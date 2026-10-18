@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.222.1",
+    "version": "0.222.2",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -12122,7 +12122,7 @@
       "post": {
         "operationId": "opsV3StartRun",
         "summary": "start a run",
-        "description": "Needs scan.trigger (the floor POST /api/v1/operations/v2 has) plus the definition's own permission (settings.manage when it declares none). Params are validated against the definition's JSON Schema before anything is queued; a violation is a 400 with field paths. mode is written into params under every key in the definition's preview_keys, read off the params type its code decodes (declared on the operation, never inferred): a preview writes each at its non-writing value (dry_run / dryRun = true, apply / live = false), a live run each at its writing value. An omitted mode takes the mode the keys already in params state, else is a preview. Its live_one_of switches, if any, are written false for a preview, and a live run must set exactly one of them true itself (400 otherwise). A 400 also refuses: a mode key in params that contradicts mode or another mode key; a mode key the definition does not read (for example dry_run sent to an apply definition); a params key that differs from dry_run, dryRun, apply, live or a live_one_of switch only in case (encoding/json would decode APPLY into apply); and params an operation's own start check refuses (series-phantom-repair live with mode report; opchange-book-index-rebuild with ensure=true). A writing definition without a preview (has_preview=false: it ignores every mode key, or previews only through a different operation) starts only with mode \"live\" and its params are passed through untouched; a preview or omitted mode is a 409, and a mode key in params asking for a preview is a 400. A read-only definition takes either mode and its params are passed through untouched, but a mode key in them that contradicts mode, or another mode key, is a 400. A batchable definition adds the request to a pending batch instead of creating a run, and answers 202 {\"batched\": true} with no run_id.",
+        "description": "Needs scan.trigger (the floor POST /api/v1/operations/v2 has) plus the definition's own permission (settings.manage when it declares none). Params are validated against the definition's JSON Schema before anything is queued; a violation is a 400 with field paths. mode is written into params under every key in the definition's preview_keys, read off the params type its code decodes (declared on the operation, never inferred): a preview writes each at its non-writing value (dry_run / dryRun = true, apply / live = false), a live run each at its writing value. An omitted mode takes the mode the keys already in params state, else is a preview. Its live_one_of switches, if any, are written false for a preview, and a live run must set exactly one of them true itself (400 otherwise). A 400 also refuses: a mode key in params that contradicts mode or another mode key; a mode key the definition does not read (for example dry_run sent to an apply definition); a params key that differs from dry_run, dryRun, apply, live or a live_one_of switch only in case (encoding/json would decode APPLY into apply); and params an operation's own start check refuses (series-phantom-repair live with mode report; opchange-book-index-rebuild with ensure=true). A writing definition without a preview (has_preview=false: it ignores every mode key, or previews only through a different operation) starts only with mode \"live\" and its params are passed through untouched; a preview or omitted mode is a 409, and a mode key in params asking for a preview is a 400. Five operations that declare no writes yet write on every run (acoustid.scan, ai.author-scan, dedup.split-book-scan, library.bulk-metadata-fetch, diagnostics.ai-analyze) are treated the same way. A read-only definition takes either mode and its params are passed through untouched, but a mode key in them that contradicts mode, or another mode key, is a 400. A batchable definition adds the request to a pending batch instead of creating a run, and answers 202 {\"batched\": true} with no run_id.",
         "tags": [
           "operations"
         ],
@@ -12903,7 +12903,15 @@
             }
           },
           "503": {
-            "description": "No event feed, or too many open streams (64)"
+            "description": "No event feed, or too many open streams (64). The too-many answer carries Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying (5); sent when the 64-stream cap refused the request.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "429": {
             "description": "The signed-in caller already holds 4 open streams of this kind (their browser session, or all of their API keys together); close one and retry. Requests with no user (auth disabled, first run) are bounded only by the global cap.",
