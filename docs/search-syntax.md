@@ -75,3 +75,9 @@ playlist evaluates them as the playlist's user. A dynamic collection is shared
 by the whole server, so it evaluates them as the collection's owner (the user
 who created it; if that user is gone, the first active admin). A user with no
 listening history for a book counts as "unstarted" for that book.
+
+Because a dynamic collection answers with its owner's state for everybody, only
+that owner (or, for a collection that fell back to the first active admin, that
+admin) can write `last_played`, `read_status` or `progress_pct` into its query.
+Anyone else gets a 403, `COLLECTION_PER_USER_QUERY_OWNER_ONLY`. Queries without
+those fields can be edited by anyone allowed to manage collections.

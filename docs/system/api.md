@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.14.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -147,6 +147,38 @@ Remove finished runs one at a time with `DELETE /api/v1/operations/v2/:id/record
 | `GET` | `/api/v1/diagnostics/traces` · `/diagnostics/traces/:name` | Admin-only (`settings.manage`): list the runtime flight recorder's snapshot files (`{"data": {"traces": [{name, size, modified}]}}`, newest first; each snapshot is a `.trace` plus a `.goroutines.txt`) and download one as an attachment; an unknown name is a 404 `trace not found` |
 | `POST` | `/api/v1/backup/create` | Create PebbleDB backup (checkpoint) |
 | `POST` | `/api/v1/system/reset` · `/system/factory-reset` | Admin-only resets |
+
+### Collections
+
+Reads need `library.view`; every write needs `collections.manage`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/collections` · `/collections/:id` | List collections / get one (a dynamic collection's members are its stored `book_ids`) |
+| `POST` | `/api/v1/collections` | Create a static or dynamic collection; the caller is stored as its owner (`created_by_user_id`) |
+| `PUT` | `/api/v1/collections/:id` | Update name, description, query or the whole book list |
+| `DELETE` | `/api/v1/collections/:id` | Delete a collection |
+| `POST` | `/api/v1/collections/:id/materialize` | Re-evaluate a dynamic collection and store the members |
+| `POST` | `/api/v1/collections/:id/books` `{"book_ids":[...]}` | Add books to a static collection (atomic; duplicates ignored; `404` unknown collection, `409` not static) |
+| `DELETE` | `/api/v1/collections/:id/books/:bookId` | Remove one book from a static collection (`404` when it is not a member) |
+
+A dynamic collection is evaluated as its owner: the user who created it, or the
+first active admin when that user no longer exists (`503` when there is neither).
+The result is stored and served to everyone.
+
+Per-user fields in a query (`read_status`, `progress_pct`, `last_played`) read the
+evaluating user's own listening state. To stop anyone with `collections.manage`
+from reading the owner's state back out of the members, only the evaluating user
+may write one into a query. `POST /collections` (dynamic) and `PUT
+/collections/:id` answer `403` with code `COLLECTION_PER_USER_QUERY_OWNER_ONLY`
+(`only the collection's owner can use per-user fields (last_played, progress_pct,
+read_status) in its query`) when anyone else sends a query that uses one, including
+when converting a static collection to dynamic. The query and the stored members
+are left unchanged. A query with no per-user field, a rename, or re-sending the
+unchanged query is allowed to any caller with the permission. A collection that
+falls back to the first admin can have per-user fields set only by that admin. The
+Audiobookshelf-compatible routes cannot set a query (their create is static only
+and their PATCH touches name, description and books), so they have no path to it.
 
 ### Authentication
 

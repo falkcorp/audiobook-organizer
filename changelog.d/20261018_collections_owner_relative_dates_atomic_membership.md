@@ -38,3 +38,12 @@ effective permission names, so the web app can show or hide collection controls.
 The web `AuthUser` type has `permissions` (empty when the server does not send
 it). A web search-syntax help entry and `docs/search-syntax.md` describe the
 date terms.
+
+Security: because a dynamic collection is read as its owner, anyone who could
+edit its query could have used `read_status`, `progress_pct` or `last_played` to
+read the owner's listening state out of the members. Only the evaluating user
+(the owner, or the first active admin for a collection that fell back to one) can
+now write those fields into a query, when creating a dynamic collection, editing
+its query or converting a static collection; anyone else gets a 403 with code
+`COLLECTION_PER_USER_QUERY_OWNER_ONLY` and nothing is changed. Queries without
+those fields, renames and re-sending the unchanged query are unaffected.

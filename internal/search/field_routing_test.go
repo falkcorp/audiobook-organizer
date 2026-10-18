@@ -1,7 +1,7 @@
 // file: internal/search/field_routing_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d1f3a6c-5e27-4b90-9c14-2a7e6b0d4f83
-// last-edited: 2026-09-27
+// last-edited: 2026-10-18
 
 package search
 
@@ -58,5 +58,60 @@ func TestIsIndexedField(t *testing.T) {
 	got := strings.Join(FieldNames(ast), ",")
 	if got != "review,author,narrator" {
 		t.Errorf("FieldNames = %s", got)
+	}
+}
+
+// The collections handler refuses a per-user field from anyone but the
+// collection's evaluator, and it decides with this helper. It must read the same
+// set the translator routes on and see through every shape a term can take.
+func TestQueryUsesPerUserField(t *testing.T) {
+	yes := []string{
+		"read_status:finished",
+		"progress_pct:>5",
+		"last_played:>-30d",
+		"last_played:*",
+		"-read_status:finished",
+		"NOT read_status:unstarted",
+		"title:Alpha AND read_status:in_progress",
+		"title:Alpha OR (title:Bravo AND progress_pct:>=50)",
+		"read_status:(finished|in_progress)",
+		"((title:x))  last_played:>2026-01-01",
+	}
+	no := []string{
+		"",
+		"title:Alpha",
+		"date_added:>-30d",
+		"date_modified:<2026-01-01",
+		"author:read_status",
+		"\"read_status:finished\"",
+		"title:(unclosed",
+		"read_status",
+	}
+	for _, q := range yes {
+		if !QueryUsesPerUserField(q) {
+			t.Errorf("QueryUsesPerUserField(%q) = false, want true", q)
+		}
+	}
+	for _, q := range no {
+		if QueryUsesPerUserField(q) {
+			t.Errorf("QueryUsesPerUserField(%q) = true, want false", q)
+		}
+	}
+}
+
+func TestPerUserFieldNames_MatchesTheRoutingSet(t *testing.T) {
+	names := PerUserFieldNames()
+	if got, want := strings.Join(names, ","), "last_played,progress_pct,read_status"; got != want {
+		t.Fatalf("PerUserFieldNames() = %s, want %s", got, want)
+	}
+	for _, n := range names {
+		if !IsPerUserField(n) {
+			t.Errorf("IsPerUserField(%q) = false for a listed name", n)
+		}
+	}
+	for _, n := range []string{"title", "date_added", "duration", ""} {
+		if IsPerUserField(n) {
+			t.Errorf("IsPerUserField(%q) = true, want false", n)
+		}
 	}
 }
