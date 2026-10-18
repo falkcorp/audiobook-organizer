@@ -96,7 +96,11 @@ func EvaluateSmartPlaylist(
 	if err != nil {
 		return nil, fmt.Errorf("parse query: %w", err)
 	}
-	bleveQ, perUserFilters, err := search.Translate(ast)
+	// ONE instant for the whole evaluation: relative dates (last_played:>-30d)
+	// in the Bleve translation and in the per-user pass resolve against the same
+	// now, so a window cannot shift between the first book and the last.
+	now := time.Now()
+	bleveQ, perUserFilters, err := search.TranslateAt(ast, now)
 	if err != nil {
 		return nil, fmt.Errorf("translate query: %w", err)
 	}
@@ -113,7 +117,7 @@ func EvaluateSmartPlaylist(
 		ids = append(ids, h.BookID)
 	}
 
-	ids = applyPerUserFilters(store, ids, perUserFilters, userID)
+	ids = applyPerUserFilters(store, ids, perUserFilters, userID, now)
 
 	ids, err = sortBookIDs(store, ids, sortJSON)
 	if err != nil {
@@ -138,6 +142,7 @@ func applyPerUserFilters(
 	ids []string,
 	filters []search.PerUserFilter,
 	userID string,
+	now time.Time,
 ) []string {
 	if len(filters) == 0 {
 		return ids
@@ -145,7 +150,7 @@ func applyPerUserFilters(
 	kept := make([]string, 0, len(ids))
 	for _, id := range ids {
 		state, _ := store.GetUserBookState(userID, id)
-		if search.MatchPerUserFilters(state, filters) {
+		if search.MatchPerUserFilters(state, filters, now) {
 			kept = append(kept, id)
 		}
 	}

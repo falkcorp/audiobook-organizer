@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	blevequery "github.com/blevesearch/bleve/v2/search/query"
 
@@ -1229,7 +1230,10 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		// a true total; it is the pre-existing behaviour for this fallback.
 		return books, len(books), sErr
 	}
-	bleveQ, perUser, err := search.Translate(ast)
+	// One instant for this whole search: relative date terms in the Bleve query
+	// and in the per-user pass below resolve against the same now.
+	now := time.Now()
+	bleveQ, perUser, err := search.TranslateAt(ast, now)
 	if err != nil {
 		// Same silent-degradation hazard as the parse-failure branch above:
 		// the query parsed fine but could not be expressed as a Bleve query,
@@ -1283,7 +1287,7 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 					"book_id", b.ID, "err", stateErr)
 				state = nil
 			}
-			if !search.MatchPerUserFilters(state, perUser) {
+			if !search.MatchPerUserFilters(state, perUser, now) {
 				continue
 			}
 			filtered = append(filtered, b)

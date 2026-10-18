@@ -7,10 +7,13 @@ package handlers
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/gin-gonic/gin"
@@ -39,8 +42,16 @@ import (
 // COLLECTIONS ARE SERVER-WIDE — no ownedByCaller here. This file sits beside
 // playlists.go, which scopes every read to CallingUserID and 404s other users'
 // rows, and that difference is deliberate rather than an oversight: a playlist
-// belongs to a person, a collection belongs to the server. CreatedByUserID is
-// attribution only.
+// belongs to a person, a collection belongs to the server. VISIBILITY is
+// server-wide; CreatedByUserID never decides who may see or edit a collection.
+//
+// A DYNAMIC COLLECTION IS EVALUATED AS ITS OWNER, NOT AS THE READER (D75).
+// Per-user query fields (read_status, progress_pct, last_played) mean "for whom?",
+// and a collection that answered with the signed-in reader's state would show
+// different members to different people, store whichever answer was computed last
+// as MaterializedBookIDs, and serve that to everyone on the ABS surface, which
+// never evaluates. So the evaluating user is CreatedByUserID (see evaluatorFor).
+// Smart PLAYLISTS stay per-user; they are a different feature.
 
 // CollectionCreateReq is the payload for POST /api/v1/collections.
 //
@@ -72,6 +83,34 @@ type CollectionUpdateReq struct {
 	Limit       *int      `json:"limit,omitempty"`
 }
 
+// CollectionMembers is the locked member-list slice of the store: the two
+// operations the add/remove-books routes call. Kept out of CollectionStore, and
+// out of database.Store, so the wide store interface does not grow; the wiring
+// resolves it with database.AsCapability.
+type CollectionMembers interface {
+	AddBooksToCollection(id string, bookIDs []string) (*database.Collection, error)
+	RemoveBookFromCollection(id, bookID string) (*database.Collection, error)
+}
+
+// CollectionOwnerStore is what the owner evaluator reads: the owning user by id,
+// and the user list for the first-admin fallback.
+type CollectionOwnerStore interface {
+	GetUserByID(id string) (*database.User, error)
+	ListUsers() ([]database.User, error)
+}
+
+// ErrNoCollectionEvaluator means a dynamic collection has no owner that still
+// exists and the install has no active admin to fall back to, so there is no
+// user whose per-user state the query could be evaluated against.
+var ErrNoCollectionEvaluator = errors.New("no admin user to evaluate this collection as")
+
+// maxCollectionBooksPerRequest bounds one add-books request.
+const maxCollectionBooksPerRequest = 500
+
+// collectionLog records the owner fallback so an operator can see which
+// collections are being evaluated as someone other than their stored owner.
+var collectionLog = logger.New("handlers.collections")
+
 // CollectionStore is the narrow database interface CollectionHandler requires.
 type CollectionStore interface {
 	CreateCollection(col *database.Collection) (*database.Collection, error)
@@ -91,6 +130,11 @@ type CollectionEvalStore interface {
 // CollectionHandler serves the native collection routes.
 type CollectionHandler struct {
 	store CollectionStore
+	// members is nil when the store has no locked membership operations; the
+	// add/remove-books routes then answer 503 rather than a read-modify-write.
+	members CollectionMembers
+	// owners resolves the user a dynamic collection is evaluated as.
+	owners CollectionOwnerStore
 	// evalStore is the wider store the smart-query evaluator needs. Separate
 	// from store because CollectionStore is deliberately narrow and the
 	// evaluator's requirements are not this handler's business.
@@ -104,13 +148,18 @@ type CollectionHandler struct {
 // NewCollectionHandler constructs a CollectionHandler with a lazy index getter.
 func NewCollectionHandler(
 	store CollectionStore,
+	members CollectionMembers,
+	owners CollectionOwnerStore,
 	evalStore CollectionEvalStore,
 	indexFn func() *search.BleveIndex,
 ) *CollectionHandler {
 	if indexFn == nil {
 		indexFn = func() *search.BleveIndex { return nil }
 	}
-	return &CollectionHandler{store: store, evalStore: evalStore, indexFn: indexFn}
+	return &CollectionHandler{
+		store: store, members: members, owners: owners,
+		evalStore: evalStore, indexFn: indexFn,
+	}
 }
 
 // validateCollectionCreate enforces the type/field agreement.
@@ -179,7 +228,7 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 	// create it because the index happens to be closed would lose the user's work
 	// for a reason that has nothing to do with what they typed.
 	if col.Type == database.CollectionTypeDynamic {
-		if ids, err := h.evaluate(c, col); err == nil {
+		if ids, err := h.evaluate(col); err == nil {
 			col.MaterializedBookIDs = ids
 		}
 	}
@@ -236,7 +285,7 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 		return
 	}
 
-	ids, err := h.evaluate(c, col)
+	ids, err := h.evaluate(col)
 	if err != nil {
 		// Serve the last known membership rather than an error. A search index
 		// that is closed or rebuilding is a transient condition, and failing the
@@ -340,7 +389,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 	// rather than the previous query's members.
 	if col.Type == database.CollectionTypeDynamic &&
 		(req.Query != nil || req.SortJSON != nil || req.Limit != nil) {
-		if ids, err := h.evaluate(c, col); err == nil {
+		if ids, err := h.evaluate(col); err == nil {
 			col.MaterializedBookIDs = ids
 		}
 	}
@@ -384,10 +433,10 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "only a dynamic collection can be materialized")
 		return
 	}
-	ids, err := h.evaluate(c, col)
+	ids, err := h.evaluate(col)
 	if err != nil {
-		if err == playlist.ErrSearchIndexUnavailable {
-			httputil.RespondWithError(c, 503, err.Error(), "SERVICE_UNAVAILABLE")
+		if errors.Is(err, playlist.ErrSearchIndexUnavailable) || errors.Is(err, ErrNoCollectionEvaluator) {
+			httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), "SERVICE_UNAVAILABLE")
 			return
 		}
 		httputil.RespondWithBadRequest(c, err.Error())
@@ -416,18 +465,61 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 	httputil.RespondWithOK(c, col)
 }
 
-// evaluate runs a dynamic collection's query.
+// evaluate runs a dynamic collection's query as the collection's owner.
 //
 // It reuses playlist.EvaluateSmartPlaylist rather than growing a second query
 // engine: the two features ask the same question of the same index, and a
 // private copy would drift — a query that worked in a smart playlist and failed
 // in a dynamic collection would be indistinguishable from a bad query.
-func (h *CollectionHandler) evaluate(c *gin.Context, col *database.Collection) ([]string, error) {
+//
+// The user passed to it is evaluatorFor's answer, never the caller: see the file
+// header. That is what makes a materialize, a native read and the ABS surface
+// (which serves the stored set) agree whoever is signed in.
+func (h *CollectionHandler) evaluate(col *database.Collection) ([]string, error) {
+	userID, err := h.evaluatorFor(col)
+	if err != nil {
+		return nil, err
+	}
 	return playlist.EvaluateSmartPlaylist(
 		h.evalStore, h.indexFn(),
 		col.Query, col.SortJSON, col.Limit,
-		CallingUserID(c),
+		userID,
 	)
+}
+
+// evaluatorFor names the user whose per-user state a dynamic collection is
+// evaluated against: CreatedByUserID when that user still exists, otherwise the
+// first active admin (logged, because the stored owner is stale), otherwise
+// ErrNoCollectionEvaluator.
+//
+// "Exists" is a row lookup, not an active check: a deactivated owner's reading
+// state is still theirs, and moving a collection to a different user's state
+// because its owner was deactivated would silently change its members. The
+// fallback admin, by contrast, must be active (auth.FirstActiveAdmin).
+func (h *CollectionHandler) evaluatorFor(col *database.Collection) (string, error) {
+	if h.owners == nil {
+		return "", ErrNoCollectionEvaluator
+	}
+	if col.CreatedByUserID != "" {
+		u, err := h.owners.GetUserByID(col.CreatedByUserID)
+		if err != nil {
+			return "", err
+		}
+		if u != nil {
+			return u.ID, nil
+		}
+	}
+	users, err := h.owners.ListUsers()
+	if err != nil {
+		return "", err
+	}
+	admin := auth.FirstActiveAdmin(users)
+	if admin == nil {
+		return "", ErrNoCollectionEvaluator
+	}
+	collectionLog.Warn("collections: collection %s has owner %q which is not a user; evaluating as first admin %s",
+		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.CreatedByUserID), logger.SanitizeLogValue(admin.ID))
+	return admin.ID, nil
 }
 
 // load resolves :id, writing the error response itself.
@@ -445,4 +537,109 @@ func (h *CollectionHandler) load(c *gin.Context) (*database.Collection, bool) {
 		return nil, false
 	}
 	return col, true
+}
+
+// CollectionAddBooksReq is the payload for POST /api/v1/collections/:id/books.
+type CollectionAddBooksReq struct {
+	BookIDs []string `json:"book_ids"`
+}
+
+// AddBooksToCollection — POST /api/v1/collections/:id/books
+//
+// Adds books to a STATIC collection through the store's locked membership
+// operation, so two requests adding different books to one collection both land
+// (a PUT with the whole book_ids list cannot promise that: it replaces what the
+// caller last read). Ids already in the collection are skipped, order is kept.
+//
+// Statuses: 400 for a payload that is not 1 to 500 ids or names a book that does
+// not exist (the first unknown id is named), 404 for an unknown collection, 409
+// for a dynamic one, 503 when the store has no membership operations. The
+// response is the updated collection.
+func (h *CollectionHandler) AddBooksToCollection(c *gin.Context) {
+	if h.members == nil {
+		httputil.RespondWithServiceUnavailable(c, "collection membership is not available")
+		return
+	}
+	var req CollectionAddBooksReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+	if n := len(req.BookIDs); n < 1 || n > maxCollectionBooksPerRequest {
+		httputil.RespondWithBadRequest(c, "book_ids must contain 1 to 500 ids")
+		return
+	}
+	col, ok := h.load(c)
+	if !ok {
+		return
+	}
+	if col.Type == database.CollectionTypeDynamic {
+		httputil.RespondWithConflict(c, errDynamicMembership)
+		return
+	}
+	// Every id must be a real book: a collection holding an id no book answers to
+	// would create successfully and render a hole. Bounded by the 500 cap above,
+	// so this is request-scale work, not a library-scale loop.
+	for _, id := range req.BookIDs {
+		b, err := h.evalStore.GetBookByID(id)
+		if err != nil {
+			httputil.InternalError(c, "failed to check book", err)
+			return
+		}
+		if b == nil {
+			httputil.RespondWithBadRequest(c, "unknown book id: "+logger.SanitizeLogValue(id))
+			return
+		}
+	}
+	updated, err := h.members.AddBooksToCollection(col.ID, req.BookIDs)
+	if err != nil {
+		h.respondMembershipError(c, col.ID, err)
+		return
+	}
+	httputil.RespondWithOK(c, updated)
+}
+
+// RemoveBookFromCollection — DELETE /api/v1/collections/:id/books/:bookId
+//
+// Removes one book from a STATIC collection through the same locked operation.
+// 404 for an unknown collection or a book that is not a member, 409 for a
+// dynamic collection; the response is the updated collection.
+func (h *CollectionHandler) RemoveBookFromCollection(c *gin.Context) {
+	if h.members == nil {
+		httputil.RespondWithServiceUnavailable(c, "collection membership is not available")
+		return
+	}
+	col, ok := h.load(c)
+	if !ok {
+		return
+	}
+	if col.Type == database.CollectionTypeDynamic {
+		httputil.RespondWithConflict(c, errDynamicMembership)
+		return
+	}
+	updated, err := h.members.RemoveBookFromCollection(col.ID, c.Param("bookId"))
+	if err != nil {
+		h.respondMembershipError(c, col.ID, err)
+		return
+	}
+	httputil.RespondWithOK(c, updated)
+}
+
+const errDynamicMembership = "a dynamic collection's members come from its query; update the query instead"
+
+// respondMembershipError maps the locked membership operations' sentinels. The
+// pre-checks in the handlers answer the common cases; these also cover the row
+// changing between the pre-check and the locked write (deleted, or the type
+// differing).
+func (h *CollectionHandler) respondMembershipError(c *gin.Context, id string, err error) {
+	switch {
+	case errors.Is(err, database.ErrCollectionNotFound):
+		httputil.RespondWithNotFound(c, "collection", id)
+	case errors.Is(err, database.ErrCollectionNotStatic):
+		httputil.RespondWithConflict(c, errDynamicMembership)
+	case errors.Is(err, database.ErrCollectionBookNotMember):
+		httputil.RespondWithNotFound(c, "collection member", c.Param("bookId"))
+	default:
+		httputil.InternalError(c, "failed to update collection membership", err)
+	}
 }

@@ -229,7 +229,7 @@ func (svc *AudiobookService) scopedTagFacetsKey(search string, authorID, seriesI
 		return "", false
 	}
 	q := strings.TrimSpace(search)
-	if q != "" && SearchHasPerUserFilters(q) {
+	if q != "" && (SearchHasPerUserFilters(q) || SearchHasRelativeDate(q)) {
 		return "", false
 	}
 	f.SortBy, f.SortOrder, f.UserID = "", "", ""

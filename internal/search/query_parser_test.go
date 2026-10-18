@@ -244,3 +244,65 @@ func TestParse_Errors(t *testing.T) {
 		}
 	}
 }
+
+// ── relative dates (D76) ────────────────────────────────────────────────────
+
+// TestParseQuery_RelativeDateTerms pins that the lexer already carries a signed
+// offset after a comparison operator, and the ".." range for date fields.
+func TestParseQuery_RelativeDateTerms(t *testing.T) {
+	cases := []struct {
+		q    string
+		want FieldNode
+	}{
+		{"last_played:>-30d", FieldNode{Field: "last_played", Op: ">", Value: "-30d"}},
+		{"date_added:>=-1y", FieldNode{Field: "date_added", Op: ">=", Value: "-1y"}},
+		{"date_added:<+2w", FieldNode{Field: "date_added", Op: "<", Value: "+2w"}},
+		{"last_played:-30d..now", FieldNode{Field: "last_played", Op: "range", RangeMin: "-30d", RangeMax: "now"}},
+		{"added:2026-01-01..2026-02-01", FieldNode{Field: "added", Op: "range", RangeMin: "2026-01-01", RangeMax: "2026-02-01"}},
+		{"date_modified:-1y..-6m", FieldNode{Field: "date_modified", Op: "range", RangeMin: "-1y", RangeMax: "-6m"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.q, func(t *testing.T) {
+			node, err := ParseQuery(tc.q)
+			if err != nil {
+				t.Fatalf("ParseQuery(%q): %v", tc.q, err)
+			}
+			got, ok := node.(*FieldNode)
+			if !ok {
+				t.Fatalf("node is %T, want *FieldNode", node)
+			}
+			if got.Field != tc.want.Field || got.Op != tc.want.Op || got.Value != tc.want.Value ||
+				got.RangeMin != tc.want.RangeMin || got.RangeMax != tc.want.RangeMax {
+				t.Fatalf("got %+v, want %+v", *got, tc.want)
+			}
+		})
+	}
+}
+
+// ".." is only a range on a date field: elsewhere it is part of the value.
+func TestParseQuery_DotDotOutsideDateFieldsIsAValue(t *testing.T) {
+	node, err := ParseQuery("title:wait..what")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := node.(*FieldNode)
+	if got.Op == "range" || got.Value != "wait..what" {
+		t.Fatalf("title:wait..what parsed as %+v", *got)
+	}
+}
+
+// A leading '-' on the whole term is still NOT; the sign after the colon is not.
+func TestParseQuery_NegatedDateTermStillNegates(t *testing.T) {
+	node, err := ParseQuery("-last_played:>-30d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, ok := node.(*NotNode)
+	if !ok {
+		t.Fatalf("node is %T, want *NotNode", node)
+	}
+	f := n.Child.(*FieldNode)
+	if f.Field != "last_played" || f.Op != ">" || f.Value != "-30d" {
+		t.Fatalf("child = %+v", *f)
+	}
+}

@@ -9,6 +9,8 @@
 
 package search
 
+import "time"
+
 // BookDocument is the denormalized record indexed in Bleve.
 //
 // Field boost policy (applied via the index mapping, not this
@@ -52,6 +54,13 @@ type BookDocument struct {
 	Channels      int   `json:"channels,omitempty"`
 	BitDepth      int   `json:"bit_depth,omitempty"`
 	FileSizeBytes int64 `json:"file_size_bytes,omitempty"`
+
+	// Dates (for relative-date queries: date_added:>-7d, date_modified:>-1y).
+	// Pointers so a book with no timestamp indexes no date at all rather than
+	// year 1. DateAdded is Book.CreatedAt, DateModified is Book.UpdatedAt (every
+	// database write). Both are UTC. Added with mapping version 4.
+	DateAdded    *time.Time `json:"date_added,omitempty"`
+	DateModified *time.Time `json:"date_modified,omitempty"`
 
 	// Boolean flags (for `has_cover:true`-style queries)
 	HasCover bool `json:"has_cover,omitempty"`

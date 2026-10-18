@@ -281,6 +281,14 @@ func bookToDocCore(book *database.Book) BookDocument {
 	if book.FileSize != nil {
 		doc.FileSizeBytes = *book.FileSize
 	}
+	if book.CreatedAt != nil && !book.CreatedAt.IsZero() {
+		t := book.CreatedAt.UTC()
+		doc.DateAdded = &t
+	}
+	if book.UpdatedAt != nil && !book.UpdatedAt.IsZero() {
+		t := book.UpdatedAt.UTC()
+		doc.DateModified = &t
+	}
 	doc.HasCover = book.CoverURL != nil && *book.CoverURL != ""
 	return doc
 }
