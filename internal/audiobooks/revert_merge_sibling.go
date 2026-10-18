@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_sibling.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c4e1a96-2b83-4d50-9f17-a6e3d0b85c21
 // last-edited: 2026-10-18
 
@@ -48,10 +48,12 @@ func siblingJournalDone(j *merge.SiblingMoveJournal) bool {
 // each sibling's current group, and refuses as a whole when a newer merge
 // moved one of them into the same group again. A journal with nothing left to
 // put back is already restored.
+//
+// The survivor row (c.BookID) is not required: the undo moves the siblings
+// back by the journal alone and handles a survivor purged since, so a merge
+// whose survivor was later combined away and purged still reverts. A missing
+// journal still refuses.
 func (rs *RevertService) revertMergeSiblingJournal(c *database.OperationChange) error {
-	if _, err := rs.loadBook(c.BookID); err != nil {
-		return err
-	}
 	u := rs.siblingUndoerFor()
 	if u == nil {
 		return &undo.ReferentError{Reason: undo.ReasonFieldUnreadable,
