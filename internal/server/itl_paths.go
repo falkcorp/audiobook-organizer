@@ -1,5 +1,5 @@
 // file: internal/server/itl_paths.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b8e6f52-4c1d-4e7a-9a63-5d2f8c1e7b40
 // last-edited: 2026-10-18
 //
@@ -10,24 +10,24 @@
 package server
 
 import (
+	"fmt"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
-	"github.com/gin-gonic/gin"
 )
 
-// resolveITLPath reads and validates the configured ITL path, writing an
-// error response and returning ok=false when it is unset/invalid.
-func resolveITLPath(c *gin.Context) (string, bool) {
+// configuredITLPath returns the configured ITL path cleaned and validated, or
+// "" when none is configured. An unset path is not an error: the PID census
+// runs without the ITL and then reports tracks_in_itl as 0. A path that is set
+// but invalid is an error. It never writes a response.
+func configuredITLPath() (string, error) {
 	rawPath := config.AppConfig.ITunes.LibraryITLPath
 	if rawPath == "" {
-		httputil.RespondWithBadRequest(c, "the iTunes library ITL path (itunes.library_write_path) is not configured")
-		return "", false
+		return "", nil
 	}
 	itlPath, err := pathvalidation.CleanAbsolutePath(rawPath)
 	if err != nil {
-		httputil.RespondWithInternalError(c, "invalid iTunes library ITL path in config")
-		return "", false
+		return "", fmt.Errorf("invalid iTunes library ITL path in config: %w", err)
 	}
-	return itlPath, true
+	return itlPath, nil
 }

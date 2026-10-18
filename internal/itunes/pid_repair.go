@@ -1,5 +1,5 @@
 // file: internal/itunes/pid_repair.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a9d3c62-7e14-4b80-9f26-1c8b0a3e6d47
 // last-edited: 2026-10-18
 //
@@ -41,7 +41,7 @@ type PIDRepairStore interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
-// pidClear is one row that the plan would strip of the PID (its full row).
+// pidClear is a book_file row the plan would clear the PID from.
 type pidClear struct {
 	file database.BookFile
 }
