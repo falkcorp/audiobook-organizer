@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d5e6f7a8-b9c0-1234-5678-90abcdef0123
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package handlers_test
 
@@ -126,6 +126,8 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil)
+	// Login reports the user's effective permissions, resolved from the roles.
+	store.EXPECT().GetRoleByID("user").Return(nil, nil)
 	// A password sign-in records its origin: the session is an interactive login.
 	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).Return(session, nil)
 
@@ -349,4 +351,121 @@ func TestAuthHandler_Me_Authenticated(t *testing.T) {
 	data := resp["data"].(map[string]any)
 	userField := data["user"].(map[string]any)
 	assert.Equal(t, "alice", userField["username"])
+}
+
+// ── permissions on login and /auth/me (07-F5a) ──────────────────────────────
+
+// authUserPermissions decodes data.user.permissions; present reports whether the
+// key was in the body at all.
+func authUserPermissions(t *testing.T, w *httptest.ResponseRecorder) (perms []string, present bool, raw string) {
+	t.Helper()
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var resp struct {
+		Data struct {
+			User map[string]json.RawMessage `json:"user"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	rawPerms, ok := resp.Data.User["permissions"]
+	if ok {
+		require.NoError(t, json.Unmarshal(rawPerms, &perms))
+	}
+	return perms, ok, w.Body.String()
+}
+
+func loginAs(t *testing.T, store *handlersmocks.MockAuthStore, roles ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	user := &database.User{
+		ID: "user-1", Username: "pat", PasswordHash: testBcryptHash(t, "password123"),
+		Roles: roles, Status: "active", CreatedAt: time.Now(),
+	}
+	store.EXPECT().GetUserByUsername("pat").Return(user, nil)
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).
+		Return(&database.Session{ID: "sess-1", UserID: "user-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
+	h := handlers.NewAuthHandler(store, true)
+	c, w := newAuthCtx("POST", "/auth/login", map[string]any{"username": "pat", "password": "password123"})
+	h.Login(c)
+	return w
+}
+
+// TestAuthHandler_Login_CarriesEffectivePermissions: Login answers before the
+// auth middleware binds anything, so it resolves the roles itself. A curator
+// holding collections.manage sees it; a plain viewer does not.
+func TestAuthHandler_Login_CarriesEffectivePermissions(t *testing.T) {
+	curator := &database.Role{ID: "curator", Name: "curator",
+		Permissions: []string{auth.PermLibraryView, auth.PermCollectionsManage}}
+	viewer := &database.Role{ID: "viewer", Name: "viewer",
+		Permissions: []string{auth.PermLibraryView, auth.PermRequestsCreate}}
+
+	t.Run("curator", func(t *testing.T) {
+		store := handlersmocks.NewMockAuthStore(t)
+		store.EXPECT().GetRoleByID("curator").Return(curator, nil)
+		perms, present, body := authUserPermissions(t, loginAs(t, store, "curator"))
+		require.True(t, present, "body: %s", body)
+		assert.Equal(t, []string{auth.PermCollectionsManage, auth.PermLibraryView}, perms,
+			"sorted, and exactly the role's set")
+		assert.NotContains(t, body, "password_hash")
+	})
+
+	t.Run("plain user", func(t *testing.T) {
+		store := handlersmocks.NewMockAuthStore(t)
+		store.EXPECT().GetRoleByID("viewer").Return(viewer, nil)
+		perms, _, _ := authUserPermissions(t, loginAs(t, store, "viewer"))
+		assert.NotContains(t, perms, auth.PermCollectionsManage)
+		assert.Contains(t, perms, auth.PermLibraryView)
+	})
+
+	t.Run("union across roles, unknown role skipped", func(t *testing.T) {
+		store := handlersmocks.NewMockAuthStore(t)
+		store.EXPECT().GetRoleByID("viewer").Return(viewer, nil)
+		store.EXPECT().GetRoleByID("curator").Return(curator, nil)
+		store.EXPECT().GetRoleByID("deleted-role").Return(nil, nil)
+		perms, _, _ := authUserPermissions(t, loginAs(t, store, "viewer", "curator", "deleted-role"))
+		assert.Equal(t,
+			[]string{auth.PermCollectionsManage, auth.PermLibraryView, auth.PermRequestsCreate}, perms)
+	})
+}
+
+// TestAuthHandler_Me_PermissionsAreTheRequestsEffectiveSet reads the request
+// context, not the roles. The mock store has no GetRoleByID expectation, so a
+// handler that re-walked the roles would fail the strict mock outright.
+func TestAuthHandler_Me_PermissionsAreTheRequestsEffectiveSet(t *testing.T) {
+	user := &database.User{ID: "user-1", Username: "pat", Roles: []string{"curator"}, Status: "active"}
+	meWith := func(t *testing.T, perms []auth.Permission) *httptest.ResponseRecorder {
+		store := handlersmocks.NewMockAuthStore(t)
+		h := handlers.NewAuthHandler(store, true)
+		c, w := newAuthCtx("GET", "/auth/me", nil)
+		setAuthUser(c, user)
+		c.Request = c.Request.WithContext(auth.WithPermissions(c.Request.Context(), perms))
+		h.Me(c)
+		return w
+	}
+
+	t.Run("curator sees collections.manage", func(t *testing.T) {
+		perms, present, body := authUserPermissions(t,
+			meWith(t, []auth.Permission{auth.PermLibraryView, auth.PermCollectionsManage}))
+		require.True(t, present, "body: %s", body)
+		assert.Equal(t, []string{auth.PermCollectionsManage, auth.PermLibraryView}, perms)
+	})
+
+	t.Run("plain user does not", func(t *testing.T) {
+		perms, _, _ := authUserPermissions(t, meWith(t, []auth.Permission{auth.PermLibraryView}))
+		assert.Equal(t, []string{auth.PermLibraryView}, perms)
+		assert.NotContains(t, perms, auth.PermCollectionsManage)
+	})
+
+	// An API key's scopes narrow the set the middleware binds. The user's role
+	// still holds collections.manage, but this request cannot use it, so /auth/me
+	// must not advertise it.
+	t.Run("key-scoped request is narrowed", func(t *testing.T) {
+		scoped := []auth.Permission{auth.PermLibraryView} // what the middleware left after intersecting
+		perms, _, _ := authUserPermissions(t, meWith(t, scoped))
+		assert.NotContains(t, perms, auth.PermCollectionsManage)
+	})
+
+	t.Run("no bound permissions leaves the key out, which a client reads as none", func(t *testing.T) {
+		perms, present, _ := authUserPermissions(t, meWith(t, nil))
+		assert.False(t, present)
+		assert.Empty(t, perms)
+	})
 }

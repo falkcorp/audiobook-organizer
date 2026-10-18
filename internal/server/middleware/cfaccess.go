@@ -90,7 +90,7 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 			return
 		}
 		c.Set(contextUserKey, user)
-		perms := effectivePermissionsFor(a.store, user)
+		perms := EffectivePermissionsFor(a.store, user)
 		ctx := auth.WithUser(c.Request.Context(), user)
 		ctx = auth.WithPermissions(ctx, perms)
 		ctx = auth.WithMethod(ctx, auth.MethodCFAccess)
@@ -104,7 +104,7 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 
 // cfAccessStore is what this authenticator forwards its store into: the
 // identity resolution in oauth.Config.ResolveUser, and the role lookup behind
-// effectivePermissionsFor. Both already declare narrow interfaces, so both are
+// EffectivePermissionsFor. Both already declare narrow interfaces, so both are
 // embedded BY NAME -- two entries, and this re-narrows on its own if either
 // does. It was database.Store -- 398 methods -- until 2026-08-19.
 type cfAccessStore interface {

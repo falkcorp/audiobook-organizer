@@ -22,7 +22,7 @@ import (
 // reading the compiler's enumeration. They were inline anonymous interfaces of
 // database.* embeds — 25, 25 and 20 methods — repeated across four parameters.
 //
-// effectivePermissionsFor took database.RoleStore (6 methods) for one lookup;
+// EffectivePermissionsFor took database.RoleStore (6 methods) for one lookup;
 // that is what forced RoleStore into the two composites above.
 type roleResolver interface {
 	GetRoleByID(id string) (*database.Role, error)
@@ -227,7 +227,7 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 
 		// Attach user + effective permissions on the request context using the
 		// typed helpers from internal/auth so handlers can call auth.Can(ctx, perm).
-		perms := effectivePermissionsFor(store, user)
+		perms := EffectivePermissionsFor(store, user)
 		ctx := auth.WithUser(c.Request.Context(), user)
 		ctx = auth.WithPermissions(ctx, perms)
 		// Only a session from the user's own sign-in is an interactive
@@ -345,7 +345,7 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 	}
 
 	// Compute user's role-based permissions, then narrow to key scopes.
-	rolePerms := effectivePermissionsFor(store, user)
+	rolePerms := EffectivePermissionsFor(store, user)
 	effectivePerms := intersectPermissions(rolePerms, key.Scopes)
 
 	// Synchronous on purpose. This was a bare `go func()` per authenticated
@@ -403,11 +403,15 @@ func intersectPermissions(rolePerms []auth.Permission, scopes []string) []auth.P
 	return out
 }
 
-// effectivePermissionsFor resolves the union of every role's
+// EffectivePermissionsFor resolves the union of every role's
 // Permissions slice for the given user. Unknown roles are skipped.
 // Returns nil if the user has no roles (which makes every Can()
 // check return false — safe default).
-func effectivePermissionsFor(store roleResolver, user *database.User) []auth.Permission {
+//
+// Exported because the login handler runs BEFORE this middleware binds a
+// request's permissions, and must report the same union rather than a second
+// walk of the roles that could drift from what Can() will enforce.
+func EffectivePermissionsFor(store roleResolver, user *database.User) []auth.Permission {
 	if user == nil || len(user.Roles) == 0 || store == nil {
 		return nil
 	}
