@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.34.0
+// version: 3.34.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-18
 
@@ -459,6 +459,9 @@ func previewIntroTranscribe(reporter sdk.Reporter, sel transcribeSelection, extr
 		verb = "extract clips for"
 	}
 	samples := sel.work[:min(introPreviewSamples, len(sel.work))]
+	// The "PREVIEW (dry_run" prefix is load-bearing: scripts/transcribe_monitor.py
+	// matches it in the progress message to raise RELAUNCH_IS_PREVIEW, and
+	// TestPreviewBehaviour_TranscribeBookIntros pins it. Change all three together.
 	msg := fmt.Sprintf(
 		"PREVIEW (dry_run, nothing written) — would %s %d books (of %d listed, starting at %d); "+
 			"%d skipped (%d of them known-broken, not retried), %d unreadable; first ids: [%s]. "+

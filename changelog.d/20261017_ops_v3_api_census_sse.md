@@ -84,16 +84,27 @@ a number too large to compare with a bound is a violation.
 
 ### Fixed
 
-- A start of a scheduled or deduplicated operation is no longer answered with
-  the ID of an active run in the other mode. `EnqueueOp` folded a live start of
-  `maintenance.author-split-scan` into the cron's queued preview run, so the
-  caller was told its live run had started and nothing was written. A
-  definition that declares its preview mode now folds a start only into an
-  active run of the same mode (its mode keys and `live_one_of` switches
-  compared after normalization); otherwise a second run is queued.
-- The `maintenance.regroup-shattered-ai` preview no longer counts a group
-  whose review hold a person already decided as a hold it would write; it
-  reports those as already decided.
-- `scripts/transcribe_monitor.py` reads each relaunched run back and raises
-  `RELAUNCH_IS_PREVIEW` (an ERROR alert and a banner on stderr) when the
-  server queued a preview.
+#### A start is no longer answered with an active run of the other mode
+
+`EnqueueOp` folded a start of a scheduled or deduplicated operation into any
+active run of the same definition, without looking at the mode. A live start
+of `maintenance.author-split-scan` while its cron preview was queued got the
+preview run's ID back, so the caller was told its live run had started and
+nothing was written. A definition that declares its preview mode now folds a
+start only into an active run of the same mode (its mode keys and
+`live_one_of` switches compared after normalization); otherwise a second run
+is queued. Scheduler ticks with no params still fold into one run.
+
+#### The regroup preview no longer counts holds a person already decided
+
+The `maintenance.regroup-shattered-ai` preview counted every detected group as
+a review hold it would write, including groups whose hold a person had
+already approved, rejected or applied, which a live run leaves untouched. It
+now reports those as already decided.
+
+#### The transcription monitor raises an alarm when a relaunch is a preview
+
+`scripts/transcribe_monitor.py` reads each relaunched run back and raises
+`RELAUNCH_IS_PREVIEW` (an ERROR alert and a banner on stderr) when the server
+queued a preview, instead of relaunching a run that transcribes nothing every
+time the library looks idle.
