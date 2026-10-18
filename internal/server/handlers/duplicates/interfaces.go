@@ -1,11 +1,11 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed author/series duplicate detection, async link / refresh
-// triggers, combine and its undo, series prune preview + apply, and dedup-entry
+// triggers, combine and its journal lists, series prune preview + apply, and dedup-entry
 // metadata validation). Each interface lists only what the handlers actually
 // call so package duplicates stays decoupled from the concrete store / service /
 // registry implementations and never imports package server (which would create
@@ -47,7 +47,7 @@ type DuplicatesStore interface {
 }
 
 // MergeService is the narrow *merge.Service subset used by combineBooks and
-// the combine / sibling-move undo handlers. The concrete *merge.Service
+// the combine / sibling-move journal list handlers. The concrete *merge.Service
 // satisfies it. The service is reached through a provider closure
 // (getMergeService) so the original nil-fallback (merge.NewService(s.Ops())
 // when s.mergeService is nil) is preserved by the controller without this
@@ -62,14 +62,16 @@ type MergeService interface {
 	// an undo journal. Distinct from MergeBooks, which links them as alternate
 	// versions in a version group.
 	CombineBooks(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error)
-	// UndoCombine reverses one journaled combine; ListCombineJournals lists
-	// the journals newest-first so a caller can find the id to undo.
-	UndoCombine(journalID string) (*merge.CombineUndoResult, error)
+	// ListCombineJournals lists the combine journals newest-first
+	// (GET /merge/combine-journal, a read-only diagnostic kept by D73). The
+	// POST /merge/undo/:journal_id route that reversed one is retired; the
+	// operation revert (POST /operations/:id/revert) reverses a Repairs-fixer
+	// combine through merge.Service.UndoCombine.
 	ListCombineJournals(limit int) ([]merge.CombineJournal, error)
-	// UndoSiblingMove puts back the version-group siblings one merge carried
-	// into its group; ListSiblingMoveJournals lists those journals
-	// newest-first. Every MergeBooks that moves a sibling writes one.
-	UndoSiblingMove(journalID string) (*merge.SiblingUndoResult, error)
+	// ListSiblingMoveJournals lists the sibling-move journals newest-first
+	// (GET /merge/sibling-journal, a read-only diagnostic kept by D73). Every
+	// MergeBooks that moves a sibling writes one. The sibling-undo route is
+	// retired.
 	ListSiblingMoveJournals(limit int) ([]merge.SiblingMoveJournal, error)
 }
 
