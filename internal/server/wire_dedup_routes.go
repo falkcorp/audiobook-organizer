@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
@@ -11,6 +11,10 @@ import (
 	duplicates "github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates"
 	"github.com/gin-gonic/gin"
 )
+
+// combineUndoGone is the replacement named by the retired POST
+// /merge/undo/:journal_id stub. It reads inside gone()'s "use ... instead".
+const combineUndoGone = "POST /api/v1/operations/:id/revert (for a combine a Repairs fixer made; a manual combine has no HTTP undo now)"
 
 // wireDedupRoutes registers the embedding-based dedup domain routes and the
 // SQL-backed duplicates domain routes on the protected group.
@@ -92,14 +96,22 @@ func (s *Server) wireDedupRoutes(
 	protected.POST("/authors/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshDuplicateAuthors)
 	protected.POST("/audiobooks/link", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBooks)
 	protected.POST("/audiobooks/combine", s.perm(auth.PermLibraryEditMetadata), duplicatesH.CombineBooks)
-	// Combine undo: every combine (manual or review-queue combine/duplicate-of)
-	// is journaled; these list the journals and reverse one.
+	// Merge journals. Every combine (manual or review-queue combine/duplicate-of)
+	// and every merge that carries a loser's version siblings into its group is
+	// journaled. The two GETs list those journals; they are read-only
+	// diagnostics the owner keeps (D73) and stay live.
 	protected.GET("/merge/combine-journal", s.perm(auth.PermLibraryView), duplicatesH.ListCombineJournals)
-	protected.POST("/merge/undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), duplicatesH.UndoCombine)
-	// Sibling-move undo: every merge that carries a loser's version siblings
-	// into its group journals the move; these list the journals and reverse one.
+	// POST /merge/undo/:journal_id and POST /merge/sibling-undo/:journal_id had
+	// no caller in the repo (01-P81h). They answer 410 Gone for one release
+	// (owner decision D9) and are then removed. The stubs stay on the protected
+	// group behind their old library.edit_metadata guard, so an unauthenticated
+	// caller still gets 401, a caller without the permission 403, and only an
+	// allowed caller learns they are gone. The combine undo's live path is the
+	// operation revert (merge.Service.UndoCombine through revertMergeCombineJournal);
+	// the sibling-move undo has none (todo.d fragment 01-P81h).
+	protected.POST("/merge/undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), gone(combineUndoGone))
 	protected.GET("/merge/sibling-journal", s.perm(auth.PermLibraryView), duplicatesH.ListSiblingMoveJournals)
-	protected.POST("/merge/sibling-undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), duplicatesH.UndoSiblingMove)
+	protected.POST("/merge/sibling-undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), gone(""))
 	protected.GET("/series/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListSeriesDuplicates)
 	protected.POST("/series/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshSeriesDuplicates)
 	protected.POST("/series/deduplicate", s.perm(auth.PermLibraryEditMetadata), duplicatesH.DeduplicateSeriesHandler)

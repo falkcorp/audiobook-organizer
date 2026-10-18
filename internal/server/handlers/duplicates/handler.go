@@ -1,11 +1,12 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-18
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series
-// duplicate listing, async link / refresh triggers, combine and its undo,
+// duplicate listing, async link / refresh triggers, combine and the combine /
+// sibling-move journal lists (their undo routes were retired, 01-P81h),
 // series prune preview + apply, deduplicate, and dedup-entry metadata
 // validation. The book-duplicate listing, scan, link-as-versions and reject
 // handlers were retired with the old /dedup page (03-PR12); their routes answer
@@ -54,7 +55,7 @@ type Handler struct {
 
 	// dedupCache is the concrete *cache.Cache[gin.H] the original handlers read /
 	// wrote directly (author-duplicates / series-duplicates keys; the
-	// book-dedup-scan key is only invalidated here, after a combine or an undo,
+	// book-dedup-scan key is only invalidated here, after a combine,
 	// and currently has no reader: see todo.d/2026-10-17-remove-audiobooks-duplicates-410-stubs.md for the pending decision
 	// with 04 on the dedup.book-scan op that writes it). Passed concrete (the cache exception) because it is a
 	// clean generic db-adjacent type under heavy multi-method use; the handler
@@ -72,7 +73,7 @@ type Handler struct {
 	metadataFetchService MetadataFetchService
 
 	// getMergeService resolves the merge service for combineBooks and the
-	// combine / sibling-move undo handlers.
+	// combine / sibling-move journal list handlers.
 	// The original handler used s.mergeService when non-nil, else constructed
 	// merge.NewService(s.Ops()). The controller closes over that exact fallback
 	// so this package needs neither the merge constructor nor a server import.
@@ -218,40 +219,6 @@ func respondCombineIncomplete(c *gin.Context, e *merge.CombineIncompleteError) {
 	})
 }
 
-// UndoCombine reverses one journaled combine (manual /audiobooks/combine or a
-// review-queue combine / duplicate-of approval). POST /merge/undo/:journal_id.
-//
-// 404 when no such journal exists; 409 with every reason when the library
-// changed since the combine (nothing is written in that case); 200 with the
-// restored book ids and any warnings otherwise.
-func (h *Handler) UndoCombine(c *gin.Context) {
-	journalID := c.Param("journal_id")
-	ms := h.getMergeService()
-	if ms == nil {
-		httputil.RespondWithInternalError(c, "merge service not initialized")
-		return
-	}
-	res, err := ms.UndoCombine(journalID)
-	var refused *merge.CombineUndoRefusedError
-	switch {
-	case errors.Is(err, merge.ErrCombineJournalNotFound):
-		httputil.RespondWithNotFound(c, "combine journal", journalID)
-		return
-	case errors.As(err, &refused):
-		logger.New("duplicates").Warn("combine undo refused journal=%s reasons=%s", logger.SanitizeLogValue(journalID), logger.SanitizeLogValue(fmt.Sprint(refused.Reasons)))
-		c.JSON(http.StatusConflict, gin.H{"error": refused.Error(), "reasons": refused.Reasons})
-		return
-	case err != nil:
-		httputil.InternalError(c, "failed to undo combine", err)
-		return
-	}
-	if h.dedupCache != nil {
-		// No reader today (see dedupCache above); kept until 04 decides dedup.book-scan.
-		h.dedupCache.Invalidate("book-dedup-scan")
-	}
-	httputil.RespondWithOK(c, res)
-}
-
 // ListCombineJournals lists combine undo journals newest-first.
 // GET /merge/combine-journal?limit=N (default 50).
 func (h *Handler) ListCombineJournals(c *gin.Context) {
@@ -275,40 +242,6 @@ func (h *Handler) ListCombineJournals(c *gin.Context) {
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
-}
-
-// UndoSiblingMove puts back the version-group siblings one merge carried into
-// its group (merge.MergeBooks item 6). POST /merge/sibling-undo/:journal_id.
-//
-// 404 when no such journal exists; 409 when the undo is refused (the journal
-// is already undone or aborted, or a later merge moved one of its siblings
-// into the same group again; see merge.ErrSiblingUndoRefused); 200 with the
-// restored, already-back and moved-on book ids otherwise. A sibling moved to
-// another group since the merge is left there and listed in moved_on.
-func (h *Handler) UndoSiblingMove(c *gin.Context) {
-	journalID := c.Param("journal_id")
-	ms := h.getMergeService()
-	if ms == nil {
-		httputil.RespondWithInternalError(c, "merge service not initialized")
-		return
-	}
-	res, err := ms.UndoSiblingMove(journalID)
-	switch {
-	case errors.Is(err, merge.ErrSiblingJournalNotFound):
-		httputil.RespondWithNotFound(c, "sibling-move journal", journalID)
-		return
-	case errors.Is(err, merge.ErrSiblingUndoRefused):
-		httputil.RespondWithConflict(c, err.Error())
-		return
-	case err != nil:
-		httputil.InternalError(c, "failed to undo sibling move", err)
-		return
-	}
-	if h.dedupCache != nil {
-		// No reader today (see dedupCache above); kept until 04 decides dedup.book-scan.
-		h.dedupCache.Invalidate("book-dedup-scan")
-	}
-	httputil.RespondWithOK(c, res)
 }
 
 // Sibling-journal list paging: limit=0 or absent is the default, and a larger
@@ -404,9 +337,10 @@ func (h *Handler) LinkBooks(c *gin.Context) {
 }
 
 // CombineBooks combines several single-file books into ONE multi-file book on the
-// survivor (keep_id) and soft-deletes the absorbed shells, returning the undo
-// journal id. Distinct from LinkBooks, which links them as alternate VERSIONS
-// in a version group. Synchronous — combine is a fast DB-only operation.
+// survivor (keep_id) and soft-deletes the absorbed shells, returning the combine
+// journal id (the HTTP undo route for it is retired; see MergeService).
+// Distinct from LinkBooks, which links them as alternate VERSIONS in a version
+// group. Synchronous — combine is a fast DB-only operation.
 // POST /audiobooks/combine.
 func (h *Handler) CombineBooks(c *gin.Context) {
 	var req struct {
