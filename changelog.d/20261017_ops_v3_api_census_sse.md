@@ -20,8 +20,9 @@ Event ids are `<boot id>-<sequence>`, so an id from before a restart resyncs
 instead of resuming at the wrong place; a run whose terminal event the registry
 feed dropped is still published once it settles; streams end as soon as the
 server starts shutting down; at most 64 streams are open at once (then 503)
-and at most 4 per signed-in user and credential (then 429 with `Retry-After`;
-a browser session and each API key of one user are counted apart); a stream
+and at most 4 for a signed-in user's browser session plus 4 shared by all of
+that user's API keys (then 429 with `Retry-After`), so a script cannot take the
+session's places and minting keys buys no more streams; a stream
 ends when a write to the client fails.
 
 `POST /api/v3/ops/defs/{id}/runs` (also `POST /api/v3/ops/runs` with the
