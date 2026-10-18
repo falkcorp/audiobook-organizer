@@ -1400,7 +1400,6 @@
 "TestUserPositions_NoRowsIsNilNil": 0.01,
 "TestUserPositions_UndecodableErrorCarriesReadableRows": 0.02,
 "TestUserPositions_UndecodableRowIsAnError": 0.02,
-"TestVacuumTruncate_TruncatesTheWAL": 0.3,
 "TestValidateBookID": 0,
 "TestVectorEncodeRatio": 0.01,
 "TestVerifyAuthorUnlinked_RefusesWhileATrashedBookStillCredits": 0.02,
