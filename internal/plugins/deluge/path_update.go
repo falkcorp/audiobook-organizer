@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/path_update.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-18
 
@@ -73,9 +73,12 @@ func (p *Plugin) handleBookRelocated(ctx context.Context, payload any) error {
 		return fmt.Errorf("book.relocated payload is not a string")
 	}
 
-	// A relocation event wants the move made, so the params say so: with the
-	// op's preview default an omitted dry_run would queue a run that moves
-	// nothing.
+	// Placeholder; nothing enqueues this today. The params below are built
+	// and discarded (see the end of this function), and nothing in the repo
+	// publishes book.relocated. DryRun is set live so that whoever wires this
+	// up does not inherit the op's preview default by accident: a relocation
+	// event wants the move made, and an omitted dry_run would queue a run that
+	// moves nothing.
 	params := pathUpdateParams{BookID: bookID, DryRun: opmode.Live()}
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
