@@ -1,5 +1,5 @@
 <!-- file: docs/port-inventory-phase7.md -->
-<!-- version: 2.0.1 -->
+<!-- version: 2.0.2 -->
 <!-- guid: b0d4917c-52ae-4f38-9c61-7e2038ab5d19 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -99,7 +99,7 @@ legacy.
 ## 4. Left owing after this phase
 
 - **No metadata search in the workspace.** §2.1 — the dialogs remain the only
-  entry point. The honest next feature.
+  entry point. The next feature to build.
 - The `MetadataPanel` lift that would make the metadata lane structurally match
   dupes and regroup.
 

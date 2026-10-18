@@ -1,5 +1,5 @@
 <!-- file: docs/port-inventory-dupes.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: c93b313e-8cfd-4ecc-8f28-443b071cd080 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -71,7 +71,7 @@ than left pointing at a generalisation that was examined and rejected.
       dimension in the schema — so the source returned a hardcoded `0` for every
       band and only its `total` was real. Reproducing the shape would ship a map
       whose name promises counts it cannot contain. Replaced by `pendingTotal`,
-      which is the one honest number derivable from that endpoint.
+      which is the only real number derivable from that endpoint.
 
 ### The keep decision
 - [x] `metadataQuality(book)` — moved to `lanes/keepDecision.ts`
