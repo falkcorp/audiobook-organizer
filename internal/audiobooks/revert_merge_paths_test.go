@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_paths_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e1f3a27-6c94-4b05-a2d8-0f7b5c19e364
 // last-edited: 2026-10-18
 
@@ -121,6 +121,7 @@ func revertAndRequireRestored(t *testing.T, store database.Store, opID string, f
 	res, err := NewRevertService(store).RevertOperation(opID)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.RestoredTypes[undo.ChangeTypeMergeCombineJournal], "%+v", res)
+	require.Empty(t, res.Kept, "a clean combine's revert leaves nothing as is")
 	require.Equal(t, before, snapLibrary(t, store, f), "the revert put every book, file row and id back")
 }
 

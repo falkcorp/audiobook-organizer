@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.77.0
+// version: 1.78.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-18
 
@@ -292,8 +292,10 @@ type RevertResult struct {
 	// (undo.AuthorPartlyRestoredError). Nothing in RestoredTypes shows them, and
 	// the restored author is still a write a caller's caches must see.
 	AuthorsPartlyRestored int `json:"authors_partly_restored,omitempty"`
-	// Kept lists, per partially restored row, the tags left as they are
-	// because they changed since the operation.
+	// Kept lists, per partially restored row, what was left as it is: the
+	// tags (or metadata fields) that changed since the operation, or what a
+	// combine's undo could not put back (a created file row with no book to
+	// return to, a survivor field changed since).
 	Kept []string `json:"kept,omitempty"`
 	// ChangedSince counts the Failed rows the compare-and-set refused because
 	// their target no longer holds what the operation wrote
@@ -1260,9 +1262,11 @@ func retiredBefore(b *database.Book, c *database.OperationChange) bool {
 	return b.MarkedForDeletionAt != nil && b.MarkedForDeletionAt.Before(c.CreatedAt)
 }
 
-// partialTagRestore reports a snapshot tag_write row put back only in part:
-// the kept properties changed since the operation. RevertOperation counts the
-// row restored and reports detail.
+// partialTagRestore reports a row put back only in part: a snapshot
+// tag_write row whose kept properties changed since the operation, a metadata
+// apply batch with fields left, or a merge_combine_journal row whose undo
+// returned warnings (merge.CombineUndoResult.Warnings). RevertOperation counts
+// the row restored and reports detail in RevertResult.Kept.
 type partialTagRestore struct{ detail string }
 
 // supersededRestore is a row's revert that wrote nothing because what it
