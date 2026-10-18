@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2465,7 +2465,8 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 			author, err = ms.db.CreateAuthor(plan.Applied.Author)
 		}
 		if err != nil || author == nil {
-			slog.Warn("combine override author", "name", logger.SanitizeLogValue(plan.Applied.Author), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
+			mlog.Warn("combine override: author %s not created; author not overridden: %s",
+				logger.SanitizeLogValue(plan.Applied.Author), logger.SanitizeLogValue(fmt.Sprint(err)))
 			dropAuthor()
 			return
 		}
