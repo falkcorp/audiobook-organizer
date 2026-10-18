@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -48,6 +48,28 @@ A date is one of:
 | `m` | calendar months |
 | `y` | calendar years |
 
+Months and years keep the day of the month, and a day that does not exist in the
+target month rolls forward into the next one, so `-1m` on 31 March is 3 March
+(there is no 31 February, so it becomes 3 March), not 28 February. Use days (`-30d`)
+when you need an exact length.
+
+A date with no time of day names a whole UTC day, and the operator says what you mean
+by it:
+
+| Query | Finds |
+|---|---|
+| `date_added:2026-03-31` | Added at any time on 31 March |
+| `date_added:>2026-03-31` | Added after the end of 31 March |
+| `date_added:>=2026-03-31` | Added from the start of 31 March |
+| `date_added:<2026-03-31` | Added before 31 March began |
+| `date_added:<=2026-03-31` | Added up to the end of 31 March |
+| `date_added:2026-03-01..2026-03-31` | Added on any of those days, including all of 31 March |
+
+A full timestamp or an offset is an exact moment instead: `<=` includes it and `>`
+starts just after it. A book added at 15:00 UTC on 31 March matches
+`date_added:<=2026-03-31` and `date_added:2026-03-01..2026-03-31`, in the library
+search and in a dynamic collection alike.
+
 The sign is required: `-30d` is 30 days ago and `+2w` is two weeks from now.
 `30d` on its own is refused, with a message showing `-30d`, rather than
 guessed at. The number can be at most 100000.
@@ -66,7 +88,10 @@ Examples:
 Offsets are resolved when the search runs, not when you type it. A saved
 search, a dynamic collection or a smart playlist that says `last_played:>-30d`
 therefore keeps sliding: it means the last 30 days as of each evaluation. All
-rows in one evaluation share the same "now".
+rows in one evaluation share the same "now". A dynamic collection is evaluated
+when someone opens it, and the Audiobookshelf surface serves its stored members, so
+a scheduled task refreshes every dynamic collection with a relative date in its query
+hourly; its members are at most an hour behind the clock.
 
 ### Per-user fields and dynamic collections
 
@@ -85,5 +110,11 @@ those fields can be edited by anyone allowed to manage collections.
 If a collection's owner has been removed and its query uses those fields, it is
 not worked out as the first administrator (that would show the administrator's
 listening to everyone). It keeps the books it already had and says so, until the
-first administrator saves its query again to take it over or the per-user terms
-are removed.
+first administrator saves its query again with `adopt_owner` set to true to take it
+over or the per-user terms are removed. Saving it again without the flag does not
+take it over.
+
+A malformed date on a per-user field (for example `last_played:>30d`, which needs a
+sign) is refused when the query is saved, with the same message the library search
+gives, instead of producing a collection that matches nothing. With authentication
+off there is one local user, which owns every collection and is the evaluator.

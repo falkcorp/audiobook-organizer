@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
 // last-edited: 2026-10-18
 
@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ import (
 // ── fake store ──────────────────────────────────────────────────────────────
 
 type colFakeStore struct {
+	// mu guards UpdateCollection, the one write the scheduled refresh issues from
+	// several workers at once.
+	mu      sync.Mutex
 	cols    []database.Collection
 	created *database.Collection
 	updates int
@@ -57,10 +61,15 @@ func (f *colFakeStore) AddBooksToCollection(id string, bookIDs []string) (*datab
 		if f.cols[i].Type == database.CollectionTypeDynamic {
 			return nil, database.ErrCollectionNotStatic
 		}
+		changed := false
 		for _, b := range bookIDs {
 			if !slices.Contains(f.cols[i].BookIDs, b) {
 				f.cols[i].BookIDs = append(f.cols[i].BookIDs, b)
+				changed = true
 			}
+		}
+		if changed {
+			f.cols[i].Version++ // the real store bumps Version on a change
 		}
 		cp := f.cols[i]
 		return &cp, nil
@@ -82,6 +91,7 @@ func (f *colFakeStore) RemoveBookFromCollection(id, bookID string) (*database.Co
 			return nil, database.ErrCollectionBookNotMember
 		}
 		f.cols[i].BookIDs = slices.Delete(slices.Clone(f.cols[i].BookIDs), at, at+1)
+		f.cols[i].Version++
 		cp := f.cols[i]
 		return &cp, nil
 	}
@@ -161,6 +171,8 @@ func (f *colFakeStore) ListCollections(t string, _, _ int) ([]database.Collectio
 }
 
 func (f *colFakeStore) UpdateCollection(col *database.Collection) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.updates++
 	if f.updateErr != nil {
 		return f.updateErr
@@ -191,7 +203,7 @@ func (f *colFakeStore) DeleteCollection(id string) error {
 // indistinguishable in the output.
 func colRouter(store handlers.CollectionStore) (*gin.Engine, *handlers.CollectionHandler) {
 	gin.SetMode(gin.TestMode)
-	// A nil index getter is the honest fixture here: these tests assert
+	// A nil index getter is the plain fixture here: these tests assert
 	// validation and routing, not query evaluation, and a dynamic collection is
 	// specified to survive an unavailable index rather than fail creation.
 	members, _ := store.(handlers.CollectionMembers)
@@ -838,10 +850,11 @@ func TestRemoveBookFromCollection(t *testing.T) {
 type ownerRig struct {
 	r     *gin.Engine
 	store *colFakeStore
+	h     *handlers.CollectionHandler
 }
 
 func newOwnerRig(t *testing.T, store *colFakeStore, users []database.User,
-	states map[string]*database.UserBookState) *ownerRig {
+	states map[string]*database.UserBookState, opts ...handlers.CollectionOption) *ownerRig {
 	t.Helper()
 	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
 	require.NoError(t, err)
@@ -853,7 +866,7 @@ func newOwnerRig(t *testing.T, store *colFakeStore, users []database.User,
 
 	gin.SetMode(gin.TestMode)
 	h := handlers.NewCollectionHandler(store, nil, &colFakeUsers{list: users},
-		&colFakeBooks{states: states}, func() *search.BleveIndex { return idx })
+		&colFakeBooks{states: states}, func() *search.BleveIndex { return idx }, opts...)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		if id := c.GetHeader("X-Test-User"); id != "" {
@@ -868,7 +881,7 @@ func newOwnerRig(t *testing.T, store *colFakeStore, users []database.User,
 	g.POST("/collections/:id/materialize", h.MaterializeCollection)
 	g.POST("/collections", h.CreateCollection)
 	g.PUT("/collections/:id", h.UpdateCollection)
-	return &ownerRig{r: r, store: store}
+	return &ownerRig{r: r, store: store, h: h}
 }
 
 func (o *ownerRig) do(t *testing.T, method, path, asUser string) *httptest.ResponseRecorder {
@@ -1009,7 +1022,21 @@ func TestDynamicCollectionFallsBackToFirstActiveAdmin(t *testing.T) {
 				assert.Equal(t, http.StatusOK, w.Code, "%s re-sending the same query: %s", who, w.Body.String())
 				assert.Equal(t, owner, store.cols[0].CreatedByUserID, "%s is not the stand-in, so nothing is adopted", who)
 			}
+			// The admin re-sending the query without the flag adopts nothing; the
+			// collection stays blocked and the response says so.
 			w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice", map[string]any{"query": "read_status:finished"})
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Equal(t, owner, store.cols[0].CreatedByUserID, "no adopt_owner, no adoption")
+			assert.Contains(t, w.Body.String(), "evaluation_blocked")
+			// Adoption is the explicit act, and only the stand-in admin's.
+			for _, who := range []string{"old-admin", "bob"} {
+				w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", who,
+					map[string]any{"query": "read_status:finished", "adopt_owner": true})
+				assert.Equal(t, http.StatusForbidden, w.Code, "%s: %s", who, w.Body.String())
+				assert.Equal(t, owner, store.cols[0].CreatedByUserID)
+			}
+			w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice",
+				map[string]any{"query": "read_status:finished", "adopt_owner": true})
 			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 			assert.Equal(t, "alice", store.cols[0].CreatedByUserID)
 			w = rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
@@ -1145,11 +1172,19 @@ func TestCollectionPerUserQueryIsEvaluatorOnly(t *testing.T) {
 				assert.Equal(t, "title:Alpha", store.cols[0].Query)
 				assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
 
+				// The stand-in admin may write the query, but writing it adopts nothing:
+				// the collection stays ownerless and unevaluated until adopt_owner.
 				w := put(rig, "alice", "read_status:finished")
 				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+				assert.Equal(t, owner, store.cols[0].CreatedByUserID, "no adopt_owner, no adoption")
+				assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs, "members untouched")
+
+				w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice",
+					map[string]any{"query": "read_status:in_progress", "adopt_owner": true})
+				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 				assert.Equal(t, "alice", store.cols[0].CreatedByUserID,
-					"the admin who writes a per-user query on an ownerless collection takes it over")
-				assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs, "and it is evaluated as alice")
+					"the admin who asks to adopt an ownerless per-user collection takes it over")
+				assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs, "and it is evaluated as alice")
 			})
 		}
 	})
@@ -1260,7 +1295,7 @@ func TestCollectionFallbackNeverEvaluatesPerUserQuery(t *testing.T) {
 		assert.NotContains(t, w.Body.String(), "evaluation_blocked")
 	})
 
-	t.Run("the first admin re-saving the query takes the collection over", func(t *testing.T) {
+	t.Run("the first admin saving the query with adopt_owner takes the collection over", func(t *testing.T) {
 		store := ownerless("read_status:finished", "deleted-user")
 		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
 		// Not a non-admin: bob re-sending the same query neither adopts nor errors.
@@ -1268,7 +1303,8 @@ func TestCollectionFallbackNeverEvaluatesPerUserQuery(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		assert.Equal(t, "deleted-user", store.cols[0].CreatedByUserID)
 
-		w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice", map[string]any{"query": "read_status:finished"})
+		w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice",
+			map[string]any{"query": "read_status:finished", "adopt_owner": true})
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		assert.Equal(t, "alice", store.cols[0].CreatedByUserID)
 		assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)

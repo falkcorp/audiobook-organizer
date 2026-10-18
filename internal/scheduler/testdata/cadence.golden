@@ -11,6 +11,7 @@ series_normalize|0s||false|false|-1|false
 asin_backfill|0s||false|false|-1|false
 candidate_fetch|0s||false|false|-1|false
 identification_advance|5m0s||false|false|-1|false
+collections_refresh|1h0m0s||false|false|-1|false
 catalog_harvest|0s||false|false|-1|false
 acoustid_backfill|0s||false|false|-1|false
 temp_file_cleanup|0s||true|true|14|true

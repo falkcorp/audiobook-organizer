@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.51.0
+// version: 2.52.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-18
 
@@ -114,15 +114,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		config.AppConfig.AutoOrganize,
 	)
 	playlistH := handlers.NewPlaylistHandlerWithGetter(s.storeForWiring(), s.SearchIndex)
-	// The store is passed four times on purpose, each as the narrow role the
-	// handler needs: the CollectionStore it writes through, the locked membership
-	// operations (resolved with AsCapability, NOT part of database.Store), the
-	// user lookups the owner evaluator reads, and the wider store the query
-	// evaluator reads books and per-user state from. Keeping them separate
-	// parameters means the handler's own dependency surface stays inspectable.
-	collectionH := handlers.NewCollectionHandler(
-		s.storeForWiring(), asCollectionMembers(s.storeForWiring()),
-		s.storeForWiring(), s.storeForWiring(), s.SearchIndex)
+	// One shared handler for the routes and the scheduled refresh; see collectionHandler.
+	collectionH := s.collectionHandler()
 	pluginsH := handlers.NewPluginsHandler(s.pluginRegistry, config.AppConfig.Plugins)
 	versionsH := handlers.NewVersionsHandler(s.storeForWiring())
 
@@ -783,4 +776,27 @@ func asCollectionMembers(s any) handlers.CollectionMembers {
 		return m
 	}
 	return nil
+}
+
+// collectionHandler returns the one native collection handler. The store is
+// passed four times on purpose, each as the narrow role the handler needs: the
+// CollectionStore it writes through, the locked membership operations (resolved
+// with AsCapability, NOT part of database.Store), the user lookups the owner
+// evaluator reads, and the wider store the query evaluator reads books and
+// per-user state from. Keeping them separate parameters means the handler's own
+// dependency surface stays inspectable.
+//
+// It is built once and shared by the routes and the scheduled relative-date
+// refresh (collection_refresh_op.go): the handler remembers which collections it
+// has already warned about, so two instances would each warn once an hour about
+// the same orphan.
+func (s *Server) collectionHandler() *handlers.CollectionHandler {
+	s.collectionHOnce.Do(func() {
+		s.collectionHV = handlers.NewCollectionHandler(
+			s.storeForWiring(), asCollectionMembers(s.storeForWiring()),
+			s.storeForWiring(), s.storeForWiring(), s.SearchIndex,
+			// Read per request: with auth off "_local" is a legitimate evaluator.
+			handlers.WithAuthEnabled(func() bool { return config.AppConfig.EnableAuth }))
+	})
+	return s.collectionHV
 }

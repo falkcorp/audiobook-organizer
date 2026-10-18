@@ -9,8 +9,13 @@ with no active admin cannot work out a dynamic collection and answers 503.
 The one search syntax now takes rolling relative dates: a sign, a whole number
 and a unit (`d` days, `w` weeks, `m` months, `y` years), for example
 `last_played:>-30d`, `date_added:>-1y` and `last_played:-30d..now`. An offset is
-resolved each time the search runs, so a saved search keeps sliding; an unsigned
-`30d` is refused with a message showing `-30d`. `date_added` (alias `added`) and
+resolved each time the search runs, so a saved search keeps sliding (a scheduled
+op, `collections.refresh-relative-dynamic`, refreshes the stored members of
+relative-date dynamic collections hourly); an unsigned `30d` is refused with a
+message showing `-30d`, including on a per-user field when a collection is saved.
+A date with no time of day names its whole UTC day: `<=2026-03-31` and
+`2026-03-01..2026-03-31` include everything added on 31 March, `>2026-03-31`
+starts after it. `date_added` (alias `added`) and
 `date_modified` (alias `modified`) are new search fields, in the search index
 and on the Library list; `last_played:*` means played at any time. The Library
 list previously treated any `last_played:` value as "has been played" and
@@ -44,7 +49,7 @@ edit its query could have used `read_status`, `progress_pct` or `last_played` to
 read the owner's listening state out of the members. Only the evaluating user
 (the owner, or the first active admin for a collection that fell back to one) can
 now write those fields into a query, when creating a dynamic collection, editing
-its query or converting a static collection; anyone else gets a 403 with code
+or editing its query; anyone else gets a 403 with code
 `COLLECTION_PER_USER_QUERY_OWNER_ONLY` and nothing is changed. Queries without
 those fields, renames and re-sending the unchanged query are unaffected.
 
@@ -55,9 +60,17 @@ listening state to every reader): materialize answers 409
 `COLLECTION_OWNER_MISSING_PER_USER_QUERY`, a native read answers 200 with the
 stored members and an `evaluation_blocked` flag, and the stored members are left
 as they were. Queries without those fields still fall back to the admin. The first
-active admin takes the collection over by saving its query again. The startup
+active admin takes the collection over by saving its query again with
+`"adopt_owner": true`; re-sending the query without the flag never adopts. The startup
 owner backfill leaves such collections ownerless instead of assigning the admin,
 and logs one warning listing their ids and names (also in the system activity
 log) on every start until they are resolved. Per-user queries that someone other
 than the owner wrote before the 403 gate cannot be detected, because collections
 keep no authorship history.
+
+Review fixes: with authentication off, `_local` is the owner and evaluator of
+dynamic collections, and a query with no per-user field never answers 503.
+`PUT /api/v1/collections/:id` with `book_ids` now requires `version` (400 when
+missing, 409 with `current_version` when stale). `date_added:(a|b)` alternations
+work. A `PUT` that changes only `sort_json` or `limit` on a blocked collection
+answers with the `evaluation_blocked` flag.

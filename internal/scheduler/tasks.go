@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.34.2
+// version: 1.35.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-18
 
@@ -102,6 +102,24 @@ const (
 )
 
 type identificationAdvanceTaskParams struct {
+	DryRun *bool `json:"dry_run"`
+}
+
+// collections_refresh task: collections.refresh-relative-dynamic every
+// hour. Live, like identification_advance: the op defaults to a dry run. A
+// dynamic collection whose query has a relative date (last_played:>-30d) answers
+// differently as the clock moves, and the ABS surface serves the stored members
+// without evaluating, so this is what makes "the last 30 days" slide for those
+// readers. An hour is the finest granularity a day-sized offset needs; the op
+// stores nothing for a collection whose members did not change, so a quiet hour
+// costs the searches and no writes.
+const (
+	collectionsRefreshTaskName = "collections_refresh"
+	collectionsRefreshOpID     = "collections.refresh-relative-dynamic"
+	collectionsRefreshInterval = time.Hour
+)
+
+type collectionsRefreshTaskParams struct {
 	DryRun *bool `json:"dry_run"`
 }
 
@@ -892,6 +910,53 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return ok
 		},
 		GetInterval:            func() time.Duration { return identificationAdvanceInterval },
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return false },
+	})
+
+	// collections_refresh: re-materialize the relative-date dynamic
+	// collections every hour so what the ABS surface serves slides with the
+	// clock. Not on startup (the search index may still be warming; a refresh
+	// that finds it closed fails and the next hour retries) and not in the
+	// maintenance window (it has its own short interval).
+	ts.registerTask(TaskDefinition{
+		Name:        collectionsRefreshTaskName,
+		Description: "Re-evaluate dynamic collections whose query has a relative date (collections.refresh-relative-dynamic)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			if ts.hasActiveV2Op(collectionsRefreshOpID) {
+				schedLog.Debug("%s: a %s run is already queued or running, skipping this tick (source=%s)",
+					collectionsRefreshTaskName, collectionsRefreshOpID, source)
+				return nil, nil
+			}
+			if prev := ts.previousRunID(collectionsRefreshTaskName); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						return nil, nil
+					}
+				}
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), collectionsRefreshOpID,
+				collectionsRefreshTaskParams{DryRun: opmode.Live()})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue %s: %w", collectionsRefreshOpID, enqErr)
+			}
+			ts.setPreviousRunID(collectionsRefreshTaskName, v2ID)
+			return v2ScheduledOp(v2ID, collectionsRefreshTaskName), nil
+		},
+		// Enabled whenever the op is registered in this binary.
+		IsEnabled: func() bool {
+			if ts.deps.OpRegistry == nil {
+				return false
+			}
+			_, ok := ts.deps.OpRegistry.Def(collectionsRefreshOpID)
+			return ok
+		},
+		GetInterval:            func() time.Duration { return collectionsRefreshInterval },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
 	})

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-18
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -64,6 +65,17 @@ import (
 // collection with no usable owner evaluates as the first active admin, so only
 // that admin may set one there. See requirePerUserQueryEvaluator.
 //
+// AN EVALUATOR IS RESOLVED ONLY FOR A PER-USER QUERY. A query with no per-user
+// field is evaluated with no user at all, as it always was, so it never needs an
+// owner and never answers 503 because the install has no admin.
+//
+// WITH AUTH OFF, "_local" IS THE EVALUATOR. A single-user install (EnableAuth
+// false) has no user rows to speak of: every request is the caller "_local", and
+// it is the one person whose listening state exists. A collection owned by
+// "_local" is therefore evaluated as "_local" (not as a stand-in), and per-user
+// queries work there. With auth on, "_local" is not a user and is treated like any
+// other owner that no longer exists.
+//
 // A STAND-IN ADMIN NEVER EVALUATES A PER-USER QUERY. The first-admin fallback
 // exists so a collection whose owner was deleted keeps working, but for a query
 // that uses a per-user field it would publish the admin's listening state (the
@@ -76,7 +88,10 @@ import (
 // read has always served the last known members rather than failing, see
 // GetCollection). A query without a per-user field still falls back to the admin.
 // The first active admin takes the collection over by saving its query again
-// (UpdateCollection stores that admin as the owner).
+// WITH "adopt_owner": true in the PUT body (UpdateCollection stores that admin as
+// the owner). The flag is required: re-sending a query, changed or not, never
+// adopts, so an admin who edits a query for another reason cannot become the
+// evaluator of per-user state they did not mean to claim.
 
 // CollectionCreateReq is the payload for POST /api/v1/collections.
 //
@@ -99,6 +114,11 @@ type CollectionCreateReq struct {
 // an absent key leaves the stored value alone and an explicit empty one clears
 // it. Type is deliberately absent: converting a static collection into a dynamic
 // one would discard its members with no way back.
+//
+// Version is required when BookIDs is present (a whole-list replace is only safe
+// against the list the caller last read), and AdoptOwner is the explicit opt-in
+// for the first active admin to take an ownerless per-user collection over; see
+// the file header.
 type CollectionUpdateReq struct {
 	Name        *string   `json:"name,omitempty"`
 	Description *string   `json:"description,omitempty"`
@@ -106,6 +126,8 @@ type CollectionUpdateReq struct {
 	Query       *string   `json:"query,omitempty"`
 	SortJSON    *string   `json:"sort_json,omitempty"`
 	Limit       *int      `json:"limit,omitempty"`
+	Version     *int      `json:"version,omitempty"`
+	AdoptOwner  bool      `json:"adopt_owner,omitempty"`
 }
 
 // CollectionMembers is the locked member-list slice of the store: the two
@@ -186,6 +208,32 @@ type CollectionHandler struct {
 	// works when the search index is opened later in Start(). A dynamic
 	// collection answers 503 rather than 500 while it is nil.
 	indexFn func() *search.BleveIndex
+	// authEnabled reports whether authentication is on, read per request so a
+	// config change applies without a restart. Off means single-user mode, where
+	// "_local" is a legitimate evaluator. Defaults to on, the strict reading.
+	authEnabled func() bool
+	// log receives the owner-fallback warning; fallbackLogged holds the ids it
+	// has already been written for, so each collection warns once.
+	log            collectionWarner
+	fallbackLogged sync.Map
+}
+
+// collectionWarner is the part of a logger the handler writes warnings to.
+type collectionWarner interface {
+	Warn(msg string, args ...any)
+}
+
+// CollectionOption configures optional CollectionHandler behaviour.
+type CollectionOption func(*CollectionHandler)
+
+// WithAuthEnabled tells the handler whether authentication is on. The server
+// passes the live config value; without it the handler assumes auth is on.
+func WithAuthEnabled(fn func() bool) CollectionOption {
+	return func(h *CollectionHandler) {
+		if fn != nil {
+			h.authEnabled = fn
+		}
+	}
 }
 
 // NewCollectionHandler constructs a CollectionHandler with a lazy index getter.
@@ -195,14 +243,21 @@ func NewCollectionHandler(
 	owners CollectionOwnerStore,
 	evalStore CollectionEvalStore,
 	indexFn func() *search.BleveIndex,
+	opts ...CollectionOption,
 ) *CollectionHandler {
 	if indexFn == nil {
 		indexFn = func() *search.BleveIndex { return nil }
 	}
-	return &CollectionHandler{
+	h := &CollectionHandler{
 		store: store, members: members, owners: owners,
 		evalStore: evalStore, indexFn: indexFn,
+		authEnabled: func() bool { return true },
+		log:         collectionLog,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // validateCollectionCreate enforces the type/field agreement.
@@ -262,9 +317,9 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 
 	// The creator is the owner and the evaluator, never a stand-in: a per-user
 	// query is refused unless evaluatorFor resolves to the creator, which it does
-	// whenever the creator is a user row. A creator who is not (no-auth "_local",
-	// a row deleted mid-request) would otherwise be evaluated as the first admin
-	// and read the admin's state.
+	// whenever the creator is a user row, or is "_local" with auth off. A creator
+	// who is neither (a row deleted mid-request) would otherwise be evaluated as
+	// the first admin and read the admin's state.
 	if col.Type == database.CollectionTypeDynamic && !h.requirePerUserQueryEvaluator(c, col, col.Query) {
 		return
 	}
@@ -429,7 +484,25 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 				"a dynamic collection's members come from its query; update the query instead")
 			return
 		}
+		// A whole-list replace is only safe against the list the caller last read,
+		// so the version it read is required and must still be current. Without it
+		// a PUT silently dropped any book an atomic add landed since the read.
+		if req.Version == nil {
+			httputil.RespondWithBadRequest(c,
+				"version is required with book_ids: send the version of the collection you read")
+			return
+		}
+		if *req.Version != col.Version {
+			httputil.RespondWithErrorFields(c, http.StatusConflict,
+				"the collection changed since you read it; reload it and resend book_ids with its current version",
+				"CONFLICT", gin.H{"current_version": col.Version})
+			return
+		}
 		col.BookIDs = *req.BookIDs
+	}
+	if req.AdoptOwner && req.Query == nil {
+		httputil.RespondWithBadRequest(c, "adopt_owner applies to a query: send the per-user query with it")
+		return
 	}
 	if req.Query != nil {
 		if col.Type != database.CollectionTypeDynamic {
@@ -446,16 +519,13 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		if *req.Query != origQuery && !h.requirePerUserQueryEvaluator(c, col, *req.Query) {
 			return
 		}
-		// The first active admin saving a per-user query on an ownerless collection
-		// takes it over: the stand-in never evaluates such a query (see the file
-		// header), so without this the one user the gate lets write it could not
-		// make it work. Re-sending the unchanged query is enough. Only the
-		// stand-in qualifies (the gate above refuses anyone else a changed query,
-		// and an unchanged one by someone else fails the id check here).
-		if search.QueryUsesPerUserField(*req.Query) {
-			if id, fallback, rerr := h.resolveEvaluator(col); rerr == nil && fallback && id == CallingUserID(c) {
-				col.CreatedByUserID = id
-			}
+		// The first active admin takes an ownerless per-user collection over, but
+		// only by asking: the stand-in never evaluates such a query (see the file
+		// header), so without adoption the one user the gate lets write it could
+		// not make it work, and with adoption implied by a re-save an admin editing
+		// the query for another reason would claim someone else's per-user state.
+		if req.AdoptOwner && !h.adoptOwner(c, col, *req.Query) {
+			return
 		}
 		col.Query = *req.Query
 	}
@@ -469,10 +539,18 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 	// Re-materialize when the query or its shaping changed, so the next reader —
 	// including the ABS surface, which never evaluates — sees the new answer
 	// rather than the previous query's members.
+	blocked := false
 	if col.Type == database.CollectionTypeDynamic &&
 		(req.Query != nil || req.SortJSON != nil || req.Limit != nil) {
-		if ids, err := h.evaluate(col); err == nil {
+		ids, err := h.evaluate(col)
+		switch {
+		case err == nil:
 			col.MaterializedBookIDs = ids
+		case errors.Is(err, ErrCollectionOwnerMissingPerUserQuery):
+			// The edit is saved (name, sort, limit, even the query) but the members
+			// stay as they were, and the caller is told so instead of being handed
+			// a 200 that reads as a fresh evaluation.
+			blocked = true
 		}
 	}
 
@@ -484,7 +562,49 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		httputil.InternalError(c, "failed to update collection", err)
 		return
 	}
+	if blocked {
+		httputil.RespondWithOK(c, collectionBlockedResponse{
+			Collection:               col,
+			EvaluationBlocked:        ErrCodeCollectionOwnerMissingPerUserQuery,
+			EvaluationBlockedMessage: ownerMissingMessage(),
+		})
+		return
+	}
 	httputil.RespondWithOK(c, col)
+}
+
+// adoptOwner handles "adopt_owner": true on a PUT carrying query: the caller must
+// be the first active admin standing in for an ownerless collection, and the query
+// must use a per-user field (adopting for any other query would change nothing the
+// evaluator reads). It stores the caller as the owner on col, or writes the error
+// response and reports false. Every refusal is explicit; nothing is a silent no-op.
+func (h *CollectionHandler) adoptOwner(c *gin.Context, col *database.Collection, query string) bool {
+	if !search.QueryUsesPerUserField(query) {
+		httputil.RespondWithBadRequest(c, "adopt_owner applies only to a query that uses a per-user field ("+
+			strings.Join(search.PerUserFieldNames(), ", ")+")")
+		return false
+	}
+	id, fallback, err := h.resolveEvaluator(col)
+	switch {
+	case errors.Is(err, ErrNoCollectionEvaluator):
+		httputil.RespondWithError(c, http.StatusForbidden,
+			"only the first active admin can adopt a collection, and there is none",
+			ErrCodeCollectionPerUserQueryOwnerOnly)
+		return false
+	case err != nil:
+		httputil.InternalError(c, "failed to resolve the collection's evaluating user", err)
+		return false
+	case !fallback:
+		httputil.RespondWithConflict(c, "the collection already has an owner; adopt_owner applies only to an ownerless collection")
+		return false
+	case id != CallingUserID(c):
+		httputil.RespondWithError(c, http.StatusForbidden,
+			"only the first active admin can adopt an ownerless collection",
+			ErrCodeCollectionPerUserQueryOwnerOnly)
+		return false
+	}
+	col.CreatedByUserID = id
+	return true
 }
 
 // DeleteCollection — DELETE /api/v1/collections/:id
@@ -566,15 +686,20 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 // header. That is what makes a materialize, a native read and the ABS surface
 // (which serves the stored set) agree whoever is signed in.
 func (h *CollectionHandler) evaluate(col *database.Collection) ([]string, error) {
-	userID, fallback, err := h.resolveEvaluator(col)
-	if err != nil {
-		return nil, err
-	}
-	if fallback {
-		if search.QueryUsesPerUserField(col.Query) {
+	// Only a per-user query has anyone to be evaluated as. Resolving an evaluator
+	// for every query would make a plain one depend on the owner row and on an
+	// active admin existing, and answer 503 for neither reason being its business.
+	userID := ""
+	if search.QueryUsesPerUserField(col.Query) {
+		id, fallback, err := h.resolveEvaluator(col)
+		if err != nil {
+			return nil, err
+		}
+		if fallback {
+			h.logOwnerFallback(col, id)
 			return nil, ErrCollectionOwnerMissingPerUserQuery
 		}
-		logOwnerFallback(col, userID)
+		userID = id
 	}
 	return playlist.EvaluateSmartPlaylist(
 		h.evalStore, h.indexFn(),
@@ -624,15 +749,25 @@ func (h *CollectionHandler) requirePerUserQueryEvaluator(c *gin.Context, col *da
 func (h *CollectionHandler) evaluatorFor(col *database.Collection) (string, error) {
 	userID, fallback, err := h.resolveEvaluator(col)
 	if err == nil && fallback {
-		logOwnerFallback(col, userID)
+		h.logOwnerFallback(col, userID)
 	}
 	return userID, err
 }
+
+// localCallerID is the caller id a request carries when nobody is authenticated
+// (CallingUserID), and so the owner of a collection created with auth off.
+const localCallerID = "_local"
 
 // resolveEvaluator is evaluatorFor that also says whether the answer is the
 // first-admin stand-in (the stored owner is empty, "_local" or not a user row)
 // rather than the owner. It does not log; callers that evaluate do.
 func (h *CollectionHandler) resolveEvaluator(col *database.Collection) (userID string, fallback bool, err error) {
+	// Single-user mode: "_local" is the one user whose state exists, not a
+	// stand-in. With auth on it is not a user row and falls through like any other
+	// owner that does not exist.
+	if col.CreatedByUserID == localCallerID && !h.authEnabled() {
+		return localCallerID, false, nil
+	}
 	if h.owners == nil {
 		return "", false, ErrNoCollectionEvaluator
 	}
@@ -656,10 +791,18 @@ func (h *CollectionHandler) resolveEvaluator(col *database.Collection) (userID s
 	return admin.ID, true, nil
 }
 
-// logOwnerFallback records that a collection is being evaluated as someone other
-// than its stored owner.
-func logOwnerFallback(col *database.Collection, adminID string) {
-	collectionLog.Warn("collections: collection %s has owner %q which is not a user; evaluating as first admin %s",
+// logOwnerFallback records that a collection has no usable owner and its first
+// active admin stand-in applies. It warns once per collection per process, and
+// never for a collection with no id (a create in flight has none yet, and an
+// empty id names nothing an operator could act on).
+func (h *CollectionHandler) logOwnerFallback(col *database.Collection, adminID string) {
+	if col.ID == "" {
+		return
+	}
+	if _, seen := h.fallbackLogged.LoadOrStore(col.ID, struct{}{}); seen {
+		return
+	}
+	h.log.Warn("collections: collection %s has owner %q which is not a user; first admin %s stands in for it and its per-user query is not evaluated",
 		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.CreatedByUserID), logger.SanitizeLogValue(adminID))
 }
 
@@ -668,7 +811,7 @@ func ownerMissingMessage() string {
 	return "this collection's owner no longer exists and its query uses per-user fields (" +
 		strings.Join(search.PerUserFieldNames(), ", ") +
 		"), so it is not evaluated as the first admin and keeps its stored members; " +
-		"the first active admin can save its query again to take ownership, or the per-user fields can be removed"
+		"the first active admin can save its query again with adopt_owner set to true to take ownership, or the per-user fields can be removed"
 }
 
 // load resolves :id, writing the error response itself.

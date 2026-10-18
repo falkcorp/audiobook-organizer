@@ -1,5 +1,5 @@
 // file: internal/server/collection_owner_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91a4c7e2-5d38-4b6f-8c10-e3f7a2d9b564
 // last-edited: 2026-10-18
 
@@ -97,7 +97,7 @@ func ownerBackfillCollections() []database.Collection {
 func TestBackfillCollectionOwners(t *testing.T) {
 	store := &fakeOwnerStore{users: ownerBackfillUsers(), cols: ownerBackfillCollections()}
 
-	res, err := backfillCollectionOwners(store, nil, nil)
+	res, err := backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, 3, res.Reassigned)
 	assert.Zero(t, res.Rematerialized, "no rematerializer was given")
@@ -119,7 +119,7 @@ func TestBackfillCollectionOwners(t *testing.T) {
 
 	// Second run: nothing needs an owner, nothing is written.
 	writesBefore := store.writes
-	res, err = backfillCollectionOwners(store, nil, nil)
+	res, err = backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, collectionOwnerBackfillResult{}, res)
 	assert.Equal(t, writesBefore, store.writes, "a second run must change nothing")
@@ -135,7 +135,7 @@ func TestBackfillCollectionOwners_FirstAdminTieBreak(t *testing.T) {
 		cols: []database.Collection{{ID: "c1", Name: "c1", Type: database.CollectionTypeDynamic,
 			Query: "title:x", Version: 1}},
 	}
-	_, err := backfillCollectionOwners(store, nil, nil)
+	_, err := backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "admin-a", store.byID("c1").CreatedByUserID,
 		"equal CreatedAt is broken by the smaller id")
@@ -146,7 +146,7 @@ func TestBackfillCollectionOwners_NoAdminLeavesRows(t *testing.T) {
 		users: []database.User{{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active"}},
 		cols:  ownerBackfillCollections(),
 	}
-	res, err := backfillCollectionOwners(store, nil, nil)
+	res, err := backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.True(t, res.NoAdmin)
 	assert.Zero(t, res.Reassigned)
@@ -158,7 +158,7 @@ func TestBackfillCollectionOwners_NothingToDoWritesNothing(t *testing.T) {
 	store := &fakeOwnerStore{users: ownerBackfillUsers(), cols: []database.Collection{
 		{ID: "s", Name: "s", Type: database.CollectionTypeStatic, Version: 1},
 	}}
-	res, err := backfillCollectionOwners(store, nil, nil)
+	res, err := backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, collectionOwnerBackfillResult{}, res)
 	assert.Zero(t, store.writes)
@@ -174,7 +174,7 @@ func TestBackfillCollectionOwners_Rematerialize(t *testing.T) {
 		}
 		return []string{"b1", "b2"}, nil
 	}
-	res, err := backfillCollectionOwners(store, remat, nil)
+	res, err := backfillCollectionOwners(store, remat, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, 3, res.Reassigned)
 	assert.Equal(t, 2, res.Rematerialized)
@@ -190,14 +190,14 @@ func TestBackfillCollectionOwners_ConflictIsSkippedNotFatal(t *testing.T) {
 		users: ownerBackfillUsers(), cols: ownerBackfillCollections(),
 		conflictOn: map[string]bool{"dyn-local": true},
 	}
-	res, err := backfillCollectionOwners(store, nil, nil)
+	res, err := backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, 2, res.Reassigned)
 	assert.Equal(t, 1, res.Conflicts)
 	assert.Equal(t, "_local", store.byID("dyn-local").CreatedByUserID, "left for the next boot")
 
 	store.conflictOn = nil
-	res, err = backfillCollectionOwners(store, nil, nil)
+	res, err = backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Reassigned, "the next run finishes the skipped one")
 }
@@ -225,7 +225,7 @@ func TestBackfillCollectionOwners_RealStore(t *testing.T) {
 	gone := mk("Gone", database.CollectionTypeDynamic, "title:x", "deleted-user")
 	static := mk("Static", database.CollectionTypeStatic, "", "")
 
-	res, err := backfillCollectionOwners(store, nil, nil)
+	res, err := backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, 2, res.Reassigned)
 
@@ -240,7 +240,7 @@ func TestBackfillCollectionOwners_RealStore(t *testing.T) {
 	assert.Equal(t, "", got.CreatedByUserID)
 	assert.Equal(t, 1, got.Version)
 
-	res, err = backfillCollectionOwners(store, nil, nil)
+	res, err = backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, collectionOwnerBackfillResult{}, res)
 }
@@ -272,7 +272,7 @@ func TestBackfillCollectionOwners_SkipsPerUserQueriesAndListsThem(t *testing.T) 
 	act := &recordingActivityWriter{}
 	log := logger.NewWithActivityLog("collection-owner-backfill", act)
 
-	res, err := backfillCollectionOwners(store, nil, log)
+	res, err := backfillCollectionOwners(store, nil, log, true)
 	require.NoError(t, err)
 	assert.Equal(t, 3, res.Reassigned, "the three title-only orphans still get the admin")
 	assert.Equal(t, 3, res.SkippedPerUser)
@@ -307,7 +307,7 @@ func TestBackfillCollectionOwners_SkipsPerUserQueriesAndListsThem(t *testing.T) 
 	// Idempotent: nothing more is written, and the same collections are listed again.
 	writes := store.writes
 	act.lines = nil
-	res, err = backfillCollectionOwners(store, nil, log)
+	res, err = backfillCollectionOwners(store, nil, log, true)
 	require.NoError(t, err)
 	assert.Equal(t, collectionOwnerBackfillResult{SkippedPerUser: 3}, res)
 	assert.Equal(t, writes, store.writes, "a second run writes nothing")
@@ -322,7 +322,7 @@ func TestBackfillCollectionOwners_PerUserOrphansListedWithoutAdmin(t *testing.T)
 			Query: "read_status:finished", Version: 1}},
 	}
 	act := &recordingActivityWriter{}
-	res, err := backfillCollectionOwners(store, nil, logger.NewWithActivityLog("collection-owner-backfill", act))
+	res, err := backfillCollectionOwners(store, nil, logger.NewWithActivityLog("collection-owner-backfill", act), true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.SkippedPerUser)
 	assert.False(t, res.NoAdmin, "nothing needed an admin")
@@ -360,7 +360,7 @@ func TestBackfillCollectionOwners_RealStoreSkipsPerUser(t *testing.T) {
 	plain := mk("Plain", "title:x")
 	pu := mk("PerUser", "read_status:finished")
 
-	res, err := backfillCollectionOwners(store, nil, nil)
+	res, err := backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, collectionOwnerBackfillResult{Reassigned: 1, SkippedPerUser: 1}, res)
 	got, err := store.GetCollection(plain.ID)
@@ -371,7 +371,29 @@ func TestBackfillCollectionOwners_RealStoreSkipsPerUser(t *testing.T) {
 	assert.Equal(t, "deleted-user", got.CreatedByUserID)
 	assert.Equal(t, 1, got.Version, "not written")
 
-	res, err = backfillCollectionOwners(store, nil, nil)
+	res, err = backfillCollectionOwners(store, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, collectionOwnerBackfillResult{SkippedPerUser: 1}, res)
+}
+
+// With auth off "_local" is the single user and a legitimate owner: the backfill
+// must leave its collections alone (reassigning one to an admin would change whose
+// per-user state it is evaluated against), while the other ownerless shapes are
+// still given the first active admin.
+func TestBackfillCollectionOwners_AuthOffKeepsLocalOwner(t *testing.T) {
+	store := &fakeOwnerStore{users: ownerBackfillUsers(), cols: ownerBackfillCollections()}
+	store.cols = append(store.cols, database.Collection{
+		ID: "dyn-local-peruser", Name: "dyn-local-peruser", Type: database.CollectionTypeDynamic,
+		Query: "read_status:finished", CreatedByUserID: "_local", Version: 1,
+	})
+
+	res, err := backfillCollectionOwners(store, nil, nil, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, "_local", store.byID("dyn-local").CreatedByUserID, "an auth-off _local owner is kept")
+	assert.Equal(t, "_local", store.byID("dyn-local-peruser").CreatedByUserID)
+	assert.Equal(t, 0, res.SkippedPerUser, "a _local per-user collection is owned, not an orphan to list")
+	assert.Equal(t, "alice", store.byID("dyn-empty").CreatedByUserID, "an empty owner still gets the first admin")
+	assert.Equal(t, "alice", store.byID("dyn-gone").CreatedByUserID, "a deleted owner still gets the first admin")
+	assert.Equal(t, 2, res.Reassigned)
 }
