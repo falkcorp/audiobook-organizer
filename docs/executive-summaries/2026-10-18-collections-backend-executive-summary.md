@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-collections-backend-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: bc1b7020-e5ad-4493-90ab-243c0a1234fc -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -40,6 +40,14 @@ relative dates in the one search syntax, atomic add and remove).
   steps are now done as one locked step. Two new routes add and remove books
   directly, and the four Audiobookshelf calls that change membership use the
   same step. Two simultaneous adds now both succeed.
+- **Nobody can read another person's listening through a shared collection.**
+  Because a dynamic collection answers with its owner's listening history for
+  everybody, anyone allowed to edit it could have rewritten its search to ask
+  "which books has the owner finished?" and read the answer off the list. Only
+  the person the collection is worked out as can now put listening-history terms
+  (read status, progress, last played) into its search; anyone else is refused
+  with a clear message and nothing changes. Ordinary searches, renames and book
+  lists are unaffected.
 - **The web app knows what the signed-in user may do.** The sign-in and
   "who am I" answers now list the user's permissions, so the app can show or
   hide collection controls.

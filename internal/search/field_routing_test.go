@@ -1,5 +1,5 @@
 // file: internal/search/field_routing_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d1f3a6c-5e27-4b90-9c14-2a7e6b0d4f83
 // last-edited: 2026-10-18
 
@@ -113,5 +113,50 @@ func TestPerUserFieldNames_MatchesTheRoutingSet(t *testing.T) {
 		if IsPerUserField(n) {
 			t.Errorf("IsPerUserField(%q) = true, want false", n)
 		}
+	}
+}
+
+// The gate is only as good as its agreement with the evaluator: a query the
+// translator routes to the per-user pass (and so evaluates as the owner) must be
+// one QueryUsesPerUserField reports, in every spelling the parser accepts. This
+// is the differential check: for each query that parses, the translator's own
+// per-user routing and the gate must give the same answer. A query that does not
+// parse (or translate) is refused by EvaluateSmartPlaylist, so it never reads
+// anyone's state whatever the gate says.
+func TestQueryUsesPerUserField_AgreesWithTranslatorRouting(t *testing.T) {
+	queries := []string{
+		"read_status:finished", "READ_STATUS:finished", "Read_Status:finished",
+		"read_status:\"finished\"", "read_status:'finished'", "read_status:Finished",
+		"progress_pct:>5", "progress_pct:[10 TO 90]", "progress_pct:10..90", "PROGRESS_PCT:>5",
+		"last_played:*", "last_played:>-30d", "last_played:-30d..now", "Last_Played:>2026-01-01",
+		"-read_status:finished", "NOT read_status:finished", "NOT (read_status:finished)",
+		"title:x AND (author:y OR -read_status:finished)",
+		"read_status:(finished|in_progress)", "read_status:/fin.*/", "read_status:fin*",
+		"title:x read_status:finished", "(((read_status:finished)))",
+		"added:>-30d", "modified:<2026-01-01", "date_added:>-30d", "duration:>1h",
+		"title:read_status", "read_status", "title:\"read_status:finished\"",
+		"readstatus:finished", "read-status:finished", "read_status :finished", "read_status: finished",
+		"user.read_status:finished", "per_user:read_status", "state:finished",
+	}
+	routed := 0
+	for _, q := range queries {
+		ast, err := ParseQuery(q)
+		if err != nil {
+			continue // refused by the evaluator before any state is read
+		}
+		_, perUser, err := Translate(ast)
+		if err != nil {
+			continue // likewise refused at translation
+		}
+		if got, want := QueryUsesPerUserField(q), len(perUser) > 0; got != want {
+			t.Errorf("%q: QueryUsesPerUserField = %v but the translator routes %d per-user filter(s)", q, got, len(perUser))
+		}
+		if len(perUser) > 0 {
+			routed++
+		}
+	}
+	// Not vacuous: most of the list really is routed to the per-user pass.
+	if routed < 15 {
+		t.Errorf("only %d of the probe queries were routed per-user; the probe list no longer exercises the gate", routed)
 	}
 }
