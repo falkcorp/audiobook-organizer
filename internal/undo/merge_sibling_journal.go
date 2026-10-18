@@ -1,5 +1,5 @@
 // file: internal/undo/merge_sibling_journal.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9b2e4f71-3c58-4a06-8d1e-6f7a0c35b2d9
 // last-edited: 2026-10-18
 
@@ -24,9 +24,10 @@ import (
 // Restorable: the revert undoes that journal (merge.Service.UndoSiblingMove),
 // which puts every sibling the merge moved back in its old group with its old
 // flag, and reverses the losers' state follow onto a flag holder. It does not
-// bring back the merge's named losers (they are restored from the trash), as
-// the retired POST /merge/sibling-undo/:journal_id did not. A journal already
-// undone, or aborted (the merge was refused before it moved anything), counts
+// bring back the merge's named losers (they are restored from the trash),
+// and neither does POST /merge/sibling-undo/:journal_id, which is still
+// registered (server/wire_dedup_routes.go) and runs the same undo. A journal
+// already undone (by that route or an earlier revert), or aborted (the merge was refused before it moved anything), counts
 // restored with nothing written; one a newer merge built on is refused,
 // changed since.
 //
