@@ -1859,6 +1859,9 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "Forbidden: library.view permission required"
+          },
           "410": {
             "description": "Gone: the endpoint has been removed and has no replacement",
             "content": {
@@ -2860,6 +2863,9 @@
         "responses": {
           "401": {
             "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: library.view permission required"
           },
           "410": {
             "description": "Gone: the endpoint has been removed; use GET /api/v1/audiobooks/:id/changelog instead",

@@ -1,6 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.7.0 -->
-<!-- version: 1.9.2 -->
+<!-- version: 1.9.3 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-18 -->
 

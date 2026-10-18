@@ -274,9 +274,6 @@ METHOD_TO_IFACE = {
     "GetMetadataChangeHistory": "MetadataStore",
     "GetBookChangeHistory": "MetadataStore",
     "GetBookAlternativeTitles": "MetadataStore",
-    "AddBookAlternativeTitle": "MetadataStore",
-    "RemoveBookAlternativeTitle": "MetadataStore",
-    "SetBookAlternativeTitles": "MetadataStore",
     # Hash blocklist
     "IsHashBlocked": "HashBlocklistStore",
     "AddBlockedHash": "HashBlocklistStore",

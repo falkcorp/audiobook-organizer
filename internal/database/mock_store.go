@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.150.0
+// version: 1.151.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package database
 
@@ -388,9 +388,6 @@ type MockStore struct {
 	AddBookUserTagFunc               func(bookID string, tag string) error
 	RemoveBookUserTagFunc            func(bookID string, tag string) error
 	GetBookAlternativeTitlesFunc     func(bookID string) ([]BookAlternativeTitle, error)
-	AddBookAlternativeTitleFunc      func(bookID, title, source, language string) error
-	RemoveBookAlternativeTitleFunc   func(bookID, title string) error
-	SetBookAlternativeTitlesFunc     func(bookID string, titles []BookAlternativeTitle) error
 
 	// Playlists
 	CreatePlaylistFunc        func(name string, seriesID *int, filePath string) (*Playlist, error)
@@ -3113,25 +3110,6 @@ func (m *MockStore) GetBookAlternativeTitles(bookID string) ([]BookAlternativeTi
 	}
 	return nil, nil
 }
-func (m *MockStore) AddBookAlternativeTitle(bookID, title, source, language string) error {
-	if m.AddBookAlternativeTitleFunc != nil {
-		return m.AddBookAlternativeTitleFunc(bookID, title, source, language)
-	}
-	return nil
-}
-func (m *MockStore) RemoveBookAlternativeTitle(bookID, title string) error {
-	if m.RemoveBookAlternativeTitleFunc != nil {
-		return m.RemoveBookAlternativeTitleFunc(bookID, title)
-	}
-	return nil
-}
-func (m *MockStore) SetBookAlternativeTitles(bookID string, titles []BookAlternativeTitle) error {
-	if m.SetBookAlternativeTitlesFunc != nil {
-		return m.SetBookAlternativeTitlesFunc(bookID, titles)
-	}
-	return nil
-}
-
 func (m *MockStore) RecordPathChange(change *BookPathChange) error {
 	if m.RecordPathChangeFunc != nil {
 		return m.RecordPathChangeFunc(change)
