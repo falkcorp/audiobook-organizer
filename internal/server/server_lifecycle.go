@@ -1751,10 +1751,11 @@ func (s *Server) setupRoutes() {
 			// NOTE: /authors, /authors/count, /authors/merge,
 			// /authors/:id/{reclassify-as-narrator,name,split,resolve-production,
 			// aliases,books}, /authors/:id/aliases/:aliasId, /authors/bulk-delete,
-			// /authors/:id, /narrators[/count], /audiobooks/:id/narrators,
+			// /authors/:id, /narrators[/count],
 			// /series[/count], /series/:id[/books,/name,/split], PATCH /series/:id,
 			// /series/bulk-delete, and the work routes migrated to the
 			// handlers/entities sub-package (wire_handlers.go).
+			// /audiobooks/:id/narrators is a 410 stub in wire_entities_routes.go.
 			// /authors/duplicates(/refresh),
 			// /series/duplicates(/refresh), /series/deduplicate, /series/merge,
 			// /series/prune(/preview) and /dedup/validate migrated to the
