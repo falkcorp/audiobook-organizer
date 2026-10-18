@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-review-apply-double-merge-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 599fbed0-86a9-46e6-8bcf-3d81a0563082 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -25,6 +25,11 @@ There is no separate spec.
   stopped in the middle of a merge, the hold was left marked "in progress"
   forever and was hidden from the review list. Now the server recognises at once
   that the merge was interrupted, and approving the hold again finishes it.
+- **A failed second try keeps the hold out of the queue.** If finishing an
+  interrupted merge fails, the hold stays held instead of returning to the
+  list, because the first try may already have moved books. A new "Abandon"
+  button moves a hold that cannot be finished to a "needs attention" list,
+  where someone checks the library and then approves or rejects it.
 - **A merge whose result could not be saved is not run again.** If the merge
   worked but recording "done" failed, approving again now just records it,
   without merging a second time.
@@ -95,6 +100,26 @@ built to skip work that is already done: books already merged are passed over.
 The one thing it does not redo is the disc and track numbering of a multi-disc
 merge that was cut off part way. The re-run uses the same action the
 interrupted merge was running, even if the hold now recommends a different one.
+A "this folder duplicates an existing book" merge can also fail on its second
+try if its first try got part way.
+
+## A second try that fails
+
+**What it was.** When finishing an interrupted merge failed, the hold went back
+into the review list as if nothing had happened, and a reviewer could then
+reject it or mark it "keep separate".
+
+**Why it mattered.** The interrupted first try may already have moved books.
+Recording "rejected" over a half-done merge leaves the library and the record
+disagreeing, with nothing pointing anyone at it.
+
+**The fix.** A failed second try leaves the hold held, with a message giving the
+reason and the two ways forward: try again, or abandon it. Abandoning moves the
+hold to "needs attention" and records which merge was abandoned. It undoes
+nothing. The review page lists those holds separately, with Approve (run the
+merge again from the start) and Reject, for someone who has checked the library.
+Abandoning is also the way out for an interrupted merge whose action the server
+no longer knows how to run.
 
 ## A merge that worked but was not recorded
 
@@ -114,17 +139,21 @@ restart, approving again re-runs the merge, which skips the work already done.
 The review page's regroup lane shows a notice, "N holds held mid-apply", whenever
 any hold is being applied, was interrupted, or ran without being recorded. "Show
 them" lists the holds with the action each was running; "Finish" approves one
-again, which finishes an interrupted merge or records an unrecorded one. The
+again, which finishes an interrupted merge or records an unrecorded one, and
+"Abandon" moves an interrupted one to the "needs attention" list. Each approve
+or reject from the page carries the version of the hold the page showed, so a
+hold that changed in the meantime is refused and the page reloads it. The
 review count the page polls carries the same number. The report after an
 "approve all" now gives holds that were skipped because they are already merged
 or mid-merge their own heading, instead of saying they are "still pending".
 
 ## What remains
 
-A hold interrupted by a crash accepts only one decision: approving it again with
-the same action, which finishes the merge. A reject or a "keep separate" is
-refused, because the interrupted merge may already have moved books, and
-recording "rejected" over that would not match what happened. While merging is
-switched off (production has had it on since 2026-08-17), approving cannot finish
-such a hold either, so it stays held, visible in the notice, until merging is
-switched on again.
+A hold interrupted by a crash accepts only approving it again with the same
+action, which finishes the merge, or abandoning it. A reject or a "keep
+separate" is refused, because the interrupted merge may already have moved
+books, and recording "rejected" over that would not match what happened. While
+merging is switched off (production has had it on since 2026-08-17), approving
+cannot finish such a hold, so abandoning is the only way out. Abandoning leaves
+checking the library to a person: nothing works out what a half-done merge
+changed.
