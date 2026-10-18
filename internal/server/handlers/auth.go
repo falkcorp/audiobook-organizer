@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,14 @@ type AuthUserResponse struct {
 	Roles     []string  `json:"roles"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
+	// Permissions is the caller's effective permission set, sorted, so the web UI
+	// can hide controls the server would refuse. Only Login and Me fill it: the
+	// same struct describes OTHER users in the admin user routes, where a
+	// "permissions" key would read as that person's set, so it is omitted there
+	// (and omitted for an empty set, which a client reads as none: it defaults an
+	// absent field to []). Advisory for the UI only; every route still enforces
+	// its own permission.
+	Permissions []string `json:"permissions,omitempty"`
 }
 
 // AuthUserReader looks up users and counts them for the first-run check.
@@ -42,6 +51,12 @@ type AuthUserWriter interface {
 	UpdateUser(user *database.User) error
 }
 
+// AuthRoleReader resolves a role by id. Login needs it to report the user's
+// effective permissions before any middleware has bound them to a request.
+type AuthRoleReader interface {
+	GetRoleByID(id string) (*database.Role, error)
+}
+
 // AuthSessionStore issues, reads, lists and revokes sessions.
 type AuthSessionStore interface {
 	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error)
@@ -55,12 +70,14 @@ type AuthSessionStore interface {
 // Only the methods actually called by the handler are listed here.
 //
 // Split into interfaces on 2026-08-18. This name is retained as their
-// composition so no consumer moves. AuthRoleReader was dropped on 2026-10-07:
-// ChangePassword's only role lookups were replaced by the request's effective
-// permissions (auth.Can).
+// composition so no consumer moves. AuthRoleReader was dropped on 2026-10-07
+// (ChangePassword's role lookups were replaced by the request's effective
+// permissions, auth.Can) and returned on 2026-10-18 for Login alone, which
+// answers before the auth middleware has bound any permissions.
 type AuthStore interface {
 	AuthUserReader
 	AuthUserWriter
+	AuthRoleReader
 	AuthSessionStore
 }
 
@@ -214,6 +231,17 @@ func buildAuthUserResponse(user *database.User) AuthUserResponse {
 		Status:    user.Status,
 		CreatedAt: user.CreatedAt,
 	}
+}
+
+// permissionStrings flattens a permission set into a sorted slice, [] when
+// empty.
+func permissionStrings(perms []auth.Permission) []string {
+	out := make([]string, 0, len(perms))
+	for _, p := range perms {
+		out = append(out, string(p))
+	}
+	sort.Strings(out)
+	return out
 }
 
 // BuildAuthUserResponse is the exported form of buildAuthUserResponse for
@@ -394,8 +422,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// return session.ID in the JSON body — that would expose the bearer token
 	// to page JavaScript and defeat the HttpOnly protection against XSS theft.
 	// Expose non-authenticating metadata only (expiry) for UI display.
+	// Login answers before the auth middleware binds permissions, so they are
+	// computed from the user's roles with the middleware's own union
+	// (EffectivePermissionsFor). A password sign-in is never key-scoped, so this
+	// is exactly the set a request on the new session will carry.
+	resp := buildAuthUserResponse(user)
+	resp.Permissions = permissionStrings(servermiddleware.EffectivePermissionsFor(h.store, user))
 	httputil.RespondWithOK(c, gin.H{
-		"user":       buildAuthUserResponse(user),
+		"user":       resp,
 		"expires_at": session.ExpiresAt,
 	})
 }
@@ -407,7 +441,23 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		httputil.RespondWithUnauthorized(c, "not authenticated")
 		return
 	}
-	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
+	// The request's effective permissions, the set auth.Can reads: the role union
+	// the middleware bound, already narrowed by an API key's scopes when the
+	// request came in on a key. A fresh walk of the roles here would report
+	// permissions a scoped key cannot actually use.
+	resp := buildAuthUserResponse(user)
+	resp.Permissions = permissionStrings(requestPermissions(c))
+	httputil.RespondWithOK(c, gin.H{"user": resp})
+}
+
+// requestPermissions lists the permissions bound to c's request context.
+func requestPermissions(c *gin.Context) []auth.Permission {
+	set := auth.PermissionsFromContext(c.Request.Context())
+	out := make([]auth.Permission, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	return out
 }
 
 // UpdateMe handles PATCH /auth/me.

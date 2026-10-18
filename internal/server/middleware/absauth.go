@@ -647,7 +647,7 @@ func absAPIKeyFromRequest(c *gin.Context) string {
 
 // absEffectivePermissions resolves the union of a user's role permissions.
 //
-// It mirrors effectivePermissionsFor (auth.go) but takes only the single method it
+// It mirrors EffectivePermissionsFor (auth.go) but takes only the single method it
 // needs, so ABSIdentityStore does not have to embed the whole six-method
 // database.RoleStore and the existing helper's signature stays untouched. A user with
 // no resolvable roles gets nil, which makes every auth.Can() check return false —

@@ -358,6 +358,68 @@ func (_c *MockAuthStore_CreateUser_Call) RunAndReturn(run func(username string, 
 	return _c
 }
 
+// GetRoleByID provides a mock function for the type MockAuthStore
+func (_mock *MockAuthStore) GetRoleByID(id string) (*database.Role, error) {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetRoleByID")
+	}
+
+	var r0 *database.Role
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Role, error)); ok {
+		return returnFunc(id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Role); ok {
+		r0 = returnFunc(id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Role)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAuthStore_GetRoleByID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetRoleByID'
+type MockAuthStore_GetRoleByID_Call struct {
+	*mock.Call
+}
+
+// GetRoleByID is a helper method to define mock.On call
+//   - id string
+func (_e *MockAuthStore_Expecter) GetRoleByID(id any) *MockAuthStore_GetRoleByID_Call {
+	return &MockAuthStore_GetRoleByID_Call{Call: _e.mock.On("GetRoleByID", id)}
+}
+
+func (_c *MockAuthStore_GetRoleByID_Call) Run(run func(id string)) *MockAuthStore_GetRoleByID_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAuthStore_GetRoleByID_Call) Return(role *database.Role, err error) *MockAuthStore_GetRoleByID_Call {
+	_c.Call.Return(role, err)
+	return _c
+}
+
+func (_c *MockAuthStore_GetRoleByID_Call) RunAndReturn(run func(id string) (*database.Role, error)) *MockAuthStore_GetRoleByID_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetSession provides a mock function for the type MockAuthStore
 func (_mock *MockAuthStore) GetSession(id string) (*database.Session, error) {
 	ret := _mock.Called(id)
