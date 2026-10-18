@@ -1,6 +1,6 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.11.1
-// last-edited: 2026-10-11
+// version: 2.12.0
+// last-edited: 2026-10-18
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -169,6 +169,18 @@ const SEARCH_HELP = [
   { example: 'read_status:in_progress', desc: "Books you're reading" },
   { example: '-read_status:finished', desc: 'Unfinished books' },
   { example: 'progress_pct:>75', desc: 'Nearly finished books' },
+  // Dates — last_played is per-user; date_added and date_modified are library-wide
+  // (aliases: added, modified). An offset is a sign, a number and a unit, and it is
+  // resolved when the search RUNS, so a saved search keeps sliding.
+  {
+    example: 'last_played:>-30d',
+    desc: 'Played in the last 30 days. An offset is a sign, a number and a unit: d days, w weeks, m months, y years (-2w, +1m). It is worked out each time the search runs, so a saved search keeps sliding. The sign is required (30d is refused)',
+  },
+  { example: 'date_added:>-1y', desc: 'Added to the library within the last year (also date_modified)' },
+  {
+    example: 'last_played:-30d..now',
+    desc: 'A date range, inclusive: from 30 days ago until now (dates also work, e.g. 2026-01-01..2026-03-31)',
+  },
   // Value syntax — the same in every field:value filter (and in the Review
   // Title filter). Evaluated server-side over the whole library. Only syntax
   // that actually works belongs here; OR (||), fuzzy (~) and (a|b) groups

@@ -1,6 +1,6 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.5.1
-// last-edited: 2026-10-11
+// version: 1.6.0
+// last-edited: 2026-10-18
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
 /**
@@ -72,6 +72,13 @@ export const SEARCH_FIELDS: readonly string[] = [
   'read_status',
   'progress_pct',
   'last_played',
+  // Dates (server: internal/search/relative_date.go): date_added and
+  // date_modified are indexed; `added` and `modified` are their aliases. All
+  // take YYYY-MM-DD, now, or an offset such as -30d (see queryGrammar.ts).
+  'date_added',
+  'added',
+  'date_modified',
+  'modified',
 ] as const;
 
 const searchFieldSet = new Set<string>(SEARCH_FIELDS);

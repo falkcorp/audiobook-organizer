@@ -1054,6 +1054,19 @@ export interface AuthUser {
   roles: string[];
   status: string;
   created_at: string;
+  /**
+   * The caller's effective permissions (for example `collections.manage`), as the
+   * server computed them for this session, so the UI can hide controls the server
+   * would refuse. Advisory only: every route still enforces its own permission.
+   * Always an array here: `normalizeAuthUser` turns an absent field (an older
+   * server, or an endpoint that does not report it) into `[]`, which fails closed.
+   */
+  permissions: string[];
+}
+
+/** Defaults `permissions` to `[]` so a missing field means "none", never "all". */
+export function normalizeAuthUser(user: AuthUser): AuthUser {
+  return { ...user, permissions: Array.isArray(user?.permissions) ? user.permissions : [] };
 }
 
 export interface AuthSession {
@@ -2904,7 +2917,8 @@ export async function setupAdmin(payload: {
     throw await buildApiError(response, 'Failed to create admin account');
   }
   const body = await response.json();
-  return body.data;
+  const data = body.data;
+  return data?.user ? { ...data, user: normalizeAuthUser(data.user) } : data;
 }
 
 export async function login(payload: {
@@ -2922,7 +2936,8 @@ export async function login(payload: {
     throw await buildApiError(response, 'Failed to login');
   }
   const body = await response.json();
-  return body.data;
+  const data = body.data;
+  return data?.user ? { ...data, user: normalizeAuthUser(data.user) } : data;
 }
 
 export interface TempLoginTokenResponse {
@@ -2973,7 +2988,7 @@ export async function getMe(): Promise<AuthUser> {
     throw await buildApiError(response, 'Failed to fetch current user');
   }
   const data = await response.json();
-  return data.data?.user ?? data.user;
+  return normalizeAuthUser(data.data?.user ?? data.user);
 }
 
 export async function updateMe(payload: { email: string }): Promise<AuthUser> {
@@ -2987,7 +3002,7 @@ export async function updateMe(payload: { email: string }): Promise<AuthUser> {
     throw await buildApiError(response, 'Failed to update profile');
   }
   const body = await response.json();
-  return body.data?.user ?? body.user;
+  return normalizeAuthUser(body.data?.user ?? body.user);
 }
 
 export async function changePassword(payload: {

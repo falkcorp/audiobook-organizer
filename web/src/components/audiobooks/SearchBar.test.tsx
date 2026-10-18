@@ -1,6 +1,6 @@
 // file: web/src/components/audiobooks/SearchBar.test.tsx
-// version: 1.3.0
-// last-edited: 2026-10-06
+// version: 1.4.0
+// last-edited: 2026-10-18
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -275,5 +275,25 @@ describe('SearchBar: query errors are visible (2026-10-06)', () => {
     expect(screen.queryByText(/\|\|/)).not.toBeInTheDocument();
     expect(screen.queryByText('author:smith~')).not.toBeInTheDocument();
     expect(screen.queryByText('format:(m4b|mp3)')).not.toBeInTheDocument();
+  });
+
+  it('help documents relative dates: examples, the units, and that they resolve at search time', () => {
+    renderWithProviders(<SearchBar {...defaultProps()} />);
+    fireEvent.click(screen.getByLabelText('Search help'));
+    expect(screen.getByText('last_played:>-30d')).toBeInTheDocument();
+    expect(screen.getByText('date_added:>-1y')).toBeInTheDocument();
+    expect(screen.getByText('last_played:-30d..now')).toBeInTheDocument();
+    expect(screen.getByText(/d days, w weeks, m months, y years/)).toBeInTheDocument();
+    expect(screen.getByText(/worked out each time the search runs/)).toBeInTheDocument();
+  });
+
+  it('accepts a relative date while typing, and refuses an unsigned offset with the fix', () => {
+    const { unmount } = renderWithProviders(
+      <SearchBar {...defaultProps({ value: 'last_played:>-30d date_added:-1y..now' })} />
+    );
+    expect(screen.queryByText(/needs a sign|invalid date/)).not.toBeInTheDocument();
+    unmount();
+    renderWithProviders(<SearchBar {...defaultProps({ value: 'last_played:>30d' })} />);
+    expect(screen.getByText(/needs a sign: write -30d/)).toBeInTheDocument();
   });
 });
