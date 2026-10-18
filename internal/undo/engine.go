@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -417,6 +417,14 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// (merge.Service.UndoCombine), which runs its own whole-journal
 		// preconditions and refuses as a whole. The preflight store does not
 		// read combine journals, so it proves only that the keep is there.
+		_, refusal := CheckRestoreBook(store, c.BookID)
+		return rowVerdict{refusal: refusal}
+	case ChangeTypeMergeSiblingJournal:
+		// The revert undoes the merge's sibling-move journal
+		// (merge.Service.UndoSiblingMove), which checks every sibling's
+		// current group itself and refuses as a whole when a newer merge
+		// moved one again. The preflight store does not read sibling
+		// journals, so it proves only that the survivor is there.
 		_, refusal := CheckRestoreBook(store, c.BookID)
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeMetadataCacheCopy:

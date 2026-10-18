@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package database
 
@@ -244,8 +244,16 @@ var opChangePruneBeforeCommit func()
 // that lets the operation's revert find that journal. The combine journal
 // itself is not pruned, so pruning the pointer would strand an undoable merge
 // behind a run that offers no revert. One row per merge, so keeping them
-// costs little.
-var OpChangeTypesKeptByPrune = map[string]bool{"repair_plan_record": true, "repair_owner_apply": true, "merge_combine_journal": true}
+// costs little. Every combine writes one since 2026-10-18, not only the
+// Repairs merges.
+//
+// "merge_sibling_journal" (undo.ChangeTypeMergeSiblingJournal) is the same
+// pointer for a merge's merge.SiblingMoveJournal (the version-group siblings
+// it carried into its group), kept for the same reason.
+var OpChangeTypesKeptByPrune = map[string]bool{
+	"repair_plan_record": true, "repair_owner_apply": true,
+	"merge_combine_journal": true, "merge_sibling_journal": true,
+}
 
 // PruneOperationChanges deletes operation change entries older than the given
 // time, each with its opchange_by_book: index entry. Undecodable rows are

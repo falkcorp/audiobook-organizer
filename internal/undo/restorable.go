@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.37.2
+// version: 1.38.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package undo
 
@@ -819,6 +819,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return ChangeTypeMergeCombineJournal + ":(no journal id)"
+	case ChangeTypeMergeSiblingJournal:
+		if validMergeSiblingJournalRow(c) {
+			return ""
+		}
+		return ChangeTypeMergeSiblingJournal + ":(no journal id)"
 	case "metadata_update":
 		if IsRevertableBookField(c.FieldName) {
 			return ""
