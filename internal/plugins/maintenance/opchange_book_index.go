@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-10-18
 
@@ -77,12 +77,31 @@ type opChangeBookIndexParams struct {
 	Ensure bool `json:"ensure,omitempty"`
 }
 
+// opChangeBookIndexStartCheck refuses ensure=true at start: a preview or live
+// start always carries dry_run, and Run refuses ensure beside dry_run, so the
+// run could only fail. ensure is the boot path, enqueued by the server itself.
+func opChangeBookIndexStartCheck(params map[string]json.RawMessage, _ bool) error {
+	raw, ok := params["ensure"]
+	if !ok {
+		return nil
+	}
+	var ensure bool
+	if err := json.Unmarshal(raw, &ensure); err != nil {
+		return fmt.Errorf("ensure must be true or false")
+	}
+	if ensure {
+		return fmt.Errorf("%s: ensure=true is the boot mode and cannot be combined with dry_run, which every start carries; "+
+			"send dry_run alone (preview) or dry_run=false (rebuild)", opChangeBookIndexRebuildID)
+	}
+	return nil
+}
+
 const opChangeBookIndexRebuildID = "maintenance.opchange-book-index-rebuild"
 
 func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          opChangeBookIndexRebuildID,
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: opChangeBookIndexParams{}},
+		Preview:     sdk.PreviewSpec{Params: opChangeBookIndexParams{}, StartCheck: opChangeBookIndexStartCheck},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Operation-journal by-book index rebuild",

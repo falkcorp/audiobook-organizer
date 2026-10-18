@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-10-18
 
@@ -364,7 +364,7 @@ type authorPathLinkStore interface {
 func (p *Plugin) authorPathLinkDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-path-link",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: authorPathLinkParams{}},
+		Preview:     sdk.PreviewSpec{Params: authorPathLinkParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Link path-derived authors to author rows",

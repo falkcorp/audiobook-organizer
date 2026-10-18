@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
 // last-edited: 2026-10-18
 
@@ -49,7 +49,7 @@ type datasetBackfillParams struct {
 func (p *Plugin) datasetBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.dataset-backfill",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: datasetBackfillParams{}},
+		Preview:     sdk.PreviewSpec{Params: datasetBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "dedup",
 		DisplayName: "Backfill dedup tuning dataset",

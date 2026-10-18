@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
 // last-edited: 2026-10-18
 
@@ -86,7 +86,7 @@ type reembedEmbeddingsParams struct {
 func (p *Plugin) reembedEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.reembed-embeddings",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: reembedEmbeddingsParams{}},
+		Preview:     sdk.PreviewSpec{Params: reembedEmbeddingsParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Re-embed corpus (embedding model change)",

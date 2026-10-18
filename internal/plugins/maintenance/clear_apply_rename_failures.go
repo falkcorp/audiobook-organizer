@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
 // last-edited: 2026-10-18
 
@@ -68,7 +68,7 @@ type clearApplyRenameFailuresResult struct {
 func (p *Plugin) clearApplyRenameFailuresDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.clear-apply-rename-failures",
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: clearApplyRenameFailuresParams{}},
+		Preview:         sdk.PreviewSpec{Params: clearApplyRenameFailuresParams{}},
 		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 10 * time.Minute,
 		Plugin:          "maintenance",

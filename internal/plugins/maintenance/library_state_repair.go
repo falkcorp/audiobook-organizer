@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
 // last-edited: 2026-10-18
 
@@ -171,7 +171,7 @@ type libraryStateRepairStore interface {
 func (p *Plugin) repairLibraryStateDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.repair-library-state",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: libraryStateRepairParams{}},
+		Preview:     sdk.PreviewSpec{Params: libraryStateRepairParams{}},
 		Plugin:      "maintenance",
 		DisplayName: "Repair stale library_state on already-organized books",
 		Description: "Writes library_state=\"organized\" on books that are already under RootDir and " +

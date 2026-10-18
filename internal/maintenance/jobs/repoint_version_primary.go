@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
 // last-edited: 2026-10-18
 
@@ -119,10 +119,11 @@ func (j *repointVersionPrimaryJob) Description() string {
 		"Report only by default; send {\"apply\": true, \"dry_run\": false} to write. Keeps the version link intact."
 }
 
-// Policy is DefaultPolicy plus ExtraWriteKey "apply" (a write needs apply=true
-// as well as dry_run=false: Run's `write := p.Apply && !dryRun`), so
-// registration declares no dry_run preview for it, and derives the per-job key
-// "maintenance.repoint-version-primary" and this job serializes against ITSELF.
+// Policy is DefaultPolicy plus Params repointVersionPrimaryParams (a write needs
+// apply=true as well as dry_run=false: Run's `write := p.Apply && !dryRun`), so
+// registration declares both as the op's mode keys and /api/v3/ops writes both.
+// It derives the per-job key "maintenance.repoint-version-primary", so this job
+// serializes against ITSELF.
 //
 // It briefly declared library.scan's key instead, to join the lane the way
 // merge-chapter-groups does. That is not expressible: ConcurrencyKey is one
@@ -149,7 +150,7 @@ func (j *repointVersionPrimaryJob) Description() string {
 //     holds per row and at the instant of the write.
 func (j *repointVersionPrimaryJob) Policy() maintenance.ExecutionPolicy {
 	p := maintenance.DefaultPolicy()
-	p.ExtraWriteKey = "apply"
+	p.Params = repointVersionPrimaryParams{}
 	return p
 }
 

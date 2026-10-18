@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
 // last-edited: 2026-10-18
 
@@ -182,7 +182,7 @@ type folderBuildReport struct {
 func (p *Plugin) buildFolderBookFilesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.build-folder-book-files",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: folderBuildParams{}},
+		Preview:     sdk.PreviewSpec{Params: folderBuildParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Build book_file rows from a book's folder",

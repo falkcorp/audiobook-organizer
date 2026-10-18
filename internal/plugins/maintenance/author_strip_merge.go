@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-10-18
 
@@ -394,7 +394,7 @@ func (r authorStripMergeReport) summary() string {
 func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-strip-merge",
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: authorStripMergeParams{}},
+		Preview:     sdk.PreviewSpec{Params: authorStripMergeParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Strip author numbering and merge",

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -181,6 +181,10 @@ func (r *icReport) summary() string {
 func (p *Plugin) itunesCloneIntoLibraryDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID: "itunes.clone-into-library",
+		// apply, rollback and repair are three kinds of write and Run refuses
+		// more than one; with none it is a dry run. A preview writes all three
+		// false; a live run must name exactly one itself.
+		Preview: sdk.PreviewSpec{Params: icParams{}, LiveOneOf: []string{"apply", "rollback", "repair"}},
 		// Renamed 2026-09-25 (naming audit class 8): every iTunes op lives in itunes.*, whichever Go package implements it.
 		FormerIDs:   []string{"maintenance.itunes-clone-into-library"},
 		Liveness:    sdk.LivenessManual,

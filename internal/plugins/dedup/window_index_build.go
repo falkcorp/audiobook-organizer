@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/window_index_build.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7e2b9d51-0c46-4f83-a1d7-5b8e3c9f6a20
 // last-edited: 2026-10-18
 
@@ -85,7 +85,7 @@ const (
 func (p *Plugin) windowIndexBuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              windowIndexBuildOpID,
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: windowIndexBuildParams{}},
+		Preview:         sdk.PreviewSpec{Params: windowIndexBuildParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Build window-print index",

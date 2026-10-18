@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-18
 
@@ -83,28 +83,42 @@ var previewOnlyElsewhere = map[string]string{
 	"metadata.batch-apply-cached": "preview is the separate metadata.bulk-apply-preview op",
 	// Persists candidate rows on every run; no mode key.
 	"metadata.candidate-fetch": "no mode key; fetches and stores candidates on every run",
-	// apply gates only the clone mode: rollback=true or repair=true write
-	// with apply omitted (itunes_clone_into_library.go, `writes := modes == 1`),
-	// so apply=false is not a preview.
-	"itunes.clone-into-library": "apply gates only one of three write modes",
-	// write := p.Apply && !dryRun: dry_run=false alone writes nothing, so a
-	// dry_run preview would be honoured but its live run would silently
-	// preview (maintenance.ExecutionPolicy.ExtraWriteKey).
-	"maintenance.repoint-version-primary": "writes need apply=true and dry_run=false",
+}
+
+// multiModeKeyFamilies are the ops whose declared params type decodes more
+// than one mode-key family (dry_run/dryRun, apply, live). v3 writes every
+// one, so a preview is a preview and a live run is live whichever the op
+// reads, but two switches for one decision is a shape to justify, not to
+// copy: each entry says how the op combines them. A new op with two families
+// fails until it is listed here, and an entry whose op no longer has two
+// fails too.
+var multiModeKeyFamilies = map[string]string{
+	// vgPrimaryRepairParams: apply is the older spelling of dry_run=false.
+	// Run writes when either says write (apply || dry_run==false) and refuses
+	// dry_run=true beside apply=true (version_group_primary_repair.go).
+	"maintenance.version-group-primary-repair": "apply || !dry_run; dry_run=true with apply=true is refused",
+	// repointVersionPrimaryParams via ExecutionPolicy.Params: Run writes only
+	// when apply && !dry_run, two fail-closed switches
+	// (repoint_version_primary.go).
+	"maintenance.repoint-version-primary": "apply && !dry_run",
 }
 
 // TestOpsV3_PreviewDeclarationsMatchTheOpsParams checks every registered op's
 // Preview declaration against the op's code, not the ledger:
 //
-//   - a declaration names a bool field of the params type the op decodes
-//     (PreviewSpec.Check, by reflection), and that type decodes the injected
-//     key under DisallowUnknownFields, so a strict decoder accepts what v3
-//     writes;
-//   - /defs reports exactly the declared key for a writer, and no preview for
-//     a writer that declares none (fail closed);
+//   - the declaration checks (PreviewSpec.Check, by reflection: its mode keys
+//     and LiveOneOf switches are bool fields of the params type it names),
+//     and that type decodes every key v3 writes under DisallowUnknownFields,
+//     so a strict decoder accepts what v3 writes;
+//   - /defs reports exactly the declared mode keys for a writer, and no
+//     preview for a writer that declares none (fail closed);
+//   - an op with more than one mode-key family is in multiModeKeyFamilies;
 //   - every writing op is classified: one the ledger records `preview` either
-//     declares a key or is listed in previewOnlyElsewhere with the reason,
-//     and one recorded `no-mode` declares none.
+//     declares a preview or is listed in previewOnlyElsewhere with the
+//     reason, and one recorded `no-mode` declares none.
+//
+// It does not prove the declared type is the one Run decodes: that is what
+// the TestPreviewBehaviour_* tests do, by running ops with Resolve's output.
 func TestOpsV3_PreviewDeclarationsMatchTheOpsParams(t *testing.T) {
 	srv, _, _ := bootRegisteredOpIDs(t)
 	ledger := readWriteOpModes(t)
@@ -115,6 +129,8 @@ func TestOpsV3_PreviewDeclarationsMatchTheOpsParams(t *testing.T) {
 	require.NotEmpty(t, defs)
 	declared := map[string]int{}
 	usedElsewhere := map[string]bool{}
+	usedMulti := map[string]bool{}
+	oneOf := 0
 	for _, od := range srv.opRegistry.ActiveDefs() {
 		d, ok := defs[od.ID]
 		require.True(t, ok, "%s missing from the v3 catalog", od.ID)
@@ -123,52 +139,69 @@ func TestOpsV3_PreviewDeclarationsMatchTheOpsParams(t *testing.T) {
 			require.NoError(t, p.Check(), "%s: Preview does not match its params type", od.ID)
 			require.True(t, canWrite(od), "%s declares a preview but cannot write", od.ID)
 			strictDecodes(t, od.ID, p)
-			require.Equal(t, string(p.Key), d.PreviewParam, "%s: /defs preview_param", od.ID)
-			require.NotContains(t, d.UnreadModeKeys, string(p.Key), od.ID)
-			declared[string(p.Key)]++
+			require.True(t, d.HasPreview(), "%s: /defs shows no preview for a declared one", od.ID)
+			require.Equal(t, p.ModeKeys(), d.Preview.ModeKeys(), "%s: /defs mode keys", od.ID)
+			require.Equal(t, p.LiveOneOf, d.Preview.LiveOneOf, "%s: /defs live_one_of", od.ID)
+			for _, f := range p.ModeFamilies() {
+				declared[f]++
+			}
+			if len(p.LiveOneOf) > 0 {
+				oneOf++
+			}
+			if len(p.ModeFamilies()) > 1 {
+				_, listed := multiModeKeyFamilies[od.ID]
+				require.True(t, listed, "%s decodes mode keys %v from more than one family; list it in multiModeKeyFamilies with how its Run combines them", od.ID, p.ModeKeys())
+				usedMulti[od.ID] = true
+			}
 		} else if d.Writer {
-			require.Empty(t, d.PreviewParam, "%s declares no preview, so it must have none", od.ID)
+			require.False(t, d.HasPreview(), "%s declares no preview, so it must have none", od.ID)
 		}
 		if !canWrite(od) || isMaintenanceJobOp(od.ID) {
 			continue
 		}
 		switch ledger[od.ID] {
 		case "no-mode":
-			require.True(t, p.IsZero(), "%s: the ledger says it always writes, yet it declares preview key %q; fix whichever is wrong", od.ID, p.Key)
+			require.True(t, p.IsZero(), "%s: the ledger says it always writes, yet it declares a preview (mode keys %v); fix whichever is wrong", od.ID, p.ModeKeys())
 		case "preview":
 			if p.IsZero() {
 				_, listed := previewOnlyElsewhere[od.ID]
-				require.True(t, listed, "%s: the ledger says omitted mode writes nothing, but it declares no Preview. Declare the key its Run gates on (OperationDef.Preview), or list it in previewOnlyElsewhere with the reason", od.ID)
+				require.True(t, listed, "%s: the ledger says omitted mode writes nothing, but it declares no Preview. Declare the params type its Run decodes (OperationDef.Preview), or list it in previewOnlyElsewhere with the reason", od.ID)
 				usedElsewhere[od.ID] = true
 			}
 		}
 	}
 	for id := range previewOnlyElsewhere {
-		if strings.HasPrefix(id, "maintenance.") && isMaintenanceJobOp(id) {
-			od, ok := srv.opRegistry.Def(id)
-			require.True(t, ok, id)
-			require.True(t, od.Preview.IsZero(), "%s is listed as previewing elsewhere but declares %q", id, od.Preview.Key)
-			continue
-		}
 		require.True(t, usedElsewhere[id], "previewOnlyElsewhere lists %s, which is not a registered ledger-preview op without a declaration; delete the entry", id)
+	}
+	for id := range multiModeKeyFamilies {
+		require.True(t, usedMulti[id], "multiModeKeyFamilies lists %s, which no longer declares two mode-key families; delete the entry", id)
 	}
 	for _, k := range []string{"dry_run", "apply", "live"} {
 		require.Positive(t, declared[k], "no registered op declares %s; the check did not run", k)
 	}
+	require.Positive(t, oneOf, "no registered op declares LiveOneOf; the check did not run")
 }
 
-// strictDecodes: the declared params type accepts {"<key>": true} and
-// {"<key>": false} under DisallowUnknownFields.
+// strictDecodes: the declared params type accepts every key v3 can write
+// (each mode key and LiveOneOf switch, all true and all false) under
+// DisallowUnknownFields.
 func strictDecodes(t *testing.T, id string, p opsregistry.PreviewSpec) {
 	t.Helper()
 	typ := reflect.TypeOf(p.Params)
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
-	for _, v := range []string{"true", "false"} {
-		dec := json.NewDecoder(strings.NewReader(`{"` + string(p.Key) + `":` + v + `}`))
+	keys := append(p.ModeKeys(), p.LiveOneOf...)
+	for _, v := range []bool{true, false} {
+		obj := map[string]bool{}
+		for _, k := range keys {
+			obj[k] = v
+		}
+		raw, err := json.Marshal(obj)
+		require.NoError(t, err)
+		dec := json.NewDecoder(strings.NewReader(string(raw)))
 		dec.DisallowUnknownFields()
-		require.NoError(t, dec.Decode(reflect.New(typ).Interface()), "%s: a strict decode of the injected %s fails", id, p.Key)
+		require.NoError(t, dec.Decode(reflect.New(typ).Interface()), "%s: a strict decode of the injected %s fails", id, raw)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/ident_index.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 90d81b9d-7102-4e21-a4ac-e55a95d3922c
 // last-edited: 2026-10-18
 
@@ -48,7 +48,7 @@ type identIndexRebuilder interface {
 func (p *Plugin) identIndexRebuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          database.IdentIndexRebuildOpID,
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: opmode.DryRunParams{}},
+		Preview:     sdk.PreviewSpec{Params: opmode.DryRunParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Identification index rebuild",

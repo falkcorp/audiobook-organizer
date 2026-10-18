@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-10-18
 
@@ -100,7 +100,7 @@ func (p DedupeBookFileRowsParams) pruneSupersededEnabled() bool {
 func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.dedupe-book-file-rows",
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: DedupeBookFileRowsParams{}},
+		Preview:         sdk.PreviewSpec{Params: DedupeBookFileRowsParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "De-duplicate book_file rows",

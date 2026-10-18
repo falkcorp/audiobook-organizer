@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
 // last-edited: 2026-10-18
 
@@ -274,18 +274,29 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 	})
 }
 
-// maintenanceJobPreview is how a job's op previews: dry_run, decoded below
-// into opmode.DryRunParams and handed to job.Run, when the job advertises
-// dry_run=true by default (TestMaintenanceJobs_PreviewByDefault checks each
-// job honours it) and needs no second write key. A job that advertises
-// dry_run=false ignores the flag (the read-only report jobs), and a job with
-// an ExtraWriteKey would silently preview on a live run that sent only
-// dry_run=false; neither declares a preview.
+// maintenanceJobPreview is how a job's op previews. A job that advertises
+// dry_run=true by default previews with dry_run, which the run closure above
+// decodes into opmode.DryRunParams (both spellings) and hands to job.Run;
+// /api/v3/ops writes it, and every other mode key the job's own params type
+// decodes when the job names that type in policy.Params
+// (repoint-version-primary: dry_run and apply, because its Run writes only
+// when apply && !dry_run). A job that advertises dry_run=false ignores the flag
+// (the read-only report jobs) and declares no preview.
+//
+// What checks this: TestMaintenanceJobs_PreviewByDefault checks only that each
+// job's DefaultParams advertise dry_run=true; it does not run a job. Whether a
+// job really writes nothing under the preview params is checked per job by
+// behavioural tests (TestPreviewBehaviour_RepointVersionPrimary for the one
+// job with a second mode key); for the dry_run-only jobs it rests on the run
+// closure handing job.Run the resolved dry_run.
 func maintenanceJobPreview(job maintenance.MaintenanceJob, policy maintenance.ExecutionPolicy) opsregistry.PreviewSpec {
-	if policy.ExtraWriteKey != "" || !advertisedDryRunDefault(job) {
+	if !advertisedDryRunDefault(job) {
 		return opsregistry.PreviewSpec{}
 	}
-	return opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: opmode.DryRunParams{}}
+	if policy.Params != nil {
+		return opsregistry.PreviewSpec{Params: policy.Params}
+	}
+	return opsregistry.PreviewSpec{Params: opmode.DryRunParams{}}
 }
 
 func init() {

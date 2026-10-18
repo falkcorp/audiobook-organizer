@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/defs.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a701dc58-da75-41f2-b165-03a957c6e540
 // last-edited: 2026-10-18
 
@@ -69,10 +69,17 @@ type DefView struct {
 	// previews (OperationDef.Preview), never inferred. null for a read-only
 	// definition, where the mode changes nothing.
 	HasPreview *bool `json:"has_preview"`
-	// PreviewParam is the params key the mode is written into: "dry_run"
-	// (true = preview), "apply" or "live" (false = preview). null when the
-	// definition has no preview or is read-only.
-	PreviewParam *string `json:"preview_param"`
+	// PreviewKeys are every params key the mode is written into, read off
+	// the params type the op decodes: dry_run and dryRun (true = preview),
+	// apply and live (false = preview). An op that decodes two (apply and
+	// dry_run) writes only when both say so, so both are written. null when
+	// the definition has no preview or is read-only; [] when its preview is
+	// LiveOneOf alone.
+	PreviewKeys []string `json:"preview_keys"`
+	// LiveOneOf are write switches of which a live run must set exactly one
+	// true in params (itunes.clone-into-library: apply, rollback, repair). A
+	// preview writes them all false. Omitted when the definition has none.
+	LiveOneOf []string `json:"live_one_of,omitempty"`
 }
 
 // lastRunTTL is how long a definition's looked-up last run is served before
@@ -152,8 +159,8 @@ func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo) DefView {
 		hp := d.HasPreview()
 		v.HasPreview = &hp
 		if hp {
-			pp := d.PreviewParam
-			v.PreviewParam = &pp
+			v.PreviewKeys = nonNil(d.Preview.ModeKeys())
+			v.LiveOneOf = d.Preview.LiveOneOf
 		}
 	}
 	if s, ok := scheds[d.ID]; ok {

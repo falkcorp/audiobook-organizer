@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/activity_reclaim.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5a2e7c41-6b83-4d09-9f27-c1a840b6e35d
 // last-edited: 2026-10-18
 
@@ -33,7 +33,7 @@ type activityReclaimParams struct {
 func (p *Plugin) activityReclaimDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:      "maintenance.activity-reclaim",
-		Preview: sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: activityReclaimParams{}},
+		Preview: sdk.PreviewSpec{Params: activityReclaimParams{}},
 		Plugin:  "maintenance",
 		// LivenessNone with an explicit budget, not LivenessManual.
 		//

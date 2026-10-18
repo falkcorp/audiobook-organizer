@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-10-18
 
@@ -128,7 +128,7 @@ type linkVersionReader interface {
 func (p *Plugin) linkBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          linkBackfillOpID,
-		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: linkBackfillParams{}},
+		Preview:     sdk.PreviewSpec{Params: linkBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "deluge",
 		DisplayName: "Link Deluge torrents to library files",

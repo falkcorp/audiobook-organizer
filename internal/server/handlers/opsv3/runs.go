@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
 // last-edited: 2026-10-18
 
@@ -19,7 +19,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -88,26 +87,29 @@ type startBody struct {
 // run is queued (202 {run_id}).
 //
 // mode is "preview" or "live", and what it means depends on the definition
-// (DefInfo.PreviewParam, the op's own declaration of how it previews):
+// (DefInfo.Preview, the op's own declaration of how it previews):
 //
-//   - A writing definition that previews with dry_run: preview writes
-//     dry_run=true into params, live dry_run=false. Left out, a dry_run
-//     already in params decides, and params that say nothing are a preview.
-//   - A writing definition that previews with apply (or live): preview
-//     writes apply=false, live apply=true. Left out, an apply already in
-//     params decides, and params that say nothing are a preview.
+//   - A writing definition with a preview: every mode key its params type
+//     decodes (dry_run, dryRun, apply, live) is part of the mode. Preview
+//     writes each at its non-writing value (dry_run=true, apply=false,
+//     live=false), live each at its writing value. Left out, the mode keys
+//     already in params decide, and params that state none are a preview.
+//     Its LiveOneOf switches, if any, are written false for a preview, and a
+//     live run must set exactly one of them true itself. Its StartCheck, if
+//     any, refuses params that cannot do what the mode asks.
 //   - A writing definition with no declared preview (it ignores every key,
 //     or previews only somewhere else, such as an HTTP handler): only mode
 //     "live" starts it, and params are passed through untouched. "preview"
 //     or no mode is a 409, because answering 202 would queue a live run the
 //     caller asked to be a preview.
-//   - A read-only definition: mode is checked and otherwise ignored; params
-//     are passed through untouched, so a strictly decoded op never sees a
-//     key it does not declare.
+//   - A read-only definition: params are passed through untouched, so a
+//     strictly decoded op never sees a key it does not declare.
 //
-// A mode that contradicts the definition's key in params is a 400, and so is
-// a mode key the definition's params type does not read (a dry_run sent to an
-// op that previews with apply): that op would never see it.
+// For every definition, a 400 refuses: a mode key in params that contradicts
+// mode, or another mode key in params; a params key that differs from a
+// mode key only in case (encoding/json would decode {"APPLY":true} into the
+// apply field); and, for a definition with a preview, a mode key its params
+// type does not decode (the op would never see it).
 //
 // A batchable definition does not create a run on enqueue; it adds the
 // request to a pending batch. That answers 202 {"batched": true} with no
@@ -214,170 +216,46 @@ type modeErr struct {
 // to queue.
 func resolveMode(def DefInfo, params json.RawMessage, mode string) (json.RawMessage, modeErr) {
 	switch mode {
-	case "", "preview", "live":
+	case "", opsregistry.ModePreview, opsregistry.ModeLive:
 	default:
 		return nil, modeErr{msg: `must be "preview" or "live"`}
 	}
+	if err := opsregistry.CheckModeKeySpelling(params); err != nil {
+		return nil, modeErr{msg: err.Error()}
+	}
 	if !def.Writer {
-		// Nothing to choose: the run changes nothing either way. params stay
-		// as sent, so an op that decodes strictly is not handed a key it
-		// does not declare.
+		// Nothing to write into: the run changes nothing either way, and
+		// params stay as sent, so an op that decodes strictly is not handed
+		// a key it does not declare. A mode key that contradicts the asked
+		// mode is still refused: the caller believes the run will do
+		// something it will not.
+		if err := opsregistry.CheckStatedMode(params, mode); err != nil {
+			return nil, modeErr{msg: err.Error()}
+		}
 		return params, modeErr{}
 	}
-	m, err := paramsObject(params)
-	if err != "" {
-		return nil, modeErr{msg: err}
-	}
-	for _, k := range def.UnreadModeKeys {
-		if _, ok := m[k]; ok {
-			return nil, modeErr{msg: "definition " + def.ID + " previews with " + def.PreviewParam + " and does not read " + k + "; send mode, or " + def.PreviewParam + " in params"}
-		}
-	}
-	switch def.PreviewParam {
-	case "dry_run":
-		return resolveDryRun(def.ID, params, mode)
-	case "apply", "live":
-		return resolveWriteKey(m, def.PreviewParam, mode)
-	default:
+	if !def.HasPreview() {
 		return resolveNoPreview(def.ID, params, mode)
 	}
-}
-
-// resolveNoPreview: a writer with no declared preview starts only in mode
-// live, with params untouched. A dry_run=true, apply=false or live=false in
-// them asks for a preview the op cannot honour.
-func resolveNoPreview(defID string, params json.RawMessage, mode string) (json.RawMessage, modeErr) {
-	if mode != "live" {
-		return nil, modeErr{conflict: true, msg: "definition " + defID + " has no preview mode: it writes whatever params say. " +
-			`Send mode "live" to run it for real`}
-	}
-	if dry, set, err := paramsDryRun(params); err != "" {
-		return nil, modeErr{msg: err}
-	} else if set && dry {
-		return nil, modeErr{msg: "mode live contradicts dry_run in params"}
-	}
-	m, _ := paramsObject(params)
-	for _, k := range []string{"apply", "live"} {
-		if raw, ok := m[k]; ok {
-			var v bool
-			if err := json.Unmarshal(raw, &v); err == nil && !v {
-				return nil, modeErr{msg: "mode live contradicts " + k + "=false in params"}
-			}
-		}
-	}
-	return params, modeErr{}
-}
-
-// resolveDryRun: mode, else a dry_run in params, else preview; written into
-// params as dry_run.
-func resolveDryRun(defID string, params json.RawMessage, mode string) (json.RawMessage, modeErr) {
-	if mode == "" {
-		dry, set, err := paramsDryRun(params)
-		if err != "" {
-			return nil, modeErr{msg: err}
-		}
-		mode = "preview"
-		if set && !dry {
-			mode = "live"
-		}
-	}
-	out, msg := applyDryRun(defID, params, mode)
-	return out, modeErr{msg: msg}
-}
-
-// resolveWriteKey is for a definition whose key writes when true (apply,
-// live): mode, else that key in params, else preview; written into params as
-// the key (true only for live).
-func resolveWriteKey(m map[string]json.RawMessage, key, mode string) (json.RawMessage, modeErr) {
-	val, set := false, false
-	if raw, ok := m[key]; ok {
-		if err := json.Unmarshal(raw, &val); err != nil {
-			return nil, modeErr{msg: key + " must be true or false"}
-		}
-		set = true
-	}
-	if mode == "" {
-		mode = "preview"
-		if set && val {
-			mode = "live"
-		}
-	}
-	want := mode == "live"
-	if set && val != want {
-		return nil, modeErr{msg: "mode " + mode + " contradicts " + key + " in params"}
-	}
-	b, _ := json.Marshal(want)
-	m[key] = b
-	out, err := json.Marshal(m)
+	out, err := def.Preview.Resolve(params, mode)
 	if err != nil {
-		return nil, modeErr{msg: err.Error()}
+		return nil, modeErr{msg: "definition " + def.ID + ": " + err.Error()}
 	}
 	return out, modeErr{}
 }
 
-// paramsObject decodes params (already a JSON object, see normalizeParams).
-func paramsObject(params json.RawMessage) (map[string]json.RawMessage, string) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(params, &m); err != nil || m == nil {
-		return nil, "params must be a JSON object"
+// resolveNoPreview: a writer with no declared preview starts only in mode
+// live, with params untouched. A mode key in them that asks for a preview
+// (dry_run=true, apply=false, live=false) is one the op cannot honour.
+func resolveNoPreview(defID string, params json.RawMessage, mode string) (json.RawMessage, modeErr) {
+	if mode != opsregistry.ModeLive {
+		return nil, modeErr{conflict: true, msg: "definition " + defID + " has no preview mode: it writes whatever params say. " +
+			`Send mode "live" to run it for real`}
 	}
-	return m, ""
-}
-
-// paramsDryRun reads dry_run / dryRun from params: the value, whether either
-// is present, and a message when they are malformed or disagree.
-func paramsDryRun(params json.RawMessage) (dry, set bool, msg string) {
-	m, err := paramsObject(params)
-	if err != "" {
-		return false, false, err
+	if err := opsregistry.CheckStatedMode(params, mode); err != nil {
+		return nil, modeErr{msg: err.Error()}
 	}
-	for _, key := range []string{"dry_run", "dryRun"} {
-		raw, ok := m[key]
-		if !ok {
-			continue
-		}
-		var got bool
-		if err := json.Unmarshal(raw, &got); err != nil {
-			return false, false, key + " must be true or false"
-		}
-		if set && got != dry {
-			return false, false, "dry_run and dryRun in params disagree"
-		}
-		dry, set = got, true
-	}
-	return dry, set, ""
-}
-
-// applyDryRun writes mode ("preview" or "live") into params as dry_run (and
-// as dryRun when the caller sent that spelling). It checks the result with
-// opmode.ParseDryRun so a params body whose dry_run and dryRun disagree, or
-// disagree with mode, is refused here instead of picking a side.
-func applyDryRun(defID string, params json.RawMessage, mode string) (json.RawMessage, string) {
-	want := mode == "preview"
-	dry, set, msg := paramsDryRun(params)
-	if msg != "" {
-		return nil, msg
-	}
-	if set && dry != want {
-		return nil, "mode " + mode + " contradicts dry_run in params"
-	}
-	m, msg := paramsObject(params)
-	if msg != "" {
-		return nil, msg
-	}
-	b, _ := json.Marshal(want)
-	m["dry_run"] = b
-	if _, camel := m["dryRun"]; camel {
-		m["dryRun"] = b
-	}
-	out, err := json.Marshal(m)
-	if err != nil {
-		return nil, err.Error()
-	}
-	if _, err := opmode.ParseDryRun(defID, out); err != nil {
-		return nil, err.Error()
-	}
-	return out, ""
+	return params, modeErr{}
 }
 
 // actorOptions records who started the run and how they were verified. The

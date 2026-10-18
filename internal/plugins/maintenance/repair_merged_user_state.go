@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
 // last-edited: 2026-10-18
 
@@ -52,7 +52,7 @@ type repairMergedUserStateParams struct {
 func (p *Plugin) repairMergedUserStateDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.repair-merged-user-state",
-		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: repairMergedUserStateParams{}},
+		Preview:         sdk.PreviewSpec{Params: repairMergedUserStateParams{}},
 		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 30 * time.Minute,
 		Plugin:          "maintenance",
