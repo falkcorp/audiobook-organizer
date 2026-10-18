@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/vacuum_activity_db.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fa1a4efa-5368-45f0-bccb-6fda6360e461
 // last-edited: 2026-10-18
 
@@ -96,7 +96,11 @@ type VacuumActivityDBResult struct {
 // Deliberately NO Schedule: it is a job you trigger, after looking at the preview.
 func (p *Plugin) vacuumActivityDBDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              VacuumActivityDBDefID,
+		ID: VacuumActivityDBDefID,
+		// Preview names the type Run decodes, so /api/v3/ops writes dry_run
+		// and dryRun for a preview and both false for a live run.
+		// TestPreviewBehaviour_VacuumActivityDB runs the op with what it queues.
+		Preview:         sdk.PreviewSpec{Params: vacuumActivityDBParams{}},
 		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 2 * time.Hour,
 		Plugin:          "maintenance",

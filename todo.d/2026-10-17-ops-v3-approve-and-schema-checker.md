@@ -31,9 +31,10 @@
 - [ ] **05-PR9 follow-up** `PreviewSpec.Params` names the type an op's Run
       decodes, but nothing ties the two by construction: an edit to Run's
       decode target is caught only by that op's `TestPreviewBehaviour_*`
-      test, which six ops have (acoustid fingerprint-duration-repair,
+      test, which seven ops have (acoustid fingerprint-duration-repair,
       version-group-primary-repair, repoint-version-primary, deluge
-      path-update, regroup-shattered-ai, transcribe-book-intros). Owner
+      path-update, regroup-shattered-ai, transcribe-book-intros,
+      vacuum-activity-db). Owner
       decision: (a) keep behavioural tests and add one per new writing op;
       (b) declare the params type once and use it for both, e.g. a generic
       `registry.Decode[T]` that Run calls and that sets Preview, touching
