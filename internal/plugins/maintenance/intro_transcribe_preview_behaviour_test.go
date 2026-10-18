@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_preview_behaviour_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f479366b-0525-4f2f-a944-65aa99b39977
 // last-edited: 2026-10-18
 
@@ -161,7 +161,9 @@ func TestPreviewBehaviour_TranscribeBookIntros(t *testing.T) {
 					if cacheMade {
 						t.Fatalf("preview created the clip cache directory %s", cacheDir)
 					}
-					if last := rep.lastMessage(); !strings.Contains(last, "PREVIEW") || !strings.Contains(last, "would") || !strings.Contains(last, " 2 books") {
+					// The exact prefix: scripts/transcribe_monitor.py's PREVIEW_MARKER
+					// matches it to detect a relaunch that came back as a preview.
+					if last := rep.lastMessage(); !strings.HasPrefix(last, "PREVIEW (dry_run") || !strings.Contains(last, "would") || !strings.Contains(last, " 2 books") {
 						t.Fatalf("preview did not report its selection: %q", last)
 					}
 					return
