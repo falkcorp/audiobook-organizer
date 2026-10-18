@@ -1,7 +1,15 @@
 <!-- file: docs/specs/2026-08-05-multidisc-apply-canary-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 03f6e432-d7ad-49e4-93e4-680940fd99bd -->
-<!-- last-edited: 2026-08-05 -->
+<!-- last-edited: 2026-10-18 -->
+
+
+> **2026-10-18 note (01-P81j):** `POST /api/v1/review/replay-approved` and its handler
+> (`ReplayApprovedItems`, `replay.go`) were retired. The canary procedure below that
+> names them is historical. The replacement is `POST /api/v1/review/bulk` with
+> `{"action":"approve","ids":[...]}` (list the approved items with
+> `GET /api/v1/review/items?status=approved`); it has no dry run and no `limit`
+> canary, so cap the ids you send instead.
 
 > ⚠️ **UNVERIFIED DRAFT — symbols not grep-checked.** Authored by an agent on
 > 2026-08-05; the adversarial verification pass did not run (the workflow was
