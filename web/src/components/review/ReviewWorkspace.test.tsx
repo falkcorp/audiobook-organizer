@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.24.2
+// version: 1.24.3
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-18
 
@@ -220,9 +220,19 @@ describe('the lane comes from the URL', () => {
     it('preselects the fixer named by ?fixer=, without writing it back', async () => {
       renderWorkspace(['/review?lane=repairs&fixer=fx-b']);
       await waitFor(() =>
-        expect(api.getRepairPlanRows).toHaveBeenCalledWith('fx-b', 'plan-b', expect.anything(), expect.anything())
+        expect(api.getRepairPlanRows).toHaveBeenCalledWith(
+          'fx-b',
+          'plan-b',
+          expect.anything(),
+          expect.anything()
+        )
       );
-      expect(api.getRepairPlanRows).not.toHaveBeenCalledWith('fx-a', expect.anything(), expect.anything(), expect.anything());
+      expect(api.getRepairPlanRows).not.toHaveBeenCalledWith(
+        'fx-a',
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
+      );
       expect(window.localStorage.getItem('review-repairs-fixer')).toBeNull();
     });
 
@@ -233,9 +243,19 @@ describe('the lane comes from the URL', () => {
       expect(api.listRepairFixers).not.toHaveBeenCalled();
       await user.click(screen.getByTestId('lane-tab-repairs'));
       await waitFor(() =>
-        expect(api.getRepairPlanRows).toHaveBeenCalledWith('fx-a', 'plan-a', expect.anything(), expect.anything())
+        expect(api.getRepairPlanRows).toHaveBeenCalledWith(
+          'fx-a',
+          'plan-a',
+          expect.anything(),
+          expect.anything()
+        )
       );
-      expect(api.getRepairPlanRows).not.toHaveBeenCalledWith('fx-b', expect.anything(), expect.anything(), expect.anything());
+      expect(api.getRepairPlanRows).not.toHaveBeenCalledWith(
+        'fx-b',
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
+      );
     });
   });
 
@@ -440,7 +460,13 @@ describe('view mode', () => {
         id: 'fx',
         title: 'Fixer X',
         description: 'Fixes x.',
-        last_plan: { operation_id: 'plan-x', status: 'completed', queued_at: '2026-10-01T00:00:00Z', total: 1, applicable: 1 },
+        last_plan: {
+          operation_id: 'plan-x',
+          status: 'completed',
+          queued_at: '2026-10-01T00:00:00Z',
+          total: 1,
+          applicable: 1,
+        },
       },
     ]);
     vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => ({
@@ -453,7 +479,16 @@ describe('view mode', () => {
       total: 1,
       applicable: 1,
       skipped_by_kind: {},
-      rows: [{ row_id: 'r1', book_ids: ['b1'], title: 'Title r1', reason: 'fix r1', risk: 'low', fingerprint: 'fp' }],
+      rows: [
+        {
+          row_id: 'r1',
+          book_ids: ['b1'],
+          title: 'Title r1',
+          reason: 'fix r1',
+          risk: 'low',
+          fingerprint: 'fp',
+        },
+      ],
     }));
     vi.mocked(api.getBooksByIds).mockResolvedValue([]);
     window.localStorage.setItem('review-repairs-fixer', 'fx');
@@ -597,7 +632,9 @@ describe('cover lightbox', () => {
 
     const viewer = await screen.findByTestId('cover-lightbox');
     const big = within(viewer).getByTestId('cover-lightbox-img') as HTMLImageElement;
-    expect(big.getAttribute('src')).toBe('https://images-na.ssl-images-amazon.com/images/I/cur.jpg');
+    expect(big.getAttribute('src')).toBe(
+      'https://images-na.ssl-images-amazon.com/images/I/cur.jpg'
+    );
     expect(big.style.maxWidth).toBe('90vw');
   });
 });
@@ -732,7 +769,12 @@ describe('one-button dedup run', () => {
       result_data: {
         dry_run: true,
         preview_skipped: [
-          { id: 'find', label: 'Finding and scoring duplicates', def_id: 'dedup.full-scan', reason: '' },
+          {
+            id: 'find',
+            label: 'Finding and scoring duplicates',
+            def_id: 'dedup.full-scan',
+            reason: '',
+          },
         ],
         steps: [],
         skipped: null,
@@ -773,7 +815,9 @@ describe('one-button dedup run', () => {
     await clickRunAll(user);
 
     await screen.findByTestId('dedup-pipeline-confirm');
-    await waitFor(() => expect(screen.queryByTestId('dedup-pipeline-preview')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId('dedup-pipeline-preview')).not.toBeInTheDocument()
+    );
     await user.click(screen.getByTestId('dedup-pipeline-confirm-run'));
     await waitFor(() => expect(api.startDedupRunAll).toHaveBeenLastCalledWith(false));
   });
@@ -1057,11 +1101,11 @@ describe('duplicate export', () => {
   it('export url carries the lane filters and is enabled on the dupes lane', async () => {
     const user = userEvent.setup();
     const hrefs: string[] = [];
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, 'click')
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        hrefs.push(this.getAttribute('href') ?? '');
-      });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      hrefs.push(this.getAttribute('href') ?? '');
+    });
     try {
       await openQueueMenu(user, '/review?lane=dupes&layer=acoustid&band=HIGH&book=B1');
       const item = await screen.findByTestId('command-export-dupes-json');
@@ -1081,11 +1125,11 @@ describe('duplicate export', () => {
   it('export url carries the applied search term and only book pairs', async () => {
     const user = userEvent.setup();
     const hrefs: string[] = [];
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, 'click')
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        hrefs.push(this.getAttribute('href') ?? '');
-      });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      hrefs.push(this.getAttribute('href') ?? '');
+    });
     try {
       renderWorkspace(['/review?lane=dupes']);
       await user.type(await screen.findByPlaceholderText(/title, author, path/i), 'Book One');
@@ -1112,11 +1156,11 @@ describe('duplicate export', () => {
   it('export url ignores a search term that has been typed but not applied yet', async () => {
     const user = userEvent.setup();
     const hrefs: string[] = [];
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, 'click')
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        hrefs.push(this.getAttribute('href') ?? '');
-      });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      hrefs.push(this.getAttribute('href') ?? '');
+    });
     debounceHold.on = true;
     try {
       renderWorkspace(['/review?lane=dupes']);
@@ -1136,11 +1180,11 @@ describe('duplicate export', () => {
   it('export url carries status and both_unmatched from the lane', async () => {
     const user = userEvent.setup();
     const hrefs: string[] = [];
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, 'click')
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        hrefs.push(this.getAttribute('href') ?? '');
-      });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      hrefs.push(this.getAttribute('href') ?? '');
+    });
     try {
       renderWorkspace(['/review?lane=dupes']);
       await user.click(await screen.findByLabelText(/both unmatched/i));

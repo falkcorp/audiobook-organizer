@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.aiScans.test.tsx
-// version: 1.3.2
+// version: 1.3.3
 // guid: 91d5a7c3-2e68-4f10-b3a4-86c0f5e7d219
 // last-edited: 2026-10-18
 
@@ -69,7 +69,11 @@ beforeEach(() => {
   vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(5), scan(6)]);
   vi.mocked(reads.fetchAIScanResults).mockResolvedValue({ results: [], authorNames: {} });
   vi.mocked(authorsReads.fetchAuthorGroups).mockResolvedValue({ groups: [], needsRefresh: false });
-  vi.mocked(authorsReads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: false });
+  vi.mocked(authorsReads.fetchSeriesGroups).mockResolvedValue({
+    groups: [],
+    totalSeries: 0,
+    needsRefresh: false,
+  });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getCachedReviewResults).mockResolvedValue({
@@ -80,7 +84,13 @@ beforeEach(() => {
     errors: 0,
     stale: 0,
   } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
-  vi.mocked(api.getReviewItems).mockResolvedValue({ items: [], count: 0, limit: 500, offset: 0, total: 0 });
+  vi.mocked(api.getReviewItems).mockResolvedValue({
+    items: [],
+    count: 0,
+    limit: 500,
+    offset: 0,
+    total: 0,
+  });
   vi.mocked(api.getReviewCount).mockResolvedValue({
     applying: 0,
     needs_attention: 0,
@@ -195,11 +205,15 @@ describe('the Authors & series menu', () => {
     renderWorkspace('/review?lane=authors&view=ai');
     await screen.findByTestId('ai-history-list');
     await openMenu(user);
-    expect(await screen.findByTestId('command-ai-author-scan-start-description')).toHaveTextContent('Realtime mode');
+    expect(await screen.findByTestId('command-ai-author-scan-start-description')).toHaveTextContent(
+      'Realtime mode'
+    );
     await user.keyboard('{Escape}');
     await user.click(screen.getByRole('button', { name: 'Batch (cheaper, hours)' }));
     await openMenu(user);
-    expect(await screen.findByTestId('command-ai-author-scan-start-description')).toHaveTextContent('Batch mode');
+    expect(await screen.findByTestId('command-ai-author-scan-start-description')).toHaveTextContent(
+      'Batch mode'
+    );
   });
 
   it('start scan uses startJob (no local polling): it starts the scan, points at the bell, and re-reads once', async () => {
@@ -208,7 +222,11 @@ describe('the Authors & series menu', () => {
     const slow: Array<[string, unknown]> = [];
     for (const name of ['setInterval', 'setTimeout'] as const) {
       const real = globalThis[name];
-      vi.spyOn(globalThis, name).mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      vi.spyOn(globalThis, name).mockImplementation(((
+        fn: () => void,
+        ms?: number,
+        ...rest: unknown[]
+      ) => {
         // Created by this feature's own code: the first frame that is not the spy,
         // a test or a dependency is a non-test file under components/review. (A toast's
         // 5 s auto-dismiss, from the app store, is not a poll.)
@@ -227,12 +245,18 @@ describe('the Authors & series menu', () => {
     await screen.findByTestId('ai-history-list');
     expect(reads.fetchAIScans).toHaveBeenCalledTimes(1);
 
-    vi.mocked(reads.fetchAIScans).mockResolvedValue([scan(7, { status: 'pending' }), scan(5), scan(6)]);
+    vi.mocked(reads.fetchAIScans).mockResolvedValue([
+      scan(7, { status: 'pending' }),
+      scan(5),
+      scan(6),
+    ]);
     await openMenu(user);
     await user.click(await start());
 
     await waitFor(() => expect(api.startAIScan).toHaveBeenCalledWith('realtime'));
-    expect(await screen.findByText('AI author scan started — watch the bell for progress.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('AI author scan started — watch the bell for progress.')
+    ).toBeInTheDocument();
     expect(await screen.findByTestId('ai-scan-7')).toBeInTheDocument();
     expect(reads.fetchAIScans).toHaveBeenCalledTimes(2);
     expect(slow).toEqual([]);
@@ -255,7 +279,7 @@ describe('the Authors & series menu', () => {
     await waitFor(() => expect(api.startAIScan).toHaveBeenCalledWith('batch'));
   });
 
-  it('Start that the server refuses is reported with the server\'s reason', async () => {
+  it("Start that the server refuses is reported with the server's reason", async () => {
     const user = userEvent.setup();
     vi.mocked(api.startAIScan).mockRejectedValue(new Error('AI scan pipeline not configured'));
     renderWorkspace('/review?lane=authors&view=ai');
@@ -267,15 +291,18 @@ describe('the Authors & series menu', () => {
     ).toBeInTheDocument();
   });
 
-  it('Start while a scan is already running shows the server\'s own 409 text', async () => {
+  it("Start while a scan is already running shows the server's own 409 text", async () => {
     const user = userEvent.setup();
-    const refusal = 'an AI author scan is already running (scan #4, scanning); wait for it to finish or cancel it first';
+    const refusal =
+      'an AI author scan is already running (scan #4, scanning); wait for it to finish or cancel it first';
     vi.mocked(api.startAIScan).mockRejectedValue(new Error(refusal));
     renderWorkspace('/review?lane=authors&view=ai');
     await screen.findByTestId('ai-history-list');
     await openMenu(user);
     await user.click(await start());
-    expect(await screen.findByText(`Failed to start AI author scan: ${refusal}`)).toBeInTheDocument();
+    expect(
+      await screen.findByText(`Failed to start AI author scan: ${refusal}`)
+    ).toBeInTheDocument();
   });
 
   it('Start cannot be fired twice: once the POST has answered the scan is listed and the command is refused, even if the re-read never answers', async () => {
@@ -317,7 +344,9 @@ describe('the Authors & series menu', () => {
 
     await waitFor(() => expect(api.cancelAIScan).toHaveBeenCalledWith(7));
     expect(await screen.findByText('Scan #7 canceled.')).toBeInTheDocument();
-    await waitFor(() => expect(within(screen.getByTestId('ai-scan-7')).getByText('canceled')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(within(screen.getByTestId('ai-scan-7')).getByText('canceled')).toBeInTheDocument()
+    );
   });
 });
 
@@ -345,7 +374,9 @@ describe('Apply selected goes through startJob', () => {
     });
     renderWorkspace('/review?lane=authors&view=ai');
     await user.click(await screen.findByTestId('ai-scan-5'));
-    expect(await screen.findByTestId('ai-result-plan-1')).toHaveTextContent('keep Dana Fixture, merge Fixture, Dana');
+    expect(await screen.findByTestId('ai-result-plan-1')).toHaveTextContent(
+      'keep Dana Fixture, merge Fixture, Dana'
+    );
     await user.click(screen.getByRole('checkbox', { name: 'Select result 1' }));
   }
 
@@ -358,24 +389,34 @@ describe('Apply selected goes through startJob', () => {
       scan_id: 5,
       results: 1,
     });
-    vi.mocked(api.pollOperationV2).mockResolvedValue({ id: 'op-apply', status: 'completed', error_message: null } as api.OperationV2);
+    vi.mocked(api.pollOperationV2).mockResolvedValue({
+      id: 'op-apply',
+      status: 'completed',
+      error_message: null,
+    } as api.OperationV2);
     await openAndSelect(user);
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
 
     await waitFor(() => expect(api.applyAIScanResults).toHaveBeenCalledWith(5, [1]));
-    expect(await screen.findByText('AI scan apply started — watch the bell for progress.')).toBeInTheDocument();
-    expect(await screen.findByTestId('ai-scans-notice')).toHaveTextContent('Merged the authors of 1 selected result.');
+    expect(
+      await screen.findByText('AI scan apply started — watch the bell for progress.')
+    ).toBeInTheDocument();
+    expect(await screen.findByTestId('ai-scans-notice')).toHaveTextContent(
+      'Merged the authors of 1 selected result.'
+    );
     await waitFor(() => expect(reads.fetchAIScanResults).toHaveBeenCalledTimes(2));
   });
 
-  it('a refusal is an error toast with the server\'s own words, and nothing is polled', async () => {
+  it("a refusal is an error toast with the server's own words, and nothing is polled", async () => {
     const user = userEvent.setup();
     const refusal = 'result 1 is a "alias" suggestion; only merge suggestions can be applied here';
     vi.mocked(api.applyAIScanResults).mockRejectedValue(new Error(refusal));
     await openAndSelect(user);
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
 
-    expect(await screen.findByText(`Failed to start AI scan apply: ${refusal}`)).toBeInTheDocument();
+    expect(
+      await screen.findByText(`Failed to start AI scan apply: ${refusal}`)
+    ).toBeInTheDocument();
     expect(api.pollOperationV2).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.15.1
+// version: 1.15.2
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-18
 //
@@ -11,7 +11,13 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
-import type { Book, OperationV2, RepairFixer, RepairRow, RepairRowsFilter } from '../../services/api';
+import type {
+  Book,
+  OperationV2,
+  RepairFixer,
+  RepairRow,
+  RepairRowsFilter,
+} from '../../services/api';
 import { RepairsPanel, SKIP_KIND_LABEL } from './RepairsPanel';
 import { useRepairsLane } from './lanes/useRepairsLane';
 import type { SpineViewMode } from './spine/viewMode';
@@ -51,7 +57,10 @@ function row(id: string, extra: Partial<RepairRow> = {}): RepairRow {
 const APPLICABLE = [row('g1'), row('g2', { risk: 'review' })];
 const SKIPPED = [
   row('g3', { skipped: 'skipped_itunes', skip_reason: 'Lives in the iTunes library' }),
-  row('g4', { skipped: 'skipped_fragment', skip_reason: 'fragment — use the consolidation fixer: 3 books share the folder' }),
+  row('g4', {
+    skipped: 'skipped_fragment',
+    skip_reason: 'fragment — use the consolidation fixer: 3 books share the folder',
+  }),
 ];
 
 function skippedByKind(): Record<string, number> {
@@ -92,7 +101,11 @@ beforeEach(() => {
   confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
   vi.mocked(api.listRepairFixers).mockResolvedValue([FIXER]);
   vi.mocked(api.getRepairPlanRows).mockImplementation(
-    async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+    async (
+      fixerId: string,
+      planOpId: string,
+      q: { filter: RepairRowsFilter; offset: number; limit: number }
+    ) => {
       const all =
         q.filter === 'applicable'
           ? APPLICABLE
@@ -203,11 +216,15 @@ describe('RepairsPanel', () => {
     await user.click(screen.getByTestId('repairs-apply-selected'));
 
     const banner = await screen.findByTestId('repairs-apply-result');
-    expect(screen.getByTestId('repairs-outcome-g2')).toHaveTextContent('Retry later (nothing written)');
+    expect(screen.getByTestId('repairs-outcome-g2')).toHaveTextContent(
+      'Retry later (nothing written)'
+    );
     expect(banner.className).toMatch(/Warning/);
     expect(banner.className).not.toMatch(/Success/);
     expect(banner).toHaveTextContent('retry later 1');
-    expect(banner).toHaveTextContent(/could not be checked right now; apply them again in a few minutes/);
+    expect(banner).toHaveTextContent(
+      /could not be checked right now; apply them again in a few minutes/
+    );
     // The outcome chip already says "nothing written"; the hint does not repeat it.
     expect(banner).not.toHaveTextContent(/were not written/);
   });
@@ -258,7 +275,9 @@ describe('RepairsPanel', () => {
     expect(banner.className).toMatch(/Warning/);
     expect(banner.className).not.toMatch(/Success/);
     expect(banner).toHaveTextContent('canceled before finishing 1');
-    expect(banner).toHaveTextContent(/The apply was canceled; rows marked "Canceled" were not applied, or were stopped partway/);
+    expect(banner).toHaveTextContent(
+      /The apply was canceled; rows marked "Canceled" were not applied, or were stopped partway/
+    );
   });
 
   it('sends nothing when the confirm is cancelled', async () => {
@@ -385,7 +404,11 @@ describe('RepairsPanel — classified rows', () => {
     ],
     evidence: ['a ← row 1: import path', 'b ← row 2: import path', 'c', 'd'],
   });
-  const NOPARENT = row('no-parent:x', { class: 'no-parent', book_ids: ['A', 'B', 'C'], title: 'Loose' });
+  const NOPARENT = row('no-parent:x', {
+    class: 'no-parent',
+    book_ids: ['A', 'B', 'C'],
+    title: 'Loose',
+  });
 
   beforeEach(() => {
     vi.mocked(api.getRepairPlanRows).mockImplementation(
@@ -408,7 +431,9 @@ describe('RepairsPanel — classified rows', () => {
           applicable: 2,
           skipped_by_kind: {},
           by_class: { moved: 1, 'no-parent': 1 },
-          by_class_in_filter: (q.filter === 'applicable' ? { moved: 1, 'no-parent': 1 } : {}) as Record<string, number>,
+          by_class_in_filter: (q.filter === 'applicable'
+            ? { moved: 1, 'no-parent': 1 }
+            : {}) as Record<string, number>,
           rows,
         };
       }
@@ -431,7 +456,9 @@ describe('RepairsPanel — classified rows', () => {
       expect.anything()
     );
     await screen.findByTestId('repairs-row-moved:P');
-    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-no-parent:x')).not.toBeInTheDocument());
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('repairs-row-no-parent:x')).not.toBeInTheDocument()
+    );
 
     await user.click(screen.getByTestId('repairs-class-all'));
     expect(await screen.findByTestId('repairs-row-no-parent:x')).toBeInTheDocument();
@@ -465,12 +492,18 @@ describe('RepairsPanel — classified rows', () => {
     expect(within(ev).queryByText('d')).not.toBeInTheDocument();
     await user.click(within(ev).getByRole('button', { name: 'Show all 4' }));
     expect(within(ev).getByText('d')).toBeInTheDocument();
-    expect(within(screen.getByTestId('repairs-row-moved:P')).getByText('Moved')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('repairs-row-moved:P')).getByText('Moved')
+    ).toBeInTheDocument();
   });
 });
 
 describe('RepairsPanel — skip kinds under a selected class', () => {
-  const S_MOVED = row('s-moved', { class: 'moved', skipped: 'skipped_itunes', skip_reason: 'iTunes' });
+  const S_MOVED = row('s-moved', {
+    class: 'moved',
+    skipped: 'skipped_itunes',
+    skip_reason: 'iTunes',
+  });
   const S_COPY = row('s-copy', { class: 'copy', skipped: 'skipped_itunes', skip_reason: 'iTunes' });
   const A_MOVED = row('a-moved', { class: 'moved' });
 
@@ -519,7 +552,7 @@ describe('RepairsPanel — skip kinds under a selected class', () => {
     );
   });
 
-  it('labels the Skipped and Applicable tabs with the selected class\'s counts', async () => {
+  it("labels the Skipped and Applicable tabs with the selected class's counts", async () => {
     const user = userEvent.setup();
     renderPanel();
     await user.click(await screen.findByTestId('repairs-tab-skipped'));
@@ -528,7 +561,9 @@ describe('RepairsPanel — skip kinds under a selected class', () => {
     expect(screen.getByTestId('repairs-tab-applicable')).toHaveTextContent('Applicable (1)');
 
     await user.click(screen.getByTestId('repairs-class-moved'));
-    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-s-copy')).not.toBeInTheDocument());
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('repairs-row-s-copy')).not.toBeInTheDocument()
+    );
     // One skipped row listed (s-moved); the chip under the tabs says 1, and
     // so does the tab the user is on.
     expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (1)');
@@ -539,12 +574,14 @@ describe('RepairsPanel — skip kinds under a selected class', () => {
     await user.click(screen.getByTestId('repairs-class-moved'));
     await screen.findByTestId('repairs-row-s-copy');
     await user.click(screen.getByTestId('repairs-class-copy'));
-    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-s-moved')).not.toBeInTheDocument());
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('repairs-row-s-moved')).not.toBeInTheDocument()
+    );
     expect(screen.getByTestId('repairs-tab-skipped')).toHaveTextContent('Skipped (1)');
     expect(screen.getByTestId('repairs-tab-applicable')).toHaveTextContent('Applicable (0)');
   });
 
-  it('labels each kind chip, and All skipped, with the selected class\'s count', async () => {
+  it("labels each kind chip, and All skipped, with the selected class's count", async () => {
     const user = userEvent.setup();
     renderPanel();
     await user.click(await screen.findByTestId('repairs-tab-skipped'));
@@ -553,7 +590,9 @@ describe('RepairsPanel — skip kinds under a selected class', () => {
     expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (2)');
 
     await user.click(screen.getByTestId('repairs-class-moved'));
-    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-s-copy')).not.toBeInTheDocument());
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('repairs-row-s-copy')).not.toBeInTheDocument()
+    );
     const chip = screen.getByTestId('repairs-skip-kind-skipped_itunes');
     expect(chip).toHaveTextContent('iTunes library (hands-off) (1)');
     expect(screen.getByTestId('repairs-skip-kind-all')).toHaveTextContent('All skipped (1)');
@@ -625,14 +664,16 @@ describe('RepairsPanel — apply all under a selected class', () => {
     });
   });
 
-  it('applies only the selected class\'s rows, and says so', async () => {
+  it("applies only the selected class's rows, and says so", async () => {
     const user = userEvent.setup();
     renderPanel();
     await screen.findByTestId('repairs-row-a-copy');
     expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent('Apply all applicable (2)');
 
     await user.click(screen.getByTestId('repairs-class-moved'));
-    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-a-copy')).not.toBeInTheDocument());
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('repairs-row-a-copy')).not.toBeInTheDocument()
+    );
     const button = screen.getByTestId('repairs-apply-all');
     expect(button).toHaveTextContent('Apply all applicable in this class (1)');
 
@@ -644,17 +685,27 @@ describe('RepairsPanel — apply all under a selected class', () => {
     expect(api.getRepairPlanRows).toHaveBeenCalledWith(
       'vg-primary',
       'plan-1',
-      expect.objectContaining({ filter: 'applicable', rowClass: 'moved', limit: api.REPAIRS_ROWS_MAX_LIMIT })
+      expect.objectContaining({
+        filter: 'applicable',
+        rowClass: 'moved',
+        limit: api.REPAIRS_ROWS_MAX_LIMIT,
+      })
     );
 
     // The applied row is subtracted from its own class only.
     await vi.waitFor(() =>
-      expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent('Apply all applicable in this class (0)')
+      expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent(
+        'Apply all applicable in this class (0)'
+      )
     );
     await user.click(screen.getByTestId('repairs-class-moved'));
     await user.click(await screen.findByTestId('repairs-class-copy'));
-    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-a-moved')).not.toBeInTheDocument());
-    expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent('Apply all applicable in this class (1)');
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('repairs-row-a-moved')).not.toBeInTheDocument()
+    );
+    expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent(
+      'Apply all applicable in this class (1)'
+    );
   });
 });
 
@@ -664,7 +715,8 @@ describe('RepairsPanel — owner rows', () => {
     skipped: 'skipped_itunes',
     skip_reason: 'iTunes tracks this library copy',
     owner_applicable: true,
-    owner_apply_reason: 'byte-identical to the parent file (content hash); only database rows change',
+    owner_apply_reason:
+      'byte-identical to the parent file (content hash); only database rows change',
     owner_writes: ['book-own'],
     evidence: ['content sha256 abc123 = parent'],
   });
@@ -672,7 +724,11 @@ describe('RepairsPanel — owner rows', () => {
 
   beforeEach(() => {
     vi.mocked(api.getRepairPlanRows).mockImplementation(
-      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number }
+      ) => {
         const all =
           q.filter === 'applicable'
             ? APPLICABLE
@@ -726,7 +782,9 @@ describe('RepairsPanel — owner rows', () => {
     await expandRow(user, 'own');
     await expandRow(user, 'man');
     expect(within(own).getByText(/byte-identical to the parent file/)).toBeInTheDocument();
-    expect(within(own).getByText(/iTunes tracks these files; only database rows change/)).toBeInTheDocument();
+    expect(
+      within(own).getByText(/iTunes tracks these files; only database rows change/)
+    ).toBeInTheDocument();
     expect(within(own).getByRole('button', { name: 'Apply (owner)' })).toBeInTheDocument();
     expect(within(own).queryByRole('checkbox')).not.toBeInTheDocument();
     const plain = screen.getByTestId('repairs-row-man');
@@ -799,7 +857,9 @@ describe('RepairsPanel — owner rows', () => {
       expect(api.startRepairOwnerApply).toHaveBeenCalledWith('vg-primary', 'plan-1', 'own')
     );
     expect(api.startRepairApply).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(screen.getByTestId('repairs-outcome-own')).toHaveTextContent('Applied'));
+    await vi.waitFor(() =>
+      expect(screen.getByTestId('repairs-outcome-own')).toHaveTextContent('Applied')
+    );
     expect(screen.queryByTestId('repairs-owner-apply-own')).not.toBeInTheDocument();
   });
 
@@ -886,8 +946,12 @@ describe('RepairsPanel — layout', () => {
     expect(screen.getByTestId('repairs-fixer-description')).toHaveStyle({ whiteSpace: 'nowrap' });
     await user.click(toggle);
     expect(toggle).toHaveTextContent('Less');
-    expect(screen.getByTestId('repairs-fixer-description')).not.toHaveStyle({ whiteSpace: 'nowrap' });
-    expect(within(screen.getByTestId('repairs-fixer-header')).getByText(/pauses briefly/)).toBeInTheDocument();
+    expect(screen.getByTestId('repairs-fixer-description')).not.toHaveStyle({
+      whiteSpace: 'nowrap',
+    });
+    expect(
+      within(screen.getByTestId('repairs-fixer-header')).getByText(/pauses briefly/)
+    ).toBeInTheDocument();
   });
 });
 
@@ -905,7 +969,12 @@ describe('RepairsPanel — view modes', () => {
     ],
     evidence: ['e1', 'e2', 'e3', 'e4'],
   });
-  const V2 = row('v2', { reason: 'same fix', current: { series: 'Series S' }, proposed: {}, book_ids: ['Q'] });
+  const V2 = row('v2', {
+    reason: 'same fix',
+    current: { series: 'Series S' },
+    proposed: {},
+    book_ids: ['Q'],
+  });
   const V3 = row('v3', { reason: 'other fix', book_ids: ['R'] });
   const ROWS = [V3, V1, V2];
 
@@ -923,7 +992,11 @@ describe('RepairsPanel — view modes', () => {
 
   beforeEach(() => {
     vi.mocked(api.getRepairPlanRows).mockImplementation(
-      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number }
+      ) => {
         const all = q.filter === 'applicable' ? ROWS : [];
         return {
           plan_op_id: planOpId,
@@ -989,9 +1062,13 @@ describe('RepairsPanel — view modes', () => {
     expect([...ids].sort()).toEqual(['F1', 'P', 'Q', 'R']);
     expect(vi.mocked(api.getBooksByIds).mock.calls[0][1]).toBeInstanceOf(AbortSignal);
     // A member the response did not include says so rather than showing blank.
-    expect(screen.getByTestId('repairs-member-v2-Q')).toHaveTextContent('Book not found in the library.');
+    expect(screen.getByTestId('repairs-member-v2-Q')).toHaveTextContent(
+      'Book not found in the library.'
+    );
     // Details shows every line of evidence, no fold.
-    expect(within(screen.getByTestId('repairs-row-evidence-v1')).getByText('e4')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('repairs-row-evidence-v1')).getByText('e4')
+    ).toBeInTheDocument();
   });
 
   it('details: a failed book request shows an error with Retry, and Retry asks again', async () => {
@@ -1000,7 +1077,9 @@ describe('RepairsPanel — view modes', () => {
     renderPanel('two-column');
     const err = await screen.findByTestId('repairs-details-books-error');
     expect(err).toHaveTextContent('books exploded');
-    expect(screen.getByTestId('repairs-member-v1-P')).toHaveTextContent('Book details could not be loaded.');
+    expect(screen.getByTestId('repairs-member-v1-P')).toHaveTextContent(
+      'Book details could not be loaded.'
+    );
     await user.click(within(err).getByRole('button', { name: 'Retry' }));
     await vi.waitFor(() =>
       expect(screen.getByTestId('repairs-member-v1-P')).toHaveTextContent('read by Reader One')
@@ -1009,7 +1088,7 @@ describe('RepairsPanel — view modes', () => {
     expect(api.getBooksByIds).toHaveBeenCalledTimes(2);
   });
 
-  it('details: Show files fetches the book\'s file rows and lists their paths', async () => {
+  it("details: Show files fetches the book's file rows and lists their paths", async () => {
     vi.mocked(api.getBookFiles).mockResolvedValue({
       files: [{ id: 'f1', book_id: 'P', file_path: '/library/a/b.mp3' } as api.BookFile],
       count: 1,
@@ -1018,7 +1097,10 @@ describe('RepairsPanel — view modes', () => {
     renderPanel('two-column');
     await user.click(await screen.findByTestId('repairs-member-files-v1-P-show'));
     expect(api.getBookFiles).toHaveBeenCalledTimes(1);
-    expect(api.getBookFiles).toHaveBeenCalledWith('P', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(api.getBookFiles).toHaveBeenCalledWith(
+      'P',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     const files = await screen.findByTestId('repairs-member-files-v1-P');
     expect(files).toHaveTextContent('/library/a/b.mp3');
     // Never the book's stale file_path.
@@ -1030,7 +1112,9 @@ describe('RepairsPanel — view modes', () => {
     const g0 = await screen.findByTestId('repairs-group-0');
     expect(within(g0).getByText('same fix')).toBeInTheDocument();
     expect(within(g0).getByTestId('repairs-group-0-count')).toHaveTextContent('2 rows');
-    expect(within(g0).getByTestId('repairs-group-0-titles')).toHaveTextContent('Title v1 · Title v2');
+    expect(within(g0).getByTestId('repairs-group-0-titles')).toHaveTextContent(
+      'Title v1 · Title v2'
+    );
     const g1 = screen.getByTestId('repairs-group-1');
     expect(within(g1).getByText('other fix')).toBeInTheDocument();
     expect(within(g1).getByTestId('repairs-group-1-count')).toHaveTextContent('1 row');
@@ -1062,7 +1146,7 @@ describe('RepairsPanel — view modes', () => {
     expect(screen.getByRole('checkbox', { name: 'Select Title v1' })).not.toBeChecked();
   });
 
-  it('grouped: Apply group sends exactly the group\'s rows through the apply-selected path', async () => {
+  it("grouped: Apply group sends exactly the group's rows through the apply-selected path", async () => {
     const user = userEvent.setup();
     renderPanel('candidates');
     await screen.findByTestId('repairs-group-0');
@@ -1119,8 +1203,13 @@ describe('RepairsPanel — split books', () => {
   beforeEach(() => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([SPLIT_FIXER]);
     vi.mocked(api.getRepairPlanRows).mockImplementation(
-      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
-        const all = q.filter === 'applicable' ? [CLUSTER] : q.filter.startsWith('skipped') ? [ITUNES] : [];
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number }
+      ) => {
+        const all =
+          q.filter === 'applicable' ? [CLUSTER] : q.filter.startsWith('skipped') ? [ITUNES] : [];
         return {
           plan_op_id: planOpId,
           fixer_id: fixerId,
@@ -1147,7 +1236,10 @@ describe('RepairsPanel — split books', () => {
     const toggle = within(r).getByTestId('repairs-row-members-split:a');
     expect(toggle).toHaveTextContent('3 books in this row');
     await user.click(toggle);
-    expect(within(r).getByRole('link', { name: 'Book One 01' })).toHaveAttribute('href', '/library/K');
+    expect(within(r).getByRole('link', { name: 'Book One 01' })).toHaveAttribute(
+      'href',
+      '/library/K'
+    );
     expect(within(r).getAllByText(/^keep · 1 file$/)).toHaveLength(1);
     expect(within(r).getAllByText(/^fragment · 1 file$/)).toHaveLength(2);
   });
@@ -1160,7 +1252,9 @@ describe('RepairsPanel — split books', () => {
     const skipped = await screen.findByTestId('repairs-row-split:b');
     expect(within(skipped).getByText('iTunes')).toBeInTheDocument();
     expect(within(skipped).queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.getByTestId('repairs-skip-kind-skipped_itunes')).toHaveTextContent('iTunes library (hands-off) (1)');
+    expect(screen.getByTestId('repairs-skip-kind-skipped_itunes')).toHaveTextContent(
+      'iTunes library (hands-off) (1)'
+    );
   });
 });
 
@@ -1193,7 +1287,10 @@ describe('RepairsPanel — missing files', () => {
     proposed: { path: '/library/new/Book One.m4b' },
     reason:
       'The file /library/old/Book One.m4b is missing; the scan matched the untracked file /library/new/Book One.m4b by hash (confidence high).',
-    evidence: ['reconcile scan scan-1 (completed 2026-10-14 03:00 UTC)', 'matched by hash, confidence high, score 1.00'],
+    evidence: [
+      'reconcile scan scan-1 (completed 2026-10-14 03:00 UTC)',
+      'matched by hash, confidence high, score 1.00',
+    ],
     members: [{ book_id: 'B1', title: 'Book One', role: 'missing', files: 1, missing_files: 1 }],
   });
   const NO_CANDIDATE = row('missing:B2', {
@@ -1209,8 +1306,17 @@ describe('RepairsPanel — missing files', () => {
   beforeEach(() => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([MISSING_FIXER]);
     vi.mocked(api.getRepairPlanRows).mockImplementation(
-      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
-        const all = q.filter === 'applicable' ? [MATCH] : q.filter.startsWith('skipped') ? [NO_CANDIDATE] : [];
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number }
+      ) => {
+        const all =
+          q.filter === 'applicable'
+            ? [MATCH]
+            : q.filter.startsWith('skipped')
+              ? [NO_CANDIDATE]
+              : [];
         return {
           plan_op_id: planOpId,
           fixer_id: fixerId,
@@ -1239,7 +1345,9 @@ describe('RepairsPanel — missing files', () => {
     );
     expect(within(r).getByText(/by hash \(confidence high\)/)).toBeInTheDocument();
     await user.click(screen.getByTestId('repairs-row-expand-missing:B1'));
-    expect(screen.getByTestId('repairs-row-evidence-missing:B1')).toHaveTextContent('matched by hash, confidence high');
+    expect(screen.getByTestId('repairs-row-evidence-missing:B1')).toHaveTextContent(
+      'matched by hash, confidence high'
+    );
   });
 
   it('lists a book with no candidate file as a skipped row with that reason and a clickable count', async () => {

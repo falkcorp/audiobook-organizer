@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.6.2
+// version: 1.6.3
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
 // last-edited: 2026-10-18
 //
@@ -175,8 +175,10 @@ describe('refetching stale rows from /review', () => {
   it('reports a started refetch as started, not as already running', async () => {
     const user = userEvent.setup();
     seed(
-      [makeResult('a', { is_fresh: false }), makeResult('c', { is_fresh: false })] as
-        api.CandidateResult[],
+      [
+        makeResult('a', { is_fresh: false }),
+        makeResult('c', { is_fresh: false }),
+      ] as api.CandidateResult[],
       2
     );
     await openWorkspace();
@@ -196,8 +198,10 @@ describe('refetching stale rows from /review', () => {
   it('still says so when the server declines because a fetch is already running', async () => {
     const user = userEvent.setup();
     seed(
-      [makeResult('a', { is_fresh: false }), makeResult('c', { is_fresh: false })] as
-        api.CandidateResult[],
+      [
+        makeResult('a', { is_fresh: false }),
+        makeResult('c', { is_fresh: false }),
+      ] as api.CandidateResult[],
       2
     );
     vi.mocked(api.batchFetchCandidates).mockResolvedValue({
@@ -260,8 +264,10 @@ describe('refetching stale rows from /review', () => {
     // TWO stale rows, deliberately: with only one, `[bookId]` and the whole
     // stale set are the same array and the test cannot tell them apart.
     seed(
-      [makeResult('a', { is_fresh: false }), makeResult('b', { is_fresh: false })] as
-        api.CandidateResult[],
+      [
+        makeResult('a', { is_fresh: false }),
+        makeResult('b', { is_fresh: false }),
+      ] as api.CandidateResult[],
       2
     );
     await openWorkspace();

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-10-18
 //
@@ -73,7 +73,11 @@ const SKIPPED = [row('g3', { skipped: 'skipped_itunes', skip_reason: 'iTunes lib
 /** A rows mock that honours plan, filter, offset and limit. */
 function mockRows(plans: Record<string, { applicable: RepairRow[]; skipped: RepairRow[] }>) {
   vi.mocked(api.getRepairPlanRows).mockImplementation(
-    async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+    async (
+      fixerId: string,
+      planOpId: string,
+      q: { filter: RepairRowsFilter; offset: number; limit: number }
+    ) => {
       const plan = plans[planOpId];
       if (!plan) throw Object.assign(new Error('repair plan not found'), { status: 404 });
       const all = q.filter === 'applicable' ? plan.applicable : plan.skipped;
@@ -258,7 +262,9 @@ describe('useRepairsLane: trials', () => {
     let finish!: (o: OperationV2) => void;
     vi.mocked(api.pollOperationV2).mockReturnValue(new Promise((r) => (finish = r)));
 
-    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    act(() =>
+      result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' })
+    );
     await waitFor(() => expect(result.current.trial?.phase).toBe('running'));
     expect(api.startRepairPlan).toHaveBeenCalledWith('vg-primary');
     expect(api.pollOperationV2).toHaveBeenCalledWith(
@@ -286,9 +292,15 @@ describe('useRepairsLane: trials', () => {
       status: 'queued',
     });
     vi.mocked(api.pollOperationV2).mockResolvedValue(op('plan-2', 'failed', 'store unavailable'));
-    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    act(() =>
+      result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' })
+    );
     await waitFor(() =>
-      expect(result.current.trial).toEqual({ opId: 'plan-2', phase: 'failed', message: 'store unavailable' })
+      expect(result.current.trial).toEqual({
+        opId: 'plan-2',
+        phase: 'failed',
+        message: 'store unavailable',
+      })
     );
     // The completed plan is still the one shown.
     expect(result.current.planOpId).toBe('plan-1');
@@ -297,7 +309,10 @@ describe('useRepairsLane: trials', () => {
 
   it('follows a trial the server reports as already running', async () => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([
-      { ...FIXER, last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' } },
+      {
+        ...FIXER,
+        last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' },
+      },
     ]);
     vi.mocked(api.pollOperationV2).mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(() => useRepairsLane(toast, true), { wrapper: QueryWrapper });
@@ -308,7 +323,10 @@ describe('useRepairsLane: trials', () => {
 
   it('stops polling when the lane goes inactive', async () => {
     vi.mocked(api.listRepairFixers).mockResolvedValue([
-      { ...FIXER, last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' } },
+      {
+        ...FIXER,
+        last_plan: { operation_id: 'plan-9', status: 'running', queued_at: '2026-09-27T10:00:00Z' },
+      },
     ]);
     vi.mocked(api.pollOperationV2).mockReturnValue(new Promise(() => {}));
     const { result, rerender } = renderHook(({ a }) => useRepairsLane(toast, a), {
@@ -359,10 +377,7 @@ describe('useRepairsLane: selection and apply', () => {
     expect(api.startRepairApply).toHaveBeenCalledWith('vg-primary', 'plan-1', ['g1']);
     expect(result.current.rowOutcomes.get('g1')?.outcome).toBe('applied');
     expect(result.current.selectedRowIds.size).toBe(0);
-    expect(toast).toHaveBeenCalledWith(
-      'Applied 1 · changed since trial 0 · failed 0',
-      'success'
-    );
+    expect(toast).toHaveBeenCalledWith('Applied 1 · changed since trial 0 · failed 0', 'success');
   });
 
   it('sends nothing when the confirm is cancelled', async () => {
@@ -412,7 +427,9 @@ describe('useRepairsLane: selection and apply', () => {
       })
     );
     await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
-    expect(confirmSpy).toHaveBeenCalledWith(repairApplyConfirmMessage(620, 'Version group primary'));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      repairApplyConfirmMessage(620, 'Version group primary')
+    );
     const ids = vi.mocked(api.startRepairApply).mock.calls[0][2];
     expect(ids).toHaveLength(620);
     expect(new Set(ids).size).toBe(620);
@@ -544,7 +561,7 @@ describe('useRepairsLane: selection and apply', () => {
     );
   });
 
-  it('does not re-send rows an earlier apply settled, and keeps both applies\' badges', async () => {
+  it("does not re-send rows an earlier apply settled, and keeps both applies' badges", async () => {
     const { result } = await renderLane();
     stubApply(applyResult({ rows: [{ row_id: 'g1', outcome: 'applied' }] }));
     act(() =>
@@ -564,7 +581,13 @@ describe('useRepairsLane: selection and apply', () => {
     expect([...result.current.selectedRowIds]).toEqual(['g2']);
     act(() => result.current.clearSelection());
 
-    stubApply(applyResult({ rows: [{ row_id: 'g2', outcome: 'failed', error: 'x' }], failed: 1, applied: 0 }));
+    stubApply(
+      applyResult({
+        rows: [{ row_id: 'g2', outcome: 'failed', error: 'x' }],
+        failed: 1,
+        applied: 0,
+      })
+    );
     confirmSpy.mockClear();
     act(() =>
       result.current.dispatch({

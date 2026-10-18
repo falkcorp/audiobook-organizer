@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.authors.test.tsx
-// version: 1.2.2
+// version: 1.2.3
 // guid: 0b6d94c3-f7a2-4e18-9d05-62c8e1a7b350
 // last-edited: 2026-10-18
 
@@ -84,7 +84,13 @@ beforeEach(() => {
     errors: 0,
     stale: 0,
   } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
-  vi.mocked(api.getReviewItems).mockResolvedValue({ items: [], count: 0, limit: 500, offset: 0, total: 0 });
+  vi.mocked(api.getReviewItems).mockResolvedValue({
+    items: [],
+    count: 0,
+    limit: 500,
+    offset: 0,
+    total: 0,
+  });
   vi.mocked(api.getReviewCount).mockResolvedValue({
     applying: 0,
     needs_attention: 0,
@@ -125,7 +131,9 @@ describe('Authors & series in the workspace', () => {
     renderWorkspace('/review?lane=regroup');
     await screen.findByTestId('regroup-rail');
     expect(reads.fetchAuthorGroups).not.toHaveBeenCalled();
-    expect(vi.mocked(api.getDedupCandidates).mock.calls.filter((c) => c[0]?.entity_type === 'author')).toHaveLength(0);
+    expect(
+      vi.mocked(api.getDedupCandidates).mock.calls.filter((c) => c[0]?.entity_type === 'author')
+    ).toHaveLength(0);
 
     await user.click(screen.getByTestId('lane-tab-authors'));
     await screen.findByRole('heading', { name: 'Author A' });
@@ -145,7 +153,9 @@ describe('Authors & series in the workspace', () => {
     await screen.findByTestId('authors-panel');
     await user.click(screen.getByTestId('lane-tab-regroup'));
     expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
-    expect(within(screen.getByTestId('review-workspace')).queryByTestId('authors-panel')).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('review-workspace')).queryByTestId('authors-panel')
+    ).not.toBeInTheDocument();
     // `?lane=` is how you ARRIVE at a lane, not a record of the one you are on:
     // moving to another lane leaves the URL exactly as it was.
     expect(screen.getByTestId('location')).toHaveTextContent('/review?lane=authors');
