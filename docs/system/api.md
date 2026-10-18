@@ -82,7 +82,7 @@ To obtain an API key:
 | `GET` | `/api/v1/audiobooks/:id/metadata-rejections` | Candidates a human rejected for this book |
 | `POST` | `/api/v1/metadata/bulk-fetch` | Queue bulk metadata fetch |
 | `GET` | `/api/v1/metadata/search` · `/fields` | Provider search; known metadata fields |
-| `GET` | `/api/v1/metadata/providers/throttles` | Provider throttle state (`DELETE` clears) |
+| `GET` | `/api/v1/metadata/providers/throttles` | Provider throttle state (read-only). The `DELETE /metadata/providers/throttles` and `/throttles/:id` resets were retired (01-P81f) and answer 410 Gone for one release |
 
 ### Deduplication
 

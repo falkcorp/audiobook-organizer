@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.26 -->
+<!-- version: 10.76.27 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-17 -->
+<!-- last-edited: 2026-10-18 -->
 
 # Project TODO — live items only
 
@@ -4040,8 +4040,10 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
 ## Provider throttling — follow-ups
 
 - [ ] **Throttle panel in the UI.** `GET /api/v1/metadata/providers/throttles` returns
-  `provider_id`, `reason`, `detail`, `until` and `seconds_remaining`; `DELETE
-  .../throttles/{id}` and `DELETE .../throttles` are the resets. Poll on a slow cadence
+  `provider_id`, `reason`, `detail`, `until` and `seconds_remaining`; the two `DELETE`
+  resets (`.../throttles/{id}` and `.../throttles`) were retired behind 410 Gone in 01-P81f
+  (no caller existed), so a "reset now" control needs a new endpoint (or the old one
+  revived) first. Poll on a slow cadence
   (~4h was the ask) and show a "reset now" control. Endpoints shipped in the provider
   throttle PR; the panel was explicitly out of scope for it.
 - [ ] **Unify the two metadata source-chain builders.** `metafetch.buildSourceChainFromConfig`
