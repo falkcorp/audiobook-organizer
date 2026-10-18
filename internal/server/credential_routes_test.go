@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -71,7 +71,7 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/admin/debug/edits/:edit_id/undo":      "admin-only undo of a raw library edit",
 	"POST /api/v1/admin/recompact-digests":              "admin-only activity maintenance",
 	"POST /api/v1/audiobooks/:id/restore":               "un-deletes a book",
-	"POST /api/v1/audiobooks/:id/cover-history/restore": "restores a book's cover",
+	"POST /api/v1/audiobooks/:id/cover-history/restore": "retired (01-P81i): 410 Gone stub, touches nothing",
 	"POST /api/v1/audiobooks/:id/versions/:vid/restore": "restores a book version",
 	"POST /api/v1/books/:id/versions/:vid/restore":      "restores a book version",
 	"POST /api/v1/dedup/reset-acoustid":                 "clears dedup data",

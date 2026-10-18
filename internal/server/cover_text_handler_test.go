@@ -1,7 +1,7 @@
 // file: internal/server/cover_text_handler_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a0c7e39-4d2b-4f81-96e3-1b8d2f6a9c04
-// last-edited: 2026-09-26
+// last-edited: 2026-10-18
 
 package server
 
@@ -9,15 +9,44 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/covertext"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/gin-gonic/gin"
 )
 
+// setupCoverTextServer builds a test server on an in-memory Pebble store with
+// RootDir pointed at a temp dir, and restores the global config and store when
+// the test ends.
+func setupCoverTextServer(t *testing.T) (*Server, database.Store) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	origCfg := config.AppConfig
+	config.AppConfig.RootDir = t.TempDir()
+
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	origStore := database.GetGlobalStore()
+	database.SetGlobalStore(store)
+	t.Cleanup(func() {
+		config.AppConfig = origCfg
+		database.SetGlobalStore(origStore)
+		store.Close()
+	})
+
+	return newTestServer(t, store), store
+}
+
 func TestHandleGetCoverText(t *testing.T) {
-	srv, store, _ := setupCoverHistoryServer(t)
+	srv, store := setupCoverTextServer(t)
 
 	get := func(id string) (int, map[string]any) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/"+id+"/cover-text", nil)
