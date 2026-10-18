@@ -1,7 +1,7 @@
 // file: internal/database/iface_auth.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8be16e9f-22a9-45ca-a13c-1cca96721f90
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package database
 
@@ -28,15 +28,14 @@ type APIKeyWriter interface {
 	CreateAPIKey(key *APIKey) (*APIKey, error)
 }
 
-// APIKeyLifecycleStore revokes keys and adjusts status/expiry, including the
-// rotation grace window where an old key keeps working until a deadline.
+// APIKeyLifecycleStore revokes keys and adjusts status/expiry.
 type APIKeyLifecycleStore interface {
 	RevokeAPIKey(id string) error
 	SetAPIKeyStatus(id, status string, at time.Time) error
 	// SetAPIKeyExpiry updates only the ExpiresAt field on an existing key,
-	// leaving Status untouched. Used for the rotation grace window, where the
-	// old key must keep working until `at` rather than being revoked
-	// immediately (SEC-1/PROC-6).
+	// leaving Status untouched. Its production caller is the one-time expiry
+	// stamp for keys created before every key had an expiry
+	// (server.stampNeverExpiringAPIKeys).
 	SetAPIKeyExpiry(id string, at time.Time) error
 }
 

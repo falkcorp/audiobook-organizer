@@ -1,7 +1,7 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 // Router-level coverage for the credential guard (2026-10-07): an API key
 // (here an all-scope admin key, the strongest there is) gets 403 from the
@@ -162,8 +162,8 @@ func guardedRoutes() []guardedRoute {
 			func(*credGuardFixture) any { return nil }, http.StatusOK},
 		{"api key for another user", http.MethodPost, func(*credGuardFixture) string { return "/api/v1/auth/api-keys" },
 			func(f *credGuardFixture) any { return map[string]any{"name": "for target", "user_id": f.targetID} }, http.StatusCreated},
-		{"rotate another user's key", http.MethodPost, func(f *credGuardFixture) string { return "/api/v1/auth/api-keys/" + f.targetKeyID + "/rotate" },
-			func(*credGuardFixture) any { return nil }, http.StatusCreated},
+		{"rotate another user's key (retired: a session reaches the 410)", http.MethodPost, func(f *credGuardFixture) string { return "/api/v1/auth/api-keys/" + f.targetKeyID + "/rotate" },
+			func(*credGuardFixture) any { return nil }, http.StatusGone},
 		{"sign-in setting change", http.MethodPut, func(*credGuardFixture) string { return "/api/v1/config" },
 			func(*credGuardFixture) any { return map[string]any{"oauth_default_role": "admin"} }, http.StatusOK},
 	}

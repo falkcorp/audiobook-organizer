@@ -1,7 +1,7 @@
 // file: internal/database/apikey_invite_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5d1e8a2f-4c3b-4f70-a9d6-2e7f0c1b9a48
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package database
 
@@ -68,9 +68,9 @@ func TestAPIKey_Lifecycle(t *testing.T) {
 	}
 }
 
-// SetAPIKeyExpiry round-trips through PebbleStore (SEC-1/PROC-6 rotation
-// grace window): it updates only ExpiresAt, leaving Status untouched so the
-// key keeps working until the new expiry via the existing middleware check.
+// SetAPIKeyExpiry round-trips through PebbleStore: it updates only ExpiresAt,
+// leaving Status untouched so the key keeps working until the new expiry via
+// the existing middleware check.
 func TestAPIKey_SetAPIKeyExpiry_RoundTrips(t *testing.T) {
 	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {

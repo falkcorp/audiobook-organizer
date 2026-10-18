@@ -1,14 +1,13 @@
 // file: internal/server/handlers/apikeys_expiry_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c8e2a17-9b3d-4f61-8a05-d7e2c9b14f38
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package handlers_test
 
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -125,112 +124,8 @@ func TestAPIKeyCreate_ForAnotherUser(t *testing.T) {
 	})
 }
 
-func rotateCtx(t *testing.T) (*gin.Context, *httptest.ResponseRecorder) {
-	t.Helper()
-	c, w := newAuthCtx("POST", "/auth/api-keys/old/rotate", nil)
-	c.Params = gin.Params{{Key: "id", Value: "old"}}
-	return c, w
-}
-
-// Rotation keeps the old key's lifetime: an 8h key rotates into an 8h key.
-func TestAPIKeyRotate_KeepsLifetime(t *testing.T) {
-	created := time.Now().Add(-time.Hour)
-	exp := created.Add(8 * time.Hour)
-	old := &database.APIKey{ID: "old", UserID: "user-1", Status: "active", CreatedAt: created, ExpiresAt: &exp}
-
-	store := handlersmocks.NewMockAPIKeyHandlerStore(t)
-	store.EXPECT().GetAPIKey("old").Return(old, nil)
-	var newKey *database.APIKey
-	echoCreatedKey(store, &newKey)
-	store.EXPECT().SetAPIKeyExpiry("old", mock.Anything).Return(nil)
-
-	c, w := rotateCtx(t)
-	asCaller(c, &database.User{ID: "user-1"}, auth.MethodSession, nil)
-	handlers.NewAPIKeyHandler(store).Rotate(c)
-
-	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-	expiresIn(t, newKey.ExpiresAt, 8*time.Hour)
-}
-
-// An 8h bootstrap key must not rotate a year-long sibling key (same user)
-// into a fresh year-long token.
-func TestAPIKeyRotate_ByAPIKeyClampedToCallingKey(t *testing.T) {
-	callerExp := time.Now().Add(8 * time.Hour)
-	boot := &database.APIKey{ID: "boot", UserID: "admin-1", Status: "active", CreatedAt: time.Now(), ExpiresAt: &callerExp}
-	yearExp := time.Now().Add(300 * 24 * time.Hour)
-	sibling := &database.APIKey{ID: "old", UserID: "admin-1", Status: "active", CreatedAt: time.Now().Add(-65 * 24 * time.Hour), ExpiresAt: &yearExp}
-
-	store := handlersmocks.NewMockAPIKeyHandlerStore(t)
-	store.EXPECT().GetAPIKey("old").Return(sibling, nil)
-	var newKey *database.APIKey
-	echoCreatedKey(store, &newKey)
-	store.EXPECT().SetAPIKeyExpiry("old", mock.Anything).Return(nil)
-
-	c, w := rotateCtx(t)
-	asCaller(c, &database.User{ID: "admin-1"}, auth.MethodAPIKey, boot, auth.All()...)
-	handlers.NewAPIKeyHandler(store).Rotate(c)
-
-	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-	require.NotNil(t, newKey.ExpiresAt)
-	assert.False(t, newKey.ExpiresAt.After(callerExp), "rotated key %v outlives the calling key %v", newKey.ExpiresAt, callerExp)
-	assert.Contains(t, w.Body.String(), "cannot mint a key that outlives it")
-}
-
-func TestAPIKeyRotate_LifetimeCappedAndDefaulted(t *testing.T) {
-	cases := []struct {
-		name string
-		old  func() *database.APIKey
-		want time.Duration
-	}{
-		{"no expiry gets the default", func() *database.APIKey {
-			return &database.APIKey{ID: "old", UserID: "user-1", CreatedAt: time.Now()}
-		}, handlers.DefaultAPIKeyTTL},
-		{"over the maximum is capped", func() *database.APIKey {
-			exp := time.Now().Add(10 * 365 * 24 * time.Hour)
-			return &database.APIKey{ID: "old", UserID: "user-1", CreatedAt: time.Now(), ExpiresAt: &exp}
-		}, handlers.MaxAPIKeyTTL},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := handlersmocks.NewMockAPIKeyHandlerStore(t)
-			store.EXPECT().GetAPIKey("old").Return(tc.old(), nil)
-			var newKey *database.APIKey
-			echoCreatedKey(store, &newKey)
-			store.EXPECT().SetAPIKeyExpiry("old", mock.Anything).Return(nil)
-
-			c, w := rotateCtx(t)
-			asCaller(c, &database.User{ID: "user-1"}, auth.MethodSession, nil)
-			handlers.NewAPIKeyHandler(store).Rotate(c)
-
-			require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-			expiresIn(t, newKey.ExpiresAt, tc.want)
-		})
-	}
-}
-
-// Rotating ANOTHER user's key hands back that user's new token.
-func TestAPIKeyRotate_AnotherUsersKey(t *testing.T) {
-	bobsKey := func() *database.APIKey {
-		return &database.APIKey{ID: "old", UserID: "bob", Status: "active", CreatedAt: time.Now()}
-	}
-	// An API key rotating another user's key is refused at the route
-	// (server.credRouteWhen); credential_routes_test.go covers it.
-	t.Run("a signed-in admin is allowed", func(t *testing.T) {
-		store := handlersmocks.NewMockAPIKeyHandlerStore(t)
-		store.EXPECT().GetAPIKey("old").Return(bobsKey(), nil)
-		var newKey *database.APIKey
-		echoCreatedKey(store, &newKey)
-		store.EXPECT().SetAPIKeyExpiry("old", mock.Anything).Return(nil)
-		c, w := rotateCtx(t)
-		asCaller(c, &database.User{ID: "admin-1"}, auth.MethodCFAccess, nil, auth.All()...)
-		handlers.NewAPIKeyHandler(store).Rotate(c)
-		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-		assert.Equal(t, "bob", newKey.UserID)
-	})
-}
-
 // A caller that is not a person and has no calling key with a real expiry
-// cannot mint or rotate a key: the clamp has nothing to clamp to (the
+// cannot mint a key: the clamp has nothing to clamp to (the
 // 2026-10-07 review's fail-open: a key with no expiry used to mint keys of
 // any length).
 func TestAPIKey_NoExpiryToClampTo_Refused(t *testing.T) {
@@ -255,15 +150,6 @@ func TestAPIKey_NoExpiryToClampTo_Refused(t *testing.T) {
 			c, w := newAuthCtx("POST", "/auth/api-keys", map[string]any{"name": "child", "expires_in_days": 365})
 			as(c)
 			handlers.NewAPIKeyHandler(store).Create(c)
-			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
-		})
-		t.Run("rotate/"+name, func(t *testing.T) {
-			exp := time.Now().Add(300 * 24 * time.Hour)
-			store := handlersmocks.NewMockAPIKeyHandlerStore(t)
-			store.EXPECT().GetAPIKey("old").Return(&database.APIKey{ID: "old", UserID: "user-1", CreatedAt: time.Now(), ExpiresAt: &exp}, nil)
-			c, w := rotateCtx(t)
-			as(c)
-			handlers.NewAPIKeyHandler(store).Rotate(c)
 			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 		})
 	}

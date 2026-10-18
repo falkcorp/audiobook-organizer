@@ -1,7 +1,7 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package server
 
@@ -56,14 +56,20 @@ func (s *Server) wireAuthRoutes(
 		s.credRoute(authProtected, http.MethodPost, "/temp-tokens", s.perm(permTempLoginMint()), s.createTempLoginToken)
 
 		// A key may manage its own user's keys (clamped to its own expiry);
-		// creating or rotating a key for ANOTHER user mints a credential for
-		// them and is refused at the route. Re-enabling an inactive key is
-		// handing a credential back, so PATCH is guarded whoever owns it.
+		// creating a key for ANOTHER user mints a credential for them and is
+		// refused at the route. Re-enabling an inactive key is handing a
+		// credential back, so PATCH is guarded whoever owns it.
 		s.credRouteWhen(authProtected, http.MethodPost, "/api-keys", apiKeyCreateForAnotherUser, apiKeyH.Create)
 		authProtected.GET("/api-keys", apiKeyH.List)
 		authProtected.GET("/api-keys/:id", apiKeyH.Get)
 		s.credRoute(authProtected, http.MethodPatch, "/api-keys/:id", apiKeyH.UpdateStatus)
 		authProtected.DELETE("/api-keys/:id", apiKeyH.Revoke)
-		s.credRouteWhen(authProtected, http.MethodPost, "/api-keys/:id/rotate", s.apiKeyOwnedByAnotherUser, apiKeyH.Rotate)
+		// POST /api-keys/:id/rotate was retired by 01-P81k: it answers 410 Gone
+		// for one release (owner decision D9) and is then removed. Create a new
+		// key and revoke the old one instead. The route keeps its credential
+		// guard, so the auth middleware and the refusal of an API key rotating
+		// another user's key still run before the 410.
+		s.credRouteWhen(authProtected, http.MethodPost, "/api-keys/:id/rotate", s.apiKeyOwnedByAnotherUser,
+			gone("POST /api/v1/auth/api-keys (create a new key), then DELETE /api/v1/auth/api-keys/:id (revoke the old one)"))
 	}
 }

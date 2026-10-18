@@ -1,7 +1,7 @@
 // file: internal/server/handlers/apikeys.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package handlers
 
@@ -18,18 +18,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// apiKeyRotationGraceWindow is how long the OLD key keeps working after a
-// rotation before the pre-existing middleware expiry check retires it. This
-// gives in-flight clients/scripts holding the old key a chance to pick up
-// the new one instead of failing instantly (SEC-1/PROC-6).
-const apiKeyRotationGraceWindow = 1 * time.Hour
-
 // Every API key expires (2026-10-07). See
 // docs/plans/2026-10-07-apikey-expiry-and-privilege.md, D5–D8.
 const (
 	// DefaultAPIKeyTTLDays is the lifetime of a key created without
-	// expires_in_days, of a rotated key whose old key had no expiry, and of
-	// the one-time stamp given to keys that never expired.
+	// expires_in_days and of the one-time stamp given to keys that never
+	// expired.
 	DefaultAPIKeyTTLDays = 30
 	// DefaultAPIKeyTTL is DefaultAPIKeyTTLDays as a duration.
 	DefaultAPIKeyTTL = DefaultAPIKeyTTLDays * 24 * time.Hour
@@ -41,8 +35,8 @@ const (
 	MaxAPIKeyTTL = MaxAPIKeyTTLDays * 24 * time.Hour
 )
 
-// clampedNote explains a clamped expiry in the create/rotate response.
-const clampedNote = "expiry shortened to the expiry of the API key that made this request: a key cannot mint a key that outlives it (sign in to extend it)"
+// clampedNote explains a clamped expiry in the create response.
+const clampedNote = "expiry shortened to the expiry of the API key that made this request: a key cannot mint a key that outlives it (sign in to create a longer-lived one)"
 
 // clampToCallingKey limits exp to the expiry of the API key that
 // authenticated the request: a key may not mint a key that outlives it (an 8h
@@ -67,7 +61,7 @@ func clampToCallingKey(c *gin.Context, exp time.Time) (clampedExp time.Time, cla
 }
 
 // noClampMessage is the 403 when clampToCallingKey has nothing to clamp to.
-const noClampMessage = "this credential has no expiry to limit a new key to; sign in to create or rotate keys"
+const noClampMessage = "this credential has no expiry to limit a new key to; sign in to create keys"
 
 // ---- Request / response types -----------------------------------------------
 
@@ -125,7 +119,6 @@ type APIKeyHandlerStore interface {
 	ListAPIKeysForUser(userID string) ([]database.APIKey, error)
 	RevokeAPIKey(id string) error
 	SetAPIKeyStatus(id, status string, at time.Time) error
-	SetAPIKeyExpiry(id string, at time.Time) error
 }
 
 // ---- Handler -----------------------------------------------------------------
@@ -416,110 +409,4 @@ func (h *APIKeyHandler) Revoke(c *gin.Context) {
 	}
 	slog.Info("apikey revoked", "id", logger.SanitizeLogValue(id), "caller", caller.ID, "name", key.Name)
 	httputil.RespondWithNoContent(c)
-}
-
-// rotatedKeyLifetime is the lifetime a rotated key gets: the old key's own
-// (ExpiresAt − CreatedAt), capped at MaxAPIKeyTTL, or DefaultAPIKeyTTL when
-// the old key had none. Rotation replaces a secret and keeps its policy: an
-// 8h bootstrap key rotates into an 8h key, a one-year integration key into a
-// one-year key. (It used to read the bootstrap TTL setting, which would have
-// made every rotated key a bootstrap-length key.)
-func rotatedKeyLifetime(old *database.APIKey) time.Duration {
-	if old == nil || old.ExpiresAt == nil || old.CreatedAt.IsZero() {
-		return DefaultAPIKeyTTL
-	}
-	d := old.ExpiresAt.Sub(old.CreatedAt)
-	switch {
-	case d <= 0:
-		return DefaultAPIKeyTTL
-	case d > MaxAPIKeyTTL:
-		return MaxAPIKeyTTL
-	}
-	return d
-}
-
-// Rotate handles POST /auth/api-keys/:id/rotate. It issues a fresh key that
-// inherits the old key's scopes and lifetime (rotatedKeyLifetime; clamped to
-// the calling key's expiry when an API key asks), and instead of revoking the old key
-// immediately it puts it on a short grace-window expiry via
-// SetAPIKeyExpiry — the pre-existing middleware expiry check
-// (key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt)) retires it
-// naturally once the grace window elapses. This avoids breaking in-flight
-// clients that haven't picked up the new key yet (SEC-1/PROC-6).
-func (h *APIKeyHandler) Rotate(c *gin.Context) {
-	caller, ok := servermiddleware.CurrentUser(c)
-	if !ok || caller == nil {
-		httputil.RespondWithUnauthorized(c, "authentication required")
-		return
-	}
-	id := c.Param("id")
-	oldKey, err := h.store.GetAPIKey(id)
-	if err != nil {
-		httputil.InternalError(c, "failed to get api key", err)
-		return
-	}
-	if oldKey == nil {
-		httputil.RespondWithNotFound(c, "api key", id)
-		return
-	}
-	if oldKey.UserID != caller.ID {
-		// The response carries the new token for ANOTHER user's key, so this
-		// is minting a credential for them: an API key is refused at the
-		// route (server.credRouteWhen).
-		if !isAdminUser(c) {
-			httputil.RespondWithForbidden(c, "access denied")
-			return
-		}
-	}
-
-	rawToken, hash, err := database.GenerateAPIKeyToken()
-	if err != nil {
-		httputil.InternalError(c, "failed to generate token", err)
-		return
-	}
-
-	// A key-authenticated rotation is clamped like Create: otherwise an 8h
-	// bootstrap key could rotate a year-long sibling key of the same user and
-	// walk away with a fresh year-long token. Extending a key past the
-	// calling key's own expiry takes a signed-in session.
-	newExpiresAt, clamped, clampOK := clampToCallingKey(c, time.Now().Add(rotatedKeyLifetime(oldKey)))
-	if !clampOK {
-		httputil.RespondWithForbidden(c, noClampMessage)
-		return
-	}
-
-	newKey := &database.APIKey{
-		UserID:      oldKey.UserID,
-		Name:        oldKey.Name,
-		Description: oldKey.Description,
-		TokenHash:   hash,
-		Scopes:      oldKey.Scopes,
-		Status:      "active",
-		ExpiresAt:   &newExpiresAt,
-	}
-	created, err := h.store.CreateAPIKey(newKey)
-	if err != nil {
-		httputil.InternalError(c, "failed to create api key", err)
-		return
-	}
-
-	graceExpiresAt := time.Now().Add(apiKeyRotationGraceWindow)
-	if err := h.store.SetAPIKeyExpiry(oldKey.ID, graceExpiresAt); err != nil {
-		httputil.InternalError(c, "failed to grace-window old api key", err)
-		return
-	}
-
-	slog.Info("apikey rotated", "id", created.ID, "user", oldKey.UserID, "old_key_id", oldKey.ID, "grace_window", apiKeyRotationGraceWindow.String(), "expires", created.ExpiresAt, "clamped_to_calling_key", clamped)
-	resp := CreateAPIKeyResponse{
-		ID:        created.ID,
-		Name:      created.Name,
-		Token:     rawToken,
-		Scopes:    created.Scopes,
-		ExpiresAt: created.ExpiresAt,
-		CreatedAt: created.CreatedAt,
-	}
-	if clamped {
-		resp.Note = clampedNote
-	}
-	httputil.RespondWithCreated(c, resp)
 }
