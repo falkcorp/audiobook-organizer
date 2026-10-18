@@ -1,8 +1,7 @@
 <!-- file: docs/specs/2026-08-05-multidisc-apply-canary-design.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 03f6e432-d7ad-49e4-93e4-680940fd99bd -->
 <!-- last-edited: 2026-10-18 -->
-
 
 > **2026-10-18 note (01-P81j):** `POST /api/v1/review/replay-approved` and its handler
 > (`ReplayApprovedItems`, `replay.go`) were retired. The canary procedure below that
