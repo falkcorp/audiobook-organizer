@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
 // last-edited: 2026-10-18
 
@@ -541,10 +541,15 @@ func newSiblingJournal(survivorID, intoGroupID string, losers []string, siblings
 // GetSiblingMoveJournal returns the journal with the given id, or
 // ErrSiblingJournalNotFound.
 func (ms *Service) GetSiblingMoveJournal(id string) (*SiblingMoveJournal, error) {
+	return readSiblingMoveJournal(ms.db, id)
+}
+
+// readSiblingMoveJournal is GetSiblingMoveJournal over any raw-key reader.
+func readSiblingMoveJournal(kv journalKVReader, id string) (*SiblingMoveJournal, error) {
 	if id == "" || strings.ContainsAny(id, ":/") {
 		return nil, ErrSiblingJournalNotFound
 	}
-	data, err := ms.db.GetRaw(siblingJournalKey(id))
+	data, err := kv.GetRaw(siblingJournalKey(id))
 	if err != nil {
 		return nil, fmt.Errorf("read sibling-move journal %s: %w", id, err)
 	}
@@ -562,7 +567,12 @@ func (ms *Service) GetSiblingMoveJournal(id string) (*SiblingMoveJournal, error)
 // (0 = all), with Stale set on each pending one older than
 // SiblingJournalStaleAfter.
 func (ms *Service) ListSiblingMoveJournals(limit int) ([]SiblingMoveJournal, error) {
-	out, err := ms.scanSiblingJournals()
+	return listSiblingMoveJournals(ms.db, limit)
+}
+
+// listSiblingMoveJournals is ListSiblingMoveJournals over any raw-key reader.
+func listSiblingMoveJournals(kv journalKVReader, limit int) ([]SiblingMoveJournal, error) {
+	out, err := scanSiblingJournals(kv)
 	if err != nil {
 		return nil, err
 	}
@@ -578,8 +588,8 @@ func (ms *Service) ListSiblingMoveJournals(limit int) ([]SiblingMoveJournal, err
 
 // scanSiblingJournals reads every journal, newest-first. An undecodable row
 // is logged and skipped.
-func (ms *Service) scanSiblingJournals() ([]SiblingMoveJournal, error) {
-	rows, err := ms.db.ScanPrefix(siblingJournalPrefix)
+func scanSiblingJournals(kv journalKVReader) ([]SiblingMoveJournal, error) {
+	rows, err := kv.ScanPrefix(siblingJournalPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("list sibling-move journals: %w", err)
 	}
@@ -751,7 +761,7 @@ func (ms *Service) requireNoNewerSiblingMove(j *SiblingMoveJournal, todo []Moved
 	for _, s := range todo {
 		want[s.BookID] = true
 	}
-	all, err := ms.scanSiblingJournals()
+	all, err := scanSiblingJournals(ms.db)
 	if err != nil {
 		return fmt.Errorf("check later sibling moves before undoing %s: %w", j.ID, err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/merge/pointer_backfill_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3052d5ca-020e-4197-8003-3e5e527e0938
 // last-edited: 2026-10-18
 
@@ -78,13 +78,28 @@ func TestLivePointerOperation(t *testing.T) {
 	require.Equal(t, "op-live", livePointerOperation(changes, CombineJournalPointerType, "J1"))
 }
 
-// A store with no undo ledger refuses before taking the merge lock or reading
-// a journal, and so does a store that cannot scan it for the index.
-func TestBackfillJournalPointer_RefusesWithoutLedger(t *testing.T) {
-	ms := &Service{db: nil}
-	_, err := ms.BackfillJournalPointer(&PointerBackfillIndex{}, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: "J1"}, false)
-	require.ErrorContains(t, err, "no undo ledger")
-	_, err = ms.NewPointerBackfillIndex()
+// The wide store carries every role the backfill and the chokepoint pointer
+// write need. Pinned here, in a test, so production code depends only on the
+// narrow role interfaces (database/store_consumers_test.go ratchets the rest).
+var (
+	_ PointerBackfillStore = database.Store(nil)
+	_ JournalPointerWriter = database.Store(nil)
+	_ opChangeScanner      = (*database.PebbleStore)(nil)
+)
+
+// noScanStore has the backfill's whole static surface but cannot scan the
+// undo ledger (ScanOperationChanges is a PebbleStore capability, not on any
+// interface).
+type noScanStore struct{ PointerBackfillStore }
+
+// A backfiller with no store refuses before taking the merge lock or reading
+// a journal, and so does a store that cannot scan the ledger for the index.
+func TestPointerBackfiller_Refuses(t *testing.T) {
+	_, err := NewPointerBackfiller(nil).Backfill(&PointerBackfillIndex{}, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: "J1"}, false)
+	require.ErrorContains(t, err, "no store")
+	_, err = NewPointerBackfiller(nil).Backfill(nil, PointerBackfillItem{}, false)
+	require.ErrorContains(t, err, "no pointer index")
+	_, err = NewPointerBackfiller(noScanStore{}).NewIndex()
 	require.ErrorContains(t, err, "cannot scan the undo ledger")
 }
 
@@ -103,7 +118,7 @@ func (s countBookChanges) GetBookChanges(bookID string) ([]*database.OperationCh
 // decided from it with no ledger read under the lock; only a journal created
 // after the index (a merge during the backfill) reads its survivor's ledger,
 // and its chokepoint pointer is found there, not duplicated.
-func TestBackfillJournalPointer_LedgerReadOnlyForJournalsNewerThanIndex(t *testing.T) {
+func TestPointerBackfiller_LedgerReadOnlyForJournalsNewerThanIndex(t *testing.T) {
 	store := setupTestStore(t).(*database.PebbleStore)
 	combine := func() *CombineResult {
 		ids := []string{ulid.Make().String(), ulid.Make().String()}
@@ -118,19 +133,19 @@ func TestBackfillJournalPointer_LedgerReadOnlyForJournalsNewerThanIndex(t *testi
 	old := combine()
 
 	n := 0
-	ms := NewService(countBookChanges{store, &n})
-	idx, err := ms.NewPointerBackfillIndex()
+	pb := NewPointerBackfiller(countBookChanges{store, &n})
+	idx, err := pb.NewIndex()
 	require.NoError(t, err)
 	time.Sleep(2 * time.Millisecond) // the next journal is created strictly after asOf
 	newer := combine()
 
-	got, err := ms.BackfillJournalPointer(idx, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: old.JournalID}, false)
+	got, err := pb.Backfill(idx, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: old.JournalID}, false)
 	require.NoError(t, err)
 	require.Equal(t, PointerBackfillHasPointer, got.Verdict)
 	require.Equal(t, old.OperationID, got.OperationID)
 	require.Zero(t, n, "an older journal is decided from the index, with no ledger read under the lock")
 
-	got, err = ms.BackfillJournalPointer(idx, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: newer.JournalID}, false)
+	got, err = pb.Backfill(idx, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: newer.JournalID}, false)
 	require.NoError(t, err)
 	require.Equal(t, PointerBackfillHasPointer, got.Verdict, "the newer journal's own pointer is found in the ledger")
 	require.Equal(t, newer.OperationID, got.OperationID)
@@ -153,12 +168,12 @@ func (s lockProbeScanner) ScanOperationChanges(fn func(*database.OperationChange
 	return s.PebbleStore.ScanOperationChanges(fn)
 }
 
-// NewPointerBackfillIndex holds the merge lock only to stamp asOf; the
-// ledger scan runs outside it.
-func TestNewPointerBackfillIndex_ScansOutsideTheMergeLock(t *testing.T) {
+// NewIndex holds the merge lock only to stamp asOf; the ledger scan runs
+// outside it.
+func TestPointerBackfiller_NewIndexScansOutsideTheMergeLock(t *testing.T) {
 	store := setupTestStore(t).(*database.PebbleStore)
 	scanned := false
-	_, err := NewService(lockProbeScanner{store, &scanned}).NewPointerBackfillIndex()
+	_, err := NewPointerBackfiller(lockProbeScanner{store, &scanned}).NewIndex()
 	require.NoError(t, err)
 	require.True(t, scanned)
 }

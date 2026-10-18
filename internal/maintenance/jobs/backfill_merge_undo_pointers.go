@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_merge_undo_pointers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 844f88c2-fda0-43f4-bf8d-e4e35ca38b0c
 // last-edited: 2026-10-18
 
@@ -19,23 +19,20 @@ import (
 
 func init() { maintenance.Register(&backfillMergeUndoPointersJob{}) }
 
-// The job builds a merge.Service over the store it is handed. Every
-// database.Store is a merge.Store, so the runtime assertion in Run cannot start
-// failing in prod because database.Store lost a method.
-var _ merge.Store = database.Store(nil)
+// The job hands its own store to merge.NewPointerBackfiller, so JobStore must
+// carry everything the backfill reads and writes. Checked here at compile time:
+// there is no runtime assertion left to fail in prod.
+var _ merge.PointerBackfillStore = maintenance.JobStore(nil)
 
-var (
-	bmupLog = logger.New("backfill-merge-undo-pointers")
-
-	errBackfillPointerStore = errors.New("backfill-merge-undo-pointers: store does not implement merge.Store; refusing to run")
-)
+var bmupLog = logger.New("backfill-merge-undo-pointers")
 
 // backfillMergeUndoPointersJob gives every combine journal and sibling-move
 // journal written before the merge cores journaled their own undo pointer
 // (merge/undo_pointer.go) a pointer row, so POST /operations/:id/revert can
-// undo it. Until then the retired POST /merge/undo/:journal_id and
-// /merge/sibling-undo/:journal_id routes were the only way back for those
-// merges.
+// undo it. Until a journal has one, its only way back is POST
+// /merge/undo/:journal_id or /merge/sibling-undo/:journal_id (both still
+// registered, in server/wire_dedup_routes.go), which the Operations page does
+// not offer.
 //
 // Each journal gets a fresh correlation id of its own, never this job's
 // operation id: reverting the backfill must never undo every historical
@@ -86,10 +83,10 @@ type backfillPointerCounts struct {
 }
 
 // Run reads the undo ledger ONCE, outside the merge lock, for the pointers
-// that already exist (merge.Service.NewPointerBackfillIndex), then walks the
+// that already exist (merge.PointerBackfiller.NewIndex), then walks the
 // journals one at a time. The walk is sequential on purpose, not a missing
 // worker pool: each journal is decided and written under the process-wide
-// merge lock (merge.Service.BackfillJournalPointer), which is what keeps the
+// merge lock (merge.PointerBackfiller.Backfill), which is what keeps the
 // backfill from giving a merge in flight a second pointer, and parallel
 // workers would only queue on that lock. Under the lock each journal costs a
 // point read of the journal and at most one row write; only a journal created
@@ -97,16 +94,12 @@ type backfillPointerCounts struct {
 // lock is never held across a ledger scan, and merges interleave between
 // journals.
 func (j *backfillMergeUndoPointersJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
-	ms, ok := store.(merge.Store)
-	if !ok {
-		return errBackfillPointerStore
-	}
-	svc := merge.NewService(ms)
-	items, err := svc.ListPointerBackfillCandidates()
+	pb := merge.NewPointerBackfiller(store)
+	items, err := pb.Candidates()
 	if err != nil {
 		return fmt.Errorf("backfill-merge-undo-pointers: list journals: %w", err)
 	}
-	idx, err := svc.NewPointerBackfillIndex()
+	idx, err := pb.NewIndex()
 	if err != nil {
 		return fmt.Errorf("backfill-merge-undo-pointers: %w", err)
 	}
@@ -120,7 +113,7 @@ func (j *backfillMergeUndoPointersJob) Run(ctx context.Context, store maintenanc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		out, berr := svc.BackfillJournalPointer(idx, item, dryRun)
+		out, berr := pb.Backfill(idx, item, dryRun)
 		reporter.Increment()
 		if berr != nil {
 			counts.Failed++

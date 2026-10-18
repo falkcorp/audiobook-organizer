@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-10-18
 
@@ -377,9 +377,20 @@ type jobOperationStateStore interface {
 	DeleteOperationState(opID string) error
 }
 
+// jobUndoLedgerStore reads one book's undo-ledger rows and writes one row.
+// backfill-merge-undo-pointers gives older merge journals their pointer rows
+// (merge.PointerBackfillStore); on this interface rather than reached by a
+// runtime assertion, so a store that lost either method stops compiling
+// instead of refusing the job in prod.
+type jobUndoLedgerStore interface {
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+	CreateOperationChange(change *database.OperationChange) error
+}
+
 type jobOperationStore interface {
 	jobOperationRecordStore
 	jobOperationStateStore
+	jobUndoLedgerStore
 }
 
 // jobKVStore is settings plus the raw key/value space the retention and sweep

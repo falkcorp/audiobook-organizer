@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-10-18
 
@@ -144,6 +144,12 @@ type combineUndoStore interface {
 // combineJournalKV stores the journal itself as raw keys.
 type combineJournalKV interface {
 	SetRaw(key string, value []byte) error
+	journalKVReader
+}
+
+// journalKVReader reads the combine and sibling-move journals: a point read
+// and a prefix scan. The undo-pointer backfill needs only this half.
+type journalKVReader interface {
 	GetRaw(key string) ([]byte, error)
 	ScanPrefix(prefix string) ([]database.KVPair, error)
 }
