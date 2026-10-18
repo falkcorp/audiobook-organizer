@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/partial_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d4a1f60-2c97-4e35-b0a8-5f1e93c7d268
 // last-edited: 2026-10-18
 
@@ -233,5 +233,56 @@ func TestBulkApprove_HeldFirstRun_IsSkippedWithItsCode(t *testing.T) {
 		if got, _ := s.GetReviewItem(id); got.Status != want {
 			t.Fatalf("item %s status = %q, want %q", id, got.Status, want)
 		}
+	}
+}
+
+// claimEndFailStore fails the claim-ending call the handler makes after a failed apply,
+// so the reason the handler builds for that case can be read.
+type claimEndFailStore struct {
+	*database.PebbleStore
+}
+
+func (claimEndFailStore) HoldReviewItemClaim(string, string) (*database.ReviewItem, error) {
+	return nil, errors.New("pebble write stalled")
+}
+
+func (claimEndFailStore) ReleaseReviewItemClaim(string, string) (*database.ReviewItem, error) {
+	return nil, errors.New("pebble write stalled")
+}
+
+// The reason for a claim that could not be ended names the call that failed: a failure
+// that may have written is HELD, one that wrote nothing is RELEASED, and the text must
+// not say "released" for the first.
+func TestApprove_ClaimEndFailure_NamesTheFailedStep(t *testing.T) {
+	for _, tc := range []struct {
+		name, want, notWant string
+		applyErr            error
+	}{
+		{"hold", "could not be held", "could not be released", errors.New("merge stopped after moving two of five files")},
+		{"release", "could not be released", "could not be held", database.NothingWritten(errors.New("refused before any write"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			a := seedAction(t, s, "regroup.multidisc", "m-"+tc.name, itunesservice.ActionCombine)
+			h := reviewhandler.New(claimEndFailStore{s}, func() bool { return true }, nil)
+			h.RegisterApplyHandler(itunesservice.ActionCombine, func(context.Context, database.ReviewItem) error { return tc.applyErr })
+
+			// The single-item route hides the reason behind a generic 500; bulk
+			// reports it per item.
+			w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+				map[string]any{"action": "approve", "ids": []string{a.ID}}, nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("bulk: code %d body %s", w.Code, w.Body.String())
+			}
+			failed, _ := decodeBody(t, w)["data"].(map[string]any)["failed"].([]any)
+			if len(failed) != 1 {
+				t.Fatalf("failed = %v, want the one item", failed)
+			}
+			reason, _ := failed[0].(map[string]any)["reason"].(string)
+			if !strings.Contains(reason, tc.want) || strings.Contains(reason, tc.notWant) ||
+				!strings.Contains(reason, "pebble write stalled") {
+				t.Fatalf("reason %q, want the claim %q with the store's cause, never %q", reason, tc.want, tc.notWant)
+			}
+		})
 	}
 }
