@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -1698,11 +1698,16 @@ type CombineResult struct {
 	// key keeps its old name for API compatibility; the books are recoverable
 	// via UndoCombine(JournalID) until the purge job removes them.
 	BooksDeleted int `json:"books_deleted"`
-	// JournalID is the undo key (POST /api/v1/merge/undo/:journal_id).
+	// JournalID is the combine's undo journal.
 	JournalID string `json:"journal_id,omitempty"`
-	// UndoUnavailable is set, and JournalID empty, when the combine applied
-	// but its journal could not be finalized, so it cannot be undone.
-	UndoUnavailable string `json:"undo_unavailable,omitempty"`
+	// JournalPending is set when the combine applied but its journal could
+	// not be marked applied: it stays Pending, naming every step that ran
+	// (the combine journals each one), so reverting OperationID still
+	// replays it. The value is the write error.
+	JournalPending string `json:"journal_pending,omitempty"`
+	// Warnings name what the combine did not do that the caller asked for
+	// (an override skipped because its undo could not be journaled).
+	Warnings []string `json:"warnings,omitempty"`
 	// OperationID is the operation the combine's undo pointer
 	// (undo.ChangeTypeMergeCombineJournal) is journaled under:
 	// CombineOptions.OperationID, or a correlation id of its own. POST
@@ -1818,12 +1823,14 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	eidStore := AsExternalIDReassigner(ms.db)
 
 	// Users are listed once so each FollowMerge's progress drain can be
-	// snapshotted for undo. Household-scale, not library-scale.
-	var users []database.User
-	if ms.syncFollower != nil {
-		if users, err = ms.db.ListUsers(); err != nil {
-			return nil, fmt.Errorf("list users for combine journal: %w", err)
-		}
+	// snapshotted for undo. Household-scale, not library-scale. Listed with
+	// or without a sync layer: the follow drains progress either way, and no
+	// progress moves without its undo journal (fail closed on a nil
+	// syncFollower, which only a test wiring or a capability-hiding store
+	// decorator produces).
+	users, err := ms.db.ListUsers()
+	if err != nil {
+		return nil, fmt.Errorf("list users for combine journal: %w", err)
 	}
 
 	// --- Journal, before the first mutation ---
@@ -1841,6 +1848,10 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		SurvivorID:     primaryID,
 		ITunesRemovals: []string{},
 		StepJournaled:  true,
+		// Until the per-book loop completes, nothing can have renumbered the
+		// survivor's own rows (the regroup apply stamps play order only once
+		// CombineBooks returns).
+		SurvivorNumbering: SurvivorNumberingUntouched,
 	}
 	ownFiles, err := ms.db.GetBookFiles(primaryID)
 	if err != nil {
@@ -1918,14 +1929,18 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	}
 	res.OperationID = opID
 
-	// persist re-writes the journal after a step that already ran. A failure
-	// is logged and recorded: the step is done, and the next persist (or the
-	// final one) carries it.
-	persist := func(step string) {
+	// persist re-writes the journal. Every call precedes a mutation (or
+	// records one that just ran before the next can start), so a failure
+	// stops the combine: going on would write a step the journal on disk does
+	// not name. The journal is left Pending and names everything done so far,
+	// so reverting the operation replays exactly that.
+	persist := func(step string) error {
 		if err := ms.putCombineJournal(journal); err != nil {
-			mlog.Error("combine: undo journal not updated after %s journal=%s err=%s",
+			mlog.Error("combine: undo journal not updated at %s; combine stopped journal=%s err=%s",
 				step, journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
+			return fmt.Errorf("combine stopped: undo journal %s not updated at %s (left %s): %w", journal.ID, step, CombineJournalPending, err)
 		}
+		return nil
 	}
 
 	// Materialize the survivor's own single-file (virtual-segment) audio as a
@@ -1991,7 +2006,9 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 				journal.Warnings = append(journal.Warnings, fmt.Sprintf("absorbed book %s vanished after its files moved", id))
 			} else {
 				journal.Absorbed = slices.DeleteFunc(journal.Absorbed, func(e CombineAbsorbed) bool { return e.BookID == id })
-				persist("dropping vanished book " + id)
+				if err := persist("dropping vanished book " + id); err != nil {
+					return nil, err
+				}
 			}
 			continue
 		}
@@ -2031,24 +2048,28 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		// Per user: a user whose progress cannot be read (a corrupt row) is
 		// skipped, logged and reported in the journal warnings, and their
 		// rows stay where they are. Only users in the before-snapshot are
-		// followed, so no progress moves without its undo journal.
-		if ms.syncFollower != nil {
-			before, followable, skipped := snapshotPair(ms.db, users, id, survivor.ID)
-			ms.reportSkippedProgress(journal, id, "not journaled or followed; a pending-repair record holds their move", skipped)
-			a.Progress = buildProgressJournal(before, progressSnap{})
-			a.SyncRedirected = true
-			if err := ms.putCombineJournal(journal); err != nil {
-				return nil, fmt.Errorf("journal progress of %s before following it (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
-			}
-			if err := FollowMergeUsers(ms.db, ms.syncFollower, survivor.ID, []string{id}, followable, len(skipped) > 0); err != nil {
-				return nil, fmt.Errorf("carry user state of %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
-			}
-			after, _, afterSkipped := snapshotPair(ms.db, followable, id, survivor.ID)
-			ms.reportSkippedProgress(journal, id, "followed, but the after-snapshot failed; undo leaves their survivor progress as is", afterSkipped)
-			a.Progress = buildProgressJournal(before, after)
-		} else if err := FollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id}); err != nil {
+		// followed, so no progress moves without its undo journal. With no
+		// sync layer (a nil syncFollower) the progress is still journaled
+		// and followed; only the redirect is not recorded.
+		before, followable, skipped := snapshotPair(ms.db, users, id, survivor.ID)
+		ms.reportSkippedProgress(journal, id, "not journaled or followed; a pending-repair record holds their move", skipped)
+		a.Progress = buildProgressJournal(before, progressSnap{})
+		a.SyncRedirected = ms.syncFollower != nil
+		if err := persist("following the progress of " + id); err != nil {
+			return nil, err
+		}
+		if err := FollowMergeUsers(ms.db, ms.syncFollower, survivor.ID, []string{id}, followable, len(skipped) > 0); err != nil {
 			// Not retired: the absorbed book keeps its state and stays live.
 			return nil, fmt.Errorf("carry user state of %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
+		}
+		after, _, afterSkipped := snapshotPair(ms.db, followable, id, survivor.ID)
+		ms.reportSkippedProgress(journal, id, "followed, but the after-snapshot failed; undo leaves their survivor progress as is", afterSkipped)
+		a.Progress = buildProgressJournal(before, after)
+		// The after-snapshot is what lets an undo tell the follow's write
+		// from listening done on the survivor since: journal it now, not only
+		// with the next step.
+		if err := persist("recording the progress follow of " + id); err != nil {
+			return nil, err
 		}
 
 		// Guard (mirrors applyFSRegroup): never retire a book that still owns
@@ -2057,13 +2078,32 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 			return nil, fmt.Errorf("book %s still owns %d files after move; aborting soft-delete (journal %s left %s)",
 				id, len(remaining), journal.ID, CombineJournalPending)
 		}
-		stamp, err := ms.softDeleteAbsorbed(id)
+		// The soft-delete stamp is minted and journaled BEFORE the write, and
+		// the write sets exactly it. Undo restores only a row carrying the
+		// journal's stamp (retiredByJournal), so a stamp journaled after the
+		// write would leave a crash in between with a retired book no undo
+		// could ever restore. A journal that names the stamp of a write that
+		// never landed is harmless: the row is still live and the undo leaves
+		// it alone.
+		stamp := time.Now().UTC()
+		a.MarkedForDeletionAt = &stamp
+		if err := persist("retiring " + id); err != nil {
+			a.MarkedForDeletionAt = nil
+			return nil, err
+		}
+		stored, err := ms.softDeleteAbsorbed(id, stamp)
 		if err != nil {
 			return nil, fmt.Errorf("soft-delete absorbed book %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 		}
-		a.MarkedForDeletionAt = stamp
 		res.BooksDeleted++
-		persist("retiring " + id)
+		if !stored.Equal(stamp) {
+			// The store kept a different value (it rounds, or another writer
+			// stamped the row): journal what it holds.
+			a.MarkedForDeletionAt = stored
+			if err := persist("recording the stored retirement stamp of " + id); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// Only books the combine retired (or whose files it moved) stay in the
 	// final journal.
@@ -2074,6 +2114,15 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 	}
 	journal.Absorbed = kept
+	// The body is complete: from here a caller may renumber the survivor's
+	// rows (regroup_apply stamps play order once this returns nil), so the
+	// undo must restore their numbers. Journaled before returning, or the
+	// combine stops: a renumbering the journal does not allow for would
+	// survive the undo.
+	journal.SurvivorNumbering = SurvivorNumberingMayChange
+	if err := persist("completing the combine body"); err != nil {
+		return nil, err
+	}
 
 	if err := ms.db.RecomputeBookAggregates(survivor.ID); err != nil {
 		slog.Warn("combine RecomputeBookAggregates", "id", survivor.ID, "err", err)
@@ -2093,19 +2142,42 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	}
 	handOffLeftGroups(ms.db, leftGroups)
 
+	// The override is planned (every before-value read, the author
+	// resolved), journaled, and only then written; an override the journal
+	// could not record is not written at all. Written unjournaled, a
+	// failure of the final journal write would leave it with no undo.
 	if override != nil && (override.Title != "" || override.Author != "" || override.Narrator != "") {
-		journal.Override = ms.applyCombineOverride(primaryID, override)
+		if plan := ms.planCombineOverride(primaryID, override); plan != nil {
+			journal.Override = plan
+			if err := ms.putCombineJournal(journal); err != nil {
+				journal.Override = nil
+				msg := fmt.Sprintf("metadata override not applied: its undo could not be journaled: %v", err)
+				mlog.Error("combine: %s journal=%s survivor=%s", logger.SanitizeLogValue(msg), journal.ID, logger.SanitizeLogValue(survivor.ID))
+				journal.Warnings = append(journal.Warnings, msg)
+				res.Warnings = append(res.Warnings, msg)
+			} else {
+				ms.writeCombineOverride(primaryID, plan)
+				// Records the before-values the writes actually replaced and
+				// drops any sub-write that failed. A failure here is carried by
+				// the final write below.
+				if err := ms.putCombineJournal(journal); err != nil {
+					mlog.Warn("combine: override written; its journal update waits for the final write journal=%s err=%s",
+						journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
+				}
+			}
+		}
 	}
 
 	journal.Status = CombineJournalApplied
+	res.JournalID = journal.ID
 	if err := ms.putCombineJournal(journal); err != nil {
-		// The combine is done and cannot be failed now. Say plainly that this
-		// one has no undo, both in the log and to the caller.
-		mlog.Error("combine applied but its undo journal could not be finalized; this combine is NOT undoable journal=%s survivor=%s err=%s",
-			journal.ID, logger.SanitizeLogValue(survivor.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
-		res.UndoUnavailable = err.Error()
-	} else {
-		res.JournalID = journal.ID
+		// The combine is done and cannot be failed now. Its journal stays
+		// Pending, but it names every step that ran (each was journaled
+		// before or as it ran, the override included), so reverting the
+		// operation replays it exactly, as for a combine stopped part way.
+		mlog.Error("combine applied but its journal could not be marked applied; it stays pending and reverting operation %s replays it journal=%s survivor=%s err=%s",
+			logger.SanitizeLogValue(opID), journal.ID, logger.SanitizeLogValue(survivor.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		res.JournalPending = err.Error()
 	}
 
 	mlog.Info("combined books into one survivor=%s journal=%s files_moved=%d books_soft_deleted=%d",
@@ -2113,23 +2185,24 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	return res, nil
 }
 
-// softDeleteAbsorbed soft-deletes a combine's absorbed shell and CLEARS its
-// FilePath, returning the MarkedForDeletionAt stamp as the store kept it.
+// softDeleteAbsorbed soft-deletes a combine's absorbed shell with exactly the
+// stamp the caller journaled and CLEARS its FilePath, returning the
+// MarkedForDeletionAt stamp as the store kept it (read back).
 //
 // Clearing FilePath is what makes the soft delete safe: the path now belongs to
 // a file row the survivor owns, and PurgeSoftDeletedBooks (with delete-files
 // on) os.Remove()s a purged single-file book's FilePath. The journal keeps the
 // original for undo. A separate function from SoftDeleteBook because
 // MergeBooks' losers keep their own files and must keep their FilePath.
-func (ms *Service) softDeleteAbsorbed(bookID string) (*time.Time, error) {
+func (ms *Service) softDeleteAbsorbed(bookID string, stamp time.Time) (*time.Time, error) {
 	// ModifyBook: the three columns are set on the row as it is under the
 	// write lock, so a column another writer committed in the meantime is
 	// not reverted by a whole-row write of a stale read.
 	written, err := ms.db.ModifyBook(bookID, func(b *database.Book) error {
 		t := true
-		now := time.Now()
+		at := stamp
 		b.MarkedForDeletion = &t
-		b.MarkedForDeletionAt = &now
+		b.MarkedForDeletionAt = &at
 		b.FilePath = ""
 		return nil
 	})
@@ -2195,156 +2268,183 @@ func buildProgressJournal(before, after progressSnap) []CombineUserProgress {
 	return out
 }
 
-// applyCombineOverride writes the caller's title/narrator/author onto the
-// survivor and returns what the survivor held before, for undo. UpdateBook
-// does a full column replacement, so it re-fetches after the aggregate
-// recompute and patches only the non-empty override fields.
-func (ms *Service) applyCombineOverride(primaryID string, override *CombineOverride) *CombineOverrideUndo {
-	undo := &CombineOverrideUndo{Applied: *override, FieldStates: map[string]*database.MetadataFieldState{}}
+// planCombineOverride reads everything an undo of the override needs before
+// anything is written, under the merge lock: the survivor's title, narrator,
+// author id and author links, and the lock rows the override will write. It
+// resolves the author by name (creating it when new), so AuthorIDAfter is
+// known up front. A field that cannot be planned is dropped from the plan, and
+// a plan with nothing left is nil.
+//
+// Creation gate. The override is often PREFILLED from one of the books being
+// combined rather than typed, so a book already carrying an author row like
+// "Track 01" would otherwise propagate that name onto the survivor. Logged at
+// Warn rather than dropped quietly: a rejected author is a change the caller
+// asked for that did not happen. The predicate lives in internal/personname,
+// not internal/dedup: six dedup files import this package, so anything
+// reachable from here has to sit in a leaf.
+func (ms *Service) planCombineOverride(primaryID string, override *CombineOverride) *CombineOverrideUndo {
+	plan := &CombineOverrideUndo{Applied: *override, FieldStates: map[string]*database.MetadataFieldState{}}
+	b, err := ms.db.GetBookByID(primaryID)
+	if err != nil || b == nil {
+		mlog.Warn("combine override: survivor %s unreadable; override not applied: %v", logger.SanitizeLogValue(primaryID), err)
+		return nil
+	}
+	plan.TitleBefore = b.Title
+	plan.NarratorBefore = b.Narrator
+	plan.AuthorIDBefore = b.AuthorID
 
-	// Lock rows the override is about to write, as they were before.
+	if override.Author != "" {
+		cleaned, ok := personname.CleanAuthorNameForCreation(override.Author)
+		if !ok {
+			slog.Warn("combine override author rejected as unusable; survivor left unchanged",
+				"id", logger.SanitizeLogValue(primaryID), "author", logger.SanitizeLogValue(override.Author))
+			plan.Applied.Author = ""
+		} else {
+			// Applied.Author names the author actually linked: the lock
+			// row records this cleaned name, not the raw override.
+			plan.Applied.Author = cleaned
+			author, aerr := ms.db.GetAuthorByName(cleaned)
+			if aerr == nil && author == nil {
+				author, aerr = ms.db.CreateAuthor(cleaned)
+			}
+			prior, perr := ms.db.GetBookAuthors(primaryID)
+			switch {
+			case aerr != nil || author == nil:
+				slog.Warn("combine override author", "name", logger.SanitizeLogValue(override.Author), "err", logger.SanitizeLogValue(fmt.Sprint(aerr)))
+				plan.Applied.Author = ""
+			case perr != nil:
+				// Without the links it replaces, the undo could not put
+				// them back: the author is not overridden.
+				mlog.Warn("combine override: prior authors of %s unreadable; author not overridden: %s", logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(perr)))
+				plan.Applied.Author = ""
+			default:
+				id := author.ID
+				plan.AuthorIDAfter = &id
+				plan.AuthorsBefore = prior
+			}
+		}
+	}
+
 	lockKeys := []string{}
-	if override.Title != "" {
+	if plan.Applied.Title != "" {
 		lockKeys = append(lockKeys, database.FieldKeyTitle)
 	}
-	if override.Narrator != "" {
+	if plan.Applied.Narrator != "" {
 		lockKeys = append(lockKeys, database.FieldKeyNarrator)
 	}
-	if override.Author != "" {
+	if plan.Applied.Author != "" {
 		lockKeys = append(lockKeys, database.FieldKeyAuthorName)
 	}
-	if states, err := ms.db.GetMetadataFieldStates(primaryID); err == nil {
-		byField := map[string]database.MetadataFieldState{}
-		for _, st := range states {
-			byField[st.Field] = st
-		}
-		for _, k := range lockKeys {
-			if st, ok := byField[k]; ok {
-				st := st
-				undo.FieldStates[k] = &st
-			} else {
-				undo.FieldStates[k] = nil
-			}
-		}
-	} else {
-		mlog.Warn("combine override: could not read lock rows for undo journal id=%s err=%s", logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(err)))
+	if len(lockKeys) == 0 {
+		return nil
 	}
+	states, err := ms.db.GetMetadataFieldStates(primaryID)
+	if err != nil {
+		// The override writes lock rows; an undo that cannot know which
+		// existed before would remove or keep the wrong ones.
+		mlog.Warn("combine override: lock rows of %s unreadable; override not applied: %s", logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		return nil
+	}
+	byField := map[string]database.MetadataFieldState{}
+	for _, st := range states {
+		byField[st.Field] = st
+	}
+	for _, k := range lockKeys {
+		if st, ok := byField[k]; ok {
+			st := st
+			plan.FieldStates[k] = &st
+		} else {
+			plan.FieldStates[k] = nil
+		}
+	}
+	return plan
+}
 
-	if override.Title != "" || override.Narrator != "" {
+// writeCombineOverride writes a journaled override plan onto the survivor.
+// The before-values are refreshed from the row each write actually replaces
+// (ModifyBook), and a sub-write that fails is dropped from the plan (its
+// Applied field and lock-row entry cleared, AuthorIDAfter nil) so the undo
+// neither checks nor rolls back a change that never happened. The caller
+// re-journals the plan afterwards.
+func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideUndo) {
+	if plan.Applied.Title != "" || plan.Applied.Narrator != "" {
 		// ModifyBook: only Title and Narrator are written, on the row as it
 		// is under the write lock, so a column another writer committed in
-		// the meantime survives. The undo before-values come from that same
-		// row, the one the write actually replaces.
+		// the meantime survives.
 		fresh, err := ms.db.ModifyBook(primaryID, func(b *database.Book) error {
-			undo.TitleBefore = b.Title
-			undo.NarratorBefore = b.Narrator
-			if override.Title != "" {
-				b.Title = override.Title
+			plan.TitleBefore = b.Title
+			plan.NarratorBefore = b.Narrator
+			if plan.Applied.Title != "" {
+				b.Title = plan.Applied.Title
 			}
-			if override.Narrator != "" {
-				b.Narrator = &override.Narrator
+			if plan.Applied.Narrator != "" {
+				n := plan.Applied.Narrator
+				b.Narrator = &n
 			}
 			return nil
 		})
 		if err != nil || fresh == nil {
 			slog.Warn("combine override ModifyBook", "id", primaryID, "err", err)
-			// Not applied, so nothing for undo to roll back or check.
-			undo.Applied.Title, undo.Applied.Narrator = "", ""
+			plan.Applied.Title, plan.Applied.Narrator = "", ""
+			delete(plan.FieldStates, database.FieldKeyTitle)
+			delete(plan.FieldStates, database.FieldKeyNarrator)
 		} else {
 			slog.Info("combine applied metadata override", "id", fresh.ID,
-				"title", override.Title, "narrator", override.Narrator)
-			// The override is the user's explicit choice for the
-			// survivor. Record it as a lock, or the next metadata fetch
-			// is free to replace the value they just picked.
+				"title", plan.Applied.Title, "narrator", plan.Applied.Narrator)
+			// The override is the user's explicit choice for the survivor.
+			// Record it as a lock, or the next metadata fetch is free to
+			// replace the value they just picked.
 			userSet := map[string]any{}
-			if override.Title != "" {
-				userSet[database.FieldKeyTitle] = override.Title
+			if plan.Applied.Title != "" {
+				userSet[database.FieldKeyTitle] = plan.Applied.Title
 			}
-			if override.Narrator != "" {
-				userSet[database.FieldKeyNarrator] = override.Narrator
+			if plan.Applied.Narrator != "" {
+				userSet[database.FieldKeyNarrator] = plan.Applied.Narrator
 			}
 			if err := database.RecordUserOverrides(ms.db, fresh.ID, userSet); err != nil {
 				slog.Warn("combine override lock rows", "id", fresh.ID, "err", err)
 			}
 		}
 	}
-	// Author resolution: find or create by name, then link to the survivor.
-	//
-	// Creation gate. The override is often PREFILLED from one of the books
-	// being combined rather than typed, so a book already carrying an
-	// author row like "Track 01" would otherwise propagate that name onto
-	// the survivor. Logged at Warn rather than dropped quietly: every
-	// sibling override on this path surfaces its failures, and a rejected
-	// author is a change the caller asked for that did not happen.
-	//
-	// The predicate lives in internal/personname, not internal/dedup: six
-	// dedup files import this package, so anything reachable from here has
-	// to sit in a leaf.
-	cleanedAuthor := ""
-	if override.Author != "" {
-		if c, ok := personname.CleanAuthorNameForCreation(override.Author); ok {
-			cleanedAuthor = c
-		} else {
-			slog.Warn("combine override author rejected as unusable; survivor left unchanged",
-				"id", logger.SanitizeLogValue(primaryID), "author", logger.SanitizeLogValue(override.Author))
-		}
+	if plan.AuthorIDAfter == nil {
+		return
 	}
-	if cleanedAuthor == "" {
-		undo.Applied.Author = ""
-		delete(undo.FieldStates, database.FieldKeyAuthorName)
-		return undo
+	authorID := *plan.AuthorIDAfter
+	dropAuthor := func() {
+		plan.Applied.Author = ""
+		plan.AuthorIDAfter = nil
+		delete(plan.FieldStates, database.FieldKeyAuthorName)
 	}
-	author, err := ms.db.GetAuthorByName(cleanedAuthor)
-	if err == nil && author == nil {
-		author, err = ms.db.CreateAuthor(cleanedAuthor)
+	if err := ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
+		{BookID: primaryID, AuthorID: authorID, Role: "author", Position: 0},
+	}); err != nil {
+		slog.Warn("combine override SetBookAuthors", "id", logger.SanitizeLogValue(primaryID), "author", logger.SanitizeLogValue(plan.Applied.Author), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
+		dropAuthor()
+		return
 	}
-	if err != nil || author == nil {
-		if err != nil {
-			slog.Warn("combine override author", "name", logger.SanitizeLogValue(override.Author), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
-		}
-		undo.Applied.Author = ""
-		delete(undo.FieldStates, database.FieldKeyAuthorName)
-		return undo
-	}
-	if prior, aerr := ms.db.GetBookAuthors(primaryID); aerr == nil {
-		undo.AuthorsBefore = prior
-	} else {
-		mlog.Warn("combine override: could not read prior authors for undo journal id=%s err=%s", logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(aerr)))
-	}
-	// Surface failures instead of swallowing them: a dropped write here
-	// silently discards the user's explicit author choice while Combine
-	// still reports success (matches the sibling title/narrator path above).
-	if saErr := ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
-		{BookID: primaryID, AuthorID: author.ID, Role: "author", Position: 0},
-	}); saErr != nil {
-		slog.Warn("combine override SetBookAuthors", "id", logger.SanitizeLogValue(primaryID), "author", logger.SanitizeLogValue(override.Author), "err", logger.SanitizeLogValue(fmt.Sprint(saErr)))
-	}
-	// Also set AuthorID on the book row for backward compat.
-	// ModifyBook: only AuthorID is written, on the row as it is under the
-	// write lock, so a column another writer committed in the meantime
-	// survives. The undo before-value comes from that same row.
-	b, ubErr := ms.db.ModifyBook(primaryID, func(b *database.Book) error {
-		undo.AuthorIDBefore = b.AuthorID
-		b.AuthorID = &author.ID
+	// Also set AuthorID on the book row for backward compat. ModifyBook:
+	// only AuthorID is written, and its before-value comes from that row.
+	b, err := ms.db.ModifyBook(primaryID, func(b *database.Book) error {
+		plan.AuthorIDBefore = b.AuthorID
+		b.AuthorID = &authorID
 		return nil
 	})
-	if ubErr != nil || b == nil {
-		slog.Warn("combine override author ModifyBook", "id", primaryID, "err", ubErr)
-	} else {
-		id := author.ID
-		undo.AuthorIDAfter = &id
-		if lErr := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
-			// The CLEANED name, not the raw override: this row is
-			// the lock that protects the field from later scans, so
-			// it has to name the author actually linked above.
-			// Recording the raw "001-147 Kevin J Anderson" would
-			// lock the field to a value nothing else agrees with.
-			database.FieldKeyAuthorName: cleanedAuthor,
-		}); lErr != nil {
-			slog.Warn("combine override author lock row", "id", b.ID, "err", lErr)
+	if err != nil || b == nil {
+		slog.Warn("combine override author ModifyBook", "id", primaryID, "err", err)
+		// The links are written but the row is not: put the links back, so
+		// the half-applied author leaves nothing for the undo to miss.
+		if rerr := ms.db.SetBookAuthors(primaryID, plan.AuthorsBefore); rerr != nil {
+			mlog.Error("combine override: author links of %s not put back after a failed author write: %s",
+				logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(rerr)))
 		}
+		dropAuthor()
+		return
 	}
-	return undo
+	if err := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
+		database.FieldKeyAuthorName: plan.Applied.Author,
+	}); err != nil {
+		slog.Warn("combine override author lock row", "id", b.ID, "err", err)
+	}
 }
 
 // virtualFilePlan is what attaching a virtual single-file book's FilePath to

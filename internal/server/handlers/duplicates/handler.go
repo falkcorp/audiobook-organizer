@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-18
 
@@ -435,17 +435,21 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 		"books_deleted": result.BooksDeleted,
 	}
 	done := fmt.Sprintf("Combined %d files onto book; moved %d absorbed entries to trash", result.FilesMoved, result.BooksDeleted)
-	if result.UndoUnavailable != "" {
-		// The combine applied but its journal was never finalized: no id is
-		// offered, since a revert of it is not guaranteed to put everything back.
-		body["message"] = done + "; this combine cannot be undone (its undo journal could not be saved)"
-		body["undo_unavailable"] = result.UndoUnavailable
+	// operation_id: POST /operations/:id/revert with it undoes this combine
+	// (the combine's undo pointer is journaled under it).
+	body["journal_id"] = result.JournalID
+	body["operation_id"] = result.OperationID
+	if result.JournalPending != "" {
+		// The combine applied but its journal could not be marked applied.
+		// It stays pending and still names every step that ran, so the
+		// revert replays it (the split-book merge's rule).
+		body["message"] = fmt.Sprintf("%s; its undo journal could not be finalized and is still pending: reverting operation %s replays what it recorded", done, result.OperationID)
+		body["journal_pending"] = result.JournalPending
 	} else {
-		// operation_id: POST /operations/:id/revert with it undoes this combine
-		// (the combine's undo pointer is journaled under it).
 		body["message"] = fmt.Sprintf("%s; revert operation %s to undo it", done, result.OperationID)
-		body["journal_id"] = result.JournalID
-		body["operation_id"] = result.OperationID
+	}
+	if len(result.Warnings) > 0 {
+		body["warnings"] = result.Warnings
 	}
 	httputil.RespondWithOK(c, body)
 }

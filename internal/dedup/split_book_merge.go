@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-10-18
 
@@ -295,6 +295,9 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	journal := merge.NewCombineJournal(keepID)
 	journal.Origin = SplitBookMergeJournalOrigin
 	journal.StepJournaled = true
+	// Nothing renumbers the keep's own rows before step 2b, which journals
+	// SurvivorNumberingMayChange first.
+	journal.SurvivorNumbering = merge.SurvivorNumberingUntouched
 	for _, p := range plans {
 		journal.Absorbed = append(journal.Absorbed, p.entry)
 	}
@@ -337,11 +340,23 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	}
 	// persist re-writes the journal after a step. A failure is recorded: the
 	// merge goes on (its writes are real), but the result says the journal may
-	// be behind.
+	// be behind. A write that must not happen unjournaled uses
+	// persistBefore instead.
 	persist := func() {
 		if err := merge.WriteCombineJournal(store, journal); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("undo journal %s not updated: %v", journal.ID, err))
 		}
+	}
+	// persistBefore journals a step BEFORE its write. On a failure the
+	// caller must skip the write: an undo can only reverse what the journal
+	// on disk names.
+	persistBefore := func(step string) error {
+		if err := merge.WriteCombineJournal(store, journal); err != nil {
+			msg := fmt.Sprintf("undo journal %s not updated before %s: %v; skipped", journal.ID, step, err)
+			result.Errors = append(result.Errors, msg)
+			return errors.New(msg)
+		}
+		return nil
 	}
 
 	// Step 1: per src -- move files, reassign external IDs, follow progress,
@@ -430,16 +445,31 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 				continue
 			}
 		}
-		stamp, err := softDeleteSplitSource(store, srcID)
+		// The soft-delete stamp is minted and journaled BEFORE the write, and
+		// the write sets exactly it: undo restores only a row carrying the
+		// journal's stamp, so a crash between a write and a later journal
+		// would leave a retired src no undo could restore.
+		stamp := time.Now().UTC()
+		entry.MarkedForDeletionAt = &stamp
+		if err := persistBefore("retiring " + srcID); err != nil {
+			entry.MarkedForDeletionAt = nil
+			leaveLive(fmt.Sprintf("%v; %s left live, undo moves its files back", err, srcID))
+			continue
+		}
+		stored, err := softDeleteSplitSource(store, srcID, stamp)
 		if err != nil {
 			splitMergeLog.Warn("split-book merge soft-delete failed src=%s err=%s", logger.SanitizeLogValue(srcID), logger.SanitizeLogValue(fmt.Sprint(err)))
+			entry.MarkedForDeletionAt = nil
 			leaveLive(fmt.Sprintf("soft-delete %s: %v; %s left live, undo moves its files back", srcID, err, srcID))
 			continue
 		}
-		entry.MarkedForDeletionAt = stamp
 		kept = append(kept, srcID)
 		result.MergedSrcCount++
-		persist()
+		if !stored.Equal(stamp) {
+			// The store kept another value: journal what it holds.
+			entry.MarkedForDeletionAt = stored
+			persist()
+		}
 	}
 
 	// Step 2: recompute keep duration from its file rows -- only when the
@@ -470,6 +500,15 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	if stopped {
 		order = nil // a stopped merge makes no optional write
 	}
+	if len(order) > 0 {
+		// Journaled before the first stamp: the undo restores the keep's own
+		// numbers only when this marker says a stamp could have run.
+		journal.SurvivorNumbering = merge.SurvivorNumberingMayChange
+		if persistBefore("stamping the play order") != nil {
+			journal.SurvivorNumbering = merge.SurvivorNumberingUntouched
+			order = nil
+		}
+	}
 	for i, fid := range order {
 		f, ferr := store.GetBookFileByID(keepID, fid)
 		if ferr != nil || f == nil {
@@ -498,13 +537,17 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 			result.TitleKeptLocked = true
 			splitMergeLog.Info("split-book merge kept the user-locked title keep=%s suggested=%s", logger.SanitizeLogValue(keep.ID), logger.SanitizeLogValue(suggestedTitle))
 		default:
-			applyTitle = true
-			// Journal the title change BEFORE writing it.
+			// Journal the title change BEFORE writing it; unjournaled, it is
+			// not written.
 			journal.Override = &merge.CombineOverrideUndo{
 				Applied:     merge.CombineOverride{Title: suggestedTitle},
 				TitleBefore: keep.Title,
 			}
-			persist()
+			if persistBefore("setting the keep's title") == nil {
+				applyTitle = true
+			} else {
+				journal.Override = nil
+			}
 		}
 	}
 	// ModifyBook on the fresh row, setting only the two columns this merge
@@ -558,7 +601,10 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		case !fp.Values.Empty():
 			planned := fp.Values
 			journal.FilledEmpty = &planned
-			persist()
+			if persistBefore("filling the keep's empty metadata") != nil {
+				journal.FilledEmpty = nil
+				break
+			}
 			filled, ferr := applyFillEmpty(store, keepID, fp)
 			if ferr != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("fill-empty metadata on keep %s: %v", keepID, ferr))
@@ -731,14 +777,15 @@ func planSplitSource(store Store, srcID string, canReassign bool) (splitSrcPlan,
 }
 
 // softDeleteSplitSource stamps srcID soft-deleted through ModifyBook (only the
-// two deletion columns change) and returns the stamp as stored, which
-// UndoCombine compares exactly.
-func softDeleteSplitSource(store Store, srcID string) (*time.Time, error) {
+// deletion columns and FilePath change) with exactly the stamp the caller
+// journaled, and returns the stamp as stored (read back), which UndoCombine
+// compares exactly.
+func softDeleteSplitSource(store Store, srcID string, stamp time.Time) (*time.Time, error) {
 	updated, err := store.ModifyBook(srcID, func(b *database.Book) error {
 		t := true
-		now := time.Now()
+		at := stamp
 		b.MarkedForDeletion = &t
-		b.MarkedForDeletionAt = &now
+		b.MarkedForDeletionAt = &at
 		// Clear FilePath, as CombineBooks' softDeleteAbsorbed does: the path
 		// now belongs to a file row the keeper owns, and a purge with
 		// delete-files on os.Remove()s a purged book's FilePath, which would

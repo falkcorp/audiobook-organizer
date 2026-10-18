@@ -1,5 +1,5 @@
 // file: internal/merge/pointer_backfill.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 56e834dc-3c76-4989-9ce4-9db933749d76
 // last-edited: 2026-10-18
 
@@ -93,6 +93,16 @@ var _ opChangeScanner = (*database.PebbleStore)(nil)
 // committed, before the scan began. A journal created at or after asOf (a
 // merge that ran during the backfill) is checked against the ledger under the
 // lock instead.
+//
+// The order is wall-clock (CreatedAt), not a monotonic sequence. Neither the
+// journal ULIDs nor CreatedAt survive a backward clock step as an order, and a
+// persisted monotonic counter would need a new field on both journal kinds and
+// a process epoch, so the cost is documented instead: if the clock steps back
+// while a merge runs during the backfill, that merge's journal can read as
+// older than asOf, be trusted to a scan that ran before its pointer
+// committed, and get a second pointer under a fresh id. Nothing is lost: both
+// operations then name the same journal, reverting either undoes the merge,
+// and the other finds it already undone (undo.ErrAlreadyRestored).
 type PointerBackfillIndex struct {
 	asOf time.Time
 	live map[string]string // pointerKey -> operation id

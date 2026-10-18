@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.12.3
+// version: 1.13.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-10-18
 
@@ -149,11 +149,13 @@ type combineJournalKV interface {
 }
 
 // combineFileRowStore reads and rewrites single file rows: the refuse-if-
-// changed checks, the disc/track restore, and removing rows the combine made.
+// changed checks and the disc/track restore. It has no delete on purpose:
+// book_file rows are never deleted, a combine's undo moves each row it
+// created to the book whose audio it names, and leaving the method off the
+// interface keeps any merge path from deleting one.
 type combineFileRowStore interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	UpdateBookFile(id string, file *database.BookFile) error
-	DeleteBookFile(id string) error
 }
 
 // combineReverseMappingStore reverses the mappings a combine rewrites:
