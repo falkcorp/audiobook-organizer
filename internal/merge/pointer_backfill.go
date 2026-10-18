@@ -1,5 +1,5 @@
 // file: internal/merge/pointer_backfill.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 56e834dc-3c76-4989-9ce4-9db933749d76
 // last-edited: 2026-10-18
 
@@ -19,17 +19,19 @@ import (
 //
 // Every combine and sibling move made since undo_pointer.go landed journals
 // its pointer at the chokepoint. Journals written before that have none, so
-// POST /operations/:id/revert cannot reach them; the retired
-// POST /merge/undo/:journal_id and /merge/sibling-undo/:journal_id routes were
-// their only way back. The maintenance job backfill-merge-undo-pointers gives
-// each such journal a pointer of its own through BackfillJournalPointer.
+// POST /operations/:id/revert cannot reach them; until a pointer exists their
+// only way back is POST /merge/undo/:journal_id or
+// /merge/sibling-undo/:journal_id (both still registered, in
+// server/wire_dedup_routes.go), which the Operations page does not offer. The
+// maintenance job backfill-merge-undo-pointers gives each such journal a
+// pointer of its own through PointerBackfiller.Backfill.
 //
 // Each backfilled journal gets a FRESH correlation id, never the backfill
 // job's own operation id. Under the job's id, reverting the job would undo
 // every historical combine in one click, and the revert of one combine would
 // be indistinguishable from the revert of all of them.
 
-// Verdicts of BackfillJournalPointer.
+// Verdicts of PointerBackfiller.Backfill.
 const (
 	// PointerBackfillWritten: the pointer was written (apply).
 	PointerBackfillWritten = "written"
@@ -65,13 +67,36 @@ type PointerBackfillItem struct {
 	OperationID string `json:"operation_id,omitempty"`
 }
 
-// journalPointerReader lists a book's undo-ledger rows. Every database.Store
-// carries it; the backfill resolves it with database.AsCapability.
+// journalPointerReader lists a book's undo-ledger rows.
 type journalPointerReader interface {
 	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }
 
-var _ journalPointerReader = database.Store(nil)
+// database.OperationChangeStore is the undo-ledger role the production store
+// embeds; see the JournalPointerWriter assertion in undo_pointer.go.
+var _ journalPointerReader = database.OperationChangeStore(nil)
+
+// PointerBackfillStore is the whole of what the backfill reads and writes:
+// the two journal keyspaces (raw reads only) and the undo ledger (one book's
+// rows, and the pointer row it writes). The maintenance job hands its own
+// maintenance.JobStore here, which carries all four, so the job needs no
+// runtime assertion and a store that lost one stops compiling.
+type PointerBackfillStore interface {
+	journalKVReader
+	journalPointerReader
+	JournalPointerWriter
+}
+
+// PointerBackfiller gives older merge journals their undo pointers. Build one
+// with NewPointerBackfiller.
+type PointerBackfiller struct {
+	db PointerBackfillStore
+}
+
+// NewPointerBackfiller returns a backfiller over db.
+func NewPointerBackfiller(db PointerBackfillStore) *PointerBackfiller {
+	return &PointerBackfiller{db: db}
+}
 
 // opChangeScanner reads the whole undo ledger in one pass
 // (PebbleStore.ScanOperationChanges, which is not on Store).
@@ -88,7 +113,7 @@ var _ opChangeScanner = (*database.PebbleStore)(nil)
 // Why it can be trusted for a journal created before asOf without taking the
 // lock for a ledger read: every chokepoint writes its journal (CreatedAt is
 // set inside that write's lock hold) and its pointer inside ONE hold of the
-// merge lock. NewPointerBackfillIndex takes that lock to stamp asOf, so every
+// merge lock. NewIndex takes that lock to stamp asOf, so every
 // merge whose journal is older than asOf had released the lock, its pointer
 // committed, before the scan began. A journal created at or after asOf (a
 // merge that ran during the backfill) is checked against the ledger under the
@@ -110,10 +135,10 @@ type PointerBackfillIndex struct {
 
 func pointerKey(changeType, journalID string) string { return changeType + "\x00" + journalID }
 
-// NewPointerBackfillIndex stamps asOf under the merge lock (held only for
-// the stamp), then scans the undo ledger outside it.
-func (ms *Service) NewPointerBackfillIndex() (*PointerBackfillIndex, error) {
-	scanner, _ := database.AsCapability[opChangeScanner](ms.db)
+// NewIndex stamps asOf under the merge lock (held only for the stamp), then
+// scans the undo ledger outside it.
+func (pb *PointerBackfiller) NewIndex() (*PointerBackfillIndex, error) {
+	scanner, _ := database.AsCapability[opChangeScanner](pb.db)
 	if scanner == nil {
 		return nil, errors.New("the store cannot scan the undo ledger; refusing to backfill undo pointers")
 	}
@@ -136,14 +161,14 @@ func (ms *Service) NewPointerBackfillIndex() (*PointerBackfillIndex, error) {
 	return idx, nil
 }
 
-// ListPointerBackfillCandidates returns every combine and sibling-move
-// journal, newest first within each kind, as items with no verdict yet.
-func (ms *Service) ListPointerBackfillCandidates() ([]PointerBackfillItem, error) {
-	combines, err := ms.ListCombineJournals(0)
+// Candidates returns every combine and sibling-move journal, newest first
+// within each kind, as items with no verdict yet.
+func (pb *PointerBackfiller) Candidates() ([]PointerBackfillItem, error) {
+	combines, err := listCombineJournals(pb.db, 0)
 	if err != nil {
 		return nil, err
 	}
-	siblings, err := ms.ListSiblingMoveJournals(0)
+	siblings, err := listSiblingMoveJournals(pb.db, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +182,7 @@ func (ms *Service) ListPointerBackfillCandidates() ([]PointerBackfillItem, error
 	return out, nil
 }
 
-// BackfillJournalPointer decides whether the journal item names needs an undo
-// pointer and, unless dryRun, writes it under a fresh correlation id. The
+// Backfill decides whether the journal item names needs an undo pointer and, unless dryRun, writes it under a fresh correlation id. The
 // returned item carries the verdict.
 //
 // It runs under the merge lock (LockMergeRMW), which every chokepoint holds
@@ -171,20 +195,18 @@ func (ms *Service) ListPointerBackfillCandidates() ([]PointerBackfillItem, error
 // added to idx.
 //
 // The caller must not hold the merge lock.
-func (ms *Service) BackfillJournalPointer(idx *PointerBackfillIndex, item PointerBackfillItem, dryRun bool) (PointerBackfillItem, error) {
+func (pb *PointerBackfiller) Backfill(idx *PointerBackfillIndex, item PointerBackfillItem, dryRun bool) (PointerBackfillItem, error) {
 	if idx == nil {
-		return item, errors.New("no pointer index; build one with NewPointerBackfillIndex")
+		return item, errors.New("no pointer index; build one with NewIndex")
 	}
-	reader, _ := database.AsCapability[journalPointerReader](ms.db)
-	writer, _ := database.AsCapability[JournalPointerWriter](ms.db)
-	if reader == nil || writer == nil {
-		return item, errors.New("the store has no undo ledger; refusing to backfill undo pointers")
+	if pb.db == nil {
+		return item, errors.New("no store; refusing to backfill undo pointers")
 	}
 
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
 
-	st, err := ms.pointerBackfillState(item)
+	st, err := pb.journalState(item)
 	if err != nil {
 		return item, err
 	}
@@ -198,7 +220,7 @@ func (ms *Service) BackfillJournalPointer(idx *PointerBackfillIndex, item Pointe
 	opID := idx.live[key]
 	if opID == "" && !st.createdAt.Before(idx.asOf) {
 		// Created during this run: idx cannot have seen its pointer.
-		changes, err := reader.GetBookChanges(st.survivor)
+		changes, err := pb.db.GetBookChanges(st.survivor)
 		if err != nil {
 			return item, fmt.Errorf("read the undo ledger of %s: %w", st.survivor, err)
 		}
@@ -213,7 +235,7 @@ func (ms *Service) BackfillJournalPointer(idx *PointerBackfillIndex, item Pointe
 		return item, nil
 	}
 	opID = ulid.Make().String()
-	if _, err := RecordJournalPointer(writer, opID, st.survivor, item.ChangeType, item.JournalID); err != nil {
+	if _, err := RecordJournalPointer(pb.db, opID, st.survivor, item.ChangeType, item.JournalID); err != nil {
 		return item, err
 	}
 	idx.live[key] = opID
@@ -221,7 +243,7 @@ func (ms *Service) BackfillJournalPointer(idx *PointerBackfillIndex, item Pointe
 	return item, nil
 }
 
-// backfillJournalState is a journal as BackfillJournalPointer re-reads it.
+// backfillJournalState is a journal as Backfill re-reads it.
 type backfillJournalState struct {
 	survivor, status string
 	createdAt        time.Time
@@ -229,17 +251,17 @@ type backfillJournalState struct {
 	reason string
 }
 
-// pointerBackfillState re-reads the journal.
-func (ms *Service) pointerBackfillState(item PointerBackfillItem) (backfillJournalState, error) {
+// journalState re-reads the journal.
+func (pb *PointerBackfiller) journalState(item PointerBackfillItem) (backfillJournalState, error) {
 	switch item.ChangeType {
 	case CombineJournalPointerType:
-		j, err := ms.GetCombineJournal(item.JournalID)
+		j, err := readCombineJournal(pb.db, item.JournalID)
 		if err != nil {
 			return backfillJournalState{}, err
 		}
 		return backfillJournalState{j.SurvivorID, j.Status, j.CreatedAt, combineNotUndoableReason(j)}, nil
 	case SiblingJournalPointerType:
-		j, err := ms.GetSiblingMoveJournal(item.JournalID)
+		j, err := readSiblingMoveJournal(pb.db, item.JournalID)
 		if err != nil {
 			return backfillJournalState{}, err
 		}

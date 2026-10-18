@@ -1,5 +1,5 @@
 // file: internal/merge/undo_pointer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a6c9e38-5f02-4b7d-8e49-c3d0a7f25b16
 // last-edited: 2026-10-18
 
@@ -52,16 +52,17 @@ const (
 	JournalPointerField = "journal"
 )
 
-// JournalPointerWriter writes undo-ledger rows. Every database.Store carries
-// it; the merge cores resolve it with database.AsCapability so no store
-// interface is widened for it.
+// JournalPointerWriter writes undo-ledger rows. The merge cores resolve it
+// with database.AsCapability so no store interface is widened for it.
 type JournalPointerWriter interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
-// The production store carries the undo ledger, so the capability lookup
-// never refuses a merge the server runs.
-var _ JournalPointerWriter = database.Store(nil)
+// database.OperationChangeStore is the undo-ledger role the production store
+// embeds (Store -> operationsStore -> OperationStore -> OperationChangeStore),
+// so the capability lookup never refuses a merge the server runs. The test
+// file pins the wide Store to this interface as well.
+var _ JournalPointerWriter = database.OperationChangeStore(nil)
 
 // RecordJournalPointer journals the row that lets POST
 // /operations/:id/revert find a merge's own undo record: a

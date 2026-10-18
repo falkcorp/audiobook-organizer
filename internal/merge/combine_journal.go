@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -319,10 +319,15 @@ func (ms *Service) putCombineJournal(j *CombineJournal) error {
 // GetCombineJournal returns the journal with the given id, or
 // ErrCombineJournalNotFound.
 func (ms *Service) GetCombineJournal(id string) (*CombineJournal, error) {
+	return readCombineJournal(ms.db, id)
+}
+
+// readCombineJournal is GetCombineJournal over any raw-key reader.
+func readCombineJournal(kv journalKVReader, id string) (*CombineJournal, error) {
 	if id == "" || strings.ContainsAny(id, ":/") {
 		return nil, ErrCombineJournalNotFound
 	}
-	data, err := ms.db.GetRaw(combineJournalKey(id))
+	data, err := kv.GetRaw(combineJournalKey(id))
 	if err != nil {
 		return nil, fmt.Errorf("read combine journal %s: %w", id, err)
 	}
@@ -338,7 +343,12 @@ func (ms *Service) GetCombineJournal(id string) (*CombineJournal, error) {
 
 // ListCombineJournals returns journals newest-first, capped at limit (0 = all).
 func (ms *Service) ListCombineJournals(limit int) ([]CombineJournal, error) {
-	rows, err := ms.db.ScanPrefix(combineJournalPrefix)
+	return listCombineJournals(ms.db, limit)
+}
+
+// listCombineJournals is ListCombineJournals over any raw-key reader.
+func listCombineJournals(kv journalKVReader, limit int) ([]CombineJournal, error) {
+	rows, err := kv.ScanPrefix(combineJournalPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("list combine journals: %w", err)
 	}
