@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-18
 //
@@ -423,10 +423,10 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// The revert undoes the merge's sibling-move journal
 		// (merge.Service.UndoSiblingMove), which checks every sibling's
 		// current group itself and refuses as a whole when a newer merge
-		// moved one again. The preflight store does not read sibling
-		// journals, so it proves only that the survivor is there.
-		_, refusal := CheckRestoreBook(store, c.BookID)
-		return rowVerdict{refusal: refusal}
+		// moved one again. It needs only the journal, not the survivor row
+		// (a survivor purged since does not stop it), and the preflight store
+		// does not read sibling journals, so there is nothing to check here.
+		return rowVerdict{}
 	case ChangeTypeMetadataCacheCopy:
 		// The revert deletes or restores the cache row only while it still
 		// carries the copy's stamp (CheckMetadataCacheCopy). It fails closed
