@@ -1,7 +1,7 @@
 // file: internal/merge/progress_safety_followups_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e82a272-8905-49f4-b073-a818dfc67963
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package merge
 
@@ -194,40 +194,48 @@ func reconcileMarkers(t *testing.T, s *database.PebbleStore) []string {
 	return keys
 }
 
-// clientWriteDuringReconcile lands a client write (50s more listened) on
-// the survivor right when the reconcile re-reads it before its write.
+// clientWriteDuringReconcile starts a client write (50s more listened) on
+// the survivor right after the restore's first read of its state. The
+// client takes the survivor's user-state stripe first, as the ABS handlers
+// do (stripedClientWrite); wait joins it.
 type clientWriteDuringReconcile struct {
 	*database.PebbleStore
-	t        *testing.T
 	survivor string
 	mu       sync.Mutex
-	reads    int
+	wait     func() error
 }
 
 func (s *clientWriteDuringReconcile) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
-	if bookID == s.survivor {
-		s.mu.Lock()
-		s.reads++
-		n := s.reads
-		s.mu.Unlock()
-		if n == 2 { // RestoreFollowedProgress read it (1); this is the re-read
-			cur, err := s.PebbleStore.GetUserBookState(userID, bookID)
-			require.NoError(s.t, err)
-			cur.TotalListenedSeconds += 50
-			require.NoError(s.t, s.PebbleStore.SetUserBookState(cur))
-		}
+	got, err := s.PebbleStore.GetUserBookState(userID, bookID)
+	if err != nil || bookID != s.survivor {
+		return got, err
 	}
-	return s.PebbleStore.GetUserBookState(userID, bookID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.wait == nil {
+		s.wait = stripedClientWrite(userID, bookID, func() error {
+			cur, err := s.PebbleStore.GetUserBookState(userID, bookID)
+			if err != nil {
+				return err
+			}
+			cur.TotalListenedSeconds += 50
+			return s.PebbleStore.SetUserBookState(cur)
+		})
+	}
+	return got, nil
 }
 
-// D3: a client write landing between the reconcile's read and its write is
-// not overwritten by the stale reconcile: it is redone from fresh reads, so
-// the 50s listened in that window are kept.
-func TestReconcileTouchedSurvivor_RedoesOnAWriteMeanwhile(t *testing.T) {
+// D3: a client write racing the reconcile is not overwritten by it. The
+// reconcile used to re-read under the stripe and redo itself from fresh
+// reads; it now reads and writes under one hold of the stripe (round 6 of
+// the #4064 review), so the client waits and its 50s land on top.
+func TestReconcileTouchedSurvivor_KeepsAClientWriteMeanwhile(t *testing.T) {
 	s, u, keep, dup, progress, redirected := touchedSurvivorSetup(t)
-	cw := &clientWriteDuringReconcile{PebbleStore: s, t: t, survivor: keep}
+	cw := &clientWriteDuringReconcile{PebbleStore: s, survivor: keep}
 	_, err := RestoreFollowedProgress(cw, keep, dup, redirected, progress)
 	require.NoError(t, err)
+	require.NotNil(t, cw.wait, "the client write started inside the reconcile")
+	require.NoError(t, cw.wait())
 	kst, err := s.GetUserBookState(u.ID, keep)
 	require.NoError(t, err)
 	require.Equal(t, 650.0, kst.TotalListenedSeconds, "keep's own 500 plus 100 and the 50 written during the reconcile")

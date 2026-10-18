@@ -1,7 +1,7 @@
 // file: internal/merge/merge_carry_followups_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d83771a3-8e26-4d42-94a4-742624eb59ee
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package merge
 
@@ -19,18 +19,18 @@ import (
 
 // Review follow-ups to #3777 (merge-state carry).
 
-// positionWriteAfterRead lands a client position write on one book right
+// positionWriteAfterRead starts a client position write on one book right
 // after the FIRST read of that book's positions has been taken, and returns
-// that (now stale) read: a device sync arriving between a reader's read and
-// its write.
+// that read: a device sync arriving between a reader's read and its write.
+// The client takes the book's user-state stripe first, as the ABS handlers
+// do (stripedClientWrite); wait joins it.
 type positionWriteAfterRead struct {
 	*database.PebbleStore
-	t       *testing.T
 	book    string
 	segment string
 	seconds float64
 	mu      sync.Mutex
-	done    bool
+	wait    func() error
 }
 
 func (s *positionWriteAfterRead) ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error) {
@@ -39,11 +39,11 @@ func (s *positionWriteAfterRead) ListUserPositionsForBook(userID, bookID string)
 		return got, err
 	}
 	s.mu.Lock()
-	fire := !s.done
-	s.done = true
-	s.mu.Unlock()
-	if fire {
-		require.NoError(s.t, s.PebbleStore.SetUserPosition(userID, bookID, s.segment, s.seconds))
+	defer s.mu.Unlock()
+	if s.wait == nil {
+		s.wait = stripedClientWrite(userID, bookID, func() error {
+			return s.PebbleStore.SetUserPosition(userID, bookID, s.segment, s.seconds)
+		})
 	}
 	return got, nil
 }
@@ -51,14 +51,18 @@ func (s *positionWriteAfterRead) ListUserPositionsForBook(userID, bookID string)
 // Item 2: the touched-survivor reconcile wrote the positions BEFORE taking
 // the per-(user, book) stripe and checking the survivor had not moved on, so
 // a client position landing after its read was rewound. Segment "a" on keep
-// is exactly the row the follow wrote (it matches the after-snapshot), so the
-// stale reconcile would put keep's before row (100s) back over the user's
-// new 2000s.
+// is exactly the row the follow wrote (it matches the after-snapshot), so a
+// reconcile built from a read the client wrote after would put keep's
+// before row (100s) back over the user's new 2000s. The reconcile now reads
+// and writes under one hold of the stripe (round 6 of the #4064 review), so
+// the client's write waits and lands on top.
 func TestReconcileTouchedSurvivor_NewerPositionIsNotRewound(t *testing.T) {
 	s, u, keep, dup, progress, redirected := touchedSurvivorSetup(t)
-	cw := &positionWriteAfterRead{PebbleStore: s, t: t, book: keep, segment: "a", seconds: 2000}
+	cw := &positionWriteAfterRead{PebbleStore: s, book: keep, segment: "a", seconds: 2000}
 	_, err := RestoreFollowedProgress(cw, keep, dup, redirected, progress)
 	require.NoError(t, err)
+	require.NotNil(t, cw.wait, "the client write started inside the reconcile")
+	require.NoError(t, cw.wait())
 
 	kpos, err := s.ListUserPositionsForBook(u.ID, keep)
 	require.NoError(t, err)
