@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.21.3
+// version: 1.21.4
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-18
 
@@ -33,7 +33,7 @@ import (
 )
 
 // Store is the slice of the database this service uses: seven methods it calls
-// directly, plus four forwarding constraints embedded by name.
+// directly, plus three forwarding constraints embedded by name.
 //
 // It was `= database.Store` (398 methods) with a comment saying it had been
 // "temporarily widened ... because versions.CreateIngestVersion requires the

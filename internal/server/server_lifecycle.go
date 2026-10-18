@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.48.1
+// version: 4.48.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-18
 
@@ -1917,12 +1917,15 @@ func (s *Server) setupRoutes() {
 			// (wireHandlers).
 			protected.POST("/metadata/batch-apply-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleBatchApplyCandidates)
 			// Retired (01-P81i, owner decision D9): no caller in the repo. Starting
-			// a dry run is now the default of POST /metadata/batch-apply-candidates
-			// and POST /audiobooks/metadata/batch-apply-cached (send dry_run:false
-			// to apply); the report-reading route has no replacement. The stubs are removed after one release; auth and each
-			// route's permission guard run first.
-			protected.POST("/metadata/bulk-apply-preview", s.perm(auth.PermLibraryView), gone("POST /api/v1/metadata/batch-apply-candidates or POST /api/v1/audiobooks/metadata/batch-apply-cached (each is a dry run unless the body sends dry_run:false)"))
-			protected.GET("/metadata/bulk-apply-preview/:id", s.perm(auth.PermLibraryView), gone(""))
+			// a preview is POST /operations/v2 with def_id
+			// metadata.bulk-apply-preview (it takes book_ids, all_cached or
+			// operation_id, like the old route). The two batch-apply endpoints are
+			// dry runs by default too (send dry_run:false to apply). The per-book
+			// report the GET read is no longer served; the finished operation's
+			// message carries the summary. The stubs are removed after one
+			// release; auth and each route's permission guard run first.
+			protected.POST("/metadata/bulk-apply-preview", s.perm(auth.PermLibraryView), gone(bulkApplyPreviewGone))
+			protected.GET("/metadata/bulk-apply-preview/:id", s.perm(auth.PermLibraryView), gone(bulkApplyPreviewReportGone))
 			protected.POST("/metadata/batch-reject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleRejectCandidates)
 			protected.POST("/metadata/batch-unreject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleUnrejectCandidates)
 			protected.POST("/metadata/unreject-candidate", s.perm(auth.PermLibraryEditMetadata), s.handleUnrejectCandidate)
