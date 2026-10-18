@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
 // last-edited: 2026-10-18
 
@@ -32,7 +32,7 @@ import (
 // open; the ring is how far back Last-Event-ID can resume; ClientBuffer is how
 // many unsent events one slow client may hold before its oldest are dropped.
 // MaxClients bounds the open streams (each holds a goroutine and a queue);
-// one more is answered 503. MaxClientsPerUser bounds the open streams of one
+// one more is answered 503 with Retry-After. MaxClientsPerUser bounds the open streams of one
 // bucket: a signed-in user's browser session is one bucket and all of their
 // API keys together are another (see streamBucket), so a script using an API
 // key cannot use up the session's places and more keys buy no more streams;
@@ -50,10 +50,13 @@ const (
 	DefaultMaxWatched   = 256
 	defaultFlushEvery   = 250 * time.Millisecond
 
-	// tooManyStreamsRetryAfterSeconds is the Retry-After of the 429
-	// TOO_MANY_STREAMS answer: long enough that a reconnect loop backs off,
-	// short enough that a page reload after closing a tab is not locked out.
-	tooManyStreamsRetryAfterSeconds = 5
+	// streamRetryAfterSeconds is the Retry-After of both stream refusals,
+	// the per-bucket 429 TOO_MANY_STREAMS and the server-wide 503: long
+	// enough that a reconnect loop backs off, short enough that a page reload
+	// after closing a tab (or after another client's stream ends) is not
+	// locked out. EventSource has no back-off of its own, so without the
+	// header a refused browser retries on its default ~3 s timer.
+	streamRetryAfterSeconds = 5
 )
 
 // subscribe's refusals: past MaxClients, and past MaxClientsPerUser for one
@@ -492,11 +495,14 @@ func (h *Handler) Events(c *gin.Context) {
 	}
 	cl, unsubscribe, err := b.subscribe(streamBucket(c), lastID, mode)
 	if errors.Is(err, ErrTooManyUserClients) {
-		c.Header("Retry-After", strconv.Itoa(tooManyStreamsRetryAfterSeconds))
+		c.Header("Retry-After", strconv.Itoa(streamRetryAfterSeconds))
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many open operations event streams for this user; close one and retry", "TOO_MANY_STREAMS")
 		return
 	}
 	if err != nil {
+		// ErrTooManyClients is the only other refusal: the server-wide cap,
+		// which frees as any client's stream ends.
+		c.Header("Retry-After", strconv.Itoa(streamRetryAfterSeconds))
 		httputil.RespondWithServiceUnavailable(c, "too many open operations event streams; try again shortly")
 		return
 	}
