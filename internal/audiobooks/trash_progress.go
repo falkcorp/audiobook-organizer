@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -38,6 +38,10 @@ const (
 	purgeCarried
 	purgeKeptHasProgress
 	purgeCarryFailed
+	// purgeNotInTrash: the book was restored (or already purged) between the
+	// listing and the purge's hold of the merge lock. Nothing was done, and
+	// it is not an error.
+	purgeNotInTrash
 )
 
 // purgeOutcome is one book's result in a purge pass.
@@ -69,6 +73,8 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 		r.CarryFailedIDs = append(r.CarryFailedIDs, bookID)
 	case purgeFailed:
 		// counted by its Errors lines
+	case purgeNotInTrash:
+		// restored or purged meanwhile: nothing to count
 	}
 }
 
@@ -411,6 +417,8 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 		return nil, fmt.Errorf("purge %s: %w. Restore it, or use Discard progress and purge to delete it together with its progress", book.ID, ErrBookHasProgress)
 	case purgeCarryFailed:
 		return nil, fmt.Errorf("purge %s: %w: %s", book.ID, ErrPurgeCarryFailed, detail)
+	case purgeNotInTrash:
+		return nil, fmt.Errorf("purge %s: %w: it was restored meanwhile", book.ID, ErrNotInTrash)
 	default:
 		return nil, fmt.Errorf("purge %s failed: %s", book.ID, detail)
 	}

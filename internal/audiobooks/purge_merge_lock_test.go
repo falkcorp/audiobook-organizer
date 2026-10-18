@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_merge_lock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e44858b2-5180-4f51-9842-e61721722f2f
 // last-edited: 2026-10-18
 
@@ -7,6 +7,7 @@ package audiobooks
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ type lockWatchStore struct {
 	*database.PebbleStore
 	doomed string
 
-	mu                    sync.Mutex
+	mu                     sync.Mutex
 	checkLocked, delLocked []bool
 }
 
@@ -93,4 +94,86 @@ func TestPurge_StateCheckAndDeleteHoldTheMergeLock(t *testing.T) {
 	b, err := store.GetBookByID("doomed")
 	require.NoError(t, err)
 	require.Nil(t, b)
+}
+
+// restoredMeanwhileStore restores the doomed book from the trash during the
+// purge's file-row pre-check (step 0, before the merge lock), as a restore or
+// a merge revert running at that moment would.
+//
+// With onSiblingLookup set it restores the book later instead: when the carry
+// path looks up the version group for a sibling, after the stateless check's
+// hold of the lock and before the carry's, so only the carry's own re-read
+// can see it.
+type restoredMeanwhileStore struct {
+	*database.PebbleStore
+	doomed          string
+	onSiblingLookup bool
+	once            sync.Once
+}
+
+func (s *restoredMeanwhileStore) restore() {
+	s.once.Do(func() {
+		_, _ = s.PebbleStore.ModifyBook(s.doomed, func(b *database.Book) error {
+			b.MarkedForDeletion, b.MarkedForDeletionAt = nil, nil
+			return nil
+		})
+	})
+}
+
+func (s *restoredMeanwhileStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	if bookID == s.doomed && !s.onSiblingLookup {
+		s.restore()
+	}
+	return s.PebbleStore.GetBookFiles(bookID)
+}
+
+func (s *restoredMeanwhileStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	if s.onSiblingLookup {
+		s.restore()
+	}
+	return s.PebbleStore.GetBooksByVersionGroup(groupID)
+}
+
+// SF4 follow-up: the purge re-reads the book under the merge lock. One that
+// was restored between the listing and the lock is left alone: with no file
+// rows and no listening state, DeleteBook would not have refused it, and the
+// purge hard-deleted a book that had just come back.
+func TestPurge_BookRestoredMeanwhileIsNotPurged(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "back", "")
+	res, err := NewAudiobookService(&restoredMeanwhileStore{PebbleStore: store, doomed: "back"}).
+		PurgeSoftDeletedBooks(context.Background(), false, nil)
+	require.NoError(t, err)
+	require.Zero(t, res.Purged, "result %+v", res)
+	require.Empty(t, res.Errors, "a book restored meanwhile is not an error")
+	require.False(t, bookGone(t, store, "back"), "the restored book is still there")
+}
+
+// The carry path re-reads the doomed book under its own hold of the lock: a
+// book with listening state restored after the stateless check is neither
+// carried from nor deleted.
+func TestPurge_BookWithStateRestoredMeanwhileIsNotCarried(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "keep", "g1", false, true)
+	groupBook(t, store, "dup", "g1", true, false)
+	u := purgeSeedProgress(t, store, "dup")
+	res, err := NewAudiobookService(&restoredMeanwhileStore{PebbleStore: store, doomed: "dup", onSiblingLookup: true}).
+		PurgeSoftDeletedBooks(context.Background(), false, nil)
+	require.NoError(t, err)
+	require.Zero(t, res.Purged, "result %+v", res)
+	require.Zero(t, res.CarriedToSibling)
+	require.Zero(t, res.CarryFailed)
+	require.Empty(t, res.Errors)
+	require.False(t, bookGone(t, store, "dup"))
+	require.Equal(t, 40, userPct(t, store, u.ID, "dup"), "the progress stays on the restored book")
+}
+
+// "Purge now" on a book restored meanwhile answers ErrNotInTrash.
+func TestPurgeNow_BookRestoredMeanwhileIsNotInTrash(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "back", "")
+	svc := NewAudiobookService(&restoredMeanwhileStore{PebbleStore: store, doomed: "back"})
+	_, err := svc.DeleteAudiobook(context.Background(), "back", &DeleteAudiobookOptions{})
+	require.True(t, errors.Is(err, ErrNotInTrash), "err = %v", err)
+	require.False(t, bookGone(t, store, "back"))
 }
