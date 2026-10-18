@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-18
 
@@ -140,8 +140,9 @@ func (d *opsV3Defs) info(def ops.Definition, od opsregistry.OperationDef) opsv3.
 	if compiled.Kind == ops.KindAdapted {
 		// FromV2 declares no effects, so the v2 op's own declarations say
 		// whether it writes, and its own Preview declaration how it previews.
-		info.Writer = canWrite(od)
-		if info.Writer {
+		_, forcedLive := writesWithoutPreview[od.ID]
+		info.Writer = canWrite(od) || forcedLive
+		if info.Writer && !forcedLive {
 			info.Preview = adaptedPreview(od.Preview)
 		}
 	} else {
@@ -153,6 +154,29 @@ func (d *opsV3Defs) info(def ops.Definition, od opsregistry.OperationDef) opsv3.
 		}
 	}
 	return info
+}
+
+// writesWithoutPreview lists adapted ops whose v2 declarations read as
+// read-only (no write capability, no Writes) but which write something on
+// every run and have no mode key to turn that off. v3 treats each as a writer
+// with no preview: a start is refused (409) unless it says mode "live", and
+// params are passed through untouched. Without this list v3 would run them in
+// either mode, so a "preview" start would upsert candidate rows or spend a
+// paid AI batch.
+//
+// This is a v3-only classification. canWrite is unchanged, so the ops get no
+// write_op_modes.golden line and the dispatcher's write-set gate is not
+// engaged for them. Whether each should instead declare what it writes, gain
+// a real preview, or be accepted as a read is the owner's call
+// (todo.d/2026-10-17-ops-v3-approve-and-schema-checker.md). An entry is
+// refused by TestOpsV3_WritesWithoutPreviewAreLiveOnly once its op declares
+// writes or a preview of its own, so the list cannot go stale silently.
+var writesWithoutPreview = map[string]string{
+	"acoustid.scan":               "upserts dedup candidate rows every run",
+	"ai.author-scan":              "writes AI scan state and suggestions; paid OpenAI calls",
+	"dedup.split-book-scan":       "saves split-book candidates every run",
+	"diagnostics.ai-analyze":      "paid OpenAI batch on every run",
+	"library.bulk-metadata-fetch": "writes metadata fetch caches every run",
 }
 
 // canWrite: declares a write capability, declares a resource it writes

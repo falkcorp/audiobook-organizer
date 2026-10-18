@@ -10,20 +10,24 @@
       adopt a maintained library (and drop the checker).
 - [ ] **05-PR9 follow-up** Writers declared read-only (the reverse of the
       item below): `/api/v3/ops` decides whether an op writes from its
-      capabilities and `Writes`, and runs an op it thinks is read-only in
-      either mode with params untouched. A sweep on 2026-10-18 found five that
-      still write something with no mode key, listed `OWNER` in
-      `readOnlyByDeclaration` (`internal/server/wire_ops_v3_routes_test.go`):
+      capabilities and `Writes`. A sweep on 2026-10-18 found five that declare
+      neither yet write something on every run with no mode key:
       `acoustid.scan` (dedup candidate rows), `ai.author-scan` (AI scan state
       and suggestions, paid OpenAI calls), `dedup.split-book-scan` (split-book
       candidates), `library.bulk-metadata-fetch` (metadata fetch caches, never
       book rows) and `diagnostics.ai-analyze` (a paid OpenAI batch, no DB
-      writes). Owner decision, recommended (b) then (a) for the paid ones:
-      (a) give each a dry_run preview mode and its write capability;
-      (b) rule that derived, recomputable result rows and caches are not
-      writes for the preview rule, and keep them listed read-only;
-      (c) mark them writers with a `no-mode` ledger line, which the ledger
-      forbids without owner sign-off.
+      writes). Until the owner decides, v3 fails closed on them:
+      `writesWithoutPreview` (`internal/server/wire_ops_v3_routes.go`) makes
+      each a writer with no preview, so a v3 start is a 409 unless it says
+      `mode: "live"`, with params untouched. That list is v3-only: no
+      `write_op_modes.golden` line, no dispatcher write-set gate, and v1/v2
+      starts and internal enqueues are unchanged. Owner decision, recommended
+      (b) for the three that write derived rows or caches and (a) for the two
+      paid AI ones: (a) give each a dry_run preview mode and its write
+      capability, then delete its list entry; (b) rule that derived,
+      recomputable result rows and caches are not writes for the preview
+      rule, delete the entry and list the op in `readOnlyByDeclaration`;
+      (c) keep the v3 list as the permanent answer.
 - [ ] **05-PR9 follow-up** `PreviewSpec.Params` names the type an op's Run
       decodes, but nothing ties the two by construction: an edit to Run's
       decode target is caught only by that op's `TestPreviewBehaviour_*`

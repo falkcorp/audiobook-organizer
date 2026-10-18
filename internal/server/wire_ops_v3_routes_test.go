@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-18
 
@@ -233,9 +233,10 @@ func TestOpsV3_EveryOpThatDeclaresWritesIsAWriter(t *testing.T) {
 // PR 05-PR9). v3 passes their params through untouched and runs them in
 // either mode, so an op wrongly listed here runs for real on a "preview".
 // A new op that lands here fails until it is listed, so the claim gets read.
-// Entries marked OWNER write something the preview rule may or may not cover
-// (derived candidate rows, caches, scan state, paid calls) and are waiting on
-// the owner's decision (todo.d/2026-10-17-ops-v3-approve-and-schema-checker.md).
+// Ops that declare no writes yet write on every run (candidate rows, caches,
+// scan state, paid calls) are not here: they are in writesWithoutPreview,
+// which makes v3 treat them as live-only writers until the owner decides
+// (todo.d/2026-10-17-ops-v3-approve-and-schema-checker.md).
 var readOnlyByDeclaration = map[string]string{
 	"catalog.coverage-report":                        "reads ident index and catalog keys",
 	"dedup.author-scan":                              "in-memory result cache only",
@@ -263,11 +264,6 @@ var readOnlyByDeclaration = map[string]string{
 	"metafetch.calibrate-scoring":                    "reads; reports",
 	"reconcile.scan":                                 "reads and hashes; the writes are reconcile.apply's",
 	"repairs.plan":                                   "fixers' Plan only; writes are in Apply",
-	"acoustid.scan":                                  "OWNER: upserts dedup candidate rows every run, no mode key",
-	"ai.author-scan":                                 "OWNER: writes AI scan state and suggestions, paid OpenAI calls, no mode key",
-	"dedup.split-book-scan":                          "OWNER: saves split-book candidates every run, no mode key",
-	"diagnostics.ai-analyze":                         "OWNER: paid OpenAI batch, no DB writes, no mode key",
-	"library.bulk-metadata-fetch":                    "OWNER: writes metadata fetch caches, never book rows, no mode key",
 }
 
 // TestOpsV3_ReadOnlyOpsAreListed pins readOnlyByDeclaration to the catalog in
@@ -285,6 +281,51 @@ func TestOpsV3_ReadOnlyOpsAreListed(t *testing.T) {
 	for id := range readOnlyByDeclaration {
 		require.True(t, got[id], "readOnlyByDeclaration lists %s, which is not a read-only adapted op; delete the entry", id)
 	}
+}
+
+// TestOpsV3_WritesWithoutPreviewAreLiveOnly: every op in writesWithoutPreview
+// is a registered adapted op that v3 shows as a writer with no preview, and
+// the router refuses a preview or mode-less start of each with 409. An entry
+// whose op has since declared writes or a preview of its own is refused, so
+// the list is deleted from rather than left to shadow the declaration.
+func TestOpsV3_WritesWithoutPreviewAreLiveOnly(t *testing.T) {
+	require.Len(t, writesWithoutPreview, 5, "the list changed; update this count with the owner decision it carries")
+	srv, _, _ := bootRegisteredOpIDs(t)
+	defs := map[string]opsv3.DefInfo{}
+	for _, d := range (&opsV3Defs{reg: srv.opRegistry}).ListDefs() {
+		defs[d.ID] = d
+	}
+	for id, why := range writesWithoutPreview {
+		require.NotEmpty(t, why, "%s: say what it writes", id)
+		od, ok := srv.opRegistry.Def(id)
+		require.True(t, ok, "writesWithoutPreview lists %s, which is not registered; delete the entry", id)
+		require.False(t, canWrite(od), "%s now declares what it writes; delete its writesWithoutPreview entry and give it a ledger line", id)
+		require.True(t, od.Preview.IsZero(), "%s now declares a preview; delete its writesWithoutPreview entry", id)
+		d := defs[id]
+		require.Equal(t, "adapted", d.Kind, id)
+		require.True(t, d.Writer, "%s: v3 must treat it as a writer", id)
+		require.False(t, d.HasPreview(), "%s: v3 must show no preview", id)
+		_, alsoReadOnly := readOnlyByDeclaration[id]
+		require.False(t, alsoReadOnly, "%s is in both writesWithoutPreview and readOnlyByDeclaration", id)
+	}
+
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	routed := 0
+	for id := range writesWithoutPreview {
+		if _, ok := s.opRegistry.Def(id); !ok {
+			continue // not wired on the slim test server; the catalog checks above cover it
+		}
+		routed++
+		for _, body := range []string{`{"mode":"preview"}`, `{}`, `{"mode":"preview","params":{"dry_run":true}}`} {
+			req := httptest.NewRequest(http.MethodPost, "/api/v3/ops/defs/"+id+"/runs", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			s.router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusConflict, rec.Code, "%s %s: %s", id, body, rec.Body.String())
+		}
+	}
+	require.Positive(t, routed, "no listed op is wired on the test server; the router check did not run")
 }
 
 // TestOpsV3Routes_NoPreviewOpRefusesPreview drives the real router: a
