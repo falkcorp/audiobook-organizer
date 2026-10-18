@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_replay_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9e3a6d12-7c48-4b05-a1f9-2d8e5b70c364
 // last-edited: 2026-10-18
 
@@ -140,13 +140,12 @@ func replayAfterUnrecordedUndo(t *testing.T, mode string, lostApplied bool) {
 
 	re, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err, "the re-run finishes the undo")
-	if lostApplied && mode == "listened to the survivor since" {
-		// A replay that skips the survivor on its put-back marker says so.
-		require.Len(t, re.Warnings, 1, "%v", re.Warnings)
-		require.Contains(t, re.Warnings[0], "was put back by an earlier run of this undo and listened to since; left as is")
-	} else {
-		require.Empty(t, re.Warnings, "the re-run reports no put-back it did not make")
-	}
+	// A replay that skips the survivor on its put-back marker reports
+	// nothing: the marker records that the put-back landed, so the
+	// listening since is the user's own (round 6 of the #4064 review; it
+	// used to warn). The marker-without-landed-record case that still
+	// warns is TestRev6_LandedMarkerWriteFailureFallsBackToTheWarning.
+	require.Empty(t, re.Warnings, "the re-run reports no put-back it did not make")
 	require.Empty(t, re.RestoredBooks)
 	require.Zero(t, re.FilesMoved)
 	for _, id := range []string{f.survivor, f.absA, f.absB} {
