@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.28.3
+// version: 1.28.4
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1165,6 +1165,31 @@ func (ms *Service) restoreSurvivorFileNumbers(j *CombineJournal, fm CombineFileM
 		return fmt.Errorf("restore disc/track of survivor file %s: %w", f.ID, err)
 	}
 	return nil
+}
+
+// primaryAuthorOf picks the book row's AuthorID from the author links left
+// on a book: the first, in position order, whose role names the book's
+// author ("author", "primary", or an unlabelled older row), and nil when
+// none does. A narrator, editor or co-author link is never made the primary
+// author: the fill-empty undo used to take whichever link came first, which
+// could be any of them.
+func primaryAuthorOf(links []database.BookAuthor) *int {
+	var best *database.BookAuthor
+	for i := range links {
+		switch strings.ToLower(strings.TrimSpace(links[i].Role)) {
+		case "author", "primary", "":
+		default:
+			continue
+		}
+		if best == nil || links[i].Position < best.Position {
+			best = &links[i]
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	id := best.AuthorID
+	return &id
 }
 
 func strPtrIs(p *string, v string) bool { return p != nil && *p == v }
@@ -2398,10 +2423,7 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			if f.AuthorID != nil {
 				if b.AuthorID != nil && *b.AuthorID == *f.AuthorID {
 					b.AuthorID, changed, authorsCleared = nil, true, true
-					if len(remaining) > 0 {
-						id := remaining[0].AuthorID
-						b.AuthorID = &id
-					}
+					b.AuthorID = primaryAuthorOf(remaining)
 				} else {
 					res.Warnings = append(res.Warnings, "survivor author changed after the merge; left as is")
 				}

@@ -1,7 +1,7 @@
 // file: internal/database/metadata_field_locks.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 0d1a2cd0-a75c-4990-bb1f-bac01864e50c
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package database
 
@@ -180,6 +180,20 @@ func RecordUserOverrides(store UserOverrideRecorder, bookID string, values map[s
 	}
 	unlock := LockMetadataState(bookID)
 	defer unlock()
+	return RecordUserOverridesLocked(store, bookID, values)
+}
+
+// RecordUserOverridesLocked is RecordUserOverrides for a caller that already
+// holds LockMetadataState(bookID) (the lock is not reentrant), so it can
+// read back the rows written, or act on them, under the same hold: the
+// combine override journals the lock rows its write left
+// (merge.Service.recordOverrideLocks), and a writer between the write and a
+// read taken after the lock was released would be journaled as the
+// combine's.
+func RecordUserOverridesLocked(store UserOverrideRecorder, bookID string, values map[string]any) error {
+	if store == nil || bookID == "" || len(values) == 0 {
+		return nil
+	}
 	if _, err := MigrateLegacyMetadataState(store, bookID); err != nil {
 		return fmt.Errorf("migrate metadata state for %s: %w", bookID, err)
 	}

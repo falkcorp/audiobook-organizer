@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.60.1
+// version: 1.60.2
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2473,10 +2473,8 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 			if plan.Applied.Narrator != "" {
 				userSet[database.FieldKeyNarrator] = plan.Applied.Narrator
 			}
-			if err := database.RecordUserOverrides(ms.db, fresh.ID, userSet); err != nil {
+			if err := ms.recordOverrideLocks(fresh.ID, plan, userSet, database.FieldKeyTitle, database.FieldKeyNarrator); err != nil {
 				slog.Warn("combine override lock rows", "id", fresh.ID, "err", err)
-			} else {
-				ms.noteOverrideLocksAfter(fresh.ID, plan, database.FieldKeyTitle, database.FieldKeyNarrator)
 			}
 		}
 	}
@@ -2556,14 +2554,28 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		dropAuthor(why)
 		return warnings
 	}
-	if err := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
+	if err := ms.recordOverrideLocks(b.ID, plan, map[string]any{
 		database.FieldKeyAuthorName: plan.Applied.Author,
-	}); err != nil {
+	}, database.FieldKeyAuthorName); err != nil {
 		slog.Warn("combine override author lock row", "id", b.ID, "err", err)
-	} else {
-		ms.noteOverrideLocksAfter(b.ID, plan, database.FieldKeyAuthorName)
 	}
 	return warnings
+}
+
+// recordOverrideLocks writes the override's lock rows for values
+// (database.RecordUserOverridesLocked) and records in plan.FieldStatesAfter
+// what that write left for fields (noteOverrideLocksAfter), both under one
+// hold of the book's metadata-state lock (database.LockMetadataState), the
+// lock every lock-row writer takes. The read-back used to follow the write
+// after the lock was released, so a lock another writer set in between was
+// journaled as the combine's, and the undo would have removed it.
+func (ms *Service) recordOverrideLocks(bookID string, plan *CombineOverrideUndo, values map[string]any, fields ...string) error {
+	defer database.LockMetadataState(bookID)()
+	if err := database.RecordUserOverridesLocked(ms.db, bookID, values); err != nil {
+		return err
+	}
+	ms.noteOverrideLocksAfter(bookID, plan, fields...)
+	return nil
 }
 
 // noteOverrideLocksAfter records in plan.FieldStatesAfter the lock rows the
@@ -2571,7 +2583,8 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 // back from the store; the caller re-journals the plan. The undo restores a
 // lock row only while it still holds this (restoreOverrideLocks). A failed
 // read records nothing: the undo then compares with what the lock write
-// writes, which is the same lock.
+// writes, which is the same lock. Called with the book's metadata-state lock
+// held (recordOverrideLocks).
 func (ms *Service) noteOverrideLocksAfter(bookID string, plan *CombineOverrideUndo, fields ...string) {
 	states, err := ms.db.GetMetadataFieldStates(bookID)
 	if err != nil {

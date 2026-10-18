@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
 // last-edited: 2026-10-18
 
@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	ulid "github.com/oklog/ulid/v2"
 )
 
 // Round-5 review of #4064: regression tests for the survivor put-back's
@@ -319,4 +320,103 @@ func TestRev5_JournalWithoutFollowIDKeepsTheTimestampMarkerKey(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("%ss:a:u:%d", survivorReconcilePrefix, at.UnixNano()), survivorReconcileKey("s", "a", p))
 	p.FollowID = "F1"
 	require.Equal(t, survivorReconcilePrefix+"s:a:u:f:F1", survivorReconcileKey("s", "a", p))
+}
+
+// lockRaceStore starts another lock-row writer right after the combine's
+// lock write, as the combine reads its lock rows back.
+type lockRaceStore struct {
+	*database.PebbleStore
+	book    string
+	armed   bool
+	started bool
+	done    chan struct{}
+}
+
+func (s *lockRaceStore) UpsertMetadataFieldState(st *database.MetadataFieldState) error {
+	err := s.PebbleStore.UpsertMetadataFieldState(st)
+	if st.BookID == s.book && !s.started {
+		s.armed = true
+	}
+	return err
+}
+
+func (s *lockRaceStore) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
+	if bookID == s.book && s.armed {
+		s.armed, s.started = false, true
+		go func() {
+			defer close(s.done)
+			_ = database.RecordUserOverrides(s.PebbleStore, bookID, map[string]any{database.FieldKeyTitle: "Someone Else"})
+		}()
+		// The other writer gets the lock at once unless the combine still
+		// holds it.
+		select {
+		case <-s.done:
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	return s.PebbleStore.GetMetadataFieldStates(bookID)
+}
+
+// NIT 1: the combine journals the lock row its own write left, not one a
+// writer set between that write and the read-back. The read-back used to run
+// after the metadata-state lock was released.
+func TestRev5_OverrideLockReadBackIsTheCombinesOwn(t *testing.T) {
+	store := setupTestStore(t).(*database.PebbleStore)
+	keep, gone := overrideBooks(t, store)
+	w := &lockRaceStore{PebbleStore: store, book: keep, done: make(chan struct{})}
+	ms := NewService(w)
+	res, err := ms.CombineBooksWithOptions([]string{keep, gone}, keep, &CombineOverride{Title: "Override T"}, CombineOptions{})
+	require.NoError(t, err)
+	require.True(t, w.started, "the other writer ran")
+	<-w.done
+	j, err := ms.GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	require.Equal(t, "Override T", lockValue(t, j.Override.FieldStatesAfter[database.FieldKeyTitle]), "the journal holds the combine's lock")
+	require.Equal(t, "Someone Else", lockValue(t, lockOf(t, store, keep, database.FieldKeyTitle)), "the other writer's lock landed after")
+}
+
+// NIT 2: the fill-empty undo takes the author link it filled back off the
+// survivor and sets the book row's AuthorID from the links left. It used to
+// take the first link whatever its role; a narrator credit added since
+// became the book's primary author.
+func TestRev5_FillEmptyUndoPicksAnAuthorLinkForAuthorID(t *testing.T) {
+	store := setupTestStore(t).(*database.PebbleStore)
+	filled, err := store.CreateAuthor("Filled Writer")
+	require.NoError(t, err)
+	narrator, err := store.CreateAuthor("Some Narrator")
+	require.NoError(t, err)
+	later, err := store.CreateAuthor("Later Writer")
+	require.NoError(t, err)
+	keep := ulid.Make().String()
+	_, err = store.CreateBook(&database.Book{ID: keep, Title: "Keep", Format: "mp3", FilePath: "/tmp/rev5/keep.mp3", AuthorID: &filled.ID})
+	require.NoError(t, err)
+	// The merge filled the empty author; since then a narrator credit (first)
+	// and another author were added.
+	require.NoError(t, store.SetBookAuthors(keep, []database.BookAuthor{
+		{BookID: keep, AuthorID: narrator.ID, Role: "narrator", Position: 0},
+		{BookID: keep, AuthorID: filled.ID, Role: "author", Position: 1},
+		{BookID: keep, AuthorID: later.ID, Role: "author", Position: 2},
+	}))
+	j := NewCombineJournal(keep)
+	j.Status = CombineJournalApplied
+	j.StepJournaled = true
+	j.FilledEmpty = &CombineFillEmpty{AuthorID: &filled.ID, Authors: []database.BookAuthor{{BookID: keep, AuthorID: filled.ID, Role: "author"}}}
+	require.NoError(t, WriteCombineJournal(store, j))
+
+	_, err = NewService(store).UndoCombine(j.ID)
+	require.NoError(t, err)
+	b, err := store.GetBookByID(keep)
+	require.NoError(t, err)
+	require.NotNil(t, b.AuthorID)
+	require.Equal(t, later.ID, *b.AuthorID, "the author link left, not the narrator credit")
+	links, err := store.GetBookAuthors(keep)
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+}
+
+func TestRev5_PrimaryAuthorOfSkipsNonAuthorRoles(t *testing.T) {
+	require.Nil(t, primaryAuthorOf([]database.BookAuthor{{AuthorID: 1, Role: "narrator"}, {AuthorID: 2, Role: "co-author", Position: 1}}))
+	got := primaryAuthorOf([]database.BookAuthor{{AuthorID: 1, Role: "narrator"}, {AuthorID: 3, Role: "Author ", Position: 2}, {AuthorID: 2, Role: "", Position: 1}})
+	require.NotNil(t, got)
+	require.Equal(t, 2, *got, "the lowest position among author-role links")
 }
