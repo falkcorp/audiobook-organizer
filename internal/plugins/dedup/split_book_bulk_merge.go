@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/split_book_bulk_merge.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 3f8eb2e1-b4b7-4d83-b176-fc427cc5d98c
 // last-edited: 2026-10-18
 
@@ -15,6 +15,7 @@ import (
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -61,6 +62,7 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 		candidateStore = dedupengine.NewSplitBookStore(p.embeddingStore.PebbleDB())
 	}
 
+	opID := opsregistry.ReporterOpID(reporter)
 	progress := sdk.NewProgress(reporter, len(params.Items))
 	progress.Start("Processing reviewed split-book candidates...")
 	refusedITunes := 0
@@ -79,7 +81,10 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 				srcIDs = append(srcIDs, bookID)
 			}
 		}
-		result, err := dedupengine.MergeSplitBookCluster(p.store, item.KeepID, srcIDs, item.SuggestedTitle)
+		// Each merge journals its undo pointer under this run, so reverting
+		// the op undoes every merge of the batch.
+		result, err := dedupengine.MergeSplitBookClusterWithOptions(p.store, item.KeepID, srcIDs, item.SuggestedTitle,
+			dedupengine.SplitMergeOptions{OperationID: opID})
 		if errors.Is(err, merge.ErrITunesProtected) {
 			refusedITunes++
 			reporter.Logger().Warn("split-book candidate merge refused: a book has a file under the active iTunes library",

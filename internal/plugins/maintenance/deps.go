@@ -924,8 +924,11 @@ type ScanController interface {
 // maintenance plugin never imports internal/merge or internal/server.
 type BookMerger interface {
 	// MergeBooks merges bookIDs (which must include primaryID) into primaryID and
-	// returns the number of records soft-deleted as losers.
-	MergeBooks(bookIDs []string, primaryID string) (mergedCount int, err error)
+	// returns the number of records soft-deleted as losers. opID is the calling
+	// operation: a merge that moves version-group siblings journals the undo
+	// pointer to its sibling-move journal under it, so reverting the op puts
+	// them back (merge.MergeOptions.OperationID).
+	MergeBooks(opID string, bookIDs []string, primaryID string) (mergedCount int, err error)
 }
 
 // LibraryCloner clones an iTunes-only book into the library root as a new

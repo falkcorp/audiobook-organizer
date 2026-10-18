@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal_db_resolve_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b04ad264-d893-44f7-bd8c-d7f85f1b2385
-// last-edited: 2026-09-19
+// last-edited: 2026-10-18
 
 package reconcile
 
@@ -54,7 +54,7 @@ func TestResolveAmbiguousByDB_UnreadablePrintIsUnknownNotMerge(t *testing.T) {
 				mergeReads.Add(1)
 				return nil, nil
 			}
-			src, merged := resolveAmbiguousByDB(context.Background(), m, []string{"/a.m4b", "/b.m4b"})
+			src, merged := resolveAmbiguousByDB(context.Background(), m, "", []string{"/a.m4b", "/b.m4b"})
 			if tc.wantMerge {
 				if mergeReads.Load() == 0 {
 					t.Fatal("control: identical prints never reached the merge path; fixture is vacuous")

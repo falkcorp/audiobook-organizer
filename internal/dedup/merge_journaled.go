@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package dedup
 
@@ -209,8 +209,8 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 		// them); the sibling journal is the undo for those moves.
 		var partial *merge.PartialMergeError
 		if errors.As(mergeErr, &partial) && partial.SiblingJournalID != "" {
-			journaledMergeLog.Error("merge failed part way; undo its sibling moves with sibling-move journal %s (candidate=%d version_group=%s moved_siblings=%d)",
-				logger.SanitizeLogValue(partial.SiblingJournalID), candidateID,
+			journaledMergeLog.Error("merge failed part way; undo its sibling moves by reverting operation %s, which names sibling-move journal %s (candidate=%d version_group=%s moved_siblings=%d)",
+				logger.SanitizeLogValue(partial.SiblingOperationID), logger.SanitizeLogValue(partial.SiblingJournalID), candidateID,
 				logger.SanitizeLogValue(partial.VersionGroupID), len(partial.MovedSiblings))
 		}
 		return nil, journalKeys, fmt.Errorf("merge-journaled: merge books: %w", mergeErr)
@@ -251,10 +251,11 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			// The provisional entry stands and UnmergeAuto refuses it (it
 			// records no snapshot and no siblings); the loser is still
 			// restorable from the trash, and the siblings that left with it
-			// through the sibling-move journal logged here.
+			// through the sibling-move journal logged here (reverting the
+			// operation logged with it).
 			slog.Error("merge-journaled: patch journal entry failed (provisional entry stands; UnmergeAuto will refuse it)",
 				"candidate", candidateID, "journal", journalKeys[i], "loser", loserID,
-				"sibling_journal", result.SiblingJournalID, "siblings", len(sibs), "err", err)
+				"sibling_journal", result.SiblingJournalID, "sibling_operation", result.SiblingOperationID, "siblings", len(sibs), "err", err)
 		}
 	}
 

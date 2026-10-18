@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -595,6 +595,9 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 	type mergeOutcome struct {
 		SuggestionID string `json:"suggestion_id"`
 		merge.FlagOutcome
+		// SiblingOperationID: when the merge carried version-group siblings
+		// into its group, POST /operations/:id/revert with it puts them back.
+		SiblingOperationID string `json:"sibling_operation_id,omitempty"`
 	}
 	merges := []mergeOutcome{}
 
@@ -611,7 +614,11 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 				var res *merge.Result
 				res, applyErr = ms.MergeBooks(suggestion.BookIDs, suggestion.PrimaryID)
 				if applyErr == nil {
-					merges = append(merges, mergeOutcome{SuggestionID: suggestion.ID, FlagOutcome: res.FlagOutcome()})
+					out := mergeOutcome{SuggestionID: suggestion.ID, FlagOutcome: res.FlagOutcome()}
+					if res != nil {
+						out.SiblingOperationID = res.SiblingOperationID
+					}
+					merges = append(merges, out)
 				}
 			}
 

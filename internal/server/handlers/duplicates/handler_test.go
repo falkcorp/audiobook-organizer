@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // metadata-fetch-service / operations-registry deps are generated mocks; the
@@ -165,13 +165,17 @@ func assertReturnsV2OpID(t *testing.T, w *httptest.ResponseRecorder) {
 func TestCombineBooks_OK(t *testing.T) {
 	h, d := newHandler(t)
 	d.merge.EXPECT().CombineBooks([]string{"b", "c", "a"}, "a", (*merge.CombineOverride)(nil)).Return(&merge.CombineResult{
-		PrimaryID: "a", FilesMoved: 3, BooksDeleted: 2,
+		PrimaryID: "a", FilesMoved: 3, BooksDeleted: 2, OperationID: "op-combine",
 	}, nil)
 	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b", "c"}).Return(2)
 	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
 		map[string]any{"keep_id": "a", "merge_ids": []string{"b", "c"}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	// The id POST /operations/:id/revert undoes the combine with.
+	if !strings.Contains(w.Body.String(), `"operation_id":"op-combine"`) {
+		t.Fatalf("response does not carry the combine's operation id: %s", w.Body.String())
 	}
 }
 

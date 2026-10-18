@@ -85,7 +85,9 @@ func (d fakeDeps) LatestReconcileScan() (ReconcileScan, error) {
 
 func (d fakeDeps) SplitBookCandidates() SplitBookCandidateRows { return d.splitCands }
 
-func (d fakeDeps) MergeBooks(bookIDs []string, primaryID string) (int, error) { return 0, nil }
+func (d fakeDeps) MergeBooks(opID string, bookIDs []string, primaryID string) (int, error) {
+	return 0, nil
+}
 
 // LibraryCloner (unused by these fakes; itunes_clone tests use their own).
 func (d fakeDeps) PlanLibraryClone(*database.Book, []database.BookFile) ([]string, error) {

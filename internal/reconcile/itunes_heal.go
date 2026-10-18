@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package reconcile
 
@@ -288,8 +288,10 @@ const acoustIDHealMinScore = 0.85
 //
 // If all candidates are acoustically identical (similarity ≥ 0.9), they are
 // duplicate books from the organize bug. MergeBooks collapses them and returns
-// the surviving path. Acoustically distinct candidates return ("", 0).
-func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates []string) (string, int) {
+// the surviving path. Acoustically distinct candidates return ("", 0). opID
+// is the heal operation the collapse's undo pointer is journaled under
+// (collapseHealDuplicates).
+func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, opID string, candidates []string) (string, int) {
 	if len(candidates) == 0 {
 		return "", 0
 	}
@@ -335,7 +337,7 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates 
 		}
 	}
 	if len(dupIDs) > 0 {
-		if err := collapseHealDuplicates(store, keepID, dupIDs); err != nil {
+		if err := collapseHealDuplicates(store, opID, keepID, dupIDs); err != nil {
 			// Returning ("", 0) already fails closed — this candidate stays
 			// unresolved and the heal falls through to its next layer rather
 			// than repointing at a collapse that never happened. What was
@@ -377,7 +379,11 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates 
 //
 // merge.Service queues no ITL removal here (no write-back batcher), which is
 // what the legacy path did too.
-func collapseHealDuplicates(store reconcileStore, keepID string, dupIDs []string) error {
+//
+// A collapse that moves version-group siblings journals the undo pointer to
+// its sibling-move journal under opID, the heal operation, so reverting the
+// heal puts those siblings back (merge.MergeOptions.OperationID).
+func collapseHealDuplicates(store reconcileStore, opID, keepID string, dupIDs []string) error {
 	ids := []string{keepID}
 	for _, id := range dupIDs {
 		b, err := store.GetBookByID(id)
@@ -395,6 +401,7 @@ func collapseHealDuplicates(store reconcileStore, keepID string, dupIDs []string
 	_, err := merge.NewService(store).MergeBooksWithOptions(ids, keepID, merge.MergeOptions{
 		CarryITunesFields:      true,
 		RefuseSharedAudioPaths: true,
+		OperationID:            opID,
 	})
 	return err
 }
@@ -798,6 +805,8 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 	}
 
 	log := reporter.Logger()
+	// The duplicate collapse journals its undo pointers under this run.
+	opID := registry.ReporterOpID(reporter)
 	log.Info("itunes-heal: parsing iTunes XML", "path", cfg.LibraryReadPath)
 
 	allTracks, err := ParseITunesXML(cfg.LibraryReadPath)
@@ -911,7 +920,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 			// Layer 2: stored fingerprint comparison — no fpcalc.
 			if src == "" && len(candidates) > 0 && store != nil {
 				var n int
-				src, n = resolveAmbiguousByDB(ctx, store, candidates)
+				src, n = resolveAmbiguousByDB(ctx, store, opID, candidates)
 				merged.Add(int64(n))
 			}
 

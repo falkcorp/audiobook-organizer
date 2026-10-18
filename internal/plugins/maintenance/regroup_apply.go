@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -204,7 +204,7 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 		}
 		slog.Info("regroup multidisc apply: collapsed folder",
 			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
-			"files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
+			"undo_operation", res.OperationID, "files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
 
 		// Stamp the merged book's files with the per-file disc/track order the classifier
 		// derived. Best-effort: the combine (the actual merge) already committed, so a
@@ -725,7 +725,8 @@ func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candi
 		}
 		slog.Info("regroup duplicate-of apply: merged debris into canonical book",
 			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
-			"debris_merged", len(present), "files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
+			"undo_operation", res.OperationID, "debris_merged", len(present), "files_moved", res.FilesMoved,
+			"books_soft_deleted", res.BooksDeleted)
 		return nil
 	}
 }

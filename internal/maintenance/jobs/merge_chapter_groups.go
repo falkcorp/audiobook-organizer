@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package jobs
 
@@ -541,7 +541,9 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chap
 		return nil
 	}
 	mres, merr := dedup.MergeSplitBookClusterWithOptions(ds, sel.PrimaryBookID, out.SourceBookIDs, suggested,
-		dedup.SplitMergeOptions{OrderByBooks: true, FillEmpty: true, Precheck: precheck})
+		// OperationID: the merge journals its undo pointer under this run, so
+		// reverting the op undoes every chapter merge it made.
+		dedup.SplitMergeOptions{OrderByBooks: true, FillEmpty: true, Precheck: precheck, OperationID: opID})
 	var stepErr *chapterStepError
 	if errors.As(merr, &stepErr) {
 		out.Status = stepErr.status
