@@ -1,5 +1,5 @@
 // file: internal/merge/state_follow_followups_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1056ccb5-89ca-4487-9ff7-533be24d6942
 // last-edited: 2026-10-18
 
@@ -273,19 +273,32 @@ func TestUndoSiblingMove_SurvivorMergedAwayFollowsItsChain(t *testing.T) {
 // With the survivor gone (trashed, no live end to its chain) and the loser
 // still in the trash, nothing live can take the loser's state, so the undo
 // leaves it on the flag holder, says so, keeps the follow open (not Undone),
-// and queues no pending repair onto the dead survivor. The loser purged as
-// well is the same: the state stays on the holder.
+// and queues no pending repair onto the dead survivor. The survivor purged
+// (loser in the trash, or purged as well) is the same: the state stays on
+// the holder.
 func TestUndoSiblingMove_NoLiveDestination_StateStaysOnHolder(t *testing.T) {
-	for _, purgeLoser := range []bool{false, true} {
-		t.Run(map[bool]string{false: "loser in the trash", true: "loser purged"}[purgeLoser], func(t *testing.T) {
+	cases := []struct {
+		name                      string
+		purgeSurvivor, purgeLoser bool
+	}{
+		{"survivor and loser in the trash", false, false},
+		{"survivor purged, loser in the trash", true, false},
+		{"survivor and loser purged", true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			m := newFlagHolderMerge(t)
 			res := m.merge(t)
 			require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.ls), "the merge carried l's state to the flag holder")
-			if purgeLoser {
+			if tc.purgeSurvivor {
 				// A purge refuses a book that still owns rows: hand them to
 				// another book first, as a later combine would.
 				other := m.f.Book(t, vptest.Spec{ID: "m", Group: "M", Primary: "true"})
-				for _, id := range []string{m.k, m.l} {
+				purge := []string{m.k}
+				if tc.purgeLoser {
+					purge = append(purge, m.l)
+				}
+				for _, id := range purge {
 					files, err := m.f.S.GetBookFiles(id)
 					require.NoError(t, err)
 					var ids []string
