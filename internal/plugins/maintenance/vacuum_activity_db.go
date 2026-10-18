@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/vacuum_activity_db.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fa1a4efa-5368-45f0-bccb-6fda6360e461
 // last-edited: 2026-10-18
 
@@ -54,15 +54,18 @@ type VacuumActivityDBResult struct {
 //
 // DISK SPACE AND TEMP DIRECTORY. VACUUM rewrites the whole database. It builds
 // the compacted copy in a temp file and then copies it back through the WAL, so
-// the peak EXTRA space is about TWICE the compacted size (FileBytes minus the
-// free pages), not the file's size: the rebuilt database passes through the -wal
+// the peak EXTRA space is about TWICE the compacted size (the pages in use,
+// (page_count - freelist_count) * page_size; the main file's size is not used
+// because recent pages live in the -wal), not the file's size: the rebuilt database passes through the -wal
 // on the database's volume until the post-vacuum TRUNCATE returns it. Before it
 // starts, VacuumActivity pins SQLite's temp directory to the database's own
 // directory (otherwise the temp copy lands in TMPDIR, the root pool on prod: the
 // 2026-09-09 outage) and REFUSES, fail closed, if that pin fails or if free space
 // there is below required_bytes = 2 x compacted + max(1 GiB, 10%). The preview
 // reports free_bytes, required_bytes and would_refuse so the answer is known
-// before going live.
+// before going live. ZFS snapshots that hold the database's old blocks can push
+// the real peak past 2x and make the net reclaim negative (the old blocks stay
+// pinned), so purge snapshots first.
 //
 // STALLS WHILE IT RUNS. A live VACUUM holds the activity store's single writer
 // connection for its whole run. Synchronous callers of SQLActivityStore.Record
@@ -72,8 +75,9 @@ type VacuumActivityDBResult struct {
 // stall and some activity log lines may be dropped while it runs. Owner decision
 // 2026-10-18: accept that and say so; the follow-up that gives Record a context
 // or a deferral is todo.d/2026-10-18-activity-record-nonblocking.md. As cheap
-// protection a live run refuses to start while a library scan or a metadata
-// fetch/apply/write-back op is queued or running. That check is POINT-IN-TIME,
+// protection a live run refuses to start while any op in vacuumBlockingDefIDs (library
+// scan, import, metadata fetch/apply/write-back, version-twin metadata) is queued
+// or running; a metadata apply started from the UI during the run still stalls. That check is POINT-IN-TIME,
 // not a lock (an op enqueued a moment later is not caught), the same shape as
 // dedupe-book-file-rows' scan guard; a preview is read-only and always allowed.
 //
@@ -101,7 +105,8 @@ func (p *Plugin) vacuumActivityDBDef() sdk.OperationDef {
 			"Preview unless dry_run=false: a preview reports file size, page and free-page counts, the reclaimable estimate and a free-space check. " +
 			"A live run needs about twice the compacted size free on the database's volume and refuses without it. " +
 			"While it runs scans and metadata applies stall and some activity log lines may be dropped; " +
-			"it refuses to start during a library scan or metadata fetch/apply.",
+			"it refuses to start while the listed scan and metadata ops are active, but a metadata apply started from the UI during the run will stall until it finishes. " +
+			"ZFS snapshots holding the database's old blocks can push peak usage past 2x and make the net reclaim negative, so purge snapshots first.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -169,6 +174,7 @@ func (p *Plugin) runVacuumActivityDB(ctx context.Context, raw json.RawMessage, r
 			"PREVIEW: activity database is %d bytes (+%d bytes WAL); %d of %d pages are free, about %d bytes reclaimable. "+
 				"Disk check: free_bytes=%d required_bytes=%d would_refuse=%t, %s. "+
 				"On a live run, scans and metadata applies stall and some activity log lines may be dropped while it runs. "+
+				"ZFS snapshots holding the database's old blocks can push peak usage past 2x and make the net reclaim negative, so purge snapshots first. "+
 				"Rerun with dry_run=false to vacuum.",
 			rep.Before.FileBytes, rep.Before.WALBytes, rep.Before.FreelistCount, rep.Before.PageCount, rep.Before.ReclaimableBytes,
 			rep.Before.FreeBytes, rep.Before.RequiredBytes, rep.Before.WouldRefuse, verdict)
@@ -200,12 +206,15 @@ func (p *Plugin) runVacuumActivityDB(ctx context.Context, raw json.RawMessage, r
 // whole-library write pressure) a live VACUUM would stall: the library scan and
 // the metadata fetch, apply and write-back ops.
 var vacuumBlockingDefIDs = map[string]bool{
-	"library.scan":                true,
-	"library.folder-auto-scan":    true,
-	"library.bulk-metadata-fetch": true,
-	"library.bulk-write-back":     true,
-	"metadata.batch-apply-cached": true,
-	"metadata.batch-save":         true,
+	"library.scan":                      true,
+	"library.import":                    true, // PerformScan -> OnBookScanned -> synchronous Record
+	"metadata.apply-when-scanned":       true,
+	"maintenance.version-twin-metadata": true,
+	"library.folder-auto-scan":          true,
+	"library.bulk-metadata-fetch":       true,
+	"library.bulk-write-back":           true,
+	"metadata.batch-apply-cached":       true,
+	"metadata.batch-save":               true,
 }
 
 // refuseWhileActivityWritersActive fails closed: an unreadable queue is not

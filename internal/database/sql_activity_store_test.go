@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9f1c4b70-3d21-4a58-b0e6-1c8a2f5d6e30
 // last-edited: 2026-10-12
 
@@ -22,6 +22,9 @@ func newTestSQLStore(t *testing.T) *SQLActivityStore {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	// Generous free space, so live-vacuum tests do not depend on the CI runner
+	// having the 1 GiB floor free; the refusal tests override it.
+	s.freeBytes = func(string) (uint64, error) { return 1 << 50, nil }
 	return s
 }
 
