@@ -1,7 +1,7 @@
 // file: internal/server/wire_entities_routes.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e5f6a7b8-c9d0-1234-efab-567890123456
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package server
 
@@ -44,8 +44,8 @@ func (s *Server) wireEntitiesRoutes(
 
 	protected.GET("/narrators", s.perm(auth.PermLibraryView), entitiesH.ListNarrators)
 	protected.GET("/narrators/count", s.perm(auth.PermLibraryView), entitiesH.CountNarrators)
-	protected.GET("/audiobooks/:id/narrators", s.perm(auth.PermLibraryView), entitiesH.ListAudiobookNarrators)
-	protected.PUT("/audiobooks/:id/narrators", s.perm(auth.PermLibraryEditMetadata), entitiesH.SetAudiobookNarrators)
+	protected.GET("/audiobooks/:id/narrators", s.perm(auth.PermLibraryView), gone(""))
+	protected.PUT("/audiobooks/:id/narrators", s.perm(auth.PermLibraryEditMetadata), gone(""))
 
 	protected.GET("/series", s.perm(auth.PermLibraryView), entitiesH.ListSeries)
 	protected.GET("/series/count", s.perm(auth.PermLibraryView), entitiesH.CountSeries)

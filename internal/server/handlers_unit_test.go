@@ -1164,60 +1164,6 @@ func TestHandler_CountNarrators_Success(t *testing.T) {
 	assert.Equal(t, float64(3), envelope.Data["count"])
 }
 
-// =============== listAudiobookNarrators ===============
-
-func TestHandler_ListAudiobookNarrators_Success(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	narrators := []database.BookNarrator{
-		{BookID: "b1", NarratorID: 1, Role: "narrator"},
-	}
-	mockStore.EXPECT().GetBookNarrators("b1").Return(narrators, nil)
-
-	router.GET("/audiobooks/:id/narrators", newEntitiesHandler(srv).ListAudiobookNarrators)
-
-	req := httptest.NewRequest("GET", "/audiobooks/b1/narrators", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestHandler_ListAudiobookNarrators_Empty(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	mockStore.EXPECT().GetBookNarrators("b2").Return(nil, nil)
-
-	router.GET("/audiobooks/:id/narrators", newEntitiesHandler(srv).ListAudiobookNarrators)
-
-	req := httptest.NewRequest("GET", "/audiobooks/b2/narrators", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-// =============== setAudiobookNarrators ===============
-
-func TestHandler_SetAudiobookNarrators_Success(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	narrators := []database.BookNarrator{
-		{BookID: "b1", NarratorID: 1, Role: "narrator", Position: 0},
-	}
-	mockStore.EXPECT().SetBookNarrators("b1", narrators).Return(nil)
-
-	router.PUT("/audiobooks/:id/narrators", newEntitiesHandler(srv).SetAudiobookNarrators)
-
-	body, _ := json.Marshal(narrators)
-	req := httptest.NewRequest("PUT", "/audiobooks/b1/narrators", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
 // =============== deleteBackup (path traversal guard) ===============
 
 func TestHandler_DeleteBackup_PathTraversal(t *testing.T) {

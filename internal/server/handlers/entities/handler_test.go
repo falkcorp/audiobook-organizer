@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 
 package entities_test
 
@@ -831,29 +831,6 @@ func TestCountNarrators(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestListAudiobookNarrators(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{{BookID: "b1"}}, nil)
-	c, w := newCtx(http.MethodGet, "/audiobooks/b1/narrators", "", idParam("b1"))
-	h.ListAudiobookNarrators(c)
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestSetAudiobookNarrators(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().SetBookNarrators("b1", mock.Anything).Return(nil)
-	c, w := newCtx(http.MethodPut, "/audiobooks/b1/narrators", `[{"book_id":"b1","narrator_id":3}]`, idParam("b1"))
-	h.SetAudiobookNarrators(c)
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestSetAudiobookNarrators_BadJSON(t *testing.T) {
-	h, _ := newHandler(t)
-	c, w := newCtx(http.MethodPut, "/audiobooks/b1/narrators", `not-json`, idParam("b1"))
-	h.SetAudiobookNarrators(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
 // ── helpers ──────────────────────────────────────────────────────────────
 
 type errString string
@@ -1149,50 +1126,6 @@ func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
 	assert.Equal(t, 9, *(*wrote).AuthorID, "with no surviving author, AuthorID must fall back to Unknown Author")
 	require.NotNil(t, (*wrote).Author)
 	assert.Equal(t, 9, (*wrote).Author.ID, "the denormalized Author must agree with the new AuthorID")
-}
-
-// TestSetAudiobookNarrators_OmittedBookIDKeepsMemDBLive drives PUT
-// /audiobooks/:id/narrators with a body that omits book_id against a real,
-// warm PebbleStore. The handler binds client JSON straight through, so before
-// the store stamped BookID this stored rows memdb rejects, and every later
-// update of the book stopped reaching memdb.
-func TestSetAudiobookNarrators_OmittedBookIDKeepsMemDBLive(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	store, err := database.NewPebbleStore(t.TempDir())
-	require.NoError(t, err)
-	store.WaitForWarmup()
-	t.Cleanup(func() { _ = store.Close() })
-
-	book, err := store.CreateBook(&database.Book{Title: "Put Narrators", FilePath: "/entities/put-narrators"})
-	require.NoError(t, err)
-	narrator, err := store.CreateNarrator("Client Narrator")
-	require.NoError(t, err)
-
-	h := entities.New(store, nil, nil, nil,
-		cache.NewWithLimit[*audiobooks.AuthorWithCountListResponse]("authors-real", time.Hour, 1),
-		cache.NewWithLimit[*audiobooks.SeriesWithCountsResponse]("series-real", time.Hour, 1),
-		cache.NewWithLimit[gin.H]("dedup-real", time.Hour, 1),
-		nil)
-	c, w := newCtx(http.MethodPut, "/audiobooks/"+book.ID+"/narrators",
-		fmt.Sprintf(`[{"narrator_id":%d,"role":"narrator"}]`, narrator.ID), idParam(book.ID))
-	h.SetAudiobookNarrators(c)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	narrators, err := store.GetBookNarrators(book.ID)
-	require.NoError(t, err)
-	require.Len(t, narrators, 1)
-	require.Equal(t, book.ID, narrators[0].BookID)
-
-	full, err := store.GetBookByID(book.ID)
-	require.NoError(t, err)
-	full.Title = "Put Narrators (renamed)"
-	_, err = store.UpdateBook(book.ID, full)
-	require.NoError(t, err)
-	cores, err := store.GetAllBooksCore(0, 0)
-	require.NoError(t, err)
-	require.Len(t, cores, 1)
-	require.Equal(t, "Put Narrators (renamed)", cores[0].Title,
-		"memdb kept the old title: the book's memdb upsert aborted on its narrator rows")
 }
 
 // The split relink list includes the trash (GetBooksByAuthorIDForRelinkCore):
