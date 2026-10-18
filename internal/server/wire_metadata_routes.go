@@ -1,7 +1,7 @@
 // file: internal/server/wire_metadata_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0123-defa-456789012345
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package server
 
@@ -39,12 +39,15 @@ func (s *Server) wireMetadataRoutes(
 	protected.POST("/audiobooks/batch-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.BatchWriteBackAudiobooks)
 	protected.POST("/audiobooks/bulk-write-back", s.perm(auth.PermLibraryEditMetadata), metadataH.HandleBulkWriteBack)
 
-	// Global provider throttles. Reading is a view permission; clearing a hold
-	// resumes outbound calls to a provider that refused us, so it takes the
-	// same edit permission as a fetch.
+	// Global provider throttles. GET is the read-only diagnostic view (kept by
+	// owner decision D73). The two DELETE resets had no caller in the repo
+	// (01-P81f); they answer 410 Gone for one release (owner decision D9) and are
+	// then removed. They stay on the protected group behind their original edit
+	// permission, so an unauthenticated caller still gets 401, a read-only caller
+	// still gets 403, and only an allowed caller learns they are gone.
 	protected.GET("/metadata/providers/throttles", s.perm(auth.PermLibraryView), metadataH.ListProviderThrottles)
-	protected.DELETE("/metadata/providers/throttles", s.perm(auth.PermLibraryEditMetadata), metadataH.ClearAllProviderThrottles)
-	protected.DELETE("/metadata/providers/throttles/:id", s.perm(auth.PermLibraryEditMetadata), metadataH.ClearProviderThrottle)
+	protected.DELETE("/metadata/providers/throttles", s.perm(auth.PermLibraryEditMetadata), gone(""))
+	protected.DELETE("/metadata/providers/throttles/:id", s.perm(auth.PermLibraryEditMetadata), gone(""))
 
 	// Metadata-candidate feedback (thumbs-down / implicit thumbs-up on apply),
 	// kept as scoring training data. Recording a label is a metadata judgement,

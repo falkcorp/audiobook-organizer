@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops_throttle_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 11f72a9a-9bd0-4e67-925a-1e1b498f9baf
-// last-edited: 2026-09-03
+// last-edited: 2026-10-18
 
 package server
 
@@ -45,10 +45,8 @@ func throttleProvider(t *testing.T, id string, status int, body string) {
 
 func resetThrottles(t *testing.T) {
 	t.Helper()
-	if _, err := metadata.DefaultThrottleRegistry().ClearAll(); err != nil {
-		t.Fatalf("reset: %v", err)
-	}
-	t.Cleanup(func() { _, _ = metadata.DefaultThrottleRegistry().ClearAll() })
+	metadata.ResetThrottlesForTesting()
+	t.Cleanup(metadata.ResetThrottlesForTesting)
 }
 
 const quotaBody = `{"error":{"message":"Quota exceeded for quota metric 'Queries' and limit 'Queries per day'"}}`

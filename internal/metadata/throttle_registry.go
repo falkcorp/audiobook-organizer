@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle_registry.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0317e94d-7c76-4a4b-97a3-3cdfbf327945
-// last-edited: 2026-09-03
+// last-edited: 2026-10-18
 
 package metadata
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -322,14 +321,9 @@ func (r *ThrottleRegistry) RecordSuccess(providerID string, startedAt time.Time)
 		"provider", providerID, "reason", string(cur.Reason))
 }
 
-// Clear removes one hold (the manual reset).
-func (r *ThrottleRegistry) Clear(providerID string) error {
-	r.persistMu.Lock()
-	defer r.persistMu.Unlock()
-	return r.clearLocked(providerID)
-}
-
-// clearLocked is Clear's body; the caller must hold persistMu.
+// clearLocked removes one hold from memory and the store; the caller must hold
+// persistMu. RecordSuccess is its only caller: there is no manual reset any more
+// (the DELETE routes were retired in 01-P81f).
 func (r *ThrottleRegistry) clearLocked(providerID string) error {
 	r.mu.Lock()
 	delete(r.entries, providerID)
@@ -339,62 +333,6 @@ func (r *ThrottleRegistry) clearLocked(providerID string) error {
 		return nil
 	}
 	return store.DeleteProviderThrottle(providerID)
-}
-
-// ClearAll removes every hold, returning how many ACTIVE ones were cleared
-// (expired-but-unswept entries are removed too, but not counted).
-func (r *ThrottleRegistry) ClearAll() (int, error) {
-	r.persistMu.Lock()
-	defer r.persistMu.Unlock()
-
-	now := time.Now()
-	r.mu.Lock()
-	ids := make([]string, 0, len(r.entries))
-	active := 0
-	for id, t := range r.entries {
-		ids = append(ids, id)
-		if t.Active(now) {
-			active++
-		}
-	}
-	store := r.store
-	r.mu.Unlock()
-
-	// Delete from the STORE first, and keep in memory anything whose delete
-	// failed.
-	//
-	// Wiping memory first made a partial failure unrecoverable: the handler
-	// returned 500, the operator retried, the second ClearAll found an empty map
-	// and returned 200 with nothing to delete, and the orphaned rows came back on
-	// the next restart -- undoing a reset the operator had performed twice and
-	// been told had failed. The single-provider Clear never had this bug because
-	// it deletes unconditionally, so a retry reaches the row.
-	failed := make(map[string]bool)
-	var firstErr error
-	if store != nil {
-		for _, id := range ids {
-			if err := store.DeleteProviderThrottle(id); err != nil {
-				failed[id] = true
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-		}
-	}
-
-	r.mu.Lock()
-	for _, id := range ids {
-		if !failed[id] {
-			delete(r.entries, id)
-		}
-	}
-	r.mu.Unlock()
-
-	if firstErr != nil {
-		return active - len(failed), fmt.Errorf("cleared %d of %d provider throttles; %d failed (first: %w)",
-			len(ids)-len(failed), len(ids), len(failed), firstErr)
-	}
-	return active, nil
 }
 
 // truncateDetail bounds the stored provider message.

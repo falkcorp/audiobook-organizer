@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/exported.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 34fcf0d9-304d-4ce1-8020-bb03430c90a7
-// last-edited: 2026-06-03
+// last-edited: 2026-10-18
 
 // Exported HTTP entry points for the metadata-domain Handler. Each delegates to
 // the unexported *Impl method that holds the original handler body verbatim, so
@@ -72,9 +72,3 @@ func (h *Handler) HandleUpdateBookRating(c *gin.Context) { h.handleUpdateBookRat
 
 // ListProviderThrottles handles GET /api/v1/metadata/providers/throttles.
 func (h *Handler) ListProviderThrottles(c *gin.Context) { h.listProviderThrottlesImpl(c) }
-
-// ClearProviderThrottle handles DELETE /api/v1/metadata/providers/throttles/:id.
-func (h *Handler) ClearProviderThrottle(c *gin.Context) { h.clearProviderThrottleImpl(c) }
-
-// ClearAllProviderThrottles handles DELETE /api/v1/metadata/providers/throttles.
-func (h *Handler) ClearAllProviderThrottles(c *gin.Context) { h.clearAllProviderThrottlesImpl(c) }
