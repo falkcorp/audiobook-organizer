@@ -1,7 +1,7 @@
 // file: internal/server/itl_paths.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b8e6f52-4c1d-4e7a-9a63-5d2f8c1e7b40
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 //
 // Read-side helpers for the ITL endpoints that remain after iTunes write-back
 // was removed (owner decision 2026-10-07: iTunes is import-only). The ITL is
@@ -12,7 +12,6 @@ package server
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/gin-gonic/gin"
 )
@@ -31,15 +30,4 @@ func resolveITLPath(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	return itlPath, true
-}
-
-// itlPathMappings converts the configured iTunes path mappings into the itunes
-// package type, so an ITL location can be translated to a local path.
-func itlPathMappings() []itunes.PathMapping {
-	cfg := config.AppConfig.ITunes.PathMappings
-	out := make([]itunes.PathMapping, len(cfg))
-	for i, m := range cfg {
-		out[i] = itunes.PathMapping{From: m.From, To: m.To}
-	}
-	return out
 }

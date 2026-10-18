@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.48.3
+// version: 4.50.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-18
 
@@ -1853,10 +1853,13 @@ func (s *Server) setupRoutes() {
 				// PID-integrity: read-only census of duplicate book_file iTunes PIDs
 				// (a PID must identify exactly one row).
 				itunesGroup.GET("/pid-integrity", s.perm(auth.PermLibraryEditMetadata), s.pidIntegrityHandler)
-				// PID-repair: backfill the duplicates — keep the PID on one canonical
-				// row, clear it from the rest (DB rows only; no row/file deletion,
-				// no ITL write). dry_run=true previews.
-				itunesGroup.POST("/pid-repair", s.perm(auth.PermLibraryEditMetadata), s.pidRepairHandler)
+				// POST /pid-repair (clear duplicate PIDs on database rows) had no caller
+				// in the repo (01-P81k). It answers 410 Gone for one release (owner
+				// decision D9) and is then removed. It keeps its s.perm guard, so an
+				// unauthenticated caller still gets 401 and only an allowed caller
+				// learns it is gone. The read-only plan preview survives as
+				// `pid-census --repair`.
+				itunesGroup.POST("/pid-repair", s.perm(auth.PermLibraryEditMetadata), gone(""))
 
 				// ITL download (6.4): a read of the library file.
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))
