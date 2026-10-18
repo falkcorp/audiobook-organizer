@@ -4573,63 +4573,6 @@ func (_m *MockStore) EXPECT() *MockStore_Expecter {
 	return &MockStore_Expecter{mock: &_m.Mock}
 }
 
-// AddAuthorTag provides a mock function for the type MockStore
-func (_mock *MockStore) AddAuthorTag(authorID int, tag string) error {
-	ret := _mock.Called(authorID, tag)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AddAuthorTag")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(int, string) error); ok {
-		r0 = returnFunc(authorID, tag)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_AddAuthorTag_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddAuthorTag'
-type MockStore_AddAuthorTag_Call struct {
-	*mock.Call
-}
-
-// AddAuthorTag is a helper method to define mock.On call
-//   - authorID int
-//   - tag string
-func (_e *MockStore_Expecter) AddAuthorTag(authorID any, tag any) *MockStore_AddAuthorTag_Call {
-	return &MockStore_AddAuthorTag_Call{Call: _e.mock.On("AddAuthorTag", authorID, tag)}
-}
-
-func (_c *MockStore_AddAuthorTag_Call) Run(run func(authorID int, tag string)) *MockStore_AddAuthorTag_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 int
-		if args[0] != nil {
-			arg0 = args[0].(int)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_AddAuthorTag_Call) Return(err error) *MockStore_AddAuthorTag_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_AddAuthorTag_Call) RunAndReturn(run func(authorID int, tag string) error) *MockStore_AddAuthorTag_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // AddAuthorTagWithSource provides a mock function for the type MockStore
 func (_mock *MockStore) AddAuthorTagWithSource(authorID int, tag string, source string) error {
 	ret := _mock.Called(authorID, tag, source)
@@ -5157,63 +5100,6 @@ func (_c *MockStore_AddPlaylistItem_Call) Return(err error) *MockStore_AddPlayli
 }
 
 func (_c *MockStore_AddPlaylistItem_Call) RunAndReturn(run func(playlistID int, bookID int, position int) error) *MockStore_AddPlaylistItem_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// AddSeriesTag provides a mock function for the type MockStore
-func (_mock *MockStore) AddSeriesTag(seriesID int, tag string) error {
-	ret := _mock.Called(seriesID, tag)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AddSeriesTag")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(int, string) error); ok {
-		r0 = returnFunc(seriesID, tag)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_AddSeriesTag_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddSeriesTag'
-type MockStore_AddSeriesTag_Call struct {
-	*mock.Call
-}
-
-// AddSeriesTag is a helper method to define mock.On call
-//   - seriesID int
-//   - tag string
-func (_e *MockStore_Expecter) AddSeriesTag(seriesID any, tag any) *MockStore_AddSeriesTag_Call {
-	return &MockStore_AddSeriesTag_Call{Call: _e.mock.On("AddSeriesTag", seriesID, tag)}
-}
-
-func (_c *MockStore_AddSeriesTag_Call) Run(run func(seriesID int, tag string)) *MockStore_AddSeriesTag_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 int
-		if args[0] != nil {
-			arg0 = args[0].(int)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_AddSeriesTag_Call) Return(err error) *MockStore_AddSeriesTag_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_AddSeriesTag_Call) RunAndReturn(run func(seriesID int, tag string) error) *MockStore_AddSeriesTag_Call {
 	_c.Call.Return(run)
 	return _c
 }

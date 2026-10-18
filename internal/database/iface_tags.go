@@ -1,7 +1,7 @@
 // file: internal/database/iface_tags.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9129bad9-0aa9-4eda-82fb-b945f0393674
-// last-edited: 2026-09-11
+// last-edited: 2026-10-18
 
 package database
 
@@ -40,7 +40,6 @@ type AuthorTagReader interface {
 // AuthorTagWriter adds and removes tags on authors.
 type AuthorTagWriter interface {
 	// Author tags
-	AddAuthorTag(authorID int, tag string) error
 	AddAuthorTagWithSource(authorID int, tag, source string) error
 	RemoveAuthorTag(authorID int, tag string) error
 	RemoveAuthorTagsByPrefix(authorID int, prefix, source string) error
@@ -58,7 +57,6 @@ type SeriesTagReader interface {
 // SeriesTagWriter adds and removes tags on series.
 type SeriesTagWriter interface {
 	// Series tags
-	AddSeriesTag(seriesID int, tag string) error
 	AddSeriesTagWithSource(seriesID int, tag, source string) error
 	RemoveSeriesTag(seriesID int, tag string) error
 	RemoveSeriesTagsByPrefix(seriesID int, prefix, source string) error

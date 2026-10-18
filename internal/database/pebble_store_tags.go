@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_tags.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c2ad6d2b-75c3-446d-9f67-08cc517050e2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package database
 
@@ -629,10 +629,6 @@ func (p *PebbleStore) pebbleEntitiesByTag(ks pebbleTagKeyspace, tag string) ([]s
 	return ids, nil
 }
 
-func (p *PebbleStore) AddAuthorTag(authorID int, tag string) error {
-	return p.pebbleAddTag(authorTagKeyspace, strconv.Itoa(authorID), tag, "user")
-}
-
 func (p *PebbleStore) AddAuthorTagWithSource(authorID int, tag, source string) error {
 	return p.pebbleAddTag(authorTagKeyspace, strconv.Itoa(authorID), tag, source)
 }
@@ -675,10 +671,6 @@ func (p *PebbleStore) GetAuthorsByTag(tag string) ([]int, error) {
 		ids = append(ids, n)
 	}
 	return ids, nil
-}
-
-func (p *PebbleStore) AddSeriesTag(seriesID int, tag string) error {
-	return p.pebbleAddTag(seriesTagKeyspace, strconv.Itoa(seriesID), tag, "user")
 }
 
 func (p *PebbleStore) AddSeriesTagWithSource(seriesID int, tag, source string) error {

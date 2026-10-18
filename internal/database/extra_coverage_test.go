@@ -1,7 +1,7 @@
 // file: internal/database/extra_coverage_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef0102030405
-// last-edited: 2026-09-19
+// last-edited: 2026-10-18
 
 // Package database — extra tests to lift coverage of 0%-covered functions.
 // Covers: APIKeyToken helpers, PebbleStore book/tag/user/activity/metadata
@@ -645,7 +645,7 @@ func TestSQLiteStore_AuthorTags(t *testing.T) {
 	author, err := store.CreateAuthor("Tagged Author")
 	require.NoError(t, err)
 
-	require.NoError(t, s.AddAuthorTag(author.ID, "Sci-Fi"))
+	require.NoError(t, s.AddAuthorTagWithSource(author.ID, "Sci-Fi", "user"))
 	require.NoError(t, s.AddAuthorTagWithSource(author.ID, "metadata:source:openlibrary", "system"))
 
 	tags, err := s.GetAuthorTags(author.ID)
@@ -699,7 +699,7 @@ func TestSQLiteStore_SeriesTags(t *testing.T) {
 	series, err := store.CreateSeries("Tagged Series", nil)
 	require.NoError(t, err)
 
-	require.NoError(t, s.AddSeriesTag(series.ID, "Epic Fantasy"))
+	require.NoError(t, s.AddSeriesTagWithSource(series.ID, "Epic Fantasy", "user"))
 	require.NoError(t, s.AddSeriesTagWithSource(series.ID, "metadata:source:openlibrary", "system"))
 
 	tags, err := s.GetSeriesTags(series.ID)
