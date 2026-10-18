@@ -1,5 +1,5 @@
 // file: internal/database/review_claim.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 793a733c-f28c-4b2d-ba41-4170b8a43a07
 // last-edited: 2026-10-18
 
@@ -77,7 +77,10 @@ type ReviewItemApplyClaimer interface {
 	// cannot or should not be re-run (its re-run keeps failing, or its action has no
 	// apply handler any more). It moves an applying item whose claim no running
 	// process holds to needs_attention, recording the abandoned action in
-	// ApplyAbandonedAction, and clears the claim. It refuses with a
+	// ApplyAbandonedAction AND as ChosenAction, and clears the claim. ChosenAction is
+	// what an approve with no explicit action (an empty body, or bulk by ids) resolves
+	// to (effectiveActionFor), so without it that approve would run the payload's
+	// recommendation instead of the action the operator abandoned. It refuses with a
 	// *ReviewClaimConflictError a live claim (ReviewClaimInProgress), an applied item
 	// (ReviewClaimApplied) and any item not under a claim (ReviewClaimNotClaimed).
 	// Returns (nil, nil) when the item does not exist.
@@ -260,6 +263,12 @@ func (p *PebbleStore) ClaimReviewItemForApply(id, action string, ifUpdatedAt tim
 		return nil, fmt.Errorf("review claim token: %w", err)
 	}
 	oldStatus := item.Status
+	// ChosenAction is deliberately NOT written here: a failed first run is released
+	// back to the status it was claimed from, and an override recorded by a claim
+	// would outlive an apply that never finished, becoming what a later approve with
+	// no action runs. The action rides on the claim (ApplyClaimAction) until the
+	// apply is finished (ChosenAction) or abandoned (ChosenAction, as the action
+	// that may be half done).
 	item.Status = ReviewStatusApplying
 	item.ApplyClaimedFrom = from
 	item.ApplyClaimAction = action
@@ -347,6 +356,16 @@ func (p *PebbleStore) AbandonReviewItemClaim(id string) (*ReviewItem, error) {
 		return nil, conflict
 	}
 	item.ApplyAbandonedAction = item.ApplyClaimAction
+	// The abandoned action is the last action anyone chose for this item (the claim
+	// was an approve of it, possibly an override of the payload's recommendation, and
+	// nothing records an override until FinishReviewItemApply). Record it, so that
+	// approving the needs_attention item without naming an action re-runs THAT
+	// action and not the recommendation the reviewer overrode. A claim's action is
+	// never blank (ClaimReviewItemForApply refuses one); the guard keeps a damaged
+	// record from erasing a recorded choice.
+	if item.ApplyClaimAction != "" {
+		item.ChosenAction = item.ApplyClaimAction
+	}
 	item.Status = ReviewStatusNeedsAttention
 	clearReviewClaim(item)
 	if err := p.commitReviewItemLocked(item, ReviewStatusApplying); err != nil {
