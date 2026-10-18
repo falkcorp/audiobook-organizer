@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_replay_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e3a6d12-7c48-4b05-a1f9-2d8e5b70c364
 // last-edited: 2026-10-18
 
@@ -21,36 +21,61 @@ import (
 
 // Round-4 S2 (#4064): an undo that finishes but whose final journal write
 // fails leaves the journal undo_failed (UndoCombine marks it so before its
-// first write), so it can be run again, and that re-run replays applyUndo.
-// The replay must not change anything the user did after the first undo.
-// Before the fix it removed a lock the user set after the undo, took the
-// carried listened seconds off the survivor a second time, and reported
-// put-backs it did not make.
+// first write), so it can be run again. Since round 5 the finished undo
+// writes its applied record (combineUndoAppliedKey) first, and the re-run
+// only records the journal as undone. Only when that record is lost too
+// does the re-run replay applyUndo, and the replay must not change anything
+// the user did after the first undo. Before the round-4 fix it removed a
+// lock the user set after the undo, took the carried listened seconds off
+// the survivor a second time, and reported put-backs it did not make.
 
 // failUndoneJournalStore fails the combine-journal write that records the
 // undo as done, so a COMPLETED undo leaves its journal as the pre-mark wrote
-// it.
+// it. With failApplied it fails the undo's applied record as well, so the
+// re-run replays.
 type failUndoneJournalStore struct {
 	*database.PebbleStore
+	failApplied bool
 }
 
 func (s *failUndoneJournalStore) SetRaw(key string, value []byte) error {
 	if strings.HasPrefix(key, combineJournalPrefix) && strings.Contains(string(value), `"status":"undone"`) {
 		return errors.New("injected undone-journal failure")
 	}
+	if s.failApplied && strings.HasPrefix(key, combineUndoAppliedPrefix) {
+		return errors.New("injected undo-applied record failure")
+	}
 	return s.PebbleStore.SetRaw(key, value)
 }
 
-// undoWithoutRecording runs an undo that completes but cannot record itself,
-// and checks it left the journal as a cut-short undo.
+// undoWithoutRecording runs an undo that completes but cannot record itself
+// in the journal (its applied record is written), and checks it left the
+// journal as a cut-short undo.
 func undoWithoutRecording(t *testing.T, store *database.PebbleStore, ms *Service, journalID string) {
 	t.Helper()
-	_, err := NewService(&failUndoneJournalStore{PebbleStore: store}).UndoCombine(journalID)
+	undoUnrecorded(t, store, ms, journalID, false)
+}
+
+// undoUnrecorded is undoWithoutRecording; with lostApplied the applied record
+// is not written either, so a re-run replays.
+func undoUnrecorded(t *testing.T, store *database.PebbleStore, ms *Service, journalID string, lostApplied bool) {
+	t.Helper()
+	_, err := NewService(&failUndoneJournalStore{PebbleStore: store, failApplied: lostApplied}).UndoCombine(journalID)
 	require.NoError(t, err, "the undo itself completes")
 	j, err := ms.GetCombineJournal(journalID)
 	require.NoError(t, err)
 	require.Equal(t, CombineJournalUndoFailed, j.Status, "the journal still reads as an undo in progress")
+	applied, err := readCombineUndoApplied(store, journalID)
+	require.NoError(t, err)
+	require.Equal(t, !lostApplied, applied != nil, "the applied record is there unless its write failed")
 }
+
+// replayModes are the two re-runs of an unrecorded undo: one that finds the
+// applied record and only records the journal, and one that replays.
+var replayModes = []struct {
+	name        string
+	lostApplied bool
+}{{"applied record kept", false}, {"applied record lost too", true}}
 
 // fullProgress is every field of a user's progress on a book that the undo
 // can write, positions included.
@@ -74,49 +99,59 @@ func fullProgress(t *testing.T, store *database.PebbleStore, userID, bookID stri
 }
 
 func TestUndoCombine_ReplayAfterUnrecordedUndoChangesNothing(t *testing.T) {
-	for _, mode := range []string{"no listening since", "listened to the survivor since", "listened to an absorbed book since"} {
-		t.Run(mode, func(t *testing.T) {
-			store := setupTestStore(t).(*database.PebbleStore)
-			f := seedUndoFixture(t, store)
-			at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
-			// Listened time on both sides, so a carried-seconds subtraction
-			// shows.
-			require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.absA, Status: "in_progress", ProgressPct: 40, LastActivityAt: at, LastSegmentID: "seg-a", TotalListenedSeconds: 600}))
-			require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.survivor, Status: "in_progress", ProgressPct: 10, LastActivityAt: at.Add(-time.Hour), LastSegmentID: "seg-s", TotalListenedSeconds: 100}))
-			ms := NewService(store)
-			res, err := ms.CombineBooks([]string{f.survivor, f.absA, f.absB}, f.survivor, nil)
-			require.NoError(t, err)
-			undoWithoutRecording(t, store, ms, res.JournalID)
-
-			now := time.Now().UTC().Truncate(time.Second)
-			switch mode {
-			case "listened to the survivor since":
-				// More than the carried 600 seconds, so a second take-back
-				// would land and remove real listening.
-				require.NoError(t, store.SetUserPosition(f.user.ID, f.survivor, "seg-new", 4321))
-				require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.survivor, Status: "in_progress", ProgressPct: 77, LastActivityAt: now, LastSegmentID: "seg-new", TotalListenedSeconds: 2100}))
-			case "listened to an absorbed book since":
-				require.NoError(t, store.SetUserPosition(f.user.ID, f.absA, "seg-a", 5555))
-				require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.absA, Status: "in_progress", ProgressPct: 66, LastActivityAt: now, LastSegmentID: "seg-a", TotalListenedSeconds: 900}))
-			}
-			before := map[string]string{}
-			for _, id := range []string{f.survivor, f.absA, f.absB} {
-				before[id] = fullProgress(t, store, f.user.ID, id)
-			}
-
-			re, err := ms.UndoCombine(res.JournalID)
-			require.NoError(t, err, "the re-run finishes the undo")
-			require.Empty(t, re.Warnings, "the re-run reports no put-back it did not make")
-			require.Empty(t, re.RestoredBooks)
-			require.Zero(t, re.FilesMoved)
-			for _, id := range []string{f.survivor, f.absA, f.absB} {
-				require.Equal(t, before[id], fullProgress(t, store, f.user.ID, id), "progress on %s untouched by the re-run", id)
-			}
-			j, err := ms.GetCombineJournal(res.JournalID)
-			require.NoError(t, err)
-			require.Equal(t, CombineJournalUndone, j.Status)
-		})
+	for _, rm := range replayModes {
+		for _, mode := range []string{"no listening since", "listened to the survivor since", "listened to an absorbed book since"} {
+			t.Run(rm.name+"/"+mode, func(t *testing.T) {
+				replayAfterUnrecordedUndo(t, mode, rm.lostApplied)
+			})
+		}
 	}
+}
+
+func replayAfterUnrecordedUndo(t *testing.T, mode string, lostApplied bool) {
+	t.Helper()
+	store := setupTestStore(t).(*database.PebbleStore)
+	f := seedUndoFixture(t, store)
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	// Listened time on both sides, so a carried-seconds subtraction
+	// shows.
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.absA, Status: "in_progress", ProgressPct: 40, LastActivityAt: at, LastSegmentID: "seg-a", TotalListenedSeconds: 600}))
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.survivor, Status: "in_progress", ProgressPct: 10, LastActivityAt: at.Add(-time.Hour), LastSegmentID: "seg-s", TotalListenedSeconds: 100}))
+	ms := NewService(store)
+	res, err := ms.CombineBooks([]string{f.survivor, f.absA, f.absB}, f.survivor, nil)
+	require.NoError(t, err)
+	undoUnrecorded(t, store, ms, res.JournalID, lostApplied)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	switch mode {
+	case "listened to the survivor since":
+		// More than the carried 600 seconds, so a second take-back
+		// would land and remove real listening.
+		require.NoError(t, store.SetUserPosition(f.user.ID, f.survivor, "seg-new", 4321))
+		require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.survivor, Status: "in_progress", ProgressPct: 77, LastActivityAt: now, LastSegmentID: "seg-new", TotalListenedSeconds: 2100}))
+	case "listened to an absorbed book since":
+		require.NoError(t, store.SetUserPosition(f.user.ID, f.absA, "seg-a", 5555))
+		require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.absA, Status: "in_progress", ProgressPct: 66, LastActivityAt: now, LastSegmentID: "seg-a", TotalListenedSeconds: 900}))
+	}
+	before := map[string]string{}
+	for _, id := range []string{f.survivor, f.absA, f.absB} {
+		before[id] = fullProgress(t, store, f.user.ID, id)
+	}
+
+	re, err := ms.UndoCombine(res.JournalID)
+	require.NoError(t, err, "the re-run finishes the undo")
+	require.Empty(t, re.Warnings, "the re-run reports no put-back it did not make")
+	require.Empty(t, re.RestoredBooks)
+	require.Zero(t, re.FilesMoved)
+	for _, id := range []string{f.survivor, f.absA, f.absB} {
+		require.Equal(t, before[id], fullProgress(t, store, f.user.ID, id), "progress on %s untouched by the re-run", id)
+	}
+	j, err := ms.GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	require.Equal(t, CombineJournalUndone, j.Status)
+	applied, err := readCombineUndoApplied(store, res.JournalID)
+	require.NoError(t, err)
+	require.Nil(t, applied, "the applied record goes once the journal reads undone")
 }
 
 // lockOf returns bookID's lock row for field, nil when there is none.
@@ -153,25 +188,34 @@ func combineWithTitleOverride(t *testing.T, store *database.PebbleStore) (*Servi
 }
 
 // The lock the user sets after a completed (unrecorded) undo survives the
-// re-run, which says it left it. It used to be removed: step 4 restored the
-// journaled lock rows unconditionally.
+// re-run. It used to be removed: step 4 restored the journaled lock rows
+// unconditionally. A re-run that finds the applied record does not replay,
+// so it reports nothing; a replay says it left the lock.
 func TestUndoCombine_ReplayKeepsALockSetAfterTheUndo(t *testing.T) {
-	store := setupTestStore(t).(*database.PebbleStore)
-	ms, keep, res := combineWithTitleOverride(t, store)
-	j, err := ms.GetCombineJournal(res.JournalID)
-	require.NoError(t, err)
-	require.NotNil(t, j.Override.FieldStatesAfter[database.FieldKeyTitle], "the journal records the lock the override wrote")
-	undoWithoutRecording(t, store, ms, res.JournalID)
-	require.Nil(t, lockOf(t, store, keep, database.FieldKeyTitle), "the first undo removed the combine's lock")
+	for _, rm := range replayModes {
+		t.Run(rm.name, func(t *testing.T) {
+			store := setupTestStore(t).(*database.PebbleStore)
+			ms, keep, res := combineWithTitleOverride(t, store)
+			j, err := ms.GetCombineJournal(res.JournalID)
+			require.NoError(t, err)
+			require.NotNil(t, j.Override.FieldStatesAfter[database.FieldKeyTitle], "the journal records the lock the override wrote")
+			undoUnrecorded(t, store, ms, res.JournalID, rm.lostApplied)
+			require.Nil(t, lockOf(t, store, keep, database.FieldKeyTitle), "the first undo removed the combine's lock")
 
-	b, err := store.GetBookByID(keep)
-	require.NoError(t, err)
-	require.NoError(t, database.RecordUserOverrides(store, keep, map[string]any{database.FieldKeyTitle: b.Title}))
+			b, err := store.GetBookByID(keep)
+			require.NoError(t, err)
+			require.NoError(t, database.RecordUserOverrides(store, keep, map[string]any{database.FieldKeyTitle: b.Title}))
 
-	re, err := ms.UndoCombine(res.JournalID)
-	require.NoError(t, err)
-	require.Contains(t, strings.Join(re.Warnings, "\n"), "title lock on book "+keep+" was changed after the combine; left as it is")
-	require.Equal(t, b.Title, lockValue(t, lockOf(t, store, keep, database.FieldKeyTitle)), "the user's later lock survives the re-run")
+			re, err := ms.UndoCombine(res.JournalID)
+			require.NoError(t, err)
+			if rm.lostApplied {
+				require.Contains(t, strings.Join(re.Warnings, "\n"), "title lock on book "+keep+" was changed after the combine; left as it is")
+			} else {
+				require.Empty(t, re.Warnings, "nothing was replayed")
+			}
+			require.Equal(t, b.Title, lockValue(t, lockOf(t, store, keep, database.FieldKeyTitle)), "the user's later lock survives the re-run")
+		})
+	}
 }
 
 // A lock the user changed between the combine and the undo is kept, with a
