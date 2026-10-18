@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-review-apply-double-merge-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 599fbed0-86a9-46e6-8bcf-3d81a0563082 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -125,6 +125,6 @@ A hold interrupted by a crash accepts only one decision: approving it again with
 the same action, which finishes the merge. A reject or a "keep separate" is
 refused, because the interrupted merge may already have moved books, and
 recording "rejected" over that would not match what happened. While merging is
-switched off (the review-only setting production uses), approving cannot finish
+switched off (production has had it on since 2026-08-17), approving cannot finish
 such a hold either, so it stays held, visible in the notice, until merging is
 switched on again.
