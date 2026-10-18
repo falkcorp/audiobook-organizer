@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -821,7 +821,6 @@ func (ms *Service) overrideAuthorsToRestore(survivorID string, o *CombineOverrid
 	}
 	return restore, warns, nil
 }
-
 
 // retiredByJournal reports whether b is still the shell this combine retired:
 // soft-deleted, carrying exactly the stamp the combine wrote and journaled.
