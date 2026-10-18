@@ -1,13 +1,13 @@
 // file: internal/versions/ingest.go
-// version: 1.16.0
+// version: 1.15.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-18
+// last-edited: 2026-10-11
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
 // Spec 3.1 calls for a BookVersion row on every ingest. Today only one path
-// creates one: importer.ImportFile (POST /api/v1/import/file; the Deluge
-// discover-import route that also called it was retired by 01-P81k), which creates the book_file row first and then calls
+// creates one: importer.ImportFile (POST /api/v1/import/file and the Deluge
+// discover import), which creates the book_file row first and then calls
 // CreateIngestVersion to create the version and link it. Scan and organize do
 // not create versions. The version tracks the file's provenance (source,
 // torrent hash) and its lifecycle status; the linked book_file row carries
@@ -59,7 +59,7 @@ type IngestVersionParams struct {
 	// it and the stranded-version lookup (GetBookVersionsByBookID) is skipped.
 	// Besides saving a read, that keeps a failure of THAT read from aborting
 	// the version create, and with it the torrent index entry that turns a
-	// retried import of the same torrent into a 409 instead of a second book.
+	// retried discover import into a 409 instead of a second book.
 	//
 	// It narrows the failure surface; it does not remove it. A call with a
 	// TorrentHash still reads the torrent index and the holder's book
