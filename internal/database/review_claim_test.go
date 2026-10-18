@@ -1,5 +1,5 @@
 // file: internal/database/review_claim_test.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 74ff5b50-d848-43ed-91e5-889e92c828b1
 // last-edited: 2026-10-18
 
@@ -499,5 +499,42 @@ func TestDecide_RefusesARecordThatChangedSinceItWasRead(t *testing.T) {
 	got, err := s.DecideReviewItem(it.ID, ReviewStatusRejected, "", now.UpdatedAt)
 	if err != nil || got.Status != ReviewStatusRejected {
 		t.Fatalf("decide with the current stamp = %+v, %v", got, err)
+	}
+}
+
+// DecideReviewItem writes only the three decision statuses. needs_attention is the
+// abandon's, and any other string would park an item where no list looks.
+func TestDecide_AcceptsOnlyDecisionStatuses(t *testing.T) {
+	s := newReviewTestStore(t)
+	it := seedClaimItem(t, s, "k1", ReviewStatusPending)
+	for _, status := range []string{ReviewStatusNeedsAttention, "on-hold", "Approved"} {
+		if _, err := s.DecideReviewItem(it.ID, status, "", time.Time{}); err == nil {
+			t.Fatalf("DecideReviewItem accepted status %q", status)
+		}
+	}
+	for _, status := range []string{ReviewStatusApproved, ReviewStatusRejected, ReviewStatusPending} {
+		if got, err := s.DecideReviewItem(it.ID, status, "", time.Time{}); err != nil || got.Status != status {
+			t.Fatalf("decide %q = %+v, %v", status, got, err)
+		}
+	}
+	assertStatusIndexConsistent(t, s)
+}
+
+// A producer re-scan never touches an item under an apply claim: its payload is what
+// the apply was resolved from and is running against, and its record holds the claim.
+func TestUpsert_LeavesAClaimedItemAlone(t *testing.T) {
+	s := newReviewTestStore(t)
+	it := seedClaimItem(t, s, "k1", ReviewStatusPending)
+	c := mustClaim(t, s, it.ID, "combine")
+	before, _ := s.GetReviewItem(it.ID)
+	got, err := s.UpsertReviewItem(ReviewItem{Kind: "regroup.multidisc", DedupKey: "k1", FolderRef: "/f/k1",
+		Summary: "rescanned", Payload: `{"recommendedAction":"separate"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.GetReviewItem(it.ID)
+	if got.Status != ReviewStatusApplying || after.Status != ReviewStatusApplying || after.Payload != before.Payload ||
+		after.Summary != before.Summary || !after.UpdatedAt.Equal(before.UpdatedAt) || after.ApplyClaimToken != c.Token {
+		t.Fatalf("re-scan of a claimed item: returned %+v, stored %+v; want it untouched (%+v)", got, after, before)
 	}
 }

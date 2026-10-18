@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.10.0
+// version: 1.10.1
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-10-18
 
@@ -853,9 +853,10 @@ export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: 
       <Typography variant="body2" sx={{ mb: 1 }}>
         An apply is running, ran but could not be recorded, or was interrupted (by a server restart,
         or its re-run failed). These holds are not in the list below and accept no other decision
-        until the apply is finished. Finish runs an interrupted apply again; if it cannot be
-        finished, Abandon moves the hold to needs attention. Abandoning undoes nothing, so check
-        what the apply changed in the library.
+        until the apply is finished. Finish runs an interrupted apply again: it skips work already
+        done, but it does not redo an incomplete multidisc renumbering, and a duplicate-of re-run
+        can fail after a partial merge. If it cannot be finished, Abandon moves the hold to needs
+        attention. Abandoning undoes nothing, so check what the apply changed in the library.
       </Typography>
       {items === null ? (
         <Button size="small" data-testid="regroup-applying-show" onClick={show}>

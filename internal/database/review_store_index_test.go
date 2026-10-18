@@ -1,5 +1,5 @@
 // file: internal/database/review_store_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c1e9a27-7d43-4b8f-a6e2-3f9d0b7c8e15
 // last-edited: 2026-10-18
 
@@ -97,8 +97,11 @@ func TestDecideReviewItem_ConcurrentDecisionsKeepStatusIndexExact(t *testing.T) 
 
 	// Distinct statuses per goroutine so a double-index is visible as two
 	// DIFFERENT rows; the same status from both writers would collide on one key
-	// and hide the race.
-	statuses := []string{ReviewStatusApproved, ReviewStatusRejected, ReviewStatusNeedsAttention, "on-hold", "escalated"}
+	// and hide the race. These are the three statuses DecideReviewItem accepts.
+	// Pending counts although each round starts pending: unlocked, a pending write
+	// that read "pending" lands after another worker moved the row away, leaving the
+	// item indexed under pending and the other status.
+	statuses := []string{ReviewStatusApproved, ReviewStatusRejected, ReviewStatusPending}
 	const rounds = 5
 	for round := range rounds {
 		var start, done sync.WaitGroup

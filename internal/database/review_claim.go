@@ -1,5 +1,5 @@
 // file: internal/database/review_claim.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 793a733c-f28c-4b2d-ba41-4170b8a43a07
 // last-edited: 2026-10-18
 
@@ -88,8 +88,10 @@ type ReviewItemApplyClaimer interface {
 	// *ReviewClaimConflictError when the item is applied or applying — under a live
 	// claim or a dead one, because a dead claim's apply may already have changed the
 	// library, and only re-running it (an approve, which takes the claim over) leaves
-	// a record that matches what happened. status may not be applying or applied;
-	// those belong to the claim. A non-zero ifUpdatedAt makes it a compare-and-set
+	// a record that matches what happened. status must be pending, approved or
+	// rejected: applying and applied belong to the claim, needs_attention to
+	// AbandonReviewItemClaim, and any other string would park the item in a status no
+	// list shows. A non-zero ifUpdatedAt makes it a compare-and-set
 	// like the claim's (ReviewClaimChanged). Returns (nil, nil) when the item does not
 	// exist.
 	//
@@ -355,10 +357,13 @@ func (p *PebbleStore) AbandonReviewItemClaim(id string) (*ReviewItem, error) {
 
 func (p *PebbleStore) DecideReviewItem(id, status, chosenAction string, ifUpdatedAt time.Time) (*ReviewItem, error) {
 	switch status {
-	case "":
-		return nil, fmt.Errorf("review item: status is required")
+	case ReviewStatusPending, ReviewStatusApproved, ReviewStatusRejected:
 	case ReviewStatusApplying, ReviewStatusApplied:
 		return nil, fmt.Errorf("review item %s: status %q is written only by the apply claim", id, status)
+	case ReviewStatusNeedsAttention:
+		return nil, fmt.Errorf("review item %s: status %q is written only by AbandonReviewItemClaim", id, status)
+	default:
+		return nil, fmt.Errorf("review item %s: %q is not a review decision (pending, approved or rejected)", id, status)
 	}
 	p.reviewMu.Lock()
 	defer p.reviewMu.Unlock()
