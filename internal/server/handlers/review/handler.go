@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -512,6 +512,15 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn 
 	if item == nil {
 		return nil, "", "", nil
 	}
+	// "applied" is terminal — no writer moves an item out of it — so refusing it from
+	// this read cannot go stale, unlike "applying". It is refused BEFORE the action is
+	// validated: an applied hold with no recorded choice and an old payload resolves
+	// to insufficient-evidence, and must answer "already applied", not "choose an
+	// action" (which bulk would list as still pending).
+	if item.Status == database.ReviewStatusApplied {
+		return nil, effectiveActionFor(*item), "", conflictRejection(
+			&database.ReviewClaimConflictError{ID: id, Status: item.Status, Reason: database.ReviewClaimApplied})
+	}
 	// An apply that ran in THIS process but could not be recorded: record it now and
 	// never run it again. The work happened as the claim's action, whatever this
 	// request asks for.
@@ -775,7 +784,7 @@ func conflictRejection(c *database.ReviewClaimConflictError) *actionRejection {
 		return rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED", "already applied")
 	case database.ReviewClaimInterrupted:
 		return rejectf(http.StatusConflict, "REVIEW_APPLY_INTERRUPTED",
-			"an apply of "+strconv.Quote(c.ClaimAction)+" was interrupted by a server restart; approve it again as "+
+			"an apply of "+strconv.Quote(c.ClaimAction)+" was interrupted by a server restart; with apply enabled, approve it again as "+
 				strconv.Quote(c.ClaimAction)+" to finish it (the apply runs again and skips work already done). "+
 				"No other decision can be recorded until then, because the interrupted apply may already have changed the library")
 	case database.ReviewClaimChanged:

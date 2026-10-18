@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/claim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4ac78f22-e4e5-46e6-963d-64243d9d758f
 // last-edited: 2026-10-18
 
@@ -473,5 +473,26 @@ func TestApproveRejectStorm_AppliesAtMostOnce(t *testing.T) {
 		if got.Status == database.ReviewStatusApplying {
 			t.Fatalf("round %d: claim leaked", round)
 		}
+	}
+}
+
+// An applied hold whose action resolves to insufficient-evidence (no recorded choice,
+// old payload) answers "already applied", not "choose an action": bulk must not list
+// it as still pending.
+func TestApprove_AppliedOldShapeHold_Is409AlreadyApplied(t *testing.T) {
+	s := newTestStore(t)
+	a := seed(t, s, "regroup.multidisc", "m1") // payload "{}": insufficient-evidence
+	if _, err := s.SetReviewItemDecision(a.ID, database.ReviewStatusApplied, ""); err != nil {
+		t.Fatal(err)
+	}
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+	code, body := approveReq(t, h, a.ID, nil)
+	want409(t, "approve of an applied old-shape hold", code, body, "REVIEW_ALREADY_APPLIED")
+	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": []string{a.ID}}, nil)
+	data := decodeBody(t, w)["data"].(map[string]any)
+	skipped, _ := data["skipped"].([]any)
+	if len(skipped) != 1 || skipped[0].(map[string]any)["code"] != "REVIEW_ALREADY_APPLIED" {
+		t.Fatalf("bulk = %v, want one skip coded REVIEW_ALREADY_APPLIED", data)
 	}
 }
