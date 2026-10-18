@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/reapprove_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d2e4e573-9060-4296-b021-6de20390337a
 // last-edited: 2026-10-18
 
@@ -130,7 +130,7 @@ func TestReApprove_HonoursOverrideTowardsCombine(t *testing.T) {
 func TestApprove_AlreadyApprovedItem_CanBeReApprovedWithAnExplicitAction(t *testing.T) {
 	s := newTestStore(t)
 	it := seed(t, s, "regroup.ambiguous", "a1") // old payload → insufficient-evidence
-	if _, err := s.SetReviewItemStatus(it.ID, database.ReviewStatusApproved); err != nil {
+	if _, err := s.DecideReviewItem(it.ID, database.ReviewStatusApproved, "", time.Time{}); err != nil {
 		t.Fatalf("seed approved: %v", err)
 	}
 	h, c := newActionHandler(s, true)
@@ -326,11 +326,11 @@ func (f *flakyStore) FinishReviewItemApply(id, token string) (*database.ReviewIt
 	return f.PebbleStore.FinishReviewItemApply(id, token)
 }
 
-func (f *flakyStore) DecideReviewItem(id, status, chosen string) (*database.ReviewItem, error) {
+func (f *flakyStore) DecideReviewItem(id, status, chosen string, ifUpdatedAt time.Time) (*database.ReviewItem, error) {
 	if status == database.ReviewStatusRejected && id == f.rejectFailID {
 		return nil, errors.New("synthetic reject write error")
 	}
-	return f.PebbleStore.DecideReviewItem(id, status, chosen)
+	return f.PebbleStore.DecideReviewItem(id, status, chosen, ifUpdatedAt)
 }
 
 // 🔴 AN APPLY THAT SUCCEEDED BUT COULD NOT BE RECORDED IS NEVER RUN AGAIN BY THIS

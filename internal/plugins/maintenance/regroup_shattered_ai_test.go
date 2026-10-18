@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a9f6c04-8e21-4b57-9d0a-6f2e7c1b5a48
 // last-edited: 2026-10-18
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -295,7 +296,7 @@ func TestRegroupShatteredAI_DryRun_PreservesDecision(t *testing.T) {
 		t.Fatalf("want 1 hold, got %d", len(items))
 	}
 	// Human rejects it.
-	if _, err := s.SetReviewItemStatus(items[0].ID, database.ReviewStatusRejected); err != nil {
+	if _, err := s.DecideReviewItem(items[0].ID, database.ReviewStatusRejected, "", time.Time{}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 
@@ -353,7 +354,7 @@ func TestReconcileStaleHolds_PurgesSupersededPendingOnly(t *testing.T) {
 
 	rejKey := regroupDedupKey(itunesservice.KindMultidisc, "/books/rej")
 	rej := seedHold(t, s, itunesservice.KindMultidisc, rejKey, "/books/rej")
-	if _, err := s.SetReviewItemStatus(rej.ID, database.ReviewStatusRejected); err != nil {
+	if _, err := s.DecideReviewItem(rej.ID, database.ReviewStatusRejected, "", time.Time{}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 
@@ -410,7 +411,7 @@ type decidingLister struct {
 func (d *decidingLister) ListReviewItems(f database.ReviewFilter) ([]database.ReviewItem, int, error) {
 	items, total, err := d.PebbleStore.ListReviewItems(f)
 	if err == nil {
-		if _, derr := d.DecideReviewItem(d.decideID, database.ReviewStatusApproved, "separate"); derr != nil {
+		if _, derr := d.DecideReviewItem(d.decideID, database.ReviewStatusApproved, "separate", time.Time{}); derr != nil {
 			return nil, 0, derr
 		}
 	}

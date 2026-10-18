@@ -1,7 +1,7 @@
 // file: internal/database/test_deadline_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e4cb4c5c-b25d-414e-815a-01772db5bb16
-// last-edited: 2026-10-04
+// last-edited: 2026-10-18
 
 package database
 
@@ -32,7 +32,7 @@ import (
 // the test's deferred calls and t.Cleanup funcs, and in this package those
 // close the Pebble store; a worker still inside a store call then dies with
 // "panic: pebble: closed", which kills the whole test binary and buries the
-// real failure. TestSetReviewItemDecision_ConcurrentDecisionsKeepStatusIndexExact
+// real failure. TestDecideReviewItem_ConcurrentDecisionsKeepStatusIndexExact
 // failed exactly that way in `make ci` once the package had used 1495s of its
 // 25m -timeout and every wait's bound had collapsed to the 100ms floor. So on
 // timeout awaitOrFatal:

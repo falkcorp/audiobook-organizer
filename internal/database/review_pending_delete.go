@@ -1,5 +1,5 @@
 // file: internal/database/review_pending_delete.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a067e38f-ed88-4e38-87ce-5f53cb6a8fdf
 // last-edited: 2026-10-18
 
@@ -10,11 +10,12 @@ package database
 // ReviewStore or Store.
 //
 // It exists for the regroup reconcile (maintenance.reconcileStaleHolds), which lists
-// pending holds and deletes the ones its scan no longer emits. Deleting with the
-// unconditional DeleteReviewItem after listing races a reviewer: an item approved,
-// rejected or claimed for apply between the list and the delete would lose its
-// decision, and deleting the dedup index as well lets the next scan offer the folder
-// again as if nobody had decided. Here the status is re-read under reviewMu, the
+// pending holds and deletes the ones its scan no longer emits. The unconditional
+// delete it used to make after listing (DeleteReviewItem, removed in 01-P81j) raced
+// a reviewer: an item approved, rejected or claimed for apply between the list and
+// the delete lost its decision, and deleting the dedup index as well let the next
+// scan offer the folder again as if nobody had decided. This is now the store's
+// only review delete. Here the status is re-read under reviewMu, the
 // mutex every review writer holds, so a decided item is never deleted.
 type ReviewItemPendingDeleter interface {
 	// DeleteReviewItemIfPending deletes the item and all its index rows when its
