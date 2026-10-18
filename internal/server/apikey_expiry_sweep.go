@@ -1,7 +1,7 @@
 // file: internal/server/apikey_expiry_sweep.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 481f65a7-e54a-4be2-b43e-d6d992fcbd60
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package server
 
@@ -40,8 +40,8 @@ const (
 //     doesn't spam every tick.
 //   - active keys with ExpiresAt != nil that are within apiKeyExpiryWarnWindow
 //     of expiring (and not yet expired) — once per key ID until expiry is
-//     observed to have moved (e.g. the key was rotated), tracked by the
-//     expiry timestamp itself so a rotation naturally re-arms the warning.
+//     observed to have moved (e.g. the one-time expiry stamp set it), tracked
+//     by the expiry timestamp itself so a changed expiry re-arms the warning.
 //
 // This goroutine owns its state exclusively (no shared mutable state with
 // other goroutines beyond the store), so no mutex is needed.
@@ -53,7 +53,7 @@ func (s *Server) warnExpiringAPIKeys() {
 
 	// warnedLegacy tracks key IDs already warned about having no expiry at
 	// all. warnedExpiring maps key ID -> the ExpiresAt value last warned
-	// about, so a rotation (which changes ExpiresAt) re-arms the warning.
+	// about, so a changed ExpiresAt re-arms the warning.
 	warnedLegacy := map[string]bool{}
 	warnedExpiring := map[string]time.Time{}
 
@@ -78,7 +78,7 @@ func (s *Server) warnExpiringAPIKeys() {
 			if k.ExpiresAt == nil {
 				if !warnedLegacy[k.ID] {
 					warnedLegacy[k.ID] = true
-					slog.Warn("api key has no expiry (legacy) — set one via rotate",
+					slog.Warn("api key has no expiry (legacy) — create a replacement key with an expiry and revoke this one",
 						"key_id", k.ID, "user_id", k.UserID, "name", k.Name)
 				}
 				continue

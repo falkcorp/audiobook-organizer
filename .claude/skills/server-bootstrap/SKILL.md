@@ -3,9 +3,9 @@ name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
-<!-- last-edited: 2026-10-07 -->
+<!-- last-edited: 2026-10-18 -->
 
 # Server Bootstrap
 
@@ -137,8 +137,9 @@ this"):
 - `PATCH /api/v1/auth/me` (email)
 - `POST /api/v1/auth/temp-tokens`, `POST /api/v1/users/:id/reset-password`
 - `POST /api/v1/users/invite`, `POST /api/v1/users/:id/deactivate`, `.../reactivate`
-- `POST /api/v1/auth/api-keys` with another user's `user_id`, and rotating
-  another user's key
+- `POST /api/v1/auth/api-keys` with another user's `user_id` (and the retired
+  `POST /api/v1/auth/api-keys/:id/rotate` on another user's key, which is still
+  refused before it answers 410)
 - `POST /api/v1/system/reset`, `/system/factory-reset`, `/backup/restore`
 - `PUT /api/v1/config` when it changes a sign-in setting (`enable_auth`,
   `basic_auth_*`, `oauth_*`, `cf_access_*`, `abs_api_enabled`,
@@ -146,7 +147,9 @@ this"):
 
 To create a user (for example a `claude_*` login) or reset a password, the
 owner does it from the web UI while signed in. A key the bootstrap key creates
-or rotates can't outlive it, so it also expires within 8 hours.
+can't outlive it, so it also expires within 8 hours. To replace a key, create a
+new one with `POST /api/v1/auth/api-keys` and revoke the old one with
+`DELETE /api/v1/auth/api-keys/:id`; `POST .../:id/rotate` answers 410.
 
 See [references/bootstrap-api.md](references/bootstrap-api.md) for full API details.
 

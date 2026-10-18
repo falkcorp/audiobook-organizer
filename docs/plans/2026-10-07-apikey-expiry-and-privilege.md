@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-10-07-apikey-expiry-and-privilege.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 67c7aa4f-72e2-4a9c-805a-92fff01c3308 -->
-<!-- last-edited: 2026-10-07 -->
+<!-- last-edited: 2026-10-18 -->
 
 # API keys: expiry, and no path from a key to a signed-in admin
 
@@ -110,6 +110,14 @@ warning.** Precedence: `bootstrap_key_ttl` if set and valid, else
 with it in place the legacy key would always look set and the 8h default
 could never apply. The warning is logged at startup and names the replacement.
 
+> **Update 2026-10-18 (01-P81k): `POST /auth/api-keys/:id/rotate` is retired.**
+> It answers 410 Gone for one release and is then removed (owner decision D9).
+> The supported replacement is `POST /auth/api-keys` followed by
+> `DELETE /auth/api-keys/:id`. What the replacement does not do: give the old
+> key a one-hour grace window, or copy the old key's scopes and lifetime (D5).
+> The credential guard on the stub is unchanged. D5 and D6 below describe the
+> route as it was.
+
 **D5. Rotate keeps the old key's lifetime.** The new key's lifetime is the old
 key's `ExpiresAt − CreatedAt`, capped at the 365-day maximum; if the old key
 had none, 30 days. Why: rotation replaces a secret, it should not change the
@@ -124,8 +132,8 @@ with 365 days in one call, or rotate a year-long sibling key of the same admin
 and take the fresh year-long token, and D3 would mean nothing. The expiry is
 clamped to the calling key's `expires_at` (the response's `note` says so); an
 interactive caller is not clamped. Consequence: a key rotating itself cannot
-extend itself; extending a key's life takes a signed-in session (rotate it
-from the web UI).
+extend itself; extending a key's life takes a signed-in session (create a
+replacement key there and revoke the old one).
 
 **D7. `POST /auth/api-keys`: `expires_in_days` omitted or 0 means 30 days;
 negative or over 365 is a 400.**
@@ -479,8 +487,9 @@ vitest on `web/src/components/settings`; `npx tsc --noEmit -p web`.
 
 Revert the commit. No schema change. The one-time stamp is the only data
 write: stamped keys keep their new `expires_at` after a revert. To undo it,
-extend each key with `POST /auth/api-keys/:id/rotate` from a signed-in session,
-or set a new expiry; the WARN log lists every key it stamped.
+replace each key from a signed-in session (`POST /auth/api-keys`, then
+`DELETE /auth/api-keys/:id`; `POST /auth/api-keys/:id/rotate` was retired on
+2026-10-18); the WARN log lists every key it stamped.
 
 ## Remaining risk (owner's call)
 

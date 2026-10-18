@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package database
 
@@ -490,10 +490,9 @@ func (p *PebbleStore) SetAPIKeyStatus(id, status string, at time.Time) error {
 }
 
 // SetAPIKeyExpiry updates only the ExpiresAt field on an existing key,
-// leaving Status (and idx: entries) untouched. Used by the rotation grace
-// window (SEC-1/PROC-6): the old key gets a short future ExpiresAt instead
-// of being revoked outright, so the pre-existing middleware expiry check
-// retires it naturally after the grace period.
+// leaving Status (and idx: entries) untouched. Used by the one-time expiry
+// stamp for legacy keys: the key gets a future ExpiresAt instead of being
+// revoked, and the middleware expiry check retires it when that time passes.
 func (p *PebbleStore) SetAPIKeyExpiry(id string, at time.Time) error {
 	k, err := p.GetAPIKey(id)
 	if err != nil {

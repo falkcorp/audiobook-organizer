@@ -1,7 +1,7 @@
 // file: internal/server/apikey_expiry_stamp.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 03e89930-38be-47ce-a24e-71825969fb5b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 
 package server
 
@@ -77,7 +77,7 @@ func stampNeverExpiringAPIKeys(store apiKeyExpiryStampStore, now time.Time) (api
 
 	if res.AlreadyDone {
 		for _, k := range never {
-			apiKeyExpiryLog.Warn("api key has no expiry (the one-time expiry stamp already ran; set one by rotating it): key_id=%v name=%v user=%v created=%v status=%v",
+			apiKeyExpiryLog.Warn("api key has no expiry (the one-time expiry stamp already ran; create a replacement key with an expiry and revoke this one): key_id=%v name=%v user=%v created=%v status=%v",
 				k.ID, k.Name, k.UserID, k.CreatedAt, k.Status)
 		}
 		return res, nil
@@ -97,7 +97,7 @@ func stampNeverExpiringAPIKeys(store apiKeyExpiryStampStore, now time.Time) (api
 			continue
 		}
 		res.Stamped++
-		apiKeyExpiryLog.Warn("api key had no expiry; it now expires (create or rotate a replacement before then): key_id=%v name=%v user=%v created=%v status=%v expires_at=%v",
+		apiKeyExpiryLog.Warn("api key had no expiry; it now expires (create a replacement key and revoke this one before then): key_id=%v name=%v user=%v created=%v status=%v expires_at=%v",
 			k.ID, k.Name, k.UserID, k.CreatedAt,
 			k.Status, expiresAt)
 	}
