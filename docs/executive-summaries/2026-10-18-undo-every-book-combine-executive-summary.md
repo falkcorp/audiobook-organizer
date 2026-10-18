@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -92,8 +92,9 @@ job, such as the manual Combine button, a review approval or a split-book
 candidate merge, also get a fresh number. The manual Combine and split-book
 merge responses return it, a review approval logs it, and the surviving
 book's change history always lists it. If a combine's undo record cannot be
-saved at the end, the Combine button says plainly that this one cannot be
-undone and offers no number.
+finalized at the end, the combine is still undoable: the record already lists
+every step it took, so the Combine button still offers the number and says
+the record is pending, and reverting it replays those steps.
 
 ## Restoring version groups
 
@@ -107,7 +108,7 @@ the wrong group, with the wrong book marked as the main edition.
 **The fix.** The Revert action now understands this second kind of record
 and puts each edition back in its old group with its old main-edition flag.
 An edition that has since been moved to some other group is left where it
-is. If a later merge moved an edition into the same group again,
+is, and the revert's result says so. If a later merge moved an edition into the same group again,
 the undo refuses as a whole and says why, rather than undoing that later
 merge. The undo works even if the merge's surviving book has been purged
 since.
@@ -150,3 +151,33 @@ such book left stays on the surviving book, and the revert's result names it.
 A combine
 now records each step before taking it, so a stopped combine undoes exactly
 what it did. Each of these has a test that failed before the fix.
+
+## Fixes from the second review
+
+**What it was.** A second review of #4064 found four ways a revert could
+still go wrong. A combine that crashed right after sending a book to the
+trash, but before noting it, left a book the revert would not recognise. A
+title or author override was written before it was noted, so a failure at
+the end left it impossible to undo. The revert renumbered the tracks of
+books the combine never touched, wiping out later renumbering. And undoing
+an edition move could try to put a reader's listening progress back onto a
+book that no longer exists.
+
+**Why it mattered.** Each one either lost a change the user made later or
+left a combine that could not be fully undone. The owner's rule is that
+listening progress is never removed.
+
+**The fix.** A combine now notes each change before it makes it, or, for
+the trash date, notes the exact date it is about to write. If the note
+cannot be saved the combine stops instead of carrying on.
+An override's undo now puts back the title, the narrator, the author and
+exactly the field locks that were there before. Track numbers are restored
+only on the files the combine actually moved. Listening progress with no
+book left to go back to stays where it is, and both the revert and the
+check before it say so. The first two are tested by stopping a combine (with an
+override and a reader's progress) and a split-book merge at every write
+they make, once just before the write and once just after it lands, and
+then reverting. A stop in the middle of moving a reader's progress can
+leave a copy of it on the surviving book as well; the progress on the
+original book always comes back. The track-number and listening-progress
+fixes each have a test of the exact case that went wrong.
