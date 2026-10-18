@@ -1,7 +1,9 @@
 <!-- file: docs/port-inventory-dupes.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c93b313e-8cfd-4ecc-8f28-443b071cd080 -->
-<!-- last-edited: 2026-08-20 -->
+<!-- last-edited: 2026-10-18 -->
+
+> **Superseded** by `docs/proposals/2026-10-holistic/03-dedup-page-retirement.md`; the old /dedup page was retired.
 
 # Port inventory — `UnifiedDedupTab` → the dupes lane
 

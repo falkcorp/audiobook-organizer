@@ -1,7 +1,9 @@
 <!-- file: docs/port-inventory-phase7.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.0.1 -->
 <!-- guid: b0d4917c-52ae-4f38-9c61-7e2038ab5d19 -->
-<!-- last-edited: 2026-08-20 -->
+<!-- last-edited: 2026-10-18 -->
+
+> **Superseded** by `docs/proposals/2026-10-holistic/03-dedup-page-retirement.md`; the old /dedup page was retired.
 
 # Phase 7 inventory — what actually gets deleted
 
