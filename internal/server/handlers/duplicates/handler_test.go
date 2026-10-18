@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
 // last-edited: 2026-10-18
 
@@ -179,12 +179,13 @@ func TestCombineBooks_OK(t *testing.T) {
 	}
 }
 
-// A combine whose journal was never finalized offers no operation to revert
-// and says it cannot be undone.
-func TestCombineBooks_UndoUnavailable_OffersNoOperation(t *testing.T) {
+// A combine whose journal could not be marked applied still offers its
+// operation: the pending journal names every step, and reverting replays it.
+func TestCombineBooks_JournalPending_StillOffersTheOperation(t *testing.T) {
 	h, d := newHandler(t)
 	d.merge.EXPECT().CombineBooks([]string{"b", "a"}, "a", (*merge.CombineOverride)(nil)).Return(&merge.CombineResult{
-		PrimaryID: "a", FilesMoved: 1, BooksDeleted: 1, OperationID: "op-combine", UndoUnavailable: "disk full",
+		PrimaryID: "a", FilesMoved: 1, BooksDeleted: 1, OperationID: "op-combine", JournalID: "J1",
+		JournalPending: "disk full", Warnings: []string{"metadata override not applied"},
 	}, nil)
 	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b"}).Return(1)
 	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
@@ -193,11 +194,11 @@ func TestCombineBooks_UndoUnavailable_OffersNoOperation(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if strings.Contains(body, "operation_id") || strings.Contains(body, "journal_id") {
-		t.Fatalf("an undo id is offered for a combine with no undo: %s", body)
-	}
-	if !strings.Contains(body, `"undo_unavailable":"disk full"`) || !strings.Contains(body, "cannot be undone") {
-		t.Fatalf("response does not say the combine cannot be undone: %s", body)
+	for _, want := range []string{`"operation_id":"op-combine"`, `"journal_id":"J1"`, `"journal_pending":"disk full"`,
+		"still pending: reverting operation op-combine replays", `"warnings":["metadata override not applied"]`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response lacks %s: %s", want, body)
+		}
 	}
 }
 

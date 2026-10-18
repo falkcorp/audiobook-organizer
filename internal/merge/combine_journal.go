@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -55,11 +55,15 @@ const combineJournalPrefix = "merge:combine-journal:"
 // Combine journal statuses.
 const (
 	// CombineJournalPending is written BEFORE the combine mutates anything. A
-	// journal left in this state names a combine that failed or crashed part
-	// way; it is never undoable automatically (the recorded moves may not all
-	// have happened), but it tells an operator exactly what was attempted.
+	// journal left in this state names a merge that failed or crashed part
+	// way, or one whose final journal write failed. A StepJournaled journal
+	// (every writer today) names each step before or as it runs, so
+	// UndoCombine replays it with retry tolerance: a step that never ran
+	// leaves its row where it already is. A Pending journal that is not
+	// StepJournaled (CombineBooks before it journaled each step) does not
+	// record what ran and is refused.
 	CombineJournalPending = "pending"
-	// CombineJournalApplied marks a combine that completed. Only these undo.
+	// CombineJournalApplied marks a merge that completed.
 	CombineJournalApplied = "applied"
 	// CombineJournalUndone marks a combine that UndoCombine reversed.
 	CombineJournalUndone = "undone"
@@ -70,6 +74,23 @@ const (
 	// applyUndo, whose steps are each safe to re-run).
 	CombineJournalUndoFailed = "undo_failed"
 )
+
+// SurvivorNumbering values (CombineJournal.SurvivorNumbering).
+const (
+	// SurvivorNumberingUntouched: the merge stopped before any renumbering
+	// of the survivor's own rows could run. Undo leaves their numbers alone:
+	// a number there now was set by someone else, after.
+	SurvivorNumberingUntouched = "untouched"
+	// SurvivorNumberingMayChange: the merge's body completed, so a
+	// play-order stamp may have renumbered the survivor's own rows.
+	SurvivorNumberingMayChange = "may_change"
+)
+
+// survivorMayBeRenumbered reports whether undo restores the numbers of the
+// survivor's own rows.
+func (j *CombineJournal) survivorMayBeRenumbered() bool {
+	return j.SurvivorNumbering != SurvivorNumberingUntouched
+}
 
 // CombineJournal is the undo record for one CombineBooks call.
 type CombineJournal struct {
@@ -85,15 +106,25 @@ type CombineJournal struct {
 	Absorbed []CombineAbsorbed `json:"absorbed"`
 
 	// SurvivorFiles are file rows planOwnFile attached to the survivor for
-	// its OWN FilePath (virtual-segment materialization). Created rows are
-	// deleted on undo; a row reattached from another owner is moved back.
+	// its OWN FilePath (virtual-segment materialization). A created row stays
+	// on the survivor on undo (it names the survivor's own audio); a row
+	// reattached from another owner is moved back. No row is ever deleted.
 	SurvivorFiles []CombineFileMove `json:"survivor_files,omitempty"`
 
 	// SurvivorOwnFiles are the rows the survivor already owned before the
-	// combine. They never move, but the regroup multidisc apply stamps new
-	// disc/track numbers on them right after the combine, so undo restores
-	// their DiscBefore/TrackBefore too (and refuses if one was moved away).
+	// combine. They never move, but a play-order stamp can renumber them
+	// once the combine's body is done (the regroup multidisc apply right
+	// after CombineBooks returns, the split merge's step 2b), so undo
+	// restores their DiscBefore/TrackBefore too -- only when
+	// SurvivorNumbering says such a stamp could have run -- and refuses if
+	// one was moved away.
 	SurvivorOwnFiles []CombineFileMove `json:"survivor_own_files,omitempty"`
+	// SurvivorNumbering records whether a renumbering of the survivor's own
+	// rows can have followed this merge: SurvivorNumberingUntouched until the
+	// writer persists SurvivorNumberingMayChange at the point a stamp can
+	// run. A journal written before the field existed has "", read as may
+	// change (the old rule).
+	SurvivorNumbering string `json:"survivor_numbering,omitempty"`
 
 	// Override is non-nil when the combine applied a metadata override to the
 	// survivor; it records what the survivor held before.
@@ -102,11 +133,11 @@ type CombineJournal struct {
 	// survivor where the survivor's field was EMPTY (never an overwrite).
 	// Undo empties each such field again if it still holds the filled value.
 	FilledEmpty *CombineFillEmpty `json:"filled_empty,omitempty"`
-	// StepJournaled is set by writers that re-write the journal after EVERY
-	// step (dedup.MergeSplitBookClusterWithOptions). Only such a journal can
-	// be undone while still Pending: it names everything done before a crash.
-	// CombineBooks writes Pending once up front and Applied at the end, so its
-	// Pending journal does not record what ran and stays non-undoable.
+	// StepJournaled is set by writers that journal every step before or as
+	// it runs (dedup.MergeSplitBookClusterWithOptions, and CombineBooks since
+	// #4064). Only such a journal can be undone while still Pending: it names
+	// everything done before a crash. A CombineBooks journal written before
+	// then has it unset, and its Pending state stays non-undoable.
 	StepJournaled bool `json:"step_journaled,omitempty"`
 
 	// ITunesRemovals is always empty for a combine and is recorded so the
@@ -133,9 +164,12 @@ type CombineAbsorbed struct {
 	FilePath         string  `json:"file_path"`
 	IsPrimaryVersion *bool   `json:"is_primary_version,omitempty"`
 	VersionGroupID   *string `json:"version_group_id,omitempty"`
-	// MarkedForDeletionAt is the soft-delete stamp the combine wrote, read
-	// back from the store. Undo refuses if the row no longer carries it: the
-	// book was restored, re-deleted, or purged by something else since.
+	// MarkedForDeletionAt is the soft-delete stamp the merge writes. It is
+	// minted and journaled BEFORE the soft-delete, which writes exactly it
+	// (re-journaled if the store's read-back differs), so a crash in between
+	// cannot leave a retired book the journal does not name. Undo restores
+	// only a row carrying it (retiredByJournal); an applied journal refuses
+	// when the row no longer does (restored, re-deleted or purged since).
 	MarkedForDeletionAt *time.Time `json:"marked_for_deletion_at,omitempty"`
 
 	// Files are the rows moved from this book onto the survivor.
@@ -1531,22 +1565,34 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		absorbedIDs[a.BookID] = true
 	}
 	moveBack := func(moves []CombineFileMove) error {
-		// Every step here is safe to re-run after a failed attempt: a row
-		// already back on its owner is not moved again (only its disc/track
-		// are re-checked).
-		byOwner := map[string][]CombineFileMove{}
+		// Decided row by row, never by the journal's status: only a row on
+		// the survivor now is one the merge moved (or created) and has not
+		// been moved back. Its numbers are restored while it is still there,
+		// then it moves. A row already on its recorded owner is not written
+		// at all: either the merge never moved it (it stopped first, or left
+		// its book live), or an earlier attempt of this undo already moved
+		// it back, numbers first. Either way a number it carries now was set
+		// after, by someone else, and stays. Every step is safe to re-run.
+		byOwner := map[string][]string{}
 		var owners []string
 		for _, fm := range moves {
+			cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
+			if err != nil {
+				return fmt.Errorf("load file %s: %w", fm.FileID, err)
+			}
+			if cur == nil {
+				// Not on the survivor: back on its owner already, never
+				// moved, or (a created row) never created.
+				continue
+			}
 			if fm.Created && fm.FromBookID == j.SurvivorID {
-				cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
-				if err != nil {
-					return fmt.Errorf("load file row %s created by the combine: %w", fm.FileID, err)
-				}
-				if cur == nil {
-					continue // named by the journal, never created (a combine stopped first)
-				}
-				if err := ms.restoreSurvivorFileNumbers(j, fm); err != nil {
-					return err
+				// The survivor's own materialized row stays where it is. Its
+				// numbers (zero before) are put back only when a renumbering
+				// could have followed the merge.
+				if j.survivorMayBeRenumbered() {
+					if err := ms.restoreSurvivorFileNumbers(j, fm); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -1558,59 +1604,24 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 					fm.FileID, fm.FromBookID, j.SurvivorID))
 				continue
 			}
-			if fm.Created {
-				cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
-				if err != nil {
-					return fmt.Errorf("load file row %s created by the combine: %w", fm.FileID, err)
-				}
-				if cur == nil {
-					if back, berr := ms.db.GetBookFileByID(fm.FromBookID, fm.FileID); berr == nil && back == nil {
-						// Neither on the survivor nor on its owner: a
-						// combine stopped between journaling the row and
-						// creating it, or an undo from before rows were
-						// repointed deleted it.
-						continue
-					}
+			if cur.DiscNumber != fm.DiscBefore || cur.TrackNumber != fm.TrackBefore {
+				cur.DiscNumber, cur.TrackNumber = fm.DiscBefore, fm.TrackBefore
+				if err := ms.db.UpdateBookFile(cur.ID, cur); err != nil {
+					return fmt.Errorf("restore disc/track of file %s: %w", cur.ID, err)
 				}
 			}
 			if _, ok := byOwner[fm.FromBookID]; !ok {
 				owners = append(owners, fm.FromBookID)
 			}
-			byOwner[fm.FromBookID] = append(byOwner[fm.FromBookID], fm)
+			byOwner[fm.FromBookID] = append(byOwner[fm.FromBookID], fm.FileID)
 		}
 		for _, owner := range owners {
-			group := byOwner[owner]
-			ids := make([]string, 0, len(group))
-			for _, fm := range group {
-				cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
-				if err != nil {
-					return fmt.Errorf("load file %s: %w", fm.FileID, err)
-				}
-				if cur != nil {
-					ids = append(ids, fm.FileID)
-				}
+			ids := byOwner[owner]
+			if err := ms.db.MoveBookFilesToBook(ids, j.SurvivorID, owner); err != nil {
+				return fmt.Errorf("move %d file(s) back to %s: %w", len(ids), owner, err)
 			}
-			if len(ids) > 0 {
-				if err := ms.db.MoveBookFilesToBook(ids, j.SurvivorID, owner); err != nil {
-					return fmt.Errorf("move %d file(s) back to %s: %w", len(ids), owner, err)
-				}
-				FollowFileMove(ms.db, j.SurvivorID, owner, ids)
-				res.FilesMoved += len(ids)
-			}
-			for _, fm := range group {
-				f, err := ms.db.GetBookFileByID(owner, fm.FileID)
-				if err != nil || f == nil {
-					return fmt.Errorf("reload moved-back file %s: %v", fm.FileID, err)
-				}
-				if f.DiscNumber == fm.DiscBefore && f.TrackNumber == fm.TrackBefore {
-					continue
-				}
-				f.DiscNumber = fm.DiscBefore
-				f.TrackNumber = fm.TrackBefore
-				if err := ms.db.UpdateBookFile(f.ID, f); err != nil {
-					return fmt.Errorf("restore disc/track of file %s: %w", f.ID, err)
-				}
-			}
+			FollowFileMove(ms.db, j.SurvivorID, owner, ids)
+			res.FilesMoved += len(ids)
 		}
 		return nil
 	}
@@ -1622,9 +1633,15 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	if err := moveBack(j.SurvivorFiles); err != nil {
 		return res, err
 	}
-	for _, fm := range j.SurvivorOwnFiles {
-		if err := ms.restoreSurvivorFileNumbers(j, fm); err != nil {
-			return res, err
+	// The survivor's own rows never moved. Their numbers are restored only
+	// when the journal records that a renumbering could have run: a merge
+	// stopped before that point never renumbered them, and a number there
+	// now is someone else's later choice.
+	if j.survivorMayBeRenumbered() {
+		for _, fm := range j.SurvivorOwnFiles {
+			if err := ms.restoreSurvivorFileNumbers(j, fm); err != nil {
+				return res, err
+			}
 		}
 	}
 

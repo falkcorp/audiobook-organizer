@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_retry_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9d2f4b61-8a3e-4c07-b5d1-6e9a0c7f2b48
 // last-edited: 2026-10-18
 
@@ -38,13 +38,6 @@ func (s *failNthStore) ReassignExternalID(source, externalID, newBookID string) 
 		return err
 	}
 	return s.Store.ReassignExternalID(source, externalID, newBookID)
-}
-
-func (s *failNthStore) DeleteBookFile(id string) error {
-	if err := s.hit("DeleteBookFile"); err != nil {
-		return err
-	}
-	return s.Store.DeleteBookFile(id)
 }
 
 func (s *failNthStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {

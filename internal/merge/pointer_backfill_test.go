@@ -1,5 +1,5 @@
 // file: internal/merge/pointer_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3052d5ca-020e-4197-8003-3e5e527e0938
 // last-edited: 2026-10-18
 
@@ -135,4 +135,30 @@ func TestBackfillJournalPointer_LedgerReadOnlyForJournalsNewerThanIndex(t *testi
 	require.Equal(t, PointerBackfillHasPointer, got.Verdict, "the newer journal's own pointer is found in the ledger")
 	require.Equal(t, newer.OperationID, got.OperationID)
 	require.Equal(t, 1, n)
+}
+
+// lockProbeScanner checks, from inside the ledger scan, that the merge lock
+// is free: the scan reads the whole ledger and must not stall every merge.
+type lockProbeScanner struct {
+	*database.PebbleStore
+	scanned *bool
+}
+
+func (s lockProbeScanner) ScanOperationChanges(fn func(*database.OperationChange) error) error {
+	*s.scanned = true
+	if !mergeSerializeMu.mu.TryLock() {
+		return fmt.Errorf("the ledger scan ran inside the merge lock")
+	}
+	mergeSerializeMu.mu.Unlock()
+	return s.PebbleStore.ScanOperationChanges(fn)
+}
+
+// NewPointerBackfillIndex holds the merge lock only to stamp asOf; the
+// ledger scan runs outside it.
+func TestNewPointerBackfillIndex_ScansOutsideTheMergeLock(t *testing.T) {
+	store := setupTestStore(t).(*database.PebbleStore)
+	scanned := false
+	_, err := NewService(lockProbeScanner{store, &scanned}).NewPointerBackfillIndex()
+	require.NoError(t, err)
+	require.True(t, scanned)
 }

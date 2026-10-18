@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.104.1
+// version: 1.104.2
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-18
 
@@ -1525,11 +1525,13 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           : undefined;
       const result = await api.combineBooks(keepId, mergeIds, override);
       const combined = `Combined ${result.files_moved} files into one book; moved ${result.books_deleted} entries to trash`;
-      if (result.undo_unavailable) {
+      if (result.journal_pending) {
         toast(
-          `${combined}. This combine cannot be undone: its undo journal could not be saved.`,
+          `${combined}. Its undo record could not be finalized; it still lists every step, so reverting the operation replays them.`,
           'warning'
         );
+      } else if (result.warnings?.length) {
+        toast(`${combined}. ${result.warnings.join(' ')}`, 'warning');
       } else {
         toast(`${combined}.`, 'success');
       }

@@ -1,5 +1,5 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
 // last-edited: 2026-10-18
 
@@ -519,7 +519,10 @@ func TestB3_CombineBooks_OverrideCreateAuthorError_NonFatal(t *testing.T) {
 	assert.Nil(t, fresh.AuthorID, "author creation failed, so no author should have been linked")
 }
 
-func TestB3_CombineBooks_OverrideSetBookAuthorsError_StillSetsAuthorID(t *testing.T) {
+// A failed SetBookAuthors drops the author from the override: the book-row
+// AuthorID is not written either, and the journal records no author change,
+// so the undo neither checks nor rolls back one that never happened.
+func TestB3_CombineBooks_OverrideSetBookAuthorsError_SkipsTheAuthor(t *testing.T) {
 	real := setupTestStore(t)
 
 	survivor := &database.Book{ID: ulid.Make().String(), Title: "T", Format: "mp3", FilePath: "/tmp/b3ovsbaerr-survivor.mp3"}
@@ -536,16 +539,15 @@ func TestB3_CombineBooks_OverrideSetBookAuthorsError_StillSetsAuthorID(t *testin
 	require.NoError(t, err, "a failed SetBookAuthors must not fail the whole combine")
 	assert.Equal(t, 1, res.BooksDeleted)
 
-	// SetBookAuthors failing does not gate the backward-compat AuthorID
-	// write on the book row — the two are independent.
 	fresh, err := real.GetBookByID(survivor.ID)
 	require.NoError(t, err)
-	require.NotNil(t, fresh.AuthorID, "book-row AuthorID should still be set even though SetBookAuthors failed")
-
-	author, err := real.GetAuthorByName("Reaches Fallback")
+	require.Nil(t, fresh.AuthorID, "the author is not half-applied")
+	j, err := ms.GetCombineJournal(res.JournalID)
 	require.NoError(t, err)
-	require.NotNil(t, author)
-	assert.Equal(t, author.ID, *fresh.AuthorID)
+	require.NotNil(t, j.Override)
+	require.Nil(t, j.Override.AuthorIDAfter)
+	require.Empty(t, j.Override.Applied.Author)
+	require.NotContains(t, j.Override.FieldStates, database.FieldKeyAuthorName)
 }
 
 // ---------- planVirtualFile/applyVirtualFile error branches (unexported helpers) ----------
