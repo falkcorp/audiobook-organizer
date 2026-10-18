@@ -866,12 +866,29 @@ func newOwnerRig(t *testing.T, store *colFakeStore, users []database.User,
 	g := r.Group("/api/v1")
 	g.GET("/collections/:id", h.GetCollection)
 	g.POST("/collections/:id/materialize", h.MaterializeCollection)
+	g.POST("/collections", h.CreateCollection)
+	g.PUT("/collections/:id", h.UpdateCollection)
 	return &ownerRig{r: r, store: store}
 }
 
 func (o *ownerRig) do(t *testing.T, method, path, asUser string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, nil)
+	if asUser != "" {
+		req.Header.Set("X-Test-User", asUser)
+	}
+	w := httptest.NewRecorder()
+	o.r.ServeHTTP(w, req)
+	return w
+}
+
+// send is do with a JSON body.
+func (o *ownerRig) send(t *testing.T, method, path, asUser string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(method, path, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
 	if asUser != "" {
 		req.Header.Set("X-Test-User", asUser)
 	}
@@ -998,4 +1015,152 @@ func TestDynamicCollectionWithNoEvaluatorIs503(t *testing.T) {
 	w = rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
 	assert.Equal(t, []string{"b9"}, decodeMaterialized(t, w),
 		"a read serves the last stored members rather than failing")
+}
+
+// ── per-user fields in a query are the evaluator's to write ─────────────────
+
+// A dynamic collection is evaluated as its owner and the answer is stored and
+// served to everybody. Anyone with collections.manage could therefore edit the
+// query to read the owner's private state back out of the members. The fix:
+// only the evaluating user may write a per-user field into the query.
+func TestCollectionPerUserQueryIsEvaluatorOnly(t *testing.T) {
+	const forbidden = http.StatusForbidden
+	aliceOwned := func() *colFakeStore {
+		return &colFakeStore{cols: []database.Collection{{
+			ID: "c1", Name: "Alice's", Type: database.CollectionTypeDynamic,
+			Query: "title:Alpha", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b1"},
+		}}}
+	}
+	put := func(rig *ownerRig, who, query string) *httptest.ResponseRecorder {
+		return rig.send(t, http.MethodPut, "/api/v1/collections/c1", who, map[string]any{"query": query})
+	}
+	requireRefused := func(t *testing.T, w *httptest.ResponseRecorder) {
+		t.Helper()
+		require.Equal(t, forbidden, w.Code, "body: %s", w.Body.String())
+		var body struct {
+			Code  string `json:"code"`
+			Error string `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), w.Body.String())
+		assert.Equal(t, handlers.ErrCodeCollectionPerUserQueryOwnerOnly, body.Code)
+		assert.Contains(t, body.Error, "only the collection's owner can use per-user fields")
+		for _, f := range []string{"read_status", "progress_pct", "last_played"} {
+			assert.Contains(t, body.Error, f)
+		}
+	}
+
+	t.Run("a non-owner cannot put a per-user field in the query", func(t *testing.T) {
+		for _, q := range []string{
+			"read_status:finished",
+			"title:Alpha AND read_status:finished",
+			"-read_status:finished",
+			"NOT read_status:unstarted",
+			"progress_pct:>5",
+			"last_played:>2026-01-01",
+			"last_played:>-30d",
+			"title:Alpha OR (title:Bravo AND read_status:in_progress)",
+			"read_status:(finished|in_progress)",
+		} {
+			store := aliceOwned()
+			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+			requireRefused(t, put(rig, "bob", q))
+			assert.Equal(t, "title:Alpha", store.cols[0].Query, "%q: the query must be unchanged", q)
+			assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs, "%q: so must the members", q)
+			assert.Zero(t, store.updates, "%q: nothing is written", q)
+		}
+	})
+
+	t.Run("a non-owner may still edit a query with no per-user field", func(t *testing.T) {
+		store := aliceOwned()
+		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+		w := put(rig, "bob", "title:Bravo")
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, "title:Bravo", store.cols[0].Query)
+		assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs)
+	})
+
+	t.Run("the owner may use a per-user field, and it is read as the owner", func(t *testing.T) {
+		store := aliceOwned()
+		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+		w := put(rig, "alice", "read_status:finished")
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, "read_status:finished", store.cols[0].Query)
+		assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
+	})
+
+	t.Run("only the query is gated: a non-owner can rename, re-send or strip it", func(t *testing.T) {
+		store := &colFakeStore{cols: []database.Collection{{
+			ID: "c1", Name: "Alice's", Type: database.CollectionTypeDynamic,
+			Query: "read_status:finished", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b1"},
+		}}}
+		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+
+		w := rig.send(t, http.MethodPut, "/api/v1/collections/c1", "bob", map[string]any{"name": "Renamed"})
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, "Renamed", store.cols[0].Name)
+
+		// The same text again changes nothing the evaluator's state is asked about.
+		w = put(rig, "bob", "read_status:finished")
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+		// Changing it to another per-user query is refused ...
+		requireRefused(t, put(rig, "bob", "read_status:in_progress"))
+		assert.Equal(t, "read_status:finished", store.cols[0].Query)
+
+		// ... and removing the per-user field is not.
+		w = put(rig, "bob", "title:Charlie")
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, "title:Charlie", store.cols[0].Query)
+	})
+
+	t.Run("a collection evaluated as the first admin: only that admin may set one", func(t *testing.T) {
+		for name, owner := range map[string]string{"owner row gone": "deleted-user", "no owner recorded": ""} {
+			t.Run(name, func(t *testing.T) {
+				store := aliceOwned()
+				store.cols[0].CreatedByUserID = owner
+				rig := newOwnerRig(t, store, ownerUsers(), ownerStates()) // alice is the first admin
+				requireRefused(t, put(rig, "bob", "read_status:finished"))
+				assert.Equal(t, "title:Alpha", store.cols[0].Query)
+				assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
+
+				w := put(rig, "alice", "read_status:finished")
+				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			})
+		}
+	})
+
+	t.Run("nobody can set one when there is no evaluator at all", func(t *testing.T) {
+		users := []database.User{{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active"}}
+		store := aliceOwned()
+		store.cols[0].CreatedByUserID = "deleted-user"
+		rig := newOwnerRig(t, store, users, ownerStates())
+		requireRefused(t, put(rig, "bob", "read_status:finished"))
+		assert.Equal(t, "title:Alpha", store.cols[0].Query)
+	})
+
+	t.Run("create: the creator is the owner and the evaluator", func(t *testing.T) {
+		store := &colFakeStore{}
+		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+		w := rig.send(t, http.MethodPost, "/api/v1/collections", "bob", map[string]any{
+			"name": "Bob finished", "type": "dynamic", "query": "read_status:finished"})
+		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+		require.Len(t, store.cols, 1)
+		assert.Equal(t, "bob", store.cols[0].CreatedByUserID)
+		assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs,
+			"evaluated as bob (b2), never as the first admin alice (b1)")
+	})
+
+	t.Run("create: a creator who is not a user row never borrows the admin's state", func(t *testing.T) {
+		store := &colFakeStore{}
+		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+		w := rig.send(t, http.MethodPost, "/api/v1/collections", "ghost", map[string]any{
+			"name": "Ghost finished", "type": "dynamic", "query": "read_status:finished"})
+		requireRefused(t, w)
+		assert.Empty(t, store.cols, "nothing is stored")
+
+		// Without a per-user field the same caller may create one.
+		w = rig.send(t, http.MethodPost, "/api/v1/collections", "ghost", map[string]any{
+			"name": "Ghost title", "type": "dynamic", "query": "title:Alpha"})
+		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	})
 }

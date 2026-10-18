@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,40 @@ func IsIndexedField(name string) bool {
 	}
 	_, ok := indexedFields[name]
 	return ok
+}
+
+// IsPerUserField reports whether name is a per-user field: its value comes from
+// the evaluating user's own state (UserBookState), not from the book.
+func IsPerUserField(name string) bool {
+	_, ok := perUserFieldSet[name]
+	return ok
+}
+
+// PerUserFieldNames lists the per-user fields, sorted. It reads the same set
+// the translator routes on, so a message that names them cannot drift from it.
+func PerUserFieldNames() []string {
+	out := make([]string, 0, len(perUserFieldSet))
+	for name := range perUserFieldSet {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// QueryUsesPerUserField reports whether the query text references any per-user
+// field. Text that does not parse reports false: it cannot be evaluated, so it
+// reads no one's state.
+func QueryUsesPerUserField(query string) bool {
+	ast, err := ParseQuery(query)
+	if err != nil {
+		return false
+	}
+	for _, name := range FieldNames(ast) {
+		if IsPerUserField(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // FieldNames returns every field name referenced by a parsed query, in order

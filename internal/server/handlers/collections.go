@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-18
 
@@ -52,6 +52,17 @@ import (
 // as MaterializedBookIDs, and serve that to everyone on the ABS surface, which
 // never evaluates. So the evaluating user is CreatedByUserID (see evaluatorFor).
 // Smart PLAYLISTS stay per-user; they are a different feature.
+//
+// ONLY THE EVALUATOR MAY WRITE A PER-USER FIELD INTO A QUERY. Because the query is
+// evaluated as the owner and the answer (MaterializedBookIDs) is served to every
+// reader, anyone allowed to edit a collection could otherwise set
+// read_status:finished or last_played:>2026-01-01 on someone else's collection and
+// read that person's private listening state back out of its members. So a query
+// that references a per-user field (search.QueryUsesPerUserField) is accepted
+// only from the user evaluatorFor resolves to; anyone else with collections.manage
+// still edits every other part of the collection, and any query without one. A
+// collection with no usable owner evaluates as the first active admin, so only
+// that admin may set one there. See requirePerUserQueryEvaluator.
 
 // CollectionCreateReq is the payload for POST /api/v1/collections.
 //
@@ -217,6 +228,15 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 		CreatedByUserID: CallingUserID(c),
 	}
 
+	// The creator is the owner and the evaluator, never a stand-in: a per-user
+	// query is refused unless evaluatorFor resolves to the creator, which it does
+	// whenever the creator is a user row. A creator who is not (no-auth "_local",
+	// a row deleted mid-request) would otherwise be evaluated as the first admin
+	// and read the admin's state.
+	if col.Type == database.CollectionTypeDynamic && !h.requirePerUserQueryEvaluator(c, col, col.Query) {
+		return
+	}
+
 	// Evaluate a dynamic collection ONCE at creation so it is populated the first
 	// time anyone looks at it. Read paths deliberately serve MaterializedBookIDs
 	// without re-evaluating (they must not depend on the index being open), so a
@@ -343,6 +363,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
+	origQuery := col.Query
 
 	if req.Name != nil {
 		if strings.TrimSpace(*req.Name) == "" {
@@ -373,6 +394,12 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		}
 		if strings.TrimSpace(*req.Query) == "" {
 			httputil.RespondWithBadRequest(c, "a dynamic collection requires a query")
+			return
+		}
+		// Only a CHANGED query is checked: renaming a collection whose stored query
+		// already has a per-user field, or re-sending that query unchanged, writes
+		// nothing new into what the evaluator's state is asked about.
+		if *req.Query != origQuery && !h.requirePerUserQueryEvaluator(c, col, *req.Query) {
 			return
 		}
 		col.Query = *req.Query
@@ -485,6 +512,35 @@ func (h *CollectionHandler) evaluate(col *database.Collection) ([]string, error)
 		col.Query, col.SortJSON, col.Limit,
 		userID,
 	)
+}
+
+// ErrCodeCollectionPerUserQueryOwnerOnly is the error code of the 403 a caller
+// gets for writing a per-user field into a query they do not evaluate as.
+const ErrCodeCollectionPerUserQueryOwnerOnly = "COLLECTION_PER_USER_QUERY_OWNER_ONLY"
+
+// requirePerUserQueryEvaluator reports whether the caller may put query on col,
+// writing the 403 itself when not. A query with no per-user field is always fine.
+// One with one is allowed only when the caller IS the collection's evaluator
+// (evaluatorFor), so nobody can read another user's state through the members
+// the owner-evaluated collection stores. No evaluator at all (no owner row, no
+// active admin) means nobody qualifies.
+func (h *CollectionHandler) requirePerUserQueryEvaluator(c *gin.Context, col *database.Collection, query string) bool {
+	if !search.QueryUsesPerUserField(query) {
+		return true
+	}
+	evaluator, err := h.evaluatorFor(col)
+	if err != nil && !errors.Is(err, ErrNoCollectionEvaluator) {
+		httputil.InternalError(c, "failed to resolve the collection's evaluating user", err)
+		return false
+	}
+	if err == nil && evaluator == CallingUserID(c) {
+		return true
+	}
+	httputil.RespondWithError(c, http.StatusForbidden,
+		"only the collection's owner can use per-user fields ("+strings.Join(search.PerUserFieldNames(), ", ")+
+			") in its query",
+		ErrCodeCollectionPerUserQueryOwnerOnly)
+	return false
 }
 
 // evaluatorFor names the user whose per-user state a dynamic collection is
