@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2188,7 +2188,9 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 				journal.Warnings = append(journal.Warnings, msg)
 				res.Warnings = append(res.Warnings, msg)
 			} else {
-				ms.writeCombineOverride(primaryID, plan, func() error { return ms.putCombineJournal(journal) })
+				warns := ms.writeCombineOverride(primaryID, plan, func() error { return ms.putCombineJournal(journal) })
+				journal.Warnings = append(journal.Warnings, warns...)
+				res.Warnings = append(res.Warnings, warns...)
 				// Records the before-values the writes actually replaced and
 				// drops any sub-write that failed. A failure here is carried by
 				// the final write below.
@@ -2402,11 +2404,15 @@ func (ms *Service) planCombineOverride(primaryID string, override *CombineOverri
 // The before-values are refreshed from the row each write actually replaces
 // (ModifyBook), and a sub-write that fails is dropped from the plan (its
 // Applied field and lock-row entry cleared, AuthorIDAfter nil, AuthorCreated
-// false, and an author row the combine created taken back while nothing
-// credits it) so the undo neither checks nor rolls back a change that never
-// happened and no created author is left that nothing links to. The caller
-// re-journals the plan afterwards.
-func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideUndo, persist func() error) {
+// false) so the undo neither checks nor rolls back a change that never
+// happened. The caller re-journals the plan afterwards.
+//
+// It returns the warnings the caller reports on the combine result and the
+// journal: an author override it dropped, and an author row it created for
+// that override that nothing credits now. That row is left in place, never
+// deleted here (see createdAuthorNote for why); maintenance.purge-empty-authors
+// removes it.
+func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideUndo, persist func() error) (warnings []string) {
 	if plan.Applied.Title != "" || plan.Applied.Narrator != "" {
 		// ModifyBook: only Title and Narrator are written, on the row as it
 		// is under the write lock, so a column another writer committed in
@@ -2425,6 +2431,10 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		})
 		if err != nil || fresh == nil {
 			slog.Warn("combine override ModifyBook", "id", primaryID, "err", err)
+			if err == nil {
+				err = errors.New("book not found")
+			}
+			warnings = append(warnings, fmt.Sprintf("title/narrator override not applied: the book could not be written: %v", err))
 			plan.Applied.Title, plan.Applied.Narrator = "", ""
 			delete(plan.FieldStates, database.FieldKeyTitle)
 			delete(plan.FieldStates, database.FieldKeyNarrator)
@@ -2447,15 +2457,16 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		}
 	}
 	if plan.Applied.Author == "" {
-		return
+		return warnings
 	}
-	// dropAuthor takes the author out of the plan. An author this combine
-	// created is removed with it, unless something credits it by now: it is
-	// journaled (or about to be) as created, and the plan that names it is
-	// about to be rewritten without it, so nothing would ever remove it.
-	dropAuthor := func() {
+	// dropAuthor takes the author out of the plan and says why on the
+	// result. An author row this combine created for it is left in place
+	// (createdAuthorNote): the plan that names it is about to be rewritten
+	// without it, so the warning is the only record that it came from here.
+	dropAuthor := func(why string) {
+		warnings = append(warnings, fmt.Sprintf("author override %q not applied: %s", plan.Applied.Author, why))
 		if plan.AuthorCreated && plan.AuthorIDAfter != nil {
-			ms.removeCreatedAuthor(*plan.AuthorIDAfter, "the override that created it was dropped")
+			warnings = append(warnings, ms.createdAuthorNote(*plan.AuthorIDAfter, plan.Applied.Author)...)
 		}
 		plan.Applied.Author = ""
 		plan.AuthorIDAfter = nil
@@ -2466,21 +2477,22 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		// A new author: created only now that the plan is journaled, and its
 		// id journaled, with the fact that this combine created it, before
 		// any link names it, so the undo always knows which links to put back
-		// and which row to remove. A journal on disk that names the author
-		// but no id (a crash in between) has no link to undo. If that
-		// journal write fails the override is dropped and the row is taken
-		// back (dropAuthor), so no author is left that nothing links to.
+		// and whether this combine created the row. A journal on disk that
+		// names the author but no id (a crash in between) has no link to
+		// undo. If that journal write fails the override is dropped and the
+		// row is left, with a warning (dropAuthor): an author no book credits
+		// is maintenance.purge-empty-authors' to remove.
 		//
 		// MintAuthor, not GetAuthorByName then CreateAuthor: it reports
 		// whether THIS call wrote the row, and only a row it wrote is
 		// journaled as created. An author another writer created in the gap
-		// is linked like any existing one, and the undo never deletes it.
+		// is linked like any existing one, and no warning names it.
 		author, minted, err := ms.db.MintAuthor(plan.Applied.Author)
 		if err != nil || author == nil {
 			mlog.Warn("combine override: author %s not created; author not overridden: %s",
 				logger.SanitizeLogValue(plan.Applied.Author), logger.SanitizeLogValue(fmt.Sprint(err)))
-			dropAuthor()
-			return
+			dropAuthor(fmt.Sprintf("the author could not be created: %v", err))
+			return warnings
 		}
 		id := author.ID
 		plan.AuthorIDAfter = &id
@@ -2488,8 +2500,8 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		if err := persist(); err != nil {
 			mlog.Error("combine override: author %d (%s) could not be journaled; author not overridden: %s",
 				id, logger.SanitizeLogValue(plan.Applied.Author), logger.SanitizeLogValue(fmt.Sprint(err)))
-			dropAuthor()
-			return
+			dropAuthor(fmt.Sprintf("its undo could not be journaled: %v", err))
+			return warnings
 		}
 	}
 	authorID := *plan.AuthorIDAfter
@@ -2497,8 +2509,8 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		{BookID: primaryID, AuthorID: authorID, Role: "author", Position: 0},
 	}); err != nil {
 		slog.Warn("combine override SetBookAuthors", "id", logger.SanitizeLogValue(primaryID), "author", logger.SanitizeLogValue(plan.Applied.Author), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
-		dropAuthor()
-		return
+		dropAuthor(fmt.Sprintf("the author link could not be written: %v", err))
+		return warnings
 	}
 	// Also set AuthorID on the book row for backward compat. ModifyBook:
 	// only AuthorID is written, and its before-value comes from that row.
@@ -2511,18 +2523,21 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		slog.Warn("combine override author ModifyBook", "id", primaryID, "err", err)
 		// The links are written but the row is not: put the links back, so
 		// the half-applied author leaves nothing for the undo to miss.
+		why := fmt.Sprintf("the book's author could not be written: %v", err)
 		if rerr := ms.db.SetBookAuthors(primaryID, plan.AuthorsBefore); rerr != nil {
 			mlog.Error("combine override: author links of %s not put back after a failed author write: %s",
 				logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(rerr)))
+			why += fmt.Sprintf("; the author links it had already written could not be put back either (%v), so book %s may still credit the new author", rerr, primaryID)
 		}
-		dropAuthor()
-		return
+		dropAuthor(why)
+		return warnings
 	}
 	if err := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
 		database.FieldKeyAuthorName: plan.Applied.Author,
 	}); err != nil {
 		slog.Warn("combine override author lock row", "id", b.ID, "err", err)
 	}
+	return warnings
 }
 
 // virtualFilePlan is what attaching a virtual single-file book's FilePath to

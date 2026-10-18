@@ -1,5 +1,5 @@
 // file: internal/merge/combine_override_author_undo_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 7b2d94e1-5c63-4f08-a1d7-3e90c4b6a258
 // last-edited: 2026-10-18
 
@@ -16,7 +16,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
+// The combine and its undo never delete an author (createdAuthorNote has the
+// design decision). These tests pin that: every case asserts the author row
+// the combine created is still there, and that the warning naming
+// maintenance.purge-empty-authors appears exactly when no book credits it.
+
 const createdAuthorName = "Brand New Writer"
+
+// uncreditedNote is the text of the warning about a created author no book
+// credits any more.
+const uncreditedNote = "was created by this combine and is no longer credited on any book"
 
 // combineCreatingAuthor combines two books with an override naming a new
 // author and returns the service, the survivor, the author the combine
@@ -55,32 +64,29 @@ func creditLaterBook(t *testing.T, store *database.PebbleStore, a *database.Auth
 	return id
 }
 
-func requireAuthorLive(t *testing.T, store *database.PebbleStore, id int, live bool) {
+func requireAuthorLive(t *testing.T, store *database.PebbleStore, id int) {
 	t.Helper()
 	got, err := store.GetAuthorByID(id)
 	require.NoError(t, err)
-	if live {
-		require.NotNil(t, got)
-		require.Equal(t, id, got.ID)
-		return
-	}
-	require.True(t, got == nil || got.ID != id, "author %d is gone", id)
+	require.NotNil(t, got, "author %d is never deleted by a combine or its undo", id)
+	require.Equal(t, id, got.ID)
 }
 
-// An undo removes the author the combine created once nothing credits it, and
-// running the removal again is a no-op.
-func TestUndoCombine_RemovesAuthorTheCombineCreated(t *testing.T) {
+// An undo leaves the author the combine created in place and says that no
+// book credits it any more and purge-empty-authors can remove it. Running the
+// undo's note again answers the same.
+func TestUndoCombine_LeavesTheAuthorTheCombineCreatedAndWarns(t *testing.T) {
 	store := setupTestStore(t).(*database.PebbleStore)
 	ms, keep, a, res := combineCreatingAuthor(t, store)
 
 	undo, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	require.Empty(t, undo.Warnings, "an uncredited created author is removed without a warning")
+	joined := strings.Join(undo.Warnings, "\n")
+	require.Contains(t, joined, uncreditedNote)
+	require.Contains(t, joined, "maintenance.purge-empty-authors")
+	require.Contains(t, joined, createdAuthorName)
 
-	got, err := store.GetAuthorByName(createdAuthorName)
-	require.NoError(t, err)
-	require.Nil(t, got, "the author the combine created is removed")
-	requireAuthorLive(t, store, a.ID, false)
+	requireAuthorLive(t, store, a.ID)
 	authors, err := store.GetBookAuthors(keep)
 	require.NoError(t, err)
 	require.Empty(t, authors, "the survivor is back to the credits it had")
@@ -88,15 +94,14 @@ func TestUndoCombine_RemovesAuthorTheCombineCreated(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, b.AuthorID)
 
-	kept, err := ms.removeUncreditedAuthor(a.ID)
-	require.NoError(t, err)
-	require.Empty(t, kept, "a row already gone is not an error")
+	require.Len(t, ms.createdAuthorNote(a.ID, createdAuthorName), 1, "the note is a read: asking again answers the same")
+	requireAuthorLive(t, store, a.ID)
 }
 
-// A book that credits the author after the combine keeps it: through the
-// junction, through the legacy AuthorID alone, or as a narrator. The warning
-// names the author and why it stayed, and the credit is untouched.
-func TestUndoCombine_KeepsCreatedAuthorStillCredited(t *testing.T) {
+// A book that credits the author after the combine (through the junction,
+// through the legacy AuthorID alone, or as a narrator) means it is in use:
+// no purge note, and the credit is untouched.
+func TestUndoCombine_CreatedAuthorStillCreditedGetsNoNote(t *testing.T) {
 	cases := []struct {
 		name             string
 		junction, scalar bool
@@ -117,16 +122,15 @@ func TestUndoCombine_KeepsCreatedAuthorStillCredited(t *testing.T) {
 
 			undo, err := ms.UndoCombine(res.JournalID)
 			require.NoError(t, err)
-			joined := strings.Join(undo.Warnings, "\n")
-			require.Contains(t, joined, "was kept")
-			require.Contains(t, joined, "still credited")
+			require.NotContains(t, strings.Join(undo.Warnings, "\n"), "purge-empty-authors")
 
-			requireAuthorLive(t, store, a.ID, true)
+			requireAuthorLive(t, store, a.ID)
 			if tc.junction {
 				links, err := store.GetBookAuthors(later)
 				require.NoError(t, err)
 				require.Len(t, links, 1)
 				require.Equal(t, a.ID, links[0].AuthorID)
+				require.Equal(t, tc.role, links[0].Role)
 			}
 			if tc.scalar {
 				b, err := store.GetBookByID(later)
@@ -138,26 +142,9 @@ func TestUndoCombine_KeepsCreatedAuthorStillCredited(t *testing.T) {
 	}
 }
 
-// An alias added to the author after the combine is somebody's work that
-// DeleteAuthor would cascade away: the author is kept.
-func TestUndoCombine_KeepsCreatedAuthorWithAnAlias(t *testing.T) {
-	store := setupTestStore(t).(*database.PebbleStore)
-	ms, _, a, res := combineCreatingAuthor(t, store)
-	_, err := store.CreateAuthorAlias(a.ID, "B. New Writer", "pen_name")
-	require.NoError(t, err)
-
-	undo, err := ms.UndoCombine(res.JournalID)
-	require.NoError(t, err)
-	require.Contains(t, strings.Join(undo.Warnings, "\n"), "alias")
-	requireAuthorLive(t, store, a.ID, true)
-	aliases, err := store.GetAuthorAliases(a.ID)
-	require.NoError(t, err)
-	require.Len(t, aliases, 1)
-}
-
 // A journal from before AuthorCreated existed, and an override that linked an
-// author that already existed, both delete nothing.
-func TestUndoCombine_DeletesNoAuthorItDidNotCreate(t *testing.T) {
+// author that already existed, get no note: the combine did not create them.
+func TestUndoCombine_NoNoteForAnAuthorItDidNotCreate(t *testing.T) {
 	t.Run("journal without the field", func(t *testing.T) {
 		store := setupTestStore(t).(*database.PebbleStore)
 		ms, _, a, res := combineCreatingAuthor(t, store)
@@ -172,7 +159,7 @@ func TestUndoCombine_DeletesNoAuthorItDidNotCreate(t *testing.T) {
 		undo, err := ms.UndoCombine(res.JournalID)
 		require.NoError(t, err)
 		require.Empty(t, undo.Warnings)
-		requireAuthorLive(t, store, a.ID, true)
+		requireAuthorLive(t, store, a.ID)
 	})
 	t.Run("author already existed", func(t *testing.T) {
 		store := setupTestStore(t).(*database.PebbleStore)
@@ -191,67 +178,59 @@ func TestUndoCombine_DeletesNoAuthorItDidNotCreate(t *testing.T) {
 		undo, err := ms.UndoCombine(res.JournalID)
 		require.NoError(t, err)
 		require.Empty(t, undo.Warnings)
-		requireAuthorLive(t, store, existing.ID, true)
+		requireAuthorLive(t, store, existing.ID)
 	})
 }
 
-// An author merged into another is gone under its own id (GetAuthorByID
-// answers with the canonical row): removing it touches neither the canonical
-// author nor its credits.
-func TestRemoveUncreditedAuthor_MergedAwayAuthorIsLeftAlone(t *testing.T) {
-	store := setupTestStore(t).(*database.PebbleStore)
-	merged, err := store.CreateAuthor("Merged Away Writer")
-	require.NoError(t, err)
-	canonical, err := store.CreateAuthor("Canonical Writer")
-	require.NoError(t, err)
-	later := creditLaterBook(t, store, canonical, true, true)
-	_, err = store.MergeDeleteAuthor(merged.ID, canonical.ID)
-	require.NoError(t, err)
-
-	kept, err := NewService(store).removeUncreditedAuthor(merged.ID)
-	require.NoError(t, err)
-	require.Empty(t, kept)
-	requireAuthorLive(t, store, canonical.ID, true)
-	links, err := store.GetBookAuthors(later)
-	require.NoError(t, err)
-	require.Len(t, links, 1, "the canonical author's credit survives")
-}
-
-// deleteFailStore fails DeleteAuthor.
-type deleteFailStore struct {
+// creditCheckFailStore fails the credit lookup createdAuthorNote asks.
+type creditCheckFailStore struct {
 	*database.PebbleStore
 }
 
-func (deleteFailStore) DeleteAuthor(int) error { return errors.New("injected DeleteAuthor failure") }
+func (creditCheckFailStore) GetBooksByAuthorIDForRelinkCore(int) ([]database.BookCore, error) {
+	return nil, errors.New("injected credit lookup failure")
+}
 
-// A removal that fails does not fail the undo: the survivor is restored, and
-// the warning says the row was left.
-func TestUndoCombine_AuthorDeleteFailureIsAWarning(t *testing.T) {
+// A credit check that cannot be answered does not fail the undo: the survivor
+// is restored, the author stays, and the warning says the check failed.
+func TestUndoCombine_UncheckableCreditIsAWarning(t *testing.T) {
 	store := setupTestStore(t).(*database.PebbleStore)
 	_, keep, a, res := combineCreatingAuthor(t, store)
 
-	undo, err := NewService(deleteFailStore{store}).UndoCombine(res.JournalID)
+	undo, err := NewService(creditCheckFailStore{store}).UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	require.Contains(t, strings.Join(undo.Warnings, "\n"), "left in place")
-	requireAuthorLive(t, store, a.ID, true)
+	require.Contains(t, strings.Join(undo.Warnings, "\n"), "could not be checked")
+	requireAuthorLive(t, store, a.ID)
 	authors, err := store.GetBookAuthors(keep)
 	require.NoError(t, err)
 	require.Empty(t, authors, "the survivor is restored all the same")
 }
 
-// Gap 1: when the journal write that carries the new author's id fails, the
-// author row just created is taken back, and the override is skipped.
-func TestCombineOverride_FailedAuthorIDJournalLeavesNoAuthor(t *testing.T) {
+// requireDroppedOverrideNotes asserts the combine result names the dropped
+// author override and the uncredited author it created.
+func requireDroppedOverrideNotes(t *testing.T, warnings []string) {
+	t.Helper()
+	joined := strings.Join(warnings, "\n")
+	require.Contains(t, joined, `author override "`+createdAuthorName+`" not applied`)
+	require.Contains(t, joined, uncreditedNote)
+	require.Contains(t, joined, "maintenance.purge-empty-authors")
+}
+
+// When the journal write that carries the new author's id fails, the override
+// is skipped, the author row just created stays, and the combine result says
+// both (round-4 N5: these were log lines only).
+func TestCombineOverride_FailedAuthorIDJournalKeepsAuthorAndWarns(t *testing.T) {
 	store := setupTestStore(t).(*database.PebbleStore)
 	keep, gone := overrideBooks(t, store)
 	ws := &overrideJournalStore{PebbleStore: store, failAuthorIDJournal: true}
 	ms := NewService(ws)
 	res, err := ms.CombineBooksWithOptions([]string{keep, gone}, keep, &CombineOverride{Author: createdAuthorName}, CombineOptions{})
 	require.NoError(t, err)
+	requireDroppedOverrideNotes(t, res.Warnings)
 
 	a, err := store.GetAuthorByName(createdAuthorName)
 	require.NoError(t, err)
-	require.Nil(t, a, "the author created before the failed journal write is removed again")
+	require.NotNil(t, a, "the author created before the failed journal write is left for purge-empty-authors")
 	b, err := store.GetBookByID(keep)
 	require.NoError(t, err)
 	require.Nil(t, b.AuthorID, "the override was skipped")
@@ -261,20 +240,22 @@ func TestCombineOverride_FailedAuthorIDJournalLeavesNoAuthor(t *testing.T) {
 		require.Nil(t, j.Override.AuthorIDAfter)
 		require.False(t, j.Override.AuthorCreated)
 	}
+	require.Contains(t, strings.Join(j.Warnings, "\n"), uncreditedNote, "the journal keeps the warning too")
 }
 
-// The same orphan after the id was journaled: a failed link write drops the
-// override, and the author the combine created goes with it.
-func TestCombineOverride_FailedLinkRemovesTheCreatedAuthor(t *testing.T) {
+// The same after the id was journaled: a failed link write drops the
+// override, the author the combine created stays, and the result says so.
+func TestCombineOverride_FailedLinkKeepsAuthorAndWarns(t *testing.T) {
 	real := setupTestStore(t).(*database.PebbleStore)
 	keep, gone := overrideBooks(t, real)
 	ms := NewService(&b3FaultStore{Store: real, failSetBookAuthors: true})
 	res, err := ms.CombineBooksWithOptions([]string{keep, gone}, keep, &CombineOverride{Author: createdAuthorName}, CombineOptions{})
 	require.NoError(t, err)
+	requireDroppedOverrideNotes(t, res.Warnings)
 
 	a, err := real.GetAuthorByName(createdAuthorName)
 	require.NoError(t, err)
-	require.Nil(t, a, "a dropped override leaves no author row behind")
+	require.NotNil(t, a, "a dropped override leaves its author for purge-empty-authors")
 	j, err := ms.GetCombineJournal(res.JournalID)
 	require.NoError(t, err)
 	require.NotNil(t, j.Override)
