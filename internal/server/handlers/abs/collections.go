@@ -75,6 +75,10 @@ type CollectionStore interface {
 	CreateCollection(col *database.Collection) (*database.Collection, error)
 	UpdateCollection(col *database.Collection) error
 	DeleteCollection(id string) error
+	// The membership routes (single add/remove, batch add/remove) write through
+	// the store's locked operations, never read-modify-write of col.BookIDs, so
+	// two racing writers cannot lose one another's change.
+	database.CollectionMembershipStore
 }
 
 // absCollectionPageSize bounds one page of collections. Like playlists, the
@@ -340,30 +344,15 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 	}
 	// Adding a book already present is a no-op rather than an error or a
 	// duplicate entry: the client's own list is the user's mental model, and a
-	// collection holding the same book twice has no meaning.
-	if slices.Contains(col.BookIDs, ids[0]) {
-		books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-		respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	// collection holding the same book twice has no meaning. The store skips ids
+	// already present and does not bump Version when nothing changed.
+	updated, err := h.collections.AddBooksToCollection(col.ID, ids[:1])
+	if err != nil {
+		h.respondMembershipError(c, err)
 		return
 	}
-	col.BookIDs = append(col.BookIDs, ids[0])
-
-	if err := h.collections.UpdateCollection(col); err != nil {
-		// col was read via h.lookupCollection above with no lock held until this
-		// write, so a concurrent add/remove/edit on the same collection can win
-		// the race and make this call's read stale — the classic
-		// read-modify-write clobber the Version compare-and-swap exists to
-		// catch. Surface it as a 409 so the client re-reads and retries rather
-		// than getting a 500 for what is really "try again."
-		if errors.Is(err, database.ErrCollectionVersionConflict) {
-			respondError(c, http.StatusConflict, err.Error())
-			return
-		}
-		respondError(c, http.StatusInternalServerError, "could not update collection")
-		return
-	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
+	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
 }
 
 // RemoveBookFromCollection handles DELETE /api/collections/:id/book/:bookId.
@@ -398,20 +387,17 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 	// withoutMembers, not a plain id compare: the client holds the SURVIVOR's
 	// id for a member that is stored as a merge loser (the list renders the
 	// survivor in its place), and removing it must remove the stored loser.
-	col.BookIDs = h.withoutMembers(col.BookIDs, target)
-
-	if err := h.collections.UpdateCollection(col); err != nil {
-		// Same race as AddBookToCollection above: surface a stale-Version
-		// conflict as 409 rather than a generic 500.
-		if errors.Is(err, database.ErrCollectionVersionConflict) {
-			respondError(c, http.StatusConflict, err.Error())
-			return
-		}
-		respondError(c, http.StatusInternalServerError, "could not update collection")
+	// It runs inside the store's lock against the CURRENT membership, so a
+	// member added by a racing request is neither dropped nor resurrected.
+	updated, err := h.collections.UpdateCollectionBooks(col.ID, func(current []string) ([]string, error) {
+		return h.withoutMembers(current, target), nil
+	})
+	if err != nil {
+		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
+	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
 }
 
 // ── POST /api/collections/:id/batch/add, /batch/remove ──────────────────────
@@ -429,27 +415,28 @@ type absCollectionBatchReq struct {
 
 // BatchAddToCollection handles POST /api/collections/:id/batch/add.
 func (h *Handler) BatchAddToCollection(c *gin.Context) {
-	h.batchEditCollection(c, func(col *database.Collection, ids []string) {
+	h.batchEditCollection(c, func(current, ids []string) []string {
 		for _, id := range ids {
-			if !slices.Contains(col.BookIDs, id) {
-				col.BookIDs = append(col.BookIDs, id)
+			if !slices.Contains(current, id) {
+				current = append(current, id)
 			}
 		}
+		return current
 	})
 }
 
 // BatchRemoveFromCollection handles POST /api/collections/:id/batch/remove.
 func (h *Handler) BatchRemoveFromCollection(c *gin.Context) {
-	h.batchEditCollection(c, func(col *database.Collection, ids []string) {
-		col.BookIDs = h.withoutMembers(col.BookIDs, ids)
+	h.batchEditCollection(c, func(current, ids []string) []string {
+		return h.withoutMembers(current, ids)
 	})
 }
 
 // batchEditCollection is the shared body of the two batch routes: gate, resolve,
-// reject dynamic collections, apply, and persist in ONE UpdateCollection — so the
-// whole batch lands or none of it does, and the Version compare-and-swap catches a
-// concurrent edit exactly as it does for the single-book routes.
-func (h *Handler) batchEditCollection(c *gin.Context, apply func(col *database.Collection, ids []string)) {
+// reject dynamic collections, apply, and persist in ONE locked store call — so
+// the whole batch lands or none of it does, applied to the membership that is
+// stored at that moment rather than to a copy read earlier in the request.
+func (h *Handler) batchEditCollection(c *gin.Context, apply func(current, ids []string) []string) {
 	if !h.canManageCollections(c) {
 		return
 	}
@@ -472,19 +459,32 @@ func (h *Handler) batchEditCollection(c *gin.Context, apply func(col *database.C
 		respondResolveError(c)
 		return
 	}
-	col.BookIDs = append([]string(nil), col.BookIDs...)
-	apply(col, ids)
-
-	if err := h.collections.UpdateCollection(col); err != nil {
-		if errors.Is(err, database.ErrCollectionVersionConflict) {
-			respondError(c, http.StatusConflict, err.Error())
-			return
-		}
-		respondError(c, http.StatusInternalServerError, "could not update collection")
+	updated, err := h.collections.UpdateCollectionBooks(col.ID, func(current []string) ([]string, error) {
+		return apply(current, ids), nil
+	})
+	if err != nil {
+		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
+	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
+}
+
+// respondMembershipError maps a locked membership operation's error onto the
+// statuses this surface already used: a dynamic collection answers the same 409
+// text as the up-front check, a collection deleted mid-request is a 404, and
+// anything else is a 500. There is no version-conflict branch because the store
+// no longer raises one for membership: it re-reads the row inside the lock.
+func (h *Handler) respondMembershipError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, database.ErrCollectionNotStatic):
+		respondError(c, http.StatusConflict,
+			"this is a dynamic collection; its members come from its query")
+	case errors.Is(err, database.ErrCollectionNotFound):
+		respondError(c, http.StatusNotFound, "collection not found")
+	default:
+		respondError(c, http.StatusInternalServerError, "could not update collection")
+	}
 }
 
 // ── shared plumbing ─────────────────────────────────────────────────────────
