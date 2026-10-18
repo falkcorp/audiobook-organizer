@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply_nothing_written_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b7f3e52-9a14-4d68-b3c1-6e2a85d9f470
 // last-edited: 2026-10-18
 
@@ -276,6 +276,42 @@ func TestApplyVersionGroup_HandOffClassification(t *testing.T) {
 		assert.True(t, database.IsNothingWritten(err), "the guard refused before the demote wrote: %v", err)
 		for _, id := range ids {
 			assert.Equal(t, "true", f.Flag(t, id), "member %s must be untouched", id)
+		}
+	})
+}
+
+// The held-group branch of the hand-off (the CrownEnv call): no member is organized
+// under the library root, so EnsureSinglePrimary holds the group and the apply
+// crowns heldGroupFallback's pick itself. Every member is already in the group, so
+// again no link write runs and w.may can only come from the crown.
+func TestApplyVersionGroup_HeldGroupCrownClassification(t *testing.T) {
+	seed := func(t *testing.T) (*vptest.Fixture, []string) {
+		f := vptest.New(t)
+		withLibraryRoot(t, f.Root)
+		a := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "false", State: "imported"})
+		b := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "false", State: "imported"})
+		return f, []string{a, b}
+	}
+
+	t.Run("a crown that committed then failed is held although no link write ran", func(t *testing.T) {
+		f, ids := seed(t)
+		// Calls 1 and 2 are the link loop's skips; call 3 is the crown.
+		store := &failingModifyStore{PebbleStore: f.S, failAfter: len(ids), commitThenFail: true, armed: true}
+		err := ApplyVersionGroup(store)(context.Background(), versionGroupItem(t, "/lib/nw-hc", ids))
+		require.Error(t, err)
+		require.Equal(t, len(ids)+1, store.calls, "the failure must land on the crown's write, after the link-loop skips")
+		assert.Contains(t, err.Error(), "crown the primary of held group", "the held branch must be the one that ran")
+		assert.False(t, database.IsNothingWritten(err), "the crown may have committed: %v", err)
+	})
+	t.Run("a crown refused before any write is nothing written", func(t *testing.T) {
+		f, ids := seed(t)
+		store := &markITunesAfterStore{PebbleStore: f.S, t: t, afterCalls: len(ids), marks: ids}
+		err := ApplyVersionGroup(store)(context.Background(), versionGroupItem(t, "/lib/nw-hc", ids))
+		require.ErrorIs(t, err, versionprimary.ErrWriteRefused)
+		assert.Contains(t, err.Error(), "crown the primary of held group")
+		assert.True(t, database.IsNothingWritten(err), "the guard refused before the crown wrote: %v", err)
+		for _, id := range ids {
+			assert.Equal(t, "false", f.Flag(t, id), "member %s must be untouched", id)
 		}
 	})
 }
