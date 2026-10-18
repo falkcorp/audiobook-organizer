@@ -91,9 +91,11 @@ active run of the same definition, without looking at the mode. A live start
 of `maintenance.author-split-scan` while its cron preview was queued got the
 preview run's ID back, so the caller was told its live run had started and
 nothing was written. A definition that declares its preview mode now folds a
-start only into an active run of the same mode (its mode keys and
-`live_one_of` switches compared after normalization); otherwise a second run
-is queued. Scheduler ticks with no params still fold into one run.
+start only into an active run of the same mode, judged by what each body does
+when it runs (an absent or null mode key is the preview default; an operation
+that reads both `dry_run` and `apply` is live only when both say write, or
+either for one that declares so); otherwise a second run is queued.
+Byte-identical params always fold, so scheduler ticks still fold into one run.
 
 #### The regroup preview no longer counts holds a person already decided
 
@@ -104,7 +106,10 @@ now reports those as already decided.
 
 #### The transcription monitor raises an alarm when a relaunch is a preview
 
-`scripts/transcribe_monitor.py` reads each relaunched run back and raises
-`RELAUNCH_IS_PREVIEW` (an ERROR alert and a banner on stderr) when the server
-queued a preview, instead of relaunching a run that transcribes nothing every
-time the library looks idle.
+Every progress message of a `maintenance.transcribe-book-intros` transcribe
+or extract run now opens with its mode (`PREVIEW (dry_run, nothing written) — `
+or `LIVE — `). `scripts/transcribe_monitor.py` reads each relaunched run back
+and raises `RELAUNCH_IS_PREVIEW` (an ERROR alert and a banner on stderr) when
+the server queued a preview, instead of relaunching a run that transcribes
+nothing every time the library looks idle; a run that reports no marker is
+`RELAUNCH_UNVERIFIED`, never an all-clear.
