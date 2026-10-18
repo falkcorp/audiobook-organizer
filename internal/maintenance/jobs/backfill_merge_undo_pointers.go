@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_merge_undo_pointers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 844f88c2-fda0-43f4-bf8d-e4e35ca38b0c
 // last-edited: 2026-10-18
 
@@ -43,10 +43,11 @@ var (
 // (journal -> operation_id), and the pointer is on the survivor, so GET
 // /audiobooks/:id/changes lists it too.
 //
-// A preview writes nothing and records, per journal that would get a pointer,
-// what it would write. Journals that already have a live pointer, and journals
-// no undo would accept (undone, aborted, a CombineBooks journal left pending, a
-// refused combine's emptied journal), are counted and skipped.
+// Every journal gets an operation result with its verdict: written (with the
+// new id), would_write (preview), has_pointer (with the existing pointer's
+// id), or not_undoable (with the reason: undone, aborted, a CombineBooks
+// journal left pending, a refused combine's emptied journal). A preview
+// writes no pointer.
 type backfillMergeUndoPointersJob struct{}
 
 func (j *backfillMergeUndoPointersJob) ID() string       { return "backfill-merge-undo-pointers" }
@@ -84,13 +85,17 @@ type backfillPointerCounts struct {
 	Failed      int `json:"failed"`
 }
 
-// Run walks the journals one at a time, and that is deliberate rather than a
-// missing worker pool. Each journal is decided and written under the
-// process-wide merge lock (merge.Service.BackfillJournalPointer), which is what
-// keeps the backfill from giving a merge in flight a second pointer; parallel
-// workers would only queue on that lock. The per-journal work is one journal
-// read, one ledger read and at most one row write, so the lock is held only
-// briefly and merges interleave between journals.
+// Run reads the undo ledger ONCE, outside the merge lock, for the pointers
+// that already exist (merge.Service.NewPointerBackfillIndex), then walks the
+// journals one at a time. The walk is sequential on purpose, not a missing
+// worker pool: each journal is decided and written under the process-wide
+// merge lock (merge.Service.BackfillJournalPointer), which is what keeps the
+// backfill from giving a merge in flight a second pointer, and parallel
+// workers would only queue on that lock. Under the lock each journal costs a
+// point read of the journal and at most one row write; only a journal created
+// while the backfill runs also needs a ledger read of its survivor. So the
+// lock is never held across a ledger scan, and merges interleave between
+// journals.
 func (j *backfillMergeUndoPointersJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	ms, ok := store.(merge.Store)
 	if !ok {
@@ -100,6 +105,10 @@ func (j *backfillMergeUndoPointersJob) Run(ctx context.Context, store maintenanc
 	items, err := svc.ListPointerBackfillCandidates()
 	if err != nil {
 		return fmt.Errorf("backfill-merge-undo-pointers: list journals: %w", err)
+	}
+	idx, err := svc.NewPointerBackfillIndex()
+	if err != nil {
+		return fmt.Errorf("backfill-merge-undo-pointers: %w", err)
 	}
 	opID := maintenance.OperationIDFromCtx(ctx)
 	reporter.SetTotal(len(items))
@@ -111,7 +120,7 @@ func (j *backfillMergeUndoPointersJob) Run(ctx context.Context, store maintenanc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		out, berr := svc.BackfillJournalPointer(item, dryRun)
+		out, berr := svc.BackfillJournalPointer(idx, item, dryRun)
 		reporter.Increment()
 		if berr != nil {
 			counts.Failed++
@@ -124,15 +133,17 @@ func (j *backfillMergeUndoPointersJob) Run(ctx context.Context, store maintenanc
 		switch out.Verdict {
 		case merge.PointerBackfillWritten:
 			counts.Written++
-			j.recordResult(store, opID, out, out.Verdict, "")
 		case merge.PointerBackfillWouldWrite:
 			counts.WouldWrite++
-			j.recordResult(store, opID, out, out.Verdict, "")
 		case merge.PointerBackfillHasPointer:
 			counts.HasPointer++
 		case merge.PointerBackfillNotUndoable:
 			counts.NotUndoable++
 		}
+		// Every journal gets a result row, so the run lists each one's undo
+		// id: the one written, or the existing pointer's (has_pointer), or
+		// why it has none (not_undoable).
+		j.recordResult(store, opID, out, out.Verdict, "")
 	}
 
 	summary, _ := json.Marshal(counts)
@@ -145,8 +156,8 @@ func (j *backfillMergeUndoPointersJob) Run(ctx context.Context, store maintenanc
 	return nil
 }
 
-// recordResult writes one operation result: the journal, its survivor and,
-// for an applied pointer, the operation id that reverts the merge. A run with
+// recordResult writes one operation result: the journal, its survivor, its
+// verdict and, where there is one, the operation id that reverts the merge. A run with
 // no operation id (a direct call outside the registry) records nothing.
 func (j *backfillMergeUndoPointersJob) recordResult(store maintenance.JobStore, opID string, item merge.PointerBackfillItem, status, errMsg string) {
 	if opID == "" {

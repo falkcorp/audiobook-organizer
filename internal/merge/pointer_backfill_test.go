@@ -1,13 +1,16 @@
 // file: internal/merge/pointer_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3052d5ca-020e-4197-8003-3e5e527e0938
 // last-edited: 2026-10-18
 
 package merge
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
+	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -76,9 +79,60 @@ func TestLivePointerOperation(t *testing.T) {
 }
 
 // A store with no undo ledger refuses before taking the merge lock or reading
-// a journal.
+// a journal, and so does a store that cannot scan it for the index.
 func TestBackfillJournalPointer_RefusesWithoutLedger(t *testing.T) {
 	ms := &Service{db: nil}
-	_, err := ms.BackfillJournalPointer(PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: "J1"}, false)
+	_, err := ms.BackfillJournalPointer(&PointerBackfillIndex{}, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: "J1"}, false)
 	require.ErrorContains(t, err, "no undo ledger")
+	_, err = ms.NewPointerBackfillIndex()
+	require.ErrorContains(t, err, "cannot scan the undo ledger")
+}
+
+// countBookChanges counts GetBookChanges, the per-survivor ledger read.
+type countBookChanges struct {
+	*database.PebbleStore
+	n *int
+}
+
+func (s countBookChanges) GetBookChanges(bookID string) ([]*database.OperationChange, error) {
+	*s.n++
+	return s.PebbleStore.GetBookChanges(bookID)
+}
+
+// The index is read once outside the merge lock. A journal older than it is
+// decided from it with no ledger read under the lock; only a journal created
+// after the index (a merge during the backfill) reads its survivor's ledger,
+// and its chokepoint pointer is found there, not duplicated.
+func TestBackfillJournalPointer_LedgerReadOnlyForJournalsNewerThanIndex(t *testing.T) {
+	store := setupTestStore(t).(*database.PebbleStore)
+	combine := func() *CombineResult {
+		ids := []string{ulid.Make().String(), ulid.Make().String()}
+		for i, id := range ids {
+			_, err := store.CreateBook(&database.Book{ID: id, Title: "B", Format: "mp3", FilePath: fmt.Sprintf("/tmp/pb/%s-%d.mp3", id, i)})
+			require.NoError(t, err)
+		}
+		res, err := NewService(store).CombineBooks(ids, ids[0], nil)
+		require.NoError(t, err)
+		return res
+	}
+	old := combine()
+
+	n := 0
+	ms := NewService(countBookChanges{store, &n})
+	idx, err := ms.NewPointerBackfillIndex()
+	require.NoError(t, err)
+	time.Sleep(2 * time.Millisecond) // the next journal is created strictly after asOf
+	newer := combine()
+
+	got, err := ms.BackfillJournalPointer(idx, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: old.JournalID}, false)
+	require.NoError(t, err)
+	require.Equal(t, PointerBackfillHasPointer, got.Verdict)
+	require.Equal(t, old.OperationID, got.OperationID)
+	require.Zero(t, n, "an older journal is decided from the index, with no ledger read under the lock")
+
+	got, err = ms.BackfillJournalPointer(idx, PointerBackfillItem{ChangeType: CombineJournalPointerType, JournalID: newer.JournalID}, false)
+	require.NoError(t, err)
+	require.Equal(t, PointerBackfillHasPointer, got.Verdict, "the newer journal's own pointer is found in the ledger")
+	require.Equal(t, newer.OperationID, got.OperationID)
+	require.Equal(t, 1, n)
 }
