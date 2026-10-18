@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-10-18
 
@@ -211,7 +211,12 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 		}
 	}
 
-	plan, err := planMergeSamePathDupes(ctx, store, p.deps.MergeBooks, params, reporter)
+	// Every merge journals its sibling-move undo pointer under this run.
+	opID := registry.ReporterOpID(reporter)
+	mergeFn := func(bookIDs []string, primaryID string) (int, error) {
+		return p.deps.MergeBooks(opID, bookIDs, primaryID)
+	}
+	plan, err := planMergeSamePathDupes(ctx, store, mergeFn, params, reporter)
 	if err != nil {
 		return err
 	}

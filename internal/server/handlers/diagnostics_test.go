@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package handlers_test
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
@@ -421,6 +422,30 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersions(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"applied":1`)
+}
+
+// A merge_versions apply that carried siblings into the merge's group
+// reports the operation its sibling-move undo pointer is under, so the caller
+// can revert it (POST /operations/:id/revert). merge.Service.MergeBooks,
+// which this calls, journals that pointer (audiobooks
+// TestRevert_MergeBooks_SiblingMove reverts it end to end).
+func TestDiagnosticsHandler_ApplySuggestions_MergeVersionsReportsSiblingOperation(t *testing.T) {
+	store := databasemocks.NewMockStore(t)
+	mergeSvc := handlersmocks.NewMockMergeService(t)
+
+	rd := `{"suggestions":[{"id":"s1","action":"merge_versions","book_ids":["b1","b2"],"primary_id":"b1"}]}`
+	store.EXPECT().GetOperationV2("op-1").
+		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: new(rd)}, nil)
+	mergeSvc.EXPECT().MergeBooks([]string{"b1", "b2"}, "b1").
+		Return(&merge.Result{PrimaryID: "b1", SiblingJournalID: "S1", SiblingOperationID: "op-sib"}, nil)
+
+	h := handlers.NewDiagnosticsHandler(store, mergeSvc, nil, nil, nil)
+	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
+		`{"operation_id":"op-1","approved_suggestion_ids":["s1"]}`, nil)
+	h.ApplySuggestions(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"sibling_operation_id":"op-sib"`)
 }
 
 // ── GetDBHealth ───────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -168,7 +168,9 @@ func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error)
 	if res != nil && res.RestoredTypes[undo.ChangeTypeSeriesRename] > 0 {
 		s.invalidateSeriesCaches()
 	}
-	if res != nil && res.RestoredTypes[undo.ChangeTypeMergeCombineJournal] > 0 {
+	// A merge_sibling_journal row (a merge's sibling move undone) changes
+	// version groups the same way, so it drops the same caches.
+	if res != nil && (res.RestoredTypes[undo.ChangeTypeMergeCombineJournal] > 0 || res.RestoredTypes[undo.ChangeTypeMergeSiblingJournal] > 0) {
 		s.invalidateBookDuplicateCaches()
 	}
 	if res != nil && restoredAuthorRows(res) {

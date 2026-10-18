@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
-// last-edited: 2026-09-19
+// last-edited: 2026-10-18
 
 package jobs
 
@@ -13,9 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // chRun runs job against store with the given raw params and returns the
@@ -307,9 +309,30 @@ func TestMergeChapterGroups_RealMergeIsCorrectAuditedAndUndoable(t *testing.T) {
 		t.Fatalf("re-run regrouped merged books: %+v", again)
 	}
 
-	// Undo through the existing combine journal restores the sources.
-	if _, err := merge.NewService(s).UndoCombine(audit.JournalID); err != nil {
-		t.Fatalf("UndoCombine: %v", err)
+	// Each merge journaled its undo pointer under the op, so reverting the
+	// op (the engine POST /operations/:id/revert runs) undoes both groups.
+	changes, err := s.GetOperationChanges("op-chapter-test")
+	if err != nil {
+		t.Fatalf("GetOperationChanges: %v", err)
+	}
+	pointers := map[string]string{}
+	for _, c := range changes {
+		if c.ChangeType == undo.ChangeTypeMergeCombineJournal {
+			pointers[c.BookID] = c.NewValue
+		}
+	}
+	if len(pointers) != 2 || pointers[books[0].ID] != audit.JournalID {
+		t.Fatalf("want one combine pointer per merged group under the op, got %v", pointers)
+	}
+	rv, err := audiobooks.NewRevertService(s).RevertOperation("op-chapter-test")
+	if err != nil {
+		t.Fatalf("RevertOperation: %v", err)
+	}
+	if rv.RestoredTypes[undo.ChangeTypeMergeCombineJournal] != 2 {
+		t.Fatalf("revert restored %v, want both combines", rv.RestoredTypes)
+	}
+	if ddMustGet(t, s, curated[1].ID).IsSoftDeleted() {
+		t.Fatalf("the second group's source was not restored by the op revert")
 	}
 	for _, src := range books[1:] {
 		got := ddMustGet(t, s, src.ID)

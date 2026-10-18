@@ -245,7 +245,7 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 		}
 		slog.Info("regroup multidisc apply: collapsed folder",
 			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
-			"files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
+			"undo_operation", res.OperationID, "files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
 
 		// Stamp the merged book's files with the per-file disc/track order the classifier
 		// derived. Best-effort: the combine (the actual merge) already committed, so a
@@ -786,7 +786,8 @@ func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candi
 		}
 		slog.Info("regroup duplicate-of apply: merged debris into canonical book",
 			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
-			"debris_merged", len(present), "files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
+			"undo_operation", res.OperationID, "debris_merged", len(present), "files_moved", res.FilesMoved,
+			"books_soft_deleted", res.BooksDeleted)
 		return nil
 	}
 }

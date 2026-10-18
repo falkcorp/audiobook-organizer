@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.29.2
+// version: 2.30.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-18
 
@@ -193,7 +193,7 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				// are skipped in that mode (tests / iTunes write-back disabled).
 				ms = merge.NewService(store)
 			}
-			mergeRes, err := applyBookMergeReroute(ms, p.KeepID, p.MergeIDs)
+			mergeRes, err := applyBookMergeReroute(ms, opID, p.KeepID, p.MergeIDs)
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "book merge failed", "err", err)
@@ -258,8 +258,11 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 // Extracted from the op Run body so the reroute (soft-delete + external-ID
 // reassignment, NOT hard delete) is unit-testable on a real store.
 //
+// opID is the dedup.book-merge operation: a sibling move's undo pointer is
+// journaled under it, so reverting the op puts the siblings back.
+//
 // It returns the merge's Result (nil when there was nothing to merge).
-func applyBookMergeReroute(ms *merge.Service, keepID string, mergeIDs []string) (*merge.Result, error) {
+func applyBookMergeReroute(ms *merge.Service, opID, keepID string, mergeIDs []string) (*merge.Result, error) {
 	// Build the loser set once, excluding the keep book and de-duping. Callers
 	// (the handler binds keep_id/merge_ids without validation) may include the
 	// keep book in mergeIDs; legacy dedup.MergeBooks guarded this with a
@@ -283,7 +286,7 @@ func applyBookMergeReroute(ms *merge.Service, keepID string, mergeIDs []string) 
 
 	// Service takes ALL ids (losers + winner) and the winner id.
 	return ms.MergeBooksWithOptions(append(append([]string{}, losers...), keepID), keepID,
-		merge.MergeOptions{CarryITunesFields: true})
+		merge.MergeOptions{CarryITunesFields: true, OperationID: opID})
 }
 
 // RegisterAuthorDedupScanOp registers the "dedup.author-scan" v2 OperationDef.

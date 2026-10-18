@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.67.3
+// version: 1.68.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-18
 
@@ -1127,9 +1127,10 @@ func (s *Server) WaitForOp(ctx context.Context, opID string, onObserve func(chil
 // MergeBooks implements maintenance.BookMerger. It routes through the same
 // merge.Service the UI merge and dedup paths use (soft-delete losers, reassign
 // external IDs, clean up iTunes ITL entries, one version group), built from the
-// full store so every capability method resolves. Returns the loser count.
-func (s *Server) MergeBooks(bookIDs []string, primaryID string) (int, error) {
-	res, err := merge.NewService(s.storeForWiring()).MergeBooks(bookIDs, primaryID)
+// full store so every capability method resolves. Returns the loser count. A
+// sibling move's undo pointer is journaled under opID, the calling op.
+func (s *Server) MergeBooks(opID string, bookIDs []string, primaryID string) (int, error) {
+	res, err := merge.NewService(s.storeForWiring()).MergeBooksWithOptions(bookIDs, primaryID, merge.MergeOptions{OperationID: opID})
 	if err != nil {
 		return 0, err
 	}

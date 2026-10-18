@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_undo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2d9e51-0c47-4f83-b16e-2e9f7c34d0a8
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -9,13 +9,37 @@ import (
 	"context"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// revertCombineOn finds the combine pointer the apply journaled on survivor
+// (a review approval runs in no operation, so the combine minted its own
+// operation id), checks it names journalID, and reverts that operation
+// through the engine POST /operations/:id/revert runs.
+func revertCombineOn(t *testing.T, store database.Store, survivor, journalID string) {
+	t.Helper()
+	rows, err := store.GetBookChanges(survivor)
+	require.NoError(t, err)
+	opID := ""
+	for _, r := range rows {
+		if r.ChangeType == undo.ChangeTypeMergeCombineJournal && !r.Voided {
+			require.Empty(t, opID, "one combine, one pointer")
+			require.Equal(t, journalID, r.NewValue)
+			opID = r.OperationID
+		}
+	}
+	require.NotEmpty(t, opID, "the approval's combine journaled an undo pointer on its survivor")
+	res, err := audiobooks.NewRevertService(store).RevertOperation(opID)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.RestoredTypes[undo.ChangeTypeMergeCombineJournal])
+}
 
 // latestJournal returns the id of the newest combine journal.
 func latestJournal(t *testing.T, ms *merge.Service) string {
@@ -47,7 +71,7 @@ func ownedFiles(t *testing.T, store database.Store, ids ...string) map[string]ow
 }
 
 // An approved regroup.multidisc hold combines the folder and THEN stamps
-// disc/track numbers. Undo must reverse both: every member live again, owning
+// disc/track numbers. Reverting the combine's operation must reverse both: every member live again, owning
 // its own file, with the pre-approval (unset) numbers and its fingerprint.
 func TestApplyMultidisc_UndoRoundTrip(t *testing.T) {
 	store := newApplyTestStore(t)
@@ -67,8 +91,7 @@ func TestApplyMultidisc_UndoRoundTrip(t *testing.T) {
 		require.NotZero(t, f.TrackNumber, "the apply stamped track numbers")
 	}
 
-	_, err = ms.UndoCombine(latestJournal(t, ms))
-	require.NoError(t, err)
+	revertCombineOn(t, store, minID(ids...), latestJournal(t, ms))
 
 	assert.Equal(t, before, ownedFiles(t, store, ids...), "files back on their books with pre-approval numbers and fingerprints")
 	for i, id := range ids {
@@ -83,7 +106,8 @@ func TestApplyMultidisc_UndoRoundTrip(t *testing.T) {
 
 // An approved duplicate-of hold combines folder debris into a canonical book
 // outside the folder. All three are virtual single-file books, so the combine
-// CREATES file rows (the canonical's own and one per debris); undo deletes
+// CREATES file rows (the canonical's own and one per debris); reverting the
+// combine's operation deletes
 // those rows and restores each debris book's FilePath.
 func TestApplyDuplicateOf_UndoRoundTrip(t *testing.T) {
 	store := newApplyTestStore(t)
@@ -108,8 +132,7 @@ func TestApplyDuplicateOf_UndoRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, cf, 3, "canonical owns its own and both debris files while combined")
 
-	_, err = ms.UndoCombine(latestJournal(t, ms))
-	require.NoError(t, err)
+	revertCombineOn(t, store, canonical, latestJournal(t, ms))
 
 	assert.Equal(t, before, ownedFiles(t, store, all...), "created rows removed; every book back to its pre-approval files")
 	for id, path := range map[string]string{canonical: "/lib/real/book.mp3", debris1: "/lib/junk/d1.mp3", debris2: "/lib/junk/d2.mp3"} {

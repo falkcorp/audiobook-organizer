@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series
@@ -429,9 +429,12 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 		h.dedupEngine.CleanupCandidatesAfterMerge(mergedAwayIDs(req.MergeIDs, result.PrimaryID))
 	}
 
+	// operation_id: POST /operations/:id/revert with it undoes this combine
+	// (the combine's undo pointer is journaled under it).
 	httputil.RespondWithOK(c, gin.H{
 		"message":       fmt.Sprintf("Combined %d files onto book; moved %d absorbed entries to trash (undoable)", result.FilesMoved, result.BooksDeleted),
 		"journal_id":    result.JournalID,
+		"operation_id":  result.OperationID,
 		"primary_id":    result.PrimaryID,
 		"files_moved":   result.FilesMoved,
 		"books_deleted": result.BooksDeleted,
