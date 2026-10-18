@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
-// last-edited: 2026-09-01
+// last-edited: 2026-10-18
 
 /**
  * The regroup lane's renderer -- the THIRD comparison shape in this workspace.
@@ -258,7 +258,7 @@ export function RecommendationPanel({
 
 // ActionSelector lets a reviewer OVERRIDE the recommendation per item. The chosen
 // action is sent as {"action": "..."} and persisted on the hold, so it survives to
-// the replay that does the real work once review_apply_enabled is on.
+// the re-approve that does the real work once review_apply_enabled is on.
 //
 // 🔴 `insufficient-evidence` IS NOT AN OPTION. The backend 400s it deliberately — it
 // is a statement BY the machine, not a decision a human can take — so offering it

@@ -1,7 +1,7 @@
 <!-- file: docs/system/pipelines.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: b2c3d4e5-f6a7-8901-bcde-f01234567890 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-18 -->
 
 # Data Pipelines
 
@@ -84,7 +84,7 @@ stateDiagram-v2
 
 Values: `null` (unreviewed), `"matched"` (operator approved), `"no_match"` (operator rejected), `"audio_confirmed"` (Whisper transcription confirms metadata).
 
-Separately from this per-book status, the **review queue** (`database.ReviewStore`, `/api/v1/review/*`) holds items a producer flagged for a human decision (e.g. regroup holds). Approving dispatches the chosen action to a registered apply handler only while `review_apply_enabled` is on; otherwise the decision is recorded and `POST /review/replay-approved` executes it later.
+Separately from this per-book status, the **review queue** (`database.ReviewStore`, `/api/v1/review/*`) holds items a producer flagged for a human decision (e.g. regroup holds). Approving dispatches the chosen action to a registered apply handler only while `review_apply_enabled` is on; otherwise the decision is recorded and approving the item again once the switch is on executes it (`POST /review/replay-approved` was retired by 01-P81j).
 
 ## Repairs Pipeline (plan → rows → apply)
 

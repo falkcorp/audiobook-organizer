@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -42,11 +42,12 @@
 // 🔴 AND THE CHOICE IS PERSISTED. ReviewItem.ChosenAction records what the human
 // picked, written atomically with the status by SetReviewItemDecision. That matters
 // because with review_apply_enabled OFF — production's setting — approving executes
-// nothing, and ReplayApprovedItems does the work later. Replay reads ChosenAction
-// first (effectiveActionFor) and only falls back to the payload's recommendation for
-// rows written before the field existed. Without that, an override would evaporate at
-// the moment it was recorded and the replay would merge books a human said to keep
-// apart. See effectiveActionFor and database.ReviewItem.ChosenAction.
+// nothing, and approving the same item again once the switch is on does the work
+// later (POST /review/replay-approved did that in one call until 01-P81j retired it).
+// The second approve reads ChosenAction first (effectiveActionFor) and only falls back
+// to the payload's recommendation for rows written before the field existed. Without
+// that, an override would evaporate at the moment it was recorded and the second
+// approve would merge books a human said to keep apart. See effectiveActionFor and database.ReviewItem.ChosenAction.
 package reviewhandler
 
 import (
@@ -211,14 +212,14 @@ func recommendedActionFor(item database.ReviewItem) string {
 	return p.RecommendedAction
 }
 
-// effectiveActionFor answers the ONE question both approve and replay must answer
-// identically: what does this hold currently mean?
+// effectiveActionFor answers the ONE question every approve of a hold must answer
+// the same way, first time or re-approve: what does this hold currently mean?
 //
 // 🔴 THE PERSISTED HUMAN CHOICE WINS OVER THE MACHINE'S SUGGESTION. ReviewItem.ChosenAction
 // is written when a reviewer approves (SetReviewItemDecision); the payload's
 // `recommendedAction` is what the classifier proposed. When they disagree, the human
 // is right by definition — that disagreement IS owner item 2. A hold recommending
-// `combine` that a human approved as `separate` must never be replayed as a merge,
+// `combine` that a human approved as `separate` must never be re-approved as a merge,
 // because the combine apply path hard-deletes the absorbed Book rows.
 //
 // The fallback covers rows written before ChosenAction existed: those resolve through
@@ -226,8 +227,8 @@ func recommendedActionFor(item database.ReviewItem) string {
 // which has no apply handler and is not approvable. Old rows therefore keep working
 // and keep failing closed.
 //
-// Both approveOne and ReplayApprovedItems route through here so the two can never
-// carry out different decisions for the same row.
+// approveOne is the only caller, so a first approve and a later re-approve of the same
+// row can never carry out different decisions.
 func effectiveActionFor(item database.ReviewItem) string {
 	if a := strings.TrimSpace(item.ChosenAction); a != "" {
 		return a
@@ -404,7 +405,8 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 	// The default is the hold's EFFECTIVE action, not the raw payload recommendation:
 	// re-approving an already-decided hold with an empty body must not silently revert
 	// a human's recorded override back to the machine's suggestion. Re-approve is a
-	// supported flow — it is the recovery path replay's skip reason advertises.
+	// supported flow — it is how a hold approved while apply was off gets executed now
+	// that POST /review/replay-approved is retired (01-P81j).
 	// Pending holds carry no ChosenAction, so for them this is the recommendation.
 	chosen := requested
 	if chosen == "" {
@@ -450,19 +452,20 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 	// SetReviewItemDecision existed the chosen action was stored NOWHERE, so with
 	// review_apply_enabled off — production's setting — a reviewer could not record a
 	// disagreement at all: approving a `combine` hold as `separate` wrote plain
-	// "approved", and ReplayApprovedItems re-resolved the action from the payload and
+	// "approved", and the later apply re-resolved the action from the payload and
 	// would merge the books the human said to keep apart. Refusing the override was the
 	// only safe answer then, but it also meant owner item 2 did not actually ship.
 	//
-	// Now the choice is persisted atomically with the status and replay prefers it
-	// (effectiveActionFor), so the override survives the switch being flipped later.
+	// Now the choice is persisted atomically with the status and the later re-approve
+	// prefers it (effectiveActionFor), so the override survives the switch being
+	// flipped later.
 
 	// (5) separate needs NO apply handler and never will. Every member is already its
 	// own book, so "separate into N" is a statement that the current on-disk state is
 	// correct — there is nothing to execute, only a decision to record. The dedup-key
 	// idempotency in UpsertReviewItem keeps it decided across re-scans, which is the
 	// whole mechanism: a re-scan skips a non-pending hold. Recording the action still
-	// matters: it is what stops a replay from falling back to a `combine` payload.
+	// matters: it is what stops a later re-approve from falling back to a `combine` payload.
 	if chosen == itunesservice.ActionSeparate {
 		updated, serr := h.store.SetReviewItemDecision(id, database.ReviewStatusApproved, chosen)
 		if serr != nil {
@@ -489,7 +492,7 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 	// Either no apply handler for this action, OR the global apply switch is OFF
 	// (review-only mode). Record the decision as "approved" but do NOT execute — the
 	// item stays visible/reviewable and nothing is merged. The action is recorded even
-	// though nothing ran, which is precisely the case replay later reads back.
+	// though nothing ran, which is precisely the case a later re-approve reads back.
 	updated, err := h.store.SetReviewItemDecision(id, database.ReviewStatusApproved, chosen)
 	if err != nil {
 		return nil, "", "", err
@@ -497,7 +500,7 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 	note := "no apply handler registered for action " + chosen + "; marked approved"
 	if hasHandler {
 		note = "apply is disabled (review-only mode): item approved but NOT applied — " +
-			"enable review_apply_enabled to perform the merge"
+			"enable review_apply_enabled and approve it again to perform the merge"
 	}
 	return updated, chosen, note, nil
 }
@@ -673,8 +676,9 @@ const (
 //
 // 🔴 WHY REFUSE INSTEAD OF CLAMP. The store treats Limit<=0 as "default page of
 // 50". A client that sends limit=0 meaning "everything" therefore gets 50 rows,
-// a total that says otherwise, and no error — the replay handler in this very
-// package made exactly that mistake and reported a 300-hold queue as 50. A
+// a total that says otherwise, and no error — the replay-approved handler that
+// lived in this package until 01-P81j made exactly that mistake and reported a
+// 300-hold queue as 50. A
 // non-numeric limit used to fall to the default the same silent way. Refusing
 // at the edge turns the misunderstanding into a message the caller sees on the
 // first request instead of a page that looks complete and is not.

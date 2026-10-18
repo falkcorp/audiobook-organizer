@@ -1,12 +1,11 @@
 // file: internal/server/handlers/review/applycap_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d7a4c1e8-3b6f-4d29-a5e1-8c0f2b7d4a96
-// last-edited: 2026-09-02
+// last-edited: 2026-10-18
 
 package reviewhandler_test
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )
 
@@ -107,82 +105,5 @@ func TestBulkReviewAction_NilAndZeroCapMeanDefault(t *testing.T) {
 		if !strings.Contains(w.Body.String(), "cap is "+strconv.Itoa(applycap.Default)) {
 			t.Fatalf("want the default cap named: %s", w.Body.String())
 		}
-	}
-}
-
-// --- replay -----------------------------------------------------------------
-
-func approvedCombineItems(t *testing.T, s *database.PebbleStore, h *reviewhandler.Handler, n int) {
-	t.Helper()
-	for i := range n {
-		it := seedAction(t, s, "regroup.multidisc", "m"+strconv.Itoa(i), itunesservice.ActionCombine)
-		approveWith(t, h, it.ID)
-	}
-}
-
-func TestReplayApproved_LiveRefusesOverTheCap(t *testing.T) {
-	s := newTestStore(t)
-	// Approve with apply OFF so the items park as "approved" and replay has work.
-	off := reviewhandler.New(s, func() bool { return false }, capOf(2))
-	approvedCombineItems(t, s, off, 3)
-
-	h := reviewhandler.New(s, func() bool { return true }, capOf(2))
-	ran := 0
-	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
-		ran++
-		return nil
-	})
-	w := doReq(t, h.ReplayApprovedItems, http.MethodPost, "/review/replay-approved",
-		map[string]any{"apply": true}, nil)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
-	}
-	if ran != 0 {
-		t.Fatalf("a refused replay ran %d apply handlers", ran)
-	}
-	if got, _ := s.CountReviewItems(database.ReviewStatusApproved); got != 3 {
-		t.Fatalf("want all 3 still approved, got %d", got)
-	}
-}
-
-// The dry run is how an operator sizes a live replay: it must NOT be capped,
-// and it must report the cap so a `limit` under it can be chosen.
-func TestReplayApproved_DryRunReportsTheCapAndIsNotCapped(t *testing.T) {
-	s := newTestStore(t)
-	off := reviewhandler.New(s, func() bool { return false }, capOf(2))
-	approvedCombineItems(t, s, off, 3)
-
-	h := reviewhandler.New(s, func() bool { return true }, capOf(2))
-	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error { return nil })
-	w := doReq(t, h.ReplayApprovedItems, http.MethodPost, "/review/replay-approved", nil, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("dry run must not be capped, got %d: %s", w.Code, w.Body.String())
-	}
-	data := decodeBody(t, w)["data"].(map[string]any)
-	if data["would_replay"].(float64) != 3 || data["apply_cap"].(float64) != 2 {
-		t.Fatalf("want would_replay=3 apply_cap=2, got %v", data)
-	}
-}
-
-// `limit` is the operator's knob for staying under the cap: a limit at the cap
-// over more approved items than the cap must run exactly cap applies.
-func TestReplayApproved_LimitUnderTheCapRuns(t *testing.T) {
-	s := newTestStore(t)
-	off := reviewhandler.New(s, func() bool { return false }, capOf(2))
-	approvedCombineItems(t, s, off, 3)
-
-	h := reviewhandler.New(s, func() bool { return true }, capOf(2))
-	ran := 0
-	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
-		ran++
-		return nil
-	})
-	w := doReq(t, h.ReplayApprovedItems, http.MethodPost, "/review/replay-approved",
-		map[string]any{"apply": true, "limit": 2}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if ran != 2 {
-		t.Fatalf("want exactly 2 applies, got %d", ran)
 	}
 }
