@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -28,8 +28,10 @@ const NightlyCompactActivityLogDefID = "maintenance.nightly-compact-activity-log
 // There is no second compactor.
 //
 // SCHEDULE. The Schedule field below is documentation and the EnqueueOp
-// dedupe arm only: nothing reads OperationDef.Schedule (no cron library in the
-// module). The run is driven by the nightly_activity_compaction task in
+// dedupe arm only: nothing evaluates OperationDef.Schedule as a timer (the
+// cron evaluator in internal/scheduler/cron.go runs only native ops.Schedule
+// declarations; the v3 defs view lists this string as "disabled" unless a
+// task drives it). The run is driven by the nightly_activity_compaction task in
 // internal/scheduler/tasks.go, which fires at 00:10 server-local time via the
 // scheduler's DailyAt trigger (internal/scheduler/daily_at.go), matching the
 // "10 0 * * *" below. Because the cutoff is recomputed from the clock
