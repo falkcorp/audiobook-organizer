@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.8.0
+// version: 3.7.1
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-10-18
+// last-edited: 2026-10-11
 //
 // Deluge label-based audiobook discovery — HTTP handlers.
 //
@@ -11,13 +11,19 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"path/filepath"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/importer"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/gin-gonic/gin"
 )
 
@@ -69,6 +75,180 @@ func (s *Server) handleDelugeListLabels(c *gin.Context) {
 		Labels any `json:"labels"`
 		Count  int `json:"count"`
 	}{Labels: labels, Count: len(labels)})
+}
+
+// handleDelugeDiscoverImport triggers an import of a discovered torrent's
+// content_path into the library. Reuses the existing ImportFile pipeline.
+// POST /api/v1/deluge/discover/import
+// Body: { "content_path": "/mnt/downloads/Dune by Frank Herbert", "torrent_hash": "abc123" }
+func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
+	if !config.AppConfig.DelugeDiscoveryEnabled {
+		httputil.RespondWithForbidden(c, "deluge discovery is disabled (set deluge_discovery_enabled=true to enable)")
+		return
+	}
+	var req struct {
+		ContentPath string `json:"content_path" binding:"required"`
+		TorrentHash string `json:"torrent_hash"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+	if s.importService == nil {
+		httputil.RespondWithInternalError(c, "import service not initialized")
+		return
+	}
+
+	// Resolve the torrent link BEFORE importing: a hash already linked to a
+	// live book is refused (409), a hash that does not check out against
+	// Deluge is rejected (400) or dropped (unlinked), and only a verified hash
+	// is ever handed to ImportFile.
+	verifiedHash, linkNote, ok := s.verifyDiscoveryTorrentHash(c, req.ContentPath, req.TorrentHash)
+	if !ok {
+		return
+	}
+
+	resp, err := s.importService.ImportFile(&importer.ImportFileRequest{
+		FilePath:    req.ContentPath,
+		Organize:    false,
+		TorrentHash: verifiedHash,
+	})
+	if err != nil {
+		// A doubled request passes the pre-check above twice (it runs outside
+		// ImportFile's per-torrent lock); the second one is refused there,
+		// before any book exists, and gets the same 409 as the sequential case.
+		var linkedErr *importer.TorrentAlreadyLinkedError
+		if errors.As(err, &linkedErr) {
+			respondDiscoverAlreadyLinked(c, linkedErr.BookID)
+			return
+		}
+		httputil.InternalError(c, "failed to import file", err)
+		return
+	}
+
+	// torrent_linked reports what the importer actually wrote, not what was
+	// asked for: a verified hash can still go unlinked (previously purged
+	// content, a failed version or file row), and the importer's note says why.
+	if linkNote == "" {
+		linkNote = resp.TorrentLinkNote
+	}
+	httputil.RespondWithCreated(c, struct {
+		Book            any    `json:"book"`
+		TorrentHash     string `json:"torrent_hash"`
+		TorrentLinked   bool   `json:"torrent_linked"`
+		TorrentLinkNote string `json:"torrent_link_note,omitempty"`
+	}{Book: resp, TorrentHash: req.TorrentHash, TorrentLinked: resp.TorrentLinked, TorrentLinkNote: linkNote})
+}
+
+// discoverVerifyTimeout bounds the Deluge round trip (login plus one status
+// call) that verifies a discover-import hash. The client's own transport
+// timeout is 5 minutes, long enough for a proxy in front of the server to give
+// up first while the import still completes, inviting a retry that duplicates
+// the book. A variable only so tests can shorten it.
+var discoverVerifyTimeout = 15 * time.Second
+
+// discoverImportLog carries the upstream error detail that the response note
+// deliberately omits.
+var discoverImportLog = logger.New("server.deluge-discover-import")
+
+// Fixed notes for a hash dropped before the import. They never carry upstream
+// error text: a transport error names the Deluge URL, an internal host.
+const (
+	discoverNoteNotConfigured = "deluge not configured"
+	discoverNoteUnreachable   = "deluge unreachable"
+	discoverNoteTimedOut      = "deluge timed out"
+)
+
+// discoverErrAlreadyLinked is the 409 message for a torrent a live book
+// already holds; the response's book_id names that book.
+const discoverErrAlreadyLinked = "torrent is already linked to a book in the library"
+
+// respondDiscoverAlreadyLinked writes the 409 for a torrent a live book
+// already holds. Both refusals use it, the pre-check in
+// verifyDiscoveryTorrentHash and the one under ImportFile's per-torrent lock,
+// so a caller sees one response whichever caught the duplicate.
+func respondDiscoverAlreadyLinked(c *gin.Context, holderBookID string) {
+	httputil.RespondWithErrorFields(c, http.StatusConflict, discoverErrAlreadyLinked, "TORRENT_ALREADY_LINKED",
+		map[string]any{"book_id": holderBookID})
+}
+
+// verifyDiscoveryTorrentHash normalizes the caller's torrent hash and
+// cross-checks it against Deluge. It returns the hash to store (empty when the
+// import must proceed unlinked), a note explaining why it is empty, and
+// ok=false when it has already written an error response.
+//
+// A hash that a live version already holds in the torrent index is refused
+// with 409 before Deluge is asked anything and before any book is created:
+// the torrent is already in the library, so the request is a retry or a
+// duplicate, and importing it would create a second book whose link (were it
+// written) would move the one-to-one index away from the first. The check
+// runs whatever Deluge's state, because the duplicate book is the harm, not
+// the link. A discover content_path is the whole torrent (save_path/name), so
+// one torrent never legitimately feeds two single-file imports. ImportFile
+// keeps its own guard, under a per-torrent lock, for any path that gets past
+// this one (a concurrent pair, or another caller): it refuses with
+// importer.ErrTorrentAlreadyLinked before creating a book, and the handler
+// answers with the same 409.
+//
+// An unverifiable hash is dropped, never stored: Deluge not configured,
+// unreachable or not answering within discoverVerifyTimeout proceeds unlinked
+// with a fixed note (the upstream error is logged, never returned); a malformed hash, a torrent Deluge does not
+// know, or a content_path that is not a file of that torrent is a 400.
+func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash string) (hash, note string, ok bool) {
+	if rawHash == "" {
+		return "", "", true
+	}
+	hash, err := delugeclient.NormalizeTorrentID(rawHash)
+	if err != nil {
+		httputil.RespondWithBadRequest(c, "torrent_hash is not a valid torrent id: "+err.Error())
+		return "", "", false
+	}
+	if store := s.storeForWiring(); store != nil {
+		holder, holdErr := versions.LiveTorrentHolder(store, hash)
+		if holdErr != nil {
+			httputil.InternalError(c, "failed to read the torrent index", holdErr)
+			return "", "", false
+		}
+		if holder != nil {
+			respondDiscoverAlreadyLinked(c, holder.BookID)
+			return "", "", false
+		}
+	}
+	client := getDelugeClient()
+	if client == nil {
+		return "", discoverNoteNotConfigured, true
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), discoverVerifyTimeout)
+	defer cancel()
+	detail, err := client.GetTorrentDetailContext(ctx, hash)
+	if err != nil {
+		if errors.Is(err, delugeclient.ErrTorrentNotFound) {
+			httputil.RespondWithBadRequest(c, "torrent_hash does not name a torrent in Deluge")
+			return "", "", false
+		}
+		note := discoverNoteUnreachable
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			note = discoverNoteTimedOut
+		}
+		discoverImportLog.Warn("torrent %s could not be verified against Deluge (%s); importing unlinked: %s",
+			hash, note, logger.SanitizeLogValue(err.Error()))
+		return "", note, true
+	}
+	// The route imports exactly one file, so an exact match against one entry
+	// of the torrent's file list is the strong check. Compare cleaned
+	// absolute paths, never raw strings.
+	want, absErr := filepath.Abs(contentPath)
+	if absErr != nil {
+		httputil.RespondWithBadRequest(c, "content_path is not a valid path")
+		return "", "", false
+	}
+	for _, f := range detail.Files {
+		if abs, aerr := filepath.Abs(detail.AbsPath(f)); aerr == nil && abs == want {
+			return hash, "", true
+		}
+	}
+	httputil.RespondWithBadRequest(c, "content_path is not a file of that torrent")
+	return "", "", false
 }
 
 // handleDiscoveryImport runs deluge.ImportToLibrary (internal/deluge/import.go)

@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.23.0
+// version: 1.21.4
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-18
 
@@ -113,12 +113,11 @@ type ImportFileRequest struct {
 	// importer has no organizer dependency, and organizing inline would bypass
 	// the op registry's concurrency gate.
 	//
-	// A non-HTTP caller therefore gets no organize from setting this. A direct
-	// caller should pass false explicitly rather than rely on the zero value, to
-	// document that the field was considered (the Deluge discover-import route
-	// did, until 01-P81k retired it). If you add another direct caller of
-	// ImportFile, honor this yourself or leave it false; do not assume the
-	// service acts on it. It was decoded and ignored
+	// A non-HTTP caller therefore gets no organize from setting this. That is
+	// why deluge_discovery.go:95 passes false explicitly rather than relying on
+	// the zero value — it documents that the field was considered. If you add
+	// another direct caller of ImportFile, honor this yourself or leave it
+	// false; do not assume the service acts on it. It was decoded and ignored
 	// everywhere until 2026-08-25, which is exactly the bug this comment exists
 	// to stop recurring.
 	Organize bool `json:"organize"`
@@ -127,11 +126,8 @@ type ImportFileRequest struct {
 	// It is NOT bindable from JSON (`json:"-"`): POST /api/v1/import/file binds
 	// this struct straight from the request body under a weaker permission than
 	// the Deluge discover route, so a JSON tag here would let any caller store
-	// a hash nobody checked. Only trusted Go callers set it. The one that did,
-	// POST /api/v1/deluge/discover/import (after cross-checking the hash against
-	// Deluge), was retired by 01-P81k, so no production caller sets it today; the
-	// link logic below is kept for the Deluge discovery work and is tested by
-	// calling ImportFile directly.
+	// a hash nobody checked. Only trusted Go callers set it; today that is
+	// handleDelugeDiscoverImport, after cross-checking the hash against Deluge.
 	//
 	// ImportFile does NOT verify the hash against Deluge. It checks only the
 	// shape (40 or 64 lower-case hex) and trusts the caller for the rest, so a
@@ -197,8 +193,8 @@ type ImportFileResponse struct {
 	//
 	// Neither is serialized: the field they describe is not bindable from JSON
 	// either, so POST /api/v1/import/file has nothing to report, and the one
-	// caller that set a hash (the retired Deluge discover import) lifted them
-	// into its own response.
+	// caller that sets a hash (the Deluge discover import) lifts them into its
+	// own response.
 	TorrentLinked   bool   `json:"-"`
 	TorrentLinkNote string `json:"-"`
 }
@@ -480,7 +476,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	}
 	// Already-linked guard, also BEFORE the book row exists. The torrent index
 	// is one-to-one and CreateBookVersion overwrites it unconditionally, so a
-	// second link (a retried or doubled import of the same torrent) would move the index
+	// second link (a retried or doubled discover import) would move the index
 	// from the book that owns the torrent to this new one, orphaning the first
 	// link. The torrent is already in the library, so the request is refused
 	// with ErrTorrentAlreadyLinked rather than imported as a second, unlinked
@@ -602,7 +598,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// When the row was not written the version is STILL created, unlinked (its
 	// orphan warning is then accurate): with a torrent hash it holds the
 	// one-to-one torrent index, and that index is what makes a retried
-	// import of the same torrent a 409 instead of a second book.
+	// discover import of the same torrent a 409 instead of a second book.
 	//
 	// Failure states, none of which needs a deletion to recover:
 	//   - version create fails: the row keeps FileHash, has no VersionID and
