@@ -1,3 +1,7 @@
+### Removed
+
+#### Unreachable functions deleted from nine internal packages
+
 Deleted production functions in `internal/config`, `internal/errhandling`,
 `internal/httputil`, `internal/logger`, `internal/policy`,
 `internal/security/pathvalidation`, `internal/security/safepath`,

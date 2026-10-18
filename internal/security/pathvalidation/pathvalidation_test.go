@@ -1,5 +1,5 @@
 // file: internal/security/pathvalidation/pathvalidation_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7b3d9f1e-2a6c-4f8d-8e0b-5c4a3b2d1e0f
 // last-edited: 2026-10-18
 
@@ -183,6 +183,36 @@ func TestSecureJoin_AbsolutePartRejected(t *testing.T) {
 	}
 	if !errors.Is(err, pathvalidation.ErrAbsolutePathNotAllowed) {
 		t.Errorf("expected ErrAbsolutePathNotAllowed, got %v", err)
+	}
+}
+
+func TestSecureJoin_RootWithTrailingSlash(t *testing.T) {
+	// A root with a trailing slash must behave the same as one without.
+	got1, err1 := pathvalidation.SecureJoin("/srv/books/", "sub/file.m4b")
+	got2, err2 := pathvalidation.SecureJoin("/srv/books", "sub/file.m4b")
+	if err1 != nil || err2 != nil {
+		t.Fatalf("unexpected errors: %v, %v", err1, err2)
+	}
+	if got1 != got2 {
+		t.Errorf("trailing slash changed result: %q vs %q", got1, got2)
+	}
+	if want := "/srv/books/sub/file.m4b"; got1 != want {
+		t.Errorf("got %q, want %q", got1, want)
+	}
+}
+
+// URL-encoded percent sequences are not path separators at the filesystem
+// level; filepath.Clean treats them as literal characters. "..%2Fetc%2Fpasswd"
+// is therefore an ordinary filename that stays inside root, and SecureJoin must
+// neither decode it nor reject it.
+func TestSecureJoin_URLEncodedPercent_IsLiteralChar(t *testing.T) {
+	root := "/srv/books"
+	got, err := pathvalidation.SecureJoin(root, "..%2Fetc%2Fpasswd")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "/srv/books/..%2Fetc%2Fpasswd"; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

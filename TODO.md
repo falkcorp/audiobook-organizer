@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.29 -->
+<!-- version: 10.76.30 -->
 <!-- version: 10.76.27 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-18 -->
@@ -3747,10 +3747,11 @@ still touches the store interface and both generated mock sets.
 - [ ] **`GET /system/logs` returns nothing and has for a long time — point it at the activity store.**
       `sysinfo.CollectSystemLogs` walks recent operation ids and calls
       `GetOperationLogs(op.ID)`, which reads the `operationlog:` Pebble keyspace.
-      That keyspace has **no writer**: `AddOperationLog` is called only from
-      `logger.OperationLogger`, which is only constructed by `logger.ForOperation`,
-      and `ForOperation` has **zero production callers**. Operations log through the
-      activity store instead — `internal/server/batch_save_op.go:99` already spells
+      That keyspace has **no writer**: `AddOperationLog` was called only from
+      `logger.OperationLogger`, which was only constructed by `logger.ForOperation`,
+      and `ForOperation` had **zero production callers**. Both were deleted in
+      01-T6a (2026-10-18), so `AddOperationLog` now has no callers at all.
+      Operations log through the activity store instead — `internal/server/batch_save_op.go:99` already spells
       out that the two are different keyspaces.
       Verified against production 2026-09-07:
       `GET /api/v1/system/logs?limit=5` → `{"logs":null,"offset":0,"total":0}`.
@@ -3763,9 +3764,9 @@ still touches the store interface and both generated mock sets.
       means deciding what "system logs" means now that per-operation logs, activity
       entries and the `journalctl` stream are three different things.
 
-      Also decide the fate of `operationlog:`, `AddOperationLog`,
-      `GetOperationLogs`, `logger.ForOperation` and `logger.OperationLogger` — a
-      seventh write-dead keyspace found during the v1 operations purge, and the
+      Also decide the fate of `operationlog:`, `AddOperationLog` and
+      `GetOperationLogs` (`logger.ForOperation` and `logger.OperationLogger` are
+      already gone, 01-T6a) — a seventh write-dead keyspace found during the v1 operations purge, and the
       only one whose deadness is currently user-visible.
 
 ### N+1 / batch-endpoint audit follow-ups (2026-09-08)
