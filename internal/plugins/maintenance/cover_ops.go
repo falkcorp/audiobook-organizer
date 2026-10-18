@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
 // last-edited: 2026-10-18
 
@@ -250,6 +250,7 @@ var coverTextNow = time.Now
 func (p *Plugin) coverTextReadDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.cover-text-read",
+		Preview:     sdk.PreviewSpec{Params: coverOpParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Read cover text (vision)",
@@ -264,7 +265,7 @@ func (p *Plugin) coverTextReadDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.cover-text-read",
 		Cancellable:     true,
 		Timeout:         24 * time.Hour,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runCoverTextRead,
 	}
 }

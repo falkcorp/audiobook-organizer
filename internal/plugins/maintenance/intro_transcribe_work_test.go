@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_work_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7a4c2e9d-1b6f-4d38-9e5a-c0f3b8d21a76
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -331,7 +331,7 @@ func TestRunIntroTranscribe_DenominatorIsBooksNeedingWork(t *testing.T) {
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
 	rep := &denomReporter{}
 
-	if err := p.runIntroTranscribe(context.Background(), []byte(`{}`), rep); err != nil {
+	if err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(`{}`), rep); err != nil {
 		t.Fatalf("runIntroTranscribe: %v", err)
 	}
 
@@ -379,7 +379,7 @@ func TestRunIntroTranscribe_NothingToDoStillPublishesStats(t *testing.T) {
 	store := &statsStore{MockStore: mock}
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
 	rep := &denomReporter{}
-	if err := p.runIntroTranscribe(context.Background(), nil, rep); err != nil {
+	if err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(``), rep); err != nil {
 		t.Fatal(err)
 	}
 	if store.last == nil || !store.last.Done || store.last.SkippedExisting != 1 || store.last.TotalBooks != 0 {
@@ -400,7 +400,7 @@ func TestRunIntroTranscribe_TotalStoreFailureIsAnError(t *testing.T) {
 	}
 	store := &statsStore{MockStore: mock}
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
-	err := p.runIntroTranscribe(context.Background(), nil, &denomReporter{})
+	err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(``), &denomReporter{})
 	if err == nil || !strings.Contains(err.Error(), "pebble: closed") {
 		t.Fatalf("err = %v, want the store failure", err)
 	}
@@ -418,7 +418,7 @@ func TestRunIntroTranscribe_PartialUnreadableIsPersisted(t *testing.T) {
 	mock.UpdateBookFunc = func(_ string, b *database.Book) (*database.Book, error) { return b, nil }
 	store := &statsStore{MockStore: mock}
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
-	if err := p.runIntroTranscribe(context.Background(), nil, &denomReporter{}); err != nil {
+	if err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(``), &denomReporter{}); err != nil {
 		t.Fatal(err)
 	}
 	st := store.last
@@ -460,7 +460,7 @@ func TestRunIntroTranscribe_ResumeSelectsAfterCheckpointInFullList(t *testing.T)
 		store, writes := newStore()
 		p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
 		rep := &denomReporter{}
-		if err := p.runIntroTranscribe(context.Background(), []byte(params), rep); err != nil {
+		if err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(params), rep); err != nil {
 			t.Fatal(err)
 		}
 		return store, *writes, rep.last
@@ -515,7 +515,7 @@ func TestRunIntroTranscribe_PageTimeChangesAreCounted(t *testing.T) {
 	}
 	store := &statsStore{MockStore: mock}
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
-	if err := p.runIntroTranscribe(context.Background(), nil, &denomReporter{}); err != nil {
+	if err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(``), &denomReporter{}); err != nil {
 		t.Fatal(err)
 	}
 	st := store.last
@@ -547,7 +547,7 @@ func TestRunIntroTranscribe_ResumeAfterVanishedCheckpointSeeksToSuccessor(t *tes
 	}
 	store := &statsStore{MockStore: mock}
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
-	if err := p.runIntroTranscribe(context.Background(), []byte(`{"last_book_id":"w4"}`), &denomReporter{}); err != nil {
+	if err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(`{"last_book_id":"w4"}`), &denomReporter{}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(writes, ",") != "w5,w7" {

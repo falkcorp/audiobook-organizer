@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -31,10 +31,11 @@ import (
 //
 // READ-ONLY with respect to iTunes. It parses an .itl and writes only
 // UserPlaylist rows into our own store, so it is safe against the hands-off
-// Original tree. It declares CapLibraryRead only — deliberately NOT
-// CapLibraryWrite, which would both misdescribe it and invite a future caller
-// to assume writing is allowed. The push direction (PushDirty) is a separate,
-// still-unwired unit and is intentionally not exposed here.
+// Original tree. Because it does write those rows (CreateUserPlaylist, reached
+// only when dry_run/dryRun resolves false) it declares CapLibraryWrite next to
+// CapLibraryRead; the iTunes files themselves are never written. The push
+// direction (PushDirty) is a separate, still-unwired unit and is intentionally
+// not exposed here.
 
 type itunesPlaylistImportParams struct {
 	// DryRun reports what would be imported without creating rows.
@@ -80,7 +81,8 @@ type itunesPlaylistImportParams struct {
 
 func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID: "itunes.playlist-import",
+		ID:      "itunes.playlist-import",
+		Preview: sdk.PreviewSpec{Params: itunesPlaylistImportParams{}},
 		// Renamed 2026-09-25 (naming audit class 8): every iTunes op lives in itunes.*, whichever Go package implements it.
 		FormerIDs:       []string{"maintenance.itunes-playlist-import"},
 		Liveness:        sdk.LivenessManual,
@@ -94,7 +96,7 @@ func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
 		Isolate:         false,
 		Timeout:         30 * time.Minute,
 		Schedule:        nil,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runITunesPlaylistImport,
 	}
 }

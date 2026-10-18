@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
-// last-edited: 2026-08-21
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -118,6 +118,7 @@ const brokenChainSampleCap = 12
 func (p *Plugin) fileProvenanceExportDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.file-provenance-export",
+		Preview:     sdk.PreviewSpec{Params: fileProvExportParams{}},
 		DisplayName: "Export the file provenance ledger to append-only JSONL",
 		Description: "Appends every provenance event newer than the durable export " +
 			"cursor to a JSONL file, so the ledger survives corruption of the database " +
@@ -130,9 +131,11 @@ func (p *Plugin) fileProvenanceExportDef() sdk.OperationDef {
 		// the next run picks up exactly where the last committed one stopped.
 		ResumePolicy: sdk.ResumeDrop,
 		Liveness:     sdk.LivenessRunItems,
-		// CapLibraryRead only: this reads the ledger and writes a file outside
-		// the library. It mutates no library row and appends no event.
-		Capabilities: []sdk.Capability{sdk.CapLibraryRead},
+		// With apply=true this appends JSONL to the caller's path (CapFilesWrite)
+		// and advances the durable export cursor in the database
+		// (CapLibraryWrite). It appends no provenance event and changes no book
+		// or file row. Without apply it only reads the ledger.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapFilesWrite},
 		Run: func(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 			return p.runFileProvenanceExport(ctx, raw, reporter)
 		},

@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-18
 
@@ -202,6 +202,88 @@ func strictDecodes(t *testing.T, id string, p opsregistry.PreviewSpec) {
 		dec := json.NewDecoder(strings.NewReader(string(raw)))
 		dec.DisallowUnknownFields()
 		require.NoError(t, dec.Decode(reflect.New(typ).Interface()), "%s: a strict decode of the injected %s fails", id, raw)
+	}
+}
+
+// TestOpsV3_EveryOpThatDeclaresWritesIsAWriter: an op that declares the rows
+// it writes (OperationDef.Writes) is a v3 writer whatever its capabilities
+// say, so its mode is never ignored. maintenance.transcribe-book-intros
+// declared Writes: books with only read capabilities, and v3 passed a
+// "preview" to it untouched.
+func TestOpsV3_EveryOpThatDeclaresWritesIsAWriter(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
+	defs := map[string]opsv3.DefInfo{}
+	for _, d := range (&opsV3Defs{reg: srv.opRegistry}).ListDefs() {
+		defs[d.ID] = d
+	}
+	n := 0
+	for _, od := range srv.opRegistry.ActiveDefs() {
+		if len(od.Writes) == 0 {
+			continue
+		}
+		n++
+		require.True(t, canWrite(od), "%s declares Writes %v but canWrite is false", od.ID, od.Writes)
+		require.True(t, defs[od.ID].Writer, "%s declares Writes %v but v3 treats it as read-only", od.ID, od.Writes)
+	}
+	require.Positive(t, n, "no registered op declares Writes; the check did not run")
+}
+
+// readOnlyByDeclaration is every adapted op v3 treats as read-only (no write
+// capability, no Writes), with what it was found to do (re-swept 2026-10-18,
+// PR 05-PR9). v3 passes their params through untouched and runs them in
+// either mode, so an op wrongly listed here runs for real on a "preview".
+// A new op that lands here fails until it is listed, so the claim gets read.
+// Entries marked OWNER write something the preview rule may or may not cover
+// (derived candidate rows, caches, scan state, paid calls) and are waiting on
+// the owner's decision (todo.d/2026-10-17-ops-v3-approve-and-schema-checker.md).
+var readOnlyByDeclaration = map[string]string{
+	"catalog.coverage-report":                        "reads ident index and catalog keys",
+	"dedup.author-scan":                              "in-memory result cache only",
+	"dedup.book-scan":                                "in-memory result cache only",
+	"dedup.calibrate-embedding-thresholds":           "reads; logs a report",
+	"dedup.label-refinement":                         "enqueues two children with their default (non-writing) params",
+	"dedup.series-scan":                              "in-memory result cache only",
+	"diagnostics.export":                             "temp ZIP in the OS temp dir",
+	"library.size-refresh":                           "in-memory size cache only",
+	"maintenance.author-title-fragment-scan":         "reads; logs",
+	"maintenance.author-whitespace-collision-report": "reads; logs",
+	"maintenance.book-atpath-index-verify":           "snapshot scans only",
+	"maintenance.book-shape-report":                  "report TSV under .reports (reportPath can redirect it: see todo)",
+	"maintenance.credit-census":                      "reads; reports",
+	"maintenance.file-integrity-check":               "reads and hashes files; reports",
+	"maintenance.filepath-collision-report":          "reads; reports",
+	"maintenance.metadata-refresh":                   "lists and logs; holds the scan stand-down for its run",
+	"maintenance.missing-file-audit":                 "reads; reports",
+	"maintenance.missing-file-repair":                "reports; apply is refused",
+	"maintenance.orphan-book-files-cleanup":          "reports; delete is refused",
+	"maintenance.orphan-book-files-repoint-plan":     "reads; plans",
+	"maintenance.unknown-author-audit":               "reads; reports",
+	"maintenance.version-group-primary-report":       "reads; reports",
+	"metadata.bulk-apply-preview":                    "its own result rows only",
+	"metafetch.calibrate-scoring":                    "reads; reports",
+	"reconcile.scan":                                 "reads and hashes; the writes are reconcile.apply's",
+	"repairs.plan":                                   "fixers' Plan only; writes are in Apply",
+	"acoustid.scan":                                  "OWNER: upserts dedup candidate rows every run, no mode key",
+	"ai.author-scan":                                 "OWNER: writes AI scan state and suggestions, paid OpenAI calls, no mode key",
+	"dedup.split-book-scan":                          "OWNER: saves split-book candidates every run, no mode key",
+	"diagnostics.ai-analyze":                         "OWNER: paid OpenAI batch, no DB writes, no mode key",
+	"library.bulk-metadata-fetch":                    "OWNER: writes metadata fetch caches, never book rows, no mode key",
+}
+
+// TestOpsV3_ReadOnlyOpsAreListed pins readOnlyByDeclaration to the catalog in
+// both directions.
+func TestOpsV3_ReadOnlyOpsAreListed(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
+	got := map[string]bool{}
+	for _, d := range (&opsV3Defs{reg: srv.opRegistry}).ListDefs() {
+		if d.Kind == "adapted" && !d.Writer {
+			got[d.ID] = true
+			_, listed := readOnlyByDeclaration[d.ID]
+			require.True(t, listed, "%s is treated by v3 as read-only (no write capability, no Writes). Check it writes nothing in any mode and list it in readOnlyByDeclaration, or declare what it writes", d.ID)
+		}
+	}
+	for id := range readOnlyByDeclaration {
+		require.True(t, got[id], "readOnlyByDeclaration lists %s, which is not a read-only adapted op; delete the entry", id)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-09-26
+// last-edited: 2026-10-18
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -11,12 +11,14 @@
 // folder's shape with a deterministic regex tier (NO AI — that's a deferred
 // fast-follow), and writes ONE review-queue HOLD per candidate folder.
 //
-// This is DRY-RUN ONLY (locked decision #5): run #1 writes ZERO book/file changes.
-// Even confident multi-disc collapses are written as `pending` holds, never
-// auto-applied — the apply path (CombineBooks/version-group writes) is PR-B2. The
-// only writes this op makes are review-queue rows via UpsertReviewItem, which is
-// idempotent on its stable DedupKey so re-running never duplicates a hold or
-// resurfaces a human-decided one.
+// It NEVER changes a book or a book file (locked decision #5). Even confident
+// multi-disc collapses are written as `pending` holds, never auto-applied — the
+// apply path (CombineBooks/version-group writes) is PR-B2. The only writes this op
+// makes are review-queue rows: UpsertReviewItem, which is idempotent on its stable
+// DedupKey so re-running never duplicates a hold or resurfaces a human-decided one,
+// and DeleteReviewItem for superseded PENDING holds. Both happen only when
+// dry_run=false: a run that states no mode (the default) is a PREVIEW that computes
+// the same candidates and reports what it would upsert and delete, calling neither.
 //
 // REAL-WORLD YIELD IS UNVERIFIED. The prior tag-anchored heal (fs_regroup_xml.go)
 // healed 0 of the ~44,327 shattered records that remain, which means those records
@@ -46,17 +48,25 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// regroupParams configures the dry-run regroup scan. There is no apply flag in B1 —
-// this op is always a dry-run review-queue producer (decision #5).
+// regroupParams configures the regroup scan. The op never changes books or files
+// (decision #5); what dry_run gates is the review-queue rows it writes and the
+// stale pending holds it deletes.
 type regroupParams struct {
 	// Limit caps how many detected groups get a review hold this run (0 = no cap).
 	// Useful for a first canary run before writing the full queue.
 	Limit int `json:"limit"`
+	// DryRun (dry_run) and DryRunCamel (dryRun) are one switch, resolved by
+	// opmode.ResolveDryRun: omitted means PREVIEW (no review row is written or
+	// deleted), false writes the holds, and the two spellings disagreeing is an
+	// error.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 }
 
 // regroupPayload is the JSON stored on each review-queue hold. The A1 frontend
@@ -104,23 +114,27 @@ type regroupPayload struct {
 func (p *Plugin) regroupShatteredAIDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.regroup-shattered-ai",
+		Preview:     sdk.PreviewSpec{Params: regroupParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
-		DisplayName: "Regroup shattered books (dry-run · review-queue producer)",
+		DisplayName: "Regroup shattered books (review-queue producer)",
 		Description: "Scans the whole library, groups the single-file books left by the broken iTunes import " +
 			"(one track = one book) by their book folder, classifies each folder's shape with a deterministic " +
 			"regex tier (multi-disc, version group, anthology, or ambiguous — NO AI), and writes one review-queue " +
-			"HOLD per candidate folder. DRY-RUN ONLY: writes ZERO book/file changes; the only writes are review " +
-			"rows (idempotent). The apply path is a later PR.",
+			"HOLD per candidate folder. Never changes a book or file; the only writes are review-queue rows (upserts " +
+			"are idempotent) and deletes of superseded pending holds. dry_run defaults to true: a run that states " +
+			"no mode computes the candidates and reports what it would upsert and delete, writing nothing. Pass " +
+			"dry_run=false to write the holds. The apply path is a later PR.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.regroup-shattered-ai",
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         120 * time.Minute,
-		// Read-only w.r.t. books/files in B1 (writes ONLY review-queue rows). No
-		// CapLibraryWrite until the apply path lands (PR-B2).
-		Capabilities: []sdk.Capability{sdk.CapLibraryRead},
+		// Never writes books or files; with dry_run=false it writes review-queue
+		// rows (upsert and delete), which are library data, hence CapLibraryWrite.
+		// The book/file apply path is PR-B2.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:          p.runRegroupShatteredAI,
 	}
 }
@@ -132,9 +146,16 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
+	dryRun, err := opmode.ResolveDryRun("maintenance.regroup-shattered-ai", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
+	}
+	if dryRun {
+		_ = reporter.Log(slog.LevelInfo, "PREVIEW (dry_run) — no review hold is written or deleted; pass dry_run=false to write them")
 	}
 
 	_ = reporter.UpdateProgress(0, 0, "Phase 1/2: enumerating library…")
@@ -245,7 +266,11 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	_ = reporter.Log(slog.LevelInfo, recon)
 
 	// Write one idempotent review hold per detected group. ZERO book/file writes.
+	// A preview builds every payload and item exactly as a live run does (so a
+	// marshal failure shows up in a preview too) but never calls UpsertReviewItem.
 	written, alreadyDecided, writeErrs := 0, 0, 0
+	wouldUpsert := 0
+	var sampleUpserts []string
 	for i := range groups {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -266,6 +291,13 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 			FolderRef: g.FolderRef,
 			Summary:   regroupSummary(g),
 			Payload:   payload,
+		}
+		if dryRun {
+			wouldUpsert++
+			if len(sampleUpserts) < regroupPreviewSamples {
+				sampleUpserts = append(sampleUpserts, fmt.Sprintf("%s %q", item.Kind, item.FolderRef))
+			}
+			continue
 		}
 		res, uerr := store.UpsertReviewItem(item)
 		if uerr != nil {
@@ -291,16 +323,34 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	// forever. Only PENDING holds are purged — a human decision (approved/rejected/
 	// applied) is always preserved. Skipped on a capped/canary run (Limit > 0), where
 	// the emitted set is intentionally partial and would wrongly purge the remainder.
-	purged := reconcileStaleHolds(ctx, store, reporter, groups, params.Limit)
-
-	result := fmt.Sprintf(
-		"DRY RUN — review holds written=%d (already-decided=%d, write-errors=%d, stale-purged=%d, "+
-			"skipped-frozen-itunes=%d) from %d detected groups; library untouched. bykind=%v",
-		written, alreadyDecided, writeErrs, purged, skippedFrozen.Load(), len(groups), st.ByKind)
+	var result string
+	if dryRun {
+		stale := staleRegroupHolds(store, reporter, groups, params.Limit)
+		samples := make([]string, 0, regroupPreviewSamples)
+		for i := range stale {
+			if i >= regroupPreviewSamples {
+				break
+			}
+			samples = append(samples, fmt.Sprintf("%s %q", stale[i].Kind, stale[i].FolderRef))
+		}
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+			"PREVIEW: would upsert %d review holds (e.g. %s) and delete %d stale pending holds (e.g. %s)",
+			wouldUpsert, strings.Join(sampleUpserts, "; "), len(stale), strings.Join(samples, "; ")))
+		result = fmt.Sprintf(
+			"PREVIEW (dry_run, nothing written) — would upsert %d review holds and delete %d stale pending holds "+
+				"(marshal-errors=%d, skipped-frozen-itunes=%d) from %d detected groups; library untouched. bykind=%v",
+			wouldUpsert, len(stale), writeErrs, skippedFrozen.Load(), len(groups), st.ByKind)
+	} else {
+		purged := reconcileStaleHolds(ctx, store, reporter, groups, params.Limit)
+		result = fmt.Sprintf(
+			"APPLY — review holds written=%d (already-decided=%d, write-errors=%d, stale-purged=%d, "+
+				"skipped-frozen-itunes=%d) from %d detected groups; books and files untouched. bykind=%v",
+			written, alreadyDecided, writeErrs, purged, skippedFrozen.Load(), len(groups), st.ByKind)
+	}
 	_ = reporter.Log(slog.LevelInfo, result)
 	_ = reporter.UpdateProgress(len(ids)+1, len(ids)+1, result)
 	if writeErrs > 0 {
-		return fmt.Errorf("%d review-hold write errors during regroup dry-run (see op log)", writeErrs)
+		return fmt.Errorf("%d review-hold write errors during regroup (see op log)", writeErrs)
 	}
 	return nil
 }
@@ -317,8 +367,34 @@ const reconcileScanLimit = 100_000
 // cheap local Pebble write, and DeleteReviewItem/UpsertReviewItem share one mutex, so a
 // worker pool would only add contention.
 func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) int {
+	stale := staleRegroupHolds(store, reporter, groups, limit)
+	purged := 0
+	for _, it := range stale {
+		if ctx.Err() != nil {
+			break
+		}
+		if derr := store.DeleteReviewItem(it.ID); derr != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: delete stale hold %s (%s): %v", it.ID, it.FolderRef, derr))
+			continue
+		}
+		purged++
+	}
+	_ = reporter.Log(slog.LevelInfo,
+		fmt.Sprintf("RECONCILE-PURGE: deleted %d superseded pending regroup holds (folder no longer emitted)", purged))
+	return purged
+}
+
+// regroupPreviewSamples bounds the example holds a preview names in its log.
+const regroupPreviewSamples = 5
+
+// staleRegroupHolds is the READ half of the reconcile: the PENDING regroup.* holds whose
+// DedupKey is not in the set this run emitted. It deletes nothing, so a preview calls it
+// to report what a live run would purge and reconcileStaleHolds deletes exactly this
+// list. Nil when limit > 0 (a canary run emits a subset) or when the pending list cannot
+// be read (logged).
+func staleRegroupHolds(store reviewHoldStore, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
 	if limit > 0 {
-		return 0
+		return nil
 	}
 	emitted := make(map[string]struct{}, len(groups))
 	for i := range groups {
@@ -330,28 +406,19 @@ func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sd
 	})
 	if err != nil {
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: list pending review items: %v", err))
-		return 0
+		return nil
 	}
-	purged := 0
+	var stale []database.ReviewItem
 	for _, it := range pending {
-		if ctx.Err() != nil {
-			break
-		}
 		if !strings.HasPrefix(it.Kind, "regroup.") {
 			continue // never purge another producer's holds
 		}
 		if _, ok := emitted[it.DedupKey]; ok {
 			continue // still a candidate this run
 		}
-		if derr := store.DeleteReviewItem(it.ID); derr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: delete stale hold %s (%s): %v", it.ID, it.FolderRef, derr))
-			continue
-		}
-		purged++
+		stale = append(stale, it)
 	}
-	_ = reporter.Log(slog.LevelInfo,
-		fmt.Sprintf("RECONCILE-PURGE: deleted %d superseded pending regroup holds (folder no longer emitted)", purged))
-	return purged
+	return stale
 }
 
 // regroupDedupKey is the STABLE upsert target: a hash of (Kind, FolderRef). Re-running

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/decode_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d7a2e91-b3f0-4c58-8e16-a9c5d02f7b34
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -28,7 +28,9 @@ func (d *storeSpyDeps) OpsStore() OpsStore {
 }
 
 // Each maintenance operation that decodes audio in-process must refuse, before
-// any store read, unless the host opted in.
+// any store read, unless the host opted in. The transcribe cases state
+// dry_run=false: a preview decodes nothing and is not refused (see
+// TestPreviewBehaviour_TranscribeBookIntros).
 func TestDecodeOps_RefuseWithoutServerDecode(t *testing.T) {
 	t.Setenv(serverdecode.EnvVar, "")
 
@@ -40,10 +42,10 @@ func TestDecodeOps_RefuseWithoutServerDecode(t *testing.T) {
 			return p.runExtractWAVClips(context.Background(), nil, &fakeReporter{})
 		}},
 		{"transcribe-book-intros", func(p *Plugin) error {
-			return p.runIntroTranscribe(context.Background(), nil, &fakeReporter{})
+			return p.runIntroTranscribe(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{})
 		}},
 		{"transcribe-book-intros extract_only", func(p *Plugin) error {
-			return p.runIntroTranscribe(context.Background(), json.RawMessage(`{"extract_only":true}`), &fakeReporter{})
+			return p.runIntroTranscribe(context.Background(), json.RawMessage(`{"extract_only":true,"dry_run":false}`), &fakeReporter{})
 		}},
 	}
 	for _, tc := range cases {

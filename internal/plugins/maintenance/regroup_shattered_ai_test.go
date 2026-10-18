@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a9f6c04-8e21-4b57-9d0a-6f2e7c1b5a48
-// last-edited: 2026-08-19
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -15,6 +15,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
+
+// regroupLive is the params of a run that writes its review holds: the op
+// previews (writes nothing) unless dry_run=false is stated.
+var regroupLive = json.RawMessage(`{"dry_run":false}`)
 
 // TestBuildRegroupPayload_DiscTrackRoundTrip closes the classifier→payload→apply seam:
 // a real classified group serialized by buildRegroupPayload and decoded back by
@@ -186,7 +190,7 @@ func TestRegroupShatteredAI_DryRun_WritesHolds_ZeroMutations_Idempotent(t *testi
 	rep := &fakeReporter{}
 
 	// Run #1.
-	if err := p.runRegroupShatteredAI(context.Background(), nil, rep); err != nil {
+	if err := p.runRegroupShatteredAI(context.Background(), regroupLive, rep); err != nil {
 		t.Fatalf("run #1: %v", err)
 	}
 
@@ -254,7 +258,7 @@ func TestRegroupShatteredAI_DryRun_WritesHolds_ZeroMutations_Idempotent(t *testi
 	}
 
 	// Run #2 — UPSERT idempotency: the same folder must NOT create a second row.
-	if err := p.runRegroupShatteredAI(context.Background(), nil, rep); err != nil {
+	if err := p.runRegroupShatteredAI(context.Background(), regroupLive, rep); err != nil {
 		t.Fatalf("run #2: %v", err)
 	}
 	_, total2, err := s.ListReviewItems(database.ReviewFilter{})
@@ -283,7 +287,7 @@ func TestRegroupShatteredAI_DryRun_PreservesDecision(t *testing.T) {
 
 	p := &Plugin{deps: fakeDeps{store: s}}
 	rep := &fakeReporter{}
-	if err := p.runRegroupShatteredAI(context.Background(), nil, rep); err != nil {
+	if err := p.runRegroupShatteredAI(context.Background(), regroupLive, rep); err != nil {
 		t.Fatalf("run #1: %v", err)
 	}
 	items, _, _ := s.ListReviewItems(database.ReviewFilter{})
@@ -296,7 +300,7 @@ func TestRegroupShatteredAI_DryRun_PreservesDecision(t *testing.T) {
 	}
 
 	// Re-scan must leave the rejected item rejected (no resurfacing).
-	if err := p.runRegroupShatteredAI(context.Background(), nil, rep); err != nil {
+	if err := p.runRegroupShatteredAI(context.Background(), regroupLive, rep); err != nil {
 		t.Fatalf("run #2: %v", err)
 	}
 	after, total, _ := s.ListReviewItems(database.ReviewFilter{})

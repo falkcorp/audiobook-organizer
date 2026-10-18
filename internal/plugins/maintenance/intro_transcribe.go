@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.32.1
+// version: 3.33.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
@@ -98,24 +99,39 @@ type introTranscribeParams struct {
 	// cache: extract-only first (fast, CPU-bound), then a normal run transcribes
 	// off the warm cache (cache hits → no ffmpeg, only the GPU step remains).
 	ExtractOnly *bool `json:"extract_only,omitempty"`
-	// DryRun previews what a run WOULD change without writing anything.
-	// Currently honoured by reparse_only runs only; the full-transcribe path
-	// ignores it (registry-wide dry-run enforcement is tracked separately).
+	// DryRun previews what a run WOULD change without writing anything. It
+	// gates every mode: reparse_only, extract_only and the full transcribe.
+	// Omitted means PREVIEW (opmode.ResolveDryRun); pass dry_run=false to run.
+	//
+	// A preview of the transcribe modes runs the work selection and reports what
+	// it would do (how many books, how many skipped, a few ids) and then
+	// returns: no ffmpeg, no Whisper, no clip-cache write, no stats:transcribe
+	// write, no book write, and no serverdecode check (nothing is decoded). A
+	// live run writes books, the clip cache and the stats key and calls Whisper.
 	//
 	// ⚠️ Behaviour change (2026-08-07): for reparse_only runs, dry_run DEFAULTS
 	// TO TRUE. The 2026-08-07 reparse of 12,990 books was dispatched with no
 	// preview at all; that was acceptable only because reparse is upgrade-only.
-	// Pass dry_run=false explicitly to apply changes.
+	// ⚠️ Behaviour change (2026-10-18): the same default now covers the full
+	// transcribe and extract_only paths, which used to ignore dry_run and write.
+	// A caller that wants them to run must send dry_run=false (the
+	// transcribe_monitor.py relaunch does).
+	//
+	// The checkpoint (CheckpointFn below) deliberately leaves this field nil:
+	// ResumeRestart merges the checkpoint over the run's ORIGINAL params, so a
+	// live run's dry_run=false stays in the resumed params and a resumed live run
+	// stays live. Writing dry_run into the checkpoint would let it override that.
 	DryRun *bool `json:"dry_run,omitempty"`
 }
 
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.transcribe-book-intros",
+		Preview:         sdk.PreviewSpec{Params: introTranscribeParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply.",
+		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply. dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false to transcribe, extract or reparse for real.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
@@ -132,7 +148,7 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		// remote path; this generous timeout is the backstop for the local
 		// single-subprocess fallback, which is silent until it completes.
 		ProgressTimeout: 30 * time.Minute,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapFilesRead},
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapFilesRead},
 		Run:             p.runIntroTranscribe,
 	}
 }
@@ -154,6 +170,11 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	retryFailed := params.RetryFailed != nil && *params.RetryFailed
 	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
 	extractOnly := params.ExtractOnly != nil && *params.ExtractOnly
+	// One mode for every path below; omitted = preview.
+	dryRun, err := opmode.ResolveDryRun("maintenance.transcribe-book-intros", params.DryRun, nil)
+	if err != nil {
+		return err
+	}
 
 	log := reporter.Logger()
 
@@ -164,7 +185,6 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		// ⚠️ dry_run defaults to TRUE on the reparse path (behaviour change
 		// 2026-08-07): previews are free, and the alternative is dispatching a
 		// library-wide write blind. Pass dry_run=false to apply.
-		dryRun := params.DryRun == nil || *params.DryRun
 		ids, err := store.ListBookIDs()
 		if err != nil {
 			return fmt.Errorf("list book ids: %w", err)
@@ -172,10 +192,13 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		return p.reparseStoredIntros(ctx, store, reporter, ids, dryRun)
 	}
 
-	// Everything below extracts audio clips with ffmpeg (including extract_only),
-	// so it is refused unless the host opted in. reparse_only above never decodes.
-	if err := serverdecode.Check("maintenance.transcribe-book-intros"); err != nil {
-		return err
+	// A live run below extracts audio clips with ffmpeg (including extract_only),
+	// so it is refused unless the host opted in. reparse_only above never decodes,
+	// and neither does a preview (it only selects work), so neither is refused.
+	if !dryRun {
+		if err := serverdecode.Check("maintenance.transcribe-book-intros"); err != nil {
+			return err
+		}
 	}
 
 	// Load the FULL, ordered list of book IDs up front. This is the proven
@@ -235,6 +258,10 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		return err
 	}
 	total := len(sel.work)
+
+	if dryRun {
+		return previewIntroTranscribe(reporter, sel, extractOnly, len(allIDs), startIdx)
+	}
 
 	log.Info("transcribe-book-intros: starting batch run",
 		"only_missing", onlyMissing, "retry_failed", retryFailed,
@@ -410,6 +437,37 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			"(of %d total; %d skipped, %d of them known-broken not retried, %d unreadable)",
 		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, st.Deferred, total,
 		st.SkippedExisting, sel.failedSkipped, st.Unreadable)+journalFailureNote(st.JournalWriteFailures))
+	return nil
+}
+
+// introPreviewSamples bounds the book ids a preview names.
+const introPreviewSamples = 5
+
+// previewIntroTranscribe reports what a live run would do from the work
+// selection and returns. It is the whole of a transcribe/extract_only preview:
+// it calls no ffmpeg and no Whisper and writes no clip, no stats key, no
+// journal entry and no book, so everything it needs is already in sel.
+func previewIntroTranscribe(reporter sdk.Reporter, sel transcribeSelection, extractOnly bool, libraryBooks, startIdx int) error {
+	verb := "transcribe"
+	if extractOnly {
+		verb = "extract clips for"
+	}
+	samples := sel.work[:min(introPreviewSamples, len(sel.work))]
+	msg := fmt.Sprintf(
+		"PREVIEW (dry_run, nothing written) — would %s %d books (of %d listed, starting at %d); "+
+			"%d skipped (%d of them known-broken, not retried), %d unreadable; first ids: [%s]. "+
+			"Pass dry_run=false to run.",
+		verb, len(sel.work), libraryBooks, startIdx,
+		sel.skipped, sel.failedSkipped, sel.unreadable(), strings.Join(samples, ", "))
+	reporter.Logger().Info("transcribe-book-intros: preview",
+		"would_process", len(sel.work), "library_books", libraryBooks, "start_index", startIdx,
+		"skipped_existing", sel.skipped, "skipped_known_broken", sel.failedSkipped,
+		"not_found", sel.notFound, "read_errors", sel.readErrors, "sample_ids", samples)
+	if sel.unreadable() > 0 {
+		reporter.Logger().Warn("transcribe-book-intros: books listed but not readable, left out of the preview",
+			"not_found", sel.notFound, "read_errors", sel.readErrors, "samples", sel.samples)
+	}
+	_ = reporter.UpdateProgress(1, 1, msg)
 	return nil
 }
 
