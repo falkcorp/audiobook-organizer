@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package server
 
@@ -34,11 +34,11 @@ func (s *Server) wireAudiobooksRoutes(
 	// the nightly purge keeps because a user has listening state on it.
 	protected.POST("/audiobooks/:id/discard-progress-and-purge", s.perm(auth.PermLibraryDelete), audiobooksH.DiscardProgressAndPurge)
 	// reconcile-files re-stats the book's files and corrects FileSize. It does
-	// NOT re-read anything. /rescan is kept as a DEPRECATED alias for the same
-	// handler: the old name always meant this, so repointing it at the new
-	// force-rescan behaviour would silently change what existing callers do.
+	// NOT re-read anything. The old /rescan alias for it is retired (01-P81d);
+	// the stub below answers 410 and names reconcile-files as the replacement.
 	protected.POST("/audiobooks/:id/reconcile-files", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ReconcileAudiobookFiles)
-	protected.POST("/audiobooks/:id/rescan", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ReconcileAudiobookFiles)
+	// Retired (01-P81d): no caller in the repo. Stub kept for one release.
+	protected.POST("/audiobooks/:id/rescan", s.perm(auth.PermLibraryEditMetadata), gone("POST /api/v1/audiobooks/:id/reconcile-files"))
 	// force-rescan is the real per-book forced re-read: it sets NeedsRescan and
 	// the next scan re-reads exactly this book.
 	protected.POST("/audiobooks/:id/force-rescan", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ForceRescanAudiobook)
@@ -53,7 +53,8 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/:id/files", s.perm(auth.PermLibraryView), audiobooksH.ListBookFiles)
 	protected.PATCH("/audiobooks/:id/files/:file_id", s.perm(auth.PermLibraryEditMetadata), audiobooksH.PatchBookFile)
 	protected.GET("/audiobooks/:id/changelog", s.perm(auth.PermLibraryView), audiobooksH.GetBookChangelog)
-	protected.GET("/audiobooks/:id/path-history", s.perm(auth.PermLibraryView), audiobooksH.GetBookPathHistory)
+	// Retired (01-P81d): no caller in the repo. Stub kept for one release.
+	protected.GET("/audiobooks/:id/path-history", s.perm(auth.PermLibraryView), gone("GET /api/v1/audiobooks/:id/changelog"))
 	protected.GET("/audiobooks/:id/external-ids", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobookExternalIDs)
 	protected.POST("/audiobooks/:id/extract-track-info", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ExtractTrackInfo)
 	protected.POST("/audiobooks/:id/relocate", s.perm(auth.PermLibraryOrganize), audiobooksH.RelocateBookFiles)
@@ -63,9 +64,10 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/:id/user-tags", s.perm(auth.PermLibraryView), audiobooksH.GetBookUserTags)
 	protected.GET("/audiobooks/:id/tags-detailed", s.perm(auth.PermLibraryView), audiobooksH.GetBookTagsDetailed)
 	protected.POST("/audiobooks/batch-tags", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchUpdateTags)
-	protected.GET("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryView), audiobooksH.GetBookAlternativeTitles)
-	protected.POST("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryEditMetadata), audiobooksH.AddBookAlternativeTitle)
-	protected.DELETE("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryDelete), audiobooksH.RemoveBookAlternativeTitle)
+	// Retired (01-P81d): no caller in the repo. Stubs kept for one release.
+	protected.GET("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryView), gone(""))
+	protected.POST("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryEditMetadata), gone(""))
+	protected.DELETE("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryDelete), gone(""))
 	protected.GET("/audiobooks/:id/metadata-history", s.perm(auth.PermLibraryView), audiobooksH.GetBookMetadataHistory)
 	protected.GET("/audiobooks/:id/metadata-history/:field", s.perm(auth.PermLibraryView), audiobooksH.GetFieldMetadataHistory)
 	protected.POST("/audiobooks/:id/metadata-history/:field/undo", s.perm(auth.PermLibraryEditMetadata), audiobooksH.UndoMetadataChange)

@@ -47,75 +47,6 @@ func (_m *MockAudiobooksStore) EXPECT() *MockAudiobooksStore_Expecter {
 	return &MockAudiobooksStore_Expecter{mock: &_m.Mock}
 }
 
-// AddBookAlternativeTitle provides a mock function for the type MockAudiobooksStore
-func (_mock *MockAudiobooksStore) AddBookAlternativeTitle(bookID string, title string, source string, language string) error {
-	ret := _mock.Called(bookID, title, source, language)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AddBookAlternativeTitle")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, string) error); ok {
-		r0 = returnFunc(bookID, title, source, language)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockAudiobooksStore_AddBookAlternativeTitle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddBookAlternativeTitle'
-type MockAudiobooksStore_AddBookAlternativeTitle_Call struct {
-	*mock.Call
-}
-
-// AddBookAlternativeTitle is a helper method to define mock.On call
-//   - bookID string
-//   - title string
-//   - source string
-//   - language string
-func (_e *MockAudiobooksStore_Expecter) AddBookAlternativeTitle(bookID any, title any, source any, language any) *MockAudiobooksStore_AddBookAlternativeTitle_Call {
-	return &MockAudiobooksStore_AddBookAlternativeTitle_Call{Call: _e.mock.On("AddBookAlternativeTitle", bookID, title, source, language)}
-}
-
-func (_c *MockAudiobooksStore_AddBookAlternativeTitle_Call) Run(run func(bookID string, title string, source string, language string)) *MockAudiobooksStore_AddBookAlternativeTitle_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		var arg3 string
-		if args[3] != nil {
-			arg3 = args[3].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-			arg3,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAudiobooksStore_AddBookAlternativeTitle_Call) Return(err error) *MockAudiobooksStore_AddBookAlternativeTitle_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockAudiobooksStore_AddBookAlternativeTitle_Call) RunAndReturn(run func(bookID string, title string, source string, language string) error) *MockAudiobooksStore_AddBookAlternativeTitle_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetAuthorByID provides a mock function for the type MockAudiobooksStore
 func (_mock *MockAudiobooksStore) GetAuthorByID(id int) (*database.Author, error) {
 	ret := _mock.Called(id)
@@ -174,68 +105,6 @@ func (_c *MockAudiobooksStore_GetAuthorByID_Call) Return(author *database.Author
 }
 
 func (_c *MockAudiobooksStore_GetAuthorByID_Call) RunAndReturn(run func(id int) (*database.Author, error)) *MockAudiobooksStore_GetAuthorByID_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetBookAlternativeTitles provides a mock function for the type MockAudiobooksStore
-func (_mock *MockAudiobooksStore) GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error) {
-	ret := _mock.Called(bookID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetBookAlternativeTitles")
-	}
-
-	var r0 []database.BookAlternativeTitle
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookAlternativeTitle, error)); ok {
-		return returnFunc(bookID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.BookAlternativeTitle); ok {
-		r0 = returnFunc(bookID)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookAlternativeTitle)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(bookID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAudiobooksStore_GetBookAlternativeTitles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookAlternativeTitles'
-type MockAudiobooksStore_GetBookAlternativeTitles_Call struct {
-	*mock.Call
-}
-
-// GetBookAlternativeTitles is a helper method to define mock.On call
-//   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookAlternativeTitles(bookID any) *MockAudiobooksStore_GetBookAlternativeTitles_Call {
-	return &MockAudiobooksStore_GetBookAlternativeTitles_Call{Call: _e.mock.On("GetBookAlternativeTitles", bookID)}
-}
-
-func (_c *MockAudiobooksStore_GetBookAlternativeTitles_Call) Run(run func(bookID string)) *MockAudiobooksStore_GetBookAlternativeTitles_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAudiobooksStore_GetBookAlternativeTitles_Call) Return(bookAlternativeTitles []database.BookAlternativeTitle, err error) *MockAudiobooksStore_GetBookAlternativeTitles_Call {
-	_c.Call.Return(bookAlternativeTitles, err)
-	return _c
-}
-
-func (_c *MockAudiobooksStore_GetBookAlternativeTitles_Call) RunAndReturn(run func(bookID string) ([]database.BookAlternativeTitle, error)) *MockAudiobooksStore_GetBookAlternativeTitles_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -682,68 +551,6 @@ func (_c *MockAudiobooksStore_GetBookNarrators_Call) Return(bookNarrators []data
 }
 
 func (_c *MockAudiobooksStore_GetBookNarrators_Call) RunAndReturn(run func(bookID string) ([]database.BookNarrator, error)) *MockAudiobooksStore_GetBookNarrators_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetBookPathHistory provides a mock function for the type MockAudiobooksStore
-func (_mock *MockAudiobooksStore) GetBookPathHistory(bookID string) ([]database.BookPathChange, error) {
-	ret := _mock.Called(bookID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetBookPathHistory")
-	}
-
-	var r0 []database.BookPathChange
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookPathChange, error)); ok {
-		return returnFunc(bookID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.BookPathChange); ok {
-		r0 = returnFunc(bookID)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookPathChange)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(bookID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAudiobooksStore_GetBookPathHistory_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookPathHistory'
-type MockAudiobooksStore_GetBookPathHistory_Call struct {
-	*mock.Call
-}
-
-// GetBookPathHistory is a helper method to define mock.On call
-//   - bookID string
-func (_e *MockAudiobooksStore_Expecter) GetBookPathHistory(bookID any) *MockAudiobooksStore_GetBookPathHistory_Call {
-	return &MockAudiobooksStore_GetBookPathHistory_Call{Call: _e.mock.On("GetBookPathHistory", bookID)}
-}
-
-func (_c *MockAudiobooksStore_GetBookPathHistory_Call) Run(run func(bookID string)) *MockAudiobooksStore_GetBookPathHistory_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAudiobooksStore_GetBookPathHistory_Call) Return(bookPathChanges []database.BookPathChange, err error) *MockAudiobooksStore_GetBookPathHistory_Call {
-	_c.Call.Return(bookPathChanges, err)
-	return _c
-}
-
-func (_c *MockAudiobooksStore_GetBookPathHistory_Call) RunAndReturn(run func(bookID string) ([]database.BookPathChange, error)) *MockAudiobooksStore_GetBookPathHistory_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1304,63 +1111,6 @@ func (_c *MockAudiobooksStore_RecordMetadataChange_Call) Return(err error) *Mock
 }
 
 func (_c *MockAudiobooksStore_RecordMetadataChange_Call) RunAndReturn(run func(record *database.MetadataChangeRecord) error) *MockAudiobooksStore_RecordMetadataChange_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RemoveBookAlternativeTitle provides a mock function for the type MockAudiobooksStore
-func (_mock *MockAudiobooksStore) RemoveBookAlternativeTitle(bookID string, title string) error {
-	ret := _mock.Called(bookID, title)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RemoveBookAlternativeTitle")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
-		r0 = returnFunc(bookID, title)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockAudiobooksStore_RemoveBookAlternativeTitle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveBookAlternativeTitle'
-type MockAudiobooksStore_RemoveBookAlternativeTitle_Call struct {
-	*mock.Call
-}
-
-// RemoveBookAlternativeTitle is a helper method to define mock.On call
-//   - bookID string
-//   - title string
-func (_e *MockAudiobooksStore_Expecter) RemoveBookAlternativeTitle(bookID any, title any) *MockAudiobooksStore_RemoveBookAlternativeTitle_Call {
-	return &MockAudiobooksStore_RemoveBookAlternativeTitle_Call{Call: _e.mock.On("RemoveBookAlternativeTitle", bookID, title)}
-}
-
-func (_c *MockAudiobooksStore_RemoveBookAlternativeTitle_Call) Run(run func(bookID string, title string)) *MockAudiobooksStore_RemoveBookAlternativeTitle_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAudiobooksStore_RemoveBookAlternativeTitle_Call) Return(err error) *MockAudiobooksStore_RemoveBookAlternativeTitle_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockAudiobooksStore_RemoveBookAlternativeTitle_Call) RunAndReturn(run func(bookID string, title string) error) *MockAudiobooksStore_RemoveBookAlternativeTitle_Call {
 	_c.Call.Return(run)
 	return _c
 }

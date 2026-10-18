@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-09-12
+// last-edited: 2026-10-18
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -464,116 +464,6 @@ func TestHandler_GetBookTagsDetailed_Empty(t *testing.T) {
 	respData := resp["data"].(map[string]any)
 	respTags := respData["tags"].([]any)
 	assert.Len(t, respTags, 0)
-}
-
-// =============== getBookAlternativeTitles ===============
-
-func TestHandler_GetBookAlternativeTitles_Success(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	alts := []database.BookAlternativeTitle{
-		{BookID: "b1", Title: "Alt Title 1", Source: "user"},
-	}
-	mockStore.EXPECT().GetBookAlternativeTitles("b1").Return(alts, nil)
-
-	router.GET("/audiobooks/:id/alternative-titles", newAudiobooksHandler(srv).GetBookAlternativeTitles)
-
-	req := httptest.NewRequest("GET", "/audiobooks/b1/alternative-titles", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	respData := resp["data"].(map[string]any)
-	titles := respData["alternative_titles"].([]any)
-	assert.Len(t, titles, 1)
-}
-
-// =============== addBookAlternativeTitle ===============
-
-func TestHandler_AddBookAlternativeTitle_Success(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	book := &database.Book{ID: "b1", Title: "Test Book"}
-	mockStore.EXPECT().GetBookByID("b1").Return(book, nil)
-	mockStore.EXPECT().AddBookAlternativeTitle("b1", "New Title", "user", "en").Return(nil)
-	mockStore.EXPECT().GetBookAlternativeTitles("b1").Return([]database.BookAlternativeTitle{
-		{BookID: "b1", Title: "New Title", Source: "user"},
-	}, nil)
-
-	router.POST("/audiobooks/:id/alternative-titles", newAudiobooksHandler(srv).AddBookAlternativeTitle)
-
-	body, _ := json.Marshal(map[string]string{"title": "New Title", "source": "user", "language": "en"})
-	req := httptest.NewRequest("POST", "/audiobooks/b1/alternative-titles", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestHandler_AddBookAlternativeTitle_MissingTitle(t *testing.T) {
-	srv, _, router := setupHandlerTest(t)
-
-	router.POST("/audiobooks/:id/alternative-titles", newAudiobooksHandler(srv).AddBookAlternativeTitle)
-
-	body, _ := json.Marshal(map[string]string{"source": "user"})
-	req := httptest.NewRequest("POST", "/audiobooks/b1/alternative-titles", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestHandler_AddBookAlternativeTitle_BookNotFound(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	mockStore.EXPECT().GetBookByID("missing").Return(nil, errors.New("not found"))
-
-	router.POST("/audiobooks/:id/alternative-titles", newAudiobooksHandler(srv).AddBookAlternativeTitle)
-
-	body, _ := json.Marshal(map[string]string{"title": "Alt"})
-	req := httptest.NewRequest("POST", "/audiobooks/missing/alternative-titles", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
-// =============== removeBookAlternativeTitle ===============
-
-func TestHandler_RemoveBookAlternativeTitle_Success(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	mockStore.EXPECT().RemoveBookAlternativeTitle("b1", "Old Title").Return(nil)
-	mockStore.EXPECT().GetBookAlternativeTitles("b1").Return([]database.BookAlternativeTitle{}, nil)
-
-	router.DELETE("/audiobooks/:id/alternative-titles", newAudiobooksHandler(srv).RemoveBookAlternativeTitle)
-
-	body, _ := json.Marshal(map[string]string{"title": "Old Title"})
-	req := httptest.NewRequest("DELETE", "/audiobooks/b1/alternative-titles", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestHandler_RemoveBookAlternativeTitle_MissingTitle(t *testing.T) {
-	srv, _, router := setupHandlerTest(t)
-
-	router.DELETE("/audiobooks/:id/alternative-titles", newAudiobooksHandler(srv).RemoveBookAlternativeTitle)
-
-	body, _ := json.Marshal(map[string]string{})
-	req := httptest.NewRequest("DELETE", "/audiobooks/b1/alternative-titles", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // =============== getSystemActivityLog ===============

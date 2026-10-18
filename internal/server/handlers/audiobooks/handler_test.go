@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -739,16 +739,6 @@ func TestUndoLastApply_NoHistory(t *testing.T) {
 	}
 }
 
-func TestGetBookPathHistory(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().GetBookPathHistory("b1").Return([]database.BookPathChange{}, nil)
-	c, w := newCtx("GET", "/audiobooks/b1/path-history", nil, p("id", "b1"))
-	h.GetBookPathHistory(c)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", w.Code)
-	}
-}
-
 func TestGetAudiobookExternalIDs_NoStore(t *testing.T) {
 	h, _ := newHandler(t)
 	// rec.extIDStore is nil by default
@@ -859,72 +849,6 @@ func TestBatchUpdateTags_MissingBookIDs(t *testing.T) {
 	h, _ := newHandler(t)
 	c, w := newCtx("POST", "/audiobooks/batch-tags", map[string]any{"add_tags": []string{"x"}}, nil)
 	h.BatchUpdateTags(c)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-// ---- alternative titles ----
-
-func TestGetBookAlternativeTitles(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().GetBookAlternativeTitles("b1").Return(nil, nil)
-	c, w := newCtx("GET", "/audiobooks/b1/alternative-titles", nil, p("id", "b1"))
-	h.GetBookAlternativeTitles(c)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", w.Code)
-	}
-}
-
-func TestAddBookAlternativeTitle_Success(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
-	d.store.EXPECT().AddBookAlternativeTitle("b1", "Alt", "user", "en").Return(nil)
-	d.store.EXPECT().GetBookAlternativeTitles("b1").Return(nil, nil)
-	c, w := newCtx("POST", "/audiobooks/b1/alternative-titles",
-		map[string]any{"title": "Alt", "source": "user", "language": "en"}, p("id", "b1"))
-	h.AddBookAlternativeTitle(c)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", w.Code)
-	}
-}
-
-func TestAddBookAlternativeTitle_MissingTitle(t *testing.T) {
-	h, _ := newHandler(t)
-	c, w := newCtx("POST", "/audiobooks/b1/alternative-titles", map[string]any{}, p("id", "b1"))
-	h.AddBookAlternativeTitle(c)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-func TestAddBookAlternativeTitle_BookNotFound(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().GetBookByID("b1").Return(nil, nil)
-	c, w := newCtx("POST", "/audiobooks/b1/alternative-titles",
-		map[string]any{"title": "Alt"}, p("id", "b1"))
-	h.AddBookAlternativeTitle(c)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
-	}
-}
-
-func TestRemoveBookAlternativeTitle(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().RemoveBookAlternativeTitle("b1", "Alt").Return(nil)
-	d.store.EXPECT().GetBookAlternativeTitles("b1").Return(nil, nil)
-	c, w := newCtx("DELETE", "/audiobooks/b1/alternative-titles",
-		map[string]any{"title": "Alt"}, p("id", "b1"))
-	h.RemoveBookAlternativeTitle(c)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", w.Code)
-	}
-}
-
-func TestRemoveBookAlternativeTitle_MissingTitle(t *testing.T) {
-	h, _ := newHandler(t)
-	c, w := newCtx("DELETE", "/audiobooks/b1/alternative-titles", map[string]any{}, p("id", "b1"))
-	h.RemoveBookAlternativeTitle(c)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", w.Code)
 	}

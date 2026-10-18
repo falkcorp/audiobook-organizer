@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_tags.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ff2e3609-5ce3-4414-a18b-976d21b929fb
-// last-edited: 2026-07-13
+// last-edited: 2026-10-18
 
 // Tag read/write, alternative-title CRUD, and batch tag-update endpoints for
 // the audiobooks domain. Split out of handler.go for readability; one Handler,
@@ -86,79 +86,6 @@ func (h *Handler) GetBookTagsDetailed(c *gin.Context) {
 		tags = []database.BookTag{}
 	}
 	httputil.RespondWithOK(c, gin.H{"tags": tags})
-}
-
-// GetBookAlternativeTitles handles GET /audiobooks/:id/alternative-titles.
-func (h *Handler) GetBookAlternativeTitles(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
-		httputil.RespondWithBadRequest(c, "id is required")
-		return
-	}
-	alts, err := h.store.GetBookAlternativeTitles(id)
-	if err != nil {
-		httputil.InternalError(c, "failed to get alternative titles", err)
-		return
-	}
-	if alts == nil {
-		alts = []database.BookAlternativeTitle{}
-	}
-	httputil.RespondWithOK(c, gin.H{"alternative_titles": alts})
-}
-
-// AddBookAlternativeTitle handles POST /audiobooks/:id/alternative-titles.
-// Idempotent on (book_id, title).
-func (h *Handler) AddBookAlternativeTitle(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
-		httputil.RespondWithBadRequest(c, "id is required")
-		return
-	}
-	var body struct {
-		Title    string `json:"title"`
-		Source   string `json:"source,omitempty"`
-		Language string `json:"language,omitempty"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.Title == "" {
-		httputil.RespondWithBadRequest(c, "title is required")
-		return
-	}
-	store := h.store
-	// Confirm the book exists before inserting — avoids orphan alt
-	// title rows for deleted books.
-	if book, err := store.GetBookByID(id); err != nil || book == nil {
-		httputil.RespondWithNotFound(c, "book", id)
-		return
-	}
-	if err := store.AddBookAlternativeTitle(id, body.Title, body.Source, body.Language); err != nil {
-		httputil.InternalError(c, "failed to add alternative title", err)
-		return
-	}
-	alts, _ := store.GetBookAlternativeTitles(id)
-	httputil.RespondWithOK(c, gin.H{"alternative_titles": alts})
-}
-
-// RemoveBookAlternativeTitle handles DELETE /audiobooks/:id/alternative-titles.
-func (h *Handler) RemoveBookAlternativeTitle(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
-		httputil.RespondWithBadRequest(c, "id is required")
-		return
-	}
-	var body struct {
-		Title string `json:"title"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.Title == "" {
-		httputil.RespondWithBadRequest(c, "title is required")
-		return
-	}
-	store := h.store
-	if err := store.RemoveBookAlternativeTitle(id, body.Title); err != nil {
-		httputil.InternalError(c, "failed to remove alternative title", err)
-		return
-	}
-	alts, _ := store.GetBookAlternativeTitles(id)
-	httputil.RespondWithOK(c, gin.H{"alternative_titles": alts})
 }
 
 // BatchUpdateTags handles POST /audiobooks/batch-tags.
