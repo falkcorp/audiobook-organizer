@@ -1,5 +1,5 @@
 // file: internal/server/itl_pid.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d6b1f048-3e29-4a75-9c81-0f2a7b4c6e93
 // last-edited: 2026-10-18
 //
@@ -19,10 +19,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// pidIntegrityHandler handles GET/POST /api/v1/itunes/pid-integrity. Always
+// pidIntegrityHandler handles GET /api/v1/itunes/pid-integrity. Always
 // read-only: it reports the duplicate-PID census + relocate-correctness probe.
+// It needs the configured ITL path (itunes.library_write_path) and answers a
+// single 400 when it is unset.
 func (s *Server) pidIntegrityHandler(c *gin.Context) {
-	itlPath, _ := resolveITLPath(c) // best-effort: census works without the ITL
+	itlPath, ok := resolveITLPath(c)
+	if !ok {
+		return // resolveITLPath already wrote the error response; writing the census as well made two bodies
+	}
 	report, err := itunes.ComputePIDIntegrity(s.storeForWiring(), itlPath)
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("pid-integrity census failed: %v", err))
