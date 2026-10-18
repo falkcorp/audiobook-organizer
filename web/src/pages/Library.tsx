@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.104.0
+// version: 1.104.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-18
 
@@ -1531,7 +1531,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           'warning'
         );
       } else {
-        toast(`${combined}. To undo it, revert operation ${result.operation_id}.`, 'success');
+        toast(`${combined}.`, 'success');
       }
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);
