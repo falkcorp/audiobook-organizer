@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_preview_behaviour_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f479366b-0525-4f2f-a944-65aa99b39977
 // last-edited: 2026-10-18
 
@@ -196,9 +196,10 @@ func (r *allProgressReporter) UpdateProgress(_, _ int, msg string) error {
 	return nil
 }
 
-// TestIntroTranscribe_ProgressNamesTheMode: every progress message of a
-// transcribe run opens with its mode, including the "Selecting work" line
-// both modes report before they diverge, so a reader of whichever message is
+// TestIntroTranscribe_ProgressNamesTheMode: every progress message of a run
+// opens with its mode, in every path (full transcribe, extract_only and
+// reparse_only), including the "Selecting work" line both modes report
+// before they diverge, so a reader of whichever message is
 // current (scripts/transcribe_monitor.py) can tell a preview from a live run.
 // The exact prefixes are the monitor's PREVIEW_MARKER and LIVE_MARKER.
 func TestIntroTranscribe_ProgressNamesTheMode(t *testing.T) {
@@ -210,11 +211,16 @@ func TestIntroTranscribe_ProgressNamesTheMode(t *testing.T) {
 	config.AppConfig.WhisperClipCacheDir = ""
 	t.Cleanup(func() { config.AppConfig.WhisperClipCacheDir = origCache })
 
+	const preview, live = "PREVIEW (dry_run, nothing written) — ", "LIVE — "
 	for _, tc := range []struct {
-		body, marker string
+		body, marker, first string
 	}{
-		{`{}`, "PREVIEW (dry_run, nothing written) — "},
-		{`{"dry_run":false}`, "LIVE — "},
+		{`{}`, preview, "Selecting work"},
+		{`{"dry_run":false}`, live, "Selecting work"},
+		{`{"extract_only":true}`, preview, "Selecting work"},
+		{`{"extract_only":true,"dry_run":false}`, live, "Selecting work"},
+		{`{"reparse_only":true}`, preview, "Reparsing intros"},
+		{`{"reparse_only":true,"dry_run":false}`, live, "Reparsing intros"},
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			root := t.TempDir()
@@ -230,10 +236,10 @@ func TestIntroTranscribe_ProgressNamesTheMode(t *testing.T) {
 			rep.pmu.Lock()
 			defer rep.pmu.Unlock()
 			if len(rep.msgs) < 2 {
-				t.Fatalf("%s: want the selecting line and at least one more, got %q", tc.body, rep.msgs)
+				t.Fatalf("%s: want the first progress line and at least one more, got %q", tc.body, rep.msgs)
 			}
-			if !strings.Contains(rep.msgs[0], "Selecting work") {
-				t.Fatalf("%s: first message %q is not the selecting line", tc.body, rep.msgs[0])
+			if !strings.Contains(rep.msgs[0], tc.first) {
+				t.Fatalf("%s: first message %q is not the %q line", tc.body, rep.msgs[0], tc.first)
 			}
 			for _, m := range rep.msgs {
 				if !strings.HasPrefix(m, tc.marker) {

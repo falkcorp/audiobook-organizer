@@ -108,8 +108,8 @@ now reports those as already decided.
 
 #### The transcription monitor raises an alarm when a relaunch is a preview
 
-Every progress message of a `maintenance.transcribe-book-intros` transcribe
-or extract run now opens with its mode (`PREVIEW (dry_run, nothing written) — `
+Every progress message of a `maintenance.transcribe-book-intros` run
+(transcribe, extract_only or reparse_only) now opens with its mode (`PREVIEW (dry_run, nothing written) — `
 or `LIVE — `). `scripts/transcribe_monitor.py` reads each relaunched run back
 and raises `RELAUNCH_IS_PREVIEW` (an ERROR alert and a banner on stderr) when
 the server queued a preview, instead of relaunching a run that transcribes
