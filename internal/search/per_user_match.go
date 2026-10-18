@@ -1,5 +1,5 @@
 // file: internal/search/per_user_match.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a82911d7-d9dc-4f47-9863-1a7638e47194
 // last-edited: 2026-10-18
 
@@ -105,36 +105,13 @@ func numericFieldMatches(got float64, node *FieldNode) bool {
 
 // timeFieldMatches evaluates a date comparison. Terms are absolute (RFC 3339,
 // YYYY-MM-DD) or relative to now (see ParseDateTerm); a term that does not parse
-// matches nothing. An equality on a bare YYYY-MM-DD matches the whole UTC day.
+// matches nothing here, and is refused earlier by CheckDateNode. What each
+// operator means for a bare YYYY-MM-DD is dateTermInterval's rule, shared with
+// the Bleve translator.
 func timeFieldMatches(got time.Time, node *FieldNode, now time.Time) bool {
-	switch node.Op {
-	case "range":
-		lo, ok1 := ParseDateTerm(node.RangeMin, now)
-		hi, ok2 := ParseDateTerm(node.RangeMax, now)
-		if !ok1 || !ok2 {
-			return false
-		}
-		return !got.Before(lo) && !got.After(hi)
-	default:
-		want, ok := ParseDateTerm(node.Value, now)
-		if !ok {
-			return false
-		}
-		switch node.Op {
-		case ">":
-			return got.After(want)
-		case "<":
-			return got.Before(want)
-		case ">=":
-			return got.After(want) || got.Equal(want)
-		case "<=":
-			return got.Before(want) || got.Equal(want)
-		default:
-			if isDateOnly(node.Value) {
-				lo, hi := dateDayBounds(want)
-				return !got.Before(lo) && got.Before(hi)
-			}
-			return got.Equal(want)
-		}
+	iv, err := dateTermInterval(node, now)
+	if err != nil {
+		return false
 	}
+	return iv.contains(got)
 }

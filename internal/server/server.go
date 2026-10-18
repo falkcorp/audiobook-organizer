@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.98.1
+// version: 2.99.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
@@ -182,7 +182,12 @@ type Server struct {
 	// metadataCacheH is the metadata-cache handler, kept so the startup
 	// warmer can build its review snapshot (warmMetadataReviewSnapshot).
 	metadataCacheH *handlers.MetadataCacheHandler
-	httpServer     *http.Server
+	// collectionHOnce/collectionHV hold the one native collection handler, shared
+	// by the routes and the scheduled relative-date refresh so the owner-fallback
+	// warning is once per collection per process (see collectionHandler).
+	collectionHOnce sync.Once
+	collectionHV    *handlers.CollectionHandler
+	httpServer      *http.Server
 	// httpBoundAddr is the main listener's real address ("host:port"),
 	// stored by configureAndStartHTTP once the port is bound and before
 	// READY=1 is sent. With --port 0 it is the only record of the port.

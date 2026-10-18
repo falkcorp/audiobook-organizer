@@ -1,5 +1,5 @@
 // file: internal/server/collection_owner_backfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6b8d41-a3c7-4e95-b012-7d9e5c1a4f68
 // last-edited: 2026-10-18
 
@@ -67,8 +67,9 @@ type collectionOwnerLogger interface {
 const maxListedUnowned = 50
 
 // backfillCollectionOwners gives every dynamic collection with no usable owner
-// (CreatedByUserID empty, "_local", or naming a user that no longer exists) the
-// first active admin as its owner, so it has one evaluating user (D75) instead
+// (CreatedByUserID empty, "_local" when auth is on, or naming a user that no
+// longer exists) the first active admin as its owner, so it has one evaluating
+// user (D75) instead
 // of leaving the read path to fall back on every request. When remat is non-nil
 // each reassigned collection is also re-evaluated as its new owner and its
 // MaterializedBookIDs refreshed; if the evaluation fails the stored set is left
@@ -96,7 +97,7 @@ const maxListedUnowned = 50
 // the library, and each iteration is one row write plus at most one index query.
 // It is deliberately sequential; a worker pool would add ordering questions
 // (two workers writing the same name index) for no measurable gain.
-func backfillCollectionOwners(store collectionOwnerStore, remat collectionRematerializer, log collectionOwnerLogger) (collectionOwnerBackfillResult, error) {
+func backfillCollectionOwners(store collectionOwnerStore, remat collectionRematerializer, log collectionOwnerLogger, authEnabled bool) (collectionOwnerBackfillResult, error) {
 	var res collectionOwnerBackfillResult
 	if log == nil {
 		log = collectionOwnerLog
@@ -126,8 +127,12 @@ func backfillCollectionOwners(store collectionOwnerStore, remat collectionRemate
 		if c.Type != database.CollectionTypeDynamic {
 			continue
 		}
-		unowned := c.CreatedByUserID == "" || c.CreatedByUserID == localCallerID
-		if !unowned {
+		// With auth off "_local" is the single user, a legitimate owner the
+		// handler evaluates as, though no user row answers to it; only with auth
+		// on is it a stand-in id.
+		localOwner := c.CreatedByUserID == localCallerID && !authEnabled
+		unowned := c.CreatedByUserID == "" || (c.CreatedByUserID == localCallerID && authEnabled)
+		if !unowned && !localOwner {
 			_, ok := exists[c.CreatedByUserID]
 			unowned = !ok
 		}

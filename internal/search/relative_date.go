@@ -1,5 +1,5 @@
 // file: internal/search/relative_date.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3a96e18-5d47-4b02-8f1e-a7d2b04c6e93
 // last-edited: 2026-10-18
 
@@ -143,6 +143,78 @@ func dateDayBounds(day time.Time) (lo, hi time.Time) {
 	return lo, lo.AddDate(0, 0, 1)
 }
 
+// dateInterval is the span of time a date term selects: from lo (inclusive)
+// until hi (exclusive); a missing side is unbounded. Matching and translating
+// both go through it, so the Go matcher and the Bleve date range cannot disagree
+// about what an operator means.
+type dateInterval struct {
+	lo, hi       time.Time
+	hasLo, hasHi bool
+}
+
+func (iv dateInterval) contains(t time.Time) bool {
+	if iv.hasLo && t.Before(iv.lo) {
+		return false
+	}
+	if iv.hasHi && !t.Before(iv.hi) {
+		return false
+	}
+	return true
+}
+
+// dateTermInterval resolves a date term (comparison, equality or range) against
+// now. A bare YYYY-MM-DD names a whole UTC day, so it is read by what the
+// operator says about that day: ">d" is after the whole day, ">=d" from its
+// start, "<d" before it, "<=d" through its end, "=d" the day itself, and in
+// "a..b" or "[a TO b]" the upper bound b includes all of day b. A full instant
+// (RFC 3339, "now" or an offset like -30d) is exact: "<=t" includes t itself and
+// ">t" starts just after it.
+func dateTermInterval(n *FieldNode, now time.Time) (dateInterval, error) {
+	var iv dateInterval
+	// startOf is the first instant a bound reaches; endOf is the first instant
+	// after it. For a day they are the day's two edges, for an instant t and t+1ns.
+	bound := func(s string) (start, end time.Time, err error) {
+		t, perr := ParseDateTermErr(s, now)
+		if perr != nil {
+			return start, end, fmt.Errorf("%s: %w", n.Field, perr)
+		}
+		if isDateOnly(s) {
+			lo, hi := dateDayBounds(t)
+			return lo, hi, nil
+		}
+		return t, t.Add(time.Nanosecond), nil
+	}
+	if n.Op == "range" {
+		lo, _, err := bound(n.RangeMin)
+		if err != nil {
+			return iv, err
+		}
+		_, hi, err := bound(n.RangeMax)
+		if err != nil {
+			return iv, err
+		}
+		iv.lo, iv.hasLo, iv.hi, iv.hasHi = lo, true, hi, true
+		return iv, nil
+	}
+	start, end, err := bound(n.Value)
+	if err != nil {
+		return iv, err
+	}
+	switch n.Op {
+	case ">":
+		iv.lo, iv.hasLo = end, true
+	case ">=":
+		iv.lo, iv.hasLo = start, true
+	case "<":
+		iv.hi, iv.hasHi = start, true
+	case "<=":
+		iv.hi, iv.hasHi = end, true
+	default:
+		iv.lo, iv.hasLo, iv.hi, iv.hasHi = start, true, end, true
+	}
+	return iv, nil
+}
+
 // dateFields is every query field that takes a date term, with its aliases.
 // last_played is per-user and answered by the Go matcher; the others are
 // indexed (datetime fields of BookDocument) and answered by the Bleve
@@ -160,6 +232,16 @@ var dateFields = map[string]struct{}{
 func IsDateField(name string) bool {
 	_, ok := dateFields[name]
 	return ok
+}
+
+// QueryHasRelativeDate reports whether the query text has a relative date term.
+// Text that does not parse reports false: it cannot be evaluated at all.
+func QueryHasRelativeDate(query string) bool {
+	ast, err := ParseQuery(query)
+	if err != nil {
+		return false
+	}
+	return HasRelativeDate(ast)
 }
 
 // isRelativeDateTerm reports whether v is a date term whose instant depends on
@@ -209,6 +291,16 @@ func HasRelativeDate(n Node) bool {
 			return isRelativeDateTerm(v.RangeMin) || isRelativeDateTerm(v.RangeMax)
 		}
 		return isRelativeDateTerm(v.Value)
+	case *ValueAltNode:
+		// date_added:(-30d|-1y): each alternative is a date term of its own.
+		if !IsDateField(v.Field) {
+			return false
+		}
+		for _, alt := range v.Values {
+			if isRelativeDateTerm(alt) {
+				return true
+			}
+		}
 	}
 	return false
 }

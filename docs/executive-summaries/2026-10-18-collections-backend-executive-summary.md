@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-collections-backend-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: bc1b7020-e5ad-4493-90ab-243c0a1234fc -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -24,9 +24,14 @@ relative dates in the one search syntax, atomic add and remove).
   days, `date_added:>-1y` means added in the last year, and
   `last_played:-30d..now` is the same window as a range. Units are days, weeks,
   months and years. The window is worked out each time the search runs, so a
-  saved search or a dynamic collection keeps sliding forward. A bare `30d`
-  with no sign is refused with a message showing `-30d`, instead of being
-  guessed at.
+  saved search keeps sliding forward, and a dynamic collection is refreshed
+  every hour by a scheduled task, so the books the Audiobookshelf side shows
+  stay within an hour of the clock. A bare `30d` with no sign is refused with a
+  message showing `-30d`, instead of being guessed at; that includes a collection
+  that is saved with a mistyped listening date, which is now refused when it is
+  saved instead of quietly matching nothing. A date with no time of day, such as
+  `2026-03-31`, means that whole day, so "up to 31 March" includes a book added
+  that afternoon.
 - **The Library page now honours those searches.** Until now the Library page
   treated any `last_played:` value as "has ever been played", and refused
   `date_added:` altogether. Both now work, and "added" and "modified" are new
@@ -51,7 +56,8 @@ relative dates in the one search syntax, atomic add and remove).
   If a collection's owner has been removed, it is not worked out as the first
   administrator when its search uses those terms (that would show the
   administrator's listening to everyone): it keeps the books it had and says
-  why, until the administrator saves its search again to take it over. Start-up
+  why, until the administrator saves its search again and explicitly confirms
+  taking it over (saving it for another reason never takes it over). Start-up
   leaves such collections alone and lists them once in the activity log. One
   gap remains: a listening-history search that someone other than the owner
   wrote before this fix cannot be found, because collections keep no record of

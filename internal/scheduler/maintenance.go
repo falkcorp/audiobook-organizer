@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package scheduler
 
@@ -170,6 +170,7 @@ var taskV2DefIDs = map[string]string{
 	"asin_backfill":               "metafetch.asin-backfill",
 	"candidate_fetch":             "metadata.candidate-fetch",
 	"identification_advance":      "identification.advance",
+	"collections_refresh":         "collections.refresh-relative-dynamic",
 	"catalog_harvest":             "catalog.harvest-authors",
 	"temp_file_cleanup":           "maintenance.temp-file-cleanup",
 	"transcode_temp_cleanup":      "maintenance.transcode-temp-cleanup",
@@ -204,6 +205,7 @@ var taskV2DefIDs = map[string]string{
 var legacyTaskNames = map[string]string{
 	"acoustid.backfill":                        "acoustid_backfill",
 	"acoustid.lookup-online":                   "acoustid_online_lookup",
+	"collections.refresh-relative-dynamic":     "collections_refresh",
 	"catalog.harvest-authors":                  "catalog_harvest",
 	"dedup.author-scan":                        "dedup_refresh",
 	"dedup.label-refinement":                   "label_refinement",

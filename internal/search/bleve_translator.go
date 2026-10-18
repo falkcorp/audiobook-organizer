@@ -1,5 +1,5 @@
 // file: internal/search/bleve_translator.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
 // last-edited: 2026-10-18
 //
@@ -242,6 +242,14 @@ func translateNot(n *NotNode, tc *translateCtx, negated bool) (query.Query, erro
 func translateField(n *FieldNode, tc *translateCtx, negated bool) (query.Query, error) {
 	// Per-user fields → post-filter, not Bleve.
 	if _, ok := perUserFieldSet[n.Field]; ok {
+		// A malformed date (last_played:>30d, no sign) must be refused here, like
+		// the indexed date fields are. Left to the matcher it matches nothing,
+		// and negated it would match every book.
+		if IsDateField(n.Field) {
+			if err := CheckDateNode(n, tc.now); err != nil {
+				return nil, err
+			}
+		}
 		tc.perUser = append(tc.perUser, PerUserFilter{Node: n, Negated: negated})
 		return nil, nil
 	}
@@ -359,50 +367,21 @@ func indexedDateField(field string) (string, bool) {
 // ParseDateTerm). Equality on a bare YYYY-MM-DD matches that whole UTC day; on
 // any other term it is the one-instant range.
 func translateDate(n *FieldNode, field string, now time.Time) (query.Query, error) {
-	inc, exc := true, false
-	rng := func(lo, hi time.Time, loInc, hiInc *bool) query.Query {
-		q := bleve.NewDateRangeInclusiveQuery(lo, hi, loInc, hiInc)
-		q.SetField(field)
-		return q
-	}
-	parse := func(s string) (time.Time, error) {
-		t, err := ParseDateTermErr(s, now)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("%s: %w", n.Field, err)
-		}
-		return t, nil
-	}
-	if n.Op == "range" {
-		lo, err := parse(n.RangeMin)
-		if err != nil {
-			return nil, err
-		}
-		hi, err := parse(n.RangeMax)
-		if err != nil {
-			return nil, err
-		}
-		return rng(lo, hi, &inc, &inc), nil
-	}
-	v, err := parse(n.Value)
+	iv, err := dateTermInterval(n, now)
 	if err != nil {
 		return nil, err
 	}
-	switch n.Op {
-	case ">":
-		return rng(v, time.Time{}, &exc, &inc), nil
-	case ">=":
-		return rng(v, time.Time{}, &inc, &inc), nil
-	case "<":
-		return rng(time.Time{}, v, &inc, &exc), nil
-	case "<=":
-		return rng(time.Time{}, v, &inc, &inc), nil
-	default:
-		if isDateOnly(n.Value) {
-			lo, hi := dateDayBounds(v)
-			return rng(lo, hi, &inc, &exc), nil
-		}
-		return rng(v, v, &inc, &inc), nil
+	inc, exc := true, false
+	var lo, hi time.Time
+	if iv.hasLo {
+		lo = iv.lo
 	}
+	if iv.hasHi {
+		hi = iv.hi
+	}
+	q := bleve.NewDateRangeInclusiveQuery(lo, hi, &inc, &exc)
+	q.SetField(field)
+	return q, nil
 }
 
 // translateDuration builds a numeric range on the indexed seconds field from
@@ -446,12 +425,38 @@ func translateValueAlt(n *ValueAltNode, tc *translateCtx, negated bool) (query.Q
 	if _, ok := perUserFieldSet[n.Field]; ok {
 		// Build a synthetic set of PerUserFilter entries.
 		for _, v := range n.Values {
+			if IsDateField(n.Field) {
+				if err := CheckDateNode(&FieldNode{Field: n.Field, Value: v}, tc.now); err != nil {
+					return nil, err
+				}
+			}
 			tc.perUser = append(tc.perUser, PerUserFilter{
 				Node:    &FieldNode{Field: n.Field, Value: v},
 				Negated: negated,
 			})
 		}
 		return nil, nil
+	}
+
+	// date_added:(2026-03-31|-30d): each alternative is a date term on the
+	// indexed field, refused when malformed. Matching it as text would silently
+	// find nothing.
+	if target, ok := indexedDateField(n.Field); ok {
+		var dates []query.Query
+		for _, v := range n.Values {
+			dq, err := translateDate(&FieldNode{Field: n.Field, Value: v}, target, tc.now)
+			if err != nil {
+				return nil, err
+			}
+			dates = append(dates, dq)
+		}
+		if len(dates) == 0 {
+			return nil, nil
+		}
+		if len(dates) == 1 {
+			return dates[0], nil
+		}
+		return bleve.NewDisjunctionQuery(dates...), nil
 	}
 
 	var children []query.Query
