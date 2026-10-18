@@ -1,5 +1,5 @@
 // file: internal/database/review_store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
 // last-edited: 2026-10-18
 
@@ -100,17 +100,19 @@ type ReviewItem struct {
 	// action) and AbandonReviewItemClaim (which records the abandoned action, so a
 	// later approve with no explicit action re-runs it), never cleared: a
 	// status-only decision and a release leave it alone, so no later transition can
-	// erase the decision it is carrying out. A claim does NOT record it: a failed
-	// first run is released back to its old status, and an override must not outlive
-	// an apply that never happened (the claim's own ApplyClaimAction carries it
-	// until the apply is finished, released or abandoned).
+	// erase the decision it is carrying out. A claim does NOT record it: a first run
+	// that failed having written nothing is released back to its old status, and an
+	// override must not outlive an apply that never happened (the claim's own
+	// ApplyClaimAction carries it until the apply is finished, released, held or
+	// abandoned).
 	ChosenAction string `json:"chosen_action,omitempty"`
 
 	// The apply claim (review_claim.go). They are set together when a claim moves
 	// the item to "applying" and cleared together when FinishReviewItemApply,
 	// ReleaseReviewItemClaim or AbandonReviewItemClaim moves it out; nothing else
-	// writes them. The one partial write: a failed re-run's release blanks the token
-	// and instance and keeps the rest, leaving a claim no process holds.
+	// writes them. The one partial write: HoldReviewItemClaim (a failed re-run's
+	// release, or a failed first run that may have written) blanks the token and
+	// instance and keeps the rest, leaving a claim no process holds.
 	//
 	// ApplyClaimedFrom is the status before the claim, which a release goes back to.
 	// ApplyClaimAction is the action being applied: the finish records it as
@@ -124,7 +126,9 @@ type ReviewItem struct {
 	ApplyClaimInstance string `json:"apply_claim_instance,omitempty"`
 	// ApplyClaimRerun is true on a claim that took over an interrupted one: its
 	// apply is a re-run over a library the first run may have changed. Releasing
-	// such a claim does not hand the item back (see ReleaseReviewItemClaim).
+	// such a claim does not hand the item back (see ReleaseReviewItemClaim). A first
+	// run held after a failure that may have written (HoldReviewItemClaim) is not
+	// marked: its retry is the takeover that sets this.
 	ApplyClaimRerun bool `json:"apply_claim_rerun,omitempty"`
 
 	// ApplyAbandonedAction is the action of an interrupted apply an operator

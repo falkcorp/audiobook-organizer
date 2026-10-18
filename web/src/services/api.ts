@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.189.0
+// version: 2.190.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-18
 
@@ -7537,8 +7537,9 @@ export interface ReviewBulkSkip {
   action: string;
   reason: string;
   /** The refusal's stable code (REVIEW_ACTION_NOT_DECIDABLE, REVIEW_ALREADY_APPLIED,
-   *  REVIEW_APPLY_IN_PROGRESS, REVIEW_APPLY_INTERRUPTED, ...). A skip coded as applied,
-   *  in progress or interrupted is NOT still pending. */
+   *  REVIEW_APPLY_IN_PROGRESS, REVIEW_APPLY_INTERRUPTED, REVIEW_APPLY_PARTIAL, ...). A skip
+   *  coded as applied, in progress, interrupted or partial (a first run that failed after it
+   *  may have written, held applying) is NOT still pending. */
   code?: string;
 }
 

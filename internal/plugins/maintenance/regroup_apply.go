@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -76,6 +76,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -92,6 +93,44 @@ import (
 )
 
 var regroupLog = logger.New("regroup-apply")
+
+// applyWrites tracks whether a review apply may have changed anything persistent. The
+// apply functions below return an error wrapped by database.NothingWritten only when
+// it has not: the review handler releases such a failure back to the queue and HOLDS
+// every other one (see database.NothingWrittenError). So may starts false, is set true
+// at the first step that can write, and is cleared again only where a refusal is shown
+// to precede every write. A step that cannot say whether it wrote sets it: the safe
+// direction.
+type applyWrites struct{ may bool }
+
+// classify marks err as nothing-written while no write may have landed. A nil error
+// stays nil. It runs as a deferred call, so every return of an apply function is
+// classified by where it left may, with no per-return bookkeeping to forget.
+func (w *applyWrites) classify(err error) error {
+	if err == nil || w.may {
+		return err
+	}
+	return database.NothingWritten(err)
+}
+
+// combine runs CombineBooks with a nil override. CombineBooks is opaque: it writes an
+// undo journal and then moves files and soft-deletes books, and an error after that
+// leaves a partial merge, so any failure is taken as having written (w.may). The one
+// exception is merge.ErrITunesProtected: GuardITunesProtected is CombineBooks' only
+// iTunes refusal and runs before the journal or any other write, so it changes
+// nothing. The other typed refusals (BookNotFoundError, SoftDeletedInputError) are
+// NOT exempted: the same BookNotFoundError is also returned by CombineBooks' soft-delete
+// step, after files have moved. Its untyped store-read errors before the journal are
+// held conservatively for the same reason: they cannot be told apart from a later one.
+func (w *applyWrites) combine(c bookCombiner, ids []string, primaryID string) (*merge.CombineResult, error) {
+	before := w.may
+	w.may = true
+	res, err := c.CombineBooks(ids, primaryID, nil) // nil override = survivor metadata untouched
+	if errors.Is(err, merge.ErrITunesProtected) {
+		w.may = before
+	}
+	return res, err
+}
 
 // bookCombiner is the slim slice of merge.Service the multidisc apply path needs.
 // Narrowing to an interface keeps the apply function unit-testable without a full
@@ -177,7 +216,9 @@ func nominateDuplicateTargets(cands candidateLister, members []string, memberSet
 // type is assignable to the named type), so the wiring registers it directly without
 // this package importing the server handler.
 func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.Context, database.ReviewItem) error {
-	return func(ctx context.Context, item database.ReviewItem) error {
+	return func(ctx context.Context, item database.ReviewItem) (err error) {
+		var w applyWrites
+		defer func() { err = w.classify(err) }()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -198,7 +239,7 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 			return nil
 		}
 		primaryID := pickPrimary(present)
-		res, err := combiner.CombineBooks(present, primaryID, nil) // nil override = survivor metadata untouched
+		res, err := w.combine(combiner, present, primaryID)
 		if err != nil {
 			return fmt.Errorf("regroup multidisc apply: combine %q (%d books): %w", p.Folder, len(present), err)
 		}
@@ -303,8 +344,17 @@ func applyDiscTrackNumbers(ctx context.Context, store bookFileTrackWriter, survi
 // MergeBooks soft-deletes the loser, but a version group must keep BOTH editions
 // visible (the user picks which to play). The group-ID-reuse mirrors
 // merge/service.go: reuse an existing VersionGroupID if any member already has one.
+//
+// WRITES, for the review handler's hold-or-release decision (applyWrites): everything
+// before the link loop below only reads or checks, so a failure there wrote nothing.
+// The loop writes member by member, so a failure at a later member leaves the earlier
+// ones linked; it counts as written once any member's write was attempted. The
+// hand-off after it is opaque, except a versionprimary.ErrWriteRefused, which that
+// hand-off documents as having written nothing (the link may still stand).
 func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.ReviewItem) error {
-	return func(ctx context.Context, item database.ReviewItem) error {
+	return func(ctx context.Context, item database.ReviewItem) (err error) {
+		var w applyWrites
+		defer func() { err = w.classify(err) }()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -467,6 +517,7 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// (idempotent). The primary is decided below over the whole group.
 		for _, b := range books {
 			vg := target
+			attempted := false
 			written, err := store.ModifyBook(b.ID, func(cur *database.Book) error {
 				if cur.VersionGroupID != nil && *cur.VersionGroupID == target {
 					return database.ErrSkipBookWrite
@@ -481,8 +532,14 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 					f := false
 					cur.IsPrimaryVersion = &f
 				}
+				attempted = true // returning nil makes ModifyBook write the row
 				return nil
 			})
+			// A write that was attempted counts whether or not it succeeded: a failed
+			// update is not known to have changed nothing.
+			if attempted {
+				w.may = true
+			}
 			if err != nil {
 				return fmt.Errorf("regroup version-group apply: set version group on %s: %w", b.ID, err)
 			}
@@ -518,6 +575,7 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// for a human.
 		res, err := versionprimary.EnsureSinglePrimary(ctx, store, target, versionprimary.Env{RootDir: rootDir, MayWrite: mayWrite})
 		if err != nil {
+			w.may = w.may || !errors.Is(err, versionprimary.ErrWriteRefused)
 			return fmt.Errorf("regroup version-group apply: decide the primary of %s: %w", target, err)
 		}
 		if res.Outcome == versionprimary.OutcomeHeld {
@@ -526,6 +584,7 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				return fmt.Errorf("regroup version-group apply: choose the primary of held group %s: %w", target, kerr)
 			}
 			if res, err = versionprimary.CrownEnv(store, target, keep, versionprimary.Env{MayWrite: mayWrite}); err != nil {
+				w.may = w.may || !errors.Is(err, versionprimary.ErrWriteRefused)
 				return fmt.Errorf("regroup version-group apply: crown the primary of held group %s: %w", target, err)
 			}
 		}
@@ -655,7 +714,9 @@ func pickPrimary(ids []string) string {
 // Soft-deleted and vanished members are dropped by presentMembers before any of this,
 // so a corpse can never be merged onto a survivor or become one.
 func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candidateLister) func(context.Context, database.ReviewItem) error {
-	return func(ctx context.Context, item database.ReviewItem) error {
+	return func(ctx context.Context, item database.ReviewItem) (err error) {
+		var w applyWrites
+		defer func() { err = w.classify(err) }()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -718,7 +779,7 @@ func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candi
 				p.Folder, target)
 		}
 
-		res, err := combiner.CombineBooks(append(present, target), target, nil)
+		res, err := w.combine(combiner, append(present, target), target)
 		if err != nil {
 			return fmt.Errorf("regroup duplicate-of apply: merge %q (%d books) into %s: %w",
 				p.Folder, len(present), target, err)

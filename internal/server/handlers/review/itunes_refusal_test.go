@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/itunes_refusal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b4d2e61-7c3a-4f85-b0e9-1d6a8c5f2e34
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package reviewhandler_test
 
@@ -20,9 +20,11 @@ import (
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )
 
+// itunesRefusingApply models the iTunes guard's refusal: it runs before any write, so
+// the handler marks it NothingWritten (maintenance's apply functions do the same).
 func itunesRefusingApply(_ context.Context, _ database.ReviewItem) error {
-	return fmt.Errorf("regroup multidisc apply: combine: %w",
-		&merge.ITunesProtectedError{BookID: "B1", Path: "/srv/media/Audiobooks/x.m4b"})
+	return database.NothingWritten(fmt.Errorf("regroup multidisc apply: combine: %w",
+		&merge.ITunesProtectedError{BookID: "B1", Path: "/srv/media/Audiobooks/x.m4b"}))
 }
 
 // An apply refused by the iTunes guard is a 409 and the hold stays pending.

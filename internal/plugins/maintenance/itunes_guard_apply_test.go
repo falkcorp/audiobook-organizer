@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_guard_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2a7c90-4d1b-4f38-a6e2-9b3d0c8f1a57
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -70,6 +70,9 @@ func TestApplyMultidisc_RefusesITunesMember(t *testing.T) {
 	apply := ApplyMultidisc(store, merge.NewService(&applyWriteTrap{Store: store, t: t}))
 	err := apply(context.Background(), multidiscItem(t, "/srv/any", []string{a, b}))
 	require.ErrorIs(t, err, merge.ErrITunesProtected)
+	// The guard refuses before CombineBooks writes anything, so the review handler hands
+	// the item back as REVIEW_ITUNES_PROTECTED rather than holding it.
+	require.True(t, database.IsNothingWritten(err), "an iTunes refusal precedes every write: %v", err)
 	requireAllLive(t, store, a, b)
 }
 

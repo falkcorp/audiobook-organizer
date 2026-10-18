@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f7c9e21-5a4b-4d8e-9c1f-2b6a7d0e4c53
 // last-edited: 2026-10-18
 
@@ -227,6 +227,48 @@ describe('SkipsAlert held-versus-pending skip codes', () => {
     expect(pending).toHaveTextContent('1 hold was skipped — still pending');
     expect(pending).toHaveTextContent('a member is under the active iTunes library');
     expect(pending).not.toHaveTextContent('r1');
+  });
+
+  // A first run that failed after it may have written is HELD applying (it is in no
+  // pending list), unlike a first run that failed having written nothing, which the
+  // server hands back (REVIEW_ITUNES_PROTECTED is that case for the iTunes guard).
+  it('files a held partial first run as no longer pending', () => {
+    const lane = {
+      skipsByKind: {
+        [KIND]: [
+          {
+            id: 'p1',
+            action: 'combine',
+            reason: 'merge stopped after moving two of five files',
+            code: 'REVIEW_APPLY_PARTIAL',
+          },
+          {
+            id: 'i1',
+            action: 'combine',
+            reason: 'a member is under the active iTunes library',
+            code: 'REVIEW_ITUNES_PROTECTED',
+          },
+        ],
+      },
+      failedByKind: {},
+      unrecordedByKind: {},
+      dismissSkips: vi.fn(),
+    } as unknown as RegroupLane;
+    render(
+      <ThemeProvider theme={appTheme} defaultMode="dark">
+        <div data-testid="regroup-row-i1">row i1</div>
+        <SkipsAlert kind={KIND} lane={lane} />
+      </ThemeProvider>
+    );
+    const done = screen.getByTestId(`regroup-skipped-done-${KIND}`);
+    expect(done).toHaveTextContent(
+      '1 hold was skipped — no longer pending (applied, mid-apply or needs attention)'
+    );
+    expect(done).toHaveTextContent('merge stopped after moving two of five files');
+    expect(screen.getByTestId('regroup-report-id-p1')).toBeInTheDocument();
+    const pending = screen.getByTestId(`regroup-skipped-${KIND}`);
+    expect(pending).toHaveTextContent('1 hold was skipped — still pending');
+    expect(pending).not.toHaveTextContent('p1');
   });
 });
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 // Tests for the universal review-queue handlers. The store is exercised through
 // a REAL pebble-backed *database.PebbleStore (which implements the ReviewStore
@@ -247,7 +247,7 @@ func TestApproveReviewItem_HandlerError_StaysPending(t *testing.T) {
 	it := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true }, nil)
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
-		return context.DeadlineExceeded // any apply failure
+		return database.NothingWritten(context.DeadlineExceeded) // an apply failure before any write
 	})
 
 	w := doReq(t, h.ApproveReviewItem, http.MethodPost, "/review/items/"+it.ID+"/approve", nil,

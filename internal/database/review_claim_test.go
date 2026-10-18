@@ -1,5 +1,5 @@
 // file: internal/database/review_claim_test.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 74ff5b50-d848-43ed-91e5-889e92c828b1
 // last-edited: 2026-10-18
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -587,5 +588,132 @@ func TestClaim_ReleasedFirstRunLeavesChosenActionAlone(t *testing.T) {
 	}
 	if back.Status != ReviewStatusApproved || back.ChosenAction != "combine" {
 		t.Fatalf("after a released first run status=%q chosen=%q; want approved/combine", back.Status, back.ChosenAction)
+	}
+}
+
+// 🔴 A FIRST RUN THAT FAILED AFTER WRITING IS HELD, NOT HANDED BACK. HoldReviewItemClaim
+// leaves the item applying, held by no process, exactly as a failed re-run's release
+// does: it keeps refusing every decision as interrupted, a retry (same action) takes it
+// over, and an abandon moves it to needs_attention. Release of a first-run claim (a
+// failure that wrote nothing) still hands the item back.
+func TestClaim_HeldFirstRunStaysInterrupted_RetryFinishes(t *testing.T) {
+	for _, from := range []string{ReviewStatusPending, ReviewStatusApproved, ReviewStatusRejected} {
+		t.Run(from, func(t *testing.T) {
+			s := newReviewTestStore(t)
+			it := seedClaimItem(t, s, "k1", from)
+			first := mustClaim(t, s, it.ID, "combine")
+			if first.TookOver || first.Item.ApplyClaimRerun {
+				t.Fatalf("first-run claim = %+v, want not a re-run", first)
+			}
+			held, err := s.HoldReviewItemClaim(it.ID, first.Token)
+			if err != nil || held == nil {
+				t.Fatalf("hold of a failed first run = %+v, %v", held, err)
+			}
+			if held.Status != ReviewStatusApplying || held.ApplyClaimToken != "" || held.ApplyClaimInstance != "" ||
+				held.ApplyClaimAction != "combine" || held.ApplyClaimedFrom != from {
+				t.Fatalf("after a held first run = %+v; want applying, action and claimed-from kept, held by nobody", held)
+			}
+			if got, _ := s.GetReviewItem(it.ID); got.ChosenAction == "combine" && from == ReviewStatusPending {
+				t.Fatalf("a held claim recorded the action as the item's decision: %+v", got)
+			}
+			if countStatus(t, s, ReviewStatusApplying) != 1 || countStatus(t, s, from) != 0 {
+				t.Fatal("status index moved wrongly by the hold")
+			}
+			// Held by no process, in THIS process too: interrupted, not in progress.
+			for _, status := range []string{ReviewStatusRejected, ReviewStatusApproved, ReviewStatusPending} {
+				_, err := s.DecideReviewItem(it.ID, status, "separate", time.Time{})
+				wantConflict(t, err, ReviewClaimInterrupted)
+			}
+			_, err = s.ClaimReviewItemForApply(it.ID, "separate", time.Time{})
+			wantConflict(t, err, ReviewClaimInterrupted)
+			// The spent token neither holds nor releases anything more.
+			if got, _ := s.HoldReviewItemClaim(it.ID, first.Token); got != nil {
+				t.Fatalf("spent token held again: %+v", got)
+			}
+			if got, _ := s.ReleaseReviewItemClaim(it.ID, first.Token); got != nil {
+				t.Fatalf("spent token released: %+v", got)
+			}
+
+			// Retry: the same action takes it over and can finish it.
+			retry := mustClaim(t, s, it.ID, "combine")
+			if !retry.TookOver || !retry.Item.ApplyClaimRerun || retry.Item.ApplyClaimedFrom != from {
+				t.Fatalf("retry = %+v, want a takeover keeping claimed-from %q", retry, from)
+			}
+			done, err := s.FinishReviewItemApply(it.ID, retry.Token)
+			if err != nil || done.Status != ReviewStatusApplied || done.ChosenAction != "combine" || done.ApplyClaimRerun {
+				t.Fatalf("finish of the retry = %+v, %v", done, err)
+			}
+			assertStatusIndexConsistent(t, s)
+		})
+	}
+}
+
+// A failed retry of a held first run stays held (it is a re-run now), and the operator's
+// abandon moves it to needs_attention with the abandoned action recorded.
+func TestClaim_HeldFirstRun_FailedRetryStaysHeld_ThenAbandon(t *testing.T) {
+	s := newReviewTestStore(t)
+	it := seedClaimItem(t, s, "k1", ReviewStatusApproved)
+	first := mustClaim(t, s, it.ID, "version-group")
+	if _, err := s.HoldReviewItemClaim(it.ID, first.Token); err != nil {
+		t.Fatal(err)
+	}
+	retry := mustClaim(t, s, it.ID, "version-group")
+	// A failure of the retry that says nothing was written is STILL held: the first run
+	// wrote something, which is why the item was held at all.
+	left, err := s.ReleaseReviewItemClaim(it.ID, retry.Token)
+	if err != nil || left == nil || left.Status != ReviewStatusApplying || left.ApplyClaimToken != "" {
+		t.Fatalf("release of a retry's clean failure = %+v, %v; want still held", left, err)
+	}
+	got, err := s.AbandonReviewItemClaim(it.ID)
+	if err != nil || got == nil {
+		t.Fatalf("abandon = %+v, %v", got, err)
+	}
+	if got.Status != ReviewStatusNeedsAttention || got.ApplyAbandonedAction != "version-group" ||
+		got.ChosenAction != "version-group" || got.ApplyClaimAction != "" || got.ApplyClaimedFrom != "" {
+		t.Fatalf("after abandon = %+v, want needs_attention noting the abandoned version-group", got)
+	}
+	assertStatusIndexConsistent(t, s)
+}
+
+// The hold refuses a token that does not hold the claim, a missing item and an item
+// that is not applying, and changes nothing.
+func TestHoldReviewItemClaim_RefusesWhatIsNotHeldByTheToken(t *testing.T) {
+	s := newReviewTestStore(t)
+	it := seedClaimItem(t, s, "k1", ReviewStatusApproved)
+	if got, err := s.HoldReviewItemClaim(it.ID, "whatever"); got != nil || err != nil {
+		t.Fatalf("hold of an unclaimed item = %+v, %v", got, err)
+	}
+	if got, err := s.HoldReviewItemClaim("nope", "t"); got != nil || err != nil {
+		t.Fatalf("hold of a missing item = %+v, %v", got, err)
+	}
+	c := mustClaim(t, s, it.ID, "combine")
+	for _, token := range []string{"", "wrong"} {
+		if got, err := s.HoldReviewItemClaim(it.ID, token); got != nil || err != nil {
+			t.Fatalf("hold with token %q = %+v, %v", token, got, err)
+		}
+	}
+	if got, _ := s.GetReviewItem(it.ID); got.ApplyClaimToken != c.Token || got.ApplyClaimInstance == "" {
+		t.Fatalf("a refused hold disturbed the live claim: %+v", got)
+	}
+}
+
+func TestNothingWritten_MarksAndUnwraps(t *testing.T) {
+	if NothingWritten(nil) != nil || IsNothingWritten(nil) {
+		t.Fatal("nil must stay nil and unmarked")
+	}
+	cause := errors.New("boom")
+	marked := NothingWritten(cause)
+	if !IsNothingWritten(marked) || !errors.Is(marked, cause) || marked.Error() != "boom" {
+		t.Fatalf("marked = %v", marked)
+	}
+	if NothingWritten(marked) != marked {
+		t.Fatal("marking twice must not wrap again")
+	}
+	wrapped := fmt.Errorf("outer: %w", marked)
+	if !IsNothingWritten(wrapped) {
+		t.Fatal("the marker must be found through a wrapping error")
+	}
+	if IsNothingWritten(cause) || IsNothingWritten(fmt.Errorf("outer: %w", cause)) {
+		t.Fatal("an unmarked error must not read as nothing-written")
 	}
 }
