@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-10-18
 
@@ -246,11 +246,34 @@ describe('bulk skips are kept per kind', () => {
     vi.mocked(api.bulkReviewAction).mockResolvedValueOnce({
       action: 'approve',
       processed: 1,
-      skipped: [],
-    } as unknown as api.ReviewBulkResult);
+      approved: ['a1'],
+    } as api.ReviewBulkResult);
     await act(async () => result.current.bulkAction('regroup.ambiguous', 'approve'));
 
     await waitFor(() => expect(result.current.skipsByKind['regroup.ambiguous']).toBeUndefined());
+  });
+
+  it('keeps failed and applied-but-unrecorded items per kind until dismissed', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.bulkReviewAction).mockResolvedValueOnce({
+      action: 'approve',
+      processed: 3,
+      applied: ['a1'],
+      failed: [{ id: 'a2', reason: 'synthetic refusal' }],
+      applied_unrecorded: [{ id: 'a3', reason: 'applied but status write failed' }],
+    } as api.ReviewBulkResult);
+    await act(async () => result.current.bulkAction('regroup.multidisc', 'approve'));
+
+    await waitFor(() => expect(result.current.failedByKind['regroup.multidisc']).toHaveLength(1));
+    expect(result.current.unrecordedByKind['regroup.multidisc']).toEqual([
+      { id: 'a3', reason: 'applied but status write failed' },
+    ]);
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/do NOT resend/), 'error');
+
+    // A later clean run replaces the report; dismiss clears every bucket.
+    act(() => result.current.dismissSkips('regroup.multidisc'));
+    expect(result.current.failedByKind['regroup.multidisc']).toBeUndefined();
+    expect(result.current.unrecordedByKind['regroup.multidisc']).toBeUndefined();
   });
 });
 

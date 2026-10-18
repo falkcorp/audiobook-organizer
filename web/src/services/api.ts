@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.186.0
+// version: 2.187.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-18
 
@@ -7524,9 +7524,9 @@ export interface ReviewBulkSkip {
   reason: string;
 }
 
-/** One item a bulk action could not complete (an apply handler or status-write
- *  error). The item keeps the status it had, so it stays in the list and a resend
- *  of its id retries it. */
+/** One item a bulk action could not complete. In \`failed\` the item keeps the status
+ *  it had, so it stays in the list and a resend of its id retries it; in
+ *  \`applied_unrecorded\` the apply already ran and it must NOT be resent. */
 export interface ReviewBulkFail {
   id: string;
   reason: string;
@@ -7544,8 +7544,13 @@ export interface ReviewBulkResult {
   rejected?: string[];
   not_found?: string[];
   skipped?: ReviewBulkSkip[];
-  /** Items whose apply errored; the batch carried on past them. MUST be surfaced. */
+  /** Items whose apply errored before it completed; the batch carried on past them.
+   *  They keep their status, so resending their id retries them. MUST be surfaced. */
   failed?: ReviewBulkFail[];
+  /** Items whose apply SUCCEEDED but whose "applied" status write failed. The work is
+   *  done: do NOT resend them (the item is held "applying" and a resend is refused
+   *  until the claim goes stale). MUST be surfaced. */
+  applied_unrecorded?: ReviewBulkFail[];
   /** True on an approve while review_apply_enabled is off: approvals were recorded
    *  but nothing was applied. */
   apply_disabled?: boolean;

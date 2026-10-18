@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.7.1
+// version: 1.8.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-10-18
 
@@ -627,32 +627,91 @@ function BucketHeader({ bucket, lane }: { bucket: RegroupBucket; lane: RegroupLa
   );
 }
 
-function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) {
-  const skipped = lane.skipsByKind[kind];
-  if (!skipped || skipped.length === 0) return null;
+/** Scrolls to a hold's row when it is rendered. A failed item stays in the list, so
+ *  it normally is; if it paged out of view the id is still shown in the report. */
+function revealRow(id: string) {
+  const el = document.querySelector(`[data-testid="regroup-row-${id}"]`);
+  if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+}
+
+function ReportIdButton({ id }: { id: string }) {
+  return (
+    <Button
+      size="small"
+      variant="text"
+      sx={{ minWidth: 0, p: 0, textTransform: 'none', verticalAlign: 'baseline' }}
+      data-testid={`regroup-report-open-${id}`}
+      onClick={() => revealRow(id)}
+    >
+      <code>{id}</code>
+    </Button>
+  );
+}
+
+/** The kind's report from the last bulk action: skips, failures and applied-but-
+ *  unrecorded items. Every count in it clicks through to the row, and it outlives
+ *  the toast, so a failure is never visible for only a few seconds. */
+export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) {
+  const skipped = lane.skipsByKind[kind] ?? [];
+  const failed = lane.failedByKind[kind] ?? [];
+  const unrecorded = lane.unrecordedByKind[kind] ?? [];
+  if (skipped.length + failed.length + unrecorded.length === 0) return null;
+  const severity = failed.length || unrecorded.length ? 'error' : 'warning';
   return (
     <Alert
-      severity="warning"
+      severity={severity}
       sx={{ mb: 1 }}
       data-testid={`regroup-skips-${kind}`}
       onClose={() => lane.dismissSkips(kind)}
     >
-      <AlertTitle>
-        {skipped.length} hold
-        {skipped.length === 1 ? ' was' : 's were'} skipped — still pending
-      </AlertTitle>
-      <Typography variant="body2" sx={{ mb: 1 }}>
-        Bulk approve uses each hold&apos;s own recommendation. These had none it would act on, so
-        they were left alone. Open them below and choose an action.
-      </Typography>
-      <Stack spacing={0.5}>
-        {skipped.map((s) => (
-          <Typography key={s.id} variant="caption" sx={{ display: 'block' }}>
-            <code>{s.id}</code>
-            {s.action ? ` · ${labelForAction(s.action) || s.action}` : ''} — {s.reason}
+      {unrecorded.length > 0 && (
+        <Box data-testid={`regroup-unrecorded-${kind}`} sx={{ mb: 1 }}>
+          <AlertTitle>{unrecorded.length} applied but not recorded — do not resend</AlertTitle>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            The apply ran; only the status write failed. Resending would be refused until the claim
+            goes stale, and the work is already done.
           </Typography>
-        ))}
-      </Stack>
+          <Stack spacing={0.5}>
+            {unrecorded.map((f) => (
+              <Typography key={f.id} variant="caption" sx={{ display: 'block' }}>
+                <ReportIdButton id={f.id} /> — {f.reason}
+              </Typography>
+            ))}
+          </Stack>
+        </Box>
+      )}
+      {failed.length > 0 && (
+        <Box data-testid={`regroup-failed-${kind}`} sx={{ mb: 1 }}>
+          <AlertTitle>{failed.length} failed — still in the list, resend to retry</AlertTitle>
+          <Stack spacing={0.5}>
+            {failed.map((f) => (
+              <Typography key={f.id} variant="caption" sx={{ display: 'block' }}>
+                <ReportIdButton id={f.id} /> — {f.reason}
+              </Typography>
+            ))}
+          </Stack>
+        </Box>
+      )}
+      {skipped.length > 0 && (
+        <Box data-testid={`regroup-skipped-${kind}`}>
+          <AlertTitle>
+            {skipped.length} hold
+            {skipped.length === 1 ? ' was' : 's were'} skipped — still pending
+          </AlertTitle>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Bulk approve uses each hold&apos;s own recommendation. These had none it would act on,
+            so they were left alone. Open them below and choose an action.
+          </Typography>
+          <Stack spacing={0.5}>
+            {skipped.map((sk) => (
+              <Typography key={sk.id} variant="caption" sx={{ display: 'block' }}>
+                <ReportIdButton id={sk.id} />
+                {sk.action ? ` · ${labelForAction(sk.action) || sk.action}` : ''} — {sk.reason}
+              </Typography>
+            ))}
+          </Stack>
+        </Box>
+      )}
     </Alert>
   );
 }
