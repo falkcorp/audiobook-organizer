@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_repair_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e7b0a94-6c21-4d58-8f39-2a1c7e5b0d64
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package itunes
 
@@ -12,8 +12,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// newRepairTestStore returns a real PebbleStore backed by a temp dir — the repair
-// path exercises UpdateBookFile + the book_file_pid index, so a real store (not a
+// newRepairTestStore returns a real PebbleStore backed by a temp dir — the plan
+// reads the book_file rows and the book_file_pid index, so a real store (not a
 // mock) is required.
 func newRepairTestStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
@@ -61,10 +61,11 @@ func TestPickDiffFileKeeper(t *testing.T) {
 	}
 }
 
-// TestApplyPIDRepairSameFile exercises the common (97.5%) same_file case end to
-// end against a real store: two rows carry one PID; after repair exactly one row
-// keeps it and the index points there — no row/file deleted.
-func TestApplyPIDRepairSameFile(t *testing.T) {
+// TestComputePIDRepairPlanSameFile exercises the common (97.5%) same_file case
+// end to end against a real store: two rows carry one PID; the plan keeps one
+// row, lists the other as the row to clear, and writes nothing (the plan is
+// read-only, so both rows still carry the PID afterwards).
+func TestComputePIDRepairPlanSameFile(t *testing.T) {
 	store := newRepairTestStore(t)
 
 	primary := true
@@ -96,30 +97,28 @@ func TestApplyPIDRepairSameFile(t *testing.T) {
 	if preview.DuplicatePIDs != 1 || preview.SameFileGroups != 1 || preview.FilesToClear != 1 {
 		t.Fatalf("preview = %+v, want 1 dup / 1 same_file / 1 to-clear", preview)
 	}
-
-	if _, err := ApplyPIDRepairPlan(store, groups); err != nil {
-		t.Fatal(err)
+	if len(groups) != 1 || len(groups[0].losers) != 1 {
+		t.Fatalf("groups = %+v, want one group with one loser", groups)
+	}
+	g := groups[0]
+	if g.pid != pid || g.keep.ID == g.losers[0].file.ID {
+		t.Errorf("group = pid %q keep %q loser %q, want pid %q and distinct keeper and loser",
+			g.pid, g.keep.ID, g.losers[0].file.ID, pid)
+	}
+	if ids := map[string]bool{f1.ID: true, f2.ID: true}; !ids[g.keep.ID] || !ids[g.losers[0].file.ID] {
+		t.Errorf("keeper %q / loser %q are not the two seeded rows", g.keep.ID, g.losers[0].file.ID)
 	}
 
-	// Exactly one row keeps the PID, and the index resolves to it.
-	got, err := store.GetBookFileByPID(pid)
-	if err != nil || got == nil {
-		t.Fatalf("GetBookFileByPID after repair: %v (nil=%v)", err, got == nil)
-	}
-	withPID := 0
+	// Planning writes nothing: both rows still carry the PID, paths untouched.
 	for _, bid := range []string{b1.ID, b2.ID} {
 		files, _ := store.GetBookFiles(bid)
 		for i := range files {
-			if files[i].ITunesPersistentID == pid {
-				withPID++
+			if files[i].ITunesPersistentID != pid {
+				t.Errorf("planning cleared the PID on %s", files[i].ID)
 			}
-			// The audio path is never touched.
 			if files[i].FilePath != path {
 				t.Errorf("file path mutated: %q", files[i].FilePath)
 			}
 		}
-	}
-	if withPID != 1 {
-		t.Errorf("rows still carrying the PID = %d, want 1", withPID)
 	}
 }

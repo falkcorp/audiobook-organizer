@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.31.2
+// version: 1.32.1
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-18
 
@@ -11,7 +11,7 @@ package logger
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
 	slogRatchetFileCeiling = 278
-	slogRatchetCallCeiling = 1555
+	slogRatchetCallCeiling = 1553
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -113,7 +113,7 @@ var slogRatchet = map[string]int{
 	"internal/itunes/cross_type.go":                              1,
 	"internal/itunes/import.go":                                  7,
 	"internal/itunes/pid_integrity.go":                           2,
-	"internal/itunes/pid_repair.go":                              4,
+	"internal/itunes/pid_repair.go":                              1,
 	"internal/itunes/service/importer.go":                        10,
 	"internal/itunes/service/playlist_sync.go":                   2,
 	"internal/itunes/service/validate.go":                        7,
@@ -256,7 +256,6 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/review/handler.go":                 1,
 	"internal/server/handlers/scheduler_admin.go":                1,
 	"internal/server/handlers/system/handler.go":                 9,
-	"internal/server/itl_pid.go":                                 1,
 	"internal/server/library_list_warmer.go":                     18,
 	"internal/server/library_size_refresh_op.go":                 1,
 	"internal/server/library_writeback_op.go":                    1,

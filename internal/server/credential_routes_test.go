@@ -90,7 +90,7 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/itunes/test-mapping":             "tests a path mapping; writes nothing",
 	"POST /api/v1/itunes/import":                   "imports FROM iTunes into the database; never writes iTunes",
 	"POST /api/v1/itunes/import-status/bulk":       "reads import status (POST for the id list)",
-	"POST /api/v1/itunes/pid-repair":               "dry-run-gated; clears duplicate PIDs on database rows only, never the iTunes library",
+	"POST /api/v1/itunes/pid-repair":               "retired: 410 Gone stub, touches nothing",
 	"POST /api/v1/audiobooks/:id/user-tags":        "library tags",
 	"PUT /api/v1/audiobooks/:id/user-tags":         "library tags",
 	"DELETE /api/v1/audiobooks/:id/user-tags/:tag": "library tags",

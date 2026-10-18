@@ -1,15 +1,18 @@
 // file: internal/itunes/pid_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a9d3c62-7e14-4b80-9f26-1c8b0a3e6d47
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 //
-// Backfill repair for duplicate book_file iTunes PIDs (the ~8,987 the census
-// found). A PID must identify exactly one book_file; where several rows share one
-// (version-split copies), this keeps the PID on ONE canonical row and CLEARS it
-// from the rest. It NEVER deletes a row or touches an audio file — only the
-// itunes_persistent_id / itunes_path DB fields move — so it cannot lose data.
+// Read-only repair PLAN for duplicate book_file iTunes PIDs (the ~8,987 the
+// census found). A PID must identify exactly one book_file; where several rows
+// share one (version-split copies), the plan keeps the PID on ONE canonical row
+// and lists the rest as rows that would lose it. This file only computes and
+// previews the plan (`pid-census --repair`). The apply step, POST
+// /api/v1/itunes/pid-repair, was retired by 01-P81k (it answers 410); it only
+// ever moved the itunes_persistent_id / itunes_path DB fields, never a row or an
+// audio file.
 //
-// Keep policy (fail-safe: only clears when the keeper is unambiguous):
+// Keep policy (fail-safe: only plans a clear when the keeper is unambiguous):
 //   - same_file (all owners share FilePath): keep a live primary (tie-break lowest
 //     file ID). Any owner is equivalent for the ITL — same location — so the track
 //     link is unaffected regardless of which is kept.
@@ -18,35 +21,27 @@
 //     linked to the right file. If the ITL doesn't disambiguate (no owner matches,
 //     or more than one does), the PID is left UNTOUCHED for review — never guessed.
 //
-// After a full repair every PID has one owner, which also makes the relocate path
-// deterministic (removes the order-dependent first-wins hazard the census counted
-// as pids_on_multiple_primaries_diff_path). Apply is dry-run-gated. See
-// docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md.
+// See docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md.
 
 package itunes
 
 import (
 	"fmt"
 	"log/slog"
-	"runtime"
 	"sort"
 	"strings"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// PIDRepairStore is the read+write slice of the store the repair needs.
+// PIDRepairStore is the read-only slice of the store the repair plan needs.
 type PIDRepairStore interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBookFile(id string, file *database.BookFile) error
 }
 
-// pidClear is one row that will lose the PID (its full row, so UpdateBookFile
-// preserves every other field incl. the raw fingerprint).
+// pidClear is one row that the plan would strip of the PID (its full row).
 type pidClear struct {
 	file database.BookFile
 }
@@ -67,7 +62,7 @@ type PIDRepairSample struct {
 	ClearedPaths []string `json:"cleared_paths"`
 }
 
-// PIDRepairPreview summarizes the repair without applying it.
+// PIDRepairPreview summarizes the planned repair.
 type PIDRepairPreview struct {
 	DuplicatePIDs   int `json:"duplicate_pids"`
 	SameFileGroups  int `json:"same_file_groups"`
@@ -112,7 +107,7 @@ func ComputePIDRepairPlan(store PIDRepairStore, itlPath string, mappings []PathM
 	var groups []pidRepairGroup
 	bookCache := map[string]*database.Book{}
 
-	// Deterministic PID order so the sample + apply are stable across runs.
+	// Deterministic PID order so the sample is stable across runs.
 	pids := make([]string, 0, len(byPID))
 	for pid, owners := range byPID {
 		if len(owners) > 1 {
@@ -184,7 +179,7 @@ func ComputePIDRepairPlan(store PIDRepairStore, itlPath string, mappings []PathM
 		}
 	}
 
-	slog.Info("itunes pid-repair: computed plan",
+	slog.Info("itunes pid repair plan computed",
 		"duplicatePIDs", preview.DuplicatePIDs, "sameFile", preview.SameFileGroups,
 		"diffFile", preview.DiffFileGroups, "ambiguous", preview.AmbiguousGroups,
 		"filesToClear", preview.FilesToClear)
@@ -264,60 +259,4 @@ func isLivePrimary(store PIDRepairStore, bookID string, cache map[string]*databa
 	primary := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 	deleted := b.IsSoftDeleted()
 	return primary && !deleted
-}
-
-// PIDRepairResult reports what an apply actually did.
-type PIDRepairResult struct {
-	GroupsRepaired int `json:"groups_repaired"`
-	FilesCleared   int `json:"files_cleared"`
-	Errors         int `json:"errors"`
-}
-
-// ApplyPIDRepairPlan executes the groups: for each PID, clear the PID/path fields
-// on every loser row, then re-assert the keeper so the book_file_pid index points
-// at it. Groups are disjoint by PID, so a bounded worker pool over groups is safe
-// (no two workers touch the same row or index key). No audio file is touched.
-func ApplyPIDRepairPlan(store PIDRepairStore, groups []pidRepairGroup) (*PIDRepairResult, error) {
-	res := &PIDRepairResult{}
-	var g errgroup.Group
-	g.SetLimit(runtime.NumCPU())
-	results := make([]struct{ cleared, errs int }, len(groups))
-
-	for i := range groups {
-		grp := groups[i]
-		g.Go(func() error {
-			for _, l := range grp.losers {
-				f := l.file
-				f.ITunesPersistentID = ""
-				f.ITunesPath = ""
-				if err := store.UpdateBookFile(f.ID, &f); err != nil {
-					slog.Warn("pid-repair: clear loser failed", "pid", grp.pid, "file", f.ID, "err", err)
-					results[i].errs++
-					continue
-				}
-				results[i].cleared++
-			}
-			// Re-assert the keeper so book_file_pid:<pid> points at it (clearing the
-			// losers deleted the shared index key).
-			keep := grp.keep
-			if err := store.UpdateBookFile(keep.ID, &keep); err != nil {
-				slog.Error("pid-repair: re-assert keeper failed (PID index may be unset)",
-					"pid", grp.pid, "keep", keep.ID, "err", err)
-				results[i].errs++
-			}
-			return nil
-		})
-	}
-	_ = g.Wait()
-
-	for i := range results {
-		res.FilesCleared += results[i].cleared
-		res.Errors += results[i].errs
-		if results[i].errs == 0 {
-			res.GroupsRepaired++
-		}
-	}
-	slog.Info("itunes pid-repair: applied", "groupsRepaired", res.GroupsRepaired,
-		"filesCleared", res.FilesCleared, "errors", res.Errors)
-	return res, nil
 }

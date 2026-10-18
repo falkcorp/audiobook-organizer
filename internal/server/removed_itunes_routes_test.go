@@ -1,7 +1,7 @@
 // file: internal/server/removed_itunes_routes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8c2a6e-91d4-4b57-a0e3-7c5d1b9f4e28
-// last-edited: 2026-10-08
+// last-edited: 2026-10-18
 
 package server
 
@@ -82,7 +82,6 @@ func TestRemovedITunesWriteRoutes_ImportRoutesStay(t *testing.T) {
 		"POST /api/v1/itunes/import",
 		"GET /api/v1/itunes/library/download",
 		"GET /api/v1/itunes/pid-integrity",
-		"POST /api/v1/itunes/pid-repair",
 	} {
 		assert.True(t, registered[key], "%s must stay registered", key)
 	}

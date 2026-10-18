@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.76.28 -->
+<!-- version: 10.76.27 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -19281,6 +19282,8 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `pid-repair?dry_run=true` on prod to confirm → owner runs the apply with `!` → re-run the
   census to confirm 0 duplicates → review the 3 ambiguous groups by hand. See
   `docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md` §1.5b.
+  Update 2026-10-18 (01-P81k): `POST /itunes/pid-repair` is retired (410) and
+  its apply code deleted; see 01-P81K-PID-REPAIR-APPLY. Census and plan preview stay.
 
 - [x] **iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed — ✅ CLOSED 2026-10-07: superseded, iTunes write-back removed (iTunes is import-only; docs/plans/2026-10-07-remove-itunes-writeback.md).
   `rebuild-full` writeback regenerates the library (12,193 tracks / 14 playlists) vs the real
