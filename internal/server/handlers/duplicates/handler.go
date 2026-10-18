@@ -338,7 +338,7 @@ func (h *Handler) LinkBooks(c *gin.Context) {
 
 // CombineBooks combines several single-file books into ONE multi-file book on the
 // survivor (keep_id) and soft-deletes the absorbed shells, returning the combine
-// journal id (the HTTP undo route for it is retired; see MergeService).
+// journal id and the operation id that undoes it (POST /operations/:id/revert).
 // Distinct from LinkBooks, which links them as alternate VERSIONS in a version
 // group. Synchronous — combine is a fast DB-only operation.
 // POST /audiobooks/combine.

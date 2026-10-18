@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_merge_undo_pointers.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 844f88c2-fda0-43f4-bf8d-e4e35ca38b0c
 // last-edited: 2026-10-18
 
@@ -29,10 +29,11 @@ var bmupLog = logger.New("backfill-merge-undo-pointers")
 // backfillMergeUndoPointersJob gives every combine journal and sibling-move
 // journal written before the merge cores journaled their own undo pointer
 // (merge/undo_pointer.go) a pointer row, so POST /operations/:id/revert can
-// undo it. Until a journal has one, its only way back is POST
-// /merge/undo/:journal_id or /merge/sibling-undo/:journal_id (both still
-// registered, in server/wire_dedup_routes.go), which the Operations page does
-// not offer.
+// undo it. Until a journal has one it has no HTTP undo: its only other way
+// back was POST /merge/undo/:journal_id or /merge/sibling-undo/:journal_id,
+// which the Operations page never offered and which 01-P81h retired (both
+// answer 410 Gone). Run this job (preview, then apply) before a build with
+// that retirement reaches prod.
 //
 // Each journal gets a fresh correlation id of its own, never this job's
 // operation id: reverting the backfill must never undo every historical

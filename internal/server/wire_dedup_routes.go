@@ -1,5 +1,5 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
 // last-edited: 2026-10-18
 
@@ -12,9 +12,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// combineUndoGone is the replacement named by the retired POST
-// /merge/undo/:journal_id stub. It reads inside gone()'s "use ... instead".
-const combineUndoGone = "POST /api/v1/operations/:id/revert (only for a combine made by the dedup.split-books Repairs fixer; other combines have no HTTP undo now)"
+// The replacements named by the retired merge undo stubs. Each reads inside
+// gone()'s "use ... instead". Since #4064 every combine and every sibling move
+// journals an undo pointer under an operation id, so POST
+// /operations/:id/revert undoes both; a journal written before that gets its
+// pointer from the backfill-merge-undo-pointers maintenance job. A caller
+// holding only a journal id finds the operation id on the kept book's change
+// list (GET /audiobooks/:id/changes) or in that job's results.
+const (
+	combineUndoGone = "POST /api/v1/operations/:id/revert with the combine's operation id (operation_id in the combine response; GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older combine gets one from the backfill-merge-undo-pointers job)"
+	siblingUndoGone = "POST /api/v1/operations/:id/revert with the merge's operation id (GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older merge gets one from the backfill-merge-undo-pointers job)"
+)
 
 // wireDedupRoutes registers the embedding-based dedup domain routes and the
 // SQL-backed duplicates domain routes on the protected group.
@@ -106,12 +114,13 @@ func (s *Server) wireDedupRoutes(
 	// (owner decision D9) and are then removed. The stubs stay on the protected
 	// group behind their old library.edit_metadata guard, so an unauthenticated
 	// caller still gets 401, a caller without the permission 403, and only an
-	// allowed caller learns they are gone. The combine undo's live path is the
-	// operation revert (merge.Service.UndoCombine through revertMergeCombineJournal);
-	// the sibling-move undo has none (todo.d fragment 01-P81h).
+	// allowed caller learns they are gone. Both undos now run through the
+	// operation revert (revertMergeCombineJournal -> merge.Service.UndoCombine,
+	// revertMergeSiblingJournal -> merge.Service.UndoSiblingMove), which needs
+	// library.organize rather than library.edit_metadata.
 	protected.POST("/merge/undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), gone(combineUndoGone))
 	protected.GET("/merge/sibling-journal", s.perm(auth.PermLibraryView), duplicatesH.ListSiblingMoveJournals)
-	protected.POST("/merge/sibling-undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), gone(""))
+	protected.POST("/merge/sibling-undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), gone(siblingUndoGone))
 	protected.GET("/series/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListSeriesDuplicates)
 	protected.POST("/series/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshSeriesDuplicates)
 	protected.POST("/series/deduplicate", s.perm(auth.PermLibraryEditMetadata), duplicatesH.DeduplicateSeriesHandler)

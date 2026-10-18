@@ -1,5 +1,5 @@
 // file: internal/server/combine_revert_route_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c8a5f12-7e46-4d91-b0a3-9f2e6d17c548
 // last-edited: 2026-10-18
 
@@ -22,7 +22,7 @@ import (
 // A manual combine (POST /api/v1/audiobooks/combine) runs in no operation, so
 // it journals its undo pointer under a correlation id of its own and answers
 // it as operation_id. POST /api/v1/operations/:id/revert with that id -- the
-// live undo path once POST /merge/undo/:journal_id is retired -- puts every
+// live undo path now that POST /merge/undo/:journal_id is retired -- puts every
 // book, file row and external id back. Both requests go through the server's
 // router.
 func TestCombineRoute_UndoneByOperationsRevert(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: internal/server/merge_sibling_undo_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 43e2fa1b-c761-4fd6-a2f1-e668c89b5335
 // last-edited: 2026-10-18
 
@@ -46,8 +46,8 @@ func siblingUndoFixture(t *testing.T) (f *vptest.Fixture, k, l, ls string) {
 // operations revert (Server.revertOperation, what POST
 // /operations/:id/revert runs) and asserts LS is back in G as G's only
 // primary (L stays retired, so the undo's hand-off must elect LS) while H
-// keeps K. The other way back is POST /merge/sibling-undo/:journal_id
-// (still registered), which the Operations page does not offer.
+// keeps K. The other way back was POST /merge/sibling-undo/:journal_id,
+// retired by 01-P81h (410 Gone).
 func requireSiblingUndo(t *testing.T, f *vptest.Fixture, opID, k, ls string) {
 	t.Helper()
 	require.Equal(t, "H", f.GroupOf(t, ls), "the merge carried the sibling along")
@@ -108,7 +108,8 @@ func TestBookMergeOpRun_SiblingMoveIsUndoableByRunID(t *testing.T) {
 // per-merge id (owner decision: one id per merge, not per batch). That id is
 // on the result, the surviving book's change list (GET
 // /audiobooks/:id/changes) carries it, and reverting it through the operations revert puts the sibling
-// back, the same undo POST /merge/sibling-undo/:journal_id runs by journal id.
+// back, the same undo the retired POST /merge/sibling-undo/:journal_id ran by
+// journal id.
 func TestMergeBooksJournaled_SiblingMoveIsUndoableByItsOperation(t *testing.T) {
 	f, k, l, ls := siblingUndoFixture(t)
 	edb, err := pebble.Open(t.TempDir(), &pebble.Options{})

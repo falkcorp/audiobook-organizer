@@ -1,5 +1,5 @@
 // file: internal/merge/pointer_backfill.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 56e834dc-3c76-4989-9ce4-9db933749d76
 // last-edited: 2026-10-18
 
@@ -19,10 +19,10 @@ import (
 //
 // Every combine and sibling move made since undo_pointer.go landed journals
 // its pointer at the chokepoint. Journals written before that have none, so
-// POST /operations/:id/revert cannot reach them; until a pointer exists their
-// only way back is POST /merge/undo/:journal_id or
-// /merge/sibling-undo/:journal_id (both still registered, in
-// server/wire_dedup_routes.go), which the Operations page does not offer. The
+// POST /operations/:id/revert cannot reach them. Their only other way back
+// was POST /merge/undo/:journal_id or /merge/sibling-undo/:journal_id, which
+// the Operations page never offered and which 01-P81h retired (both answer
+// 410 Gone), so until a pointer exists such a journal has no HTTP undo. The
 // maintenance job backfill-merge-undo-pointers gives each such journal a
 // pointer of its own through PointerBackfiller.Backfill.
 //

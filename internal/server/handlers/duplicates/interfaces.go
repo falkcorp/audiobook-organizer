@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
 // last-edited: 2026-10-18
 
@@ -65,13 +65,13 @@ type MergeService interface {
 	// ListCombineJournals lists the combine journals newest-first
 	// (GET /merge/combine-journal, a read-only diagnostic kept by D73). The
 	// POST /merge/undo/:journal_id route that reversed one is retired; the
-	// operation revert (POST /operations/:id/revert) reverses a Repairs-fixer
-	// combine through merge.Service.UndoCombine.
+	// operation revert (POST /operations/:id/revert) reverses a combine
+	// through merge.Service.UndoCombine.
 	ListCombineJournals(limit int) ([]merge.CombineJournal, error)
 	// ListSiblingMoveJournals lists the sibling-move journals newest-first
 	// (GET /merge/sibling-journal, a read-only diagnostic kept by D73). Every
 	// MergeBooks that moves a sibling writes one. The sibling-undo route is
-	// retired.
+	// retired; the operation revert reverses the move.
 	ListSiblingMoveJournals(limit int) ([]merge.SiblingMoveJournal, error)
 }
 
