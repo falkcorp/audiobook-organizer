@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow_syncfile_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d74cf944-f953-4a7e-83eb-994193dbc7d1
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package merge
 
@@ -172,7 +172,7 @@ func TestCombineBooks_SyncIdentity_NoSyncFileEntry_IsHarmlessNoOp(t *testing.T) 
 
 // TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook_CarriesFileIno
 // extends TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook
-// (service_b3_realstore_test.go): attachVirtualFile's cross-book reattach
+// (service_b3_realstore_test.go): applyVirtualFile's cross-book reattach
 // branch is also a file moving onto a different book id and must carry the
 // file's ino the same way the main CombineBooks loop does.
 func TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook_CarriesFileIno(t *testing.T) {
@@ -194,7 +194,7 @@ func TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook_CarriesFileIno(t 
 	strayID, err := sf.MintOrGetSyncFileID(strayOwner.ID, strayFile.ID)
 	require.NoError(t, err)
 
-	_, n := ms.attachVirtualFile(target, target.ID)
+	n := ms.applyVirtualFile(ms.planVirtualFile(target, target.ID), target.ID)
 	require.Equal(t, 1, n)
 
 	gotID, ok, err := sf.GetSyncFileID(target.ID, strayFile.ID)

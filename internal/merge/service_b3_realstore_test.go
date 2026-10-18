@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_realstore_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a2f9e14-3c7b-4d8a-9e10-b8f2a5c6d7e1
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package merge
 
@@ -346,14 +346,14 @@ func TestB3_CombineBooks_OverrideAuthorExisting(t *testing.T) {
 	assert.Equal(t, existing.ID, *fresh.AuthorID, "must reuse the existing author, not create a duplicate")
 }
 
-// ---------- ensureOwnFile / attachVirtualFile (unexported helpers) ----------
+// ---------- planOwnFile / planVirtualFile / applyVirtualFile (unexported helpers) ----------
 
 func TestB3_EnsureOwnFile_NoFilePath_ReturnsZero(t *testing.T) {
 	store := setupTestStore(t)
 	ms := NewService(store)
 
 	b := &database.Book{ID: ulid.Make().String(), Title: "No path"}
-	assert.Equal(t, 0, second(ms.ensureOwnFile(b)))
+	assert.Equal(t, 0, ms.applyVirtualFile(ms.planOwnFile(b), b.ID))
 }
 
 func TestB3_EnsureOwnFile_AlreadyMaterialized_ReturnsZero(t *testing.T) {
@@ -367,13 +367,13 @@ func TestB3_EnsureOwnFile_AlreadyMaterialized_ReturnsZero(t *testing.T) {
 		ID: ulid.Make().String(), BookID: b.ID, FilePath: b.FilePath, Format: "mp3",
 	}))
 
-	assert.Equal(t, 0, second(ms.ensureOwnFile(b)), "book already has a BookFile row; nothing to materialize")
+	assert.Equal(t, 0, ms.applyVirtualFile(ms.planOwnFile(b), b.ID), "book already has a BookFile row; nothing to materialize")
 }
 
 // TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook exercises the
-// "#1549 reattach-safe" branch documented on attachVirtualFile: a BookFile
+// "#1549 reattach-safe" branch documented on planVirtualFile: a BookFile
 // row already exists at the target path but is owned by a DIFFERENT book
-// (a stray/orphaned row from an earlier partial operation). attachVirtualFile
+// (a stray/orphaned row from an earlier partial operation). The plan
 // must MOVE that row onto the target book rather than creating a duplicate.
 func TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook(t *testing.T) {
 	store := setupTestStore(t)
@@ -389,7 +389,7 @@ func TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook(t *testing.T) {
 	strayFile := &database.BookFile{ID: ulid.Make().String(), BookID: strayOwner.ID, FilePath: target.FilePath, Format: "mp3"}
 	require.NoError(t, store.CreateBookFile(strayFile))
 
-	_, n := ms.attachVirtualFile(target, target.ID)
+	n := ms.applyVirtualFile(ms.planVirtualFile(target, target.ID), target.ID)
 	assert.Equal(t, 1, n)
 
 	files, err := store.GetBookFiles(target.ID)
@@ -414,7 +414,7 @@ func TestB3_AttachVirtualFile_SetsDurationFromBook(t *testing.T) {
 	_, err := store.CreateBook(b)
 	require.NoError(t, err)
 
-	_, n := ms.attachVirtualFile(b, b.ID)
+	n := ms.applyVirtualFile(ms.planVirtualFile(b, b.ID), b.ID)
 	assert.Equal(t, 1, n)
 
 	files, err := store.GetBookFiles(b.ID)
@@ -422,6 +422,3 @@ func TestB3_AttachVirtualFile_SetsDurationFromBook(t *testing.T) {
 	require.Len(t, files, 1)
 	assert.Equal(t, dur, files[0].Duration)
 }
-
-// second returns the file count from ensureOwnFile, discarding the journal record.
-func second(_ CombineFileMove, n int) int { return n }

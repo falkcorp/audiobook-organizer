@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Package merge: sync-identity follow hooks.
 //
@@ -200,7 +200,7 @@ func moveLoserState(db UserProgressMerger, follower SyncFollower, winnerBookID, 
 // FollowFileMove carries each moved file's sync_file identity (its durable
 // `ino`) from oldBookID to newBookID after the caller has physically moved
 // the underlying BookFile row(s) onto a different book -- CombineBooks
-// (MoveBookFilesToBook, and attachVirtualFile's cross-book reattach branch).
+// (MoveBookFilesToBook, and applyVirtualFile's cross-book reattach branch).
 // Call it with the EXACT list of file IDs that were just moved, still inside
 // whatever lock guards the operation's read-modify-write, and BEFORE the
 // source book row is retired. UndoCombine calls it in the reverse direction

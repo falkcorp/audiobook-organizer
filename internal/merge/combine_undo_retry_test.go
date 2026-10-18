@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_retry_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d2f4b61-8a3e-4c07-b5d1-6e9a0c7f2b48
-// last-edited: 2026-09-14
+// last-edited: 2026-10-18
 
 package merge
 
@@ -61,9 +61,10 @@ func (s *failNthStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targe
 // state TestCombineUndo_RoundTripRestoresExactly pins for a clean undo.
 //
 // Undo order: step 1 restores absA/absB, step 2 moves absA's two rows back
-// (one MoveBookFilesToBook), deletes absB's created row (DeleteBookFile #1)
-// and then the survivor's own created row (DeleteBookFile #2), step 3 moves
-// the PID back (ReassignExternalID). Each case stops attempt 1 at a different
+// (MoveBookFilesToBook #1) and repoints absB's created row onto absB
+// (MoveBookFilesToBook #2; created rows are never deleted, and the
+// survivor's own created row stays put), step 3 moves the PID back
+// (ReassignExternalID). Each case stops attempt 1 at a different
 // point, so the retry crosses a different mix of done and not-done items.
 //
 // Every case stops before step 3's progress restore, so on the retry survivor
@@ -87,17 +88,17 @@ func TestCombineUndo_RetryAfterMidwayFailure(t *testing.T) {
 			},
 		},
 		{
-			name: "step2 survivor created row", method: "DeleteBookFile", nth: 2,
+			name: "step2 absorbed created row", method: "MoveBookFilesToBook", nth: 2,
 			midway: func(t *testing.T, store database.Store, f undoFixture) {
 				files, err := store.GetBookFiles(f.absA)
 				require.NoError(t, err)
 				assert.Len(t, files, 2, "absA's rows already moved back")
 				bFiles, err := store.GetBookFiles(f.absB)
 				require.NoError(t, err)
-				assert.Empty(t, bFiles)
+				assert.Empty(t, bFiles, "absB's created row is not repointed yet")
 				sFiles, err := store.GetBookFiles(f.survivor)
 				require.NoError(t, err)
-				assert.Len(t, sFiles, 1, "only the survivor's own created row is left: absB's created row is already gone")
+				assert.Len(t, sFiles, 2, "the survivor's own created row and absB's created row")
 			},
 		},
 		{
@@ -147,7 +148,7 @@ func TestCombineUndo_RetryAfterMidwayFailure(t *testing.T) {
 			for _, id := range all {
 				assert.Equal(t, preBooks[id], viewBook(t, store, id), "book %s restored exactly", id)
 			}
-			assert.Equal(t, preFiles, viewFiles(t, store, all...))
+			assert.Equal(t, withCreatedRows(t, ms, res.JournalID, preFiles), viewFiles(t, store, all...))
 			assert.Equal(t, preLocks, lockFields(t, store, f.survivor))
 			owner, err := store.GetBookByExternalID("itunes", f.pid)
 			require.NoError(t, err)

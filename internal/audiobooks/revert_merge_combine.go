@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_combine.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f7b0d52-c1e4-4a98-8d26-9e5a7c13b0f4
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package audiobooks
 
@@ -60,6 +60,13 @@ func (rs *RevertService) revertMergeCombineJournal(c *database.OperationChange) 
 		return fmt.Errorf("book %s: read combine journal %s: %w", c.BookID, c.NewValue, err)
 	case j.Status == merge.CombineJournalUndone:
 		return undo.ErrAlreadyRestored
+	case j.Status == merge.CombineJournalPending && !j.StepJournaled:
+		// A CombineBooks journal from before the combine journaled each step,
+		// left pending by a combine that stopped part-way: it does not record
+		// what ran, so no undo can replay it. Nothing changed since; there is
+		// just no undo recorded.
+		return &undo.ReferentError{Reason: undo.ReasonFieldUnreadable,
+			Detail: fmt.Sprintf("book %s: combine %s never completed and recorded no steps; no undo recorded", c.BookID, c.NewValue)}
 	}
 	if _, err := u.UndoCombine(c.NewValue); err != nil {
 		var refused *merge.CombineUndoRefusedError
