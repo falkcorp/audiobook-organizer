@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_journal_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0b42d884-b844-4201-ba60-046bfb995928
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -209,7 +209,7 @@ func openJournalPebble(t *testing.T, dir string) *database.PebbleStore {
 func runTranscribeOnce(t *testing.T, s writeCountingStore, ctx context.Context, params string) error {
 	t.Helper()
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
-	return p.runIntroTranscribe(ctx, json.RawMessage(params), &denomReporter{})
+	return p.runIntroTranscribe(ctx, liveTranscribeParams(params), &denomReporter{})
 }
 
 // TestIntroTranscribe_KillMidPageLosesNothingAndRepeatsNothing simulates a
@@ -406,7 +406,7 @@ func TestIntroTranscribe_JournalWriteFailuresAreCounted(t *testing.T) {
 	st := failingJournalStore{writeCountingStore{s, &wmu, map[string]int{}}}
 	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: st}, root: t.TempDir()}}
 	rep := &denomReporter{}
-	if err := p.runIntroTranscribe(context.Background(), json.RawMessage(`{}`), rep); err != nil {
+	if err := p.runIntroTranscribe(context.Background(), liveTranscribeParams(`{}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	stats, err := s.GetTranscribeStats()

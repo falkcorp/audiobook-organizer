@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/transcribe_monitor.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 2f7c4a91-8b03-4d6e-9a52-1c6e8f0b3d47
-# last-edited: 2026-07-17
+# last-edited: 2026-10-18
 """Transcription progress monitor + alerter.
 
 Polls the audiobook-organizer transcribe-stats aggregate
@@ -133,7 +133,9 @@ def relaunch_op(base, token, insecure):
     url = base.rstrip("/") + "/api/v1/operations/v2"
     return http_post(url, token, insecure, {
         "def_id": "maintenance.transcribe-book-intros",
-        "params": {},
+        # The op previews unless told otherwise (dry_run defaults to true): a
+        # relaunch that omitted this would queue a run that transcribes nothing.
+        "params": {"dry_run": False},
     })
 
 

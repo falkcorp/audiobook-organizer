@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-18
 
@@ -155,10 +155,14 @@ func (d *opsV3Defs) info(def ops.Definition, od opsregistry.OperationDef) opsv3.
 	return info
 }
 
-// canWrite: declares a write capability, or declares none (undeclared is not
-// evidence of read-only).
+// canWrite: declares a write capability, declares a resource it writes
+// (OperationDef.Writes), or declares no capabilities at all (undeclared is
+// not evidence of read-only). Writes counts on its own because an op can
+// declare the rows it writes and still list only read capabilities, as
+// maintenance.transcribe-book-intros did; capabilities alone made v3 treat it
+// as read-only and ignore the mode.
 func canWrite(d opsregistry.OperationDef) bool {
-	if len(d.Capabilities) == 0 {
+	if len(d.Capabilities) == 0 || len(d.Writes) > 0 {
 		return true
 	}
 	for _, c := range d.Capabilities {
