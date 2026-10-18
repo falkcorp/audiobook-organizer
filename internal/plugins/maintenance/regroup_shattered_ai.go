@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-10-18
 
@@ -271,6 +271,13 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	written, alreadyDecided, writeErrs := 0, 0, 0
 	wouldUpsert := 0
 	var sampleUpserts []string
+	// A preview counts only the holds a live run would change. UpsertReviewItem
+	// is a full no-op on a hold a human already decided (approved, rejected,
+	// applied), so those are reported as already-decided, not as would-upsert.
+	var decided map[string]struct{}
+	if dryRun {
+		decided = decidedRegroupHolds(store, reporter)
+	}
 	for i := range groups {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -293,6 +300,10 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 			Payload:   payload,
 		}
 		if dryRun {
+			if _, ok := decided[item.DedupKey]; ok {
+				alreadyDecided++
+				continue
+			}
 			wouldUpsert++
 			if len(sampleUpserts) < regroupPreviewSamples {
 				sampleUpserts = append(sampleUpserts, fmt.Sprintf("%s %q", item.Kind, item.FolderRef))
@@ -334,12 +345,12 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 			samples = append(samples, fmt.Sprintf("%s %q", stale[i].Kind, stale[i].FolderRef))
 		}
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-			"PREVIEW: would upsert %d review holds (e.g. %s) and delete %d stale pending holds (e.g. %s)",
-			wouldUpsert, strings.Join(sampleUpserts, "; "), len(stale), strings.Join(samples, "; ")))
+			"PREVIEW: would upsert %d review holds (e.g. %s) and delete %d stale pending holds (e.g. %s); %d already decided, left as they are",
+			wouldUpsert, strings.Join(sampleUpserts, "; "), len(stale), strings.Join(samples, "; "), alreadyDecided))
 		result = fmt.Sprintf(
 			"PREVIEW (dry_run, nothing written) — would upsert %d review holds and delete %d stale pending holds "+
-				"(marshal-errors=%d, skipped-frozen-itunes=%d) from %d detected groups; library untouched. bykind=%v",
-			wouldUpsert, len(stale), writeErrs, skippedFrozen.Load(), len(groups), st.ByKind)
+				"(already-decided=%d left as they are, marshal-errors=%d, skipped-frozen-itunes=%d) from %d detected groups; library untouched. bykind=%v",
+			wouldUpsert, len(stale), alreadyDecided, writeErrs, skippedFrozen.Load(), len(groups), st.ByKind)
 	} else {
 		purged := reconcileStaleHolds(ctx, store, reporter, groups, params.Limit)
 		result = fmt.Sprintf(
@@ -419,6 +430,29 @@ func staleRegroupHolds(store reviewHoldStore, reporter sdk.Reporter, groups []it
 		stale = append(stale, it)
 	}
 	return stale
+}
+
+// decidedRegroupHolds returns the DedupKeys of regroup.* holds whose status is
+// not pending: the ones UpsertReviewItem leaves untouched. One full scan of the
+// review queue (the status index has no "not pending" scan, and a new decided
+// status must not be missed). On a read error it logs and returns nil, so the
+// preview counts every group as would-upsert, as it did before this check.
+func decidedRegroupHolds(store reviewHoldStore, reporter sdk.Reporter) map[string]struct{} {
+	items, total, err := store.ListReviewItems(database.ReviewFilter{Limit: reconcileScanLimit})
+	if err != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("preview: list review items: %v; already-decided holds are counted as would-upsert", err))
+		return nil
+	}
+	if total > len(items) {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("preview: review queue has %d items, read %d; decided holds past the cap are counted as would-upsert", total, len(items)))
+	}
+	decided := map[string]struct{}{}
+	for _, it := range items {
+		if strings.HasPrefix(it.Kind, "regroup.") && it.Status != database.ReviewStatusPending {
+			decided[it.DedupKey] = struct{}{}
+		}
+	}
+	return decided
 }
 
 // regroupDedupKey is the STABLE upsert target: a hash of (Kind, FolderRef). Re-running
