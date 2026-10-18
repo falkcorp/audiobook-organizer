@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev6_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e0dd46d-1455-44fc-94b7-899dc9c35055
 // last-edited: 2026-10-18
 
@@ -144,4 +144,45 @@ func TestRev6_LandedMarkerWriteFailureFallsBackToTheWarning(t *testing.T) {
 	require.Contains(t, strings.Join(re.Warnings, "\n"), "was put back by an earlier run of this undo and listened to since; left as is")
 	require.Equal(t, float64(600), rev5Listened(t, store, user, gone))
 	require.Equal(t, float64(0), rev5Listened(t, store, user, keep))
+}
+
+// lockBetweenPlanAndWrite sets the user's own title lock on book right after
+// the override's title column write (ModifyBook) lands: after the combine
+// planned the override and before it writes the lock rows.
+type lockBetweenPlanAndWrite struct {
+	*database.PebbleStore
+	book  string
+	value string
+	fired bool
+	err   error
+}
+
+func (s *lockBetweenPlanAndWrite) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	b, err := s.PebbleStore.ModifyBook(id, fn)
+	if err == nil && id == s.book && !s.fired && b != nil && b.Title == "Override T" {
+		s.fired = true
+		s.err = database.RecordUserOverrides(s.PebbleStore, s.book, map[string]any{database.FieldKeyTitle: s.value})
+	}
+	return b, err
+}
+
+// N2: a person locks the survivor's title between the override's plan and
+// its lock write. The override replaces that lock, and its undo puts the
+// person's lock back. The before-snapshot used to be the plan's, read ahead
+// of the write without the metadata-state lock, so the undo put back the
+// older lock ("Prior T") instead.
+func TestRev6_OverrideUndoRestoresALockSetBetweenPlanAndWrite(t *testing.T) {
+	store := setupTestStore(t).(*database.PebbleStore)
+	keep, gone := overrideBooks(t, store)
+	require.NoError(t, database.RecordUserOverrides(store, keep, map[string]any{database.FieldKeyTitle: "Prior T"}))
+	w := &lockBetweenPlanAndWrite{PebbleStore: store, book: keep, value: "User T"}
+	res, err := NewService(w).CombineBooksWithOptions([]string{keep, gone}, keep, &CombineOverride{Title: "Override T"}, CombineOptions{})
+	require.NoError(t, err)
+	require.True(t, w.fired, "the person's lock landed between the plan and the lock write")
+	require.NoError(t, w.err)
+	require.Equal(t, "Override T", lockValue(t, lockOf(t, store, keep, database.FieldKeyTitle)), "the override replaced it")
+
+	_, err = NewService(store).UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	require.Equal(t, "User T", lockValue(t, lockOf(t, store, keep, database.FieldKeyTitle)), "the undo puts back the lock the override replaced")
 }

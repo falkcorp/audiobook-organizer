@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.60.2
+// version: 1.60.3
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2325,7 +2325,9 @@ func buildProgressJournal(before, after progressSnap) []CombineUserProgress {
 // front; a new author is created by writeCombineOverride once this plan is
 // journaled, and AuthorIDAfter journaled before any link is written. A field
 // that cannot be planned is dropped from the plan, and a plan with nothing
-// left is nil.
+// left is nil. The lock rows read here are what the journal holds until the
+// write: recordOverrideLocks reads them again, under the lock, right before
+// it writes.
 //
 // Creation gate. The override is often PREFILLED from one of the books being
 // combined rather than typed, so a book already carrying an author row like
@@ -2563,19 +2565,54 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 }
 
 // recordOverrideLocks writes the override's lock rows for values
-// (database.RecordUserOverridesLocked) and records in plan.FieldStatesAfter
-// what that write left for fields (noteOverrideLocksAfter), both under one
-// hold of the book's metadata-state lock (database.LockMetadataState), the
-// lock every lock-row writer takes. The read-back used to follow the write
-// after the lock was released, so a lock another writer set in between was
-// journaled as the combine's, and the undo would have removed it.
+// (database.RecordUserOverridesLocked), all under one hold of the book's
+// metadata-state lock (database.LockMetadataState), the lock every lock-row
+// writer takes: it first records in plan.FieldStates the lock rows that
+// write replaces (noteOverrideLocksBefore), then writes, then records in
+// plan.FieldStatesAfter what the write left (noteOverrideLocksAfter). The
+// read-back used to follow the write after the lock was released, so a lock
+// another writer set in between was journaled as the combine's, and the
+// undo would have removed it. The before-snapshot was taken only at plan
+// time (planCombineOverride), well ahead of the write and without the lock,
+// so a lock someone set in between was replaced by the override and the
+// undo put back the older one, or removed the lock (round 6 of the #4064
+// review).
 func (ms *Service) recordOverrideLocks(bookID string, plan *CombineOverrideUndo, values map[string]any, fields ...string) error {
 	defer database.LockMetadataState(bookID)()
+	ms.noteOverrideLocksBefore(bookID, plan, fields...)
 	if err := database.RecordUserOverridesLocked(ms.db, bookID, values); err != nil {
 		return err
 	}
 	ms.noteOverrideLocksAfter(bookID, plan, fields...)
 	return nil
+}
+
+// noteOverrideLocksBefore refreshes plan.FieldStates for fields (those the
+// override set: a key already in the plan) from the lock rows as they are
+// right before the override's lock write; nil when there is none. The
+// plan-time values (planCombineOverride) are what the journal holds if the
+// process dies before the caller re-journals the plan. A failed read keeps
+// them, logged. Called with the book's metadata-state lock held
+// (recordOverrideLocks).
+func (ms *Service) noteOverrideLocksBefore(bookID string, plan *CombineOverrideUndo, fields ...string) {
+	states, err := ms.db.GetMetadataFieldStates(bookID)
+	if err != nil {
+		mlog.Warn("combine override: lock rows of %s not read again before the lock write; the undo restores the ones read when the override was planned: %s",
+			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	for _, field := range fields {
+		if _, set := plan.FieldStates[field]; !set {
+			continue
+		}
+		plan.FieldStates[field] = nil
+		for i := range states {
+			if states[i].Field == field {
+				st := states[i]
+				plan.FieldStates[field] = &st
+			}
+		}
+	}
 }
 
 // noteOverrideLocksAfter records in plan.FieldStatesAfter the lock rows the
