@@ -1,16 +1,25 @@
 // file: internal/server/merge_sibling_undo_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 43e2fa1b-c761-4fd6-a2f1-e668c89b5335
 // last-edited: 2026-10-18
 
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
@@ -77,4 +86,50 @@ func TestServerBookMerger_SiblingMoveIsUndoable(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	requireSiblingUndo(t, f, "op-same-path", k, ls)
+}
+
+// The dedup.book-merge op's own Run, not applyBookMergeReroute called with a
+// hand-picked id: the merge must journal under the id the registry gives the
+// run (opsregistry.ReporterOpID), so dropping that lookup leaves the pointer
+// under "" and this fails. The revert is of the run's id, which is the id the
+// Operations page offers.
+func TestBookMergeOpRun_SiblingMoveIsUndoableByRunID(t *testing.T) {
+	f, k, l, ls := siblingUndoFixture(t)
+	s := &Server{store: f.S, dedupCache: cache.New[gin.H]("dedup-test", time.Hour)}
+	def := relinkOpDef(t, s.RegisterBookMergeOp, "dedup.book-merge")
+	params, err := json.Marshal(dedup.BookMergeParams{KeepID: k, MergeIDs: []string{l}})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), params, &opReporter{id: "op-book-merge-run"}))
+	requireSiblingUndo(t, f, "op-book-merge-run", k, ls)
+}
+
+// A dedup engine merge (MergeBooksJournaled: auto-resolve, merge-candidate,
+// review applies) runs with no operation of its own, so merge.Service mints a
+// per-merge id (owner decision: one id per merge, not per batch). That id is
+// on the result, the surviving book's change list (GET
+// /audiobooks/:id/changes) carries it, and reverting it through the operations revert puts the sibling
+// back. This is the path the retired POST /merge/sibling-undo used to cover.
+func TestMergeBooksJournaled_SiblingMoveIsUndoableByItsOperation(t *testing.T) {
+	f, k, l, ls := siblingUndoFixture(t)
+	edb, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = edb.Close() })
+	engine, err := dedup.NewEngine(database.NewEmbeddingStore(database.NewGatedDB(edb)), f.S,
+		nil, nil, merge.NewService(f.S), unified.DefaultScoreConfig())
+	require.NoError(t, err)
+
+	res, keys, err := engine.MergeBooksJournaled(0, []string{l, k}, k, "dedup:merge-source:test")
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	require.NotEmpty(t, res.SiblingOperationID, "the merge minted an operation for its undo pointer")
+
+	changes, err := f.S.GetBookChanges(k)
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		found = found || c.OperationID == res.SiblingOperationID
+	}
+	require.True(t, found, "the survivor's change list names the merge's operation")
+
+	requireSiblingUndo(t, f, res.SiblingOperationID, k, ls)
 }

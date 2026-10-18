@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d2e8a41-9c3b-4f7e-8a10-2b6c4d9e1f30
-// last-edited: 2026-09-05
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -290,4 +290,36 @@ func TestPreflightReportPath_RefusesUnwritablePath(t *testing.T) {
 	require.NoError(t, preflightReportPath(ok))
 	_, statErr := os.Stat(ok)
 	require.NoError(t, statErr, "preflight should have created the file")
+}
+
+// samePathMergeDeps records the operation id each merge is journaled under.
+type samePathMergeDeps struct {
+	fakeDeps
+	opIDs *[]string
+}
+
+func (d samePathMergeDeps) MergeBooks(opID string, bookIDs []string, _ string) (int, error) {
+	*d.opIDs = append(*d.opIDs, opID)
+	return len(bookIDs) - 1, nil
+}
+
+// The op's own Run passes the registry's run id to every merge, so the merge's
+// undo pointer lands under the operation the Operations page reverts. Dropping
+// the registry.ReporterOpID lookup (or passing "") fails here; the plan tests
+// above call planMergeSamePathDupes directly and never see the id.
+func TestMergeSamePathRun_MergesUnderTheRunID(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	path := "/lib/Author/Book.m4b"
+	for _, id := range []string{"a", "b"} {
+		_, err := st.CreateBook(&database.Book{ID: id, Title: "Book", FilePath: path})
+		require.NoError(t, err)
+		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: id, FilePath: path, FileHash: "H"}))
+	}
+	var opIDs []string
+	p := New(samePathMergeDeps{fakeDeps: fakeDeps{store: st, root: t.TempDir()}, opIDs: &opIDs})
+	require.NoError(t, p.runMergeSamePathDupes(context.Background(),
+		[]byte(`{"apply":true}`), &opIDReporter{id: "op-same-path-run"}))
+	require.Equal(t, []string{"op-same-path-run"}, opIDs)
 }
