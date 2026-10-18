@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -303,8 +303,11 @@ listening time. The fourth undid a choice the user made after the undo.
 
 **The fix.**
 
-- The undo now takes the same lock as the sync, looks at the progress again
-  while holding it, and keeps anything that arrived in the meantime.
+- The undo now takes the same lock as the listening apps' sync and the
+  "mark as" buttons, looks at the progress again while holding it, and
+  keeps anything those sent in the meantime. The web player's position
+  updates and the iTunes position sync do not take that lock yet, so an
+  update from one of them arriving in the same instant can still be lost.
 - Each combine's progress move gets its own unique id, and the note is
   named after that.
 - When the note cannot be removed, it is marked "did not happen" instead.

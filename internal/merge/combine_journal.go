@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.28.4
+// version: 1.28.5
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1168,27 +1168,36 @@ func (ms *Service) restoreSurvivorFileNumbers(j *CombineJournal, fm CombineFileM
 }
 
 // primaryAuthorOf picks the book row's AuthorID from the author links left
-// on a book: the first, in position order, whose role names the book's
-// author ("author", "primary", or an unlabelled older row), and nil when
-// none does. A narrator, editor or co-author link is never made the primary
-// author: the fill-empty undo used to take whichever link came first, which
-// could be any of them.
+// on a book, in position order: the first whose role names the book's
+// author ("author", "primary", or an unlabelled older row); failing that,
+// the first co-author (any other database.IsAuthorCreditRole role), which
+// is still an author of the book; and nil when no link credits an author.
+// A narrator, editor or translator link is never made the primary author,
+// and a co-author never wins over an author: the fill-empty undo used to
+// take whichever link came first, which could be any of them.
 func primaryAuthorOf(links []database.BookAuthor) *int {
-	var best *database.BookAuthor
+	var author, coAuthor *database.BookAuthor
 	for i := range links {
-		switch strings.ToLower(strings.TrimSpace(links[i].Role)) {
-		case "author", "primary", "":
-		default:
+		l := &links[i]
+		if !database.IsAuthorCreditRole(l.Role) {
 			continue
 		}
-		if best == nil || links[i].Position < best.Position {
-			best = &links[i]
+		best := &coAuthor
+		switch strings.ToLower(strings.TrimSpace(l.Role)) {
+		case "author", "primary", "":
+			best = &author
+		}
+		if *best == nil || l.Position < (*best).Position {
+			*best = l
 		}
 	}
-	if best == nil {
+	if author == nil {
+		author = coAuthor
+	}
+	if author == nil {
 		return nil
 	}
-	id := best.AuthorID
+	id := author.AuthorID
 	return &id
 }
 
@@ -1362,7 +1371,9 @@ func restoreSurvivorSideOnce(db UserProgressMerger, p CombineUserProgress, survi
 // (errSurvivorMovedOn), so it is reconciled instead of written over. Until
 // round 5 of the #4064 review the marker, positions and state were written
 // with no stripe, and a sync landing between the read and the state write
-// was lost.
+// was lost. A writer that does not take the stripe (database's "NOT YET HELD
+// BY" list: the web reading heartbeat and RecomputeUserBookState, the iTunes
+// position sync) can still land between the re-read and the write.
 //
 // The same marker the reconcile writes goes first (key empty: no
 // after-snapshot, so no marker), holding the state's UpdatedAt as it is
