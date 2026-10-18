@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 
 package database
 
@@ -861,59 +861,6 @@ func (s *CatalogStore) pageUnder(prefix string, offset, limit int) ([]string, in
 		n++
 	}
 	return ids, n, iter.Error()
-}
-
-// CatalogListQuery selects entries for the read API. At most one of AuthorKey
-// and SeriesKey may be set; neither lists every entry in id order.
-type CatalogListQuery struct {
-	AuthorKey string
-	SeriesKey string
-	Limit     int
-	Offset    int
-}
-
-// ListEntries returns one page of entries and the total matching count. Every
-// branch walks a keys-only index (cat_id, cat_author, cat_series), copies only
-// the ids inside the requested window, and decodes only those entries; the
-// total is a key count. No branch iterates the entry values.
-func (s *CatalogStore) ListEntries(q CatalogListQuery) ([]CatalogEntry, int, error) {
-	if q.AuthorKey != "" && q.SeriesKey != "" {
-		return nil, 0, errors.New("catalog list: author and series filters are exclusive")
-	}
-	limit := q.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 50
-	}
-	offset := max(q.Offset, 0)
-
-	prefix := catIDPrefix
-	switch {
-	case q.AuthorKey != "":
-		prefix = catAuthorPrefix + q.AuthorKey + ":"
-	case q.SeriesKey != "":
-		prefix = catSeriesPrefix + q.SeriesKey + ":"
-	}
-	ids, total, err := s.pageUnder(prefix, offset, limit)
-	if err != nil {
-		return nil, 0, err
-	}
-	out := make([]CatalogEntry, 0, len(ids))
-	for _, id := range ids {
-		e, err := s.GetEntry(id)
-		if errors.Is(err, ErrCatalogEntryNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, *e)
-	}
-	return out, total, nil
-}
-
-// EditionGroupMembers returns the entry ids in one edition group.
-func (s *CatalogStore) EditionGroupMembers(groupID string) ([]string, error) {
-	return s.idsUnder(catGroupPrefix + groupID + ":")
 }
 
 // CountEntries counts every catalog entry by its keys-only cat_id index.

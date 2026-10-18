@@ -1,11 +1,12 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package database
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -256,4 +257,60 @@ func TestPutAuthorAliases_ResolveAmbiguousAndIdempotent(t *testing.T) {
 			t.Errorf("ResolveAuthorAlias(%q) = %v, %v; want not found", alias, ok, err)
 		}
 	}
+}
+
+// CatalogListQuery selects entries for the keys-only index tests. The
+// GET /catalog/entries read API that used it was retired by 01-P81j, so this
+// lives in the test file. At most one of AuthorKey and SeriesKey may be set;
+// neither lists every entry in id order.
+type CatalogListQuery struct {
+	AuthorKey string
+	SeriesKey string
+	Limit     int
+	Offset    int
+}
+
+// ListEntries returns one page of entries and the total matching count (test
+// only since 01-P81j). Every branch walks a keys-only index (cat_id, cat_author, cat_series), copies only
+// the ids inside the requested window, and decodes only those entries; the
+// total is a key count. No branch iterates the entry values.
+func (s *CatalogStore) ListEntries(q CatalogListQuery) ([]CatalogEntry, int, error) {
+	if q.AuthorKey != "" && q.SeriesKey != "" {
+		return nil, 0, errors.New("catalog list: author and series filters are exclusive")
+	}
+	limit := q.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	offset := max(q.Offset, 0)
+
+	prefix := catIDPrefix
+	switch {
+	case q.AuthorKey != "":
+		prefix = catAuthorPrefix + q.AuthorKey + ":"
+	case q.SeriesKey != "":
+		prefix = catSeriesPrefix + q.SeriesKey + ":"
+	}
+	ids, total, err := s.pageUnder(prefix, offset, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]CatalogEntry, 0, len(ids))
+	for _, id := range ids {
+		e, err := s.GetEntry(id)
+		if errors.Is(err, ErrCatalogEntryNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, *e)
+	}
+	return out, total, nil
+}
+
+// EditionGroupMembers returns the entry ids in one edition group (test only
+// since 01-P81j).
+func (s *CatalogStore) EditionGroupMembers(groupID string) ([]string, error) {
+	return s.idsUnder(catGroupPrefix + groupID + ":")
 }
