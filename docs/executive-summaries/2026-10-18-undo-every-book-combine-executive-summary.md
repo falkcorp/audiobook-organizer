@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -203,13 +203,18 @@ fully undone, or put a reader's progress or a user's later edit at risk.
 **The fix.**
 
 - An undo now notes "started" before it changes anything, so running it
-  again finishes the job. Crashing the undo at each of its 44 writes,
-  then running it again, puts everything back.
+  again finishes the job. A test crashes the undo at 44 different points
+  (just before and just after each thing it writes) and runs it again;
+  every time, everything comes back.
 - A combine that stops part-way now returns its undo number and says so.
+  The Library message shows that number too, so the undo can still be
+  found after the message is gone.
 - The Combine message has an Undo button, and a Retry button when an undo
   only partly works.
 - The purge now checks for progress and deletes the book in one step that
-  an undo cannot interrupt.
+  an undo cannot interrupt. In that same step it looks at the book again,
+  so a book someone restored from the trash a moment earlier is left
+  alone instead of deleted.
 - The undo keeps a co-author added since the combine and says so.
 - An override creates a new author only after its plan is recorded.
 - The kept-progress messages now name the right place.
