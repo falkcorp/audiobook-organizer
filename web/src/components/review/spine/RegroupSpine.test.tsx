@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f7c9e21-5a4b-4d8e-9c1f-2b6a7d0e4c53
-// last-edited: 2026-09-01
+// last-edited: 2026-10-18
 
 /**
  * Task 6 fix round: RegroupSpine wired PathLinks into MemberRow (commit
@@ -17,7 +17,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
-import { MemberRow } from './RegroupSpine';
+import { MemberRow, SkipsAlert } from './RegroupSpine';
+import type { RegroupLane } from '../lanes/useRegroupLane';
 import { appTheme } from '../../../theme';
 import * as api from '../../../services/api';
 import type { PathAlias, Config } from '../../../services/api';
@@ -48,7 +49,7 @@ function renderRow(e: MemberEntry, aliases: PathAlias[] = []) {
   return render(
     <ThemeProvider theme={appTheme} defaultMode="dark">
       <MemberRow entry={e} book={undefined} pathAliases={aliases} pathVars={[]} />
-    </ThemeProvider>,
+    </ThemeProvider>
   );
 }
 
@@ -87,5 +88,49 @@ describe('MemberRow / PathLinks wiring', () => {
     await user.click(screen.getByRole('button', { name: 'Copy Linux path' }));
     // Reaching here without an uncaught rejection/throw is the assertion.
     expect(screen.getByRole('button', { name: 'Copy Linux path' })).toBeInTheDocument();
+  });
+});
+
+describe('SkipsAlert report panel', () => {
+  const KIND = 'regroup.multidisc';
+
+  function renderAlert(lane: Partial<RegroupLane>) {
+    const full = {
+      skipsByKind: {},
+      failedByKind: {},
+      unrecordedByKind: {},
+      dismissSkips: vi.fn(),
+      ...lane,
+    } as unknown as RegroupLane;
+    render(
+      <ThemeProvider theme={appTheme} defaultMode="dark">
+        <div data-testid="regroup-row-f1">row f1</div>
+        <SkipsAlert kind={KIND} lane={full} />
+      </ThemeProvider>
+    );
+    return full;
+  }
+
+  it('renders nothing when the kind has no skips, failures or unrecorded items', () => {
+    renderAlert({});
+    expect(screen.queryByTestId(`regroup-skips-${KIND}`)).toBeNull();
+  });
+
+  it('lists failed and applied-but-unrecorded items as clickable entries that outlive the toast', async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    const lane = renderAlert({
+      failedByKind: { [KIND]: [{ id: 'f1', reason: 'synthetic refusal' }] },
+      unrecordedByKind: { [KIND]: [{ id: 'u1', reason: 'applied but status write failed' }] },
+    });
+
+    expect(screen.getByTestId(`regroup-failed-${KIND}`)).toHaveTextContent('synthetic refusal');
+    expect(screen.getByTestId(`regroup-unrecorded-${KIND}`)).toHaveTextContent('do not resend');
+
+    await userEvent.click(screen.getByTestId('regroup-report-open-f1'));
+    expect(scroll).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(lane.dismissSkips).toHaveBeenCalledWith(KIND);
   });
 });

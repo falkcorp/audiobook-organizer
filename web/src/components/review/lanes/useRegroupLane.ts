@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-10-18
 
@@ -81,7 +81,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { serverAnsweredTerm, useDebouncedSearch } from '../../../hooks/useDebouncedSearch';
 import * as api from '../../../services/api';
-import type { ReviewBulkSkip, ReviewItem, ReviewItemsPage } from '../../../services/api';
+import type {
+  ReviewBulkFail,
+  ReviewBulkSkip,
+  ReviewItem,
+  ReviewItemsPage,
+} from '../../../services/api';
 import { useReviewStore } from '../../../stores/useReviewStore';
 import { labelForKind } from '../../../lib/reviewKinds';
 import { defaultActionFor, parsePayload } from '../../../lib/reviewPayload';
@@ -263,6 +268,13 @@ export interface RegroupLane {
    * the one message telling the reviewer what still needed them vanished.
    */
   skipsByKind: Record<string, ReviewBulkSkip[]>;
+  /** Items the last bulk action FAILED on (apply errored; they keep their status and
+   *  stay in the list), keyed by kind. Reported next to the skips so they outlive
+   *  the toast. */
+  failedByKind: Record<string, ReviewBulkFail[]>;
+  /** Items whose apply SUCCEEDED but whose status write failed (do NOT resend). */
+  unrecordedByKind: Record<string, ReviewBulkFail[]>;
+  /** Clears the kind's whole report: skips, failures and unrecorded applies. */
   dismissSkips: (kind: string) => void;
 
   refresh: () => void;
@@ -351,6 +363,8 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   const [busyKinds, setBusyKinds] = useState<Set<string>>(new Set());
   const [chosenActions, setChosenActions] = useState<Record<string, string>>({});
   const [skipsByKind, setSkipsByKind] = useState<Record<string, ReviewBulkSkip[]>>({});
+  const [failedByKind, setFailedByKind] = useState<Record<string, ReviewBulkFail[]>>({});
+  const [unrecordedByKind, setUnrecordedByKind] = useState<Record<string, ReviewBulkFail[]>>({});
   const [reloadToken, setReloadToken] = useState(0);
   const [filters, setFiltersState] = useState<RegroupFilters>(REGROUP_INITIAL_FILTERS);
   // The debounced twin of filters.search. The raw value drives the text field so
@@ -819,16 +833,22 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           const result = await api.bulkReviewAction({ action, kind });
           const skipped = result.skipped ?? [];
           const failed = result.failed ?? [];
+          const unrecorded = result.applied_unrecorded ?? [];
           // Report the skips in the same breath as the successes. Bulk approve
           // runs each hold's OWN recommendation and refuses the undecidable
           // ones; a message quoting only `processed` would let a reviewer
           // believe a bucket was cleared when a third of it is still sitting
           // there. Failed items (an apply that errored) are named too: they keep
           // their status and stay in the list, and the first cause is quoted.
-          // `apply_disabled` says an approve only recorded the decision.
+          // `applied_unrecorded` is the opposite case: the apply RAN and only its
+          // status write failed, so the toast says not to resend. `apply_disabled`
+          // says an approve only recorded the decision.
           const notes = [
             skipped.length ? `${skipped.length} skipped, listed below` : '',
             failed.length ? `${failed.length} failed (still in the list; ${failed[0].reason})` : '',
+            unrecorded.length
+              ? `${unrecorded.length} applied but not recorded, do NOT resend (${unrecorded[0].reason})`
+              : '',
             action === 'approve' && result.apply_disabled
               ? 'apply is off, so nothing was applied'
               : '',
@@ -837,14 +857,20 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
             `${action === 'approve' ? 'Approved' : 'Rejected'} ${result.processed} item${
               result.processed === 1 ? '' : 's'
             }${notes.length ? ` · ${notes.join(' · ')}` : ''}`,
-            failed.length ? 'error' : notes.length ? 'warning' : 'success'
+            failed.length || unrecorded.length ? 'error' : notes.length ? 'warning' : 'success'
           );
-          setSkipsByKind((prev) => {
+          // One report per kind, three buckets, each replaced by the latest run. A
+          // kind's entry is dropped only when ALL of them are empty (SkipsAlert
+          // shows while any is non-empty), so a failure never vanishes with the toast.
+          const keep = <T>(prev: Record<string, T[]>, items: T[]) => {
             const next = { ...prev };
-            if (skipped.length) next[kind] = skipped;
+            if (items.length) next[kind] = items;
             else delete next[kind];
             return next;
-          });
+          };
+          setSkipsByKind((prev) => keep(prev, skipped));
+          setFailedByKind((prev) => keep(prev, failed));
+          setUnrecordedByKind((prev) => keep(prev, unrecorded));
           await reload();
         } catch (err) {
           toast(
@@ -864,11 +890,14 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   );
 
   const dismissSkips = useCallback((kind: string) => {
-    setSkipsByKind((prev) => {
+    const drop = <T>(prev: Record<string, T>) => {
       const next = { ...prev };
       delete next[kind];
       return next;
-    });
+    };
+    setSkipsByKind(drop);
+    setFailedByKind(drop);
+    setUnrecordedByKind(drop);
   }, []);
 
   return {
@@ -908,6 +937,8 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     rejectItem,
     bulkAction,
     skipsByKind,
+    failedByKind,
+    unrecordedByKind,
     dismissSkips,
     refresh,
   };
