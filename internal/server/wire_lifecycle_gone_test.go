@@ -1,11 +1,12 @@
 // file: internal/server/wire_lifecycle_gone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2d9b6e84-1a3c-4f57-8e20-b7c5a41d9f63
 // last-edited: 2026-10-18
 
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,8 +21,20 @@ import (
 const (
 	lifecycleGoneNoReplacementBody = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`
 	lifecycleGoneSimilarBody       = `{"error":"gone","message":"this endpoint has been removed; use GET /api/v1/audiobooks?search=author:... (the library search takes the same author: and series: terms) instead"}`
-	lifecycleGoneBulkPreviewBody   = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/metadata/batch-apply-candidates or POST /api/v1/audiobooks/metadata/batch-apply-cached (each is a dry run unless the body sends dry_run:false) instead"}`
+	// The two bulk-apply-preview stubs carry JSON and ":id" in their message,
+	// so their expected bodies are built the way gone() builds them.
+	lifecycleGoneBulkPreviewBody = "POST /api/v1/operations/v2 {\"def_id\":\"metadata.bulk-apply-preview\",\"params\":{...}} (or POST /api/v1/metadata/batch-apply-candidates / POST /api/v1/audiobooks/metadata/batch-apply-cached, which are dry runs unless the body sends dry_run:false)"
+	lifecycleGoneBulkReportBody  = "GET /api/v1/operations/v2/:id (the finished operation's message carries the summary; the per-book report is no longer served)"
 )
+
+// goneBodyFor is the exact body gone(replacement) answers.
+func goneBodyFor(replacement string) string {
+	b, err := json.Marshal(map[string]string{"error": "gone", "message": "this endpoint has been removed; use " + replacement + " instead"})
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
 
 // retiredLifecycleRoutes are the server_lifecycle-owned orphan routes retired
 // by 01-P81i, with the exact gone() body each one answers and the permission
@@ -36,8 +49,8 @@ var retiredLifecycleRoutes = []struct {
 	{http.MethodGet, "/api/v1/audiobooks/:id/cover-history", "/api/v1/audiobooks/synthetic-book/cover-history", lifecycleGoneNoReplacementBody, false},
 	{http.MethodPost, "/api/v1/audiobooks/:id/cover-history/restore", "/api/v1/audiobooks/synthetic-book/cover-history/restore", lifecycleGoneNoReplacementBody, true},
 	{http.MethodGet, "/api/v1/audiobooks/:id/similar", "/api/v1/audiobooks/synthetic-book/similar", lifecycleGoneSimilarBody, false},
-	{http.MethodPost, "/api/v1/metadata/bulk-apply-preview", "/api/v1/metadata/bulk-apply-preview", lifecycleGoneBulkPreviewBody, false},
-	{http.MethodGet, "/api/v1/metadata/bulk-apply-preview/:id", "/api/v1/metadata/bulk-apply-preview/synthetic-op", lifecycleGoneNoReplacementBody, false},
+	{http.MethodPost, "/api/v1/metadata/bulk-apply-preview", "/api/v1/metadata/bulk-apply-preview", goneBodyFor(lifecycleGoneBulkPreviewBody), false},
+	{http.MethodGet, "/api/v1/metadata/bulk-apply-preview/:id", "/api/v1/metadata/bulk-apply-preview/synthetic-op", goneBodyFor(lifecycleGoneBulkReportBody), false},
 	{http.MethodPost, "/api/v1/import/collision-preview", "/api/v1/import/collision-preview", lifecycleGoneNoReplacementBody, false},
 }
 
@@ -74,9 +87,11 @@ func TestRetiredLifecycleRoutes_AuthRunsFirst(t *testing.T) {
 // library.view but not library.edit_metadata, so the restore stub answers 403
 // from s.perm and never reaches gone(); the positive control shows the same
 // viewer gets 410 on a view-guarded stub, so the 403 is the permission guard
-// and not a rejected session. An fp-worker session holds only
-// PermFingerprintWorker, so s.perm must refuse it on every stub; without that
-// loop, dropping s.perm from a stub would fail no test.
+// and not a rejected session. A custom-role session holding only scan.trigger
+// (not library.view, not library.edit_metadata) must get 403 on EVERY stub: it
+// is the case that fails if s.perm is dropped from any one of them. (An
+// fp-worker session would not prove this: its 403 comes from the worker-API
+// middleware before s.perm runs.)
 func TestRetiredLifecycleRoutes_PermissionRunsBeforeGone(t *testing.T) {
 	f := setupCredGuardServer(t)
 
@@ -84,9 +99,11 @@ func TestRetiredLifecycleRoutes_PermissionRunsBeforeGone(t *testing.T) {
 	require.NoError(t, err)
 	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
 	require.NoError(t, err)
-	fpWorker, err := f.store.CreateUser("synthetic-fp-worker", "fpworker@example.test", "bcrypt", "x", []string{auth.SeedRoleFPWorker}, "active")
+	_, err = f.store.CreateRole(&database.Role{ID: "synthetic-scan-only", Name: "synthetic-scan-only", Permissions: []string{string(auth.PermScanTrigger)}})
 	require.NoError(t, err)
-	fpSess, err := f.store.CreateSessionWithOrigin(fpWorker.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	scanOnly, err := f.store.CreateUser("synthetic-scan-only", "scanonly@example.test", "bcrypt", "x", []string{"synthetic-scan-only"}, "active")
+	require.NoError(t, err)
+	scanSess, err := f.store.CreateSessionWithOrigin(scanOnly.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
 	require.NoError(t, err)
 
 	for _, r := range retiredLifecycleRoutes {
@@ -102,8 +119,8 @@ func TestRetiredLifecycleRoutes_PermissionRunsBeforeGone(t *testing.T) {
 				assert.Equal(t, http.StatusGone, w.Code, w.Body.String())
 			})
 		}
-		t.Run("fp-worker gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {
-			w := f.do(t, fpSess.ID, r.method, r.path, nil)
+		t.Run("scan-only role gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {
+			w := f.do(t, scanSess.ID, r.method, r.path, nil)
 			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 		})
@@ -145,6 +162,34 @@ func TestRetiredLifecycleRoutes_KeptRoutesNotGone(t *testing.T) {
 			assert.Equal(t, k.want, w.Code, w.Body.String())
 			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 			assert.NotEqual(t, "404 page not found", w.Body.String())
+		})
+	}
+}
+
+// TestBulkApplyDryRun_ResponseShape: both bulk-apply endpoints answer a dry
+// run (the default) with 202 and op_id, dry_run and note, and no results_url
+// (it used to point at the retired report route).
+func TestBulkApplyDryRun_ResponseShape(t *testing.T) {
+	f := setupCredGuardServer(t)
+	cases := []struct {
+		name, path string
+		body       map[string]any
+	}{
+		{"batch-apply-candidates", "/api/v1/metadata/batch-apply-candidates", map[string]any{"operation_id": "synthetic-op", "book_ids": []string{"synthetic-book"}}},
+		{"batch-apply-cached", "/api/v1/audiobooks/metadata/batch-apply-cached", map[string]any{"book_ids": []string{"synthetic-book"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := f.do(t, f.sessionToken, http.MethodPost, c.path, c.body)
+			require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+			var resp struct {
+				Data map[string]any `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.NotEmpty(t, resp.Data["op_id"])
+			assert.Equal(t, true, resp.Data["dry_run"])
+			assert.NotEmpty(t, resp.Data["note"])
+			assert.NotContains(t, resp.Data, "results_url")
 		})
 	}
 }
