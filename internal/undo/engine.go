@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-18
 //
@@ -19,8 +19,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // UndoConflictReport summarizes potential conflicts detected before
@@ -205,6 +207,13 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	}
 
 	return report, nil
+}
+
+// siblingJournalReader is what merge.SiblingUndoKeptFollows reads: the raw
+// journal and the books it names.
+type siblingJournalReader interface {
+	GetRaw(key string) ([]byte, error)
+	GetBookByID(id string) (*database.Book, error)
 }
 
 // rowVerdict is the preflight's prediction for one row: refused (refusal), a
@@ -424,8 +433,25 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// (merge.Service.UndoSiblingMove), which checks every sibling's
 		// current group itself and refuses as a whole when a newer merge
 		// moved one again. It needs only the journal, not the survivor row
-		// (a survivor purged since does not stop it), and the preflight store
-		// does not read sibling journals, so there is nothing to check here.
+		// (a survivor purged since does not stop it). What it predicts here
+		// is the listening state it would leave on a flag holder for want of
+		// a live book to put it on (merge.SiblingUndoKeptFollows): a
+		// restorable conflict, not Safe. A store that cannot read the
+		// journal gets no prediction; the revert still decides.
+		r, ok := database.AsCapability[siblingJournalReader](store)
+		if !ok {
+			return rowVerdict{}
+		}
+		kept, err := merge.SiblingUndoKeptFollows(r, c.NewValue)
+		switch {
+		case errors.Is(err, merge.ErrSiblingJournalNotFound):
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "book %s: sibling-move journal %s not found", c.BookID, c.NewValue)}
+		case err != nil:
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "book %s: read sibling-move journal %s: %v", c.BookID, c.NewValue, err)}
+		case len(kept) > 0:
+			return rowVerdict{conflict: &UndoConflictItem{ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
+				Reason: "listening state kept: " + strings.Join(kept, "; ")}}
+		}
 		return rowVerdict{}
 	case ChangeTypeMetadataCacheCopy:
 		// The revert deletes or restores the cache row only while it still

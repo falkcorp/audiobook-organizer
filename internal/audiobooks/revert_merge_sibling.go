@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_sibling.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c4e1a96-2b83-4d50-9f17-a6e3d0b85c21
 // last-edited: 2026-10-18
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -69,7 +70,8 @@ func (rs *RevertService) revertMergeSiblingJournal(c *database.OperationChange) 
 	case siblingJournalDone(j):
 		return undo.ErrAlreadyRestored
 	}
-	if _, err := u.UndoSiblingMove(c.NewValue); err != nil {
+	res, err := u.UndoSiblingMove(c.NewValue)
+	if err != nil {
 		if errors.Is(err, merge.ErrSiblingUndoRefused) {
 			// The pre-read above and the undo are not atomic: another undo
 			// (a second revert, a per-loser undo) may have finished in
@@ -81,6 +83,14 @@ func (rs *RevertService) revertMergeSiblingJournal(c *database.OperationChange) 
 			return &undo.ReferentError{Reason: undo.ReasonChangedSince, Detail: fmt.Sprintf("book %s: %v", c.BookID, err)}
 		}
 		return fmt.Errorf("book %s: sibling-move journal %s not undone: %w", c.BookID, c.NewValue, err)
+	}
+	if res != nil && len(res.Warnings) > 0 {
+		// The siblings are back, but the undo left something as it is: a
+		// sibling moved to a third group since (res.MovedOn), listening
+		// state kept on a flag holder because its loser has no live book
+		// left. Reported on the revert (RevertResult.Kept), not only logged.
+		return &partialTagRestore{detail: fmt.Sprintf("book %s: sibling move %s undone; left as is: %s",
+			c.BookID, c.NewValue, strings.Join(res.Warnings, "; "))}
 	}
 	return nil
 }

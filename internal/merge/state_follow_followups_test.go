@@ -1,7 +1,7 @@
 // file: internal/merge/state_follow_followups_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1056ccb5-89ca-4487-9ff7-533be24d6942
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package merge
 
@@ -269,20 +269,61 @@ func TestUndoSiblingMove_SurvivorMergedAwayFollowsItsChain(t *testing.T) {
 	require.Contains(t, strings.Join(j.Warnings, "\n"), "merged away")
 }
 
-// NIT 2: a survivor deleted outright leads to no live book. The state stays
-// on the loser, held by a pending repair the sweep completes later.
-func TestUndoSiblingMove_SurvivorGoneLeavesPendingRepair(t *testing.T) {
-	m := newFlagHolderMerge(t)
-	res := m.merge(t)
-	require.NoError(t, SoftDeleteBook(m.f.S, m.k))
+// B4 (owner decision, #4064 re-review): listening data is never removed.
+// With the survivor gone (trashed, no live end to its chain) and the loser
+// still in the trash, nothing live can take the loser's state, so the undo
+// leaves it on the flag holder, says so, keeps the follow open (not Undone),
+// and queues no pending repair onto the dead survivor. The loser purged as
+// well is the same: the state stays on the holder.
+func TestUndoSiblingMove_NoLiveDestination_StateStaysOnHolder(t *testing.T) {
+	for _, purgeLoser := range []bool{false, true} {
+		t.Run(map[bool]string{false: "loser in the trash", true: "loser purged"}[purgeLoser], func(t *testing.T) {
+			m := newFlagHolderMerge(t)
+			res := m.merge(t)
+			require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.ls), "the merge carried l's state to the flag holder")
+			if purgeLoser {
+				// A purge refuses a book that still owns rows: hand them to
+				// another book first, as a later combine would.
+				other := m.f.Book(t, vptest.Spec{ID: "m", Group: "M", Primary: "true"})
+				for _, id := range []string{m.k, m.l} {
+					files, err := m.f.S.GetBookFiles(id)
+					require.NoError(t, err)
+					var ids []string
+					for _, x := range files {
+						ids = append(ids, x.ID)
+					}
+					if len(ids) > 0 {
+						require.NoError(t, m.f.S.MoveBookFilesToBook(ids, id, other))
+					}
+					require.NoError(t, m.f.S.DeleteBook(id))
+				}
+			} else {
+				require.NoError(t, SoftDeleteBook(m.f.S, m.k))
+			}
 
-	_, err := m.svc.UndoSiblingMove(res.SiblingJournalID)
-	require.NoError(t, err)
-	require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.l), "the state stays on the loser")
-	require.Contains(t, pendingKeys(t, m.f.S), pendingRepairKey(m.l, m.k))
-	has, err := BookHasCarryableUserState(m.f.S, m.l)
-	require.NoError(t, err)
-	require.True(t, has, "the purge keeps the loser while it holds the state")
+			kept, err := SiblingUndoKeptFollows(m.f.S, res.SiblingJournalID)
+			require.NoError(t, err)
+			require.Len(t, kept, 1, "the preflight prediction names the kept state")
+
+			ur, err := m.svc.UndoSiblingMove(res.SiblingJournalID)
+			require.NoError(t, err)
+			require.Equal(t, "G", m.f.GroupOf(t, m.ls), "the sibling is still put back")
+			require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.ls), "the state stays on the holder, where it is still seen")
+			require.Len(t, ur.Warnings, 1)
+			require.Contains(t, ur.Warnings[0], "stays on "+m.ls)
+			for _, k := range pendingKeys(t, m.f.S) {
+				require.NotContains(t, k, m.k, "no repair is queued onto the dead survivor")
+			}
+			j := journalByID(t, m.svc, res.SiblingJournalID)
+			open := 0
+			for _, f := range j.StateFollows {
+				if !f.Undone {
+					open++
+				}
+			}
+			require.Equal(t, 1, open, "the follow is not marked undone")
+		})
+	}
 }
 
 // Item 6: the sync redirect leads to the flag holder; ResolveMergeSurvivor
