@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1193,12 +1193,13 @@ func intPtrEqual(a, b *int) bool {
 // the reconcile's marker (survivorReconcileMarker) before its write for
 // that: without it, a re-run after the user listened read the survivor as
 // "touched since the follow" and reconciled it again, taking the carried
-// listened seconds off a second time (round-4 review S2 of #4064). The one
-// window left is crash-only, as for the reconcile: the process dies after
-// the put-back's marker and before its write, and a client writes the
-// survivor before the re-run. The re-run then reads the put-back as landed
-// and leaves the carried state on the survivor as well as on the absorbed
-// book: listened time counted twice, never fewer seconds than listened.
+// listened seconds off a second time (round-4 review S2 of #4064). A re-run
+// that skips on a marker says so in a warning. The marker is not written in
+// the same batch as the progress, so it can outlive a write that did not
+// land; when it does is set out on survivorReconcileMarker. In every such
+// case the re-run reads the put-back as landed and leaves the carried state
+// on the survivor as well as on the absorbed book: listened time counted
+// twice, never fewer seconds than listened.
 //
 // The absorbed side gets the same care (restoreAbsorbedSide): the absorbed
 // book is often still live when this runs (CarryStateBeforeHardDelete puts a
@@ -1285,10 +1286,16 @@ func restoreSurvivorSideOnce(db UserProgressMerger, p CombineUserProgress, survi
 			// reconcile), and the state has been written since: what is
 			// there now is the user's own listening after the put-back.
 			// Doing it again would take the carried seconds off a
-			// second time (round-4 S2: an undo whose final journal write
-			// failed stays undo_failed, and its re-run comes here).
-			// Nothing is written and nothing is reported.
-			return "", nil
+			// second time (round-4 S2: a re-run of an undo that stopped
+			// after this user's put-back comes here). Nothing is written.
+			// It is reported, because the marker is trusted on its word:
+			// the one case it is wrong (a crash between the marker and the
+			// write, see survivorReconcileMarker) leaves the carried
+			// listened time on both books.
+			mlog.Warn("merge: survivor put-back of user=%s on %s from %s already landed per its marker; left as is",
+				logger.SanitizeLogValue(p.UserID), logger.SanitizeLogValue(survivorID), logger.SanitizeLogValue(absorbedID))
+			return fmt.Sprintf(
+				"user %s progress on survivor %s was put back by an earlier run of this undo and listened to since; left as is", p.UserID, survivorID), nil
 		}
 	}
 	if !sameProgress(cur, p.SurvivorStateAfter, curPos, p.SurvivorPosAfter) {
@@ -1360,14 +1367,40 @@ func putBackSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, k
 	}
 	if err := writeProgress(db, p.UserID, survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, fresh); err != nil {
 		if key != "" {
-			if derr := db.DeleteRaw(key); derr != nil {
-				mlog.Warn("merge: survivor put-back marker %s not dropped after a failed write: %s",
-					logger.SanitizeLogValue(key), logger.SanitizeLogValue(derr.Error()))
+			if note := withdrawPutBackMarker(db, key); note != "" {
+				return fmt.Errorf("%w; %s", err, note)
 			}
 		}
 		return err
 	}
 	return nil
+}
+
+// withdrawPutBackMarker takes back the marker a put-back wrote before a
+// write that failed, so a re-run does not read the put-back as landed: with
+// the user listening on the survivor in between, it would skip, and the
+// carried listened time would stay on the survivor as well as go back to the
+// absorbed book. The marker is deleted; when the delete fails it is
+// overwritten as not landed (survivorReconcileMarker.NotLanded), which
+// readSurvivorReconcileMarker reads as no marker. Only when both raw writes
+// fail does it stay, and the note returned (for the caller's error, so it
+// lands in the journal's LastError) says what a re-run will then do.
+func withdrawPutBackMarker(db UserProgressMerger, key string) string {
+	derr := db.DeleteRaw(key)
+	if derr == nil {
+		return ""
+	}
+	data, err := json.Marshal(survivorReconcileMarker{NotLanded: true})
+	if err == nil {
+		if err = db.SetRaw(key, data); err == nil {
+			mlog.Warn("merge: survivor put-back marker %s not dropped after a failed write (%s); marked not landed instead",
+				logger.SanitizeLogValue(key), logger.SanitizeLogValue(derr.Error()))
+			return ""
+		}
+	}
+	mlog.Error("merge: survivor put-back marker %s neither dropped (%s) nor marked not landed (%s) after a failed write",
+		logger.SanitizeLogValue(key), logger.SanitizeLogValue(derr.Error()), logger.SanitizeLogValue(err.Error()))
+	return fmt.Sprintf("its put-back marker %s could be neither dropped (%v) nor marked not landed (%v): if the user listens to the survivor before the undo is run again, that run reads this put-back as done and the carried listened time stays on both books", key, derr, err)
 }
 
 // survivorReconcilePrefix keys the per-user marker reconcileTouchedSurvivorOnce
@@ -1383,6 +1416,17 @@ const survivorReconcilePrefix = "merge:survivor-reconcile:"
 // state row). SetUserBookState stamps UpdatedAt on every write, so on a
 // re-run a different UpdatedAt means that write (or a later one) landed.
 //
+// The marker goes in its own raw write, before the progress write, so it
+// can outlive a write that did not land. A failed write withdraws it
+// (withdrawPutBackMarker: delete, or failing that overwrite it as
+// NotLanded). It is left standing, and read as landed once the user writes
+// the survivor, in two cases only: the process dies between the marker and
+// the write, or the write fails and both raw writes that would withdraw it
+// fail as well. The second case is named in the put-back's error, so it
+// reaches the journal's LastError. Until round 5 of the #4064 review a
+// failed delete alone left it standing, and these docs called the window
+// crash-only.
+//
 // Markers are dropped once nothing can re-run the put-back
 // (dropSurvivorReconcileMarkers). The user_state_follow operation revert
 // (audiobooks revertUserStateFollow) does not drop them: a revert whose row
@@ -1390,6 +1434,10 @@ const survivorReconcilePrefix = "merge:survivor-reconcile:"
 // names a follow stamp no later follow reuses) and stay as small raw keys.
 type survivorReconcileMarker struct {
 	PreUpdatedAt time.Time `json:"pre_updated_at"`
+	// NotLanded withdraws the marker: the write it was journaled for
+	// failed, and deleting it failed too (withdrawPutBackMarker). Read as
+	// no marker.
+	NotLanded bool `json:"not_landed,omitempty"`
 }
 
 // followStamp is the newest stamp in a follow's after-snapshot of the
@@ -1450,6 +1498,9 @@ func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorRe
 		if err := json.Unmarshal(r.Value, &m); err != nil {
 			return nil, fmt.Errorf("decode survivor reconcile marker %s: %w", key, err)
 		}
+		if m.NotLanded {
+			return nil, nil
+		}
 		return &m, nil
 	}
 	return nil, nil
@@ -1507,14 +1558,13 @@ var errSurvivorMovedOn = errors.New("the survivor's listening state changed whil
 // from that re-read. Until 2026-10-06 the positions were written BEFORE the
 // stripe and the check, so a client position that landed after the read
 // was rewound to the before-snapshot's row (the review of #3777). A
-// state write that fails drops the marker again (best effort). What remains
-// is crash-only: the process dies after the marker is written and before
-// the state write lands, AND a client then writes the survivor before the
-// re-run. The re-run then reads the marker and a new UpdatedAt as "landed"
-// and keeps the current listened time, which may still hold the carried
-// seconds once -- never fewer seconds than the user listened. UndoCombine
-// (re-run when a later absorbed book fails) and the user_state_follow
-// revert (retried after a failure) both come through here.
+// state write that fails withdraws the marker (withdrawPutBackMarker). When
+// a marker can still outlive a write that did not land is set out on
+// survivorReconcileMarker; a re-run then reads the marker and a new
+// UpdatedAt as "landed" and keeps the current listened time, which may
+// still hold the carried seconds once -- never fewer seconds than the user
+// listened. UndoCombine (re-run when a later absorbed book fails) and the
+// user_state_follow revert (retried after a failure) both come through here.
 func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string, cur *database.UserBookState, curPos []database.UserPosition) error {
 	afterBy := map[string]database.UserPosition{}
 	for _, a := range p.SurvivorPosAfter {
@@ -1631,9 +1681,8 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 		// effort: if the delete fails too, the retry keeps the current
 		// listened time (never fewer seconds than the user listened).
 		if wroteMarker {
-			if derr := db.DeleteRaw(key); derr != nil {
-				mlog.Warn("merge: survivor reconcile marker %s not dropped after a failed state write: %s",
-					logger.SanitizeLogValue(key), logger.SanitizeLogValue(derr.Error()))
+			if note := withdrawPutBackMarker(db, key); note != "" {
+				return fmt.Errorf("reconcile state user=%s book=%s: %w; %s", p.UserID, survivorID, err, note)
 			}
 		}
 		return fmt.Errorf("reconcile state user=%s book=%s: %w", p.UserID, survivorID, err)

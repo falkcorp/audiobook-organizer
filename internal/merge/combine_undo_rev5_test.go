@@ -1,11 +1,13 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
 // last-edited: 2026-10-18
 
 package merge
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +28,35 @@ type rev5Store struct {
 	// positions: a client write that lands after the put-back read the
 	// survivor's state and before it takes the user-state stripe.
 	onSurvivorPositions func()
+	// failSurvState fails that many survivor state writes.
+	failSurvState int
+	// failMarkerDel fails that many reconcile-marker deletes.
+	failMarkerDel int
+	// failNotLanded fails the overwrite that withdraws a marker.
+	failNotLanded bool
+}
+
+func (s *rev5Store) SetUserBookState(st *database.UserBookState) error {
+	if st.BookID == s.survivor && s.failSurvState > 0 {
+		s.failSurvState--
+		return errors.New("injected survivor state write failure")
+	}
+	return s.PebbleStore.SetUserBookState(st)
+}
+
+func (s *rev5Store) DeleteRaw(key string) error {
+	if strings.HasPrefix(key, survivorReconcilePrefix) && s.failMarkerDel > 0 {
+		s.failMarkerDel--
+		return errors.New("injected marker delete failure")
+	}
+	return s.PebbleStore.DeleteRaw(key)
+}
+
+func (s *rev5Store) SetRaw(key string, value []byte) error {
+	if s.failNotLanded && strings.HasPrefix(key, survivorReconcilePrefix) && strings.Contains(string(value), `"not_landed":true`) {
+		return errors.New("injected marker withdraw failure")
+	}
+	return s.PebbleStore.SetRaw(key, value)
 }
 
 func (s *rev5Store) ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error) {
@@ -145,4 +176,81 @@ func TestRev5_RerunKeepsAReaddedOverrideAuthorLink(t *testing.T) {
 		}
 	}
 	require.True(t, found, "the link the user added after the undo survives the re-run: %+v", cur)
+}
+
+// rev5AddListening is the user listening to the survivor: more listened time
+// and a newer last-played, written as a client does.
+func rev5AddListening(t *testing.T, store *database.PebbleStore, user, book string, seconds int) {
+	t.Helper()
+	cur, err := store.GetUserBookState(user, book)
+	require.NoError(t, err)
+	c := *cur
+	c.TotalListenedSeconds += float64(seconds)
+	c.LastActivityAt = time.Now().UTC()
+	require.NoError(t, store.SetUserBookState(&c))
+}
+
+// S2: the plain put-back's state write fails and so does the delete of its
+// marker. The marker is withdrawn as not landed, so the re-run after the
+// user listened reconciles instead of skipping: the carried 600 seconds are
+// not left on the survivor as well (it used to read 600 + 300 = 900).
+func TestRev5_FailedPutBackWithAStuckMarkerIsNotReadAsLanded(t *testing.T) {
+	store, f, res := rev5Seed(t)
+	w := &rev5Store{PebbleStore: store, survivor: f.survivor, failSurvState: 1, failMarkerDel: 1}
+	_, err := NewService(w).UndoCombine(res.JournalID)
+	require.ErrorContains(t, err, "injected survivor state write failure")
+	require.NotContains(t, err.Error(), "neither dropped", "the marker was withdrawn")
+	rev5AddListening(t, store, f.user.ID, f.survivor, 300)
+
+	_, err = NewService(store).UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	require.Equal(t, float64(400), rev5Listened(t, store, f.user.ID, f.survivor), "before 100 + the 300 listened since")
+	require.Equal(t, float64(600), rev5Listened(t, store, f.user.ID, f.absA))
+}
+
+// S2, reconcile path: the user listened to the survivor before the undo, so
+// it reconciles; that state write fails and the marker delete fails. The
+// re-run after more listening reconciles again from the after-snapshot.
+func TestRev5_FailedReconcileWithAStuckMarkerIsNotReadAsLanded(t *testing.T) {
+	store, f, res := rev5Seed(t)
+	rev5AddListening(t, store, f.user.ID, f.survivor, 200)
+	w := &rev5Store{PebbleStore: store, survivor: f.survivor, failSurvState: 1, failMarkerDel: 1}
+	_, err := NewService(w).UndoCombine(res.JournalID)
+	require.ErrorContains(t, err, "injected survivor state write failure")
+	rev5AddListening(t, store, f.user.ID, f.survivor, 300)
+
+	_, err = NewService(store).UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	require.Equal(t, float64(600), rev5Listened(t, store, f.user.ID, f.survivor), "before 100 + 200 + 300 listened since the follow")
+	require.Equal(t, float64(600), rev5Listened(t, store, f.user.ID, f.absA))
+}
+
+// S2: when the marker can be neither deleted nor withdrawn, the error says
+// what a re-run will do, and that re-run reports its skip.
+func TestRev5_StuckMarkerIsNamedInTheErrorAndTheSkipIsReported(t *testing.T) {
+	store, f, res := rev5Seed(t)
+	w := &rev5Store{PebbleStore: store, survivor: f.survivor, failSurvState: 1, failMarkerDel: 1, failNotLanded: true}
+	_, err := NewService(w).UndoCombine(res.JournalID)
+	require.ErrorContains(t, err, "could be neither dropped")
+	j, err := NewService(store).GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	require.Contains(t, j.LastError, "could be neither dropped", "the journal names it")
+	rev5AddListening(t, store, f.user.ID, f.survivor, 300)
+
+	re, err := NewService(store).UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(re.Warnings, "\n"), "was put back by an earlier run of this undo and listened to since; left as is")
+}
+
+// A put-back whose state write fails (the marker delete works) is finished
+// by the re-run with nothing listened in between.
+func TestRev5_PartialPutBackThenRerun(t *testing.T) {
+	store, f, res := rev5Seed(t)
+	w := &rev5Store{PebbleStore: store, survivor: f.survivor, failSurvState: 1}
+	_, err := NewService(w).UndoCombine(res.JournalID)
+	require.Error(t, err)
+	_, err = NewService(store).UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	require.Equal(t, float64(100), rev5Listened(t, store, f.user.ID, f.survivor))
+	require.Equal(t, float64(600), rev5Listened(t, store, f.user.ID, f.absA))
 }
