@@ -1,5 +1,5 @@
 // file: internal/database/store_width_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 7d1b6c2e-4a93-4f58-9e0d-3c8a52b7f1e4
 // last-edited: 2026-10-18
 
