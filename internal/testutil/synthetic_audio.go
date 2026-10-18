@@ -3,6 +3,8 @@
 // guid: 2c41790f-743f-4a6c-be6d-9a7b9bd38719
 // last-edited: 2026-10-18
 
+//go:build integration
+
 package testutil
 
 import (
