@@ -1,5 +1,5 @@
 // file: internal/database/user_state_lock.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
 // last-edited: 2026-10-18
 
@@ -37,9 +37,9 @@ var userStateLocks [userStateStripes]sync.Mutex
 //   - the merge undo restore (merge.RestoreFollowedProgress, inside
 //     merge.LockMergeRMW): restoreAbsorbedSide across its read and write of
 //     the absorbed book, and on the survivor (after the absorbed book's
-//     stripe is released, never with it) both the plain put-back
-//     (putBackSurvivor) and the reconcile (reconcileTouchedSurvivorOnce),
-//     each across its re-read and every write (positions, marker, state).
+//     stripe is released, never with it) restoreSurvivorSide, from before
+//     its reads of the state, the positions and the put-back marker until
+//     after the plain put-back's or the reconcile's last write.
 //
 // LOCK ORDER: merge.LockMergeRMW, then this stripe, then anything else
 // (session.mu, a book's write stripe). Nothing takes this stripe and then the
@@ -51,8 +51,9 @@ var userStateLocks [userStateStripes]sync.Mutex
 // reading heartbeat in handlers/reading.go, the iTunes position sync's
 // position write), the iTunes position backfill job, and the merge follow /
 // combine carry itself (which holds merge.LockMergeRMW only). Every holder above
-// re-reads under the lock and compares, so such a write is caught when it
-// lands first; one that lands inside the window is not.
+// reads under the lock (some read again under it and compare), so such a
+// write is caught when it lands before that read; one that lands between
+// the read and the write is not.
 //
 // Striped, not per key: two keys can share a stripe, so a holder must never
 // take a second user-state lock while holding one (none does). Not reentrant.

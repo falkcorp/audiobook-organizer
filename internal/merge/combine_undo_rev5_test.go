@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
 // last-edited: 2026-10-18
 
@@ -27,8 +27,8 @@ type rev5Store struct {
 	*database.PebbleStore
 	survivor string
 	// onSurvivorPositions runs once, on the first read of the survivor's
-	// positions: a client write that lands after the put-back read the
-	// survivor's state and before it takes the user-state stripe.
+	// positions, after the put-back read the survivor's state: where a
+	// client write races the put-back's decision.
 	onSurvivorPositions func()
 	// failSurvState fails that many survivor state writes.
 	failSurvState int
@@ -94,29 +94,37 @@ func rev5Listened(t *testing.T, store *database.PebbleStore, user, book string) 
 }
 
 // B1: a device sync that lands while the plain survivor put-back is deciding
-// is kept. The client takes the user-state stripe, as the ABS handlers do.
-// Before the fix the put-back took no stripe and did not re-read, so it
-// wrote the before-snapshot (100 seconds) over the sync.
+// is kept. The client takes the user-state stripe, as the ABS handlers do,
+// and starts from inside the put-back's read of the survivor's positions.
+// The put-back holds the stripe from before that read until after its
+// write (round 6), so the client waits and its write lands on top. Before
+// round 5 the put-back took no stripe and did not re-read, so it wrote the
+// before-snapshot (100 seconds) over the sync.
 func TestRev5_PlainPutBackKeepsAClientWriteThatLandsBeforeTheStripe(t *testing.T) {
 	store, f, res := rev5Seed(t)
 	w := &rev5Store{PebbleStore: store, survivor: f.survivor}
 	fired := false
+	var wait func() error
 	w.onSurvivorPositions = func() {
 		fired = true
-		defer database.LockUserBookState(f.user.ID, f.survivor)()
-		cur, err := store.GetUserBookState(f.user.ID, f.survivor)
-		require.NoError(t, err)
-		c := *cur
-		c.TotalListenedSeconds += 900
-		c.LastActivityAt = time.Now().UTC()
-		c.ProgressPct = 88
-		require.NoError(t, store.SetUserBookState(&c))
+		wait = stripedClientWrite(f.user.ID, f.survivor, func() error {
+			cur, err := store.GetUserBookState(f.user.ID, f.survivor)
+			if err != nil {
+				return err
+			}
+			c := *cur
+			c.TotalListenedSeconds += 900
+			c.LastActivityAt = time.Now().UTC()
+			c.ProgressPct = 88
+			return store.SetUserBookState(&c)
+		})
 	}
 	_, err := NewService(w).UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	require.True(t, fired, "the client write ran inside the survivor put-back")
+	require.True(t, fired, "the client write started inside the survivor put-back")
+	require.NoError(t, wait())
 	// The carried 600 seconds go back to the absorbed book; the 900 the
-	// client added since the follow stay on the survivor.
+	// client added stay on the survivor.
 	require.Equal(t, float64(1000), rev5Listened(t, store, f.user.ID, f.survivor), "the client's 900 seconds are kept")
 	require.Equal(t, float64(600), rev5Listened(t, store, f.user.ID, f.absA))
 }
