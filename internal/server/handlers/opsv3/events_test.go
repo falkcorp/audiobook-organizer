@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
 // last-edited: 2026-10-18
 
@@ -247,6 +247,8 @@ func TestSSEClientCap(t *testing.T) {
 	r := newRouter(New(Deps{Runs: &memRuns{}, Broker: br}))
 	if w := do(t, r, viewer, http.MethodGet, "/api/v3/ops/events", nil); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("third stream = %d, want 503", w.Code)
+	} else if got, want := w.Header().Get("Retry-After"), strconv.Itoa(streamRetryAfterSeconds); got != want {
+		t.Fatalf("503 Retry-After = %q, want %q: a refused EventSource otherwise reconnects on its own ~3 s timer", got, want)
 	}
 	u1()
 	if _, u3, err := br.subscribe("", 0, resumeNone); err != nil {
@@ -601,7 +603,7 @@ func TestSSETooManyStreamsHasRetryAfter(t *testing.T) {
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("second stream = %d, want 429", w.Code)
 	}
-	if got, want := w.Header().Get("Retry-After"), strconv.Itoa(tooManyStreamsRetryAfterSeconds); got != want {
+	if got, want := w.Header().Get("Retry-After"), strconv.Itoa(streamRetryAfterSeconds); got != want {
 		t.Fatalf("Retry-After = %q, want %q", got, want)
 	}
 }
