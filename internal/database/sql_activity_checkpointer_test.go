@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_checkpointer_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8d3f6a1e-2b7c-4e90-9f15-6a4c0b8e7d23
 // last-edited: 2026-10-18
 
@@ -32,6 +32,9 @@ func openCkptTestStore(t *testing.T, interval time.Duration) (*SQLActivityStore,
 	s, err := openSQLiteActivityStore(path, interval)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
+	// No probe is wired in this package (the server wires diskstats); give tests
+	// that run a live VACUUM ample free space.
+	s.SetFreeBytesFunc(func(string) (uint64, error) { return 1 << 50, nil })
 	return s, path
 }
 

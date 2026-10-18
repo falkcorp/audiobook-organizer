@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.67.2
+// version: 1.67.3
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-18
 
@@ -410,7 +410,16 @@ func (s *Server) VacuumActivityDB(ctx context.Context, dryRun bool) (database.Ac
 	if s.activityService == nil {
 		return database.ActivityVacuumReport{DryRun: dryRun}, nil
 	}
-	return database.RunActivityVacuum(ctx, s.activityService.Store(), dryRun)
+	store := s.activityService.Store()
+	// internal/database cannot import diskstats (it is in the SDK's dependency
+	// closure, see sdkguard), so the free-space probe is wired in here.
+	if v, ok := database.FindActivityVacuumer(store); ok {
+		v.SetFreeBytesFunc(func(path string) (uint64, error) {
+			_, free, err := getDiskStats(path)
+			return free, err
+		})
+	}
+	return database.RunActivityVacuum(ctx, store, dryRun)
 }
 
 // ActivityFilterIndexBackfiller returns the Pebble activity store behind the
