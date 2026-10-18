@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1235,7 +1235,9 @@ func intPtrEqual(a, b *int) bool {
 // that: without it, a re-run after the user listened read the survivor as
 // "touched since the follow" and reconciled it again, taking the carried
 // listened seconds off a second time (round-4 review S2 of #4064). A re-run
-// that skips on a marker says so in a warning. The marker is not written in
+// that skips on a marker says so in a warning, unless the marker records
+// that the state is still the row the put-back wrote (PostUpdatedAt): that
+// put-back is complete, and the re-run is silent. The marker is not written in
 // the same batch as the progress, so it can outlive a write that did not
 // land; when it does is set out on survivorReconcileMarker. In every such
 // case the re-run reads the put-back as landed and leaves the carried state
@@ -1327,16 +1329,26 @@ func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorI
 		}
 		if marker != nil && cur != nil && !cur.UpdatedAt.Equal(marker.PreUpdatedAt) {
 			// An earlier run of this put-back already wrote this user's
-			// survivor state (the put-back below, or the reconcile), and
-			// the state has been written since: what is there now is the
-			// user's own listening after the put-back. Doing it again
-			// would take the carried seconds off a second time (round-4
-			// S2: a re-run of an undo that stopped after this user's
-			// put-back comes here). Nothing is written. It is reported,
-			// because the marker is trusted on its word: the one case it
-			// is wrong (a crash between the marker and the write, see
-			// survivorReconcileMarker) leaves the carried listened time on
-			// both books.
+			// survivor state (the put-back below, or the reconcile).
+			// Doing it again would take the carried seconds off a second
+			// time (round-4 S2: a re-run of an undo that stopped after
+			// this user's put-back comes here). Nothing is written.
+			if !marker.PostUpdatedAt.IsZero() && cur.UpdatedAt.Equal(marker.PostUpdatedAt) {
+				// The state is the row that put-back wrote
+				// (recordPutBackLanded), untouched since: the put-back is
+				// complete and nothing is left as it is, so there is
+				// nothing to report. Until round 6 of the #4064 review
+				// this case warned too, so a re-run after a later step
+				// failed reported a complete undo as done in part.
+				return "", nil
+			}
+			// The state has been written since, or the landed write was
+			// never recorded: what is there now is taken as the user's own
+			// listening after the put-back. It is reported, because
+			// without a recorded landed write the marker is trusted on its
+			// word: the one case it is wrong (a crash between the marker
+			// and the write, see survivorReconcileMarker) leaves the
+			// carried listened time on both books.
 			mlog.Warn("merge: survivor put-back of user=%s on %s from %s already landed per its marker; left as is",
 				logger.SanitizeLogValue(p.UserID), logger.SanitizeLogValue(survivorID), logger.SanitizeLogValue(absorbedID))
 			return fmt.Sprintf(
@@ -1371,7 +1383,9 @@ func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorI
 // after-snapshot, so no marker), holding the state's UpdatedAt as read under
 // the stripe, so a re-run that finds the state written since knows this
 // put-back landed (restoreSurvivorSide). A write that fails drops the marker
-// again, as the reconcile does. Until round 5 of the #4064 review the
+// again, as the reconcile does; one that lands records the row it wrote in
+// the marker (recordPutBackLanded), so a re-run that finds that row
+// untouched stays silent. Until round 5 of the #4064 review the
 // marker, positions and state were written with no stripe, and a sync
 // landing between the read and the state write was lost.
 func putBackSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, key string, cur *database.UserBookState) error {
@@ -1396,7 +1410,46 @@ func putBackSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, k
 		}
 		return err
 	}
+	if key != "" {
+		var pre time.Time
+		if cur != nil {
+			pre = cur.UpdatedAt
+		}
+		recordPutBackLanded(db, p.UserID, survivorID, key, pre)
+	}
 	return nil
+}
+
+// recordPutBackLanded rewrites the marker at key once a put-back's state
+// write has landed (putBackSurvivor, reconcileTouchedSurvivorOnce), adding
+// the UpdatedAt of the row that write left (PostUpdatedAt) to the pre-write
+// one. The caller still holds the survivor's user-state stripe, so the row
+// read back here is that write's, unless a writer that does not take the
+// stripe landed after it; either way the put-back had landed first. A
+// re-run that finds the state still at that UpdatedAt knows the put-back is
+// complete and untouched, and reports nothing (restoreSurvivorSide).
+//
+// Best effort: the put-back has landed, so a read-back or marker write that
+// fails is logged, not returned. The marker then holds only PreUpdatedAt,
+// and a re-run reads a written-since state as landed and says so in a
+// warning, as it did before round 6 of the #4064 review.
+func recordPutBackLanded(db UserProgressMerger, userID, survivorID, key string, pre time.Time) {
+	st, err := db.GetUserBookState(userID, survivorID)
+	if err != nil || st == nil {
+		if err != nil {
+			mlog.Warn("merge: survivor put-back of user=%s on %s landed, but its state could not be read back to record it (%s); a re-run will report it as listened to since",
+				logger.SanitizeLogValue(userID), logger.SanitizeLogValue(survivorID), logger.SanitizeLogValue(err.Error()))
+		}
+		return
+	}
+	data, err := json.Marshal(survivorReconcileMarker{PreUpdatedAt: pre, PostUpdatedAt: st.UpdatedAt})
+	if err == nil {
+		err = db.SetRaw(key, data)
+	}
+	if err != nil {
+		mlog.Warn("merge: survivor put-back marker %s not updated after its write landed (%s); a re-run will report it as listened to since",
+			logger.SanitizeLogValue(key), logger.SanitizeLogValue(err.Error()))
+	}
 }
 
 // withdrawPutBackMarker takes back the marker a put-back wrote before a
@@ -1459,6 +1512,12 @@ const survivorReconcilePrefix = "merge:survivor-reconcile:"
 // names a follow id no later follow reuses) and stay as small raw keys.
 type survivorReconcileMarker struct {
 	PreUpdatedAt time.Time `json:"pre_updated_at"`
+	// PostUpdatedAt is the UpdatedAt of the row the put-back's state write
+	// left, recorded under the same stripe once that write landed
+	// (recordPutBackLanded); zero until then, and on markers written before
+	// round 6 of the #4064 review. A re-run that finds the state still at
+	// it knows the put-back is complete and untouched, and stays silent.
+	PostUpdatedAt time.Time `json:"post_updated_at,omitzero"`
 	// NotLanded withdraws the marker: the write it was journaled for
 	// failed, and deleting it failed too (withdrawPutBackMarker). Read as
 	// no marker.
@@ -1693,6 +1752,7 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 		}
 		return fmt.Errorf("reconcile state user=%s book=%s: %w", p.UserID, survivorID, err)
 	}
+	recordPutBackLanded(db, p.UserID, survivorID, key, cur.UpdatedAt)
 	return nil
 }
 
