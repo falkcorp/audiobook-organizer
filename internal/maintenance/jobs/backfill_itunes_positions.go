@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 package jobs
 
@@ -247,9 +247,13 @@ func (j *backfillITunesPositionsJob) Run(ctx context.Context, store maintenance.
 		return nil
 	}, registry.RunItemsOptions{
 		// Per-book work partitions cleanly by book ID — two workers can never
-		// touch the same (user, book) rows — so the pool needs no extra
-		// locking. Bounded at NumCPU: a bare sequential loop over the whole
-		// library is the pattern behind this repo's 3-hour single-core stall.
+		// touch the same (user, book) rows — so the workers need nothing
+		// between THEMSELVES. They still race every other listening-state
+		// writer (an ABS sync, the web heartbeat, a merge undo's put-back), so
+		// migrateOne holds that book's user-state stripe across its
+		// read-merge-write: per book, never the whole run. Bounded at NumCPU:
+		// a bare sequential loop over the whole library is the pattern behind
+		// this repo's 3-hour single-core stall.
 		Concurrency: BackfillConcurrency(),
 		ErrMode:     registry.ErrModeCollect,
 		Label:       func(i, total int) string { return fmt.Sprintf("book %d/%d", i+1, total) },
@@ -271,6 +275,14 @@ func (j *backfillITunesPositionsJob) Run(ctx context.Context, store maintenance.
 // Every failure path logs the book ID and returns outcomeFailed rather than
 // returning nil quietly: a silently skipped book is a listening position the
 // owner loses without ever being told.
+//
+// The user-state read, the newer-wins merge and the position and state writes
+// are one step under the (userID, bookID) user-state stripe
+// (database.LockUserBookState), taken in mergeLocked. Without it a device sync
+// landing between the read and the write was overwritten by a state derived
+// from the stale read, or a merge undo's put-back reading in between rewound
+// this write. The courtesy bookmark is written after the stripe is released:
+// bookmarks are not user-state rows. Lock order: this stripe only.
 func (j *backfillITunesPositionsJob) migrateOne(store maintenance.JobStore, bookmarkStore database.BookmarkStore, userID, bookID string, dryRun bool) migrateResult {
 	book, err := store.GetBookByID(bookID)
 	if err != nil {
@@ -297,15 +309,28 @@ func (j *backfillITunesPositionsJob) migrateOne(store maintenance.JobStore, book
 			"but the book can never auto-mark finished (§5b/§1.8.7)", "book", bookID)
 	}
 
+	res, merged := j.mergeLocked(store, book, userID, bookID, positionSec, durationSec, hadDuration, dryRun)
+	if res.outcome != outcomeMigrated || dryRun {
+		return res
+	}
+	res.bookmarkCreated = j.dropCourtesyBookmark(bookmarkStore, userID, bookID, merged.CurrentTime)
+	return res
+}
+
+// mergeLocked is migrateOne's read-merge-write of (userID, bookID)'s
+// listening state, under that key's user-state stripe for its whole length.
+// It returns the merged progress for the courtesy bookmark.
+func (j *backfillITunesPositionsJob) mergeLocked(store maintenance.JobStore, book *database.Book, userID, bookID string, positionSec, durationSec float64, hadDuration, dryRun bool) (migrateResult, progress.Progress) {
+	defer database.LockUserBookState(userID, bookID)()
 	existingPositions, err := store.ListUserPositionsForBook(userID, bookID)
 	if err != nil {
 		slog.Warn("backfill-itunes-positions: list existing positions failed", "book", bookID, "err", err)
-		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}
+		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}, progress.Progress{}
 	}
 	existingState, err := store.GetUserBookState(userID, bookID)
 	if err != nil {
 		slog.Warn("backfill-itunes-positions: get existing state failed", "book", bookID, "err", err)
-		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}
+		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}, progress.Progress{}
 	}
 
 	server := j.serverProgress(existingPositions, existingState, durationSec)
@@ -329,11 +354,11 @@ func (j *backfillITunesPositionsJob) migrateOne(store maintenance.JobStore, book
 		return migrateResult{
 			outcome:     j.repairStateOnly(store, userID, bookID, server, existingState, dryRun),
 			hadDuration: hadDuration,
-		}
+		}, progress.Progress{}
 	}
 
 	if dryRun {
-		return migrateResult{outcome: outcomeMigrated, hadDuration: hadDuration}
+		return migrateResult{outcome: outcomeMigrated, hadDuration: hadDuration}, merged
 	}
 
 	// Position first, state second: the position is the load-bearing datum (the
@@ -341,22 +366,18 @@ func (j *backfillITunesPositionsJob) migrateOne(store maintenance.JobStore, book
 	// re-run via repairStateOnly above.
 	if err := store.SetUserPosition(userID, bookID, ITunesPositionWholeBookSegmentID, merged.CurrentTime); err != nil {
 		slog.Warn("backfill-itunes-positions: write position failed", "book", bookID, "err", err)
-		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}
+		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}, progress.Progress{}
 	}
 	if err := store.SetUserBookState(j.desiredState(userID, bookID, merged, existingState)); err != nil {
 		slog.Warn("backfill-itunes-positions: write user-book state failed (position was written)",
 			"book", bookID, "err", err)
-		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}
+		return migrateResult{outcome: outcomeFailed, hadDuration: hadDuration}, progress.Progress{}
 	}
 	slog.Debug("backfill-itunes-positions: migrated", "book", bookID, "user", userID,
 		"position_sec", merged.CurrentTime, "duration_sec", merged.Duration,
 		"is_finished", merged.IsFinished)
 
-	return migrateResult{
-		outcome:         outcomeMigrated,
-		hadDuration:     hadDuration,
-		bookmarkCreated: j.dropCourtesyBookmark(bookmarkStore, userID, bookID, merged.CurrentTime),
-	}
+	return migrateResult{outcome: outcomeMigrated, hadDuration: hadDuration}, merged
 }
 
 // dropCourtesyBookmark writes the single named bookmark described by
