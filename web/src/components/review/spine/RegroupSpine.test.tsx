@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7c9e21-5a4b-4d8e-9c1f-2b6a7d0e4c53
 // last-edited: 2026-10-18
 
@@ -161,16 +161,72 @@ describe('SkipsAlert report panel', () => {
             reason: 'an apply is in progress',
             code: 'REVIEW_APPLY_IN_PROGRESS',
           },
+          {
+            id: 'd3',
+            action: 'combine',
+            reason: 'needs attention and apply is off',
+            code: 'REVIEW_APPLY_DISABLED',
+          },
         ],
       },
     });
     const done = screen.getByTestId(`regroup-skipped-done-${KIND}`);
-    expect(done).toHaveTextContent('2 holds were skipped — already applied or mid-apply');
+    expect(done).toHaveTextContent(
+      '3 holds were skipped — no longer pending (applied, mid-apply or needs attention)'
+    );
     expect(done).not.toHaveTextContent('still pending');
     expect(screen.getByTestId('regroup-report-id-d1')).toBeInTheDocument();
     const pending = screen.getByTestId(`regroup-skipped-${KIND}`);
     expect(pending).toHaveTextContent('1 hold was skipped — still pending');
     expect(pending).not.toHaveTextContent('d1');
+  });
+});
+
+describe('SkipsAlert held-versus-pending skip codes', () => {
+  const KIND = 'regroup.multidisc';
+
+  // The code tells the report whether the item is still in a pending list. A re-run
+  // refused by the iTunes guard leaves the item applying, and the server now answers
+  // that as REVIEW_RERUN_FAILED; REVIEW_ITUNES_PROTECTED is a FIRST run that was
+  // handed back, which is still pending and still in the list below the alert.
+  it('files a refused re-run as held and a refused first run as still pending', () => {
+    const lane = {
+      skipsByKind: {
+        [KIND]: [
+          {
+            id: 'r1',
+            action: 'combine',
+            reason: 'iTunes guard refused the re-run',
+            code: 'REVIEW_RERUN_FAILED',
+          },
+          {
+            id: 'i1',
+            action: 'combine',
+            reason: 'a member is under the active iTunes library',
+            code: 'REVIEW_ITUNES_PROTECTED',
+          },
+        ],
+      },
+      failedByKind: {},
+      unrecordedByKind: {},
+      dismissSkips: vi.fn(),
+    } as unknown as RegroupLane;
+    render(
+      <ThemeProvider theme={appTheme} defaultMode="dark">
+        <div data-testid="regroup-row-i1">row i1</div>
+        <SkipsAlert kind={KIND} lane={lane} />
+      </ThemeProvider>
+    );
+    const done = screen.getByTestId(`regroup-skipped-done-${KIND}`);
+    expect(done).toHaveTextContent(
+      '1 hold was skipped — no longer pending (applied, mid-apply or needs attention)'
+    );
+    expect(done).toHaveTextContent('iTunes guard refused the re-run');
+    expect(screen.getByTestId('regroup-report-id-r1')).toBeInTheDocument();
+    const pending = screen.getByTestId(`regroup-skipped-${KIND}`);
+    expect(pending).toHaveTextContent('1 hold was skipped — still pending');
+    expect(pending).toHaveTextContent('a member is under the active iTunes library');
+    expect(pending).not.toHaveTextContent('r1');
   });
 });
 
@@ -261,6 +317,29 @@ describe('NeedsAttentionAlert', () => {
     await userEvent.click(await screen.findByTestId('regroup-needs-attention-approve-n1'));
     expect(api.approveReviewItem).toHaveBeenCalledWith('n1', 'combine', HELD_STAMP);
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows the refusal when approving is refused because apply is off, and leaves the hold listed', async () => {
+    const message =
+      'this item needs attention because an apply of "combine" was abandoned part way, so approving it ' +
+      'means running that apply again, which needs review_apply_enabled to be on. ' +
+      'Enable it and approve again, or reject the item';
+    vi.mocked(api.getReviewItems).mockResolvedValue(
+      heldPage([{ ...heldItem('n1', 'needs_attention'), apply_abandoned_action: 'combine' }])
+    );
+    vi.mocked(api.approveReviewItem).mockRejectedValue(
+      Object.assign(new Error(message), { status: 409, data: { code: 'REVIEW_APPLY_DISABLED' } })
+    );
+    const onChanged = vi.fn();
+    render(<NeedsAttentionAlert count={1} onChanged={onChanged} />);
+
+    await userEvent.click(screen.getByTestId('regroup-needs-attention-show'));
+    await userEvent.click(await screen.findByTestId('regroup-needs-attention-approve-n1'));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    // The list reloads (the row may be stale) and the hold is still there to reject.
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('regroup-needs-attention-reject-n1')).toBeInTheDocument();
+    expect(onChanged).not.toHaveBeenCalled();
   });
 
   it('rejects one with the rendered updated_at', async () => {
