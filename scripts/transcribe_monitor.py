@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/transcribe_monitor.py
-# version: 1.1.1
+# version: 1.2.0
 # guid: 2f7c4a91-8b03-4d6e-9a52-1c6e8f0b3d47
 # last-edited: 2026-10-18
 """Transcription progress monitor + alerter.
@@ -17,6 +17,11 @@ ALERTs when:
   * NOPROGRESS— a run completed but produced almost no OK transcriptions
                 (the "did-nothing completion" pattern: mostly source_file_missing).
   * WHISPER_DOWN — the Whisper server /health check fails.
+  * RELAUNCH_IS_PREVIEW — an auto-relaunch came back as a preview run (its
+                progress message says PREVIEW): it transcribes nothing, writes
+                no stats, and the next IDLE poll would relaunch another one.
+                Raised loudly (ERROR plus a banner on stderr) because the
+                server, not this script, decided the mode.
 
 This is deliberately a STANDALONE script meant to run persistently on the
 always-up Linux server (systemd timer or a screen/tmux loop), NOT an agent
@@ -48,6 +53,7 @@ import ssl
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -139,6 +145,99 @@ def relaunch_op(base, token, insecure):
     })
 
 
+# A preview run of transcribe-book-intros says so in its progress message
+# (previewIntroTranscribe in internal/plugins/maintenance/intro_transcribe.go).
+PREVIEW_MARKER = "PREVIEW (dry_run"
+TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled", "interrupted", "abandoned"}
+
+
+def fetch_op(base, token, insecure, op_id):
+    """Return the v2 operation view for op_id (status, progress_message, ...)."""
+    url = base.rstrip("/") + "/api/v1/operations/v2/" + urllib.parse.quote(op_id, safe="")
+    body = http_get(url, token, insecure)
+    data = body.get("data", body) if isinstance(body, dict) else {}
+    return (data or {}).get("operation") or {}
+
+
+def classify_relaunch(op):
+    """'preview', 'live' or 'unknown' for a relaunched op's v2 view.
+
+    A preview names itself in its progress message. A run that has reported any
+    other progress, or settled without the marker, is live. A queued run with no
+    message yet is unknown.
+    """
+    msg = op.get("progress_message") or ""
+    if PREVIEW_MARKER in msg:
+        return "preview"
+    status = (op.get("status") or "").lower()
+    if msg or status in TERMINAL_STATUSES:
+        return "live"
+    return "unknown"
+
+
+def preview_banner(op_id, msg, alerts_path):
+    """The loud form: an ERROR alert plus a banner nobody scrolls past."""
+    emit_alert(
+        "ERROR",
+        "RELAUNCH_IS_PREVIEW",
+        f"relaunched op {op_id} is a PREVIEW and transcribes nothing: {msg!r}. "
+        "The server ignored dry_run=false or answered with an active preview run; "
+        "check the deployed build and relaunch with dry_run=false by hand.",
+        alerts_path,
+    )
+    bar = "!" * 78
+    print(
+        f"{bar}\n!! RELAUNCH CAME BACK AS A PREVIEW: op {op_id}\n!! {msg}\n{bar}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def check_relaunch(args, token, state, record, wait_secs=0):
+    """Classify the pending relaunch, waiting up to wait_secs for it to report.
+
+    Resolved (preview or live) clears state['pending_relaunch']; unknown keeps it
+    for the next poll. Returns the classification.
+    """
+    pending = state.get("pending_relaunch")
+    if not pending:
+        return None
+    op_id = pending["op_id"]
+    deadline = time.time() + wait_secs
+    while True:
+        try:
+            op = fetch_op(args.base, token, args.insecure, op_id)
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError) as e:
+            record["relaunch_check"] = f"fetch failed: {e}"
+            return "unknown"
+        kind = classify_relaunch(op)
+        if kind != "unknown" or time.time() >= deadline:
+            break
+        time.sleep(2)
+    record["relaunch_check"] = kind
+    if kind == "preview":
+        state.pop("pending_relaunch", None)
+        preview_banner(op_id, op.get("progress_message") or "", args.alerts_log)
+    elif kind == "live":
+        state.pop("pending_relaunch", None)
+        emit_alert(
+            "INFO",
+            "RELAUNCH_LIVE",
+            f"relaunched op {op_id} is not a preview (status {op.get('status')!r})",
+            args.alerts_log,
+        )
+    elif time.time() - pending["ts"] >= args.relaunch_verify_max:
+        state.pop("pending_relaunch", None)
+        emit_alert(
+            "WARN",
+            "RELAUNCH_UNVERIFIED",
+            f"relaunched op {op_id} has reported nothing for {int(time.time() - pending['ts'])}s "
+            f"(status {op.get('status')!r}); cannot tell whether it is a preview",
+            args.alerts_log,
+        )
+    return kind
+
+
 def summarize(stats):
     """One-line human summary of a stats dict."""
     if not stats:
@@ -180,6 +279,9 @@ def run_once(args, token, state):
     Returns the metrics record."""
     ts = now_iso()
     record: dict = {"ts": ts}
+
+    # A relaunch from an earlier poll that had not reported yet.
+    check_relaunch(args, token, state, record)
 
     # Whisper health (optional).
     w = whisper_alive(args.whisper_url)
@@ -263,6 +365,19 @@ def _try_relaunch(args, token, state, record):
     except Exception as e:
         record["relaunch"] = f"failed: {e}"
         emit_alert("ERROR", "RELAUNCH_FAILED", str(e), args.alerts_log)
+        return
+    if not op_id:
+        emit_alert(
+            "WARN",
+            "RELAUNCH_UNVERIFIED",
+            f"relaunch response named no op_id: {resp!r}",
+            args.alerts_log,
+        )
+        return
+    # The server decides the mode (and may answer with an already-active run),
+    # so confirm what was queued instead of trusting the request body.
+    state["pending_relaunch"] = {"op_id": op_id, "ts": time.time()}
+    check_relaunch(args, token, state, record, wait_secs=args.relaunch_verify_wait)
 
 
 def main():
@@ -288,6 +403,20 @@ def main():
                     help="auto-relaunch the op when idle (respects --relaunch-cooldown)")
     ap.add_argument("--relaunch-cooldown", type=int, default=900,
                     help="min seconds between auto-relaunches (default 900)")
+    ap.add_argument(
+        "--relaunch-verify-wait",
+        type=int,
+        default=30,
+        help="seconds to wait right after a relaunch for the op to report "
+        "whether it is a preview (default 30; later polls keep checking)",
+    )
+    ap.add_argument(
+        "--relaunch-verify-max",
+        type=int,
+        default=1800,
+        help="give up classifying a relaunch after this many seconds and "
+        "raise RELAUNCH_UNVERIFIED (default 1800)",
+    )
     ap.add_argument("--insecure", action="store_true", default=False,
                     help="skip TLS cert verification. Prod uses a self-signed cert, so "
                          "you must pass --insecure (or add the server CA to the trust store). "
