@@ -1,5 +1,5 @@
 // file: internal/operations/registry/preview.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 1d72f677-0951-40e4-9b15-cb9211c3e50a
 // last-edited: 2026-10-18
 
@@ -208,6 +208,53 @@ func modeErrorf(format string, args ...any) error {
 //
 // Every error is a *ModeError.
 func (p PreviewSpec) Resolve(params json.RawMessage, mode string) (json.RawMessage, error) {
+	return p.resolve(params, mode, true)
+}
+
+// SameMode reports whether two params bodies of the op run in the same mode:
+// both are normalized as Resolve with an empty mode would (StartCheck aside:
+// it judges whether a start may be queued, not which mode a body is), and
+// the values of every mode key and LiveOneOf switch are compared. A body that
+// does not normalize (malformed, or keys that disagree) is in no mode, so it
+// is never the same as another. EnqueueOp's dedupe uses it so a live request
+// is never answered with a queued preview's run id, or the reverse.
+func (p PreviewSpec) SameMode(a, b json.RawMessage) bool {
+	sa, err := p.modeSignature(a)
+	if err != nil {
+		return false
+	}
+	sb, err := p.modeSignature(b)
+	if err != nil {
+		return false
+	}
+	return sa == sb
+}
+
+// modeSignature is the normalized value of every mode key and LiveOneOf
+// switch, in declaration order; an absent switch is false.
+func (p PreviewSpec) modeSignature(params json.RawMessage) (string, error) {
+	out, err := p.resolve(params, "", false)
+	if err != nil {
+		return "", err
+	}
+	m, err := paramsObject(out)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, k := range append(p.ModeKeys(), p.LiveOneOf...) {
+		v := false
+		if raw, ok := m[k]; ok {
+			if v, err = paramsBool(raw, k); err != nil {
+				return "", err
+			}
+		}
+		fmt.Fprintf(&b, "%s=%t;", k, v)
+	}
+	return b.String(), nil
+}
+
+func (p PreviewSpec) resolve(params json.RawMessage, mode string, startCheck bool) (json.RawMessage, error) {
 	if p.IsZero() {
 		return nil, modeErrorf("no preview declared")
 	}
@@ -302,7 +349,7 @@ func (p PreviewSpec) Resolve(params json.RawMessage, mode string) (json.RawMessa
 			}
 		}
 	}
-	if p.StartCheck != nil {
+	if startCheck && p.StartCheck != nil {
 		if err := p.StartCheck(m, live); err != nil {
 			return nil, &ModeError{Msg: err.Error()}
 		}

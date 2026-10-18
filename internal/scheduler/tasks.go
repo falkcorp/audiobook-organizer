@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.34.1
+// version: 1.34.2
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 
 // Package scheduler — task registrations.
 // Every registered task is defined here. Each task's TriggerFn and
@@ -1575,11 +1575,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 	// Activity DB Optimize — refresh the activity store's query-planner statistics.
 	//
 	// Registered here, in the TaskScheduler, and NOT relied upon via the op
-	// def's own Schedule field. OperationDef.Schedule is written to the
-	// ScheduleCron column of op_definitions_v2 by registry.upsertDefToDB and is
-	// read by nothing: there is no cron library in the module and nothing
-	// enumerates defs by schedule. A def that declares Schedule and has no
-	// TaskScheduler task here does not run.
+	// def's own Schedule field. OperationDef.Schedule (a v2 cron string) is
+	// never evaluated as a timer: the cron evaluator in cron.go runs only the
+	// native ops.Schedule declarations. The string is still read, in three
+	// places: registry.upsertDefToDB copies it to the ScheduleCron column of
+	// op_definitions_v2; registry.EnqueueOp treats a non-nil Schedule as "fold
+	// a second start into the active run of the same mode"; and
+	// RegisterSchedules (v3_schedule.go) lists a v2 cron that no task here
+	// drives as "disabled" on the v3 defs view. A def that declares Schedule
+	// and has no TaskScheduler task here does not run.
 	ts.registerTask(TaskDefinition{
 		Name:        "optimize_activity_db",
 		Description: "Refresh the activity store's query-planner statistics",
