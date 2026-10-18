@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -519,6 +519,11 @@ type syncMergeClearer interface {
 	ClearSyncMerge(loserBookID, winnerBookID string) error
 }
 
+// combineUndoInProgress is the LastError an undo writes before its first
+// write. A journal that still carries it after the undo returned is one whose
+// undo was cut short (a crash, a kill); re-running the undo finishes it.
+const combineUndoInProgress = "undo started and did not finish"
+
 // UndoCombine reverses the combine recorded under journalID: the absorbed books
 // are restored from soft-delete with their original FilePath, their file rows
 // (and sync_file inos, disc/track numbers and external-ID mappings) move back,
@@ -541,6 +546,22 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 	}
 	if reasons := ms.undoPreconditions(j); len(reasons) > 0 {
 		return nil, &CombineUndoRefusedError{JournalID: j.ID, Reasons: reasons}
+	}
+	// Mark an Applied journal as a retry BEFORE the first write. undo_failed
+	// was written only on an error return, so a crash (or a kill) part-way
+	// through applyUndo left the journal Applied over a half-undone library,
+	// and every re-run then refused on the rows the dead attempt had already
+	// put back. As undo_failed, a re-run gets the retry tolerance of
+	// undoPreconditions: each row may be in its post-combine OR its recorded
+	// pre-combine state. A Pending (step-journaled) journal already has that
+	// tolerance and keeps its status. A journal that cannot be marked is not
+	// undone at all: nothing has been written yet.
+	if j.Status == CombineJournalApplied {
+		j.Status = CombineJournalUndoFailed
+		j.LastError = combineUndoInProgress
+		if err := ms.putCombineJournal(j); err != nil {
+			return nil, fmt.Errorf("undo combine %s: journal not marked as an undo in progress, nothing undone: %w", j.ID, err)
+		}
 	}
 
 	res, applyErr := ms.applyUndo(j)
@@ -1477,6 +1498,68 @@ func newerDeliberateStatus(older, newer userStateSide) bool {
 		n.LastActivityAt.After(lastUpdate(older.state, older.positions))
 }
 
+// restoreAbsorbedRow is applyUndo step 1 for one absorbed book: under its
+// membership lock, it restores the row only when this combine retired it
+// (retiredByJournal), and reports whether it did. The lock is released by a
+// defer, so a panic anywhere between the acquisition and the write (a store
+// that crashes mid-write) cannot leak the group stripes and wedge every later
+// merge of the group.
+func (ms *Service) restoreAbsorbedRow(a CombineAbsorbed) (restored bool, warning string, err error) {
+	gid := ""
+	if a.VersionGroupID != nil {
+		gid = strings.TrimSpace(*a.VersionGroupID)
+	}
+	// Membership lock: the shell's current group (the no-group sentinel when
+	// it has none) and the group it is restored into, in ONE acquisition
+	// (merge lock, then group stripes, then the book's write lock), held
+	// across the incumbent read and the whole-row restore.
+	unlockGroup, _, err := versionprimary.LockBookGroups(ms.db, []string{a.BookID}, gid)
+	if err != nil {
+		return false, "", fmt.Errorf("lock version groups of absorbed book %s: %w", a.BookID, err)
+	}
+	defer unlockGroup()
+	b, err := ms.db.GetBookByID(a.BookID)
+	if err != nil || b == nil {
+		return false, "", fmt.Errorf("reload absorbed book %s: %v", a.BookID, err)
+	}
+	if !retiredByJournal(a, b) {
+		return false, "", nil
+	}
+	b.MarkedForDeletion = nil
+	b.MarkedForDeletionAt = nil
+	// The library state is decided in step 2b, once this book's files are
+	// back: at this point they are still on the survivor, so the restore rule
+	// would read no files and answer "imported" for every shell.
+	// MergedIntoBookID is the journal's to restore, not cleared here.
+	b.FilePath = a.FilePath
+	b.VersionGroupID = a.VersionGroupID
+	b.IsPrimaryVersion = a.IsPrimaryVersion
+	if gid != "" && a.IsPrimaryVersion != nil && *a.IsPrimaryVersion {
+		// Another member may have become the group's primary while this one
+		// was soft-deleted. One primary per group, always, by the same rule
+		// as a trash restore (versionprimary.Incumbent: an explicit-true
+		// member, else the one nil-flag member every visibility path reads
+		// as primary). Read and written under the group's hand-off lock,
+		// taken above.
+		incumbent, ierr := versionprimary.IncumbentExcept(ms.db, gid, a.BookID)
+		if ierr != nil {
+			return false, "", fmt.Errorf("read version group %s of absorbed book %s: %w", gid, a.BookID, ierr)
+		}
+		versionprimary.YieldToIncumbent(b, incumbent)
+		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+			warning = fmt.Sprintf("book %s was primary of version group %s, but %s is primary now; restored as a non-primary member",
+				a.BookID, gid, incumbent)
+		}
+	}
+	// UpdateBook on purpose: this is the journal's whole-row restore of the
+	// absorbed shell, not a column write, so it is not routed through
+	// ModifyBook.
+	if _, err := ms.db.UpdateBook(a.BookID, b); err != nil {
+		return false, warning, fmt.Errorf("restore absorbed book %s: %w", a.BookID, err)
+	}
+	return true, warning, nil
+}
+
 // applyUndo performs the reversal. Preconditions have passed.
 func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	res := &CombineUndoResult{JournalID: j.ID, SurvivorID: j.SurvivorID}
@@ -1499,64 +1582,17 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	//    step 2b.
 	retired := map[string]bool{}
 	for _, a := range j.Absorbed {
-		gid := ""
-		if a.VersionGroupID != nil {
-			gid = strings.TrimSpace(*a.VersionGroupID)
+		restored, warning, err := ms.restoreAbsorbedRow(a)
+		if warning != "" {
+			res.Warnings = append(res.Warnings, warning)
 		}
-		// Membership lock: the shell's current group (the no-group sentinel
-		// when it has none) and the group it is restored into, in ONE
-		// acquisition (merge lock, then group stripes, then the book's write
-		// lock), held across the incumbent read and the whole-row restore.
-		unlockGroup, _, err := versionprimary.LockBookGroups(ms.db, []string{a.BookID}, gid)
 		if err != nil {
-			return res, fmt.Errorf("lock version groups of absorbed book %s: %w", a.BookID, err)
+			return res, err
 		}
-		b, err := ms.db.GetBookByID(a.BookID)
-		if err != nil || b == nil {
-			unlockGroup()
-			return res, fmt.Errorf("reload absorbed book %s: %v", a.BookID, err)
+		if restored {
+			retired[a.BookID] = true
+			res.RestoredBooks = append(res.RestoredBooks, a.BookID)
 		}
-		if !retiredByJournal(a, b) {
-			unlockGroup()
-			continue
-		}
-		retired[a.BookID] = true
-		b.MarkedForDeletion = nil
-		b.MarkedForDeletionAt = nil
-		// The library state is decided in step 2b, once this book's files are
-		// back: at this point they are still on the survivor, so the restore
-		// rule would read no files and answer "imported" for every shell.
-		// MergedIntoBookID is the journal's to restore, not cleared here.
-		b.FilePath = a.FilePath
-		b.VersionGroupID = a.VersionGroupID
-		b.IsPrimaryVersion = a.IsPrimaryVersion
-		if gid != "" && a.IsPrimaryVersion != nil && *a.IsPrimaryVersion {
-			// Another member may have become the group's primary while this
-			// one was soft-deleted. One primary per group, always, by the
-			// same rule as a trash restore (versionprimary.Incumbent: an
-			// explicit-true member, else the one nil-flag member every
-			// visibility path reads as primary). Read and written under the
-			// group's hand-off lock, taken above.
-			incumbent, ierr := versionprimary.IncumbentExcept(ms.db, gid, a.BookID)
-			if ierr != nil {
-				unlockGroup()
-				return res, fmt.Errorf("read version group %s of absorbed book %s: %w", gid, a.BookID, ierr)
-			}
-			versionprimary.YieldToIncumbent(b, incumbent)
-			if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
-				res.Warnings = append(res.Warnings, fmt.Sprintf(
-					"book %s was primary of version group %s, but %s is primary now; restored as a non-primary member",
-					a.BookID, gid, incumbent))
-			}
-		}
-		// UpdateBook on purpose: this is the journal's whole-row restore of the
-		// absorbed shell, not a column write, so it is not routed through ModifyBook.
-		_, err = ms.db.UpdateBook(a.BookID, b)
-		unlockGroup()
-		if err != nil {
-			return res, fmt.Errorf("restore absorbed book %s: %w", a.BookID, err)
-		}
-		res.RestoredBooks = append(res.RestoredBooks, a.BookID)
 	}
 
 	// 2. Files: move rows back to the book they came from, carry sync_file
