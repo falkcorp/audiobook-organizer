@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -215,7 +215,9 @@ fully undone, or put a reader's progress or a user's later edit at risk.
   an undo cannot interrupt. In that same step it looks at the book again,
   so a book someone restored from the trash a moment earlier is left
   alone instead of deleted.
-- The undo keeps a co-author added since the combine and says so.
+- The undo keeps a co-author added since the combine and says so. It
+  also keeps the combine's own author when someone has since credited
+  that person in another way, such as narrator of the same book.
 - An override creates a new author only after its plan is recorded.
 - Undoing a combine leaves any author it created in place. When no
   book credits that author any more, the undo says so, and the existing
