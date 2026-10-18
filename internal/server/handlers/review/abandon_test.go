@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/abandon_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a69f495d-437b-4cc8-be64-db0a76852163
 // last-edited: 2026-10-18
 
@@ -172,8 +172,44 @@ func TestAbandon_UnrecordedApplyIsAlreadyApplied(t *testing.T) {
 	if code, _ := approveReq(t, h, a.ID, nil); code != http.StatusInternalServerError {
 		t.Fatalf("seed unrecorded: code %d", code)
 	}
-	code, body := abandonReq(t, h, a.ID)
-	want409(t, "abandon of an unrecorded apply", code, body, "REVIEW_ALREADY_APPLIED")
+	w := doReq(t, h.AbandonApply, http.MethodPost, "/review/items/"+a.ID+"/abandon-apply", nil, gin.Params{{Key: "id", Value: a.ID}})
+	want409(t, "abandon of an unrecorded apply", w.Code, w.Body.String(), "REVIEW_ALREADY_APPLIED")
+	// One response: a handler that answered and then fell through to the store would
+	// append a second (in progress) body, which decodeBody refuses.
+	if body := decodeBody(t, w); body["code"] != "REVIEW_ALREADY_APPLIED" {
+		t.Fatalf("abandon of an unrecorded apply answered %v", body)
+	}
+}
+
+// 🔴 A TOKEN FOR AN APPLY ANOTHER REQUEST RECORDED IS DROPPED BY THE NEXT APPROVE.
+// The other request's finish lands between this process's failed finish and the next
+// approve, which then reads the item as applied. Kept, the token would make every
+// later reject answer "its result is not recorded yet" about an applied item.
+func TestApprove_AppliedWithAStaleUnrecordedToken_DropsTheToken(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	fs := &flakyStore{PebbleStore: s}
+	fs.failFinish.Store(true)
+	h := reviewhandler.New(fs, func() bool { return true }, nil)
+	var calls atomic.Int32
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(context.Context, database.ReviewItem) error { calls.Add(1); return nil })
+	if code, _ := approveReq(t, h, a.ID, nil); code != http.StatusInternalServerError {
+		t.Fatalf("seed unrecorded: code %d", code)
+	}
+	held, _ := s.GetReviewItem(a.ID) // the store's copy carries the token
+	if _, err := s.FinishReviewItemApply(a.ID, held.ApplyClaimToken); err != nil {
+		t.Fatalf("the other request's finish: %v", err)
+	}
+	fs.failFinish.Store(false)
+
+	code, body := approveReq(t, h, a.ID, nil)
+	want409(t, "approve of an applied item", code, body, "REVIEW_ALREADY_APPLIED")
+	code, body = rejectReq(t, h, a.ID)
+	want409(t, "reject of an applied item", code, body, "REVIEW_ALREADY_APPLIED")
+	if strings.Contains(body, "not recorded") {
+		t.Fatalf("reject still reports the result unrecorded: %s", body)
+	}
+	assertAppliedOnce(t, s, a.ID, calls.Load(), itunesservice.ActionCombine)
 }
 
 // staleFinishStore plays the losing side of two requests racing to record one
