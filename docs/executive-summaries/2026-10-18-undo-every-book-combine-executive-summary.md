@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -274,3 +274,46 @@ routine repair run far slower and heavier than it needed to be.
   undo number.
 
 Each of these has a test.
+
+## Fixes from the fifth review
+
+**What it was.** A fifth review of #4064 found:
+
+- While an undo put a reader's listening progress back on the kept book, a
+  phone or tablet syncing at that moment could have its update thrown away.
+  The undo did not take the lock the sync takes.
+- The note an undo leaves to say "this reader's progress is already back"
+  was named after a time. A second combine of the same two books could get
+  the same name, and an old note then made the second undo skip that reader
+  and leave the combined progress behind.
+- When saving progress failed and removing the note failed too, a later
+  retry trusted the note and counted the reader's carried listening time on
+  both books.
+- An undo that finished but could not save its "done" note was replayed in
+  full when run again. A title, lock or author the user had picked again
+  after the undo, with the same value the combine had used, looked like the
+  combine's and was taken away.
+- Smaller gaps: the combine could record someone else's field lock as its
+  own, an undo could make a narrator the book's main author, the Library
+  message for a partly undone combine left out what was kept, and a revert
+  that undid many combines could produce an enormous message.
+
+**Why it mattered.** The first three could quietly lose or double-count
+listening time. The fourth undid a choice the user made after the undo.
+
+**The fix.**
+
+- The undo now takes the same lock as the sync, looks at the progress again
+  while holding it, and keeps anything that arrived in the meantime.
+- Each combine's progress move gets its own unique id, and the note is
+  named after that.
+- When the note cannot be removed, it is marked "did not happen" instead.
+  If even that fails, the error says what a retry will do. A retry that
+  skips a reader because of a note now says so.
+- A finished undo now writes a separate "done" record before anything
+  else. Running it again just saves the "done" note and changes nothing.
+- The combine reads its own lock while still holding it, the main author
+  is picked only from author credits, the Library message shows what was
+  kept, and the revert message names five items and counts the rest.
+
+Each of these has a test that failed before the fix.
