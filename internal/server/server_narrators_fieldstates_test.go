@@ -1,14 +1,13 @@
 // file: internal/server/server_narrators_fieldstates_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-narrator0test
-// last-edited: 2026-06-10
+// last-edited: 2026-10-18
 
 // NOTE(fable5 T022): SQLiteStore type assertions replaced with Store interface calls.
 
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -85,99 +84,6 @@ func TestCountNarrators(t *testing.T) {
 	require.NoError(t, err)
 	resp = resp["data"].(map[string]any)
 	assert.Equal(t, float64(2), resp["count"])
-}
-
-func TestListAudiobookNarrators(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	// Create a book
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Test Book",
-		FilePath: "/tmp/test.m4b",
-	})
-	require.NoError(t, err)
-
-	// No narrators yet — should return empty array
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/"+book.ID+"/narrators", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var wrapper struct {
-		Data []database.BookNarrator `json:"data"`
-	}
-	err = json.Unmarshal(w.Body.Bytes(), &wrapper)
-	require.NoError(t, err)
-	assert.Empty(t, wrapper.Data)
-
-	// Create narrator and assign to book
-	store := database.GetGlobalStore()
-	narrator, err := store.CreateNarrator("Test Narrator")
-	require.NoError(t, err)
-
-	err = database.GetGlobalStore().SetBookNarrators(book.ID, []database.BookNarrator{
-		{BookID: book.ID, NarratorID: narrator.ID, Role: "narrator", Position: 0},
-	})
-	require.NoError(t, err)
-
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks/"+book.ID+"/narrators", nil)
-	w = httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	err = json.Unmarshal(w.Body.Bytes(), &wrapper)
-	require.NoError(t, err)
-	assert.Len(t, wrapper.Data, 1)
-	assert.Equal(t, narrator.ID, wrapper.Data[0].NarratorID)
-}
-
-func TestSetAudiobookNarrators(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	// Create a book and narrator
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Narrator Set Test",
-		FilePath: "/tmp/narrator-set.m4b",
-	})
-	require.NoError(t, err)
-
-	store := database.GetGlobalStore()
-	narrator, err := store.CreateNarrator("PUT Narrator")
-	require.NoError(t, err)
-
-	// PUT narrators
-	body := []database.BookNarrator{
-		{BookID: book.ID, NarratorID: narrator.ID, Role: "narrator", Position: 0},
-	}
-	bodyBytes, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/audiobooks/"+book.ID+"/narrators", bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]any
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	resp = resp["data"].(map[string]any)
-	assert.Equal(t, "ok", resp["status"])
-
-	// Verify by reading back
-	narrators, err := database.GetGlobalStore().GetBookNarrators(book.ID)
-	require.NoError(t, err)
-	assert.Len(t, narrators, 1)
-	assert.Equal(t, narrator.ID, narrators[0].NarratorID)
-
-	// Test bad JSON body
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/audiobooks/"+book.ID+"/narrators", bytes.NewReader([]byte("not json")))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestGetAudiobookFieldStates(t *testing.T) {

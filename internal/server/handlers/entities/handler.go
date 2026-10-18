@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -1200,47 +1200,6 @@ func (h *Handler) CountNarrators(c *gin.Context) {
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"count": len(narrators)})
-}
-
-// ListAudiobookNarrators implements GET /audiobooks/:id/narrators.
-func (h *Handler) ListAudiobookNarrators(c *gin.Context) {
-	id := c.Param("id")
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	narrators, err := h.store.GetBookNarrators(id)
-	if err != nil {
-		httputil.InternalError(c, "failed to list audiobook narrators", err)
-		return
-	}
-	if narrators == nil {
-		narrators = []database.BookNarrator{}
-	}
-	httputil.RespondWithOK(c, narrators)
-}
-
-// SetAudiobookNarrators implements PUT /audiobooks/:id/narrators.
-func (h *Handler) SetAudiobookNarrators(c *gin.Context) {
-	id := c.Param("id")
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	var narrators []database.BookNarrator
-	if err := c.ShouldBindJSON(&narrators); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-	if err := h.store.SetBookNarrators(id, narrators); err != nil {
-		httputil.InternalError(c, "failed to set audiobook narrators", err)
-		return
-	}
-
-	// Invalidate caches since narrators may have changed
-	h.authorsCache.InvalidateAll()
-
-	httputil.RespondWithOK(c, gin.H{"status": "ok"})
 }
 
 // refuseDeleteWhileLinked runs database.VerifyAuthorUnlinked before a split or

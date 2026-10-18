@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package server
 
@@ -219,21 +219,15 @@ type serverNarratorWriter interface {
 
 // serverTagWriter: Adds, sets and removes tags on books, authors and series.
 type serverTagWriter interface {
-	AddAuthorTag(authorID int, tag string) error
-	AddAuthorTagWithSource(authorID int, tag string, source string) error
 	AddBookTag(bookID string, tag string) error
-	AddSeriesTag(seriesID int, tag string) error
-	AddSeriesTagWithSource(seriesID int, tag string, source string) error
 	RemoveBookTag(bookID string, tag string) error
 	SetBookTags(bookID string, tags []string) error
 }
 
 // serverTagReader: Reads tags back.
 type serverTagReader interface {
-	GetAuthorTagsDetailed(authorID int) ([]database.BookTag, error)
 	GetBookTags(bookID string) ([]string, error)
 	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
-	GetSeriesTagsDetailed(seriesID int) ([]database.BookTag, error)
 }
 
 // serverOperationReader: Reads v1 operation rows and their results.
