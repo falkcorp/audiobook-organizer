@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.221.1",
+    "version": "0.222.0",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -12005,7 +12005,7 @@
                           "last_run": {
                             "type": "object",
                             "nullable": true,
-                            "description": "the definition's newest finished run however long ago it finished, from the store's per-definition run index (the newest-queued finished run, compared with the 8 runs queued before it so an overlapping run that finished later wins). null when it has none. Cached for 5 seconds.",
+                            "description": "the definition's newest finished run however long ago it finished, from the store's per-definition run index (the newest-queued finished run, compared with the 8 runs queued before it so an overlapping run that finished later wins). null when it has none, and also when 256 or more of its runs queued after its newest finished one are still unfinished: the lookup reads at most 256 of the definition's runs, newest first. Cached for 5 seconds.",
                             "properties": {
                               "id": {
                                 "type": "string"
@@ -12029,12 +12029,23 @@
                           "has_preview": {
                             "type": "boolean",
                             "nullable": true,
-                            "description": "writing definitions: whether a preview run really writes nothing, from the operation's own declaration of the params key its code gates writes on (false: only mode live starts it). null for a read-only definition."
+                            "description": "writing definitions: whether a preview run really writes nothing, from the operation's own declaration of the params type its code decodes (false: only mode live starts it). null for a read-only definition."
                           },
-                          "preview_param": {
-                            "type": "string",
+                          "preview_keys": {
+                            "type": "array",
                             "nullable": true,
-                            "description": "the params key mode is written into: dry_run (true = preview) or apply / live (false = preview). null when has_preview is not true."
+                            "items": {
+                              "type": "string",
+                              "enum": ["dry_run", "dryRun", "apply", "live"]
+                            },
+                            "description": "every params key mode is written into, read off the params type the operation decodes: dry_run / dryRun (true = preview), apply / live (false = preview). An operation that decodes two (apply and dry_run) gets both. null when has_preview is not true; empty when the preview is live_one_of alone."
+                          },
+                          "live_one_of": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "write switches of which a live run must set exactly one true in params (itunes.clone-into-library: apply, rollback, repair); a preview writes them all false. Omitted when the definition has none."
                           }
                         }
                       }
@@ -12111,7 +12122,7 @@
       "post": {
         "operationId": "opsV3StartRun",
         "summary": "start a run",
-        "description": "Needs scan.trigger (the floor POST /api/v1/operations/v2 has) plus the definition's own permission (settings.manage when it declares none). Params are validated against the definition's JSON Schema before anything is queued; a violation is a 400 with field paths. mode is written into params under the definition's preview_param, the key its code gates writes on (declared on the operation, never inferred): dry_run (preview = true, live = false), or apply / live (preview = false, live = true). An omitted mode takes that key from params when present, else is a preview. A mode that contradicts the key in params, or a mode key the definition does not read (for example dry_run sent to an apply definition), is a 400. A writing definition without a preview (has_preview=false: it ignores every mode key, or previews only through a different operation) starts only with mode \"live\" and its params are passed through untouched; a preview or omitted mode is a 409. A read-only definition takes either mode and its params are passed through untouched. A batchable definition adds the request to a pending batch instead of creating a run, and answers 202 {\"batched\": true} with no run_id.",
+        "description": "Needs scan.trigger (the floor POST /api/v1/operations/v2 has) plus the definition's own permission (settings.manage when it declares none). Params are validated against the definition's JSON Schema before anything is queued; a violation is a 400 with field paths. mode is written into params under every key in the definition's preview_keys, read off the params type its code decodes (declared on the operation, never inferred): a preview writes each at its non-writing value (dry_run / dryRun = true, apply / live = false), a live run each at its writing value. An omitted mode takes the mode the keys already in params state, else is a preview. Its live_one_of switches, if any, are written false for a preview, and a live run must set exactly one of them true itself (400 otherwise). A 400 also refuses: a mode key in params that contradicts mode or another mode key; a mode key the definition does not read (for example dry_run sent to an apply definition); a params key that differs from dry_run, dryRun, apply, live or a live_one_of switch only in case (encoding/json would decode APPLY into apply); and params an operation's own start check refuses (series-phantom-repair live with mode report; opchange-book-index-rebuild with ensure=true). A writing definition without a preview (has_preview=false: it ignores every mode key, or previews only through a different operation) starts only with mode \"live\" and its params are passed through untouched; a preview or omitted mode is a 409, and a mode key in params asking for a preview is a 400. A read-only definition takes either mode and its params are passed through untouched, but a mode key in them that contradicts mode, or another mode key, is a 400. A batchable definition adds the request to a pending batch instead of creating a run, and answers 202 {\"batched\": true} with no run_id.",
         "tags": [
           "operations"
         ],
@@ -12850,7 +12861,7 @@
       "get": {
         "operationId": "opsV3Events",
         "summary": "run events (SSE)",
-        "description": "text/event-stream: `event: run` with a run view and an id of the form `<boot id>-<sequence>`, `: heartbeat` every 15 s, `event: resync` when events were missed. Last-Event-ID resumes from a bounded ring; an id from another boot, or one that does not parse, gets `event: resync`. The stream ends when the server starts shutting down. At most 64 streams are open at once (503 past that) and 4 per signed-in user (429 past that). Needs library.view.",
+        "description": "text/event-stream: `event: run` with a run view and an id of the form `<boot id>-<sequence>`, `: heartbeat` every 15 s, `event: resync` when events were missed. Last-Event-ID resumes from a bounded ring; an id from another boot, or one that does not parse, gets `event: resync`. The stream ends when the server starts shutting down. At most 64 streams are open at once (503 past that) and 4 per signed-in user and credential (429 past that): a user's browser session and each of their API keys are counted apart. The stream ends when a write to the client fails. Needs library.view.",
         "tags": [
           "operations"
         ],
@@ -12895,7 +12906,15 @@
             "description": "No event feed, or too many open streams (64)"
           },
           "429": {
-            "description": "The signed-in caller already holds 4 open streams; close one and retry. Requests with no user (auth disabled, first run) are bounded only by the global cap."
+            "description": "The signed-in caller already holds 4 open streams with this credential (the session, or this API key); close one and retry. Requests with no user (auth disabled, first run) are bounded only by the global cap.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying (5).",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         }
       }
