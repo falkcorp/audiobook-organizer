@@ -6,6 +6,6 @@
       activity database at 5.3 GB with summaries holding most of it. If it is
       needed again, add a `maintenance.*` op with an `opmode` dry-run (measure
       first, apply on request) that clamps the oversized summaries in batches
-      and then vacuums and truncates the WAL (`truncateWALAfterVacuum`, which the
-      background checkpointer still uses). Run it on the SQLite activity backend
-      only.
+      and then vacuums and truncates the WAL (the deleted `VacuumActivity` did a
+      VACUUM, then a PASSIVE-converge-then-TRUNCATE checkpoint; see git history
+      before 01-P81g). Run it on the SQLite activity backend only.
