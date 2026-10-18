@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.46.0
+# version: 2.47.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-16
+# last-edited: 2026-10-18
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -83,7 +83,7 @@ GO_STRIP_LDFLAGS := -s -w
         web-install web-build web-typecheck web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
+        vet vet-integration mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -354,6 +354,14 @@ vet:
 	@echo "🔍 Running go vet..."
 	@go vet ./...
 	@echo "✅ go vet passed"
+
+## vet-integration: Compile-check every package with the integration build tag
+## (no ffmpeg needed). No other gate builds -tags integration, so the
+## integration tests rotted unnoticed once (the v1-queue deletion broke one).
+vet-integration:
+	@echo "🔍 Running go vet -tags integration..."
+	@go vet -tags integration ./...
+	@echo "✅ go vet -tags integration passed"
 
 ## mutate: Run mutation testing on ONE package (PKG=./internal/scanner/).
 ## Mutation testing answers the question a green suite cannot: would these

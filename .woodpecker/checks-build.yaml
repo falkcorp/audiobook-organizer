@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.8.0
+# version: 1.9.0
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
-# last-edited: 2026-10-15
+# last-edited: 2026-10-18
 #
 # The non-linter gates of `make ci`: vet (test-short's prerequisite),
 # fmt-check, sdkguard, bench-check, pprof-check, and the web tests, each step running the
@@ -56,6 +56,8 @@ steps:
     commands:
       - . scripts/ci/cache_env.sh || exit 1
       - make --no-print-directory vet
+      # Compile-only: the integration-tagged tests are built by no other step.
+      - make --no-print-directory vet-integration
 
   - name: fmt-sdkguard-bench
     image: bash

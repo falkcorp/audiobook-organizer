@@ -1,5 +1,5 @@
 // file: internal/transcode/transcode_integration_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c9789340-1670-48d9-88e7-383f2c998be1
 // last-edited: 2026-10-18
 
@@ -9,7 +9,6 @@ package transcode_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -58,83 +57,6 @@ func (m *mockProgressReporter) IsCanceled() bool {
 	return m.canceled
 }
 
-// synthesizeBook generates three short tone MP3s in a temp book directory
-// (no committed audio fixtures) and returns the directory and file paths.
-func synthesizeBook(t *testing.T) (string, []string) {
-	t.Helper()
-	bookDir := filepath.Join(t.TempDir(), "tone-book")
-	var files []string
-	for i := 0; i < 3; i++ {
-		p := filepath.Join(bookDir, fmt.Sprintf("track%d.mp3", i+1))
-		testutil.SynthesizeMP3(t, p, 2, 440+100*i)
-		files = append(files, p)
-	}
-	return bookDir, files
-}
-
-// ffprobeChapterCount uses ffprobe to count chapters in an audio file.
-func ffprobeChapterCount(t *testing.T, filePath string) int {
-	t.Helper()
-	ffprobePath, err := exec.LookPath("ffprobe")
-	require.NoError(t, err, "ffprobe must be available")
-
-	cmd := exec.Command(ffprobePath,
-		"-v", "quiet",
-		"-print_format", "json",
-		"-show_chapters",
-		filePath,
-	)
-	output, err := cmd.Output()
-	require.NoError(t, err, "ffprobe should succeed on %s", filePath)
-
-	var result struct {
-		Chapters []json.RawMessage `json:"chapters"`
-	}
-	require.NoError(t, json.Unmarshal(output, &result))
-	return len(result.Chapters)
-}
-
-// ffprobeValidate checks that a file is a valid audio file using ffprobe.
-func ffprobeValidate(t *testing.T, filePath string) {
-	t.Helper()
-	ffprobePath, err := exec.LookPath("ffprobe")
-	require.NoError(t, err)
-
-	cmd := exec.Command(ffprobePath,
-		"-v", "error",
-		"-print_format", "json",
-		"-show_format",
-		"-show_streams",
-		filePath,
-	)
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "ffprobe validation failed for %s: %s", filePath, string(output))
-
-	var result struct {
-		Format struct {
-			FormatName string `json:"format_name"`
-			Duration   string `json:"duration"`
-		} `json:"format"`
-		Streams []struct {
-			CodecType string `json:"codec_type"`
-			CodecName string `json:"codec_name"`
-		} `json:"streams"`
-	}
-	require.NoError(t, json.Unmarshal(output, &result))
-	assert.NotEmpty(t, result.Format.FormatName, "format_name should not be empty")
-	assert.NotEmpty(t, result.Format.Duration, "duration should not be empty")
-
-	// Verify at least one audio stream exists
-	hasAudio := false
-	for _, s := range result.Streams {
-		if s.CodecType == "audio" {
-			hasAudio = true
-			break
-		}
-	}
-	assert.True(t, hasAudio, "M4B should contain at least one audio stream")
-}
-
 // TestTranscodeIntegration_M4BConversion tests the Transcode function directly
 // using real ffmpeg and generated tone MP3s. The registered library.transcode op
 // is covered in internal/server (TestLibraryTranscodeOp_RegisteredOpCreatesVersion).
@@ -152,13 +74,14 @@ func TestTranscodeIntegration_M4BConversion(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	// Generate synthetic tone MP3s in a temp directory
-	bookDir, copiedFiles := synthesizeBook(t)
+	bookDir := filepath.Join(t.TempDir(), "tone-book")
+	copiedFiles := testutil.SynthesizeToneBook(t, bookDir)
 
-	// Create a Book record in the database; FilePath is the base path the
-	// output M4B is named after.
+	// Create a Book record in the database; a multi-file book's FilePath is its
+	// directory (as the scanner sets it), and the output M4B is named after it.
 	book := &database.Book{
 		Title:    "Synthetic Tone Book",
-		FilePath: filepath.Join(bookDir, "tone-book.mp3"),
+		FilePath: bookDir,
 		Format:   "mp3",
 	}
 	createdBook, err := env.Store.CreateBook(book)
@@ -206,11 +129,8 @@ func TestTranscodeIntegration_M4BConversion(t *testing.T) {
 	// Verify: output path has .m4b extension
 	assert.Equal(t, ".m4b", filepath.Ext(outputPath), "Output file should have .m4b extension")
 
-	// Verify: the M4B file is a valid audio file
-	ffprobeValidate(t, outputPath)
-
-	// Verify: the M4B file has chapters (one per input MP3)
-	chapterCount := ffprobeChapterCount(t, outputPath)
+	// Verify: the M4B is a valid audio file with one chapter per input MP3
+	chapterCount := testutil.FFprobeValidate(t, outputPath)
 	assert.Equal(t, len(copiedFiles), chapterCount,
 		"M4B should have %d chapters (one per input file), got %d", len(copiedFiles), chapterCount)
 
