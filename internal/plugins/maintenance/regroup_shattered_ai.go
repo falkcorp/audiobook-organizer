@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-10-18
 
@@ -16,7 +16,7 @@
 // apply path (CombineBooks/version-group writes) is PR-B2. The only writes this op
 // makes are review-queue rows: UpsertReviewItem, which is idempotent on its stable
 // DedupKey so re-running never duplicates a hold or resurfaces a human-decided one,
-// and DeleteReviewItem for superseded PENDING holds. Both happen only when
+// and DeleteReviewItemIfPending for superseded PENDING holds. Both happen only when
 // dry_run=false: a run that states no mode (the default) is a PREVIEW that computes
 // the same candidates and reports what it would upsert and delete, calling neither.
 //
@@ -335,6 +335,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	// applied) is always preserved. Skipped on a capped/canary run (Limit > 0), where
 	// the emitted set is intentionally partial and would wrongly purge the remainder.
 	var result string
+	purgeSkipped := false
 	if dryRun {
 		stale := staleRegroupHolds(store, reporter, groups, params.Limit)
 		samples := make([]string, 0, regroupPreviewSamples)
@@ -352,22 +353,35 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 				"(already-decided=%d left as they are, marshal-errors=%d, skipped-frozen-itunes=%d) from %d detected groups; library untouched. bykind=%v",
 			wouldUpsert, len(stale), alreadyDecided, writeErrs, skippedFrozen.Load(), len(groups), st.ByKind)
 	} else {
-		purged := 0
+		// The purge needs the conditional delete (DeleteReviewItemIfPending). A store
+		// without it cannot purge safely, and "stale-purged=0" would read as "nothing
+		// was stale", so the result says the purge did not run and the op fails below.
+		purgeField := ""
 		if holds, ok := database.AsCapability[reviewHoldStore](store); ok {
-			purged = reconcileStaleHolds(ctx, holds, reporter, groups, params.Limit)
+			purgeField = fmt.Sprintf("stale-purged=%d", reconcileStaleHolds(ctx, holds, reporter, groups, params.Limit))
 		} else {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-				"reconcile: store %T cannot delete review holds conditionally; skipping the stale-hold purge", store))
+			purgeSkipped = true
+			purgeField = "stale-purge SKIPPED (store lacks conditional delete)"
+			_ = reporter.Log(slog.LevelError, fmt.Sprintf(
+				"reconcile: store %T cannot delete review holds conditionally; the stale-hold purge was NOT run", store))
 		}
 		result = fmt.Sprintf(
-			"APPLY — review holds written=%d (already-decided=%d, write-errors=%d, stale-purged=%d, "+
+			"APPLY — review holds written=%d (already-decided=%d, write-errors=%d, %s, "+
 				"skipped-frozen-itunes=%d) from %d detected groups; books and files untouched. bykind=%v",
-			written, alreadyDecided, writeErrs, purged, skippedFrozen.Load(), len(groups), st.ByKind)
+			written, alreadyDecided, writeErrs, purgeField, skippedFrozen.Load(), len(groups), st.ByKind)
 	}
 	_ = reporter.Log(slog.LevelInfo, result)
 	_ = reporter.UpdateProgress(len(ids)+1, len(ids)+1, result)
+	if writeErrs > 0 && purgeSkipped {
+		return fmt.Errorf("%d review-hold write errors during regroup (see op log), and the stale-hold purge was skipped "+
+			"because the store lacks the conditional delete", writeErrs)
+	}
 	if writeErrs > 0 {
 		return fmt.Errorf("%d review-hold write errors during regroup (see op log)", writeErrs)
+	}
+	if purgeSkipped {
+		return fmt.Errorf("stale-purge SKIPPED (store lacks conditional delete): review holds were written but " +
+			"superseded pending holds were not purged")
 	}
 	return nil
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3a9f6c04-8e21-4b57-9d0a-6f2e7c1b5a48
 // last-edited: 2026-10-18
 
@@ -438,5 +438,83 @@ func TestReconcileStaleHolds_LeavesAHoldDecidedAfterTheList(t *testing.T) {
 	}
 	if keys := remainingKeys(t, s); keys[staleKey] || !keys[decidedKey] {
 		t.Fatalf("remaining keys = %v", keys)
+	}
+}
+
+// regroupResultReporter keeps the last progress message, which is where the op's result
+// string goes.
+type regroupResultReporter struct {
+	fakeReporter
+	last string
+}
+
+func (r *regroupResultReporter) UpdateProgress(_, _ int, msg string) error {
+	r.last = msg
+	return nil
+}
+
+// noConditionalDelete is a store that has every Store method but not
+// DeleteReviewItemIfPending, and no Unwrap to reach a store that has: what the
+// reconcile sees when the capability lookup misses.
+type noConditionalDelete struct{ database.Store }
+
+// The composite reviewHoldStore the reconcile resolves is the real PebbleStore: the
+// op's whole stale-hold purge hangs on this lookup, and a miss used to be a warning
+// and a green run. A store that lacks the conditional delete must not resolve.
+func TestReviewHoldStore_ResolvesOnPebbleStoreNotOnAStoreLackingTheDelete(t *testing.T) {
+	s := regroupStore(t)
+	if _, ok := database.AsCapability[reviewHoldStore](s); !ok {
+		t.Fatalf("*database.PebbleStore does not resolve reviewHoldStore; the regroup stale-hold purge would be skipped")
+	}
+	var plain database.Store = s
+	if _, ok := database.AsCapability[reviewHoldStore](plain); !ok {
+		t.Fatalf("a PebbleStore held as database.Store does not resolve reviewHoldStore")
+	}
+	if _, ok := database.AsCapability[reviewHoldStore](noConditionalDelete{Store: s}); ok {
+		t.Fatalf("a store without DeleteReviewItemIfPending resolved reviewHoldStore")
+	}
+}
+
+// 🔴 A live run on a store that cannot delete conditionally is not green. The holds
+// are written, but the stale-hold purge did not run, and "stale-purged=0" would read
+// as "nothing was stale": the result says SKIPPED and the op returns an error.
+func TestRegroupShatteredAI_LiveRun_FailsWhenTheStoreCannotPurge(t *testing.T) {
+	s := regroupStore(t)
+	for i := 1; i <= 6; i++ {
+		seedShatterBook(t, s, "/lib/A/Cage of Souls/Cage of Souls - "+itoa(i)+"/01.mp3")
+	}
+	staleKey := regroupDedupKey(itunesservice.KindAnthology, "/books/stale")
+	seedHold(t, s, itunesservice.KindAnthology, staleKey, "/books/stale")
+
+	p := &Plugin{deps: fakeDeps{store: noConditionalDelete{Store: s}}}
+	rep := &regroupResultReporter{}
+	err := p.runRegroupShatteredAI(context.Background(), regroupLive, rep)
+	if err == nil || !strings.Contains(err.Error(), "stale-purge SKIPPED (store lacks conditional delete)") {
+		t.Fatalf("err = %v, want a failure naming the skipped stale-purge", err)
+	}
+	if !strings.Contains(rep.last, "stale-purge SKIPPED (store lacks conditional delete)") || strings.Contains(rep.last, "stale-purged=") {
+		t.Fatalf("result = %q, want it to say the purge was SKIPPED and not report stale-purged=N", rep.last)
+	}
+	if !remainingKeys(t, s)[staleKey] {
+		t.Fatal("the stale hold was deleted by a store that cannot delete conditionally")
+	}
+	var wrote bool
+	for k := range remainingKeys(t, s) {
+		if k != staleKey {
+			wrote = true
+		}
+	}
+	if !wrote {
+		t.Fatal("the run wrote no holds; the test did not exercise the apply path")
+	}
+
+	// The same run on the real store purges and succeeds.
+	rep2 := &regroupResultReporter{}
+	p2 := &Plugin{deps: fakeDeps{store: s}}
+	if err := p2.runRegroupShatteredAI(context.Background(), regroupLive, rep2); err != nil {
+		t.Fatalf("run on the real store: %v", err)
+	}
+	if !strings.Contains(rep2.last, "stale-purged=1") {
+		t.Fatalf("result on the real store = %q, want stale-purged=1", rep2.last)
 	}
 }

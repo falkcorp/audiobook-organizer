@@ -1,5 +1,5 @@
 // file: internal/server/wire_review_claim_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c06d748-d485-44de-9d5a-2ad16e6fedd7
 // last-edited: 2026-10-18
 
@@ -96,12 +96,17 @@ func TestReviewRoutes_AbandonApplyIsWiredAndReachesTheStore(t *testing.T) {
 }
 
 // TestOpsStore_ResolvesReviewPendingDeleter: the regroup reconcile resolves its
-// conditional delete from the maintenance plugin's OpsStore. If this lookup failed
-// the purge would be skipped with only a warning in the op log.
+// conditional delete, together with the pending-hold lister, from the maintenance
+// plugin's OpsStore (maintenance.reviewHoldStore is exactly these two). If this
+// lookup failed the purge would not run and the op would fail with "stale-purge
+// SKIPPED"; the maintenance package pins the composite on the concrete store.
 func TestOpsStore_ResolvesReviewPendingDeleter(t *testing.T) {
 	f := setupCredGuardServer(t)
-	_, ok := database.AsCapability[database.ReviewItemPendingDeleter](f.srv.OpsStore())
-	assert.True(t, ok, "OpsStore() %T hides database.ReviewItemPendingDeleter", f.srv.OpsStore())
+	_, ok := database.AsCapability[interface {
+		database.ReviewItemPendingDeleter
+		ListReviewItems(filter database.ReviewFilter) ([]database.ReviewItem, int, error)
+	}](f.srv.OpsStore())
+	assert.True(t, ok, "OpsStore() %T hides the review hold lister and database.ReviewItemPendingDeleter", f.srv.OpsStore())
 	_, ok = database.AsCapability[database.ReviewItemApplyClaimer](f.srv.storeForWiring())
 	assert.True(t, ok, "storeForWiring() %T hides database.ReviewItemApplyClaimer", f.srv.storeForWiring())
 }
