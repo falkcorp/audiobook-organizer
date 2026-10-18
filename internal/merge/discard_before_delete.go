@@ -1,7 +1,7 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package merge
 
@@ -82,32 +82,12 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		if u.ID == "" {
 			continue
 		}
-		st, err := db.GetUserBookState(u.ID, bookID)
+		had, err := discardUserState(db, deleter, canDelete, u.ID, bookID)
 		if err != nil {
-			return res, fmt.Errorf("%w: read state user=%s book=%s: %w", ErrDiscardIncomplete, u.ID, bookID, err)
+			return res, err
 		}
-		pos, err := db.ListUserPositionsForBook(u.ID, bookID)
-		if err != nil {
-			return res, fmt.Errorf("%w: read positions user=%s book=%s: %w", ErrDiscardIncomplete, u.ID, bookID, err)
-		}
-		if hasCarryableState(st, pos) {
+		if had {
 			counted[u.ID] = true
-		}
-		if len(pos) > 0 {
-			if err := db.ClearUserPositions(u.ID, bookID); err != nil {
-				return res, fmt.Errorf("%w: clear positions user=%s book=%s: %w", ErrDiscardIncomplete, u.ID, bookID, err)
-			}
-		}
-		if st == nil {
-			continue
-		}
-		if canDelete {
-			err = deleter.DeleteUserBookState(u.ID, bookID)
-		} else {
-			err = db.SetUserBookState(drainedUserState(*st))
-		}
-		if err != nil {
-			return res, fmt.Errorf("%w: clear state user=%s book=%s: %w", ErrDiscardIncomplete, u.ID, bookID, err)
 		}
 	}
 
@@ -125,6 +105,47 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		return res, fmt.Errorf("hard delete %s after its listening state was discarded: %w", bookID, err)
 	}
 	return res, nil
+}
+
+// discardUserState clears one user's state row and positions on bookID and
+// reports whether they held carryable state. The read and the clear are one
+// step under the (userID, bookID) user-state stripe
+// (database.LockUserBookState), so a device sync lands either before the
+// read (and is discarded with the rest, which is what the owner asked for)
+// or after the clear, never between them where the clear would wipe it
+// unseen. One that lands after the clear but before carryLeftover's re-check
+// makes the delete refuse; one that lands after that re-check is a write to
+// a book that is deleted next, like a write to any book being hard-deleted.
+// Lock order: the caller holds the merge lock; this stripe is taken and
+// released per user.
+func discardUserState(db UserProgressMerger, deleter database.UserBookStateDeleter, canDelete bool, userID, bookID string) (had bool, err error) {
+	defer database.LockUserBookState(userID, bookID)()
+	st, err := db.GetUserBookState(userID, bookID)
+	if err != nil {
+		return false, fmt.Errorf("%w: read state user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+	}
+	pos, err := db.ListUserPositionsForBook(userID, bookID)
+	if err != nil {
+		return false, fmt.Errorf("%w: read positions user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+	}
+	had = hasCarryableState(st, pos)
+	if len(pos) > 0 {
+		if err := db.ClearUserPositions(userID, bookID); err != nil {
+			return had, fmt.Errorf("%w: clear positions user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+		}
+	}
+	if st == nil {
+		return had, nil
+	}
+	if canDelete {
+		err = deleter.DeleteUserBookState(userID, bookID)
+	} else {
+		err = db.SetUserBookState(drainedUserState(*st))
+	}
+	if err != nil {
+		return had, fmt.Errorf("%w: clear state user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+	}
+	return had, nil
 }
 
 // discardOwnBookmarks deletes each user's bookmarks under bookID's own sync
