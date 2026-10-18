@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/reapprove_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d2e4e573-9060-4296-b021-6de20390337a
 // last-edited: 2026-10-18
 
@@ -9,7 +9,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -301,5 +305,201 @@ func TestBulkApprove_ApplyOffSaysSo(t *testing.T) {
 	}
 	if got, _ := s.GetReviewItem(it.ID); got.Status != database.ReviewStatusApproved {
 		t.Fatalf("status = %q, want approved", got.Status)
+	}
+}
+
+// flakyStore wraps the real store (embedding keeps the apply-claim capability
+// visible to database.AsCapability) and fails chosen writes.
+type flakyStore struct {
+	*database.PebbleStore
+	failApplied  atomic.Bool
+	rejectFailID string
+}
+
+func (f *flakyStore) SetReviewItemDecision(id, status, chosen string) (*database.ReviewItem, error) {
+	if f.failApplied.Load() && status == database.ReviewStatusApplied {
+		return nil, errors.New("synthetic pebble write error")
+	}
+	return f.PebbleStore.SetReviewItemDecision(id, status, chosen)
+}
+
+func (f *flakyStore) SetReviewItemStatus(id, status string) (*database.ReviewItem, error) {
+	if status == database.ReviewStatusRejected && id == f.rejectFailID {
+		return nil, errors.New("synthetic reject write error")
+	}
+	return f.PebbleStore.SetReviewItemStatus(id, status)
+}
+
+// 🔴 AN APPLY THAT SUCCEEDED BUT COULD NOT BE RECORDED MUST NEVER BE RESENT. The handler
+// ran, the "applied" write failed twice: the item lands in applied_unrecorded (not
+// failed), stays claimed ("applying") so a resend is refused, and the apply ran once.
+func TestBulkApprove_StatusWriteFailAfterApply_IsUnrecordedAndNotResendable(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	fs := &flakyStore{PebbleStore: s}
+	fs.failApplied.Store(true)
+	h := reviewhandler.New(fs, func() bool { return true }, nil)
+	var calls atomic.Int32
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
+		calls.Add(1)
+		return nil
+	})
+
+	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": []string{a.ID}}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code %d body %s", w.Code, w.Body.String())
+	}
+	data := decodeBody(t, w)["data"].(map[string]any)
+	unrec, _ := data["applied_unrecorded"].([]any)
+	if len(unrec) != 1 || unrec[0].(map[string]any)["id"] != a.ID {
+		t.Fatalf("applied_unrecorded = %v, want the item", data["applied_unrecorded"])
+	}
+	if reason, _ := unrec[0].(map[string]any)["reason"].(string); !strings.Contains(reason, "do not resend") {
+		t.Fatalf("reason = %q, want it to say do not resend", reason)
+	}
+	if data["failed"] != nil {
+		t.Fatalf("failed = %v; an applied item must not be reported as failed", data["failed"])
+	}
+	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusApplying {
+		t.Fatalf("status = %q, want applying (held so a resend is refused)", got.Status)
+	}
+
+	fs.failApplied.Store(false)
+	w = doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": []string{a.ID}}, nil)
+	data = decodeBody(t, w)["data"].(map[string]any)
+	if skipped, _ := data["skipped"].([]any); len(skipped) != 1 {
+		t.Fatalf("resend skipped = %v, want the held item", data["skipped"])
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("apply ran %d times, want 1", calls.Load())
+	}
+}
+
+// A single approve of an applied item is refused, not re-applied.
+func TestApprove_AlreadyAppliedItemIs409AndNotReapplied(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+	calls := 0
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error { calls++; return nil })
+	reApprove(t, h, a.ID)
+	w := doReq(t, h.ApproveReviewItem, http.MethodPost, "/review/items/"+a.ID+"/approve", nil, gin.Params{{Key: "id", Value: a.ID}})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "REVIEW_ALREADY_APPLIED") {
+		t.Fatalf("second approve: code %d body %s, want 409 REVIEW_ALREADY_APPLIED", w.Code, w.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("apply ran %d times, want 1", calls)
+	}
+}
+
+// 🔴 TWO CONCURRENT APPROVES OF ONE ITEM RUN THE APPLY EXACTLY ONCE (run with -race).
+func TestApprove_ConcurrentApprovesApplyExactlyOnce(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+	var calls atomic.Int32
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
+		calls.Add(1)
+		time.Sleep(30 * time.Millisecond) // hold the claim long enough for the others to collide
+		return nil
+	})
+	var wg sync.WaitGroup
+	var ok, conflict atomic.Int32
+	for range 8 {
+		wg.Go(func() {
+			w := doReq(t, h.ApproveReviewItem, http.MethodPost, "/review/items/"+a.ID+"/approve", nil,
+				gin.Params{{Key: "id", Value: a.ID}})
+			switch w.Code {
+			case http.StatusOK:
+				ok.Add(1)
+			case http.StatusConflict:
+				conflict.Add(1)
+			default:
+				t.Errorf("unexpected code %d body %s", w.Code, w.Body.String())
+			}
+		})
+	}
+	wg.Wait()
+	if calls.Load() != 1 || ok.Load() != 1 || conflict.Load() != 7 {
+		t.Fatalf("apply calls=%d ok=%d conflict=%d, want 1/1/7", calls.Load(), ok.Load(), conflict.Load())
+	}
+	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusApplied {
+		t.Fatalf("status = %q, want applied", got.Status)
+	}
+}
+
+// A failing apply releases its claim, so the item is retryable and not stuck applying.
+func TestApprove_FailedApplyReleasesTheClaim(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	applyOn := false
+	h := reviewhandler.New(s, func() bool { return applyOn }, nil)
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error {
+		return errors.New("synthetic refusal")
+	})
+	reApprove(t, h, a.ID)
+	applyOn = true
+	w := doReq(t, h.ApproveReviewItem, http.MethodPost, "/review/items/"+a.ID+"/approve", nil, gin.Params{{Key: "id", Value: a.ID}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code %d body %s", w.Code, w.Body.String())
+	}
+	got, _ := s.GetReviewItem(a.ID)
+	if got.Status != database.ReviewStatusApproved || got.ApplyClaimedFrom != "" {
+		t.Fatalf("after failed apply = %q / claimed_from %q, want approved with no claim", got.Status, got.ApplyClaimedFrom)
+	}
+	if n, _ := s.CountReviewItems(database.ReviewStatusApplying); n != 0 {
+		t.Fatalf("%d items left applying", n)
+	}
+}
+
+// 🔴 A REJECT WHOSE WRITE FAILS IS REPORTED, NOT SWALLOWED, AND THE BATCH CARRIES ON.
+func TestBulkReject_WriteFailureIsReportedAndBatchContinues(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	b := seedAction(t, s, "regroup.multidisc", "m2", itunesservice.ActionCombine)
+	c := seedAction(t, s, "regroup.multidisc", "m3", itunesservice.ActionCombine)
+	fs := &flakyStore{PebbleStore: s, rejectFailID: b.ID}
+	h := reviewhandler.New(fs, func() bool { return true }, nil)
+
+	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "reject", "ids": []string{a.ID, b.ID, c.ID}}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code %d body %s", w.Code, w.Body.String())
+	}
+	data := decodeBody(t, w)["data"].(map[string]any)
+	failed, _ := data["failed"].([]any)
+	if len(failed) != 1 || failed[0].(map[string]any)["id"] != b.ID {
+		t.Fatalf("failed = %v, want only %s", data["failed"], b.ID)
+	}
+	if rejected, _ := data["rejected"].([]any); len(rejected) != 2 {
+		t.Fatalf("rejected = %v, want the first and third", data["rejected"])
+	}
+	if got, _ := s.GetReviewItem(b.ID); got.Status != database.ReviewStatusPending {
+		t.Fatalf("failed item status = %q, want pending", got.Status)
+	}
+}
+
+// Rejecting an applied item would falsify history: refused, single and bulk.
+func TestReject_AppliedItemIsRefused(t *testing.T) {
+	s := newTestStore(t)
+	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
+	h := reviewhandler.New(s, func() bool { return true }, nil)
+	h.RegisterApplyHandler(itunesservice.ActionCombine, func(_ context.Context, _ database.ReviewItem) error { return nil })
+	reApprove(t, h, a.ID)
+
+	w := doReq(t, h.RejectReviewItem, http.MethodPost, "/review/items/"+a.ID+"/reject", nil, gin.Params{{Key: "id", Value: a.ID}})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "REVIEW_ALREADY_APPLIED") {
+		t.Fatalf("single reject: code %d body %s", w.Code, w.Body.String())
+	}
+	w = doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "reject", "ids": []string{a.ID}}, nil)
+	data := decodeBody(t, w)["data"].(map[string]any)
+	if skipped, _ := data["skipped"].([]any); len(skipped) != 1 || data["rejected"] != nil {
+		t.Fatalf("bulk reject: skipped=%v rejected=%v", data["skipped"], data["rejected"])
+	}
+	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusApplied {
+		t.Fatalf("status = %q, want applied", got.Status)
 	}
 }
