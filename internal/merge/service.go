@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.60.0
+// version: 1.60.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2296,7 +2296,7 @@ func buildProgressJournal(before, after progressSnap) []CombineUserProgress {
 	}
 	slices.Sort(ids)
 	for _, u := range ids {
-		out = append(out, CombineUserProgress{
+		p := CombineUserProgress{
 			UserID:              u,
 			AbsorbedState:       before.absState[u],
 			AbsorbedPositions:   before.absPos[u],
@@ -2304,7 +2304,16 @@ func buildProgressJournal(before, after progressSnap) []CombineUserProgress {
 			SurvivorPosBefore:   before.survPos[u],
 			SurvivorStateAfter:  after.survState[u],
 			SurvivorPosAfter:    after.survPos[u],
-		})
+		}
+		// Only an entry with an after-snapshot can have a survivor
+		// put-back, so only it needs the id its marker is keyed by. Each
+		// follow builds that entry once (the before-only build persisted
+		// ahead of the follow has no after-snapshot), so the id is minted
+		// once per follow.
+		if p.SurvivorStateAfter != nil || len(p.SurvivorPosAfter) > 0 {
+			p.FollowID = ulid.Make().String()
+		}
+		out = append(out, p)
 	}
 	return out
 }

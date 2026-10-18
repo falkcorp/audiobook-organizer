@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.28.2
+// version: 1.28.3
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -235,6 +235,13 @@ type CombineUserProgress struct {
 	SurvivorPosBefore   []database.UserPosition `json:"survivor_positions_before,omitempty"`
 	SurvivorStateAfter  *database.UserBookState `json:"survivor_state_after,omitempty"`
 	SurvivorPosAfter    []database.UserPosition `json:"survivor_positions_after,omitempty"`
+	// FollowID names this one follow of this user: a fresh ULID minted
+	// with the after-snapshot (buildProgressJournal). The survivor
+	// put-back's marker is keyed by it (survivorReconcileKey), so a later
+	// follow of the same pair never reads an earlier one's marker. Empty on
+	// a journal written before round 5 of the #4064 review, whose markers
+	// keep the old timestamp key (followStamp).
+	FollowID string `json:"follow_id,omitempty"`
 }
 
 // CombineFillEmpty is the set of survivor fields a merge filled because they
@@ -1275,7 +1282,7 @@ func restoreSurvivorSideOnce(db UserProgressMerger, p CombineUserProgress, survi
 	hasAfter := p.SurvivorStateAfter != nil || len(p.SurvivorPosAfter) > 0
 	var key string
 	if hasAfter {
-		key = survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
+		key = survivorReconcileKey(survivorID, absorbedID, p)
 		marker, err := readSurvivorReconcileMarker(db, key)
 		if err != nil {
 			return "", err
@@ -1403,11 +1410,13 @@ func withdrawPutBackMarker(db UserProgressMerger, key string) string {
 	return fmt.Sprintf("its put-back marker %s could be neither dropped (%v) nor marked not landed (%v): if the user listens to the survivor before the undo is run again, that run reads this put-back as done and the carried listened time stays on both books", key, derr, err)
 }
 
-// survivorReconcilePrefix keys the per-user marker reconcileTouchedSurvivorOnce
-// writes before its state write: merge:survivor-reconcile:<survivor>:
-// <absorbed>:<user>:<follow stamp>. The follow stamp (followStamp) is unique
-// to one follow's after-snapshot, so a later follow between the same books
-// gets a fresh key and a stale marker can never apply to it.
+// survivorReconcilePrefix keys the per-user marker a survivor put-back
+// (putBackSurvivor, reconcileTouchedSurvivorOnce) writes before its state
+// write: merge:survivor-reconcile:<survivor>:<absorbed>:<user>:f:<follow
+// id>, the follow id (CombineUserProgress.FollowID) being minted per
+// follow, so a later follow between the same books gets a fresh key and a
+// stale marker can never apply to it. Older journals use the timestamp key
+// survivorReconcileKey describes.
 const survivorReconcilePrefix = "merge:survivor-reconcile:"
 
 // survivorReconcileMarker records the survivor state's UpdatedAt as it was
@@ -1431,7 +1440,7 @@ const survivorReconcilePrefix = "merge:survivor-reconcile:"
 // (dropSurvivorReconcileMarkers). The user_state_follow operation revert
 // (audiobooks revertUserStateFollow) does not drop them: a revert whose row
 // mark then fails is retried, and needs them. Its markers are inert (each key
-// names a follow stamp no later follow reuses) and stay as small raw keys.
+// names a follow id no later follow reuses) and stay as small raw keys.
 type survivorReconcileMarker struct {
 	PreUpdatedAt time.Time `json:"pre_updated_at"`
 	// NotLanded withdraws the marker: the write it was journaled for
@@ -1442,7 +1451,8 @@ type survivorReconcileMarker struct {
 
 // followStamp is the newest stamp in a follow's after-snapshot of the
 // survivor: the state row's UpdatedAt (SetUserBookState stamps it on the
-// follow's write) or a carried position's.
+// follow's write) or a carried position's. Only the marker key of a journal
+// written before FollowID uses it (survivorReconcileKey).
 func followStamp(p CombineUserProgress) int64 {
 	var t time.Time
 	if p.SurvivorStateAfter != nil {
@@ -1456,25 +1466,44 @@ func followStamp(p CombineUserProgress) int64 {
 	return t.UnixNano()
 }
 
-func survivorReconcileKey(survivorID, absorbedID, userID string, stamp int64) string {
-	return fmt.Sprintf("%s%s:%s:%s:%d", survivorReconcilePrefix, survivorID, absorbedID, userID, stamp)
+// survivorReconcileKey is the key of the marker one user's survivor
+// put-back writes for one follow, the same for the put-back, the reconcile
+// and the drop: <survivor>:<absorbed>:<user>:f:<FollowID>.
+//
+// A journal written before FollowID existed keeps the old key, ending in the
+// follow's newest timestamp (followStamp). That stamp is not unique: carried
+// positions keep their UpdatedAt, so a re-combine of the same pair after an
+// undo can produce the same one, and a marker the first undo failed to drop
+// then made the second undo skip (round-5 review S1). The old key is kept
+// anyway, rather than reading such a journal as having no marker: without
+// one, a re-run after the user listened would take the carried listened
+// time off the survivor a second time (fewer seconds than listened), where
+// a wrong skip leaves it on both books. And it can only collide with
+// another pre-FollowID follow's marker: every follow journaled since gets
+// the f: key.
+func survivorReconcileKey(survivorID, absorbedID string, p CombineUserProgress) string {
+	if p.FollowID != "" {
+		return fmt.Sprintf("%s%s:%s:%s:f:%s", survivorReconcilePrefix, survivorID, absorbedID, p.UserID, p.FollowID)
+	}
+	return fmt.Sprintf("%s%s:%s:%s:%d", survivorReconcilePrefix, survivorID, absorbedID, p.UserID, followStamp(p))
 }
 
 // dropSurvivorReconcileMarkers deletes the reconcile markers one follow's
-// put-back may have written (one per user, keyed by the follow's stamp).
+// put-back may have written (one per user, keyed by survivorReconcileKey).
 // Call it only once nothing can re-run that put-back: the journal that
 // holds it is recorded as undone (UndoCombine, a sibling-move journal's
 // follow marked Undone and persisted) or the put-back was a one-shot
 // (a refused carry's reversal). A re-run without its marker could subtract
 // or add the carried listened time again. Best effort: a marker left behind
-// is inert (its key names a follow stamp no later follow reuses), it only
-// takes space, so a failed delete is logged.
+// is inert (its key names a follow id no later follow reuses; for a journal
+// from before FollowID, see survivorReconcileKey), it only takes space, so a
+// failed delete is logged.
 func dropSurvivorReconcileMarkers(db UserProgressMerger, survivorID, absorbedID string, progress []CombineUserProgress) {
 	for _, p := range progress {
 		if p.SurvivorStateAfter == nil && len(p.SurvivorPosAfter) == 0 {
 			continue // no after-snapshot: no put-back wrote a marker
 		}
-		key := survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
+		key := survivorReconcileKey(survivorID, absorbedID, p)
 		if err := db.DeleteRaw(key); err != nil {
 			mlog.Warn("merge: survivor reconcile marker %s not dropped: %s",
 				logger.SanitizeLogValue(key), logger.SanitizeLogValue(err.Error()))
@@ -1642,7 +1671,7 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 	if timePtrEqual(cur.ProgressResetAt, after.ProgressResetAt) && slices.Equal(cur.ProgressResetPositions, after.ProgressResetPositions) {
 		st.ProgressResetAt, st.ProgressResetPositions = before.ProgressResetAt, before.ProgressResetPositions
 	}
-	key := survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
+	key := survivorReconcileKey(survivorID, absorbedID, p)
 	marker, err := readSurvivorReconcileMarker(db, key)
 	if err != nil {
 		return err
