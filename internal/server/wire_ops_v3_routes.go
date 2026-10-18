@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
 // last-edited: 2026-10-18
 
@@ -32,6 +32,11 @@ func (s *Server) wireOpsV3Routes(protected *gin.RouterGroup) {
 	d := opsv3.Deps{Authz: s.opsV3Authz(), Closing: s.opsV3Closing}
 	if runs, ok := database.AsCapability[opsv3.RunReader](s.storeForWiring()); ok {
 		d.Runs = runs
+	}
+	// The per-definition last-run lookup is a PebbleStore method outside
+	// database.Store; a store without it leaves /defs last_run null.
+	if lr, ok := database.AsCapability[opsv3.LastRunFinder](s.storeForWiring()); ok {
+		d.LastRuns = lr
 	}
 	if s.opRegistry != nil {
 		d.Defs = &opsV3Defs{reg: s.opRegistry, warm: warmupSource(s.storeForWiring())}
