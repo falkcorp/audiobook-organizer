@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 
 package middleware
 

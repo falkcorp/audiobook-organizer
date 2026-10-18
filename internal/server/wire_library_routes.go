@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.10.5
+// version: 1.11.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-10-18
 

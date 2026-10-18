@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_collections_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 7a6f1e4c-92b8-4d13-9a5e-3c8f0d6e1b27
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package database
 

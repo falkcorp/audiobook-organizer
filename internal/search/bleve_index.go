@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The

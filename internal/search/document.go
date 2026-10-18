@@ -1,5 +1,5 @@
 // file: internal/search/document.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2d8f1c-4b3e-4f60-a7c5-2e8d0f1b9a47
 //
 // BookDocument is the flat, Bleve-indexable projection of a Book

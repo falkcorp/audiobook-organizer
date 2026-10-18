@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.50.0
+// version: 4.51.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-18
 
