@@ -2143,7 +2143,7 @@
         }
       ],
       "get": {
-        "operationId": "listCoverHistory",
+        "operationId": "handleListCoverHistory",
         "summary": "List Cover History (retired)",
         "tags": [
           "audiobooks"
@@ -2199,7 +2199,7 @@
         }
       ],
       "post": {
-        "operationId": "restoreCoverFromHistory",
+        "operationId": "handleRestoreCover",
         "summary": "Restore Cover From History (retired)",
         "tags": [
           "audiobooks"
@@ -3295,7 +3295,7 @@
         }
       ],
       "get": {
-        "operationId": "listSimilarBooks",
+        "operationId": "handleSimilarBooks",
         "summary": "Similar Books (retired)",
         "tags": [
           "audiobooks"
@@ -6748,7 +6748,7 @@
     },
     "/import/collision-preview": {
       "post": {
-        "operationId": "previewImportCollision",
+        "operationId": "handleImportCollisionPreview",
         "summary": "Import Collision Preview (retired)",
         "tags": [
           "import"
