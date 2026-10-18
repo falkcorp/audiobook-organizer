@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/preview_behaviour_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ed206294-a7e6-4b17-9d5e-56b475029ed8
 // last-edited: 2026-10-18
 
@@ -8,6 +8,7 @@ package jobs
 import (
 	"encoding/json"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
@@ -34,8 +35,10 @@ func TestPreviewBehaviour_RepointVersionPrimary(t *testing.T) {
 		params = opmode.DryRunParams{}
 	}
 	spec := opsregistry.PreviewSpec{Params: params}
-	if got := spec.ModeKeys(); !reflect.DeepEqual(got, []string{"apply", "dry_run"}) && !reflect.DeepEqual(got, []string{"dry_run", "apply"}) {
-		t.Errorf("repoint-version-primary mode keys = %v, want dry_run and apply", got)
+	got := append([]string(nil), spec.ModeKeys()...)
+	sort.Strings(got)
+	if want := []string{"apply", "dryRun", "dry_run"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("repoint-version-primary mode keys = %v, want %v", got, want)
 	}
 
 	for _, tc := range []struct {

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
 // last-edited: 2026-10-18
 
@@ -121,7 +121,8 @@ func (j *repointVersionPrimaryJob) Description() string {
 
 // Policy is DefaultPolicy plus Params repointVersionPrimaryParams (a write needs
 // apply=true as well as dry_run=false: Run's `write := p.Apply && !dryRun`), so
-// registration declares both as the op's mode keys and /api/v3/ops writes both.
+// registration declares dry_run, dryRun and apply as the op's mode keys and
+// /api/v3/ops writes all three.
 // It derives the per-job key "maintenance.repoint-version-primary", so this job
 // serializes against ITSELF.
 //
@@ -162,6 +163,12 @@ type repointVersionPrimaryParams struct {
 	// DryRun is decoded only so the result can echo the effective params; the
 	// value Run acts on arrives through its dryRun argument.
 	DryRun bool `json:"dry_run"`
+	// DryRunCamel is the dryRun spelling the maintenance-job bridge already
+	// accepts (opmode.DryRunParams there). Declared here so the op's Preview
+	// names both keys and /api/v3/ops writes both; like DryRun, Run never reads
+	// it (the bridge resolves the pair into the dryRun argument), and it is
+	// cleared before the echo so the result states the mode once, as dry_run.
+	DryRunCamel bool `json:"dryRun,omitempty"`
 	// MinFiles / MaxPerFileDuration / PathPrefix are forwarded verbatim to the
 	// shared chapter detection, so this job and scan-chapter-groups can be run
 	// with identical scoping and compared.
@@ -333,6 +340,7 @@ func (j *repointVersionPrimaryJob) Run(ctx context.Context, store maintenance.Jo
 		}
 	}
 	p.DryRun = !write
+	p.DryRunCamel = false
 
 	det, books, err := detectChapterGroupsForRunWithBooks(ctx, store, chapterGroupParams{
 		MinFiles:           p.MinFiles,
