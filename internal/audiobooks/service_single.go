@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-18
 
@@ -492,8 +492,18 @@ type statelessPurge struct {
 // calls underneath take only per-book locks, and no caller of the purge
 // (the purge handler, DELETE /audiobooks/:id's trash path, the auto-purge
 // op) holds it.
+//
+// The hold is not counted (merge.LockMergeRMWBookRowsOnly): everything it
+// writes is the book row's delete, which the book change log records, plus
+// tombstones nothing snapshots, and it never touches a book_file row (a book
+// that owns one is refused, here and by DeleteBook). A counted hold per
+// trashed book made the chapter-fragment fixer list the whole library again
+// before nearly every row of an apply running beside the purge (see
+// merge.MergeLockAcquisitions). Anything added under this hold that writes a
+// file row, or anything else such a snapshot reads unlogged, must switch it
+// back to merge.LockMergeRMW.
 func (svc *AudiobookService) purgeIfStateless(book *database.Book, probe *merge.UserStateProbe) (r statelessPurge) {
-	merge.LockMergeRMW()
+	merge.LockMergeRMWBookRowsOnly()
 	defer merge.UnlockMergeRMW()
 	cur, err := svc.store.GetBookByID(book.ID)
 	switch {

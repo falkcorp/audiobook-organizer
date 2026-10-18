@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -215,19 +215,44 @@ fully undone, or put a reader's progress or a user's later edit at risk.
   an undo cannot interrupt. In that same step it looks at the book again,
   so a book someone restored from the trash a moment earlier is left
   alone instead of deleted.
-- The undo keeps a co-author added since the combine and says so. It
-  also keeps the combine's own author when someone has since credited
-  that person in another way, such as narrator of the same book.
+- The undo keeps a co-author added since the combine and says so.
 - An override creates a new author only after its plan is recorded.
-- Undoing a combine leaves any author it created in place. When no
-  book credits that author any more, the undo says so, and the existing
-  clean-up job for empty authors removes it with its own safety checks
-  and its own undo. A combine that cancels its own author change now
-  says so on screen instead of only in the log.
 - The kept-progress messages now name the right place.
 - A split-book merge now handles a trash write that reports an error the
   same safe way a combine does.
 - The code this pull request added no longer depends on the full
   database interface. That had turned a code-size check red.
+
+Each of these has a test.
+
+## Fixes from the fourth review
+
+**What it was.** A fourth review of #4064 found:
+
+- The undo had started deleting an author the combine created, with
+  checks that could miss a book linked at the wrong moment, no record of
+  the delete, and no way to undo it.
+- The undo of a combine's author change dropped that same person's other
+  credits on the book, such as narrator.
+- The nightly trash purge made the chapter-repair tool reload the whole
+  library, about 460 MB, for nearly every book it fixed while both ran.
+
+**Why it mattered.** The first two could quietly lose a credit someone
+had added. The third made a routine repair run far slower and heavier
+than it needed to be.
+
+**The fix.**
+
+- Undoing a combine never deletes an author. When no book credits an
+  author the combine created, the undo says so, and the existing clean-up
+  job for empty authors removes it with its own safety checks and its own
+  undo. A combine that cancels its own author or title change now says so
+  on screen instead of only in the log.
+- The undo takes back only the one author credit the combine wrote, so
+  the same person credited since as narrator or co-author stays, and the
+  undo says so.
+- The purge still blocks merges while it deletes a book, but it no longer
+  counts as a merge for the chapter-repair tool, which already sees every
+  book the purge deletes.
 
 Each of these has a test.
