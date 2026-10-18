@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_checkpointer_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8d3f6a1e-2b7c-4e90-9f15-6a4c0b8e7d23
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 // Tests for the SQLActivityStore's WAL checkpointing (sql_activity_checkpointer.go):
 // foreground writes never checkpoint, the background checkpointer does, the
@@ -64,6 +64,9 @@ func TestSQLActivityStore_ForegroundWritesNeverCheckpoint(t *testing.T) {
 	var limit int64
 	require.NoError(t, s.writer.QueryRow("PRAGMA journal_size_limit").Scan(&limit))
 	assert.Equal(t, int64(sqlActJournalSizeLimit), limit)
+	var ckptBusy int
+	require.NoError(t, s.ckpt.QueryRow("PRAGMA busy_timeout").Scan(&ckptBusy))
+	assert.Zero(t, ckptBusy, "checkpoint connection busy_timeout must be 0: a TRUNCATE holds the WAL write lock while it waits")
 
 	base := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
 	for i := range 1500 {

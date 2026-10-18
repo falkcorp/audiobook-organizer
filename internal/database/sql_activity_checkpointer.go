@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_checkpointer.go
-// version: 1.3.1
+// version: 1.3.0
 // guid: 5e0b7c2a-91d4-4f3e-8a6b-2c7d9e1f4a08
-// last-edited: 2026-10-18
+// last-edited: 2026-10-06
 
 // WAL checkpointing for SQLActivityStore.
 //
@@ -68,10 +68,16 @@ const (
 	// it is ZERO on purpose. Only TRUNCATE consults the busy handler (PASSIVE
 	// never does), and TRUNCATE takes the WAL write lock BEFORE it waits for
 	// readers to leave, so every millisecond it waits is a millisecond no
-	// Record can commit. At 1000 a reader that opened late made each TRUNCATE
-	// attempt hold the lock for a full second, and Records stalled for 2.5 s in
-	// review; at 0 the slowest Record was 4-10 ms. A busy TRUNCATE costs
-	// nothing to repeat: the background loop retries on its next idle tick.
+	// Record can commit. At 1000 a reader that opened after a VACUUM made each
+	// post-vacuum TRUNCATE attempt hold the lock for a full second, and Records
+	// stalled for 2.5 s in review; at 0 the slowest Record was 4-10 ms. A busy
+	// TRUNCATE costs nothing to repeat: truncateWALAfterVacuum retries with
+	// backoff and the background loop retries on its next idle tick.
+	//
+	// This is the RESTING value. The post-vacuum TRUNCATE alone raises it to
+	// vacuumTruncateResetWaitMS for that one statement on a pinned connection
+	// and sets it back to this value before releasing the connection
+	// (truncateWithResetWait), so the background loop never inherits a wait.
 	sqlActCkptBusyTimeoutMS = 0
 )
 

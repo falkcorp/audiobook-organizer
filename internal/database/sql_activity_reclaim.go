@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_reclaim.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f8c1a56-90d4-4e27-b6a1-7c05e2d84b93
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package database
 
@@ -123,9 +123,9 @@ func ReclaimMigratedActivity(
 	// The assertion lives here rather than at the call site so that the refusal
 	// can NAME what it actually got.
 	//
-	// Unlike FindSummaryClamper, this deliberately does NOT recurse through
+	// Unlike FindActivityVacuumer, this deliberately does NOT recurse through
 	// Primary()/Secondary(): that helper digs INTO the wrapper to reach the one
-	// backend that can clamp, whereas a reclaim needs the wrapper itself — it is
+	// backend that can vacuum, whereas a reclaim needs the wrapper itself — it is
 	// the only thing that knows whether reads have been flipped. So the correct
 	// assertion is on the outermost value, and today register.go hands the
 	// *MigratingActivityStore straight to activity.NewService with nothing in

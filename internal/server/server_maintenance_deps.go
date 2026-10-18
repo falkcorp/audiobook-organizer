@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.67.1
+// version: 1.67.2
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -401,6 +401,16 @@ func (s *Server) RecompactActivityDigests(ctx context.Context) (database.Recompa
 		return database.RecompactResult{}, nil
 	}
 	return s.activityService.RecompactDigests(ctx)
+}
+
+// VacuumActivityDB previews or performs a VACUUM of the SQLite activity
+// database. Backends with no SQLite side report Supported=false rather than an
+// error.
+func (s *Server) VacuumActivityDB(ctx context.Context, dryRun bool) (database.ActivityVacuumReport, error) {
+	if s.activityService == nil {
+		return database.ActivityVacuumReport{DryRun: dryRun}, nil
+	}
+	return database.RunActivityVacuum(ctx, s.activityService.Store(), dryRun)
 }
 
 // ActivityFilterIndexBackfiller returns the Pebble activity store behind the
