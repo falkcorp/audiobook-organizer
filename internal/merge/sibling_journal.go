@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package merge
 
@@ -266,11 +266,16 @@ func (ms *Service) followUnjournaled(loser, holderID string) error {
 // RestoreFollowedProgress is safe to run twice.
 //
 // When the survivor has itself been merged away since, the refollow goes to
-// the live book its chain leads to (ResolveSurvivor). When none is live, a
-// pending-repair record onto the survivor holds the move: the repair sweep
-// resolves the winner forward and moves the state once a live book exists,
-// and the purge keeps the loser while it holds state. It returns the
-// warnings and the first error.
+// the live book its chain leads to (ResolveSurvivor).
+//
+// Listening data is never removed. A follow with no live book to put the
+// state on (followHasDestination: the loser purged since, or a loser still in
+// the trash whose survivor leads to no live book) is not reversed: the state
+// stays on the holder, where the user can still see it, the follow is NOT
+// marked Undone, and a warning says so (the operation revert reports it in
+// RevertResult.Kept). No pending repair is written for it, so nothing is ever
+// queued to move state onto a purged book. It returns the warnings and the
+// first error.
 func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateFollow) bool, refollow bool) ([]string, error) {
 	var warnings []string
 	// Fixed bound: the refollow appends to j.StateFollows, and those new
@@ -279,6 +284,14 @@ func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateF
 	for i := 0; i < n; i++ {
 		f := j.StateFollows[i]
 		if f.Undone || !pick(i, f) {
+			continue
+		}
+		ok, why, err := followHasDestination(ms.db, j, f, refollow)
+		if err != nil {
+			return warnings, err
+		}
+		if !ok {
+			warnings = append(warnings, why)
 			continue
 		}
 		w, err := RestoreFollowedProgress(ms.db, f.HolderID, f.LoserID, f.SyncRedirected, f.Progress)
@@ -312,12 +325,11 @@ func (ms *Service) refollowOntoSurvivor(j *SiblingMoveJournal, loser string, und
 	}
 	target, err := ResolveSurvivor(ms.db, j.SurvivorID)
 	if errors.Is(err, ErrNoLiveSurvivor) {
-		if perr := putPendingRepair(ms.db, PendingUserStateRepair{
-			LoserBookID: loser, WinnerBookID: j.SurvivorID, RecordedAt: time.Now().UTC(),
-		}); perr != nil {
-			return nil, fmt.Errorf("survivor %s of loser %s is not live and no repair record could be written: %w", j.SurvivorID, loser, perr)
-		}
-		return []string{fmt.Sprintf("survivor %s is no longer live and leads to no live book; loser %s's state stays on it, held by a pending user-state repair", j.SurvivorID, loser)}, nil
+		// undoStateFollows checked under the same merge lock that a live
+		// end existed (followHasDestination), so this is a book purged in
+		// between by a path outside the lock. Never queue state onto a
+		// purged book: fail, and the follow stays to be retried.
+		return nil, fmt.Errorf("survivor %s of loser %s leads to no live book; loser's state not refollowed", j.SurvivorID, loser)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve survivor %s: %w", j.SurvivorID, err)
@@ -330,6 +342,76 @@ func (ms *Service) refollowOntoSurvivor(j *SiblingMoveJournal, loser string, und
 		return warnings, err
 	}
 	return warnings, nil
+}
+
+// followHasDestination reports whether reversing follow f has a live book to
+// put the loser's state on. The loser itself is that book while it exists (a
+// per-loser undo brings it back; a whole undo of a live loser restores onto
+// it). A whole undo (refollow) of a loser still in the trash refollows onto
+// the live end of the survivor's chain, so it needs one. With no destination
+// it returns false and the reason: reversing would write the state onto a
+// purged book, or onto a trashed one that nothing will ever follow on.
+func followHasDestination(db interface {
+	GetBookByID(id string) (*database.Book, error)
+}, j *SiblingMoveJournal, f StateFollow, refollow bool) (bool, string, error) {
+	b, err := db.GetBookByID(f.LoserID)
+	if err != nil {
+		return false, "", fmt.Errorf("read loser %s: %w", f.LoserID, err)
+	}
+	if b == nil {
+		return false, fmt.Sprintf("loser %s has been purged since the merge; its listening state stays on %s", f.LoserID, f.HolderID), nil
+	}
+	if refollow && b.IsSoftDeleted() {
+		_, err := ResolveSurvivor(db, j.SurvivorID)
+		if errors.Is(err, ErrNoLiveSurvivor) {
+			return false, fmt.Sprintf("loser %s is in the trash and survivor %s leads to no live book; its listening state stays on %s", f.LoserID, j.SurvivorID, f.HolderID), nil
+		}
+		if err != nil {
+			return false, "", fmt.Errorf("resolve survivor %s: %w", j.SurvivorID, err)
+		}
+	}
+	return true, "", nil
+}
+
+// SiblingUndoKeptFollows predicts, read-only, what a whole undo of sibling
+// journal journalID (UndoSiblingMove) would leave in place for want of a live
+// destination: one line per state follow whose listening state would stay on
+// its holder (followHasDestination). The operation preflight reports these.
+func SiblingUndoKeptFollows(db interface {
+	GetRaw(key string) ([]byte, error)
+	GetBookByID(id string) (*database.Book, error)
+}, journalID string) ([]string, error) {
+	if journalID == "" || strings.ContainsAny(journalID, ":/") {
+		return nil, ErrSiblingJournalNotFound
+	}
+	data, err := db.GetRaw(siblingJournalKey(journalID))
+	if err != nil {
+		return nil, fmt.Errorf("read sibling-move journal %s: %w", journalID, err)
+	}
+	if data == nil {
+		return nil, ErrSiblingJournalNotFound
+	}
+	var j SiblingMoveJournal
+	if err := json.Unmarshal(data, &j); err != nil {
+		return nil, fmt.Errorf("decode sibling-move journal %s: %w", journalID, err)
+	}
+	var kept []string
+	for i, f := range j.StateFollows {
+		if f.Undone || isRefollow(&j, i) || slices.Contains(j.UndoneSiblings, f.HolderID) {
+			continue
+		}
+		if !slices.ContainsFunc(j.Siblings, func(s MovedSibling) bool { return s.BookID == f.HolderID }) {
+			continue
+		}
+		ok, why, err := followHasDestination(db, &j, f, true)
+		if err != nil {
+			return kept, err
+		}
+		if !ok {
+			kept = append(kept, why)
+		}
+	}
+	return kept, nil
 }
 
 // FlagFollow is one retired loser whose user state and sync redirect a merge
@@ -423,6 +505,10 @@ type SiblingUndoResult struct {
 	// sibling is resolved, otherwise what it was.
 	Status string `json:"status"`
 	SiblingRestoreResult
+	// Warnings are what this undo left as it is: a sibling moved to a third
+	// group since (also in MovedOn), listening state kept on its holder for
+	// want of a live destination, a survivor reconciled instead of restored.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func siblingJournalKey(id string) string { return siblingJournalPrefix + id }
@@ -608,9 +694,12 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 	res, restoreErr := ms.restoreMovedSiblings(j.IntoGroupID, todo)
 	j.UndoneSiblings = append(j.UndoneSiblings, res.Restored...)
 	j.UndoneSiblings = append(j.UndoneSiblings, res.AlreadyBack...)
+	callWarnings := append([]string(nil), followWarnings...)
 	for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
 		j.UndoneSiblings = append(j.UndoneSiblings, id)
-		j.Warnings = append(j.Warnings, fmt.Sprintf("book %s moved to version group %s since the merge; left there", id, res.MovedOn[id]))
+		w := fmt.Sprintf("book %s moved to version group %s since the merge; left there", id, res.MovedOn[id])
+		j.Warnings = append(j.Warnings, w)
+		callWarnings = append(callWarnings, w)
 	}
 	// A group every one of whose siblings is back is no longer one the merge
 	// emptied; drop its trash-restore redirect (group_redirect.go).
@@ -639,7 +728,7 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 			dropSurvivorReconcileMarkers(ms.db, f.HolderID, f.LoserID, f.Progress)
 		}
 	}
-	return &SiblingUndoResult{JournalID: j.ID, Status: j.Status, SiblingRestoreResult: res}, nil
+	return &SiblingUndoResult{JournalID: j.ID, Status: j.Status, SiblingRestoreResult: res, Warnings: callWarnings}, nil
 }
 
 func siblingJournalFullyUndone(j *SiblingMoveJournal) bool {
