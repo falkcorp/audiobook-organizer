@@ -1,5 +1,5 @@
 // file: internal/merge/state_follow_followups_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1056ccb5-89ca-4487-9ff7-533be24d6942
 // last-edited: 2026-10-18
 
