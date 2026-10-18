@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
 // last-edited: 2026-10-18
 
@@ -100,7 +100,7 @@ func rev5Listened(t *testing.T, store *database.PebbleStore, user, book string) 
 // write (round 6), so the client waits and its write lands on top. Before
 // round 5 the put-back took no stripe and did not re-read, so it wrote the
 // before-snapshot (100 seconds) over the sync.
-func TestRev5_PlainPutBackKeepsAClientWriteThatLandsBeforeTheStripe(t *testing.T) {
+func TestRev5_PlainPutBackKeepsAClientWriteThatRacesIt(t *testing.T) {
 	store, f, res := rev5Seed(t)
 	w := &rev5Store{PebbleStore: store, survivor: f.survivor}
 	fired := false

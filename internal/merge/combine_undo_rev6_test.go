@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev6_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e0dd46d-1455-44fc-94b7-899dc9c35055
 // last-edited: 2026-10-18
 
@@ -56,8 +56,9 @@ type rev6Store struct {
 	// restore, a step the undo takes after the progress put-back.
 	failLockDel int
 	// failLandedMarker fails the marker write that records a put-back's
-	// landed state (recordPutBackLanded).
-	failLandedMarker bool
+	// landed state (recordPutBackLanded); landedMarkerFails counts them.
+	failLandedMarker  bool
+	landedMarkerFails int
 }
 
 func (s *rev6Store) DeleteMetadataFieldState(bookID, field string) error {
@@ -70,6 +71,7 @@ func (s *rev6Store) DeleteMetadataFieldState(bookID, field string) error {
 
 func (s *rev6Store) SetRaw(key string, value []byte) error {
 	if s.failLandedMarker && strings.HasPrefix(key, survivorReconcilePrefix) && strings.Contains(string(value), `"post_updated_at"`) {
+		s.landedMarkerFails++
 		return errors.New("injected landed-marker write failure")
 	}
 	return s.PebbleStore.SetRaw(key, value)
@@ -135,9 +137,11 @@ func TestRev6_RerunAfterALandedReconcileIsSilent(t *testing.T) {
 // way.
 func TestRev6_LandedMarkerWriteFailureFallsBackToTheWarning(t *testing.T) {
 	store, keep, gone, user, res := rev6Seed(t)
-	_, err := NewService(&rev6Store{PebbleStore: store, failLockDel: 1, failLandedMarker: true}).UndoCombine(res.JournalID)
-	require.ErrorContains(t, err, "injected lock delete failure")
+	w := &rev6Store{PebbleStore: store, failLockDel: 1, failLandedMarker: true}
+	_, err := NewService(w).UndoCombine(res.JournalID)
+	require.ErrorContains(t, err, "injected lock delete failure", "the undo went on past the put-back")
 	require.NotContains(t, err.Error(), "landed-marker", "a landed put-back is not failed for its marker")
+	require.Positive(t, w.landedMarkerFails, "the put-back tried to record its landed write")
 
 	re, err := NewService(store).UndoCombine(res.JournalID)
 	require.NoError(t, err)
