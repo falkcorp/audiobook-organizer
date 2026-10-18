@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -42,7 +42,8 @@
 // 🔴 AND THE CHOICE IS PERSISTED. ReviewItem.ChosenAction records what the human
 // picked, written atomically with the status (database.ReviewItemApplyClaimer: DecideReviewItem
 // for a decision, FinishReviewItemApply for an apply). That matters
-// because with review_apply_enabled OFF — production's setting — approving executes
+// because with review_apply_enabled OFF (its default, and whatever a deployment has it
+// set to; production has had it ON since 2026-08-17) approving executes
 // nothing, and approving the same item again once the switch is on does the work
 // later (POST /review/replay-approved did that in one call until 01-P81j retired it).
 // The second approve reads ChosenAction first (effectiveActionFor) and only falls back
@@ -590,6 +591,19 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, ifUpdate
 			&database.ReviewClaimConflictError{ID: id, Status: item.Status, Reason: database.ReviewClaimChanged})
 	}
 
+	// 🔴 A needs_attention item is approved only with apply ENABLED. Its status says an
+	// apply of it was abandoned half done, so approving it means re-running that apply;
+	// with the switch off nothing would run, yet the decision write would move it to
+	// approved and erase the abandoned-action note, so the operator would lose the
+	// only record that the library may hold a partial apply. It can still be rejected
+	// (rejectOne), which is an answer that needs no apply.
+	if item.Status == database.ReviewStatusNeedsAttention && !applyOn {
+		return nil, currentActionFor(*item), "", rejectf(http.StatusConflict, "REVIEW_APPLY_DISABLED",
+			"this item needs attention because an apply of "+strconv.Quote(item.ApplyAbandonedAction)+" was abandoned "+
+				"part way, so approving it means running that apply again, which needs review_apply_enabled to be on. "+
+				"Enable it and approve again, or reject the item")
+	}
+
 	// The default is the hold's EFFECTIVE action, not the raw payload recommendation:
 	// re-approving an already-decided hold with an empty body must not silently revert
 	// a human's recorded override back to the machine's suggestion. Re-approve is a
@@ -642,8 +656,8 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, ifUpdate
 	// This is what makes an override durable, and it is the reason the 409
 	// REVIEW_OVERRIDE_NOT_PERSISTABLE refusal that used to sit here is gone. Before
 	// the decision write recorded it (now DecideReviewItem) the chosen action was stored NOWHERE, so with
-	// review_apply_enabled off — production's setting — a reviewer could not record a
-	// disagreement at all: approving a `combine` hold as `separate` wrote plain
+	// review_apply_enabled off (production had it off until 2026-08-17) a reviewer could
+	// not record a disagreement at all: approving a `combine` hold as `separate` wrote plain
 	// "approved", and the later apply re-resolved the action from the payload and
 	// would merge the books the human said to keep apart. Refusing the override was the
 	// only safe answer then, but it also meant owner item 2 did not actually ship.
@@ -758,9 +772,14 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 	if applyErr != nil {
 		settled = true
 		reason := applyErr
-		// A first run failed before changing anything it could not retry: hand the
-		// claim back so the item is decidable again. A re-run's release keeps the item
-		// held as interrupted (see the doc above), and the reason says so.
+		// A first run that fails is handed back: the claim is released and the item is
+		// decidable again, EVEN IF the apply wrote part of what it set out to. The
+		// handlers are not all-or-nothing (ApplyVersionGroup makes two writes, and a
+		// duplicate-of merge can stop after a partial merge), so "failed" does not
+		// mean "changed nothing". Only a RE-RUN's release keeps the item held as
+		// interrupted (see the doc above), and the reason says so. Holding a failed
+		// first run the same way is an open owner decision (todo.d fragment
+		// 2026-10-18-hold-failed-first-run-apply.md).
 		relErr := h.releaseClaim(id, claim.Token)
 		if relErr != nil {
 			reason = fmt.Errorf("%w; and its apply claim could not be released, so the item stays "+
@@ -771,17 +790,22 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 				"retry, or abandon the apply (POST /api/v1/review/items/%s/abandon-apply) to move it to "+
 				"needs_attention for someone to check the library", chosen, applyErr, id)
 		}
+		// A failed re-run is a 409 with its own code, not a 500: the item is still held
+		// as interrupted, which the caller has to act on (retry or abandon), and a 500's
+		// body would hide the reason. It is checked BEFORE the iTunes refusal below
+		// because the code is what tells a client whether the item is still in a
+		// pending list: a re-run refused by the iTunes guard leaves the item applying,
+		// so it answers REVIEW_RERUN_FAILED like any other failed re-run (the reason
+		// carries the iTunes detail), whereas REVIEW_ITUNES_PROTECTED means a first run
+		// that was handed back and is still pending.
+		if relErr == nil && claim.TookOver {
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_RERUN_FAILED", reason.Error())
+		}
 		// A refusal because a member has a file under the active iTunes library is
 		// 409, not a 500: the item keeps its status and bulk approve skips it
 		// instead of aborting.
 		if errors.Is(applyErr, merge.ErrITunesProtected) {
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", reason.Error())
-		}
-		// A failed re-run is a 409 with its own code, not a 500: the item is still held
-		// as interrupted, which the caller has to act on (retry or abandon), and a 500's
-		// body would hide the reason.
-		if relErr == nil && claim.TookOver {
-			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_RERUN_FAILED", reason.Error())
 		}
 		return nil, "", "", reason
 	}
