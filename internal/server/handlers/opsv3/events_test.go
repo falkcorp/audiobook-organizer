@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
 // last-edited: 2026-10-18
 
@@ -12,10 +12,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -257,12 +260,14 @@ func TestSSEClientCap(t *testing.T) {
 // one more is 429 while other users still get in, closing one frees a place,
 // and requests with no user are bounded only by MaxClients.
 func TestSSEPerUserCap(t *testing.T) {
+	// A session-authenticated request's bucket: the user id and no API key id.
+	viewerBucket := viewer.user + "\x00"
 	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClients: 10, MaxClientsPerUser: 2})
-	_, a1, err := br.subscribe(viewer.user, 0, resumeNone)
+	_, a1, err := br.subscribe(viewerBucket, 0, resumeNone)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, a2, err := br.subscribe(viewer.user, 0, resumeNone)
+	_, a2, err := br.subscribe(viewerBucket, 0, resumeNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,12 +290,12 @@ func TestSSEPerUserCap(t *testing.T) {
 	}
 	a1()
 	a1() // idempotent: must not free a second place
-	if _, u, err := br.subscribe(viewer.user, 0, resumeNone); err != nil {
+	if _, u, err := br.subscribe(viewerBucket, 0, resumeNone); err != nil {
 		t.Fatalf("after one closed: %v", err)
 	} else {
 		defer u()
 	}
-	if _, _, err := br.subscribe(viewer.user, 0, resumeNone); !errors.Is(err, ErrTooManyUserClients) {
+	if _, _, err := br.subscribe(viewerBucket, 0, resumeNone); !errors.Is(err, ErrTooManyUserClients) {
 		t.Fatalf("a double unsubscribe freed an extra place: %v", err)
 	}
 }
@@ -519,4 +524,139 @@ func unmarshalView(t testing.TB, data string) RunView {
 		t.Fatalf("event data is not a RunView: %s", data)
 	}
 	return v
+}
+
+// failWriter is a ResponseWriter whose Write fails after okWrites writes, like
+// a connection the client has dropped.
+type failWriter struct {
+	hdr      http.Header
+	okWrites int
+	writes   int
+}
+
+func (w *failWriter) Header() http.Header { return w.hdr }
+func (w *failWriter) WriteHeader(int)     {}
+func (w *failWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.okWrites {
+		return 0, errors.New("write: broken pipe")
+	}
+	return len(p), nil
+}
+
+// TestSSEStreamEndsWhenAWriteFails: a failed write to the client ends Events
+// at once (it does not keep looping until the request context ends) and frees
+// the stream's place, both for the opening heartbeat and for a later event.
+func TestSSEStreamEndsWhenAWriteFails(t *testing.T) {
+	for _, okWrites := range []int{0, 1} {
+		t.Run("ok_writes_"+strconv.Itoa(okWrites), func(t *testing.T) {
+			br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{Heartbeat: time.Hour})
+			h := New(Deps{Runs: &memRuns{}, Broker: br})
+			fw := &failWriter{hdr: http.Header{}, okWrites: okWrites}
+			c, _ := gin.CreateTestContext(fw)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v3/ops/events", nil)
+			returned := make(chan struct{})
+			go func() { h.Events(c); close(returned) }()
+			if okWrites > 0 {
+				// Wait for the stream to subscribe, then give it an event to
+				// write into the broken connection.
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					br.mu.Lock()
+					n := len(br.clients)
+					br.mu.Unlock()
+					if n > 0 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("stream never subscribed")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				br.publish(RunView{ID: "r1"})
+			}
+			select {
+			case <-returned:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Events kept running after a write to the client failed")
+			}
+			br.mu.Lock()
+			defer br.mu.Unlock()
+			if len(br.clients) != 0 {
+				t.Fatalf("%d clients still registered after the stream ended", len(br.clients))
+			}
+		})
+	}
+}
+
+// TestSSETooManyStreamsHasRetryAfter: the 429 names how long to wait.
+func TestSSETooManyStreamsHasRetryAfter(t *testing.T) {
+	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClientsPerUser: 1})
+	_, u, err := br.subscribe(viewer.user+"\x00", 0, resumeNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u()
+	r := newRouter(New(Deps{Runs: &memRuns{}, Broker: br}))
+	w := do(t, r, viewer, http.MethodGet, "/api/v3/ops/events", nil)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second stream = %d, want 429", w.Code)
+	}
+	if got, want := w.Header().Get("Retry-After"), strconv.Itoa(tooManyStreamsRetryAfterSeconds); got != want {
+		t.Fatalf("Retry-After = %q, want %q", got, want)
+	}
+}
+
+// TestSSEPerUserCapIsPerCredential: one user's session and API key streams
+// are counted apart, so a script on a key cannot use up the browser session's
+// places, and each credential still stops at MaxClientsPerUser.
+func TestSSEPerUserCapIsPerCredential(t *testing.T) {
+	const perUser = 2
+	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClients: 20, MaxClientsPerUser: perUser})
+	h := New(Deps{Runs: &memRuns{}, Broker: br})
+	r := gin.New()
+	g := r.Group("/api/v3", func(c *gin.Context) {
+		ctx := auth.WithUser(c.Request.Context(), &database.User{ID: "u-same"})
+		ctx = auth.WithPermissions(ctx, []string{auth.PermLibraryView})
+		c.Request = c.Request.WithContext(ctx)
+		// The key the API-key middleware records (middleware.CurrentAPIKey
+		// reads this gin key).
+		if id := c.GetHeader("X-Test-Key"); id != "" {
+			c.Set("auth_api_key", &database.APIKey{ID: id})
+		}
+		c.Next()
+	})
+	h.Register(g, testPerm)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	open := func(keyID string) *http.Response {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v3/ops/events", nil)
+		if keyID != "" {
+			req.Header.Set("X-Test-Key", keyID)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cancel(); _ = resp.Body.Close() })
+		return resp
+	}
+	for _, cred := range []string{"", "key-1"} {
+		for i := range perUser {
+			if resp := open(cred); resp.StatusCode != http.StatusOK {
+				t.Fatalf("credential %q stream %d = %d, want 200", cred, i+1, resp.StatusCode)
+			}
+		}
+		if resp := open(cred); resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("credential %q past the cap = %d, want 429", cred, resp.StatusCode)
+		}
+	}
+	// A different key of the same user is its own bucket too.
+	if resp := open("key-2"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second key = %d, want 200", resp.StatusCode)
+	}
 }

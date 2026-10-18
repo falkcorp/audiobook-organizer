@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
 // last-edited: 2026-10-18
 
@@ -25,19 +25,22 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // SSE tuning. Heartbeat is the comment line that keeps an idle connection
 // open; the ring is how far back Last-Event-ID can resume; ClientBuffer is how
 // many unsent events one slow client may hold before its oldest are dropped.
 // MaxClients bounds the open streams (each holds a goroutine and a queue);
-// one more is answered 503. MaxClientsPerUser bounds one signed-in user's
-// open streams so a single account (a page reloaded in a loop, a script)
-// cannot take every place; one more is answered 429. A request with no user
-// (auth disabled, first run) is bounded only by MaxClients: there is no
-// account to tell apart, and keying on the client address would put every
-// caller behind one reverse proxy into the same small bucket. MaxWatched bounds the runs the broker re-reads
-// until they settle (see Run).
+// one more is answered 503. MaxClientsPerUser bounds the open streams of one
+// bucket, which is one signed-in user presenting one credential: the user id
+// plus the API key id (see streamBucket), so a script using an API key cannot
+// use up the places of the same user's browser session; one more is answered
+// 429 with Retry-After. A request with no user (auth disabled, first run) is
+// bounded only by MaxClients: there is no account to tell apart, and keying on
+// the client address would put every caller behind one reverse proxy into the
+// same small bucket. MaxWatched bounds the runs the broker re-reads until they
+// settle (see Run).
 const (
 	DefaultHeartbeat    = 15 * time.Second
 	DefaultRingSize     = 512
@@ -46,10 +49,15 @@ const (
 	DefaultMaxPerUser   = 4
 	DefaultMaxWatched   = 256
 	defaultFlushEvery   = 250 * time.Millisecond
+
+	// tooManyStreamsRetryAfterSeconds is the Retry-After of the 429
+	// TOO_MANY_STREAMS answer: long enough that a reconnect loop backs off,
+	// short enough that a page reload after closing a tab is not locked out.
+	tooManyStreamsRetryAfterSeconds = 5
 )
 
 // subscribe's refusals: past MaxClients, and past MaxClientsPerUser for one
-// user.
+// bucket.
 var (
 	ErrTooManyClients     = errors.New("opsv3: too many event stream clients")
 	ErrTooManyUserClients = errors.New("opsv3: too many event streams for this user")
@@ -102,7 +110,8 @@ type Broker struct {
 	seq     uint64
 	ring    []message // oldest first, at most opt.RingSize
 	clients map[*client]struct{}
-	// perUser counts the open streams of each signed-in user.
+	// perUser counts the open streams of each bucket (streamBucket): a
+	// signed-in user and the API key, if any, they authenticated with.
 	perUser map[string]int
 
 	// Lazy start (StartOnFirstSubscriber): Run begins with the first client.
@@ -324,6 +333,22 @@ func (b *Broker) publish(v RunView) {
 	b.mu.Unlock()
 }
 
+// streamBucket is the per-user cap's key: the user id and, for a request
+// authenticated by an API key, the key's id, joined by a NUL (neither can
+// contain one), so session and key streams of one user are counted apart.
+// It is "" when the request has no user: there is no cap then.
+func streamBucket(c *gin.Context) string {
+	u, ok := auth.UserFromContext(c.Request.Context())
+	if !ok {
+		return ""
+	}
+	var keyID string
+	if key, ok := middleware.CurrentAPIKey(c); ok {
+		keyID = key.ID
+	}
+	return u.ID + "\x00" + keyID
+}
+
 // client is one SSE connection's bounded queue.
 type client struct {
 	mu     sync.Mutex
@@ -378,15 +403,16 @@ const (
 // after lastID; when the ring no longer reaches back that far (or for
 // resumeResync: an id of another process, or one that does not parse) the
 // client is marked to resync instead. Past MaxClients it refuses, and past
-// MaxClientsPerUser streams of the same user (a non-empty userID).
-func (b *Broker) subscribe(userID string, lastID uint64, mode resumeMode) (*client, func(), error) {
+// MaxClientsPerUser streams of the same bucket (a non-empty bucket, see
+// streamBucket).
+func (b *Broker) subscribe(bucket string, lastID uint64, mode resumeMode) (*client, func(), error) {
 	c := newClient(b.opt.ClientBuffer)
 	b.mu.Lock()
 	if len(b.clients) >= b.opt.MaxClients {
 		b.mu.Unlock()
 		return nil, nil, ErrTooManyClients
 	}
-	if userID != "" && b.perUser[userID] >= b.opt.MaxClientsPerUser {
+	if bucket != "" && b.perUser[bucket] >= b.opt.MaxClientsPerUser {
 		b.mu.Unlock()
 		return nil, nil, ErrTooManyUserClients
 	}
@@ -410,8 +436,8 @@ func (b *Broker) subscribe(userID string, lastID uint64, mode resumeMode) (*clie
 		}
 	}
 	b.clients[c] = struct{}{}
-	if userID != "" {
-		b.perUser[userID]++
+	if bucket != "" {
+		b.perUser[bucket]++
 	}
 	b.mu.Unlock()
 	b.ensureRunning()
@@ -420,9 +446,9 @@ func (b *Broker) subscribe(userID string, lastID uint64, mode resumeMode) (*clie
 		once.Do(func() {
 			b.mu.Lock()
 			delete(b.clients, c)
-			if userID != "" {
-				if b.perUser[userID]--; b.perUser[userID] <= 0 {
-					delete(b.perUser, userID)
+			if bucket != "" {
+				if b.perUser[bucket]--; b.perUser[bucket] <= 0 {
+					delete(b.perUser, bucket)
 				}
 			}
 			b.mu.Unlock()
@@ -438,7 +464,8 @@ func (b *Broker) subscribe(userID string, lastID uint64, mode resumeMode) (*clie
 // reading. Event ids are "<boot nonce>-<sequence>". The stream ends when the
 // client leaves or the server starts shutting down (Deps.Closing). Past
 // MaxClients open streams the answer is 503; past MaxClientsPerUser streams
-// of the signed-in caller it is 429.
+// of the caller's bucket (streamBucket: user plus API key) it is 429 with a
+// Retry-After header. The loop ends when a write to the client fails.
 func (h *Handler) Events(c *gin.Context) {
 	b := h.d.Broker
 	if b == nil {
@@ -453,12 +480,9 @@ func (h *Handler) Events(c *gin.Context) {
 			lastID, mode = n, resumeAfter
 		}
 	}
-	var userID string
-	if u, ok := auth.UserFromContext(c.Request.Context()); ok {
-		userID = u.ID
-	}
-	cl, unsubscribe, err := b.subscribe(userID, lastID, mode)
+	cl, unsubscribe, err := b.subscribe(streamBucket(c), lastID, mode)
 	if errors.Is(err, ErrTooManyUserClients) {
+		c.Header("Retry-After", strconv.Itoa(tooManyStreamsRetryAfterSeconds))
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many open operations event streams for this user; close one and retry", "TOO_MANY_STREAMS")
 		return
 	}
@@ -473,7 +497,9 @@ func (h *Handler) Events(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
-	fmt.Fprint(c.Writer, ": heartbeat\n\n")
+	if _, err := fmt.Fprint(c.Writer, ": heartbeat\n\n"); err != nil {
+		return
+	}
 	c.Writer.Flush()
 
 	hb := time.NewTicker(b.opt.Heartbeat)
@@ -489,19 +515,25 @@ func (h *Handler) Events(c *gin.Context) {
 		case <-closing:
 			return
 		case <-hb.C:
-			fmt.Fprint(c.Writer, ": heartbeat\n\n")
+			if _, err := fmt.Fprint(c.Writer, ": heartbeat\n\n"); err != nil {
+				return
+			}
 			c.Writer.Flush()
 		case <-cl.wake:
 			msgs, resync := cl.take()
 			if resync {
-				fmt.Fprint(c.Writer, "event: resync\ndata: {\"reason\":\"events missed\"}\n\n")
+				if _, err := fmt.Fprint(c.Writer, "event: resync\ndata: {\"reason\":\"events missed\"}\n\n"); err != nil {
+					return
+				}
 			}
 			for _, m := range msgs {
 				data, err := json.Marshal(m.view)
 				if err != nil {
 					continue
 				}
-				fmt.Fprintf(c.Writer, "id: %s\nevent: run\ndata: %s\n\n", b.eventID(m.id), data)
+				if _, err := fmt.Fprintf(c.Writer, "id: %s\nevent: run\ndata: %s\n\n", b.eventID(m.id), data); err != nil {
+					return
+				}
 			}
 			c.Writer.Flush()
 		}
