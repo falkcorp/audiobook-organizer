@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
 // last-edited: 2026-10-18
 
@@ -547,14 +547,13 @@ func TestDefsListEffectsScheduleReadinessAndLastRun(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	next := now.Add(time.Hour)
 	fin := now.Add(-time.Hour)
-	mem := &memRuns{
-		done: []database.RunRecord{
-			{ID: "old", DefID: "test.nightly", State: state.V3Failed, CompletedAt: ptr(fin.Add(-time.Hour))},
-			{ID: "new", DefID: "test.nightly", State: state.V3Succeeded, CompletedAt: &fin},
-		},
-		runs:  map[string]database.RunRecord{"viaSched": {ID: "viaSched", DefID: "test.weekly", State: state.V3Canceled, CompletedAt: &fin}},
-		sched: map[string]database.SchedState{"test.weekly": {DefID: "test.weekly", LastRunID: "viaSched"}},
-	}
+	mem := &memRuns{runs: map[string]database.RunRecord{}}
+	last := &fakeLastRuns{by: map[string]database.RunRecord{
+		"test.nightly": {ID: "new", DefID: "test.nightly", State: state.V3Succeeded, CompletedAt: &fin},
+		// Finished a month ago: a manual def's last run is shown however
+		// old it is.
+		"test.weekly": {ID: "monthAgo", DefID: "test.weekly", State: state.V3Canceled, CompletedAt: ptr(now.AddDate(0, -1, 0))},
+	}}
 	defs := &fakeDefs{
 		defs: map[string]DefInfo{
 			"test.nightly": {ID: "test.nightly", Title: "Nightly", Kind: "batch", Permissions: []auth.Permission{auth.PermScanTrigger}, Writes: []string{"book"}},
@@ -564,7 +563,7 @@ func TestDefsListEffectsScheduleReadinessAndLastRun(t *testing.T) {
 		ready: map[string]string{"test.manual": "waiting for startup warmup"},
 	}
 	sched := fakeSched{"test.nightly": {Kind: "daily_at", Active: true, Live: true, NextFire: &next}}
-	r := newRouter(New(Deps{Runs: mem, Defs: defs, Sched: sched, Now: func() time.Time { return now }}))
+	r := newRouter(New(Deps{Runs: mem, LastRuns: last, Defs: defs, Sched: sched, Now: func() time.Time { return now }}))
 	type listDefs struct {
 		Items []DefView `json:"items"`
 		Total int       `json:"total"`
@@ -588,8 +587,8 @@ func TestDefsListEffectsScheduleReadinessAndLastRun(t *testing.T) {
 		t.Errorf("nightly effects/permission = %+v / %s", n.Effects, n.Permission)
 	}
 	w := by["test.weekly"]
-	if w.LastRun == nil || w.LastRun.ID != "viaSched" || w.LastRun.Outcome != "canceled" {
-		t.Errorf("weekly last_run = %+v, want the scheduler's recorded run", w.LastRun)
+	if w.LastRun == nil || w.LastRun.ID != "monthAgo" || w.LastRun.Outcome != "canceled" {
+		t.Errorf("weekly last_run = %+v, want the month-old run", w.LastRun)
 	}
 	if !w.Effects.ReadOnly || w.Schedule.Kind != "manual" || w.Schedule.NextFire != nil {
 		t.Errorf("weekly = %+v", w)
@@ -656,88 +655,56 @@ func TestStartAndCancelNeedScanTriggerFloor(t *testing.T) {
 	}
 }
 
-// pagedDone is a RunReader whose finished-run window behaves like the
-// store's: oldest first, cut at limit with complete=false. It counts the
-// scheduler-state reads.
-type pagedDone struct {
-	memRuns
-	all        []database.RunRecord // sorted by CompletedAt
-	pages      int
-	schedReads int
-}
-
-func (p *pagedDone) ListDoneRunsSinceV3(since time.Time, limit int) ([]database.RunRecord, bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pages++
-	var out []database.RunRecord
-	for _, r := range p.all {
-		if r.CompletedAt.Before(since) {
-			continue
-		}
-		if len(out) == limit {
-			return out, false, nil
-		}
-		out = append(out, r)
-	}
-	return out, true, nil
-}
-
-func (p *pagedDone) GetSchedV3(id string) (*database.SchedState, error) {
-	p.mu.Lock()
-	p.schedReads++
-	p.mu.Unlock()
-	return p.memRuns.GetSchedV3(id)
-}
-
-// TestDefsLastRunIsTheNewestWhenTheWindowIsTruncated: a day with more
-// finished runs than one scan holds must still show each definition's newest
-// run, not the newest of the oldest page.
-func TestDefsLastRunIsTheNewestWhenTheWindowIsTruncated(t *testing.T) {
+// TestDefsLastRunIsCachedAndErrorsAreNot: a definition's last run is looked
+// up once per cache period, not on every request; a failed lookup reads as
+// null and is retried on the next request instead of being cached.
+func TestDefsLastRunIsCachedAndErrorsAreNot(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	p := &pagedDone{memRuns: memRuns{runs: map[string]database.RunRecord{}}}
-	n := lastRunScan*2 + 7
-	for i := range n {
-		at := now.Add(-23 * time.Hour).Add(time.Duration(i) * time.Second)
-		id := "old"
-		if i == n-1 {
-			id = "newest"
-		}
-		p.all = append(p.all, database.RunRecord{ID: id, DefID: "test.busy", State: state.V3Succeeded, CompletedAt: ptr(at)})
+	fin := now.Add(-time.Hour)
+	last := &fakeLastRuns{
+		by:   map[string]database.RunRecord{"test.a": {ID: "a1", DefID: "test.a", State: state.V3Succeeded, CompletedAt: &fin}},
+		fail: map[string]bool{"test.b": true},
 	}
-	defs := &fakeDefs{defs: map[string]DefInfo{"test.busy": {ID: "test.busy", Title: "Busy", Kind: "task"}}}
-	r := newRouter(New(Deps{Runs: p, Defs: defs, Now: func() time.Time { return now }}))
-	got := decode[DefView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.busy", nil))
-	if got.LastRun == nil || got.LastRun.ID != "newest" {
-		t.Fatalf("last_run = %+v, want the newest run", got.LastRun)
-	}
-	if p.pages < 2 {
-		t.Errorf("read %d pages, want the window paged to its end", p.pages)
-	}
-}
-
-// TestDefsLastRunFallbackIsCached: the scheduler lookup for a definition that
-// did not run in the window is done once per cache period, not on every
-// request.
-func TestDefsLastRunFallbackIsCached(t *testing.T) {
-	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	p := &pagedDone{memRuns: memRuns{runs: map[string]database.RunRecord{}, sched: map[string]database.SchedState{}}}
 	defs := &fakeDefs{defs: map[string]DefInfo{
 		"test.a": {ID: "test.a", Title: "A", Kind: "task"},
 		"test.b": {ID: "test.b", Title: "B", Kind: "task"},
 	}}
 	clock := now
-	r := newRouter(New(Deps{Runs: p, Defs: defs, Now: func() time.Time { return clock }}))
+	r := newRouter(New(Deps{Runs: &memRuns{runs: map[string]database.RunRecord{}}, LastRuns: last, Defs: defs, Now: func() time.Time { return clock }}))
 	for range 3 {
-		do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs", nil)
+		got := decode[DefView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.b", nil))
+		if got.LastRun != nil {
+			t.Fatalf("failed lookup last_run = %+v, want null", got.LastRun)
+		}
+		do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.a", nil)
 	}
-	if p.schedReads != 2 {
-		t.Fatalf("scheduler state read %d times for 2 defs over 3 requests, want 2", p.schedReads)
+	// test.a once (cached), test.b three times (never cached).
+	if last.calls != 4 {
+		t.Fatalf("lookups = %d, want 4", last.calls)
 	}
 	clock = now.Add(lastRunTTL + time.Second)
-	do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs", nil)
-	if p.schedReads != 4 {
-		t.Fatalf("after the cache period: %d reads, want 4", p.schedReads)
+	got := decode[DefView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.a", nil))
+	if got.LastRun == nil || got.LastRun.ID != "a1" || last.calls != 5 {
+		t.Fatalf("after the cache period: last_run %+v, lookups %d, want a1 and 5", got.LastRun, last.calls)
+	}
+}
+
+// TestDefsLastRunFromTheStoreIndex: through a real store, a definition whose
+// last run finished long ago still shows it (the review case: a 24h window
+// made a manual def's last_run null), and a running run is not a last run.
+func TestDefsLastRunFromTheStoreIndex(t *testing.T) {
+	p := realStore(t)
+	old := insertRun(t, p, "test.manual")
+	finish(t, p, old, state.EvReturnNil)
+	open := insertRun(t, p, "test.manual")
+	step(t, p, open, state.EvDispatch, nil)
+	defs := &fakeDefs{defs: map[string]DefInfo{"test.manual": {ID: "test.manual", Title: "M", Kind: "task"}}}
+	// The clock is a year on: no window would still hold the finished run.
+	later := time.Now().AddDate(1, 0, 0)
+	r := newRouter(New(Deps{Runs: p, LastRuns: p, Defs: defs, Now: func() time.Time { return later }}))
+	got := decode[DefView](t, do(t, r, viewer, http.MethodGet, "/api/v3/ops/defs/test.manual", nil))
+	if got.LastRun == nil || got.LastRun.ID != old || got.LastRun.Outcome != "succeeded" {
+		t.Fatalf("last_run = %+v, want %s", got.LastRun, old)
 	}
 }
 

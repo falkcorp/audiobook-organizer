@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/helpers_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 83b0b0e7-6219-4470-952a-df087898cae5
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package opsv3
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -199,7 +200,6 @@ type memRuns struct {
 	runs        map[string]database.RunRecord
 	done        []database.RunRecord
 	doneCmplete bool
-	sched       map[string]database.SchedState
 }
 
 func (m *memRuns) set(id string, r database.RunRecord) {
@@ -226,9 +226,25 @@ func (m *memRuns) ListDoneRunsSinceV3(time.Time, int) ([]database.RunRecord, boo
 func (m *memRuns) ListItemOutcomesV3(string, database.ItemQuery) (database.ItemPage, error) {
 	return database.ItemPage{}, nil
 }
-func (m *memRuns) GetSchedV3(id string) (*database.SchedState, error) {
-	if s, ok := m.sched[id]; ok {
-		return &s, nil
+
+// fakeLastRuns is a LastRunFinder over fixed records; it counts lookups and
+// fails for the ids in fail.
+type fakeLastRuns struct {
+	mu    sync.Mutex
+	by    map[string]database.RunRecord
+	fail  map[string]bool
+	calls int
+}
+
+func (f *fakeLastRuns) LatestSettledRunV3(defID string) (*database.RunRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.fail[defID] {
+		return nil, errors.New("store unavailable")
+	}
+	if r, ok := f.by[defID]; ok {
+		return &r, nil
 	}
 	return nil, nil
 }

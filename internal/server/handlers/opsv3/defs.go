@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/defs.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a701dc58-da75-41f2-b165-03a957c6e540
 // last-edited: 2026-10-18
 
@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // EffectsView is a definition's declared effects.
@@ -75,114 +75,63 @@ type DefView struct {
 	PreviewParam *string `json:"preview_param"`
 }
 
-// lastRunWindow and lastRunTTL bound the work of finding every definition's
-// latest finished run: a pass over the last day's finished runs, kept for a
-// few seconds, plus a lookup of the scheduler's recorded last run for a
-// definition that did not run in the window (cached for as long).
-//
-// The window is read in pages of lastRunScan, oldest first, each page
-// starting where the last one ended, until the store says the window is
-// complete. Stopping after one page would keep the oldest runs and drop the
-// newest, so a busy day would show stale last runs. lastRunMaxPages bounds a
-// pathological day; past it the result is still the newest seen so far.
-const (
-	lastRunWindow   = 24 * time.Hour
-	lastRunTTL      = 5 * time.Second
-	lastRunScan     = 2000
-	lastRunMaxPages = 50
-)
+// lastRunTTL is how long a definition's looked-up last run is served before
+// it is looked up again.
+const lastRunTTL = 5 * time.Second
 
+// lastRunCache holds each definition's last finished run, as LastRunFinder
+// found it, for lastRunTTL. The lock guards the map only; lookups run outside
+// it, and concurrent requests for the same definition share one lookup.
 type lastRunCache struct {
 	mu   sync.Mutex
-	at   time.Time
-	byID map[string]LastRunView
-	// fallback is lastRunOf's scheduler lookups for this cache period; a
-	// nil value records "none".
-	fallback map[string]*LastRunView
+	byID map[string]lastRunEntry
+	sf   singleflight.Group
 }
 
-// lastRuns returns the latest finished run per definition within the window.
-func (h *Handler) lastRuns() map[string]LastRunView {
-	h.lastCache.mu.Lock()
-	defer h.lastCache.mu.Unlock()
-	now := h.d.Now()
-	if h.lastCache.byID != nil && now.Sub(h.lastCache.at) < lastRunTTL {
-		return h.lastCache.byID
-	}
-	out := map[string]LastRunView{}
-	if h.d.Runs != nil {
-		since := now.Add(-lastRunWindow)
-		for range lastRunMaxPages {
-			recs, complete, err := h.d.Runs.ListDoneRunsSinceV3(since, lastRunScan)
-			if err != nil {
-				break
-			}
-			// Oldest first, so a later run of the same definition replaces an
-			// earlier one.
-			for _, r := range recs {
-				out[r.DefID] = LastRunView{ID: r.ID, State: string(r.State), Outcome: outcomeOf(r.State), FinishedAt: r.CompletedAt}
-			}
-			if complete || len(recs) == 0 {
-				break
-			}
-			next := since
-			if last := recs[len(recs)-1].CompletedAt; last != nil {
-				next = *last
-			}
-			// The next page starts at the last completion seen (inclusive,
-			// so a run sharing that instant is not skipped; re-reading one is
-			// harmless). A page entirely at one instant cannot move the start,
-			// so step past it rather than read the same page again.
-			if !next.After(since) {
-				next = since.Add(time.Nanosecond)
-			}
-			since = next
-		}
-	}
-	h.lastCache.byID, h.lastCache.at = out, now
-	h.lastCache.fallback = map[string]*LastRunView{}
-	return out
+type lastRunEntry struct {
+	at time.Time
+	lr *LastRunView // nil: the definition has no finished run
 }
 
-// lastRunOf is the definition's last finished run: the window's, else the one
-// its schedule state recorded. The schedule lookup (two store reads) is
-// cached with the window, so listing every definition does not repeat it for
-// each one on every request.
-func (h *Handler) lastRunOf(defID string, window map[string]LastRunView) *LastRunView {
-	if lr, ok := window[defID]; ok {
-		return &lr
-	}
-	if h.d.Runs == nil {
+// lastRunOf is the definition's newest finished run (LastRunFinder), or nil
+// when it has none or no finder is wired. A lookup that fails is not cached
+// and reads as nil for this request.
+func (h *Handler) lastRunOf(defID string) *LastRunView {
+	if h.d.LastRuns == nil {
 		return nil
 	}
+	now := h.d.Now()
 	h.lastCache.mu.Lock()
-	if lr, ok := h.lastCache.fallback[defID]; ok {
+	if e, ok := h.lastCache.byID[defID]; ok && now.Sub(e.at) < lastRunTTL {
 		h.lastCache.mu.Unlock()
-		return lr
+		return e.lr
 	}
 	h.lastCache.mu.Unlock()
-	lr := h.schedLastRun(defID)
-	h.lastCache.mu.Lock()
-	if h.lastCache.fallback != nil {
-		h.lastCache.fallback[defID] = lr
+	v, err, _ := h.lastCache.sf.Do(defID, func() (any, error) {
+		rec, err := h.d.LastRuns.LatestSettledRunV3(defID)
+		if err != nil {
+			return nil, err
+		}
+		var lr *LastRunView
+		if rec != nil {
+			lr = &LastRunView{ID: rec.ID, State: string(rec.State), Outcome: outcomeOf(rec.State), FinishedAt: rec.CompletedAt}
+		}
+		h.lastCache.mu.Lock()
+		if h.lastCache.byID == nil {
+			h.lastCache.byID = map[string]lastRunEntry{}
+		}
+		h.lastCache.byID[defID] = lastRunEntry{at: now, lr: lr}
+		h.lastCache.mu.Unlock()
+		return lr, nil
+	})
+	if err != nil {
+		return nil
 	}
-	h.lastCache.mu.Unlock()
+	lr, _ := v.(*LastRunView)
 	return lr
 }
 
-func (h *Handler) schedLastRun(defID string) *LastRunView {
-	st, err := h.d.Runs.GetSchedV3(defID)
-	if err != nil || st == nil || st.LastRunID == "" {
-		return nil
-	}
-	rec, err := h.d.Runs.GetRunV3(st.LastRunID)
-	if err != nil || rec == nil || !state.ClassifyV3(rec.State).Settled {
-		return nil
-	}
-	return &LastRunView{ID: rec.ID, State: string(rec.State), Outcome: outcomeOf(rec.State), FinishedAt: rec.CompletedAt}
-}
-
-func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo, window map[string]LastRunView) DefView {
+func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo) DefView {
 	perms := requiredPerms(d, true)
 	ps := append([]string(nil), perms...)
 	approver := d.Approver
@@ -194,7 +143,7 @@ func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo, window map[
 		Permission: ps[0], Permissions: ps, Approver: approver,
 		Effects:  EffectsView{ReadOnly: d.ReadOnly, Reads: nonNil(d.Reads), Writes: nonNil(d.Writes), Deletes: nonNil(d.Deletes)},
 		Schedule: ScheduleView{Kind: "manual"},
-		LastRun:  h.lastRunOf(d.ID, window),
+		LastRun:  h.lastRunOf(d.ID),
 	}
 	if len(d.ParamsSchema) > 0 {
 		v.ParamsSchema = d.ParamsSchema
@@ -241,13 +190,13 @@ func (h *Handler) ListDefs(c *gin.Context) {
 	kind := c.Query("kind")
 	defs := h.d.Defs.ListDefs()
 	sort.Slice(defs, func(i, j int) bool { return defs[i].ID < defs[j].ID })
-	scheds, window := h.schedules(), h.lastRuns()
+	scheds := h.schedules()
 	items := make([]DefView, 0, len(defs))
 	for _, d := range defs {
 		if kind != "" && d.Kind != kind {
 			continue
 		}
-		items = append(items, h.defView(d, scheds, window))
+		items = append(items, h.defView(d, scheds))
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
 }
@@ -263,5 +212,5 @@ func (h *Handler) GetDef(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "definition", c.Param("id"))
 		return
 	}
-	c.JSON(http.StatusOK, h.defView(d, h.schedules(), h.lastRuns()))
+	c.JSON(http.StatusOK, h.defView(d, h.schedules()))
 }

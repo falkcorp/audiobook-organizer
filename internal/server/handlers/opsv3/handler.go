@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/handler.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b12d50f5-488d-4f11-bf35-03e56a5ca698
 // last-edited: 2026-10-18
 
@@ -58,7 +58,14 @@ type RunReader interface {
 	OpCountsV3() (database.OpCounts, error)
 	ListDoneRunsSinceV3(since time.Time, limit int) (runs []database.RunRecord, complete bool, err error)
 	ListItemOutcomesV3(id string, q database.ItemQuery) (database.ItemPage, error)
-	GetSchedV3(defID string) (*database.SchedState, error)
+}
+
+// LastRunFinder is the store's per-definition lookup of the newest finished
+// run (database.PebbleStore.LatestSettledRunV3, which walks the
+// opv3:ix:def: index). It is not part of database.Store; the server resolves
+// it with database.AsCapability.
+type LastRunFinder interface {
+	LatestSettledRunV3(defID string) (*database.RunRecord, error)
 }
 
 // DefInfo is what the endpoints know about one definition. The server builds
@@ -174,7 +181,10 @@ func StrictAuthz() Authz {
 // Deps is everything a Handler needs. Only Runs is required for the reads;
 // a missing collaborator makes the routes that need it answer 503.
 type Deps struct {
-	Runs     RunReader
+	Runs RunReader
+	// LastRuns finds each definition's last finished run for /defs; nil
+	// leaves last_run null.
+	LastRuns LastRunFinder
 	Defs     Defs
 	Sched    Sched
 	Enqueuer Enqueuer
