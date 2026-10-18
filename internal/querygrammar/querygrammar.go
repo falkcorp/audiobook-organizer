@@ -1,7 +1,7 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 // Package querygrammar is the ONE value grammar behind the Library search bar
 // and the Review → Metadata Title filter (owner decision 2026-10-06: one
@@ -15,7 +15,7 @@
 //	a*  *a  *a*   glob on the WHOLE (trimmed) value; only * is a wildcard
 //	*             the value is non-empty
 //
-// and, for numeric fields, ParseNumericExpr's comparisons and ranges.
+// and, for numeric fields, ParseNumericExprUnits's comparisons and ranges.
 //
 // A regex or glob is run over at most the first 16 KB of a field
 // (MaxPatternInputBytes); a substring is matched against all of it. On a field
@@ -459,20 +459,17 @@ func IsNumber(raw string) bool {
 	return err == nil
 }
 
-// ParseNumericExpr parses a numeric filter value:
-//
-//	>2020  >=4.5  <64  <=3  =2019  ==2019  !=2019  2019 (equality)
-//	[2015 TO 2020]  [* TO 64]  [2015 TO *]   (inclusive; * = open side)
-func ParseNumericExpr(raw string) (Comparison, error) {
-	return ParseNumericExprUnits(raw, nil)
-}
-
 // NumberParser parses one operand of a numeric expression, applying a
 // field's units (see ParseBytes, ParseKbps, ParseHz). nil = plain number.
 type NumberParser func(s string) (float64, error)
 
-// ParseNumericExprUnits is ParseNumericExpr with a per-field unit parser for
-// every operand: file_size:>20mb, bitrate:<64k, sample_rate:[22khz TO 48khz].
+// ParseNumericExprUnits parses a numeric filter value with a per-field unit
+// parser for every operand: file_size:>20mb, bitrate:<64k,
+// sample_rate:[22khz TO 48khz]. A nil parser means plain numbers.
+//
+//	>2020  >=4.5  <64  <=3  =2019  ==2019  !=2019  2019 (equality)
+//	[2015 TO 2020]  [* TO 64]  [2015 TO *]   (inclusive; * = open side)
+//
 // It is the same comparison grammar the duration filter has used since
 // 2026-09-27 (ops > >= < <= == != =, [a TO b] with * open), generalised.
 func ParseNumericExprUnits(raw string, num NumberParser) (Comparison, error) {
