@@ -1,7 +1,7 @@
 // file: internal/server/legacy_backfill_op.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e2b7f04-6c31-4a58-b0d9-52f81c6ae374
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 // legacy_backfill_op registers operations.backfill-legacy-status, the supervised
 // repair for v1 operation rows that never left a non-terminal status because the
@@ -39,6 +39,7 @@ type legacyBackfillOpParams struct {
 func (s *Server) RegisterLegacyStatusBackfillOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "operations.backfill-legacy-status",
+		Preview:         opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: legacyBackfillOpParams{}},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "operations",
 		DisplayName:     "Backfill Legacy Operation Status",

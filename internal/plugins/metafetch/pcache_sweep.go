@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1817dbb3-1b63-474d-af55-ff93d468ae1b
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package metafetch
 
@@ -114,6 +114,7 @@ func (r pcacheSweepResult) summary() string {
 func (p *Plugin) pcacheSweepDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          pcacheSweepOpID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: pcacheSweepParams{}},
 		Plugin:      "metafetch",
 		DisplayName: "Sweep the shared metadata answer cache",
 		Description: "Deletes shared provider-answer cache rows (pcache:) that are dead: question and product " +

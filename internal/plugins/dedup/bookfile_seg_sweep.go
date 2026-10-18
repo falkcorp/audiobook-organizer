@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a3b5c8e-d1f2-4e9a-b6c0-3d7f1a2e5b8c
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 // Package dedup — op dedup.bookfile-seg-drop (T020, SPEC 3 §6 item 2).
 //
@@ -77,6 +77,7 @@ type bookfileSegDropParams struct {
 func (p *Plugin) bookfileSegDropDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.bookfile-seg-drop",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: bookfileSegDropParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Drop AcoustID segment fields from BookFile values",

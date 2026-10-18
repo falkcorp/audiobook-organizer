@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 96facb01-98fa-4ebd-b06d-1422569abedd
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 //
 // Registers identification.advance (spec 02 PR 14): the v2 ADAPTER around
 // the v3-shaped driver body in internal/identification.
@@ -71,6 +71,7 @@ func init() {
 func (s *Server) RegisterIdentificationAdvanceOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:          identificationAdvanceOpID,
+		Preview:     opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: identificationAdvanceParams{}},
 		Liveness:    opsregistry.LivenessRunItems,
 		Plugin:      "metadata",
 		DisplayName: "Advance Book Identification",

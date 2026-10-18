@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 package server
 
@@ -122,6 +122,7 @@ func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
 func (s *Server) whenScannedDef(opID, plugin, display, desc string, perm auth.Permission, accepts func(kind string) bool) opsregistry.OperationDef {
 	return opsregistry.OperationDef{
 		ID:              opID,
+		Preview:         opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: applyWhenScannedParams{}},
 		Plugin:          plugin,
 		DisplayName:     display,
 		Description:     desc,

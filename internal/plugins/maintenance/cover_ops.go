@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
-// last-edited: 2026-09-26
+// last-edited: 2026-10-18
 
 // Package maintenance — ops maintenance.folder-cover-backfill and
 // maintenance.cover-text-read.
@@ -123,6 +123,7 @@ func clampWorkers(n, def int) int {
 func (p *Plugin) folderCoverBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.folder-cover-backfill",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: coverOpParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Use folder cover images",

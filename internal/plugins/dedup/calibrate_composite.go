@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-09-27
+// last-edited: 2026-10-18
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -152,6 +152,7 @@ type calibrateCompositeParams struct {
 func (p *Plugin) calibrateCompositeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "dedup.calibrate-composite",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: calibrateCompositeParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "dedup",
 		DisplayName: "Calibrate composite scorer (report; apply gated)",

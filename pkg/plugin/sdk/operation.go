@@ -1,7 +1,7 @@
 // file: pkg/plugin/sdk/operation.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package sdk
 
@@ -15,6 +15,15 @@ type Priority = registry.Priority
 type ActorMode = registry.ActorMode
 type Phase = registry.Phase
 type Resource = registry.Resource
+type PreviewSpec = registry.PreviewSpec
+type PreviewKey = registry.PreviewKey
+
+// Preview keys for OperationDef.Preview (see registry.PreviewSpec).
+const (
+	PreviewDryRun = registry.PreviewDryRun
+	PreviewApply  = registry.PreviewApply
+	PreviewLive   = registry.PreviewLive
+)
 
 // Resume policy constants.
 const (

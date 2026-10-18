@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -42,6 +42,7 @@ type autoMatchTranscribedParams struct {
 func (p *Plugin) autoMatchTranscribedDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:           "maintenance.auto-match-transcribed",
+		Preview:      sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: autoMatchTranscribedParams{}},
 		Liveness:     sdk.LivenessRunItems,
 		Plugin:       "maintenance",
 		DisplayName:  "Auto-match transcribed books",

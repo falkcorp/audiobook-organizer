@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -166,6 +166,7 @@ func (p markMissingPlan) summary() string {
 func (p *Plugin) markMissingFilesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.mark-missing-files",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: markMissingParams{}},
 		DisplayName: "Mark missing book files (reconcile the Missing flag)",
 		Description: "Stats every book_file row and reconciles its stored Missing flag with disk: sets " +
 			"Missing=true where the bytes are gone, clears it where they are present again. This is what " +

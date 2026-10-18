@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -145,6 +145,7 @@ type authorIDRepairResult struct {
 func (p *Plugin) authorIDRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-id-repair",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: authorIDRepairParams{}},
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repair dangling and duplicate author ids",

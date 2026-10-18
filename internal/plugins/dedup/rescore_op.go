@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_op.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5c1a9f38-7b62-4d0e-9a15-6e3b8c07d24f
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 // dedup.rescore — re-band every pending dedup candidate under the CURRENT
 // score ladder, and the config-PUT sink that queues it.
@@ -111,6 +111,7 @@ func ladderFingerprint(cfg unified.ScoreConfig) string {
 func (p *Plugin) rescoreDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "dedup.rescore",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: RescoreParams{}},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Re-band dedup candidates",

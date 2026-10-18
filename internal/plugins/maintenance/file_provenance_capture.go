@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
-// last-edited: 2026-09-01
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -93,6 +93,7 @@ type fileProvSample struct {
 func (p *Plugin) fileProvenanceCaptureDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.file-provenance-capture",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: fileProvCaptureParams{}},
 		DisplayName: "Capture provenance for files outside the library",
 		Description: "Walks the given roots, digests each audio file, and records an " +
 			"append-only provenance event so the pristine hash exists before anything " +

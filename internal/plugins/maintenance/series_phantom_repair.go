@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -160,6 +160,7 @@ type seriesPhantomRepairResult struct {
 func (p *Plugin) seriesPhantomRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              seriesPhantomRepairOpID,
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: seriesPhantomRepairParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Report / repair phantom series IDs",

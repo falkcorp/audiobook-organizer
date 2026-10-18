@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -158,6 +158,7 @@ type bookMergeFunc func(bookIDs []string, primaryID string) (int, error)
 func (p *Plugin) mergeSamePathDupesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.merge-same-path-dupes",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: mergeSamePathParams{}},
 		DisplayName: "Merge duplicate books that share one audio file",
 		Description: "Merges book records that point at the EXACT same audio file, when the stored " +
 			"file hash matches across them, keeping the metadata-bearing record as primary. Uses the " +

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
-// last-edited: 2026-09-15
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -144,6 +144,7 @@ func decideTitleRepair(in titleRepairBook, agreedFn func(dirPath string) (agreed
 func (p *Plugin) titleRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-repair",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: titleRepairParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Repair leaked chapter-tag titles (CONS-17b)",

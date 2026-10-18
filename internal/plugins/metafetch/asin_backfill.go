@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 
 package metafetch
 
@@ -210,6 +210,7 @@ var _ asinBackfillStore = (database.Store)(nil)
 func (p *Plugin) asinBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          asinBackfillOpID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: asinBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "metafetch",
 		DisplayName: "Backfill missing ASINs and ISBNs from Audible",

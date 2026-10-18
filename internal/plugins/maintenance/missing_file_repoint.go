@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -150,6 +150,7 @@ func (p repointPlan) summary() string {
 func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.missing-file-repoint",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewApply, Params: missingFileRepointParams{}},
 		DisplayName: "Repoint missing book files to their real path",
 		Description: "Rewrites book_file.FilePath for rows whose recorded path is gone but whose bytes " +
 			"exist on disk under the flattened/padded name. NEVER deletes a row. Default dry-run; " +

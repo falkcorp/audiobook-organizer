@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.8.0
+// version: 2.8.1
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -154,6 +154,7 @@ func judgeTagPositions(bookID string, full []database.BookFile, readings map[str
 func (p *Plugin) tagBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.tag-backfill",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: tagBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Backfill lossless file tags (RawTags + track/disc)",

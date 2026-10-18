@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.5.2
+// version: 3.6.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package server
 
@@ -145,6 +145,7 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              maintenanceOpID(jobID),
+		Preview:         maintenanceJobPreview(job, policy),
 		Liveness:        policy.Liveness,
 		Plugin:          "maintenance",
 		DisplayName:     job.Name(),
@@ -271,6 +272,20 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			return runErr
 		},
 	})
+}
+
+// maintenanceJobPreview is how a job's op previews: dry_run, decoded below
+// into opmode.DryRunParams and handed to job.Run, when the job advertises
+// dry_run=true by default (TestMaintenanceJobs_PreviewByDefault checks each
+// job honours it) and needs no second write key. A job that advertises
+// dry_run=false ignores the flag (the read-only report jobs), and a job with
+// an ExtraWriteKey would silently preview on a live run that sent only
+// dry_run=false; neither declares a preview.
+func maintenanceJobPreview(job maintenance.MaintenanceJob, policy maintenance.ExecutionPolicy) opsregistry.PreviewSpec {
+	if policy.ExtraWriteKey != "" || !advertisedDryRunDefault(job) {
+		return opsregistry.PreviewSpec{}
+	}
+	return opsregistry.PreviewSpec{Key: opsregistry.PreviewDryRun, Params: opmode.DryRunParams{}}
 }
 
 func init() {

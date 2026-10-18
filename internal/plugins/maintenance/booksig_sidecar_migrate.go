@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2c8f6a90-4b17-4e35-9d82-1a5e703c6f84
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -75,6 +75,7 @@ const bookSigInlineBytesPerBook = 22 * 1024
 func (p *Plugin) bookSigSidecarMigrateDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.booksig-sidecar-migrate",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: bookSigSidecarMigrateParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Migrate inline book signatures into the book_sig: sidecar",

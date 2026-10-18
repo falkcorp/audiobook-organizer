@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7b057b54-4781-486b-b075-fe627504dcf1
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -138,6 +138,7 @@ type authorityPlanResult struct {
 func (p *Plugin) authorityBuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          authorityBuildOpID,
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: authorityBuildParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Authority lists: build",

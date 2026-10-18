@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 // dedup.run-all is the Review page's one-button "Find all duplicates" run: every
 // duplicate check, in order, as ONE server-side operation. Until 2026-09-28 the
@@ -237,6 +237,7 @@ func runAllPlan() (plan, skipped []string) {
 func (p *Plugin) runAllDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:           RunAllDefID,
+		Preview:      sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: runAllState{}},
 		Liveness:     sdk.LivenessManual,
 		Plugin:       "dedup",
 		DisplayName:  "Find all duplicates",

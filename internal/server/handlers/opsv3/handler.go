@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/handler.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: b12d50f5-488d-4f11-bf35-03e56a5ca698
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Package opsv3 serves /api/v3/ops/*: the operations v3 run model over HTTP.
 //
@@ -85,13 +85,25 @@ type DefInfo struct {
 	// a native definition it is !ReadOnly; for an adapted v2 op it is what
 	// its capabilities say (undeclared counts as writing).
 	Writer bool
-	// HasPreview is whether the definition honours dry_run, so a "preview"
-	// run really writes nothing. Native writing definitions always do (the
-	// runner resolves the mode with opmode.ParseDryRun). An adapted v2 op does
-	// only when write_op_modes.golden records it as `preview`; the `no-mode`
-	// ops ignore dry_run and always write. Meaningless when !Writer.
-	HasPreview bool
+	// PreviewParam is the params key that makes a run of a writing
+	// definition write nothing: "dry_run" (true = preview) or "apply"
+	// (false = preview). Empty means it has no preview a caller can ask for
+	// by params, so only mode "live" starts it. For an adapted v2 op it is
+	// the op's own declaration (OperationDef.Preview), never inferred: an
+	// undeclared or unprovable declaration is empty. Native writing
+	// definitions preview with dry_run (the runner resolves the mode).
+	// Meaningless when !Writer.
+	PreviewParam string
+	// UnreadModeKeys are mode keys the definition's params type does not
+	// decode (dry_run and dryRun on an op that previews with apply). One in
+	// a start request is refused: the caller is asking for a mode the op
+	// would never see.
+	UnreadModeKeys []string
 }
+
+// HasPreview reports whether a "preview" run of the definition writes
+// nothing.
+func (d DefInfo) HasPreview() bool { return d.PreviewParam != "" }
 
 // Defs is the definition catalog.
 type Defs interface {

@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.1.4
+// version: 1.2.0
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +23,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opsv3"
 )
 
 // TestOpsV3Routes_WiredAndServed checks the oracle the handler tests cannot:
@@ -68,32 +71,105 @@ func TestOpsV3Routes_WiredAndServed(t *testing.T) {
 	}
 }
 
-// TestOpsV3Defs_PreviewFollowsTheWriteModeLedger: every adapted v2 op the
-// ledger records `no-mode` is a writer without a preview, every `preview` one
-// has one, and a v2 op that cannot write is not a writer. The real catalog,
-// not a fake.
-func TestOpsV3Defs_PreviewFollowsTheWriteModeLedger(t *testing.T) {
+// previewOnlyElsewhere are writing ops whose omitted mode writes nothing
+// (write_op_modes.golden records them `preview`) but which have no params key
+// /api/v3/ops can drive a preview with, so they declare no Preview and start
+// in v3 only with an explicit mode "live":
+var previewOnlyElsewhere = map[string]string{
+	// No dry_run: its preview is a different op,
+	// metadata.bulk-apply-preview (bulk_apply_preview.go), reached through
+	// POST /metadata/bulk-apply-preview. A v3 "preview" of this op used to
+	// apply metadata and write tags.
+	"metadata.batch-apply-cached": "preview is the separate metadata.bulk-apply-preview op",
+	// Persists candidate rows on every run; no mode key.
+	"metadata.candidate-fetch": "no mode key; fetches and stores candidates on every run",
+	// apply gates only the clone mode: rollback=true or repair=true write
+	// with apply omitted (itunes_clone_into_library.go, `writes := modes == 1`),
+	// so apply=false is not a preview.
+	"itunes.clone-into-library": "apply gates only one of three write modes",
+	// write := p.Apply && !dryRun: dry_run=false alone writes nothing, so a
+	// dry_run preview would be honoured but its live run would silently
+	// preview (maintenance.ExecutionPolicy.ExtraWriteKey).
+	"maintenance.repoint-version-primary": "writes need apply=true and dry_run=false",
+}
+
+// TestOpsV3_PreviewDeclarationsMatchTheOpsParams checks every registered op's
+// Preview declaration against the op's code, not the ledger:
+//
+//   - a declaration names a bool field of the params type the op decodes
+//     (PreviewSpec.Check, by reflection), and that type decodes the injected
+//     key under DisallowUnknownFields, so a strict decoder accepts what v3
+//     writes;
+//   - /defs reports exactly the declared key for a writer, and no preview for
+//     a writer that declares none (fail closed);
+//   - every writing op is classified: one the ledger records `preview` either
+//     declares a key or is listed in previewOnlyElsewhere with the reason,
+//     and one recorded `no-mode` declares none.
+func TestOpsV3_PreviewDeclarationsMatchTheOpsParams(t *testing.T) {
 	srv, _, _ := bootRegisteredOpIDs(t)
 	ledger := readWriteOpModes(t)
-	defs := (&opsV3Defs{reg: srv.opRegistry}).ListDefs()
+	defs := map[string]opsv3.DefInfo{}
+	for _, d := range (&opsV3Defs{reg: srv.opRegistry}).ListDefs() {
+		defs[d.ID] = d
+	}
 	require.NotEmpty(t, defs)
-	noMode, preview := 0, 0
-	for _, d := range defs {
-		od, ok := srv.opRegistry.Def(d.ID)
-		require.True(t, ok, d.ID)
-		switch class, listed := ledger[d.ID]; {
-		case listed && class == "no-mode":
-			noMode++
-			require.True(t, d.Writer && !d.HasPreview, "%s is no-mode: writer without preview, got writer=%v preview=%v", d.ID, d.Writer, d.HasPreview)
-		case listed && class == "preview":
-			preview++
-			require.True(t, d.Writer && d.HasPreview, "%s is recorded preview", d.ID)
-		case !canWrite(od):
-			require.False(t, d.Writer, "%s declares no write capability", d.ID)
+	declared := map[string]int{}
+	usedElsewhere := map[string]bool{}
+	for _, od := range srv.opRegistry.ActiveDefs() {
+		d, ok := defs[od.ID]
+		require.True(t, ok, "%s missing from the v3 catalog", od.ID)
+		p := od.Preview
+		if !p.IsZero() {
+			require.NoError(t, p.Check(), "%s: Preview does not match its params type", od.ID)
+			require.True(t, canWrite(od), "%s declares a preview but cannot write", od.ID)
+			strictDecodes(t, od.ID, p)
+			require.Equal(t, string(p.Key), d.PreviewParam, "%s: /defs preview_param", od.ID)
+			require.NotContains(t, d.UnreadModeKeys, string(p.Key), od.ID)
+			declared[string(p.Key)]++
+		} else if d.Writer {
+			require.Empty(t, d.PreviewParam, "%s declares no preview, so it must have none", od.ID)
+		}
+		if !canWrite(od) || isMaintenanceJobOp(od.ID) {
+			continue
+		}
+		switch ledger[od.ID] {
+		case "no-mode":
+			require.True(t, p.IsZero(), "%s: the ledger says it always writes, yet it declares preview key %q; fix whichever is wrong", od.ID, p.Key)
+		case "preview":
+			if p.IsZero() {
+				_, listed := previewOnlyElsewhere[od.ID]
+				require.True(t, listed, "%s: the ledger says omitted mode writes nothing, but it declares no Preview. Declare the key its Run gates on (OperationDef.Preview), or list it in previewOnlyElsewhere with the reason", od.ID)
+				usedElsewhere[od.ID] = true
+			}
 		}
 	}
-	require.Positive(t, noMode, "no registered no-mode op was checked")
-	require.Positive(t, preview, "no registered preview op was checked")
+	for id := range previewOnlyElsewhere {
+		if strings.HasPrefix(id, "maintenance.") && isMaintenanceJobOp(id) {
+			od, ok := srv.opRegistry.Def(id)
+			require.True(t, ok, id)
+			require.True(t, od.Preview.IsZero(), "%s is listed as previewing elsewhere but declares %q", id, od.Preview.Key)
+			continue
+		}
+		require.True(t, usedElsewhere[id], "previewOnlyElsewhere lists %s, which is not a registered ledger-preview op without a declaration; delete the entry", id)
+	}
+	for _, k := range []string{"dry_run", "apply", "live"} {
+		require.Positive(t, declared[k], "no registered op declares %s; the check did not run", k)
+	}
+}
+
+// strictDecodes: the declared params type accepts {"<key>": true} and
+// {"<key>": false} under DisallowUnknownFields.
+func strictDecodes(t *testing.T, id string, p opsregistry.PreviewSpec) {
+	t.Helper()
+	typ := reflect.TypeOf(p.Params)
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	for _, v := range []string{"true", "false"} {
+		dec := json.NewDecoder(strings.NewReader(`{"` + string(p.Key) + `":` + v + `}`))
+		dec.DisallowUnknownFields()
+		require.NoError(t, dec.Decode(reflect.New(typ).Interface()), "%s: a strict decode of the injected %s fails", id, p.Key)
+	}
 }
 
 // TestOpsV3Routes_NoPreviewOpRefusesPreview drives the real router: a

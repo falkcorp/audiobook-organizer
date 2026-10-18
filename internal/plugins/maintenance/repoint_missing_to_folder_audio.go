@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -331,6 +331,7 @@ type rfEnv struct {
 func (p *Plugin) repointMissingToFolderAudioDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.repoint-missing-to-folder-audio",
+		Preview:     sdk.PreviewSpec{Key: sdk.PreviewDryRun, Params: rfParams{}},
 		DisplayName: "Repoint missing book files to the audio in their folder",
 		Description: "For primary + organized books whose active book_file rows point at files that no longer exist, " +
 			"repoints them at the audio actually in the book's folder: N chapter rows collapsed into one file keep ONE " +

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
-// last-edited: 2026-09-12
+// last-edited: 2026-10-18
 
 // Clears the metadata apply pipeline's DURABLE RENAME-FAILURE records.
 //
@@ -68,6 +68,7 @@ type clearApplyRenameFailuresResult struct {
 func (p *Plugin) clearApplyRenameFailuresDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.clear-apply-rename-failures",
+		Preview:         sdk.PreviewSpec{Key: sdk.PreviewApply, Params: clearApplyRenameFailuresParams{}},
 		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 10 * time.Minute,
 		Plugin:          "maintenance",
