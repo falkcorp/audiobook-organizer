@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package server
 
@@ -55,7 +55,7 @@ func TestHandleTrashVersion(t *testing.T) {
 		t.Fatalf("create version: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/books/b1/versions/"+ver.ID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+ver.ID, nil)
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 
@@ -79,7 +79,7 @@ func TestHandleTrashVersion_BookMismatch(t *testing.T) {
 	})
 
 	// Try to trash with wrong book ID
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/books/b2/versions/"+ver.ID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/b2/versions/"+ver.ID, nil)
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 
@@ -96,7 +96,7 @@ func TestHandleRestoreVersion(t *testing.T) {
 		BookID: "b1", Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported",
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/books/b1/versions/"+ver.ID+"/restore", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 
@@ -118,7 +118,7 @@ func TestHandleRestoreVersion_NotInTrash(t *testing.T) {
 		BookID: "b1", Status: database.BookVersionStatusActive, Format: "m4b", Source: "imported",
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/books/b1/versions/"+ver.ID+"/restore", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 
@@ -127,10 +127,10 @@ func TestHandleRestoreVersion_NotInTrash(t *testing.T) {
 	}
 }
 
-// TestHandleTrashRestoreVersion_CanonicalAudiobooksPath proves the
-// /audiobooks/:id/versions/:vid... routes (naming-audit 2026-09-25, class 1)
-// answer the same as the deprecated /books/:id/versions/:vid... aliases
-// exercised by TestHandleTrashVersion / TestHandleRestoreVersion above.
+// TestHandleTrashRestoreVersion_CanonicalAudiobooksPath walks the whole
+// /audiobooks/:id/versions/:vid... lifecycle (trash, restore, re-trash,
+// purge-now) through the real router. The former /books/:id/versions/:vid...
+// aliases answer 410 now (wire_versions_gone_test.go).
 func TestHandleTrashRestoreVersion_CanonicalAudiobooksPath(t *testing.T) {
 	srv, store := setupVersionLifecycleServer(t)
 
