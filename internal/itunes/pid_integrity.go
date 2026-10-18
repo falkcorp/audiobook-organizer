@@ -1,14 +1,17 @@
 // file: internal/itunes/pid_integrity.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e2f7a1c4-6b90-4d38-8a5e-1c3f9d2b7e60
-// last-edited: 2026-08-20
+// last-edited: 2026-10-18
 //
 // READ-ONLY book_file iTunes-PID integrity census. A PID is minted unique per
 // book_file (TrackProvisioner.Provision → GeneratePIDHex → crypto/rand), so the
 // same PID on two book_file rows is an anomaly: it was COPIED (a field-merge left
 // it on both src and dst) rather than minted. This census groups every book_file
 // by PID, and for each PID owned by more than one row classifies the shape so the
-// repair (pid_repair) can act without data loss:
+// repair plan (pid_repair) can act without data loss. The plan is preview-only:
+// its apply route was retired by 01-P81k.
+//
+// The shapes:
 //
 //   - same_file : all owner rows point at the SAME FilePath → a duplicate row; the
 //     repair keeps the PID on one canonical row and clears it from the rest. No ITL
