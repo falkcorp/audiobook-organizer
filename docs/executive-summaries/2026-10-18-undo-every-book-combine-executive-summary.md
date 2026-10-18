@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -345,10 +345,12 @@ the user made while the combine ran.
 
 **The fix.**
 
-- When the undo puts a reader's progress back, it now also notes what the
-  progress looked like right after. A rerun that finds it unchanged knows
-  the put-back is complete and says nothing. If the progress has changed
-  since, or the note could not be saved, the rerun still says so.
+- When the undo puts a reader's progress back, it now also notes that the
+  put-back went through. A rerun that finds that note knows the put-back is
+  complete and says nothing, even if the reader has listened since: that
+  listening is theirs, and it is kept. Only when the note is missing (a
+  crash at the wrong moment, or the note could not be saved) does the
+  rerun still say it left the progress as it was.
 - The undo now takes the listening apps' lock before it looks at the
   progress and keeps it until it has written, so there is nothing to check
   again and no starting over. The web player's position updates and the

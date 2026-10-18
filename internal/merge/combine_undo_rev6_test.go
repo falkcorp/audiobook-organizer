@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_rev6_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5e0dd46d-1455-44fc-94b7-899dc9c35055
 // last-edited: 2026-10-18
 
@@ -129,6 +129,39 @@ func TestRev6_RerunAfterALandedReconcileIsSilent(t *testing.T) {
 	require.Empty(t, re.Warnings, "nothing was listened to between the runs")
 	require.Equal(t, float64(300), rev5Listened(t, store, user, keep), "the carried seconds are not taken off again")
 	require.Equal(t, float64(600), rev5Listened(t, store, user, gone))
+}
+
+// S1: a put-back (plain, or the reconcile) landed and recorded so in its
+// marker, a later step failed, and the user then listened to the survivor.
+// The re-run leaves the survivor alone and says nothing: the put-back was
+// complete and the new listening is the user's own. It is kept, and the
+// carried 600 seconds are counted once, on the absorbed book.
+func TestRev6_RerunAfterALandedPutBackAndNewListeningIsSilent(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		listenedBy float64 // listened on the survivor before the undo
+		want       float64 // survivor after the re-run
+	}{
+		{name: "put-back", listenedBy: 0, want: 0 + 250},
+		{name: "reconcile", listenedBy: 300, want: 300 + 250},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, keep, gone, user, res := rev6Seed(t)
+			if tc.listenedBy > 0 {
+				rev5AddListening(t, store, user, keep, int(tc.listenedBy))
+			}
+			_, err := NewService(&rev6Store{PebbleStore: store, failLockDel: 1}).UndoCombine(res.JournalID)
+			require.ErrorContains(t, err, "injected lock delete failure")
+			require.Equal(t, tc.listenedBy, rev5Listened(t, store, user, keep), "the put-back landed")
+			rev5AddListening(t, store, user, keep, 250)
+
+			re, err := NewService(store).UndoCombine(res.JournalID)
+			require.NoError(t, err)
+			require.Empty(t, re.Warnings, "the put-back was complete; the listening since is the user's own")
+			require.Equal(t, tc.want, rev5Listened(t, store, user, keep), "the 250 seconds listened since are kept, nothing taken off again")
+			require.Equal(t, float64(600), rev5Listened(t, store, user, gone), "the carried seconds are on the absorbed book once")
+		})
+	}
 }
 
 // S1 fallback: when the marker cannot record the landed write, the put-back
