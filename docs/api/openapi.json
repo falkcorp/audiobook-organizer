@@ -1846,7 +1846,7 @@
       ],
       "get": {
         "operationId": "getBookAlternativeTitles",
-        "summary": "get Book Alternative Titles",
+        "summary": "Get book alternative titles (retired)",
         "tags": [
           "audiobooks"
         ],
@@ -1856,23 +1856,37 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "410": {
+            "description": "Gone: the endpoint has been removed and has no replacement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone and has no replacement. A caller without the required permission still gets 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       },
       "post": {
         "operationId": "addBookAlternativeTitle",
-        "summary": "add Book Alternative Title",
+        "summary": "Add book alternative title (retired)",
         "tags": [
           "audiobooks"
         ],
@@ -1882,23 +1896,40 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed and has no replacement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone and has no replacement. A caller without the required permission still gets 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       },
       "delete": {
         "operationId": "removeBookAlternativeTitle",
-        "summary": "remove Book Alternative Title",
+        "summary": "Remove book alternative title (retired)",
         "tags": [
           "audiobooks"
         ],
@@ -1908,19 +1939,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed and has no replacement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone and has no replacement. A caller without the required permission still gets 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/audiobooks/{id}/apply-metadata": {
@@ -2800,7 +2848,7 @@
       ],
       "get": {
         "operationId": "getBookPathHistory",
-        "summary": "get Book Path History",
+        "summary": "Get book path history (retired)",
         "tags": [
           "audiobooks"
         ],
@@ -2810,19 +2858,33 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "410": {
+            "description": "Gone: the endpoint has been removed; use GET /api/v1/audiobooks/:id/changelog instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. Use GET /audiobooks/{id}/changelog instead, which includes the path history (it returns at most 50 entries). It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/audiobooks/{id}/preview-organize": {

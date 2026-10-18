@@ -1,5 +1,5 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-10-18
 
@@ -37,7 +37,8 @@ func (s *Server) wireAudiobooksRoutes(
 	// NOT re-read anything. The old /rescan alias for it is retired (01-P81d);
 	// the stub below answers 410 and names reconcile-files as the replacement.
 	protected.POST("/audiobooks/:id/reconcile-files", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ReconcileAudiobookFiles)
-	// Retired (01-P81d): no caller in the repo. Stub kept for one release.
+	// Retired (01-P81d, owner decision D9): no caller in the repo. The stub is
+	// removed after one release; auth and the permission guard run first.
 	protected.POST("/audiobooks/:id/rescan", s.perm(auth.PermLibraryEditMetadata), gone("POST /api/v1/audiobooks/:id/reconcile-files"))
 	// force-rescan is the real per-book forced re-read: it sets NeedsRescan and
 	// the next scan re-reads exactly this book.
@@ -53,7 +54,8 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/:id/files", s.perm(auth.PermLibraryView), audiobooksH.ListBookFiles)
 	protected.PATCH("/audiobooks/:id/files/:file_id", s.perm(auth.PermLibraryEditMetadata), audiobooksH.PatchBookFile)
 	protected.GET("/audiobooks/:id/changelog", s.perm(auth.PermLibraryView), audiobooksH.GetBookChangelog)
-	// Retired (01-P81d): no caller in the repo. Stub kept for one release.
+	// Retired (01-P81d, owner decision D9): no caller in the repo. The stub is
+	// removed after one release; auth and the permission guard run first.
 	protected.GET("/audiobooks/:id/path-history", s.perm(auth.PermLibraryView), gone("GET /api/v1/audiobooks/:id/changelog"))
 	protected.GET("/audiobooks/:id/external-ids", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobookExternalIDs)
 	protected.POST("/audiobooks/:id/extract-track-info", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ExtractTrackInfo)
@@ -64,7 +66,8 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/:id/user-tags", s.perm(auth.PermLibraryView), audiobooksH.GetBookUserTags)
 	protected.GET("/audiobooks/:id/tags-detailed", s.perm(auth.PermLibraryView), audiobooksH.GetBookTagsDetailed)
 	protected.POST("/audiobooks/batch-tags", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchUpdateTags)
-	// Retired (01-P81d): no caller in the repo. Stubs kept for one release.
+	// Retired (01-P81d, owner decision D9): no caller in the repo. The stubs are
+	// removed after one release; auth and each route's permission guard run first.
 	protected.GET("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryView), gone(""))
 	protected.POST("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryEditMetadata), gone(""))
 	protected.DELETE("/audiobooks/:id/alternative-titles", s.perm(auth.PermLibraryDelete), gone(""))

@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.47.0
+// version: 4.48.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
@@ -1734,11 +1734,11 @@ func (s *Server) setupRoutes() {
 		{
 			// Audiobook routes.
 			// NOTE: the main audiobooks list / CRUD domain (list, count, facets,
-			// soft-delete/restore/purge, rescan, get, tags, update, delete, cover,
-			// segments, files, changelog, path-history, external-ids,
+			// soft-delete/restore/purge, get, tags, update, delete, cover,
+			// segments, files, changelog, external-ids,
 			// extract-track-info, relocate, batch, batch-operations, user tags,
-			// tags-detailed, batch-tags, alternative-titles, metadata-history,
-			// undo, field-states, changes — 36 handlers) was migrated to the
+			// tags-detailed, batch-tags, metadata-history,
+			// undo, field-states, changes) was migrated to the
 			// handlers/audiobooks sub-package (wire_handlers.go). The sibling
 			// /audiobooks/:id/* routes below stay here because they belong to
 			// OTHER domains (quarantine, rating, sample, write-back).

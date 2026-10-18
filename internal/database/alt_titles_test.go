@@ -1,69 +1,49 @@
 // file: internal/database/alt_titles_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef0123456789
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package database
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestBookAlternativeTitles_Pebble verifies the round-trip behavior of
-// the book_alternative_titles table: add, get, remove, set, idempotency.
-// Uses the shared newTestActivityStore-style setup but for the main
-// SQLite store.
+// seedAltTitles writes a legacy alt_titles:book:<id> row the way the deleted
+// writer did, so reader and DeleteBook tests still have rows to find.
+func seedAltTitles(t *testing.T, s *PebbleStore, bookID string, titles ...BookAlternativeTitle) {
+	t.Helper()
+	data, err := json.Marshal(titles)
+	require.NoError(t, err)
+	require.NoError(t, s.db.Set([]byte("alt_titles:book:"+bookID), data, pebble.Sync))
+}
+
+// TestBookAlternativeTitles_Pebble verifies GetBookAlternativeTitles reads the
+// stored row and isolates books from each other. It is read-only: nothing in
+// production writes alternative titles since 01-P81d.
 func TestBookAlternativeTitles_Pebble(t *testing.T) {
 	s := setupTestPebbleStore(t)
 	bookID := "01HKEXAMPLE00000000000000"
 
-	// Empty to start
 	alts, err := s.GetBookAlternativeTitles(bookID)
 	require.NoError(t, err)
 	assert.Empty(t, alts)
 
-	// Add one
-	require.NoError(t, s.AddBookAlternativeTitle(bookID, "Foundation and Empire", "user", "en"))
+	seedAltTitles(t, s, bookID,
+		BookAlternativeTitle{BookID: bookID, Title: "Japanese Title", Source: "user", Language: "ja"},
+		BookAlternativeTitle{BookID: bookID, Title: "English Translation", Source: "user", Language: "en"},
+	)
 	alts, err = s.GetBookAlternativeTitles(bookID)
 	require.NoError(t, err)
-	require.Len(t, alts, 1)
-	assert.Equal(t, "Foundation and Empire", alts[0].Title)
-	assert.Equal(t, "user", alts[0].Source)
-	assert.Equal(t, "en", alts[0].Language)
+	require.Len(t, alts, 2)
+	assert.Equal(t, "Japanese Title", alts[0].Title)
+	assert.Equal(t, "en", alts[1].Language)
 
-	// Idempotent: re-adding the same title is a no-op.
-	require.NoError(t, s.AddBookAlternativeTitle(bookID, "Foundation and Empire", "auto_ampersand", ""))
-	alts, _ = s.GetBookAlternativeTitles(bookID)
-	assert.Len(t, alts, 1, "re-add should not duplicate")
-	assert.Equal(t, "user", alts[0].Source, "original source preserved")
-
-	// Add a second variant
-	require.NoError(t, s.AddBookAlternativeTitle(bookID, "Foundation & Empire", "auto_ampersand", ""))
-	alts, _ = s.GetBookAlternativeTitles(bookID)
-	assert.Len(t, alts, 2)
-
-	// Remove one
-	require.NoError(t, s.RemoveBookAlternativeTitle(bookID, "Foundation & Empire"))
-	alts, _ = s.GetBookAlternativeTitles(bookID)
-	require.Len(t, alts, 1)
-	assert.Equal(t, "Foundation and Empire", alts[0].Title)
-
-	// Set replaces everything
-	require.NoError(t, s.SetBookAlternativeTitles(bookID, []BookAlternativeTitle{
-		{Title: "Japanese Title", Source: "user", Language: "ja"},
-		{Title: "English Translation", Source: "user", Language: "en"},
-	}))
-	alts, _ = s.GetBookAlternativeTitles(bookID)
-	assert.Len(t, alts, 2)
-
-	// Empty title rejected
-	err = s.AddBookAlternativeTitle(bookID, "", "user", "")
-	assert.Error(t, err)
-
-	// Different book — isolation
 	other := "01HKOTHER00000000000000000"
 	alts, _ = s.GetBookAlternativeTitles(other)
 	assert.Empty(t, alts)

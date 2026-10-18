@@ -1,8 +1,8 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.7.0 -->
 <!-- version: 1.9.2 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-14 -->
+<!-- last-edited: 2026-10-18 -->
 
 # HTTP API
 
@@ -41,7 +41,7 @@ To obtain an API key:
 | `GET` | `/api/v1/audiobooks/:id/cover-text` | Vision-extracted cover text |
 | `GET` | `/api/v1/audiobooks/:id/changelog` | Metadata changelog |
 | `GET` | `/api/v1/audiobooks/:id/metadata-history` | Per-field metadata history (`/:field`, `/:field/undo`) |
-| `POST` | `/api/v1/audiobooks/:id/rescan` | Reconcile the book's files against disk (`/force-rescan` re-reads tags) |
+| `POST` | `/api/v1/audiobooks/:id/reconcile-files` | Reconcile the book's files against disk (`/force-rescan` re-reads tags) |
 
 #### Library List Query Parameters
 

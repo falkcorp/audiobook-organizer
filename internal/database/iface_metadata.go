@@ -1,7 +1,7 @@
 // file: internal/database/iface_metadata.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -231,12 +231,11 @@ type MetadataChangeStore interface {
 	GetBookChangeHistory(bookID string, limit int) ([]MetadataChangeRecord, error)
 }
 
-// AlternativeTitleStore covers alternative titles for a book.
+// AlternativeTitleStore reads alternative titles for a book. Nothing writes
+// them any more: the HTTP routes that did were retired (01-P81d) and the
+// writers deleted with them.
 type AlternativeTitleStore interface {
 	GetBookAlternativeTitles(bookID string) ([]BookAlternativeTitle, error)
-	AddBookAlternativeTitle(bookID, title, source, language string) error
-	RemoveBookAlternativeTitle(bookID, title string) error
-	SetBookAlternativeTitles(bookID string, titles []BookAlternativeTitle) error
 }
 
 // MetadataStore covers MetadataFieldState, change history, and
