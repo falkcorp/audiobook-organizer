@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f7c9e21-5a4b-4d8e-9c1f-2b6a7d0e4c53
 // last-edited: 2026-10-18
 
@@ -14,10 +14,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
-import { MemberRow, SkipsAlert } from './RegroupSpine';
+import { ApplyingAlert, MemberRow, SkipsAlert } from './RegroupSpine';
 import type { RegroupLane } from '../lanes/useRegroupLane';
 import { appTheme } from '../../../theme';
 import * as api from '../../../services/api';
@@ -116,7 +116,7 @@ describe('SkipsAlert report panel', () => {
     expect(screen.queryByTestId(`regroup-skips-${KIND}`)).toBeNull();
   });
 
-  it('lists failed and applied-but-unrecorded items as clickable entries that outlive the toast', async () => {
+  it('lists failed items as clickable entries and unrecorded ones as plain ids, outliving the toast', async () => {
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
     const lane = renderAlert({
@@ -125,12 +125,92 @@ describe('SkipsAlert report panel', () => {
     });
 
     expect(screen.getByTestId(`regroup-failed-${KIND}`)).toHaveTextContent('synthetic refusal');
-    expect(screen.getByTestId(`regroup-unrecorded-${KIND}`)).toHaveTextContent('do not resend');
+    expect(screen.getByTestId(`regroup-unrecorded-${KIND}`)).toHaveTextContent(
+      'Approving one again records it without running the apply again'
+    );
+    // An unrecorded item is held mid-apply and is not in the list: no row to open.
+    expect(screen.getByTestId('regroup-report-id-u1')).toBeInTheDocument();
+    expect(screen.queryByTestId('regroup-report-open-u1')).toBeNull();
 
     await userEvent.click(screen.getByTestId('regroup-report-open-f1'));
     expect(scroll).toHaveBeenCalledTimes(1);
 
     await userEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(lane.dismissSkips).toHaveBeenCalledWith(KIND);
+  });
+
+  it('gives skips of applied or mid-apply items their own heading, not "still pending"', () => {
+    renderAlert({
+      skipsByKind: {
+        [KIND]: [
+          {
+            id: 'p1',
+            action: 'insufficient-evidence',
+            reason: 'no decidable action',
+            code: 'REVIEW_ACTION_NOT_DECIDABLE',
+          },
+          {
+            id: 'd1',
+            action: 'combine',
+            reason: 'already applied',
+            code: 'REVIEW_ALREADY_APPLIED',
+          },
+          {
+            id: 'd2',
+            action: 'combine',
+            reason: 'an apply is in progress',
+            code: 'REVIEW_APPLY_IN_PROGRESS',
+          },
+        ],
+      },
+    });
+    const done = screen.getByTestId(`regroup-skipped-done-${KIND}`);
+    expect(done).toHaveTextContent('2 holds were skipped — already applied or mid-apply');
+    expect(done).not.toHaveTextContent('still pending');
+    expect(screen.getByTestId('regroup-report-id-d1')).toBeInTheDocument();
+    const pending = screen.getByTestId(`regroup-skipped-${KIND}`);
+    expect(pending).toHaveTextContent('1 hold was skipped — still pending');
+    expect(pending).not.toHaveTextContent('d1');
+  });
+});
+
+describe('ApplyingAlert', () => {
+  it('renders nothing when no hold is held mid-apply', () => {
+    render(<ApplyingAlert count={0} onChanged={vi.fn()} />);
+    expect(screen.queryByTestId('regroup-applying')).toBeNull();
+  });
+
+  it('lists the held holds on demand and finishes one with no explicit action', async () => {
+    vi.mocked(api.getReviewItems).mockResolvedValue({
+      items: [
+        {
+          id: 'h1',
+          kind: 'regroup.multidisc',
+          dedup_key: 'k',
+          folder_ref: '/f',
+          status: 'applying',
+          summary: 'Chapters: 3 tracks',
+          payload: '{}',
+          created_at: '',
+          updated_at: '',
+          apply_claim_action: 'combine',
+        },
+      ],
+      count: 1,
+      total: 1,
+      limit: 100,
+      offset: 0,
+    } as api.ReviewItemsPage);
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    const onChanged = vi.fn();
+    render(<ApplyingAlert count={1} onChanged={onChanged} />);
+
+    expect(screen.getByTestId('regroup-applying')).toHaveTextContent('1 hold is held mid-apply');
+    await userEvent.click(screen.getByTestId('regroup-applying-show'));
+    expect(api.getReviewItems).toHaveBeenCalledWith({ status: 'applying', limit: 100 });
+    await userEvent.click(await screen.findByTestId('regroup-applying-finish-h1'));
+    // No action: the server resolves it to the claim's own action.
+    expect(api.approveReviewItem).toHaveBeenCalledWith('h1');
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });
 });

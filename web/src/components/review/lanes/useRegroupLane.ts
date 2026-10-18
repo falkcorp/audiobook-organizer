@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-10-18
 
@@ -220,6 +220,12 @@ export interface RegroupLane {
    * substitute a number they do not have.
    */
   queueTotal: number | null;
+  /**
+   * Holds held by an apply claim, per the polled /review/count: an apply running
+   * now, one that ran but could not be recorded, or one a server restart
+   * interrupted. They are in no pending list, so the lane surfaces the number.
+   */
+  applyingTotal: number;
   /** Holds actually loaded, across every loaded kind. */
   loaded: number;
   /** Loaded holds still visible after the search box. */
@@ -272,7 +278,8 @@ export interface RegroupLane {
    *  stay in the list), keyed by kind. Reported next to the skips so they outlive
    *  the toast. */
   failedByKind: Record<string, ReviewBulkFail[]>;
-  /** Items whose apply SUCCEEDED but whose status write failed (do NOT resend). */
+  /** Items whose apply SUCCEEDED but whose status write failed. They are held
+   *  "applying" (not in the list); approving one again records it. */
   unrecordedByKind: Record<string, ReviewBulkFail[]>;
   /** Clears the kind's whole report: skips, failures and unrecorded applies. */
   dismissSkips: (kind: string) => void;
@@ -383,6 +390,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   // loaded rows and calling that the total.
   const byKind = useReviewStore((s) => s.byKind);
   const storeCount = useReviewStore((s) => s.count);
+  const applyingTotal = useReviewStore((s) => s.applying);
   const loadCount = useReviewStore((s) => s.loadCount);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -799,8 +807,18 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         // longer true -- duplicate-of has had an apply path since 2026-08-19 --
         // but the behaviour is right on its own terms, so it is the REASON that
         // was rewritten here, not the code.
+        //
+        // REVIEW_APPLIED_UNRECORDED is not a failure: the apply RAN and only its
+        // status write did not. Prefixing it "Failed to approve" would invite the
+        // reviewer to treat the merge as not having happened.
+        const message = err instanceof Error ? err.message : 'unknown error';
+        // Read off the ApiError body by shape rather than `instanceof`, which the
+        // tests' automocked api module would defeat.
+        const code = (err as { data?: { code?: unknown } } | null)?.data?.code;
         toast(
-          `Failed to ${action} item: ${err instanceof Error ? err.message : 'unknown error'}`,
+          code === 'REVIEW_APPLIED_UNRECORDED'
+            ? `Applied, but the result was not recorded: ${message}`
+            : `Failed to ${action} item: ${message}`,
           'error'
         );
       } finally {
@@ -841,13 +859,14 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           // there. Failed items (an apply that errored) are named too: they keep
           // their status and stay in the list, and the first cause is quoted.
           // `applied_unrecorded` is the opposite case: the apply RAN and only its
-          // status write failed, so the toast says not to resend. `apply_disabled`
-          // says an approve only recorded the decision.
+          // status write failed, so the toast says approving again records it (it
+          // does not re-run the apply). `apply_disabled` says an approve only
+          // recorded the decision.
           const notes = [
             skipped.length ? `${skipped.length} skipped, listed below` : '',
             failed.length ? `${failed.length} failed (still in the list; ${failed[0].reason})` : '',
             unrecorded.length
-              ? `${unrecorded.length} applied but not recorded, do NOT resend (${unrecorded[0].reason})`
+              ? `${unrecorded.length} applied but not recorded, approve again to record (${unrecorded[0].reason})`
               : '',
             action === 'approve' && result.apply_disabled
               ? 'apply is off, so nothing was applied'
@@ -920,6 +939,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     // not announce itself; this is the CLAUDE.md worked example, so the
     // condition names both filters rather than the one that existed first.
     queueTotal: kindFilter || searchFilter ? (storeCount > 0 ? storeCount : null) : total,
+    applyingTotal,
     loaded: items.length,
     visible,
     oldestSortIsPartial: filters.sortBy === 'oldest' && items.length < total,
