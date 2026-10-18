@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-10-18
 
@@ -657,14 +657,18 @@ function ReportIdText({ id }: { id: string }) {
 /** Skip codes that mean the item is no longer pending: it is applied, held by an
  *  apply claim, or waiting in needs_attention, so it is not in the list and must not
  *  be reported as "still pending". REVIEW_ITUNES_PROTECTED is deliberately absent: it
- *  answers a FIRST run that was handed back, which is still pending (a re-run the
- *  iTunes guard refuses answers REVIEW_RERUN_FAILED, because it stays held). */
+ *  answers a FIRST run that was handed back, and the item is then back at the status
+ *  it was claimed from (pending, approved, rejected or needs_attention), which is not
+ *  always pending (a re-run the iTunes guard refuses answers REVIEW_RERUN_FAILED,
+ *  because it stays held). */
 const NOT_PENDING_SKIP_CODES = new Set([
   'REVIEW_ALREADY_APPLIED',
   'REVIEW_APPLY_IN_PROGRESS',
   'REVIEW_APPLY_INTERRUPTED',
   'REVIEW_RERUN_FAILED',
   'REVIEW_APPLY_DISABLED',
+  'REVIEW_NO_APPLY_HANDLER',
+  'REVIEW_SEPARATE_NEEDS_ATTENTION',
 ]);
 
 /** The kind's report from the last bulk action: skips, failures and applied-but-

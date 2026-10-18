@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/abandon_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a69f495d-437b-4cc8-be64-db0a76852163
 // last-edited: 2026-10-18
 
@@ -535,9 +535,8 @@ func TestNeedsAttention_ApproveWhileApplyIsOff_Is409AndKeepsTheNote(t *testing.T
 	}
 
 	for name, body := range map[string]any{
-		"empty body":        nil,
-		"explicit action":   map[string]any{"action": itunesservice.ActionVersionGroup},
-		"explicit separate": map[string]any{"action": itunesservice.ActionSeparate},
+		"empty body":      nil,
+		"explicit action": map[string]any{"action": itunesservice.ActionVersionGroup},
 	} {
 		code, resp := approveReq(t, h, a.ID, body)
 		want409(t, "approve ("+name+") while apply is off", code, resp, "REVIEW_APPLY_DISABLED")
@@ -566,10 +565,91 @@ func TestNeedsAttention_ApproveWhileApplyIsOff_Is409AndKeepsTheNote(t *testing.T
 	}
 }
 
+// 🔴 With apply ON but no handler registered for the chosen action, a needs_attention
+// approve used to fall through to the plain decision write: nothing ran, yet the item
+// became approved and ApplyAbandonedAction was erased. It answers 409
+// REVIEW_NO_APPLY_HANDLER, single and bulk, and the item (and its note) is untouched.
+// The single route names duplicate-of, which abandonedOverride registers no handler for;
+// bulk has no per-item action, so its case registers nothing for the abandoned action.
+func TestNeedsAttention_ApproveWithNoApplyHandler_Is409AndKeepsTheNote(t *testing.T) {
+	for _, applyOn := range []bool{true, false} {
+		s, a, h, ran := abandonedOverride(t, applyOn)
+		before, _ := s.GetReviewItem(a.ID)
+		check := func(what string) {
+			t.Helper()
+			got, _ := s.GetReviewItem(a.ID)
+			if got.Status != database.ReviewStatusNeedsAttention || got.ApplyAbandonedAction != itunesservice.ActionVersionGroup ||
+				!got.UpdatedAt.Equal(before.UpdatedAt) {
+				t.Fatalf("applyOn=%v: %s changed the item: %+v (was %+v)", applyOn, what, got, before)
+			}
+		}
+		code, resp := approveReq(t, h, a.ID, map[string]any{"action": itunesservice.ActionDuplicateOf})
+		want409(t, "approve with no handler", code, resp, "REVIEW_NO_APPLY_HANDLER")
+		if !strings.Contains(resp, "no apply handler") || !strings.Contains(resp, "Reject") {
+			t.Fatalf("body %s, want a message saying the action has no apply handler and to reject", resp)
+		}
+		check("single approve")
+		if *ran != "" {
+			t.Fatalf("applyOn=%v: an apply ran (%q)", applyOn, *ran)
+		}
+	}
+
+	// Bulk: nothing registered for the abandoned action itself.
+	dir := t.TempDir()
+	s := openStoreAt(t, dir)
+	a := seedAction(t, s, "regroup.multidisc", "p1", itunesservice.ActionCombine)
+	if _, err := s.ClaimReviewItemForApply(a.ID, itunesservice.ActionVersionGroup, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	s = restart(t, s, dir)
+	h := reviewhandler.New(s, func() bool { return true }, nil) // nothing registered
+	if code, body := abandonReq(t, h, a.ID); code != http.StatusOK {
+		t.Fatalf("abandon: %d %s", code, body)
+	}
+	before, _ := s.GetReviewItem(a.ID)
+	w := doReq(t, h.BulkReviewAction, http.MethodPost, "/review/bulk",
+		map[string]any{"action": "approve", "ids": []string{a.ID}}, gin.Params{})
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "REVIEW_NO_APPLY_HANDLER") {
+		t.Fatalf("bulk approve with no handler: %d %s, want the item skipped with REVIEW_NO_APPLY_HANDLER", w.Code, w.Body.String())
+	}
+	got, _ := s.GetReviewItem(a.ID)
+	if got.Status != database.ReviewStatusNeedsAttention || got.ApplyAbandonedAction != itunesservice.ActionVersionGroup ||
+		!got.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("bulk approve changed the item: %+v (was %+v)", got, before)
+	}
+	// And the single route, with the same item.
+	code, resp := approveReq(t, h, a.ID, nil)
+	want409(t, "single approve with nothing registered", code, resp, "REVIEW_NO_APPLY_HANDLER")
+}
+
+// Explicit `separate` runs nothing, so approving a needs_attention item as separate
+// could never confirm the library is fine after a partial apply, whatever the switch
+// says. It answers 409 REVIEW_SEPARATE_NEEDS_ATTENTION with apply on and with apply
+// off, and the item and its note are untouched.
+func TestNeedsAttention_ApproveAsSeparate_IsRefusedWhateverTheSwitch(t *testing.T) {
+	for _, applyOn := range []bool{true, false} {
+		s, a, h, ran := abandonedOverride(t, applyOn)
+		before, _ := s.GetReviewItem(a.ID)
+		code, resp := approveReq(t, h, a.ID, map[string]any{"action": itunesservice.ActionSeparate})
+		want409(t, "approve as separate", code, resp, "REVIEW_SEPARATE_NEEDS_ATTENTION")
+		if !strings.Contains(resp, "partial apply") || !strings.Contains(resp, "reject the item") {
+			t.Fatalf("applyOn=%v: body %s, want a message about a possible partial apply and rejecting", applyOn, resp)
+		}
+		got, _ := s.GetReviewItem(a.ID)
+		if got.Status != database.ReviewStatusNeedsAttention || got.ApplyAbandonedAction != itunesservice.ActionVersionGroup ||
+			!got.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Fatalf("applyOn=%v: separate changed the item: %+v (was %+v)", applyOn, got, before)
+		}
+		if *ran != "" {
+			t.Fatalf("applyOn=%v: an apply ran (%q)", applyOn, *ran)
+		}
+	}
+}
+
 // A re-run refused by the iTunes guard leaves the item held as interrupted, so it
 // answers REVIEW_RERUN_FAILED (a code clients treat as "no longer pending"), not
-// REVIEW_ITUNES_PROTECTED, which means a first run that was handed back and is still
-// pending (TestApproveReviewItem_ITunesRefusal_Is409AndStaysPending).
+// REVIEW_ITUNES_PROTECTED, which means a first run that was handed back (to the status it was claimed from;
+// TestApproveReviewItem_ITunesRefusal_Is409AndStaysPending).
 func TestTakeover_RerunRefusedByTheITunesGuard_IsRerunFailed(t *testing.T) {
 	s, a := interruptedItem(t, itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true }, nil)

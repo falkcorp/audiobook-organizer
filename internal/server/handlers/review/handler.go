@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -591,19 +591,6 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, ifUpdate
 			&database.ReviewClaimConflictError{ID: id, Status: item.Status, Reason: database.ReviewClaimChanged})
 	}
 
-	// 🔴 A needs_attention item is approved only with apply ENABLED. Its status says an
-	// apply of it was abandoned half done, so approving it means re-running that apply;
-	// with the switch off nothing would run, yet the decision write would move it to
-	// approved and erase the abandoned-action note, so the operator would lose the
-	// only record that the library may hold a partial apply. It can still be rejected
-	// (rejectOne), which is an answer that needs no apply.
-	if item.Status == database.ReviewStatusNeedsAttention && !applyOn {
-		return nil, currentActionFor(*item), "", rejectf(http.StatusConflict, "REVIEW_APPLY_DISABLED",
-			"this item needs attention because an apply of "+strconv.Quote(item.ApplyAbandonedAction)+" was abandoned "+
-				"part way, so approving it means running that apply again, which needs review_apply_enabled to be on. "+
-				"Enable it and approve again, or reject the item")
-	}
-
 	// The default is the hold's EFFECTIVE action, not the raw payload recommendation:
 	// re-approving an already-decided hold with an empty body must not silently revert
 	// a human's recorded override back to the machine's suggestion. Re-approve is a
@@ -666,6 +653,39 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, ifUpdate
 	// prefers it (effectiveActionFor), so the override survives the switch being
 	// flipped later.
 
+	fn, hasHandler := h.applyHandlerFor(chosen)
+
+	// 🔴 A needs_attention item is approved only when the apply will actually RUN: the
+	// chosen action has a registered handler AND the apply switch is on. Its status says
+	// an apply of it was abandoned half done, so approving it means re-running an apply.
+	// Anything that would fall through to the plain decision write below (no handler,
+	// switch off) or to the no-apply `separate` path moves it to approved without
+	// running anything and erases apply_abandoned_action, the only record that the
+	// library may hold a partial apply. It can still be rejected (rejectOne), which is an
+	// answer that needs no apply.
+	if item.Status == database.ReviewStatusNeedsAttention {
+		abandoned := strconv.Quote(item.ApplyAbandonedAction)
+		switch {
+		case chosen == itunesservice.ActionSeparate:
+			// Refused whatever the switch says: separate runs nothing, so it can never
+			// confirm the library is fine after a partial apply.
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_SEPARATE_NEEDS_ATTENTION",
+				"this item needs attention because an apply of "+abandoned+" was abandoned part way, so a partial "+
+					"apply may exist; choosing separate runs nothing and cannot confirm the library is fine. "+
+					"Check the library, then reject the item to dismiss it")
+		case !hasHandler:
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_NO_APPLY_HANDLER",
+				"this item needs attention because an apply of "+abandoned+" was abandoned part way, but action "+
+					strconv.Quote(chosen)+" has no apply handler, so approving it would run nothing and erase that note. "+
+					"Reject the item instead")
+		case !applyOn:
+			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_APPLY_DISABLED",
+				"this item needs attention because an apply of "+abandoned+" was abandoned part way, "+
+					"so approving it means running an apply again, which needs review_apply_enabled to be on. "+
+					"Enable it and approve again, or reject the item")
+		}
+	}
+
 	// (5) separate needs NO apply handler and never will. Every member is already its
 	// own book, so "separate into N" is a statement that the current on-disk state is
 	// correct — there is nothing to execute, only a decision to record. The dedup-key
@@ -684,7 +704,6 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string, ifUpdate
 			"recorded as approved so re-scans leave it alone", nil
 	}
 
-	fn, hasHandler := h.applyHandlerFor(chosen)
 	if hasHandler && applyOn {
 		return h.applyUnderClaim(ctx, item, chosen, fn)
 	}
@@ -797,7 +816,7 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 		// pending list: a re-run refused by the iTunes guard leaves the item applying,
 		// so it answers REVIEW_RERUN_FAILED like any other failed re-run (the reason
 		// carries the iTunes detail), whereas REVIEW_ITUNES_PROTECTED means a first run
-		// that was handed back and is still pending.
+		// that was handed back and the item is back at the status it was claimed from.
 		if relErr == nil && claim.TookOver {
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_RERUN_FAILED", reason.Error())
 		}
