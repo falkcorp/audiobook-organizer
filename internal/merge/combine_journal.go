@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -261,11 +261,13 @@ type CombineOverrideUndo struct {
 	AuthorsBefore  []database.BookAuthor `json:"authors_before,omitempty"`
 	AuthorIDAfter  *int                  `json:"author_id_after,omitempty"`
 	// AuthorCreated is true when the combine itself created the author row
-	// AuthorIDAfter names (database.MintAuthor reported it minted the row), so
-	// its undo may delete that row once nothing credits it. It is written in
-	// the same journal write as AuthorIDAfter, before the author is linked.
-	// False for an author that already existed, and absent from a journal
-	// written before the field: an undo deletes nothing for either.
+	// AuthorIDAfter names (database.MintAuthor reported it minted the row). It
+	// is written in the same journal write as AuthorIDAfter, before the author
+	// is linked. Nothing deletes that row on its account: the undo only warns
+	// when no book credits it any more (createdAuthorNote), and
+	// maintenance.purge-empty-authors removes it. False for an author that
+	// already existed, and absent from a journal written before the field: no
+	// warning for either.
 	AuthorCreated bool                                    `json:"author_created,omitempty"`
 	FieldStates   map[string]*database.MetadataFieldState `json:"field_states_before,omitempty"`
 }
@@ -829,72 +831,44 @@ func (ms *Service) overrideAuthorsToRestore(survivorID string, o *CombineOverrid
 	return restore, warns, nil
 }
 
-// removeUncreditedAuthor deletes author id, an author a combine's override
-// created, but only while nothing uses it. It returns kept, the reason it was
-// left in place (empty when the row was removed or is already gone), and err
-// when the question could not be answered; a caller treats both as "the row
-// stays".
+// createdAuthorNote is the warning about author id (name), an author a
+// combine's override created (CombineOverrideUndo.AuthorCreated), once the
+// survivor no longer credits it: after an undo has restored the survivor's
+// links, or when the combine dropped its own author override after minting
+// the row. It returns nothing while some book still credits the author.
 //
-// DeleteAuthor sweeps the author out of EVERY book_authors row and drops its
-// aliases, so nothing here may reach it before these have all come back empty:
-//   - no book credits the author, in any role (narrators are book_authors rows
-//     too) or state (trash, non-primary), through the junction or the legacy
-//     Book.AuthorID: database.VerifyAuthorUnlinked, the check every
-//     relink-then-delete path ends with, so no second scan is written here;
-//   - the author has no alias, which the delete would cascade.
+// DESIGN DECISION (2026-10-18, round-4 review of #4064): the combine and its
+// undo never delete that author. An earlier version deleted it here, behind a
+// read-only check that no book credited it and it had no alias, and that had
+// four holes: the check and the delete were not one step (a book linked in
+// between lost the credit), a crash between restoring the links and the
+// delete left the orphan anyway, the delete wrote no author_delete ledger
+// row (so nothing could revert it), and tombstones and series rows naming the
+// id were left dangling. maintenance.purge-empty-authors
+// (internal/plugins/maintenance/author_purge_empty.go) already removes an
+// author no book credits, with the gates this lacked (references in every
+// book state, series owners, file counts, a per-item re-check), journals each
+// delete as an author_delete row first, and is revertible. So the undo
+// leaves the row and says so, and the crash case needs no special handling:
+// an orphan is one more empty author for that op.
 //
-// A row that is not live under its own id (deleted by an earlier attempt of
-// the same undo, or merged into another author and left a tombstone) is
-// already gone: GetAuthorByID follows the tombstone, so only an answer under
-// the same id is the row itself.
-//
-// The check and the delete are not one atomic step: a book linked to the
-// author in between loses that credit. That window is the same one every
-// relink-then-delete path accepts.
-func (ms *Service) removeUncreditedAuthor(id int) (kept string, err error) {
-	live, err := ms.db.GetAuthorByID(id)
-	if err != nil {
-		return "", fmt.Errorf("read author %d: %w", id, err)
-	}
-	if live == nil || live.ID != id {
-		return "", nil
-	}
-	if err := database.VerifyAuthorUnlinked(ms.db, id); err != nil {
-		if errors.Is(err, database.ErrAuthorStillLinked) {
-			return err.Error(), nil
-		}
-		return "", err
-	}
-	aliases, err := ms.db.GetAuthorAliases(id)
-	if err != nil {
-		return "", fmt.Errorf("read aliases of author %d: %w", id, err)
-	}
-	if len(aliases) > 0 {
-		return fmt.Sprintf("author %d has %d alias(es) that deleting it would drop", id, len(aliases)), nil
-	}
-	if err := ms.db.DeleteAuthor(id); err != nil {
-		return "", fmt.Errorf("delete author %d: %w", id, err)
-	}
-	return "", nil
-}
-
-// removeCreatedAuthor is removeUncreditedAuthor for the two callers that
-// report instead of acting on the answer: it logs and returns the warning
-// lines (none when the row was removed or is already gone). why says how the
-// caller knows the combine created the row.
-func (ms *Service) removeCreatedAuthor(id int, why string) []string {
-	kept, err := ms.removeUncreditedAuthor(id)
+// "Credited" is database.VerifyAuthorUnlinked: any role (narrators are
+// book_authors rows too) and any book state, the legacy Book.AuthorID
+// included. A check that cannot be answered is a warning of its own.
+func (ms *Service) createdAuthorNote(id int, name string) []string {
+	err := database.VerifyAuthorUnlinked(ms.db, id)
+	var msg string
 	switch {
-	case err != nil:
-		msg := fmt.Sprintf("author %d (%s) was left in place: it could not be removed: %v", id, why, err)
-		mlog.Warn("combine: %s", logger.SanitizeLogValue(msg))
-		return []string{msg}
-	case kept != "":
-		msg := fmt.Sprintf("author %d (%s) was kept: %s", id, why, kept)
+	case err == nil:
+		msg = fmt.Sprintf("author %d (%q) was created by this combine and is no longer credited on any book; it is left in place, and maintenance.purge-empty-authors can remove it", id, name)
 		mlog.Info("combine: %s", logger.SanitizeLogValue(msg))
-		return []string{msg}
+	case errors.Is(err, database.ErrAuthorStillLinked):
+		return nil
+	default:
+		msg = fmt.Sprintf("author %d (%q) was created by this combine and is left in place; whether any book still credits it could not be checked: %v", id, name, err)
+		mlog.Warn("combine: %s", logger.SanitizeLogValue(msg))
 	}
-	return nil
+	return []string{msg}
 }
 
 // retiredByJournal reports whether b is still the shell this combine retired:
@@ -1899,13 +1873,11 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 				return res, fmt.Errorf("restore survivor authors: %w", err)
 			}
 			res.Warnings = append(res.Warnings, warns...)
-			// The survivor no longer credits the author the combine created.
-			// Remove the row only now, and only while nothing else credits
-			// it. A failure here is a warning, not a failed undo: the
-			// survivor is already restored, the row is only left behind, and
-			// a retry of this undo tries again.
+			// The author the combine created is never deleted here (see
+			// createdAuthorNote): when nothing credits it any more, the undo
+			// says so and leaves it for maintenance.purge-empty-authors.
 			if o.AuthorCreated {
-				res.Warnings = append(res.Warnings, ms.removeCreatedAuthor(*o.AuthorIDAfter, "the combine created it")...)
+				res.Warnings = append(res.Warnings, ms.createdAuthorNote(*o.AuthorIDAfter, o.Applied.Author)...)
 			}
 		}
 		for field, prior := range o.FieldStates {

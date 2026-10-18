@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-10-18
 
@@ -15,10 +15,12 @@ import (
 // was database.Store (398 methods) until 2026-08-19. On 2026-09-13
 // playCountMarkStore added ModifyBook to the progress carry, making 20
 // (GetBookByID was already counted, through bookReader). On 2026-10-18 the
-// combine undo's removal of an author the combine created replaced CreateAuthor
-// with MintAuthor and added GetAuthorByID, GetAuthorAliases,
-// GetBooksByAuthorIDForRelinkCore and DeleteAuthor (net +4, all on
-// database.Store).
+// combine override replaced CreateAuthor with MintAuthor and added
+// GetBooksByAuthorIDForRelinkCore, for the warning about an author the
+// combine created that no book credits any more (net +1, on database.Store).
+// The same day's GetAuthorByID, GetAuthorAliases and DeleteAuthor, added so
+// the undo could delete that author, were removed again with the delete: the
+// undo leaves it for maintenance.purge-empty-authors (createdAuthorNote).
 //
 // Grouped rather than declared flat so each consumer can name the slice it uses:
 // the free functions in sync_follow.go need only user-progress methods.
@@ -56,22 +58,17 @@ type mergeBookFileStore interface {
 type mergeAuthorStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	// MintAuthor, not CreateAuthor: a combine's override journals that it
-	// CREATED an author (CombineOverrideUndo.AuthorCreated) so its undo can
-	// remove the row, and CreateAuthor cannot say whether this call wrote it.
+	// CREATED an author (CombineOverrideUndo.AuthorCreated), so its undo can
+	// say when that author is left uncredited, and CreateAuthor cannot say
+	// whether this call wrote the row.
 	MintAuthor(name string) (*database.Author, bool, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
-	// The remainder removes an author the combine created and nothing credits
-	// any more (removeUncreditedAuthor). DeleteAuthor sweeps the author out of
-	// every book_authors row and drops its aliases, so it is only ever called
-	// after the other three show there is nothing left to lose:
 	// GetBooksByAuthorIDForRelinkCore is database.AuthorRelinkLister (every
 	// book crediting the author in any role and any state, the legacy
-	// Book.AuthorID included), GetAuthorByID tells a live row from one merged
-	// away, GetAuthorAliases is what the delete would cascade.
-	GetAuthorByID(id int) (*database.Author, error)
-	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
+	// Book.AuthorID included): createdAuthorNote asks it whether an author
+	// the combine created is still credited. Read-only; nothing in this
+	// package deletes an author.
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
-	DeleteAuthor(id int) error
 }
 
 // playCountMarkStore is the book leg of a progress carry. A carried finish

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -217,7 +217,11 @@ fully undone, or put a reader's progress or a user's later edit at risk.
   alone instead of deleted.
 - The undo keeps a co-author added since the combine and says so.
 - An override creates a new author only after its plan is recorded.
-- Undoing a combine now removes the author it created, unless a book still credits that author or it has aliases, in which case the author stays and the undo says so; a combine that cancels its own override also takes back any author it had just created.
+- Undoing a combine leaves any author it created in place. When no
+  book credits that author any more, the undo says so, and the existing
+  clean-up job for empty authors removes it with its own safety checks
+  and its own undo. A combine that cancels its own author change now
+  says so on screen instead of only in the log.
 - The kept-progress messages now name the right place.
 - A split-book merge now handles a trash write that reports an error the
   same safe way a combine does.

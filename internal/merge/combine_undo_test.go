@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c6e2f94-7b1d-4a58-9e3c-5d8a1f27b640
 // last-edited: 2026-10-18
 
@@ -161,6 +161,15 @@ func seedUndoFixture(t *testing.T, store database.Store) undoFixture {
 	return f
 }
 
+// requireOnlyCreatedAuthorNote asserts that the one warning is the note about
+// the author the combine's override created (name), which the undo leaves in
+// place for maintenance.purge-empty-authors instead of deleting it.
+func requireOnlyCreatedAuthorNote(t *testing.T, warnings []string, name string) {
+	t.Helper()
+	require.Len(t, warnings, 1, "%v", warnings)
+	require.Contains(t, warnings[0], fmt.Sprintf("(%q) was created by this combine and is no longer credited on any book", name))
+}
+
 func progressView(t *testing.T, store database.Store, userID, bookID string) (int, string, []string) {
 	t.Helper()
 	st, err := store.GetUserBookState(userID, bookID)
@@ -229,7 +238,7 @@ func TestCombineUndo_RoundTripRestoresExactly(t *testing.T) {
 	undo, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{f.absA, f.absB}, undo.RestoredBooks)
-	assert.Empty(t, undo.Warnings)
+	requireOnlyCreatedAuthorNote(t, undo.Warnings, "Jane Undo")
 
 	for _, id := range all {
 		assert.Equal(t, preBooks[id], viewBook(t, store, id), "book %s restored exactly", id)
