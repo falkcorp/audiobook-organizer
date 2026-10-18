@@ -1,5 +1,5 @@
 // file: internal/merge/combine_override_author_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e933924-4b94-4b6c-9a57-613b0274c40c
 // last-edited: 2026-10-18
 
@@ -24,6 +24,10 @@ import (
 type overrideJournalStore struct {
 	*database.PebbleStore
 	failOverrideJournal bool
+	// failAuthorIDJournal fails only the journal write that carries the new
+	// author's id (the one after the author row is created); the plan write
+	// before it, which names no id, succeeds.
+	failAuthorIDJournal bool
 	// watchLinks: at each single-author link write, record whether some
 	// combine journal on disk already names that author as AuthorIDAfter.
 	watchLinks bool
@@ -33,6 +37,9 @@ type overrideJournalStore struct {
 func (s *overrideJournalStore) SetRaw(key string, value []byte) error {
 	if s.failOverrideJournal && strings.HasPrefix(key, combineJournalPrefix) && strings.Contains(string(value), `"override"`) {
 		return errors.New("injected override journal failure")
+	}
+	if s.failAuthorIDJournal && strings.HasPrefix(key, combineJournalPrefix) && strings.Contains(string(value), `"author_id_after"`) {
+		return errors.New("injected author id journal failure")
 	}
 	return s.PebbleStore.SetRaw(key, value)
 }

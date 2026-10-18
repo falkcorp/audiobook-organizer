@@ -1,5 +1,5 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
 // last-edited: 2026-10-18
 
@@ -184,6 +184,15 @@ func (f *b3FaultStore) CreateAuthor(name string) (*database.Author, error) {
 		return nil, fmt.Errorf("b3 injected CreateAuthor failure")
 	}
 	return f.Store.CreateAuthor(name)
+}
+
+// MintAuthor is how a combine's override creates its author; failCreateAuthor
+// fails it as it fails CreateAuthor.
+func (f *b3FaultStore) MintAuthor(name string) (*database.Author, bool, error) {
+	if f.failCreateAuthor {
+		return nil, false, fmt.Errorf("b3 injected MintAuthor failure")
+	}
+	return f.Store.MintAuthor(name)
 }
 
 func (f *b3FaultStore) SetBookAuthors(bookID string, authors []database.BookAuthor) error {

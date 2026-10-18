@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_regressions_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d9b7f41-6e05-4c38-a1f2-8b3c5e9d0a74
 // last-edited: 2026-10-18
 
@@ -330,6 +330,14 @@ func (s crashStore) CreateAuthor(name string) (*database.Author, error) {
 	a, err := s.PebbleStore.CreateAuthor(name)
 	s.after("CreateAuthor", name, err)
 	return a, err
+}
+
+// MintAuthor is the call a combine's override creates its author with.
+func (s crashStore) MintAuthor(name string) (*database.Author, bool, error) {
+	s.before("MintAuthor", name)
+	a, minted, err := s.PebbleStore.MintAuthor(name)
+	s.after("MintAuthor", name, err)
+	return a, minted, err
 }
 
 func (s crashStore) UpsertMetadataFieldState(st *database.MetadataFieldState) error {

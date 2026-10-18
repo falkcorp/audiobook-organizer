@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2401,8 +2401,10 @@ func (ms *Service) planCombineOverride(primaryID string, override *CombineOverri
 // writeCombineOverride writes a journaled override plan onto the survivor.
 // The before-values are refreshed from the row each write actually replaces
 // (ModifyBook), and a sub-write that fails is dropped from the plan (its
-// Applied field and lock-row entry cleared, AuthorIDAfter nil) so the undo
-// neither checks nor rolls back a change that never happened. The caller
+// Applied field and lock-row entry cleared, AuthorIDAfter nil, AuthorCreated
+// false, and an author row the combine created taken back while nothing
+// credits it) so the undo neither checks nor rolls back a change that never
+// happened and no created author is left that nothing links to. The caller
 // re-journals the plan afterwards.
 func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideUndo, persist func() error) {
 	if plan.Applied.Title != "" || plan.Applied.Narrator != "" {
@@ -2447,23 +2449,33 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 	if plan.Applied.Author == "" {
 		return
 	}
+	// dropAuthor takes the author out of the plan. An author this combine
+	// created is removed with it, unless something credits it by now: it is
+	// journaled (or about to be) as created, and the plan that names it is
+	// about to be rewritten without it, so nothing would ever remove it.
 	dropAuthor := func() {
+		if plan.AuthorCreated && plan.AuthorIDAfter != nil {
+			ms.removeCreatedAuthor(*plan.AuthorIDAfter, "the override that created it was dropped")
+		}
 		plan.Applied.Author = ""
 		plan.AuthorIDAfter = nil
+		plan.AuthorCreated = false
 		delete(plan.FieldStates, database.FieldKeyAuthorName)
 	}
 	if plan.AuthorIDAfter == nil {
 		// A new author: created only now that the plan is journaled, and its
-		// id journaled before any link names it, so the undo always knows
-		// which links to put back. A journal on disk that names the author
-		// but no id (a crash in between) has no link to undo. The one row
-		// this can still leave unlinked is the author created here when
-		// that journal write then fails: the override is dropped, and the
-		// row is logged.
-		author, err := ms.db.GetAuthorByName(plan.Applied.Author)
-		if err == nil && author == nil {
-			author, err = ms.db.CreateAuthor(plan.Applied.Author)
-		}
+		// id journaled, with the fact that this combine created it, before
+		// any link names it, so the undo always knows which links to put back
+		// and which row to remove. A journal on disk that names the author
+		// but no id (a crash in between) has no link to undo. If that
+		// journal write fails the override is dropped and the row is taken
+		// back (dropAuthor), so no author is left that nothing links to.
+		//
+		// MintAuthor, not GetAuthorByName then CreateAuthor: it reports
+		// whether THIS call wrote the row, and only a row it wrote is
+		// journaled as created. An author another writer created in the gap
+		// is linked like any existing one, and the undo never deletes it.
+		author, minted, err := ms.db.MintAuthor(plan.Applied.Author)
 		if err != nil || author == nil {
 			mlog.Warn("combine override: author %s not created; author not overridden: %s",
 				logger.SanitizeLogValue(plan.Applied.Author), logger.SanitizeLogValue(fmt.Sprint(err)))
@@ -2472,8 +2484,9 @@ func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideU
 		}
 		id := author.ID
 		plan.AuthorIDAfter = &id
+		plan.AuthorCreated = minted
 		if err := persist(); err != nil {
-			mlog.Error("combine override: author %d (%s) exists but its id could not be journaled; author not overridden and the row is left unlinked: %s",
+			mlog.Error("combine override: author %d (%s) could not be journaled; author not overridden: %s",
 				id, logger.SanitizeLogValue(plan.Applied.Author), logger.SanitizeLogValue(fmt.Sprint(err)))
 			dropAuthor()
 			return
