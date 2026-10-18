@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -100,6 +100,11 @@ type Handler struct {
 	// store is the wire-time snapshot of the review-queue store.
 	store database.ReviewStore
 
+	// claimer is the apply-claim compare-and-set resolved from store with
+	// database.AsCapability (nil when the store lacks it: no claim is taken and two
+	// concurrent approves can then both apply, as before the claim existed).
+	claimer database.ReviewItemApplyClaimer
+
 	// applyEnabled is the GLOBAL "big switch" gate, read at approve time. When it
 	// returns false (the default), approving a hold records the decision but NEVER
 	// executes its apply handler — every hold stays visible/reviewable. A nil gate is
@@ -129,8 +134,10 @@ type Handler struct {
 // never executed). applyCap supplies the bulk apply ceiling; nil means
 // applycap.Default.
 func New(store database.ReviewStore, applyEnabled func() bool, applyCap func() int) *Handler {
+	claimer, _ := database.AsCapability[database.ReviewItemApplyClaimer](store)
 	return &Handler{
 		store:         store,
+		claimer:       claimer,
 		applyEnabled:  applyEnabled,
 		applyCap:      applyCap,
 		applyHandlers: make(map[string]ApplyFunc),
@@ -256,6 +263,18 @@ func rejectf(status int, code, msg string) *actionRejection {
 	return &actionRejection{status: status, code: code, msg: msg}
 }
 
+// appliedUnrecordedError means the apply handler SUCCEEDED but the "applied" status
+// could not be written (twice). The work is done; the item is left in the "applying"
+// claim, which blocks a second apply until the claim goes stale. It is its own type
+// so a caller is never told to resend: a resend inside the stale window is refused,
+// and one after it would re-run an apply that already ran.
+type appliedUnrecordedError struct{ err error }
+
+func (e *appliedUnrecordedError) Error() string {
+	return "applied but status write failed — do not resend: " + e.err.Error()
+}
+func (e *appliedUnrecordedError) Unwrap() error { return e.err }
+
 // GetReviewCount handles GET /api/v1/review/count.
 //
 // Response: { "count": N, "by_kind": { "<kind>": n, ... } } where count and the
@@ -364,9 +383,13 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 	}
 
 	id := c.Param("id")
-	updated, chosen, note, err := h.approveOne(c.Request.Context(), id, strings.TrimSpace(req.Action))
+	updated, chosen, note, err := h.approveOne(c.Request.Context(), id, strings.TrimSpace(req.Action), h.applyGloballyEnabled())
 	if rej, ok := errors.AsType[*actionRejection](err); ok {
 		httputil.RespondWithError(c, rej.status, rej.msg, rej.code)
+		return
+	}
+	if unrec, ok := errors.AsType[*appliedUnrecordedError](err); ok {
+		httputil.RespondWithError(c, http.StatusInternalServerError, unrec.Error(), "REVIEW_APPLIED_UNRECORDED")
 		return
 	}
 	if err != nil {
@@ -392,14 +415,22 @@ func (h *Handler) ApproveReviewItem(c *gin.Context) {
 // requested is the caller's explicit override ("" = use the hold's recommendation).
 // The returned action is the one actually dispatched. A returned *actionRejection
 // means the caller asked for something that must not happen; any other error is a
-// genuine fault.
-func (h *Handler) approveOne(ctx context.Context, id, requested string) (*database.ReviewItem, string, string, error) {
+// genuine fault. applyOn is the apply switch as read ONCE by the caller, so a bulk
+// batch and its per-item results can never disagree about it.
+//
+// An item that is already applied (or mid-apply under another claim) is refused with
+// 409, never approved again: a second apply of a merge that already ran must not
+// happen, from a single approve or a resent bulk alike.
+func (h *Handler) approveOne(ctx context.Context, id, requested string, applyOn bool) (*database.ReviewItem, string, string, error) {
 	item, err := h.store.GetReviewItem(id)
 	if err != nil {
 		return nil, "", "", err
 	}
 	if item == nil {
 		return nil, "", "", nil
+	}
+	if rej := alreadyDone(item); rej != nil {
+		return nil, effectiveActionFor(*item), "", rej
 	}
 
 	// The default is the hold's EFFECTIVE action, not the raw payload recommendation:
@@ -476,18 +507,48 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 	}
 
 	fn, hasHandler := h.applyHandlerFor(chosen)
-	if hasHandler && h.applyGloballyEnabled() {
+	if hasHandler && applyOn {
+		// Claim the item (pending/approved/rejected -> applying) under the store's
+		// lock so two concurrent approves cannot both run the handler. A store
+		// without the capability applies unclaimed.
+		if h.claimer != nil {
+			claimed, cerr := h.claimer.ClaimReviewItemForApply(id, database.ReviewApplyClaimStale)
+			if conflict, ok := errors.AsType[*database.ReviewClaimConflictError](cerr); ok {
+				return nil, chosen, "", claimConflict(conflict)
+			}
+			if cerr != nil {
+				return nil, "", "", cerr
+			}
+			if claimed == nil {
+				return nil, "", "", nil
+			}
+		}
+		release := func() {
+			if h.claimer != nil {
+				_ = h.claimer.ReleaseReviewItemClaim(id)
+			}
+		}
 		if err := fn(ctx, *item); err != nil {
+			// Nothing was applied: hand the claim back so the item is retryable.
+			release()
 			// A refusal because a member has a file under the active iTunes
-			// library is 409, not a 500: the item stays pending (no status
-			// transition below) and bulk approve skips it instead of aborting.
+			// library is 409, not a 500: the item keeps its status and bulk
+			// approve skips it instead of aborting.
 			if errors.Is(err, merge.ErrITunesProtected) {
 				return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", err.Error())
 			}
 			return nil, "", "", err
 		}
+		// The handler ran. Recording that is retried once; if it still fails the
+		// claim stays (blocking a double apply) and the caller is told not to resend.
 		updated, err := h.store.SetReviewItemDecision(id, database.ReviewStatusApplied, chosen)
-		return updated, chosen, "", err
+		if err != nil {
+			updated, err = h.store.SetReviewItemDecision(id, database.ReviewStatusApplied, chosen)
+		}
+		if err != nil {
+			return nil, chosen, "", &appliedUnrecordedError{err: err}
+		}
+		return updated, chosen, "", nil
 	}
 	// Either no apply handler for this action, OR the global apply switch is OFF
 	// (review-only mode). Record the decision as "approved" but do NOT execute — the
@@ -505,6 +566,39 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 	return updated, chosen, note, nil
 }
 
+// alreadyDone refuses an approve or reject of an item whose apply already ran or is
+// running: rewriting an applied item's status would falsify history.
+func alreadyDone(item *database.ReviewItem) *actionRejection {
+	switch item.Status {
+	case database.ReviewStatusApplied:
+		return rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED", "already applied")
+	case database.ReviewStatusApplying:
+		return rejectf(http.StatusConflict, "REVIEW_APPLY_IN_PROGRESS", "an apply is in progress for this item")
+	}
+	return nil
+}
+
+// claimConflict turns a refused apply claim into the same 409s alreadyDone gives.
+func claimConflict(c *database.ReviewClaimConflictError) *actionRejection {
+	if c.Status == database.ReviewStatusApplied {
+		return rejectf(http.StatusConflict, "REVIEW_ALREADY_APPLIED", "already applied")
+	}
+	return rejectf(http.StatusConflict, "REVIEW_APPLY_IN_PROGRESS", "an apply is in progress for this item")
+}
+
+// rejectOne rejects one item, refusing one that is applied or applying. Returns
+// (nil, nil) when the item does not exist.
+func (h *Handler) rejectOne(id string) (*database.ReviewItem, error) {
+	item, err := h.store.GetReviewItem(id)
+	if err != nil || item == nil {
+		return nil, err
+	}
+	if rej := alreadyDone(item); rej != nil {
+		return nil, rej
+	}
+	return h.store.SetReviewItemStatus(id, database.ReviewStatusRejected)
+}
+
 // RejectReviewItem handles POST /api/v1/review/items/:id/reject.
 func (h *Handler) RejectReviewItem(c *gin.Context) {
 	if h.store == nil {
@@ -512,7 +606,11 @@ func (h *Handler) RejectReviewItem(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	updated, err := h.store.SetReviewItemStatus(id, database.ReviewStatusRejected)
+	updated, err := h.rejectOne(id)
+	if rej, ok := errors.AsType[*actionRejection](err); ok {
+		httputil.RespondWithError(c, rej.status, rej.msg, rej.code)
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to reject review item", err)
 		return
@@ -556,10 +654,15 @@ type bulkResult struct {
 	Rejected []string   `json:"rejected,omitempty"`
 	NotFound []string   `json:"not_found,omitempty"`
 	Skipped  []bulkSkip `json:"skipped,omitempty"`
-	// Failed lists items whose apply (or status write) errored. The item keeps the
-	// status it had, so an approved item stays approved and a retry is another
-	// bulk approve naming its id; the batch carries on past it.
+	// Failed lists items whose apply (or status write) errored BEFORE the apply ran
+	// to completion. The item keeps the status it had, so an approved item stays
+	// approved and a retry is another bulk approve naming its id.
 	Failed []bulkFail `json:"failed,omitempty"`
+	// AppliedUnrecorded lists items whose apply SUCCEEDED but whose "applied" status
+	// write failed. The work is done: do NOT resend them (the item is held in
+	// "applying" so a resend is refused until the claim goes stale, and a resend
+	// after that would apply twice). Check the item and fix its status by hand.
+	AppliedUnrecorded []bulkFail `json:"applied_unrecorded,omitempty"`
 	// ApplyDisabled is true on an approve while the global apply switch is off:
 	// approvals were recorded but nothing was applied, so an empty `applied` is not
 	// a result. Enable review_apply_enabled and approve the ids again.
@@ -634,27 +737,24 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 	// items applied but unreported and later ones untouched. A 500 is kept only for
 	// request-level failures (the store listing above).
 	result := bulkResult{Action: req.Action}
-	result.ApplyDisabled = req.Action == "approve" && !h.applyGloballyEnabled()
+	applyOn := h.applyGloballyEnabled() // read once: flag and per-item results agree
+	result.ApplyDisabled = req.Action == "approve" && !applyOn
 	for _, id := range ids {
 		switch req.Action {
 		case "approve":
 			// "" = use this item's OWN recommendation. See bulkRequest's comment for
 			// why there is no batch-wide action.
-			//
-			// An item that is already applied is skipped, not approved again: the
-			// retry path after a partial failure is to resend the same ids, and a
-			// second apply of a merge that already ran must never happen.
-			if cur, gerr := h.store.GetReviewItem(id); gerr == nil && cur != nil && cur.Status == database.ReviewStatusApplied {
-				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Action: effectiveActionFor(*cur), Reason: "already applied"})
-				continue
-			}
-			updated, chosen, _, err := h.approveOne(c.Request.Context(), id, "")
+			updated, chosen, _, err := h.approveOne(c.Request.Context(), id, "", applyOn)
 			// A per-item refusal (no decidable action, unimplemented action) SKIPS that
 			// item and the batch continues. Aborting the whole batch on one
 			// insufficient-evidence hold would make bulk approve useless on a queue
 			// where 70 of 356 holds are exactly that.
 			if rej, ok := errors.AsType[*actionRejection](err); ok {
 				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Action: chosen, Reason: rej.msg})
+				continue
+			}
+			if unrec, ok := errors.AsType[*appliedUnrecordedError](err); ok {
+				result.AppliedUnrecorded = append(result.AppliedUnrecorded, bulkFail{ID: id, Reason: unrec.Error()})
 				continue
 			}
 			if err != nil {
@@ -672,7 +772,11 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 			}
 			result.Processed++
 		case "reject":
-			updated, err := h.store.SetReviewItemStatus(id, database.ReviewStatusRejected)
+			updated, err := h.rejectOne(id)
+			if rej, ok := errors.AsType[*actionRejection](err); ok {
+				result.Skipped = append(result.Skipped, bulkSkip{ID: id, Reason: rej.msg})
+				continue
+			}
 			if err != nil {
 				result.Failed = append(result.Failed, bulkFail{ID: id, Reason: err.Error()})
 				continue
@@ -726,7 +830,8 @@ func parseReviewListLimit(c *gin.Context) (int, bool) {
 		return 0, false
 	case n <= 0:
 		httputil.RespondWithError(c, http.StatusBadRequest,
-			fmt.Sprintf("limit must be between 1 and %d; %d is not a request for every item — page with offset instead", maxReviewListLimit, n),
+			fmt.Sprintf("limit must be between 1 and %d; %d is not a request for every item — "+
+				"page with offset instead", maxReviewListLimit, n),
 			reviewListLimitCode)
 		return 0, false
 	case n > maxReviewListLimit:

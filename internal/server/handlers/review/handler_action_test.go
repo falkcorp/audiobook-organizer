@@ -312,7 +312,7 @@ func TestApprove_AmbiguousRecommendingCombine_NowCombines(t *testing.T) {
 }
 
 // 🔴 review_apply_enabled IS STILL THE GATE, AND THE OVERRIDE IS STILL RECORDED.
-// With the switch OFF — production's setting — an explicit override of a APPLYABLE
+// With the switch OFF — production's setting — an explicit override of an applyable
 // recommendation must be accepted (that is the only way a reviewer can register a
 // disagreement at all), must execute nothing, and must persist what they chose.
 //
