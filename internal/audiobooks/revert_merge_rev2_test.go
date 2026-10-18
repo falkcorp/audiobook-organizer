@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_rev2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0c7a52-8e7b-4f1e-9c36-2a4b6f1d8e90
 // last-edited: 2026-10-18
 
@@ -284,6 +284,9 @@ func TestRevert_CombineWithOverride_StoppedAtEveryWrite(t *testing.T) {
 						CombineBooksWithOptions([]string{f.keep, f.a, f.b}, f.keep, override, merge.CombineOptions{OperationID: opID})
 				}()
 				require.True(t, crashed, "write %d was reached", i)
+				// Every row the stopped combine left, created ones included,
+				// must still be there after the revert, on its owner.
+				mid := snapCrash(t, store, f)
 
 				if len(pointerRows(t, store, opID, undo.ChangeTypeMergeCombineJournal)) == 0 {
 					// Stopped before its undo pointer: refused with nothing
@@ -310,6 +313,9 @@ func TestRevert_CombineWithOverride_StoppedAtEveryWrite(t *testing.T) {
 				}
 				for path, owner := range before.Owner {
 					require.Equal(t, owner, after.Owner[path], "file %s still there, on its book", path)
+				}
+				for path := range mid.Owner {
+					require.Equal(t, f.paths[path], after.Owner[path], "row for %s (the combine left it) is on its owner after the revert", path)
 				}
 				require.Equal(t, metaBefore, metaOf(t, store, f.keep), "title, author link, author rows and lock rows back")
 			})
