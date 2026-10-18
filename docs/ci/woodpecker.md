@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.14.1 -->
+<!-- version: 1.15.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-10-17 -->
+<!-- last-edited: 2026-10-18 -->
 
 # Woodpecker CI: install runbook
 
@@ -40,7 +40,7 @@ one for the same commit.
 | `test-database` | `heavy=true` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
 | `test-server-scanner` | `heavy=true` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
 | `test-rest` | `heavy=true` | every other package, including maintenance, registry and applygate | about 450–600 s |
-| `test-fixtures` | `heavy=true` | `make test-fixtures`: every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line | not yet measured on U1 |
+| `test-fixtures` | `heavy=true` | `make test-fixtures` as three sequential shards (`FIXTURE_SHARD=1/3`, `2/3`, `3/3`, one step, first failure stops it): every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line. Sequential, not one run of every package, because on llm1 and the mac agent the packages starved each other (pipeline 1129: `internal/plugins/maintenance` hit the 25m per-package timeout with nothing hung). One workflow keeps the one status context and one agent; each shard runs a third of the packages at a time. The repo pipeline timeout (60 min) is a Woodpecker server setting: 22-34 min on llm1/mac before the split, about 11 min on U1; raise it if the summed shard times approach it | 22-34 min on llm1/mac (single run), about 11 min on U1 |
 | `test-native-taglib` | `taglib=true` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
 | `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, pprof-check, web tests | split out of `checks` on 2026-09-29 |
