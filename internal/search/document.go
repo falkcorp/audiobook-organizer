@@ -1,6 +1,7 @@
 // file: internal/search/document.go
 // version: 1.1.0
 // guid: 6a2d8f1c-4b3e-4f60-a7c5-2e8d0f1b9a47
+// last-edited: 2026-10-18
 //
 // BookDocument is the flat, Bleve-indexable projection of a Book
 // plus its related author, series, and tag rows. The fields here
