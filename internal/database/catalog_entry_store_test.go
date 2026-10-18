@@ -1,5 +1,5 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
 // last-edited: 2026-10-18
 
@@ -26,10 +26,10 @@ func openTestCatalogStore(t *testing.T) *CatalogStore {
 	return NewCatalogStore(NewGatedDB(db))
 }
 
-// TestCatalogList_UnfilteredUsesKeysOnlyIndex: the entry count must never
-// iterate the cat: prefix (every ~1 KB entry value); it walks the keys-only
-// cat_id index.
-func TestCatalogList_UnfilteredUsesKeysOnlyIndex(t *testing.T) {
+// TestCountEntries_UsesKeysOnlyIndex: the entry count must never iterate the
+// cat: prefix (every ~1 KB entry value); it walks the keys-only cat_id index,
+// and re-upserting does not duplicate that index.
+func TestCountEntries_UsesKeysOnlyIndex(t *testing.T) {
 	st := openTestCatalogStore(t)
 	items := make([]CatalogUpsert, 7)
 	for i := range items {

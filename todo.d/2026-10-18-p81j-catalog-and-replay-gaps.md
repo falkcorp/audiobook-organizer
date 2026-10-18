@@ -7,7 +7,8 @@
       there is no catalog read there). Also decide whether the `cat_series` and
       `cat_eg` (edition group) index writes in
       `internal/database/catalog_entry_store.go` stay: no production code reads
-      them any more, only tests.
+      them: `ListEntries` and `EditionGroupMembers`, their last readers, were deleted
+      with the routes, so those index rows are write-only.
 - [ ] **01-P81J-REPLAY-ALL** 01-P81j retired `POST /api/v1/review/replay-approved`
       (410; replacement is `POST /api/v1/review/bulk` with explicit `ids`). Bulk
       approve now reports per-item apply errors in `failed`, skips already-applied

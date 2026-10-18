@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.9.5 -->
+<!-- version: 1.9.6 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -104,7 +104,7 @@ The producer-agnostic review queue behind the `/review` workspace's **Review que
 | `GET` | `/api/v1/review/items` | List review items |
 | `POST` | `/api/v1/review/items/:id/approve` | Approve; dispatches the chosen action to its apply handler only while `review_apply_enabled` is on, otherwise records `approved` |
 | `POST` | `/api/v1/review/items/:id/reject` | Reject |
-| `POST` | `/api/v1/review/bulk` | Bulk approve/reject. Approving by `ids` also executes items that were approved while apply was off, once `review_apply_enabled` is on (list them with `GET /api/v1/review/items?status=approved`). Per-item apply errors do not stop the batch: they come back in `failed` (`{id, reason}`) and the item keeps its status for a retry; already-applied ids are `skipped`. `apply_disabled: true` means apply is off and nothing was applied |
+| `POST` | `/api/v1/review/bulk` | Bulk approve/reject. Approving by `ids` also executes items that were approved while apply was off, once `review_apply_enabled` is on (list them with `GET /api/v1/review/items?status=approved`). Per-item apply errors do not stop the batch: they come back in `failed` (`{id, reason}`) and failed items keep their status, so resending their id retries them. `applied_unrecorded` (`{id, reason}`) is the opposite case: the apply ran but the `applied` status write failed twice, so the item is held `applying` and must **not** be resent (a resend answers 409 until the claim goes stale after 15 minutes). Items already applied, or being applied by another request, are `skipped`; approve and reject both refuse them (single-item routes answer 409 `REVIEW_ALREADY_APPLIED` / `REVIEW_APPLY_IN_PROGRESS`). `apply_disabled: true` means apply is off and nothing was applied |
 | `POST` | `/api/v1/review/replay-approved` | Retired (01-P81j): answers `410 Gone` for one release; use `POST /api/v1/review/bulk` with `ids` as above |
 
 ### Repairs Lane
