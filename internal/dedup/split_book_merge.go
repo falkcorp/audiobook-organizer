@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-10-18
 
@@ -458,9 +458,16 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		}
 		stored, err := softDeleteSplitSource(store, srcID, stamp)
 		if err != nil {
+			// The journaled stamp is KEPT, as CombineBooksWithOptions keeps
+			// it. An error does not prove the write missed: the read-back can
+			// fail after the soft-delete committed, and so can a store that
+			// commits then reports an error. A kept stamp matches the row
+			// only if the write landed, so undo restores the row exactly
+			// then (retiredByJournal) and otherwise leaves the live row
+			// alone. A cleared stamp would make a landed write read as "re-deleted
+			// since the merge" and refuse the whole undo.
 			splitMergeLog.Warn("split-book merge soft-delete failed src=%s err=%s", logger.SanitizeLogValue(srcID), logger.SanitizeLogValue(fmt.Sprint(err)))
-			entry.MarkedForDeletionAt = nil
-			leaveLive(fmt.Sprintf("soft-delete %s: %v; %s left live, undo moves its files back", srcID, err, srcID))
+			leaveLive(fmt.Sprintf("soft-delete %s: %v; %s is probably left live (undo moves its files back, and restores it if the soft-delete did land)", srcID, err, srcID))
 			continue
 		}
 		kept = append(kept, srcID)
