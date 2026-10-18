@@ -1,7 +1,7 @@
 # file: .github/codeql/models/path-sanitizers.model.yml
-# version: 0.3.0
+# version: 0.3.1
 # guid: 07edd0c5-64fa-4d57-8830-fbfaa513c052
-# last-edited: 2026-05-18
+# last-edited: 2026-10-18
 
 extensions:
   - addsTo:
@@ -15,10 +15,6 @@ extensions:
       # pathvalidation.CleanAbsolutePath: validates and returns the cleaned absolute path.
       # Signature: func CleanAbsolutePath(path string) (string, error)
       - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "CleanAbsolutePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
-
-      # pathvalidation.ValidateRelativePath: validates and returns the cleaned relative path joined to root.
-      # Signature: func ValidateRelativePath(root, userPath string) (string, error)
-      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "ValidateRelativePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # pathvalidation.SecureJoin: joins root with user parts, returns sanitized path.
       # Signature: func SecureJoin(root string, parts ...string) (string, error)

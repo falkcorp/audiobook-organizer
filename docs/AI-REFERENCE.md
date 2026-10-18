@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-11 -->
+<!-- last-edited: 2026-10-18 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -141,8 +141,9 @@ opv2:strike:{def_id}:{ts_nano:020d}:{op_id}      → OpStrikeV2Row JSON (watchdo
 - **Locked settings** (`envLockedSettings`, `configFileLockedSettings`, `flagLockedSettings` in `config.go`): a few settings are operator-authoritative. When the environment, an explicit flag or (Deluge keys only) the config file viper loaded (`--config`, default `~/.audiobook-organizer.yaml`; NOT the `<db dir>/config.yaml` that `SaveConfigToFile` writes) supplies one, `applyEnvAuthoritativeConfig` re-applies that value over the stored settings blob on every load, and `GET /config` reports it in `env_locked` (keys) and `setting_locks` (key to the variable name, the flag, or `config file <path>`) so the UI shows the field read-only. `SettingLockedBy(key)` is the single test for both the apply and the annotation. An empty variable or empty file value is not a lock; with nothing supplied the stored value wins. The five Deluge keys (`deluge_web_url`, `deluge_web_password`, `deluge_discovery_label`, `deluge_discovery_enabled`, `deluge_move_enabled`; variables `DELUGE_*`) are locked this way since 2026-10-11. `PUT /config` on a locked key is accepted and in effect until the next load, then overridden; it is saved too, except `deluge_web_password`: `SaveConfigToDatabase` carries the previously stored blob value forward instead, so neither the env/file secret nor the PUT value is persisted and the operator's stored password survives removal of the lock.
 
 ### `internal/logger` — Logging
-- **operation.go** — `OperationLogger` wraps operation progress reporting
-- Interface: `UpdateProgress(current, total, message)`, `Info()`, `Warn()`, `Error()`, `IsCanceled()`
+- **logger.go** — the `Logger` interface, composed of `LevelLogger` (`Trace/Debug/Info/Warn/Error`), `ProgressReporter` (`UpdateProgress(current, total, message)`), `ChangeRecorder` (`RecordChange`, `ChangeCounters`), `CancellationReporter` (`IsCanceled`) and `SubLoggerFactory` (`With(subsystem)`). Also `Level`, `Change`, `WithOperation` / `FromContext` (context-carried `*slog.Logger`)
+- **standard.go** — `StandardLogger`, built with `logger.New(subsystem)` (or `NewWithActivityLog` to also write INFO+ to the system activity log). It logs to stdout only: `UpdateProgress`, `RecordChange` and `IsCanceled` are no-ops
+- Other packages implement `Logger` when they need real progress or cancellation, e.g. `operations/progress.go`'s `reporterLogger` (built by `LoggerFromReporter`), which wraps a `logger.New("operation")` logger, delegates everything else to it, and forwards `UpdateProgress` (and keeps the reporter across `With`) to the operation's `ProgressReporter`
 
 ### `internal/cache` — Generic cache
 - **cache.go** — `Cache[T]` with TTL. Thread-safe.

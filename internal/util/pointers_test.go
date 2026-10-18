@@ -1,5 +1,6 @@
 // file: internal/util/pointers_test.go
-// version: 1.0.2
+// version: 1.0.3
+// guid: a19ad7f3-3545-4392-b1f3-99f8de3c9aa5
 // last-edited: 2026-10-18
 
 package util
