@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply_undo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a2d9e51-0c47-4f83-b16e-2e9f7c34d0a8
 // last-edited: 2026-10-18
 
@@ -106,9 +106,10 @@ func TestApplyMultidisc_UndoRoundTrip(t *testing.T) {
 
 // An approved duplicate-of hold combines folder debris into a canonical book
 // outside the folder. All three are virtual single-file books, so the combine
-// CREATES file rows (the canonical's own and one per debris); reverting the
-// combine's operation deletes
-// those rows and restores each debris book's FilePath.
+// CREATES file rows (the canonical's own and one per debris). Reverting the
+// combine's operation never deletes a book_file row: each debris row is
+// repointed to the debris book whose audio it names, the canonical keeps its
+// own, and each debris book's FilePath is restored.
 func TestApplyDuplicateOf_UndoRoundTrip(t *testing.T) {
 	store := newApplyTestStore(t)
 	canonical := "zzz" + ulid.Make().String()
@@ -131,10 +132,21 @@ func TestApplyDuplicateOf_UndoRoundTrip(t *testing.T) {
 	cf, err := store.GetBookFiles(canonical)
 	require.NoError(t, err)
 	require.Len(t, cf, 3, "canonical owns its own and both debris files while combined")
+	require.Empty(t, before, "virtual books: no file rows before the approval")
+	rowAt := map[string]string{} // path -> the row the combine created for it
+	for _, f := range cf {
+		rowAt[f.FilePath] = f.ID
+	}
 
 	revertCombineOn(t, store, canonical, latestJournal(t, ms))
 
-	assert.Equal(t, before, ownedFiles(t, store, all...), "created rows removed; every book back to its pre-approval files")
+	after := ownedFiles(t, store, all...)
+	require.Len(t, after, 3, "no book_file row deleted")
+	for book, path := range map[string]string{canonical: "/lib/real/book.mp3", debris1: "/lib/junk/d1.mp3", debris2: "/lib/junk/d2.mp3"} {
+		id := rowAt[path]
+		require.NotEmpty(t, id, "the combine created a row for %s", path)
+		assert.Equal(t, ownedFile{Book: book, Path: path}, after[id], "row %s repointed to the book whose audio it names", path)
+	}
 	for id, path := range map[string]string{canonical: "/lib/real/book.mp3", debris1: "/lib/junk/d1.mp3", debris2: "/lib/junk/d2.mp3"} {
 		b, err := store.GetBookByID(id)
 		require.NoError(t, err)

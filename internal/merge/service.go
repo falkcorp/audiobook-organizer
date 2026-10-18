@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -1827,12 +1827,20 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	}
 
 	// --- Journal, before the first mutation ---
+	// StepJournaled: the journal is re-written after every step below
+	// (each soft-delete, the before-snapshot of each progress follow) and
+	// ahead of every file row the combine creates or reattaches, so a combine
+	// stopped part-way by an error or a crash leaves a Pending journal that
+	// names everything that ran, and UndoCombine replays exactly that. What
+	// it lists but never ran (a planned file move, an id reassignment) is
+	// left where it already is by the undo's replay tolerance.
 	journal := &CombineJournal{
 		ID:             ulid.Make().String(),
 		Status:         CombineJournalPending,
 		CreatedAt:      time.Now().UTC(),
 		SurvivorID:     primaryID,
 		ITunesRemovals: []string{},
+		StepJournaled:  true,
 	}
 	ownFiles, err := ms.db.GetBookFiles(primaryID)
 	if err != nil {
@@ -1860,7 +1868,8 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 			FilePath:         b.FilePath,
 			IsPrimaryVersion: b.IsPrimaryVersion,
 			VersionGroupID:   b.VersionGroupID,
-			SyncRedirected:   ms.syncFollower != nil,
+			// SyncRedirected is set with the before-snapshot, just ahead of
+			// the follow: a combine stopped before it never redirected.
 		}
 		if len(files) > 0 {
 			ids := make([]string, len(files))
@@ -1909,14 +1918,23 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	}
 	res.OperationID = opID
 
-	// Materialize the survivor's own single-file (virtual-segment) audio as a
-	// BookFile so the combined book owns ALL its files explicitly.
-	if fm, n := ms.ensureOwnFile(survivor); n > 0 {
-		res.FilesMoved += n
-		if fm.FileID != "" {
-			journal.SurvivorFiles = append(journal.SurvivorFiles, fm)
+	// persist re-writes the journal after a step that already ran. A failure
+	// is logged and recorded: the step is done, and the next persist (or the
+	// final one) carries it.
+	persist := func(step string) {
+		if err := ms.putCombineJournal(journal); err != nil {
+			mlog.Error("combine: undo journal not updated after %s journal=%s err=%s",
+				step, journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
 		}
 	}
+
+	// Materialize the survivor's own single-file (virtual-segment) audio as a
+	// BookFile so the combined book owns ALL its files explicitly.
+	ownN, err := ms.attachJournaledFile(journal, &journal.SurvivorFiles, ms.planOwnFile(survivor), survivor.ID)
+	if err != nil {
+		return nil, fmt.Errorf("combine refused: %w", err)
+	}
+	res.FilesMoved += ownN
 
 	// Move every absorbed book's files onto the survivor in ONE batch, before the
 	// per-book loop below.
@@ -1928,7 +1946,8 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	//
 	// The batch is atomic, so a failure here writes nothing and returns. No
 	// per-book fallback, deliberately — a partially-moved combine is exactly what
-	// the early return exists to prevent.
+	// the early return exists to prevent. The journal already lists every move
+	// (planned above), so no write is needed before it.
 	if len(bulk) > 0 {
 		if err := ms.db.MoveBookFilesToBookBulk(bulk, survivor.ID); err != nil {
 			if !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
@@ -1943,20 +1962,36 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 	}
 
-	kept := make([]CombineAbsorbed, 0, len(journal.Absorbed))
-	for _, entry := range journal.Absorbed {
-		a := &entry
-		id := a.BookID
+	// Each entry is updated IN the journal (by index), so every persist
+	// writes what has run so far.
+	absorbedOrder := make([]string, 0, len(journal.Absorbed))
+	for _, a := range journal.Absorbed {
+		absorbedOrder = append(absorbedOrder, a.BookID)
+	}
+	entryOf := func(id string) *CombineAbsorbed {
+		for i := range journal.Absorbed {
+			if journal.Absorbed[i].BookID == id {
+				return &journal.Absorbed[i]
+			}
+		}
+		return nil
+	}
+	for _, id := range absorbedOrder {
+		a := entryOf(id)
 
 		// A book deleted by something else between validation and here is
 		// skipped, not fatal. If the bulk move already took its files, its
 		// entry stays so the journal still names those moves; undo then
-		// refuses, because a vanished book cannot be restored.
+		// refuses, because a vanished book cannot be restored. With nothing
+		// moved its entry is dropped now, so a later stop cannot leave a
+		// journal that refuses over a book the combine never touched.
 		if cur, _ := ms.db.GetBookByID(id); cur == nil {
 			mlog.Warn("combine: absorbed book vanished mid-combine; skipped id=%s journal=%s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(journal.ID))
 			if len(movedFiles[id]) > 0 {
 				journal.Warnings = append(journal.Warnings, fmt.Sprintf("absorbed book %s vanished after its files moved", id))
-				kept = append(kept, entry)
+			} else {
+				journal.Absorbed = slices.DeleteFunc(journal.Absorbed, func(e CombineAbsorbed) bool { return e.BookID == id })
+				persist("dropping vanished book " + id)
 			}
 			continue
 		}
@@ -1969,11 +2004,11 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 			FollowFileMove(ms.db, id, survivor.ID, ids)
 			res.FilesMoved += len(ids)
 		} else if a.FilePath != "" {
-			fm, n := ms.attachVirtualFile(books[id], survivor.ID)
-			res.FilesMoved += n
-			if fm.FileID != "" {
-				a.Files = append(a.Files, fm)
+			n, err := ms.attachJournaledFile(journal, &a.Files, ms.planVirtualFile(books[id], survivor.ID), survivor.ID)
+			if err != nil {
+				return nil, fmt.Errorf("combine %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 			}
+			res.FilesMoved += n
 		}
 
 		// Reassign external IDs to the survivor.
@@ -1989,6 +2024,9 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		// Carry the absorbed shell's sync identity and listening position onto
 		// the survivor, snapshotting both sides first so undo can put them
 		// back (mergeUserProgress DRAINS the loser; nothing else keeps it).
+		// The before-snapshot is journaled BEFORE the follow drains anything,
+		// as FollowAbsorbedJournaled does for the split merge: a stop inside
+		// the follow still leaves undo what it needs.
 		//
 		// Per user: a user whose progress cannot be read (a corrupt row) is
 		// skipped, logged and reported in the journal warnings, and their
@@ -1997,6 +2035,11 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		if ms.syncFollower != nil {
 			before, followable, skipped := snapshotPair(ms.db, users, id, survivor.ID)
 			ms.reportSkippedProgress(journal, id, "not journaled or followed; a pending-repair record holds their move", skipped)
+			a.Progress = buildProgressJournal(before, progressSnap{})
+			a.SyncRedirected = true
+			if err := ms.putCombineJournal(journal); err != nil {
+				return nil, fmt.Errorf("journal progress of %s before following it (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
+			}
 			if err := FollowMergeUsers(ms.db, ms.syncFollower, survivor.ID, []string{id}, followable, len(skipped) > 0); err != nil {
 				return nil, fmt.Errorf("carry user state of %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 			}
@@ -2020,7 +2063,15 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 		a.MarkedForDeletionAt = stamp
 		res.BooksDeleted++
-		kept = append(kept, *a)
+		persist("retiring " + id)
+	}
+	// Only books the combine retired (or whose files it moved) stay in the
+	// final journal.
+	kept := make([]CombineAbsorbed, 0, len(journal.Absorbed))
+	for _, a := range journal.Absorbed {
+		if a.MarkedForDeletionAt != nil || len(movedFiles[a.BookID]) > 0 {
+			kept = append(kept, a)
+		}
 	}
 	journal.Absorbed = kept
 
@@ -2296,43 +2347,52 @@ func (ms *Service) applyCombineOverride(primaryID string, override *CombineOverr
 	return undo
 }
 
-// ensureOwnFile materializes a single-file book's FilePath as a BookFile when it
-// has no BookFile rows yet (the virtual-segment model). Returns the journal
-// record of what it did (FileID empty when nothing changed) and the number of
-// files attached (0/1).
-func (ms *Service) ensureOwnFile(b *database.Book) (CombineFileMove, int) {
-	if b.FilePath == "" {
-		return CombineFileMove{}, 0
-	}
-	if files, _ := ms.db.GetBookFiles(b.ID); len(files) > 0 {
-		return CombineFileMove{}, 0 // already materialized
-	}
-	return ms.attachVirtualFile(b, b.ID)
+// virtualFilePlan is what attaching a virtual single-file book's FilePath to
+// a target book takes (planVirtualFile): nothing, a move of the row already at
+// that path, or a new row. Planned before any write, so the combine can
+// journal the row (its id included) before it exists or moves.
+type virtualFilePlan struct {
+	// fm is the journal record; FileID is empty when nothing is written.
+	fm CombineFileMove
+	// existing is the row to move (nil for a new row).
+	existing *database.BookFile
+	// create is the row to create (nil for a move).
+	create *database.BookFile
+	// attached is true when the target ends up owning a row for the path
+	// (already, or once applied).
+	attached bool
 }
 
-// attachVirtualFile creates (or reattaches) a BookFile at book.FilePath owned by
-// targetBookID. Reattach-safe per #1549: an existing row at that path is MOVED
-// (its BookID can't be changed in place — the primary key embeds it), never
-// duplicated. Returns the journal record (FileID empty when nothing changed:
-// the row was already the target's) and files attached (0/1).
-func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) (CombineFileMove, int) {
+// planOwnFile plans materializing a single-file book's FilePath as a BookFile
+// when it has no BookFile rows yet (the virtual-segment model).
+func (ms *Service) planOwnFile(b *database.Book) virtualFilePlan {
+	if b.FilePath == "" {
+		return virtualFilePlan{}
+	}
+	if files, _ := ms.db.GetBookFiles(b.ID); len(files) > 0 {
+		return virtualFilePlan{} // already materialized
+	}
+	return ms.planVirtualFile(b, b.ID)
+}
+
+// planVirtualFile plans a BookFile at book.FilePath owned by targetBookID.
+// Reattach-safe per #1549: an existing row at that path is MOVED (its BookID
+// can't be changed in place -- the primary key embeds it), never duplicated.
+// A new row's id is minted here, so the journal can name it before it exists.
+func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtualFilePlan {
 	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
 	if existing != nil {
 		if existing.BookID == targetBookID {
-			return CombineFileMove{}, 1
+			return virtualFilePlan{attached: true}
 		}
-		oldOwnerID := existing.BookID
-		if err := ms.db.MoveBookFilesToBook([]string{existing.ID}, oldOwnerID, targetBookID); err != nil {
-			slog.Warn("combine reattach existing file", "path", b.FilePath, "err", err)
-			return CombineFileMove{}, 0
+		return virtualFilePlan{
+			fm: CombineFileMove{
+				FileID: existing.ID, FromBookID: existing.BookID, FilePath: existing.FilePath,
+				DiscBefore: existing.DiscNumber, TrackBefore: existing.TrackNumber,
+			},
+			existing: existing,
+			attached: true,
 		}
-		// Same file-move shape as the main CombineBooks loop: the row's
-		// owning book id just changed, so its sync_file ino must follow.
-		FollowFileMove(ms.db, oldOwnerID, targetBookID, []string{existing.ID})
-		return CombineFileMove{
-			FileID: existing.ID, FromBookID: oldOwnerID, FilePath: existing.FilePath,
-			DiscBefore: existing.DiscNumber, TrackBefore: existing.TrackNumber,
-		}, 1
 	}
 	bf := &database.BookFile{
 		ID:       ulid.Make().String(),
@@ -2347,11 +2407,63 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) (Com
 		known.BookDurationSec = *b.Duration
 	}
 	bookfileaudio.EnsureDuration(bf, known, nil)
-	if err := ms.db.CreateBookFile(bf); err != nil {
-		slog.Warn("combine create file", "path", b.FilePath, "err", err)
-		return CombineFileMove{}, 0
+	return virtualFilePlan{
+		fm:       CombineFileMove{FileID: bf.ID, FromBookID: b.ID, FilePath: bf.FilePath, Created: true},
+		create:   bf,
+		attached: true,
 	}
-	return CombineFileMove{FileID: bf.ID, FromBookID: b.ID, FilePath: bf.FilePath, Created: true}, 1
+}
+
+// applyVirtualFile performs a plan. It returns the number of files attached
+// (0/1): 0 when the write failed, in which case nothing was written.
+func (ms *Service) applyVirtualFile(p virtualFilePlan, targetBookID string) int {
+	switch {
+	case p.existing != nil:
+		oldOwnerID := p.existing.BookID
+		if err := ms.db.MoveBookFilesToBook([]string{p.existing.ID}, oldOwnerID, targetBookID); err != nil {
+			slog.Warn("combine reattach existing file", "path", p.existing.FilePath, "err", err)
+			return 0
+		}
+		// Same file-move shape as the main CombineBooks loop: the row's
+		// owning book id just changed, so its sync_file ino must follow.
+		FollowFileMove(ms.db, oldOwnerID, targetBookID, []string{p.existing.ID})
+		return 1
+	case p.create != nil:
+		if err := ms.db.CreateBookFile(p.create); err != nil {
+			slog.Warn("combine create file", "path", p.create.FilePath, "err", err)
+			return 0
+		}
+		return 1
+	case p.attached:
+		return 1
+	}
+	return 0
+}
+
+// attachJournaledFile attaches a planned virtual file to targetBookID with the
+// journal ahead of the write: the record is appended to *list and the journal
+// persisted BEFORE the row is created or moved, so a crash in between leaves
+// a journal that names it (undo skips a recorded row that never came to
+// exist). A write that fails takes the record back out. An error means the
+// journal could not be persisted and nothing was written.
+func (ms *Service) attachJournaledFile(journal *CombineJournal, list *[]CombineFileMove, p virtualFilePlan, targetBookID string) (int, error) {
+	if p.fm.FileID == "" {
+		return ms.applyVirtualFile(p, targetBookID), nil
+	}
+	*list = append(*list, p.fm)
+	if err := ms.putCombineJournal(journal); err != nil {
+		*list = (*list)[:len(*list)-1]
+		return 0, fmt.Errorf("journal file row %s before writing it: %w", p.fm.FileID, err)
+	}
+	n := ms.applyVirtualFile(p, targetBookID)
+	if n == 0 {
+		*list = (*list)[:len(*list)-1]
+		if err := ms.putCombineJournal(journal); err != nil {
+			mlog.Error("combine: file row %s was not written but stays in journal %s: %s",
+				p.fm.FileID, journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
+		}
+	}
+	return n, nil
 }
 
 // SoftDeleteBook marks a book as deleted using the MarkedForDeletion flag.

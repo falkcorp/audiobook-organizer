@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0c6e2f94-7b1d-4a58-9e3c-5d8a1f27b640
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package merge
 
@@ -68,6 +68,32 @@ func viewFiles(t *testing.T, store database.Store, bookIDs ...string) map[string
 	return out
 }
 
+// withCreatedRows returns pre plus every row the combine journalID created,
+// where an undo leaves it: on the book whose audio it names (FromBookID),
+// with no disc/track. Undo repoints a created row; it never deletes a
+// book_file row.
+func withCreatedRows(t *testing.T, ms *Service, journalID string, pre map[string]fileView) map[string]fileView {
+	t.Helper()
+	j, err := ms.GetCombineJournal(journalID)
+	require.NoError(t, err)
+	out := map[string]fileView{}
+	for id, v := range pre {
+		out[id] = v
+	}
+	add := func(moves []CombineFileMove) {
+		for _, fm := range moves {
+			if fm.Created {
+				out[fm.FileID] = fileView{BookID: fm.FromBookID, Path: fm.FilePath}
+			}
+		}
+	}
+	add(j.SurvivorFiles)
+	for _, a := range j.Absorbed {
+		add(a.Files)
+	}
+	return out
+}
+
 func lockFields(t *testing.T, store database.Store, id string) []string {
 	t.Helper()
 	states, err := store.GetMetadataFieldStates(id)
@@ -90,11 +116,11 @@ type undoFixture struct {
 }
 
 // seedUndoFixture builds every shape the combine touches:
-//   - survivor: VIRTUAL single-file book (ensureOwnFile creates its row);
+//   - survivor: VIRTUAL single-file book (planOwnFile creates its row);
 //   - absA: two real file rows with disc/track numbers, an iTunes PID, a
 //     version group it is primary of, a sync identity, and listening progress
 //     further along than the survivor's;
-//   - absB: VIRTUAL single-file book (attachVirtualFile creates its row).
+//   - absB: VIRTUAL single-file book (planVirtualFile creates its row).
 func seedUndoFixture(t *testing.T, store database.Store) undoFixture {
 	t.Helper()
 	f := undoFixture{
@@ -208,7 +234,8 @@ func TestCombineUndo_RoundTripRestoresExactly(t *testing.T) {
 	for _, id := range all {
 		assert.Equal(t, preBooks[id], viewBook(t, store, id), "book %s restored exactly", id)
 	}
-	assert.Equal(t, preFiles, viewFiles(t, store, all...), "file rows restored exactly (created rows gone, moved rows back with their numbers)")
+	assert.Equal(t, withCreatedRows(t, ms, res.JournalID, preFiles), viewFiles(t, store, all...),
+		"file rows restored exactly: moved rows back with their numbers, created rows repointed (never deleted)")
 	assert.Equal(t, preLocks, lockFields(t, store, f.survivor), "override lock rows rolled back")
 	owner, err = store.GetBookByExternalID("itunes", f.pid)
 	require.NoError(t, err)
@@ -415,7 +442,8 @@ func TestCombineUndo_ReattachedRowGoesBackToItsOutsideOwner(t *testing.T) {
 
 	_, err = ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	assert.Equal(t, before, viewFiles(t, store, survivor, virt, outside), "row back on its outside owner exactly once")
+	assert.Equal(t, withCreatedRows(t, ms, res.JournalID, before), viewFiles(t, store, survivor, virt, outside),
+		"row back on its outside owner exactly once; the survivor keeps the row created for its own audio")
 
 	// Same shape, but the outside owner is deleted before the undo: refuse.
 	res2, err := ms.CombineBooks([]string{survivor, virt}, survivor, nil)

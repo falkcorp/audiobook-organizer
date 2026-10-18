@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
-// last-edited: 2026-09-14
+// last-edited: 2026-10-18
 
 package merge
 
@@ -383,8 +383,10 @@ func TestB3_CombineBooks_FilesRemainingAfterMove_AbortsDelete(t *testing.T) {
 }
 
 // The absorbed shell's soft-delete is an UpdateBook. When it fails the combine
-// must fail loudly: the shell is left live (no files, visible) and the journal
-// stays "pending", which UndoCombine refuses.
+// must fail loudly: the shell is left live and the journal stays "pending".
+// The journal is step-journaled (it names every row the combine created
+// before creating it), so the undo replays what ran: each created row goes to
+// the book whose audio it names, and the live shell's row is not rewritten.
 func TestB3_CombineBooks_SoftDeleteError(t *testing.T) {
 	real := setupTestStore(t)
 
@@ -411,9 +413,19 @@ func TestB3_CombineBooks_SoftDeleteError(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, journals, 1)
 	assert.Equal(t, CombineJournalPending, journals[0].Status)
-	_, err = ms.UndoCombine(journals[0].ID)
-	var refused *CombineUndoRefusedError
-	require.ErrorAs(t, err, &refused, "a pending (failed) combine must never be undone automatically")
+	assert.True(t, journals[0].StepJournaled, "the combine journals every step")
+	before := viewBook(t, real, loser.ID)
+
+	undone, err := NewService(real).UndoCombine(journals[0].ID)
+	require.NoError(t, err, "a combine stopped part-way is undone by replaying what ran")
+	assert.Empty(t, undone.RestoredBooks, "the shell was never retired, so its row is not rewritten")
+	assert.Equal(t, before, viewBook(t, real, loser.ID))
+	for id, path := range map[string]string{survivor.ID: survivor.FilePath, loser.ID: loser.FilePath} {
+		files, err := real.GetBookFiles(id)
+		require.NoError(t, err)
+		require.Len(t, files, 1, "book %s owns the row created for its own audio (never deleted)", id)
+		assert.Equal(t, path, files[0].FilePath)
+	}
 }
 
 func TestB3_CombineBooks_RecomputeAggregatesError_NonFatal(t *testing.T) {
@@ -536,7 +548,7 @@ func TestB3_CombineBooks_OverrideSetBookAuthorsError_StillSetsAuthorID(t *testin
 	assert.Equal(t, author.ID, *fresh.AuthorID)
 }
 
-// ---------- attachVirtualFile error branches (unexported helper) ----------
+// ---------- planVirtualFile/applyVirtualFile error branches (unexported helpers) ----------
 
 func TestB3_AttachVirtualFile_MoveBookFilesToBookError_NonFatal(t *testing.T) {
 	real := setupTestStore(t)
@@ -554,7 +566,7 @@ func TestB3_AttachVirtualFile_MoveBookFilesToBookError_NonFatal(t *testing.T) {
 	fault := &b3FaultStore{Store: real, failMoveBookFilesToBookFor: map[string]bool{strayOwner.ID: true}}
 	ms := NewService(fault)
 
-	_, n := ms.attachVirtualFile(target, target.ID)
+	n := ms.applyVirtualFile(ms.planVirtualFile(target, target.ID), target.ID)
 	assert.Equal(t, 0, n, "a failed reattach move must be warned and return 0, not panic")
 
 	// The stray file is still owned by its original book — the move never
@@ -574,7 +586,7 @@ func TestB3_AttachVirtualFile_CreateBookFileError_NonFatal(t *testing.T) {
 	fault := &b3FaultStore{Store: real, failCreateBookFile: true}
 	ms := NewService(fault)
 
-	_, n := ms.attachVirtualFile(b, b.ID)
+	n := ms.applyVirtualFile(ms.planVirtualFile(b, b.ID), b.ID)
 	assert.Equal(t, 0, n, "a failed CreateBookFile must be warned and return 0, not panic")
 
 	files, err := real.GetBookFiles(b.ID)

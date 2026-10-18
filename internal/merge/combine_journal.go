@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package merge
 
@@ -84,7 +84,7 @@ type CombineJournal struct {
 	// Absorbed holds one entry per book folded into the survivor.
 	Absorbed []CombineAbsorbed `json:"absorbed"`
 
-	// SurvivorFiles are file rows ensureOwnFile attached to the survivor for
+	// SurvivorFiles are file rows planOwnFile attached to the survivor for
 	// its OWN FilePath (virtual-segment materialization). Created rows are
 	// deleted on undo; a row reattached from another owner is moved back.
 	SurvivorFiles []CombineFileMove `json:"survivor_files,omitempty"`
@@ -161,8 +161,9 @@ type CombineFileMove struct {
 	FromBookID string `json:"from_book_id"`
 	FilePath   string `json:"file_path"`
 	// Created is true when the combine CREATED this row (a virtual single-file
-	// book materialized as a BookFile); undo deletes a created row instead of
-	// moving it, since it did not exist before.
+	// book materialized as a BookFile). Undo repoints it to FromBookID, the
+	// book whose audio it names, like any moved row; it never deletes it (a
+	// row whose FromBookID is the survivor stays on the survivor).
 	Created bool `json:"created,omitempty"`
 	// DiscBefore/TrackBefore are the numbers the row carried before the
 	// combine. The regroup multidisc apply stamps new numbers AFTER the combine;
@@ -546,6 +547,9 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	// a step that never ran leaves its row where it already is.
 	pending := j.Status == CombineJournalPending && j.StepJournaled
 	retry := j.Status == CombineJournalUndoFailed || pending
+	if j.Status == CombineJournalPending && !j.StepJournaled {
+		return []string{"the combine never completed and its journal does not record which steps ran; no undo recorded"}
+	}
 	if j.Status != CombineJournalApplied && !retry {
 		return []string{fmt.Sprintf("journal status is %q, only %q (or %q / %q, to replay) combines can be undone", j.Status, CombineJournalApplied, CombineJournalUndoFailed, CombineJournalPending)}
 	}
@@ -577,7 +581,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	for _, fm := range j.SurvivorFiles {
 		checkFile(fm)
 	}
-	// A reattached row came from a book OUTSIDE the combine (attachVirtualFile
+	// A reattached row came from a book OUTSIDE the combine (planVirtualFile
 	// moved it off its previous owner). Undo moves it back there, so that
 	// owner has to still exist.
 	inCombine := map[string]bool{j.SurvivorID: true}
@@ -628,14 +632,13 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			reasons = append(reasons, fmt.Sprintf("load files of absorbed book %s: %v", a.BookID, err))
 		} else {
 			// On a retry the failed attempt may already have moved some of
-			// this book's own rows back; those are expected. Any other row is
-			// a file the book gained since, and still refuses.
+			// this book's own rows back (a row the combine created included:
+			// it is repointed, never deleted); those are expected. Any other
+			// row is a file the book gained since, and still refuses.
 			ownRows := map[string]bool{}
 			if lenient {
 				for _, fm := range a.Files {
-					if !fm.Created {
-						ownRows[fm.FileID] = true
-					}
+					ownRows[fm.FileID] = true
 				}
 			}
 			foreign := 0
@@ -683,18 +686,53 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 }
 
 // fileAlreadyUndone reports whether a file row that is no longer on the
-// survivor is exactly where a completed undo of fm puts it: gone, for a row
-// the combine created, or back on its recorded owner at its recorded path.
-// Only consulted on a retry.
+// survivor is exactly where a completed undo of fm puts it: back on its
+// recorded owner at its recorded path. A row the combine created is also
+// accepted when it is gone altogether: a step-journaled combine names a row
+// before creating it, so a combine stopped in between leaves a record of a
+// row that never came to exist (and an undo from before created rows were
+// repointed deleted them). Only consulted on a retry or a replay.
 func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove) bool {
-	if fm.Created {
-		return true
-	}
 	if fm.FromBookID == j.SurvivorID {
-		return false
+		// Not on the survivor (the caller checked): only a created row that
+		// was never written can be missing from its own owner.
+		return fm.Created
 	}
 	f, err := ms.db.GetBookFileByID(fm.FromBookID, fm.FileID)
-	return err == nil && f != nil && f.FilePath == fm.FilePath
+	if err != nil {
+		return false
+	}
+	if f == nil {
+		return fm.Created
+	}
+	return f.FilePath == fm.FilePath
+}
+
+// retiredByJournal reports whether b is still the shell this combine retired:
+// soft-deleted, carrying exactly the stamp the combine wrote and journaled.
+// A live row (left live, never reached, or already restored by an earlier
+// undo attempt) or a row re-deleted since is not.
+func retiredByJournal(a CombineAbsorbed, b *database.Book) bool {
+	return b != nil && b.IsSoftDeleted() && a.MarkedForDeletionAt != nil &&
+		b.MarkedForDeletionAt != nil && b.MarkedForDeletionAt.Equal(*a.MarkedForDeletionAt)
+}
+
+// restoreSurvivorFileNumbers puts back the disc/track a row the survivor
+// keeps carried before the combine (zero for a row the combine created), so
+// a play-order stamp made after the combine is reversed with it.
+func (ms *Service) restoreSurvivorFileNumbers(j *CombineJournal, fm CombineFileMove) error {
+	f, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
+	if err != nil || f == nil {
+		return fmt.Errorf("reload survivor file %s: %v", fm.FileID, err)
+	}
+	if f.DiscNumber == fm.DiscBefore && f.TrackNumber == fm.TrackBefore {
+		return nil
+	}
+	f.DiscNumber, f.TrackNumber = fm.DiscBefore, fm.TrackBefore
+	if err := ms.db.UpdateBookFile(f.ID, f); err != nil {
+		return fmt.Errorf("restore disc/track of survivor file %s: %w", f.ID, err)
+	}
+	return nil
 }
 
 func strPtrIs(p *string, v string) bool { return p != nil && *p == v }
@@ -1402,6 +1440,20 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	// 1. Restore the absorbed rows first, so the file moves below land on live
 	//    books. Re-fetch and patch only the fields the combine changed:
 	//    UpdateBook is a full-column replace.
+	//
+	//    Only a row THIS combine retired is the journal's to restore: one
+	//    still soft-deleted with exactly the stamp the combine wrote
+	//    (retiredByJournal). The combine changes an absorbed row in that one
+	//    write and nowhere else (the soft-delete clears FilePath in the same
+	//    write), so a live absorbed book was never touched by it: a book the
+	//    merge left live (LeftLive), one a crash stopped before its
+	//    retirement (a pending step-journaled journal), or one a failed undo
+	//    already restored. Such a row may have been edited since (linked into
+	//    another group, renamed, organized), and writing the journal's
+	//    before-values over it would undo that edit, not the combine. Its
+	//    files still come back (step 2); its row is left as it is, here and in
+	//    step 2b.
+	retired := map[string]bool{}
 	for _, a := range j.Absorbed {
 		gid := ""
 		if a.VersionGroupID != nil {
@@ -1420,6 +1472,11 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			unlockGroup()
 			return res, fmt.Errorf("reload absorbed book %s: %v", a.BookID, err)
 		}
+		if !retiredByJournal(a, b) {
+			unlockGroup()
+			continue
+		}
+		retired[a.BookID] = true
 		b.MarkedForDeletion = nil
 		b.MarkedForDeletionAt = nil
 		// The library state is decided in step 2b, once this book's files are
@@ -1458,27 +1515,63 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		res.RestoredBooks = append(res.RestoredBooks, a.BookID)
 	}
 
-	// 2. Files: move rows back to the book they came from (or delete the rows
-	//    the combine created), carry sync_file inos, restore disc/track.
+	// 2. Files: move rows back to the book they came from, carry sync_file
+	//    inos, restore disc/track.
+	//
+	//    A row the combine CREATED (a virtual single-file book materialized as
+	//    a BookFile, planVirtualFile) is repointed too, never deleted: book
+	//    file rows are not deleted, they are moved to the book they belong
+	//    to. FromBookID is the book whose FilePath the row materialized,
+	//    which is that row's owner after the undo: an absorbed book gets back
+	//    the row for its own audio (its FilePath, restored in step 1, names
+	//    the same file), and the survivor's own materialized row
+	//    (planOwnFile, FromBookID == the survivor) stays where it is.
+	absorbedIDs := map[string]bool{}
+	for _, a := range j.Absorbed {
+		absorbedIDs[a.BookID] = true
+	}
 	moveBack := func(moves []CombineFileMove) error {
-		// Every step here is safe to re-run after a failed attempt: a created
-		// row already removed is skipped, and a row already back on its owner
-		// is not moved again (only its disc/track are re-checked).
+		// Every step here is safe to re-run after a failed attempt: a row
+		// already back on its owner is not moved again (only its disc/track
+		// are re-checked).
 		byOwner := map[string][]CombineFileMove{}
 		var owners []string
 		for _, fm := range moves {
+			if fm.Created && fm.FromBookID == j.SurvivorID {
+				cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
+				if err != nil {
+					return fmt.Errorf("load file row %s created by the combine: %w", fm.FileID, err)
+				}
+				if cur == nil {
+					continue // named by the journal, never created (a combine stopped first)
+				}
+				if err := ms.restoreSurvivorFileNumbers(j, fm); err != nil {
+					return err
+				}
+				continue
+			}
+			if fm.Created && !absorbedIDs[fm.FromBookID] {
+				// No book of this combine to give it to: it stays on the
+				// survivor, which owns the audio now, and the undo says so.
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"file row %s (created by the combine for book %s) has no book to go back to; left on survivor %s",
+					fm.FileID, fm.FromBookID, j.SurvivorID))
+				continue
+			}
 			if fm.Created {
 				cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
 				if err != nil {
 					return fmt.Errorf("load file row %s created by the combine: %w", fm.FileID, err)
 				}
 				if cur == nil {
-					continue // removed by an earlier attempt
+					if back, berr := ms.db.GetBookFileByID(fm.FromBookID, fm.FileID); berr == nil && back == nil {
+						// Neither on the survivor nor on its owner: a
+						// combine stopped between journaling the row and
+						// creating it, or an undo from before rows were
+						// repointed deleted it.
+						continue
+					}
 				}
-				if err := ms.db.DeleteBookFile(fm.FileID); err != nil {
-					return fmt.Errorf("remove file row %s created by the combine: %w", fm.FileID, err)
-				}
-				continue
 			}
 			if _, ok := byOwner[fm.FromBookID]; !ok {
 				owners = append(owners, fm.FromBookID)
@@ -1530,16 +1623,8 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		return res, err
 	}
 	for _, fm := range j.SurvivorOwnFiles {
-		f, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
-		if err != nil || f == nil {
-			return res, fmt.Errorf("reload survivor file %s: %v", fm.FileID, err)
-		}
-		if f.DiscNumber == fm.DiscBefore && f.TrackNumber == fm.TrackBefore {
-			continue
-		}
-		f.DiscNumber, f.TrackNumber = fm.DiscBefore, fm.TrackBefore
-		if err := ms.db.UpdateBookFile(f.ID, f); err != nil {
-			return res, fmt.Errorf("restore disc/track of survivor file %s: %w", f.ID, err)
+		if err := ms.restoreSurvivorFileNumbers(j, fm); err != nil {
+			return res, err
 		}
 	}
 
@@ -1549,8 +1634,12 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	//     "organized" needs the files back inside the library root and
 	//     outside the iTunes library, and a row a later trash path labelled
 	//     "deleted" gets back what that path recorded.
+	//     Only for a row step 1 restored: a live row keeps its own state.
 	env := TrashRestoreEnv()
 	for _, a := range j.Absorbed {
+		if !retired[a.BookID] {
+			continue
+		}
 		files, err := ms.db.GetBookFiles(a.BookID)
 		if err != nil {
 			return res, fmt.Errorf("read files of absorbed book %s: %w", a.BookID, err)
@@ -1712,8 +1801,9 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	}
 
 	// 5. Aggregates. MoveBookFilesToBook recomputes both of its books; the
-	//    survivor is recomputed once more after the created-row deletes, and
-	//    the absorbed books because a FilePath restore can change them.
+	//    survivor is recomputed once more after the disc/track restores, and
+	//    the restored absorbed books because a FilePath restore can change
+	//    them.
 	for _, id := range append([]string{j.SurvivorID}, res.RestoredBooks...) {
 		if err := ms.db.RecomputeBookAggregates(id); err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("recompute aggregates of %s: %v", id, err))
