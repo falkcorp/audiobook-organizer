@@ -92,7 +92,9 @@ func (f *abscolFakeStore) CreateCollection(col *database.Collection) (*database.
 		return nil, f.err
 	}
 	if col.ID == "" {
-		col.ID = "col-generated"
+		// Unique per create: two creates sharing an id made the second
+		// unreachable by id, which the real store's ULIDs never do.
+		col.ID = fmt.Sprintf("col-generated-%d", f.creates)
 	}
 	f.cols = append(f.cols, *col)
 	return col, nil
