@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.27 -->
+<!-- version: 10.76.28 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -3934,7 +3934,7 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
   - **Add quota fields to the provider config/model.** Per provider: a daily request budget (e.g. `daily_quota`), optional per-minute/rate cap, and a *persisted* running count with a day-boundary reset (in the provider's own timezone/UTC as the API defines it). The count must survive restarts — an in-memory counter resets on every deploy and the process restarts many times a day, so the budget would never actually bind (same failure class as the in-memory-ticker note in memory). Track "requests spent today" and "requests remaining" and expose them (the throttles API is the natural place).
   - **Add a "last resort" provider flag/priority tier.** A provider marked last-resort is only queried when *every* non-last-resort provider has been tried and returned no usable match (not merely no cache hit). Today the chain does not truly fall back — the "no fallback past Google Books" symptom was traced to literal-title misses (#3074), but the ordering model is still flat. Introduce an explicit priority/tier ordering: normal providers first, last-resort only if all normal ones miss or are quota-exhausted.
   - **Change how we scan so we stop burning the daily quota.** A full-library scan/backfill must budget provider calls against the remaining daily quota (stop/queue-for-tomorrow when a provider is spent rather than hammering 429s), dedupe identical lookups within a run, prefer cache, and spread expensive-provider calls across days if the backlog exceeds the daily budget. Consider a persistent "needs-metadata" queue drained at the daily budget rate instead of a single blocking pass.
-  - Context / prior art: `internal/metadata` provider chain + the throttle from #3066 (`GET/DELETE /api/v1/metadata/providers/throttles[/{id}]`); single-book lookups currently bypass the throttle. Related memory: google-books daily quota (1,000/day, no per-minute cap at 3 rps), and the "no fallback" literal-title-miss finding (#3074). Raising the Google quota is a Cloud Console request, not a `rate_limit` change.
+  - Context / prior art: `internal/metadata` provider chain + the throttle from #3066 (`GET /api/v1/metadata/providers/throttles`; its two `DELETE` resets were retired in 01-P81f); single-book lookups currently bypass the throttle. Related memory: google-books daily quota (1,000/day, no per-minute cap at 3 rps), and the "no fallback" literal-title-miss finding (#3074). Raising the Google quota is a Cloud Console request, not a `rate_limit` change.
 
 - [ ] **Series identity fragmented by (name, author-combo) instead of name — PRIORITY 1 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`docs/audits/` / scratchpad `library-health-audit-2026-09-05.md`) found **8,530 distinct series names with >1 series ID and 15,448 redundant series rows** — the largest raw-count data-quality problem in the library. Series appear to be keyed on the (name, author/narrator combination) rather than the name alone, so any installment credited to a different co-author/narrator combination mints a brand-new series entity for what a human calls one series. Worst cases: "Doctor Who" ~90 series IDs, "Night of the Hunter" 118 IDs (nearly all `book_count:2` — one row minted per book pair), "KGUniverse" ~70 IDs, "Doctor Who BF Monthly Range" ~50. Clean spot-check cases: "Discworld" 4 IDs (1 real @128 books + 3 near-empty), "The Dresden Files" 2 IDs (107 vs 2), "Eldest" 2 IDs (349 vs 0). Also: 51.8% of series have `book_count:0` and 35.3% have exactly 1 book → 87% of series entities hold 0 or 1 books; 91% of primary books belong to *some* series (suspiciously high, consistent with auto-create-per-book). Work: (1) find the series-create/resolve path and change the identity key from (name,author-combo) to a normalized name (with a deliberate co-author/narrator disambiguation rule only where genuinely distinct); (2) a plan-first, dry-run-first merge op to collapse the redundant rows and re-point book→series FKs; (3) prune the 0-book series. Note the `series[].book_count` field drifts low vs a direct census tally (cached counter) — measure from the book census, not the field. Plan-first + dry-run before any prod write; NEVER during a scan.
 
@@ -4042,8 +4042,8 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
 - [ ] **Throttle panel in the UI.** `GET /api/v1/metadata/providers/throttles` returns
   `provider_id`, `reason`, `detail`, `until` and `seconds_remaining`; the two `DELETE`
   resets (`.../throttles/{id}` and `.../throttles`) were retired behind 410 Gone in 01-P81f
-  (no caller existed), so a "reset now" control needs a new endpoint (or the old one
-  revived) first. Poll on a slow cadence
+  (no caller existed), so a "reset now" control needs the THROTTLE-RESET-OP op (a
+  registered op, not a route) first. Poll on a slow cadence
   (~4h was the ask) and show a "reset now" control. Endpoints shipped in the provider
   throttle PR; the panel was explicitly out of scope for it.
 - [ ] **Unify the two metadata source-chain builders.** `metafetch.buildSourceChainFromConfig`

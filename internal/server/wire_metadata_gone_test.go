@@ -1,5 +1,5 @@
 // file: internal/server/wire_metadata_gone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e2c94d1-5b0a-4f38-9c6d-1a83f4e07b52
 // last-edited: 2026-10-18
 
@@ -112,6 +112,10 @@ func TestRetiredMetadataRoutes_KeptNeighboursStillLive(t *testing.T) {
 	w = f.do(t, f.sessionToken, http.MethodDelete, "/api/v1/metadata/providers/throttles/hardcover", nil)
 	assert.Equal(t, http.StatusGone, w.Code)
 	assert.True(t, metadata.DefaultThrottleRegistry().Throttled("hardcover"), "the 410 stub must not clear the hold")
+
+	w = f.do(t, f.sessionToken, http.MethodDelete, "/api/v1/metadata/providers/throttles", nil)
+	assert.Equal(t, http.StatusGone, w.Code)
+	assert.True(t, metadata.DefaultThrottleRegistry().Throttled("hardcover"), "the bare 410 stub must not clear the hold")
 
 	w = f.do(t, f.sessionToken, http.MethodGet, "/api/v1/metadata/fields", nil)
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())

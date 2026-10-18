@@ -1,7 +1,7 @@
 // file: internal/metafetch/chain_throttle.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 13b1277e-34bb-49e5-959a-c749f34c537f
-// last-edited: 2026-09-03
+// last-edited: 2026-10-18
 
 package metafetch
 
@@ -56,7 +56,7 @@ func PrepareFetchChain(chain []metadata.MetadataSource, preferAudible bool) (liv
 		return live, skipped, nil
 	}
 	return nil, skipped, fmt.Errorf(
-		"every configured metadata provider is throttled, so no book would be fetched; not starting. Holds: %s. Reset one at DELETE /api/v1/metadata/providers/throttles/{id}",
+		"every configured metadata provider is throttled, so no book would be fetched; not starting. Holds: %s. Holds expire on their own (time left is shown above); a single-book metadata search bypasses holds and releases one on success; check state at GET /api/v1/metadata/providers/throttles",
 		metadata.ThrottleSummary(skipped))
 }
 
@@ -76,6 +76,6 @@ func PrepareFetchChain(chain []metadata.MetadataSource, preferAudible bool) (liv
 func AllThrottledMidRunError(chain []metadata.MetadataSource) error {
 	_, skipped := metadata.UnthrottledSources(chain)
 	return fmt.Errorf(
-		"every metadata provider became throttled mid-run, so no further book could be fetched; stopping with the remainder untouched and retryable. Holds: %s. Reset one at DELETE /api/v1/metadata/providers/throttles/{id}",
+		"every metadata provider became throttled mid-run, so no further book could be fetched; stopping with the remainder untouched and retryable. Holds: %s. Holds expire on their own (time left is shown above); a single-book metadata search bypasses holds and releases one on success; check state at GET /api/v1/metadata/providers/throttles",
 		metadata.ThrottleSummary(skipped))
 }
