@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -16,7 +16,9 @@
 // both stores) and only soft-deletes after the files AND the external-ID
 // mappings have been reassigned. Duration is recomputed as the sum of
 // moved-file durations. Every run is recorded in the same undo journal
-// merge.Service.CombineBooks writes, so merge.Service.UndoCombine reverses it.
+// merge.Service.CombineBooks writes, so merge.Service.UndoCombine reverses it,
+// and journals the opchange pointer to that journal (merge.RecordJournalPointer)
+// that POST /operations/:id/revert follows.
 
 package dedup
 
@@ -49,8 +51,14 @@ type SplitBookMergeResult struct {
 	TitleKeptLocked bool `json:"title_kept_locked,omitempty"`
 	// JournalID names the combine journal that merge.Service.UndoCombine
 	// reverses. Empty when the journal could not be finalized (see Errors).
-	JournalID string   `json:"journal_id,omitempty"`
-	Errors    []string `json:"errors,omitempty"`
+	JournalID string `json:"journal_id,omitempty"`
+	// OperationID is the operation the journal's undo pointer
+	// (undo.ChangeTypeMergeCombineJournal) is journaled under when the merge
+	// wrote it itself (no SplitMergeOptions.OnJournal): OperationID, or a
+	// correlation id of its own. POST /operations/:id/revert with it undoes
+	// the merge.
+	OperationID string   `json:"operation_id,omitempty"`
+	Errors      []string `json:"errors,omitempty"`
 	// NotAttempted are the srcs a SplitMergeOptions.BeforeSource stop left
 	// untouched, in srcIDs order. Nothing was written for them and the
 	// journal does not list them.
@@ -143,7 +151,18 @@ type SplitMergeOptions struct {
 	// it is rewritten as an empty Applied record naming the refusal (undoing
 	// it restores nothing). Once OnJournal returns nil the merge never
 	// returns an error: every later stop is reported in the result.
+	//
+	// Left nil, the merge journals the pointer POST /operations/:id/revert
+	// follows to the journal itself (merge.RecordJournalPointer), under
+	// OperationID, with the same refusal: no merge runs without a way back.
+	// A caller sets it only to journal that pointer its own way (the
+	// dedup.split-books fixer, through its repairs Writer).
 	OnJournal func(journalID string) error
+	// OperationID is the operation the default OnJournal journals the undo
+	// pointer under: the caller's op, so reverting it undoes every merge it
+	// made. Empty: a correlation id of its own, returned in
+	// SplitBookMergeResult.OperationID. Unused when OnJournal is set.
+	OperationID string
 	// BeforeSource, when set, runs under the merge lock before each src is
 	// absorbed. An error stops the merge there: that src and every later one
 	// are not attempted (Result.NotAttempted, an entry in Errors, dropped
@@ -290,22 +309,31 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	if err := merge.WriteCombineJournal(store, journal); err != nil {
 		return nil, fmt.Errorf("split-book merge refused: undo journal could not be written: %w", err)
 	}
-	if opts.OnJournal != nil {
-		if err := opts.OnJournal(journal.ID); err != nil {
-			// Nothing was mutated. The journal must not stay Pending listing
-			// srcs: an undo of it would "restore" books this merge never
-			// touched. Rewritten empty, it records the refusal and undoes to
-			// nothing.
-			msg := fmt.Sprintf("refused before its first write: %v", err)
-			journal.Absorbed, journal.SurvivorOwnFiles = nil, nil
-			journal.Status = merge.CombineJournalApplied
-			journal.Warnings = append(journal.Warnings, msg)
-			if werr := merge.WriteCombineJournal(store, journal); werr != nil {
-				splitMergeLog.Error("split-book merge refused but its pending journal was not emptied journal=%s keep=%s err=%s",
-					journal.ID, logger.SanitizeLogValue(keepID), logger.SanitizeLogValue(fmt.Sprint(werr)))
+	onJournal := opts.OnJournal
+	if onJournal == nil {
+		opID := merge.UndoOperationID(opts.OperationID)
+		onJournal = func(journalID string) error {
+			if _, err := merge.RecordJournalPointerIn(store, opID, keepID, merge.CombineJournalPointerType, journalID); err != nil {
+				return err
 			}
-			return nil, fmt.Errorf("split-book merge refused: %w", err)
+			result.OperationID = opID
+			return nil
 		}
+	}
+	if err := onJournal(journal.ID); err != nil {
+		// Nothing was mutated. The journal must not stay Pending listing
+		// srcs: an undo of it would "restore" books this merge never
+		// touched. Rewritten empty, it records the refusal and undoes to
+		// nothing.
+		msg := fmt.Sprintf("refused before its first write: %v", err)
+		journal.Absorbed, journal.SurvivorOwnFiles = nil, nil
+		journal.Status = merge.CombineJournalApplied
+		journal.Warnings = append(journal.Warnings, msg)
+		if werr := merge.WriteCombineJournal(store, journal); werr != nil {
+			splitMergeLog.Error("split-book merge refused but its pending journal was not emptied journal=%s keep=%s err=%s",
+				journal.ID, logger.SanitizeLogValue(keepID), logger.SanitizeLogValue(fmt.Sprint(werr)))
+		}
+		return nil, fmt.Errorf("split-book merge refused: %w", err)
 	}
 	// persist re-writes the journal after a step. A failure is recorded: the
 	// merge goes on (its writes are real), but the result says the journal may
