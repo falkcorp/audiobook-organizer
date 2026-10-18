@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -31,7 +31,6 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime"
-	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -245,7 +244,7 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	return row
 }
 
-// previewResultStore is where the op writes its report and the GET reads it.
+// previewResultStore is where the op writes its report.
 type previewResultStore interface {
 	CreateOperationResult(result *database.OperationResult) error
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
@@ -378,7 +377,7 @@ func runBulkApplyPreview(
 			slog.Int("unreadable", n))
 	}
 	if err := writePreviewIndexRow(results, opID, claims.Unreadable()); err != nil {
-		_ = reporter.Log(slog.LevelWarn, "preview index row not saved; the summary's unreadable_books will read 0",
+		_ = reporter.Log(slog.LevelWarn, "preview index row not saved",
 			slog.String("error", err.Error()))
 	}
 
@@ -452,21 +451,10 @@ func runBulkApplyPreview(
 	if runErr != nil {
 		return runErr
 	}
-	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (skipped as already applied: %d; left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books); read /api/v1/metadata/bulk-apply-preview/%s",
-		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nAlreadyApplied.Load(), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable(), opID)
+	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (skipped as already applied: %d; left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books)",
+		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nAlreadyApplied.Load(), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable())
 	_ = registryProgressAdapter{r: reporter}.UpdateProgress(len(ids), len(ids), msg)
 	return nil
-}
-
-// previewSummary counts a report by verdict and by reason.
-type previewSummary struct {
-	Total     int                       `json:"total"`
-	ByVerdict map[string]int            `json:"by_verdict"`
-	ByReason  map[string]map[string]int `json:"by_reason"` // verdict -> reason -> count
-	// UnreadableBooks counts books the sibling-part index could not read;
-	// rows that look like one of them are blocked as partial_book. The same
-	// field batch-apply-candidates returns.
-	UnreadableBooks int `json:"unreadable_books"`
 }
 
 // previewIndexRowID is the reserved op-result key under which the preview op
@@ -491,26 +479,8 @@ func writePreviewIndexRow(results previewResultStore, opID string, unreadable in
 	})
 }
 
-// handleStartBulkApplyPreview handles POST /api/v1/metadata/bulk-apply-preview.
-// Body: bulkApplyPreviewParams. Returns 202 with the preview op id.
-func (s *Server) handleStartBulkApplyPreview(c *gin.Context) {
-	var p bulkApplyPreviewParams
-	if err := c.ShouldBindJSON(&p); err != nil {
-		httputil.RespondWithBadRequest(c, "invalid request body")
-		return
-	}
-	if len(p.BookIDs) == 0 && !p.AllCached && p.OperationID == "" {
-		httputil.RespondWithBadRequest(c, "give book_ids, all_cached:true, or operation_id")
-		return
-	}
-	if p.OperationID != "" && p.Source == "" {
-		p.Source = previewSourceOpResults
-	}
-	s.enqueueBulkApplyPreview(c, p)
-}
-
 // enqueueBulkApplyPreview enqueues the preview op and answers 202. Shared by
-// the preview endpoint and by both bulk-apply endpoints' dry-run default.
+// the bulk-apply endpoints' dry-run default.
 func (s *Server) enqueueBulkApplyPreview(c *gin.Context, p bulkApplyPreviewParams) {
 	if s.opRegistry == nil {
 		httputil.RespondWithInternalError(c, "operations registry not initialized")
@@ -522,93 +492,10 @@ func (s *Server) enqueueBulkApplyPreview(c *gin.Context, p bulkApplyPreviewParam
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"data": gin.H{
-		"op_id":       opID,
-		"dry_run":     true,
-		"results_url": "/api/v1/metadata/bulk-apply-preview/" + opID,
-		"note":        "dry run: nothing was applied. Send dry_run:false to apply.",
+		"op_id":   opID,
+		"dry_run": true,
+		"note":    "dry run: nothing was applied. The summary is the finished operation's message (GET /api/v1/operations/v2/:id). Send dry_run:false to apply.",
 	}})
-}
-
-// handleGetBulkApplyPreview handles GET /api/v1/metadata/bulk-apply-preview/:id.
-//
-// Query: limit (default 100, 0 = all), offset, verdict, reason (filters), and
-// download=1 for the whole filtered report as an attachment. The summary always
-// covers the WHOLE report, not the page. Rows appear while the op runs; poll
-// /api/v1/operations/v2/:id for its status.
-func (s *Server) handleGetBulkApplyPreview(c *gin.Context) {
-	opID := c.Param("id")
-	all, err := s.Ops().GetOperationResults(opID)
-	if err != nil {
-		httputil.InternalError(c, "failed to load preview results", err)
-		return
-	}
-	rows := make([]bulkApplyPreviewRow, 0, len(all))
-	sum := previewSummary{ByVerdict: map[string]int{}, ByReason: map[string]map[string]int{}}
-	wantVerdict, wantReason := c.Query("verdict"), c.Query("reason")
-	for _, r := range all {
-		if r.BookID == previewIndexRowID {
-			var ix previewIndexRow
-			if json.Unmarshal([]byte(r.ResultJSON), &ix) == nil {
-				sum.UnreadableBooks = ix.UnreadableBooks
-			}
-			continue
-		}
-		var row bulkApplyPreviewRow
-		if json.Unmarshal([]byte(r.ResultJSON), &row) != nil || row.Verdict == "" {
-			continue // not a preview row
-		}
-		sum.Total++
-		sum.ByVerdict[row.Verdict]++
-		if sum.ByReason[row.Verdict] == nil {
-			sum.ByReason[row.Verdict] = map[string]int{}
-		}
-		sum.ByReason[row.Verdict][row.Reason]++
-		if (wantVerdict == "" || row.Verdict == wantVerdict) && (wantReason == "" || row.Reason == wantReason) {
-			rows = append(rows, row)
-		}
-	}
-	if sum.Total == 0 {
-		httputil.RespondWithNotFound(c, "bulk apply preview", opID)
-		return
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].BookID < rows[j].BookID })
-
-	if c.Query("download") == "1" {
-		c.Header("Content-Disposition", `attachment; filename="bulk-apply-preview-`+sanitizeFilenamePart(opID)+`.json"`)
-		c.JSON(http.StatusOK, gin.H{"op_id": opID, "summary": sum, "rows": rows})
-		return
-	}
-	limit, offset := 100, 0
-	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v >= 0 {
-		limit = v
-	}
-	if v, err := strconv.Atoi(c.Query("offset")); err == nil && v >= 0 {
-		offset = v
-	}
-	filtered := len(rows)
-	page := rows[min(offset, filtered):]
-	if limit > 0 && len(page) > limit {
-		page = page[:limit]
-	}
-	httputil.RespondWithOK(c, gin.H{
-		"op_id":          opID,
-		"summary":        sum,
-		"filtered_count": filtered,
-		"limit":          limit,
-		"offset":         offset,
-		"rows":           page,
-	})
-}
-
-// sanitizeFilenamePart keeps an op id safe inside a Content-Disposition value.
-func sanitizeFilenamePart(s string) string {
-	out := make([]rune, 0, len(s))
-	for _, r := range s {
-		if r == '-' || r == '_' || r == '.' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			out = append(out, r)
-		}
-	}
-	return string(out)
 }
 
 func init() {

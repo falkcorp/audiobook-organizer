@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.48.0
+// version: 4.48.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-18
 
@@ -1820,7 +1820,10 @@ func (s *Server) setupRoutes() {
 			protected.POST("/operations/backfill-scan-cache", s.perm(auth.PermSettingsManage), s.backfillScanCacheHandler)
 
 			// Import routes
-			protected.POST("/import/collision-preview", s.perm(auth.PermLibraryView), s.handleImportCollisionPreview)
+			// Retired (01-P81i, owner decision D9): no caller in the repo and no
+			// replacement. The stub is removed after one release; auth and the
+			// permission guard run first.
+			protected.POST("/import/collision-preview", s.perm(auth.PermLibraryView), gone(""))
 
 			// iTunes import routes
 			itunesGroup := protected.Group("/itunes")
@@ -1855,8 +1858,11 @@ func (s *Server) setupRoutes() {
 			// Cover art
 			protected.GET("/covers/proxy", s.perm(auth.PermLibraryView), s.handleCoverProxy)
 			protected.GET("/covers/local/:filename", s.perm(auth.PermLibraryView), s.handleLocalCover)
-			protected.GET("/audiobooks/:id/cover-history", s.perm(auth.PermLibraryView), s.handleListCoverHistory)
-			protected.POST("/audiobooks/:id/cover-history/restore", s.perm(auth.PermLibraryEditMetadata), s.handleRestoreCover)
+			// Retired (01-P81i, owner decision D9): no caller in the repo and no
+			// replacement. The stubs are removed after one release; auth and each
+			// route's permission guard run first.
+			protected.GET("/audiobooks/:id/cover-history", s.perm(auth.PermLibraryView), gone(""))
+			protected.POST("/audiobooks/:id/cover-history/restore", s.perm(auth.PermLibraryEditMetadata), gone(""))
 
 			// Unified task/scheduler routes and the maintenance-window routes
 			// (GET /tasks, POST /tasks/:name/run, PUT /tasks/:name, POST
@@ -1910,16 +1916,22 @@ func (s *Server) setupRoutes() {
 			// /library/quick-queries migrated to the handlers/system sub-package
 			// (wireHandlers).
 			protected.POST("/metadata/batch-apply-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleBatchApplyCandidates)
-			// Bulk-apply dry run: start one, then page / download its report.
-			protected.POST("/metadata/bulk-apply-preview", s.perm(auth.PermLibraryView), s.handleStartBulkApplyPreview)
-			protected.GET("/metadata/bulk-apply-preview/:id", s.perm(auth.PermLibraryView), s.handleGetBulkApplyPreview)
+			// Retired (01-P81i, owner decision D9): no caller in the repo. Starting
+			// a dry run is now the default of POST /metadata/batch-apply-candidates
+			// and POST /audiobooks/metadata/batch-apply-cached (send dry_run:false
+			// to apply); the report-reading route has no replacement. The stubs are removed after one release; auth and each
+			// route's permission guard run first.
+			protected.POST("/metadata/bulk-apply-preview", s.perm(auth.PermLibraryView), gone("POST /api/v1/metadata/batch-apply-candidates or POST /api/v1/audiobooks/metadata/batch-apply-cached (each is a dry run unless the body sends dry_run:false)"))
+			protected.GET("/metadata/bulk-apply-preview/:id", s.perm(auth.PermLibraryView), gone(""))
 			protected.POST("/metadata/batch-reject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleRejectCandidates)
 			protected.POST("/metadata/batch-unreject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleUnrejectCandidates)
 			protected.POST("/metadata/unreject-candidate", s.perm(auth.PermLibraryEditMetadata), s.handleUnrejectCandidate)
 			// fetch-metadata / search-metadata / apply-metadata / mark-no-match /
 			// revert-metadata / metadata-rejections / cow-versions(+prune) /
 			// write-back migrated to the handlers/metadata sub-package (wireHandlers).
-			protected.GET("/audiobooks/:id/similar", s.perm(auth.PermLibraryView), s.handleSimilarBooks)
+			// Retired (01-P81i, owner decision D9): no caller in the repo. The stub is
+			// removed after one release; auth and the permission guard run first.
+			protected.GET("/audiobooks/:id/similar", s.perm(auth.PermLibraryView), gone("GET /api/v1/audiobooks?search=author:... (the library search takes the same author: and series: terms)"))
 
 			// AI parsing, scan-pipeline, metadata-source-test, and parse-with-ai
 			// routes migrated to AIHandler (wire_handlers.go).

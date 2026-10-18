@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.40.0
+// version: 1.40.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -1259,12 +1259,11 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		h.InvalidateReviewSnapshot()
 		c.JSON(http.StatusAccepted, gin.H{
 			"data": gin.H{
-				"op_id":       opID,
-				"dry_run":     true,
-				"requested":   len(body.BookIDs),
-				"write_back":  shouldWriteBack,
-				"results_url": "/api/v1/metadata/bulk-apply-preview/" + opID,
-				"note":        "dry run: nothing was applied. Send dry_run:false to apply.",
+				"op_id":      opID,
+				"dry_run":    true,
+				"requested":  len(body.BookIDs),
+				"write_back": shouldWriteBack,
+				"note":       "dry run: nothing was applied. The summary is the finished operation's message (GET /api/v1/operations/v2/:id). Send dry_run:false to apply.",
 			},
 		})
 		return

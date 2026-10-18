@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.58.0
+// version: 5.58.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 
 package metafetch
 
@@ -591,8 +591,9 @@ var coverEmbedLog = logger.New("metafetch-cover-embed")
 // embedCoverInBookFiles embeds cover art into all audio files for a book.
 // It returns immediately when the embed_cover_art setting is off.
 // Always overwrites existing cover art. Before overwriting, extracts the old
-// cover and saves it as a timestamped version in covers/history/ so it can be
-// restored later via the changelog.
+// cover and saves it as a timestamped version in covers/history/. No API route
+// restores from that directory since the cover-history routes were retired
+// (01-P81i); the copies are kept on disk for a manual restore.
 //
 // book is the file-work target its caller resolved and locked (fileWorkTarget:
 // the library copy, for a protected book). It used to resolve the copy again
@@ -725,8 +726,10 @@ func (mfs *Service) embedCoverInBookFiles(ctx context.Context, book *database.Bo
 }
 
 // archiveExistingCover extracts the current embedded cover art from an audio
-// file and saves it as a timestamped version in covers/history/{bookID}/ so it
-// can be restored later. Records a metadata change for changelog tracking.
+// file and saves it as a timestamped version in covers/history/{bookID}/. No
+// API route restores from there since the cover-history routes were retired
+// (01-P81i); the copies are kept on disk for a manual restore. Records a
+// metadata change for changelog tracking.
 func (mfs *Service) archiveExistingCover(bookID string, audioFilePath string) {
 	data, mimeType, err := metadata.ExtractCoverArtBytes(audioFilePath)
 	if err != nil || len(data) == 0 {

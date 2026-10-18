@@ -1,21 +1,19 @@
 // file: internal/server/unreadable_books_count_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c3f1a92-5e04-4d8b-b6a1-2e9d0f47c815
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 //
-// Both bulk-apply surfaces report how many books the sibling-part index could
-// not read, under one field name: unreadable_books.
+// The bulk-apply surfaces report how many books the sibling-part index could
+// not read: batch-apply-candidates answers it as unreadable_books, and the
+// preview op saves it in a reserved index row.
 
 package server
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -77,27 +75,20 @@ func (m *memResults) GetOperationResults(string) ([]database.OperationResult, er
 	return append([]database.OperationResult(nil), m.rows...), nil
 }
 
-// The preview op saves the count in its index row; the report's summary reads
-// it back as unreadable_books and does not count that row as a report row.
-func TestBulkApplyPreview_SummaryReportsUnreadableBooks(t *testing.T) {
+// The preview op saves the count in a reserved index row under its own op id,
+// keyed so it can never be mistaken for a book's report row (no verdict).
+func TestBulkApplyPreview_IndexRowSavesUnreadableBooks(t *testing.T) {
 	results := &memResults{}
 	require.NoError(t, writePreviewIndexRow(results, "pv", 2))
-	raw, err := json.Marshal(bulkApplyPreviewRow{BookID: "b1", Verdict: previewVerdictApply})
+
+	rows, err := results.GetOperationResults("pv")
 	require.NoError(t, err)
-	require.NoError(t, results.CreateOperationResult(&database.OperationResult{OperationID: "pv", BookID: "b1", ResultJSON: string(raw), Status: previewVerdictApply}))
+	require.Len(t, rows, 1)
+	require.Equal(t, previewIndexRowID, rows[0].BookID)
+	require.Equal(t, "index", rows[0].Status)
+	require.JSONEq(t, `{"unreadable_books":2}`, rows[0].ResultJSON)
 
-	store := &database.MockStore{GetOperationResultsFunc: results.GetOperationResults}
-	gin.SetMode(gin.TestMode)
-	s := &Server{store: store}
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/metadata/bulk-apply-preview/pv", nil)
-	c.Params = gin.Params{{Key: "id", Value: "pv"}}
-	s.handleGetBulkApplyPreview(c)
-
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	body := w.Body.String()
-	require.Contains(t, body, `"unreadable_books":2`, body)
-	require.Contains(t, body, `"total":1`, body, "the index row must not count as a report row")
-	require.NotContains(t, body, previewIndexRowID, "the index row must not be listed as a row")
+	var asReportRow bulkApplyPreviewRow
+	require.NoError(t, json.Unmarshal([]byte(rows[0].ResultJSON), &asReportRow))
+	require.Empty(t, asReportRow.Verdict, "the index row must carry no verdict")
 }
