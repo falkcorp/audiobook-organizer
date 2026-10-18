@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.56.0
+// version: 3.56.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-18
 
@@ -1053,7 +1053,15 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 				// preview's id back (and a preview start a live run's). Only a
 				// row in the same mode may absorb the request; otherwise a new
 				// row is queued and Gate 3 serializes the two.
-				if !def.Preview.IsZero() && !def.Preview.SameMode(rawParams, []byte(op.Params)) {
+				//
+				// Byte-identical params are the same request whatever SameMode
+				// can read from them: a body whose mode it cannot read (a
+				// non-bool mode value, two case variants of a key) would
+				// otherwise never fold, and every cron tick sending it would
+				// queue another row.
+				if !def.Preview.IsZero() &&
+					!sameParamsIgnoringLegacyID(rawParams, []byte(op.Params)) &&
+					!def.Preview.SameMode(rawParams, []byte(op.Params)) {
 					r.logger.Info("registry: active op exists in the other mode (preview vs live) — queueing a second run",
 						"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID), "status", op.Status)
 					continue
