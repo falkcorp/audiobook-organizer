@@ -1,5 +1,5 @@
 // file: internal/undo/merge_combine_journal.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e3a9c17-2d84-4f60-b9a1-7c06e4d2f8b3
 // last-edited: 2026-10-18
 
