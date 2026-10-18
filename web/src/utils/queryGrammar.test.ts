@@ -1,7 +1,7 @@
 // file: web/src/utils/queryGrammar.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5f9c3a28-1e6d-4b70-8c42-b7e0d4a9f163
-// last-edited: 2026-10-09
+// last-edited: 2026-10-18
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +9,10 @@ import { describe, expect, it } from 'vitest';
 import {
   compileTitleFilter,
   compileValue,
+  dateTermError,
+  dateValueError,
   firstSearchError,
+  isDateField,
   re2ToJsRegExp,
   regexValueError,
 } from './queryGrammar';
@@ -48,6 +51,91 @@ describe('regexValueError (client pre-check)', () => {
     expect(firstSearchError(parseSearch('tag:sci*').fieldFilters)).toMatch(/exact tag name/);
     expect(firstSearchError(parseSearch('read_status:/fin/').fieldFilters)).toMatch(/exact status/);
     expect(firstSearchError(parseSearch('tag:scifi read_status:finished').fieldFilters)).toBeNull();
+  });
+});
+
+describe('relative dates (client pre-check)', () => {
+  it('knows which fields take a date', () => {
+    for (const f of ['last_played', 'date_added', 'added', 'date_modified', 'modified']) {
+      expect(isDateField(f)).toBe(true);
+    }
+    // itunes_last_played is sort-only on the server, not a filter field.
+    for (const f of ['itunes_last_played', 'year', 'title', 'created_at']) {
+      expect(isDateField(f)).toBe(false);
+    }
+  });
+
+  it.each([
+    'now',
+    'NOW',
+    '2026-01-31',
+    '2024-02-29',
+    '2026-03-04T10:20:30Z',
+    '2026-03-04T10:20:30.5+02:00',
+    '-30d',
+    '+2w',
+    '-1m',
+    '-1Y',
+    '-100000d',
+    '-0d',
+  ])('%s is a valid date term', (v) => {
+    expect(dateTermError(v)).toBeNull();
+  });
+
+  it('an unsigned offset is refused with the signed spelling in the message', () => {
+    expect(dateTermError('30d')).toBe(
+      'date offset "30d" needs a sign: write -30d for 30 days ago, or +30d for 30 days from now'
+    );
+    expect(dateTermError('1y')).toMatch(/write -1y for 1 year ago, or \+1y for 1 year from now/);
+  });
+
+  it.each([
+    ['2026-02-31', /that day does not exist/],
+    ['2025-02-29', /that day does not exist/],
+    ['2026-13-01', /that day does not exist/],
+    ['yesterday', /use YYYY-MM-DD, now, or an offset like -30d/],
+    ['-30x', /use YYYY-MM-DD, now, or an offset like -30d/],
+    ['-d', /use YYYY-MM-DD/],
+    ['-100001d', /too large/],
+    ['', /empty date/],
+  ])('%j is refused', (v, msg) => {
+    expect(dateTermError(v)).toMatch(msg);
+  });
+
+  it('a value takes an operator, a range, or last_played:*', () => {
+    expect(dateValueError('last_played', '>-30d')).toBeNull();
+    expect(dateValueError('date_added', '>=2026-01-01')).toBeNull();
+    expect(dateValueError('date_added', '<=-1y')).toBeNull();
+    expect(dateValueError('last_played', '-30d..now')).toBeNull();
+    expect(dateValueError('last_played', '2026-01-01..2026-03-31')).toBeNull();
+    expect(dateValueError('last_played', '*')).toBeNull();
+    // Only last_played has an "ever" form; the server has no * for the indexed dates.
+    expect(dateValueError('date_added', '*')).toMatch(/use YYYY-MM-DD/);
+    // Either side of a range is checked.
+    expect(dateValueError('last_played', '30d..now')).toMatch(/needs a sign/);
+    expect(dateValueError('last_played', '-30d..tomorrow')).toMatch(/invalid date "tomorrow"/);
+    // A range has two sides: an open end is not a range.
+    expect(dateValueError('last_played', '-30d..')).toMatch(/invalid date/);
+    expect(dateValueError('last_played', '..now')).toMatch(/invalid date/);
+    // An operator and a range together are not supported.
+    expect(dateValueError('last_played', '>-30d..now')).toMatch(/invalid date/);
+  });
+
+  it('firstSearchError names the date token, and skips quoted values', () => {
+    expect(firstSearchError(parseSearch('last_played:>-30d date_added:-1y..now').fieldFilters)).toBeNull();
+    expect(firstSearchError(parseSearch('added:>30d').fieldFilters)).toMatch(
+      /^added:>30d — date offset "30d" needs a sign: write -30d/
+    );
+    expect(firstSearchError(parseSearch('modified:2026-02-31').fieldFilters)).toMatch(
+      /^modified:2026-02-31 — invalid date/
+    );
+    expect(firstSearchError(parseSearch('last_played:"30d"').fieldFilters)).toBeNull();
+  });
+
+  it('a date field value is not run through the regex pre-check', () => {
+    // A leading slash is a regex on a text field but just an invalid date here.
+    expect(firstSearchError(parseSearch('title:/abc').fieldFilters)).toMatch(/no closing/);
+    expect(firstSearchError(parseSearch('last_played:/abc').fieldFilters)).toMatch(/invalid date/);
   });
 });
 

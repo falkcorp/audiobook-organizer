@@ -1,7 +1,7 @@
 // file: web/src/utils/queryGrammar.ts
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8e5b2d17-4c9a-4f36-b1e8-0d7a3c6f9e24
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 /**
  * The ONE search value grammar shared by the Library search bar and the
@@ -23,6 +23,15 @@
  *   a* *a *a*     glob on the WHOLE trimmed value; only * is a wildcard
  *   *             the value is non-empty
  *   >N [a TO b]   numeric fields only (server-side)
+ *   dates         last_played, date_added (added), date_modified (modified):
+ *                 YYYY-MM-DD, now, or an offset from now: a sign, a whole
+ *                 number and a unit (d days, w weeks, m months, y years), e.g.
+ *                 -30d. last_played:>-30d, date_added:>-1y, and a range with
+ *                 ..  as in last_played:-30d..now. The sign is required (30d is
+ *                 refused). An offset is resolved when the search RUNS, so a
+ *                 saved query keeps sliding. A bare YYYY-MM-DD with no operator
+ *                 means that whole (UTC) day. The Go twin is
+ *                 internal/search/relative_date.go; the server is the authority.
  *
  * Server-side limits (internal/querygrammar): a value is at most 256 bytes, a
  * compiled regex at most 500 instructions, and a regex or glob is matched
@@ -45,6 +54,75 @@ function closingSlash(raw: string): number {
     if (raw[i] === '/') return i;
   }
   return -1;
+}
+
+/** Query fields whose value is a date term. Mirrors search.IsDateField. */
+const DATE_FIELDS = new Set(['last_played', 'date_added', 'added', 'date_modified', 'modified']);
+
+export function isDateField(field: string): boolean {
+  return DATE_FIELDS.has(field);
+}
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const DATE_OFFSET = /^([+-]?)(\d+)([dwmy])$/i;
+/** Same bound as the server, so an absurd offset is refused while typing too. */
+const MAX_DATE_OFFSET = 100000;
+
+const UNIT_NAMES: Record<string, string> = { d: 'day', w: 'week', m: 'month', y: 'year' };
+
+function unitPhrase(digits: string, unit: string): string {
+  const name = UNIT_NAMES[unit.toLowerCase()];
+  return `${digits} ${name}${digits === '1' ? '' : 's'}`;
+}
+
+/**
+ * Pre-checks ONE date term (no operator, no ..). Returns the reason it is
+ * refused, worded like the server's, or null when it is valid. A calendar-valid
+ * date is checked for real so 2026-02-31 is caught here rather than guessed at.
+ */
+export function dateTermError(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return 'empty date';
+  if (v.toLowerCase() === 'now') return null;
+  if (DATE_ONLY.test(v)) {
+    const d = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(v)
+      ? null
+      : `invalid date "${v}": that day does not exist`;
+  }
+  if (RFC3339.test(v) && !Number.isNaN(new Date(v).getTime())) return null;
+  const m = DATE_OFFSET.exec(v);
+  if (m) {
+    const [, sign, digits, unit] = m;
+    if (!sign) {
+      return `date offset "${v}" needs a sign: write -${digits}${unit} for ${unitPhrase(digits, unit)} ago, or +${digits}${unit} for ${unitPhrase(digits, unit)} from now`;
+    }
+    if (Number(digits) > MAX_DATE_OFFSET) {
+      return `date offset "${v}" is too large (at most ${MAX_DATE_OFFSET})`;
+    }
+    return null;
+  }
+  return `invalid date "${v}": use YYYY-MM-DD, now, or an offset like -30d (units d, w, m, y)`;
+}
+
+/**
+ * Pre-checks the value of a date field: an optional comparison operator and one
+ * term, or a bare a..b range. last_played:* (ever played) is also valid.
+ * Returns the first reason, or null.
+ */
+export function dateValueError(field: string, raw: string): string | null {
+  const v = raw.trim();
+  if (field === 'last_played' && v === '*') return null;
+  const op = /^(>=|<=|>|<|=)/.exec(v);
+  const rest = op ? v.slice(op[0].length) : v;
+  if (!op) {
+    const i = rest.indexOf('..');
+    if (i > 0 && i + 2 < rest.length) {
+      return dateTermError(rest.slice(0, i)) ?? dateTermError(rest.slice(i + 2));
+    }
+  }
+  return dateTermError(rest);
 }
 
 /** Constructs RE2 rejects but JS RegExp would silently accept. */
@@ -101,6 +179,11 @@ export function firstSearchError(filters: readonly FieldFilter[]): string | null
       (f.value.includes('*') || f.value.startsWith('/'))
     ) {
       return `read_status:${f.value} — read_status takes an exact status, not a pattern`;
+    }
+    if (isDateField(f.field) && !f.quoted) {
+      const dateErr = dateValueError(f.field, f.value);
+      if (dateErr) return `${f.field}:${f.value} — ${dateErr}`;
+      continue;
     }
     const err = regexValueError(f.value, f.quoted);
     if (err) return `${f.field}:${f.value} — ${err}`;
