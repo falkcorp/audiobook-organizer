@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_compact.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b5d2e8a4-7c19-4f6b-a3e0-1d8f4c7b9e26
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package handlers
 
@@ -34,16 +34,17 @@ type ActiveOperationsLister interface {
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
 
-// ActivityCompactHandler serves the activity-maintenance enqueue endpoints:
-// POST /api/v1/activity/compact and POST /api/v1/admin/recompact-digests.
+// ActivityCompactHandler serves the activity-maintenance enqueue endpoint
+// POST /api/v1/activity/compact.
 //
-// Until 2026-09-10 both ran their whole pass inside the request and returned
-// its counters (ActivityHandler.CompactActivity and .RecompactDigests). On a
-// production-sized activity store that took longer than any browser waits, so
-// the user saw a timeout and could not tell whether the work was still going.
-// Each now enqueues its maintenance op and answers 202 with the op id; the op
-// appears in the operations list with a live log, which is where the counters
-// are read.
+// Until 2026-09-10 it ran its whole pass inside the request and returned its
+// counters. On a production-sized activity store that took longer than any
+// browser waits, so the user saw a timeout and could not tell whether the work
+// was still going. It now enqueues maintenance.compact-activity-log and answers
+// 202 with the op id; the op appears in the operations list with a live log,
+// which is where the counters are read. (POST /admin/recompact-digests, its
+// sibling, was retired in 01-P81g; the digest recompaction op is started with
+// POST /api/v1/operations/v2.)
 type ActivityCompactHandler struct {
 	enqueuer CompactionEnqueuer     // nil when the registry is not initialised
 	active   ActiveOperationsLister // nil when the store does not expose ops v2
@@ -133,25 +134,8 @@ func parseOlderThanDays(raw json.RawMessage) (int, string) {
 	return int(n), ""
 }
 
-// RecompactDigests handles POST /api/v1/admin/recompact-digests.
-//
-// Re-derives type, tier and tags on every stored daily-digest entry, on every
-// activity backend. No body. Until 2026-09-10 it ran inside the request and
-// returned {touched, skipped}; it now enqueues
-// maintenance.recompact-activity-digests and responds exactly as
-// CompactActivity does (202 with the op id, 409 if a run is already live, 500
-// without a registry). The counters are the op's persisted result.
-func (h *ActivityCompactHandler) RecompactDigests(c *gin.Context) {
-	if h.enqueuer == nil {
-		httputil.RespondWithInternalError(c, "operations registry not initialized")
-		return
-	}
-	h.enqueue(c, maintenance.RecompactActivityDigestsDefID, "digest recompaction", nil)
-}
-
-// enqueue is the shared tail of both endpoints: enqueue defID with params,
-// answer 409 if the registry deduped the request onto a run that was already
-// active, else 202 with the new op id.
+// enqueue enqueues defID with params and answers 409 if the registry deduped
+// the request onto a run that was already active, else 202 with the new op id.
 func (h *ActivityCompactHandler) enqueue(c *gin.Context, defID, what string, params any) {
 	before := h.activeOpIDs(defID)
 
