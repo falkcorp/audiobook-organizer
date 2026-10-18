@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_combine.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f7b0d52-c1e4-4a98-8d26-9e5a7c13b0f4
 // last-edited: 2026-10-18
 
