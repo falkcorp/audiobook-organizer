@@ -1,5 +1,5 @@
 // file: internal/database/review_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
 // last-edited: 2026-10-18
 
@@ -49,6 +49,9 @@ const (
 	ReviewStatusApproved = "approved"
 	ReviewStatusRejected = "rejected"
 	ReviewStatusApplied  = "applied"
+	// ReviewStatusApplying is a transient claim held while an apply handler runs
+	// (review_claim.go). It is never a decision a human makes.
+	ReviewStatusApplying = "applying"
 )
 
 // ReviewItem is one thing the system has flagged for a human decision.
@@ -63,7 +66,7 @@ type ReviewItem struct {
 	Kind      string    `json:"kind"`       // e.g. "regroup.multidisc", "regroup.anthology"
 	DedupKey  string    `json:"dedup_key"`  // STABLE: hash(Kind + FolderRef) — upsert target
 	FolderRef string    `json:"folder_ref"` // grandparent folder path this hold is about
-	Status    string    `json:"status"`     // pending | approved | rejected | applied
+	Status    string    `json:"status"`     // pending | approved | rejected | applied | applying (transient claim)
 	Summary   string    `json:"summary"`    // one-line human label
 	Payload   string    `json:"payload"`    // JSON blob: folder, listing, proposed action, member IDs, ...
 	CreatedAt time.Time `json:"created_at"`
@@ -89,6 +92,11 @@ type ReviewItem struct {
 	// Written only by SetReviewItemDecision. SetReviewItemStatus leaves it alone, so
 	// the later approved→applied transition cannot erase the decision it is carrying out.
 	ChosenAction string `json:"chosen_action,omitempty"`
+
+	// ApplyClaimedFrom is the status an item held before an apply claim moved it to
+	// "applying", so a failed apply can release back to it. Set and cleared only while
+	// a claim exists (review_claim.go; SetReviewItemDecision clears it on the way out).
+	ApplyClaimedFrom string `json:"apply_claimed_from,omitempty"`
 }
 
 // ReviewFilter controls ListReviewItems / list-by-status queries.
@@ -629,6 +637,9 @@ func (p *PebbleStore) SetReviewItemDecision(id, status, chosenAction string) (*R
 	item.UpdatedAt = time.Now().UTC()
 	if chosenAction != "" {
 		item.ChosenAction = chosenAction
+	}
+	if status != ReviewStatusApplying {
+		item.ApplyClaimedFrom = "" // a finished or released claim leaves nothing behind
 	}
 
 	data, err := json.Marshal(item)
