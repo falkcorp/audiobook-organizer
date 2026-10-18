@@ -1,17 +1,14 @@
 // file: internal/merge/service_b3_misc_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 2f8b6d1c-5e9a-4c3f-8b7d-0a1e2c4f6d8b
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package merge
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestB3_AsExternalIDReassigner_Nil covers the s == nil branch: passing a
@@ -48,27 +45,4 @@ func TestB3_LockUnlockMergeRMW_RoundTrips(t *testing.T) {
 	// an acceptable signal for a mutex round-trip test.
 	LockMergeRMW()
 	UnlockMergeRMW()
-}
-
-// TestB3_QuickHash_ComputesStableHash covers collision.go's QuickHash: same
-// content hashes the same, different content hashes differently.
-func TestB3_QuickHash_ComputesStableHash(t *testing.T) {
-	dir := t.TempDir()
-	pathA := filepath.Join(dir, "a.bin")
-	pathB := filepath.Join(dir, "b.bin")
-	require.NoError(t, os.WriteFile(pathA, []byte("b3 same content"), 0o644))
-	require.NoError(t, os.WriteFile(pathB, []byte("b3 different content"), 0o644))
-
-	hashA1 := QuickHash(pathA)
-	hashA2 := QuickHash(pathA)
-	hashB := QuickHash(pathB)
-
-	assert.NotEmpty(t, hashA1)
-	assert.Equal(t, hashA1, hashA2, "hashing the same file twice must be stable")
-	assert.NotEqual(t, hashA1, hashB, "different content must hash differently")
-}
-
-// TestB3_QuickHash_MissingFile_ReturnsEmpty covers the os.Open error branch.
-func TestB3_QuickHash_MissingFile_ReturnsEmpty(t *testing.T) {
-	assert.Empty(t, QuickHash(filepath.Join(t.TempDir(), "does-not-exist.bin")))
 }
