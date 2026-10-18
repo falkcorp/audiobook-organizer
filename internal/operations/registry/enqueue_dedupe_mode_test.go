@@ -1,5 +1,5 @@
 // file: internal/operations/registry/enqueue_dedupe_mode_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bf374303-0b13-466b-b0d6-f5efc8453cff
 // last-edited: 2026-10-18
 
@@ -152,5 +152,33 @@ func TestPreviewSpec_SameMode(t *testing.T) {
 		if spec.SameMode(json.RawMessage(c[0]), json.RawMessage(c[1])) {
 			t.Errorf("SameMode(%s, %s) = true, want false", c[0], c[1])
 		}
+	}
+}
+
+// TestEnqueueDedupe_NoParamsTicksStillCollapse: the pile-up this dedupe was
+// written for is scheduler ticks, which enqueue with no params. nil params
+// (stored as {}) and a nil json.RawMessage (marshalled to null) are the same
+// work in the same mode, so repeated ticks keep collapsing into one row.
+func TestEnqueueDedupe_NoParamsTicksStillCollapse(t *testing.T) {
+	r, store := newTestRegistry(t)
+	def := registerCronPreviewDef(t, r, "test.preview-cron-ticks")
+	first, err := r.EnqueueOp(context.Background(), def.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, params := range []any{nil, json.RawMessage(nil), struct{}{}} {
+		id, err := r.EnqueueOp(context.Background(), def.ID, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id != first {
+			t.Fatalf("tick %d (%T) queued %s instead of folding into %s", i, params, id, first)
+		}
+	}
+	if n := len(activeRowsForDef(t, store, def.ID)); n != 1 {
+		t.Fatalf("active rows = %d, want the one tick row", n)
+	}
+	if !def.Preview.SameMode(json.RawMessage("null"), json.RawMessage("{}")) {
+		t.Fatal("SameMode(null, {}) = false; a null body is no params")
 	}
 }
