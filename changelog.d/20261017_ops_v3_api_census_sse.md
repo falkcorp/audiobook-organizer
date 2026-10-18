@@ -19,7 +19,7 @@ heartbeat every 15 seconds, `Last-Event-ID` resume from a bounded ring and an
 Event ids are `<boot id>-<sequence>`, so an id from before a restart resyncs
 instead of resuming at the wrong place; a run whose terminal event the registry
 feed dropped is still published once it settles; streams end as soon as the
-server starts shutting down; at most 64 streams are open at once (then 503)
+server starts shutting down; at most 64 streams are open at once (then 503 with `Retry-After`)
 and at most 4 for a signed-in user's browser session plus 4 shared by all of
 that user's API keys (then 429 with `Retry-After`), so a script cannot take the
 session's places and minting keys buys no more streams; a stream
@@ -60,7 +60,14 @@ capabilities now declare their writes: `itunes.playlist-import`,
 previewed by default; `deluge.path-update`, `maintenance.regroup-shattered-ai`
 and the full-transcribe path of `maintenance.transcribe-book-intros` now take
 `dry_run` and preview when it is omitted (pass `dry_run: false` to run them for
-real). `POST
+real). `maintenance.transcribe-book-intros` and
+`maintenance.repoint-version-primary` also read the `dryRun` spelling, as the
+rest of the operations do. Five operations that declare no writes yet write on
+every run (`acoustid.scan`, `ai.author-scan`, `dedup.split-book-scan`,
+`library.bulk-metadata-fetch` and the paid `diagnostics.ai-analyze`) are
+treated by v3 as writing definitions without a preview: only `mode: "live"`
+starts them, pending an owner decision on whether each gains a preview mode.
+`POST
 .../runs/{id}/cancel` needs being the run's starter, or scan.trigger plus the
 definition's permission; an interrupted or awaiting-decision run is not
 executing, so cancelling it is a 409. `POST
@@ -74,3 +81,19 @@ The schema check is a small in-tree checker for the keywords a params struct
 produces (no new dependency); a schema using a keyword it cannot check, or a
 supported keyword with a malformed argument, is refused rather than passed, and
 a number too large to compare with a bound is a violation.
+
+### Fixed
+
+- A start of a scheduled or deduplicated operation is no longer answered with
+  the ID of an active run in the other mode. `EnqueueOp` folded a live start of
+  `maintenance.author-split-scan` into the cron's queued preview run, so the
+  caller was told its live run had started and nothing was written. A
+  definition that declares its preview mode now folds a start only into an
+  active run of the same mode (its mode keys and `live_one_of` switches
+  compared after normalization); otherwise a second run is queued.
+- The `maintenance.regroup-shattered-ai` preview no longer counts a group
+  whose review hold a person already decided as a hold it would write; it
+  reports those as already decided.
+- `scripts/transcribe_monitor.py` reads each relaunched run back and raises
+  `RELAUNCH_IS_PREVIEW` (an ERROR alert and a banner on stderr) when the
+  server queued a preview.
