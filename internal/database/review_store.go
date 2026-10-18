@@ -1,5 +1,5 @@
 // file: internal/database/review_store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
 // last-edited: 2026-10-18
 
@@ -96,9 +96,14 @@ type ReviewItem struct {
 	// and readers fall back to the payload recommendation, which for a pre-2026-08-06
 	// hold resolves to insufficient-evidence — the fail-closed direction.
 	//
-	// Written by DecideReviewItem and FinishReviewItemApply (which records the
-	// claimed action), never cleared: a status-only decision and a release leave it
-	// alone, so no later transition can erase the decision it is carrying out.
+	// Written by DecideReviewItem, FinishReviewItemApply (which records the claimed
+	// action) and AbandonReviewItemClaim (which records the abandoned action, so a
+	// later approve with no explicit action re-runs it), never cleared: a
+	// status-only decision and a release leave it alone, so no later transition can
+	// erase the decision it is carrying out. A claim does NOT record it: a failed
+	// first run is released back to its old status, and an override must not outlive
+	// an apply that never happened (the claim's own ApplyClaimAction carries it
+	// until the apply is finished, released or abandoned).
 	ChosenAction string `json:"chosen_action,omitempty"`
 
 	// The apply claim (review_claim.go). They are set together when a claim moves
@@ -184,9 +189,13 @@ func (p *PebbleStore) getReviewItem(id string) (*ReviewItem, error) {
 // already-decided items):
 //
 //   - New DedupKey → create a fresh row (ULID assigned if item.ID is empty),
-//     Status defaulted to "pending" when empty, CreatedAt = UpdatedAt = now.
-//   - Existing DedupKey, current Status == "pending" → update Summary, Payload,
-//     and UpdatedAt only. Kind/FolderRef/CreatedAt/Status are preserved (Kind and
+//     Status pending, CreatedAt = UpdatedAt = now.
+//   - Existing DedupKey, current Status == "pending" → update Summary and Payload
+//     (and UpdatedAt) only when either differs from the stored row; byte-identical
+//     input is a full no-op that leaves UpdatedAt alone. UpdatedAt is the stamp
+//     callers send back as if_updated_at, so a regroup run that re-emits an
+//     unchanged hold must not invalidate every row a reviewer has open.
+//     Kind/FolderRef/CreatedAt/Status are preserved (Kind and
 //     FolderRef are what DedupKey hashes, so they cannot legitimately change).
 //   - Existing DedupKey, current Status != "pending" (approved/rejected/applied)
 //     → FULL no-op: the stored row (including UpdatedAt) is returned untouched, so
@@ -194,12 +203,21 @@ func (p *PebbleStore) getReviewItem(id string) (*ReviewItem, error) {
 //
 // The dedupkey → id index is written once on create and never deleted in A1, so
 // "rejected is remembered": a rejected folder stays rejected across re-scans.
+//
+// Upsert is a PRODUCER entry point and writes no status but pending: an item.Status
+// other than "" or pending is refused (statuses are written only by DecideReviewItem
+// and the apply claim, review_claim.go), because a row inserted as applied or
+// approved would be a decision no reviewer made.
 func (p *PebbleStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) {
 	if item.DedupKey == "" {
 		return ReviewItem{}, fmt.Errorf("review item: DedupKey is required for upsert")
 	}
 	if item.Kind == "" {
 		return ReviewItem{}, fmt.Errorf("review item: Kind is required")
+	}
+	if item.Status != "" && item.Status != ReviewStatusPending {
+		return ReviewItem{}, fmt.Errorf("review item %s: a producer upsert writes only pending items, not %q "+
+			"(statuses are written by DecideReviewItem and the apply claim)", item.DedupKey, item.Status)
 	}
 
 	// Serialize upserts so two producers writing the same DedupKey concurrently
@@ -223,16 +241,12 @@ func (p *PebbleStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) {
 				return ReviewItem{}, fmt.Errorf("review item: generate id: %w", err)
 			}
 		}
-		status := item.Status
-		if status == "" {
-			status = ReviewStatusPending
-		}
 		rec := ReviewItem{
 			ID:        id,
 			Kind:      item.Kind,
 			DedupKey:  item.DedupKey,
 			FolderRef: item.FolderRef,
-			Status:    status,
+			Status:    ReviewStatusPending,
 			Summary:   item.Summary,
 			Payload:   item.Payload,
 			CreatedAt: now,
@@ -269,16 +283,12 @@ func (p *PebbleStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) {
 	if existing == nil {
 		// Dangling dedupkey index (record gone). Treat as a fresh insert reusing
 		// the mapped ID so the index and record reconverge.
-		status := item.Status
-		if status == "" {
-			status = ReviewStatusPending
-		}
 		rec := ReviewItem{
 			ID:        existingID,
 			Kind:      item.Kind,
 			DedupKey:  item.DedupKey,
 			FolderRef: item.FolderRef,
-			Status:    status,
+			Status:    ReviewStatusPending,
 			Summary:   item.Summary,
 			Payload:   item.Payload,
 			CreatedAt: now,
@@ -307,7 +317,13 @@ func (p *PebbleStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) {
 		return *existing, nil
 	}
 
-	// Pending item: refresh only the mutable presentation fields.
+	// Pending item: refresh only the mutable presentation fields, and only when one
+	// changed. An identical refresh would still move UpdatedAt, and every
+	// if_updated_at a reviewer holds for this row would then answer 409 after each
+	// regroup run although nothing about the hold changed.
+	if existing.Summary == item.Summary && existing.Payload == item.Payload {
+		return *existing, nil
+	}
 	existing.Summary = item.Summary
 	existing.Payload = item.Payload
 	existing.UpdatedAt = now
