@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-10-18
 
@@ -820,6 +820,10 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         // REVIEW_APPLIED_UNRECORDED is not a failure: the apply RAN and only its
         // status write did not. Prefixing it "Failed to approve" would invite the
         // reviewer to treat the merge as not having happened.
+        //
+        // REVIEW_APPLY_PARTIAL is not a plain failure either: the apply wrote part
+        // of the library and the item is now held mid-apply, off the pending list.
+        // "Failed to approve" would read as nothing having changed.
         const message = err instanceof Error ? err.message : 'unknown error';
         // Read off the ApiError body by shape rather than `instanceof`, which the
         // tests' automocked api module would defeat.
@@ -829,13 +833,20 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
             ? `Applied, but the result was not recorded: ${message}`
             : code === 'REVIEW_ITEM_CHANGED'
               ? `This hold changed since it was shown, so nothing was done. It has been reloaded: check it and decide again.`
-              : `Failed to ${action} item: ${message}`,
+              : code === 'REVIEW_APPLY_PARTIAL'
+                ? `The apply changed part of the library before it failed; the item is held mid-apply. Retry or abandon it from the held list. (${message})`
+                : `Failed to ${action} item: ${message}`,
           'error'
         );
-        // Both of these mean the row on screen is no longer the hold: an
-        // unrecorded apply has left the pending list (it is held mid-apply), and a
-        // changed hold must be re-read before anyone decides it.
-        if (code === 'REVIEW_APPLIED_UNRECORDED' || code === 'REVIEW_ITEM_CHANGED') {
+        // All of these mean the row on screen is no longer the hold: an unrecorded
+        // or partial apply has left the pending list (it is held mid-apply, which
+        // the ApplyingAlert count must pick up), and a changed hold must be
+        // re-read before anyone decides it.
+        if (
+          code === 'REVIEW_APPLIED_UNRECORDED' ||
+          code === 'REVIEW_APPLY_PARTIAL' ||
+          code === 'REVIEW_ITEM_CHANGED'
+        ) {
           await reload();
         }
       } finally {
