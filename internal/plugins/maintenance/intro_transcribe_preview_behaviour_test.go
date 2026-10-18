@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_preview_behaviour_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: f479366b-0525-4f2f-a944-65aa99b39977
 // last-edited: 2026-10-18
 
@@ -179,6 +179,68 @@ func TestPreviewBehaviour_TranscribeBookIntros(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// allProgressReporter keeps every progress message, in order.
+type allProgressReporter struct {
+	fakeReporter
+	pmu  sync.Mutex
+	msgs []string
+}
+
+func (r *allProgressReporter) UpdateProgress(_, _ int, msg string) error {
+	r.pmu.Lock()
+	defer r.pmu.Unlock()
+	r.msgs = append(r.msgs, msg)
+	return nil
+}
+
+// TestIntroTranscribe_ProgressNamesTheMode: every progress message of a
+// transcribe run opens with its mode, including the "Selecting work" line
+// both modes report before they diverge, so a reader of whichever message is
+// current (scripts/transcribe_monitor.py) can tell a preview from a live run.
+// The exact prefixes are the monitor's PREVIEW_MARKER and LIVE_MARKER.
+func TestIntroTranscribe_ProgressNamesTheMode(t *testing.T) {
+	if introPreviewMarker != "PREVIEW (dry_run, nothing written) — " || introLiveMarker != "LIVE — " {
+		t.Fatalf("markers changed (%q, %q): change scripts/transcribe_monitor.py's PREVIEW_MARKER and LIVE_MARKER with them",
+			introPreviewMarker, introLiveMarker)
+	}
+	origCache := config.AppConfig.WhisperClipCacheDir
+	config.AppConfig.WhisperClipCacheDir = ""
+	t.Cleanup(func() { config.AppConfig.WhisperClipCacheDir = origCache })
+
+	for _, tc := range []struct {
+		body, marker string
+	}{
+		{`{}`, "PREVIEW (dry_run, nothing written) — "},
+		{`{"dry_run":false}`, "LIVE — "},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			root := t.TempDir()
+			store := newTranscribeWriteStore(map[string]*database.Book{
+				"book-1": {ID: "book-1", Title: "Example Book", FilePath: filepath.Join(root, "missing", "example.mp3")},
+			})
+			p := New(fakeDeps{store: store, root: root})
+			t.Setenv(serverdecode.EnvVar, "1")
+			rep := &allProgressReporter{}
+			if err := p.runIntroTranscribe(context.Background(), json.RawMessage(tc.body), rep); err != nil {
+				t.Fatalf("%s: %v", tc.body, err)
+			}
+			rep.pmu.Lock()
+			defer rep.pmu.Unlock()
+			if len(rep.msgs) < 2 {
+				t.Fatalf("%s: want the selecting line and at least one more, got %q", tc.body, rep.msgs)
+			}
+			if !strings.Contains(rep.msgs[0], "Selecting work") {
+				t.Fatalf("%s: first message %q is not the selecting line", tc.body, rep.msgs[0])
+			}
+			for _, m := range rep.msgs {
+				if !strings.HasPrefix(m, tc.marker) {
+					t.Errorf("%s: progress message %q does not open with %q", tc.body, m, tc.marker)
+				}
+			}
+		})
 	}
 }
 
