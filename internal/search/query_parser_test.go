@@ -1,6 +1,7 @@
 // file: internal/search/query_parser_test.go
 // version: 1.1.0
 // guid: 5f1c8a2d-4b9e-4f70-a7c6-2d8e0f1b9a57
+// last-edited: 2026-10-18
 
 package search
 
