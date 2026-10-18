@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
 // last-edited: 2026-10-18
 
@@ -260,8 +260,7 @@ func TestSSEClientCap(t *testing.T) {
 // one more is 429 while other users still get in, closing one frees a place,
 // and requests with no user are bounded only by MaxClients.
 func TestSSEPerUserCap(t *testing.T) {
-	// A session-authenticated request's bucket: the user id and no API key id.
-	viewerBucket := viewer.user + "\x00"
+	viewerBucket := sessionBucket(viewer.user)
 	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClients: 10, MaxClientsPerUser: 2})
 	_, a1, err := br.subscribe(viewerBucket, 0, resumeNone)
 	if err != nil {
@@ -592,7 +591,7 @@ func TestSSEStreamEndsWhenAWriteFails(t *testing.T) {
 // TestSSETooManyStreamsHasRetryAfter: the 429 names how long to wait.
 func TestSSETooManyStreamsHasRetryAfter(t *testing.T) {
 	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClientsPerUser: 1})
-	_, u, err := br.subscribe(viewer.user+"\x00", 0, resumeNone)
+	_, u, err := br.subscribe(sessionBucket(viewer.user), 0, resumeNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,9 +606,10 @@ func TestSSETooManyStreamsHasRetryAfter(t *testing.T) {
 	}
 }
 
-// TestSSEPerUserCapIsPerCredential: one user's session and API key streams
-// are counted apart, so a script on a key cannot use up the browser session's
-// places, and each credential still stops at MaxClientsPerUser.
+// TestSSEPerUserCapIsPerCredential: one user's session streams and API-key
+// streams are counted apart, so a script on a key cannot use up the browser
+// session's places; all of the user's keys share one bucket, so minting keys
+// cannot raise the user's total above 2 x MaxClientsPerUser.
 func TestSSEPerUserCapIsPerCredential(t *testing.T) {
 	const perUser = 2
 	br := NewBroker(&memRuns{}, nil, nil, BrokerOptions{MaxClients: 20, MaxClientsPerUser: perUser})
@@ -655,8 +655,17 @@ func TestSSEPerUserCapIsPerCredential(t *testing.T) {
 			t.Fatalf("credential %q past the cap = %d, want 429", cred, resp.StatusCode)
 		}
 	}
-	// A different key of the same user is its own bucket too.
-	if resp := open("key-2"); resp.StatusCode != http.StatusOK {
-		t.Fatalf("second key = %d, want 200", resp.StatusCode)
+	// More keys buy no more streams: every key of the user shares the one
+	// API-key bucket, so the user's total stays 2 x MaxClientsPerUser.
+	for _, key := range []string{"key-2", "key-3", "key-4"} {
+		if resp := open(key); resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("another key of a user whose keys are at the cap = %d, want 429", resp.StatusCode)
+		}
+	}
+	br.mu.Lock()
+	got := br.perUser[sessionBucket("u-same")] + br.perUser[apiKeyBucket("u-same")]
+	br.mu.Unlock()
+	if got != 2*perUser {
+		t.Fatalf("user holds %d streams, want the total 2 x %d", got, perUser)
 	}
 }

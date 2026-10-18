@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
 // last-edited: 2026-10-18
 
@@ -33,10 +33,10 @@ import (
 // many unsent events one slow client may hold before its oldest are dropped.
 // MaxClients bounds the open streams (each holds a goroutine and a queue);
 // one more is answered 503. MaxClientsPerUser bounds the open streams of one
-// bucket, which is one signed-in user presenting one credential: the user id
-// plus the API key id (see streamBucket), so a script using an API key cannot
-// use up the places of the same user's browser session; one more is answered
-// 429 with Retry-After. A request with no user (auth disabled, first run) is
+// bucket: a signed-in user's browser session is one bucket and all of their
+// API keys together are another (see streamBucket), so a script using an API
+// key cannot use up the session's places and more keys buy no more streams;
+// one more is answered 429 with Retry-After. A request with no user (auth disabled, first run) is
 // bounded only by MaxClients: there is no account to tell apart, and keying on
 // the client address would put every caller behind one reverse proxy into the
 // same small bucket. MaxWatched bounds the runs the broker re-reads until they
@@ -111,7 +111,7 @@ type Broker struct {
 	ring    []message // oldest first, at most opt.RingSize
 	clients map[*client]struct{}
 	// perUser counts the open streams of each bucket (streamBucket): a
-	// signed-in user and the API key, if any, they authenticated with.
+	// signed-in user's session, or all of that user's API keys together.
 	perUser map[string]int
 
 	// Lazy start (StartOnFirstSubscriber): Run begins with the first client.
@@ -333,21 +333,30 @@ func (b *Broker) publish(v RunView) {
 	b.mu.Unlock()
 }
 
-// streamBucket is the per-user cap's key: the user id and, for a request
-// authenticated by an API key, the key's id, joined by a NUL (neither can
-// contain one), so session and key streams of one user are counted apart.
-// It is "" when the request has no user: there is no cap then.
+// streamBucket is the per-user cap's key. A signed-in user has two buckets
+// of MaxClientsPerUser each: one for their browser session (any request not
+// authenticated by an API key) and one shared by ALL of their API keys. So a
+// script on a key cannot take the session's places, and minting more keys
+// buys no more streams: one user holds at most 2 x MaxClientsPerUser. (A
+// bucket per key would let a user multiply their allowance by minting keys,
+// bounded only by MaxClients; a per-user total over per-key buckets would let
+// keys fill the total and starve the session again.) It is "" when the
+// request has no user: there is no cap then.
 func streamBucket(c *gin.Context) string {
 	u, ok := auth.UserFromContext(c.Request.Context())
 	if !ok {
 		return ""
 	}
-	var keyID string
-	if key, ok := middleware.CurrentAPIKey(c); ok {
-		keyID = key.ID
+	if _, ok := middleware.CurrentAPIKey(c); ok {
+		return apiKeyBucket(u.ID)
 	}
-	return u.ID + "\x00" + keyID
+	return sessionBucket(u.ID)
 }
+
+// sessionBucket and apiKeyBucket join the user id and the credential kind
+// with a NUL, which a user id cannot contain.
+func sessionBucket(userID string) string { return userID + "\x00session" }
+func apiKeyBucket(userID string) string  { return userID + "\x00apikey" }
 
 // client is one SSE connection's bounded queue.
 type client struct {
@@ -464,7 +473,8 @@ func (b *Broker) subscribe(bucket string, lastID uint64, mode resumeMode) (*clie
 // reading. Event ids are "<boot nonce>-<sequence>". The stream ends when the
 // client leaves or the server starts shutting down (Deps.Closing). Past
 // MaxClients open streams the answer is 503; past MaxClientsPerUser streams
-// of the caller's bucket (streamBucket: user plus API key) it is 429 with a
+// of the caller's bucket (streamBucket: the user's session, or all of the
+// user's API keys) it is 429 with a
 // Retry-After header. The loop ends when a write to the client fails.
 func (h *Handler) Events(c *gin.Context) {
 	b := h.d.Broker
