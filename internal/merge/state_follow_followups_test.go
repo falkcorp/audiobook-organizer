@@ -287,6 +287,31 @@ func TestUndoSiblingMove_LoserGoneAfterRestoreIsAnError(t *testing.T) {
 	require.NotEmpty(t, j.LastError)
 }
 
+// NIT 6: an earlier attempt put the loser's state back on it and then failed
+// at the refollow; the survivor has since gone to the trash with no live end.
+// The retry keeps the state where it is, and the warning must not claim it is
+// on the holder: it says the state may be on the loser itself.
+func TestUndoSiblingMove_NoLiveDestinationAfterFailedRefollowNamesTheLoser(t *testing.T) {
+	m := newFlagHolderMerge(t)
+	res := m.merge(t)
+
+	// The refollow onto the survivor fails, after the restore onto l, and no
+	// repair record can hold it.
+	m.fs.failStateOn, m.fs.failPendingRepair = m.k, true
+	_, err := m.svc.UndoSiblingMove(res.SiblingJournalID)
+	require.Error(t, err)
+	require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.l), "fixture: the failed attempt left the state on the trashed loser")
+	m.fs.failStateOn, m.fs.failPendingRepair = "", false
+	require.NoError(t, SoftDeleteBook(m.f.S, m.k))
+
+	ur, err := m.svc.UndoSiblingMove(res.SiblingJournalID)
+	require.NoError(t, err)
+	require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.l), "the state is left on the loser, not moved")
+	require.Len(t, ur.Warnings, 1)
+	require.Contains(t, ur.Warnings[0], "or on loser "+m.l+" itself")
+	require.NotContains(t, ur.Warnings[0], "stays on "+m.ls)
+}
+
 // NIT 2: a survivor merged away since the merge. The refollow goes to the
 // live book the survivor's chain leads to.
 func TestUndoSiblingMove_SurvivorMergedAwayFollowsItsChain(t *testing.T) {
