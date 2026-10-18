@@ -1,5 +1,5 @@
 // file: internal/server/wire_entities_gone_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6d2a9c41-7b58-4e03-91f6-a4c8e2b05d37
 // last-edited: 2026-10-18
 
@@ -88,19 +88,20 @@ func TestRetiredEntityRoutes_PermissionRunsBeforeGone(t *testing.T) {
 		})
 	}
 
-	// An fp-worker session holds only PermFingerprintWorker, so s.perm must
-	// refuse it on every GET stub too; without this, dropping s.perm from a
-	// GET stub would fail no test.
-	fpWorker, err := f.store.CreateUser("synthetic-fp-worker", "fpworker@example.test", "bcrypt", "x", []string{auth.SeedRoleFPWorker}, "active")
+	// A custom-role session holding only scan.trigger (neither library.view nor
+	// library.edit_metadata) must get 403 on EVERY stub, GET stubs included: it
+	// fails if s.perm is dropped from any one of them. An fp-worker session
+	// would not prove that, because its 403 comes from the worker-API
+	// middleware before s.perm runs.
+	_, err = f.store.CreateRole(&database.Role{ID: "synthetic-scan-only", Name: "synthetic-scan-only", Permissions: []string{string(auth.PermScanTrigger)}})
 	require.NoError(t, err)
-	fpSess, err := f.store.CreateSessionWithOrigin(fpWorker.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	scanOnly, err := f.store.CreateUser("synthetic-scan-only", "scanonly@example.test", "bcrypt", "x", []string{"synthetic-scan-only"}, "active")
+	require.NoError(t, err)
+	scanSess, err := f.store.CreateSessionWithOrigin(scanOnly.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
 	require.NoError(t, err)
 	for _, r := range retiredEntityRoutes {
-		if r.method != http.MethodGet {
-			continue
-		}
-		t.Run("fp-worker gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {
-			w := f.do(t, fpSess.ID, r.method, r.path, nil)
+		t.Run("scan-only role gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {
+			w := f.do(t, scanSess.ID, r.method, r.path, nil)
 			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 		})
