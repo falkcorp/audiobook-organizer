@@ -1,5 +1,5 @@
 // file: internal/server/itl_pid.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d6b1f048-3e29-4a75-9c81-0f2a7b4c6e93
 // last-edited: 2026-10-18
 //
@@ -21,12 +21,14 @@ import (
 
 // pidIntegrityHandler handles GET /api/v1/itunes/pid-integrity. Always
 // read-only: it reports the duplicate-PID census + relocate-correctness probe.
-// It needs the configured ITL path (itunes.library_write_path) and answers a
-// single 400 when it is unset.
+// The ITL path (itunes.library_write_path) is optional: when it is unset the
+// census still runs and tracks_in_itl is 0. A path that is set but invalid
+// answers a single 500.
 func (s *Server) pidIntegrityHandler(c *gin.Context) {
-	itlPath, ok := resolveITLPath(c)
-	if !ok {
-		return // resolveITLPath already wrote the error response; writing the census as well made two bodies
+	itlPath, err := configuredITLPath() // "" is fine: the census runs without the ITL
+	if err != nil {
+		httputil.RespondWithInternalError(c, "invalid iTunes library ITL path in config")
+		return // one response only: the error, not the census after it
 	}
 	report, err := itunes.ComputePIDIntegrity(s.storeForWiring(), itlPath)
 	if err != nil {

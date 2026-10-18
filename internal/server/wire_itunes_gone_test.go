@@ -1,5 +1,5 @@
 // file: internal/server/wire_itunes_gone_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1c5e8a03-d92b-4f67-a4e0-6b3d7f18c295
 // last-edited: 2026-10-18
 
@@ -88,22 +88,27 @@ func TestRetiredPIDRepairRoute_PermissionRunsBeforeGone(t *testing.T) {
 
 // TestRetiredPIDRepairRoute_KeptNeighboursNotGone: the owner-kept read-only
 // diagnostics (D73) are still registered and run their handlers; neither answers
-// 410.
+// 410, and pid-integrity answers 200 with its census report.
 func TestRetiredPIDRepairRoute_KeptNeighboursNotGone(t *testing.T) {
 	f := setupCredGuardServer(t)
 	registered := map[string]bool{}
 	for _, r := range f.srv.router.Routes() {
 		registered[r.Method+" "+r.Path] = true
 	}
-	for _, k := range []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/itunes/pid-integrity"},
-		{http.MethodGet, "/api/v1/itunes/library-stats"},
+	for _, k := range []struct{ method, path, answers string }{
+		{http.MethodGet, "/api/v1/itunes/pid-integrity", `"report"`},
+		{http.MethodGet, "/api/v1/itunes/library-stats", ""},
 	} {
 		t.Run(k.method+" "+k.path, func(t *testing.T) {
 			require.True(t, registered[k.method+" "+k.path], "route not registered")
 			w := f.do(t, f.sessionToken, k.method, k.path, nil)
 			assert.NotEqual(t, http.StatusGone, w.Code, w.Body.String())
 			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
+			if k.answers != "" {
+				// Not just "not 410": the handler itself answered 200 with its payload.
+				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				assert.Contains(t, w.Body.String(), k.answers)
+			}
 		})
 	}
 }
