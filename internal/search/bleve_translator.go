@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/analysis"
@@ -48,35 +49,52 @@ var perUserFieldSet = map[string]struct{}{
 // Translate converts an AST into a Bleve query plus any per-user
 // filters. Returns an error if the AST references unknown operators
 // or if a range can't be parsed as numeric.
+//
+// Relative date terms (date_added:>-7d) resolve against the clock at the moment
+// of the call; use TranslateAt to supply the instant.
 func Translate(node Node) (query.Query, []PerUserFilter, error) {
+	return TranslateAt(node, time.Now())
+}
+
+// TranslateAt is Translate with the instant relative date terms resolve
+// against. A caller that also runs the per-user filters (MatchPerUserFilters)
+// passes the same now to both, so one evaluation sees one instant.
+func TranslateAt(node Node, now time.Time) (query.Query, []PerUserFilter, error) {
 	if node == nil {
 		return bleve.NewMatchAllQuery(), nil, nil
 	}
-	var perUser []PerUserFilter
-	q, err := translateNode(node, &perUser, false)
+	tc := &translateCtx{now: now}
+	q, err := translateNode(node, tc, false)
 	if err != nil {
 		return nil, nil, err
 	}
 	if q == nil {
 		// Only per-user filters — let Bleve return everything, Go
 		// post-filter narrows.
-		return bleve.NewMatchAllQuery(), perUser, nil
+		return bleve.NewMatchAllQuery(), tc.perUser, nil
 	}
-	return q, perUser, nil
+	return q, tc.perUser, nil
 }
 
-func translateNode(n Node, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
+// translateCtx carries what one translation accumulates or needs: the per-user
+// filters peeled off the AST, and the instant relative dates resolve against.
+type translateCtx struct {
+	perUser []PerUserFilter
+	now     time.Time
+}
+
+func translateNode(n Node, tc *translateCtx, negated bool) (query.Query, error) {
 	switch v := n.(type) {
 	case *AndNode:
-		return translateAnd(v, perUser, negated)
+		return translateAnd(v, tc, negated)
 	case *OrNode:
-		return translateOr(v, perUser, negated)
+		return translateOr(v, tc, negated)
 	case *NotNode:
-		return translateNot(v, perUser, negated)
+		return translateNot(v, tc, negated)
 	case *FieldNode:
-		return translateField(v, perUser, negated)
+		return translateField(v, tc, negated)
 	case *ValueAltNode:
-		return translateValueAlt(v, perUser, negated)
+		return translateValueAlt(v, tc, negated)
 	case *FreeTextNode:
 		return translateFreeText(v), nil
 	default:
@@ -84,10 +102,10 @@ func translateNode(n Node, perUser *[]PerUserFilter, negated bool) (query.Query,
 	}
 }
 
-func translateAnd(n *AndNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
+func translateAnd(n *AndNode, tc *translateCtx, negated bool) (query.Query, error) {
 	var children []query.Query
 	for _, c := range dropStopwordOnlyConjuncts(n.Children) {
-		q, err := translateNode(c, perUser, negated)
+		q, err := translateNode(c, tc, negated)
 		if err != nil {
 			return nil, err
 		}
@@ -180,10 +198,10 @@ func dropStopwordOnlyConjuncts(children []Node) []Node {
 	return kept
 }
 
-func translateOr(n *OrNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
+func translateOr(n *OrNode, tc *translateCtx, negated bool) (query.Query, error) {
 	var children []query.Query
 	for _, c := range n.Children {
-		q, err := translateNode(c, perUser, negated)
+		q, err := translateNode(c, tc, negated)
 		if err != nil {
 			return nil, err
 		}
@@ -200,12 +218,12 @@ func translateOr(n *OrNode, perUser *[]PerUserFilter, negated bool) (query.Query
 	return bleve.NewDisjunctionQuery(children...), nil
 }
 
-func translateNot(n *NotNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
+func translateNot(n *NotNode, tc *translateCtx, negated bool) (query.Query, error) {
 	// Flip the negation flag going into the child. When the child is
 	// a FieldNode on a per-user field, we record Negated on the
 	// PerUserFilter so Go post-filter can invert. When the child is
 	// indexable, we wrap in a BooleanQuery{MustNot}.
-	inner, err := translateNode(n.Child, perUser, !negated)
+	inner, err := translateNode(n.Child, tc, !negated)
 	if err != nil {
 		return nil, err
 	}
@@ -221,10 +239,10 @@ func translateNot(n *NotNode, perUser *[]PerUserFilter, negated bool) (query.Que
 	return b, nil
 }
 
-func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
+func translateField(n *FieldNode, tc *translateCtx, negated bool) (query.Query, error) {
 	// Per-user fields → post-filter, not Bleve.
 	if _, ok := perUserFieldSet[n.Field]; ok {
-		*perUser = append(*perUser, PerUserFilter{Node: n, Negated: negated})
+		tc.perUser = append(tc.perUser, PerUserFilter{Node: n, Negated: negated})
 		return nil, nil
 	}
 
@@ -236,6 +254,12 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 	}
 	if n.Field == "duration_seconds" {
 		return translateDuration(n, n.Field)
+	}
+
+	// Date fields (date_added, date_modified and their aliases): absolute or
+	// relative terms onto the indexed datetime fields.
+	if target, ok := indexedDateField(n.Field); ok {
+		return translateDate(n, target, tc.now)
 	}
 
 	// Range queries.
@@ -318,6 +342,69 @@ func translateField(n *FieldNode, perUser *[]PerUserFilter, negated bool) (query
 	return mq, nil
 }
 
+// indexedDateField maps a query field to the indexed datetime field it names.
+// last_played is not here: it is per-user and never reaches this path.
+func indexedDateField(field string) (string, bool) {
+	switch field {
+	case "date_added", "added":
+		return "date_added", true
+	case "date_modified", "modified":
+		return "date_modified", true
+	}
+	return "", false
+}
+
+// translateDate builds a datetime range on an indexed date field from a date
+// term. Terms are absolute (RFC 3339, YYYY-MM-DD) or relative to now (see
+// ParseDateTerm). Equality on a bare YYYY-MM-DD matches that whole UTC day; on
+// any other term it is the one-instant range.
+func translateDate(n *FieldNode, field string, now time.Time) (query.Query, error) {
+	inc, exc := true, false
+	rng := func(lo, hi time.Time, loInc, hiInc *bool) query.Query {
+		q := bleve.NewDateRangeInclusiveQuery(lo, hi, loInc, hiInc)
+		q.SetField(field)
+		return q
+	}
+	parse := func(s string) (time.Time, error) {
+		t, err := ParseDateTermErr(s, now)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("%s: %w", n.Field, err)
+		}
+		return t, nil
+	}
+	if n.Op == "range" {
+		lo, err := parse(n.RangeMin)
+		if err != nil {
+			return nil, err
+		}
+		hi, err := parse(n.RangeMax)
+		if err != nil {
+			return nil, err
+		}
+		return rng(lo, hi, &inc, &inc), nil
+	}
+	v, err := parse(n.Value)
+	if err != nil {
+		return nil, err
+	}
+	switch n.Op {
+	case ">":
+		return rng(v, time.Time{}, &exc, &inc), nil
+	case ">=":
+		return rng(v, time.Time{}, &inc, &inc), nil
+	case "<":
+		return rng(time.Time{}, v, &inc, &exc), nil
+	case "<=":
+		return rng(time.Time{}, v, &inc, &inc), nil
+	default:
+		if isDateOnly(n.Value) {
+			lo, hi := dateDayBounds(v)
+			return rng(lo, hi, &inc, &exc), nil
+		}
+		return rng(v, v, &inc, &inc), nil
+	}
+}
+
 // translateDuration builds a numeric range on the indexed seconds field from
 // a duration term. Equality (duration:20m) is the one-point range.
 func translateDuration(n *FieldNode, field string) (query.Query, error) {
@@ -353,13 +440,13 @@ func translateDuration(n *FieldNode, field string) (query.Query, error) {
 	}
 }
 
-func translateValueAlt(n *ValueAltNode, perUser *[]PerUserFilter, negated bool) (query.Query, error) {
+func translateValueAlt(n *ValueAltNode, tc *translateCtx, negated bool) (query.Query, error) {
 	// Per-user field alternation still goes to post-filter. Rare in
 	// practice but handle it for correctness.
 	if _, ok := perUserFieldSet[n.Field]; ok {
 		// Build a synthetic set of PerUserFilter entries.
 		for _, v := range n.Values {
-			*perUser = append(*perUser, PerUserFilter{
+			tc.perUser = append(tc.perUser, PerUserFilter{
 				Node:    &FieldNode{Field: n.Field, Value: v},
 				Negated: negated,
 			})

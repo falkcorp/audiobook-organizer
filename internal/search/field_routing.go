@@ -48,6 +48,8 @@ var indexedFields = func() map[string]struct{} {
 // fieldAliases maps a query field name onto the indexed field it means.
 var fieldAliases = map[string]string{
 	"duration": "duration_seconds",
+	"added":    "date_added",
+	"modified": "date_modified",
 }
 
 // IsIndexedField reports whether the search index can answer a fielded term

@@ -157,11 +157,13 @@ const bookTextAnalyzerName = "book_en_nostop"
 //	2                      — bookTextAnalyzerName, stopwords preserved
 //	3                      — '_' mapped to a space before tokenising, so
 //	                         "Arcane_Chef_2__A_LitRPG" is five tokens, not one
+//	4                      — date_added and date_modified datetime fields, so
+//	                         date_added:>-7d is answerable (D76)
 //
 // A bump deletes the on-disk index and rebuilds it through the durable dirty
 // set; while that runs the index reports Rebuilding and library search uses
 // the substring path (see audiobooks.AudiobookService.bleveSearchable).
-const bookMappingVersion = "3"
+const bookMappingVersion = "4"
 
 // underscoreCharFilterName maps '_' to ' ' ahead of the unicode tokenizer.
 // The tokenizer follows Unicode word-break rules, under which '_' is an
@@ -734,6 +736,11 @@ func bookIndexMapping() mapping.IndexMapping {
 		f.Store = true
 		return f
 	}
+	datetime := func() *mapping.FieldMapping {
+		f := bleve.NewDateTimeFieldMapping()
+		f.Store = true
+		return f
+	}
 	boolean := func() *mapping.FieldMapping {
 		f := bleve.NewBooleanFieldMapping()
 		f.Store = true
@@ -782,6 +789,10 @@ func bookIndexMapping() mapping.IndexMapping {
 	book.AddFieldMappingsAt("channels", numeric())
 	book.AddFieldMappingsAt("bit_depth", numeric())
 	book.AddFieldMappingsAt("file_size_bytes", numeric())
+
+	// Datetime
+	book.AddFieldMappingsAt("date_added", datetime())
+	book.AddFieldMappingsAt("date_modified", datetime())
 
 	// Boolean
 	book.AddFieldMappingsAt("has_cover", boolean())

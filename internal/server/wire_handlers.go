@@ -114,11 +114,15 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		config.AppConfig.AutoOrganize,
 	)
 	playlistH := handlers.NewPlaylistHandlerWithGetter(s.storeForWiring(), s.SearchIndex)
-	// The store is passed twice on purpose: once as the narrow CollectionStore
-	// this handler writes through, once as the wider store the query evaluator
-	// reads books and per-user state from. Keeping them separate parameters means
-	// the handler's own dependency surface stays inspectable.
-	collectionH := handlers.NewCollectionHandler(s.storeForWiring(), s.storeForWiring(), s.SearchIndex)
+	// The store is passed four times on purpose, each as the narrow role the
+	// handler needs: the CollectionStore it writes through, the locked membership
+	// operations (resolved with AsCapability, NOT part of database.Store), the
+	// user lookups the owner evaluator reads, and the wider store the query
+	// evaluator reads books and per-user state from. Keeping them separate
+	// parameters means the handler's own dependency surface stays inspectable.
+	collectionH := handlers.NewCollectionHandler(
+		s.storeForWiring(), asCollectionMembers(s.storeForWiring()),
+		s.storeForWiring(), s.storeForWiring(), s.SearchIndex)
 	pluginsH := handlers.NewPluginsHandler(s.pluginRegistry, config.AppConfig.Plugins)
 	versionsH := handlers.NewVersionsHandler(s.storeForWiring())
 
@@ -768,4 +772,15 @@ func (s *Server) organizeLibraryCopyResolver() organizer.LibraryCopyResolver {
 		}
 		return s.metadataFetchService.ExistingLibraryCopyOfFile(b)
 	}
+}
+
+// asCollectionMembers resolves the locked collection membership operations from
+// the store, or nil when the backend does not implement them. Nil is a supported
+// state: the add/remove-books routes then answer 503 instead of the whole
+// handler failing to build.
+func asCollectionMembers(s any) handlers.CollectionMembers {
+	if m, ok := database.AsCapability[handlers.CollectionMembers](s); ok {
+		return m
+	}
+	return nil
 }

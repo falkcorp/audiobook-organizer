@@ -128,12 +128,18 @@ func (s *Server) wireLibraryRoutes(
 	//
 	// Reads are open to any authenticated caller by design: server-wide means
 	// everyone sees them.
+	//
+	// The two /books routes add and remove members of a STATIC collection through
+	// the store's locked operations (D77); a dynamic collection answers 409. They
+	// carry the same gate as every other write here.
 	protected.GET("/collections", s.perm(auth.PermLibraryView), collectionH.ListCollections)
 	protected.GET("/collections/:id", s.perm(auth.PermLibraryView), collectionH.GetCollection)
 	protected.POST("/collections", s.perm(auth.PermCollectionsManage), collectionH.CreateCollection)
 	protected.PUT("/collections/:id", s.perm(auth.PermCollectionsManage), collectionH.UpdateCollection)
 	protected.DELETE("/collections/:id", s.perm(auth.PermCollectionsManage), collectionH.DeleteCollection)
 	protected.POST("/collections/:id/materialize", s.perm(auth.PermCollectionsManage), collectionH.MaterializeCollection)
+	protected.POST("/collections/:id/books", s.perm(auth.PermCollectionsManage), collectionH.AddBooksToCollection)
+	protected.DELETE("/collections/:id/books/:bookId", s.perm(auth.PermCollectionsManage), collectionH.RemoveBookFromCollection)
 
 	// User management
 	users := protected.Group("/users")

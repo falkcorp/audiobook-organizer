@@ -17,6 +17,7 @@
 //   valueAlt := '(' value ( '|' value )* ')'
 //   value    := quotedStr | operated
 //   operated := ('>'|'<'|'>='|'<='|'='|'range')? rawToken ('~'|'*')? ('^' number)?
+//   dateRange:= dateField ':' dateTerm '..' dateTerm      (date fields only)
 //
 // Operator precedence (tightest to loosest): NOT → AND → OR.
 // Grouping with ( … ) overrides precedence.
@@ -328,6 +329,19 @@ func (p *parser) parseFieldValue(field string) (Node, error) {
 		quoted = true
 	} else {
 		value = p.parseBareValue()
+	}
+
+	// Date range: last_played:-30d..now. Only for the date fields: ".." is an
+	// ordinary substring of a title or a path, so splitting it everywhere would
+	// change what title:a..b means. Both ends are kept as the raw terms; the
+	// matcher and the translator resolve them against one "now" per evaluation.
+	if op == "" && !quoted && IsDateField(field) {
+		if i := strings.Index(value, ".."); i > 0 && i+2 < len(value) {
+			return &FieldNode{
+				Field: field, Op: "range",
+				RangeMin: value[:i], RangeMax: value[i+2:],
+			}, nil
+		}
 	}
 
 	node := &FieldNode{

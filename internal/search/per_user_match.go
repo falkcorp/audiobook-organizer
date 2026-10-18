@@ -24,9 +24,14 @@ import (
 // (AND semantics; Negated inverts per filter). state==nil is evaluated
 // as the zero-value UserBookState — read_status:finished rejects an
 // unstarted book, negated filters can still succeed.
-func MatchPerUserFilters(state *database.UserBookState, filters []PerUserFilter) bool {
+//
+// now is the instant relative date terms (last_played:>-30d) resolve against.
+// The caller takes it ONCE per evaluation and passes the same value for every
+// row, so a window cannot move between the first book and the last one; the
+// clock is not read here. A caller with no relative terms still passes it.
+func MatchPerUserFilters(state *database.UserBookState, filters []PerUserFilter, now time.Time) bool {
 	for _, f := range filters {
-		ok := perUserFilterMatches(state, f.Node)
+		ok := perUserFilterMatches(state, f.Node, now)
 		if f.Negated {
 			ok = !ok
 		}
@@ -40,23 +45,31 @@ func MatchPerUserFilters(state *database.UserBookState, filters []PerUserFilter)
 // perUserFilterMatches evaluates a single FieldNode against a
 // UserBookState. A nil state means the user has no record — only
 // negated filters can succeed against nil.
-func perUserFilterMatches(state *database.UserBookState, node *FieldNode) bool {
+func perUserFilterMatches(state *database.UserBookState, node *FieldNode, now time.Time) bool {
 	if state == nil {
 		// Treat absence as a zero-value state: status="" + progress=0.
-		// That way `read_status:unstarted` (if the caller maps
-		// "unstarted"→"") matches and `read_status:finished` rejects.
 		state = &database.UserBookState{}
 	}
 	switch node.Field {
 	case "read_status":
-		return strings.EqualFold(state.Status, node.Value)
+		// A book the user has no row for, or whose row carries no status yet,
+		// has not been started: it is "unstarted", the same word the status
+		// machine writes for an auto row that has not moved. Comparing the raw
+		// empty string meant read_status:unstarted matched only rows that said
+		// so and missed every book the user never opened, which is most of the
+		// library.
+		status := state.Status
+		if status == "" {
+			status = database.UserBookStatusUnstarted
+		}
+		return strings.EqualFold(status, node.Value)
 	case "progress_pct":
 		return numericFieldMatches(float64(state.ProgressPct), node)
 	case "last_played":
 		if state.LastActivityAt.IsZero() {
 			return false
 		}
-		return timeFieldMatches(state.LastActivityAt, node)
+		return timeFieldMatches(state.LastActivityAt, node, now)
 	default:
 		return false
 	}
@@ -92,27 +105,20 @@ func numericFieldMatches(got float64, node *FieldNode) bool {
 	return false
 }
 
-func timeFieldMatches(got time.Time, node *FieldNode) bool {
-	parse := func(s string) (time.Time, bool) {
-		// Accept RFC3339 + plain YYYY-MM-DD.
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			return t, true
-		}
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			return t, true
-		}
-		return time.Time{}, false
-	}
+// timeFieldMatches evaluates a date comparison. Terms are absolute (RFC 3339,
+// YYYY-MM-DD) or relative to now (see ParseDateTerm); a term that does not parse
+// matches nothing. An equality on a bare YYYY-MM-DD matches the whole UTC day.
+func timeFieldMatches(got time.Time, node *FieldNode, now time.Time) bool {
 	switch node.Op {
 	case "range":
-		lo, ok1 := parse(node.RangeMin)
-		hi, ok2 := parse(node.RangeMax)
+		lo, ok1 := ParseDateTerm(node.RangeMin, now)
+		hi, ok2 := ParseDateTerm(node.RangeMax, now)
 		if !ok1 || !ok2 {
 			return false
 		}
 		return !got.Before(lo) && !got.After(hi)
 	default:
-		want, ok := parse(node.Value)
+		want, ok := ParseDateTerm(node.Value, now)
 		if !ok {
 			return false
 		}
@@ -126,6 +132,10 @@ func timeFieldMatches(got time.Time, node *FieldNode) bool {
 		case "<=":
 			return got.Before(want) || got.Equal(want)
 		default:
+			if isDateOnly(node.Value) {
+				lo, hi := dateDayBounds(want)
+				return !got.Before(lo) && got.Before(hi)
+			}
 			return got.Equal(want)
 		}
 	}

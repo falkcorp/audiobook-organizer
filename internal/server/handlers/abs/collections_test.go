@@ -595,6 +595,7 @@ func TestCollections_DynamicMembershipIsNotEditable(t *testing.T) {
 		t.Fatalf("the rejected edit still wrote to the store (%d updates)", store.updates)
 	}
 }
+
 // TestAddBookToCollection_ConcurrentAdds_BothLand pins the lost-update fix for
 // the ABS single-add route.
 //

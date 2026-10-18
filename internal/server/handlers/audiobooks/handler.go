@@ -718,12 +718,13 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// advance. A search is instead served from the search result cache, which
 	// is invalidated by all of them, so a search page never goes through this
 	// cache while that one is on. A per-user DSL query (read_status: and
-	// friends) is never cached here either: the key does not carry the user.
+	// friends) is never cached here either: the key does not carry the user. Nor
+	// is a relative date query (last_played:>-30d): it depends on the clock.
 	// An ident: filter is never cached here either: identification states
 	// move on metadata_cache writes, which do not move the library generation.
 	useListCache := len(filters.PerUserFilters) == 0 &&
 		!audiobookspkg.HasIdentFilter(filters.FieldFilters) &&
-		!(params.Search != "" && (h.searchServedByResultCache(params.Search, authorID, seriesID, filters) || audiobookspkg.SearchHasPerUserFilters(params.Search)))
+		!(params.Search != "" && (h.searchServedByResultCache(params.Search, authorID, seriesID, filters) || audiobookspkg.SearchHasPerUserFilters(params.Search) || audiobookspkg.SearchHasRelativeDate(params.Search)))
 	if useListCache {
 		if cached, ok := h.listCache.Get(cacheKey); ok {
 			httputil.RespondWithOK(c, cached)

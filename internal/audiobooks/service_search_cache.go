@@ -312,6 +312,10 @@ func (svc *AudiobookService) lookupOptions(ctx context.Context) searchcache.Look
 //     listening state, and user-state writes do not advance the store change
 //     log, so even a per-user key would serve stale matches. Owner question
 //     2026-09-25; decision: do not cache them.
+//   - a relative date term (last_played:>-30d, date_added:>-7d, ...): its
+//     result depends on the clock at the moment of the search, which is neither
+//     in the key nor on the change log, so a cached page would keep answering
+//     for the instant it was computed.
 //   - RestrictToIDs (has_file_errors): the ID set comes from book-file error
 //     state, which the change log does not track.
 //   - fingerprint status / coverage filters: computed from book files, not the
@@ -328,7 +332,7 @@ func (svc *AudiobookService) searchCacheKey(search string, authorID, seriesID *i
 		f.FingerprintStatus != "" || f.CoveragePercentMin != nil || f.CoveragePercentMax != nil {
 		return "", false
 	}
-	if SearchHasPerUserFilters(strings.TrimSpace(q)) {
+	if SearchHasPerUserFilters(strings.TrimSpace(q)) || SearchHasRelativeDate(strings.TrimSpace(q)) {
 		return "", false
 	}
 	// Apply the same sort normalization queryAudiobooks does, so two requests
@@ -379,6 +383,18 @@ func SearchHasPerUserFilters(q string) bool {
 	}
 	_, perUser, err := search.Translate(ast)
 	return err == nil && len(perUser) > 0
+}
+
+// SearchHasRelativeDate reports whether a search string carries a relative date
+// term (now, or a signed offset such as -30d) on a date field. Such a query
+// resolves against the clock when it runs, so no cache may serve it. A query that
+// does not parse has none: it takes the substring fallback.
+func SearchHasRelativeDate(q string) bool {
+	ast, err := search.ParseQuery(q)
+	if err != nil {
+		return false
+	}
+	return search.HasRelativeDate(ast)
 }
 
 // NormalizeSearchKey folds a query to the form two requests share an entry
