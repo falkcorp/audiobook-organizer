@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
 // last-edited: 2026-10-18
 
@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -37,6 +39,89 @@ type colFakeStore struct {
 	// test can drive the handler's error mapping with a real store error shape.
 	createErr error
 	updateErr error
+	// membershipWrites counts calls into the locked add/remove operations, so a
+	// gated test can prove a refused request never reached them.
+	membershipWrites int
+}
+
+// AddBooksToCollection / RemoveBookFromCollection give the fake the locked
+// membership operations with the real store's semantics (static only, skip
+// duplicates, keep order, absent member is a sentinel), so handler tests assert
+// the handler's mapping rather than a looser fake's behaviour.
+func (f *colFakeStore) AddBooksToCollection(id string, bookIDs []string) (*database.Collection, error) {
+	f.membershipWrites++
+	for i := range f.cols {
+		if f.cols[i].ID != id {
+			continue
+		}
+		if f.cols[i].Type == database.CollectionTypeDynamic {
+			return nil, database.ErrCollectionNotStatic
+		}
+		for _, b := range bookIDs {
+			if !slices.Contains(f.cols[i].BookIDs, b) {
+				f.cols[i].BookIDs = append(f.cols[i].BookIDs, b)
+			}
+		}
+		cp := f.cols[i]
+		return &cp, nil
+	}
+	return nil, fmt.Errorf("collection %s %w", id, database.ErrCollectionNotFound)
+}
+
+func (f *colFakeStore) RemoveBookFromCollection(id, bookID string) (*database.Collection, error) {
+	f.membershipWrites++
+	for i := range f.cols {
+		if f.cols[i].ID != id {
+			continue
+		}
+		if f.cols[i].Type == database.CollectionTypeDynamic {
+			return nil, database.ErrCollectionNotStatic
+		}
+		at := slices.Index(f.cols[i].BookIDs, bookID)
+		if at < 0 {
+			return nil, database.ErrCollectionBookNotMember
+		}
+		f.cols[i].BookIDs = slices.Delete(slices.Clone(f.cols[i].BookIDs), at, at+1)
+		cp := f.cols[i]
+		return &cp, nil
+	}
+	return nil, fmt.Errorf("collection %s %w", id, database.ErrCollectionNotFound)
+}
+
+// colFakeUsers is the owner lookup. byID is what GetUserByID answers (nil for an
+// id with no row), list is what the first-admin fallback scans.
+type colFakeUsers struct {
+	list []database.User
+}
+
+func (f *colFakeUsers) GetUserByID(id string) (*database.User, error) {
+	for i := range f.list {
+		if f.list[i].ID == id {
+			cp := f.list[i]
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *colFakeUsers) ListUsers() ([]database.User, error) { return f.list, nil }
+
+// colFakeBooks answers the two reads the handler and the evaluator make. known
+// is the set of book ids that exist; states is keyed "user/book".
+type colFakeBooks struct {
+	known  map[string]bool
+	states map[string]*database.UserBookState
+}
+
+func (f *colFakeBooks) GetBookByID(id string) (*database.Book, error) {
+	if f.known != nil && !f.known[id] {
+		return nil, nil
+	}
+	return &database.Book{ID: id}, nil
+}
+
+func (f *colFakeBooks) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
+	return f.states[userID+"/"+bookID], nil
 }
 
 func (f *colFakeStore) CreateCollection(col *database.Collection) (*database.Collection, error) {
@@ -109,7 +194,8 @@ func colRouter(store handlers.CollectionStore) (*gin.Engine, *handlers.Collectio
 	// A nil index getter is the honest fixture here: these tests assert
 	// validation and routing, not query evaluation, and a dynamic collection is
 	// specified to survive an unavailable index rather than fail creation.
-	h := handlers.NewCollectionHandler(store, nil, nil)
+	members, _ := store.(handlers.CollectionMembers)
+	h := handlers.NewCollectionHandler(store, members, nil, &colFakeBooks{}, nil)
 	r := gin.New()
 	g := r.Group("/api/v1")
 	g.POST("/collections", h.CreateCollection)
@@ -118,6 +204,8 @@ func colRouter(store handlers.CollectionStore) (*gin.Engine, *handlers.Collectio
 	g.PUT("/collections/:id", h.UpdateCollection)
 	g.DELETE("/collections/:id", h.DeleteCollection)
 	g.POST("/collections/:id/materialize", h.MaterializeCollection)
+	g.POST("/collections/:id/books", h.AddBooksToCollection)
+	g.DELETE("/collections/:id/books/:bookId", h.RemoveBookFromCollection)
 	return r, h
 }
 
@@ -341,6 +429,8 @@ func TestCollectionWrites_RequirePermission(t *testing.T) {
 		{http.MethodPut, "/api/v1/collections/c1", map[string]any{"name": "y"}},
 		{http.MethodDelete, "/api/v1/collections/c1", nil},
 		{http.MethodPost, "/api/v1/collections/c1/materialize", nil},
+		{http.MethodPost, "/api/v1/collections/c1/books", map[string]any{"book_ids": []string{"b1"}}},
+		{http.MethodDelete, "/api/v1/collections/c1/books/b1", nil},
 	}
 
 	t.Run("without the permission", func(t *testing.T) {
@@ -353,6 +443,8 @@ func TestCollectionWrites_RequirePermission(t *testing.T) {
 			assert.Equal(t, http.StatusForbidden, rec.Code,
 				"%s %s must be refused without %s", w.method, w.path, auth.PermCollectionsManage)
 			assert.Nil(t, fake.created, "a refused request reached the store")
+			assert.Zero(t, fake.membershipWrites,
+				"%s %s was refused but still reached the locked membership operation", w.method, w.path)
 		}
 	})
 
@@ -369,6 +461,27 @@ func TestCollectionWrites_RequirePermission(t *testing.T) {
 			"a permitted caller must get through: %s", rec.Body.String())
 		require.NotNil(t, fake.created)
 		assert.Equal(t, "Allowed", fake.created.Name)
+	})
+
+	// The same negative control for the two membership routes: a router that
+	// refused them for EVERY caller (a typo in the route table, say) would pass
+	// the "without the permission" block above.
+	t.Run("membership routes with the permission", func(t *testing.T) {
+		fake := &colFakeStore{cols: []database.Collection{{
+			ID: "c1", Name: "Existing", Type: database.CollectionTypeStatic, BookIDs: []string{"b1"},
+		}}}
+		r := colGatedRouter(store, fake,
+			[]auth.Permission{auth.PermLibraryView, auth.PermCollectionsManage})
+
+		rec := colDo(t, r, http.MethodPost, "/api/v1/collections/c1/books",
+			map[string]any{"book_ids": []string{"b2"}})
+		require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+		assert.Equal(t, []string{"b1", "b2"}, fake.cols[0].BookIDs)
+
+		rec = colDo(t, r, http.MethodDelete, "/api/v1/collections/c1/books/b1", nil)
+		require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+		assert.Equal(t, []string{"b2"}, fake.cols[0].BookIDs)
+		assert.Equal(t, 2, fake.membershipWrites)
 	})
 }
 
@@ -396,7 +509,8 @@ func colGatedRouter(
 	perms []auth.Permission,
 ) *gin.Engine {
 	gin.SetMode(gin.TestMode)
-	h := handlers.NewCollectionHandler(colStore, nil, nil)
+	members, _ := colStore.(handlers.CollectionMembers)
+	h := handlers.NewCollectionHandler(colStore, members, nil, &colFakeBooks{}, nil)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		ctx := auth.WithUser(c.Request.Context(), &database.User{ID: "u1", Username: "gatekeeper"})
@@ -411,6 +525,8 @@ func colGatedRouter(
 	g.PUT("/collections/:id", gate, h.UpdateCollection)
 	g.DELETE("/collections/:id", gate, h.DeleteCollection)
 	g.POST("/collections/:id/materialize", gate, h.MaterializeCollection)
+	g.POST("/collections/:id/books", gate, h.AddBooksToCollection)
+	g.DELETE("/collections/:id/books/:bookId", gate, h.RemoveBookFromCollection)
 	return r
 }
 
@@ -447,7 +563,7 @@ func colEvalRouter(t *testing.T, store handlers.CollectionStore, bookIDs ...stri
 		return books, nil
 	}).Maybe()
 
-	h := handlers.NewCollectionHandler(store, evalStore, func() *search.BleveIndex { return idx })
+	h := handlers.NewCollectionHandler(store, nil, colEvalOwners(), evalStore, func() *search.BleveIndex { return idx })
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	g := r.Group("/api/v1")
@@ -536,4 +652,350 @@ func TestCollectionNameInUse_Maps409(t *testing.T) {
 		w := colDo(t, r, http.MethodPut, "/api/v1/collections/c1", map[string]any{"name": "Road Trip"})
 		assert.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
 	})
+}
+
+// colEvalOwners is the owner lookup for tests that do not care who the owner is:
+// one active admin, so the first-admin fallback always has an answer.
+func colEvalOwners() *colFakeUsers {
+	return &colFakeUsers{list: []database.User{{
+		ID: "admin-1", Username: "admin", Roles: []string{auth.SeedRoleAdmin}, Status: "active",
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}}}
+}
+
+// ── add / remove books ──────────────────────────────────────────────────────
+
+func staticCollection(ids ...string) *colFakeStore {
+	return &colFakeStore{cols: []database.Collection{{
+		ID: "c1", Name: "Shelf", Type: database.CollectionTypeStatic, BookIDs: ids,
+	}}}
+}
+
+func TestAddBooksToCollection(t *testing.T) {
+	t.Run("appends in order and skips duplicates", func(t *testing.T) {
+		store := staticCollection("b1")
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPost, "/api/v1/collections/c1/books",
+			map[string]any{"book_ids": []string{"b2", "b1", "b3"}})
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, []string{"b1", "b2", "b3"}, store.cols[0].BookIDs)
+		assert.Contains(t, w.Body.String(), `"b3"`, "the response is the updated collection")
+		assert.Equal(t, 0, store.updates,
+			"membership must go through the locked op, not a read-modify-write UpdateCollection")
+	})
+
+	bad := []struct {
+		name string
+		body any
+	}{
+		{"empty list", map[string]any{"book_ids": []string{}}},
+		{"missing list", map[string]any{}},
+		{"not json", "not-an-object"},
+	}
+	for _, tc := range bad {
+		t.Run("400 for "+tc.name, func(t *testing.T) {
+			store := staticCollection()
+			r, _ := colRouter(store)
+			w := colDo(t, r, http.MethodPost, "/api/v1/collections/c1/books", tc.body)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Zero(t, store.membershipWrites)
+		})
+	}
+
+	t.Run("400 over the per-request cap, accepted at the cap", func(t *testing.T) {
+		ids := func(n int) []string {
+			out := make([]string, n)
+			for i := range out {
+				out[i] = fmt.Sprintf("book-%04d", i)
+			}
+			return out
+		}
+		store := staticCollection()
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPost, "/api/v1/collections/c1/books",
+			map[string]any{"book_ids": ids(501)})
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Zero(t, store.membershipWrites)
+
+		w = colDo(t, r, http.MethodPost, "/api/v1/collections/c1/books",
+			map[string]any{"book_ids": ids(500)})
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Len(t, store.cols[0].BookIDs, 500)
+	})
+
+	t.Run("400 names the first unknown book and writes nothing", func(t *testing.T) {
+		store := staticCollection("b1")
+		gin.SetMode(gin.TestMode)
+		h := handlers.NewCollectionHandler(store, store, nil,
+			&colFakeBooks{known: map[string]bool{"b1": true, "b2": true}}, nil)
+		r := gin.New()
+		r.POST("/collections/:id/books", h.AddBooksToCollection)
+		w := colDo(t, r, http.MethodPost, "/collections/c1/books",
+			map[string]any{"book_ids": []string{"b2", "ghost-book", "other-ghost"}})
+		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "ghost-book")
+		assert.NotContains(t, w.Body.String(), "other-ghost")
+		assert.Zero(t, store.membershipWrites, "b2 is real, but one unknown id must reject the whole request")
+		assert.Equal(t, []string{"b1"}, store.cols[0].BookIDs)
+	})
+
+	t.Run("404 for an unknown collection", func(t *testing.T) {
+		store := staticCollection()
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPost, "/api/v1/collections/nope/books",
+			map[string]any{"book_ids": []string{"b1"}})
+		assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	})
+
+	t.Run("409 for a dynamic collection", func(t *testing.T) {
+		store := &colFakeStore{cols: []database.Collection{{
+			ID: "c1", Name: "Smart", Type: database.CollectionTypeDynamic, Query: "author:sanderson",
+		}}}
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPost, "/api/v1/collections/c1/books",
+			map[string]any{"book_ids": []string{"b1"}})
+		assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+		assert.Zero(t, store.membershipWrites)
+	})
+
+	t.Run("409 when the row turned dynamic after the pre-check", func(t *testing.T) {
+		// The pre-check reads a static row; the locked op then reports the row is
+		// not static. The mapping must still be 409 rather than a 500.
+		store := &racingMembership{colFakeStore: staticCollection(), err: database.ErrCollectionNotStatic}
+		gin.SetMode(gin.TestMode)
+		h := handlers.NewCollectionHandler(store, store, nil, &colFakeBooks{}, nil)
+		r := gin.New()
+		r.POST("/collections/:id/books", h.AddBooksToCollection)
+		w := colDo(t, r, http.MethodPost, "/collections/c1/books",
+			map[string]any{"book_ids": []string{"b1"}})
+		assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	})
+
+	t.Run("503 without a membership store", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		h := handlers.NewCollectionHandler(staticCollection(), nil, nil, &colFakeBooks{}, nil)
+		r := gin.New()
+		r.POST("/collections/:id/books", h.AddBooksToCollection)
+		w := colDo(t, r, http.MethodPost, "/collections/c1/books",
+			map[string]any{"book_ids": []string{"b1"}})
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	})
+}
+
+// racingMembership returns err from the locked ops, standing in for a row that
+// changed between the handler's pre-check and the write.
+type racingMembership struct {
+	*colFakeStore
+	err error
+}
+
+func (r *racingMembership) AddBooksToCollection(string, []string) (*database.Collection, error) {
+	return nil, r.err
+}
+
+func (r *racingMembership) RemoveBookFromCollection(string, string) (*database.Collection, error) {
+	return nil, r.err
+}
+
+func TestRemoveBookFromCollection(t *testing.T) {
+	t.Run("removes a member", func(t *testing.T) {
+		store := staticCollection("b1", "b2", "b3")
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodDelete, "/api/v1/collections/c1/books/b2", nil)
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, []string{"b1", "b3"}, store.cols[0].BookIDs)
+		assert.Zero(t, store.updates)
+	})
+	t.Run("404 for a book that is not a member", func(t *testing.T) {
+		store := staticCollection("b1")
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodDelete, "/api/v1/collections/c1/books/b9", nil)
+		assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, []string{"b1"}, store.cols[0].BookIDs)
+	})
+	t.Run("404 for an unknown collection", func(t *testing.T) {
+		r, _ := colRouter(staticCollection("b1"))
+		w := colDo(t, r, http.MethodDelete, "/api/v1/collections/nope/books/b1", nil)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+	t.Run("409 for a dynamic collection", func(t *testing.T) {
+		store := &colFakeStore{cols: []database.Collection{{
+			ID: "c1", Name: "Smart", Type: database.CollectionTypeDynamic, Query: "author:sanderson",
+			MaterializedBookIDs: []string{"b1"},
+		}}}
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodDelete, "/api/v1/collections/c1/books/b1", nil)
+		assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
+	})
+}
+
+// ── owner evaluation (D75) ──────────────────────────────────────────────────
+
+// ownerRig is a real Bleve index over b1..b3 plus fakes for the owner lookup and
+// per-user state. The caller is injected from the X-Test-User header so a test
+// can prove the answer does not depend on who is signed in.
+type ownerRig struct {
+	r     *gin.Engine
+	store *colFakeStore
+}
+
+func newOwnerRig(t *testing.T, store *colFakeStore, users []database.User,
+	states map[string]*database.UserBookState) *ownerRig {
+	t.Helper()
+	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = idx.Close() })
+	require.NoError(t, idx.MarkRebuilt())
+	require.NoError(t, idx.IndexBookBatch([]search.BookDocument{
+		{BookID: "b1", Title: "Alpha"}, {BookID: "b2", Title: "Bravo"}, {BookID: "b3", Title: "Charlie"},
+	}))
+
+	gin.SetMode(gin.TestMode)
+	h := handlers.NewCollectionHandler(store, nil, &colFakeUsers{list: users},
+		&colFakeBooks{states: states}, func() *search.BleveIndex { return idx })
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		if id := c.GetHeader("X-Test-User"); id != "" {
+			u := &database.User{ID: id, Username: id}
+			c.Request = c.Request.WithContext(auth.WithUser(c.Request.Context(), u))
+			c.Set("auth_user", u)
+		}
+		c.Next()
+	})
+	g := r.Group("/api/v1")
+	g.GET("/collections/:id", h.GetCollection)
+	g.POST("/collections/:id/materialize", h.MaterializeCollection)
+	return &ownerRig{r: r, store: store}
+}
+
+func (o *ownerRig) do(t *testing.T, method, path, asUser string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
+	if asUser != "" {
+		req.Header.Set("X-Test-User", asUser)
+	}
+	w := httptest.NewRecorder()
+	o.r.ServeHTTP(w, req)
+	return w
+}
+
+func decodeMaterialized(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var env struct {
+		Data database.Collection `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &env), "body: %s", w.Body.String())
+	return env.Data.MaterializedBookIDs
+}
+
+func ownerStates() map[string]*database.UserBookState {
+	return map[string]*database.UserBookState{
+		"alice/b1": {UserID: "alice", BookID: "b1", Status: database.UserBookStatusFinished},
+		"alice/b2": {UserID: "alice", BookID: "b2", Status: database.UserBookStatusInProgress},
+		"bob/b2":   {UserID: "bob", BookID: "b2", Status: database.UserBookStatusFinished},
+	}
+}
+
+func ownerUsers() []database.User {
+	return []database.User{
+		{ID: "alice", Username: "alice", Roles: []string{auth.SeedRoleAdmin}, Status: "active",
+			CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active",
+			CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+	}
+}
+
+// TestDynamicCollectionIsEvaluatedAsItsOwner is the D75 regression: the answer
+// follows CreatedByUserID, not whoever is signed in. Alice finished b1 and bob
+// finished b2, so a reader-scoped evaluation would flip the members with the
+// caller.
+func TestDynamicCollectionIsEvaluatedAsItsOwner(t *testing.T) {
+	newStore := func() *colFakeStore {
+		return &colFakeStore{cols: []database.Collection{
+			{ID: "owned-by-alice", Name: "A", Type: database.CollectionTypeDynamic,
+				Query: "read_status:finished", CreatedByUserID: "alice"},
+			{ID: "owned-by-bob", Name: "B", Type: database.CollectionTypeDynamic,
+				Query: "read_status:finished", CreatedByUserID: "bob"},
+		}}
+	}
+
+	for _, caller := range []string{"alice", "bob", ""} {
+		t.Run("materialize as "+caller, func(t *testing.T) {
+			rig := newOwnerRig(t, newStore(), ownerUsers(), ownerStates())
+			w := rig.do(t, http.MethodPost, "/api/v1/collections/owned-by-alice/materialize", caller)
+			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w),
+				"alice owns it, so it holds what alice finished, whoever asked")
+			w = rig.do(t, http.MethodPost, "/api/v1/collections/owned-by-bob/materialize", caller)
+			assert.Equal(t, []string{"b2"}, decodeMaterialized(t, w))
+		})
+		t.Run("read as "+caller, func(t *testing.T) {
+			rig := newOwnerRig(t, newStore(), ownerUsers(), ownerStates())
+			w := rig.do(t, http.MethodGet, "/api/v1/collections/owned-by-alice", caller)
+			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w))
+			// What a read stores is what the ABS surface serves without
+			// evaluating, so it must be the owner's answer too.
+			assert.Equal(t, []string{"b1"}, rig.store.cols[0].MaterializedBookIDs)
+		})
+	}
+}
+
+// TestDynamicCollectionUnstartedMatchesBooksWithNoStateRow is the end-to-end
+// side of the read_status:unstarted fix: books the owner never touched have no
+// state row at all, and they are exactly the unstarted ones.
+func TestDynamicCollectionUnstartedMatchesBooksWithNoStateRow(t *testing.T) {
+	store := &colFakeStore{cols: []database.Collection{{
+		ID: "c1", Name: "Untouched", Type: database.CollectionTypeDynamic,
+		Query: "read_status:unstarted", CreatedByUserID: "alice",
+	}}}
+	rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+	w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
+	assert.Equal(t, []string{"b3"}, decodeMaterialized(t, w),
+		"b1 is finished and b2 in progress for alice; only b3 has no row")
+}
+
+func TestDynamicCollectionFallsBackToFirstActiveAdmin(t *testing.T) {
+	users := []database.User{
+		// Earliest admin, but not active: must be skipped.
+		{ID: "old-admin", Username: "old", Roles: []string{auth.SeedRoleAdmin}, Status: "inactive",
+			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active",
+			CreatedAt: time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: "alice", Username: "alice", Roles: []string{auth.SeedRoleAdmin}, Status: "active",
+			CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	for name, owner := range map[string]string{"owner row gone": "deleted-user", "no owner recorded": ""} {
+		t.Run(name, func(t *testing.T) {
+			store := &colFakeStore{cols: []database.Collection{{
+				ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic,
+				Query: "read_status:finished", CreatedByUserID: owner,
+			}}}
+			rig := newOwnerRig(t, store, users, ownerStates())
+			w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
+			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w),
+				"evaluated as alice, the first ACTIVE admin; bob's state (b2) must not leak in")
+		})
+	}
+}
+
+func TestDynamicCollectionWithNoEvaluatorIs503(t *testing.T) {
+	// The owner is gone and nobody is an active admin.
+	users := []database.User{
+		{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active"},
+		{ID: "old-admin", Username: "old", Roles: []string{auth.SeedRoleAdmin}, Status: "revoked"},
+	}
+	store := &colFakeStore{cols: []database.Collection{{
+		ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic, Query: "read_status:finished",
+		CreatedByUserID: "deleted-user", MaterializedBookIDs: []string{"b9"},
+	}}}
+	rig := newOwnerRig(t, store, users, ownerStates())
+
+	w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, 0, store.updates)
+
+	w = rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
+	assert.Equal(t, []string{"b9"}, decodeMaterialized(t, w),
+		"a read serves the last stored members rather than failing")
 }
