@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.13.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -304,8 +304,8 @@ listening time. The fourth undid a choice the user made after the undo.
 **The fix.**
 
 - The undo now takes the same lock as the listening apps' sync and the
-  "mark as" buttons, looks at the progress again while holding it, and
-  keeps anything those sent in the meantime. The web player's position
+  "mark as" buttons, reads the progress and decides what to write while
+  holding it, and keeps anything those sent in the meantime. The web player's position
   updates and the iTunes position sync do not take that lock yet, so an
   update from one of them arriving in the same instant can still be lost.
 - Each combine's progress move gets its own unique id, and the note is
@@ -320,3 +320,42 @@ listening time. The fourth undid a choice the user made after the undo.
   kept, and the revert message names five items and counts the rest.
 
 Each of these has a test that failed before the fix.
+
+## Fixes from the sixth review
+
+**What it was.** A sixth review of #4064 found:
+
+- When an undo stopped on a later step and was run again, it could say a
+  reader's progress had been "listened to since" and call the undo only
+  partly done, even though nobody had listened and everything was back.
+  This happened when the reader had no progress on the kept book before
+  the combine, and after any put-back that had to separate new listening
+  from the combined progress.
+- The undo looked at a reader's progress before taking the lock the
+  listening apps take, then checked again under the lock and started over
+  if something had changed, up to three times.
+- A combine read the field locks its title or author change would replace
+  well before it wrote them, without the lock other lock writers take. A
+  lock someone set in between was replaced, and the undo then put back
+  the older lock instead of theirs.
+
+**Why it mattered.** The first made a complete undo look broken and asked
+the user to check progress that was fine. The third could undo a choice
+the user made while the combine ran.
+
+**The fix.**
+
+- When the undo puts a reader's progress back, it now also notes what the
+  progress looked like right after. A rerun that finds it unchanged knows
+  the put-back is complete and says nothing. If the progress has changed
+  since, or the note could not be saved, the rerun still says so.
+- The undo now takes the listening apps' lock before it looks at the
+  progress and keeps it until it has written, so there is nothing to check
+  again and no starting over. The web player's position updates and the
+  iTunes position sync still do not take that lock.
+- The combine reads the locks it replaces while holding the same lock it
+  writes them under, so its undo puts back the lock that was really there.
+
+The first and third each have a test that failed before the fix; the
+tests for the second fail when the lock is taken away. None of these
+changes removes any listening progress.
