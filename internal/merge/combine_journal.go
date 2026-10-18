@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -270,6 +271,59 @@ type CombineOverrideUndo struct {
 	// warning for either.
 	AuthorCreated bool                                    `json:"author_created,omitempty"`
 	FieldStates   map[string]*database.MetadataFieldState `json:"field_states_before,omitempty"`
+	// FieldStatesAfter is each lock row as the override's lock write left it
+	// (read back right after database.RecordUserOverrides), by field. The
+	// undo puts a lock row back to FieldStates only while it still holds
+	// this (restoreOverrideLocks), the way the fill-empty undo compares
+	// values: a lock someone set since, including one set after an undo
+	// whose final journal write failed and is re-run, stays. A field with no
+	// entry (a journal from before the field, or a read-back that failed)
+	// is compared with what the lock write writes: the override's value,
+	// locked, as a person's lock (overrideLockAsWritten).
+	FieldStatesAfter map[string]*database.MetadataFieldState `json:"field_states_after,omitempty"`
+}
+
+// overrideLockAsWritten is the lock row the override's lock write leaves for
+// field, for a journal that does not record it (FieldStatesAfter): the
+// override's value, locked, with no LockSource (database.RecordUserOverrides
+// writes a person's lock). nil when the override did not set field.
+func (o *CombineOverrideUndo) overrideLockAsWritten(field string) *database.MetadataFieldState {
+	if st := o.FieldStatesAfter[field]; st != nil {
+		return st
+	}
+	var value string
+	switch field {
+	case database.FieldKeyTitle:
+		value = o.Applied.Title
+	case database.FieldKeyNarrator:
+		value = o.Applied.Narrator
+	case database.FieldKeyAuthorName:
+		value = o.Applied.Author
+	}
+	if value == "" {
+		return nil
+	}
+	encoded, err := metastate.Encode(value)
+	if err != nil {
+		return nil
+	}
+	return &database.MetadataFieldState{Field: field, OverrideValue: encoded, OverrideLocked: true}
+}
+
+// sameLock reports whether two lock rows hold the same lock: the override
+// value, the locked flag and who set it. A missing row is no lock.
+// FetchedValue and UpdatedAt are not compared: a metadata fetch since the
+// combine rewrites both without touching the lock, and must not make the
+// undo keep a lock it would otherwise put back.
+func sameLock(a, b *database.MetadataFieldState) bool {
+	var za, zb database.MetadataFieldState
+	if a != nil {
+		za = *a
+	}
+	if b != nil {
+		zb = *b
+	}
+	return strPtrEqual(za.OverrideValue, zb.OverrideValue) && za.OverrideLocked == zb.OverrideLocked && za.LockSource == zb.LockSource
 }
 
 // CombineUndoResult is what UndoCombine returns on success.
@@ -502,6 +556,20 @@ func sameProgress(aState, bState *database.UserBookState, aPos, bPos []database.
 	return slices.Equal(as, bs)
 }
 
+// sameUserState reports whether b already holds everything a write of a
+// would set: every field combineOnRestore decides (UpdatedAt, which the store
+// stamps on each write, and the ids are not compared). A nil b holds nothing.
+func sameUserState(a, b *database.UserBookState) bool {
+	if b == nil {
+		return false
+	}
+	return a.Status == b.Status && a.StatusManual == b.StatusManual &&
+		a.ProgressPct == b.ProgressPct && timePtrEqual(a.FinishedAt, b.FinishedAt) &&
+		a.LastSegmentID == b.LastSegmentID && a.TotalListenedSeconds == b.TotalListenedSeconds &&
+		a.LastActivityAt.Equal(b.LastActivityAt) && a.HideFromContinueListening == b.HideFromContinueListening &&
+		timePtrEqual(a.ProgressResetAt, b.ProgressResetAt) && slices.Equal(a.ProgressResetPositions, b.ProgressResetPositions)
+}
+
 // writeProgress replaces one user's progress on bookID with the snapshot.
 // A nil state is written as a neutralized row, the same shape
 // mergeUserProgressFor uses to drain a loser (there is no delete primitive).
@@ -598,8 +666,18 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 	j.LastError = ""
 	j.Warnings = append(j.Warnings, res.Warnings...)
 	if err := ms.putCombineJournal(j); err != nil {
-		// The undo itself is done; a stale "applied" status is caught by the
-		// preconditions (the absorbed books are live again) if retried.
+		// The undo itself is done, but the journal still says undo_failed
+		// ("undo started and did not finish", written before the first
+		// write), so it reads as a cut-short undo and a re-run is allowed:
+		// undoPreconditions accepts every row in its pre-combine state, and
+		// applyUndo replays. That replay must change nothing the user did
+		// after this undo. Every step decides row by row from what is there
+		// now: a row already back is not written, the survivor's progress
+		// put-back recognises its own marker (RestoreFollowedProgress), and
+		// a lock row is put back only while it still holds the combine's
+		// lock (restoreOverrideLocks). The reconcile markers are kept, since
+		// that re-run still needs them; it drops them once it records the
+		// journal undone.
 		mlog.Error("combine undo: completed but journal status not updated journal=%s err=%s", j.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
 	} else {
 		// Recorded as undone: no re-run of its put-backs can come, so their
@@ -876,6 +954,90 @@ func (ms *Service) createdAuthorNote(id int, name string) []string {
 	return []string{msg}
 }
 
+// restoreOverrideLocks is applyUndo step 4's lock rows: each lock row the
+// override wrote goes back to what it was before (o.FieldStates), but only
+// while it still holds the lock the override wrote (overrideLockAsWritten).
+//
+//   - Already the before-lock (an earlier attempt of this undo restored it,
+//     or the override's lock write never landed): nothing to write.
+//   - Still the override's lock: put back. Only the lock fields (override
+//     value, locked, lock source) are put back onto the row as it is now, so
+//     a FetchedValue a metadata fetch wrote since stays; a row whose fetched
+//     value is unchanged is written back whole, and a row that did not exist
+//     before and holds nothing else is deleted, as before.
+//   - Anything else is a lock someone set after the combine: kept, with a
+//     warning. Until the round-4 review the rows were restored
+//     unconditionally, so a re-run of an undo whose final journal write had
+//     failed (the journal stays undo_failed, see UndoCombine) removed a lock
+//     the user set after the undo.
+//
+// A journal without FieldStatesAfter is compared with what the lock write
+// writes (the override's value, a person's lock). That cannot tell the
+// combine's lock from a user who later locked the field to the very same
+// value; both hold the value the undo is reverting away from, and the undo
+// puts the field's column back too, so the lock goes with it. A lock that
+// differs in any way is never clobbered.
+//
+// The reads and writes are one step under the book's metadata-state lock
+// (database.LockMetadataState), as RecordUserOverrides writes, so a lock
+// edit cannot land between the compare and the write.
+func (ms *Service) restoreOverrideLocks(survivorID string, o *CombineOverrideUndo) ([]string, error) {
+	if len(o.FieldStates) == 0 {
+		return nil, nil
+	}
+	defer database.LockMetadataState(survivorID)()
+	states, err := ms.db.GetMetadataFieldStates(survivorID)
+	if err != nil {
+		return nil, fmt.Errorf("read override locks before restoring them: %w", err)
+	}
+	current := map[string]*database.MetadataFieldState{}
+	for i := range states {
+		current[states[i].Field] = &states[i]
+	}
+	fields := make([]string, 0, len(o.FieldStates))
+	for field := range o.FieldStates {
+		fields = append(fields, field)
+	}
+	slices.Sort(fields)
+	var warns []string
+	for _, field := range fields {
+		prior, cur := o.FieldStates[field], current[field]
+		if sameLock(cur, prior) {
+			continue
+		}
+		if want := o.overrideLockAsWritten(field); want == nil || !sameLock(cur, want) {
+			warns = append(warns, fmt.Sprintf("the %s lock on book %s was changed after the combine; left as it is", field, survivorID))
+			continue
+		}
+		var priorFetched *string
+		if prior != nil {
+			priorFetched = prior.FetchedValue
+		}
+		switch {
+		case prior == nil && cur.FetchedValue == nil:
+			if err := ms.db.DeleteMetadataFieldState(survivorID, field); err != nil {
+				return warns, fmt.Errorf("remove override lock %s: %w", field, err)
+			}
+		case prior != nil && strPtrEqual(cur.FetchedValue, priorFetched):
+			restored := *prior
+			if err := ms.db.UpsertMetadataFieldState(&restored); err != nil {
+				return warns, fmt.Errorf("restore override lock %s: %w", field, err)
+			}
+		default:
+			restored := *cur
+			restored.OverrideValue, restored.OverrideLocked, restored.LockSource = nil, false, ""
+			if prior != nil {
+				restored.OverrideValue, restored.OverrideLocked, restored.LockSource = prior.OverrideValue, prior.OverrideLocked, prior.LockSource
+			}
+			restored.UpdatedAt = time.Now()
+			if err := ms.db.UpsertMetadataFieldState(&restored); err != nil {
+				return warns, fmt.Errorf("restore override lock %s: %w", field, err)
+			}
+		}
+	}
+	return warns, nil
+}
+
 // retiredByJournal reports whether b is still the shell this combine retired:
 // soft-deleted, carrying exactly the stamp the combine wrote and journaled.
 // A live row (left live, never reached, or already restored by an earlier
@@ -931,7 +1093,12 @@ func intPtrEqual(a, b *int) bool {
 // stays, so the carried state ends up on exactly one book -- the absorbed
 // one -- and its listened time is not counted on both. That is returned as a
 // warning, not an error. Safe to run twice: a survivor already back at its
-// before-state is left alone.
+// before-state is left alone, and so is one this put-back (or the reconcile)
+// already wrote and the user has written since. The plain put-back journals
+// the reconcile's marker (survivorReconcileMarker) before its write for
+// that: without it, a re-run after the user listened read the survivor as
+// "touched since the follow" and reconciled it again, taking the carried
+// listened seconds off a second time (round-4 review S2 of #4064).
 //
 // The absorbed side gets the same care (restoreAbsorbedSide): the absorbed
 // book is often still live when this runs (CarryStateBeforeHardDelete puts a
@@ -973,8 +1140,28 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 			// Already restored (an earlier attempt of this undo got here).
 			continue
 		}
+		hasAfter := p.SurvivorStateAfter != nil || len(p.SurvivorPosAfter) > 0
+		var key string
+		if hasAfter {
+			key = survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
+			marker, err := readSurvivorReconcileMarker(db, key)
+			if err != nil {
+				return warnings, err
+			}
+			if marker != nil && curSurv != nil && !curSurv.UpdatedAt.Equal(marker.PreUpdatedAt) {
+				// An earlier attempt of this put-back already wrote this
+				// user's survivor state (the put-back below, or the
+				// reconcile), and the state has been written since: what is
+				// there now is the user's own listening after the put-back.
+				// Doing it again would take the carried seconds off a
+				// second time (round-4 S2: an undo whose final journal write
+				// failed stays undo_failed, and its re-run comes here).
+				// Nothing is written and nothing is reported.
+				continue
+			}
+		}
 		if !sameProgress(curSurv, p.SurvivorStateAfter, curSurvPos, p.SurvivorPosAfter) {
-			if p.SurvivorStateAfter == nil && len(p.SurvivorPosAfter) == 0 {
+			if !hasAfter {
 				// No after-snapshot (the follow failed, or its re-read did):
 				// what the follow wrote cannot be told from the user's own
 				// listening, so nothing is taken off the survivor.
@@ -991,7 +1178,33 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 				"user %s progress on survivor %s changed after the merge; the carried state was taken back off it and their listening there since was kept", p.UserID, survivorID))
 			continue
 		}
+		// The survivor is exactly as the follow left it: put it back whole.
+		// The same marker the reconcile writes goes first, holding the
+		// state's UpdatedAt as it is now, so a re-run that finds the state
+		// written since knows this put-back landed (above). A write that
+		// fails drops the marker again (best effort), as the reconcile does.
+		wroteMarker := false
+		if hasAfter {
+			var pre time.Time
+			if curSurv != nil {
+				pre = curSurv.UpdatedAt
+			}
+			data, err := json.Marshal(survivorReconcileMarker{PreUpdatedAt: pre})
+			if err != nil {
+				return warnings, fmt.Errorf("encode survivor put-back marker: %w", err)
+			}
+			if err := db.SetRaw(key, data); err != nil {
+				return warnings, fmt.Errorf("journal survivor put-back marker user=%s book=%s: %w", p.UserID, survivorID, err)
+			}
+			wroteMarker = true
+		}
 		if err := writeProgress(db, p.UserID, survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, curSurv); err != nil {
+			if wroteMarker {
+				if derr := db.DeleteRaw(key); derr != nil {
+					mlog.Warn("merge: survivor put-back marker %s not dropped after a failed write: %s",
+						logger.SanitizeLogValue(key), logger.SanitizeLogValue(derr.Error()))
+				}
+			}
 			return warnings, err
 		}
 	}
@@ -1320,6 +1533,14 @@ func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt
 	snap := userStateSide{state: snapSt, positions: snapPos}
 	now := userStateSide{state: cur, positions: curPos}
 	st, positions := combineOnRestore(userID, absorbedID, snap, now)
+	if sameProgress(nil, nil, curPos, positions) && (st == nil || sameUserState(st, cur)) {
+		// The combined result is what is there already: the snapshot adds
+		// nothing (a re-run after an earlier attempt combined it, or newer
+		// listening that already covers it). Nothing is written, and nothing
+		// is reported: the message below is for a put-back that changed the
+		// book.
+		return "", nil
+	}
 	if err := writePositionsDiff(db, userID, absorbedID, curPos, positions); err != nil {
 		return "", err
 	}
@@ -1885,17 +2106,10 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 				res.Warnings = append(res.Warnings, ms.createdAuthorNote(*o.AuthorIDAfter, o.Applied.Author)...)
 			}
 		}
-		for field, prior := range o.FieldStates {
-			if prior == nil {
-				if err := ms.db.DeleteMetadataFieldState(j.SurvivorID, field); err != nil {
-					return res, fmt.Errorf("remove override lock %s: %w", field, err)
-				}
-				continue
-			}
-			restored := *prior
-			if err := ms.db.UpsertMetadataFieldState(&restored); err != nil {
-				return res, fmt.Errorf("restore override lock %s: %w", field, err)
-			}
+		warns, err := ms.restoreOverrideLocks(j.SurvivorID, o)
+		res.Warnings = append(res.Warnings, warns...)
+		if err != nil {
+			return res, err
 		}
 	}
 

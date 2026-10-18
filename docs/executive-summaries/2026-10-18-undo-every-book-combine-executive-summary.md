@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-undo-every-book-combine-executive-summary.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: c8d8966a-51e0-4b39-875b-779568682968 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -236,10 +236,14 @@ Each of these has a test.
   credits on the book, such as narrator.
 - The nightly trash purge made the chapter-repair tool reload the whole
   library, about 460 MB, for nearly every book it fixed while both ran.
+- An undo that finished but could not save its "done" note could be run
+  again, and that second run removed a lock the user had set since,
+  subtracted the reader's listening time a second time, and reported
+  changes it had not made.
 
-**Why it mattered.** The first two could quietly lose a credit someone
-had added. The third made a routine repair run far slower and heavier
-than it needed to be.
+**Why it mattered.** The first two and the fourth could quietly lose a
+credit, a lock or listening time someone had added. The third made a
+routine repair run far slower and heavier than it needed to be.
 
 **The fix.**
 
@@ -254,5 +258,9 @@ than it needed to be.
 - The purge still blocks merges while it deletes a book, but it no longer
   counts as a merge for the chapter-repair tool, which already sees every
   book the purge deletes.
+- Running such an undo again now changes nothing done since. It puts a
+  lock back only while it is still the one the combine set, it recognises
+  listening progress it already put back, and it reports only what it
+  actually changed.
 
 Each of these has a test.
