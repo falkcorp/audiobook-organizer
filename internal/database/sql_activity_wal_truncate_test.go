@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_wal_truncate_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-18
 
@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -1108,7 +1109,22 @@ func TestPassiveUntilShort_SeesARestartLogCannotShow(t *testing.T) {
 // freelist for a VACUUM to return.
 func freedPagesStore(t *testing.T) *SQLActivityStore {
 	t.Helper()
+	return freedPagesStoreWithInterval(t, 0)
+}
+
+// freedPagesStoreWithInterval is freedPagesStore with an explicit checkpoint
+// interval; zero means the production default (newTestSQLStore).
+func freedPagesStoreWithInterval(t *testing.T, interval time.Duration) *SQLActivityStore {
+	t.Helper()
 	s := newTestSQLStore(t)
+	if interval > 0 {
+		var err error
+		s, err = openSQLiteActivityStore(filepath.Join(t.TempDir(), "activity.sqlite"), interval)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+	}
 	for range 60 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
 	}
@@ -1120,7 +1136,10 @@ func freedPagesStore(t *testing.T) *SQLActivityStore {
 // freelist and the reclaimable estimate, leaves After zero, and changes neither
 // the main file nor the -wal by a single byte.
 func TestRunActivityVacuum_PreviewMeasuresAndWritesNothing(t *testing.T) {
-	s := freedPagesStore(t)
+	// A checkpoint interval far longer than the test: the background
+	// checkpointer would otherwise be free to checkpoint between the byte
+	// snapshot and the comparison and flake this test.
+	s := freedPagesStoreWithInterval(t, time.Hour)
 	ctx := context.Background()
 
 	mainBefore, err := os.ReadFile(s.path)
@@ -1196,5 +1215,222 @@ func TestRunActivityVacuum_NoSQLiteSideIsUnsupportedNotAnError(t *testing.T) {
 	rep, err := RunActivityVacuum(context.Background(), nil, false)
 	if err != nil || rep.Supported {
 		t.Fatalf("got %+v, %v; want unsupported and no error", rep, err)
+	}
+}
+
+// etilqsFiles lists SQLite temp files in dir.
+func etilqsFiles(dir string) []string {
+	ents, _ := os.ReadDir(dir)
+	var out []string
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), "etilqs_") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// watchForEtilqs polls dir until stop is closed and returns every temp file name
+// it ever saw. VACUUM's temp file is deleted when the statement ends, so only a
+// poll DURING the run can see it.
+func watchForEtilqs(dir string, stop <-chan struct{}) <-chan map[string]bool {
+	out := make(chan map[string]bool, 1)
+	go func() {
+		seen := map[string]bool{}
+		for {
+			for _, f := range etilqsFiles(dir) {
+				seen[f] = true
+			}
+			select {
+			case <-stop:
+				out <- seen
+				return
+			case <-time.After(200 * time.Microsecond):
+			}
+		}
+	}()
+	return out
+}
+
+// TestVacuumActivity_TempCopyStaysOffTMPDIR is the 2026-09-09 outage test: with
+// TMPDIR pointing at a directory (the root pool on prod) and the pin cleared, a
+// live run must re-pin SQLite's temp directory to the database's directory, so
+// no etilqs_* file ever appears in TMPDIR.
+//
+// The deterministic assertion is the read-back of temp_store_directory: VACUUM's
+// temp file lives only for the statement and small databases may not spill at all,
+// so the poll for etilqs_* files is a best-effort second witness that can miss a
+// leak but never fails a correct run.
+func TestVacuumActivity_TempCopyStaysOffTMPDIR(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	s := freedPagesStore(t)
+	dbDir := filepath.Dir(s.path)
+	// Clear the pin open applied, so VacuumActivity has to apply its own.
+	if _, err := s.writer.Exec(`PRAGMA temp_store_directory=''`); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	seen := watchForEtilqs(tmp, stop)
+	_, err := RunActivityVacuum(context.Background(), s, false)
+	close(stop)
+	got := <-seen
+	if err != nil {
+		t.Fatalf("live: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("VACUUM's temp copy landed in TMPDIR (%s): %v", tmp, got)
+	}
+	var pinned string
+	if err := s.writer.QueryRow(`PRAGMA temp_store_directory`).Scan(&pinned); err != nil {
+		t.Fatal(err)
+	}
+	if pinned != dbDir {
+		t.Errorf("temp_store_directory = %q, want the database directory %q", pinned, dbDir)
+	}
+	if left := etilqsFiles(tmp); len(left) != 0 {
+		t.Errorf("etilqs files left in TMPDIR: %v", left)
+	}
+}
+
+// TestOpenPinsTempDirToTheDatabaseDirectory: the pin is applied at open, before
+// the schema and covering-index builds that sort the whole table.
+func TestOpenPinsTempDirToTheDatabaseDirectory(t *testing.T) {
+	s := newTestSQLStore(t)
+	var pinned string
+	if err := s.writer.QueryRow(`PRAGMA temp_store_directory`).Scan(&pinned); err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Dir(s.path); pinned != want {
+		t.Errorf("temp_store_directory after open = %q, want %q", pinned, want)
+	}
+}
+
+// TestVacuumActivity_RefusesWithoutFreeSpace: required > free refuses the live
+// run before VACUUM touches anything; the preview reports the same verdict.
+func TestVacuumActivity_RefusesWithoutFreeSpace(t *testing.T) {
+	s := freedPagesStore(t)
+	ctx := context.Background()
+	base, err := s.VacuumStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.RequiredBytes != vacuumRequiredBytes(base) || base.RequiredBytes < vacuumMarginFloor {
+		t.Fatalf("RequiredBytes = %d, want vacuumRequiredBytes (>= the 1 GiB floor)", base.RequiredBytes)
+	}
+
+	s.freeBytes = func(string) (uint64, error) { return uint64(base.RequiredBytes) - 1, nil }
+	prev, err := RunActivityVacuum(ctx, s, true)
+	if err != nil {
+		t.Fatalf("a preview that would refuse must still succeed: %v", err)
+	}
+	if !prev.Before.WouldRefuse || prev.Before.FreeBytes != base.RequiredBytes-1 || prev.Before.RequiredBytes != base.RequiredBytes {
+		t.Errorf("preview preflight = %+v", prev.Before)
+	}
+
+	rep, err := RunActivityVacuum(ctx, s, false)
+	if err == nil || !strings.Contains(err.Error(), "not enough disk space") {
+		t.Fatalf("live run error = %v, want a disk-space refusal", err)
+	}
+	if rep.Before.FreelistCount == 0 {
+		t.Fatal("fixture built no free pages; the test would prove nothing")
+	}
+	after, _ := s.VacuumStats(ctx)
+	if after.FreelistCount != rep.Before.FreelistCount {
+		t.Errorf("a refused run vacuumed anyway: freelist %d -> %d", rep.Before.FreelistCount, after.FreelistCount)
+	}
+
+	// Exactly the required amount is enough.
+	s.freeBytes = func(string) (uint64, error) { return uint64(base.RequiredBytes), nil }
+	if _, err := RunActivityVacuum(ctx, s, false); err != nil {
+		t.Fatalf("free == required must proceed: %v", err)
+	}
+}
+
+// TestVacuumActivity_RefusesWhenFreeSpaceIsUnreadable: an unreadable figure is not
+// proof of enough space.
+func TestVacuumActivity_RefusesWhenFreeSpaceIsUnreadable(t *testing.T) {
+	s := freedPagesStore(t)
+	s.freeBytes = func(string) (uint64, error) { return 0, fmt.Errorf("statfs: boom") }
+	rep, err := RunActivityVacuum(context.Background(), s, false)
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error = %v, want the free-space failure named", err)
+	}
+	if !rep.Before.WouldRefuse || rep.Before.PreflightNote == "" {
+		t.Errorf("preflight = %+v, want WouldRefuse with a note", rep.Before)
+	}
+}
+
+func TestVacuumRequiredBytes(t *testing.T) {
+	const gib = int64(1) << 30
+	for _, tc := range []struct {
+		name string
+		st   ActivityVacuumStats
+		want int64
+	}{
+		{"tiny file gets the 1 GiB floor", ActivityVacuumStats{FileBytes: 8192, ReclaimableBytes: 4096}, 2*4096 + gib},
+		{"large file gets 10 percent", ActivityVacuumStats{FileBytes: 30 * gib, ReclaimableBytes: 10 * gib}, 40*gib + 4*gib},
+		{"reclaimable above file clamps to zero", ActivityVacuumStats{FileBytes: 10, ReclaimableBytes: 20}, gib},
+	} {
+		if got := vacuumRequiredBytes(tc.st); got != tc.want {
+			t.Errorf("%s: required = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestRunActivityVacuum_ThroughMigratingStoreInEitherOrder: the SQLite store is
+// found whichever side of the migrating wrapper holds it.
+func TestRunActivityVacuum_ThroughMigratingStoreInEitherOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sqlPrimary bool
+	}{{"pebble primary, sql secondary", false}, {"sql primary, pebble secondary", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			sqlStore := freedPagesStore(t)
+			pebbleStore := newTestPebbleActivityStore(t)
+			var mig *MigratingActivityStore
+			if tc.sqlPrimary {
+				mig = NewMigratingActivityStore(sqlStore, pebbleStore, false)
+			} else {
+				mig = NewMigratingActivityStore(pebbleStore, sqlStore, false)
+			}
+			prev, err := RunActivityVacuum(context.Background(), mig, true)
+			if err != nil || !prev.Supported || prev.Before.FreelistCount == 0 {
+				t.Fatalf("preview = %+v, %v; want the SQLite store's freelist", prev, err)
+			}
+			live, err := RunActivityVacuum(context.Background(), mig, false)
+			if err != nil || !live.Supported || live.After.FreelistCount != 0 {
+				t.Fatalf("live = %+v, %v; want the SQLite store vacuumed", live, err)
+			}
+		})
+	}
+}
+
+// TestRunActivityVacuum_PebbleOnlyIsUnsupported: a real Pebble-only store, bare
+// and behind a migrating wrapper with no SQLite side, has nothing to vacuum.
+func TestRunActivityVacuum_PebbleOnlyIsUnsupported(t *testing.T) {
+	p := newTestPebbleActivityStore(t)
+	for name, store := range map[string]ActivityStorer{
+		"bare":    p,
+		"wrapped": NewMigratingActivityStore(p, nil, false),
+	} {
+		rep, err := RunActivityVacuum(context.Background(), store, false)
+		if err != nil || rep.Supported {
+			t.Errorf("%s: got %+v, %v; want unsupported and no error", name, rep, err)
+		}
+	}
+}
+
+// TestVacuumActivity_RefusesWhenTheTempDirPinFails: the pin is fatal for a VACUUM,
+// unlike at open and in ANALYZE where it only warns.
+func TestVacuumActivity_RefusesWhenTheTempDirPinFails(t *testing.T) {
+	s := freedPagesStore(t)
+	if err := s.writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.VacuumActivity(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "cannot keep its temp copy off TMPDIR") {
+		t.Fatalf("error = %v, want the pin failure to refuse the vacuum", err)
 	}
 }

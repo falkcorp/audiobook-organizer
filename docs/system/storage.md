@@ -1,5 +1,5 @@
 <!-- file: docs/system/storage.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: c3d4e5f6-a7b8-9012-cdef-012345678901 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -154,7 +154,7 @@ NutsDB stores the activity log in BTree buckets. The bucket naming convention:
 | `act:op:<op_id>` | `<timekey>` | `<tier>:<timekey>` (op index) |
 | `act:bk:<book_id>` | `<timekey>` | `<tier>:<timekey>` (book index) |
 
-Tiers map to activity types (scan, organize, metadata_apply, tag_write, etc.). Daily digest compaction is performed by `CompactByDay` (the nightly `maintenance.cleanup-activity-log` op and the `maintenance.compact-activity-log` op behind `POST /api/v1/activity/compact`). `POST /api/v1/operations/v2` with `{"def_id":"maintenance.recompact-activity-digests"}` starts the op that re-derives (the old `POST /api/v1/admin/recompact-digests` route answers 410 Gone for one release) type/tier/tags on digest items compacted before enrichment existed. While the activity log is being migrated between backends, every one of these passes (compact, summarize, prune, recompact, index repair) runs on BOTH backends, because both receive every write.
+Tiers map to activity types (scan, organize, metadata_apply, tag_write, etc.). Daily digest compaction is performed by `CompactByDay` (the nightly `maintenance.cleanup-activity-log` op and the `maintenance.compact-activity-log` op behind `POST /api/v1/activity/compact`). `POST /api/v1/operations/v2` with `{"def_id":"maintenance.recompact-activity-digests"}` starts the op that re-derives type/tier/tags on digest items compacted before enrichment existed (the old `POST /api/v1/admin/recompact-digests` route answers 410 Gone for one release). While the activity log is being migrated between backends, every one of these passes (compact, summarize, prune, recompact, index repair) runs on BOTH backends, because both receive every write.
 
 A dual-write adapter (`dual_write_activity_store.go`) bridges the legacy SQLite activity log during migration.
 

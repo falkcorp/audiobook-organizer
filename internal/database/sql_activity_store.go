@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.21.1
+// version: 1.22.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-10-18
 
@@ -58,6 +58,11 @@ type SQLActivityStore struct {
 	reader  *sql.DB // small pool: WAL readers run concurrently with the writer.
 	dialect sqlDialect
 	path    string
+
+	// freeBytes reports free space for the vacuum preflight; nil means
+	// diskstats. A field, not a package var, so a test can inject a figure
+	// without racing parallel tests.
+	freeBytes freeBytesFunc
 
 	// backfillGate keeps every row-deleting maintenance pass (CompactByDay,
 	// Summarize, Prune — write side) out of the window between
@@ -155,6 +160,11 @@ func openSQLiteActivityStore(path string, ckptInterval time.Duration) (*SQLActiv
 		return nil, fmt.Errorf("sql_activity: open writer: %w", err)
 	}
 	writer.SetMaxOpenConns(1)
+
+	// Before the schema and covering-index build, which sort the whole table.
+	if err := pinTempDir(context.Background(), writer, path); err != nil {
+		ckptLog.Warn("%v; index builds may spill to TMPDIR, which on this deployment is the root pool", err)
+	}
 
 	if _, err := writer.Exec(strings.Join(d.ddl(), ";\n")); err != nil {
 		_ = writer.Close()
@@ -1618,6 +1628,54 @@ func (s *SQLActivityStore) buildCoveringTimeIndexes(ctx context.Context) error {
 // >10-minute behaviour.
 const sqlActAnalysisLimit = 400
 
+// pinTempDirToDatabase points SQLite's temp directory at the database's own
+// directory, keeping the sorter and VACUUM's temp copy OFF the root filesystem.
+//
+// THIS IS NOT A TUNING KNOB. ANALYZE builds sorter runs over the full
+// b-trees and spills them to SQLite's temp directory, which defaults to
+// TMPDIR and therefore to /tmp. On this deployment /tmp is a ZFS dataset on
+// the ROOT pool, not a ramdisk and not on the pool holding the database. On
+// 2026-09-09 at 13:39 EDT an ANALYZE of this table did exactly that, filled
+// the root pool, and took production down: Pebble died with "fatal commit
+// error: write /var/lib/audiobook-organizer/audiobooks.pebble/892515.log: no
+// space left on device". The activity database was 19 GB across 13,256,825
+// rows at the time.
+//
+// analysis_limit above does NOT bound this. It caps the rows SAMPLED per
+// index; the sort still ranges over the whole index. So the limit makes
+// ANALYZE finish sooner, not spill less, and it cannot be relied on for
+// safety here.
+//
+// The database's own directory is the right target: it is by construction on
+// the volume already sized for this data, it moves automatically if the data
+// directory is relocated, and it needs no environment variable to be set on
+// the unit. Setting it is best-effort — a backend or build that does not
+// support the pragma must not turn statistics maintenance into a hard
+// failure — but a failure is logged rather than swallowed, because the
+// consequence of it silently not applying is the outage above.
+//
+// The pragma is process-wide in this driver (modernc.org/sqlite), not
+// per-connection, so one successful call covers every SQLite handle in the
+// process. Callers that must not proceed without it (VacuumActivity) treat the
+// returned error as fatal; the others log it.
+func (s *SQLActivityStore) pinTempDirToDatabase(ctx context.Context) error {
+	return pinTempDir(ctx, s.writer, s.path)
+}
+
+// pinTempDir is pinTempDirToDatabase on an arbitrary handle, so the open path can
+// call it before the store struct exists.
+func pinTempDir(ctx context.Context, db *sql.DB, dbPath string) error {
+	dir := filepath.Dir(dbPath)
+	if dir == "" || dir == "." {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx,
+		fmt.Sprintf("PRAGMA temp_store_directory='%s'", strings.ReplaceAll(dir, "'", "''"))); err != nil {
+		return fmt.Errorf("sql_activity: PRAGMA temp_store_directory=%s: %w", dir, err)
+	}
+	return nil
+}
+
 // OptimizeStatistics refreshes the query planner's statistics.
 //
 // It runs PRAGMA optimize under sqlActAnalysisLimit, which is the incremental
@@ -1647,37 +1705,11 @@ func (s *SQLActivityStore) OptimizeStatistics(ctx context.Context) (ActivityOpti
 		return result, fmt.Errorf("sql_activity: set analysis_limit: %w", err)
 	}
 
-	// Keep SQLite's sorter OFF the root filesystem.
-	//
-	// THIS IS NOT A TUNING KNOB. ANALYZE builds sorter runs over the full
-	// b-trees and spills them to SQLite's temp directory, which defaults to
-	// TMPDIR and therefore to /tmp. On this deployment /tmp is a ZFS dataset on
-	// the ROOT pool, not a ramdisk and not on the pool holding the database. On
-	// 2026-09-09 at 13:39 EDT an ANALYZE of this table did exactly that, filled
-	// the root pool, and took production down: Pebble died with "fatal commit
-	// error: write /var/lib/audiobook-organizer/audiobooks.pebble/892515.log: no
-	// space left on device". The activity database was 19 GB across 13,256,825
-	// rows at the time.
-	//
-	// analysis_limit above does NOT bound this. It caps the rows SAMPLED per
-	// index; the sort still ranges over the whole index. So the limit makes
-	// ANALYZE finish sooner, not spill less, and it cannot be relied on for
-	// safety here.
-	//
-	// The database's own directory is the right target: it is by construction on
-	// the volume already sized for this data, it moves automatically if the data
-	// directory is relocated, and it needs no environment variable to be set on
-	// the unit. Setting it is best-effort — a backend or build that does not
-	// support the pragma must not turn statistics maintenance into a hard
-	// failure — but a failure is logged rather than swallowed, because the
-	// consequence of it silently not applying is the outage above.
-	if dir := filepath.Dir(s.path); dir != "" && dir != "." {
-		if _, err := s.writer.ExecContext(ctx,
-			fmt.Sprintf("PRAGMA temp_store_directory='%s'", strings.ReplaceAll(dir, "'", "''"))); err != nil {
-			slog.Warn("sql_activity: could not point SQLite's sorter at the database directory; "+
-				"ANALYZE may spill to TMPDIR, which on this deployment is the root pool",
-				"dir", dir, "err", err)
-		}
+	// Keep SQLite's sorter OFF the root filesystem (see pinTempDirToDatabase).
+	// Best-effort here: open already tried, and a failure was logged there.
+	if err := s.pinTempDirToDatabase(ctx); err != nil {
+		ckptLog.Warn("could not point SQLite's sorter at the database directory; "+
+			"ANALYZE may spill to TMPDIR, which on this deployment is the root pool: %v", err)
 	}
 
 	// The covering time indexes are built here, never at open — see

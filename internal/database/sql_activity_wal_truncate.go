@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_wal_truncate.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
 // last-edited: 2026-10-18
 
@@ -31,7 +31,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/diskstats"
 )
 
 // ActivityVacuumStats is a point-in-time measurement of the SQLite activity
@@ -49,7 +52,60 @@ type ActivityVacuumStats struct {
 	PageCount        int64 `json:"page_count"`
 	FreelistCount    int64 `json:"freelist_count"`
 	ReclaimableBytes int64 `json:"reclaimable_bytes"`
+
+	// Preflight: whether a live VACUUM has the disk space it needs. FreeBytes is
+	// the space available to this process on the volume holding the database (and,
+	// because pinTempDirToDatabase points SQLite's temp directory there, the
+	// volume that holds VACUUM's temp copy too). RequiredBytes is
+	// vacuumRequiredBytes. WouldRefuse is true when a live run would refuse to
+	// start; PreflightNote says why when free space could not be read.
+	FreeBytes     int64  `json:"free_bytes"`
+	RequiredBytes int64  `json:"required_bytes"`
+	WouldRefuse   bool   `json:"would_refuse"`
+	PreflightNote string `json:"preflight_note,omitempty"`
 }
+
+// vacuumMarginFloor is the smallest safety margin added to a VACUUM's space
+// estimate: the estimate is of live data only and VACUUM also allocates page
+// slack, the freelist rewrite and the WAL's own growth.
+const vacuumMarginFloor = int64(1) << 30
+
+// vacuumRequiredBytes is the free space a live VACUUM needs on the database's
+// volume: TWICE the compacted size, plus a margin of max(1 GiB, 10%).
+//
+// Why twice. VACUUM first builds the compacted copy in a temp database (about
+// the live data size; the temp file is pinned to this volume), then copies it back
+// into the original through the WAL, which holds roughly another compacted size
+// until the post-vacuum TRUNCATE returns it. The original's own bytes are
+// released only at the end, so the peak EXTRA space is about 2x the compacted
+// size, not 1x the file size. The compacted size is FileBytes minus the free
+// pages (ReclaimableBytes); repacking partly full pages can only make it smaller,
+// so this is an upper-ish estimate, not an exact one.
+func vacuumRequiredBytes(st ActivityVacuumStats) int64 {
+	compacted := st.FileBytes - st.ReclaimableBytes
+	if compacted < 0 {
+		compacted = 0
+	}
+	base := 2 * compacted
+	margin := base / 10
+	if margin < vacuumMarginFloor {
+		margin = vacuumMarginFloor
+	}
+	return base + margin
+}
+
+// freeBytesFunc reports the bytes available to this process on the filesystem
+// holding path. Production uses diskstats.Stats; tests inject a fake.
+type freeBytesFunc func(path string) (uint64, error)
+
+func diskstatsFreeBytes(path string) (uint64, error) {
+	_, free, err := diskstats.Stats(path)
+	return free, err
+}
+
+// compile-time proof that the SQLite store is the vacuumer: without it a rename
+// of either method would silently turn FindActivityVacuumer into "unsupported".
+var _ ActivityVacuumer = (*SQLActivityStore)(nil)
 
 // DiskBytes is the main file plus its -wal: what the activity database holds on
 // disk right now.
@@ -76,6 +132,22 @@ func (s *SQLActivityStore) VacuumStats(ctx context.Context) (ActivityVacuumStats
 	}
 	if fi, err := os.Stat(s.path + "-wal"); err == nil {
 		st.WALBytes = fi.Size()
+	}
+
+	st.RequiredBytes = vacuumRequiredBytes(st)
+	freeFn := s.freeBytes
+	if freeFn == nil {
+		freeFn = diskstatsFreeBytes
+	}
+	free, ferr := freeFn(filepath.Dir(s.path))
+	switch {
+	case ferr != nil:
+		// Fail closed: an unreadable free-space figure is not proof of enough space.
+		st.WouldRefuse = true
+		st.PreflightNote = fmt.Sprintf("cannot read free space: %v", ferr)
+	default:
+		st.FreeBytes = int64(free)
+		st.WouldRefuse = st.FreeBytes < st.RequiredBytes
 	}
 	return st, nil
 }
@@ -164,11 +236,35 @@ func RunActivityVacuum(ctx context.Context, store ActivityStorer, dryRun bool) (
 //
 // VACUUM cannot run inside a transaction and rewrites the whole database, so it
 // is deliberately a separate call rather than part of the pass: it needs a
-// window where its cost (roughly the file size in temp space and IO) is
-// acceptable. It is issued on the writer connection because it takes an
+// window where its cost (about twice the compacted size in free space on the
+// database's volume, and the IO) is acceptable; VacuumStats' preflight checks it. It is issued on the writer connection because it takes an
 // exclusive lock.
 func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, error) {
 	start := time.Now()
+
+	// FAIL CLOSED on the temp directory. VACUUM's temp copy goes to SQLite's temp
+	// directory, which defaults to TMPDIR, which on this deployment is the ROOT
+	// pool (the 2026-09-09 outage: see pinTempDirToDatabase). Open pinned it
+	// best-effort; here a failure is fatal, because a VACUUM of a database this
+	// size that spills to the root pool takes production down.
+	if err := s.pinTempDirToDatabase(ctx); err != nil {
+		return time.Since(start), fmt.Errorf("sql_activity: refusing to vacuum, cannot keep its temp copy off TMPDIR: %w", err)
+	}
+
+	// Free-space preflight on the database's own volume.
+	st, err := s.VacuumStats(ctx)
+	if err != nil {
+		return time.Since(start), err
+	}
+	if st.WouldRefuse {
+		reason := fmt.Sprintf("%d bytes free, %d required", st.FreeBytes, st.RequiredBytes)
+		if st.PreflightNote != "" {
+			reason = st.PreflightNote
+		}
+		return time.Since(start), fmt.Errorf("sql_activity: refusing to vacuum, not enough disk space (%s; 2x the compacted size plus margin is needed on %s)",
+			reason, filepath.Dir(s.path))
+	}
+
 	if _, err := s.writer.ExecContext(ctx, `VACUUM`); err != nil {
 		return time.Since(start), fmt.Errorf("sql_activity: vacuum: %w", err)
 	}
