@@ -1307,6 +1307,27 @@ func (s *Server) startBackfills() {
 		}
 	})
 
+	// Dynamic collections are evaluated as their owner (D75): give every one that
+	// has no usable owner (empty, "_local", or a deleted user) the first active
+	// admin, once, instead of leaving the read path to fall back on each request.
+	// Idempotent, over the collection rows only (see backfillCollectionOwners for
+	// why it is sequential), and it re-materializes only if the search index is
+	// already open; a rebuilding index (the first boot after a mapping bump) leaves
+	// the stored members for the next materialize.
+	s.bgWG.Go("collection-owner-backfill", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		st, ok := database.AsCapability[collectionOwnerStore](s.Ops())
+		if !ok {
+			lifecycleLog.Warn("collection-owner-backfill: store has no collection/user operations; dynamic collections without an owner keep the read-time fallback")
+			return
+		}
+		if _, err := backfillCollectionOwners(st, s.collectionRematerializer()); err != nil {
+			lifecycleLog.Warn("collection-owner-backfill failed; the next boot retries: err=%s", logger.SanitizeLogValue(err.Error()))
+		}
+	})
+
 	// Build the search index on first startup (or if it got wiped).
 	// Tracked via bgWG so shutdown can wait for in-flight indexing
 	// instead of letting it run under a closing DB.
