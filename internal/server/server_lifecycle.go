@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.51.0
+// version: 4.52.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-18
 
@@ -1323,7 +1323,8 @@ func (s *Server) startBackfills() {
 			lifecycleLog.Warn("collection-owner-backfill: store has no collection/user operations; dynamic collections without an owner keep the read-time fallback")
 			return
 		}
-		if _, err := backfillCollectionOwners(st, s.collectionRematerializer()); err != nil {
+		if _, err := backfillCollectionOwners(st, s.collectionRematerializer(),
+			logger.NewWithActivityLog("collection-owner-backfill", s.storeForWiring())); err != nil {
 			lifecycleLog.Warn("collection-owner-backfill failed; the next boot retries: err=%s", logger.SanitizeLogValue(err.Error()))
 		}
 	})

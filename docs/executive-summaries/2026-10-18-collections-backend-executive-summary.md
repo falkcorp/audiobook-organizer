@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-collections-backend-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: bc1b7020-e5ad-4493-90ab-243c0a1234fc -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -48,6 +48,14 @@ relative dates in the one search syntax, atomic add and remove).
   (read status, progress, last played) into its search; anyone else is refused
   with a clear message and nothing changes. Ordinary searches, renames and book
   lists are unaffected.
+  If a collection's owner has been removed, it is not worked out as the first
+  administrator when its search uses those terms (that would show the
+  administrator's listening to everyone): it keeps the books it had and says
+  why, until the administrator saves its search again to take it over. Start-up
+  leaves such collections alone and lists them once in the activity log. One
+  gap remains: a listening-history search that someone other than the owner
+  wrote before this fix cannot be found, because collections keep no record of
+  who edited them; the new check stops any more being written.
 - **The web app knows what the signed-in user may do.** The sign-in and
   "who am I" answers now list the user's permissions, so the app can show or
   hide collection controls.

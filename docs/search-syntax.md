@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -81,3 +81,9 @@ that owner (or, for a collection that fell back to the first active admin, that
 admin) can write `last_played`, `read_status` or `progress_pct` into its query.
 Anyone else gets a 403, `COLLECTION_PER_USER_QUERY_OWNER_ONLY`. Queries without
 those fields can be edited by anyone allowed to manage collections.
+
+If a collection's owner has been removed and its query uses those fields, it is
+not worked out as the first administrator (that would show the administrator's
+listening to everyone). It keeps the books it already had and says so, until the
+first administrator saves its query again to take it over or the per-user terms
+are removed.

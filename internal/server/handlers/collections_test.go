@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
 // last-edited: 2026-10-18
 
@@ -984,14 +984,36 @@ func TestDynamicCollectionFallsBackToFirstActiveAdmin(t *testing.T) {
 	}
 	for name, owner := range map[string]string{"owner row gone": "deleted-user", "no owner recorded": ""} {
 		t.Run(name, func(t *testing.T) {
+			// A query that reads nobody's state still falls back to the admin (D75).
 			store := &colFakeStore{cols: []database.Collection{{
 				ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic,
-				Query: "read_status:finished", CreatedByUserID: owner,
+				Query: "title:Alpha", CreatedByUserID: owner,
 			}}}
 			rig := newOwnerRig(t, store, users, ownerStates())
 			w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w),
-				"evaluated as alice, the first ACTIVE admin; bob's state (b2) must not leak in")
+			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w))
+
+			// A per-user query is never evaluated as the stand-in: the first ACTIVE
+			// admin (alice, not the earlier but inactive old-admin) takes it over by
+			// saving it, and only then does it evaluate, as alice (b1), never as bob (b2).
+			store = &colFakeStore{cols: []database.Collection{{
+				ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic,
+				Query: "read_status:finished", CreatedByUserID: owner, MaterializedBookIDs: []string{"b9"},
+			}}}
+			rig = newOwnerRig(t, store, users, ownerStates())
+			w = rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
+			assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+
+			for _, who := range []string{"old-admin", "bob"} {
+				w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", who, map[string]any{"query": "read_status:finished"})
+				assert.Equal(t, http.StatusOK, w.Code, "%s re-sending the same query: %s", who, w.Body.String())
+				assert.Equal(t, owner, store.cols[0].CreatedByUserID, "%s is not the stand-in, so nothing is adopted", who)
+			}
+			w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice", map[string]any{"query": "read_status:finished"})
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Equal(t, "alice", store.cols[0].CreatedByUserID)
+			w = rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
+			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w), "bob's state (b2) must not leak in")
 		})
 	}
 }
@@ -1125,6 +1147,9 @@ func TestCollectionPerUserQueryIsEvaluatorOnly(t *testing.T) {
 
 				w := put(rig, "alice", "read_status:finished")
 				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+				assert.Equal(t, "alice", store.cols[0].CreatedByUserID,
+					"the admin who writes a per-user query on an ownerless collection takes it over")
+				assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs, "and it is evaluated as alice")
 			})
 		}
 	})
@@ -1162,5 +1187,93 @@ func TestCollectionPerUserQueryIsEvaluatorOnly(t *testing.T) {
 		w = rig.send(t, http.MethodPost, "/api/v1/collections", "ghost", map[string]any{
 			"name": "Ghost title", "type": "dynamic", "query": "title:Alpha"})
 		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	})
+}
+
+// ── a stand-in admin never evaluates a per-user query ───────────────────────
+
+// An ownerless collection falls back to the first active admin, but only for a
+// query that does not read anyone's state. With a per-user field the fallback
+// would publish the admin's listening state, so the evaluation is refused and
+// the stored members stay as they were.
+func TestCollectionFallbackNeverEvaluatesPerUserQuery(t *testing.T) {
+	ownerless := func(query string, owner string) *colFakeStore {
+		return &colFakeStore{cols: []database.Collection{{
+			ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic,
+			Query: query, CreatedByUserID: owner, MaterializedBookIDs: []string{"b3"}, Version: 1,
+		}}}
+	}
+	for name, owner := range map[string]string{"owner row gone": "deleted-user", "no owner": "", "_local": "_local"} {
+		t.Run(name+": materialize is a 409 and keeps the stored members", func(t *testing.T) {
+			store := ownerless("read_status:finished", owner)
+			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+			w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "alice")
+			require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+			var body struct {
+				Code  string `json:"code"`
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), w.Body.String())
+			assert.Equal(t, handlers.ErrCodeCollectionOwnerMissingPerUserQuery, body.Code)
+			assert.Contains(t, body.Error, "per-user fields")
+			assert.Equal(t, []string{"b3"}, store.cols[0].MaterializedBookIDs,
+				"not re-materialized from the stand-in admin's state (alice finished b1)")
+			assert.Zero(t, store.updates, "nothing is written")
+		})
+
+		t.Run(name+": a read serves the stored members with a flag", func(t *testing.T) {
+			store := ownerless("read_status:finished", owner)
+			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+			w := rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			data, _ := body["data"].(map[string]any)
+			require.NotNil(t, data, w.Body.String())
+			assert.Equal(t, handlers.ErrCodeCollectionOwnerMissingPerUserQuery, data["evaluation_blocked"])
+			assert.NotEmpty(t, data["evaluation_blocked_message"])
+			assert.Equal(t, "c1", data["id"], "the collection fields are still flattened at the top level")
+			assert.Equal(t, []any{"b3"}, data["materialized_book_ids"])
+			assert.Zero(t, store.updates, "a read stores nothing")
+		})
+
+		t.Run(name+": without a per-user field it still falls back to the admin", func(t *testing.T) {
+			store := ownerless("title:Alpha", owner)
+			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+			w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
+
+			w = rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.NotContains(t, w.Body.String(), "evaluation_blocked")
+		})
+	}
+
+	t.Run("a collection with a live owner evaluates a per-user query as before", func(t *testing.T) {
+		store := ownerless("read_status:finished", "bob")
+		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+		w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "alice")
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs, "as bob, who finished b2")
+		w = rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice")
+		assert.NotContains(t, w.Body.String(), "evaluation_blocked")
+	})
+
+	t.Run("the first admin re-saving the query takes the collection over", func(t *testing.T) {
+		store := ownerless("read_status:finished", "deleted-user")
+		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
+		// Not a non-admin: bob re-sending the same query neither adopts nor errors.
+		w := rig.send(t, http.MethodPut, "/api/v1/collections/c1", "bob", map[string]any{"query": "read_status:finished"})
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, "deleted-user", store.cols[0].CreatedByUserID)
+
+		w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice", map[string]any{"query": "read_status:finished"})
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, "alice", store.cols[0].CreatedByUserID)
+		assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
+
+		w = rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
+		require.Equal(t, http.StatusOK, w.Code, "now it has an owner and evaluates")
 	})
 }
