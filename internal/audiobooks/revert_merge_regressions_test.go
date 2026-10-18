@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_regressions_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d9b7f41-6e05-4c38-a1f2-8b3c5e9d0a74
 // last-edited: 2026-10-18
 
@@ -219,41 +219,166 @@ func TestRevert_CombineUndoRetry_EditedSince_KeepsItsRow(t *testing.T) {
 }
 
 // crashStore panics at one write of a combine: crash reports whether the
-// call named by method and arg is the one to stop at.
+// call named by method and arg is the one to stop at. With post unset it
+// stops BEFORE the write; with post set it stops right AFTER the write lands
+// (the store call returned nil), which is the window a journal written after
+// its step would leave unrecorded.
 type crashStore struct {
 	*database.PebbleStore
 	crash func(method, arg string) bool
+	post  bool
 }
 
-func (s crashStore) hit(method, arg string) {
-	if s.crash(method, arg) {
-		panic("crash at " + method + " " + arg)
+func (s crashStore) before(method, arg string) {
+	if !s.post && s.crash(method, arg) {
+		panic("crash before " + method + " " + arg)
+	}
+}
+
+func (s crashStore) after(method, arg string, err error) {
+	if s.post && err == nil && s.crash(method, arg) {
+		panic("crash after " + method + " " + arg)
 	}
 }
 
 func (s crashStore) CreateBookFile(bf *database.BookFile) error {
-	s.hit("CreateBookFile", bf.FilePath)
-	return s.PebbleStore.CreateBookFile(bf)
+	s.before("CreateBookFile", bf.FilePath)
+	err := s.PebbleStore.CreateBookFile(bf)
+	s.after("CreateBookFile", bf.FilePath, err)
+	return err
 }
 
 func (s crashStore) MoveBookFilesToBookBulk(moves []database.BookFileMove, dst string) error {
-	s.hit("MoveBookFilesToBookBulk", dst)
-	return s.PebbleStore.MoveBookFilesToBookBulk(moves, dst)
+	s.before("MoveBookFilesToBookBulk", dst)
+	err := s.PebbleStore.MoveBookFilesToBookBulk(moves, dst)
+	s.after("MoveBookFilesToBookBulk", dst, err)
+	return err
 }
 
 func (s crashStore) ReassignExternalIDs(oldID, newID string) error {
-	s.hit("ReassignExternalIDs", oldID)
-	return s.PebbleStore.ReassignExternalIDs(oldID, newID)
+	s.before("ReassignExternalIDs", oldID)
+	err := s.PebbleStore.ReassignExternalIDs(oldID, newID)
+	s.after("ReassignExternalIDs", oldID, err)
+	return err
+}
+
+func (s crashStore) SetRaw(key string, value []byte) error {
+	s.before("SetRaw", key)
+	err := s.PebbleStore.SetRaw(key, value)
+	s.after("SetRaw", key, err)
+	return err
 }
 
 func (s crashStore) DeleteRaw(key string) error {
-	s.hit("DeleteRaw", key)
-	return s.PebbleStore.DeleteRaw(key)
+	s.before("DeleteRaw", key)
+	err := s.PebbleStore.DeleteRaw(key)
+	s.after("DeleteRaw", key, err)
+	return err
+}
+
+func (s crashStore) SetUserBookState(st *database.UserBookState) error {
+	s.before("SetUserBookState", st.BookID)
+	err := s.PebbleStore.SetUserBookState(st)
+	s.after("SetUserBookState", st.BookID, err)
+	return err
 }
 
 func (s crashStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	s.hit("ModifyBook", id)
-	return s.PebbleStore.ModifyBook(id, fn)
+	s.before("ModifyBook", id)
+	b, err := s.PebbleStore.ModifyBook(id, fn)
+	s.after("ModifyBook", id, err)
+	return b, err
+}
+
+func (s crashStore) MoveBookFilesToBook(ids []string, src, dst string) error {
+	s.before("MoveBookFilesToBook", src)
+	err := s.PebbleStore.MoveBookFilesToBook(ids, src, dst)
+	s.after("MoveBookFilesToBook", src, err)
+	return err
+}
+
+func (s crashStore) UpdateBookFile(id string, f *database.BookFile) error {
+	s.before("UpdateBookFile", f.BookID)
+	err := s.PebbleStore.UpdateBookFile(id, f)
+	s.after("UpdateBookFile", f.BookID, err)
+	return err
+}
+
+func (s crashStore) UpdateBook(id string, b *database.Book) (*database.Book, error) {
+	s.before("UpdateBook", id)
+	out, err := s.PebbleStore.UpdateBook(id, b)
+	s.after("UpdateBook", id, err)
+	return out, err
+}
+
+func (s crashStore) ReassignExternalID(source, externalID, newBookID string) error {
+	s.before("ReassignExternalID", externalID)
+	err := s.PebbleStore.ReassignExternalID(source, externalID, newBookID)
+	s.after("ReassignExternalID", externalID, err)
+	return err
+}
+
+func (s crashStore) SetBookAuthors(bookID string, authors []database.BookAuthor) error {
+	s.before("SetBookAuthors", bookID)
+	err := s.PebbleStore.SetBookAuthors(bookID, authors)
+	s.after("SetBookAuthors", bookID, err)
+	return err
+}
+
+func (s crashStore) CreateAuthor(name string) (*database.Author, error) {
+	s.before("CreateAuthor", name)
+	a, err := s.PebbleStore.CreateAuthor(name)
+	s.after("CreateAuthor", name, err)
+	return a, err
+}
+
+func (s crashStore) UpsertMetadataFieldState(st *database.MetadataFieldState) error {
+	s.before("UpsertMetadataFieldState", st.BookID+"/"+st.Field)
+	err := s.PebbleStore.UpsertMetadataFieldState(st)
+	s.after("UpsertMetadataFieldState", st.BookID+"/"+st.Field, err)
+	return err
+}
+
+func (s crashStore) DeleteMetadataFieldState(bookID, field string) error {
+	s.before("DeleteMetadataFieldState", bookID+"/"+field)
+	err := s.PebbleStore.DeleteMetadataFieldState(bookID, field)
+	s.after("DeleteMetadataFieldState", bookID+"/"+field, err)
+	return err
+}
+
+func (s crashStore) SetUserPosition(userID, bookID, segmentID string, pos float64) error {
+	s.before("SetUserPosition", bookID)
+	err := s.PebbleStore.SetUserPosition(userID, bookID, segmentID, pos)
+	s.after("SetUserPosition", bookID, err)
+	return err
+}
+
+func (s crashStore) SetUserPositionAt(userID, bookID, segmentID string, pos float64, at time.Time) error {
+	s.before("SetUserPositionAt", bookID)
+	err := s.PebbleStore.SetUserPositionAt(userID, bookID, segmentID, pos, at)
+	s.after("SetUserPositionAt", bookID, err)
+	return err
+}
+
+func (s crashStore) ClearUserPositions(userID, bookID string) error {
+	s.before("ClearUserPositions", bookID)
+	err := s.PebbleStore.ClearUserPositions(userID, bookID)
+	s.after("ClearUserPositions", bookID, err)
+	return err
+}
+
+func (s crashStore) CreateOperationChange(c *database.OperationChange) error {
+	s.before("CreateOperationChange", c.ChangeType)
+	err := s.PebbleStore.CreateOperationChange(c)
+	s.after("CreateOperationChange", c.ChangeType, err)
+	return err
+}
+
+func (s crashStore) RecomputeBookAggregates(id string) error {
+	s.before("RecomputeBookAggregates", id)
+	err := s.PebbleStore.RecomputeBookAggregates(id)
+	s.after("RecomputeBookAggregates", id, err)
+	return err
 }
 
 // crashFixture: keep and b are VIRTUAL single-file books (the combine creates
@@ -341,24 +466,23 @@ func snapCrash(t *testing.T, store database.Store, f crashFixture) crashSnap {
 	return s
 }
 
-// S3: CombineBooks journals every step, so a combine stopped at any write is
-// undone by reverting its operation: every book row, file, id and reader's
-// progress goes back. Rows the combine created stay, on the book whose audio
-// they name (book_file rows are never deleted).
+// S3: CombineBooks journals every step, so a combine stopped at any write --
+// just before it, or just after it landed -- is undone by reverting its
+// operation: every book row, file, id and reader's progress goes back. Rows
+// the combine created stay, on the book whose audio they name (book_file rows
+// are never deleted).
 func TestRevert_CombineStoppedPartWay_EveryCrashPoint(t *testing.T) {
+	type crashFn func(f crashFixture) func(method, arg string) bool
 	cases := []struct {
 		name  string
-		crash func(f crashFixture) func(method, arg string) bool
-		// survivorKeepsCopy: the follow drained a's progress onto keep and
-		// the combine stopped before the after-snapshot. With only the
+		crash crashFn
+		// mayKeepCopy: the follow drained a's progress onto keep and the
+		// combine stopped before the after-snapshot. With only the
 		// before-snapshot journaled, the undo puts a's progress back and
 		// leaves keep's as is (it cannot tell the follow's write from one the
-		// reader made since): keep holds a copy, nothing is lost.
-		survivorKeepsCopy bool
+		// reader made since): keep may hold a copy, nothing is lost.
+		mayKeepCopy bool
 	}{
-		{"no crash", func(crashFixture) func(string, string) bool {
-			return func(string, string) bool { return false }
-		}, false},
 		{"creating the survivor's own file row", func(crashFixture) func(string, string) bool {
 			return func(m, arg string) bool { return m == "CreateBookFile" && arg == "/tmp/crash/keep.mp3" }
 		}, false},
@@ -368,59 +492,88 @@ func TestRevert_CombineStoppedPartWay_EveryCrashPoint(t *testing.T) {
 		{"reassigning the external ids", func(f crashFixture) func(string, string) bool {
 			return func(m, arg string) bool { return m == "ReassignExternalIDs" && arg == f.a }
 		}, false},
-		{"after the progress follow drained a", func(f crashFixture) func(string, string) bool {
+		{"recording a's pending repair", func(f crashFixture) func(string, string) bool {
+			return func(m, arg string) bool {
+				return m == "SetRaw" && strings.HasPrefix(arg, merge.PendingUserStateRepairPrefix+f.a+":")
+			}
+		}, true},
+		{"draining a's progress", func(f crashFixture) func(string, string) bool {
+			return func(m, arg string) bool { return m == "SetUserBookState" && arg == f.a }
+		}, true},
+		{"dropping a's pending repair after the drain", func(f crashFixture) func(string, string) bool {
 			return func(m, arg string) bool {
 				return m == "DeleteRaw" && strings.HasPrefix(arg, merge.PendingUserStateRepairPrefix+f.a+":")
 			}
 		}, true},
+		{"soft-deleting a", func(f crashFixture) func(string, string) bool {
+			return func(m, arg string) bool { return m == "ModifyBook" && arg == f.a }
+		}, false},
 		{"creating b's file row", func(crashFixture) func(string, string) bool {
 			return func(m, arg string) bool { return m == "CreateBookFile" && arg == "/tmp/crash/b.mp3" }
 		}, false},
 		{"soft-deleting b after a was retired", func(f crashFixture) func(string, string) bool {
 			return func(m, arg string) bool { return m == "ModifyBook" && arg == f.b }
 		}, false},
+		{"recomputing the survivor once the body is done", func(f crashFixture) func(string, string) bool {
+			return func(m, arg string) bool { return m == "RecomputeBookAggregates" && arg == f.keep }
+		}, false},
 	}
+	run := func(t *testing.T, crash func(f crashFixture) func(string, string) bool, post, wantCrash, mayKeepCopy bool) {
+		store := dbtest.NewStore(t)
+		f := seedCrashFixture(t, store)
+		before := snapCrash(t, store, f)
+		opID := "op-" + ulid.Make().String()
+
+		crashed := false
+		func() {
+			defer func() { crashed = recover() != nil }()
+			_, err := merge.NewService(crashStore{store, crash(f), post}).CombineBooksWithOptions(
+				[]string{f.keep, f.a, f.b}, f.keep, nil, merge.CombineOptions{OperationID: opID})
+			require.NoError(t, err)
+		}()
+		require.Equal(t, wantCrash, crashed)
+		require.Len(t, pointerRows(t, store, opID, undo.ChangeTypeMergeCombineJournal), 1)
+		// Every row the stopped combine left, created ones included, must
+		// still be there after the revert, on the book whose audio it is.
+		mid := snapCrash(t, store, f)
+
+		pf, err := undo.PreflightUndoConflicts(store, opID)
+		require.NoError(t, err)
+		require.Equal(t, 1, pf.Safe, "%+v", pf)
+
+		rv, err := NewRevertService(store).RevertOperation(opID)
+		require.NoError(t, err)
+		require.Equal(t, 1, rv.RestoredTypes[undo.ChangeTypeMergeCombineJournal], "%+v", rv)
+
+		after := snapCrash(t, store, f)
+		require.Equal(t, before.Rows, after.Rows, "every book row as before")
+		require.Equal(t, before.PIDOwner, after.PIDOwner)
+		require.Equal(t, before.AProgress, after.AProgress, "a's reader progress back")
+		if mayKeepCopy {
+			require.Contains(t, []string{before.KProgress, before.AProgress}, after.KProgress, "keep has its own progress or a copy of a's")
+		} else {
+			require.Equal(t, before.KProgress, after.KProgress)
+		}
+		for path, owner := range after.Owner {
+			require.Equal(t, f.paths[path], owner, "file %s on the book whose audio it is", path)
+		}
+		for path, owner := range before.Owner {
+			require.Equal(t, owner, after.Owner[path], "file %s still there, on its book", path)
+		}
+		for path := range mid.Owner {
+			require.Equal(t, f.paths[path], after.Owner[path], "row for %s (the combine left it) is on its owner after the revert", path)
+		}
+	}
+	t.Run("no crash", func(t *testing.T) {
+		run(t, func(crashFixture) func(string, string) bool {
+			return func(string, string) bool { return false }
+		}, false, false, false)
+	})
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := dbtest.NewStore(t)
-			f := seedCrashFixture(t, store)
-			before := snapCrash(t, store, f)
-			opID := "op-" + ulid.Make().String()
-
-			crashed := false
-			func() {
-				defer func() { crashed = recover() != nil }()
-				_, err := merge.NewService(crashStore{store, tc.crash(f)}).CombineBooksWithOptions(
-					[]string{f.keep, f.a, f.b}, f.keep, nil, merge.CombineOptions{OperationID: opID})
-				require.NoError(t, err)
-			}()
-			require.Equal(t, tc.name != "no crash", crashed)
-			require.Len(t, pointerRows(t, store, opID, undo.ChangeTypeMergeCombineJournal), 1)
-
-			pf, err := undo.PreflightUndoConflicts(store, opID)
-			require.NoError(t, err)
-			require.Equal(t, 1, pf.Safe, "%+v", pf)
-
-			rv, err := NewRevertService(store).RevertOperation(opID)
-			require.NoError(t, err)
-			require.Equal(t, 1, rv.RestoredTypes[undo.ChangeTypeMergeCombineJournal], "%+v", rv)
-
-			after := snapCrash(t, store, f)
-			require.Equal(t, before.Rows, after.Rows, "every book row as before")
-			require.Equal(t, before.PIDOwner, after.PIDOwner)
-			require.Equal(t, before.AProgress, after.AProgress, "a's reader progress back")
-			if tc.survivorKeepsCopy {
-				require.Equal(t, before.AProgress, after.KProgress, "keep keeps a copy of a's progress")
-			} else {
-				require.Equal(t, before.KProgress, after.KProgress)
-			}
-			for path, owner := range after.Owner {
-				require.Equal(t, f.paths[path], owner, "file %s on the book whose audio it is", path)
-			}
-			for path, owner := range before.Owner {
-				require.Equal(t, owner, after.Owner[path], "file %s still there, on its book", path)
-			}
-		})
+		for _, post := range []bool{false, true} {
+			name := tc.name + map[bool]string{false: " (before the write)", true: " (after the write)"}[post]
+			t.Run(name, func(t *testing.T) { run(t, tc.crash, post, true, tc.mayKeepCopy) })
+		}
 	}
 }
 
@@ -429,6 +582,15 @@ func TestRevert_CombineStoppedPartWay_EveryCrashPoint(t *testing.T) {
 // only the journal, not the survivor row.
 func TestRevert_SiblingMove_SurvivorPurgedSince(t *testing.T) {
 	f, k, l, ls := siblingFixture(t)
+	// A reader's progress on the loser (the merge follows it onto the
+	// survivor) and on the sibling the merge moves: the revert must not
+	// remove listening data from any live book.
+	u, err := f.S.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.S.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: l, Status: database.UserBookStatusInProgress, ProgressPct: 60, LastActivityAt: time.Now().UTC().Truncate(time.Second)}))
+	require.NoError(t, f.S.SetUserPosition(u.ID, l, "seg-1", 1234))
+	require.NoError(t, f.S.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: ls, Status: database.UserBookStatusInProgress, ProgressPct: 30, LastActivityAt: time.Now().UTC().Truncate(time.Second)}))
+	require.NoError(t, f.S.SetUserPosition(u.ID, ls, "seg-2", 77))
 	res, err := merge.NewService(f.S).MergeBooks([]string{l, k}, k)
 	require.NoError(t, err)
 	require.Equal(t, "H", f.GroupOf(t, ls))
@@ -443,6 +605,15 @@ func TestRevert_SiblingMove_SurvivorPurgedSince(t *testing.T) {
 		require.NoError(t, f.S.MoveBookFilesToBook(ids, k, other))
 	}
 	require.NoError(t, f.S.DeleteBook(k))
+	progress := func() map[string]string {
+		out := map[string]string{}
+		for _, id := range []string{l, ls, other} {
+			out[id] = progressOf(t, f.S, u.ID, id)
+		}
+		return out
+	}
+	progressBefore := progress()
+	require.Contains(t, progressBefore[ls], "/30", "the sibling's own progress went with it")
 
 	pf, err := undo.PreflightUndoConflicts(f.S, res.SiblingOperationID)
 	require.NoError(t, err)
@@ -453,6 +624,7 @@ func TestRevert_SiblingMove_SurvivorPurgedSince(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, rv.RestoredTypes[undo.ChangeTypeMergeSiblingJournal])
 	require.Equal(t, "G", f.GroupOf(t, ls), "the sibling is back in its group")
+	require.Equal(t, progressBefore, progress(), "no live book's listening data changed")
 }
 
 // A sibling journal whose merge stopped at its first membership write (after
@@ -486,4 +658,108 @@ func TestRevert_SiblingMergeStoppedAtFirstMembershipWrite(t *testing.T) {
 	require.Equal(t, "G", f.GroupOf(t, ls))
 	require.Equal(t, "G", f.GroupOf(t, l))
 	f.RequireSinglePrimary(t, "G", l)
+}
+
+// B1 for the split-book merge: stopped at each store write it makes --
+// before the write, and right after it lands -- the merge is undone by
+// reverting its operation: every book row (title included), file owner and
+// number, the iTunes id and the reader's progress go back. The write list
+// comes from a traced run, so a write added to the merge later is crashed
+// too.
+func TestRevert_SplitMergeStoppedPartWay_EveryCrashPoint(t *testing.T) {
+	type snap struct {
+		Lib       librarySnap
+		Duration  string
+		AProgress string
+		KProgress string
+	}
+	seed := func(t *testing.T) (*database.PebbleStore, combineFixture, string) {
+		store := dbtest.NewStore(t)
+		f := seedCombineFixture(t, store)
+		u, err := store.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+		require.NoError(t, err)
+		require.NoError(t, store.SetUserBookState(&database.UserBookState{
+			UserID: u.ID, BookID: f.a, Status: database.UserBookStatusInProgress, ProgressPct: 40,
+			LastActivityAt: time.Now().UTC().Truncate(time.Second),
+		}))
+		require.NoError(t, store.SetUserPosition(u.ID, f.a, "seg", 40))
+		return store, f, u.ID
+	}
+	snapOf := func(t *testing.T, store database.Store, f combineFixture, user string) snap {
+		k, err := store.GetBookByID(f.keep)
+		require.NoError(t, err)
+		d := "nil"
+		if k.Duration != nil {
+			d = fmt.Sprint(*k.Duration)
+		}
+		return snap{Lib: snapLibrary(t, store, f), Duration: d,
+			AProgress: progressOf(t, store, user, f.a), KProgress: progressOf(t, store, user, f.keep)}
+	}
+	merge := func(db database.Store, f combineFixture, opID string) {
+		_, _ = dedup.MergeSplitBookClusterWithOptions(db, f.keep, []string{f.a, f.b},
+			"Merged Title", dedup.SplitMergeOptions{OperationID: opID, OrderByBooks: true})
+	}
+
+	var writes []string
+	var mergedK string // keep's progress after a whole merge: a's, mapped into keep's timeline
+	{
+		store, f, user := seed(t)
+		merge(crashStore{store, func(m, arg string) bool { writes = append(writes, m+" "+arg); return false }, false}, f, "op-trace")
+		mergedK = progressOf(t, store, user, f.keep)
+	}
+	// copyPieces: a stop inside the follow, before its after-snapshot is
+	// journaled, leaves keep holding (part of) the copy of a's progress; the
+	// undo cannot tell that write from the reader's own, so it is kept.
+	// Nothing is removed (a's progress is back in full), and keep holds
+	// nothing that is not a piece of that copy.
+	copyPieces := func(got string) bool {
+		allowed := map[string]bool{"none": true}
+		for _, tok := range strings.Fields(mergedK) {
+			allowed[tok] = true
+		}
+		for _, tok := range strings.Fields(got) {
+			if !allowed[tok] {
+				return false
+			}
+		}
+		return true
+	}
+	for _, want := range []string{"MoveBookFilesToBook", "ReassignExternalIDs", "SetUserBookState", "UpdateBookFile", "ModifyBook"} {
+		found := false
+		for _, w := range writes {
+			found = found || strings.HasPrefix(w, want+" ")
+		}
+		require.True(t, found, "the trace covers %s: %v", want, writes)
+	}
+
+	for i := 1; i <= len(writes); i++ {
+		for _, post := range []bool{false, true} {
+			name := fmt.Sprintf("%02d %s %s", i, strings.Fields(writes[i-1])[0], map[bool]string{false: "before", true: "after"}[post])
+			t.Run(name, func(t *testing.T) {
+				store, f, user := seed(t)
+				before := snapOf(t, store, f, user)
+				opID := "op-" + ulid.Make().String()
+				n := 0
+				crashed := false
+				func() {
+					defer func() { crashed = recover() != nil }()
+					merge(crashStore{store, func(string, string) bool { n++; return n == i }, post}, f, opID)
+				}()
+				require.True(t, crashed, "write %d was reached", i)
+				if len(pointerRows(t, store, opID, undo.ChangeTypeMergeCombineJournal)) == 0 {
+					require.Equal(t, before, snapOf(t, store, f, user), "stopped before its undo pointer: nothing changed")
+					return
+				}
+
+				rv, err := NewRevertService(store).RevertOperation(opID)
+				require.NoError(t, err, "%+v", rv)
+				after := snapOf(t, store, f, user)
+				require.Equal(t, before.Lib, after.Lib, "every book, file row and id back")
+				require.Equal(t, before.Duration, after.Duration, "keep's duration back")
+				require.Equal(t, before.AProgress, after.AProgress, "a's reader progress back")
+				require.True(t, after.KProgress == before.KProgress || copyPieces(after.KProgress),
+					"keep has its own progress (%q) or pieces of the merged copy (%q), got %q", before.KProgress, mergedK, after.KProgress)
+			})
+		}
+	}
 }
