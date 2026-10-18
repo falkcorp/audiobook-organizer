@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package opsv3
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -30,19 +31,29 @@ import (
 // open; the ring is how far back Last-Event-ID can resume; ClientBuffer is how
 // many unsent events one slow client may hold before its oldest are dropped.
 // MaxClients bounds the open streams (each holds a goroutine and a queue);
-// one more is answered 503. MaxWatched bounds the runs the broker re-reads
+// one more is answered 503. MaxClientsPerUser bounds one signed-in user's
+// open streams so a single account (a page reloaded in a loop, a script)
+// cannot take every place; one more is answered 429. A request with no user
+// (auth disabled, first run) is bounded only by MaxClients: there is no
+// account to tell apart, and keying on the client address would put every
+// caller behind one reverse proxy into the same small bucket. MaxWatched bounds the runs the broker re-reads
 // until they settle (see Run).
 const (
 	DefaultHeartbeat    = 15 * time.Second
 	DefaultRingSize     = 512
 	DefaultClientBuffer = 128
 	DefaultMaxClients   = 64
+	DefaultMaxPerUser   = 4
 	DefaultMaxWatched   = 256
 	defaultFlushEvery   = 250 * time.Millisecond
 )
 
-// ErrTooManyClients is subscribe's answer past MaxClients.
-var ErrTooManyClients = errors.New("opsv3: too many event stream clients")
+// subscribe's refusals: past MaxClients, and past MaxClientsPerUser for one
+// user.
+var (
+	ErrTooManyClients     = errors.New("opsv3: too many event stream clients")
+	ErrTooManyUserClients = errors.New("opsv3: too many event streams for this user")
+)
 
 var eventsLog = logger.New("handlers.opsv3.events")
 
@@ -59,9 +70,10 @@ type BrokerOptions struct {
 	// FlushEvery is how often changed runs are re-read and published. Progress
 	// events arrive per item; reading a run per event would put a store read
 	// on the progress path, so changes are coalesced per run instead.
-	FlushEvery time.Duration
-	MaxClients int
-	MaxWatched int
+	FlushEvery        time.Duration
+	MaxClients        int
+	MaxClientsPerUser int
+	MaxWatched        int
 }
 
 // message is one numbered event. Its SSE id is "<nonce>-<id>" (eventID).
@@ -90,6 +102,8 @@ type Broker struct {
 	seq     uint64
 	ring    []message // oldest first, at most opt.RingSize
 	clients map[*client]struct{}
+	// perUser counts the open streams of each signed-in user.
+	perUser map[string]int
 
 	// Lazy start (StartOnFirstSubscriber): Run begins with the first client.
 	startCtx  context.Context
@@ -119,11 +133,14 @@ func NewBroker(runs RunReader, hub Hub, zombies ZombieSource, opt BrokerOptions)
 	if opt.MaxClients <= 0 {
 		opt.MaxClients = DefaultMaxClients
 	}
+	if opt.MaxClientsPerUser <= 0 {
+		opt.MaxClientsPerUser = DefaultMaxPerUser
+	}
 	if opt.MaxWatched <= 0 {
 		opt.MaxWatched = DefaultMaxWatched
 	}
 	return &Broker{runs: runs, hub: hub, zombies: zombies, opt: opt, nonce: newNonce(),
-		clients: map[*client]struct{}{}, watch: map[string][]byte{}}
+		clients: map[*client]struct{}{}, perUser: map[string]int{}, watch: map[string][]byte{}}
 }
 
 func newNonce() string {
@@ -360,13 +377,18 @@ const (
 // subscribe registers a client. resumeAfter first queues the ring's events
 // after lastID; when the ring no longer reaches back that far (or for
 // resumeResync: an id of another process, or one that does not parse) the
-// client is marked to resync instead. Past MaxClients it refuses.
-func (b *Broker) subscribe(lastID uint64, mode resumeMode) (*client, func(), error) {
+// client is marked to resync instead. Past MaxClients it refuses, and past
+// MaxClientsPerUser streams of the same user (a non-empty userID).
+func (b *Broker) subscribe(userID string, lastID uint64, mode resumeMode) (*client, func(), error) {
 	c := newClient(b.opt.ClientBuffer)
 	b.mu.Lock()
 	if len(b.clients) >= b.opt.MaxClients {
 		b.mu.Unlock()
 		return nil, nil, ErrTooManyClients
+	}
+	if userID != "" && b.perUser[userID] >= b.opt.MaxClientsPerUser {
+		b.mu.Unlock()
+		return nil, nil, ErrTooManyUserClients
 	}
 	switch mode {
 	case resumeResync:
@@ -388,12 +410,23 @@ func (b *Broker) subscribe(lastID uint64, mode resumeMode) (*client, func(), err
 		}
 	}
 	b.clients[c] = struct{}{}
+	if userID != "" {
+		b.perUser[userID]++
+	}
 	b.mu.Unlock()
 	b.ensureRunning()
+	var once sync.Once
 	return c, func() {
-		b.mu.Lock()
-		delete(b.clients, c)
-		b.mu.Unlock()
+		once.Do(func() {
+			b.mu.Lock()
+			delete(b.clients, c)
+			if userID != "" {
+				if b.perUser[userID]--; b.perUser[userID] <= 0 {
+					delete(b.perUser, userID)
+				}
+			}
+			b.mu.Unlock()
+		})
 	}, nil
 }
 
@@ -403,8 +436,9 @@ func (b *Broker) subscribe(lastID uint64, mode resumeMode) (*client, func(), err
 // missed (a client too slow for its buffer, a Last-Event-ID the ring no
 // longer holds, or one from before a restart): reload /runs, then keep
 // reading. Event ids are "<boot nonce>-<sequence>". The stream ends when the
-// client leaves or the server starts shutting down (Deps.Closing), and past
-// MaxClients open streams the answer is 503.
+// client leaves or the server starts shutting down (Deps.Closing). Past
+// MaxClients open streams the answer is 503; past MaxClientsPerUser streams
+// of the signed-in caller it is 429.
 func (h *Handler) Events(c *gin.Context) {
 	b := h.d.Broker
 	if b == nil {
@@ -419,7 +453,15 @@ func (h *Handler) Events(c *gin.Context) {
 			lastID, mode = n, resumeAfter
 		}
 	}
-	cl, unsubscribe, err := b.subscribe(lastID, mode)
+	var userID string
+	if u, ok := auth.UserFromContext(c.Request.Context()); ok {
+		userID = u.ID
+	}
+	cl, unsubscribe, err := b.subscribe(userID, lastID, mode)
+	if errors.Is(err, ErrTooManyUserClients) {
+		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many open operations event streams for this user; close one and retry", "TOO_MANY_STREAMS")
+		return
+	}
 	if err != nil {
 		httputil.RespondWithServiceUnavailable(c, "too many open operations event streams; try again shortly")
 		return
