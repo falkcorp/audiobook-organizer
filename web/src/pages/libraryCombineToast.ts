@@ -1,5 +1,5 @@
 // file: web/src/pages/libraryCombineToast.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 153032e4-1d3e-45a8-9827-f498afe24850
 // last-edited: 2026-10-18
 
@@ -16,6 +16,10 @@
  * an id, the text mentions Undo only then, and a partial or failed undo offers
  * Retry (a re-run of the same revert picks up the rows that did not revert)
  * rather than pointing at a page that may not list the operation.
+ *
+ * Every toast that leaves the combine half-done (stopped part-way, partly
+ * undone, undo failed) also names the operation id: a toast is dismissed or
+ * times out, and after that the id is the only handle on the revert.
  */
 
 import { ApiError, type CombineBooksResult, type RevertOperationResult } from '../services/api';
@@ -29,6 +33,11 @@ export interface CombineToastPlan {
   undoOperationId?: string;
   /** Label of that action: 'Undo' on a combine toast, 'Retry' on an undo toast. */
   actionLabel?: string;
+}
+
+/** " (operation <id>)", so a half-done combine can still be found and reverted after its toast is gone. */
+function operationRef(operationId: string): string {
+  return ` (operation ${operationId})`;
 }
 
 export function describeCombineResult(result: CombineBooksResult): CombineToastPlan {
@@ -65,10 +74,10 @@ export function describeCombineFailure(error: unknown): CombineToastPlan {
   const undoOperationId = combineIncompleteOperationId(error);
   if (undoOperationId) {
     // The server's message names the operation id to revert; the button is
-    // that revert, so the toast says what Undo does instead of repeating it.
+    // that revert, so the toast says what Undo does instead of repeating it,
+    // and keeps the id for after the toast is gone.
     return {
-      message:
-        'The combine stopped part-way and may already have moved some files or put some books in the trash. Undo puts back what it changed.',
+      message: `The combine stopped part-way and may already have moved some files or put some books in the trash. Undo puts back what it changed${operationRef(undoOperationId)}.`,
       severity: 'error',
       undoOperationId,
       actionLabel: 'Undo',
@@ -89,7 +98,7 @@ export function describeUndoResult(
         ? ` (${result.restored} of ${result.total} changes reverted)`
         : '';
     return {
-      message: `Some of the combine could not be undone${counts}. Retry runs the undo again for what is left.`,
+      message: `Some of the combine could not be undone${counts}. Retry runs the undo again for what is left${operationRef(operationId)}.`,
       severity: 'warning',
       undoOperationId: operationId,
       actionLabel: 'Retry',
@@ -106,7 +115,7 @@ export function describeUndoFailure(error: unknown, operationId: string): Combin
     return { message: `The combine was not undone.${reason}`, severity: 'error' };
   }
   return {
-    message: `Failed to undo the combine.${reason}`,
+    message: `Failed to undo the combine${operationRef(operationId)}.${reason}`,
     severity: 'error',
     undoOperationId: operationId,
     actionLabel: 'Retry',
