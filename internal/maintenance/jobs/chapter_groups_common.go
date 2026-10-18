@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package jobs
 
@@ -144,11 +144,16 @@ type chapterGroupOutcome struct {
 	PrimaryTitle string `json:"primary_title,omitempty"`
 	// TitleAction: "set" (a filename-derived title replaced by CommonTitle),
 	// "kept" (curated title left alone), "kept_locked" (user field lock).
-	TitleAction string   `json:"title_action,omitempty"`
-	BooksMerged int      `json:"books_merged,omitempty"`
-	FilesMoved  int      `json:"files_moved,omitempty"`
-	JournalID   string   `json:"journal_id,omitempty"`
-	Errors      []string `json:"errors,omitempty"`
+	TitleAction string `json:"title_action,omitempty"`
+	BooksMerged int    `json:"books_merged,omitempty"`
+	FilesMoved  int    `json:"files_moved,omitempty"`
+	JournalID   string `json:"journal_id,omitempty"`
+	// UndoOperationID is the operation the merge journaled its undo pointer
+	// under: reverting it (POST /operations/:id/revert) undoes this group's
+	// merge. It is the run's own id, or, for a run with none, the id the merge
+	// minted for itself (merge.UndoOperationID).
+	UndoOperationID string   `json:"undo_operation_id,omitempty"`
+	Errors          []string `json:"errors,omitempty"`
 }
 
 // chapterGroupsResult is the structured payload both jobs persist on their

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-10-18
 
@@ -542,7 +542,10 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chap
 	}
 	mres, merr := dedup.MergeSplitBookClusterWithOptions(ds, sel.PrimaryBookID, out.SourceBookIDs, suggested,
 		// OperationID: the merge journals its undo pointer under this run, so
-		// reverting the op undoes every chapter merge it made.
+		// reverting the op undoes every chapter merge it made. A run with no
+		// id (one started outside the registry) is not refused: the merge
+		// mints an id of its own and returns it, recorded on the outcome
+		// below, so that merge is still undoable on its own.
 		dedup.SplitMergeOptions{OrderByBooks: true, FillEmpty: true, Precheck: precheck, OperationID: opID})
 	var stepErr *chapterStepError
 	if errors.As(merr, &stepErr) {
@@ -561,6 +564,7 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chap
 		out.BooksMerged = mres.MergedSrcCount
 		out.FilesMoved = mres.FilesMoved
 		out.JournalID = mres.JournalID
+		out.UndoOperationID = mres.OperationID
 		out.Errors = append(out.Errors, mres.Errors...)
 		if mres.TitleKeptLocked {
 			out.TitleAction = "kept_locked"
