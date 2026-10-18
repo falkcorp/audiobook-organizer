@@ -1,5 +1,5 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.5.2
+// version: 1.7.0
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
 // last-edited: 2026-10-18
 
@@ -73,7 +73,7 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/audiobooks/:id/restore":               "un-deletes a book",
 	"POST /api/v1/audiobooks/:id/cover-history/restore": "retired (01-P81i): 410 Gone stub, touches nothing",
 	"POST /api/v1/audiobooks/:id/versions/:vid/restore": "restores a book version",
-	"POST /api/v1/books/:id/versions/:vid/restore":      "restores a book version",
+	"POST /api/v1/books/:id/versions/:vid/restore":      "retired: 410 Gone stub, touches nothing",
 	"POST /api/v1/dedup/reset-acoustid":                 "clears dedup data",
 	"POST /api/v1/repairs/:fixer/plan":                  "plans a library repair",
 	"POST /api/v1/repairs/:fixer/apply":                 "applies a library repair",

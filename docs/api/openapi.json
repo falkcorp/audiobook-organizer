@@ -5332,9 +5332,7 @@
       ],
       "delete": {
         "operationId": "handleTrashVersionBooksAlias",
-        "summary": "Trash Version",
-        "description": "Deprecated alias for DELETE /audiobooks/{id}/versions/{vid}. Kept for backward compatibility.",
-        "deprecated": true,
+        "summary": "Trash Version (retired)",
         "tags": [
           "reading"
         ],
@@ -5344,19 +5342,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing library.delete permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed; use the replacement named in the message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. Use DELETE /api/v1/audiobooks/{id}/versions/{vid} instead. A caller without the required permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/audiobooks/{id}/versions/{vid}/purge-now": {
@@ -5430,9 +5445,7 @@
       ],
       "post": {
         "operationId": "handlePurgeVersionBooksAlias",
-        "summary": "Purge Version",
-        "description": "Deprecated alias for POST /audiobooks/{id}/versions/{vid}/purge-now. Kept for backward compatibility.",
-        "deprecated": true,
+        "summary": "Purge Version (retired)",
         "tags": [
           "reading"
         ],
@@ -5442,19 +5455,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing library.delete permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed; use the replacement named in the message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. Use POST /api/v1/audiobooks/{id}/versions/{vid}/purge-now instead. A caller without the required permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/audiobooks/{id}/versions/{vid}/restore": {
@@ -5528,9 +5558,7 @@
       ],
       "post": {
         "operationId": "handleRestoreVersionBooksAlias",
-        "summary": "Restore Version",
-        "description": "Deprecated alias for POST /audiobooks/{id}/versions/{vid}/restore. Kept for backward compatibility.",
-        "deprecated": true,
+        "summary": "Restore Version (retired)",
         "tags": [
           "reading"
         ],
@@ -5540,19 +5568,36 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
           "401": {
             "description": "Unauthorized"
           },
-          "404": {
-            "description": "Not found"
+          "403": {
+            "description": "Forbidden: missing library.organize permission"
+          },
+          "410": {
+            "description": "Gone: the endpoint has been removed; use the replacement named in the message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "enum": [
+                        "gone"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Retired: this endpoint now always answers 410 Gone. Use POST /api/v1/audiobooks/{id}/versions/{vid}/restore instead. A caller without the required permission still gets 401 or 403 before the 410. It is removed entirely in a later release.",
+        "deprecated": true
       }
     },
     "/config": {

@@ -1,7 +1,7 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package server
 
@@ -16,14 +16,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestDeprecatedBooksAliases_AllNineRoutesAnswer is the naming-audit
-// 2026-09-25 class-1 regression test: it drives every one of the nine
-// /books/:id/... routes moved under /audiobooks/:id/... through the real
-// router (srv.router), not by calling a handler function directly, and
-// asserts each old path AND its new canonical twin both answer 200 with a
-// real fixture (not just "not 404", which the version handlers also return
-// for a missing version and would prove nothing).
-func TestDeprecatedBooksAliases_AllNineRoutesAnswer(t *testing.T) {
+// TestDeprecatedBooksAliases_RemainingSixRoutesAnswer is the naming-audit
+// 2026-09-25 class-1 regression test: it drives each of the six /books/:id/...
+// alias routes that are still live (position, state, status, status/repair)
+// and its /audiobooks/:id/... canonical twin through the real router
+// (srv.router), not by calling a handler function directly, and asserts both
+// answer 2xx with a real fixture. The three /books/:id/versions/:vid... aliases
+// were retired by 01-P81k and answer 410 (wire_versions_gone_test.go); only
+// their canonical twins are exercised here.
+func TestDeprecatedBooksAliases_RemainingSixRoutesAnswer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	pebblePath := filepath.Join(t.TempDir(), "pebble")
@@ -105,16 +106,14 @@ func TestDeprecatedBooksAliases_AllNineRoutesAnswer(t *testing.T) {
 	call(http.MethodPost, "/api/v1/books/b1/status/repair", "")
 	call(http.MethodPost, "/api/v1/audiobooks/b1/status/repair", "")
 
-	// 7. DELETE versions/:vid (trash)
-	call(http.MethodDelete, "/api/v1/books/b1/versions/"+newVersion(database.BookVersionStatusActive), "")
+	// 7. DELETE versions/:vid (trash); the /books alias is retired
 	call(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusActive), "")
 
-	// 8. POST versions/:vid/restore (version must start in trash)
-	call(http.MethodPost, "/api/v1/books/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/restore", "")
+	// 8. POST versions/:vid/restore (version must start in trash); alias retired
 	call(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/restore", "")
 
 	// 9. POST versions/:vid/purge-now (version must be in trash; purging an
-	// active version is refused, see TestHandlePurgeVersion_RefusesUntrashed)
-	call(http.MethodPost, "/api/v1/books/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/purge-now", "")
+	// active version is refused, see TestHandlePurgeVersion_RefusesUntrashed);
+	// alias retired
 	call(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/purge-now", "")
 }

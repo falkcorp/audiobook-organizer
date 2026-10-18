@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
@@ -19,7 +19,7 @@ import (
 )
 
 // handleTrashVersion moves a version to trash.
-// DELETE /api/v1/books/:id/versions/:vid
+// DELETE /api/v1/audiobooks/:id/versions/:vid
 func (s *Server) handleTrashVersion(c *gin.Context) {
 	bookID := c.Param("id")
 	versionID := c.Param("vid")
@@ -56,7 +56,7 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 }
 
 // handleRestoreVersion restores a trashed version to alt.
-// POST /api/v1/books/:id/versions/:vid/restore
+// POST /api/v1/audiobooks/:id/versions/:vid/restore
 func (s *Server) handleRestoreVersion(c *gin.Context) {
 	bookID := c.Param("id")
 	versionID := c.Param("vid")
@@ -88,7 +88,7 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 
 // handlePurgeVersion physically deletes files and marks purged: "Purge now"
 // on the trash page, i.e. empty one version out of the trash early.
-// POST /api/v1/books/:id/versions/:vid/purge-now
+// POST /api/v1/audiobooks/:id/versions/:vid/purge-now
 //
 // Only a trashed version may be purged. Until 2026-10-11 there was no status
 // check, so a direct call on the ACTIVE version deleted the book's playable
@@ -157,17 +157,22 @@ func CleanupTrashedVersions(store trashedVersionCleaner) (purged int) {
 // registerVersionLifecycleRoutes wires the version lifecycle endpoints.
 //
 // Canonical noun is /audiobooks/, matching every other per-book version
-// route (see wire_library_routes.go's /audiobooks/:id/versions); the
-// /books/:id/versions/:vid/... paths are kept registered as DEPRECATED
-// aliases to the same handlers (naming-audit 2026-09-25, class 1:
-// docs/audits/2026-09-25-interface-naming-consistency.md).
+// route (see wire_library_routes.go's /audiobooks/:id/versions). The
+// /books/:id/versions/:vid/... paths were DEPRECATED aliases of the same
+// handlers (naming-audit 2026-09-25, class 1: docs/audits/2026-09-25-interface-naming-consistency.md);
+// the web client only ever called the /audiobooks/ paths.
 func (s *Server) registerVersionLifecycleRoutes(protected *gin.RouterGroup) {
 	protected.DELETE("/audiobooks/:id/versions/:vid", s.perm(auth.PermLibraryDelete), s.handleTrashVersion)
 	protected.POST("/audiobooks/:id/versions/:vid/restore", s.perm(auth.PermLibraryOrganize), s.handleRestoreVersion)
 	protected.POST("/audiobooks/:id/versions/:vid/purge-now", s.perm(auth.PermLibraryDelete), s.handlePurgeVersion)
-	// Deprecated aliases — DO NOT remove without a deprecation window.
-	protected.DELETE("/books/:id/versions/:vid", s.perm(auth.PermLibraryDelete), s.handleTrashVersion)
-	protected.POST("/books/:id/versions/:vid/restore", s.perm(auth.PermLibraryOrganize), s.handleRestoreVersion)
-	protected.POST("/books/:id/versions/:vid/purge-now", s.perm(auth.PermLibraryDelete), s.handlePurgeVersion)
+	// The three /books/:id/versions/:vid... aliases had no caller in the repo
+	// (01-P81k). They answer 410 Gone for one release (owner decision D9) and
+	// are then removed; the handlers stay because the /audiobooks/ routes above
+	// use them. Each stub keeps its original s.perm guard, so an unauthenticated
+	// caller still gets 401, a caller without the permission 403, and only an
+	// allowed caller learns the alias is gone.
+	protected.DELETE("/books/:id/versions/:vid", s.perm(auth.PermLibraryDelete), gone("DELETE /api/v1/audiobooks/:id/versions/:vid"))
+	protected.POST("/books/:id/versions/:vid/restore", s.perm(auth.PermLibraryOrganize), gone("POST /api/v1/audiobooks/:id/versions/:vid/restore"))
+	protected.POST("/books/:id/versions/:vid/purge-now", s.perm(auth.PermLibraryDelete), gone("POST /api/v1/audiobooks/:id/versions/:vid/purge-now"))
 	protected.DELETE("/purged-versions/:vid", s.perm(auth.PermLibraryDelete), s.handleHardDeleteVersion)
 }
