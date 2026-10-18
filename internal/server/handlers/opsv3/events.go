@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
 // last-edited: 2026-10-18
 
@@ -51,11 +51,13 @@ const (
 	defaultFlushEvery   = 250 * time.Millisecond
 
 	// streamRetryAfterSeconds is the Retry-After of both stream refusals,
-	// the per-bucket 429 TOO_MANY_STREAMS and the server-wide 503: long
-	// enough that a reconnect loop backs off, short enough that a page reload
-	// after closing a tab (or after another client's stream ends) is not
-	// locked out. EventSource has no back-off of its own, so without the
-	// header a refused browser retries on its default ~3 s timer.
+	// the per-bucket 429 TOO_MANY_STREAMS and the server-wide 503. It is for
+	// clients that read it: fetch-based stream readers and non-browser
+	// clients (scripts, the SDK). A browser EventSource never sees it: on a
+	// non-200 answer it fails the connection and does not reconnect, so the
+	// page's own code decides when to open a new one. Long enough that a
+	// retry loop backs off, short enough that a reload after closing a tab
+	// (or after another client's stream ends) is not locked out.
 	streamRetryAfterSeconds = 5
 )
 
