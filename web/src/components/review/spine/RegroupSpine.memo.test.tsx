@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.memo.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: b7e34d19-05c2-4f8a-9d16-2a63c8fb4071
 // last-edited: 2026-10-18
 //
@@ -170,6 +170,7 @@ function laneBase(): Omit<
     error: null,
     total: ROW_COUNT,
     queueTotal: ROW_COUNT,
+    applyingTotal: 0,
     loaded: ROW_COUNT,
     visible: ROW_COUNT,
     oldestSortIsPartial: false,

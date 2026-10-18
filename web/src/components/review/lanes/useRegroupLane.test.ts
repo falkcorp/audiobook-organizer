@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-10-18
 
@@ -110,14 +110,14 @@ function mockItems(items: api.ReviewItem[], total?: number) {
 function setByKind(byKind: Record<string, number>) {
   const count = Object.values(byKind).reduce((a, b) => a + b, 0);
   useReviewStore.setState({ byKind, count });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ count, by_kind: byKind });
+  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count, by_kind: byKind });
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
   toast.mockReset();
   setByKind({});
-  vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
   mockItems([makeItem('a1', 'regroup.ambiguous'), makeItem('m1', 'regroup.multidisc')]);
 });
 
@@ -268,7 +268,10 @@ describe('bulk skips are kept per kind', () => {
     expect(result.current.unrecordedByKind['regroup.multidisc']).toEqual([
       { id: 'a3', reason: 'applied but status write failed' },
     ]);
-    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/do NOT resend/), 'error');
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/applied but not recorded, approve again to record/),
+      'error'
+    );
 
     // A later clean run replaces the report; dismiss clears every bucket.
     act(() => result.current.dismissSkips('regroup.multidisc'));
@@ -329,6 +332,37 @@ describe('actionFor', () => {
       expect.stringContaining('nope, owned by maintenance'),
       'error'
     );
+  });
+
+  it('does not call an applied-but-unrecorded approve a failure', async () => {
+    // The apply RAN; only its status write did not. "Failed to approve" would tell
+    // the reviewer the merge did not happen.
+    vi.mocked(api.approveReviewItem).mockRejectedValue(
+      Object.assign(new Error('applied, but the result could not be recorded (disk full)'), {
+        status: 500,
+        data: { code: 'REVIEW_APPLIED_UNRECORDED' },
+      })
+    );
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^Applied, but the result was not recorded: applied, but/),
+      'error'
+    );
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/^Failed to/), 'error');
+  });
+
+  it('reports the applying count from the polled review count', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 2, count: 0, by_kind: {} });
+    await act(async () => {
+      await useReviewStore.getState().loadCount();
+    });
+    expect(result.current.applyingTotal).toBe(2);
   });
 });
 

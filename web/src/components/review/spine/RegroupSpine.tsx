@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
 // last-edited: 2026-10-18
 
@@ -648,14 +648,32 @@ function ReportIdButton({ id }: { id: string }) {
   );
 }
 
+/** An id for an item that is NOT in the pending list (applied, or held by an apply
+ *  claim): plain text, because there is no row to reveal. */
+function ReportIdText({ id }: { id: string }) {
+  return <code data-testid={`regroup-report-id-${id}`}>{id}</code>;
+}
+
+/** Skip codes that mean the item is no longer pending: it is applied or held by an
+ *  apply claim, so it is not in the list and must not be reported as "still
+ *  pending". */
+const NOT_PENDING_SKIP_CODES = new Set([
+  'REVIEW_ALREADY_APPLIED',
+  'REVIEW_APPLY_IN_PROGRESS',
+  'REVIEW_APPLY_INTERRUPTED',
+]);
+
 /** The kind's report from the last bulk action: skips, failures and applied-but-
- *  unrecorded items. Every count in it clicks through to the row, and it outlives
- *  the toast, so a failure is never visible for only a few seconds. */
+ *  unrecorded items. It outlives the toast, so a failure is never visible for only
+ *  a few seconds. Ids of items still in the list click through to their row; ids
+ *  of items that left it (applied, or held by an apply) are plain text. */
 export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) {
-  const skipped = lane.skipsByKind[kind] ?? [];
+  const allSkipped = lane.skipsByKind[kind] ?? [];
+  const skipped = allSkipped.filter((sk) => !NOT_PENDING_SKIP_CODES.has(sk.code ?? ''));
+  const skippedDone = allSkipped.filter((sk) => NOT_PENDING_SKIP_CODES.has(sk.code ?? ''));
   const failed = lane.failedByKind[kind] ?? [];
   const unrecorded = lane.unrecordedByKind[kind] ?? [];
-  if (skipped.length + failed.length + unrecorded.length === 0) return null;
+  if (allSkipped.length + failed.length + unrecorded.length === 0) return null;
   const severity = failed.length || unrecorded.length ? 'error' : 'warning';
   return (
     <Alert
@@ -666,15 +684,16 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
     >
       {unrecorded.length > 0 && (
         <Box data-testid={`regroup-unrecorded-${kind}`} sx={{ mb: 1 }}>
-          <AlertTitle>{unrecorded.length} applied but not recorded — do not resend</AlertTitle>
+          <AlertTitle>{unrecorded.length} applied but not recorded</AlertTitle>
           <Typography variant="body2" sx={{ mb: 1 }}>
-            The apply ran; only the status write failed. Resending would be refused until the claim
-            goes stale, and the work is already done.
+            The apply ran; only the status write failed. These are held mid-apply, so they are not
+            in the list below. Approving one again records it without running the apply again; after
+            a server restart, approving again re-runs the apply, which skips work already done.
           </Typography>
           <Stack spacing={0.5}>
             {unrecorded.map((f) => (
               <Typography key={f.id} variant="caption" sx={{ display: 'block' }}>
-                <ReportIdButton id={f.id} /> — {f.reason}
+                <ReportIdText id={f.id} /> — {f.reason}
               </Typography>
             ))}
           </Stack>
@@ -687,6 +706,25 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
             {failed.map((f) => (
               <Typography key={f.id} variant="caption" sx={{ display: 'block' }}>
                 <ReportIdButton id={f.id} /> — {f.reason}
+              </Typography>
+            ))}
+          </Stack>
+        </Box>
+      )}
+      {skippedDone.length > 0 && (
+        <Box data-testid={`regroup-skipped-done-${kind}`} sx={{ mb: 1 }}>
+          <AlertTitle>
+            {skippedDone.length} hold
+            {skippedDone.length === 1 ? ' was' : 's were'} skipped — already applied or mid-apply
+          </AlertTitle>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            These are no longer pending, so they are not in the list below. Nothing was done to
+            them.
+          </Typography>
+          <Stack spacing={0.5}>
+            {skippedDone.map((sk) => (
+              <Typography key={sk.id} variant="caption" sx={{ display: 'block' }}>
+                <ReportIdText id={sk.id} /> — {sk.reason}
               </Typography>
             ))}
           </Stack>
@@ -711,6 +749,84 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
             ))}
           </Stack>
         </Box>
+      )}
+    </Alert>
+  );
+}
+
+/**
+ * Holds held by an apply claim. They are in no pending list, so without this a
+ * hold whose apply was interrupted by a restart, or ran but could not be recorded,
+ * would vanish from the queue with no way to finish it from the UI.
+ *
+ * The list loads on demand. "Finish" approves with NO action, which the server
+ * resolves to the claim's own action: a running apply answers "in progress", an
+ * unrecorded one is recorded without re-running, and an interrupted one runs again
+ * (skipping work already done).
+ */
+export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: () => void }) {
+  const [items, setItems] = useState<ReviewItem[] | null>(null);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  if (count <= 0) return null;
+  const load = async () => {
+    try {
+      const page = await api.getReviewItems({ status: 'applying', limit: 100 });
+      setItems(page.items);
+      setMessage('');
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'failed to load');
+    }
+  };
+  const finish = async (id: string) => {
+    setBusy(id);
+    try {
+      await api.approveReviewItem(id);
+      setMessage('');
+      onChanged();
+      await load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'failed to finish');
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Alert severity="warning" data-testid="regroup-applying" sx={{ mb: 1 }}>
+      <AlertTitle>
+        {count} hold{count === 1 ? ' is' : 's are'} held mid-apply
+      </AlertTitle>
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        An apply is running, ran but could not be recorded, or was interrupted by a server restart.
+        These holds are not in the list below and accept no other decision until the apply is
+        finished.
+      </Typography>
+      {items === null ? (
+        <Button size="small" data-testid="regroup-applying-show" onClick={() => void load()}>
+          Show them
+        </Button>
+      ) : (
+        <Stack spacing={0.5}>
+          {items.map((it) => (
+            <Typography key={it.id} variant="caption" sx={{ display: 'block' }}>
+              <ReportIdText id={it.id} /> ·{' '}
+              {labelForAction(it.apply_claim_action ?? '') || it.apply_claim_action} — {it.summary}{' '}
+              <Button
+                size="small"
+                disabled={busy !== null}
+                data-testid={`regroup-applying-finish-${it.id}`}
+                onClick={() => void finish(it.id)}
+              >
+                Finish
+              </Button>
+            </Typography>
+          ))}
+        </Stack>
+      )}
+      {message && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+          {message}
+        </Typography>
       )}
     </Alert>
   );
@@ -861,6 +977,7 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
     }
     return (
       <Paper sx={{ p: 6, textAlign: 'center' }} data-testid="regroup-spine">
+        <ApplyingAlert count={lane.applyingTotal} onChanged={lane.refresh} />
         <Typography variant="h6" gutterBottom data-testid="regroup-empty">
           Nothing to review 🎉
         </Typography>
@@ -873,6 +990,7 @@ export function RegroupSpine({ lane }: { lane: RegroupLane }) {
 
   return (
     <Stack spacing={2} data-testid="regroup-spine" sx={{ p: 1 }}>
+      <ApplyingAlert count={lane.applyingTotal} onChanged={lane.refresh} />
       {lane.buckets.map((bucket) => (
         <Paper key={bucket.kind} sx={{ p: 2 }}>
           <BucketHeader bucket={bucket} lane={lane} />

@@ -1,7 +1,7 @@
 // file: web/src/stores/useReviewStore.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1e9d4c72-8a36-4f50-b1c7-3d2e6a9b7c81
-// last-edited: 2026-09-25
+// last-edited: 2026-10-18
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -34,6 +34,9 @@ interface ReviewState {
   count: number;
   /** Pending count broken down by Kind (regroup.multidisc → 12, ...). */
   byKind: Record<string, number>;
+  /** Items held by an apply claim: running, applied but unrecorded, or interrupted
+   *  by a restart. Not in any pending list, so this is where they show up. */
+  applying: number;
   /** Items loaded for the /review page. */
   items: ReviewItem[];
   /** True while loadItems is in flight (for the page's loading state). */
@@ -57,13 +60,14 @@ interface ReviewState {
 export const useReviewStore = create<ReviewState>()((set, get) => ({
   count: 0,
   byKind: {},
+  applying: 0,
   items: [],
   itemsLoading: false,
   _pollTimer: null,
 
   loadCount: async () => {
     try {
-      const { count, by_kind: byKind } = await api.getReviewCount();
+      const { count, by_kind: byKind, applying } = await api.getReviewCount();
       // Publish a NEW `byKind` object only when the numbers actually moved.
       //
       // This poller ticks every 30s for the life of the session. A freshly
@@ -78,7 +82,7 @@ export const useReviewStore = create<ReviewState>()((set, get) => ({
       // `count` is a primitive, so zustand's own `Object.is` check already
       // absorbed it; `byKind` was the only identity churn on this path.
       const prev = get().byKind;
-      set(sameCounts(prev, byKind) ? { count } : { count, byKind });
+      set(sameCounts(prev, byKind) ? { count, applying } : { count, byKind, applying });
     } catch (err) {
       // Non-critical — the badge/banner just stays at its last value.
       console.error('Failed to load review count', err);

@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -102,7 +102,7 @@ function seed() {
     offset: 0,
     total: 0,
   });
-  vi.mocked(api.getReviewCount).mockResolvedValue({ count: 0, by_kind: {} });
+  vi.mocked(api.getReviewCount).mockResolvedValue({ applying: 0, count: 0, by_kind: {} });
   vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
   vi.mocked(api.batchFetchCandidates).mockResolvedValue({
     operation_id: 'op-search',

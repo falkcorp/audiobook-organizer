@@ -1,5 +1,5 @@
 // file: web/src/components/review/RegroupPanel.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4a0f9595-7a40-4662-abfa-be27845db5fd
 // last-edited: 2026-10-18
 
@@ -70,6 +70,7 @@ function makeLane(over: Partial<RegroupLane> = {}): RegroupLane {
     buckets,
     total: over.total ?? loaded,
     queueTotal: over.queueTotal ?? loaded,
+    applyingTotal: 0,
     loaded,
     visible: over.visible ?? buckets.reduce((n, b) => n + b.items.length, 0),
     oldestSortIsPartial: false,

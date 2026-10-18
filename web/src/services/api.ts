@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.187.0
+// version: 2.188.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-18
 
@@ -5477,7 +5477,10 @@ export async function getAIScanResults(id: number, agreement?: string): Promise<
  * marked applied only once its merge succeeded. Refusals are 409 (superseded or
  * unfinished scan, result already applied) and 400 (not a merge, no keep author).
  */
-export async function applyAIScanResults(scanID: number, resultIDs: number[]): Promise<AIScanApplyStarted> {
+export async function applyAIScanResults(
+  scanID: number,
+  resultIDs: number[]
+): Promise<AIScanApplyStarted> {
   const response = await apiFetch(`${API_BASE}/ai/scans/${scanID}/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -7468,12 +7471,19 @@ export interface ReviewItem {
    *  2026-08-06. A later re-approve prefers it over the recommendation, so this is the
    *  durable record that an override happened. */
   chosen_action?: string;
+  /** Set only while status is "applying": the action the apply claim is applying.
+   *  Approving the item with no explicit action finishes that claim. */
+  apply_claim_action?: string;
 }
 
-/** GET /review/count → data.{count, by_kind}. Both cover PENDING items only. */
+/** GET /review/count → data.{count, by_kind, applying}. count and by_kind cover
+ *  PENDING items only; applying counts items held by an apply claim (running now,
+ *  applied but not yet recorded, or interrupted by a server restart), which appear
+ *  in no pending list. */
 export interface ReviewCount {
   count: number;
   by_kind: Record<string, number>;
+  applying: number;
 }
 
 /** GET /review/items → flat {items, count, limit, offset, total} (RespondWithList,
@@ -7522,6 +7532,10 @@ export interface ReviewBulkSkip {
   /** The action that was refused — usually "insufficient-evidence". */
   action: string;
   reason: string;
+  /** The refusal's stable code (REVIEW_ACTION_NOT_DECIDABLE, REVIEW_ALREADY_APPLIED,
+   *  REVIEW_APPLY_IN_PROGRESS, REVIEW_APPLY_INTERRUPTED, ...). A skip coded as applied,
+   *  in progress or interrupted is NOT still pending. */
+  code?: string;
 }
 
 /** One item a bulk action could not complete. In \`failed\` the item keeps the status
@@ -7548,8 +7562,9 @@ export interface ReviewBulkResult {
    *  They keep their status, so resending their id retries them. MUST be surfaced. */
   failed?: ReviewBulkFail[];
   /** Items whose apply SUCCEEDED but whose "applied" status write failed. The work is
-   *  done: do NOT resend them (the item is held "applying" and a resend is refused
-   *  until the claim goes stale). MUST be surfaced. */
+   *  done and the item is held "applying". Approving it again records the result
+   *  without re-running the apply while the server keeps running; after a restart it
+   *  re-runs the apply, which skips work already done. MUST be surfaced. */
   applied_unrecorded?: ReviewBulkFail[];
   /** True on an approve while review_apply_enabled is off: approvals were recorded
    *  but nothing was applied. */
@@ -7574,7 +7589,7 @@ export async function getReviewCount(): Promise<ReviewCount> {
   }
   const body = await response.json();
   const data = body.data ?? {};
-  return { count: data.count ?? 0, by_kind: data.by_kind ?? {} };
+  return { count: data.count ?? 0, by_kind: data.by_kind ?? {}, applying: data.applying ?? 0 };
 }
 
 export async function getReviewItems(
@@ -7754,11 +7769,7 @@ export interface RepairRowMember {
  * one, or the skipped rows of one kind (`skipped:<kind>`, a key of
  * `skipped_by_kind`) so each per-kind count opens the rows behind it.
  */
-export type RepairRowsFilter =
-  | 'applicable'
-  | 'skipped'
-  | 'owner_applicable'
-  | `skipped:${string}`;
+export type RepairRowsFilter = 'applicable' | 'skipped' | 'owner_applicable' | `skipped:${string}`;
 
 export interface RepairRowsPage {
   plan_op_id: string;
