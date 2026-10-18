@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-18
 
@@ -811,15 +811,17 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 		// error says nothing was written. See the doc above.
 		held := claim.TookOver || !database.IsNothingWritten(applyErr)
 		var relErr error
+		claimStep := "released" // what the failed call was doing, for the reason below
 		if held {
+			claimStep = "held"
 			relErr = h.holdClaim(id, claim.Token)
 		} else {
 			relErr = h.releaseClaim(id, claim.Token)
 		}
 		switch {
 		case relErr != nil:
-			reason = fmt.Errorf("%w; and its apply claim could not be released, so the item stays "+
-				"\"applying\" until the server restarts: %v", applyErr, relErr)
+			reason = fmt.Errorf("%w; and its apply claim could not be %s, so the item stays "+
+				"\"applying\" until the server restarts: %v", applyErr, claimStep, relErr)
 		case claim.TookOver:
 			reason = fmt.Errorf("re-running the interrupted %q apply failed: %w; the item stays held as "+
 				"interrupted because the first run may already have changed the library. Approve it again to "+
