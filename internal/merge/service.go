@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -1611,7 +1611,14 @@ type CombineIncompleteError struct {
 	Err         error
 }
 
-func (e *CombineIncompleteError) Error() string { return e.Err.Error() }
+// Error names the journal and the operation as well as the cause: a caller
+// that only wraps or logs the error (the regroup apply's item error, a review
+// apply's log line) otherwise lost the one handle that undoes what ran
+// (round-4 review N6).
+func (e *CombineIncompleteError) Error() string {
+	return fmt.Sprintf("combine stopped part-way (journal %s, operation %s; revert the operation to undo what it did): %v",
+		e.JournalID, e.OperationID, e.Err)
+}
 func (e *CombineIncompleteError) Unwrap() error { return e.Err }
 
 // resolveVersionGroup picks the version group a merge's books end up in, and

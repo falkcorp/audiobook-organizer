@@ -1,5 +1,5 @@
 // file: internal/merge/combine_incomplete_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d698376-7775-4e75-b18b-bdb85372ac0e
 // last-edited: 2026-10-18
 
@@ -59,6 +59,12 @@ func TestCombineBooks_FailureAfterPointerCarriesTheUndoIDs(t *testing.T) {
 	require.Equal(t, "op-incomplete", incomplete.OperationID)
 	require.NotEmpty(t, incomplete.JournalID)
 	require.ErrorContains(t, err, "disk full", "the cause is kept")
+	// Round-4 N6: the message itself names the ids, for callers that only
+	// wrap or log it.
+	require.ErrorContains(t, err, "journal "+incomplete.JournalID)
+	require.ErrorContains(t, err, "operation op-incomplete")
+	wrapped := fmt.Errorf("regroup multidisc apply: combine %q: %w", "/lib/x", err)
+	require.Contains(t, wrapped.Error(), incomplete.JournalID, "a wrapping caller keeps the ids")
 
 	ms := NewService(store)
 	j, err := ms.GetCombineJournal(incomplete.JournalID)
