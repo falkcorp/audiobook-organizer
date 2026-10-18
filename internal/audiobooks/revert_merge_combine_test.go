@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_merge_combine_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a6c29e41-8f07-4b3d-9e15-d2b84f7c0a63
 // last-edited: 2026-10-18
 
@@ -91,9 +91,15 @@ func TestRevertOperation_MergeCombineJournal(t *testing.T) {
 		res, err := rs.RevertOperation("op")
 		require.NoError(t, err)
 		assert.Equal(t, 1, res.Restored, "the combine is undone")
-		assert.Equal(t, 1, res.PartiallyRestored)
+		assert.Equal(t, 1, res.CombinesUndoneInPart, "counted as a combine, not as tags")
+		assert.Zero(t, res.PartiallyRestored)
 		require.Len(t, res.Kept, 1)
 		assert.Contains(t, res.Kept[0], "file row f9")
+		// Round-4 N7: the summary (the toast's message) uses combine wording
+		// and carries what was left, not "tags changed since".
+		assert.False(t, res.Partial(), "the combine is undone; nothing to retry")
+		assert.Contains(t, res.Summary(), "1 combine(s) undone with some things left as they are: file row f9")
+		assert.NotContains(t, res.Summary(), "tags")
 		assert.ElementsMatch(t, []string{"ptr", "dec"}, s.marked)
 	})
 	t.Run("a journal already undone is already restored", func(t *testing.T) {

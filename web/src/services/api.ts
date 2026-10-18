@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.189.0
+// version: 2.190.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-18
 
@@ -2743,6 +2743,14 @@ export interface RevertOperationResult {
   failed?: number;
   not_restorable?: number;
   not_restorable_types?: Record<string, number>;
+  /**
+   * Combine rows whose undo finished but left something as it is (a credit
+   * or lock added since, an author the combine created that no book credits
+   * any more). `message` lists what was left; `kept` names it per row.
+   */
+  combines_undone_in_part?: number;
+  /** Per partially restored row, what the revert left as it is. */
+  kept?: string[];
 }
 
 export async function revertOperation(operationId: string): Promise<RevertOperationResult> {

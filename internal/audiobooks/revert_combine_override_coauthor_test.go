@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_combine_override_coauthor_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 81557a7d-bf1f-4979-a259-566cb53ce578
 // last-edited: 2026-10-18
 
@@ -46,4 +46,12 @@ func TestRevertCombineOverride_LaterCoAuthorIsKept(t *testing.T) {
 	require.Equal(t, []int{prior.ID, co.ID}, ids, "the replaced author is back first; the later co-author is kept after it")
 	require.Contains(t, strings.Join(rv.Kept, "\n"), "was linked to book "+f.keep+" after the combine",
 		"the revert says the co-author was kept: %v", rv.Kept)
+	// Round-4 N7: the message the user sees (the Library toast and the
+	// Activity log show Summary) carries it too, in a combine's wording,
+	// with the note about the author the override created.
+	sum := rv.Summary()
+	require.Contains(t, sum, "combine(s) undone with some things left as they are")
+	require.Contains(t, sum, "was linked to book "+f.keep+" after the combine; kept")
+	require.Contains(t, sum, "maintenance.purge-empty-authors")
+	require.NotContains(t, sum, "tags changed since")
 }
