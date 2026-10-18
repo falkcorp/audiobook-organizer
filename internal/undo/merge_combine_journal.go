@@ -1,5 +1,5 @@
 // file: internal/undo/merge_combine_journal.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e3a9c17-2d84-4f60-b9a1-7c06e4d2f8b3
 // last-edited: 2026-10-18
 
@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // ChangeTypeMergeCombineJournal: books were combined through a merge core
@@ -18,7 +19,7 @@ import (
 // by maintenance's dedup.split-books fixer (through its repairs Writer), and by
 // every other combine at the chokepoints themselves (merge.Service
 // CombineBooksWithOptions and dedup.MergeSplitBookClusterWithOptions, through
-// RecordMergeJournalPointer), under the caller's operation id or, for a
+// merge.RecordJournalPointer), under the caller's operation id or, for a
 // combine no operation runs, a correlation id of its own. FieldName is
 // MergeCombineJournalField, NewValue the combine journal id, OldValue "".
 //
@@ -28,11 +29,14 @@ import (
 // retired, refusing as a whole when the library changed since. A journal
 // already undone (through POST /merge/undo/:journal_id, or an earlier revert)
 // counts restored with nothing written.
-const ChangeTypeMergeCombineJournal = "merge_combine_journal"
+//
+// merge.RecordJournalPointer writes the row and merge cannot import this
+// package, so the string is defined there.
+const ChangeTypeMergeCombineJournal = merge.CombineJournalPointerType
 
 // MergeCombineJournalField is the FieldName of a
 // ChangeTypeMergeCombineJournal row.
-const MergeCombineJournalField = "journal"
+const MergeCombineJournalField = merge.JournalPointerField
 
 // validMergeCombineJournalRow reports whether c names a combine journal id
 // the merge package can look up (no key separators).

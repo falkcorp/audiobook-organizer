@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.48.3
+// version: 1.49.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package merge
 
@@ -98,6 +98,12 @@ type Result struct {
 	// SiblingJournalID is the sibling-move journal this merge wrote (set when
 	// MovedSiblings is non-empty); UndoSiblingMove takes it.
 	SiblingJournalID string `json:"sibling_journal_id,omitempty"`
+	// SiblingOperationID is the operation the sibling journal's undo pointer
+	// (undo.ChangeTypeMergeSiblingJournal) is journaled under, set with
+	// SiblingJournalID: MergeOptions.OperationID, or a correlation id of its
+	// own. POST /operations/:id/revert with it puts the siblings back; it does
+	// not bring back the merge's losers (they are restored from the trash).
+	SiblingOperationID string `json:"sibling_operation_id,omitempty"`
 	// GroupPrimaryID is set when the group's primary flag went to a book
 	// other than PrimaryID: with no explicit primary and a survivor that is
 	// not organized, an organized moved sibling or member of the reused group
@@ -441,6 +447,12 @@ type MergeOptions struct {
 	// one path are a routine dedup merge, and the purge's own refusal of a
 	// book that still owns file rows covers the common shape.
 	RefuseSharedAudioPaths bool
+	// OperationID is the operation the sibling journal's undo pointer is
+	// journaled under (undo_pointer.go), when the merge moves a sibling or
+	// hands the flag to a book other than the survivor: the caller's op, so
+	// reverting it undoes every merge it made. Empty: a correlation id of its
+	// own, returned in Result.SiblingOperationID.
+	OperationID string
 }
 
 // SharedAudioPathError is MergeOptions.RefuseSharedAudioPaths' refusal.
@@ -984,6 +996,10 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// the losers' user state then follows the flag holder, and the journal
 	// is what an undo reverses that follow from (StateFollows).
 	var siblingJournal *SiblingMoveJournal
+	// siblingOpID and voidSiblingPointer are the journal's undo pointer: the
+	// operation it is under, and the void the refusal path below runs.
+	var siblingOpID string
+	var voidSiblingPointer func() error
 	if len(siblings) > 0 || flagHolderID != resolvedPrimaryID {
 		var losersOfMerge []string
 		for _, b := range books {
@@ -997,6 +1013,21 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		}
 		if err := ms.putSiblingJournal(siblingJournal); err != nil {
 			return nil, fmt.Errorf("refusing to move version-group siblings with no undo record: %w", err)
+		}
+		// The pointer the operation revert follows (undo_pointer.go). The
+		// deferred handler below is not registered yet, so a refusal here
+		// marks the journal aborted itself: nothing has moved.
+		siblingOpID = UndoOperationID(opts.OperationID)
+		var perr error
+		voidSiblingPointer, perr = ms.recordJournalPointer(siblingOpID, resolvedPrimaryID, SiblingJournalPointerType, siblingJournal.ID)
+		if perr != nil {
+			siblingJournal.Status = SiblingJournalAborted
+			siblingJournal.LastError = perr.Error()
+			if err := ms.putSiblingJournal(siblingJournal); err != nil {
+				mlog.Warn("merge: refused merge's sibling-move journal %s not marked aborted: %s",
+					logger.SanitizeLogValue(siblingJournal.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+			}
+			return nil, fmt.Errorf("refusing to move version-group siblings with no undo pointer: %w", perr)
 		}
 	}
 	// Bookkeeping for the deferred handler below.
@@ -1038,6 +1069,15 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 						logger.SanitizeLogValue(siblingJournal.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
 				}
 			}
+			// Nothing moved, so the pointer describes nothing; voided, the
+			// revert leaves it out. One that cannot be voided still reverts
+			// cleanly: an aborted journal counts already restored.
+			if voidSiblingPointer != nil {
+				if err := voidSiblingPointer(); err != nil {
+					mlog.Warn("merge: refused merge's sibling-move undo pointer (journal %s) not voided: %s",
+						logger.SanitizeLogValue(siblingJournal.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+				}
+			}
 		case membershipStarted && !membershipWritten:
 			releaseGroups()
 			groups := maps.Clone(leftGroups)
@@ -1058,6 +1098,7 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			pe := &PartialMergeError{VersionGroupID: versionGroupID, MovedSiblings: movedSiblings, Err: retErr}
 			if siblingJournal != nil {
 				pe.SiblingJournalID = siblingJournal.ID
+				pe.SiblingOperationID = siblingOpID
 			}
 			retErr = pe
 		}
@@ -1429,15 +1470,16 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 
 	return &Result{
-		PrimaryID:        resolvedPrimaryID,
-		VersionGroupID:   versionGroupID,
-		MergedCount:      len(books),
-		SoftDeleted:      softDeleted,
-		MovedSiblings:    siblings,
-		SiblingJournalID: siblingJournalID,
-		GroupPrimaryID:   groupPrimaryID(flagHolderID, resolvedPrimaryID),
-		HiddenFromABS:    hiddenFromABS,
-		StateHolderID:    groupPrimaryID(flagHolderID, resolvedPrimaryID),
+		PrimaryID:          resolvedPrimaryID,
+		VersionGroupID:     versionGroupID,
+		MergedCount:        len(books),
+		SoftDeleted:        softDeleted,
+		MovedSiblings:      siblings,
+		SiblingJournalID:   siblingJournalID,
+		SiblingOperationID: siblingOpID,
+		GroupPrimaryID:     groupPrimaryID(flagHolderID, resolvedPrimaryID),
+		HiddenFromABS:      hiddenFromABS,
+		StateHolderID:      groupPrimaryID(flagHolderID, resolvedPrimaryID),
 	}, nil
 }
 
@@ -1547,7 +1589,10 @@ type PartialMergeError struct {
 	// SiblingJournalID is the sibling-move journal (UndoSiblingMove), when
 	// the merge planned to move any sibling.
 	SiblingJournalID string
-	Err              error
+	// SiblingOperationID is the operation the journal's undo pointer is
+	// under (Result.SiblingOperationID): reverting it puts back what moved.
+	SiblingOperationID string
+	Err                error
 }
 
 func (e *PartialMergeError) Error() string { return e.Err.Error() }
@@ -1658,6 +1703,20 @@ type CombineResult struct {
 	// UndoUnavailable is set, and JournalID empty, when the combine applied
 	// but its journal could not be finalized, so it cannot be undone.
 	UndoUnavailable string `json:"undo_unavailable,omitempty"`
+	// OperationID is the operation the combine's undo pointer
+	// (undo.ChangeTypeMergeCombineJournal) is journaled under:
+	// CombineOptions.OperationID, or a correlation id of its own. POST
+	// /operations/:id/revert with it undoes the combine.
+	OperationID string `json:"operation_id,omitempty"`
+}
+
+// CombineOptions tunes CombineBooksWithOptions.
+type CombineOptions struct {
+	// OperationID is the operation the combine's undo pointer is journaled
+	// under (undo_pointer.go): the caller's op, so reverting it undoes every
+	// combine it made. Empty: a correlation id of its own, returned in
+	// CombineResult.OperationID.
+	OperationID string
 }
 
 // CombineOverride holds optional metadata fields to apply to the survivor book
@@ -1690,6 +1749,14 @@ type CombineOverride struct {
 // override is optional: non-empty fields overwrite the survivor's metadata after
 // the combine. Leave it nil or empty to keep the survivor's existing metadata.
 func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *CombineOverride) (*CombineResult, error) {
+	return ms.CombineBooksWithOptions(bookIDs, primaryID, override, CombineOptions{})
+}
+
+// CombineBooksWithOptions is CombineBooks with options. Right after the
+// Pending journal is written, and before the first mutation, it journals the
+// pointer POST /operations/:id/revert follows to that journal
+// (undo_pointer.go); a pointer that cannot be written refuses the combine.
+func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, override *CombineOverride, opts CombineOptions) (*CombineResult, error) {
 	if len(bookIDs) < 2 {
 		return nil, fmt.Errorf("need at least 2 books to combine")
 	}
@@ -1826,6 +1893,21 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	if err := ms.putCombineJournal(journal); err != nil {
 		return nil, fmt.Errorf("combine refused: undo journal could not be written: %w", err)
 	}
+	opID := UndoOperationID(opts.OperationID)
+	if _, err := ms.recordJournalPointer(opID, primaryID, CombineJournalPointerType, journal.ID); err != nil {
+		// Nothing was mutated. The journal must not stay Pending listing the
+		// absorbed books: rewritten empty, it records the refusal and undoes
+		// to nothing (the rule dedup.MergeSplitBookClusterWithOptions keeps).
+		journal.Absorbed, journal.SurvivorOwnFiles = nil, nil
+		journal.Status = CombineJournalApplied
+		journal.Warnings = append(journal.Warnings, fmt.Sprintf("refused before its first write: %v", err))
+		if werr := ms.putCombineJournal(journal); werr != nil {
+			mlog.Error("combine refused but its pending journal was not emptied journal=%s survivor=%s err=%s",
+				journal.ID, logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(werr)))
+		}
+		return nil, fmt.Errorf("combine refused: undo pointer could not be journaled: %w", err)
+	}
+	res.OperationID = opID
 
 	// Materialize the survivor's own single-file (virtual-segment) audio as a
 	// BookFile so the combined book owns ALL its files explicitly.
