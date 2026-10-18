@@ -1,5 +1,5 @@
 // file: internal/server/wire_entities_routes.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: e5f6a7b8-c9d0-1234-efab-567890123456
 // last-edited: 2026-10-18
 
@@ -10,6 +10,9 @@ import (
 	entities "github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/gin-gonic/gin"
 )
+
+// narratorsGone names where the retired per-book narrator routes point callers.
+const narratorsGone = "GET/PUT /api/v1/audiobooks/:id (narrator field)"
 
 // wireEntitiesRoutes registers the entities domain routes (authors, narrators,
 // series, works) on the protected group. Handler instantiation stays in wireHandlers.
@@ -44,8 +47,8 @@ func (s *Server) wireEntitiesRoutes(
 
 	protected.GET("/narrators", s.perm(auth.PermLibraryView), entitiesH.ListNarrators)
 	protected.GET("/narrators/count", s.perm(auth.PermLibraryView), entitiesH.CountNarrators)
-	protected.GET("/audiobooks/:id/narrators", s.perm(auth.PermLibraryView), gone(""))
-	protected.PUT("/audiobooks/:id/narrators", s.perm(auth.PermLibraryEditMetadata), gone(""))
+	protected.GET("/audiobooks/:id/narrators", s.perm(auth.PermLibraryView), gone(narratorsGone))
+	protected.PUT("/audiobooks/:id/narrators", s.perm(auth.PermLibraryEditMetadata), gone(narratorsGone))
 
 	protected.GET("/series", s.perm(auth.PermLibraryView), entitiesH.ListSeries)
 	protected.GET("/series/count", s.perm(auth.PermLibraryView), entitiesH.CountSeries)

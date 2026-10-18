@@ -1,5 +1,5 @@
 // file: internal/server/wire_entities_gone_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2a9c41-7b58-4e03-91f6-a4c8e2b05d37
 // last-edited: 2026-10-18
 
@@ -9,25 +9,31 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const entitiesGoneBody = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`
+const (
+	entitiesGoneBody  = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`
+	narratorsGoneBody = `{"error":"gone","message":"this endpoint has been removed; use GET/PUT /api/v1/audiobooks/:id (narrator field) instead"}`
+)
 
 // retiredEntityRoutes are the narrator-link and author/series tag routes
-// retired by 01-P81e. None has a replacement, so each answers the bare gone()
-// body.
+// retired by 01-P81e with the exact gone() body each one answers. The narrator
+// routes name the book record as their replacement; the tag routes have none.
 var retiredEntityRoutes = []struct {
-	method, pattern, path string
+	method, pattern, path, body string
 }{
-	{http.MethodGet, "/api/v1/audiobooks/:id/narrators", "/api/v1/audiobooks/synthetic-book/narrators"},
-	{http.MethodPut, "/api/v1/audiobooks/:id/narrators", "/api/v1/audiobooks/synthetic-book/narrators"},
-	{http.MethodGet, "/api/v1/authors/:id/tags", "/api/v1/authors/1/tags"},
-	{http.MethodPost, "/api/v1/authors/:id/tags", "/api/v1/authors/1/tags"},
-	{http.MethodGet, "/api/v1/series/:id/tags", "/api/v1/series/1/tags"},
-	{http.MethodPost, "/api/v1/series/:id/tags", "/api/v1/series/1/tags"},
+	{http.MethodGet, "/api/v1/audiobooks/:id/narrators", "/api/v1/audiobooks/synthetic-book/narrators", narratorsGoneBody},
+	{http.MethodPut, "/api/v1/audiobooks/:id/narrators", "/api/v1/audiobooks/synthetic-book/narrators", narratorsGoneBody},
+	{http.MethodGet, "/api/v1/authors/:id/tags", "/api/v1/authors/1/tags", entitiesGoneBody},
+	{http.MethodPost, "/api/v1/authors/:id/tags", "/api/v1/authors/1/tags", entitiesGoneBody},
+	{http.MethodGet, "/api/v1/series/:id/tags", "/api/v1/series/1/tags", entitiesGoneBody},
+	{http.MethodPost, "/api/v1/series/:id/tags", "/api/v1/series/1/tags", entitiesGoneBody},
 }
 
 // TestRetiredEntityRoutes_Answer410 drives each retired path through the real
@@ -38,7 +44,7 @@ func TestRetiredEntityRoutes_Answer410(t *testing.T) {
 		t.Run(r.method+" "+r.pattern, func(t *testing.T) {
 			w := f.do(t, f.sessionToken, r.method, r.path, nil)
 			assert.Equal(t, http.StatusGone, w.Code, w.Body.String())
-			assert.Equal(t, entitiesGoneBody, w.Body.String())
+			assert.Equal(t, r.body, w.Body.String())
 		})
 	}
 }
@@ -56,6 +62,36 @@ func TestRetiredEntityRoutes_AuthRunsFirst(t *testing.T) {
 			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
 		})
 	}
+}
+
+// TestRetiredEntityRoutes_PermissionRunsBeforeGone: a viewer session is valid
+// but lacks library.edit_metadata, so each write stub answers 403 from s.perm
+// and never reaches gone(). The positive control shows the same viewer gets
+// 410 on a GET stub, so the 403s are the permission guard and not a rejected
+// session.
+func TestRetiredEntityRoutes_PermissionRunsBeforeGone(t *testing.T) {
+	f := setupCredGuardServer(t)
+
+	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
+	require.NoError(t, err)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	require.NoError(t, err)
+
+	for _, r := range retiredEntityRoutes {
+		if r.method == http.MethodGet {
+			continue
+		}
+		t.Run("viewer gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {
+			w := f.do(t, viewerSess.ID, r.method, r.path, nil)
+			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+			assert.NotContains(t, w.Body.String(), `"error":"gone"`)
+		})
+	}
+
+	t.Run("viewer reaches a GET stub", func(t *testing.T) {
+		w := f.do(t, viewerSess.ID, http.MethodGet, "/api/v1/authors/1/tags", nil)
+		assert.Equal(t, http.StatusGone, w.Code, w.Body.String())
+	})
 }
 
 // TestRetiredEntityRoutes_KeptRoutesNotGone: the owner-kept diagnostics

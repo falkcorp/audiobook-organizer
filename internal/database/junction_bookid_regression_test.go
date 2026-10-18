@@ -1,7 +1,7 @@
 // file: internal/database/junction_bookid_regression_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: fca556d0-2e10-4ec6-bdbc-2adca286b893
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package database
 
@@ -78,8 +78,9 @@ func requireUpdateReachesMemDB(t *testing.T, s *PebbleStore, bookID, newTitle st
 }
 
 // TestSetBookNarrators_RowWithoutBookIDKeepsMemDBLive is the narrator-split
-// shape POST /operations/optimize-database produced, and the shape PUT
-// /audiobooks/:id/narrators accepts from a client that omits book_id.
+// shape POST /operations/optimize-database produced, and the shape the
+// since-retired PUT /audiobooks/:id/narrators accepted from a client that
+// omitted book_id.
 func TestSetBookNarrators_RowWithoutBookIDKeepsMemDBLive(t *testing.T) {
 	store := seedAuthorRefStore(t)
 	book := mkAuthorRefBook(t, store, "NarratorSplitSource", 0, true, false)
