@@ -579,8 +579,12 @@ type Collection struct {
 	MaterializedBookIDs []string  `json:"materialized_book_ids,omitempty"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
-	// CreatedByUserID records authorship for audit. It does NOT scope
-	// visibility -- collections are shared by definition.
+	// CreatedByUserID records authorship AND, for a dynamic collection, names the
+	// evaluating user: the query's per-user fields (read_status, progress_pct,
+	// last_played) are answered from this user's state, whoever is reading the
+	// collection (D75). If that user no longer exists the first active admin is
+	// used instead. It does NOT scope visibility -- collections are shared by
+	// definition, and a static collection never evaluates anything.
 	CreatedByUserID string `json:"created_by_user_id,omitempty"`
 	Version         int    `json:"version"`
 }
