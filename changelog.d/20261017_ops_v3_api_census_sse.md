@@ -94,7 +94,9 @@ nothing was written. A definition that declares its preview mode now folds a
 start only into an active run of the same mode, judged by what each body does
 when it runs (an absent or null mode key is the preview default; an operation
 that reads both `dry_run` and `apply` is live only when both say write, or
-either for one that declares so); otherwise a second run is queued.
+either for one that declares so; a body the run itself refuses, such as
+`dry_run` and `dryRun` that disagree, is in no mode and folds only into a
+byte-identical one); otherwise a second run is queued.
 Byte-identical params always fold, so scheduler ticks still fold into one run.
 
 #### The regroup preview no longer counts holds a person already decided

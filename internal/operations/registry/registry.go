@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.56.1
+// version: 3.56.2
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-18
 
@@ -1056,9 +1056,10 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 				//
 				// Byte-identical params are the same request whatever SameMode
 				// can read from them: a body whose mode it cannot read (a
-				// non-bool mode value, two case variants of a key) would
-				// otherwise never fold, and every cron tick sending it would
-				// queue another row.
+				// non-bool mode value, two case variants of a key whose values
+				// differ, dry_run and dryRun that disagree) would otherwise
+				// never fold, and every cron tick sending it would queue
+				// another row.
 				if !def.Preview.IsZero() &&
 					!sameParamsIgnoringLegacyID(rawParams, []byte(op.Params)) &&
 					!def.Preview.SameMode(rawParams, []byte(op.Params)) {
