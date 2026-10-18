@@ -2108,6 +2108,9 @@ export interface CombineBooksResult {
   // combine journals its undo pointer under this id (a correlation id of its
   // own: a manual combine runs in no operation).
   operation_id?: string;
+  // Set (and journal_id/operation_id absent) when the combine applied but its
+  // undo journal could not be saved: this combine cannot be undone.
+  undo_unavailable?: string;
   message?: string;
 }
 

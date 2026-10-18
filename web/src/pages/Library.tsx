@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.103.0
+// version: 1.104.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1524,10 +1524,15 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
             }
           : undefined;
       const result = await api.combineBooks(keepId, mergeIds, override);
-      toast(
-        `Combined ${result.files_moved} files into one book; moved ${result.books_deleted} entries to trash (undoable).`,
-        'success'
-      );
+      const combined = `Combined ${result.files_moved} files into one book; moved ${result.books_deleted} entries to trash`;
+      if (result.undo_unavailable) {
+        toast(
+          `${combined}. This combine cannot be undone: its undo journal could not be saved.`,
+          'warning'
+        );
+      } else {
+        toast(`${combined}. To undo it, revert operation ${result.operation_id}.`, 'success');
+      }
       setSelectedAudiobooks([]);
       setCrossPageFilter(null);
       setCombineOverrideTitle('');
