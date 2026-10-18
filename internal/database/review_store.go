@@ -1,5 +1,5 @@
 // file: internal/database/review_store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4f2c8a91-6b3d-4e57-9a02-8d1f5c7e3b40
 // last-edited: 2026-10-18
 
@@ -89,14 +89,26 @@ type ReviewItem struct {
 	// and readers fall back to the payload recommendation, which for a pre-2026-08-06
 	// hold resolves to insufficient-evidence — the fail-closed direction.
 	//
-	// Written only by SetReviewItemDecision. SetReviewItemStatus leaves it alone, so
-	// the later approved→applied transition cannot erase the decision it is carrying out.
+	// Written by SetReviewItemDecision, DecideReviewItem and FinishReviewItemApply
+	// (which records the claimed action), never cleared: SetReviewItemStatus and a
+	// release leave it alone, so no later transition can erase the decision it is
+	// carrying out.
 	ChosenAction string `json:"chosen_action,omitempty"`
 
-	// ApplyClaimedFrom is the status an item held before an apply claim moved it to
-	// "applying", so a failed apply can release back to it. Set and cleared only while
-	// a claim exists (review_claim.go; SetReviewItemDecision clears it on the way out).
-	ApplyClaimedFrom string `json:"apply_claimed_from,omitempty"`
+	// The apply claim (review_claim.go). All four are set together when a claim moves
+	// the item to "applying" and cleared together when FinishReviewItemApply or
+	// ReleaseReviewItemClaim moves it out; nothing else writes them.
+	//
+	// ApplyClaimedFrom is the status before the claim, which a release goes back to.
+	// ApplyClaimAction is the action being applied: the finish records it as
+	// ChosenAction, and a takeover after a restart must re-run that same action.
+	// ApplyClaimToken names the one claim allowed to finish or release the item.
+	// ApplyClaimInstance is the claiming store handle's instance id; a claim whose id
+	// is not the running process's was left by a process that has exited.
+	ApplyClaimedFrom   string `json:"apply_claimed_from,omitempty"`
+	ApplyClaimAction   string `json:"apply_claim_action,omitempty"`
+	ApplyClaimToken    string `json:"apply_claim_token,omitempty"`
+	ApplyClaimInstance string `json:"apply_claim_instance,omitempty"`
 }
 
 // ReviewFilter controls ListReviewItems / list-by-status queries.
@@ -609,6 +621,14 @@ func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error
 //
 // Returns (nil, nil) when the item does not exist.
 //
+// 🔴 IT NEVER TOUCHES AN APPLY CLAIM. Moving an item into "applying" is
+// ClaimReviewItemForApply's job and moving it out is FinishReviewItemApply's or
+// ReleaseReviewItemClaim's (review_claim.go); this writer refuses both, returning a
+// *ReviewClaimConflictError for an item that is applying. A decision landing over a
+// live claim is how one apply became two (01-P81j): the claim vanished while its
+// apply ran and the next approve claimed again. The review handler records decisions
+// through DecideReviewItem, which also refuses applied items.
+//
 // 🔴 reviewMu IS HELD ACROSS THE READ-MODIFY-WRITE. The status index is moved by
 // deleting the OLD status row, and "old" is whatever this call read a moment ago.
 // Without the lock two concurrent decisions on one item both read status=pending,
@@ -619,8 +639,11 @@ func (p *PebbleStore) SetReviewItemStatus(id, status string) (*ReviewItem, error
 // that did not, and maintenance.review-status-index-repair exists to rebuild the
 // index for rows the unlocked version already damaged.
 func (p *PebbleStore) SetReviewItemDecision(id, status, chosenAction string) (*ReviewItem, error) {
-	if status == "" {
+	switch status {
+	case "":
 		return nil, fmt.Errorf("review item: status is required")
+	case ReviewStatusApplying:
+		return nil, fmt.Errorf("review item %s: status %q is written only by ClaimReviewItemForApply", id, status)
 	}
 	p.reviewMu.Lock()
 	defer p.reviewMu.Unlock()
@@ -632,34 +655,19 @@ func (p *PebbleStore) SetReviewItemDecision(id, status, chosenAction string) (*R
 	if item == nil {
 		return nil, nil
 	}
+	if item.Status == ReviewStatusApplying {
+		conflict, cerr := p.claimConflictLocked(item)
+		if cerr != nil {
+			return nil, cerr
+		}
+		return nil, conflict
+	}
 	oldStatus := item.Status
 	item.Status = status
-	item.UpdatedAt = time.Now().UTC()
 	if chosenAction != "" {
 		item.ChosenAction = chosenAction
 	}
-	if status != ReviewStatusApplying {
-		item.ApplyClaimedFrom = "" // a finished or released claim leaves nothing behind
-	}
-
-	data, err := json.Marshal(item)
-	if err != nil {
-		return nil, fmt.Errorf("marshal review item: %w", err)
-	}
-	b := p.db.NewBatch()
-	defer b.Close()
-	if err := b.Set(reviewItemRecKey(id), data, nil); err != nil {
-		return nil, err
-	}
-	if oldStatus != "" && oldStatus != status {
-		if err := b.Delete(reviewItemStatusKey(oldStatus, id), nil); err != nil {
-			return nil, err
-		}
-	}
-	if err := b.Set(reviewItemStatusKey(status, id), nil, nil); err != nil {
-		return nil, err
-	}
-	if err := b.Commit(pebble.Sync); err != nil {
+	if err := p.commitReviewItemLocked(item, oldStatus); err != nil {
 		return nil, err
 	}
 	return item, nil
@@ -687,6 +695,13 @@ func (p *PebbleStore) DeleteReviewItem(id string) error {
 	if item == nil {
 		return nil // idempotent no-op
 	}
+	return p.deleteReviewItemLocked(item)
+}
+
+// deleteReviewItemLocked removes item's record and all its index rows in one synced
+// batch. Caller holds reviewMu and has just read item.
+func (p *PebbleStore) deleteReviewItemLocked(item *ReviewItem) error {
+	id := item.ID
 	b := p.db.NewBatch()
 	defer b.Close()
 	if err := b.Delete(reviewItemRecKey(id), nil); err != nil {
