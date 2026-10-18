@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/vacuum_activity_db_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e66fcc21-9f1b-4362-9273-3dbe2ea1a5be
 // last-edited: 2026-10-18
 
@@ -230,7 +230,8 @@ func TestVacuumActivityDB_PreviewErrorIsLoggedAsFailure(t *testing.T) {
 // A live run refuses while a scan or metadata op is active, and never reaches the
 // store; a preview is allowed through the same queue.
 func TestVacuumActivityDB_LiveRefusesWhileScanOrMetadataOpActive(t *testing.T) {
-	for _, def := range []string{"library.scan", "library.bulk-metadata-fetch", "metadata.batch-apply-cached", "library.bulk-write-back"} {
+	for _, def := range []string{"library.scan", "library.bulk-metadata-fetch", "metadata.batch-apply-cached", "library.bulk-write-back",
+		"library.import", "metadata.apply-when-scanned", "maintenance.version-twin-metadata"} {
 		for _, status := range []string{"running", "queued"} {
 			deps := &vacuumDeps{report: database.ActivityVacuumReport{Supported: true},
 				queue: fsQueue{rows: []database.OperationV2Row{{ID: "op1", DefID: def, Status: status}}}}

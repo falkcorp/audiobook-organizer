@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_wal_truncate_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-18
 
@@ -1116,7 +1116,7 @@ func freedPagesStore(t *testing.T) *SQLActivityStore {
 // interval; zero means the production default (newTestSQLStore).
 func freedPagesStoreWithInterval(t *testing.T, interval time.Duration) *SQLActivityStore {
 	t.Helper()
-	s := newTestSQLStore(t)
+	var s *SQLActivityStore
 	if interval > 0 {
 		var err error
 		s, err = openSQLiteActivityStore(filepath.Join(t.TempDir(), "activity.sqlite"), interval)
@@ -1124,6 +1124,9 @@ func freedPagesStoreWithInterval(t *testing.T, interval time.Duration) *SQLActiv
 			t.Fatalf("open: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Close() })
+		s.freeBytes = func(string) (uint64, error) { return 1 << 50, nil }
+	} else {
+		s = newTestSQLStore(t)
 	}
 	for range 60 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
@@ -1218,52 +1221,16 @@ func TestRunActivityVacuum_NoSQLiteSideIsUnsupportedNotAnError(t *testing.T) {
 	}
 }
 
-// etilqsFiles lists SQLite temp files in dir.
-func etilqsFiles(dir string) []string {
-	ents, _ := os.ReadDir(dir)
-	var out []string
-	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), "etilqs_") {
-			out = append(out, e.Name())
-		}
-	}
-	return out
-}
-
-// watchForEtilqs polls dir until stop is closed and returns every temp file name
-// it ever saw. VACUUM's temp file is deleted when the statement ends, so only a
-// poll DURING the run can see it.
-func watchForEtilqs(dir string, stop <-chan struct{}) <-chan map[string]bool {
-	out := make(chan map[string]bool, 1)
-	go func() {
-		seen := map[string]bool{}
-		for {
-			for _, f := range etilqsFiles(dir) {
-				seen[f] = true
-			}
-			select {
-			case <-stop:
-				out <- seen
-				return
-			case <-time.After(200 * time.Microsecond):
-			}
-		}
-	}()
-	return out
-}
-
 // TestVacuumActivity_TempCopyStaysOffTMPDIR is the 2026-09-09 outage test: with
 // TMPDIR pointing at a directory (the root pool on prod) and the pin cleared, a
 // live run must re-pin SQLite's temp directory to the database's directory, so
 // no etilqs_* file ever appears in TMPDIR.
 //
-// The deterministic assertion is the read-back of temp_store_directory: VACUUM's
-// temp file lives only for the statement and small databases may not spill at all,
-// so the poll for etilqs_* files is a best-effort second witness that can miss a
-// leak but never fails a correct run.
+// The check is the read-back of temp_store_directory. A poll for etilqs_* files
+// would prove nothing: SQLite unlinks its temp files as soon as they are opened,
+// so a directory listing cannot see them.
 func TestVacuumActivity_TempCopyStaysOffTMPDIR(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMPDIR", t.TempDir())
 	s := freedPagesStore(t)
 	dbDir := filepath.Dir(s.path)
 	// Clear the pin open applied, so VacuumActivity has to apply its own.
@@ -1271,16 +1238,8 @@ func TestVacuumActivity_TempCopyStaysOffTMPDIR(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stop := make(chan struct{})
-	seen := watchForEtilqs(tmp, stop)
-	_, err := RunActivityVacuum(context.Background(), s, false)
-	close(stop)
-	got := <-seen
-	if err != nil {
+	if _, err := RunActivityVacuum(context.Background(), s, false); err != nil {
 		t.Fatalf("live: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("VACUUM's temp copy landed in TMPDIR (%s): %v", tmp, got)
 	}
 	var pinned string
 	if err := s.writer.QueryRow(`PRAGMA temp_store_directory`).Scan(&pinned); err != nil {
@@ -1288,9 +1247,6 @@ func TestVacuumActivity_TempCopyStaysOffTMPDIR(t *testing.T) {
 	}
 	if pinned != dbDir {
 		t.Errorf("temp_store_directory = %q, want the database directory %q", pinned, dbDir)
-	}
-	if left := etilqsFiles(tmp); len(left) != 0 {
-		t.Errorf("etilqs files left in TMPDIR: %v", left)
 	}
 }
 
@@ -1369,9 +1325,13 @@ func TestVacuumRequiredBytes(t *testing.T) {
 		st   ActivityVacuumStats
 		want int64
 	}{
-		{"tiny file gets the 1 GiB floor", ActivityVacuumStats{FileBytes: 8192, ReclaimableBytes: 4096}, 2*4096 + gib},
-		{"large file gets 10 percent", ActivityVacuumStats{FileBytes: 30 * gib, ReclaimableBytes: 10 * gib}, 40*gib + 4*gib},
-		{"reclaimable above file clamps to zero", ActivityVacuumStats{FileBytes: 10, ReclaimableBytes: 20}, gib},
+		{"tiny db gets the 1 GiB floor", ActivityVacuumStats{PageSize: 4096, PageCount: 2, FreelistCount: 1}, 4096*2 + gib},
+		{"large db gets 10 percent", ActivityVacuumStats{PageSize: 4096, PageCount: 30 * gib / 4096, FreelistCount: 10 * gib / 4096}, 40*gib + 4*gib},
+		{"freelist above page count clamps to zero", ActivityVacuumStats{PageSize: 4096, PageCount: 1, FreelistCount: 2}, gib},
+		// WAL mode: pages not yet checkpointed live in the -wal, so the main
+		// file can be far smaller than page_count * page_size. The file size
+		// must not feed the estimate (it once read zero here).
+		{"pages in the WAL are counted", ActivityVacuumStats{FileBytes: 4096, PageSize: 4096, PageCount: 10 * gib / 4096, FreelistCount: 0}, 20*gib + 2*gib},
 	} {
 		if got := vacuumRequiredBytes(tc.st); got != tc.want {
 			t.Errorf("%s: required = %d, want %d", tc.name, got, tc.want)

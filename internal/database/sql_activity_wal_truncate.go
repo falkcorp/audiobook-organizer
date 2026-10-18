@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_wal_truncate.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
 // last-edited: 2026-10-18
 
@@ -78,11 +78,14 @@ const vacuumMarginFloor = int64(1) << 30
 // into the original through the WAL, which holds roughly another compacted size
 // until the post-vacuum TRUNCATE returns it. The original's own bytes are
 // released only at the end, so the peak EXTRA space is about 2x the compacted
-// size, not 1x the file size. The compacted size is FileBytes minus the free
-// pages (ReclaimableBytes); repacking partly full pages can only make it smaller,
+// size, not 1x the file size. The compacted size is the pages in use,
+// (PageCount - FreelistCount) * PageSize, NOT the main file's size minus the free
+// pages: in WAL mode recent pages live in the -wal and are not yet in the main
+// file, so a file-size based figure can read far too small (it read zero in a
+// measured run). Repacking partly full pages can only make it smaller,
 // so this is an upper-ish estimate, not an exact one.
 func vacuumRequiredBytes(st ActivityVacuumStats) int64 {
-	compacted := st.FileBytes - st.ReclaimableBytes
+	compacted := (st.PageCount - st.FreelistCount) * st.PageSize
 	if compacted < 0 {
 		compacted = 0
 	}
@@ -127,11 +130,19 @@ func (s *SQLActivityStore) VacuumStats(ctx context.Context) (ActivityVacuumStats
 		}
 	}
 	st.ReclaimableBytes = st.FreelistCount * st.PageSize
-	if fi, err := os.Stat(s.path); err == nil {
-		st.FileBytes = fi.Size()
+	// FileBytes and WALBytes feed DiskBytes (the reclaim report), not the
+	// required-space figure. A stat failure is still an error: a report built
+	// on a silently zeroed size would misstate what a run reclaimed. A missing
+	// -wal is normal (no write since the last truncating checkpoint).
+	fi, err := os.Stat(s.path)
+	if err != nil {
+		return st, fmt.Errorf("sql_activity: stat %s: %w", s.path, err)
 	}
-	if fi, err := os.Stat(s.path + "-wal"); err == nil {
-		st.WALBytes = fi.Size()
+	st.FileBytes = fi.Size()
+	if wi, err := os.Stat(s.path + "-wal"); err == nil {
+		st.WALBytes = wi.Size()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return st, fmt.Errorf("sql_activity: stat %s-wal: %w", s.path, err)
 	}
 
 	st.RequiredBytes = vacuumRequiredBytes(st)
