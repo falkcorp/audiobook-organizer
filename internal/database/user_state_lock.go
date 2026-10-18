@@ -1,7 +1,7 @@
 // file: internal/database/user_state_lock.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package database
 
@@ -36,8 +36,10 @@ var userStateLocks [userStateStripes]sync.Mutex
 //     merge.LockMergeRMW;
 //   - the merge undo restore (merge.RestoreFollowedProgress, inside
 //     merge.LockMergeRMW): restoreAbsorbedSide across its read and write of
-//     the absorbed book, and reconcileTouchedSurvivor across its re-read
-//     and every write (positions, marker, state) on the survivor.
+//     the absorbed book, and on the survivor (after the absorbed book's
+//     stripe is released, never with it) both the plain put-back
+//     (putBackSurvivor) and the reconcile (reconcileTouchedSurvivorOnce),
+//     each across its re-read and every write (positions, marker, state).
 //
 // LOCK ORDER: merge.LockMergeRMW, then this stripe, then anything else
 // (session.mu, a book's write stripe). Nothing takes this stripe and then the
