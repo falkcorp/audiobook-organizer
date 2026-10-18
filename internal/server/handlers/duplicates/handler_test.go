@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
 // last-edited: 2026-10-18
 
@@ -199,6 +199,48 @@ func TestCombineBooks_JournalPending_StillOffersTheOperation(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response lacks %s: %s", want, body)
 		}
+	}
+}
+
+// A combine that stopped after its undo pointer was journaled may already
+// have moved files and trashed books. The caller gets the ids that undo it
+// and a message saying so, not a bare "failed to combine books"; the store
+// error itself stays in the log.
+func TestCombineBooks_IncompleteCarriesTheUndoIDs(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.CombineIncompleteError{
+		JournalID: "J9", OperationID: "op-partial", Err: errString("soft-delete absorbed book b: disk full"),
+	})
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{`"journal_id":"J9"`, `"operation_id":"op-partial"`, `"code":"COMBINE_INCOMPLETE"`,
+		"stopped part-way", "Revert operation op-partial to undo what it did"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response lacks %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "disk full") {
+		t.Fatalf("the store error must stay in the log, not the response: %s", body)
+	}
+}
+
+// An incomplete combine whose cause is a refusal is still a 409, with the ids.
+func TestCombineBooks_IncompleteRefusalIs409WithIDs(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.CombineIncompleteError{
+		JournalID: "J8", OperationID: "op-refused", Err: &merge.SoftDeletedInputError{BookID: "b"},
+	})
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"operation_id":"op-refused"`) {
+		t.Fatalf("409 lacks the operation id: %s", w.Body.String())
 	}
 }
 
