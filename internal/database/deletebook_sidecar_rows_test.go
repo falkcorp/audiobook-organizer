@@ -1,7 +1,7 @@
 // file: internal/database/deletebook_sidecar_rows_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: c125e490-ad49-4fbd-8185-e0ae632b4de3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package database
 
@@ -79,7 +79,7 @@ func seedSidecars(t *testing.T, s *PebbleStore, bookID string, authorID, narrato
 	require.NoError(t, s.AddBookTagWithSource(bookID, "metadata:source:audible", "system"))
 	require.NoError(t, s.AddBookTagWithSource(bookID, "favorite", "user"))
 	require.NoError(t, s.SetBookUserTags(bookID, []string{"keep"}))
-	require.NoError(t, s.SetBookAlternativeTitles(bookID, []BookAlternativeTitle{{Title: "Alt " + bookID}}))
+	seedAltTitles(t, s, bookID, BookAlternativeTitle{BookID: bookID, Title: "Alt " + bookID})
 	require.NoError(t, s.AddMetadataRejection(MetadataRejection{BookID: bookID, Source: "audible", RejectionReason: "user_rejected"}))
 	require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: bookID, FetchedAt: time.Now()}))
 }

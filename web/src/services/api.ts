@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.184.1
+// version: 2.185.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1618,8 +1618,8 @@ export interface RescanBookResult {
 
 // Re-stats the book's files and corrects FileSize. Despite the historical name
 // this does NOT re-read anything -- no tags, no hashing. Use forceRescanBook for
-// an actual re-read. Points at /reconcile-files; /rescan remains a deprecated
-// server-side alias for the same handler.
+// an actual re-read. Points at /reconcile-files; the old /rescan alias answers
+// 410 Gone (retired in 01-P81d).
 export async function rescanBookFiles(bookId: string): Promise<RescanBookResult> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/reconcile-files`, {
     method: 'POST',

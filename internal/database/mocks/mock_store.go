@@ -4750,75 +4750,6 @@ func (_c *MockStore_AddBlockedHash_Call) RunAndReturn(run func(hash string, reas
 	return _c
 }
 
-// AddBookAlternativeTitle provides a mock function for the type MockStore
-func (_mock *MockStore) AddBookAlternativeTitle(bookID string, title string, source string, language string) error {
-	ret := _mock.Called(bookID, title, source, language)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AddBookAlternativeTitle")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, string) error); ok {
-		r0 = returnFunc(bookID, title, source, language)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_AddBookAlternativeTitle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddBookAlternativeTitle'
-type MockStore_AddBookAlternativeTitle_Call struct {
-	*mock.Call
-}
-
-// AddBookAlternativeTitle is a helper method to define mock.On call
-//   - bookID string
-//   - title string
-//   - source string
-//   - language string
-func (_e *MockStore_Expecter) AddBookAlternativeTitle(bookID any, title any, source any, language any) *MockStore_AddBookAlternativeTitle_Call {
-	return &MockStore_AddBookAlternativeTitle_Call{Call: _e.mock.On("AddBookAlternativeTitle", bookID, title, source, language)}
-}
-
-func (_c *MockStore_AddBookAlternativeTitle_Call) Run(run func(bookID string, title string, source string, language string)) *MockStore_AddBookAlternativeTitle_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		var arg3 string
-		if args[3] != nil {
-			arg3 = args[3].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-			arg3,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_AddBookAlternativeTitle_Call) Return(err error) *MockStore_AddBookAlternativeTitle_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_AddBookAlternativeTitle_Call) RunAndReturn(run func(bookID string, title string, source string, language string) error) *MockStore_AddBookAlternativeTitle_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // AddBookTag provides a mock function for the type MockStore
 func (_mock *MockStore) AddBookTag(bookID string, tag string) error {
 	ret := _mock.Called(bookID, tag)
@@ -27041,63 +26972,6 @@ func (_c *MockStore_RemoveBlockedHash_Call) RunAndReturn(run func(hash string) e
 	return _c
 }
 
-// RemoveBookAlternativeTitle provides a mock function for the type MockStore
-func (_mock *MockStore) RemoveBookAlternativeTitle(bookID string, title string) error {
-	ret := _mock.Called(bookID, title)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RemoveBookAlternativeTitle")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
-		r0 = returnFunc(bookID, title)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_RemoveBookAlternativeTitle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveBookAlternativeTitle'
-type MockStore_RemoveBookAlternativeTitle_Call struct {
-	*mock.Call
-}
-
-// RemoveBookAlternativeTitle is a helper method to define mock.On call
-//   - bookID string
-//   - title string
-func (_e *MockStore_Expecter) RemoveBookAlternativeTitle(bookID any, title any) *MockStore_RemoveBookAlternativeTitle_Call {
-	return &MockStore_RemoveBookAlternativeTitle_Call{Call: _e.mock.On("RemoveBookAlternativeTitle", bookID, title)}
-}
-
-func (_c *MockStore_RemoveBookAlternativeTitle_Call) Run(run func(bookID string, title string)) *MockStore_RemoveBookAlternativeTitle_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_RemoveBookAlternativeTitle_Call) Return(err error) *MockStore_RemoveBookAlternativeTitle_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_RemoveBookAlternativeTitle_Call) RunAndReturn(run func(bookID string, title string) error) *MockStore_RemoveBookAlternativeTitle_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // RemoveBookTag provides a mock function for the type MockStore
 func (_mock *MockStore) RemoveBookTag(bookID string, tag string) error {
 	ret := _mock.Called(bookID, tag)
@@ -28621,63 +28495,6 @@ func (_c *MockStore_SetAuthorTags_Call) Return(err error) *MockStore_SetAuthorTa
 }
 
 func (_c *MockStore_SetAuthorTags_Call) RunAndReturn(run func(authorID int, tags []string) error) *MockStore_SetAuthorTags_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SetBookAlternativeTitles provides a mock function for the type MockStore
-func (_mock *MockStore) SetBookAlternativeTitles(bookID string, titles []database.BookAlternativeTitle) error {
-	ret := _mock.Called(bookID, titles)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SetBookAlternativeTitles")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, []database.BookAlternativeTitle) error); ok {
-		r0 = returnFunc(bookID, titles)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_SetBookAlternativeTitles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetBookAlternativeTitles'
-type MockStore_SetBookAlternativeTitles_Call struct {
-	*mock.Call
-}
-
-// SetBookAlternativeTitles is a helper method to define mock.On call
-//   - bookID string
-//   - titles []database.BookAlternativeTitle
-func (_e *MockStore_Expecter) SetBookAlternativeTitles(bookID any, titles any) *MockStore_SetBookAlternativeTitles_Call {
-	return &MockStore_SetBookAlternativeTitles_Call{Call: _e.mock.On("SetBookAlternativeTitles", bookID, titles)}
-}
-
-func (_c *MockStore_SetBookAlternativeTitles_Call) Run(run func(bookID string, titles []database.BookAlternativeTitle)) *MockStore_SetBookAlternativeTitles_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 []database.BookAlternativeTitle
-		if args[1] != nil {
-			arg1 = args[1].([]database.BookAlternativeTitle)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_SetBookAlternativeTitles_Call) Return(err error) *MockStore_SetBookAlternativeTitles_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_SetBookAlternativeTitles_Call) RunAndReturn(run func(bookID string, titles []database.BookAlternativeTitle) error) *MockStore_SetBookAlternativeTitles_Call {
 	_c.Call.Return(run)
 	return _c
 }

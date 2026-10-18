@@ -1,14 +1,13 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
 // last-edited: 2026-10-18
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
 // restore / purge, cover art, get, segments, book files, track-info extract,
-// relocate, segment tags, metadata + path history, field states, undo,
-// external IDs, user tags, alternative titles, batch update / operations,
-// changelog, changes; 36 handlers total).
+// relocate, segment tags, metadata history, field states, undo,
+// external IDs, user tags, batch update / operations, changelog, changes).
 //
 // Each interface lists only what the handlers actually call so package
 // audiobookshandler stays decoupled from the concrete store / service
