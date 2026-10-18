@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_gone_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a4124a6-9e47-439e-bf24-3e5da4f68289
 // last-edited: 2026-10-18
 
@@ -69,7 +69,7 @@ func TestRetiredLibraryRoutes_AuthRunsFirst(t *testing.T) {
 // control that the guards let an allowed caller through to the stub.
 func TestRetiredLibraryRoutes_GuardRunsFirst(t *testing.T) {
 	f := setupCredGuardServer(t)
-	for _, role := range []string{auth.SeedRoleViewer, auth.SeedRoleFPWorker} {
+	for _, role := range []string{auth.SeedRoleViewer, auth.SeedRoleEditor, auth.SeedRoleFPWorker} {
 		u, err := f.store.CreateUser("synthetic-"+role, role+"@example.test", "bcrypt", "x", []string{role}, "active")
 		require.NoError(t, err)
 		sess, err := f.store.CreateSessionWithOrigin(u.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.93.1
+// version: 1.93.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -719,6 +719,11 @@ type ActivityLogOps interface {
 	// It backs the maintenance.recompact-activity-digests op, which replaced
 	// the synchronous POST /admin/recompact-digests handler.
 	RecompactActivityDigests(ctx context.Context) (database.RecompactResult, error)
+	// VacuumActivityDB previews (dryRun) or performs a VACUUM of the SQLite
+	// activity database, followed by the WAL truncate that returns the freed
+	// space. Backends with no SQLite database report Supported=false. It backs
+	// the maintenance.vacuum-activity-db op.
+	VacuumActivityDB(ctx context.Context, dryRun bool) (database.ActivityVacuumReport, error)
 	// ActivityFilterIndexBackfiller returns the Pebble activity store's
 	// filter-index backfill surface, or nil when no Pebble activity store is
 	// wired. In the SQLite-migration wrapper it is the Pebble side, which

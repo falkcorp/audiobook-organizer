@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.88.0
+// version: 1.88.1
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -168,6 +168,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.dbOptimizeDef(),
 		p.dbCensusExactDef(),
 		p.activityReclaimDef(),
+		p.vacuumActivityDBDef(),
 
 		// --- version groups ---
 		// version-group-primary-report is REPORT ONLY (read capability, no

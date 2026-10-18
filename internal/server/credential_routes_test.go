@@ -69,7 +69,7 @@ var exemptRoutes = map[string]string{
 	"PATCH /api/v1/admin/debug/books/:id":               "admin-only raw library-row edit",
 	"PATCH /api/v1/admin/debug/book-files/:id":          "admin-only raw library-row edit",
 	"POST /api/v1/admin/debug/edits/:edit_id/undo":      "admin-only undo of a raw library edit",
-	"POST /api/v1/admin/recompact-digests":              "admin-only activity maintenance",
+	"POST /api/v1/admin/recompact-digests":              "retired: admin-only 410 Gone stub, touches nothing",
 	"POST /api/v1/audiobooks/:id/restore":               "un-deletes a book",
 	"POST /api/v1/audiobooks/:id/cover-history/restore": "retired (01-P81i): 410 Gone stub, touches nothing",
 	"POST /api/v1/audiobooks/:id/versions/:vid/restore": "restores a book version",
