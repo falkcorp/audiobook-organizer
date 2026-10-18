@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-18
 
@@ -2424,7 +2424,7 @@ const overrideAuthorRole = "author"
 // journal: an author override it dropped, and an author row it created for
 // that override that nothing credits now. That row is left in place, never
 // deleted here (see createdAuthorNote for why); maintenance.purge-empty-authors
-// removes it.
+// can remove it.
 func (ms *Service) writeCombineOverride(primaryID string, plan *CombineOverrideUndo, persist func() error) (warnings []string) {
 	if plan.Applied.Title != "" || plan.Applied.Narrator != "" {
 		// ModifyBook: only Title and Narrator are written, on the row as it
