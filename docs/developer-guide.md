@@ -1,5 +1,5 @@
 <!-- file: docs/developer-guide.md -->
-<!-- version: 1.2.4 -->
+<!-- version: 1.2.5 -->
 <!-- guid: 7f8a9b0c-1d2e-3f4a-5b6c-7d8e9f0a1b2c -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -201,9 +201,9 @@ committed under `web/src/types/generated/` and must never be hand-edited.
   checks the key sets agree. After an intended change, run
   `UPDATE_WIRE_GOLDEN=1 go test ./internal/wirecontract/`, then `make generate-types`.
 
-There is no OpenAPI specification. The API contract is the Go DTO structs plus the generated TypeScript
-types in `web/src/types/generated/` (see "Generated TypeScript types" above). Routes are registered in the
-`internal/server/wire_*_routes.go` files.
+There is no OpenAPI specification. The generated TypeScript types in `web/src/types/generated/` cover only the
+wire structs in the files listed in `tygo.yaml`; handler response types under `internal/server/handlers` are still
+hand-maintained in `web/src/services/api.ts`. Routes are registered in the `internal/server/wire_*_routes.go` files.
 
 ## 7. Testing
 
