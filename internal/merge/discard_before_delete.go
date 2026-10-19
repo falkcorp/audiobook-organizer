@@ -1,5 +1,5 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
 // last-edited: 2026-10-18
 
@@ -77,6 +77,23 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		return res, fmt.Errorf("%w: %s: %w", ErrDiscardIncomplete, bookID, err)
 	}
 	deleter, canDelete := database.AsCapability[database.UserBookStateDeleter](db)
+	// Every user's user-state stripe on bookID is held from the first read
+	// through the hard delete, so a device sync lands either before the read
+	// (and is discarded with the rest, which is what the owner asked for) or
+	// after the book row is gone -- never between a read and its clear, where
+	// the clear would wipe it unseen, nor between the clear and the delete,
+	// where carryLeftover could miss it. Lock order: mergeSerializeMu (held),
+	// then these stripes, then whatever del's store writes take (book
+	// stripes); del reaches no user-state lock (audiobooks.purgeDeleteRow:
+	// tombstone, DeleteBook, external-id tombstones). A user created after
+	// the probe listed users is not locked; carryLeftover lists users again.
+	keys := make([]database.UserBookKey, 0, len(probe.users))
+	for _, u := range probe.users {
+		if u.ID != "" {
+			keys = append(keys, database.UserBookKey{UserID: u.ID, BookID: bookID})
+		}
+	}
+	defer database.LockUserBookStates(keys...)()
 	counted := map[string]bool{}
 	for _, u := range probe.users {
 		if u.ID == "" {
@@ -108,18 +125,10 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 }
 
 // discardUserState clears one user's state row and positions on bookID and
-// reports whether they held carryable state. The read and the clear are one
-// step under the (userID, bookID) user-state stripe
-// (database.LockUserBookState), so a device sync lands either before the
-// read (and is discarded with the rest, which is what the owner asked for)
-// or after the clear, never between them where the clear would wipe it
-// unseen. One that lands after the clear but before carryLeftover's re-check
-// makes the delete refuse; one that lands after that re-check is a write to
-// a book that is deleted next, like a write to any book being hard-deleted.
-// Lock order: the caller holds the merge lock; this stripe is taken and
-// released per user.
+// reports whether they held carryable state. The caller
+// (DiscardUserStateThenHardDelete) holds the (userID, bookID) user-state
+// stripe across this and the hard delete after it.
 func discardUserState(db UserProgressMerger, deleter database.UserBookStateDeleter, canDelete bool, userID, bookID string) (had bool, err error) {
-	defer database.LockUserBookState(userID, bookID)()
 	st, err := db.GetUserBookState(userID, bookID)
 	if err != nil {
 		return false, fmt.Errorf("%w: read state user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)

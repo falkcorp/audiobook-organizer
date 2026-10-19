@@ -1,5 +1,5 @@
 // file: internal/database/user_state_lock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dc3f20c5-76f7-46d2-af45-723d3651b19d
 // last-edited: 2026-10-18
 
@@ -131,5 +131,28 @@ func TestUserStateLockPair_OppositeOrdersNoDeadlock(t *testing.T) {
 	}
 	if counter != 8*3*200 {
 		t.Fatalf("counter = %d, want %d (a lost increment means two holders of a's stripe overlapped)", counter, 8*3*200)
+	}
+}
+
+// LockUserBookStates over many keys, with duplicates and keys sharing a
+// stripe, takes each distinct stripe once and holds every one.
+func TestUserStateLocks_ManyKeysHeldOnceEach(t *testing.T) {
+	a, same, other := collidingBooks(t, "u")
+	keys := []UserBookKey{{"u", a}, {"u", same}, {"u", other}, {"u", a}, {"v", a}}
+	done := make(chan func(), 1)
+	go func() { done <- LockUserBookStates(keys...) }()
+	var unlock func()
+	select {
+	case unlock = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("LockUserBookStates deadlocked on duplicate / shared-stripe keys")
+	}
+	for _, k := range keys {
+		k := k
+		waitsWhileHeld(t, func() func() { return LockUserBookState(k.UserID, k.BookID) })
+	}
+	unlock()
+	for _, k := range keys {
+		LockUserBookState(k.UserID, k.BookID)()
 	}
 }

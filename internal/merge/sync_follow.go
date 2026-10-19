@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-10-18
 
@@ -89,17 +89,39 @@ func FollowMerge(db UserProgressMerger, follower SyncFollower, winnerBookID stri
 	return followMerge(db, follower, winnerBookID, loserBookIDs, nil, false)
 }
 
-// FollowMergeUsers is FollowMerge restricted to the given users' state.
-// Journaled callers pass only the users they could snapshot, so state is never
-// moved without the journal undo needs to move it back. incomplete says some
-// users were left out (their rows could not be read): the pending-repair
-// record is then KEPT, so the sweep moves them once they read cleanly. A nil
-// or empty list follows NO user's state (the redirect is still recorded).
-func FollowMergeUsers(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string, users []database.User, incomplete bool) error {
+// followUsersLocked is the journaled follow of one loser restricted to the
+// given users' state, for a caller that already holds every one of those
+// users' user-state stripes on both books (followStripes) and has already run
+// completePendingInvolving for the pair. Journaled callers pass only the users
+// they could snapshot, so state is never moved without the journal undo needs
+// to move it back. incomplete says some users were left out (their rows could
+// not be read): the pending-repair record is then KEPT, so the sweep moves
+// them once they read cleanly. A nil or empty list follows NO user's state
+// (the redirect is still recorded).
+func followUsersLocked(db UserProgressMerger, follower SyncFollower, winnerBookID, loserBookID string, users []database.User, slice *SliceMapping, incomplete bool) error {
 	if users == nil {
 		users = []database.User{}
 	}
-	return followMerge(db, follower, winnerBookID, loserBookIDs, users, incomplete)
+	return followOneLoser(db, follower, winnerBookID, loserBookID, users, slice, incomplete, true)
+}
+
+// followStripes names every given user's listening state on both books: the
+// keys a journaled follow holds (database.LockUserBookStates) from its
+// before-snapshot through its after-snapshot. Without that span a device
+// write to the absorbed book between the before-snapshot and the follow was
+// carried to the survivor and then, on undo, neither restored to the
+// absorbed book (not in its snapshot) nor kept on the survivor (put back to
+// its before-state); one to the survivor between the follow and the
+// after-snapshot was read as the follow's own write and put back over.
+func followStripes(users []database.User, a, b string) []database.UserBookKey {
+	keys := make([]database.UserBookKey, 0, 2*len(users))
+	for _, u := range users {
+		if u.ID == "" {
+			continue
+		}
+		keys = append(keys, database.UserBookKey{UserID: u.ID, BookID: a}, database.UserBookKey{UserID: u.ID, BookID: b})
+	}
+	return keys
 }
 
 // followMerge: users == nil means "every user" (ListUsers).
@@ -113,7 +135,7 @@ func followMerge(db UserProgressMerger, follower SyncFollower, winnerBookID stri
 		if loserID == "" || loserID == winnerBookID {
 			continue
 		}
-		if err := followOneLoser(db, follower, winnerBookID, loserID, users, nil, incomplete); err != nil {
+		if err := followOneLoser(db, follower, winnerBookID, loserID, users, nil, incomplete, false); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -125,12 +147,14 @@ func followMerge(db UserProgressMerger, follower SyncFollower, winnerBookID stri
 var errUsersSkipped = errors.New("some users' state could not be read and was not moved")
 
 // followOneLoser is the record -> move -> clear sequence for one loser. See
-// FollowMerge for the error contract.
-func followOneLoser(db UserProgressMerger, follower SyncFollower, winnerBookID, loserBookID string, users []database.User, slice *SliceMapping, incomplete bool) error {
+// FollowMerge for the error contract. held says the caller holds every
+// listed user's user-state stripes on both books (followStripes); otherwise
+// each user's move takes them itself.
+func followOneLoser(db UserProgressMerger, follower SyncFollower, winnerBookID, loserBookID string, users []database.User, slice *SliceMapping, incomplete, held bool) error {
 	recErr := putPendingRepair(db, PendingUserStateRepair{
 		LoserBookID: loserBookID, WinnerBookID: winnerBookID, RecordedAt: time.Now().UTC(), Slice: slice,
 	})
-	moveErr := moveLoserState(db, follower, winnerBookID, loserBookID, users, slice)
+	moveErr := moveLoserState(db, follower, winnerBookID, loserBookID, users, slice, held)
 	if moveErr == nil && !incomplete {
 		if err := db.DeleteRaw(pendingRepairKey(loserBookID, winnerBookID)); err != nil {
 			// Harmless: the sweep re-runs an idempotent follow and deletes it.
@@ -156,8 +180,14 @@ func followOneLoser(db UserProgressMerger, follower SyncFollower, winnerBookID, 
 // moveLoserState does the moves: identity redirect, each user's upos/ubs
 // under the conflict rule (user_state_merge.go) or the slice rule, then
 // bookmarks. Every step runs even when an earlier one failed; the joined
-// error names each failure. users == nil means every user.
-func moveLoserState(db UserProgressMerger, follower SyncFollower, winnerBookID, loserBookID string, users []database.User, slice *SliceMapping) error {
+// error names each failure. users == nil means every user. held says the
+// caller holds the listed users' stripes on both books, so each user's move
+// runs its ...Locked variant; it requires an explicit user list, since the
+// caller can only have locked the users it named.
+func moveLoserState(db UserProgressMerger, follower SyncFollower, winnerBookID, loserBookID string, users []database.User, slice *SliceMapping, held bool) error {
+	if held && users == nil {
+		return fmt.Errorf("merge-follow: held user-state stripes need an explicit user list")
+	}
 	var errs []error
 	if follower != nil {
 		if _, err := follower.MintOrGetSyncID(winnerBookID); err != nil {
@@ -178,9 +208,14 @@ func moveLoserState(db UserProgressMerger, follower SyncFollower, winnerBookID, 
 			continue
 		}
 		var err error
-		if slice != nil {
+		switch {
+		case slice != nil && held:
+			err = followSliceForLocked(db, u.ID, winnerBookID, loserBookID, *slice)
+		case slice != nil:
 			err = followSliceFor(db, u.ID, winnerBookID, loserBookID, *slice)
-		} else {
+		case held:
+			err = mergeUserProgressForLocked(db, u.ID, loserBookID, winnerBookID)
+		default:
 			err = mergeUserProgressFor(db, u.ID, loserBookID, winnerBookID)
 		}
 		if err != nil {
@@ -434,13 +469,22 @@ func mergeUserProgressUsers(db UserProgressMerger, users []database.User, loserB
 // sync to the loser landing after its read was drained away with the loser
 // -- listening progress removed -- and one to the winner landing after its
 // read was overwritten by the merged state built from the stale read. Lock
-// order: the caller holds merge.LockMergeRMW (merges, combines, the
+// order: the caller holds merge.LockMergeRMW (unjournaled merges, the
 // pending-repair sweep, the stranded-state repair) or syncRepointMu
 // (FollowBookIDChange) and no user-state stripe; carryPlayCountMark's
 // ModifyBook takes the winner's book write stripe under these, which is the
-// documented order (user-state stripe, then book write stripe).
+// documented order (user-state stripe, then book write stripe). The
+// journaled follows hold the stripes for longer and call
+// mergeUserProgressForLocked.
 func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookID string) error {
 	defer database.LockUserBookStatePair(userID, loserBookID, winnerBookID)()
+	return mergeUserProgressForLocked(db, userID, loserBookID, winnerBookID)
+}
+
+// mergeUserProgressForLocked is mergeUserProgressFor for a caller that
+// already holds userID's stripes on both books: the journaled follows, which
+// hold them from the before-snapshot through the after-snapshot.
+func mergeUserProgressForLocked(db userPositionStore, userID, loserBookID, winnerBookID string) error {
 	loserState, err := db.GetUserBookState(userID, loserBookID)
 	if err != nil {
 		return fmt.Errorf("get loser state: %w", err)

@@ -1,5 +1,5 @@
 // file: internal/merge/user_state_lock_follow_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bd9bd3d5-42dd-4e0b-92dd-b5ab18ca5f90
 // last-edited: 2026-10-18
 
@@ -201,4 +201,54 @@ func TestDiscardUserStateThenHardDelete_HoldsUserStateLock(t *testing.T) {
 	rows, err := s.ListUserPositionsForBook(user, loser)
 	require.NoError(t, err)
 	require.Empty(t, rows)
+}
+
+// FollowAbsorbedJournaled (sibling moves, split-book and chapter merges,
+// retire-into, carry-before-delete) holds the user's stripes on both books
+// from its before-snapshot through its after-snapshot: a device write to the
+// absorbed book after the before-snapshot read waits, lands after the follow,
+// and the restore keeps it. Unlocked it was carried to the survivor, then
+// lost on restore (in neither the absorbed snapshot nor the survivor's
+// before-state).
+func TestFollowAbsorbedJournaled_UserStateRaceAbsorbedWriteKeptByRestore(t *testing.T) {
+	s, survivor, absorbed, user := seedFollowPair(t)
+	var wait func() error
+	hooked := &stateReadHook{PebbleStore: s, book: absorbed, onPositions: true}
+	hooked.onRead = func() {
+		wait = stripedClientWrite(user, absorbed, func() error {
+			return s.SetUserPositionAt(user, absorbed, "late", 777, time.Now().UTC())
+		})
+	}
+	progress, redirected, err := FollowAbsorbedJournaled(hooked, survivor, absorbed, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, wait, "the journaled follow never read the absorbed book's positions")
+	require.NoError(t, wait())
+	LockMergeRMW()
+	_, err = RestoreFollowedProgress(s, survivor, absorbed, redirected, progress)
+	UnlockMergeRMW()
+	require.NoError(t, err)
+	require.True(t, hasPosition(t, s, user, "late", 777, absorbed, survivor),
+		"the device write made during the journaled follow is on neither book after the restore")
+}
+
+// The discard holds every user's stripe through the hard delete: a device
+// write started from inside del waits until the delete has run.
+func TestDiscardUserStateThenHardDelete_UserStateHeldThroughDelete(t *testing.T) {
+	s, _, loser, user := seedFollowPair(t)
+	var blocked bool
+	_, err := DiscardUserStateThenHardDelete(s, loser, nil, func() error {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			database.LockUserBookState(user, loser)()
+		}()
+		select {
+		case <-done:
+		case <-time.After(150 * time.Millisecond):
+			blocked = true
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, blocked, "a writer took the user-state stripe inside the discard's hard delete")
 }

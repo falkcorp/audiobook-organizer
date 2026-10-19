@@ -1,5 +1,5 @@
 // file: internal/database/user_state_lock.go
-// version: 1.4.0
+// version: 1.5.1
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
 // last-edited: 2026-10-18
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"hash/fnv"
+	"slices"
 	"sync"
 )
 
@@ -57,14 +58,26 @@ var userStateLocks [userStateStripes]sync.Mutex
 //     rule, and merge.followSliceFor, the slice rule), per user, holding
 //     BOTH books' stripes through LockUserBookStatePair from the loser's read
 //     until the loser is drained. Reached under merge.LockMergeRMW (merges,
-//     combines, the pending-repair sweep, the stranded-state repair) or
-//     under merge's syncRepointMu (FollowBookIDChange, the scanner's
-//     version-link path, which holds no merge lock);
-//   - merge.DiscardUserStateThenHardDelete, per user, across that user's
-//     read and clear, inside merge.LockMergeRMW.
+//     the pending-repair sweep, the stranded-state repair) or under merge's
+//     syncRepointMu (FollowBookIDChange, the scanner's version-link path,
+//     which holds no merge lock);
+//   - the JOURNALED follows (merge.CombineBooks and
+//     merge.FollowAbsorbedJournaled: sibling moves, split-book and chapter
+//     merges, retire-into, carry-before-delete), inside merge.LockMergeRMW:
+//     every listed user's stripes on both books through LockUserBookStates,
+//     from the before-snapshot through the after-snapshot, so the journal
+//     the undo restores from describes exactly what the follow moved (the
+//     per-user moves then run their ...Locked variants);
+//   - merge.DiscardUserStateThenHardDelete, inside merge.LockMergeRMW: every
+//     user's stripe on the book through LockUserBookStates, from the first
+//     read through the hard delete.
 //
-// NOT HELD BY: nothing that writes these rows. Read-only users (listings,
-// the ABS reads, snapshots taken before a follow) do not take it.
+// NOT HELD BY: nothing that reads and then writes these rows. Outside the
+// PebbleStore methods themselves (pebble_store_playback.go), the only other
+// writers are whole-store paths that read nothing first: PebbleStore.Reset
+// (the factory reset's DeleteRange of every key) and the offline backup
+// restore, which replaces the database files. Read-only users (listings, the
+// ABS reads, the user-state probe) do not take it.
 //
 // LOCK ORDER: merge.LockMergeRMW (or merge's syncRepointMu), then this
 // stripe, then anything else (session.mu, a book's write stripe -- the
@@ -74,9 +87,9 @@ var userStateLocks [userStateStripes]sync.Mutex
 // stripe (database.LockMetadataState) under it.
 //
 // Striped, not per key: two keys can share a stripe. A holder of one stripe
-// never takes a second user-state lock while holding it; the one path that
-// needs two books at once takes both through LockUserBookStatePair, which
-// orders them. Not reentrant: a function that runs both with and without the
+// never takes a second user-state lock while holding it; a path that needs
+// several keys at once takes them all in one LockUserBookStates (or
+// LockUserBookStatePair) call, which orders the stripes. Not reentrant: a function that runs both with and without the
 // stripe held comes as a ...Locked variant (the caller holds it) and a
 // wrapper that takes it.
 func LockUserBookState(userID, bookID string) (unlock func()) {
@@ -86,31 +99,45 @@ func LockUserBookState(userID, bookID string) (unlock func()) {
 }
 
 // LockUserBookStatePair takes the user-state stripes of one user's state on
-// two books and returns one release for both. The merge follow holds it: it
-// reads both books, writes the survivor and drains the loser as one step.
-//
-// The two stripes are taken in ascending stripe order, and only once when
-// both books hash to the same stripe (a second Lock of it would self-
-// deadlock). With every single-stripe holder taking no second stripe and
-// every pair holder taking its two in ascending order, a wait-for cycle
-// cannot form. Not reentrant, like LockUserBookState: the caller must hold
-// no user-state stripe.
+// two books and returns one release for both: LockUserBookStates of the two
+// keys. The merge follow holds it: it reads both books, writes the survivor
+// and drains the loser as one step.
 func LockUserBookStatePair(userID, bookA, bookB string) (unlock func()) {
-	a, b := userStateStripe(userID, bookA), userStateStripe(userID, bookB)
-	if a == b {
-		mu := &userStateLocks[a]
-		mu.Lock()
-		return mu.Unlock
+	return LockUserBookStates(UserBookKey{userID, bookA}, UserBookKey{userID, bookB})
+}
+
+// UserBookKey names one user's listening state on one book.
+type UserBookKey struct {
+	UserID string
+	BookID string
+}
+
+// LockUserBookStates takes the user-state stripes of every key and returns
+// one release for all of them. The journaled merge follow holds every
+// followed user's stripes on both books from its before-snapshot through its
+// after-snapshot, and the owner's discard holds every user's stripe on the
+// book through the hard delete.
+//
+// The distinct stripes are taken in ascending stripe order, each once: keys
+// that hash to one stripe share it (a second Lock of it would self-deadlock).
+// With every single-stripe holder taking no second stripe and every
+// multi-stripe holder taking its stripes in ascending order, a wait-for
+// cycle cannot form. Not reentrant, like LockUserBookState: the caller must
+// hold no user-state stripe.
+func LockUserBookStates(keys ...UserBookKey) (unlock func()) {
+	idx := make([]uint32, 0, len(keys))
+	for _, k := range keys {
+		idx = append(idx, userStateStripe(k.UserID, k.BookID))
 	}
-	if a > b {
-		a, b = b, a
+	slices.Sort(idx)
+	idx = slices.Compact(idx)
+	for _, i := range idx {
+		userStateLocks[i].Lock()
 	}
-	first, second := &userStateLocks[a], &userStateLocks[b]
-	first.Lock()
-	second.Lock()
 	return func() {
-		second.Unlock()
-		first.Unlock()
+		for j := len(idx) - 1; j >= 0; j-- {
+			userStateLocks[idx[j]].Unlock()
+		}
 	}
 }
 
