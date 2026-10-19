@@ -396,14 +396,14 @@ type Handler struct {
 	sessions *sessionRegistry
 
 	// oidcRequests parks /auth/openid (hop 1) requests until the system browser
-	// arrives at /auth/openid/browser (hop 2). Bounded per caller and globally,
-	// single-use; see openid.go. Per handler, and timed by h.now, so SetClock
-	// drives expiry.
+	// arrives at /auth/openid/browser (hop 2). Bounded per credential and
+	// globally, single-use; see openid.go oidcTTLStore. Per handler, and timed
+	// by h.now, so SetClock drives expiry.
 	oidcRequests *oidcTTLStore[oidcPendingRequest]
-	// oidcLimiter rate-limits hop 1 per (credential, device) bucket, and
-	// oidcCredLimiter caps each verified credential across all its buckets.
-	oidcLimiter     *servermiddleware.IPRateLimiter
-	oidcCredLimiter *servermiddleware.IPRateLimiter
+	// Hop-1 rate limiters per verified credential (openid.go oidcRateKey):
+	// one for shared group service tokens, one for individual people.
+	oidcSharedLimiter *servermiddleware.IPRateLimiter
+	oidcPersonLimiter *servermiddleware.IPRateLimiter
 	// oidcConsentKey keys the consent form's CSRF token (openid.go
 	// oidcConsentToken). Random per process: the parked requests it protects
 	// do not survive a restart either.
@@ -576,9 +576,9 @@ func New(o Options) (*Handler, error) {
 		newID:       func() string { return ulid.Make().String() },
 	}
 	h.sessions = newSessionRegistry(h.nowFn)
-	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap, oidcPerBucketCap)
-	h.oidcLimiter = servermiddleware.NewIPRateLimiter(oidcRatePerMinute, oidcRateBurst)
-	h.oidcCredLimiter = servermiddleware.NewIPRateLimiter(oidcCredRatePerMinute, oidcCredRateBurst)
+	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap)
+	h.oidcSharedLimiter = servermiddleware.NewIPRateLimiter(oidcSharedRatePerMinute, oidcSharedRateBurst)
+	h.oidcPersonLimiter = servermiddleware.NewIPRateLimiter(oidcPersonRatePerMinute, oidcPersonRateBurst)
 	h.oidcConsentKey = make([]byte, 32)
 	if _, err := rand.Read(h.oidcConsentKey); err != nil {
 		return nil, fmt.Errorf("abs: generate openid consent key: %w", err)

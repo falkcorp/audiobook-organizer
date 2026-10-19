@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -67,8 +66,8 @@ import (
 // # The flow now: two hops, like real ABS
 //
 //	hop 1  GET  /auth/openid           (app's URLSession, service token only)
-//	       require a verified Cloudflare credential, rate-limit and quota per
-//	       (credential, device) bucket, validate redirect_uri + PKCE, park the
+//	       require a verified Cloudflare credential, rate-limit and cap live
+//	       requests per credential, validate redirect_uri + PKCE, park the
 //	       request under a random id,
 //	       302 → https://<this host>/auth/openid/browser?req=<id>
 //	       errors: 400 text/plain, never a redirect
@@ -136,34 +135,27 @@ const (
 	// tap, and no more: a shorter life is less time for a flood to hold slots.
 	oidcRequestTTL = 5 * time.Minute
 
-	// oidcStoreCap is the most entries either in-memory store holds. When the
-	// store is full the OLDEST entry is evicted, so a flood can never pin the
-	// store shut: new sign-ins always get in. Human login rates are a handful an
-	// hour; 1024 live entries is far beyond any legitimate peak.
+	// oidcStoreCap is the most entries either in-memory store holds. See
+	// oidcTTLStore for the full set of guarantees.
 	oidcStoreCap = 1024
 
-	// oidcPerBucketCap is the most live parked requests (or unredeemed codes)
-	// one bucket may hold. A new one evicts that bucket's own oldest, so a
-	// person who abandons a sign-in and retries is never blocked, and a caller
-	// flooding hop 1 only ever churns its own slots.
+	// Per-owner caps. An owner is the verified Cloudflare credential that
+	// started hop 1 (or, for codes, the user the code was minted for).
 	//
-	// A hop-1 bucket is (verified credential, device address), NOT the
-	// credential alone: a Cloudflare service token is shared by a whole group of
-	// people and devices (see oidcBucketKey), so a 3-slot cap on the token would
-	// let a fourth concurrent sign-in anywhere in the group evict a real one.
-	oidcPerBucketCap = 3
+	// A service token is shared by a whole GROUP of people and devices (the
+	// owner mints one per friends/family/other/testing group), so its cap must
+	// cover a group's concurrent sign-ins: 256 is far above any real group and
+	// is oidcStoreCap/4, so the four group tokens together fit exactly. A
+	// person (email) or a user's codes need only a few.
+	oidcSharedCredentialCap = 256
+	oidcPersonCap           = 3
 
-	// Hop-1 rate limits. Per bucket: generous for a person retrying, tight for
-	// one device. Per credential: a CEILING over all of a credential's buckets,
-	// because the device address is unauthenticated and a credential holder can
-	// rotate it to mint fresh buckets. The ceiling bounds one credential to
-	// about oidcCredRatePerMinute*5min = 300 live parked requests, under
-	// oidcStoreCap, so no single credential can churn the global store and
-	// evict other groups' sign-ins.
-	oidcRatePerMinute     = 10
-	oidcRateBurst         = 5
-	oidcCredRatePerMinute = 60
-	oidcCredRateBurst     = 30
+	// Hop-1 rate limits per verified credential and client address (see
+	// oidcRateKey): generous for a shared group token, tight for one person.
+	oidcSharedRatePerMinute = 60
+	oidcSharedRateBurst     = 30
+	oidcPersonRatePerMinute = 10
+	oidcPersonRateBurst     = 5
 
 	// oidcAuthMethod labels this path in audit records and ABSIdentity.Mode.
 	oidcAuthMethod = "openid"
@@ -193,22 +185,27 @@ var oidcLog = logger.New("abs")
 // which is correct for credentials that live seconds to minutes, and keeps
 // short-lived secrets out of the database.
 //
-// Bounds, both enforced on put and both by EVICTION, never refusal:
-//   - per owner: at most perOwner live entries; a new one evicts that owner's
-//     oldest;
-//   - global: at most max entries; expired ones are swept first, then the
-//     oldest live one is evicted.
+// INVARIANTS (enforced on every put; put always succeeds):
+//
+//  1. Global cap: the store never holds more than max entries.
+//  2. Per-owner cap: an owner never holds more than the cap passed with its
+//     put; at the cap, a new entry evicts that owner's OWN oldest.
+//  3. A flood evicts only itself: at the global cap, the entry evicted is the
+//     oldest entry of the owner holding the MOST live entries — never simply
+//     the globally oldest — so an owner flooding the store pushes out its own
+//     entries first, and anyone below the largest owner's count is untouched.
+//  4. Expired entries are swept before anything live is evicted.
+//  5. take is single-use: the read and the delete happen under one lock.
 //
 // The scans are O(n) with n ≤ max (1024), on a path that runs a handful of times
-// an hour and is rate-limited per caller, so a heap or per-owner index would be
-// complexity without a payoff.
+// an hour and is rate-limited per caller, so a heap or a per-owner index would
+// be complexity without a payoff.
 type oidcTTLStore[V any] struct {
-	mu       sync.Mutex
-	entries  map[string]*oidcTTLEntry[V]
-	max      int
-	perOwner int
-	seq      uint64
-	purgeAt  time.Time
+	mu      sync.Mutex
+	entries map[string]*oidcTTLEntry[V]
+	max     int
+	seq     uint64
+	purgeAt time.Time
 }
 
 type oidcTTLEntry[V any] struct {
@@ -220,18 +217,18 @@ type oidcTTLEntry[V any] struct {
 
 // oidcPutResult reports what a put had to evict to make room.
 type oidcPutResult struct {
-	OwnerEvicted  int // the owner's own oldest entries, over perOwner
-	GlobalEvicted int // someone's oldest live entry, at the global cap
+	OwnerEvicted  int    // the owner's own oldest entries, over its cap
+	GlobalEvicted int    // entries evicted at the global cap
+	EvictedFrom   string // the owner the global eviction took from
 }
 
-func newOIDCTTLStore[V any](maxEntries, perOwner int) *oidcTTLStore[V] {
-	return &oidcTTLStore[V]{entries: map[string]*oidcTTLEntry[V]{}, max: maxEntries, perOwner: perOwner}
+func newOIDCTTLStore[V any](maxEntries int) *oidcTTLStore[V] {
+	return &oidcTTLStore[V]{entries: map[string]*oidcTTLEntry[V]{}, max: maxEntries}
 }
 
-// put registers key, owned by owner, until now+ttl. It always succeeds; see the
-// type comment for what it evicts. An empty owner is exempt from the per-owner
-// bound.
-func (s *oidcTTLStore[V]) put(key, owner string, value V, now time.Time, ttl time.Duration) oidcPutResult {
+// put registers key, owned by owner (capped at ownerCap live entries), until
+// now+ttl. It always succeeds; see the type comment for what it evicts.
+func (s *oidcTTLStore[V]) put(key, owner string, ownerCap int, value V, now time.Time, ttl time.Duration) oidcPutResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var res oidcPutResult
@@ -244,15 +241,18 @@ func (s *oidcTTLStore[V]) put(key, owner string, value V, now time.Time, ttl tim
 		}
 		s.purgeAt = now
 	}
-	if owner != "" && s.perOwner > 0 {
-		for s.countOwnerLocked(owner) >= s.perOwner {
-			s.evictOldestLocked(owner)
-			res.OwnerEvicted++
-		}
+	if ownerCap < 1 {
+		ownerCap = 1
+	}
+	for s.countOwnerLocked(owner) >= ownerCap {
+		s.evictOldestOfLocked(owner)
+		res.OwnerEvicted++
 	}
 	for len(s.entries) >= s.max {
-		s.evictOldestLocked("")
+		victim := s.largestOwnerLocked()
+		s.evictOldestOfLocked(victim)
 		res.GlobalEvicted++
+		res.EvictedFrom = victim
 	}
 	s.seq++
 	s.entries[key] = &oidcTTLEntry[V]{value: value, owner: owner, expiresAt: now.Add(ttl), seq: s.seq}
@@ -269,12 +269,31 @@ func (s *oidcTTLStore[V]) countOwnerLocked(owner string) int {
 	return n
 }
 
-// evictOldestLocked removes the oldest entry, or the oldest of owner's when
-// owner is non-empty.
-func (s *oidcTTLStore[V]) evictOldestLocked(owner string) {
+// largestOwnerLocked returns the owner with the most live entries; a tie goes to
+// the owner holding the older entry, so the choice is deterministic.
+func (s *oidcTTLStore[V]) largestOwnerLocked() string {
+	count := map[string]int{}
+	oldest := map[string]uint64{}
+	for _, e := range s.entries {
+		count[e.owner]++
+		if o, ok := oldest[e.owner]; !ok || e.seq < o {
+			oldest[e.owner] = e.seq
+		}
+	}
+	best, bestN, bestSeq := "", -1, uint64(0)
+	for o, n := range count {
+		if n > bestN || (n == bestN && oldest[o] < bestSeq) {
+			best, bestN, bestSeq = o, n, oldest[o]
+		}
+	}
+	return best
+}
+
+// evictOldestOfLocked removes owner's oldest entry.
+func (s *oidcTTLStore[V]) evictOldestOfLocked(owner string) {
 	oldestKey, oldestSeq, found := "", uint64(0), false
 	for k, e := range s.entries {
-		if owner != "" && e.owner != owner {
+		if e.owner != owner {
 			continue
 		}
 		if !found || e.seq < oldestSeq {
@@ -337,8 +356,8 @@ type oidcPendingRequest struct {
 	RedirectURI string
 	State       string
 	ClientID    string
-	// Hop 1's verified Cloudflare credential key (svc:<token> or email:<…>),
-	// for the hop-2 audit line. The quota bucket is in the store entry's owner.
+	// Hop 1's verified Cloudflare credential key (svc:<token> or email:<…>):
+	// the entry's owner in the store, and on the hop-2 audit line.
 	CallerKey string
 	// Hop 1's client, recorded for the audit line. Not enforced: Safari with
 	// iCloud Private Relay legitimately reaches us from a different address than
@@ -351,7 +370,7 @@ type oidcPendingRequest struct {
 // oidcCodes is package-level because the web OAuth deep-link flow
 // (internal/server/handlers) mints into it through MintAppAuthorizationCode.
 // Codes are owned by the user they were minted for.
-var oidcCodes = newOIDCTTLStore[oidcPendingCode](oidcStoreCap, oidcPerBucketCap)
+var oidcCodes = newOIDCTTLStore[oidcPendingCode](oidcStoreCap)
 
 // OIDCRedirectURIsEnvVar overrides the redirect_uri allowlist (comma-separated,
 // exact matches). Set it when adding a client whose callback scheme differs.
@@ -443,7 +462,7 @@ func mintOIDCCode(userID, email, challenge, redirectURI string, now time.Time) (
 	if err != nil {
 		return "", err
 	}
-	oidcCodes.put(code, userID, oidcPendingCode{
+	oidcCodes.put(code, userID, oidcPersonCap, oidcPendingCode{
 		UserID:      userID,
 		Email:       email,
 		Challenge:   challenge,
@@ -462,10 +481,10 @@ func AppRedirectURL(target, code, state string) string {
 // client, which does not follow redirects and carries only a service token.
 //
 // It resolves no identity. It requires a VERIFIED Cloudflare credential (the
-// app's service token, or a person's assertion), rate-limits per credential and
-// per (credential, device) bucket, quotas per bucket, validates redirect_uri and
-// PKCE, parks the request under a random single-use id, and 302s to hop 2 on
-// this server's own https origin.
+// app's service token, or a person's assertion), rate-limits and caps live
+// parked requests per that credential, validates redirect_uri and PKCE, parks
+// the request under a random single-use id, and 302s to hop 2 on this server's
+// own https origin.
 //
 // Every failure is a 400 with a plain-text body and no Location: the app shows a
 // 400 body to the user and treats any other status as a generic error, and it
@@ -518,14 +537,13 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 			"Single sign-on must go through Cloudflare Access. Check the app's custom headers.")
 		return
 	}
-	bucket := oidcBucketKey(c, callerKey)
-	if !h.oidcCredLimiter.AllowKey("openid-cred:" + callerKey) {
-		oidcLog.Warn("openid authorize rate-limited at the credential ceiling: caller=%s", logger.SanitizeLogValue(callerKey))
-		h.oidcAuthorizeReject(c, "rate-limited-credential", "Too many sign-in attempts. Wait a minute and try again.")
-		return
+	shared := strings.HasPrefix(callerKey, "svc:")
+	limiter, ownerCap := h.oidcPersonLimiter, oidcPersonCap
+	if shared {
+		limiter, ownerCap = h.oidcSharedLimiter, oidcSharedCredentialCap
 	}
-	if !h.oidcLimiter.AllowKey("openid:" + bucket) {
-		oidcLog.Warn("openid authorize rate-limited: bucket=%s", logger.SanitizeLogValue(bucket))
+	if !limiter.AllowKey(oidcRateKey(c, callerKey)) {
+		oidcLog.Warn("openid authorize rate-limited: caller=%s", logger.SanitizeLogValue(callerKey))
 		h.oidcAuthorizeReject(c, "rate-limited", "Too many sign-in attempts. Wait a minute and try again.")
 		return
 	}
@@ -554,7 +572,7 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 		h.oidcAuthorizeReject(c, "request-id-error", "Could not start sign-in. Try again.")
 		return
 	}
-	res := h.oidcRequests.put(id, bucket, oidcPendingRequest{
+	res := h.oidcRequests.put(id, callerKey, ownerCap, oidcPendingRequest{
 		Challenge:   challenge,
 		RedirectURI: redirectURI,
 		State:       state,
@@ -566,8 +584,8 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 	if res.GlobalEvicted > 0 {
 		// Only reachable when many distinct credentials are parking requests at
 		// once: a flood signal worth a line.
-		oidcLog.Warn("openid authorize evicted %d parked request(s) at the global cap %d (bucket=%s)",
-			res.GlobalEvicted, oidcStoreCap, logger.SanitizeLogValue(bucket))
+		oidcLog.Warn("openid authorize evicted %d parked request(s) of caller=%s at the global cap %d (new caller=%s)",
+			res.GlobalEvicted, logger.SanitizeLogValue(res.EvictedFrom), oidcStoreCap, logger.SanitizeLogValue(callerKey))
 	}
 
 	absauth.Audit(absauth.AuditEvent{
@@ -972,33 +990,19 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 	h.issueSession(c, user, nil, oidcAuthMethod, pending.Email, now)
 }
 
-// oidcBucketKey is hop 1's quota and rate-limit bucket: the verified credential
-// plus the device's address.
+// oidcRateKey is hop 1's rate-limit key: the verified credential plus gin's
+// c.ClientIP().
 //
-// The credential is necessary but not sufficient. A person's assertion names one
-// person, but a service token is shared by a group (the owner mints one per
-// friends/family/… group), so every device in the group presents the same key.
-// The device address separates them. It comes from Cf-Connecting-Ip, which
-// Cloudflare sets to the client's address: the origin trusts no forwarded
-// headers (server.go SetTrustedProxies(nil)), and behind the shared reverse
-// proxies c.ClientIP() is the proxy's address, identical for everyone.
-//
-// Cf-Connecting-Ip is NOT authenticated at the origin; a credential holder who
-// reaches the origin directly can set it to anything. That is why it is used
-// ONLY to split a credential's quota into buckets, never to decide access, and
-// why a per-credential rate ceiling sits above the buckets: rotating the header
-// buys an attacker fresh buckets of their OWN credential's ceiling, and nothing
-// from anyone else's. AudioBooth sends no per-device identifier on hop 1
-// (OIDCAuthenticationManager sends only the URL and its custom headers), so
-// there is nothing better to use.
-func oidcBucketKey(c *gin.Context, callerKey string) string {
-	addr := strings.TrimSpace(c.GetHeader("Cf-Connecting-Ip"))
-	if ip := net.ParseIP(addr); ip != nil {
-		addr = ip.String()
-	} else {
-		addr = strings.TrimSpace(c.ClientIP())
-	}
-	return callerKey + "|ip:" + addr
+// c.ClientIP() honours the router's trusted-proxy list (server.go
+// SetTrustedProxies). Today that list is empty, so behind the shared reverse
+// proxies the address is the proxy's and the key is effectively per credential;
+// if a trusted-proxy allowlist is ever configured, this becomes per device with
+// no change here. Cf-Connecting-Ip and X-Forwarded-For are deliberately NOT read
+// directly: the origin cannot tell whether a request really came through
+// Cloudflare, so a credential holder reaching the origin directly could set
+// them to anything and mint fresh rate-limit buckets at will.
+func oidcRateKey(c *gin.Context, callerKey string) string {
+	return "openid:" + callerKey + "|" + strings.TrimSpace(c.ClientIP())
 }
 
 // oidcNoStore keeps every hop out of caches: their Locations carry a request id

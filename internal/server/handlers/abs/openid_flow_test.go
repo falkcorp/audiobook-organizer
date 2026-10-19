@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-19
 
@@ -54,6 +54,11 @@ func newOIDCHarness(t *testing.T) *harness {
 	t.Helper()
 	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "")
 	h := newHarness(t, "cf,jwt", []string{"owner@example.com", "second@example.com"})
+	// As server.go configures production: trust no forwarded headers, so
+	// c.ClientIP() is the connection's address.
+	if err := h.router.SetTrustedProxies(nil); err != nil {
+		t.Fatal(err)
+	}
 	h.verifier.byToken[oidcPersonAssertion] = &oauth.IdentityClaims{
 		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: "owner@example.com", EmailVerified: true,
@@ -89,12 +94,12 @@ func authorizePath(challenge, state string) string {
 	return "/auth/openid?" + q.Encode()
 }
 
-// hop1From runs hop 1 under the shared service token from one device address,
-// as Cloudflare reports it in Cf-Connecting-Ip.
+// hop1From runs hop 1 with forged Cf-Connecting-Ip and X-Forwarded-For headers,
+// which the origin cannot authenticate and must ignore.
 func (h *harness) hop1From(t *testing.T, assertion, deviceIP string) *httptest.ResponseRecorder {
 	t.Helper()
 	w, _ := h.do(t, request{method: http.MethodGet, path: authorizePath(s256(oidcVerifier), ""), headers: map[string]string{
-		oauth.CFAccessHeader: assertion, "Cf-Connecting-Ip": deviceIP,
+		oauth.CFAccessHeader: assertion, "Cf-Connecting-Ip": deviceIP, "X-Forwarded-For": deviceIP,
 	}})
 	return w
 }
@@ -676,16 +681,15 @@ func TestOpenIDConsent_DenyReportsAccessDenied(t *testing.T) {
 
 // ── quota and rate limit ───────────────────────────────────────────────────
 
-// One (credential, device) bucket holds at most three parked requests; a fourth
-// evicts that bucket's own oldest, and another credential's request is
-// untouched. (httptest sends no Cf-Connecting-Ip, so every request here is the
-// same device.)
-func TestOpenIDHop1_PerDeviceQuotaEvictsOwnOldest(t *testing.T) {
+// A person credential holds at most three parked requests; a fourth evicts
+// that person's own oldest, and another credential's request is untouched.
+func TestOpenIDHop1_PersonCapEvictsOwnOldest(t *testing.T) {
 	h := newOIDCHarness(t)
-	other := assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcOtherService)).RequestURI()
+	other := h.hop1(t, s256(oidcVerifier), "")
 	var mine []string
 	for range 4 {
-		mine = append(mine, h.hop1(t, s256(oidcVerifier), ""))
+		w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcPersonAssertion)
+		mine = append(mine, assertBrowserHopLocation(t, w).RequestURI())
 	}
 	assertDeadLink(t, h.get(t, mine[0], oidcPersonAssertion))
 	for _, b := range append(mine[1:], other) {
@@ -694,36 +698,34 @@ func TestOpenIDHop1_PerDeviceQuotaEvictsOwnOldest(t *testing.T) {
 }
 
 // A service token is shared by a whole group of people and devices. Many
-// concurrent sign-ins under ONE token, from different devices, must not evict
-// each other while the store is below its global cap.
-func TestOpenIDHop1_SharedServiceTokenDevicesDoNotEvictEachOther(t *testing.T) {
+// concurrent sign-ins under ONE token must not evict each other while the
+// token is below its (group-sized) cap.
+func TestOpenIDHop1_ManyLoginsUnderOneServiceTokenCoexist(t *testing.T) {
 	h := newOIDCHarness(t)
 	var links []string
-	for i := range 12 {
-		w := h.hop1From(t, oidcServiceAssertion, fmt.Sprintf("198.51.100.%d", i+1))
-		links = append(links, assertBrowserHopLocation(t, w).RequestURI())
+	for range 12 {
+		links = append(links, h.hop1(t, s256(oidcVerifier), ""))
 	}
 	for i, b := range links {
 		if w := h.get(t, b, oidcPersonAssertion); w.Code != http.StatusOK {
-			t.Fatalf("device %d's sign-in was evicted by other devices on the same token (status %d)", i+1, w.Code)
+			t.Fatalf("sign-in %d was evicted by others on the same token (status %d)", i+1, w.Code)
 		}
 	}
 }
 
-// The device address is unauthenticated, so rotating it mints fresh buckets.
-// The per-credential ceiling (burst 30) bounds that: the 31st request under one
-// token is refused however many addresses it claims, and another token is
-// unaffected. Without it one credential could churn the global store.
-func TestOpenIDHop1_CredentialCeilingBoundsRotatedBuckets(t *testing.T) {
+// Rotating a forged Cf-Connecting-Ip buys no fresh rate-limit bucket: the 31st
+// request under one token (burst 30) is refused whatever address it claims,
+// and another token is unaffected.
+func TestOpenIDHop1_SpoofedConnectingIPIgnored(t *testing.T) {
 	h := newOIDCHarness(t)
 	for i := range 30 {
 		if w := h.hop1From(t, oidcServiceAssertion, fmt.Sprintf("203.0.113.%d", i+1)); w.Code != http.StatusFound {
-			t.Fatalf("request %d = %d, want 302 within the credential burst", i+1, w.Code)
+			t.Fatalf("request %d = %d, want 302 within the burst", i+1, w.Code)
 		}
 	}
 	w := h.hop1From(t, oidcServiceAssertion, "203.0.113.200")
 	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "Too many") {
-		t.Fatalf("over the credential ceiling: status %d body %q; want 400 text", w.Code, w.Body.String())
+		t.Fatalf("over the burst with a fresh forged address: status %d body %q; want 400 text", w.Code, w.Body.String())
 	}
 	assertBrowserHopLocation(t, h.hop1From(t, oidcOtherService, "203.0.113.200"))
 }
@@ -739,21 +741,18 @@ func TestOpenIDHop1_EmptyCommonNameIsNotACredential(t *testing.T) {
 	}
 }
 
-// Hop 1 is rate-limited per (credential, device) bucket (burst 5), not per
-// client IP: behind the shared proxies every caller has the same address.
-func TestOpenIDHop1_RateLimitedPerDevice(t *testing.T) {
+// A person credential is rate-limited tightly (burst 5), independently of the
+// shared tokens arriving from the same proxy address.
+func TestOpenIDHop1_RateLimitedPerPerson(t *testing.T) {
 	h := newOIDCHarness(t)
 	for i := range 5 {
-		if w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion); w.Code != http.StatusFound {
+		if w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcPersonAssertion); w.Code != http.StatusFound {
 			t.Fatalf("request %d = %d, want 302 within the burst", i, w.Code)
 		}
 	}
-	w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion)
+	w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcPersonAssertion)
 	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "Too many") {
 		t.Fatalf("over the burst: status %d body %q; want 400 text", w.Code, w.Body.String())
 	}
-	// Same proxy address, different credential: unaffected.
-	assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcOtherService))
-	// Same credential, different device: unaffected by the first device's burst.
-	assertBrowserHopLocation(t, h.hop1From(t, oidcServiceAssertion, "198.51.100.77"))
+	assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion))
 }
