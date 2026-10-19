@@ -1,5 +1,5 @@
 // file: internal/server/collection_refresh_op.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c8d3b61-7e94-4a25-b3f0-9d1a6e2c5b47
 // last-edited: 2026-10-18
 
@@ -98,7 +98,11 @@ func (s *Server) runCollectionRefreshOp(ctx context.Context, raw json.RawMessage
 	if res.IndexUnavailable {
 		// One line, and a clean finish: the index being closed or rebuilding is
 		// routine around a start or a reindex, and the next hourly run retries.
-		msg := fmt.Sprintf("search index not open: skipped %d relative-date dynamic collection(s); the next run retries", res.Considered)
+		mode := ""
+		if dryRun {
+			mode = "dry run: "
+		}
+		msg := fmt.Sprintf("%ssearch index not open: skipped %d relative-date dynamic collection(s); the next run retries", mode, res.Considered)
 		_ = reporter.Log(slog.LevelInfo, msg)
 		collectionRefreshLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(opsregistry.ReporterOpID(reporter)))
 		_ = reporter.UpdateProgress(1, 1, msg)
