@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-10-19
 
@@ -682,7 +682,7 @@ func TestLogin_TokensNestInsideUser(t *testing.T) {
 	if !strings.HasPrefix(refresh, absauth.RefreshTokenPrefix) {
 		t.Fatalf("refreshToken must carry the %q prefix, got %q", absauth.RefreshTokenPrefix, refresh)
 	}
-	if _, err := h.cfg.ParseAccessToken(access); err != nil {
+	if _, err := h.cfg.ParseAccessToken(access, time.Now()); err != nil {
 		t.Fatalf("accessToken must be a real parseable JWT: %v", err)
 	}
 	// Top-level tokens must NOT be where clients look, but their absence inside user
@@ -1008,7 +1008,7 @@ func TestRefresh_RotatesAndConformsToFixture(t *testing.T) {
 		t.Fatal("refresh must rotate the refresh token")
 	}
 	// §1.8.8 item 5: accessToken must be a real parseable JWT with a numeric exp.
-	claims, err := h.cfg.ParseAccessToken(newAccess)
+	claims, err := h.cfg.ParseAccessToken(newAccess, time.Now())
 	if err != nil {
 		t.Fatalf("refreshed accessToken must be a parseable JWT: %v", err)
 	}
@@ -1594,7 +1594,7 @@ func TestDeleteSession_RevokesOwnSession(t *testing.T) {
 	keeper := userObj(t, h.login(t, "owner", "pw-pw-pw-pw"))
 	keeperAccess := str(t, keeper, "accessToken")
 
-	victimClaims, err := h.cfg.ParseAccessToken(str(t, victim, "accessToken"))
+	victimClaims, err := h.cfg.ParseAccessToken(str(t, victim, "accessToken"), time.Now())
 	if err != nil {
 		t.Fatalf("ParseAccessToken: %v", err)
 	}
@@ -1618,7 +1618,7 @@ func TestDeleteSession_CannotDeleteAnotherUsersSession(t *testing.T) {
 	target := userObj(t, h.login(t, "other", "pw-pw-pw-pw"))
 	attackerAccess := str(t, userObj(t, h.login(t, "owner", "pw-pw-pw-pw")), "accessToken")
 
-	claims, _ := h.cfg.ParseAccessToken(str(t, target, "accessToken"))
+	claims, _ := h.cfg.ParseAccessToken(str(t, target, "accessToken"), time.Now())
 	w, _ := h.do(t, request{method: http.MethodDelete, path: "/api/me/sessions/" + claims.SessionID,
 		headers: map[string]string{"Authorization": "Bearer " + attackerAccess}})
 	if w.Code == http.StatusOK {

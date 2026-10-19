@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth_sliding_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 23a1f237-1dc7-4ba6-b00b-fd8d85b71221
 // last-edited: 2026-10-19
 
@@ -39,7 +39,7 @@ func newSlidingHarness(t *testing.T, mutate func(*absauth.Config)) *slidingHarne
 	}
 	sh := &slidingHarness{absHarness: h, t0: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
 	sh.now = sh.t0
-	h.resolver.SetClock(func() time.Time { return sh.now })
+	h.resolver.UseClock(func() time.Time { return sh.now })
 	h.store.addUser(activeUser("u1", "owner"))
 	sh.session = &database.ABSSession{ID: "s1", UserID: "u1", CreatedAt: sh.t0, LastUsedAt: sh.t0,
 		ExpiresAt: h.cfg.SessionExpiry(sh.t0, sh.t0)}

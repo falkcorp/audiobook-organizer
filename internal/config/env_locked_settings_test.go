@@ -1,5 +1,5 @@
 // file: internal/config/env_locked_settings_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f1c9a83-6d27-4b50-9e18-2c7a5b0e3d64
 // last-edited: 2026-10-19
 
@@ -27,43 +27,40 @@ func configJSONFieldNames(t *testing.T) []string {
 	return names
 }
 
-// absEnvOnlyKeys is the sorted key set of absEnvOnlySettings, which is locked
-// whatever the environment says.
-func absEnvOnlyKeys() []string {
-	keys := make([]string, 0, len(absEnvOnlySettings))
-	for k := range absEnvOnlySettings {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 // TestEnvLockedSettings_EmptyWhenTheEnvironmentIsSilent is the case that matters
 // for every developer machine and for any deployment that does not pin these in a
-// unit file: with nothing set, no ordinary control is marked read-only. Only the
-// environment-only ABS keys remain, because the overlay applies their registered
-// default over any saved value even when no variable is set.
+// unit file: with nothing set, no control should be marked read-only.
 func TestEnvLockedSettings_EmptyWhenTheEnvironmentIsSilent(t *testing.T) {
 	for _, v := range []string{"ACTIVITY_DB_PATH", "ACTIVITY_DB_MOVE_ON_CHANGE", "ACTIVITY_BACKEND"} {
 		t.Setenv(v, "")
 	}
-	if got := EnvLockedSettings(); !slices.Equal(got, absEnvOnlyKeys()) {
-		t.Fatalf("EnvLockedSettings() = %v, want only the environment-only ABS keys %v", got, absEnvOnlyKeys())
+	if got := EnvLockedSettings(); len(got) != 0 {
+		t.Fatalf("EnvLockedSettings() = %v, want empty — nothing in the environment is set", got)
 	}
 }
 
-// TestEnvLockedSettings_ABSKeysAreAlwaysLockedWithTheirVariable: every ABS key is
-// locked with no variable set, and SettingLocks names the variable to set.
-func TestEnvLockedSettings_ABSKeysAreAlwaysLockedWithTheirVariable(t *testing.T) {
-	t.Setenv("ABS_SESSION_MAX_TTL", "")
-	locks := SettingLocks()
-	for key, envVar := range absEnvOnlySettings {
-		if got := locks[key]; got != envVar {
-			t.Errorf("SettingLocks()[%s] = %q, want %q", key, got, envVar)
+// TestEnvLockedSettings_ABSKeysAreNeverReported: the environment-only ABS keys
+// are refused on write (TestABSConfig_UpdateRefusesEnvOnlyKeys), but they are not
+// env_locked, set or unset. env_locked means "a variable is forcing this control",
+// and no Settings control renders an ABS key.
+func TestEnvLockedSettings_ABSKeysAreNeverReported(t *testing.T) {
+	for _, set := range []bool{false, true} {
+		for _, envVar := range absEnvOnlySettings {
+			if set {
+				t.Setenv(envVar, "1")
+			} else {
+				t.Setenv(envVar, "")
+			}
 		}
-	}
-	if locks["abs_session_max_ttl"] != "ABS_SESSION_MAX_TTL" {
-		t.Error("abs_session_max_ttl must be reported env-locked")
+		locked, locks := EnvLockedSettings(), SettingLocks()
+		for key := range absEnvOnlySettings {
+			if slices.Contains(locked, key) {
+				t.Errorf("variables set=%v: EnvLockedSettings() contains %s", set, key)
+			}
+			if _, ok := locks[key]; ok {
+				t.Errorf("variables set=%v: SettingLocks() contains %s", set, key)
+			}
+		}
 	}
 }
 
@@ -122,8 +119,8 @@ func TestEnvLockedSettings_IsSorted(t *testing.T) {
 	if !slices.IsSorted(got) {
 		t.Errorf("EnvLockedSettings() = %v, want sorted", got)
 	}
-	if len(got) != 3+len(absEnvOnlySettings) {
-		t.Errorf("EnvLockedSettings() = %v, want all three keys locked plus the ABS keys", got)
+	if len(got) != 3 {
+		t.Errorf("EnvLockedSettings() = %v, want all three keys locked", got)
 	}
 }
 

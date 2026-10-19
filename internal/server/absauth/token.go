@@ -1,5 +1,5 @@
 // file: internal/server/absauth/token.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a3d5f70-4c81-42be-b0d6-7e15c8a2b943
 // last-edited: 2026-10-19
 
@@ -69,14 +69,11 @@ func (c *Config) MintAccessToken(userID, sessionID string, now time.Time) (strin
 //   - the "type" claim must be exactly "access";
 //   - sub and sid must both be non-empty, so a token cannot authenticate without
 //     naming a session the caller can then check for revocation.
-func (c *Config) ParseAccessToken(raw string) (*AccessClaims, error) {
-	return c.ParseAccessTokenAt(raw, time.Now())
-}
-
-// ParseAccessTokenAt is ParseAccessToken with exp/iat judged against now instead of
-// the wall clock, so a caller with an injected clock (the resolver under test) sees
-// tokens expire on the same timeline as its sessions.
-func (c *Config) ParseAccessTokenAt(raw string, now time.Time) (*AccessClaims, error) {
+//
+// exp is judged against now, not the wall clock, so the caller's clock (the
+// resolver's, which tests move) decides token expiry on the same timeline as
+// session liveness.
+func (c *Config) ParseAccessToken(raw string, now time.Time) (*AccessClaims, error) {
 	if c == nil || len(c.secret) == 0 {
 		return nil, ErrNotEnabled
 	}

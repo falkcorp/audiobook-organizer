@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
 // last-edited: 2026-10-19
 
@@ -100,7 +100,8 @@ type ABSIdentityResolver struct {
 	oauthCfg *oauth.Config
 	store    ABSIdentityStore
 	// now is the clock for token expiry, session liveness and session extension.
-	// time.Now in production; SetClock swaps it in tests.
+	// time.Now until UseClock binds it (abs.New binds it to the ABS handler's
+	// clock, so refresh and bearer verification share one timeline).
 	now func() time.Time
 }
 
@@ -110,9 +111,12 @@ func NewABSIdentityResolver(cfg *absauth.Config, verifier CFAssertionVerifier, o
 	return &ABSIdentityResolver{cfg: cfg, verifier: verifier, oauthCfg: oauthCfg, store: store, now: time.Now}
 }
 
-// SetClock replaces the resolver's clock. Tests use it to walk a session through
-// weeks of simulated use; a nil fn is ignored.
-func (r *ABSIdentityResolver) SetClock(fn func() time.Time) {
+// UseClock makes fn the resolver's clock; a nil fn is ignored. abs.New calls it
+// with the ABS handler's clock, so the decisions refresh makes (session expiry,
+// sliding) and the ones every bearer request makes (token exp, liveness,
+// extension) are judged on the same timeline. That is time.Now in production;
+// a test that moves the handler's clock moves both.
+func (r *ABSIdentityResolver) UseClock(fn func() time.Time) {
 	if r != nil && fn != nil {
 		r.now = fn
 	}
@@ -307,7 +311,7 @@ func (r *ABSIdentityResolver) ResolveBearer(c *gin.Context) (*ABSIdentity, *ABSA
 		return nil, nil
 	}
 	now := r.clock()
-	claims, err := r.cfg.ParseAccessTokenAt(raw, now)
+	claims, err := r.cfg.ParseAccessToken(raw, now)
 	if err != nil {
 		// Both are a 401 — the client's cue to call /auth/refresh — but the audit
 		// reason must say which. Reporting a routine expiry as token-invalid made

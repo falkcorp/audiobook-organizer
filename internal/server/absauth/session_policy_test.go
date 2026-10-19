@@ -1,5 +1,5 @@
 // file: internal/server/absauth/session_policy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cfab5f5b-f80e-4161-8910-bcc11673a1ae
 // last-edited: 2026-10-19
 
@@ -137,21 +137,21 @@ func TestIsAccessTokenExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := cfg.ParseAccessTokenAt(tok, exp.Add(-time.Minute)); err != nil {
+	if _, err := cfg.ParseAccessToken(tok, exp.Add(-time.Minute)); err != nil {
 		t.Fatalf("token must verify before its exp on the injected clock: %v", err)
 	}
-	_, err = cfg.ParseAccessTokenAt(tok, exp.Add(time.Minute))
+	_, err = cfg.ParseAccessToken(tok, exp.Add(time.Minute))
 	if err == nil || !IsAccessTokenExpired(err) {
 		t.Fatalf("a genuine token past exp must report expired, got %v", err)
 	}
 
 	other := *cfg
 	other.secret = []byte("ffffffffffffffffffffffffffffffff")
-	_, err = other.ParseAccessTokenAt(tok, exp.Add(time.Minute))
+	_, err = other.ParseAccessToken(tok, exp.Add(time.Minute))
 	if err == nil || IsAccessTokenExpired(err) {
 		t.Fatalf("a wrong-secret token must be invalid, not expired, got %v", err)
 	}
-	if _, err := cfg.ParseAccessTokenAt("not.a.jwt", issued); err == nil || IsAccessTokenExpired(err) {
+	if _, err := cfg.ParseAccessToken("not.a.jwt", issued); err == nil || IsAccessTokenExpired(err) {
 		t.Fatalf("garbage must be invalid, not expired, got %v", err)
 	}
 	if IsAccessTokenExpired(nil) || IsAccessTokenExpired(jwt.ErrTokenSignatureInvalid) {

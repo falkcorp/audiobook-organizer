@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sessions-sliding-expiry-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 50c43bce-f6d8-4831-b9d1-95ea32eda66d -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -143,9 +143,9 @@ its own environment values when it started.
 **Why it mattered.** An admin could shorten or lengthen sign-ins, see the
 change accepted, and have it silently undone at the next restart.
 
-**The fix.** Those settings are now shown as locked and a save that changes
-one is refused, with the name of the server environment setting to change
-instead.
+**The fix.** A save that changes one of them is now refused, with the name
+of the server environment setting to change instead. (The settings page has
+no controls for them, so nothing there changes.)
 
 ## Clearer logs
 
