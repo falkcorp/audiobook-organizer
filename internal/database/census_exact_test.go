@@ -1,7 +1,7 @@
 // file: internal/database/census_exact_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 855ae87b-f3ac-4536-b212-083ff3eba047
-// last-edited: 2026-10-04
+// last-edited: 2026-10-18
 
 package database
 
@@ -178,12 +178,22 @@ func growTombstoneFamily(t *testing.T, p *PebbleStore, n int) {
 
 // SF3: an all-tombstone family under a low budget is cut into sub-ranges,
 // heartbeats well inside a short watchdog, and makes resumable progress
-// across reruns that are each killed by a deadline.
+// across reruns that are each killed mid-family.
+//
+// Each rerun is killed deterministically, by cancelling its context from the
+// after-save hook once it has saved tombstonesSavesPerRerun in-family
+// positions, not by a wall-clock deadline. A deadline measured from the start
+// of the rerun also pays for everything before the first sub-range (the
+// flush, the sub-range bisection, the iterator open), and on a slow -race
+// runner that alone can outlast it, so no rerun ever saved a position and the
+// loop ran out of attempts without finishing (flaked on a 218s run). Killing
+// on a saved position guarantees every rerun moves the resume point.
 func TestRunExactCensus_TombstoneFamilyHeartbeatsAndResumes(t *testing.T) {
-	oldSub, oldBeat, oldRefresh := exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh
+	oldSub, oldBeat, oldRefresh, oldAfterSave := exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh, exactCensusAfterSave
 	exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh = 64<<10, 50*time.Millisecond, 0
 	t.Cleanup(func() {
 		exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh = oldSub, oldBeat, oldRefresh
+		exactCensusAfterSave = oldAfterSave
 	})
 	p := newCensusRawStore(t)
 	const n = 20000
@@ -193,42 +203,69 @@ func TestRunExactCensus_TombstoneFamilyHeartbeatsAndResumes(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(subs), 4, "the family is cut into several sub-ranges")
 
-	const watchdog = 500 * time.Millisecond
+	const (
+		watchdog                = 500 * time.Millisecond
+		tombstonesSavesPerRerun = 2
+	)
 	var resumePoints []string
-	for attempt := 0; attempt < 200; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
-		var lastBeat = time.Now()
+	finished := false
+	for attempt := 0; attempt < len(subs)+2; attempt++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		// refAt is the last moment the pass is known to have been counting:
+		// the first heartbeat, or the return of the last position save. The
+		// gap to the next heartbeat is the time to count one sub-range (and
+		// pay its budget wait), which is what the watchdog bounds. It
+		// excludes the rerun's setup and the save's own fsync, which are
+		// not part of counting a sub-range.
+		var refAt time.Time
 		var maxGap time.Duration
+		var saves int
+		exactCensusAfterSave = func(fam string) {
+			if fam != "cat:" {
+				return
+			}
+			refAt = time.Now()
+			if saves++; saves >= tombstonesSavesPerRerun {
+				cancel()
+			}
+		}
 		_, err := p.RunExactCensus(ctx, ExactCensusOptions{
 			ReadBytesPerSec: 2 << 20,
 			Progress: func(ExactCensusProgress, string) {
-				if g := time.Since(lastBeat); g > maxGap {
-					maxGap = g
+				now := time.Now()
+				if !refAt.IsZero() {
+					if g := now.Sub(refAt); g > maxGap {
+						maxGap = g
+					}
 				}
-				lastBeat = time.Now()
+				refAt = now
 			},
 		})
 		cancel()
 		require.Less(t, maxGap, watchdog, "attempt %d: heartbeat gap %s", attempt, maxGap)
 		if err == nil {
+			finished = true
 			break
 		}
-		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, context.Canceled)
+		require.GreaterOrEqual(t, saves, tombstonesSavesPerRerun, "attempt %d was cut off before it saved a position", attempt)
 		st, lerr := p.loadExactCensusState()
 		require.NoError(t, lerr)
-		if st != nil && st.Partial != nil && st.Partial.Family == "cat:" {
-			resumePoints = append(resumePoints, string(st.Partial.ResumeAt))
-		}
+		require.NotNil(t, st)
+		require.NotNil(t, st.Partial, "attempt %d: a killed rerun leaves a resume point", attempt)
+		require.Equal(t, "cat:", st.Partial.Family)
+		resumePoints = append(resumePoints, string(st.Partial.ResumeAt))
 	}
+	require.True(t, finished, "the run finished across %d reruns", len(resumePoints)+1)
 	last, err := p.LastExactCensus()
 	require.NoError(t, err)
-	require.NotNil(t, last, "the run finished across reruns")
+	require.NotNil(t, last, "the finished run is published")
 	cat := censusFamily(t, last, "cat:")
 	require.Zero(t, cat.Keys)
 	require.Equal(t, int64(2*n), cat.Entries, "every put and tombstone counted once across the reruns")
 	require.NotEmpty(t, resumePoints, "at least one rerun stopped inside the tombstone family")
 	for i := 1; i < len(resumePoints); i++ {
-		require.GreaterOrEqual(t, resumePoints[i], resumePoints[i-1], "the saved position only moves forward")
+		require.Greater(t, resumePoints[i], resumePoints[i-1], "every rerun moves the saved position forward")
 	}
 }
 
