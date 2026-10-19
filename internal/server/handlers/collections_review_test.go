@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b4e8c1a7-6f23-4d95-8a10-3c9d7e5f2b61
 // last-edited: 2026-10-18
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -303,9 +304,14 @@ func TestCollectionPutBookIDsRequiresVersion(t *testing.T) {
 
 // ── NIT3: the owner-fallback warning is once per collection ─────────────────
 
-type warnRecorder struct{ lines []string }
+type warnRecorder struct {
+	mu    sync.Mutex
+	lines []string
+}
 
 func (w *warnRecorder) Warn(msg string, args ...any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.lines = append(w.lines, fmt.Sprintf(msg, args...))
 }
 
@@ -485,12 +491,14 @@ func TestRefreshRelativeDynamic(t *testing.T) {
 	t.Run("a closed index is a clean no-op: nothing evaluated, no error, no writes", func(t *testing.T) {
 		store := refreshStore()
 		gin.SetMode(gin.TestMode)
+		rec := &warnRecorder{}
 		h := handlers.NewCollectionHandler(store, nil, &colFakeUsers{list: ownerUsers()},
-			&colFakeBooks{states: refreshStates()}, nil)
+			&colFakeBooks{states: refreshStates()}, nil, handlers.WithCollectionLogger(rec))
 		res, err := h.RefreshRelativeDynamic(context.Background(), false, nil)
 		require.NoError(t, err, "a closed index is routine, not a failure")
 		assert.Equal(t, handlers.RelativeRefreshResult{Considered: 3, IndexUnavailable: true}, res)
 		assert.Zero(t, store.updates)
+		assert.Empty(t, rec.lines, "no warning per collection: nothing is evaluated while the index is closed")
 	})
 
 	t.Run("no relative-date collection and a closed index is still not an error", func(t *testing.T) {

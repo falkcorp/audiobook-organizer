@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_refresh.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e2a9c74-1b83-4f06-a7d1-8c4e0b3f6a92
 // last-edited: 2026-10-18
 
@@ -172,7 +172,7 @@ func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (r
 		// The run reports this once, not once per collection.
 		return refreshFailed, err
 	case err != nil:
-		collectionLog.Warn("collections: scheduled refresh could not evaluate %s: %s",
+		h.log.Warn("collections: scheduled refresh could not evaluate %s: %s",
 			logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(err.Error()))
 		return refreshFailed, err
 	}
@@ -187,7 +187,7 @@ func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (r
 		if errors.Is(err, database.ErrCollectionVersionConflict) {
 			return refreshConflict, err
 		}
-		collectionLog.Warn("collections: scheduled refresh could not store %s: %s",
+		h.log.Warn("collections: scheduled refresh could not store %s: %s",
 			logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(err.Error()))
 		return refreshFailed, err
 	}
