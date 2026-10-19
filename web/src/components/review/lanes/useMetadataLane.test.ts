@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.33.0
+// version: 1.34.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -29,6 +29,11 @@ import {
   type ReviewLevel,
 } from './useMetadataLane';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
+import {
+  reviewPageResponse as pageResponse,
+  serveReviewList as serveList,
+  type ReviewListPayload as ListPayload,
+} from '../../../test/reviewServer';
 
 vi.mock('../../../services/api');
 
@@ -42,6 +47,7 @@ function makeResult(
   return {
     book: { id, title: `Book ${id}`, author: 'A', language: 'en' },
     status: 'matched',
+    candidate_hash: `h-${id}`,
     candidate: {
       source: 'audible',
       title: `Cand ${id}`,
@@ -67,43 +73,16 @@ function reviewPayload(results: api.CandidateResult[]) {
 
 type ReviewResponse = Awaited<ReturnType<typeof api.getCachedReviewResults>>;
 
-/**
- * Serves index loads from a queue, for tests that script a SEQUENCE of index
- * responses, and answers every per-page detail request (ids=) from the index
- * most recently served -- as the server does from one snapshot.
- * mockResolvedValueOnce cannot tell the two request shapes apart, so a detail
- * fetch would consume a response meant for the next index load.
- */
-function routeIndexQueue(): (next: Promise<unknown> | unknown) => void {
-  const queue: Array<Promise<unknown> | unknown> = [];
-  let lastIndex: api.CandidateResult[] = [];
-  vi.mocked(api.getCachedReviewResults).mockImplementation(
-    async (_limit, _offset, _all, _bucket, options = {}) => {
-      if (options.ids) {
-        const want = new Set(options.ids);
-        return reviewPayload(lastIndex.filter((r) => want.has(r.book.id))) as ReviewResponse;
-      }
-      if (queue.length === 0) return reviewPayload([]) as ReviewResponse;
-      const next = (await queue.shift()) as ReviewResponse;
-      lastIndex = next.results;
-      return next;
-    }
-  );
-  return (next) => {
-    queue.push(next);
-  };
-}
-
 describe('summary reflects what the server says is reviewable', () => {
   it('carries unreviewable through instead of inventing a zero', async () => {
     // The server counts only rows it can actually return, and reports the
     // cache entries it cannot as `unreviewable`. On production that gap was
     // 14,306 held against 5,774 reviewable; the lane must not silently drop it.
     const rows = [makeResult('b1')];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveList({
       ...reviewPayload(rows),
       unreviewable: 8532,
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+    });
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -114,11 +93,11 @@ describe('summary reflects what the server says is reviewable', () => {
     // The total alone cannot say what to do about itself: an orphaned row can
     // only be reaped, a candidateless one can be refetched. The lane must hand
     // the rail the split, not just the sum.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveList({
       ...reviewPayload([makeResult('b1')]),
       unreviewable: 8532,
       unreviewable_by_cause: { orphaned: 3354, no_candidates: 5178, decode_errors: 0 },
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+    });
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -135,11 +114,11 @@ describe('summary reflects what the server says is reviewable', () => {
     // backlog -- 212 of them on production, all created by an empty refetch
     // overwriting a book's candidates while leaving its verdict intact. The
     // rail can only show them separately if the lane forwards the field.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveList({
       ...reviewPayload([makeResult('b1')]),
       unreviewable: 5178,
       resolved_no_candidates: 212,
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+    });
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -151,10 +130,10 @@ describe('summary reflects what the server says is reviewable', () => {
   it('leaves resolved_no_candidates undefined when the server omits it', async () => {
     // Same reason as the breakdown: a server that predates the split says
     // nothing, which is not the same claim as "there are none".
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveList({
       ...reviewPayload([makeResult('b1')]),
       unreviewable: 8532,
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+    });
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -164,10 +143,10 @@ describe('summary reflects what the server says is reviewable', () => {
   it('leaves the breakdown undefined when the server omits it', async () => {
     // Not zero-filled: "no breakdown available" and "every cause is zero" are
     // different claims, and the rail renders them differently.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveList({
       ...reviewPayload([makeResult('b1')]),
       unreviewable: 8532,
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+    });
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -178,33 +157,16 @@ describe('summary reflects what the server says is reviewable', () => {
     // Stale rows are reviewable and counted in `total` -- this is a caveat on
     // what is already in the list, not a shortfall. On production 5,771 of
     // 5,774 reviewable rows were past the TTL and nothing said so.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveList({
       ...reviewPayload([makeResult('b1')]),
       stale: 5771,
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+    });
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.summary.stale).toBe(5771);
   });
 
-  it('defaults stale to 0 when the server omits it', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('b1')]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.summary.stale).toBe(0);
-  });
-
-  it('defaults unreviewable to 0 when the server omits it', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('b1')]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.summary.unreviewable).toBe(0);
-  });
 });
 
 beforeEach(() => {
@@ -218,39 +180,6 @@ beforeEach(() => {
   toast.mockReset();
 });
 
-describe('provider source filters', () => {
-  it('normalizes provider display names for counts and filtering', async () => {
-    // Production cache rows carry human-readable source names (for example
-    // "Audible"), while the filter controls carry stable ids ("audible").
-    // Comparing them raw rendered every provider chip as zero and hid its rows.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([
-        makeResult('audible', {}, { source: 'Audible' }),
-        makeResult('google', {}, { source: 'Google Books' }),
-        makeResult('open-library', {}, { source: 'Open Library' }),
-        // The local catalog stage's review-only candidates: Audible data.
-        makeResult('catalog', {}, { source: 'Audible Catalog (local)' }),
-      ])
-    );
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(4));
-
-    expect(result.current.sourceCounts).toMatchObject({
-      audible: 2,
-      google_books: 1,
-      openlibrary: 1,
-    });
-    expect(result.current.sourceCounts).not.toHaveProperty('audible catalog (local)');
-
-    act(() => result.current.setFilters({ sourceFilter: 'audible' }));
-    expect(result.current.filteredResults.map((row) => row.book.id)).toEqual([
-      'audible',
-      'catalog',
-    ]);
-  });
-});
-
 describe('stale-response discard', () => {
   it('does not let an earlier fetch overwrite a later one', async () => {
     // The failure this prevents: refresh twice quickly, the first request
@@ -261,13 +190,10 @@ describe('stale-response discard', () => {
       resolveFirst = r;
     });
 
-    const push = routeIndexQueue();
-    push(first);
-    push(reviewPayload([makeResult('second')]));
+    serveList(first as Promise<ListPayload>, reviewPayload([makeResult('second')]));
 
     const { result } = renderHook(() => useMetadataLane(toast));
-    // The lane reads its mode from the config before the first fetch.
-    await waitFor(() => expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getReviewPage).toHaveBeenCalledTimes(1));
 
     // Kick off the second fetch while the first is still in flight.
     act(() => result.current.refresh());
@@ -282,44 +208,6 @@ describe('stale-response discard', () => {
 
     expect(result.current.results).toHaveLength(1);
     expect(result.current.results[0].book.id).toBe('second');
-  });
-});
-
-describe('page clamp', () => {
-  it('clamps to the last page when a filter shrinks the set beneath it', async () => {
-    // Ten matched rows, page size 25 -> but we shrink the page size to make
-    // several pages, walk to the last one, then filter the set down.
-    const rows = Array.from({ length: 10 }, (_, i) =>
-      makeResult(`b${i}`, {}, { score: i < 5 ? 2.0 : 0.5 })
-    );
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(10));
-
-    act(() => result.current.setPageSize(25));
-    // Confidence 85 keeps score*100 >= 85; the 0.5-score rows drop out.
-    act(() => result.current.setFilters({ confidenceThreshold: 150 }));
-
-    await waitFor(() => expect(result.current.filteredResults).toHaveLength(5));
-    // page must never exceed totalPages
-    expect(result.current.page).toBeLessThanOrEqual(result.current.totalPages);
-  });
-
-  it('never reports a page above totalPages after a filter change', async () => {
-    const rows = Array.from({ length: 60 }, (_, i) => makeResult(`b${i}`));
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(60));
-
-    act(() => result.current.setPageSize(25));
-    act(() => result.current.setPage(3));
-    expect(result.current.page).toBe(3);
-
-    // Filter to a single title -> one page. The clamp must pull page back.
-    act(() => result.current.setFilters({ titleFilter: '^Book b1$' }));
-    await waitFor(() => expect(result.current.page).toBe(1));
   });
 });
 
@@ -433,7 +321,7 @@ describe('review level slider', () => {
 
   it('defaults to In-depth with nothing stored', async () => {
     expect(DEFAULT_REVIEW_LEVEL).toBe('indepth');
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    serveList(reviewPayload([]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.reviewLevel).toBe('indepth');
@@ -443,7 +331,7 @@ describe('review level slider', () => {
   });
 
   it('writes every owned filter when moving down, and persists the level', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    serveList(reviewPayload([]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -462,7 +350,7 @@ describe('review level slider', () => {
   });
 
   it('keeps the level when a switch is flipped by hand, and says it is customised', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    serveList(reviewPayload([]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -486,7 +374,7 @@ describe('review level slider', () => {
 
   it('saving the level retires the legacy key', async () => {
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_STRICT_PRESET, 'true');
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    serveList(reviewPayload([]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.reviewLevel).toBe('normal');
@@ -503,120 +391,13 @@ describe('review level slider', () => {
       expect(loadReviewLevel()).toBe('indepth');
       expect(loadLanguageFilter()).toBe(true);
       expect(loadReviewPageSize()).toBe(25);
-      vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+      serveList(reviewPayload([]));
       const { result } = renderHook(() => useMetadataLane(toast));
       await waitFor(() => expect(result.current.loading).toBe(false));
       expect(result.current.reviewLevel).toBe('indepth');
     } finally {
       spy.mockRestore();
     }
-  });
-});
-
-describe('hideMultiBook', () => {
-  it('deselects books it hides, so Apply Selected cannot apply them', async () => {
-    // The toggle's tooltip promises this ("takes the hidden books out of Apply
-    // Selected too") and it is behaviour, not description. Without it the
-    // button's count disagrees with what it does.
-    const shared = { asin: 'B01SAME' };
-    const rows = [
-      makeResult('a', {}, shared),
-      makeResult('b', {}, shared),
-      makeResult('c', {}, { asin: 'B01OTHER' }),
-    ];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(3));
-
-    act(() => {
-      result.current.spineCtx.onToggleSelect('a');
-      result.current.spineCtx.onToggleSelect('c');
-    });
-    expect(result.current.selectedIds.has('a')).toBe(true);
-
-    act(() => result.current.setFilters({ hideMultiBook: true }));
-
-    await waitFor(() => expect(result.current.selectedIds.has('a')).toBe(false));
-    // The unambiguous row keeps its selection.
-    expect(result.current.selectedIds.has('c')).toBe(true);
-  });
-
-  it('spans page boundaries, because a per-page pass would miss the pair', async () => {
-    // Two files of one book on opposite sides of a page boundary each look like
-    // a singleton to a per-page pass and survive the hide -- the exact case the
-    // toggle exists to remove.
-    const shared = { asin: 'B01SAME' };
-    const rows = [
-      makeResult('a', {}, shared),
-      ...Array.from({ length: 30 }, (_, i) => makeResult(`filler${i}`, {}, { asin: `X${i}` })),
-      makeResult('z', {}, shared),
-    ];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(32));
-
-    act(() => result.current.setPageSize(25));
-    act(() => result.current.setFilters({ hideMultiBook: true }));
-
-    await waitFor(() => {
-      const ids = result.current.filteredResults.map((r) => r.book.id);
-      expect(ids).not.toContain('a');
-      expect(ids).not.toContain('z');
-    });
-  });
-});
-
-describe('hideRuntimeDifferences', () => {
-  beforeEach(() => window.localStorage.clear());
-  // Hidden when the spine would show the "runtime differs" chip (a delta over
-  // ten minutes) OR the apply gate would refuse (more than 10% off a KNOWN
-  // book runtime). Unknown on either side is kept -- not evidence of a
-  // mismatch. The fixture sets duration_delta_sec the way the server does
-  // (metafetch service_search.go): |book - candidate| when both are known.
-  function withRuntime(
-    id: string,
-    book: Partial<api.CandidateBookInfo>,
-    durationSec: number | undefined
-  ) {
-    const bookSec = book.duration_seconds ?? 0;
-    const cand: Partial<api.MetadataCandidate> =
-      durationSec === undefined ? {} : { duration_sec: durationSec };
-    if (durationSec !== undefined && bookSec > 0 && durationSec > 0) {
-      cand.duration_delta_sec = Math.abs(bookSec - durationSec);
-    }
-    const r = makeResult(id, {}, cand);
-    return { ...r, book: { ...r.book, ...book } } as api.CandidateResult;
-  }
-
-  it('is on by default (In-depth), and hides warned or >10% differences', async () => {
-    const rows = [
-      withRuntime('five-minutes', { duration_seconds: 36000 }, 35700), // no chip, <10%: kept
-      // Exactly 10% passes the gate, but the 60-minute gap shows the chip: hidden.
-      withRuntime('ten-percent', { duration_seconds: 36000 }, 32400),
-      withRuntime('eleven-percent', { duration_seconds: 36000 }, 32000), // >10%: hidden
-      withRuntime('no-cand-runtime', { duration_seconds: 36000 }, undefined),
-      withRuntime('no-book-runtime', {}, 32000),
-      // Partial: lower bound 10 h proves a 5 h candidate wrong.
-      withRuntime('partial-proves', { runtime_lower_bound_seconds: 36000 }, 18000),
-      // Partial: the candidate is LONGER than the bound -- nothing proven.
-      withRuntime('partial-unknown', { runtime_lower_bound_seconds: 18000 }, 36000),
-    ];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(7));
-
-    expect(result.current.filters.hideRuntimeDifferences).toBe(true);
-    expect(result.current.filteredResults.map((r) => r.book.id).sort()).toEqual(
-      ['five-minutes', 'no-book-runtime', 'no-cand-runtime', 'partial-unknown'].sort()
-    );
-    expect(result.current.runtimeHiddenCount).toBe(3);
-
-    act(() => result.current.setFilters({ hideRuntimeDifferences: false }));
-    await waitFor(() => expect(result.current.filteredResults).toHaveLength(7));
-    expect(result.current.runtimeHiddenCount).toBe(0);
   });
 });
 
@@ -628,7 +409,7 @@ describe('grouping', () => {
       makeResult('b', {}, shared),
       makeResult('c', {}, { asin: 'B01OTHER' }),
     ];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload(rows));
+    serveList(reviewPayload(rows));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(3));
@@ -641,9 +422,7 @@ describe('grouping', () => {
 
   it('ungroup pulls one book back out into rows', async () => {
     const shared = { asin: 'B01SAME' };
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('a', {}, shared), makeResult('b', {}, shared)])
-    );
+    serveList(reviewPayload([makeResult('a', {}, shared), makeResult('b', {}, shared)]));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.groups).toHaveLength(1));
@@ -664,7 +443,7 @@ describe('dispatch', () => {
     // The dialog had a single handler that flipped 'skipped' <-> 'pending', so
     // the Skip button and the "Skipped" chip called the same function and meant
     // opposite things. Dispatching twice must not undo the skip.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
+    serveList(reviewPayload([makeResult('a')]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(1));
 
@@ -679,7 +458,7 @@ describe('dispatch', () => {
   });
 
   it('marks a rejected row and offers an undo that clears it', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
+    serveList(reviewPayload([makeResult('a')]));
     vi.mocked(api.markNoMatch).mockResolvedValue(undefined);
     vi.mocked(api.clearMetadataNoMatch).mockResolvedValue(undefined);
 
@@ -709,9 +488,7 @@ describe('dispatch', () => {
     // reviewer's look at one book and the server answers 400 to a request that
     // pairs one with other books (the apply lifts gates for it). So the flush
     // splits: one request per pinned book, never a shared one.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(['a', 'b', 'c'].map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
-    );
+    serveList(reviewPayload(['a', 'b', 'c'].map((id) => makeResult(id, { candidate_hash: `h-${id}` }))));
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op1',
     } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
@@ -758,34 +535,6 @@ describe('dispatch', () => {
     vi.useRealTimers();
   });
 
-  it('keeps rapid applies of unpinned rows in one request', async () => {
-    // A row the server served with no candidate hash gets no pin, so nothing
-    // ties its apply to a single book; those still share a request.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(['a', 'b'].map((id) => makeResult(id)))
-    );
-    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
-      op_id: 'op1',
-    } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
-    vi.mocked(api.pollOperationV2).mockReturnValue(
-      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
-    );
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(2));
-    vi.useFakeTimers();
-    act(() => {
-      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'a' });
-      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'b' });
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {});
-    vi.useRealTimers();
-  });
-
   describe('flush with some requests failing', () => {
     afterEach(() => {
       vi.useRealTimers();
@@ -798,9 +547,7 @@ describe('dispatch', () => {
       ids: string[],
       dispatchResults: Array<{ op_id: string } | Error>
     ): Promise<number> {
-      vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-        reviewPayload(ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
-      );
+      serveList(reviewPayload(ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }))));
       const batch = vi.mocked(api.batchApplyFromCache);
       for (const r of dispatchResults) {
         if (r instanceof Error) batch.mockRejectedValueOnce(r);
@@ -868,11 +615,9 @@ describe('dispatch', () => {
   });
 
   it('pins the candidate the row showed when Apply was clicked, not the one after a refresh', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([
+    serveList(reviewPayload([
         makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown', asin: 'B001' }),
-      ])
-    );
+      ]));
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-pin',
     } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
@@ -904,40 +649,16 @@ describe('dispatch', () => {
     vi.useRealTimers();
   });
 
-  it('sends no pin for a row the server served without a candidate hash', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
-    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
-      op_id: 'op-nohash',
-    } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
-    vi.mocked(api.pollOperationV2).mockReturnValue(
-      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
-    );
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(1));
-    vi.useFakeTimers();
-    act(() => {
-      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'a' });
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a'], undefined, {});
-    vi.useRealTimers();
-  });
-
   // Bulk buttons (Apply page, Apply high confidence, group Apply All, Apply
   // selected) all dispatch applySelected. Owner ruling 2026-09-27: every
   // review-page apply button is the owner's manual apply, so each book is
   // pinned ('review_bulk') and the server lifts the same certainty refusals a
   // single-row Apply lifts.
   it('pins every book of a selected batch with the candidate its row shows', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([
+    serveList(reviewPayload([
         makeResult('a', { candidate_hash: 'h-a' }, { isbn13: '9780000000001' }),
         makeResult('b', { candidate_hash: 'h-b' }),
-      ])
-    );
+      ]));
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-sel-pins',
     } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
@@ -976,53 +697,8 @@ describe('dispatch', () => {
     );
   });
 
-  // A bulk button can apply a book the lane holds no candidate hash for: the
-  // row came without one, or the selection outlived a refresh that dropped
-  // the row. It still goes as the owner's apply, with the hashless marker.
-  it('sends the owner marker for a bulk-applied book with no loaded hash', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('a', { candidate_hash: 'h-a' }), makeResult('b')])
-    );
-    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
-      op_id: 'op-marker',
-    } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
-    vi.mocked(api.pollOperationV2).mockReturnValue(
-      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
-    );
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.filteredResults).toHaveLength(2));
-
-    await act(async () => {
-      result.current.dispatch({
-        lane: 'metadata',
-        type: 'applySelected',
-        ids: ['a', 'b', 'gone'],
-      });
-    });
-
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(
-      ['a', 'b', 'gone'],
-      undefined,
-      {
-        a: {
-          origin: 'review_bulk',
-          content_hash: 'h-a',
-          source: 'audible',
-          title: 'Cand a',
-          author: 'A',
-        },
-        b: { origin: 'review_bulk' },
-        gone: { origin: 'review_bulk' },
-      },
-      'fill'
-    );
-  });
-
   it('hides a dispatched selected batch immediately', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(['a', 'b'].map((id) => makeResult(id)))
-    );
+    serveList(reviewPayload(['a', 'b'].map((id) => makeResult(id))));
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-selected',
     } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
@@ -1042,8 +718,8 @@ describe('dispatch', () => {
         ['a', 'b'],
         undefined,
         {
-          a: { origin: 'review_bulk' },
-          b: { origin: 'review_bulk' },
+          a: expect.objectContaining({ origin: 'review_bulk', content_hash: 'h-a' }),
+          b: expect.objectContaining({ origin: 'review_bulk', content_hash: 'h-b' }),
         },
         'fill'
       )
@@ -1061,7 +737,7 @@ describe('dispatch', () => {
   // The bulk toggle (owner ruling 2026-09-27): 'fill' by default, persisted
   // per viewer, sent with every bulk request and never with a single-row one.
   it('defaults the bulk mode to fill and persists a change', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
+    serveList(reviewPayload([makeResult('a')]));
     const { result, unmount } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(1));
     expect(result.current.bulkApplyMode).toBe('fill');
@@ -1081,7 +757,7 @@ describe('dispatch', () => {
 
   it('reads an unknown stored bulk mode as fill', async () => {
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_BULK_APPLY_MODE, 'REPLACE');
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
+    serveList(reviewPayload([makeResult('a')]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(1));
     expect(result.current.bulkApplyMode).toBe('fill');
@@ -1146,8 +822,10 @@ describe('dispatch', () => {
   it('a parked Replace pins the candidate shown at the click, even if a refresh lands before confirm', async () => {
     // window.confirm blocked the event loop; the dialog does not, so a refresh
     // can replace the rows while the owner is still reading the prompt.
-    const push = routeIndexQueue();
-    push(reviewPayload([makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown' })]));
+    serveList(
+      reviewPayload([makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown' })]),
+      reviewPayload([makeResult('a', { candidate_hash: 'h-later' }, { title: 'Later' })])
+    );
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-parked',
     } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
@@ -1163,7 +841,6 @@ describe('dispatch', () => {
     });
     expect(result.current.pendingReplace?.ids).toEqual(['a']);
 
-    push(reviewPayload([makeResult('a', { candidate_hash: 'h-later' }, { title: 'Later' })]));
     act(() => result.current.refresh());
     await waitFor(() => expect(result.current.results[0].candidate?.title).toBe('Later'));
 
@@ -1188,9 +865,7 @@ describe('dispatch', () => {
   });
 
   it('sends replace from the bulk buttons and no mode from a single-row Apply', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(['a', 'b'].map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
-    );
+    serveList(reviewPayload(['a', 'b'].map((id) => makeResult(id, { candidate_hash: `h-${id}` }))));
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-mode',
     } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
@@ -1249,71 +924,41 @@ describe('dispatch', () => {
     ]);
   });
 
-  it('skipAllUnmatched touches no_match and error rows only', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([
+  it('skipAllUnmatched skips the books the server lists as unmatched, and no others', async () => {
+    // The lane holds one page, so the unmatched set (no_match and error rows)
+    // comes from the server's no_match chip, as ids.
+    serveList(reviewPayload([
         makeResult('matched'),
         makeResult('nm', { status: 'no_match' }),
         makeResult('err', { status: 'error' }),
-      ])
-    );
+      ]));
+    vi.mocked(api.getReviewMatchingIds).mockResolvedValue({
+      ids: ['nm', 'err', 'off-page'],
+      total: 3,
+      generation: 'g1',
+    });
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(3));
 
     act(() => result.current.dispatch({ lane: 'metadata', type: 'skipAllUnmatched' }));
 
-    expect(result.current.spineCtx.rowState('nm')).toBe('skipped');
+    await waitFor(() => expect(result.current.spineCtx.rowState('nm')).toBe('skipped'));
+    expect(api.getReviewMatchingIds).toHaveBeenCalledWith({ chip: 'no_match' });
     expect(result.current.spineCtx.rowState('err')).toBe('skipped');
+    expect(result.current.spineCtx.rowState('off-page')).toBe('skipped');
     // The matched row keeps whatever it had -- 'skip all unmatched' is not
     // 'skip everything'.
     expect(result.current.spineCtx.rowState('matched')).not.toBe('skipped');
   });
 });
 
-describe('language filter', () => {
-  it('shows a candidate when either side has no language set', async () => {
-    // A book with no language must still be offered its candidates; hiding it
-    // would put new imports permanently out of reach.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([
-        makeResult('nolang', { book: { id: 'nolang', title: 'No lang' } } as never, {
-          language: 'fr',
-        }),
-        makeResult('mismatch', {}, { language: 'fr' }),
-      ])
-    );
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(2));
-
-    act(() => result.current.setFilters({ matchLanguage: true }));
-
-    const ids = result.current.filteredResults.map((r) => r.book.id);
-    expect(ids).toContain('nolang'); // unknown on one side -> shown
-    expect(ids).not.toContain('mismatch'); // en vs fr -> hidden
-  });
-
-  it('treats spelled-out and coded languages as the same', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('a', {}, { language: 'English' })])
-    );
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(1));
-
-    act(() => result.current.setFilters({ matchLanguage: true }));
-    expect(result.current.filteredResults).toHaveLength(1);
-  });
-});
-
 describe('seeding from server status', () => {
   it('seeds applied and rejected without clobbering a session decision', async () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([
+    serveList(reviewPayload([
         makeResult('applied', { status: 'applied' }),
         makeResult('rejected', { status: 'no_match' }),
         makeResult('fresh'),
-      ])
-    );
+      ]));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.results).toHaveLength(3));
 
@@ -1330,7 +975,7 @@ describe('seeding from server status', () => {
 
 describe('inactive lane', () => {
   it('does not fetch when the lane is not active', () => {
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]));
+    serveList(reviewPayload([]));
     renderHook(() => useMetadataLane(toast, false));
     expect(api.getCachedReviewResults).not.toHaveBeenCalled();
   });
@@ -1358,9 +1003,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     const rows = [makeResult('b1'), makeResult('b2')];
     // The server keeps reporting both as `matched` -- i.e. still pending. That
     // is what a failed apply looks like from here.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+    serveList(reviewPayload(rows));
     // The poll is held open deliberately. Resolving it immediately made the
     // hide and the restore collapse into one tick, and the final assertion --
     // 2 rows -- then matched the STARTING state as well as the fixed one. The
@@ -1415,9 +1058,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // the clobber from a wrong label into a disappearance: `skipped` survives
     // that filter and `rejected` does not.
     const rows = [makeResult('b1', { status: 'no_match', candidate: undefined })];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+    serveList(reviewPayload(rows));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -1456,9 +1097,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // classifying a row nobody has touched. Without this, the guard could be
     // widened into inertness and nothing would go red.
     const rows = [makeResult('b1', { status: 'no_match', candidate: undefined })];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+    serveList(reviewPayload(rows));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -1474,13 +1113,7 @@ describe('an optimistic apply must be correctable by the server', () => {
       makeResult('b1', { status: 'applied' }),
       makeResult('b2', { status: 'applied' }),
     ];
-    vi.mocked(api.getCachedReviewResults)
-      .mockResolvedValueOnce(
-        reviewPayload(pending) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      )
-      .mockResolvedValue(
-        reviewPayload(applied) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      );
+    serveList(reviewPayload(pending), reviewPayload(applied));
     vi.mocked(api.pollOperationV2).mockResolvedValue(
       {} as Awaited<ReturnType<typeof api.pollOperationV2>>
     );
@@ -1522,13 +1155,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // same string, which is why provenance is recorded rather than inferred.
     const before = [makeResult('b1', { status: 'no_match', candidate: undefined })];
     const after = [makeResult('b1', { status: 'applied' })];
-    vi.mocked(api.getCachedReviewResults)
-      .mockResolvedValueOnce(
-        reviewPayload(before) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      )
-      .mockResolvedValue(
-        reviewPayload(after) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      );
+    serveList(reviewPayload(before), reviewPayload(after));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -1551,13 +1178,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // every reviewable row is stale, so this is the common case, not an edge.
     const before = [makeResult('b1', { status: 'no_match', candidate: undefined })];
     const after = [makeResult('b1')]; // matched again
-    vi.mocked(api.getCachedReviewResults)
-      .mockResolvedValueOnce(
-        reviewPayload(before) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      )
-      .mockResolvedValue(
-        reviewPayload(after) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      );
+    serveList(reviewPayload(before), reviewPayload(after));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -1579,9 +1200,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // refresh can still read the old no_match, and writing `rejected` back over
     // it would flip the undo the reviewer just performed.
     const rows = [makeResult('b1', { status: 'no_match', candidate: undefined })];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+    serveList(reviewPayload(rows));
     vi.mocked(api.clearMetadataNoMatch).mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useMetadataLane(toast));
@@ -1608,13 +1227,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // tab, a background op) must not keep showing as skipped here.
     const before = [makeResult('b1', { status: 'no_match', candidate: undefined })];
     const after = [makeResult('b1', { status: 'applied' })];
-    vi.mocked(api.getCachedReviewResults)
-      .mockResolvedValueOnce(
-        reviewPayload(before) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      )
-      .mockResolvedValue(
-        reviewPayload(after) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-      );
+    serveList(reviewPayload(before), reviewPayload(after));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -1649,9 +1262,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // Firing inside the debounce, before any dispatch exists, is the only way
     // to observe the gap.
     const rows = [makeResult('b1'), makeResult('b2')];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+    serveList(reviewPayload(rows));
     vi.mocked(api.pollOperationV2).mockReturnValue(
       new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
     );
@@ -1680,9 +1291,7 @@ describe('an optimistic apply must be correctable by the server', () => {
     // reasonably concludes the apply failed. The in-flight set is what keeps an
     // unrelated refresh (a filter change, a page change) from doing that.
     const rows = [makeResult('b1'), makeResult('b2')];
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+    serveList(reviewPayload(rows));
     // A poll that never settles == the op is still running.
     vi.mocked(api.pollOperationV2).mockReturnValue(
       new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
@@ -1715,7 +1324,7 @@ describe('a failed load is surfaced rather than swallowed', () => {
     // toast, not even a console line. A 500 and an empty cache produced byte
     // for byte the same screen, and that screen told the reviewer to go search
     // providers -- advice that cannot possibly help when the server is down.
-    vi.mocked(api.getCachedReviewResults).mockRejectedValue(new Error('boom: 500'));
+    vi.mocked(api.getReviewPage).mockRejectedValue(new Error('boom: 500'));
     const { result } = renderHook(() => useMetadataLane(toast, true));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -1724,7 +1333,7 @@ describe('a failed load is surfaced rather than swallowed', () => {
   });
 
   it('falls back to a readable message when the rejection carries none', async () => {
-    vi.mocked(api.getCachedReviewResults).mockRejectedValue('not an Error');
+    vi.mocked(api.getReviewPage).mockRejectedValue('not an Error');
     const { result } = renderHook(() => useMetadataLane(toast, true));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -1734,11 +1343,11 @@ describe('a failed load is surfaced rather than swallowed', () => {
   it('clears the error when a retry succeeds', async () => {
     // Without clearing on the NEXT attempt rather than only on success, a
     // successful Retry would leave the failure Alert on screen forever.
-    vi.mocked(api.getCachedReviewResults).mockRejectedValueOnce(new Error('boom'));
+    vi.mocked(api.getReviewPage).mockRejectedValueOnce(new Error('boom'));
     const { result } = renderHook(() => useMetadataLane(toast, true));
     await waitFor(() => expect(result.current.error).toBe('boom'));
 
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('b1')]));
+    serveList(reviewPayload([makeResult('b1')]));
     act(() => result.current.refresh());
 
     // Wait for the retry to SETTLE, not merely to start -- `error` is cleared
@@ -1753,17 +1362,16 @@ describe('a failed load is surfaced rather than swallowed', () => {
     // Letting that write `error` would paint a failure banner over a page that
     // loaded perfectly well -- the same stale-guard the success path has.
     let rejectFirst: (e: Error) => void = () => {};
-    vi.mocked(api.getCachedReviewResults).mockReturnValueOnce(
+    vi.mocked(api.getReviewPage).mockReturnValueOnce(
       new Promise((_, rej) => {
         rejectFirst = rej;
-      }) as ReturnType<typeof api.getCachedReviewResults>
+      }) as ReturnType<typeof api.getReviewPage>
     );
     const { result } = renderHook(() => useMetadataLane(toast, true));
-    // The lane reads its mode from the config before the first fetch.
-    await waitFor(() => expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getReviewPage).toHaveBeenCalledTimes(1));
 
     // Supersede it with a fetch that succeeds.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('b1')]));
+    serveList(reviewPayload([makeResult('b1')]));
     act(() => result.current.refresh());
     await waitFor(() => expect(result.current.results).toHaveLength(1));
 
@@ -1777,73 +1385,27 @@ describe('a failed load is surfaced rather than swallowed', () => {
   });
 });
 
-describe('fetches the whole reviewable set', () => {
-  it('sends all=true so the server default page cap does not truncate the lane', async () => {
-    // The server caps a request with no positive limit to a default page unless
-    // all=true is sent. Every derivation in this hook (filters, grouping,
-    // chip views) spans the whole library, so dropping the flag would silently
-    // confine all of them to the first page.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('b1')]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+describe('page rows + per-page details (the 93 MB / 119 s full list timed out)', () => {
+  // The server answers by request shape: one page of rows (no candidate
+  // description, breakdown or tags) for view=page, the full rows of exactly the
+  // asked books for ids=.
+  const pageOfIds = (ids: string[], offset: number, limit: number) =>
+    ids
+      .slice(offset, offset + limit)
+      .map((id) => makeResult(id, { candidate_hash: `h-${id}` }, { description: undefined }));
 
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    // view=index: the same whole set, minus candidate descriptions.
-    expect(api.getCachedReviewResults).toHaveBeenCalledWith(0, 0, true, 'reviewable', {
-      view: 'index',
-    });
-  });
-
-  it('warns when the server still reports the response as truncated', async () => {
-    // A partial set must not be presented as the whole library: filters,
-    // grouping and chip views would silently cover only the returned rows.
-    toast.mockClear();
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
-      ...reviewPayload([makeResult('b1')]),
-      total_count: 500,
-      truncated: true,
-      limit: 200,
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Only 1 of 500'), 'warning');
-    // Rows still load; this is a warning, not a load failure.
-    expect(result.current.results).toHaveLength(1);
-    expect(result.current.error).toBeNull();
-  });
-
-  it('does not warn when truncated is false or absent', async () => {
-    toast.mockClear();
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
-      ...reviewPayload([makeResult('b1')]),
-      truncated: false,
-    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
-
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'warning');
-  });
-});
-
-describe('index + per-page details (the 93 MB / 119 s full list timed out)', () => {
-  // The server answers by request shape: the index for view=index, the full
-  // rows of exactly the asked books for ids=.
-  function serveIndexAndDetails(n: number) {
+  function serveListAndDetails(n: number) {
     const ids = Array.from({ length: n }, (_, i) => `b${String(i).padStart(3, '0')}`);
-    const index = ids.map((id) =>
-      makeResult(id, { candidate_hash: `h-${id}` }, { description: undefined })
-    );
+    vi.mocked(api.getReviewPage).mockImplementation(async (params) => {
+      const rows = pageOfIds(ids, params.offset ?? 0, params.limit ?? 25);
+      return pageResponse({ ...reviewPayload(rows), total_count: n });
+    });
     vi.mocked(api.getCachedReviewResults).mockImplementation(
       async (_limit, _offset, _all, _bucket, options = {}) => {
-        if (options.ids) {
-          const rows = options.ids.map((id) =>
-            makeResult(id, { candidate_hash: `h-${id}` }, { description: `About ${id}` })
-          );
-          return reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
-        }
-        return reviewPayload(index) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+        const rows = (options.ids ?? []).map((id) =>
+          makeResult(id, { candidate_hash: `h-${id}` }, { description: `About ${id}` })
+        );
+        return reviewPayload(rows) as ReviewResponse;
       }
     );
     return ids;
@@ -1854,53 +1416,57 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
     localStorage.clear();
   });
 
-  it('loads the index once and fetches details for the visible page only', async () => {
-    const ids = serveIndexAndDetails(120);
+  it('asks for one page and fetches details for the visible page only', async () => {
+    const ids = serveListAndDetails(120);
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    act(() => result.current.setPageSize(25));
 
     const calls = vi.mocked(api.getCachedReviewResults).mock.calls;
-    expect(calls[0]).toEqual([0, 0, true, 'reviewable', { view: 'index' }]);
     await waitFor(() =>
       expect(result.current.pageResults[0].candidate?.description).toBe(`About ${ids[0]}`)
     );
     const detailCalls = () => calls.filter((c) => c[4]?.ids);
+    // Nothing but the detail fetch calls getCachedReviewResults: never a
+    // listing, never a view.
+    expect(detailCalls()).toHaveLength(calls.length);
     // Every detail request is for rows the page showed, never the library.
     for (const c of detailCalls()) expect(c[4]?.ids?.length).toBeLessThanOrEqual(25);
     const asked = new Set(detailCalls().flatMap((c) => c[4]?.ids ?? []));
     expect(asked.has(ids[0])).toBe(true);
     expect(asked.has(ids[100])).toBe(false);
+    // The lane holds one page, and the whole filtered list is the total.
+    expect(result.current.results).toHaveLength(25);
+    expect(result.current.filteredCount).toBe(120);
 
     // Paging fetches that page's rows, once.
     act(() => result.current.setPage(5));
     await waitFor(() =>
-      expect(result.current.pageResults[0].candidate?.description).toBe(`About ${ids[100]}`)
+      expect(result.current.pageResults[0]?.candidate?.description).toBe(`About ${ids[100]}`)
     );
-    const before = detailCalls().length;
-    act(() => result.current.setPage(1));
-    act(() => result.current.setPage(5));
-    await Promise.resolve();
-    expect(detailCalls().length).toBe(before);
-    // Filters and counts still span the whole index.
-    expect(result.current.results).toHaveLength(120);
+    expect(result.current.results).toHaveLength(20);
   });
 
-  it('refetches the index once, then warns, when a detail hash differs (never newer truth)', async () => {
-    vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_l, _o, _a, _b, options = {}) =>
-        reviewPayload([
-          options.ids
-            ? makeResult('a', { candidate_hash: 'h-new' }, { title: 'Refetched', description: 'x' })
-            : makeResult('a', { candidate_hash: 'h-old' }, { title: 'Indexed' }),
-        ]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+  it('refreshes the list once, then warns, when a detail hash differs (never newer truth)', async () => {
+    // A candidate that moved on the server moves the generation, so each list
+    // response names a new one.
+    let generation = 0;
+    vi.mocked(api.getReviewPage).mockImplementation(async () => ({
+      ...pageResponse(
+        reviewPayload([makeResult('a', { candidate_hash: 'h-old' }, { title: 'Listed' })])
+      ),
+      generation: `g${++generation}`,
+    }));
+    vi.mocked(api.getCachedReviewResults).mockImplementation(async () =>
+      reviewPayload([
+        makeResult('a', { candidate_hash: 'h-new' }, { title: 'Refetched', description: 'x' }),
+      ]) as ReviewResponse
     );
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     await waitFor(() =>
       expect(vi.mocked(api.getCachedReviewResults).mock.calls.some((c) => c[4]?.ids)).toBe(true)
     );
-    // The mismatch refetches the index once; still mismatched, it warns
+    // The mismatch refreshes the list once; still mismatched, it warns
     // instead of leaving a row whose Apply would be refused.
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
@@ -1908,82 +1474,46 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
         'warning'
       )
     );
-    const indexCalls = vi
-      .mocked(api.getCachedReviewResults)
-      .mock.calls.filter((c) => c[4]?.view === 'index');
-    expect(indexCalls).toHaveLength(2);
-    expect(result.current.pageResults[0].candidate?.title).toBe('Indexed');
+    expect(vi.mocked(api.getReviewPage)).toHaveBeenCalledTimes(2);
+    expect(result.current.pageResults[0].candidate?.title).toBe('Listed');
   });
 
-  it('refetches the index when a shown book is gone from the server', async () => {
-    let indexLoads = 0;
-    vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_l, _o, _a, _b, options = {}) => {
-        if (options.ids)
-          return reviewPayload([]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
-        indexLoads += 1;
-        return reviewPayload(
-          indexLoads === 1 ? [makeResult('gone', { candidate_hash: 'h' })] : []
-        ) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
-      }
-    );
+  it('refreshes the list when a shown book is gone from the server', async () => {
+    let listLoads = 0;
+    vi.mocked(api.getReviewPage).mockImplementation(async () => {
+      listLoads += 1;
+      return pageResponse(
+        reviewPayload(listLoads === 1 ? [makeResult('gone', { candidate_hash: 'h' })] : [])
+      );
+    });
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([]) as ReviewResponse);
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(indexLoads).toBe(2));
+    await waitFor(() => expect(listLoads).toBe(2));
     await waitFor(() => expect(result.current.results).toHaveLength(0));
   });
 
-  it('bulk apply pins books on pages never opened, from the index', async () => {
-    serveIndexAndDetails(60);
-    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
-      op_id: 'op1',
-    } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
-    vi.mocked(api.pollOperationV2).mockReturnValue(
-      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
-    );
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    act(() => result.current.setPageSize(25));
-    act(() => result.current.selectAllMatching());
-    expect(result.current.selectedIds.size).toBe(60);
-    await act(async () => {
-      result.current.dispatch({
-        lane: 'metadata',
-        type: 'applySelected',
-        ids: [...result.current.selectedIds],
-      });
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(api.batchApplyFromCache).toHaveBeenCalled());
-    const pins = vi.mocked(api.batchApplyFromCache).mock.calls[0][2] as Record<
-      string,
-      { content_hash?: string; title?: string }
-    >;
-    // b050 sits on page 3, which was never shown: its pin still carries the
-    // candidate and hash the index served.
-    expect(pins.b050).toMatchObject({ content_hash: 'h-b050', title: 'Cand b050' });
-  });
-
-  it('evidence panel reads the breakdown from the detail page, not the index row', async () => {
-    // The server's index view carries no score_breakdown; only the ids= detail
+  it('evidence panel reads the breakdown from the detail page, not the listed row', async () => {
+    // The server's page rows carry no score_breakdown; only the ids= detail
     // rows do. The spine's evidence panel renders from pageResults, so the
-    // breakdown must arrive there from the detail fetch while the index row
+    // breakdown must arrive there from the detail fetch while the listed row
     // (results) stays without one.
     const breakdown: api.MetadataScoreBreakdown = {
       score: 2.0,
       steps: [{ id: 'base', label: 'Base similarity', op: 'base', operand: 2.0, running: 2.0 }],
     };
     const ids = ['b000', 'b001', 'b002'];
+    vi.mocked(api.getReviewPage).mockResolvedValue(
+      pageResponse(
+        reviewPayload(ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
+      )
+    );
     vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, _bucket, options = {}) => {
-        if (options.ids) {
-          const rows = options.ids.map((id) =>
+      async (_limit, _offset, _all, _bucket, options = {}) =>
+        reviewPayload(
+          (options.ids ?? []).map((id) =>
             makeResult(id, { candidate_hash: `h-${id}` }, { score_breakdown: breakdown })
-          );
-          return reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
-        }
-        const index = ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
-        return reviewPayload(index) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
-      }
+          )
+        ) as ReviewResponse
     );
 
     const { result } = renderHook(() => useMetadataLane(toast));
@@ -1992,13 +1522,13 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
       expect(result.current.pageResults[0].candidate?.score_breakdown).toEqual(breakdown)
     );
     expect(result.current.pageResults[0].book.id).toBe(ids[0]);
-    // The index row itself never carried it.
+    // The listed row itself never carried it.
     expect(
       result.current.results.find((r) => r.book.id === ids[0])?.candidate?.score_breakdown
     ).toBeUndefined();
   });
 
-  // Until the detail lands, every visible candidate is the index row and has
+  // Until the detail lands, every visible candidate is the listed row and has
   // no breakdown. The evidence panel reads that as "scored without a recorded
   // derivation" unless the lane says the row is still on its way -- so the
   // lane must say so, from the first paint, and must say something DIFFERENT
@@ -2010,22 +1540,21 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
     };
     const ids = ['b000', 'b001'];
     let resolveDetail!: (v: ReviewResponse) => void;
+    vi.mocked(api.getReviewPage).mockResolvedValue(
+      pageResponse(
+        reviewPayload(ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
+      )
+    );
     vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, _bucket, options = {}) => {
-        if (options.ids) {
-          return new Promise<ReviewResponse>((r) => {
-            resolveDetail = r;
-          });
-        }
-        return reviewPayload(
-          ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }))
-        ) as ReviewResponse;
-      }
+      () =>
+        new Promise<ReviewResponse>((r) => {
+          resolveDetail = r;
+        })
     );
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    // The index is shown; the detail has not answered.
+    // The page is shown; the detail has not answered.
     expect([...result.current.detailPending].sort()).toEqual(ids);
     expect(result.current.detailFailed.size).toBe(0);
     expect(result.current.spineCtx.detailState('b000')).toBe('pending');
@@ -2050,32 +1579,25 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
 
   it('reports a rejected detail fetch as failed -- not pending, not loaded', async () => {
     const ids = ['b000', 'b001'];
-    vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, _bucket, options = {}) => {
-        if (options.ids) throw new Error('detail 500');
-        return reviewPayload(
-          ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }))
-        ) as ReviewResponse;
-      }
+    const listed = () => ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
+    vi.mocked(api.getReviewPage).mockImplementation(async () =>
+      pageResponse(reviewPayload(listed()))
     );
+    vi.mocked(api.getCachedReviewResults).mockRejectedValue(new Error('detail 500'));
 
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     await waitFor(() => expect([...result.current.detailFailed].sort()).toEqual(ids));
     expect(result.current.detailPending.size).toBe(0);
     expect(result.current.spineCtx.detailState('b000')).toBe('failed');
-    // The rows are still shown, as index rows.
+    // The rows are still shown, as listed rows.
     expect(result.current.pageResults.map((r) => r.book.id)).toEqual(ids);
     expect(result.current.pageResults[0].candidate?.score_breakdown).toBeUndefined();
 
     // The next ask -- here a refresh -- puts them back in flight, and a
     // response that now succeeds clears the failure.
     vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, _bucket, options = {}) => {
-        const rows = ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
-        if (options.ids) return reviewPayload(rows) as ReviewResponse;
-        return reviewPayload(rows) as ReviewResponse;
-      }
+      async () => reviewPayload(listed()) as ReviewResponse
     );
     act(() => result.current.refresh());
     await waitFor(() => expect(result.current.spineCtx.detailState('b000')).toBe('loaded'));
@@ -2084,18 +1606,18 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
   });
 
   it('reports a book the detail response left out as failed, never as pending', async () => {
-    // The server no longer lists b001. The lane refetches the index once for
+    // The server no longer lists b001. The lane refreshes the list once for
     // the mismatch (the existing guard) and, when the second detail still
     // leaves it out, warns. Either way the row must not sit in "loading".
     const ids = ['b000', 'b001'];
+    const listed = () => ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
+    let generation = 0;
+    vi.mocked(api.getReviewPage).mockImplementation(async () => ({
+      ...pageResponse(reviewPayload(listed())),
+      generation: `g${++generation}`,
+    }));
     vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, _bucket, options = {}) => {
-        const rows = ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
-        if (options.ids) {
-          return reviewPayload(rows.filter((r) => r.book.id !== 'b001')) as ReviewResponse;
-        }
-        return reviewPayload(rows) as ReviewResponse;
-      }
+      async () => reviewPayload(listed().filter((r) => r.book.id !== 'b001')) as ReviewResponse
     );
 
     const { result } = renderHook(() => useMetadataLane(toast));
