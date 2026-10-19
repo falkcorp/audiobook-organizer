@@ -55,9 +55,25 @@ succeeds, the selection is cleared or the filters change.
 
 #### A split bulk apply is held to the cap as a whole
 
-Select all N matching sends its apply in chunks of 500. Each chunk now names its batch
-(`batch_id`) and the batch total (`batch_total`) on `POST .../batch-apply-cached`, and the
-server refuses a chunk when the declared total is over `bulk_apply_max_items`, differs from the
-first chunk's, or the chunks add up to more than it. A request with no batch id is checked
-against the cap as one request, as before; `batch_id` without a positive `batch_total`, or the
-reverse, is a `400`. The ledger is in memory and forgets a batch after 30 minutes.
+Select all N matching sends its apply in chunks of 500. Each chunk names its batch
+(`batch_id`, an unguessable random id), the batch total (`batch_total`) and its own position
+(`batch_index`) on `POST .../batch-apply-cached`. The server keeps one ledger entry per user and
+batch id and refuses a chunk when the declared total is over `bulk_apply_max_items`
+(`BULK_APPLY_CAP_EXCEEDED`), when the total changes mid-batch (`BATCH_TOTAL_MISMATCH`), or when
+the chunks add up to more than the declared total (`BATCH_EXCEEDED`; the message says earlier
+chunks were already queued). A resent chunk (same `batch_index`) is accepted without being
+counted twice. A request is validated before it is recorded, so refused requests occupy nothing,
+and a full ledger evicts the least recently touched batch (the user's own first) instead of
+refusing anyone. A user holds at most 16 live batches; the ledger forgets an idle batch after 30
+minutes.
+
+This is an accident guard, not a quota. It enforces the total a cooperating client declares: a
+client that omits `batch_id` or sends a fresh one per request gets only the per-request check,
+and there is no per-user rolling window. A request with no batch id is checked against the cap
+as one request, as before. `batch_id`, `batch_total` and `batch_index` go together, and a
+batched request with no `book_ids` is a `400`.
+
+The selection check now asks about a changed Title over both buckets even when the view leaves a
+chip inside the debounce, holds the selection (instead of clearing it) when the server refuses
+the Title pattern or is busy (it asks again after `Retry-After`), and gives each check a 15
+second deadline, treating a timeout as a failed check that holds.

@@ -1,5 +1,5 @@
 // file: internal/applycap/applycap.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c1e8f2a-9b7d-4e63-a5c0-2f8d6b1e9a37
 // last-edited: 2026-10-19
 //
@@ -125,97 +125,202 @@ func (c *Counter) Cap() int { return c.limit }
 
 // BatchLedger is the cross-request half of the cap, for a client that splits
 // one logical bulk apply into several HTTP requests (the review lane applies
-// 500 ids per chunk). Each chunk passes the per-request cap on its own, so
-// without a ledger a client could apply any number of books by chunking.
+// 500 ids per chunk). Each chunk passes the per-request cap on its own, so a
+// cooperating client that declares one batch total gets that total enforced
+// across the chunks.
 //
-// A chunk names its batch (an opaque id the client mints) and the TOTAL it
-// declares for the whole batch. Admit refuses a chunk when:
-//   - the declared total exceeds the cap in force, or
-//   - the declared total differs from the one the batch's first chunk
-//     declared (a client cannot grow a batch mid-flight), or
-//   - the running count for the batch plus this chunk would exceed the
-//     declared total or the cap.
+// What it guarantees, and what it does not. The ledger enforces the TOTAL a
+// cooperating client DECLARES: a chunk of a named batch is refused when the
+// declared total is over the cap, differs from the first chunk's, or the
+// chunks add up past it. It is an accident guard, not an access control: a
+// client that omits the batch id, or rotates it per request, is checked only
+// per request (the caller applies Refuse to such a request), and there is no
+// per-user rolling window. Because it binds only cooperating clients, losing
+// an entry (an eviction, a restart, the TTL) loosens nothing that was not
+// already loose, which is why a full ledger evicts instead of refusing.
 //
-// The ledger is in memory, bounded (maxBatches) and TTL'd: a batch not touched
-// for ttl is forgotten, so a lost client never pins memory. A restart forgets
-// every batch, which only ever loosens a batch that was already inside the cap
-// per request; the cap's job (refusing "everything") is held by the declared
-// total check, which needs no history.
+// A batch is keyed by owner (the authenticated user) AND batch id, so one
+// user's id can neither collide with nor poison another's. Each owner may hold
+// at most maxPerOwner live batches and the ledger maxBatches in all; past a
+// limit the least recently touched batch is evicted (the owner's own first,
+// then the oldest overall), never the new request refused. Entries are
+// forgotten after ttl without a chunk. A chunk carries an index within its
+// batch: a resent index is accepted without counting twice.
 //
-// Requests with NO batch id are not chunks of anything the server knows about;
-// the caller checks them against the cap as one request (the pre-ledger rule).
-// It is safe for concurrent use.
+// Nothing is recorded for a refused request. It is safe for concurrent use.
 type BatchLedger struct {
-	mu         sync.Mutex
-	ttl        time.Duration
-	maxBatches int
-	now        func() time.Time
-	batches    map[string]*batchEntry
+	mu          sync.Mutex
+	ttl         time.Duration
+	maxBatches  int
+	maxPerOwner int
+	now         func() time.Time
+	batches     map[string]*batchEntry
 }
 
 type batchEntry struct {
+	owner    string
 	total    int
 	admitted int
+	chunks   map[int]int // chunk index -> its size
 	touched  time.Time
 }
 
+// BatchErrorKind says why the ledger refused a chunk.
+type BatchErrorKind int
+
+const (
+	// BatchTotalMismatch: the chunk declares a different total than the first
+	// chunk of its batch (or resends an index with a different size).
+	BatchTotalMismatch BatchErrorKind = iota + 1
+	// BatchExceeded: the chunks of the batch would add up past its declared
+	// total or past the cap.
+	BatchExceeded
+)
+
+// BatchError is a ledger refusal of a chunk that is not a plain cap breach.
+// Earlier chunks of the batch may already have been queued; the message says
+// so rather than claiming nothing was applied.
+type BatchError struct {
+	Kind      BatchErrorKind
+	Op        string
+	Requested int
+	Cap       int
+}
+
+// Code is the stable error code the HTTP body carries.
+func (e *BatchError) Code() string {
+	if e.Kind == BatchTotalMismatch {
+		return "BATCH_TOTAL_MISMATCH"
+	}
+	return "BATCH_EXCEEDED"
+}
+
+func (e *BatchError) Error() string {
+	if e.Kind == BatchTotalMismatch {
+		return fmt.Sprintf("%s: this chunk does not match the batch it belongs to (a different declared total, or a "+
+			"resent chunk of another size); chunks of the batch sent before this one were already queued, this one was not",
+			e.Op)
+	}
+	return fmt.Sprintf("%s: the chunks of this batch add up to %d books, past the %d it declared or the bulk apply cap "+
+		"allows; chunks sent before this one were already queued, this one was not", e.Op, e.Requested, e.Cap)
+}
+
 // NewBatchLedger builds a ledger holding at most maxBatches live batches, each
-// forgotten after ttl without a chunk. Non-positive arguments get safe defaults
-// (1024 batches, 30 minutes).
-func NewBatchLedger(ttl time.Duration, maxBatches int) *BatchLedger {
+// forgotten after ttl without a chunk, and at most maxPerOwner per owner.
+// Non-positive arguments get safe defaults (30 minutes, 1024, 16).
+func NewBatchLedger(ttl time.Duration, maxBatches, maxPerOwner int) *BatchLedger {
 	if ttl <= 0 {
 		ttl = 30 * time.Minute
 	}
 	if maxBatches <= 0 {
 		maxBatches = 1024
 	}
-	return &BatchLedger{ttl: ttl, maxBatches: maxBatches, now: time.Now, batches: map[string]*batchEntry{}}
+	if maxPerOwner <= 0 {
+		maxPerOwner = 16
+	}
+	return &BatchLedger{ttl: ttl, maxBatches: maxBatches, maxPerOwner: maxPerOwner, now: time.Now,
+		batches: map[string]*batchEntry{}}
 }
 
-// Admit records a chunk of `n` items for batch `id` that declared `total`, and
-// refuses it (recording nothing) when it would break the rules above. The
-// returned error is *ExceededError for every refusal.
-func (l *BatchLedger) Admit(op, id string, n, total, configured int) *ExceededError {
+func batchKey(owner, id string) string { return owner + "\x00" + id }
+
+// Admit records chunk `index` of `n` items for batch `id` of `owner`, which
+// declared `total`, or refuses it and records nothing. The error is nil,
+// *ExceededError (the declared total is over the cap) or *BatchError.
+func (l *BatchLedger) Admit(op, owner, id string, index, n, total, configured int) error {
 	limit := Effective(configured)
-	if total > limit {
-		return &ExceededError{Op: op, Requested: total, Cap: limit}
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 	l.sweepLocked(now)
-	e := l.batches[id]
-	if e == nil {
-		if len(l.batches) >= l.maxBatches {
-			// Full of live batches: refuse rather than evict one, which
-			// would reset its running count and loosen the cap.
-			return &ExceededError{Op: op, Requested: n, Cap: limit}
+	key := batchKey(owner, id)
+	e := l.batches[key]
+	if e != nil {
+		if e.total != total {
+			return &BatchError{Kind: BatchTotalMismatch, Op: op, Requested: total, Cap: e.total}
 		}
-		e = &batchEntry{total: total}
-		l.batches[id] = e
+		if size, seen := e.chunks[index]; seen {
+			if size != n {
+				return &BatchError{Kind: BatchTotalMismatch, Op: op, Requested: n, Cap: size}
+			}
+			e.touched = now // a resent chunk: already counted
+			return nil
+		}
+		if e.admitted+n > e.total || e.admitted+n > limit {
+			return &BatchError{Kind: BatchExceeded, Op: op, Requested: e.admitted + n, Cap: min(e.total, limit)}
+		}
+		e.admitted += n
+		e.chunks[index] = n
+		e.touched = now
+		return nil
 	}
-	if e.total != total || e.admitted+n > e.total || e.admitted+n > limit {
-		return &ExceededError{Op: op, Requested: e.admitted + n, Cap: min(e.total, limit)}
+	// A new batch is validated BEFORE it is recorded, so a refused request can
+	// never occupy a slot.
+	if total > limit {
+		return &ExceededError{Op: op, Requested: total, Cap: limit}
 	}
-	e.admitted += n
-	e.touched = now
+	if n <= 0 || n > total {
+		return &BatchError{Kind: BatchExceeded, Op: op, Requested: n, Cap: total}
+	}
+	l.makeRoomLocked(owner)
+	l.batches[key] = &batchEntry{owner: owner, total: total, admitted: n, chunks: map[int]int{index: n}, touched: now}
 	return nil
 }
 
-// Release gives back `n` items of batch `id` after a chunk that was admitted
-// but failed before writing anything (a 4xx/5xx), so the client can retry it.
-func (l *BatchLedger) Release(id string, n int) {
+// Release gives back chunk `index` of batch `id` after a chunk that was
+// admitted but failed before anything was queued, so the client can retry it.
+func (l *BatchLedger) Release(owner, id string, index int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if e := l.batches[id]; e != nil {
-		e.admitted = max(0, e.admitted-n)
+	key := batchKey(owner, id)
+	e := l.batches[key]
+	if e == nil {
+		return
+	}
+	if size, ok := e.chunks[index]; ok {
+		e.admitted -= size
+		delete(e.chunks, index)
+	}
+	if e.admitted <= 0 {
+		delete(l.batches, key)
+	}
+}
+
+// makeRoomLocked evicts so that one more batch of `owner` fits: the owner's
+// least recently touched batch when they are at their limit, and the least
+// recently touched overall when the ledger is full.
+func (l *BatchLedger) makeRoomLocked(owner string) {
+	mine := 0
+	for _, e := range l.batches {
+		if e.owner == owner {
+			mine++
+		}
+	}
+	if mine >= l.maxPerOwner {
+		l.evictOldestLocked(func(e *batchEntry) bool { return e.owner == owner })
+	}
+	if len(l.batches) >= l.maxBatches {
+		l.evictOldestLocked(func(*batchEntry) bool { return true })
+	}
+}
+
+func (l *BatchLedger) evictOldestLocked(match func(*batchEntry) bool) {
+	var oldestKey string
+	var oldest *batchEntry
+	for k, e := range l.batches {
+		if match(e) && (oldest == nil || e.touched.Before(oldest.touched)) {
+			oldestKey, oldest = k, e
+		}
+	}
+	if oldest != nil {
+		delete(l.batches, oldestKey)
 	}
 }
 
 func (l *BatchLedger) sweepLocked(now time.Time) {
-	for id, e := range l.batches {
-		if !e.touched.IsZero() && now.Sub(e.touched) > l.ttl {
-			delete(l.batches, id)
+	for k, e := range l.batches {
+		if now.Sub(e.touched) > l.ttl {
+			delete(l.batches, k)
 		}
 	}
 }

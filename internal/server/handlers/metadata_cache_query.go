@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-19
 
@@ -806,6 +806,38 @@ type reviewQueryBase struct {
 	sources    map[string]int
 	generation string
 	builtAt    time.Time
+
+	// bucketOf maps a book id to the bucket(s) it is in, built on the first
+	// selection check against this base and shared by every later one (a
+	// chunked selection check asks one question per 1000 ids; walking both
+	// buckets for each would repeat a library scan 5 times). The base is
+	// immutable, so the index never goes stale; it dies with the base.
+	bucketOnce sync.Once
+	bucketOf   map[string]uint8
+}
+
+const (
+	inReviewableBucket   uint8 = 1
+	inUnreviewableBucket uint8 = 2
+)
+
+// bucketIndex returns the id -> bucket-bits index, building it once.
+func (b *reviewQueryBase) bucketIndex() map[string]uint8 {
+	b.bucketOnce.Do(func() {
+		idx := make(map[string]uint8, len(b.rows.reviewable)+len(b.rows.unreviewable))
+		for i := range b.rows.reviewable {
+			if id := b.rows.reviewable[i].row.sum.BookID; id != "" {
+				idx[id] |= inReviewableBucket
+			}
+		}
+		for i := range b.rows.unreviewable {
+			if id := b.rows.unreviewable[i].row.sum.BookID; id != "" {
+				idx[id] |= inUnreviewableBucket
+			}
+		}
+		b.bucketOf = idx
+	})
+	return b.bucketOf
 }
 
 type reviewBaseKey struct {
@@ -1518,9 +1550,9 @@ func (h *MetadataCacheHandler) ReviewSelectionCheck(c *gin.Context) {
 
 // classifySelection splits ids into matching, not_matching and unknown for
 // the evaluated list l, whose bucket universe is `bucket`. One pass over the
-// listed refs and one over the universe's rows, each a lookup against the
-// requested ids, so the cost is the library's scan and the payload the
-// selection's.
+// listed refs (list-specific, so it cannot be shared) and a lookup per id in
+// the base's bucket index (built once per base, not once per request), so a
+// chunked check does not re-walk the library's buckets per chunk.
 func classifySelection(l *reviewResultList, bucket string, ids []string) gin.H {
 	want := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -1533,24 +1565,20 @@ func classifySelection(l *reviewResultList, bucket string, ids []string) gin.H {
 			listed[row.sum.BookID] = true
 		}
 	}
-	inBucket := make(map[string]bool, len(ids))
-	rows := &l.base.rows
-	if bucket != reviewBucketUnreviewable {
-		for i := range rows.reviewable {
-			if id := rows.reviewable[i].row.sum.BookID; id != "" {
-				if _, ok := want[id]; ok {
-					inBucket[id] = true
-				}
-			}
-		}
+	var universe uint8
+	switch bucket {
+	case reviewBucketReviewable:
+		universe = inReviewableBucket
+	case reviewBucketUnreviewable:
+		universe = inUnreviewableBucket
+	default:
+		universe = inReviewableBucket | inUnreviewableBucket
 	}
-	if bucket != reviewBucketReviewable {
-		for i := range rows.unreviewable {
-			if id := rows.unreviewable[i].row.sum.BookID; id != "" {
-				if _, ok := want[id]; ok {
-					inBucket[id] = true
-				}
-			}
+	index := l.base.bucketIndex()
+	inBucket := make(map[string]bool, len(ids))
+	for id := range want {
+		if index[id]&universe != 0 {
+			inBucket[id] = true
 		}
 	}
 	matching, notMatching, unknown := []string{}, []string{}, []string{}
