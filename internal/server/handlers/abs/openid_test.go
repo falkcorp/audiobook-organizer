@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
 // last-edited: 2026-10-19
 
@@ -520,5 +520,110 @@ func TestMintOIDCCode_RequiresS256ShapedChallenge(t *testing.T) {
 	}
 	if _, err := mintOIDCCode("u1", "e@example.com", good, "audiobooth://oauth", time.Now()); err != nil {
 		t.Fatalf("a real S256 challenge must mint: %v", err)
+	}
+}
+
+// Every origin compared in this file goes through one normaliser, so equal
+// origins are equal strings — scheme, host and port included.
+func TestOIDCNormalizeOrigin(t *testing.T) {
+	cases := []struct {
+		raw       string
+		allowPath bool
+		want      string // "" = refused
+	}{
+		{"https://example.com", false, "https://example.com"},
+		{"https://Example.COM:443", false, "https://example.com"},
+		{"HTTPS://example.com", false, "https://example.com"},
+		{"https://example.com:8443", false, "https://example.com:8443"},
+		{"https://[::1]:443", false, "https://[::1]"},
+		{"https://[::1]:8443", false, "https://[::1]:8443"},
+		{"http://example.com", false, ""},
+		{"null", false, ""},
+		{"", false, ""},
+		{"https://", false, ""},
+		{"https://u:p@example.com", false, ""},
+		{"https://example.com/", false, ""},
+		{"https://example.com?x=1", false, ""},
+		{"https://example.com#f", false, ""},
+		{"https://example.com:notaport", false, ""},
+		{"https://example.com/abs/", true, "https://example.com"},
+		{"https://Books.Example.net:443/x", true, "https://books.example.net"},
+		{"http://example.com/abs", true, ""},
+		{"example.com", true, ""},
+	}
+	for _, tc := range cases {
+		got, ok := oidcNormalizeOrigin(tc.raw, tc.allowPath)
+		if tc.want == "" {
+			if ok {
+				t.Errorf("oidcNormalizeOrigin(%q, %t) = %q, want refused", tc.raw, tc.allowPath, got)
+			}
+			continue
+		}
+		if !ok || got != tc.want {
+			t.Errorf("oidcNormalizeOrigin(%q, %t) = %q, %t; want %q", tc.raw, tc.allowPath, got, ok, tc.want)
+		}
+	}
+	for host, want := range map[string]string{
+		"example.com": "https://example.com", "Example.com:443": "https://example.com",
+		"evil.example/@x": "", "a b": "", "": "", "x%2f": "",
+	} {
+		got, ok := oidcHostOrigin(host)
+		if (want == "" && ok) || (want != "" && got != want) {
+			t.Errorf("oidcHostOrigin(%q) = %q, %t; want %q", host, got, ok, want)
+		}
+	}
+}
+
+// The hop-2 load log line's assertion kind is what tells the two
+// strict_service_token_auth behaviours apart, so each kind is pinned.
+func TestOIDCAssertionKind(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	person := &servermiddleware.ABSIdentity{User: &database.User{ID: "u1"}}
+	mk := func(header, serviceToken string) *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("GET", OIDCBrowserPath, nil)
+		if header != "" {
+			c.Request.Header.Set("Cf-Access-Jwt-Assertion", header)
+		}
+		if serviceToken != "" {
+			c.Set("abs_service_token", serviceToken)
+		}
+		return c
+	}
+	cases := []struct {
+		name     string
+		c        *gin.Context
+		identity *servermiddleware.ABSIdentity
+		authErr  *servermiddleware.ABSAuthError
+		want     string
+	}{
+		{"no header", mk("", ""), nil, nil, oidcAssertionNone},
+		{"rejected", mk("x", ""), nil, &servermiddleware.ABSAuthError{Status: 401}, oidcAssertionRejected},
+		{"person", mk("x", ""), person, nil, oidcAssertionPerson},
+		{"service token", mk("x", "family"), nil, nil, oidcAssertionServiceToken},
+		{"no person, no token", mk("x", ""), nil, nil, oidcAssertionNoPerson},
+	}
+	for _, tc := range cases {
+		if got := oidcAssertionKind(tc.c, tc.identity, tc.authErr); got != tc.want {
+			t.Errorf("%s: kind = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Cookie names only, CF_ prefix in any case, never a value.
+func TestOIDCCFCookieNames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", OIDCBrowserPath, nil)
+	if got := oidcCFCookieNames(c); got != "-" {
+		t.Fatalf("no cookies: %q, want -", got)
+	}
+	c.Request.Header.Set("Cookie", "CF_Authorization=secret-jwt; session=abc; cf_clearance=zzz")
+	got := oidcCFCookieNames(c)
+	if got != "CF_Authorization,cf_clearance" {
+		t.Fatalf("names = %q", got)
+	}
+	if strings.Contains(got, "secret") || strings.Contains(got, "zzz") {
+		t.Fatalf("a cookie value leaked into %q", got)
 	}
 }

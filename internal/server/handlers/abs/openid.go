@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -109,13 +109,34 @@ import (
 //
 // # The browser hop and the service token
 //
-// On iOS 17.4+ the browser's first load of hop 2 carries the service token too.
-// If Cloudflare admits that load on the token, the origin sees a valid but
-// person-less assertion. Hop 2 then redirects ONCE to itself with reauth=1:
-// that second load is not the initial URL, so it carries no service token, and
-// Cloudflare must authenticate the person (by their Access cookie or a fresh IdP
-// login). Only after that does a missing identity become a terminal
-// access_denied.
+// On iOS 17.4+ ASWebAuthenticationSession sets the app's Custom Headers — the
+// Cloudflare service token — on the browser's INITIAL load of hop 2, and only
+// on that load. What Cloudflare does with a token-bearing browser load depends
+// on the Zero Trust organisation's strict_service_token_auth setting, which
+// could not be read when this was written (2026-10-19: no Cloudflare API token
+// on any host checked), so both behaviours are handled and logged:
+//
+//   - Strict mode ON: Access judges a request that carries a service token
+//     only against Service Auth policies, ignoring Allow policies and any
+//     CF_Authorization cookie. The Access application covering
+//     /auth/openid/browser must therefore include the app's Service Auth
+//     policy, or Cloudflare denies the first load at the edge — the origin
+//     never sees it and the person gets a Cloudflare error page inside the
+//     sign-in sheet. With the policy in place the first load arrives as a
+//     person-less service-token assertion; hop 2 redirects ONCE to itself with
+//     reauth=1, that reload is not the initial URL and so carries no token
+//     header, and Access has to authenticate the person (their Access cookie
+//     or a fresh IdP login).
+//   - Strict mode OFF: Access may admit the token-bearing first load and set a
+//     CF_Authorization cookie for the SERVICE TOKEN. AudioBooth uses the shared
+//     browser session, so that cookie can land in Safari's shared jar and ride
+//     along on the reauth load, which Access then admits on the token again.
+//     The bounce does not shed it, and the sign-in ends in access_denied.
+//
+// Every hop-2 load logs the assertion kind it received and the names of any CF_
+// cookies, and a reauth load that still carries a service token gets its own
+// warning, so the journal says which case is live. Only after the single
+// bounce does a missing identity become a terminal access_denied.
 //
 // # Why hop 3 does not require an identity assertion
 //
@@ -583,10 +604,17 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 		h.oidcAuthorizeReject(c, "client-id-too-long", "client_id is too long")
 		return
 	}
-	origin, ok := oidcRequestOrigin(c)
+	origin, ok := h.oidcOrigin(c)
 	if !ok {
 		h.oidcAuthorizeReject(c, "host-invalid", "invalid Host header")
 		return
+	}
+	if hostOrigin, ok := oidcHostOrigin(c.Request.Host); ok && hostOrigin != origin {
+		// A configured public URL is in use and the app reached a different
+		// hostname. Fine if both are fronted by the same Access application;
+		// if not, hop 2 will fail its assertion check (see oidcOrigin).
+		oidcLog.Warn("openid authorize: browser hop goes to the configured origin %s, but the app reached %s",
+			logger.SanitizeLogValue(origin), logger.SanitizeLogValue(hostOrigin))
 	}
 
 	id, err := absauth.NewRefreshSeed() // 256-bit URL-safe random
@@ -662,19 +690,38 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 
 	identity, authErr := h.resolver.ResolveCFAssertion(c)
 	noPerson := authErr == nil && (identity == nil || identity.User == nil)
+	reauth := c.Query(oidcReauthParam) != ""
+
+	// One line per browser-hop load, first and reauth alike, saying what
+	// Cloudflare actually let through: which kind of assertion, and whether a
+	// CF_ cookie rode along. This is how to tell, from the journal, which of the
+	// two strict_service_token_auth behaviours in the file comment is in effect.
+	// Cookie NAMES only, never values.
+	assertionKind := oidcAssertionKind(c, identity, authErr)
+	cfCookies := oidcCFCookieNames(c)
+	oidcLog.Info("openid browser hop load: reauth=%t assertion=%s service_token=%s cf_cookies=%s caller=%s",
+		reauth, assertionKind, logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)),
+		cfCookies, logger.SanitizeLogValue(pending.CallerKey))
 
 	// A valid assertion that names no person: on iOS 17.4+ the initial browser
 	// load carries the app's service token. Redirect to ourselves once; that load
-	// is not the initial URL, carries no service token, and so makes Cloudflare
-	// authenticate the person.
-	if noPerson && strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)) != "" && c.Query(oidcReauthParam) == "" {
-		if origin, ok := oidcRequestOrigin(c); ok {
-			oidcLog.Info("openid browser hop carried a non-person assertion (service_token=%s); redirecting once to shed it",
-				logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)))
+	// is not the initial URL, so it carries no service-token HEADER, and
+	// Cloudflare has to admit it some other way. Whether that is the person
+	// depends on the Access configuration — see the file comment.
+	if noPerson && strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)) != "" && !reauth {
+		if origin, ok := h.oidcOrigin(c); ok {
 			c.Header("Location", oidcBrowserURL(origin, reqID, true))
 			c.Status(http.StatusFound)
 			return
 		}
+	}
+	if noPerson && reauth && assertionKind == oidcAssertionServiceToken {
+		// The bounce did not shed the token: Cloudflare admitted the reload on a
+		// service token again — most likely a service-token CF_Authorization
+		// cookie in the browser's shared jar (strict_service_token_auth off).
+		oidcLog.Warn("openid browser hop reauth load still carried a service-token assertion: service_token=%s cf_cookies=%s caller=%s",
+			logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)), cfCookies,
+			logger.SanitizeLogValue(pending.CallerKey))
 	}
 
 	ev := h.oidcBrowserAudit(c, pending)
@@ -700,7 +747,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		// ASWebAuthenticationSession is waiting for exactly that navigation and
 		// closes cleanly on it. The parked request is left to expire.
 		oidcLog.Warn("openid browser hop resolved no verified identity: service_token=%s reauth=%t caller=%s client_id=%s",
-			logger.SanitizeLogValue(ev.ServiceToken), c.Query(oidcReauthParam) != "",
+			logger.SanitizeLogValue(ev.ServiceToken), reauth,
 			logger.SanitizeLogValue(pending.CallerKey), oidcLogValue(pending.ClientID))
 		ev.Outcome = absauth.OutcomeDenied
 		ev.Reason = "no-verified-identity"
@@ -732,8 +779,13 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 func (h *Handler) OpenIDBrowserConsent(c *gin.Context) {
 	oidcBrowserHeaders(c)
 
-	if origin := strings.TrimSpace(c.GetHeader("Origin")); origin != "" {
-		if own, ok := oidcRequestOrigin(c); !ok || origin != own {
+	// Both sides are normalised (oidcNormalizeOrigin), so a Host of
+	// "Media.Example.com:443" matches an Origin of "https://media.example.com",
+	// while a different scheme, host or port — or "null" — does not.
+	if raw := strings.TrimSpace(c.GetHeader("Origin")); raw != "" {
+		got, gotOK := oidcNormalizeOrigin(raw, false)
+		own, ownOK := h.oidcOrigin(c)
+		if !gotOK || !ownOK || got != own {
 			h.oidcConsentRefuse(c, "origin-mismatch", "This sign-in request did not come from this server.")
 			return
 		}
@@ -1052,22 +1104,75 @@ func oidcNoStore(c *gin.Context) {
 	c.Header("Pragma", "no-cache")
 }
 
-// oidcRequestOrigin returns https://<Host> for this request.
+// oidcOrigin returns the origin hop 2 lives on, as https://host[:port] with the
+// host lowercased and a default :443 dropped (oidcNormalizeOrigin).
 //
-// The origin is the Host the app itself reached, not a configured base URL: hop
-// 2 must land on the same hostname — and so the same Cloudflare Access
-// application and AUD — that admitted hop 1. The scheme is always https because
-// ASWebAuthenticationSession needs an absolute http(s) URL and SSO only ever
-// completes behind Cloudflare, which terminates TLS. A Host that does not parse
-// as a bare host[:port] is refused rather than echoed into a Location.
-func oidcRequestOrigin(c *gin.Context) (string, bool) {
-	host := strings.TrimSpace(c.Request.Host)
+// Precedence:
+//
+//  1. The configured public URL (Options.PublicOrigin: oauth_redirect_base_url,
+//     else the server's --external-url), reduced to its origin. Preferred because
+//     it does not depend on every proxy in front of the origin preserving Host.
+//  2. Otherwise the Host this request arrived with. Production sets neither
+//     setting today, so this is what runs there.
+//
+// The caveat that decides which to set: hop 2 must land on the same hostname —
+// and so the same Cloudflare Access application and AUD — that admitted hop 1.
+// A public URL configured for the web UI's hostname would move hop 2 to a
+// hostname whose Access application may have a different AUD, and every SSO
+// sign-in would then fail its assertion check. Hop 1 logs whenever the two
+// disagree (see OpenIDAuthorize).
+//
+// The scheme is always https: ASWebAuthenticationSession needs an absolute
+// http(s) URL, and SSO only ever completes behind Cloudflare, which terminates
+// TLS. A configured URL that is not https falls back to Host with a warning; a
+// Host that does not parse as a bare host[:port] is refused rather than echoed
+// into a Location.
+func (h *Handler) oidcOrigin(c *gin.Context) (string, bool) {
+	if h.oidcPublicOrigin != nil {
+		if raw := strings.TrimSpace(h.oidcPublicOrigin()); raw != "" {
+			if o, ok := oidcNormalizeOrigin(raw, true); ok {
+				return o, true
+			}
+			oidcLog.Warn("openid: the configured public URL %s is not an https URL with a host; using the request Host instead",
+				oidcLogValue(raw))
+		}
+	}
+	return oidcHostOrigin(c.Request.Host)
+}
+
+// oidcHostOrigin is the origin for a bare Host header value.
+func oidcHostOrigin(host string) (string, bool) {
+	host = strings.TrimSpace(host)
 	if host == "" || strings.ContainsAny(host, "/\\@?#% \t\r\n") {
 		return "", false
 	}
-	u, err := url.Parse("https://" + host)
-	if err != nil || u.Host != host || u.User != nil || u.Path != "" || u.Hostname() == "" {
+	return oidcNormalizeOrigin("https://"+host, false)
+}
+
+// oidcNormalizeOrigin reduces raw to "https://host[:port]": scheme https only,
+// host lowercased, a default :443 dropped, IPv6 bracketed. Every origin this
+// file compares — the Origin header, the request Host, a configured URL — goes
+// through here, so equal origins compare equal as strings, scheme included.
+//
+// raw must be an https URL with a host and no userinfo, query or fragment.
+// allowPath admits (and discards) a path, for a configured base URL such as
+// "https://books.example.com/"; an Origin header or a Host never has one.
+// "null" — the Origin a sandboxed or no-referrer document sends — fails.
+func oidcNormalizeOrigin(raw string, allowPath bool) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Opaque != "" || u.User != nil ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (!allowPath && u.Path != "") {
 		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", false
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" && port != "443" {
+		host += ":" + port
 	}
 	return "https://" + host, true
 }
@@ -1096,6 +1201,47 @@ func isS256Shaped(s string) bool {
 		}
 	}
 	return true
+}
+
+// Assertion kinds for the hop-2 load log line.
+const (
+	oidcAssertionNone         = "none"          // no Cf-Access-Jwt-Assertion header
+	oidcAssertionRejected     = "rejected"      // present but refused by the resolver
+	oidcAssertionServiceToken = "service-token" // verified, a service token
+	oidcAssertionNoPerson     = "no-person"     // verified, names no person, not a token
+	oidcAssertionPerson       = "person"        // verified, names a provisioned person
+)
+
+// oidcAssertionKind classifies what Cloudflare forwarded on a hop-2 load.
+func oidcAssertionKind(c *gin.Context, identity *servermiddleware.ABSIdentity, authErr *servermiddleware.ABSAuthError) string {
+	switch {
+	case strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)) == "":
+		return oidcAssertionNone
+	case authErr != nil:
+		return oidcAssertionRejected
+	case identity != nil && identity.User != nil:
+		return oidcAssertionPerson
+	case servermiddleware.ABSServiceToken(c) != "":
+		return oidcAssertionServiceToken
+	default:
+		return oidcAssertionNoPerson
+	}
+}
+
+// oidcCFCookieNames lists the names of the CF_-prefixed cookies on the request
+// ("-" for none). Names only — the same convention as ABSAuthProbe, which also
+// matches by prefix because Access can be configured with a custom cookie name.
+func oidcCFCookieNames(c *gin.Context) string {
+	var names []string
+	for _, ck := range c.Request.Cookies() {
+		if strings.HasPrefix(strings.ToUpper(ck.Name), "CF_") {
+			names = append(names, ck.Name)
+		}
+	}
+	if len(names) == 0 {
+		return "-"
+	}
+	return oidcLogValue(strings.Join(names, ","))
 }
 
 // oidcOutcomeForStatus classifies a resolver error for the audit log.

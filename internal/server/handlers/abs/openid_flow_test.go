@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-19
 
@@ -50,13 +50,13 @@ func s256(verifier string) string {
 
 // newOIDCHarness is CF mode with one allowlisted person and one service token.
 // httptest requests arrive with Host "example.com".
-func newOIDCHarness(t *testing.T) *harness {
+func newOIDCHarness(t *testing.T, opts ...harnessOpt) *harness {
 	t.Helper()
 	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "")
 	// Each test gets its own code store: it is package-level, so caps and
 	// codes would otherwise carry over from earlier tests.
 	abshandler.IsolateOIDCCodesForTest(t)
-	h := newHarness(t, "cf,jwt", []string{"owner@example.com", "second@example.com"})
+	h := newHarness(t, "cf,jwt", []string{"owner@example.com", "second@example.com"}, opts...)
 	// As server.go configures production: trust no forwarded headers, so
 	// c.ClientIP() is the connection's address.
 	if err := h.router.SetTrustedProxies(nil); err != nil {
@@ -216,6 +216,11 @@ func (h *harness) consentPage(t *testing.T, browser, assertion string) (req, csr
 	if xfo := w.Header().Get("X-Frame-Options"); xfo != "DENY" {
 		t.Fatalf("X-Frame-Options = %q, want DENY (a framable consent page can be clickjacked)", xfo)
 	}
+	// X-Frame-Options is the legacy control; CSP frame-ancestors is the one
+	// current browsers apply, and it wins where both are present.
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Fatalf("Content-Security-Policy = %q, want frame-ancestors 'none'", csp)
+	}
 	// no-referrer would make browsers send `Origin: null` on the form POST,
 	// which the Origin check refuses: every real Allow would fail.
 	if rp := w.Header().Get("Referrer-Policy"); rp != "same-origin" {
@@ -232,7 +237,10 @@ func (h *harness) consentPage(t *testing.T, browser, assertion string) (req, csr
 	return m1[1], m2[1], body
 }
 
-// postConsent submits the consent form as a browser would.
+// postConsent submits the consent form as a browser would: from the page's own
+// origin, so it carries `Origin: https://example.com` (what WebKit sends under
+// Referrer-Policy same-origin). extra overrides headers; an empty value removes
+// one, and a "Host" entry sets the request's Host.
 func (h *harness) postConsent(t *testing.T, req, csrf, decision, assertion string, extra map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	form := url.Values{}
@@ -241,11 +249,19 @@ func (h *harness) postConsent(t *testing.T, req, csrf, decision, assertion strin
 	form.Set("decision", decision)
 	r := httptest.NewRequest(http.MethodPost, abshandler.OIDCBrowserPath, strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Origin", "https://example.com")
 	if assertion != "" {
 		r.Header.Set(oauth.CFAccessHeader, assertion)
 	}
 	for k, v := range extra {
-		r.Header.Set(k, v)
+		switch {
+		case k == "Host":
+			r.Host = v
+		case v == "":
+			r.Header.Del(k)
+		default:
+			r.Header.Set(k, v)
+		}
 	}
 	w := httptest.NewRecorder()
 	h.router.ServeHTTP(w, r)
@@ -641,6 +657,13 @@ func TestOpenIDConsent_PostWithoutValidTokenRefused(t *testing.T) {
 	// `Origin: null` is what sandboxed frames and no-referrer documents send;
 	// it proves nothing about where the form came from.
 	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "null"}))
+	// Same host, wrong scheme or port: a different origin.
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "http://example.com"}))
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "https://example.com:8443"}))
+	// A suffix or prefix of our host is a different host.
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "https://example.com.evil.example"}))
+	// A service token is not a person: there is no one to bind the consent to.
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcServiceAssertion, nil))
 
 	// None of the refusals consumed the request.
 	w := h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "https://example.com"})
@@ -772,4 +795,73 @@ func TestOpenIDHop1_RateLimitedPerPerson(t *testing.T) {
 		t.Fatalf("over the burst: status %d body %q; want 400 text", w.Code, w.Body.String())
 	}
 	assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion))
+}
+
+// ── origin handling ────────────────────────────────────────────────────────
+
+// Host and Origin are compared as normalised origins: a Host with a different
+// case and an explicit default port is the same origin as the browser's
+// `Origin: https://example.com`, and the hop-1 Location drops the :443.
+func TestOpenIDConsent_HostWithDefaultPortMatchesOrigin(t *testing.T) {
+	h := newOIDCHarness(t)
+	r := httptest.NewRequest(http.MethodGet, authorizePath(s256(oidcVerifier), ""), nil)
+	r.Host = "Example.COM:443"
+	r.Header.Set(oauth.CFAccessHeader, oidcServiceAssertion)
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, r)
+	browser := assertBrowserHopLocation(t, w).RequestURI()
+
+	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
+	w = h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Host": "Example.COM:443"})
+	if q := appCallback(t, w); q.Get("code") == "" {
+		t.Fatalf("Host %q and Origin https://example.com are one origin; params %v", "Example.COM:443", q)
+	}
+}
+
+// With no Origin header (not a browser form post) the CSRF token alone
+// carries the check; that path must keep working.
+func TestOpenIDConsent_NoOriginHeaderStillNeedsOnlyTheToken(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
+	if q := appCallback(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": ""})); q.Get("code") == "" {
+		t.Fatal("a POST without Origin but with a valid token must mint")
+	}
+}
+
+// A configured public URL wins over the request Host — reduced to its origin
+// (path dropped, host lowercased, :443 dropped) — and the consent POST must
+// then come from that origin.
+func TestOpenIDHop1_ConfiguredPublicOriginWins(t *testing.T) {
+	h := newOIDCHarness(t, func(o *abshandler.Options) {
+		o.PublicOrigin = func() string { return "https://Books.Example.net:443/abs/" }
+	})
+	w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion)
+	loc, err := url.Parse(w.Header().Get("Location"))
+	if w.Code != http.StatusFound || err != nil {
+		t.Fatalf("status %d Location %q", w.Code, w.Header().Get("Location"))
+	}
+	if loc.Scheme != "https" || loc.Host != "books.example.net" || loc.Path != abshandler.OIDCBrowserPath {
+		t.Fatalf("Location %q must be hop 2 on the configured origin https://books.example.net", loc)
+	}
+	req, csrf, _ := h.consentPage(t, loc.RequestURI(), oidcPersonAssertion)
+	// The page lives on the configured origin, so that is the Origin a
+	// browser sends; the request's own Host (example.com) is not it.
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, nil))
+	q := appCallback(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion,
+		map[string]string{"Origin": "https://books.example.net"}))
+	if q.Get("code") == "" {
+		t.Fatal("a POST from the configured origin must mint")
+	}
+}
+
+// A configured URL that is not https (or has no host) is ignored, and the
+// request Host is used instead.
+func TestOpenIDHop1_UnusablePublicOriginFallsBackToHost(t *testing.T) {
+	for _, configured := range []string{"http://books.example.net", "books.example.net", "https://", "https://u:p@books.example.net"} {
+		h := newOIDCHarness(t, func(o *abshandler.Options) {
+			o.PublicOrigin = func() string { return configured }
+		})
+		assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion))
+	}
 }
