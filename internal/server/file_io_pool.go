@@ -1,5 +1,5 @@
 // file: internal/server/file_io_pool.go
-// version: 2.12.1
+// version: 2.12.2
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-18
 //
@@ -78,9 +78,6 @@ type fileIOJobEntry struct {
 }
 
 var (
-	GlobalFileIOPool   *FileIOPool
-	globalFileIOPoolMu sync.Mutex
-
 	recoveryDispatch   = map[string]FileOpRecoveryFunc{}
 	recoveryDispatchMu sync.RWMutex
 )
@@ -101,13 +98,6 @@ func lookupFileOpRecovery(opType string) (FileOpRecoveryFunc, bool) {
 	fn, ok := recoveryDispatch[opType]
 	recoveryDispatchMu.RUnlock()
 	return fn, ok
-}
-
-// SetGlobalFileIOPool sets the pool safely.
-func SetGlobalFileIOPool(p *FileIOPool) {
-	globalFileIOPoolMu.Lock()
-	GlobalFileIOPool = p
-	globalFileIOPoolMu.Unlock()
 }
 
 // NewFileIOPool creates a pool with the given number of workers.

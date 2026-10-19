@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.45.0
+// version: 1.45.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -26,10 +26,6 @@
 //   - enrichBook — wraps *Server.enrichBookForResponseSingle, whose concrete
 //     return type (enrichedBookResponse) is server-private (surfaced as any).
 //   - isProtectedPath — wraps *Server.isProtectedPath (server_middleware.go).
-//   - loadMetadataState — wraps *Server.loadMetadataState (server_metadata.go);
-//     its return type map[string]metafetch.MetadataFieldState is EXPORTED and
-//     the bulk-fetch handler reads OverrideLocked / OverrideValue off it, so it
-//     is injected with the concrete type (not any).
 //   - updateFetchedMetadataState — wraps *Server.updateFetchedMetadataState
 //     (server_metadata.go).
 //   - publishEvent — wraps *Server.publishEvent (the shared plugin event bus).

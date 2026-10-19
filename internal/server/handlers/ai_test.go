@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0e40aea8-a75e-4dc9-9521-11521efacaf8
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package handlers_test
 
@@ -642,7 +642,7 @@ func TestAIHandler_CompareScans_OK(t *testing.T) {
 
 func TestAIHandler_ListAIJobs_OK(t *testing.T) {
 	// MockStore satisfies database.AIJobsStore (Store embeds it), so
-	// UnwrapAIJobsStore resolves directly and ListAIJobs is invoked. Defaults:
+	// database.GetAIJobs resolves directly and ListAIJobs is invoked. Defaults:
 	// limit 100, offset 0, empty filters.
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().ListAIJobs("", "", 100, 0).Return([]database.AIJob{{ID: "j1"}}, nil).Once()

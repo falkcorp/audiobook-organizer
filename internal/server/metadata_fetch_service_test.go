@@ -1,5 +1,5 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.5
+// version: 4.4.6
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
 // last-edited: 2026-10-18
 
@@ -42,7 +42,7 @@ func (m *mockMetadataSource) SearchByTitleAndAuthor(_ context.Context, title, au
 }
 
 // setupGlobalStoreForTest sets database.GetGlobalStore() to a MockStore that handles
-// metadata state calls (needed by persistFetchedMetadata -> loadMetadataState).
+// metadata state calls (needed by metafetch.Service.persistFetchedMetadata -> LoadStateSnapshot).
 func setupGlobalStoreForTest(t *testing.T) {
 	t.Helper()
 	old := database.GetGlobalStore()

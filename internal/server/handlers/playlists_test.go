@@ -1,5 +1,5 @@
 // file: internal/server/handlers/playlists_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: f1e2d3c4-b5a6-7890-cdef-1234567890ab
 // last-edited: 2026-10-18
 
@@ -54,7 +54,7 @@ func TestPlaylistHandler_GetPlaylist_CrossUser_Returns404(t *testing.T) {
 	store := handlersmocks.NewMockPlaylistStore(t)
 	store.EXPECT().GetUserPlaylist("pl-1").Return(otherUsersPlaylist(), nil)
 
-	h := handlers.NewPlaylistHandlerWithGetter(store, noSearchIndex)
+	h := handlers.NewPlaylistHandler(store, noSearchIndex)
 	c, w := newPlaylistCtxAs(http.MethodGet, "/playlists/pl-1", "userA")
 	c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
 	h.GetPlaylist(c)
@@ -69,7 +69,7 @@ func TestPlaylistHandler_DeletePlaylist_CrossUser_Returns404(t *testing.T) {
 	store.EXPECT().GetUserPlaylist("pl-1").Return(otherUsersPlaylist(), nil)
 	// DeleteUserPlaylist is intentionally NOT expected — reaching it is a bug.
 
-	h := handlers.NewPlaylistHandlerWithGetter(store, noSearchIndex)
+	h := handlers.NewPlaylistHandler(store, noSearchIndex)
 	c, w := newPlaylistCtxAs(http.MethodDelete, "/playlists/pl-1", "userA")
 	c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
 	h.DeletePlaylist(c)
@@ -83,7 +83,7 @@ func TestPlaylistHandler_UpdatePlaylist_CrossUser_Returns404(t *testing.T) {
 	store := handlersmocks.NewMockPlaylistStore(t)
 	store.EXPECT().GetUserPlaylist("pl-1").Return(otherUsersPlaylist(), nil)
 
-	h := handlers.NewPlaylistHandlerWithGetter(store, noSearchIndex)
+	h := handlers.NewPlaylistHandler(store, noSearchIndex)
 	c, w := newPlaylistCtxAs(http.MethodPut, "/playlists/pl-1", "userA")
 	// A VALID body: the payload is validated before the playlist is read (a
 	// malformed body is a 400 whichever id it names, so that order leaks
@@ -102,7 +102,7 @@ func TestPlaylistHandler_GetPlaylist_Owner_Succeeds(t *testing.T) {
 	store := handlersmocks.NewMockPlaylistStore(t)
 	store.EXPECT().GetUserPlaylist("pl-1").Return(otherUsersPlaylist(), nil)
 
-	h := handlers.NewPlaylistHandlerWithGetter(store, noSearchIndex)
+	h := handlers.NewPlaylistHandler(store, noSearchIndex)
 	c, w := newPlaylistCtxAs(http.MethodGet, "/playlists/pl-1", "userB") // owner
 	c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
 	h.GetPlaylist(c)
@@ -124,7 +124,7 @@ func TestPlaylistHandler_GetPlaylist_LegacyUnowned_Accessible(t *testing.T) {
 	store := handlersmocks.NewMockPlaylistStore(t)
 	store.EXPECT().GetUserPlaylist("pl-legacy").Return(legacy, nil)
 
-	h := handlers.NewPlaylistHandlerWithGetter(store, noSearchIndex)
+	h := handlers.NewPlaylistHandler(store, noSearchIndex)
 	c, w := newPlaylistCtxAs(http.MethodGet, "/playlists/pl-legacy", "userA")
 	c.Params = gin.Params{{Key: "id", Value: "pl-legacy"}}
 	h.GetPlaylist(c)
@@ -141,7 +141,7 @@ func TestPlaylistHandler_ListPlaylists_ScopesToCaller(t *testing.T) {
 		ListUserPlaylistsForUser("userA", "", mock.Anything, mock.Anything).
 		Return([]database.UserPlaylist{}, 0, nil)
 
-	h := handlers.NewPlaylistHandlerWithGetter(store, noSearchIndex)
+	h := handlers.NewPlaylistHandler(store, noSearchIndex)
 	c, w := newPlaylistCtxAs(http.MethodGet, "/playlists", "userA")
 	h.ListPlaylists(c)
 
@@ -154,7 +154,7 @@ func TestPlaylistHandler_ListPlaylists_ScopesToCaller(t *testing.T) {
 // 409 and nothing is written. A pure reorder of the current set applies.
 func TestPlaylistHandler_UpdatePlaylist_BookIDsNeverDropsAnUnmentionedMember(t *testing.T) {
 	put := func(t *testing.T, store *handlersmocks.MockPlaylistStore, body string) *httptest.ResponseRecorder {
-		h := handlers.NewPlaylistHandlerWithGetter(store, noSearchIndex)
+		h := handlers.NewPlaylistHandler(store, noSearchIndex)
 		c, w := newPlaylistCtxAs(http.MethodPut, "/playlists/pl-1", "userA")
 		c.Request = httptest.NewRequest(http.MethodPut, "/playlists/pl-1", strings.NewReader(body))
 		c.Request.Header.Set("Content-Type", "application/json")

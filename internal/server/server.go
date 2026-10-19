@@ -1020,7 +1020,7 @@ func NewServer(store database.Store) *Server {
 		server.metadataFetchService.SetOpEnqueuer(server.opRegistry)
 	}
 
-	// Register file-op recovery handler (uses server closure instead of globalServer)
+	// Register file-op recovery handler (a closure over the server, so recovery reaches its metadata service)
 	RegisterFileOpRecovery("apply_metadata", func(bookID string) {
 		if server.metadataFetchService == nil {
 			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)

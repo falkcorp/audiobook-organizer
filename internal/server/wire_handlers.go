@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.52.0
+// version: 2.52.1
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-18
 
@@ -113,7 +113,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		config.AppConfig.RootDir,
 		config.AppConfig.AutoOrganize,
 	)
-	playlistH := handlers.NewPlaylistHandlerWithGetter(s.storeForWiring(), s.SearchIndex)
+	playlistH := handlers.NewPlaylistHandler(s.storeForWiring(), s.SearchIndex)
 	// One shared handler for the routes and the scheduled refresh; see collectionHandler.
 	collectionH := s.collectionHandler()
 	pluginsH := handlers.NewPluginsHandler(s.pluginRegistry, config.AppConfig.Plugins)
@@ -599,7 +599,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// metadataFetchService / opRegistry / fileIOPool are wire-time
 	// interface snapshots, each typed-nil guarded so the in-method `!= nil` /
 	// `== nil` checks hold. enrichBook wraps the server-private
-	// enrichBookForResponseSingle (return type private → any). loadMetadataState /
+	// enrichBookForResponseSingle (return type private → any).
 	// updateFetchedMetadataState / isProtectedPath / publishEvent wrap helpers
 	// that STAY in package server (server_metadata.go / server_middleware.go).
 	var mdMetaFetch metadatahandler.MetadataFetchService
