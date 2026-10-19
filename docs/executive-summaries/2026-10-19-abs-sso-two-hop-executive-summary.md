@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sso-two-hop-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f9284f41-8fc0-48da-a93d-763d1a975a5e -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -14,12 +14,17 @@ Branch `fix/abs-oidc-two-hop`, PR not yet merged. No separate spec.
   in a browser; the server answered with an address the browser cannot open,
   and the app crashed on it. The server now always answers with a normal web
   page on this server.
-- **Signing in is now two steps, like a real Audiobookshelf server.** The app
+- **Signing in is now two steps.** The app
   first registers a sign-in request with the server. The browser then opens
   that request, where the person is signed in through the site's existing
   Cloudflare login, and sees a page that asks "Sign in to AudioBooth as
   <account>?" with Allow and Deny buttons. Only Allow sends the app back with
   a one-time code it can exchange for a session.
+- **The official Audiobookshelf app can use it too.** That app does not open
+  the server's answer as given; it rebuilds the address from four expected
+  pieces and checks one of them when it comes back. The server's answer now
+  carries all four. The official app still has to be allowed by the server's
+  operator (its return address is not on the default list).
 - **Why there is an Allow button.** Nothing ties the browser to the phone that
   started the sign-in. Without the button, anyone who started a sign-in could
   send the link to someone else, and simply opening it would sign them in on
@@ -34,13 +39,18 @@ Branch `fix/abs-oidc-two-hop`, PR not yet merged. No separate spec.
 - **Not yet proven in production.** On current iPhones the app sends its
   Cloudflare group token to the browser as well. The server is built to step
   around that (it reloads the page once without the token, so Cloudflare asks
-  for the person). How Cloudflare chooses between the token and the person's
-  own login has not been tried against the live site.
+  for the person). Whether that works depends on a Cloudflare account setting
+  nobody could read (no access key for it was found). With the setting on,
+  the Cloudflare rules for the sign-in page must also accept the group token,
+  or Cloudflare blocks the page itself. With it off, a leftover Cloudflare
+  cookie for the group token may come back on the reload and the sign-in ends
+  in "access denied". The server now writes down, for every load of that page,
+  which of these happened, so the first real attempt will tell.
 - **Verification.** Automated tests with made-up data cover the whole sign-in
   from first request to session, wrong and replayed codes, expired requests,
   the Allow/Deny page and its protections, and the per-credential limits.
   Every key check was confirmed by deliberately breaking it and watching a test
-  fail (35 of 35 caught). The Allow button's browser behaviour was checked in
+  fail (52 of 52 caught). The Allow button's browser behaviour was checked in
   real WebKit and Chromium, which caught a setting that would have made every
   Allow fail.
 
@@ -77,3 +87,9 @@ findings were fixed in this PR:
 3. Bound each credential's pending sign-ins, make a full list drop the largest
    holder's oldest entries, and stop trusting a client-address header that
    cannot be verified.
+
+A further independent review found nothing blocking. Its smaller points were
+also fixed here: the server now compares web addresses in one consistent form,
+refuses oversized app names, can use a configured public address, logs what
+Cloudflare sent on each sign-in page load, and works with the official
+Audiobookshelf app.

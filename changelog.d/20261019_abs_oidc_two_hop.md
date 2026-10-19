@@ -17,23 +17,34 @@ three for a person; a new one evicts that credential's own oldest). It validates
 minute expiry, in a store capped at 1024 entries that, when full, evicts from
 the credential holding the most entries rather than refusing, so a flood only
 evicts itself), and always 302s to
-`https://<same host>/auth/openid/browser?req=<id>`. Errors on
+`https://<origin>/auth/openid/browser?req=<id>&state=<id>&client_id=…&scope=openid&redirect_uri=…`.
+The origin is a configured public URL (`oauth_redirect_base_url`, else
+`--external-url`) reduced to its origin, or else the request's Host, normalised
+(https, lowercase, no `:443`). The extra parameters are there for the official
+Audiobookshelf app, which rebuilds that URL from exactly those four and drops
+the rest; hop 2 accepts the id from `state` when `req` is missing. Errors on
 that hop are a 400 with a plain-text body; an unregistered `redirect_uri` gets
-the exact text `Invalid redirect_uri`, as real Audiobookshelf sends it. The new
+the exact text `Invalid redirect_uri`, as real Audiobookshelf sends it, and a
+`client_id` over 128 bytes is refused. The new
 `/auth/openid/browser` hop runs in the system browser, where Cloudflare Access
 authenticates the person, and shows a consent page naming the app, its callback
 scheme and the signed-in account. Loading that page mints nothing. Its Allow
 button POSTs back with a CSRF token bound to the request id and the account;
 only that POST consumes the parked request and mints a code bound to the stored
 challenge and `redirect_uri`, redirecting to the app's callback with the code
-and the original `state`. Deny, a non-allowlisted account, or no verified
+and the original `state` (or, when the app sent none, the now-consumed request
+id, which is the state the official app compares against). Deny, a non-allowlisted account, or no verified
 person at all (logged and audited) redirects with `error=access_denied`
 instead. The consent step exists because nothing ties the browser to the
 device that started the flow, so without it anyone who started a sign-in could
 send the link to someone else and have a code minted for them. When the browser's first load
 carries the app's service token instead of a person (iOS 17.4+ sends the app's
 custom headers on that load), the hop redirects to itself once without the
-token, so that Cloudflare authenticates the person. `/auth/openid/callback` now
+token, so that Cloudflare authenticates the person. Every browser-hop load logs
+the kind of assertion it received and the names of any `CF_` cookies, so the
+journal shows whether the token was shed. The consent POST's `Origin` check
+compares normalised origins. Dead links and refused confirmations are short
+HTML pages. `/auth/openid/callback` now
 refuses a `redirect_uri` that differs from the one the code was minted for.
 `MintAppAuthorizationCode` takes the `redirect_uri` and refuses any target
 that is not registered.
