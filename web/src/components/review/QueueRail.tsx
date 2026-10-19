@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.19.0
+// version: 1.20.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-10-19
 //
@@ -174,6 +174,11 @@ export interface QueueRailProps {
   levelCustomised?: boolean;
   /** How many rows Hide runtime differences is hiding right now. */
   runtimeHiddenCount?: number;
+  /**
+   * The server could not read the books' Rejected marks for this page, so a
+   * row without the Rejected badge is not known to be one you never rejected.
+   */
+  ownerRejectionsUnavailable?: boolean;
   /** The chip whose books the list is showing, or null. */
   chipFilter?: ChipFilter | null;
   /** Toggle a chip's filter. Optional: without it the chips are read-outs. */
@@ -336,6 +341,7 @@ export function QueueRail({
   setReviewLevel,
   levelCustomised = false,
   runtimeHiddenCount = 0,
+  ownerRejectionsUnavailable = false,
   chipFilter = null,
   onToggleChip,
   onClearChip,
@@ -539,6 +545,14 @@ export function QueueRail({
         </Stack>
 
         {summary.ident_counts && <IdentCountsChips counts={summary.ident_counts} />}
+
+        {ownerRejectionsUnavailable && (
+          <Alert severity="warning" data-testid="owner-rejections-unavailable">
+            The books you rejected could not be loaded, so no row on this page shows a Rejected
+            badge. A rejected candidate is still refused when you apply it. Reload the review set
+            to try again.
+          </Alert>
+        )}
 
         {chipFilter && (
           <Alert

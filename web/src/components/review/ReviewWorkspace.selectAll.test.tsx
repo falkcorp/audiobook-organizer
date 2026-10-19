@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
 // last-edited: 2026-10-19
 //
@@ -22,6 +22,7 @@ import {
   useMetadataLane,
 } from './lanes/useMetadataLane';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
+import { selectionCheckAnswer } from '../../test/reviewServer';
 
 vi.mock('../../services/api');
 
@@ -53,7 +54,9 @@ function seed(reviewable: api.CandidateResult[] = [matched('m1')], bulkCap?: num
   // unreviewable bucket, anything else the reviewable rows), without a chip
   // `bucket` does ('any' is both buckets, the Title only), and `q` narrows it
   // by title (`/re/` is a regex, anything else a substring).
-  const pick = (params?: api.ReviewQueryParams) => {
+  const pick = (
+    params?: Pick<api.ReviewSelectionParams, 'q' | 'bucket'> & { chip?: api.ReviewQueryParams['chip'] }
+  ) => {
     let base = reviewable;
     if (params?.chip === 'no_candidates') base = emptyRows;
     else if (!params?.chip && params?.bucket === 'any') base = [...reviewable, ...emptyRows];
@@ -110,6 +113,16 @@ function seed(reviewable: api.CandidateResult[] = [matched('m1')], bulkCap?: num
       }
     }
     return out;
+  });
+  vi.mocked(api.checkReviewSelection).mockImplementation(async (params, ids) => {
+    const bucket = params?.bucket ?? 'reviewable';
+    const universe =
+      bucket === 'any' ? [...reviewable, ...emptyRows] : bucket === 'unreviewable' ? emptyRows : reviewable;
+    return selectionCheckAnswer(
+      pick(params).map((r) => r.book.id),
+      universe.map((r) => r.book.id),
+      ids
+    );
   });
   vi.mocked(api.getCachedReviewResults).mockImplementation(async (ids) => {
     const want = new Set(ids);
@@ -399,10 +412,16 @@ describe('lane: title regex inside a chip view', () => {
     // longer matches and is dropped; m1 and e0 still match; the id the server
     // does not list stays, the Title has nothing to say about it.
     await waitFor(() =>
-      expect(api.getReviewMatchingIds).toHaveBeenCalledWith(
+      expect(api.checkReviewSelection).toHaveBeenCalledWith(
         expect.objectContaining({ bucket: 'any', q: '/^(Alpha|Book e0$)/' }),
+        expect.arrayContaining(['m1', 'm2', 'e0', 'not-loaded']),
         expect.anything()
       )
+    );
+    // The check carries the four SELECTED ids, not a library-sized id list.
+    expect(api.getReviewMatchingIds).not.toHaveBeenCalledWith(
+      expect.objectContaining({ bucket: 'any' }),
+      expect.anything()
     );
     await waitFor(() =>
       expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'not-loaded'])

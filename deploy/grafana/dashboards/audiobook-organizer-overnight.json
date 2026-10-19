@@ -39,7 +39,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Review listing latency p50 / p95 by view",
-      "description": "Handler time of GET /audiobooks/metadata/cache/review. Views: page (view=page, the Review lane's own request), ids_all (view=page&ids=all, an id list), full (the listing with no view) and gone (the retired view=index, answered 410). The red line is the handler's own slow-request WARN threshold (5s).",
+      "description": "Handler time of GET /audiobooks/metadata/cache/review. Views: page (view=page, the Review lane's own request), ids_all (view=page&ids=all, an id list), full (the listing with no view) and gone (the retired view=index, answered 410) and selection (POST .../review/selection, which of the selected books a changed filter still lists). The red line is the handler's own slow-request WARN threshold (5s).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -201,7 +201,7 @@
       "id": 4,
       "type": "stat",
       "title": "Review requests / h",
-      "description": "Every review listing request in the last hour, all views: page, ids_all, full and gone.",
+      "description": "Every review listing request in the last hour, all views: page, ids_all, full, gone and selection.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

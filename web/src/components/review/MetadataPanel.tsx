@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.12.1
+// version: 1.13.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-10-19
 //
@@ -216,6 +216,7 @@ export function MetadataPanel({
           setReviewLevel={metadata.setReviewLevel}
           levelCustomised={metadata.levelCustomised}
           runtimeHiddenCount={metadata.runtimeHiddenCount}
+          ownerRejectionsUnavailable={metadata.ownerRejectionsUnavailable}
           chipFilter={metadata.chipFilter}
           onToggleChip={metadata.toggleChipFilter}
           onClearChip={metadata.clearChipFilter}

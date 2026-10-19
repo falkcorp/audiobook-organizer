@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-19
 //
@@ -18,7 +18,7 @@ import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';
-import { serveReviewList } from '../../test/reviewServer';
+import { selectionCheckAnswer, serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 
@@ -147,6 +147,16 @@ function serveChips(extra: Record<string, unknown> = {}) {
   vi.mocked(api.getReviewMatchingIds).mockImplementation(async (params) => {
     const ids = rowsFor(params?.chip, params?.q, params?.bucket).map((r) => r.book.id);
     return { ids, total: ids.length, generation: 'g1' };
+  });
+  vi.mocked(api.checkReviewSelection).mockImplementation(async (params, ids) => {
+    const bucket = params?.bucket ?? 'reviewable';
+    const universe =
+      bucket === 'any' ? ALL_ROWS : bucket === 'unreviewable' ? unreviewable : reviewable;
+    return selectionCheckAnswer(
+      rowsFor(undefined, params?.q, bucket).map((r) => r.book.id),
+      universe.map((r) => r.book.id),
+      ids
+    );
   });
   vi.mocked(api.getCachedReviewResults).mockImplementation(async (ids) => {
     const want = new Set(ids);
@@ -640,6 +650,27 @@ describe('chips combine with the title regex', () => {
       expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected')
     );
     expect(screen.getByLabelText('Select Book m1')).toBeChecked();
+  });
+
+  it('leaving a chip drops a selected book the restored filters hide', async () => {
+    // n1 is a no-match book: the no_match chip lists it, and the default view
+    // (Hide no-match on) does not. Select it inside the chip, then Show all.
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-no_match'));
+    await waitFor(() => expect(listedIds()).toEqual(['n1']));
+    await user.click(screen.getByTestId('main-select-page'));
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected');
+
+    await user.click(screen.getByRole('button', { name: 'Show all' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('main-selection-count')).toHaveTextContent('0 selected')
+    );
+    expect(api.checkReviewSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ hide_no_match: true }),
+      ['n1'],
+      expect.anything()
+    );
   });
 
   it('shows an invalid regex under the field instead of ignoring it', async () => {

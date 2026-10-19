@@ -1,7 +1,7 @@
 // file: internal/applycap/applycap.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4c1e8f2a-9b7d-4e63-a5c0-2f8d6b1e9a37
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 //
 // Package applycap is the fail-safe ceiling on how many books one bulk APPLY
 // may touch. It exists because several apply surfaces (metadata review, review
@@ -25,7 +25,9 @@ package applycap
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Default is the ceiling used when the configured value is unset or invalid.
@@ -120,3 +122,100 @@ func (c *Counter) Admit() error {
 
 // Cap returns the ceiling this counter enforces.
 func (c *Counter) Cap() int { return c.limit }
+
+// BatchLedger is the cross-request half of the cap, for a client that splits
+// one logical bulk apply into several HTTP requests (the review lane applies
+// 500 ids per chunk). Each chunk passes the per-request cap on its own, so
+// without a ledger a client could apply any number of books by chunking.
+//
+// A chunk names its batch (an opaque id the client mints) and the TOTAL it
+// declares for the whole batch. Admit refuses a chunk when:
+//   - the declared total exceeds the cap in force, or
+//   - the declared total differs from the one the batch's first chunk
+//     declared (a client cannot grow a batch mid-flight), or
+//   - the running count for the batch plus this chunk would exceed the
+//     declared total or the cap.
+//
+// The ledger is in memory, bounded (maxBatches) and TTL'd: a batch not touched
+// for ttl is forgotten, so a lost client never pins memory. A restart forgets
+// every batch, which only ever loosens a batch that was already inside the cap
+// per request; the cap's job (refusing "everything") is held by the declared
+// total check, which needs no history.
+//
+// Requests with NO batch id are not chunks of anything the server knows about;
+// the caller checks them against the cap as one request (the pre-ledger rule).
+// It is safe for concurrent use.
+type BatchLedger struct {
+	mu         sync.Mutex
+	ttl        time.Duration
+	maxBatches int
+	now        func() time.Time
+	batches    map[string]*batchEntry
+}
+
+type batchEntry struct {
+	total    int
+	admitted int
+	touched  time.Time
+}
+
+// NewBatchLedger builds a ledger holding at most maxBatches live batches, each
+// forgotten after ttl without a chunk. Non-positive arguments get safe defaults
+// (1024 batches, 30 minutes).
+func NewBatchLedger(ttl time.Duration, maxBatches int) *BatchLedger {
+	if ttl <= 0 {
+		ttl = 30 * time.Minute
+	}
+	if maxBatches <= 0 {
+		maxBatches = 1024
+	}
+	return &BatchLedger{ttl: ttl, maxBatches: maxBatches, now: time.Now, batches: map[string]*batchEntry{}}
+}
+
+// Admit records a chunk of `n` items for batch `id` that declared `total`, and
+// refuses it (recording nothing) when it would break the rules above. The
+// returned error is *ExceededError for every refusal.
+func (l *BatchLedger) Admit(op, id string, n, total, configured int) *ExceededError {
+	limit := Effective(configured)
+	if total > limit {
+		return &ExceededError{Op: op, Requested: total, Cap: limit}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	l.sweepLocked(now)
+	e := l.batches[id]
+	if e == nil {
+		if len(l.batches) >= l.maxBatches {
+			// Full of live batches: refuse rather than evict one, which
+			// would reset its running count and loosen the cap.
+			return &ExceededError{Op: op, Requested: n, Cap: limit}
+		}
+		e = &batchEntry{total: total}
+		l.batches[id] = e
+	}
+	if e.total != total || e.admitted+n > e.total || e.admitted+n > limit {
+		return &ExceededError{Op: op, Requested: e.admitted + n, Cap: min(e.total, limit)}
+	}
+	e.admitted += n
+	e.touched = now
+	return nil
+}
+
+// Release gives back `n` items of batch `id` after a chunk that was admitted
+// but failed before writing anything (a 4xx/5xx), so the client can retry it.
+func (l *BatchLedger) Release(id string, n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.batches[id]; e != nil {
+		e.admitted = max(0, e.admitted-n)
+	}
+}
+
+func (l *BatchLedger) sweepLocked(now time.Time) {
+	for id, e := range l.batches {
+		if !e.touched.IsZero() && now.Sub(e.touched) > l.ttl {
+			delete(l.batches, id)
+		}
+	}
+}

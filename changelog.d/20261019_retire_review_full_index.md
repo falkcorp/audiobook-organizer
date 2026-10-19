@@ -15,8 +15,9 @@ body (`code` `VIEW_INDEX_GONE`, `use` `view=page`) and is recorded in
 `review_index_request_seconds` under `view="gone"`, so a client that still sends it shows up
 in the metric. The error text tells an old browser tab to reload the page. `view=page`, `ids=`
 and the default listing keep their shapes; `view=page` rows now carry `owner_rejected` (the
-rail's "owner rejected" chip reads it) and the response carries `bulk_apply_max_items`, so the
-lane learns the apply cap without the settings permission.
+row's Rejected badge reads it; the page says `owner_rejections_unavailable` when the rejections
+could not be read) and the response and every `ids=all` list carry `bulk_apply_max_items`, so
+the lane learns the apply cap without the settings permission.
 
 The setting `review_metadata_server_query` is removed. A stored config or settings row that
 still contains it loads without error; startup logs that it is ignored, a config-file save
@@ -30,16 +31,33 @@ out since the setting was turned on.
 
 ### Changed
 
-#### Review latency metric: `view` labels are `page`, `ids_all`, `full` and `gone`
+#### Review latency metric: `view` labels are `page`, `ids_all`, `full`, `gone` and `selection`
 
 `review_index_request_seconds{view}` records every `view=page` request under `view="page"`
 (whatever it answers, a refusal included) and an id list (`ids=all`) under `view="ids_all"`,
-next to `full` (the listing) and `gone` (the retired `view=index`). `view="index"` is no longer
+next to `full` (the listing), `gone` (the retired `view=index`) and `selection` (the selection
+check below). `view="index"` is no longer
 written. The overnight dashboard's "Review page p95" panel (the 3s target) reads `view="page"`,
 and its latency, request-rate and slow-request panels include page traffic.
 
-#### Selecting books across chips and a Title change
+#### Selecting books across chips, and a filter change
 
-A Title change drops the selected books whose title no longer matches in any chip, not only in
-the chip on screen. The lane asks the server (`ids=all&bucket=any`, Title only) which selected
-books still match; ids the server does not list stay selected.
+When a filter changes, or a chip is left, the lane drops the selected books the new view hides.
+It asks the server with `POST /api/v1/audiobooks/metadata/cache/review/selection` (the page's
+filter in the query string, the selected ids in the body, at most the bulk apply cap of them,
+`422` past it), which answers which of those books the filter lists, which it does not, and
+which it does not hold at all; the lane no longer fetches the whole library's id list twice.
+`bucket=any` is accepted only there; `view=page` refuses it. A Title change drops the selected
+books whose title no longer matches in any chip. Leaving a chip checks the selection against
+the filters the chip had paused. If the check cannot be made the lane says so: outside a chip
+the selection is cleared, inside a chip it is kept but applying it is held until a check
+succeeds, the selection is cleared or the filters change.
+
+#### A split bulk apply is held to the cap as a whole
+
+Select all N matching sends its apply in chunks of 500. Each chunk now names its batch
+(`batch_id`) and the batch total (`batch_total`) on `POST .../batch-apply-cached`, and the
+server refuses a chunk when the declared total is over `bulk_apply_max_items`, differs from the
+first chunk's, or the chunks add up to more than it. A request with no batch id is checked
+against the cap as one request, as before; `batch_id` without a positive `batch_total`, or the
+reverse, is a `400`. The ledger is in memory and forgets a batch after 30 minutes.

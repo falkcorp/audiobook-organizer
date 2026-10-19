@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package server
 
@@ -74,6 +74,7 @@ func (s *Server) wireLibraryRoutes(
 	// Metadata cache
 	protected.GET("/audiobooks/metadata/cached", s.perm(auth.PermLibraryView), metaCacheH.ListCachedCandidates)
 	protected.GET("/audiobooks/metadata/cache/review", s.perm(auth.PermLibraryView), metaCacheH.GetCacheReviewResults)
+	protected.POST("/audiobooks/metadata/cache/review/selection", s.perm(auth.PermLibraryView), metaCacheH.ReviewSelectionCheck)
 	protected.POST("/audiobooks/metadata/batch-apply-cached", s.perm(auth.PermLibraryEditMetadata), metaCacheH.BatchApplyFromCache)
 	protected.POST("/audiobooks/:id/clear-no-match", s.perm(auth.PermLibraryEditMetadata), metaCacheH.ClearMetadataNoMatch)
 

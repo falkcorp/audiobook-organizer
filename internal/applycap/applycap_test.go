@@ -1,7 +1,7 @@
 // file: internal/applycap/applycap_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9e2b7c41-3f8a-4d16-b6e5-0a7c4d9f2e18
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package applycap
 
@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestEffective_ZeroAndNegativeMeanDefaultNeverUnlimited(t *testing.T) {
@@ -110,3 +113,50 @@ type atomicCounter struct {
 }
 
 func (a *atomicCounter) inc() { a.mu.Lock(); a.n++; a.mu.Unlock() }
+
+func TestBatchLedger_ChunksAddUpToTheDeclaredTotal(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 10)
+	require.Nil(t, l.Admit("op", "b1", 500, 1200, 5000))
+	require.Nil(t, l.Admit("op", "b1", 500, 1200, 5000))
+	require.Nil(t, l.Admit("op", "b1", 200, 1200, 5000))
+	ex := l.Admit("op", "b1", 1, 1200, 5000)
+	require.NotNil(t, ex, "a chunk past the declared total is refused")
+	require.Equal(t, 1201, ex.Requested)
+	require.Equal(t, 1200, ex.Cap)
+}
+
+func TestBatchLedger_RefusesADeclaredTotalOverTheCap(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 10)
+	ex := l.Admit("op", "b1", 10, 5001, 5000)
+	require.NotNil(t, ex, "a total over the cap is refused on the first chunk, however small")
+	require.Equal(t, 5001, ex.Requested)
+	require.Equal(t, 5000, ex.Cap)
+	// A zero configured cap is the default, never unlimited.
+	require.NotNil(t, l.Admit("op", "b2", 1, Default+1, 0))
+}
+
+func TestBatchLedger_ATotalCannotGrowMidBatch(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 10)
+	require.Nil(t, l.Admit("op", "b1", 500, 600, 5000))
+	require.NotNil(t, l.Admit("op", "b1", 100, 5000, 5000), "a later chunk may not raise the declared total")
+}
+
+func TestBatchLedger_ReleaseLetsAFailedChunkRetry(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 10)
+	require.Nil(t, l.Admit("op", "b1", 500, 500, 5000))
+	require.NotNil(t, l.Admit("op", "b1", 500, 500, 5000))
+	l.Release("b1", 500)
+	require.Nil(t, l.Admit("op", "b1", 500, 500, 5000))
+}
+
+func TestBatchLedger_ForgetsIdleBatchesAndBoundsTheMap(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 2)
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	require.Nil(t, l.Admit("op", "a", 1, 1, 5000))
+	require.Nil(t, l.Admit("op", "b", 1, 1, 5000))
+	require.NotNil(t, l.Admit("op", "c", 1, 1, 5000), "a full ledger refuses a new batch instead of evicting a live one")
+	now = now.Add(2 * time.Minute)
+	require.Nil(t, l.Admit("op", "c", 1, 1, 5000), "idle batches are forgotten after the ttl")
+	require.Nil(t, l.Admit("op", "a", 1, 1, 5000), "and a forgotten batch starts over")
+}

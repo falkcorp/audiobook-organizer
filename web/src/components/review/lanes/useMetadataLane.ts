@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.46.0
+// version: 1.47.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-19
 //
@@ -92,6 +92,15 @@ export function pinOfCandidate(
  * ids (~40 bytes), so 1,000 is ~40 KB.
  */
 export const APPLY_CHUNK_SIZE = 500;
+/** Ids per selection-check request (also bounded by the bulk apply cap). */
+export const SELECTION_CHECK_CHUNK = 1000;
+
+/** An opaque id naming one chunked apply (see api.ApplyBatch). */
+export function newBatchId(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
 export const FETCH_CHUNK_SIZE = 1000;
 /** Concurrent per-book requests (reject, clear no-match): no bulk endpoint exists. */
 export const PER_BOOK_CONCURRENCY = 4;
@@ -843,6 +852,11 @@ export interface MetadataLane {
    * pass every earlier filter and are dropped by that one. 0 when it is off.
    */
   runtimeHiddenCount: number;
+  /**
+   * The server could not read the owner's rejections for the page on screen:
+   * no row carries the Rejected mark, and the rail says so.
+   */
+  ownerRejectionsUnavailable: boolean;
 
   /** The summary chip whose books the list is showing, or null. */
   chipFilter: ChipFilter | null;
@@ -973,6 +987,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [pageRows, setPageRows] = useState<CandidateResult[]>([]);
   const [pageTotal, setPageTotal] = useState(0);
   const [pageFacets, setPageFacets] = useState<api.ReviewFacets | null>(null);
+  const [ownerRejectionsUnavailable, setOwnerRejectionsUnavailable] = useState(false);
   // The server's message for a Title pattern the lane's own compiler accepted.
   const [serverTitleError, setServerTitleError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1002,7 +1017,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // in flight. Cleared for the ids of every new ask, and with every new page load.
   const [detailFailedIds, setDetailFailedIds] = useState<Set<string>>(() => new Set());
   const [searching, setSearching] = useState(false);
-  const [applyCap, setApplyCap] = useState(DEFAULT_BULK_APPLY_MAX_ITEMS);
+  // The cap one apply request may carry, from the server that enforces it
+  // (a page's or an id list's bulk_apply_max_items). A ref, written when a
+  // response lands and read when an action fires, like landedKeyRef: an apply
+  // right after a response that lowered it sees the new value, not the one
+  // its closure was created with. Nothing renders it, so it is not state.
+  const applyCapRef = useRef(DEFAULT_BULK_APPLY_MAX_ITEMS);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [bulkApplyMode, setBulkApplyModeState] = useState<BulkApplyMode>(loadBulkApplyMode);
   const [skipReplaceConfirm, setSkipReplaceConfirm] = useState<boolean>(loadSkipReplaceConfirm);
@@ -1323,13 +1343,34 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     return JSON.stringify(rest);
   }, [queryParams]);
 
-  // Every filter, as one comparable value: what the selection prunes key on.
+  // Every filter, as one comparable value.
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
-  // Page mode: the filtersKey the selection has been checked against. The
-  // prune below is asynchronous (a debounce and an ids request), and until it
-  // settles for the current filters the selection may still hold books they
-  // exclude, so bulk apply and reject are refused (refuseUnsettled).
-  const pruneSettledKeyRef = useRef(filtersKey);
+  // What the selection prune keys on: the filters AND the chip. Leaving a chip
+  // restores the filters it paused, so books the selection gathered inside the
+  // chip can be hidden by them; a prune keyed on the filters alone never saw
+  // that happen.
+  const pruneKey = useMemo(() => `${filtersKey}|${chipFilter ?? ''}`, [filtersKey, chipFilter]);
+  // The Title the server is asked about (empty for a half-typed pattern).
+  const effectiveTitle = queryParams.q ?? '';
+  // Page mode: the pruneKey the selection has been checked against. The prune
+  // below is asynchronous (a debounce and a server request), and until it
+  // settles for the current key the selection may still hold books the
+  // filters exclude, so bulk apply and reject are refused (refuseUnsettled).
+  const pruneSettledKeyRef = useRef(pruneKey);
+  // What the selection was LAST successfully checked against: the filters, the
+  // chip and the Title it stood at. Written only when a prune settles, never
+  // when one starts, so a run that is superseded (a switch toggled inside the
+  // debounce of a Title edit) leaves the Title change for the run that replaces
+  // it to find.
+  const pruneBaselineRef = useRef({
+    filtersKey,
+    chip: chipFilter as ChipFilter | null,
+    title: effectiveTitle,
+  });
+  // The pruneKey whose check FAILED (null after a success), so a refused bulk
+  // action can say the selection could not be checked rather than "is being
+  // checked".
+  const pruneFailedKeyRef = useRef<string | null>(null);
 
   // What the effects below need to read at the moment they fire without
   // re-running when it changes.
@@ -1405,6 +1446,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           const total = data.total_count ?? rows.length;
           setPageTotal(total);
           setPageFacets(data.facets ?? null);
+          setOwnerRejectionsUnavailable(data.owner_rejections_unavailable === true);
           // The cap one apply request may carry, from the server that enforces
           // it. It rides every page response: GET /config needs the settings
           // permission, which a reviewer may not hold, and a lane that fell
@@ -1412,7 +1454,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           // longer apply past the real limit. A response without it (an older
           // server) keeps the cap the lane already holds.
           if (typeof data.bulk_apply_max_items === 'number' && data.bulk_apply_max_items > 0) {
-            setApplyCap(data.bulk_apply_max_items);
+            applyCapRef.current = data.bulk_apply_max_items;
           }
           // A filter (or an apply) can shrink the list beneath the page asked
           // for. Move to the last page that exists and let that request fill
@@ -1830,12 +1872,17 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       writeBack?: boolean,
       // False when applyMany sends one chunk of a larger apply and announces
       // the whole batch itself, once.
-      announce = true
+      announce = true,
+      // Set by applyMany for every chunk of an apply split over several
+      // requests: the batch's id and total, which the server holds to the
+      // bulk apply cap across the chunks.
+      batch?: api.ApplyBatch
     ): Promise<void> => {
       // mode is passed only by the bulk path (applyMany); the single-row
       // flush sends none, so the server never reads a toggle into it.
-      const dispatched =
-        mode === undefined
+      const dispatched = batch
+        ? await api.batchApplyFromCache(requestedIds, writeBack, pins, mode, batch)
+        : mode === undefined
           ? await api.batchApplyFromCache(requestedIds, writeBack, pins)
           : await api.batchApplyFromCache(requestedIds, writeBack, pins, mode);
       if (announce) {
@@ -1969,6 +2016,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // bar shows one progress count across them.
         const { pins, mode } = captured;
         const chunks = chunk(bookIds, APPLY_CHUNK_SIZE);
+        // One id for the whole apply, with its total, on every chunk: the
+        // server holds the chunks to the cap together (applycap.BatchLedger),
+        // so splitting for the body limit can never be a way around it. One
+        // request needs none: it is checked alone.
+        const batch: api.ApplyBatch | undefined =
+          chunks.length > 1 ? { id: newBatchId(), total: bookIds.length } : undefined;
         let sent = 0;
         try {
           for (const ids of chunks) {
@@ -1979,7 +2032,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             ids.forEach((id) => {
               if (pins[id]) chunkPins[id] = pins[id];
             });
-            await runApplyOp(ids, chunkPins, mode, undefined, chunks.length === 1);
+            await runApplyOp(ids, chunkPins, mode, undefined, chunks.length === 1, batch);
             sent += ids.length;
           }
         } catch (err) {
@@ -2139,6 +2192,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       api
         .getReviewMatchingIds(params, undefined, { pins: true })
         .then((data) => {
+          // The id list states the cap too, and it is the newest word on it:
+          // keep the lower of it and the one held, so an apply right after a
+          // lowered limit is refused here, not by the server. (A page response
+          // sets the cap outright, so a raised limit is picked up there.)
+          if (typeof data.bulk_apply_max_items === 'number' && data.bulk_apply_max_items > 0) {
+            applyCapRef.current = Math.min(applyCapRef.current, data.bulk_apply_max_items);
+          }
           if (seq !== selectAllSeqRef.current) {
             endRelist();
             return;
@@ -2274,7 +2334,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // Until both have caught up, bulk apply, Replace and reject are refused with
   // a message; the next click after they settle goes through.
   const refuseUnsettled = useCallback((): boolean => {
-    if (pruneSettledKeyRef.current !== filtersKey) {
+    if (pruneSettledKeyRef.current !== pruneKey) {
+      if (pruneFailedKeyRef.current === pruneKey) {
+        toast(
+          'The selection could not be checked against the current filters, so applying it is ' +
+            'held. Clear the selection or change the filters to continue.',
+          'warning'
+        );
+        return true;
+      }
       toast(
         'The selection is being checked against the new filters; apply again in a moment.',
         'warning'
@@ -2297,7 +2365,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       return true;
     }
     return false;
-  }, [filtersKey, filterQueryKey, toast]);
+  }, [pruneKey, filterQueryKey, toast]);
 
   // The pin of every book that was selected while its row was on screen, as
   // last shown (null: the row had no candidate to pin). A bulk apply of a book
@@ -2408,8 +2476,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           // to each request: applyMany chunks for the body limit, and that
           // must never become a way around the cap. Refused here, before any
           // request or Replace prompt, for every bulk entry point.
-          if (action.ids.length > applyCap) {
-            toast(applyCapMessage(applyCap, action.ids.length), 'error');
+          const cap = applyCapRef.current;
+          if (action.ids.length > cap) {
+            toast(applyCapMessage(cap, action.ids.length), 'error');
             return;
           }
           // Every book is pinned or nothing is sent (pagePinsFor): a book
@@ -2509,7 +2578,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       clearServerDerived,
       bulkApplyMode,
       skipReplaceConfirm,
-      applyCap,
     ]
   );
 
@@ -2573,96 +2641,120 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // SELECTION ACROSS FILTER CHANGES. The selection is a plain id set, so it
   // survives page turns and chip toggles untouched (a chip is a view onto the
   // lane, and "select in the no-candidates chip, then look at the stale chip"
-  // must not lose the first). When a FILTER changes -- a switch, the level,
-  // the title regex, the provider, the threshold -- ids the new filter no
-  // longer matches are dropped, so a bulk action never reaches books the
-  // reviewer can no longer see.
+  // must not lose the first). When what the view lists changes -- a filter
+  // (a switch, the level, the Title, the provider, the threshold) or a chip
+  // being left -- the selected books the new view hides are dropped, so a bulk
+  // action never reaches books the reviewer can no longer see.
   //
-  // The server answers it; the lane holds no list to check against. Outside a
-  // chip, ids the new filters no longer list are dropped: the selection is
-  // checked against the ids the filters match now (one ids-only request, after
-  // the same debounce as the page). If that check cannot be made the selection
-  // is cleared, because keeping books the reviewer can no longer see is what
-  // this prune exists to prevent. While a chip is active every filter but the
-  // Title regex is paused, so only a Title change prunes, and it prunes the
-  // selected books of ANY chip whose title the new pattern no longer matches
-  // (the selection is one id set across chips, and so is the Title).
-  // An empty or invalid regex prunes nothing, so half-typing a pattern never
-  // wipes a selection.
-  const prunedPageKeyRef = useRef(filtersKey);
-  const prunedPageTitleRef = useRef(filters.titleFilter);
+  // The server answers it (api.checkReviewSelection): the request carries the
+  // SELECTED ids and the filter, and the answer says which of them the filter
+  // lists, which it does not, and which are not in the set at all. Nothing the
+  // size of the library crosses the wire, and the lane holds no list to check
+  // against. The selection is sent in pieces of at most SELECTION_CHECK_CHUNK
+  // ids (never more than the bulk apply cap, which the server enforces on the
+  // request too).
+  //
+  // What is asked depends on where the view came from. The run compares the
+  // current view with the one the selection was LAST successfully checked
+  // against (pruneBaselineRef, written only on success):
+  //   - outside a chip, filters changed: the full current filter over the
+  //     reviewable queue; every selected book it does not list is dropped,
+  //     including an id the queue does not hold.
+  //   - outside a chip, a chip was just left: the same question, but only a
+  //     book the queue HOLDS and the filters hide is dropped. A selected book
+  //     in a chip the queue has no row for (no candidates, errors) stays: the
+  //     selection is one id set across chips.
+  //   - inside a chip every filter but the Title is paused, so only a Title
+  //     change asks anything: the Title over BOTH buckets, dropping the
+  //     selected books of any chip the Title does not list. An id the set does
+  //     not hold stays. An empty or invalid Title asks nothing, so half-typing
+  //     a pattern never wipes a selection.
+  //
+  // A check that cannot be made never passes silently. Outside a chip the
+  // selection is cleared (keeping books the reviewer can no longer see is
+  // what this prune prevents); inside a chip it is kept, but the reviewer is
+  // told, and bulk apply and reject stay refused (refuseUnsettled) until a
+  // check succeeds, the selection is cleared, or the filters change.
   useEffect(() => {
-    if (prunedPageKeyRef.current === filtersKey) return;
-    prunedPageKeyRef.current = filtersKey;
-    const titleChanged = prunedPageTitleRef.current !== filters.titleFilter;
-    prunedPageTitleRef.current = filters.titleFilter;
-    // Every way this run ends without being superseded marks the selection as
-    // checked for THESE filters, so refuseUnsettled lets bulk actions through
-    // again; a superseded run (aborted) leaves that to the run that replaced it.
-    const key = filtersKey;
-    const settle = () => {
-      pruneSettledKeyRef.current = key;
+    // Nothing differs from what the selection was last checked against, or
+    // nothing is selected: settled without asking.
+    const settleKey = pruneKey;
+    const baseline = pruneBaselineRef.current;
+    const settle = (checked: { filtersKey: string; chip: ChipFilter | null; title: string }) => {
+      pruneBaselineRef.current = checked;
+      pruneSettledKeyRef.current = settleKey;
+      pruneFailedKeyRef.current = null;
     };
-    // Nothing selected: nothing the new filters could exclude. Books selected
-    // from here on are picked from the new view.
+    const current = { filtersKey, chip: chipFilter, title: effectiveTitle };
+    if (pruneSettledKeyRef.current === settleKey) return;
     if (selectedIdsRef.current.size === 0) {
-      settle();
+      // Books selected from here on are picked from the new view.
+      settle(current);
+      return;
+    }
+    if (baseline.filtersKey === filtersKey && baseline.chip === chipFilter) {
+      settle(current);
       return;
     }
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      if (selectedIdsRef.current.size === 0) {
-        settle();
+      const selected = [...selectedIdsRef.current];
+      if (selected.length === 0) {
+        settle(current);
         return;
       }
       const { params, chip } = latestQueryRef.current;
+      const leftChip = baseline.chip !== null && chip === null;
+      const titleChanged = baseline.title !== (params.q ?? '');
+      // What to ask, and which answers drop a book.
+      let ask: api.ReviewSelectionParams;
+      let dropUnknown: boolean;
+      if (chip === null) {
+        ask = params;
+        dropUnknown = !leftChip;
+      } else {
+        if (!titleChanged || !params.q) {
+          settle(current);
+          return;
+        }
+        ask = { bucket: 'any', q: params.q };
+        dropUnknown = false;
+      }
       const run = async () => {
         try {
-          if (chip === null) {
-            const { ids } = await api.getReviewMatchingIds(params, controller.signal);
+          const drop = new Set<string>();
+          const checked = new Set<string>();
+          const size = Math.max(1, Math.min(applyCapRef.current, SELECTION_CHECK_CHUNK));
+          for (const ids of chunk(selected, size)) {
+            const answer = await api.checkReviewSelection(ask, ids, controller.signal);
             if (controller.signal.aborted) return;
-            const keep = new Set(ids);
-            setSelectedIds((prev) => {
-              const next = new Set([...prev].filter((id) => keep.has(id)));
-              return next.size === prev.size ? prev : next;
-            });
-            settle();
-            return;
+            ids.forEach((id) => checked.add(id));
+            answer.not_matching.forEach((id) => drop.add(id));
+            if (dropUnknown) answer.unknown.forEach((id) => drop.add(id));
           }
-          if (!titleChanged || !params.q) {
-            settle();
-            return;
-          }
-          // A chip view pauses every filter but the Title, and the Title
-          // applies to every book, in whatever chip it sits. So the question
-          // is asked of every book of both buckets (bucket 'any', the Title
-          // only): which of them match the old view of the set (no Title), and
-          // which still match the new Title. A selected book the Title no
-          // longer matches is dropped, in this chip or another; a selected id
-          // the server does not list at all is not one the Title can speak
-          // for, and stays.
-          const [base, narrowed] = await Promise.all([
-            api.getReviewMatchingIds({ bucket: 'any' }, controller.signal),
-            api.getReviewMatchingIds({ bucket: 'any', q: params.q }, controller.signal),
-          ]);
-          if (controller.signal.aborted) return;
-          const known = new Set(base.ids);
-          const keep = new Set(narrowed.ids);
+          // Only the books that were asked about: one ticked while the check
+          // was out was picked from the new view and is not touched.
           setSelectedIds((prev) => {
-            const next = new Set([...prev].filter((id) => !known.has(id) || keep.has(id)));
+            const next = new Set([...prev].filter((id) => !(checked.has(id) && drop.has(id))));
             return next.size === prev.size ? prev : next;
           });
-          settle();
+          settle(current);
         } catch (err) {
           if (controller.signal.aborted || isAbortError(err)) return;
-          settle();
-          // A chip view keeps its selection when the check fails, as it does for
-          // a pattern that does not compile; an unchecked filtered selection is
-          // not kept.
-          if (chip !== null) return;
-          setSelectedIds(new Set());
+          if (chip === null) {
+            setSelectedIds(new Set());
+            toastRef.current(
+              'Could not check the selection against the new filters, so it was cleared.',
+              'warning'
+            );
+            // The cleared selection has nothing left to check.
+            settle(current);
+            return;
+          }
+          pruneFailedKeyRef.current = settleKey;
           toastRef.current(
-            'Could not re-check the selection against the new filters, so it was cleared.',
+            'Could not check the selection against the new title filter. Applying the selection ' +
+              'is held until it can be checked: clear the selection or change the filters.',
             'warning'
           );
         }
@@ -2673,7 +2765,18 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [filtersKey, filters.titleFilter]);
+    // Only a change of the view runs the check; the rest is read from refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pruneKey]);
+
+  // An emptied selection has nothing to check: a failed or pending check is
+  // moot, and refuseUnsettled must not keep refusing on it.
+  useEffect(() => {
+    if (selectedIds.size > 0) return;
+    pruneBaselineRef.current = { filtersKey, chip: chipFilter, title: effectiveTitle };
+    pruneSettledKeyRef.current = pruneKey;
+    pruneFailedKeyRef.current = null;
+  }, [selectedIds, filtersKey, chipFilter, effectiveTitle, pruneKey]);
 
   const skipSelected = useCallback(() => {
     const ids = [...selectedIds];
@@ -3013,6 +3116,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setReviewLevel,
     levelCustomised,
     runtimeHiddenCount: pageFacets?.runtime_hidden ?? 0,
+    ownerRejectionsUnavailable,
     chipFilter,
     toggleChipFilter,
     clearChipFilter,

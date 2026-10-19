@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-19
 
@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
@@ -190,6 +191,10 @@ type MetadataCacheHandler struct {
 	// requests (metadata_cache_snapshot.go). nil on a handler built as a
 	// struct literal; GetCacheReviewResults then loads the rows per request.
 	reviewSnap *reviewSnapshotCache
+	// batches holds the running totals of chunked bulk applies
+	// (applycap.BatchLedger); use batchLedger(), which creates it lazily.
+	batches     *applycap.BatchLedger
+	batchesOnce sync.Once
 	// reviewBuilder builds the review snapshot, incrementally over the
 	// previous one when the store's change logs allow.
 	reviewBuilder *reviewSnapshotBuilder
@@ -208,6 +213,17 @@ type MetadataCacheHandler struct {
 // enqueue a definition with params, get an op id back immediately.
 type OpEnqueuer interface {
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
+}
+
+// batchLedger returns the cross-request cap ledger, creating it on first use
+// so a handler built as a struct literal (tests) still has one.
+func (h *MetadataCacheHandler) batchLedger() *applycap.BatchLedger {
+	h.batchesOnce.Do(func() {
+		if h.batches == nil {
+			h.batches = applycap.NewBatchLedger(30*time.Minute, 1024)
+		}
+	})
+	return h.batches
 }
 
 // NewMetadataCacheHandler constructs a MetadataCacheHandler.
@@ -1242,9 +1258,29 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// without an owner-review pin (still fill-only and fully gated). Any
 		// other value is a 400. The dry run ignores it, like pins.
 		Mode string `json:"mode"`
+		// BatchID and BatchTotal are set by a client that splits ONE bulk
+		// apply into several requests (the review lane sends 500 ids per
+		// chunk): the same opaque id on every chunk and the total number of
+		// books the whole batch will apply to. The server holds the batch to
+		// the cap across chunks (applycap.BatchLedger): a declared total over
+		// the cap, a total that changes mid-batch, or chunks adding up to more
+		// than the declared total are refused with the 422 cap body.
+		//
+		// A request WITHOUT a batch id is checked against the cap as one
+		// request, exactly as before the ledger: an API client that sends one
+		// body of N ids is bounded by N, and one that chunks by hand without
+		// naming a batch is not tracked (the server cannot tell its requests
+		// belong together). batch_total without batch_id, or batch_id without
+		// a positive batch_total, is a 400.
+		BatchID    string `json:"batch_id"`
+		BatchTotal int    `json:"batch_total"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
+		return
+	}
+	if (body.BatchID == "") != (body.BatchTotal == 0) || body.BatchTotal < 0 || len(body.BatchID) > 128 {
+		httputil.RespondWithBadRequest(c, "batch_id and a positive batch_total go together (batch_id at most 128 characters)")
 		return
 	}
 	mode, modeOK := metafetch.NormalizeBulkApplyMode(body.Mode)
@@ -1298,7 +1334,22 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	// Fail-safe cap (internal/applycap): refuse before enqueueing so the caller
 	// gets a 422 now instead of an op that fails a moment later. The op's Run
 	// re-checks, because it can be reached without this handler.
-	if ex := applycap.Refuse("batch-apply-cached", len(body.BookIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+	// A chunk of a named batch is admitted through the ledger, which also
+	// holds the batch's running total; anything else is one request against
+	// the cap.
+	configuredCap := config.AppConfig.BulkApplyMaxItems
+	admittedBatch := false
+	if body.BatchID != "" {
+		if ex := h.batchLedger().Admit("batch-apply-cached", body.BatchID, len(body.BookIDs), body.BatchTotal, configuredCap); ex != nil {
+			httputil.RespondWithApplyCapExceeded(c, ex)
+			return
+		}
+		admittedBatch = true
+	}
+	if ex := applycap.Refuse("batch-apply-cached", len(body.BookIDs), configuredCap); ex != nil {
+		if admittedBatch {
+			h.batchLedger().Release(body.BatchID, len(body.BookIDs))
+		}
 		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
@@ -1318,6 +1369,10 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	}
 	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", params)
 	if err != nil {
+		// Nothing was queued: give the chunk back so the client can retry it.
+		if admittedBatch {
+			h.batchLedger().Release(body.BatchID, len(body.BookIDs))
+		}
 		httputil.InternalError(c, "failed to enqueue metadata apply", err)
 		return
 	}

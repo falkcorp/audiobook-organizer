@@ -1,5 +1,5 @@
 // file: internal/metrics/pipeline_metrics.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1bafd1d0-de42-4e6d-a079-b28e4ea4858b
 // last-edited: 2026-10-19
 
@@ -62,11 +62,16 @@ const (
 // request (no view). "gone" is a request for the retired index view, answered
 // 410, so a client that still sends it shows up in the metric. "index" was the
 // label of that view while it was served and is no longer written.
+// "selection" is the selection check (POST .../review/selection): which of the
+// books the reviewer selected still match a changed filter, answered from the
+// selection's size, not the library's.
 const (
 	ReviewViewPage   = "page"
 	ReviewViewIDsAll = "ids_all"
 	ReviewViewFull   = "full"
 	ReviewViewGone   = "gone"
+
+	ReviewViewSelection = "selection"
 )
 
 // Bounded label values for fixer_duration_seconds{phase}: the two framework
@@ -107,7 +112,7 @@ var (
 	reviewIndexRequestSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "review_index_request_seconds",
-		Help:      "Handler latency of the metadata-cache review listing (GET /audiobooks/metadata/cache/review) by view (page, ids_all, full, gone)",
+		Help:      "Handler latency of the metadata-cache review listing (GET /audiobooks/metadata/cache/review) by view (page, ids_all, full, gone, selection)",
 		Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 5, 10, 20, 30, 60, 120},
 	}, []string{"view"})
 
