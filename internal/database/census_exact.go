@@ -1,7 +1,7 @@
 // file: internal/database/census_exact.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d2b8e71-0c4a-4f3e-9b6d-2a7c1e8f4b90
-// last-edited: 2026-10-04
+// last-edited: 2026-10-19
 
 package database
 
@@ -571,7 +571,14 @@ func (r *exactCensusRun) countFamily(fam string, pieces []keyRange) error {
 			if !force && time.Since(r.lastSave) < exactCensusIterRefresh {
 				return nil
 			}
-			st.Partial = &exactPartial{Family: fam, Piece: pi, ResumeAt: at, Count: c, Fold: fold}
+			// A nil position is the open end of the key space. ResumeAt nil
+			// would mean "restart this piece" and count it twice, so a save
+			// at the open end points past the piece instead.
+			piece := pi
+			if at == nil {
+				piece = pi + 1
+			}
+			st.Partial = &exactPartial{Family: fam, Piece: piece, ResumeAt: at, Count: c, Fold: fold}
 			st.UpdatedAt = time.Now()
 			if err := r.p.saveExactCensusState(st, r.all, true); err != nil {
 				return err
@@ -630,7 +637,9 @@ func (r *exactCensusRun) countFamily(fam string, pieces []keyRange) error {
 // it. Resuming at the next live key, inclusive, means every version of the
 // last key counted was stepped over by the closed iterator, so points and
 // deletions are exact across refreshes. A long tombstone run between two
-// checks is bounded by the sub-range the caller passed.
+// checks is bounded by the sub-range the caller passed. The last pass over a
+// sub-range saves hi before its closing budget wait, so that wait being
+// cancelled or refused loses none of the sub-range's counts.
 func (r *exactCensusRun) countRange(fam string, lo, hi []byte, c *exactFamilyCount, fold *exactHistoryFold,
 	save func(at []byte, force bool) error,
 ) error {
@@ -723,6 +732,17 @@ func (r *exactCensusRun) countRange(fam string, lo, hi []byte, c *exactFamilyCou
 			// Save the position before the wait, so a watchdog kill or
 			// restart during a long wait loses nothing.
 			if err := save(resumeAt, true); err != nil {
+				return err
+			}
+		} else if r.lim != nil && waitAfterClose > 0 {
+			// The sub-range is fully counted and this is its last wait. Save
+			// its end (hi) before waiting, exactly as a refresh does, so a
+			// cancel or a refused deadline in the wait loses none of the
+			// counts since the last save. c and the resume position agree
+			// here: everything below hi is in c, nothing at or above it is.
+			// A later save at the same or the next position only overwrites
+			// this one.
+			if err := save(hi, true); err != nil {
 				return err
 			}
 		}
