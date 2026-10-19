@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-19
 
@@ -138,11 +138,23 @@ func assertBrowserHopLocation(t *testing.T, w *httptest.ResponseRecorder) *url.U
 	if u.Path != abshandler.OIDCBrowserPath {
 		t.Fatalf("Location path = %q, want %q", u.Path, abshandler.OIDCBrowserPath)
 	}
-	if strings.Contains(loc, "audiobooth") || u.Query().Get("code") != "" {
-		t.Fatalf("Location %q must carry neither the client scheme nor a code", loc)
+	// The client's scheme appears only as the redirect_uri echo the official
+	// app requires, never as the Location's own scheme (checked above); and no
+	// code is ever minted at hop 1.
+	q := u.Query()
+	if q.Get("code") != "" || q.Get("error") != "" {
+		t.Fatalf("Location %q must carry no code and no error", loc)
 	}
-	if req := u.Query().Get("req"); len(req) != 43 {
+	if req := q.Get("req"); len(req) != 43 {
 		t.Fatalf("req id %q must be a 43-char random id", req)
+	}
+	// The official app requires all four and rebuilds the URL from them,
+	// dropping req: state must therefore be the request id.
+	if q.Get("state") != q.Get("req") {
+		t.Fatalf("Location %q: state must be the request id", loc)
+	}
+	if q.Get("redirect_uri") != "audiobooth://oauth" || q.Get("client_id") == "" || q.Get("scope") != "openid" {
+		t.Fatalf("Location %q must echo the allow-listed redirect_uri, a client_id and scope=openid", loc)
 	}
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", cc)
@@ -161,11 +173,16 @@ func (h *harness) hop1(t *testing.T, challenge, state string) string {
 // appCallback parses a hop-2 Location that must target the client's callback.
 func appCallback(t *testing.T, w *httptest.ResponseRecorder) url.Values {
 	t.Helper()
+	return appCallbackFor(t, w, "audiobooth://oauth")
+}
+
+func appCallbackFor(t *testing.T, w *httptest.ResponseRecorder, redirectURI string) url.Values {
+	t.Helper()
 	if w.Code != http.StatusFound && w.Code != http.StatusSeeOther {
 		t.Fatalf("hop 2 status = %d, want 302/303; body %q", w.Code, w.Body.String())
 	}
 	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "audiobooth://oauth?") {
+	if !strings.HasPrefix(loc, redirectURI+"?") {
 		t.Fatalf("hop 2 Location %q must target the stored redirect_uri", loc)
 	}
 	u, err := url.Parse(loc)
@@ -191,6 +208,9 @@ func assertDeadLink(t *testing.T, w *httptest.ResponseRecorder) {
 	}
 	if loc := w.Header().Get("Location"); loc != "" {
 		t.Fatalf("a dead link must not redirect; Location %q", loc)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") || !strings.Contains(w.Body.String(), "sign in again") {
+		t.Fatalf("a dead link should render the message page; Content-Type %q body %q", ct, w.Body.String())
 	}
 }
 
@@ -408,14 +428,44 @@ func TestOpenIDFlow_EndToEndWithVerifierSucceeds(t *testing.T) {
 	}
 }
 
-// AudioBooth sends no state on hop 1; the callback must then carry none either.
-func TestOpenIDFlow_NoStateMeansNoStateInCallback(t *testing.T) {
+// Neither app sends state on hop 1. The callback then carries the request id
+// as state: it is the state the official app saw in hop 1's Location and
+// compares against, and AudioBooth passes state through without comparing
+// it. The request is consumed by then, so the id is dead.
+func TestOpenIDFlow_NoStateMeansRequestIDAsState(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
 	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
-	w := h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, nil)
-	if loc := w.Header().Get("Location"); !strings.Contains(loc, "code=") || strings.Contains(loc, "state=") {
-		t.Fatalf("Location %q must carry a code and omit an empty state", loc)
+	q := appCallback(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, nil))
+	if q.Get("code") == "" || q.Get("state") != req {
+		t.Fatalf("params %v: want a code and state = the request id %q", q, req)
+	}
+	assertDeadLink(t, h.get(t, browser, oidcPersonAssertion))
+
+	// Deny is after the take too, so it echoes the id the same way.
+	browser = h.hop1(t, s256(oidcVerifier), "")
+	req, csrf, _ = h.consentPage(t, browser, oidcPersonAssertion)
+	q = appCallback(t, h.postConsent(t, req, csrf, "deny", oidcPersonAssertion, nil))
+	if q.Get("error") != "access_denied" || q.Get("state") != req {
+		t.Fatalf("deny params %v: want access_denied and state = the request id", q)
+	}
+}
+
+// The hop-2 GET's error redirects leave the request parked, so they must NOT
+// hand its still-live id to whatever app owns the callback scheme: with no
+// client state they carry no state at all.
+func TestOpenIDHop2_GetErrorNeverEchoesTheLiveRequestID(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	for _, assertion := range []string{"", oidcStrangerAssert} {
+		w := h.get(t, browser, assertion)
+		q := appCallback(t, w)
+		if q.Get("error") != "access_denied" {
+			t.Fatalf("assertion %q: params %v: want access_denied", assertion, q)
+		}
+		if _, has := q["state"]; has {
+			t.Fatalf("assertion %q: Location %q echoes a state for a live request", assertion, w.Header().Get("Location"))
+		}
 	}
 }
 
@@ -574,7 +624,7 @@ func TestOpenIDHop2_UnknownOrMalformedReqRefused(t *testing.T) {
 func TestOpenIDHop2_IgnoresQueryRedirectURIAndState(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "real-state")
-	evil := browser + "&redirect_uri=" + url.QueryEscape("https://evil.example/cb") + "&state=evil"
+	evil := browser + "&redirect_uri=" + url.QueryEscape("https://evil.example/cb")
 	q := h.allow(t, evil, oidcPersonAssertion)
 	if q.Get("state") != "real-state" || q.Get("code") == "" {
 		t.Fatalf("params %v: want the stored state and a code", q)
@@ -582,7 +632,7 @@ func TestOpenIDHop2_IgnoresQueryRedirectURIAndState(t *testing.T) {
 
 	// The error branches redirect too, and must use the stored target as well.
 	browser = h.hop1(t, s256(oidcVerifier), "real-state")
-	evil = browser + "&redirect_uri=" + url.QueryEscape("https://evil.example/cb") + "&state=evil"
+	evil = browser + "&redirect_uri=" + url.QueryEscape("https://evil.example/cb")
 	for _, assertion := range []string{"", oidcStrangerAssert} {
 		q = appCallback(t, h.get(t, evil, assertion))
 		if q.Get("error") != "access_denied" || q.Get("state") != "real-state" {
@@ -864,4 +914,106 @@ func TestOpenIDHop1_UnusablePublicOriginFallsBackToHost(t *testing.T) {
 		})
 		assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion))
 	}
+}
+
+// ── the official Audiobookshelf app ────────────────────────────────────────
+
+// officialAppAuthorizePath is audiobookshelf-app's exact hop-1 request
+// (ServerConnectForm.vue oauthRequest): no scope, no state.
+func officialAppAuthorizePath(challenge string) string {
+	return "/auth/openid?code_challenge=" + challenge + "&code_challenge_method=S256" +
+		"&redirect_uri=" + url.QueryEscape("audiobookshelf://oauth") +
+		"&client_id=" + url.QueryEscape("Audiobookshelf-App") + "&response_type=code"
+}
+
+// officialAppRebuild is clickLoginWithOpenId's URL rebuild: it refuses a
+// Location missing client_id, scope, state or redirect_uri, keeps host +
+// pathname plus those four and its own challenge, and drops everything else —
+// including req.
+func officialAppRebuild(t *testing.T, location, challenge string) (rebuilt, state string) {
+	t.Helper()
+	u, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("Location %q: %v", location, err)
+	}
+	q := u.Query()
+	clientID, scope, state, redirectURI := q.Get("client_id"), q.Get("scope"), q.Get("state"), q.Get("redirect_uri")
+	if clientID == "" || scope == "" || state == "" || redirectURI == "" {
+		t.Fatalf("the official app rejects Location %q: client_id, scope, state or redirect_uri missing", location)
+	}
+	if u.Scheme != "https" {
+		t.Fatalf("the official app requires an https Location, got %q", location)
+	}
+	rebuilt = u.Path + "?response_type=code" +
+		"&client_id=" + url.QueryEscape(clientID) + "&scope=" + url.QueryEscape(scope) +
+		"&state=" + url.QueryEscape(state) + "&redirect_uri=" + url.QueryEscape(redirectURI) +
+		"&code_challenge=" + url.QueryEscape(challenge) + "&code_challenge_method=S256"
+	return rebuilt, state
+}
+
+// The official app completes the whole flow through its URL rebuild, and the
+// callback's state equals the state it saw in hop 1's Location.
+func TestOpenIDOfficialApp_RebuiltURLCompletesFlow(t *testing.T) {
+	h := newOIDCHarness(t)
+	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "audiobookshelf://oauth")
+	challenge := s256(oidcVerifier)
+
+	w := h.get(t, officialAppAuthorizePath(challenge), oidcServiceAssertion)
+	if w.Code != http.StatusFound {
+		t.Fatalf("hop 1 = %d, want 302: %q", w.Code, w.Body.String())
+	}
+	rebuilt, sawState := officialAppRebuild(t, w.Header().Get("Location"), challenge)
+	if strings.Contains(rebuilt, "req=") {
+		t.Fatalf("the simulated rebuild must drop req: %q", rebuilt)
+	}
+
+	req, csrf, body := h.consentPage(t, rebuilt, oidcPersonAssertion)
+	if !strings.Contains(body, "Audiobookshelf") {
+		t.Fatal("the consent page should name the official app from its callback scheme")
+	}
+	q := appCallbackFor(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, nil), "audiobookshelf://oauth")
+	if q.Get("state") != sawState {
+		t.Fatalf("callback state %q != the state %q the app saw in hop 1's Location (it would refuse the login)", q.Get("state"), sawState)
+	}
+	// oauthExchangeCodeForToken: state, code and code_verifier, no redirect_uri.
+	cb := "/auth/openid/callback?state=" + url.QueryEscape(q.Get("state")) +
+		"&code=" + url.QueryEscape(q.Get("code")) + "&code_verifier=" + url.QueryEscape(oidcVerifier)
+	if w := h.get(t, cb, oidcServiceAssertion); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "owner@example.com") {
+		t.Fatalf("callback = %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A client state, when sent, wins over the request id in the callback.
+func TestOpenIDFlow_ClientStateWinsOverRequestID(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "mine")
+	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
+	q := appCallback(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, nil))
+	if q.Get("state") != "mine" || q.Get("state") == req {
+		t.Fatalf("params %v: want the client's own state", q)
+	}
+}
+
+// req and state must name the same request; a second copy of either, or two
+// that disagree, is ambiguous and answered as a dead link.
+func TestOpenIDHop2_AmbiguousRequestIDIsDead(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	other := h.hop1(t, s256(oidcVerifier), "")
+	u, _ := url.Parse(other)
+	otherID := u.Query().Get("req")
+
+	b, _ := url.Parse(browser)
+	id := b.Query().Get("req")
+	for _, path := range []string{
+		abshandler.OIDCBrowserPath + "?req=" + id + "&state=" + otherID,
+		abshandler.OIDCBrowserPath + "?req=" + id + "&req=" + otherID,
+		abshandler.OIDCBrowserPath + "?state=" + id + "&state=" + otherID,
+		browser + "&state=evil",
+	} {
+		assertDeadLink(t, h.get(t, path, oidcPersonAssertion))
+	}
+	// Either alone works.
+	h.consentPage(t, abshandler.OIDCBrowserPath+"?req="+id, oidcPersonAssertion)
+	h.consentPage(t, abshandler.OIDCBrowserPath+"?state="+id, oidcPersonAssertion)
 }
