@@ -1,12 +1,13 @@
 // file: internal/server/absauth/absauth_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6e1b47a3-0d85-4c92-a731-58f0c3b6d9e2
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 package absauth
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -411,6 +412,33 @@ func TestPassword_RejectsMalformedArgonHash(t *testing.T) {
 		if ok, _ := VerifyPassword(AlgoArgon2id, h, "pw"); ok {
 			t.Fatalf("malformed argon2id hash %q must not verify", h)
 		}
+	}
+}
+
+// A stored hash asking for more than argonMaxMemory is refused before any
+// derivation, so one bad row cannot allocate gigabytes on every login.
+func TestPassword_RefusesArgonMemoryAboveCap(t *testing.T) {
+	_, h, err := HashPassword("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("m=%d,", argonMemory)
+	if !strings.Contains(h, want) {
+		t.Fatalf("hash %q does not carry %q", h, want)
+	}
+	derived := 0
+	orig := argonCompute
+	argonCompute = func(p, s []byte, t, m uint32, th uint8, k uint32) []byte {
+		derived++
+		return orig(p, s, t, m, th, k)
+	}
+	t.Cleanup(func() { argonCompute = orig })
+
+	if ok, _ := VerifyPassword(AlgoArgon2id, strings.Replace(h, want, fmt.Sprintf("m=%d,", argonMaxMemory+1), 1), "pw"); ok {
+		t.Fatal("a hash above the memory cap must not verify")
+	}
+	if derived != 0 {
+		t.Fatalf("a hash above the memory cap must be refused before deriving; derivations = %d", derived)
 	}
 }
 

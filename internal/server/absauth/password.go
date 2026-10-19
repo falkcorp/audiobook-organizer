@@ -1,5 +1,5 @@
 // file: internal/server/absauth/password.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
 // last-edited: 2026-10-19
 
@@ -44,11 +44,19 @@ const (
 )
 
 // argonSem caps how many argon2id computations run at once, process-wide. Each one
-// allocates argonMemory (64 MiB), so unbounded concurrent logins would allocate that
-// many times over: 100 parallel sign-ins by one rehashed user is about 6.4 GB. It is
-// sized to the CPU count because argon2id is CPU-bound as well. The acquire is a
-// plain blocking one: neither HashPassword nor VerifyPassword takes a context.
-var argonSem = make(chan struct{}, max(1, runtime.NumCPU()))
+// allocates the m= cost of the hash it derives (argonMemory, 64 MiB, for every hash
+// this server writes; verifyArgon2id refuses anything above argonMaxMemory), so
+// unbounded concurrent logins would allocate that many times over: 100 parallel
+// sign-ins by one rehashed user is about 6.4 GB. It is sized to GOMAXPROCS, not
+// NumCPU, because GOMAXPROCS follows a container's CPU quota while NumCPU counts the
+// host's cores. The acquire is a plain blocking one: neither HashPassword nor
+// VerifyPassword takes a context.
+var argonSem = make(chan struct{}, max(1, runtime.GOMAXPROCS(0)))
+
+// argonMaxMemory is the largest m= (KiB) a stored hash may ask for. It leaves room to
+// raise argonMemory later while keeping one malformed or hostile row from
+// allocating gigabytes on every verify.
+const argonMaxMemory = 4 * argonMemory
 
 // argonCompute is the raw argon2id derivation. It is a variable only so the
 // concurrency test can observe how many computations overlap inside argonIDKey.
@@ -141,7 +149,7 @@ func verifyArgon2id(encoded, plain string) bool {
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
 		return false
 	}
-	if memory == 0 || time == 0 || threads == 0 {
+	if memory == 0 || time == 0 || threads == 0 || memory > argonMaxMemory {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
