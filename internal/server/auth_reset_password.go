@@ -1,5 +1,5 @@
 // file: internal/server/auth_reset_password.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6b2d94f1-7a08-4c53-9e16-3d8f05a2c761
 // last-edited: 2026-10-19
 
@@ -61,14 +61,18 @@ func (s *Server) handleResetPassword(c *gin.Context) {
 		return
 	}
 
-	// An admin reset means the account's credentials are no longer trusted, so
-	// end every ABS session now rather than when the user later sets a password.
-	// ABS sessions slide with use and have no absolute cap by default; one that
-	// survived would stay valid indefinitely. Bumping CredentialEpoch is what ends
-	// them (every ABS refresh and request checks it); fail closed: no link unless
-	// that write landed. The revoke-all after it is cleanup.
-	// BumpUserCredentialEpoch changes only the epoch, on the fresh row, so it
-	// cannot revert a status or password change that landed after our read.
+	// What this does: it signs the user out of every ABS (mobile) client and
+	// hands the admin a one-time login link so the user can get in and choose a
+	// new password. What it does NOT do: the old password keeps working until the
+	// user sets a new one, so this is not compromised-account handling (filed in
+	// todo.d as an owner decision).
+	//
+	// Signing the phones out is the CredentialEpoch bump (every ABS refresh and
+	// request checks it). ABS sessions slide with use and have no absolute cap by
+	// default, so this is what ends them. Fail closed: no link unless that write
+	// landed. BumpUserCredentialEpoch changes only the epoch, on the fresh row, so
+	// it cannot revert a status or password change that landed after our read.
+	// The revoke-all after it is cleanup.
 	creds := handlers.ResolveUserCredentialWriter(s.Ops())
 	if creds == nil {
 		httputil.RespondWithInternalError(c, "password resets are not supported by this store; no reset link was issued")

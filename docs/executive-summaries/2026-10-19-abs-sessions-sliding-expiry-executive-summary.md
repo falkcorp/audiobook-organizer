@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sessions-sliding-expiry-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 50c43bce-f6d8-4831-b9d1-95ea32eda66d -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -110,7 +110,16 @@ before the change is refused afterwards. The old sign-ins are also cleared
 from the device list, but that is tidying up; if it fails, they are refused
 anyway. Switching an account off and back on moves the counter both times,
 so no earlier phone sign-in comes back. A reset link is not handed out unless
-the counter was saved.
+the counter was saved. A reset link signs the phones out and lets the person
+choose a new password, but their old password keeps working until they do, so
+it is not a fix for a stolen password; what to do about that is left to the
+owner. A sign-in through the single sign-on page that was started before the
+change is refused when the app tries to finish it.
+
+Phones signed in through Cloudflare Access behave a little differently: they
+are refused once, then immediately get a fresh sign-in from their Cloudflare
+identity, because changing the password here does not change who Cloudflare
+says they are.
 
 Two related gaps were closed at the same time. A password, or whether an
 account is switched on, can now only be changed by a dedicated step that works

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-19
 
@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
@@ -645,13 +646,13 @@ func TestOpenIDHop2_IgnoresQueryRedirectURIAndState(t *testing.T) {
 func TestMintAppAuthorizationCode_RefusesUnregisteredRedirect(t *testing.T) {
 	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "")
 	abshandler.IsolateOIDCCodesForTest(t)
-	if _, err := abshandler.MintAppAuthorizationCode("u1", "e@example.com", s256(oidcVerifier), "https://evil.example/cb"); err == nil {
+	if _, err := abshandler.MintAppAuthorizationCode(&database.User{ID: "u1"}, "e@example.com", s256(oidcVerifier), "https://evil.example/cb"); err == nil {
 		t.Fatal("minting for an unregistered redirect_uri must fail")
 	}
-	if _, err := abshandler.MintAppAuthorizationCode("u1", "e@example.com", s256(oidcVerifier), "audiobooth://oauth"); err != nil {
+	if _, err := abshandler.MintAppAuthorizationCode(&database.User{ID: "u1"}, "e@example.com", s256(oidcVerifier), "audiobooth://oauth"); err != nil {
 		t.Fatalf("minting for the registered redirect_uri: %v", err)
 	}
-	if _, err := abshandler.MintAppAuthorizationCode("u1", "e@example.com", "not-an-s256-challenge", "audiobooth://oauth"); err == nil {
+	if _, err := abshandler.MintAppAuthorizationCode(&database.User{ID: "u1"}, "e@example.com", "not-an-s256-challenge", "audiobooth://oauth"); err == nil {
 		t.Fatal("minting with a challenge that is not S256-shaped must fail")
 	}
 }
@@ -1016,4 +1017,60 @@ func TestOpenIDHop2_AmbiguousRequestIDIsDead(t *testing.T) {
 	// Either alone works.
 	h.consentPage(t, abshandler.OIDCBrowserPath+"?req="+id, oidcPersonAssertion)
 	h.consentPage(t, abshandler.OIDCBrowserPath+"?state="+id, oidcPersonAssertion)
+}
+
+// A code minted before the account's credentials or status changed (password
+// change, reset, deactivation: anything that bumps CredentialEpoch) is refused at
+// the callback, and no session is created from it.
+func TestOpenIDFlow_CodeFromBeforeACredentialChangeIsRefused(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "client-state-1")
+	code := h.allow(t, browser, oidcPersonAssertion).Get("code")
+	if code == "" {
+		t.Fatal("precondition: hop 2 delivers a code")
+	}
+	h.bumpAllCredentialEpochs()
+	sessionsBefore := h.sessionCount()
+
+	w := h.redeem(t, code, oidcVerifier, "&state=client-state-1")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("callback after a credential change = %d, want 401: %s", w.Code, w.Body.String())
+	}
+	if got := h.sessionCount(); got != sessionsBefore {
+		t.Fatalf("a refused code created a session (%d -> %d)", sessionsBefore, got)
+	}
+}
+
+// bumpAllCredentialEpochs simulates a password change, reset or status change
+// for every seeded user.
+func (h *harness) bumpAllCredentialEpochs() {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	for _, u := range h.store.users {
+		u.CredentialEpoch++
+	}
+}
+
+func (h *harness) sessionCount() int {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	return len(h.store.sessions)
+}
+
+// A code minted for a user who already changed their password at some point
+// (epoch above 0) carries that epoch and redeems normally.
+func TestOpenIDFlow_CodeCarriesTheCurrentEpoch(t *testing.T) {
+	h := newOIDCHarness(t)
+	// The first sign-in creates the user (JIT); then its epoch moves twice.
+	first := h.allow(t, h.hop1(t, s256(oidcVerifier), "s0"), oidcPersonAssertion).Get("code")
+	if w := h.redeem(t, first, oidcVerifier, "&state=s0"); w.Code != http.StatusOK {
+		t.Fatalf("precondition: first sign-in = %d: %s", w.Code, w.Body.String())
+	}
+	h.bumpAllCredentialEpochs()
+	h.bumpAllCredentialEpochs()
+	browser := h.hop1(t, s256(oidcVerifier), "client-state-1")
+	code := h.allow(t, browser, oidcPersonAssertion).Get("code")
+	if w := h.redeem(t, code, oidcVerifier, "&state=client-state-1"); w.Code != http.StatusOK {
+		t.Fatalf("callback at an unchanged non-zero epoch = %d, want 200: %s", w.Code, w.Body.String())
+	}
 }

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.11.0 -->
+<!-- version: 7.12.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -846,6 +846,11 @@ when the request carries header `x-return-tokens: true`, the response body **als
   (deactivate and reactivate) and `BumpUserCredentialEpoch` (reset link). `UpdateUser` refuses any
   change to the password, `Status` or `CredentialEpoch` (`ErrUserProtectedField`). The §3.5 rehash
   uses `RehashUserPassword`, conditional on the stored hash still being the verified one.
+  SSO authorization codes carry the epoch at mint; `/auth/openid/callback` refuses a code whose epoch
+  differs from the user's current one. A request carrying a CF person assertion is authenticated by
+  it and never consults the session; a CF-mode client presenting only its ABS token is refused once
+  and the CF refresh branch then mints a fresh session at the current epoch (a password change does
+  not apply to a CF identity).
 - **The ABS keys are environment-only.** Every serialized `abs_*` key has a registered default and
   is re-applied from viper at each boot, so `PUT /api/v1/config` refuses a change to one (400, naming
   the variable) and the settings API reports it as locked.

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -23,6 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
@@ -406,6 +407,11 @@ type oidcPendingCode struct {
 	Email       string
 	Challenge   string
 	RedirectURI string
+	// CredentialEpoch is the user's User.CredentialEpoch when the code was
+	// minted. A password change, reset or status change in between moves it, and
+	// the callback then refuses the code rather than mint a session at the new
+	// epoch from a sign-in that predates the change.
+	CredentialEpoch int64
 }
 
 // oidcPendingRequest is one hop-1 request parked until the browser arrives.
@@ -505,12 +511,15 @@ func AppRedirectURIAllowed(uri string) bool { return oidcRedirectAllowed(uri) }
 // which is precisely the takeover PKCE exists to stop — so this refuses rather than
 // defaulting to an unbound code. redirectURI must be on the allowlist, re-checked
 // here so no caller can bind a code to a target the allowlist never approved.
-func MintAppAuthorizationCode(userID, email, challenge, redirectURI string) (string, error) {
-	return mintOIDCCode(userID, email, challenge, redirectURI, time.Now())
+//
+// user is the record the caller just resolved; the code carries its
+// CredentialEpoch (see oidcPendingCode).
+func MintAppAuthorizationCode(user *database.User, email, challenge, redirectURI string) (string, error) {
+	return mintOIDCCode(user, email, challenge, redirectURI, time.Now())
 }
 
-func mintOIDCCode(userID, email, challenge, redirectURI string, now time.Time) (string, error) {
-	if strings.TrimSpace(userID) == "" {
+func mintOIDCCode(user *database.User, email, challenge, redirectURI string, now time.Time) (string, error) {
+	if user == nil || strings.TrimSpace(user.ID) == "" {
 		return "", errors.New("abs: cannot mint an authorization code with no user")
 	}
 	if !isS256Shaped(challenge) {
@@ -527,11 +536,12 @@ func mintOIDCCode(userID, email, challenge, redirectURI string, now time.Time) (
 	if err != nil {
 		return "", err
 	}
-	oidcCodes.put(code, userID, oidcPersonCap, oidcPendingCode{
-		UserID:      userID,
-		Email:       email,
-		Challenge:   challenge,
-		RedirectURI: redirectURI,
+	oidcCodes.put(code, user.ID, oidcPersonCap, oidcPendingCode{
+		UserID:          user.ID,
+		Email:           email,
+		Challenge:       challenge,
+		RedirectURI:     redirectURI,
+		CredentialEpoch: user.CredentialEpoch,
 	}, now, oidcCodeTTL)
 	return code, nil
 }
@@ -862,7 +872,7 @@ func (h *Handler) OpenIDBrowserConsent(c *gin.Context) {
 		return
 	}
 
-	code, err := mintOIDCCode(identity.User.ID, identity.Email, pending.Challenge, pending.RedirectURI, h.now())
+	code, err := mintOIDCCode(identity.User, identity.Email, pending.Challenge, pending.RedirectURI, h.now())
 	if err != nil {
 		oidcLog.Error("openid consent could not mint a code: user_id=%s: %v",
 			logger.SanitizeLogValue(identity.User.ID), err)
@@ -1123,6 +1133,19 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 			Username: user.Username, Reason: "user-inactive", Path: c.Request.URL.Path,
 		})
 		respondError(c, http.StatusForbidden, "account is not active")
+		return
+	}
+	// The account's credentials or status changed after the code was minted
+	// (password change, reset, deactivation): the sign-in that produced it
+	// predates the change, so it must not yield a session stamped with the new
+	// epoch. The user signs in again.
+	if user.CredentialEpoch != pending.CredentialEpoch {
+		absauth.Audit(absauth.AuditEvent{
+			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: user.ID,
+			Username: user.Username, Reason: "credentials-changed", Path: c.Request.URL.Path,
+		})
+		respondError(c, http.StatusUnauthorized, "the account changed since this sign-in started; sign in again")
 		return
 	}
 
