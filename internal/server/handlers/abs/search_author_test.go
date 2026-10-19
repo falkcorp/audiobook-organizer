@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/search_author_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 6c1f0d2e-7b3a-4c5d-9e8f-2a1b3c4d5e6f
-// last-edited: 2026-09-05
+// last-edited: 2026-10-19
 
 package abs_test
 
@@ -135,7 +135,9 @@ func TestAuthorDetail_IncludeItemsAndSeries(t *testing.T) {
 // and a different query is never served from another query's document.
 func TestSearch_RepeatWithinTTLIsCached(t *testing.T) {
 	h, seed, tok := newBrowseHarness(t)
-	base := time.Unix(1_800_000_000, 0)
+	// The clock also drives bearer verification, so it starts at the real time
+	// the harness minted tok at; a fixed far-future base would expire the token.
+	base := time.Now()
 	now := base
 	h.handler.SetClock(func() time.Time { return now })
 

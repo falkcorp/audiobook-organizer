@@ -1,13 +1,16 @@
 // file: internal/server/auth_reset_password.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b2d94f1-7a08-4c53-9e16-3d8f05a2c761
 // last-edited: 2026-10-19
 
 package server
 
 import (
+	"errors"
+
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
@@ -61,11 +64,19 @@ func (s *Server) handleResetPassword(c *gin.Context) {
 	// An admin reset means the account's credentials are no longer trusted, so
 	// end every ABS session now rather than when the user later sets a password.
 	// ABS sessions slide with use and have no absolute cap by default; one that
-	// survived would stay valid indefinitely. Fail closed: no link on error.
-	if err := handlers.RevokeAllABSSessions(handlers.ResolveABSSessionRevoker(s.Ops()), user.ID, "password-reset-link"); err != nil {
+	// survived would stay valid indefinitely. Bumping CredentialEpoch is what ends
+	// them (every ABS refresh and request checks it); fail closed: no link unless
+	// that write landed. The revoke-all after it is cleanup.
+	user.CredentialEpoch++
+	if err := s.Ops().UpdateUser(user); err != nil {
+		if errors.Is(err, database.ErrUserStale) {
+			httputil.RespondWithConflict(c, "the account changed while the reset was being issued; no reset link was issued, try again")
+			return
+		}
 		httputil.RespondWithInternalError(c, "could not sign the user out of their mobile apps; no reset link was issued, try again")
 		return
 	}
+	handlers.RevokeAllABSSessions(handlers.ResolveABSSessionRevoker(s.Ops()), user.ID, "password-reset-link")
 
 	payload, ok := s.mintTempLoginPayload(c, user)
 	if !ok {

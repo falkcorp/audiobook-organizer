@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth_sliding_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 23a1f237-1dc7-4ba6-b00b-fd8d85b71221
 // last-edited: 2026-10-19
 
@@ -208,5 +208,42 @@ func TestABSAuth_ExpiredTokenReasonIsTokenExpired(t *testing.T) {
 	sh.now = sh.t0.Add(time.Hour)
 	if e := resolve("not-a-jwt"); e == nil || e.Reason != "token-invalid" {
 		t.Fatalf("garbage: %+v, want token-invalid", e)
+	}
+}
+
+// TestABSAuth_StaleCredentialEpochIsRefused: a session issued before the user's
+// credentials changed (User.CredentialEpoch moved past the session's stamp) is
+// refused on bearer use, as dead (401) even when the account is also locked, and
+// is not slid.
+func TestABSAuth_StaleCredentialEpochIsRefused(t *testing.T) {
+	sh := newSlidingHarness(t, nil)
+	resolve := func() *ABSAuthError {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		c.Request.Header.Set("Authorization", "Bearer "+sh.token)
+		_, e := sh.resolver.ResolveBearer(c)
+		return e
+	}
+	if e := resolve(); e != nil {
+		t.Fatalf("precondition: matching epochs (both 0) authenticate, got %+v", e)
+	}
+
+	sh.store.mu.Lock()
+	sh.store.users["u1"].CredentialEpoch = 1
+	sh.store.mu.Unlock()
+	sh.now = sh.t0.Add(3 * slidingDay) // past the throttle, so a pass would extend
+	before := sh.expiresAt()
+	if e := resolve(); e == nil || e.Reason != "credentials-changed" || e.Status != http.StatusUnauthorized {
+		t.Fatalf("stale epoch: %+v, want 401 credentials-changed", e)
+	}
+	if sh.store.extendWrites != 0 || !sh.expiresAt().Equal(before) {
+		t.Fatalf("a refused session was slid (%d writes)", sh.store.extendWrites)
+	}
+
+	sh.store.mu.Lock()
+	sh.store.users["u1"].Status = "locked"
+	sh.store.mu.Unlock()
+	if e := resolve(); e == nil || e.Reason != "credentials-changed" || e.Status != http.StatusUnauthorized {
+		t.Fatalf("stale epoch on a locked account: %+v, want 401 credentials-changed (dead, not suspended)", e)
 	}
 }

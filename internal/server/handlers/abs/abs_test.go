@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-10-19
 
@@ -127,6 +127,26 @@ func (f *fakeStore) UpdateUser(u *database.User) error {
 	f.users[u.ID] = u
 	f.updatedUsers = append(f.updatedUsers, u.ID)
 	return nil
+}
+
+// RehashUserPassword mirrors PebbleStore.RehashUserPassword: it writes only the
+// hash fields, and only while the stored hash is still the verified one.
+func (f *fakeStore) RehashUserPassword(userID, verifiedHash, algo, hash string) (bool, error) {
+	if f.updateErr != nil {
+		return false, f.updateErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u := f.users[userID]
+	if u == nil || u.PasswordHash != verifiedHash {
+		return false, nil
+	}
+	fresh := *u
+	fresh.PasswordHashAlgo, fresh.PasswordHash = algo, hash
+	f.users[userID] = &fresh
+	f.byUsername[strings.ToLower(fresh.Username)] = &fresh
+	f.updatedUsers = append(f.updatedUsers, userID)
+	return true, nil
 }
 
 func (f *fakeStore) GetOAuthIdentityByProviderSubject(p, s string) (*database.OAuthIdentity, error) {

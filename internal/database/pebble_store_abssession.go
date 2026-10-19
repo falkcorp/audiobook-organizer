@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
 // last-edited: 2026-10-19
 
@@ -78,6 +78,19 @@ type ABSSession struct {
 	GraceUntil time.Time `json:"grace_until,omitempty"`
 
 	Revoked bool `json:"revoked"`
+
+	// CredentialEpoch is the owning user's User.CredentialEpoch as of the login
+	// that created this session, taken from the same user record the password was
+	// verified against. It never changes afterwards: refresh carries it forward
+	// rather than re-stamping it, since re-stamping would launder a session minted
+	// before a password change into one that passes the check.
+	CredentialEpoch int64 `json:"credential_epoch,omitempty"`
+}
+
+// CredentialsCurrent reports whether the session was issued under the user's
+// current credentials. A mismatch in either direction fails closed.
+func (s *ABSSession) CredentialsCurrent(u *User) bool {
+	return s != nil && u != nil && s.CredentialEpoch == u.CredentialEpoch
 }
 
 // Live reports whether the session may still authenticate: not revoked and not past
@@ -237,6 +250,10 @@ func (p *PebbleStore) UpdateABSSession(session *ABSSession) error {
 // absSessionUpdateFollows reports whether next is a legal successor of stored:
 // see UpdateABSSession.
 func absSessionUpdateFollows(stored, next *ABSSession) bool {
+	if next.CredentialEpoch != stored.CredentialEpoch {
+		// The stamp is fixed at login; no session write may move it.
+		return false
+	}
 	switch next.Generation {
 	case stored.Generation:
 		return next.RefreshTokenHash == stored.RefreshTokenHash

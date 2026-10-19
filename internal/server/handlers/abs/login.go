@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
 // last-edited: 2026-10-19
 
@@ -168,6 +168,12 @@ func decodeLoginBody(c *gin.Context) (loginRequest, error) {
 }
 
 // rehashPassword re-stores a verified password as argon2id. Best-effort by design.
+//
+// The write is conditional on the stored hash still being the one just verified
+// (RehashUserPassword), and touches only the hash fields of the fresh row. Writing
+// back login's copy of the user instead would race a concurrent password change
+// (putting the old password back, minus the epoch bump) or deactivation (putting
+// Status back to active).
 func (h *Handler) rehashPassword(user *database.User, plain string) {
 	algo, hash, err := absauth.HashPassword(plain)
 	if err != nil {
@@ -177,13 +183,18 @@ func (h *Handler) rehashPassword(user *database.User, plain string) {
 		})
 		return
 	}
-	updated := *user
-	updated.PasswordHashAlgo = algo
-	updated.PasswordHash = hash
-	if err := h.store.UpdateUser(&updated); err != nil {
+	wrote, err := h.store.RehashUserPassword(user.ID, user.PasswordHash, algo, hash)
+	if err != nil {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "rehash", Outcome: absauth.OutcomeError, UserID: user.ID,
 			Username: user.Username, Reason: "store-update-failed",
+		})
+		return
+	}
+	if !wrote {
+		absauth.Audit(absauth.AuditEvent{
+			Action: "rehash", Outcome: absauth.OutcomeDenied, UserID: user.ID,
+			Username: user.Username, Reason: "password-changed-concurrently",
 		})
 		return
 	}
@@ -198,7 +209,7 @@ func (h *Handler) rehashPassword(user *database.User, plain string) {
 func (h *Handler) issueSession(c *gin.Context, user *database.User, deviceInfo json.RawMessage, mode, email string, now time.Time) {
 	ip := strings.TrimSpace(c.ClientIP())
 
-	session, refreshToken, err := h.createSession(user.ID, deviceInfo, ip, c.Request.UserAgent(), now)
+	session, refreshToken, err := h.createSession(user, deviceInfo, ip, c.Request.UserAgent(), now)
 	if err != nil {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "login", Outcome: absauth.OutcomeError, Mode: mode, SourceIP: ip,
@@ -248,14 +259,19 @@ func (h *Handler) issueSession(c *gin.Context, user *database.User, deviceInfo j
 
 // createSession writes a fresh abs_sess record and returns it with its plaintext
 // refresh token (which is returned to the caller and never stored).
-func (h *Handler) createSession(userID string, deviceInfo json.RawMessage, ip, userAgent string, now time.Time) (*database.ABSSession, string, error) {
+//
+// The session is stamped with user.CredentialEpoch from the record the caller
+// authenticated against: on the password path that is the same copy the password
+// was verified with, so a login that raced a password change carries the old
+// epoch and is refused once the change lands. It must not be re-read here.
+func (h *Handler) createSession(user *database.User, deviceInfo json.RawMessage, ip, userAgent string, now time.Time) (*database.ABSSession, string, error) {
 	seed, err := absauth.NewRefreshSeed()
 	if err != nil {
 		return nil, "", err
 	}
 	session := &database.ABSSession{
 		ID:         h.newID(),
-		UserID:     userID,
+		UserID:     user.ID,
 		Seed:       seed,
 		Generation: 1,
 		DeviceInfo: normalizeDeviceInfo(deviceInfo),
@@ -265,7 +281,8 @@ func (h *Handler) createSession(userID string, deviceInfo json.RawMessage, ip, u
 		LastUsedAt: now,
 		// Sliding: refresh and authenticated use push this forward (see Refresh
 		// and ABSIdentityResolver.extendSession). Login is just the first stamp.
-		ExpiresAt: h.cfg.SessionExpiry(now, now),
+		ExpiresAt:       h.cfg.SessionExpiry(now, now),
+		CredentialEpoch: user.CredentialEpoch,
 	}
 	refreshToken := h.cfg.DeriveRefreshToken(session.ID, session.Seed, session.Generation)
 	session.RefreshTokenHash = absauth.HashRefreshToken(refreshToken)

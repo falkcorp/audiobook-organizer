@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/sliding_session_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e1047d7e-5e2b-4df6-aa64-51878f896f74
 // last-edited: 2026-10-19
 
@@ -254,5 +254,96 @@ func TestRefresh_InactiveUserIsRefusedBeforeAnyWrite(t *testing.T) {
 		after.RefreshTokenHash != before.RefreshTokenHash {
 		t.Fatalf("a refused refresh wrote the session: before exp=%v gen=%d, after exp=%v gen=%d",
 			before.ExpiresAt, before.Generation, after.ExpiresAt, after.Generation)
+	}
+}
+
+func (ch *clockedHarness) setCredentialEpoch(epoch int64) {
+	ch.store.mu.Lock()
+	defer ch.store.mu.Unlock()
+	ch.store.users["u1"].CredentialEpoch = epoch
+}
+
+// TestLogin_StampsTheVerifiedUsersEpoch: a session carries the epoch of the user
+// record the password was verified against.
+func TestLogin_StampsTheVerifiedUsersEpoch(t *testing.T) {
+	ch := newClockedHarness(t, nil)
+	ch.setCredentialEpoch(3)
+	ch.login(t, "owner", "pw-pw-pw-pw")
+	if got := ch.onlySession(t).CredentialEpoch; got != 3 {
+		t.Fatalf("session stamped with epoch %d, want the user's 3", got)
+	}
+}
+
+// TestRefresh_StaleCredentialEpochIsRefusedBeforeAnyWrite: after a password
+// change, reset or deactivation bumps the user's epoch, the old session's refresh
+// is a 401 (dead, even if the account is also locked), and nothing is written.
+func TestRefresh_StaleCredentialEpochIsRefusedBeforeAnyWrite(t *testing.T) {
+	for _, locked := range []bool{false, true} {
+		ch := newClockedHarness(t, nil)
+		refresh := str(t, userObj(t, ch.login(t, "owner", "pw-pw-pw-pw")), "refreshToken")
+		before := ch.onlySession(t)
+		ch.setCredentialEpoch(1)
+		if locked {
+			ch.store.mu.Lock()
+			ch.store.users["u1"].Status = "locked"
+			ch.store.mu.Unlock()
+		}
+		ch.now = ch.t0.Add(20 * sDay)
+		if code, _, _ := ch.refresh(t, refresh, nil); code != http.StatusUnauthorized {
+			t.Fatalf("locked=%v: stale-epoch refresh got %d, want 401", locked, code)
+		}
+		after := ch.onlySession(t)
+		if !after.ExpiresAt.Equal(before.ExpiresAt) || after.Generation != before.Generation {
+			t.Fatalf("locked=%v: a refused refresh wrote the session (gen %d -> %d)", locked, before.Generation, after.Generation)
+		}
+	}
+}
+
+// TestRefresh_CFDoesNotReuseAStaleEpochSession: the CF branch never fails, but it
+// must not rotate (and so revive) a session from before a credential change. It
+// mints a fresh one under the current epoch instead.
+func TestRefresh_CFDoesNotReuseAStaleEpochSession(t *testing.T) {
+	ch := newClockedHarness(t, []string{"owner@example.com"})
+	ch.verifier.byToken["good"] = &oauth.IdentityClaims{
+		Provider: oauth.ProviderCFAccess, Subject: "cf|owner", Email: "owner@example.com", EmailVerified: true,
+	}
+	refresh := str(t, userObj(t, ch.login(t, "owner", "pw-pw-pw-pw")), "refreshToken")
+	old := ch.onlySession(t)
+	ch.setCredentialEpoch(1)
+
+	if code, _, _ := ch.refresh(t, refresh, map[string]string{oauth.CFAccessHeader: "good"}); code != http.StatusOK {
+		t.Fatalf("CF refresh got %d", code)
+	}
+	ch.store.mu.Lock()
+	defer ch.store.mu.Unlock()
+	if len(ch.store.sessions) != 2 {
+		t.Fatalf("have %d sessions, want the stale one untouched plus a fresh one", len(ch.store.sessions))
+	}
+	for id, s := range ch.store.sessions {
+		if id == old.ID {
+			if s.Generation != old.Generation {
+				t.Fatalf("the stale session was rotated (gen %d -> %d)", old.Generation, s.Generation)
+			}
+		} else if s.CredentialEpoch != 1 {
+			t.Fatalf("the fresh session carries epoch %d, want the current 1", s.CredentialEpoch)
+		}
+	}
+}
+
+// TestSessions_HidesCredentialChangedRows: a session from before a credential
+// change is dead and stays off the device list even if the cleanup revoke missed it.
+func TestSessions_HidesCredentialChangedRows(t *testing.T) {
+	ch := newClockedHarness(t, nil)
+	ch.login(t, "owner", "pw-pw-pw-pw")
+	ch.setCredentialEpoch(1)
+	access := str(t, userObj(t, ch.login(t, "owner", "pw-pw-pw-pw")), "accessToken")
+
+	w, body := ch.do(t, request{method: http.MethodGet, path: "/api/me/sessions",
+		headers: map[string]string{"Authorization": "Bearer " + access}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	if rows, _ := body["sessions"].([]any); len(rows) != 1 {
+		t.Fatalf("device list shows %d sessions, want only the current-epoch one: %v", len(rows), body)
 	}
 }

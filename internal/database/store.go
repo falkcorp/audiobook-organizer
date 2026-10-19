@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.115.1
+// version: 2.116.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-19
 
@@ -722,6 +722,19 @@ type User struct {
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	Version          int       `json:"version"`
+	// CredentialEpoch goes up by exactly one, in the same UpdateUser write, every
+	// time the account's credentials stop being trusted: a password change, an
+	// admin reset, a reset link, a deactivation. Every ABS session is stamped with
+	// the epoch of the user record its login was verified against, and a session
+	// whose stamp does not match the current epoch is refused on every refresh and
+	// every bearer request (ABSSession.CredentialsCurrent). That is what closes the
+	// window between verifying a password and writing a new one: a session minted
+	// with the old password in that window carries the old epoch and dies when the
+	// new one lands. Missing (pre-2026-10-19 rows) reads as 0, as does a missing
+	// stamp on a session, so nothing is signed out on deploy. PebbleStore.UpdateUser
+	// refuses a write that would lower it (ErrUserStale). Version is not reused for
+	// this: it is 1 on every row and no writer moves it.
+	CredentialEpoch int64 `json:"credential_epoch,omitempty"`
 }
 
 // BookVersion represents one version of a book's content (spec 3.1

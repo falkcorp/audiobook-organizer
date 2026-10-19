@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
 // last-edited: 2026-10-19
 
@@ -7,6 +7,7 @@ package handlers_test
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -54,7 +55,11 @@ func passwordUser(t *testing.T, id, password string) *database.User {
 	return &database.User{ID: id, Username: id, Status: "active", PasswordHash: testBcryptHash(t, password), PasswordHashAlgo: "bcrypt"}
 }
 
-func TestChangePassword_RevokesEveryABSSessionFirst(t *testing.T) {
+// The password change and the CredentialEpoch bump land in one UpdateUser write;
+// that bump is what ends every ABS session (including one minted with the old
+// password while the change was in flight). The revoke-all runs after it as
+// cleanup.
+func TestChangePassword_BumpsEpochInTheSameWriteThenRevokes(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		admin bool
@@ -64,8 +69,12 @@ func TestChangePassword_RevokesEveryABSSessionFirst(t *testing.T) {
 			mockStore := handlersmocks.NewMockAuthStore(t)
 			rec := &absRevokeRecorder{events: &events}
 			target := passwordUser(t, "u-target", "old-password")
+			target.CredentialEpoch = 4
+			oldHash := target.PasswordHash
 			mockStore.EXPECT().GetUserByID("u-target").Return(target, nil)
-			mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(*database.User) error {
+			mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
+				require.NotEqual(t, oldHash, u.PasswordHash, "the write carries the new password")
+				require.Equal(t, int64(5), u.CredentialEpoch, "and, in the same write, the next credential epoch")
 				events = append(events, "update")
 				return nil
 			})
@@ -82,20 +91,21 @@ func TestChangePassword_RevokesEveryABSSessionFirst(t *testing.T) {
 			h.ChangePassword(c)
 
 			require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
-			require.Equal(t, []string{"u-target"}, rec.calls, "every ABS session of the TARGET user must be revoked")
-			require.Equal(t, []string{"revoke", "update"}, events, "revoke must happen before the password changes")
+			require.Equal(t, []string{"u-target"}, rec.calls, "every ABS session of the TARGET user is cleaned up")
+			require.Equal(t, []string{"update", "revoke"}, events, "the cleanup revoke runs after the epoch write")
 		})
 	}
 }
 
-// A revoke failure must not leave a changed password with live sessions behind:
-// the change is refused and the password is untouched.
-func TestChangePassword_RevokeFailureLeavesPasswordUnchanged(t *testing.T) {
+// The cleanup revoke cannot un-change a password that already landed with its
+// epoch bump, and the sessions are already refused, so its failure is audited
+// and the change is reported as done.
+func TestChangePassword_RevokeFailureStillReportsTheChange(t *testing.T) {
 	mockStore := handlersmocks.NewMockAuthStore(t)
 	rec := &absRevokeRecorder{err: errors.New("pebble: partial revoke")}
 	target := passwordUser(t, "u1", "old-password")
 	mockStore.EXPECT().GetUserByID("u1").Return(target, nil)
-	// No UpdateUser expectation: the mock fails the test if it is called.
+	mockStore.EXPECT().UpdateUser(mock.Anything).Return(nil)
 	h := handlers.NewAuthHandler(authStoreWithABS{mockStore, rec}, true)
 
 	c, w := newAuthCtx(http.MethodPut, "/api/v1/auth/me/password",
@@ -103,8 +113,27 @@ func TestChangePassword_RevokeFailureLeavesPasswordUnchanged(t *testing.T) {
 	setAuthUser(c, target)
 	h.ChangePassword(c)
 
-	require.Equal(t, http.StatusInternalServerError, w.Code)
-	require.Contains(t, w.Body.String(), "password was not changed")
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	require.Equal(t, []string{"u1"}, rec.calls)
+}
+
+// A credential change that lost a race with another one is refused as a
+// conflict, and nothing is revoked on its behalf.
+func TestChangePassword_StaleUserIsConflict(t *testing.T) {
+	mockStore := handlersmocks.NewMockAuthStore(t)
+	rec := &absRevokeRecorder{}
+	target := passwordUser(t, "u1", "old-password")
+	mockStore.EXPECT().GetUserByID("u1").Return(target, nil)
+	mockStore.EXPECT().UpdateUser(mock.Anything).Return(fmt.Errorf("wrapped: %w", database.ErrUserStale))
+	h := handlers.NewAuthHandler(authStoreWithABS{mockStore, rec}, true)
+
+	c, w := newAuthCtx(http.MethodPut, "/api/v1/auth/me/password",
+		map[string]any{"current_password": "old-password", "new_password": "new-password-123"})
+	setAuthUser(c, target)
+	h.ChangePassword(c)
+
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Empty(t, rec.calls)
 }
 
 // Without the ABS keyspace there are no ABS sessions; the password still changes.
@@ -122,14 +151,16 @@ func TestChangePassword_NoABSKeyspaceStillChangesPassword(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
 
-func TestDeactivateUser_LocksThenRevokesABSSessions(t *testing.T) {
+func TestDeactivateUser_LocksAndBumpsEpochInOneWriteThenRevokes(t *testing.T) {
 	var events []string
 	mockStore := handlersmocks.NewMockUserStore(t)
 	rec := &absRevokeRecorder{events: &events}
 	user := sampleUser()
+	user.CredentialEpoch = 2
 	mockStore.EXPECT().GetUserByID("u-123").Return(user, nil)
 	mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
 		require.Equal(t, "locked", u.Status)
+		require.Equal(t, int64(3), u.CredentialEpoch, "the lock and the epoch bump are one write")
 		events = append(events, "update")
 		return nil
 	})
@@ -140,10 +171,10 @@ func TestDeactivateUser_LocksThenRevokesABSSessions(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, []string{"u-123"}, rec.calls)
-	require.Equal(t, []string{"update", "revoke"}, events, "lock first so the account is shut even if the revoke fails")
+	require.Equal(t, []string{"update", "revoke"}, events)
 }
 
-func TestDeactivateUser_RevokeFailureIsReported(t *testing.T) {
+func TestDeactivateUser_RevokeFailureStillDeactivates(t *testing.T) {
 	mockStore := handlersmocks.NewMockUserStore(t)
 	rec := &absRevokeRecorder{err: errors.New("pebble: partial revoke")}
 	mockStore.EXPECT().GetUserByID("u-123").Return(sampleUser(), nil)
@@ -152,20 +183,21 @@ func TestDeactivateUser_RevokeFailureIsReported(t *testing.T) {
 	c, w := newAuthCtx(http.MethodPost, "/api/v1/users/u-123/deactivate", nil)
 	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
 	h.DeactivateUser(c)
-	require.Equal(t, http.StatusInternalServerError, w.Code, "a partial revoke must not report success")
+	require.Equal(t, http.StatusOK, w.Code, "the account is locked and its sessions refused; the revoke is cleanup")
 }
 
-// Reactivation revokes BEFORE unlocking and stays locked if that fails, so a
-// session a failed deactivation-revoke left on disk cannot come back.
-func TestReactivateUser_RevokesBeforeUnlocking(t *testing.T) {
-	var events []string
+// Reactivation unlocks without moving the epoch back: the sessions the
+// deactivation killed stay dead.
+func TestReactivateUser_KeepsTheEpoch(t *testing.T) {
 	mockStore := handlersmocks.NewMockUserStore(t)
-	rec := &absRevokeRecorder{events: &events}
+	rec := &absRevokeRecorder{}
 	locked := sampleUser()
 	locked.Status = "locked"
+	locked.CredentialEpoch = 3
 	mockStore.EXPECT().GetUserByID("u-123").Return(locked, nil)
-	mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(*database.User) error {
-		events = append(events, "update")
+	mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
+		require.Equal(t, "active", u.Status)
+		require.Equal(t, int64(3), u.CredentialEpoch)
 		return nil
 	})
 	h := handlers.NewUserHandler(userStoreWithABS{mockStore, rec})
@@ -173,15 +205,5 @@ func TestReactivateUser_RevokesBeforeUnlocking(t *testing.T) {
 	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
 	h.ReactivateUser(c)
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, []string{"revoke", "update"}, events)
-
-	failing := handlersmocks.NewMockUserStore(t)
-	locked2 := sampleUser()
-	locked2.Status = "locked"
-	failing.EXPECT().GetUserByID("u-123").Return(locked2, nil)
-	h = handlers.NewUserHandler(userStoreWithABS{failing, &absRevokeRecorder{err: errors.New("boom")}})
-	c, w = newAuthCtx(http.MethodPost, "/api/v1/users/u-123/reactivate", nil)
-	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
-	h.ReactivateUser(c)
-	require.Equal(t, http.StatusInternalServerError, w.Code, "a failed revoke must leave the user locked (no UpdateUser)")
+	require.Equal(t, []string{"u-123"}, rec.calls)
 }

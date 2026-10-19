@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-10-19
 
@@ -41,11 +41,14 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
 
-// ABSUserStore ABSUserStore reads and updates the user rows the ABS auth flow touches.
+// ABSUserStore ABSUserStore reads the user rows the ABS auth flow touches. Its only
+// write is the conditional rehash (database.PebbleStore.RehashUserPassword): a
+// blind UpdateUser from login's copy of the user could land after a concurrent
+// password change or deactivation and undo it.
 type ABSUserStore interface {
 	GetUserByID(id string) (*database.User, error)
 	GetUserByUsername(username string) (*database.User, error)
-	UpdateUser(user *database.User) error
+	RehashUserPassword(userID, verifiedHash, algo, hash string) (bool, error)
 }
 
 // ABSSessionReader ABSSessionReader looks up Audiobookshelf sessions -- by id, by refresh-token hash, or all of a user's.
