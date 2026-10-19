@@ -7,8 +7,7 @@ one the stores call), `GetMigrationHistory`, `InvalidateCachedMetadataFetch`,
 helpers and their two narrow store interfaces, two unused memdb indexer types
 (`nullableBoolFieldIndex`, `effectiveIntFieldIndex`), and a handful of small
 helpers (`MetaBool`, `MetaInt`, `SortFileEvents`, `AnyProvisionalCore`,
-`OwnFolderSplit.Spans`, `StorageMigrationCheckpointPath` and its suffix
-constant, and a no-op LSH index-delete placeholder). Five helpers that only
+`OwnFolderSplit.Spans`, and a no-op LSH index-delete placeholder). Five helpers that only
 tests call (`encodeVectorV0`, `PathWindowRef`, `familyForKey`, `recordMigration`,
 `undecodableMarkerCount`) and the flat `getAllAuthorBookRefCountsPebble` wrapper
 moved into `_test.go` files. The three `CatalogStore` methods the brief listed
@@ -16,4 +15,6 @@ moved into `_test.go` files. The three `CatalogStore` methods the brief listed
 production caller in `internal/catalog`, the other two are still reachable
 from `deadcode`. `JoinCreditNames` / `JoinCreditNamesABS` stay too: they are
 the owner-approved tag write-back join ("A, B and C") that the credit-lists
-plan's write-back PR will call. Running behavior does not change.
+plan's write-back PR will call, and `StorageMigrationCheckpointPath` stays
+for its planned writer, the storage cut-over (`make rollback` already reads
+the file). Running behavior does not change.

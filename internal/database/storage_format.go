@@ -1,5 +1,5 @@
 // file: internal/database/storage_format.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9a2abfc6-3471-4cb1-8ed7-2efe634af689
 // last-edited: 2026-10-19
 
@@ -120,6 +120,18 @@ const StorageFormatSidecarSuffix = ".storage-format"
 // example /data/audiobooks.pebble.storage-format.
 func StorageFormatSidecarPath(dbPath string) string {
 	return filepath.Clean(dbPath) + StorageFormatSidecarSuffix
+}
+
+// StorageMigrationCheckpointSuffix is appended to the store path to name the
+// file in which a storage cut-over records its checkpoint_dir (design 9, step
+// 2b). Release A only defines the path; `make rollback` reads it. Kept with no
+// caller yet: RunCutover (storage plan B6a) is its planned writer.
+const StorageMigrationCheckpointSuffix = ".migration-checkpoint"
+
+// StorageMigrationCheckpointPath returns the checkpoint-record path for a
+// store at dbPath.
+func StorageMigrationCheckpointPath(dbPath string) string {
+	return filepath.Clean(dbPath) + StorageMigrationCheckpointSuffix
 }
 
 // StorageFormatTooNewError is returned when the store's stamp, or its sidecar,

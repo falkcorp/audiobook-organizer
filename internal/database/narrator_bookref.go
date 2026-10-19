@@ -58,8 +58,8 @@ import (
 // is cheap. The book pass is the expensive one, and it runs once per op.
 //
 // Both passes read ONE snapshot, so a book written between them cannot be
-// half-seen. See getAllAuthorBookRefBucketsPebble for the fail-open direction
-// of a torn two-table read.
+// half-seen. getAllAuthorBookRefBucketsPebble, the author twin, reads the
+// same way.
 
 // NarratorRefs is the answer to "what still refers to each narrator".
 type NarratorRefs struct {

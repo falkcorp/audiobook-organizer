@@ -98,7 +98,16 @@ func TestEncryptionHelpersAndSettings(t *testing.T) {
 	if err := pebbleStore.DeleteSetting("plain"); err != nil {
 		t.Fatalf("DeleteSetting failed: %v", err)
 	}
-
+	secret, err := pebbleStore.GetSetting("secret")
+	if err != nil || secret == nil {
+		t.Fatalf("GetSetting secret failed: %v", err)
+	}
+	if !secret.IsSecret || secret.Value == "shh" {
+		t.Fatalf("secret setting stored in plain text: %+v", secret)
+	}
+	if got, err := DecryptValue(secret.Value); err != nil || got != "shh" {
+		t.Fatalf("DecryptValue(secret) = %q, %v; want %q", got, err, "shh")
+	}
 }
 
 // TestMockStore_AllMethods tests all 133 methods of MockStore to ensure 100% coverage.
