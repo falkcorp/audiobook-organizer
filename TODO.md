@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.77.0 -->
+<!-- version: 10.78.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -135,10 +135,10 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **05-PR9 follow-up** `PreviewSpec.Params` names the type an op's Run
       decodes, but nothing ties the two by construction: an edit to Run's
       decode target is caught only by that op's `TestPreviewBehaviour_*`
-      test, which seven ops have (acoustid fingerprint-duration-repair,
+      test, which six ops have (acoustid fingerprint-duration-repair,
       version-group-primary-repair, repoint-version-primary, deluge
-      path-update, regroup-shattered-ai, transcribe-book-intros,
-      vacuum-activity-db). Owner
+      path-update, regroup-shattered-ai, transcribe-book-intros;
+      vacuum-activity-db was the seventh until 01-P75 removed it). Owner
       decision: (a) keep behavioural tests and add one per new writing op;
       (b) declare the params type once and use it for both, e.g. a generic
       `registry.Decode[T]` that Run calls and that sets Preview, touching
@@ -178,7 +178,7 @@ into one of the curated sections below, is a normal direct edit.
       u1 has no docker today, so it would need docker or podman to share the
       lane.
 
-- [ ] **ACTIVITY-RECORD-NONBLOCKING** A live `maintenance.vacuum-activity-db` holds
+- [x] ~~**ACTIVITY-RECORD-NONBLOCKING**~~ — obsolete 2026-10-19: 01-P75 removed `maintenance.vacuum-activity-db` and the SQLite activity store, so no op holds a single activity writer any more. A live `maintenance.vacuum-activity-db` holds
       the SQLite activity store's single writer connection for its whole run, so
       synchronous `SQLActivityStore.Record` callers block until it ends: the
       library scan (once per book, `server_search.go`), metadata apply and
@@ -4173,7 +4173,7 @@ store, bounded `CompactByDay`, dual-write + parity-gated flip). Remaining work:
   `maintenance.compact-activity-log` (202 + op id; 409 if already running), the op
   reports per-chunk progress so the watchdog cannot strike it, and
   `MigratingActivityStore.CompactByDay` compacts BOTH backends.
-- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod. — ❓ owner decision 2026-10-03: inverse now: delete the dormant SQLite activity tier code, or keep it?
+- [x] **Retire the Pebble activity path** once SQLite reads have soaked in prod. — ❓ owner decision 2026-10-03: inverse now: delete the dormant SQLite activity tier code, or keep it? — ✅ DONE 2026-10-19: owner decision D11 was delete; 01-P75 removed the SQLite activity backend (last build tagged `activity-sqlite-last`).
   Two halves; the delete half is now built, the write half is not:
   - [x] **Delete the accumulated copy.** #3139 adds `maintenance.activity-reclaim`.
     It is triggered (not scheduled), dry-run unless `dry_run=false`, and refuses
