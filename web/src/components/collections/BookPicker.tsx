@@ -1,9 +1,9 @@
 // file: web/src/components/collections/BookPicker.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5fdbda04-5379-4733-a2fe-2a59e4bb747d
 // last-edited: 2026-10-18
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -19,7 +19,8 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { type Book, searchBooks } from '../../services/api';
+import { type Book, searchBooksPage } from '../../services/api';
+import { isAbortError } from '../../utils/apiFetch';
 import { queryError } from './queryHelpData';
 
 /** Most results one search shows; a picker is for choosing, not for browsing the library. */
@@ -46,22 +47,42 @@ export function BookPicker({ selectedIds, onChange, excludeIds = [], disabled }:
   // Titles of every book ever shown, so a selected chip keeps its title after the results change.
   const [titles, setTitles] = useState<Map<string, string>>(new Map());
   const requestId = useRef(0);
+  const controller = useRef<AbortController | null>(null);
+
+  // Closing the dialog (unmount) cancels a search still in flight.
+  useEffect(() => {
+    return () => {
+      // A request handle, not a DOM node: reading .current at cleanup time is the point.
+      controller.current?.abort();
+    };
+  }, []);
 
   const parseError = text.trim() ? queryError(text) : null;
 
   const run = async () => {
     const q = text.trim();
     if (!q || parseError) return;
+    controller.current?.abort();
+    const ctl = new AbortController();
+    controller.current = ctl;
     const mine = ++requestId.current;
     setLoading(true);
     setError(null);
     try {
-      const found = await searchBooks(q, BOOK_PICKER_RESULT_LIMIT);
+      const { items: found } = await searchBooksPage(
+        q,
+        BOOK_PICKER_RESULT_LIMIT,
+        0,
+        false,
+        ctl.signal
+      );
       if (mine !== requestId.current) return;
-      setTitles((prev) => new Map([...prev, ...found.map((b): [string, string] => [b.id, b.title])]));
+      setTitles(
+        (prev) => new Map([...prev, ...found.map((b): [string, string] => [b.id, b.title])])
+      );
       setResults(found);
     } catch (err) {
-      if (mine !== requestId.current) return;
+      if (isAbortError(err) || mine !== requestId.current) return;
       setResults(null);
       setError(err instanceof Error && err.message ? err.message : 'Search failed');
     } finally {
@@ -103,7 +124,11 @@ export function BookPicker({ selectedIds, onChange, excludeIds = [], disabled }:
       </Stack>
 
       {selectedIds.length > 0 && (
-        <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.5, my: 1 }} aria-label="Selected books">
+        <Stack
+          direction="row"
+          sx={{ flexWrap: 'wrap', gap: 0.5, my: 1 }}
+          aria-label="Selected books"
+        >
           {selectedIds.map((id) => (
             <Chip
               key={id}

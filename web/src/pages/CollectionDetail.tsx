@@ -1,9 +1,9 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
 // last-edited: 2026-10-18
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
@@ -31,16 +31,26 @@ import {
   Typography,
 } from '@mui/material';
 import { Delete as DeleteIcon } from '@mui/icons-material';
-import { useCollection } from '../hooks/useCollections';
+import { useCollection, type UseCollectionResult } from '../hooks/useCollections';
 import { type Book, getBooksByIds } from '../services/api';
-import type { CollectionUpdateInput } from '../services/collectionApi';
+import { isAbortError } from '../utils/apiFetch';
+import {
+  CollectionApiError,
+  type Collection,
+  type CollectionUpdateInput,
+} from '../services/collectionApi';
 import { BookPicker } from '../components/collections/BookPicker';
 import { QueryHelp, SortPicker } from '../components/collections/QueryHelp';
-import { MANAGE_TOOLTIP, memberCount, storedMembers } from '../components/collections/collectionUtils';
 import {
+  MANAGE_TOOLTIP,
+  memberCount,
+  storedMembers,
+} from '../components/collections/collectionUtils';
+import {
+  applySortChoice,
   decodeSort,
-  encodeSort,
   queryError,
+  sameSortChoice,
   type SortChoice,
 } from '../components/collections/queryHelpData';
 
@@ -52,70 +62,13 @@ function messageOf(err: unknown, fallback: string): string {
 
 export default function CollectionDetail() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const { collection, loading, error, canManage, refresh, update, materialize, addBooks, removeBook, remove } =
-    useCollection(id);
-
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [query, setQuery] = useState('');
-  const [sort, setSort] = useState<SortChoice>({ field: '', direction: 'asc' });
-  const [limit, setLimit] = useState('');
-  const [adopt, setAdopt] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const ctl = useCollection(id);
+  const { collection, loading, error, refresh } = ctl;
+  // Bumped after a successful Save only: it re-seeds the edit form from the
+  // saved collection. Preview, membership writes, Materialize and a 409 refetch
+  // all replace `collection` but must NOT touch what the user is typing.
+  const [savedVersion, setSavedVersion] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
-  const [picked, setPicked] = useState<string[]>([]);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [page, setPage] = useState(0);
-
-  // Reset the edit form whenever the server's copy changes (load, save, refresh).
-  useEffect(() => {
-    if (!collection) return;
-    setName(collection.name);
-    setDescription(collection.description ?? '');
-    setQuery(collection.query ?? '');
-    setSort(decodeSort(collection.sort_json));
-    setLimit(collection.limit ? String(collection.limit) : '');
-    setAdopt(false);
-  }, [collection]);
-
-  const members = collection ? storedMembers(collection) : [];
-  // A shrinking list (remove, re-evaluate) must not leave the table on a page that no longer exists.
-  const lastPage = Math.max(0, Math.ceil(members.length / PAGE_SIZE) - 1);
-  const safePage = Math.min(page, lastPage);
-  const pageIds = members.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
-  const pageKey = pageIds.join(',');
-  const [books, setBooks] = useState<Map<string, Book>>(new Map());
-  const [booksLoading, setBooksLoading] = useState(false);
-  const [booksError, setBooksError] = useState<string | null>(null);
-  const booksRequest = useRef(0);
-
-  useEffect(() => {
-    // No members: the table is not rendered, so there is nothing to look up.
-    if (pageKey === '') return;
-    const mine = ++booksRequest.current;
-    const ctl = new AbortController();
-    setBooksLoading(true);
-    setBooksError(null);
-    getBooksByIds(pageKey.split(','), ctl.signal)
-      .then((found) => {
-        if (mine !== booksRequest.current) return;
-        setBooks(new Map(found.map((b) => [b.id, b])));
-      })
-      .catch((err: unknown) => {
-        if (mine !== booksRequest.current || (err as { name?: string })?.name === 'AbortError') return;
-        setBooksError(messageOf(err, 'Failed to load the books'));
-      })
-      .finally(() => {
-        if (mine === booksRequest.current) setBooksLoading(false);
-      });
-    return () => {
-      booksRequest.current++;
-      ctl.abort();
-    };
-  }, [pageKey]);
 
   if (loading && !collection) return <Typography sx={{ p: 3 }}>Loading...</Typography>;
   if (!collection) {
@@ -138,6 +91,85 @@ export default function CollectionDetail() {
     );
   }
 
+  return (
+    <CollectionEditor
+      // A new collection id, or a successful save, starts a fresh form.
+      key={`${collection.id}:${savedVersion}`}
+      collection={collection}
+      ctl={ctl}
+      notice={notice}
+      onNotice={setNotice}
+      onSaved={() => setSavedVersion((v) => v + 1)}
+    />
+  );
+}
+
+interface EditorProps {
+  collection: Collection;
+  ctl: UseCollectionResult;
+  notice: string | null;
+  onNotice: (n: string | null) => void;
+  onSaved: () => void;
+}
+
+function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: EditorProps) {
+  const navigate = useNavigate();
+  const { loading, error, canManage, refresh, update, materialize, addBooks, removeBook, remove } =
+    ctl;
+  // What the form was seeded from. Edits are compared with this, not with the
+  // live `collection`, which refreshes underneath the form.
+  const [seed] = useState(collection);
+
+  const [name, setName] = useState(seed.name);
+  const [description, setDescription] = useState(seed.description ?? '');
+  const [query, setQuery] = useState(seed.query ?? '');
+  const [sort, setSort] = useState<SortChoice>(decodeSort(seed.sort_json));
+  const [limit, setLimit] = useState(seed.limit ? String(seed.limit) : '');
+  const [adopt, setAdopt] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [queryServerError, setQueryServerError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [page, setPage] = useState(0);
+
+  const members = storedMembers(collection);
+  // A shrinking list (remove, re-evaluate) must not leave the table on a page that no longer exists.
+  const lastPage = Math.max(0, Math.ceil(members.length / PAGE_SIZE) - 1);
+  const safePage = Math.min(page, lastPage);
+  const pageIds = members.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+  const pageKey = pageIds.join(',');
+
+  // Book lookup for the visible page. Results are keyed by the page they answer,
+  // so "is this page loaded" and "did it fail" are derived, never reset in the
+  // effect body. `known` keeps every book seen so far: a row whose book is not
+  // known yet reads "Loading..." instead of showing a raw id.
+  const [known, setKnown] = useState<Map<string, Book>>(new Map());
+  const [lookup, setLookup] = useState<{ key: string; error: string | null } | null>(null);
+
+  useEffect(() => {
+    if (pageKey === '') return;
+    const abort = new AbortController();
+    Promise.resolve()
+      .then(() => getBooksByIds(pageKey.split(','), abort.signal))
+      .then(
+        (found) => {
+          if (abort.signal.aborted) return;
+          setKnown((prev) => new Map([...prev, ...found.map((b): [string, Book] => [b.id, b])]));
+          setLookup({ key: pageKey, error: null });
+        },
+        (err: unknown) => {
+          if (abort.signal.aborted || isAbortError(err)) return;
+          setLookup({ key: pageKey, error: messageOf(err, 'Failed to load the books') });
+        }
+      );
+    return () => abort.abort();
+  }, [pageKey]);
+
+  const lookupDone = lookup?.key === pageKey;
+  const booksError = lookupDone ? lookup.error : null;
+
   const isDynamic = collection.type === 'dynamic';
   const limitNum = limit.trim() === '' ? 0 : Number(limit);
   const limitInvalid = !Number.isInteger(limitNum) || limitNum < 0;
@@ -146,38 +178,68 @@ export default function CollectionDetail() {
   // Run a write; surface its message where the user is looking; refetch after a 409.
   const run = async (fn: () => Promise<unknown>, success?: string) => {
     setActionError(null);
-    setNotice(null);
+    onNotice(null);
     setSaving(true);
     try {
       await fn();
-      if (success) setNotice(success);
+      if (success) onNotice(success);
+      return true;
     } catch (err) {
       setActionError(messageOf(err, 'The request failed'));
+      if ((err as { status?: number })?.status === 409) await refresh();
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const patch: CollectionUpdateInput = {};
+  if (name.trim() !== seed.name) patch.name = name.trim();
+  if (description.trim() !== (seed.description ?? '')) patch.description = description.trim();
+  if (isDynamic) {
+    if (query.trim() !== (seed.query ?? '')) patch.query = query.trim();
+    // Compared decoded, and written back with any directives past the first kept.
+    if (!sameSortChoice(sort, decodeSort(seed.sort_json))) {
+      patch.sort_json = applySortChoice(seed.sort_json, sort);
+    }
+    if (limitNum !== (seed.limit ?? 0)) patch.limit = limitNum;
+    // adopt_owner only ever rides with a query that is being saved.
+    if (adopt) {
+      if (patch.query === undefined) patch.query = query.trim();
+      patch.adopt_owner = true;
+    }
+  }
+  const dirty = Object.keys(patch).length > 0;
+  const queryDirty = isDynamic && query.trim() !== (seed.query ?? '');
+  const canSave =
+    canManage && dirty && name.trim() !== '' && !queryInvalid && !limitInvalid && !saving;
+
+  const save = async () => {
+    setQueryServerError(null);
+    setActionError(null);
+    onNotice(null);
+    setSaving(true);
+    try {
+      await update(patch);
+      onNotice('Saved.');
+      onSaved(); // re-seeds the form from what the server stored
+    } catch (err) {
+      const message = messageOf(err, 'The request failed');
+      if (patch.query !== undefined && err instanceof CollectionApiError && err.status === 400) {
+        setQueryServerError(message);
+      } else {
+        setActionError(message);
+      }
+      // The edit stays in the form either way; only a conflict needs a re-read.
       if ((err as { status?: number })?.status === 409) await refresh();
     } finally {
       setSaving(false);
     }
   };
 
-  const changed = (): CollectionUpdateInput => {
-    const patch: CollectionUpdateInput = {};
-    if (name.trim() !== collection.name) patch.name = name.trim();
-    if (description.trim() !== (collection.description ?? '')) patch.description = description.trim();
-    if (isDynamic) {
-      if (query.trim() !== (collection.query ?? '')) patch.query = query.trim();
-      if (encodeSort(sort) !== (collection.sort_json ?? '')) patch.sort_json = encodeSort(sort);
-      if (limitNum !== (collection.limit ?? 0)) patch.limit = limitNum;
-      // adopt_owner only ever rides with a query that is being saved.
-      if (adopt && patch.query === undefined) patch.query = query.trim();
-      if (adopt) patch.adopt_owner = true;
-    }
-    return patch;
-  };
-  const patch = changed();
-  const dirty = Object.keys(patch).length > 0;
-  const canSave = canManage && dirty && name.trim() !== '' && !queryInvalid && !limitInvalid && !saving;
-
   const blocked = collection.evaluation_blocked;
+  const titleOf = (bid: string, book: Book | undefined) =>
+    book?.title ?? (lookupDone ? bid : 'Loading...');
 
   return (
     <Box sx={{ p: 3 }}>
@@ -221,7 +283,7 @@ export default function CollectionDetail() {
         </Alert>
       )}
       {notice && (
-        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice(null)}>
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => onNotice(null)}>
           {notice}
         </Alert>
       )}
@@ -249,9 +311,13 @@ export default function CollectionDetail() {
           <>
             <QueryHelp
               value={query}
-              onChange={setQuery}
+              onChange={(next) => {
+                setQuery(next);
+                setQueryServerError(null);
+              }}
               disabled={!canManage}
               creatorId={collection.created_by_user_id}
+              serverError={queryServerError}
             />
             <SortPicker value={sort} onChange={setSort} disabled={!canManage} />
             <TextField
@@ -276,11 +342,7 @@ export default function CollectionDetail() {
         <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
           <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
             <span>
-              <Button
-                variant="contained"
-                disabled={!canSave}
-                onClick={() => void run(() => update(patch), 'Saved.')}
-              >
+              <Button variant="contained" disabled={!canSave} onClick={() => void save()}>
                 Save
               </Button>
             </span>
@@ -295,8 +357,9 @@ export default function CollectionDetail() {
         <Box sx={{ flexGrow: 1 }} />
         {isDynamic ? (
           <>
+            {/* Preview runs the SAVED query, not the text in the box. */}
             <Button disabled={saving || loading} onClick={() => void run(refresh)}>
-              Preview
+              {queryDirty ? 'Preview saved query' : 'Preview'}
             </Button>
             <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
               <span>
@@ -329,8 +392,11 @@ export default function CollectionDetail() {
       </Box>
       {isDynamic && (
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
-          Preview re-runs the query and shows the live result. Materialize also stores it, which is
-          what the Audiobookshelf app serves.
+          Preview re-runs the saved query for anyone who can view the collection. It also refreshes
+          the stored members that the Audiobookshelf app serves, but only as a best effort: if the
+          search index is not ready it quietly shows the previous members. Materialize needs the
+          collections.manage permission, tells you when the index is not ready (503), and reports a
+          failed save or a conflict.
         </Typography>
       )}
 
@@ -340,11 +406,9 @@ export default function CollectionDetail() {
         <Typography sx={{ color: 'text.secondary' }}>
           {isDynamic ? 'No books match this query.' : 'No books in this collection yet.'}
         </Typography>
-      ) : booksLoading && books.size === 0 ? (
-        <Typography sx={{ color: 'text.secondary' }}>Loading books...</Typography>
       ) : (
         <>
-          <Table size="small" aria-label="Members">
+          <Table size="small" aria-label="Members" aria-busy={!lookupDone}>
             <TableHead>
               <TableRow>
                 <TableCell>Title</TableCell>
@@ -354,12 +418,12 @@ export default function CollectionDetail() {
             </TableHead>
             <TableBody>
               {pageIds.map((bid) => {
-                const book = books.get(bid);
+                const book = known.get(bid);
                 return (
                   <TableRow key={bid}>
                     <TableCell>
                       <Link component={RouterLink} to={`/library/${bid}`}>
-                        {book?.title ?? bid}
+                        {titleOf(bid, book)}
                       </Link>
                     </TableCell>
                     <TableCell>{book?.author_name ?? ''}</TableCell>
@@ -426,6 +490,7 @@ export default function CollectionDetail() {
           <Button
             color="error"
             variant="contained"
+            disabled={saving}
             onClick={() => {
               setConfirmDelete(false);
               void run(async () => {

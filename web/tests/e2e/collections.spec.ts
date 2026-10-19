@@ -190,7 +190,9 @@ test.describe('Collections page', () => {
 
     await expect(page.getByText('Test New Static')).toBeVisible();
     // This is the payload the ABS list route returns the collection for (07-F5a).
-    expect(posted).toEqual([{ type: 'static', name: 'Test New Static', description: 'Made on the page' }]);
+    expect(posted).toEqual([
+      { type: 'static', name: 'Test New Static', description: 'Made on the page' },
+    ]);
   });
 
   test('creates a dynamic collection and shows its preview', async ({ page }) => {
@@ -202,7 +204,9 @@ test.describe('Collections page', () => {
     await dialog.getByRole('button', { name: 'Dynamic' }).click();
     await dialog.getByLabel(/^Name/).fill('Test New Dynamic');
     await dialog.getByRole('button', { name: 'Use this query' }).first().click();
-    await expect(dialog.getByText(/reading state of the person who created this collection/)).toBeVisible();
+    await expect(
+      dialog.getByText(/reading state of the person who created this collection/)
+    ).toBeVisible();
     await dialog.getByRole('button', { name: 'Create' }).click();
 
     await expect(page.getByText('Test New Dynamic')).toBeVisible();
@@ -219,7 +223,9 @@ test.describe('Collections page', () => {
     await expect(page.getByRole('link', { name: 'Test Book One' })).toBeVisible();
   });
 
-  test('a user without collections.manage sees the lists but no New or Delete', async ({ page }) => {
+  test('a user without collections.manage sees the lists but no New or Delete', async ({
+    page,
+  }) => {
     await mockCollectionsApi(page, ['library.view']);
     await page.goto('/collections');
 

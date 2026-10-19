@@ -1,5 +1,5 @@
 // file: web/src/components/collections/queryHelpData.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7793a6b3-1c06-4470-ae92-563d9c29b9c4
 // last-edited: 2026-10-18
 
@@ -25,17 +25,28 @@ export interface QueryFieldHelp {
  * would match nothing. They live in SORT_FIELDS.
  */
 export const QUERY_FIELD_HELP: readonly QueryFieldHelp[] = [
-  { name: 'title', example: 'title:test*', description: 'word, "phrase", /RE2/ or glob', group: 'book' },
+  {
+    name: 'title',
+    example: 'title:test*',
+    description: 'word, "phrase", /RE2/ or glob',
+    group: 'book',
+  },
   { name: 'author', example: 'author:smith', description: 'author name', group: 'book' },
   { name: 'narrator', example: 'narrator:jones', description: 'narrator name', group: 'book' },
   { name: 'series', example: 'series:"test series"', description: 'series name', group: 'book' },
   { name: 'format', example: 'format:m4b', description: 'file format', group: 'book' },
   { name: 'genre', example: 'genre:fantasy', description: 'genre', group: 'book' },
-  { name: 'year', example: 'year:>=2015', description: 'publication year; numeric ranges', group: 'book' },
+  {
+    name: 'year',
+    example: 'year:>=2015',
+    description: 'publication year; numeric ranges',
+    group: 'book',
+  },
   {
     name: 'duration',
     example: 'duration:>20h',
-    description: 'human units (20m, 1h30m); a bare number is seconds. Ranges work: duration:30m..2h',
+    description:
+      'human units (20m, 1h30m); a bare number is seconds. Ranges work: duration:30m..2h',
     group: 'book',
   },
   {
@@ -139,6 +150,40 @@ export function decodeSort(sortJson: string | undefined): SortChoice {
     // fall through
   }
   return { field: '', direction: 'asc' };
+}
+
+interface SortDirective {
+  field: string;
+  direction?: string;
+  [extra: string]: unknown;
+}
+
+function parseSortList(sortJson: string | undefined): SortDirective[] {
+  if (!sortJson) return [];
+  try {
+    const parsed: unknown = JSON.parse(sortJson);
+    return Array.isArray(parsed) ? (parsed as SortDirective[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** True when two choices mean the same thing (compared decoded, not as JSON text). */
+export function sameSortChoice(a: SortChoice, b: SortChoice): boolean {
+  return a.field === b.field && (a.field === '' || a.direction === b.direction);
+}
+
+/**
+ * The `sort_json` to store after the user edited the picker, which only ever
+ * shows the FIRST directive: it replaces that one and keeps every later
+ * directive the collection already had, so saving never drops what the page
+ * cannot show. Clearing the picker removes just the first directive.
+ */
+export function applySortChoice(sortJson: string | undefined, choice: SortChoice): string {
+  const rest = parseSortList(sortJson).slice(1);
+  const first = choice.field ? [{ field: choice.field, direction: choice.direction }] : [];
+  const all = [...first, ...rest];
+  return all.length > 0 ? JSON.stringify(all) : '';
 }
 
 /** True when the query text filters on a per-user field (negated or not). */
