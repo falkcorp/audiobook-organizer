@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-10-18
 
@@ -195,8 +195,8 @@ var layerOf = map[string]int{
 	"internal/versionprimary/vptest":    3, // computed: max of imports=2, floored at 3
 	"internal/versions":                 3, // table: domain
 	"internal/watcher":                  3, // computed: max of imports=3, floored at 3
-	"internal/work":                     3, // computed: max of imports=2, floored at 3
 	"internal/wirecontract":             0, // computed: imports no module package (test-only package)
+	"internal/work":                     3, // computed: max of imports=2, floored at 3
 	"internal/writeback":                3, // table: domain
 	"pkg/ops":                           3, // computed: max of imports=3 (auth, undo), floored at 3
 

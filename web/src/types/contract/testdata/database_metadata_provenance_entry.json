@@ -1,0 +1,12 @@
+{
+  "file_value": "synthetic-FileValue",
+  "fetched_value": "synthetic-FetchedValue",
+  "stored_value": "synthetic-StoredValue",
+  "override_value": "synthetic-OverrideValue",
+  "override_locked": true,
+  "lock_source": "synthetic-LockSource",
+  "effective_value": "synthetic-EffectiveValue",
+  "effective_source": "synthetic-EffectiveSource",
+  "comparison_value": "synthetic-ComparisonValue",
+  "updated_at": "2026-01-02T03:04:05Z"
+}

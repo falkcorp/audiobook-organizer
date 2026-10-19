@@ -1,5 +1,5 @@
 # file: tygo.yaml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7a1e5c3b-9d24-4f60-b8a2-1c6e0d4f7b93
 # last-edited: 2026-10-18
 #
@@ -17,6 +17,22 @@ packages:
   - path: "github.com/falkcorp/audiobook-organizer/internal/repairs"
     output_path: "web/src/types/generated/repairs.ts"
     include_files: ["wire.go"]
+    frontmatter: |
+      // file: web/src/types/generated/repairs.ts
+      // version: 1.0.0
+      // guid: b3f61a08-47d2-4c95-9e1a-60d8c2e5f7a1
+      // last-edited: 2026-10-18
+      //
+      // Source of truth: internal/repairs/wire.go. Regenerate with `make generate-types`.
+      // The header is fixed text from tygo.yaml (no date churn); bump it there.
   - path: "github.com/falkcorp/audiobook-organizer/internal/database"
     output_path: "web/src/types/generated/database.ts"
     include_files: ["bookcore.go", "bookfilecore.go", "scan_state.go", "wire_types.go"]
+    frontmatter: |
+      // file: web/src/types/generated/database.ts
+      // version: 1.0.0
+      // guid: c4a72b19-58e3-4da6-8f2b-71e9d3f6a8b2
+      // last-edited: 2026-10-18
+      //
+      // Source of truth: internal/database/{bookcore,bookfilecore,scan_state,wire_types}.go.
+      // Regenerate with `make generate-types`. The header is fixed text from tygo.yaml.

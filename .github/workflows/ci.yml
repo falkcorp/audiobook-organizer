@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.31.0
+# version: 3.31.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-18
 
@@ -83,6 +83,9 @@ jobs:
                 # Generated from Go (tools/cmd/opsgen); the Go job's ops-check
                 # must run when only the generated file changed.
                 web/src/generated/*) go=true ;;
+                # Generated from Go by tygo (tygo.yaml); the Go job's types-check
+                # must run when only a generated type file changed.
+                web/src/types/generated/*) go=true ;;
                 web/*|docs/*|*.md|changelog.d/*|todo.d/*|.claude/*|agents/*|skills/*) ;;
                 *) go=true ;;
               esac

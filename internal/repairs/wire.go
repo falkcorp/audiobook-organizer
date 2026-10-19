@@ -1,5 +1,5 @@
 // file: internal/repairs/wire.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
 // last-edited: 2026-10-18
 
@@ -66,6 +66,8 @@ type RowsPage struct {
 	// exactly the rows "skipped:<kind>" pages. Set only when Class is (then
 	// never nil, so an empty tally reads as {}, not as absent); null
 	// without a class.
+	// The tstype tag is hand-written because a nil map marshals as null and tygo
+	// cannot see that; wirecontract.TestTSTypeTagsMatchGoTypes pins it to the Go type.
 	SkippedByKindInClass map[string]int `json:"skipped_by_kind_in_class" tstype:"{ [key: string]: number } | null"`
 	// ApplicableInClass counts the applicable rows of Class, whatever the
 	// filter: under a selected class the Applicable tab counts exactly the

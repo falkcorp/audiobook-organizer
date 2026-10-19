@@ -1,0 +1,27 @@
+{
+  "needs_deep": true,
+  "hash_stale": true,
+  "header_bad": true,
+  "attempts": 7,
+  "last_error": "synthetic-LastError",
+  "tagged": {
+    "done": true,
+    "attempts": 7,
+    "last_error": "synthetic-LastError"
+  },
+  "duration_ok": {
+    "done": true,
+    "attempts": 7,
+    "last_error": "synthetic-LastError"
+  },
+  "fp_windowed": {
+    "done": true,
+    "attempts": 7,
+    "last_error": "synthetic-LastError"
+  },
+  "fp_full": {
+    "done": true,
+    "attempts": 7,
+    "last_error": "synthetic-LastError"
+  }
+}
