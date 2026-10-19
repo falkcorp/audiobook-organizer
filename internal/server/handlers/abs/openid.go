@@ -1,16 +1,19 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
 package abs
 
 import (
+	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,35 +65,56 @@ import (
 //
 // # The flow now: two hops, like real ABS
 //
-//	hop 1  GET /auth/openid            (app's URLSession, service token only)
-//	       validate redirect_uri + PKCE, park the request under a random id,
-//	       302 → https://<this host>/auth/openid/browser?req=<id>
+//	hop 1  GET  /auth/openid           (app's URLSession, service token only)
+//	       require a verified Cloudflare credential, rate-limit and quota per
+//	       credential, validate redirect_uri + PKCE, park the request under a
+//	       random id, 302 → https://<this host>/auth/openid/browser?req=<id>
 //	       errors: 400 text/plain, never a redirect
 //
-//	hop 2  GET /auth/openid/browser    (system browser — Cloudflare Access
+//	hop 2  GET  /auth/openid/browser   (system browser — Cloudflare Access
 //	                                    authenticates the PERSON here)
-//	       resolve the person from the verified assertion, consume the parked
-//	       request, mint a code bound to its challenge and redirect_uri,
-//	       302 → <redirect_uri>?code=…&state=…
+//	       resolve the person and render a consent page naming the app, the
+//	       callback scheme and the account. Side-effect free: no code is minted
+//	       and the parked request is not consumed.
 //	       errors: 302 → <redirect_uri>?error=access_denied&state=…
 //	       (safe here: ASWebAuthenticationSession is waiting for exactly that)
 //
-//	hop 3  GET /auth/openid/callback   (app's URLSession, service token only)
+//	       POST /auth/openid/browser   (the consent form's Allow / Deny)
+//	       re-resolve the person, check the CSRF token bound to (req id, user),
+//	       consume the parked request, mint a code bound to its challenge and
+//	       redirect_uri, 303 → <redirect_uri>?code=…&state=…
+//
+//	hop 3  GET  /auth/openid/callback  (app's URLSession, service token only)
 //	       redeem code + code_verifier → Authorize JSON via issueSession
 //
 // Hop 1 resolves no identity at all, even when a person assertion is present,
 // and never redirects to a custom scheme. It is the hop the app inspects with
 // its own HTTP client, so the only thing it may ever hand back is an https URL.
 //
+// # Why there is a consent page
+//
+// Nothing the two hops share can tie the browser to the device that started the
+// flow: hop 1 is the app's ephemeral URLSession and hop 2 is the system browser,
+// so a cookie set on hop 1 never reaches hop 2; AudioBooth sends no state; and
+// the client IP is useless (shared reverse proxies in front of the origin, and
+// iCloud Private Relay in front of Safari). So anyone who can start hop 1 can
+// send the hop-2 link to someone else, and a GET that minted on sight would
+// issue a code for whoever clicked it. The code is bound to the starter's PKCE
+// challenge and is only ever delivered to an allow-listed redirect_uri, so the
+// starter still needs that redirect to reach them; but minting for a person who
+// never asked is wrong regardless. The consent page makes minting require the
+// person's explicit Allow, on a POST that carries a token only this server can
+// produce for that request id and that person.
+//
 // # The browser hop and the service token
 //
 // On iOS 17.4+ the browser's first load of hop 2 carries the service token too.
 // If Cloudflare admits that load on the token, the origin sees a valid but
-// person-less assertion. Hop 2 then redirects ONCE to itself with reauth=1,
-// without consuming the request: that second load is not the initial URL, so it
-// carries no service token, and Cloudflare must authenticate the person (by their
-// Access cookie or a fresh IdP login). Only after that does a missing identity
-// become a terminal access_denied.
+// person-less assertion. Hop 2 then redirects ONCE to itself with reauth=1:
+// that second load is not the initial URL, so it carries no service token, and
+// Cloudflare must authenticate the person (by their Access cookie or a fresh IdP
+// login). Only after that does a missing identity become a terminal
+// access_denied.
 //
 // # Why hop 3 does not require an identity assertion
 //
@@ -106,17 +130,28 @@ const (
 	oidcCodeTTL = 60 * time.Second
 
 	// oidcRequestTTL bounds how long a parked hop-1 request waits for the
-	// browser. It has to cover a full IdP sign-in (password, 2FA) in the browser,
-	// and no more.
-	oidcRequestTTL = 10 * time.Minute
+	// browser. It has to cover an IdP sign-in (password, 2FA) plus the consent
+	// tap, and no more: a shorter life is less time for a flood to hold slots.
+	oidcRequestTTL = 5 * time.Minute
 
-	// oidcStoreCap is the most entries either in-memory store holds. Hop 1 is
-	// reachable by anything that gets past the edge, so the parked-request store
-	// must not grow without bound under a flood. When full, a new request is
-	// REFUSED rather than evicting an old one: eviction would let a flood push
-	// real people's in-progress sign-ins out. Human login rates are a handful an
-	// hour; 1024 live entries is far beyond any legitimate peak.
+	// oidcStoreCap is the most entries either in-memory store holds. When the
+	// store is full the OLDEST entry is evicted, so a flood can never pin the
+	// store shut: new sign-ins always get in. Combined with oidcPerCallerCap, a
+	// flood would need oidcStoreCap/oidcPerCallerCap distinct verified
+	// Cloudflare credentials to push anyone else out. Human login rates are a
+	// handful an hour; 1024 live entries is far beyond any legitimate peak.
 	oidcStoreCap = 1024
+
+	// oidcPerCallerCap is the most live parked requests (or unredeemed codes)
+	// one key may hold. A new one evicts that key's own oldest, so a person who
+	// abandons a sign-in and retries is never blocked, and a caller flooding
+	// hop 1 only ever churns its own slots.
+	oidcPerCallerCap = 3
+
+	// Hop-1 rate limit per verified Cloudflare credential. Generous for a person
+	// retrying; tight enough that one credential cannot spin the store.
+	oidcRatePerMinute = 10
+	oidcRateBurst     = 5
 
 	// oidcAuthMethod labels this path in audit records and ABSIdentity.Mode.
 	oidcAuthMethod = "openid"
@@ -139,37 +174,56 @@ const (
 
 var oidcLog = logger.New("abs")
 
-// errOIDCStoreFull is returned by oidcTTLStore.put when the store is at its cap
-// even after expired entries are swept.
-var errOIDCStoreFull = errors.New("abs: openid store is full")
-
 // oidcTTLStore is a bounded, single-use, expiring map. It backs both the parked
 // hop-1 requests and the minted authorization codes.
 //
 // Everything lives in memory: a restart invalidates every in-flight sign-in,
 // which is correct for credentials that live seconds to minutes, and keeps
 // short-lived secrets out of the database.
+//
+// Bounds, both enforced on put and both by EVICTION, never refusal:
+//   - per owner: at most perOwner live entries; a new one evicts that owner's
+//     oldest;
+//   - global: at most max entries; expired ones are swept first, then the
+//     oldest live one is evicted.
+//
+// The scans are O(n) with n ≤ max (1024), on a path that runs a handful of times
+// an hour and is rate-limited per caller, so a heap or per-owner index would be
+// complexity without a payoff.
 type oidcTTLStore[V any] struct {
-	mu      sync.Mutex
-	entries map[string]oidcTTLEntry[V]
-	max     int
-	purgeAt time.Time
+	mu       sync.Mutex
+	entries  map[string]*oidcTTLEntry[V]
+	max      int
+	perOwner int
+	seq      uint64
+	purgeAt  time.Time
 }
 
 type oidcTTLEntry[V any] struct {
 	value     V
+	owner     string
 	expiresAt time.Time
+	seq       uint64 // insertion order; lower is older
 }
 
-func newOIDCTTLStore[V any](maxEntries int) *oidcTTLStore[V] {
-	return &oidcTTLStore[V]{entries: map[string]oidcTTLEntry[V]{}, max: maxEntries}
+// oidcPutResult reports what a put had to evict to make room.
+type oidcPutResult struct {
+	OwnerEvicted  int // the owner's own oldest entries, over perOwner
+	GlobalEvicted int // someone's oldest live entry, at the global cap
 }
 
-// put registers key until now+ttl. It refuses with errOIDCStoreFull rather than
-// evicting a live entry (see oidcStoreCap).
-func (s *oidcTTLStore[V]) put(key string, value V, now time.Time, ttl time.Duration) error {
+func newOIDCTTLStore[V any](maxEntries, perOwner int) *oidcTTLStore[V] {
+	return &oidcTTLStore[V]{entries: map[string]*oidcTTLEntry[V]{}, max: maxEntries, perOwner: perOwner}
+}
+
+// put registers key, owned by owner, until now+ttl. It always succeeds; see the
+// type comment for what it evicts. An empty owner is exempt from the per-owner
+// bound.
+func (s *oidcTTLStore[V]) put(key, owner string, value V, now time.Time, ttl time.Duration) oidcPutResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var res oidcPutResult
+	delete(s.entries, key) // re-putting a key replaces it and frees its slot
 	if len(s.entries) >= s.max || now.Sub(s.purgeAt) > time.Minute {
 		for k, e := range s.entries {
 			if !now.Before(e.expiresAt) {
@@ -178,15 +232,50 @@ func (s *oidcTTLStore[V]) put(key string, value V, now time.Time, ttl time.Durat
 		}
 		s.purgeAt = now
 	}
-	if _, exists := s.entries[key]; !exists && len(s.entries) >= s.max {
-		return errOIDCStoreFull
+	if owner != "" && s.perOwner > 0 {
+		for s.countOwnerLocked(owner) >= s.perOwner {
+			s.evictOldestLocked(owner)
+			res.OwnerEvicted++
+		}
 	}
-	s.entries[key] = oidcTTLEntry[V]{value: value, expiresAt: now.Add(ttl)}
-	return nil
+	for len(s.entries) >= s.max {
+		s.evictOldestLocked("")
+		res.GlobalEvicted++
+	}
+	s.seq++
+	s.entries[key] = &oidcTTLEntry[V]{value: value, owner: owner, expiresAt: now.Add(ttl), seq: s.seq}
+	return res
+}
+
+func (s *oidcTTLStore[V]) countOwnerLocked(owner string) int {
+	n := 0
+	for _, e := range s.entries {
+		if e.owner == owner {
+			n++
+		}
+	}
+	return n
+}
+
+// evictOldestLocked removes the oldest entry, or the oldest of owner's when
+// owner is non-empty.
+func (s *oidcTTLStore[V]) evictOldestLocked(owner string) {
+	oldestKey, oldestSeq, found := "", uint64(0), false
+	for k, e := range s.entries {
+		if owner != "" && e.owner != owner {
+			continue
+		}
+		if !found || e.seq < oldestSeq {
+			oldestKey, oldestSeq, found = k, e.seq, true
+		}
+	}
+	if found {
+		delete(s.entries, oldestKey)
+	}
 }
 
 // take returns the entry for key and removes it. It reports false for a key
-// that is unknown, already taken, or expired at now.
+// that is unknown, already taken, evicted, or expired at now.
 //
 // SINGLE USE is enforced here rather than at the call site: the delete happens
 // under the same lock as the read, so two concurrent redemptions of one key
@@ -207,12 +296,17 @@ func (s *oidcTTLStore[V]) take(key string, now time.Time) (V, bool) {
 	return e.value, true
 }
 
-// live reports whether key is present and unexpired, without consuming it.
-func (s *oidcTTLStore[V]) live(key string, now time.Time) bool {
+// peek returns the entry for key without consuming it, or false when it is
+// unknown, taken, evicted or expired.
+func (s *oidcTTLStore[V]) peek(key string, now time.Time) (V, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[key]
-	return ok && now.Before(e.expiresAt)
+	if !ok || !now.Before(e.expiresAt) {
+		var zero V
+		return zero, false
+	}
+	return e.value, true
 }
 
 // oidcPendingCode is one minted authorization code awaiting redemption.
@@ -231,16 +325,21 @@ type oidcPendingRequest struct {
 	RedirectURI string
 	State       string
 	ClientID    string
-	// Hop 1's client, recorded for the hop-2 audit line. Not enforced: Safari
-	// with iCloud Private Relay legitimately reaches us from a different
-	// address than the app's own URLSession.
+	// Hop 1's verified Cloudflare credential key (svc:<token> or email:<…>),
+	// for the per-caller quota and the hop-2 audit line.
+	CallerKey string
+	// Hop 1's client, recorded for the audit line. Not enforced: Safari with
+	// iCloud Private Relay legitimately reaches us from a different address than
+	// the app's own URLSession, and behind the shared proxies every caller has
+	// the same address anyway.
 	SourceIP  string
 	UserAgent string
 }
 
 // oidcCodes is package-level because the web OAuth deep-link flow
 // (internal/server/handlers) mints into it through MintAppAuthorizationCode.
-var oidcCodes = newOIDCTTLStore[oidcPendingCode](oidcStoreCap)
+// Codes are owned by the user they were minted for.
+var oidcCodes = newOIDCTTLStore[oidcPendingCode](oidcStoreCap, oidcPerCallerCap)
 
 // OIDCRedirectURIsEnvVar overrides the redirect_uri allowlist (comma-separated,
 // exact matches). Set it when adding a client whose callback scheme differs.
@@ -332,14 +431,12 @@ func mintOIDCCode(userID, email, challenge, redirectURI string, now time.Time) (
 	if err != nil {
 		return "", err
 	}
-	if err := oidcCodes.put(code, oidcPendingCode{
+	oidcCodes.put(code, userID, oidcPendingCode{
 		UserID:      userID,
 		Email:       email,
 		Challenge:   challenge,
 		RedirectURI: redirectURI,
-	}, now, oidcCodeTTL); err != nil {
-		return "", err
-	}
+	}, now, oidcCodeTTL)
 	return code, nil
 }
 
@@ -352,13 +449,16 @@ func AppRedirectURL(target, code, state string) string {
 // OpenIDAuthorize handles GET /auth/openid — hop 1, called by the app's own HTTP
 // client, which does not follow redirects and carries only a service token.
 //
-// It resolves no identity. It validates redirect_uri and PKCE, parks the request
-// under a random single-use id, and 302s to hop 2 on this server's own https
-// origin. Every failure is a 400 with a plain-text body and no Location: the app
-// shows a 400 body to the user and treats any other status as a generic error,
-// and it hands any Location it receives to ASWebAuthenticationSession, which
-// crashes on anything but an http(s) URL. So this hop never redirects to the
-// client's custom scheme, on success or on failure.
+// It resolves no identity. It requires a VERIFIED Cloudflare credential (the
+// app's service token, or a person's assertion), rate-limits and quotas per that
+// credential, validates redirect_uri and PKCE, parks the request under a random
+// single-use id, and 302s to hop 2 on this server's own https origin.
+//
+// Every failure is a 400 with a plain-text body and no Location: the app shows a
+// 400 body to the user and treats any other status as a generic error, and it
+// hands any Location it receives to ASWebAuthenticationSession, which crashes on
+// anything but an http(s) URL. So this hop never redirects to the client's
+// custom scheme, on success or on failure.
 func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 	oidcNoStore(c)
 
@@ -393,6 +493,23 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 			"Single sign-on is not available on this server. Sign in with a username and password.")
 		return
 	}
+	// The verified credential is the quota and rate-limit key. c.ClientIP() is
+	// not usable: the origin trusts no forwarded headers, and behind the shared
+	// reverse proxies every caller has the same address, so a per-IP quota would
+	// let one caller lock out everyone. A request with no verified credential
+	// never came through Cloudflare Access, and such a flow could not complete
+	// at hop 2 anyway, so it is refused before it can occupy a slot.
+	callerKey, ok := h.resolver.CFCallerKey(c)
+	if !ok {
+		h.oidcAuthorizeReject(c, "no-verified-credential",
+			"Single sign-on must go through Cloudflare Access. Check the app's custom headers.")
+		return
+	}
+	if !h.oidcLimiter.AllowKey("openid:" + callerKey) {
+		oidcLog.Warn("openid authorize rate-limited: caller=%s", logger.SanitizeLogValue(callerKey))
+		h.oidcAuthorizeReject(c, "rate-limited", "Too many sign-in attempts. Wait a minute and try again.")
+		return
+	}
 	// PKCE is mandatory, and only S256 is accepted. "plain" would let anyone who
 	// observes the redirect redeem the code, which on a custom URL scheme is a
 	// realistic threat: another installed app can register the same scheme.
@@ -418,24 +535,27 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 		h.oidcAuthorizeReject(c, "request-id-error", "Could not start sign-in. Try again.")
 		return
 	}
-	if err := h.oidcRequests.put(id, oidcPendingRequest{
+	res := h.oidcRequests.put(id, callerKey, oidcPendingRequest{
 		Challenge:   challenge,
 		RedirectURI: redirectURI,
 		State:       state,
 		ClientID:    clientID,
+		CallerKey:   callerKey,
 		SourceIP:    strings.TrimSpace(c.ClientIP()),
 		UserAgent:   c.Request.UserAgent(),
-	}, h.now(), oidcRequestTTL); err != nil {
-		oidcLog.Warn("openid authorize refused a new sign-in: %v (cap %d)", err, oidcStoreCap)
-		h.oidcAuthorizeReject(c, "pending-store-full",
-			"Too many sign-ins are in progress. Try again in a few minutes.")
-		return
+	}, h.now(), oidcRequestTTL)
+	if res.GlobalEvicted > 0 {
+		// Only reachable when many distinct credentials are parking requests at
+		// once: a flood signal worth a line.
+		oidcLog.Warn("openid authorize evicted %d parked request(s) at the global cap %d (caller=%s)",
+			res.GlobalEvicted, oidcStoreCap, logger.SanitizeLogValue(callerKey))
 	}
 
 	absauth.Audit(absauth.AuditEvent{
 		Action: "openid-authorize", Outcome: absauth.OutcomeSuccess, Mode: oidcAuthMethod,
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: "browser-hop-issued",
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
+		ServiceToken: servermiddleware.ABSServiceToken(c),
 	})
 	c.Header("Location", oidcBrowserURL(origin, id, false))
 	c.Status(http.StatusFound)
@@ -447,6 +567,7 @@ func (h *Handler) oidcAuthorizeReject(c *gin.Context, reason, message string) {
 		Action: "openid-authorize", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: reason,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
+		ServiceToken: servermiddleware.ABSServiceToken(c),
 	})
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.String(http.StatusBadRequest, message)
@@ -457,17 +578,25 @@ func (h *Handler) oidcAuthorizeReject(c *gin.Context, reason, message string) {
 // browser by ASWebAuthenticationSession. Cloudflare Access authenticates the
 // person in front of this route, so the verified assertion names them.
 //
-// The parked request is consumed before any terminal answer, so a req id yields
-// at most one code or one error. Its redirect_uri and state come from the parked
-// record, never from this request's query.
+// This GET is SIDE-EFFECT FREE with respect to the flow: it never mints a code
+// and never consumes the parked request. With a verified person it renders the
+// consent page; minting happens only on that page's POST (OpenIDBrowserConsent).
+// Its error answers go to the parked redirect_uri and state, never to anything
+// in this request's query.
+//
+// Identity resolution itself may JIT-provision an allowlisted Cloudflare user,
+// exactly as any CF-authenticated ABS request does; the req id is checked first
+// so a junk or dead link cannot trigger even that.
 func (h *Handler) OpenIDBrowser(c *gin.Context) {
-	oidcNoStore(c)
-	c.Header("Referrer-Policy", "no-referrer")
+	oidcBrowserHeaders(c)
 
 	reqID := c.Query("req")
-	// Check the id BEFORE resolving identity: resolution can provision a user,
-	// and a junk or replayed link must not cause that.
-	if !isS256Shaped(reqID) || !h.oidcRequests.live(reqID, h.now()) {
+	if !isS256Shaped(reqID) {
+		h.oidcBrowserDead(c)
+		return
+	}
+	pending, ok := h.oidcRequests.peek(reqID, h.now())
+	if !ok {
 		h.oidcBrowserDead(c)
 		return
 	}
@@ -476,9 +605,9 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 	noPerson := authErr == nil && (identity == nil || identity.User == nil)
 
 	// A valid assertion that names no person: on iOS 17.4+ the initial browser
-	// load carries the app's service token. Redirect to ourselves once, without
-	// consuming the request; that load is not the initial URL, carries no
-	// service token, and so makes Cloudflare authenticate the person.
+	// load carries the app's service token. Redirect to ourselves once; that load
+	// is not the initial URL, carries no service token, and so makes Cloudflare
+	// authenticate the person.
 	if noPerson && strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)) != "" && c.Query(oidcReauthParam) == "" {
 		if origin, ok := oidcRequestOrigin(c); ok {
 			oidcLog.Info("openid browser hop carried a non-person assertion (service_token=%s); redirecting once to shed it",
@@ -489,24 +618,11 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		}
 	}
 
-	pending, ok := h.oidcRequests.take(reqID, h.now())
-	if !ok {
-		// Lost a race with a concurrent load of the same link, or expired since
-		// the check above.
-		h.oidcBrowserDead(c)
-		return
-	}
-
-	ev := absauth.AuditEvent{
-		Action: "openid-browser", Mode: oidcAuthMethod,
-		SourceIP: strings.TrimSpace(c.ClientIP()), Path: c.Request.URL.Path,
-		UserAgent: c.Request.UserAgent(), ServiceToken: servermiddleware.ABSServiceToken(c),
-	}
-
+	ev := h.oidcBrowserAudit(c, pending)
 	if authErr != nil {
-		oidcLog.Warn("openid browser hop rejected an assertion: reason=%s status=%d email=%s hop1_ip=%s",
+		oidcLog.Warn("openid browser hop rejected an assertion: reason=%s status=%d email=%s caller=%s",
 			authErr.Reason, authErr.Status, logger.SanitizeLogValue(authErr.Email),
-			logger.SanitizeLogValue(pending.SourceIP))
+			logger.SanitizeLogValue(pending.CallerKey))
 		ev.Outcome = oidcOutcomeForStatus(authErr.Status)
 		ev.Reason = authErr.Reason
 		ev.Email = authErr.Email
@@ -515,7 +631,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		if authErr.Status >= http.StatusInternalServerError {
 			errCode = "server_error"
 		}
-		oidcRedirectError(c, pending.RedirectURI, pending.State, errCode, authErr.Message)
+		oidcRedirectError(c, http.StatusFound, pending.RedirectURI, pending.State, errCode, authErr.Message)
 		return
 	}
 	if noPerson {
@@ -523,34 +639,140 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		// deployment that means the request reached the origin without Cloudflare
 		// Access authenticating a person. Report it through the client's callback:
 		// ASWebAuthenticationSession is waiting for exactly that navigation and
-		// closes cleanly on it.
-		oidcLog.Warn("openid browser hop resolved no verified identity: service_token=%s reauth=%t hop1_ip=%s client_id=%s",
+		// closes cleanly on it. The parked request is left to expire.
+		oidcLog.Warn("openid browser hop resolved no verified identity: service_token=%s reauth=%t caller=%s client_id=%s",
 			logger.SanitizeLogValue(ev.ServiceToken), c.Query(oidcReauthParam) != "",
-			logger.SanitizeLogValue(pending.SourceIP), logger.SanitizeLogValue(pending.ClientID))
+			logger.SanitizeLogValue(pending.CallerKey), logger.SanitizeLogValue(pending.ClientID))
 		ev.Outcome = absauth.OutcomeDenied
 		ev.Reason = "no-verified-identity"
 		absauth.Audit(ev)
-		oidcRedirectError(c, pending.RedirectURI, pending.State, "access_denied",
+		oidcRedirectError(c, http.StatusFound, pending.RedirectURI, pending.State, "access_denied",
 			"no verified identity on this request")
 		return
 	}
 
 	ev.UserID, ev.Username, ev.Email = identity.User.ID, identity.User.Username, identity.Email
+	ev.Outcome = absauth.OutcomeSuccess
+	ev.Reason = "consent-shown"
+	absauth.Audit(ev)
+	h.renderOIDCConsent(c, reqID, pending, identity)
+}
+
+// OpenIDBrowserConsent handles POST /auth/openid/browser — the consent page's
+// Allow or Deny. This is the ONLY place a code is minted for the CF flow.
+//
+// Three independent checks stand between a cross-site request and a code:
+//   - the person is re-resolved from THIS request's verified assertion;
+//   - the csrf field must equal oidcConsentToken(req, that person's user id), an
+//     HMAC under a per-process secret, so a token is useless for any other
+//     request id or any other account, and cannot be computed off-server;
+//   - an Origin header, when the browser sends one, must be this origin.
+//
+// Failures before the take answer inline and do not consume the parked request,
+// so a forged POST cannot burn someone's in-progress sign-in.
+func (h *Handler) OpenIDBrowserConsent(c *gin.Context) {
+	oidcBrowserHeaders(c)
+
+	if origin := strings.TrimSpace(c.GetHeader("Origin")); origin != "" {
+		if own, ok := oidcRequestOrigin(c); !ok || origin != own {
+			h.oidcConsentRefuse(c, "origin-mismatch", "This sign-in request did not come from this server.")
+			return
+		}
+	}
+	reqID := c.PostForm("req")
+	if !isS256Shaped(reqID) {
+		h.oidcBrowserDead(c)
+		return
+	}
+	if _, ok := h.oidcRequests.peek(reqID, h.now()); !ok {
+		h.oidcBrowserDead(c)
+		return
+	}
+
+	identity, authErr := h.resolver.ResolveCFAssertion(c)
+	if authErr != nil || identity == nil || identity.User == nil {
+		h.oidcConsentRefuse(c, "no-verified-identity",
+			"Your sign-in could not be verified. Close this window and sign in again from the app.")
+		return
+	}
+	want := h.oidcConsentToken(reqID, identity.User.ID)
+	if subtle.ConstantTimeCompare([]byte(want), []byte(c.PostForm("csrf"))) != 1 {
+		h.oidcConsentRefuse(c, "consent-token-invalid",
+			"This sign-in confirmation is not valid. Close this window and sign in again from the app.")
+		return
+	}
+
+	pending, ok := h.oidcRequests.take(reqID, h.now())
+	if !ok {
+		// Lost a race with a concurrent submit of the same page, or expired.
+		h.oidcBrowserDead(c)
+		return
+	}
+	ev := h.oidcBrowserAudit(c, pending)
+	ev.UserID, ev.Username, ev.Email = identity.User.ID, identity.User.Username, identity.Email
+
+	if c.PostForm("decision") != "allow" {
+		ev.Outcome = absauth.OutcomeDenied
+		ev.Reason = "consent-declined"
+		absauth.Audit(ev)
+		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, pending.State, "access_denied",
+			"the user declined the sign-in")
+		return
+	}
+
 	code, err := mintOIDCCode(identity.User.ID, identity.Email, pending.Challenge, pending.RedirectURI, h.now())
 	if err != nil {
-		oidcLog.Error("openid browser hop could not mint a code: user_id=%s: %v",
+		oidcLog.Error("openid consent could not mint a code: user_id=%s: %v",
 			logger.SanitizeLogValue(identity.User.ID), err)
 		ev.Outcome = absauth.OutcomeError
 		ev.Reason = "code-mint-error"
 		absauth.Audit(ev)
-		oidcRedirectError(c, pending.RedirectURI, pending.State, "server_error", "could not mint code")
+		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, pending.State, "server_error", "could not mint code")
 		return
 	}
-
 	ev.Outcome = absauth.OutcomeSuccess
 	ev.Reason = "code-issued"
 	absauth.Audit(ev)
-	oidcRedirect(c, pending.RedirectURI, map[string]string{"code": code, "state": pending.State})
+	oidcRedirect(c, http.StatusSeeOther, pending.RedirectURI, map[string]string{"code": code, "state": pending.State})
+}
+
+// oidcConsentToken is the consent form's CSRF token: HMAC-SHA256 over the req id
+// and the user id under a per-process random key. Stateless, bound to one
+// request and one account, and invalidated by a restart along with the parked
+// requests it protects.
+func (h *Handler) oidcConsentToken(reqID, userID string) string {
+	m := hmac.New(sha256.New, h.oidcConsentKey)
+	m.Write([]byte("abs-openid-consent\x00"))
+	m.Write([]byte(reqID))
+	m.Write([]byte{0})
+	m.Write([]byte(userID))
+	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+}
+
+// oidcBrowserAudit is the common part of every hop-2 audit record.
+func (h *Handler) oidcBrowserAudit(c *gin.Context, pending oidcPendingRequest) absauth.AuditEvent {
+	st := servermiddleware.ABSServiceToken(c)
+	if st == "" && strings.HasPrefix(pending.CallerKey, "svc:") {
+		// The hop-1 service token, so the token↔person pairing is on this line.
+		st = strings.TrimPrefix(pending.CallerKey, "svc:")
+	}
+	return absauth.AuditEvent{
+		Action: "openid-browser", Mode: oidcAuthMethod,
+		SourceIP: strings.TrimSpace(c.ClientIP()), Path: c.Request.URL.Path,
+		UserAgent: c.Request.UserAgent(), ServiceToken: st,
+	}
+}
+
+// oidcConsentRefuse answers a consent POST that failed a check before the take.
+func (h *Handler) oidcConsentRefuse(c *gin.Context, reason, message string) {
+	absauth.Audit(absauth.AuditEvent{
+		Action: "openid-consent", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: reason,
+		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
+	})
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.String(http.StatusForbidden, message)
+	c.Abort()
 }
 
 // oidcBrowserDead answers hop 2 for an unknown, expired or used id. There is no
@@ -566,6 +788,87 @@ func (h *Handler) oidcBrowserDead(c *gin.Context) {
 	c.String(http.StatusBadRequest,
 		"This sign-in link is invalid, has expired, or was already used. Close this window and sign in again from the app.")
 	c.Abort()
+}
+
+// oidcKnownClients names apps by their registered callback scheme. The consent
+// page names the app from the ALLOW-LISTED redirect_uri, never from the
+// caller-supplied client_id, which anyone starting hop 1 can set to anything.
+var oidcKnownClients = map[string]string{"audiobooth": "AudioBooth"}
+
+var oidcConsentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in to {{.App}}?</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f6f4;--fg:#1c1c1a;--muted:#5d5d58;--card:#fff;--accent:#2f5d50;--line:#d9d9d4}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ececea;--muted:#a3a39d;--card:#20201f;--accent:#7fb8a6;--line:#3a3a37}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,system-ui,sans-serif}
+main{max-width:26rem;margin:12vh auto 0;padding:1.5rem 1rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.5rem}
+h1{font-size:1.25rem;margin:0 0 1rem}
+.who{font-weight:600;word-break:break-all}
+.small{color:var(--muted);font-size:.9rem}
+code{font-size:.9rem}
+.row{display:flex;gap:.75rem;margin-top:1.25rem}
+button{flex:1;font:inherit;padding:.7rem 1rem;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--fg)}
+button.allow{background:var(--accent);border-color:var(--accent);color:var(--card);font-weight:600}
+</style></head>
+<body><main><div class="card">
+<h1>Sign in to {{.App}}?</h1>
+<p>{{.App}} is asking to sign in to this server as</p>
+<p class="who">{{.Account}}</p>
+<p class="small">The app gets access to your library as this account. You will be returned to <code>{{.Scheme}}://</code>.</p>
+<p class="small">If you did not just start signing in from {{.App}}, choose Deny.</p>
+<form method="post" action="{{.Action}}">
+<input type="hidden" name="req" value="{{.Req}}">
+<input type="hidden" name="csrf" value="{{.Token}}">
+<div class="row">
+<button type="submit" name="decision" value="deny">Deny</button>
+<button type="submit" name="decision" value="allow" class="allow">Allow</button>
+</div>
+</form>
+</div></main></body></html>
+`))
+
+// renderOIDCConsent writes the consent page. html/template escapes every value;
+// the only caller-influenced text on it is the redirect_uri's scheme, which is
+// already on the allowlist.
+func (h *Handler) renderOIDCConsent(c *gin.Context, reqID string, pending oidcPendingRequest, identity *servermiddleware.ABSIdentity) {
+	scheme := pending.RedirectURI
+	if i := strings.Index(scheme, ":"); i >= 0 {
+		scheme = scheme[:i]
+	}
+	app := oidcKnownClients[strings.ToLower(scheme)]
+	if app == "" {
+		app = "The app"
+	}
+	account := strings.TrimSpace(identity.Email)
+	if account == "" {
+		account = identity.User.Username
+	}
+	var buf bytes.Buffer
+	if err := oidcConsentTemplate.Execute(&buf, map[string]string{
+		"App": app, "Account": account, "Scheme": scheme,
+		"Action": OIDCBrowserPath, "Req": reqID, "Token": h.oidcConsentToken(reqID, identity.User.ID),
+	}); err != nil {
+		oidcLog.Error("openid consent page failed to render: %v", err)
+		c.String(http.StatusInternalServerError, "Could not render the sign-in page.")
+		return
+	}
+	c.Data(http.StatusOK, "text/html; charset=utf-8", buf.Bytes())
+}
+
+// oidcBrowserHeaders hardens every hop-2 response: no caching (they carry
+// request ids and codes), no referrer, and no framing — a consent page that can
+// be framed can be clickjacked into an Allow. No form-action directive: Chrome
+// applies it to the redirect after a submit, which would block the callback
+// scheme.
+func oidcBrowserHeaders(c *gin.Context) {
+	oidcNoStore(c)
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("X-Frame-Options", "DENY")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
 }
 
 // OpenIDCallback handles GET /auth/openid/callback — the code-for-session
@@ -715,15 +1018,16 @@ func oidcOutcomeForStatus(status int) absauth.Outcome {
 	}
 }
 
-// oidcRedirect 302s to target with params appended, skipping empty values.
+// oidcRedirect redirects to target with params appended, skipping empty values.
+// status is 302 from hop 2's GET and 303 from the consent POST.
 //
 // The Location header is written directly rather than via c.Redirect because the
 // target is a custom scheme (audiobooth://oauth) — this keeps the value exactly
 // as the client registered it. Only hop 2 calls this; hop 1 never redirects to
 // the client's target.
-func oidcRedirect(c *gin.Context, target string, params map[string]string) {
+func oidcRedirect(c *gin.Context, status int, target string, params map[string]string) {
 	c.Header("Location", buildOIDCRedirect(target, params))
-	c.Status(http.StatusFound)
+	c.Status(status)
 }
 
 // buildOIDCRedirect assembles the callback URL. Separated from the gin plumbing
@@ -759,8 +1063,8 @@ func buildOIDCRedirect(target string, params map[string]string) string {
 
 // oidcRedirectError reports a hop-2 failure through the client's own callback so
 // its web session closes with a message instead of hanging.
-func oidcRedirectError(c *gin.Context, target, state, code, description string) {
-	oidcRedirect(c, target, map[string]string{
+func oidcRedirectError(c *gin.Context, status int, target, state, code, description string) {
+	oidcRedirect(c, status, target, map[string]string{
 		"error":             code,
 		"error_description": description,
 		"state":             state,

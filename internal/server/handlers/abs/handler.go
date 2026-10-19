@@ -23,7 +23,9 @@ package abs
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -394,9 +396,16 @@ type Handler struct {
 	sessions *sessionRegistry
 
 	// oidcRequests parks /auth/openid (hop 1) requests until the system browser
-	// arrives at /auth/openid/browser (hop 2). Bounded and single-use; see
-	// openid.go. Per handler, and timed by h.now, so SetClock drives expiry.
+	// arrives at /auth/openid/browser (hop 2). Bounded per caller and globally,
+	// single-use; see openid.go. Per handler, and timed by h.now, so SetClock
+	// drives expiry.
 	oidcRequests *oidcTTLStore[oidcPendingRequest]
+	// oidcLimiter rate-limits hop 1 per verified Cloudflare credential.
+	oidcLimiter *servermiddleware.IPRateLimiter
+	// oidcConsentKey keys the consent form's CSRF token (openid.go
+	// oidcConsentToken). Random per process: the parked requests it protects
+	// do not survive a restart either.
+	oidcConsentKey []byte
 
 	// refreshLocks holds one mutex per session id — the per-session single-flight
 	// lock of §3.4 step 1. It serializes concurrent refreshes of the SAME session so
@@ -565,7 +574,12 @@ func New(o Options) (*Handler, error) {
 		newID:       func() string { return ulid.Make().String() },
 	}
 	h.sessions = newSessionRegistry(h.nowFn)
-	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap)
+	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap, oidcPerCallerCap)
+	h.oidcLimiter = servermiddleware.NewIPRateLimiter(oidcRatePerMinute, oidcRateBurst)
+	h.oidcConsentKey = make([]byte, 32)
+	if _, err := rand.Read(h.oidcConsentKey); err != nil {
+		return nil, fmt.Errorf("abs: generate openid consent key: %w", err)
+	}
 	return h, nil
 }
 
@@ -614,13 +628,17 @@ func (h *Handler) Register(r gin.IRouter) {
 	//   - /auth/openid is called by the app's own HTTP client with only a
 	//     service token. It resolves nobody; it parks the request and 302s to
 	//     the browser hop on this origin.
-	//   - /auth/openid/browser runs in the system browser, where Cloudflare
-	//     Access authenticates the PERSON. It mints a code only for a verified
-	//     identity.
+	//   - GET /auth/openid/browser runs in the system browser, where Cloudflare
+	//     Access authenticates the PERSON, and renders a consent page. It mints
+	//     nothing.
+	//   - POST /auth/openid/browser is that page's Allow/Deny. It mints a code
+	//     only for a verified person presenting the CSRF token bound to the
+	//     request id and that person.
 	//   - /auth/openid/callback is authenticated by the one-time code plus its
 	//     PKCE verifier.
 	r.GET("/auth/openid", h.OpenIDAuthorize)
 	r.GET(OIDCBrowserPath, h.OpenIDBrowser)
+	r.POST(OIDCBrowserPath, h.OpenIDBrowserConsent)
 	r.GET("/auth/openid/callback", h.OpenIDCallback)
 
 	auth := servermiddleware.ABSRequireAuth(h.resolver)
