@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
 // last-edited: 2026-10-19
 
@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -371,6 +372,58 @@ func TestBatchApplyFromCache_AResendCannotUncountAQueuedChunk(t *testing.T) {
 	w := batchSend(h, "u1", chunkBody(`"f","g","h"`, "B", 2, 5))
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "8 books of a 5-book batch were not queued: %s", w.Body.String())
 	assert.Equal(t, 2, ops.calls)
+}
+
+// gatedEnqueuer blocks every EnqueueOp until release is closed, and counts the
+// calls: it simulates a first send whose op id is not recorded yet.
+type gatedEnqueuer struct {
+	release chan struct{}
+	entered chan struct{}
+	calls   atomic.Int32
+	fail    bool
+}
+
+func (e *gatedEnqueuer) EnqueueOp(_ context.Context, _ string, _ any, _ ...opsregistry.EnqueueOption) (string, error) {
+	e.calls.Add(1)
+	e.entered <- struct{}{}
+	select {
+	case <-e.release:
+	case <-time.After(3 * time.Second): // a wrongly enqueued resend must fail the test, not hang it
+		return "", errors.New("gate never released")
+	}
+	if e.fail {
+		return "", errors.New("queue down")
+	}
+	return "op-gated", nil
+}
+
+// A resend that arrives while the first send is still being queued (its op id
+// is not recorded) is a 409: nothing is enqueued and nothing is released, so
+// the first send's chunk stays counted whichever way it ends.
+func TestBatchApplyFromCache_AResendWhileTheFirstIsInFlightIs409(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	ops := &gatedEnqueuer{release: make(chan struct{}), entered: make(chan struct{}, 4)}
+	h := newDispatchHandler(t, ops)
+
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)) }()
+	<-ops.entered // the first send is inside EnqueueOp, no op recorded
+
+	w := batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5))
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Equal(t, "BATCH_CHUNK_IN_FLIGHT", errCode(t, w))
+	assert.EqualValues(t, 1, ops.calls.Load(), "the resend enqueued nothing")
+
+	close(ops.release)
+	require.Equal(t, http.StatusAccepted, (<-first).Code)
+	// Not released: chunk 0 is still counted, so 3 + 2 fits and one more does not.
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"d","e"`, "B", 1, 5)).Code)
+	w = batchSend(h, "u1", chunkBody(`"f"`, "B", 2, 5))
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	// And the finished first send's op is now what a resend gets.
+	w = batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5))
+	require.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), "op-gated")
 }
 
 // The same index with other books is a different chunk pretending to be a resend.
