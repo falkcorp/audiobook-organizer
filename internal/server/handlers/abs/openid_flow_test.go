@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-19
 
@@ -1038,6 +1038,29 @@ func TestOpenIDFlow_CodeFromBeforeACredentialChangeIsRefused(t *testing.T) {
 	}
 	if got := h.sessionCount(); got != sessionsBefore {
 		t.Fatalf("a refused code created a session (%d -> %d)", sessionsBefore, got)
+	}
+}
+
+// A code minted before a deactivation is dead (401 credentials-changed), not
+// suspended (403 account-inactive): the epoch is checked before the status, in
+// the same order as ResolveBearer. A deactivation through SetUserStatus both
+// locks the row and bumps the epoch.
+func TestOpenIDFlow_CodeFromBeforeADeactivationIsCredentialsChanged(t *testing.T) {
+	h := newOIDCHarness(t)
+	code := h.allow(t, h.hop1(t, s256(oidcVerifier), "client-state-1"), oidcPersonAssertion).Get("code")
+	if code == "" {
+		t.Fatal("precondition: hop 2 delivers a code")
+	}
+	h.store.mu.Lock()
+	for _, u := range h.store.users {
+		u.Status = "locked"
+		u.CredentialEpoch++
+	}
+	h.store.mu.Unlock()
+
+	w := h.redeem(t, code, oidcVerifier, "&state=client-state-1")
+	if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "sign in again") {
+		t.Fatalf("callback after a deactivation = %d %s, want 401 credentials-changed", w.Code, w.Body.String())
 	}
 }
 

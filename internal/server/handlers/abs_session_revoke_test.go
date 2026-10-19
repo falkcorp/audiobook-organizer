@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
 // last-edited: 2026-10-19
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -237,8 +238,8 @@ func TestUserStatusChanges_GoThroughSetUserStatusThenRevoke(t *testing.T) {
 	}
 }
 
-// A user deleted between the handler's read and the status write is a 404, not
-// a 500.
+// A status write the store answers with ErrUserNotFound is a 404, not a 500.
+// Defensive: nothing deletes users today.
 func TestUserStatusChanges_DeletedUserIs404(t *testing.T) {
 	for _, action := range []string{"deactivate", "reactivate"} {
 		mockStore := handlersmocks.NewMockUserStore(t)
@@ -255,5 +256,30 @@ func TestUserStatusChanges_DeletedUserIs404(t *testing.T) {
 			h.ReactivateUser(c)
 		}
 		require.Equal(t, http.StatusNotFound, w.Code, "%s: %s", action, w.Body.String())
+	}
+}
+
+// PATCH /auth/me maps the store's refusals: a stale copy that would change a
+// protected field is a 409, a missing row (defensive; nothing deletes users
+// today) is a 404, anything else a 500.
+func TestUpdateMe_StoreErrorsMapToStatus(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"protected field", fmt.Errorf("wrapped: %w", database.ErrUserProtectedField), http.StatusConflict},
+		{"not found", fmt.Errorf("wrapped: %w", database.ErrUserNotFound), http.StatusNotFound},
+		{"other", fmt.Errorf("disk full"), http.StatusInternalServerError},
+		{"ok", nil, http.StatusOK},
+	}
+	for _, tc := range cases {
+		mockStore := handlersmocks.NewMockAuthStore(t)
+		mockStore.EXPECT().UpdateUser(mock.Anything).Return(tc.err)
+		h := handlers.NewAuthHandler(mockStore, true)
+		c, w := newAuthCtx(http.MethodPatch, "/api/v1/auth/me", map[string]any{"email": "new@example.com"})
+		setAuthUser(c, &database.User{ID: "u1", Status: "active"})
+		h.UpdateMe(c)
+		require.Equal(t, tc.want, w.Code, "%s: %s", tc.name, w.Body.String())
 	}
 }

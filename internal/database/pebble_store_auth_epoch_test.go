@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth_epoch_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: da259f0d-609e-4d78-8f4f-d1d0071a7291
 // last-edited: 2026-10-19
 
@@ -82,7 +82,9 @@ func TestUpdateUser_StaleCopyCannotRevertStatusOrPassword(t *testing.T) {
 // the lock, the wait times out and the first write lands first; without the
 // lock the competitor finishes inside the window between the first write's read
 // and its write. Only the first writer waits, so the outcome does not depend on
-// scheduling. The returned func waits for the competitor.
+// scheduling. The returned func waits (at most 10s) for the competitor and
+// fails the test if no write ever reached the hook, so a refactor that returns
+// before the after-read point fails instead of passing or hanging.
 func interleave(t *testing.T, competitor func()) func() {
 	t.Helper()
 	var armed atomic.Bool
@@ -100,7 +102,17 @@ func interleave(t *testing.T, competitor func()) func() {
 	}
 	userWriteAfterReadHook.Store(&hook)
 	t.Cleanup(func() { userWriteAfterReadHook.Store(nil) })
-	return func() { <-done }
+	return func() {
+		t.Helper()
+		if armed.Load() {
+			t.Fatal("userWriteAfterReadHook never fired: the write under test no longer reaches its after-read point")
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("competitor write did not finish within 10s")
+		}
+	}
 }
 
 // Two admin resets racing from the same starting row both land, at DISTINCT

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -202,7 +202,8 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 	user, err = h.creds.SetUserStatus(userID, "locked")
 	if err != nil {
 		if errors.Is(err, database.ErrUserNotFound) {
-			// Deleted between the read above and this write.
+			// Defensive: nothing deletes users today, but the store reports a
+			// missing row as ErrUserNotFound, and that is a 404, not a 500.
 			httputil.RespondWithNotFound(c, "user", userID)
 			return
 		}
@@ -239,7 +240,8 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 	user, err = h.creds.SetUserStatus(userID, "active")
 	if err != nil {
 		if errors.Is(err, database.ErrUserNotFound) {
-			// Deleted between the read above and this write.
+			// Defensive: nothing deletes users today, but the store reports a
+			// missing row as ErrUserNotFound, and that is a 404, not a 500.
 			httputil.RespondWithNotFound(c, "user", userID)
 			return
 		}
