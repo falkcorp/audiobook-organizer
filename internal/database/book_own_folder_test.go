@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: f45fb918-35b5-4c10-871a-1cd0b11c8805
-// last-edited: 2026-09-25
+// last-edited: 2026-10-19
 
 package database
 
@@ -72,7 +72,6 @@ func TestSplitOwnFolderFiles(t *testing.T) {
 		assert.Equal(t, []string{"own", "cd2"}, ownFolderIDs(s.Own))
 		assert.Equal(t, []string{"itunes-copy"}, ownFolderIDs(s.Copies))
 		assert.Equal(t, []string{"moved"}, ownFolderIDs(s.Others))
-		assert.True(t, s.Spans())
 		assert.Equal(t, []string{"own", "cd2", "moved"}, ownFolderIDs(OwnFolderFiles(b, rows)))
 	})
 

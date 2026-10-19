@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.225.0
+// version: 1.225.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -4556,7 +4556,7 @@ func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummar
 			return nil
 		}
 		// Shared with the memdb scan and the scoped service fallback; see
-		// SubstringSearchMatches in memdb_search.go.
+		// SubstringSearchRank in search_rank.go.
 		if rank, ok := SubstringSearchRank(book.ID, book.Title, book.Narrator, book.AuthorID, authorNames, lowerQuery); ok {
 			ranker.Add(rank, book)
 		}
@@ -6316,20 +6316,14 @@ func writeFingerprintLSHIndexes(batch *GatedBatch, f *BookFile) error {
 	return batch.Set(lshMetaKey(f.ID), encodeLSHMeta(subs, bands), nil)
 }
 
-// deleteFingerprintLSHIndexesByID looks up the meta row from the underlying
-// DB (not the batch — UpdateBookFile uses a non-indexed batch), deletes every
-// fpidx row it points at, then deletes the meta row itself. Safe to call on
-// a BookFile that never had an LSH entry. The reader must be a *PebbleStore
-// passed via package-level helper, but to keep the function batch-only we
-// instead route through the DB handle pinned at module level — see
-// deleteFingerprintLSHIndexesByIDWithDB.
+// deleteFingerprintLSHIndexesByIDWithStore looks up the meta row from the
+// store's committed DB state (not the batch: UpdateBookFile uses a non-indexed
+// batch), deletes every fpidx row it points at, then deletes the meta row
+// itself. Safe to call on a BookFile that never had an LSH entry.
 //
-// The hook-callers in this file have access to the *PebbleStore receiver via
-// the batch's parent, but Pebble doesn't expose that. Instead, the entry
-// points (UpdateBookFile, DeleteBookFile) wrap this in a closure that holds
-// the store.
-//
-// Callers should use deleteFingerprintLSHIndexesByIDWithStore below.
+// It takes the *PebbleStore because the batch cannot be read back; the entry
+// points (UpdateBookFile, DeleteBookFile) wrap it in a closure that holds the
+// store.
 func deleteFingerprintLSHIndexesByIDWithStore(s *PebbleStore, batch *GatedBatch, bookFileID string) error {
 	metaKey := lshMetaKey(bookFileID)
 	v, closer, err := s.db.Get(metaKey)
@@ -6349,17 +6343,6 @@ func deleteFingerprintLSHIndexesByIDWithStore(s *PebbleStore, batch *GatedBatch,
 		}
 	}
 	return batch.Delete(metaKey, nil)
-}
-
-// deleteFingerprintLSHIndexesByID is a no-op placeholder kept for the
-// generic secondary-index-delete hook signature. The actual delete needs
-// access to the *PebbleStore handle (see deleteFingerprintLSHIndexesByIDWithStore)
-// because UpdateBookFile uses a non-indexed batch and we have to read the
-// meta row from the committed DB state.
-//
-//lint:ignore U1000 kept: no-op placeholder for the secondary-index-delete hook signature (see doc above, 2026-07-12)
-func deleteFingerprintLSHIndexesByID(_ *GatedBatch, _ string) error {
-	return nil
 }
 
 // --- AIJobsStore (PebbleDB key-value implementation) ---

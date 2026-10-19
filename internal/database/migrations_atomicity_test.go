@@ -1,7 +1,7 @@
 // file: internal/database/migrations_atomicity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f60be44c-31da-4f41-84d4-11c26dcbe1c2
-// last-edited: 2026-09-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -23,6 +23,17 @@ func swapMigrationRegistry(t *testing.T, replacement []Migration) {
 	original := migrations
 	migrations = replacement
 	t.Cleanup(func() { migrations = original })
+}
+
+// recordMigration stores a migration record on its own, the way a previous
+// build left one behind. Tests only: the runner writes the record through
+// commitMigrationBookkeeping so it lands in the same batch as the version bump.
+func recordMigration(store migrationStore, m Migration) error {
+	payload, err := migrationRecordPayload(m)
+	if err != nil {
+		return err
+	}
+	return store.SetUserPreference(migrationRecordKey(m.Version), payload)
 }
 
 // pebbleDigest returns a byte-exact fingerprint of the entire Pebble keyspace

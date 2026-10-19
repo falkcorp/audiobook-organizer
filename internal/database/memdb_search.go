@@ -1,7 +1,7 @@
 // file: internal/database/memdb_search.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
-// last-edited: 2026-09-25
+// last-edited: 2026-10-19
 
 package database
 
@@ -43,32 +43,6 @@ func (p *PebbleStore) getBookRowForSearch(id string) (*Book, error) {
 		return nil, err
 	}
 	return &book, nil
-}
-
-// SubstringSearchMatches is THE SearchBooks predicate: a whole-query substring
-// match over title, primary-author name and narrator. It is the single copy
-// shared by the Pebble disk scan, the memdb scan below, and the audiobooks
-// service's author_id/series_id-scoped fallback search, so all three decide
-// "does this book match" identically.
-//
-// authorNames maps author id to util.NormalizeAuthor(name) (lower + TrimSpace);
-// lowerQuery is strings.ToLower(query). Title and narrator compare against a
-// bare strings.ToLower. That asymmetry is pre-existing and kept on purpose —
-// see the quirk list on SearchBookIDs.
-//
-// SubstringSearchRank (search_rank.go) is the ranking form of this predicate;
-// it matches exactly when this does, and is what the store scans call.
-func SubstringSearchMatches(title string, narrator *string, authorID *int, authorNames map[int]string, lowerQuery string) bool {
-	lowerQuery = searchFold(lowerQuery)
-	if strings.Contains(searchFold(strings.ToLower(title)), lowerQuery) {
-		return true
-	}
-	if authorID != nil {
-		if name, ok := authorNames[*authorID]; ok && strings.Contains(searchFold(name), lowerQuery) {
-			return true
-		}
-	}
-	return narrator != nil && strings.Contains(searchFold(strings.ToLower(*narrator)), lowerQuery)
 }
 
 // SearchBookIDs runs the library search predicate against the in-memory book

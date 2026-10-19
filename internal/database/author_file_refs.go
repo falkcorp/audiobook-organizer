@@ -1,7 +1,7 @@
 // file: internal/database/author_file_refs.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c6e57d72-7048-499d-85aa-1714156d9481
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package database
 
@@ -219,7 +219,7 @@ func (p *PebbleStore) GetAllAuthorFileRefCounts() (map[int]int, error) {
 	return p.getAllAuthorFileRefCountsPebble()
 }
 
-// getAllAuthorFileRefCountsPebble mirrors getAllAuthorBookRefCountsPebble's key
+// getAllAuthorFileRefCountsPebble mirrors getAllAuthorBookRefBucketsPebble's key
 // ranges, snapshot and row-shape guards — see author_bookref.go for why each of
 // them is what it is (prefixUpperBound over a hand-written "~" bound, the true
 // "book:" .. "book;" range paired with the one-colon filter, one snapshot

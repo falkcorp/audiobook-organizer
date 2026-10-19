@@ -1,7 +1,7 @@
 // file: internal/database/memdb_indexers.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000001
-// last-edited: 2026-09-28
+// last-edited: 2026-10-19
 
 package database
 
@@ -60,44 +60,6 @@ func (i *nullableIntFieldIndex) FromArgs(args ...any) ([]byte, error) {
 		return encodeInt64(int64(*v)), nil
 	default:
 		return nil, fmt.Errorf("nullableIntFieldIndex: unsupported arg type %T", args[0])
-	}
-}
-
-// nullableBoolFieldIndex indexes a struct field of type *bool.
-type nullableBoolFieldIndex struct{ Field string }
-
-func (i *nullableBoolFieldIndex) FromObject(obj any) (bool, []byte, error) {
-	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Pointer {
-		v = v.Elem()
-	}
-	fv := v.FieldByName(i.Field)
-	if !fv.IsValid() {
-		return false, nil, fmt.Errorf("nullableBoolFieldIndex: field %q missing", i.Field)
-	}
-	if fv.Kind() != reflect.Pointer {
-		return false, nil, fmt.Errorf("nullableBoolFieldIndex: field %q is not a pointer", i.Field)
-	}
-	if fv.IsNil() {
-		return false, nil, nil
-	}
-	return true, encodeBool(fv.Elem().Bool()), nil
-}
-
-func (i *nullableBoolFieldIndex) FromArgs(args ...any) ([]byte, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("nullableBoolFieldIndex: must provide exactly one arg")
-	}
-	switch v := args[0].(type) {
-	case bool:
-		return encodeBool(v), nil
-	case *bool:
-		if v == nil {
-			return nil, fmt.Errorf("nullableBoolFieldIndex: cannot query with nil")
-		}
-		return encodeBool(*v), nil
-	default:
-		return nil, fmt.Errorf("nullableBoolFieldIndex: unsupported arg type %T", args[0])
 	}
 }
 
@@ -178,44 +140,6 @@ func (i *effectiveBoolFieldIndex) FromArgs(args ...any) ([]byte, error) {
 		return encodeBool(v), nil
 	default:
 		return nil, fmt.Errorf("effectiveBoolFieldIndex: unsupported arg type %T", args[0])
-	}
-}
-
-// effectiveIntFieldIndex indexes a *int field with a default for nil.
-type effectiveIntFieldIndex struct {
-	Field   string
-	Default int64
-}
-
-func (i *effectiveIntFieldIndex) FromObject(obj any) (bool, []byte, error) {
-	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Pointer {
-		v = v.Elem()
-	}
-	fv := v.FieldByName(i.Field)
-	if !fv.IsValid() {
-		return false, nil, fmt.Errorf("effectiveIntFieldIndex: field %q missing", i.Field)
-	}
-	if fv.Kind() != reflect.Pointer {
-		return false, nil, fmt.Errorf("effectiveIntFieldIndex: field %q is not a pointer", i.Field)
-	}
-	if fv.IsNil() {
-		return true, encodeInt64(i.Default), nil
-	}
-	return true, encodeInt64(fv.Elem().Int()), nil
-}
-
-func (i *effectiveIntFieldIndex) FromArgs(args ...any) ([]byte, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("effectiveIntFieldIndex: must provide exactly one arg")
-	}
-	switch v := args[0].(type) {
-	case int:
-		return encodeInt64(int64(v)), nil
-	case int64:
-		return encodeInt64(v), nil
-	default:
-		return nil, fmt.Errorf("effectiveIntFieldIndex: unsupported arg type %T", args[0])
 	}
 }
 
@@ -363,14 +287,10 @@ func (titleSortIndex) PrefixFromArgs(args ...any) ([]byte, error) {
 var (
 	_ memdb.SingleIndexer = (*nullableIntFieldIndex)(nil)
 	_ memdb.Indexer       = (*nullableIntFieldIndex)(nil)
-	_ memdb.SingleIndexer = (*nullableBoolFieldIndex)(nil)
-	_ memdb.Indexer       = (*nullableBoolFieldIndex)(nil)
 	_ memdb.SingleIndexer = (*nullableStringFieldIndex)(nil)
 	_ memdb.Indexer       = (*nullableStringFieldIndex)(nil)
 	_ memdb.SingleIndexer = (*effectiveBoolFieldIndex)(nil)
 	_ memdb.Indexer       = (*effectiveBoolFieldIndex)(nil)
-	_ memdb.SingleIndexer = (*effectiveIntFieldIndex)(nil)
-	_ memdb.Indexer       = (*effectiveIntFieldIndex)(nil)
 	_ memdb.SingleIndexer = (*plainBoolFieldIndex)(nil)
 	_ memdb.Indexer       = (*plainBoolFieldIndex)(nil)
 	_ memdb.SingleIndexer = (*nonEmptyStringFieldIndex)(nil)

@@ -70,7 +70,7 @@ var slogRatchet = map[string]int{
 	"internal/database/memdb_sync.go":                            5,
 	"internal/database/memdb_warmup.go":                          8,
 	"internal/database/metadata_fetch_cache.go":                  1,
-	"internal/database/migrations.go":                            76,
+	"internal/database/migrations.go":                            75,
 	"internal/database/pebble_activity_store.go":                 10,
 	"internal/database/pebble_quick_queries.go":                  12,
 	"internal/database/pebble_store.go":                          16,

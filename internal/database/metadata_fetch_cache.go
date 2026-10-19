@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -291,20 +291,6 @@ func PutCachedMetadataFetchAt(store RawKVStore, bookID, source, identity string,
 		return err
 	}
 	metrics.RecordCacheSet("metadata_fetch")
-	return nil
-}
-
-// InvalidateCachedMetadataFetch removes the cache entry for
-// a single (bookID, source) pair. Called after a metadata
-// apply so the next fetch refreshes from the source.
-func InvalidateCachedMetadataFetch(store RawKVStore, bookID, source string) error {
-	if bookID == "" || source == "" {
-		return nil
-	}
-	if err := store.DeleteRaw(metadataFetchCacheKey(bookID, source)); err != nil {
-		return err
-	}
-	metrics.RecordCacheInvalidation("metadata_fetch", "key")
 	return nil
 }
 

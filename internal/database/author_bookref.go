@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package database
 
@@ -214,17 +214,6 @@ func (p *PebbleStore) GetAllAuthorBookRefBuckets() (map[int]AuthorRefBuckets, er
 			"error", err, "lost_rows", m.LostRows())
 	}
 	return p.getAllAuthorBookRefBucketsPebble()
-}
-
-// getAllAuthorBookRefCountsPebble mirrors GetAllAuthorBookCounts's key ranges
-// and row-shape guards, minus every IsPrimaryVersion / soft-delete filter, and
-// dedups per (book, author) pair rather than per book.
-func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
-	buckets, err := p.getAllAuthorBookRefBucketsPebble()
-	if err != nil {
-		return nil, err
-	}
-	return sumAuthorRefBuckets(buckets), nil
 }
 
 // getAllAuthorBookRefBucketsPebble is the authoritative scan behind both the

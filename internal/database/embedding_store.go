@@ -1,6 +1,6 @@
 // file: internal/database/embedding_store.go
-// version: 2.30.0
-// last-edited: 2026-10-13
+// version: 2.30.1
+// last-edited: 2026-10-19
 // guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
 
 package database
@@ -2527,17 +2527,6 @@ func decodeVector(b []byte) []float32 {
 	return v
 }
 
-// encodeVectorV0 serialises a float32 slice to the legacy v0 wire format
-// (raw little-endian float32, no version header).  Used by tests to plant
-// legacy rows and by the re-encode op to detect rows that need upgrading.
-func encodeVectorV0(v []float32) []byte {
-	buf := make([]byte, len(v)*4)
-	for i, f := range v {
-		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
-	}
-	return buf
-}
-
 // isVectorV1 returns true when the blob was encoded with the v1 scheme.
 // Used by the re-encode op to skip already-upgraded rows.
 func isVectorV1(b []byte) bool {
@@ -2637,15 +2626,4 @@ func float16ToFloat32(h uint16) float32 {
 		// ±Inf or NaN.
 		return math.Float32frombits(sign | 0x7F800000 | mant<<13)
 	}
-}
-
-// vectorEncodeRatio returns the compression ratio achieved by v1 encoding
-// compared to v0 for the given vector.  Used in tests and logging.
-func vectorEncodeRatio(v []float32) float64 {
-	v0 := encodeVectorV0(v)
-	v1 := encodeVector(v)
-	if len(v1) == 0 {
-		return 0
-	}
-	return float64(len(v0)) / float64(len(v1))
 }

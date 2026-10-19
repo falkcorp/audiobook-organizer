@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package database
 
@@ -18,6 +18,17 @@ import (
 // delete this author row". Every assertion below is about the difference
 // between the two questions, and every fixture is built so the two counters
 // DISAGREE: a fixture where they agree passes with or without the fix.
+
+// getAllAuthorBookRefCountsPebble is the flat form of the authoritative scan:
+// getAllAuthorBookRefBucketsPebble summed per author. Tests only: production
+// reads the bucketed form and sums it itself where it needs the flat count.
+func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
+	buckets, err := p.getAllAuthorBookRefBucketsPebble()
+	if err != nil {
+		return nil, err
+	}
+	return sumAuthorRefBuckets(buckets), nil
+}
 
 // seedAuthorRefStore builds a warm store the way production runs it.
 func seedAuthorRefStore(t *testing.T) *PebbleStore {

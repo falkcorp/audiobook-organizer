@@ -1,7 +1,7 @@
 // file: internal/database/pebble_file_provenance.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2e8b6d05-91af-4c37-8b14-6d3a7f9e2c50
-// last-edited: 2026-08-21
+// last-edited: 2026-10-19
 
 package database
 
@@ -473,10 +473,4 @@ func (p *PebbleStore) SetFileProvExportCursor(seq uint64) error {
 	}
 	return p.db.Set([]byte(fileProvExportCursorKey),
 		[]byte(strconv.FormatUint(seq, 10)), pebble.Sync)
-}
-
-// SortFileEvents orders events chronologically. Callers that merge chains from
-// more than one prefix scan need this; a single scan is already ordered.
-func SortFileEvents(events []FileEvent) {
-	sort.SliceStable(events, func(i, j int) bool { return events[i].At.Before(events[j].At) })
 }

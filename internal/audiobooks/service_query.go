@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.1
+// version: 1.38.2
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package audiobooks
 
@@ -889,14 +889,14 @@ func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct
 	sort.Strings(ids)
 	if !svc.bleveSearchable() {
 		slog.Warn("search: search index is nil or rebuilding; scoped search falling back to the substring predicate",
-			"query", query, "scope", len(ids), "fallback", "database.SubstringSearchMatches")
+			"query", query, "scope", len(ids), "fallback", "database.SubstringSearchRank")
 		return svc.substringSearchWithin(query, ids)
 	}
 	return svc.searchWithBleve(query, len(ids), 0, userID, ids, mode)
 }
 
 // substringSearchWithin applies the store.SearchBooks predicate
-// (database.SubstringSearchMatches — the same single copy the Pebble and memdb
+// (database.SubstringSearchRank — the same single copy the Pebble and memdb
 // scans call) to the given books only, returning every match in the same
 // relevance order SearchBooks returns (database.RankSubstringMatches — the
 // ranking the store scans share: tier, then shorter title, then ID).

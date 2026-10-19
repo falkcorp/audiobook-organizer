@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 68a95fef-a156-403b-a6fa-3ae0ba84f8fd
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -207,14 +207,6 @@ func (p *PebbleStore) undecodableMarkerSnapshot() (*GatedSnapshot, []string, err
 		ids = append(ids, id)
 	}
 	return snap, ids, nil
-}
-
-// undecodableMarkerCount is the set's size, for tests.
-func (p *PebbleStore) undecodableMarkerCount() int {
-	m := &p.atpathMarkers
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.ids)
 }
 
 // markersOnDiskIn returns which of ids have a marker key in snap. Point reads

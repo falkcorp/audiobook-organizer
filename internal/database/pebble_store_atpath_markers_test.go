@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers_test.go
-// version: 1.1.7
+// version: 1.1.8
 // guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package database
 
@@ -17,6 +17,14 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 )
+
+// undecodableMarkerCount is the set's size.
+func (p *PebbleStore) undecodableMarkerCount() int {
+	m := &p.atpathMarkers
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.ids)
+}
 
 // batchDeletes captures the keys every UpdateBook/DeleteBook batch deletes,
 // keyed by op ("update"/"delete"), for the duration of the test.

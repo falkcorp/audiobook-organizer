@@ -1,16 +1,30 @@
 // file: internal/database/keyfamilies_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b2a931b-6ce8-4a3d-89ad-38f8bb08e66b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-19
 
 package database
 
 import (
 	"bytes"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// familyForKey returns the family whose range holds key, by binary search over
+// a partition built by keyFamilyRanges. Test helper: no production path looks
+// up one key's family.
+func familyForKey(ranges []keyRange, key []byte) string {
+	i := sort.Search(len(ranges), func(i int) bool {
+		return ranges[i].Hi == nil || bytes.Compare(key, ranges[i].Hi) < 0
+	})
+	if i >= len(ranges) {
+		return unregisteredFamily
+	}
+	return ranges[i].Family
+}
 
 func TestKeyFamilies_NoDuplicatePrefixes(t *testing.T) {
 	seen := map[string]bool{}

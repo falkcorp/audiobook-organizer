@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 6f5e4d3c-2b1a-0f9e-8d7c-6b5a4f3e2d1c
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
@@ -83,21 +83,6 @@ func TestMetadataFetchCache_CaseInsensitiveSource(t *testing.T) {
 	}
 	if entry == nil {
 		t.Fatal("expected hit when source case differs")
-	}
-}
-
-// TestMetadataFetchCache_Invalidate confirms per-(book, source)
-// invalidation works.
-func TestMetadataFetchCache_Invalidate(t *testing.T) {
-	store := newCacheTestStore(t)
-
-	_ = PutCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity, json.RawMessage(`[]`), 0)
-	if err := InvalidateCachedMetadataFetch(store, "book-1", "Hardcover"); err != nil {
-		t.Fatalf("invalidate: %v", err)
-	}
-	entry, _ := GetCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity)
-	if entry != nil {
-		t.Errorf("expected miss after invalidate, got hit")
 	}
 }
 
