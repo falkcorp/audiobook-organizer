@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
 // last-edited: 2026-10-19
 
@@ -300,16 +300,96 @@ func (p *PebbleStore) GetABSSessionByRefreshHash(hash string) (*ABSSession, erro
 	if err != nil {
 		return nil, err
 	}
-	if session == nil {
-		// Dangling index entry (record deleted out from under it).
-		_ = p.db.Delete(key, pebble.Sync)
-		return nil, nil
-	}
-	if hash != session.RefreshTokenHash && hash != session.PrevRefreshTokenHash {
-		_ = p.db.Delete(key, pebble.Sync)
+	if session == nil || (hash != session.RefreshTokenHash && hash != session.PrevRefreshTokenHash) {
+		// Dangling (record deleted) or retired (neither current nor previous).
+		p.pruneStaleABSTokenIndex(key, hash, sessionID)
 		return nil, nil
 	}
 	return session, nil
+}
+
+// pruneStaleABSTokenIndex deletes a refresh-token index entry that no longer
+// resolves, re-checking under absSessionWriteMu so it can never remove an entry a
+// concurrent write has just made valid. (Retired hashes never become valid again,
+// since each generation's token is derived once and generations only increase,
+// but the re-check makes that an enforced property rather than an argument.)
+func (p *PebbleStore) pruneStaleABSTokenIndex(key []byte, hash, sessionID string) {
+	absSessionWriteMu.Lock()
+	defer absSessionWriteMu.Unlock()
+	v, closer, err := p.db.Get(key)
+	if err != nil {
+		return
+	}
+	current := string(v)
+	closer.Close()
+	if current != sessionID {
+		return
+	}
+	s, err := p.GetABSSession(sessionID)
+	if err != nil {
+		return
+	}
+	if s != nil && (hash == s.RefreshTokenHash || hash == s.PrevRefreshTokenHash) {
+		return
+	}
+	_ = p.db.Delete(key, pebble.Sync)
+}
+
+// BackfillABSSessionExpiry raises the ExpiresAt of every live, non-revoked session
+// to at least floor(CreatedAt), and never lowers one. It returns how many rows it
+// raised. Idempotent: once applied, a second run changes nothing.
+//
+// It exists for rows written before sliding expiry, whose ExpiresAt is login+30d,
+// the same instant as their access token. Sliding expiry only moves ExpiresAt on a
+// refresh or an authenticated request, so a device left unused across its 30-day
+// mark would still have been logged out exactly as before. Raising those rows to
+// CreatedAt plus the idle TTL gives the expired access token a live session to
+// refresh against. LastUsedAt is deliberately not touched: nothing was used.
+//
+// Each row is re-read and rewritten under absSessionWriteMu, record and indexes in
+// one batch, like every other ABS session write.
+func (p *PebbleStore) BackfillABSSessionExpiry(now time.Time, floor func(createdAt time.Time) time.Time) (int, error) {
+	prefix := []byte(absSessionKeyPrefix)
+	var ids []string
+	if err := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(key, _ []byte) error {
+		ids = append(ids, strings.TrimPrefix(string(key), absSessionKeyPrefix))
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	raised := 0
+	for _, id := range ids {
+		ok, err := p.raiseABSSessionExpiry(id, now, floor)
+		if err != nil {
+			return raised, err
+		}
+		if ok {
+			raised++
+		}
+	}
+	return raised, nil
+}
+
+func (p *PebbleStore) raiseABSSessionExpiry(id string, now time.Time, floor func(time.Time) time.Time) (bool, error) {
+	absSessionWriteMu.Lock()
+	defer absSessionWriteMu.Unlock()
+	s, err := p.GetABSSession(id)
+	if err != nil || s == nil {
+		// An unreadable row is left for the sweep; a vanished one needs nothing.
+		return false, nil
+	}
+	if !s.Live(now) || s.ExpiresAt.IsZero() || s.CreatedAt.IsZero() {
+		return false, nil
+	}
+	target := floor(s.CreatedAt)
+	if !target.After(s.ExpiresAt) || !target.After(now) {
+		return false, nil
+	}
+	s.ExpiresAt = target
+	if err := p.writeABSSessionLocked(s); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListABSSessionsForUser returns every stored ABS session for a user, newest first.

@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-10-19
 
@@ -457,6 +457,7 @@ func (s *Server) wireABSRoutes() {
 		slog.Error("abs: refusing to start — the configured store cannot resolve ABS identities")
 		os.Exit(1)
 	}
+	backfillABSSessionExpiry(s.Ops(), cfg, time.Now())
 
 	// Phase 3 / Phase 5b capabilities. Each is a type assertion rather than a Store
 	// interface change (repo rule: store.go stays untouched, new capabilities live in
