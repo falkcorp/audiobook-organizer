@@ -1,22 +1,20 @@
 // file: web/src/components/settings/PathsSettingsTab.databasePath.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d94b7e1-6c38-4a05-9f72-8b1e3d05c4a7
-// last-edited: 2026-09-09
+// last-edited: 2026-10-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import type React from 'react';
 import { PathsSettingsTab } from './PathsSettingsTab';
 
-const DB_PATH = '/mnt/bigdata/books/audiobook-organizer/.appdata/audiobooks.pebble';
+const DB_PATH = '/srv/library/.appdata/audiobooks.pebble';
 
 function renderTab(overrides: Record<string, unknown> = {}) {
   const handleChange = vi.fn();
   const props = {
     settings: {
-      libraryPath: '/mnt/bigdata/books/audiobook-organizer',
-      activityDbPath: '',
-      activityDbMoveOnChange: true,
+      libraryPath: '/srv/library',
       databasePath: DB_PATH,
     },
     setSettings: vi.fn(),
@@ -32,7 +30,6 @@ function renderTab(overrides: Record<string, unknown> = {}) {
     setAddFolderDialogOpen: vi.fn(),
     envLocked: [] as string[],
     settingLocks: {} as Record<string, string>,
-    activityDbResolvedPath: '/mnt/x/.activity/activity.sqlite',
     ...overrides,
   };
   render(
@@ -112,10 +109,11 @@ describe('PathsSettingsTab — main database', () => {
     expect(screen.getAllByText(/the server configuration/i).length).toBeGreaterThan(0);
   });
 
-  // The activity database is a separate control with a separate lock. Pinning one
-  // must not grey out the other.
-  it('leaves the activity database field alone when only the main one is locked', () => {
-    renderTab({ envLocked: ['database_path'], settingLocks: { database_path: '--db' } });
-    expect(screen.getByLabelText(/Activity Database Path/i)).not.toBeDisabled();
+  // The SQLite activity backend and its location settings were removed on
+  // 2026-10-19; the tab must not offer a control for them any more.
+  it('has no activity database controls', () => {
+    renderTab();
+    expect(screen.queryByLabelText(/Activity Database Path/i)).toBeNull();
+    expect(screen.queryByText(/Move the existing database/i)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.65.1
+// version: 1.66.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -117,11 +117,8 @@ interface UiMetadataSource {
 
 export interface SettingsState {
   libraryPath: string;
-  /** Empty renders the resolved default rather than a literal blank. */
-  activityDbPath: string;
   /** Location of the MAIN book database. Takes effect on restart. */
   databasePath: string;
-  activityDbMoveOnChange: boolean;
   organizationStrategy: string;
   scanOnStartup: boolean;
   autoOrganize: boolean;
@@ -213,9 +210,6 @@ export function Settings() {
   // Config keys the server's environment is currently forcing; their controls
   // render disabled. Server-reported and read-only — never saved back.
   const [envLocked, setEnvLocked] = useState<string[]>([]);
-  // Where the activity database actually lives given the current settings —
-  // server-computed, shown as the path field's placeholder when it is left empty.
-  const [activityDbResolvedPath, setActivityDbResolvedPath] = useState('');
   // Same keys as envLocked, mapped to WHAT locks each one, so a disabled control
   // can name the environment variable or the flag instead of just going grey.
   const [settingLocks, setSettingLocks] = useState<Record<string, string>>({});
@@ -231,10 +225,6 @@ export function Settings() {
   const initialSettings: SettingsState = {
     // Library settings
     libraryPath: '/path/to/audiobooks/library',
-    // Empty on purpose: the server resolves the default, and the field shows it
-    // as a placeholder. Seeding a literal path here would save a hardcoded one.
-    activityDbPath: '',
-    activityDbMoveOnChange: true,
     // Empty until the server reports the real one. Seeding the binary's own
     // default ("audiobooks.pebble") here would show every operator a relative
     // path that is almost certainly not where their database is.
@@ -472,7 +462,6 @@ export function Settings() {
       // SettingsState because it is server-reported and read-only: it must never
       // be part of the dirty-check or the save payload.
       setEnvLocked(config.env_locked ?? []);
-      setActivityDbResolvedPath(config.activity_db_resolved_path ?? '');
       setSettingLocks(config.setting_locks ?? {});
       // Store masked key if present
       if (config.openai_api_key && config.openai_api_key.includes('***')) {
@@ -482,11 +471,7 @@ export function Settings() {
       const nextSettings: SettingsState = {
         // Library settings
         libraryPath: config.root_dir || '',
-        activityDbPath: config.activity_db_path || '',
         databasePath: config.database_path || '',
-        // Default true — the server's default is to move the data with the path.
-        // ?? not || so an explicit false survives the round-trip.
-        activityDbMoveOnChange: config.activity_db_move_on_change ?? true,
         organizationStrategy: config.organization_strategy || 'auto',
         scanOnStartup: config.scan_on_startup ?? false,
         autoOrganize: config.auto_organize ?? true,
@@ -911,7 +896,6 @@ export function Settings() {
           <PathsSettingsTab
             envLocked={envLocked}
             settingLocks={settingLocks}
-            activityDbResolvedPath={activityDbResolvedPath}
             settings={settings}
             setSettings={setSettings}
             libraryPathError={libraryPathError}

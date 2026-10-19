@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.13.1
+// version: 1.14.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -446,11 +446,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       const updates: Partial<api.Config> = {
         root_dir: libraryPath,
         playlist_dir: `${libraryPath}/playlists`,
-        // Trimmed so a field of spaces saves as "use the default" rather than as a
-        // whitespace path — ResolveActivityDBPath trims too, so this keeps what is
-        // stored consistent with what will be used.
-        activity_db_path: settings.activityDbPath.trim(),
-        activity_db_move_on_change: settings.activityDbMoveOnChange,
         // Sent even when the server reports it locked, deliberately. The locked
         // value shown in the field IS the effective one (the server re-applies
         // --db/DATABASE_PATH over the blob before serving the config), so writing
