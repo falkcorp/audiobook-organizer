@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
 // last-edited: 2026-10-19
 
@@ -44,6 +44,12 @@ const unreadSettingsRemovedMessage = "this setting was removed: it was stored an
 const reviewServerQueryRemovedMessage = "the review_metadata_server_query setting was removed: the Review > " +
 	"Metadata lane always asks the server for one filtered page (view=page) and the full-index mode it " +
 	"switched away from is gone, so there is nothing left to switch"
+
+// activityDBRemovedMessage explains the removal of the SQLite activity
+// database's location settings.
+const activityDBRemovedMessage = "this setting was removed with the SQLite activity backend: Pebble, inside the " +
+	"main database, is the only activity store, so there is no separate activity database to place or move. " +
+	"An existing activity.sqlite file is left where it is and can be deleted by hand"
 
 // removedConfigKey is a setting that used to exist and no longer does.
 type removedConfigKey struct {
@@ -107,6 +113,13 @@ var removedConfigKeys = []removedConfigKey{
 	{key: "language", message: unreadSettingsRemovedMessage, fileOnly: true},
 	// Removed 2026-10-19 (02-PR19). It was ON in production from 2026-10-18.
 	{key: "review_metadata_server_query", message: reviewServerQueryRemovedMessage},
+	// Removed 2026-10-19 (01-P75) with the SQLite activity backend. The
+	// environment names (ACTIVITY_DB_PATH, ACTIVITY_DB_MOVE_ON_CHANGE) are no
+	// longer bound, so only a config file, a stored blob or an update payload
+	// can carry them. activity_backend itself is still a setting: it is
+	// validated, and "sqlite" stops startup (config.ValidateActivityBackend).
+	{key: "activity_db_path", message: activityDBRemovedMessage},
+	{key: "activity_db_move_on_change", message: activityDBRemovedMessage},
 }
 
 // removedKeyInUpdate returns the rejection text for the first removed key

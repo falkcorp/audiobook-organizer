@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4f2a8c61-d93e-4b07-a5c8-1e6b3d9f7a20
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package config
 
@@ -168,7 +168,7 @@ func TestChangedProtectedFields(t *testing.T) {
 		{"sign-in", func(c *Config) { c.OAuthDefaultRole = "admin" }, []string{"oauth_default_role"}},
 		{"owner email", func(c *Config) { c.OwnerEmail = "someone@example.test" }, []string{"owner_email"}},
 		{"server path", func(c *Config) { c.RootDir = "/elsewhere" }, []string{"root_dir"}},
-		{"database", func(c *Config) { c.ActivityDBPath = "/tmp/a.db" }, []string{"activity_db_path"}},
+		{"database", func(c *Config) { c.DatabasePath = "/tmp/a.pebble" }, []string{"database_path"}},
 		{"executable", func(c *Config) { c.Tools.Fpcalc.CustomPath = "/bin/sh" }, []string{"tools.fpcalc.custom_path"}},
 		{"plugin settings", func(c *Config) {
 			c.Plugins = map[string]PluginConfig{"p": {Enabled: true, Settings: map[string]string{"k": "/bin/sh"}}}

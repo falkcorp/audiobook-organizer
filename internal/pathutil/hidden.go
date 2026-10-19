@@ -1,7 +1,7 @@
 // file: internal/pathutil/hidden.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 5a2c7e91-4d38-4b06-9c1f-7e0a3b58d264
-// last-edited: 2026-09-09
+// last-edited: 2026-10-19
 
 package pathutil
 
@@ -96,27 +96,22 @@ type AppDirs struct {
 	// dot is now one keystroke from being absent: <root_dir>/appdata is a
 	// perfectly ordinary thing for an operator to type.
 	DatabaseDir string
-	// ActivityDBDir holds the activity-log database and its WAL, which reach
-	// multiple gigabytes.
-	//
-	// Its default -- {RootDir}/.activity -- was already inside the library tree
-	// and already protected only by the dot;
-	// TestActivityDBDirIsSkippedByLibraryWalks pins that and says so in as many
-	// words ("it is safe there only because the dot prefix ... That is not a
-	// free property"). But activity_db_path is operator- AND UI-settable, so
-	// that test guards the DEFAULT and nothing guards the configured value.
-	ActivityDBDir string
+	// There is no activity-database directory here any more. The SQLite
+	// activity backend, whose file was the only thing activity_db_path placed,
+	// was removed in 01-P75; activity now lives in the main Pebble store under
+	// DatabaseDir. Its old default home, {RootDir}/.activity, can still hold the
+	// retired activity.sqlite and stays skipped by the dot rule
+	// (TestActivityDBDirIsSkippedByLibraryWalks).
 }
 
 // all returns the configured directories. Kept as one accessor so adding a
 // field is a single edit and cannot be half-applied across the matcher.
-func (a AppDirs) all() [5]string {
-	return [5]string{
+func (a AppDirs) all() [4]string {
+	return [4]string{
 		a.BackupDir,
 		a.OpenLibraryDumpDir,
 		a.PlaylistDir,
 		a.DatabaseDir,
-		a.ActivityDBDir,
 	}
 }
 

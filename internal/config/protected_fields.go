@@ -1,5 +1,5 @@
 // file: internal/config/protected_fields.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
 // last-edited: 2026-10-19
 
@@ -84,11 +84,9 @@ var configFieldRules = map[string]fieldRule{
 	"tools.fpcalc.custom_path": {FieldExecutable, "a program the server executes"},
 
 	// ---- database location ----
-	"database_path":              {FieldDatabase, "the main database"},
-	"database_type":              {FieldDatabase, "immutable at runtime; refused outright as well"},
-	"activity_backend":           {FieldDatabase, "chooses which activity store (and file) is used"},
-	"activity_db_path":           {FieldDatabase, "the activity database"},
-	"activity_db_move_on_change": {FieldDatabase, "moves the activity database to a new path"},
+	"database_path":    {FieldDatabase, "the main database"},
+	"database_type":    {FieldDatabase, "immutable at runtime; refused outright as well"},
+	"activity_backend": {FieldDatabase, "names the activity store; only pebble is accepted"},
 
 	// ---- server paths ----
 	"root_dir":                       {FieldServerPath, "library root the server organizes into, scans and serves"},

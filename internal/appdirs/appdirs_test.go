@@ -1,7 +1,7 @@
 // file: internal/appdirs/appdirs_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b4f2917d-30ec-4a68-85c1-6d9e0f27a3b5
-// last-edited: 2026-09-09
+// last-edited: 2026-10-19
 
 package appdirs
 
@@ -29,14 +29,12 @@ func TestFromConfig_ResolvesAbsoluteAppDirs(t *testing.T) {
 		OpenLibraryDumpDir: "/srv/books/openlibrary-dumps",
 		PlaylistDir:        "/srv/books/playlists",
 		// DatabasePath is unset in this fixture, so filepath.Dir("") is "."
-		// and cleanAbs drops it as non-absolute. ActivityDBDir still resolves,
-		// because ResolveActivityDBPath falls back to {RootDir}/.activity.
-		DatabaseDir:   "",
-		ActivityDBDir: filepath.Join("/srv/books", config.ActivityDBDirName),
+		// and cleanAbs drops it as non-absolute.
+		DatabaseDir: "",
 	}
 	// Whole-struct equality on purpose: a field added to AppDirs and left
 	// unpopulated in FromConfig fails HERE rather than silently walking a new
-	// application directory. Adding DatabaseDir/ActivityDBDir broke this test,
+	// application directory. Adding DatabaseDir broke this test,
 	// which is the property working, not a nuisance — update the want, never
 	// relax the comparison to field-by-field.
 	if got != want {
@@ -162,8 +160,7 @@ func TestCurrent_ResolvesTheProcessConfig(t *testing.T) {
 		// matches. Asserted anyway: the field must be POPULATED regardless of
 		// where it points, or a config that later moves the database inside the
 		// tree would find the exclusion missing.
-		DatabaseDir:   "/var/lib/abo",
-		ActivityDBDir: filepath.Join("/srv/books", config.ActivityDBDirName),
+		DatabaseDir: "/var/lib/abo",
 	}
 	if got != want {
 		t.Fatalf("Current() = %+v, want %+v", got, want)

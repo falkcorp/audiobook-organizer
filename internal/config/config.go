@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.163.0
+// version: 1.164.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-19
 
@@ -1052,34 +1052,18 @@ type Config struct {
 	DatabasePath string      `json:"database_path"`
 	DatabaseType string      `json:"database_type"` // "pebble" (default) or "sqlite"
 
-	// ActivityBackend selects the activity-log store backend, independent of the
-	// main DatabaseType. "pebble" is the default (and an empty value means the
-	// same): Pebble-only, no SQLite opened. "sqlite" is the legacy opt-in being
-	// retired (P75): it engages the SQLite activity store behind a Pebble→SQLite
-	// migration wrapper, where writes go to both and reads stay on Pebble until a
-	// one-time backfill copies history and verifies per-tier parity, then flip
-	// to SQLite. Setting "pebble" is still the instant rollback from "sqlite".
+	// ActivityBackend names the activity-log store backend. Pebble is the only
+	// one: the SQLite activity backend and its Pebble-to-SQLite migration were
+	// deleted in 01-P75 (owner decision D11; the last build that had them is
+	// tagged activity-sqlite-last). The field stays so that an old conf or
+	// environment still saying "sqlite" is caught: Validate (startup and every
+	// PUT) and the activitystore build both reject any value other than empty
+	// or "pebble" through ValidateActivityBackend, instead of quietly running on
+	// Pebble while the operator believes SQLite is in use. The old
+	// activity.sqlite file is left on disk; nothing opens or deletes it.
 	ActivityBackend string `json:"activity_backend" mapstructure:"activity_backend"`
-	// ActivityDBPath is the SQLite activity file. Empty resolves via
-	// ResolveActivityDBPath: {RootDir}/.activity/activity.sqlite when a library
-	// root is configured, else "activity.sqlite" beside the main database.
-	ActivityDBPath string `json:"activity_db_path" mapstructure:"activity_db_path"`
-	// ActivityDBMoveOnChange controls what happens when the resolved activity
-	// database path stops matching the file actually in use — because this
-	// setting changed, or because the library root moved under the default.
-	//
-	// true  ⇒ copy the existing database to the new location, verify it by row
-	//         count, and only then remove the original (see RelocateActivityDB).
-	// false ⇒ leave the old file alone and start a fresh database at the new
-	//         path. History stays readable at the old location but the log
-	//         appears to start over, so this is not the default.
-	//
-	// The move is a real copy of a file that reaches tens of gigabytes and is
-	// usually cross-filesystem, so it is deliberately a choice rather than
-	// something that happens silently on a path edit.
-	ActivityDBMoveOnChange bool   `json:"activity_db_move_on_change" mapstructure:"activity_db_move_on_change"`
-	PlaylistDir            string `json:"playlist_dir"`
-	SetupComplete          bool   `json:"setup_complete"`
+	PlaylistDir     string `json:"playlist_dir"`
+	SetupComplete   bool   `json:"setup_complete"`
 
 	// Library organization
 	OrganizationStrategy    string `json:"organization_strategy"` // 'auto', 'copy', 'hardlink', 'reflink', 'symlink'
@@ -1952,7 +1936,7 @@ func Generation() uint64 { return generation.Load() }
 //     makes IsSet permanently true and so makes the assignment unconditional. That
 //     is deliberate; TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI asserts it.
 //
-//  2. OPERATIONAL keys that the UI may also set (activity_db_path): the environment
+//  2. OPERATIONAL keys that the UI may also set (database_path): the environment
 //     wins only when it ACTUALLY supplies the key; otherwise the persisted blob
 //     value must survive. These need envSupplied(), NOT viper.IsSet.
 //
@@ -2035,35 +2019,23 @@ func ParseWhisperEndpoints(s string) []WhisperEndpoint {
 
 // viperDecodeJSON and viperPathList live in viper_decode.go.
 
-// ActivityDBDirName is the dot-directory that holds the activity database under
-// the library root. Dot-prefixed so the scanner skips it: pathutil.ShouldSkipDir
-// rejects any hidden directory, which keeps a multi-gigabyte SQLite file out of
-// every library walk without needing its own exclusion rule.
-const ActivityDBDirName = ".activity"
-
-// ActivityDBFileName is the activity database's basename in that directory.
-const ActivityDBFileName = "activity.sqlite"
-
-// ResolveActivityDBPath returns the activity database path this config actually
-// implies, applying the default when ActivityDBPath is unset.
-//
-// The default lives under the LIBRARY root rather than beside the main database
-// because the two have very different storage needs: the activity log grows
-// without bound (29 GB on production) while the main database sits on a small
-// system volume. Putting it in {RootDir}/.activity keeps it on the same large
-// volume as the library it describes.
-//
-// Falls back to sitting beside the main database when no library root is
-// configured — first boot, or a setup that never set one — since an empty
-// RootDir would otherwise resolve to a path at the filesystem root.
-func (c *Config) ResolveActivityDBPath() string {
-	if p := strings.TrimSpace(c.ActivityDBPath); p != "" {
-		return p
+// ValidateActivityBackend reports whether v is an accepted ActivityBackend
+// value: empty (a config that predates the setting) or "pebble", compared
+// case-insensitively after trimming. Anything else is an error. "sqlite" gets
+// its own message because it was a real setting until 01-P75 removed the
+// SQLite activity backend, and an operator who still has it in a conf must be
+// told to remove it rather than see a server that silently ignores it.
+func ValidateActivityBackend(v string) error {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "pebble":
+		return nil
+	case "sqlite":
+		return fmt.Errorf("activity_backend: sqlite is no longer supported (the SQLite activity backend was removed); " +
+			"remove activity_backend or set it to pebble. The old activity.sqlite file is not read or deleted")
+	default:
+		return fmt.Errorf("activity_backend: %q is not a supported value; the only activity backend is pebble "+
+			"(remove activity_backend or set it to pebble)", v)
 	}
-	if root := strings.TrimSpace(c.RootDir); root != "" {
-		return filepath.Join(root, ActivityDBDirName, ActivityDBFileName)
-	}
-	return filepath.Join(filepath.Dir(c.DatabasePath), ActivityDBFileName)
 }
 
 // envSupplied reports whether the process environment actually provided a value for
@@ -2072,7 +2044,7 @@ func (c *Config) ResolveActivityDBPath() string {
 // viper.IsSet CANNOT answer this question. InitConfig registers a SetDefault for most
 // bound keys, and viper.IsSet is `Get(key) != nil` — a registered default is a value,
 // so IsSet stays true with a completely empty environment. Measured against this
-// repo's viper: SetDefault("activity_db_path", "") alone yields IsSet=true, Get="".
+// repo's viper: SetDefault("<key>", "") alone yields IsSet=true, Get="".
 //
 // An empty value counts as "not supplied" on purpose: systemd `Environment=FOO=` and
 // an unset variable should not behave differently, and an empty override could only
@@ -2095,8 +2067,8 @@ func envSupplied(envVar string) bool {
 // Read both rows before touching this. The first says IsSet and Get DISAGREE:
 // IsSet skips the "fall back to the flag's default" branch that Get takes, so a
 // guard derived from the VALUE is wrong even where IsSet happens to look right.
-// The second says a single SetDefault line -- exactly the one that already
-// exists for activity_db_path in InitConfig -- flips IsSet permanently true AND
+// The second says a single SetDefault line -- of the kind InitConfig registers
+// for most keys -- flips IsSet permanently true AND
 // makes Get return the empty default instead of the flag's, because SetDefault
 // outranks a bound flag's default. Adding it would silently re-open this bug.
 //
@@ -2152,9 +2124,7 @@ func ResetExplicitFlagsForTest() {
 // documentation, and the value still reaches the client only masked
 // (UpdateService.MaskSecrets). Nothing in this file may log or return the value.
 var envLockedSettings = map[string]string{
-	"activity_backend":           "ACTIVITY_BACKEND",
-	"activity_db_move_on_change": "ACTIVITY_DB_MOVE_ON_CHANGE",
-	"activity_db_path":           "ACTIVITY_DB_PATH",
+	"activity_backend": "ACTIVITY_BACKEND",
 	// The main database. Annotated read-only in the UI whenever the operator
 	// supplies DATABASE_PATH, so the Settings page cannot present a field that
 	// silently discards what you type on the next boot.
@@ -2275,7 +2245,7 @@ var flagLockedSettings = map[string]string{
 // wire name of the API field ("env_locked") and was kept when the file source was
 // added.
 //
-// This exists so the UI cannot lie. Production sets ACTIVITY_DB_PATH in its systemd
+// This exists so the UI cannot lie. Production sets DATABASE_PATH in its systemd
 // unit; without this list the path control renders as an ordinary editable field
 // whose saved value is overwritten on the next boot — the edit appears to take, and
 // then quietly does not. A control the operator cannot actually change must say so.
@@ -2418,33 +2388,17 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	if viper.IsSet("abs_default_library_id") {
 		c.ABSDefaultLibraryID = viper.GetString("abs_default_library_id")
 	}
-	// Activity-log backend selector. Env-authoritative for the same reason as the
+	// Activity-log backend name. Env-authoritative for the same reason as the
 	// ABS keys: LoadConfigFromDatabase replaces the whole struct with the persisted
-	// blob, so without this a systemd Environment=ACTIVITY_BACKEND=pebble rollback
-	// would be silently dropped at boot and SQLite would re-engage. This lever
-	// exists to halt the Pebble→SQLite migration/backfill (the 2026-09-07 OOM).
-	// The registered SetDefault keeps IsSet permanently true, so with the
+	// blob. The registered SetDefault keeps IsSet permanently true, so with the
 	// environment silent this writes the "pebble" default over whatever the blob
-	// holds: a restored blob can never select SQLite on its own.
+	// holds, and production's Environment=ACTIVITY_BACKEND=pebble keeps working.
+	// A config file or environment value of "sqlite" reaches the field and is
+	// then refused by Validate (see ValidateActivityBackend).
 	if viper.IsSet("activity_backend") {
 		c.ActivityBackend = viper.GetString("activity_backend")
 	}
-	// Category 2 (see the doc comment): operator-OR-UI settable. ACTIVITY_DB_PATH wins
-	// when the operator actually sets it, but with the environment silent the value
-	// persisted in the config blob must SURVIVE — this is the field behind the
-	// activity-database location control in Settings. Guarding this with viper.IsSet
-	// (as every other key here does) overwrote it with "" on every boot, because the
-	// registered SetDefault keeps IsSet permanently true.
-	if envSupplied("ACTIVITY_DB_PATH") {
-		c.ActivityDBPath = viper.GetString("activity_db_path")
-	}
-	// Same category as the path it governs: normally owned by the UI, but an
-	// operator must be able to force it off from the unit file — relocating tens
-	// of gigabytes is not something to discover during an incident.
-	if envSupplied("ACTIVITY_DB_MOVE_ON_CHANGE") {
-		c.ActivityDBMoveOnChange = viper.GetBool("activity_db_move_on_change")
-	}
-	// The MAIN database path. Category 2, same as activity_db_path: the UI may
+	// The MAIN database path. Category 2 (see the doc comment): the UI may
 	// set it, but an explicit --db or DATABASE_PATH from the operator wins.
 	//
 	// This was missing entirely and it took production down on 2026-09-09. The
@@ -2473,7 +2427,7 @@ func applyEnvAuthoritativeConfig(c *Config) {
 		c.DatabasePath = viper.GetString("database_path")
 	}
 	// Deluge connection settings (owner decision 2026-10-11). Category 2 like
-	// activity_db_path: with neither the environment nor the config file setting a
+	// database_path: with neither the environment nor the config file setting a
 	// key, the stored blob (the UI / PUT /config) wins unchanged. When one does, it
 	// beats the blob — INCLUDING a stored empty value, which the blob writes for
 	// every field it knows and which used to mask env and file on any install that
@@ -2974,19 +2928,12 @@ func InitConfig() {
 	viper.SetDefault("dedup.chromem_lazy", false)
 	viper.BindEnv("dedup.chromem_lazy", "DEDUP_CHROMEM_LAZY") //nolint:errcheck
 
-	// Activity-log store backend selection. Bound to env so ACTIVITY_BACKEND
-	// can force the store choice without editing config.yaml — the prod rollback
-	// lever when the SQLite migration/backfill misbehaves (set =pebble to open
-	// Pebble only, skipping the SQLite wrapper and its Pebble→SQLite backfill).
-	// AutomaticEnv() is not active in this codebase, so without this BindEnv the
-	// ActivityBackend field is settable only from config.yaml (root:600 on prod,
-	// not editable via the deploy's NOPASSWD levers).
+	// Activity-log store backend name. Bound to env so ACTIVITY_BACKEND (set to
+	// pebble in production's unit file) is read; AutomaticEnv() is not active in
+	// this codebase. Pebble is the only backend; any other value is refused by
+	// Validate (ValidateActivityBackend).
 	viper.SetDefault("activity_backend", "pebble")
-	viper.SetDefault("activity_db_path", "")
-	viper.SetDefault("activity_db_move_on_change", true)
-	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND")                     //nolint:errcheck
-	viper.BindEnv("activity_db_path", "ACTIVITY_DB_PATH")                     //nolint:errcheck
-	viper.BindEnv("activity_db_move_on_change", "ACTIVITY_DB_MOVE_ON_CHANGE") //nolint:errcheck
+	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND") //nolint:errcheck
 
 	// Author catalog (nested under "catalog.*"). Off by default.
 	viper.SetDefault("catalog.enabled", false)
@@ -3172,13 +3119,12 @@ func InitConfig() {
 
 			// Activity-log store backend. Read from viper here so config.yaml's
 			// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
-			// the field — the mapstructure tag is inert because this config is
+			// the field, and a leftover "sqlite" is refused by Validate rather
+			// than dropped — the mapstructure tag is inert because this config is
 			// built by explicit GetString calls, not viper.Unmarshal. Also
-			// re-applied in applyEnvAuthoritativeConfig so the env lever survives
+			// re-applied in applyEnvAuthoritativeConfig so the env value survives
 			// the DB-blob config overlay (see the ABS keys there).
-			ActivityBackend:        viper.GetString("activity_backend"),
-			ActivityDBPath:         viper.GetString("activity_db_path"),
-			ActivityDBMoveOnChange: viper.GetBool("activity_db_move_on_change"),
+			ActivityBackend: viper.GetString("activity_backend"),
 
 			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
 			FingerprintRemoteWorkersEnabled:      viper.GetBool("fingerprint_remote_workers_enabled"),
@@ -3808,6 +3754,13 @@ func (c *Config) Validate() error {
 	case "pebble", "sqlite":
 	default:
 		errs = append(errs, "database_type must be 'pebble' or 'sqlite'")
+	}
+
+	// activity_backend: Pebble is the only activity backend (01-P75). A leftover
+	// "sqlite" must stop startup with a message, never run on Pebble while the
+	// conf says otherwise.
+	if err := ValidateActivityBackend(c.ActivityBackend); err != nil {
+		errs = append(errs, err.Error())
 	}
 
 	// embedding.vector_backend is enum-like and was previously never validated:
