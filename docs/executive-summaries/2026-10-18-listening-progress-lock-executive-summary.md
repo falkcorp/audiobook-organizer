@@ -23,6 +23,11 @@ There is no separate spec. It closes TODO item ARS-LOCK.
   saved progress and keep it until they have written. Two saves for the same
   book now happen one after the other, so the later one builds on the earlier
   one instead of overwriting it.
+- **Undoing a merge no longer forgets a save made during the merge.** When
+  books are merged, the app writes down where each reader was before and after,
+  so the merge can be undone. A save landing between those two notes could
+  be left out of both and then wiped by the undo. The merge now holds the locks
+  from the first note to the second.
 - **Merges take two locks safely.** Moving progress between two copies needs
   both copies locked at once. A new helper takes the two locks in a fixed order,
   so two merges going in opposite directions cannot wait on each other forever.
