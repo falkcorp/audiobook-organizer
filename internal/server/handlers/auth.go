@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.9.0
+// version: 2.9.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package handlers
 
