@@ -1,7 +1,7 @@
 // file: internal/server/absauth/token.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a3d5f70-4c81-42be-b0d6-7e15c8a2b943
-// last-edited: 2026-07-30
+// last-edited: 2026-10-19
 
 package absauth
 
@@ -70,12 +70,20 @@ func (c *Config) MintAccessToken(userID, sessionID string, now time.Time) (strin
 //   - sub and sid must both be non-empty, so a token cannot authenticate without
 //     naming a session the caller can then check for revocation.
 func (c *Config) ParseAccessToken(raw string) (*AccessClaims, error) {
+	return c.ParseAccessTokenAt(raw, time.Now())
+}
+
+// ParseAccessTokenAt is ParseAccessToken with exp/iat judged against now instead of
+// the wall clock, so a caller with an injected clock (the resolver under test) sees
+// tokens expire on the same timeline as its sessions.
+func (c *Config) ParseAccessTokenAt(raw string, now time.Time) (*AccessClaims, error) {
 	if c == nil || len(c.secret) == 0 {
 		return nil, ErrNotEnabled
 	}
 	parsed, err := jwt.Parse(raw, func(*jwt.Token) (any, error) { return c.secret, nil },
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithExpirationRequired(),
+		jwt.WithTimeFunc(func() time.Time { return now }),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("absauth: parse access token: %w", err)
@@ -101,4 +109,16 @@ func (c *Config) ParseAccessToken(raw string) (*AccessClaims, error) {
 		out.IssuedAt = iat.Time
 	}
 	return out, nil
+}
+
+// IsAccessTokenExpired reports whether err from ParseAccessToken means the token
+// was genuine but past its exp — as opposed to forged, malformed or signed with a
+// different secret. Both are a 401; the distinction exists for the audit log, where
+// "token-invalid" for a merely expired token once made a routine 30-day expiry look
+// like an ABS_JWT_SECRET change.
+//
+// A token that fails its signature check is never reported as expired, even when its
+// exp is also in the past: an unverified exp claim proves nothing.
+func IsAccessTokenExpired(err error) bool {
+	return err != nil && errors.Is(err, jwt.ErrTokenExpired) && !errors.Is(err, jwt.ErrTokenSignatureInvalid)
 }

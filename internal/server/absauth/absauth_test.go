@@ -1,5 +1,5 @@
 // file: internal/server/absauth/absauth_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e1b47a3-0d85-4c92-a731-58f0c3b6d9e2
 // last-edited: 2026-10-19
 
@@ -60,8 +60,16 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.AccessTTL != 30*24*time.Hour {
 		t.Fatalf("default access TTL must be 30d, got %v", cfg.AccessTTL)
 	}
-	if cfg.RefreshTTL != 30*24*time.Hour {
-		t.Fatalf("default refresh TTL must be 30d, got %v", cfg.RefreshTTL)
+	// The session idle TTL is 60d: strictly longer than the access TTL, so the
+	// client's 401 arrives while refresh can still rescue the session.
+	if cfg.RefreshTTL != 60*24*time.Hour {
+		t.Fatalf("default refresh (session idle) TTL must be 60d, got %v", cfg.RefreshTTL)
+	}
+	if cfg.SessionMaxTTL != 0 {
+		t.Fatalf("the absolute session cap must default to off, got %v", cfg.SessionMaxTTL)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Fatalf("the defaults must load without warnings, got %v", cfg.Warnings)
 	}
 	if cfg.RefreshGrace != 10*time.Minute {
 		t.Fatalf("default grace must be 10m, got %v", cfg.RefreshGrace)

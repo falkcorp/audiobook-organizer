@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
-// last-edited: 2026-09-12
+// last-edited: 2026-10-19
 
 package database
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -95,6 +96,28 @@ func (s *ABSSession) InGrace(now time.Time) bool {
 	return now.Before(s.GraceUntil)
 }
 
+// ErrABSSessionRevoked is returned by UpdateABSSession when the stored session has
+// been revoked (or deleted) since the caller read it. Revocation is one-way: a
+// refresh that read the row before a concurrent logout must not write it back live.
+var ErrABSSessionRevoked = errors.New("abs session: revoked or deleted")
+
+// absSessionWriteMu serializes every read-modify-write of an abs_sess record:
+// UpdateABSSession, ExtendABSSession, RevokeABSSession and
+// RevokeAllABSSessionsForUser. Pebble has no compare-and-swap, so without it two
+// writers that each read the row and write a whole copy back lose each other's
+// changes. The two that matter:
+//
+//   - the bearer-path ExpiresAt extension writing back a row a refresh rotated in
+//     between, which un-rotates it and logs the device out as refresh-token-unknown;
+//   - any writer writing back a row a logout revoked in between, which un-revokes it.
+//
+// One process-wide mutex rather than per-session locks: these writes happen at
+// login, refresh, logout and at most about once a day per session from use, so
+// contention is negligible, and a single lock cannot be taken in two orders.
+// Package-level because PebbleStore is opened once per process (and in tests, a
+// shared lock only serializes, it never deadlocks: no holder calls back into it).
+var absSessionWriteMu sync.Mutex
+
 func absSessionKey(id string) []byte { return []byte(absSessionKeyPrefix + id) }
 func absSessionTokenKey(h string) []byte {
 	return []byte(fmt.Sprintf(absSessionTokenIdxTmpl, h))
@@ -154,9 +177,22 @@ func (p *PebbleStore) GetABSSession(id string) (*ABSSession, error) {
 // entries. Both the current and the previous hash are indexed so a grace-window
 // replay still resolves. Index entries for retired generations are pruned lazily by
 // GetABSSessionByRefreshHash.
+//
+// It refuses with ErrABSSessionRevoked, writing nothing, when the STORED row is
+// revoked or gone: the caller read it before a concurrent logout, and writing its
+// copy back would un-revoke the session and re-index its refresh tokens.
 func (p *PebbleStore) UpdateABSSession(session *ABSSession) error {
 	if session == nil {
 		return fmt.Errorf("abs session: nil session")
+	}
+	absSessionWriteMu.Lock()
+	defer absSessionWriteMu.Unlock()
+	stored, err := p.GetABSSession(session.ID)
+	if err != nil {
+		return err
+	}
+	if stored == nil || stored.Revoked {
+		return ErrABSSessionRevoked
 	}
 	data, err := json.Marshal(session)
 	if err != nil {
@@ -179,6 +215,50 @@ func (p *PebbleStore) UpdateABSSession(session *ABSSession) error {
 		}
 	}
 	return b.Commit(pebble.Sync)
+}
+
+// ExtendABSSession pushes a live session's ExpiresAt forward to expiresAt and
+// stamps LastUsedAt = now, and changes nothing else. It is the write behind
+// "authenticated use keeps a session alive" and is called from the bearer path on
+// requests that may run in parallel with a refresh or a logout of the same session.
+//
+// The whole decision is made under absSessionWriteMu against a fresh read, never
+// against the caller's copy, so it can neither un-rotate a refresh that landed in
+// between nor un-revoke a logout. It writes only when ALL hold, and otherwise
+// reports (false, nil):
+//
+//   - the session exists, is not revoked and is still live at now (an expired
+//     session is dead; use must not resurrect it);
+//   - its ExpiresAt is set (zero means "never expires" and must not be shortened);
+//   - expiresAt is at least minAdvance past the stored ExpiresAt. This is the write
+//     throttle: a burst of parallel cover requests produces one write, and a capped
+//     session whose target has stopped moving produces none.
+//
+// Only the record key is rewritten. The refresh-token indexes are untouched because
+// the hashes did not change.
+func (p *PebbleStore) ExtendABSSession(id string, now, expiresAt time.Time, minAdvance time.Duration) (bool, error) {
+	absSessionWriteMu.Lock()
+	defer absSessionWriteMu.Unlock()
+	s, err := p.GetABSSession(id)
+	if err != nil {
+		return false, err
+	}
+	if s == nil || !s.Live(now) || s.ExpiresAt.IsZero() {
+		return false, nil
+	}
+	if expiresAt.Sub(s.ExpiresAt) < minAdvance || !expiresAt.After(s.ExpiresAt) {
+		return false, nil
+	}
+	s.ExpiresAt = expiresAt
+	s.LastUsedAt = now
+	data, err := json.Marshal(s)
+	if err != nil {
+		return false, fmt.Errorf("abs session: marshal: %w", err)
+	}
+	if err := p.db.Set(absSessionKey(s.ID), data, pebble.Sync); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // GetABSSessionByRefreshHash resolves a refresh-token hash to its session.
@@ -258,6 +338,8 @@ func (p *PebbleStore) ListABSSessionsForUser(userID string) ([]ABSSession, error
 // entries so the tokens stop resolving immediately. Revoking an unknown session is
 // a no-op (idempotent logout).
 func (p *PebbleStore) RevokeABSSession(id string) error {
+	absSessionWriteMu.Lock()
+	defer absSessionWriteMu.Unlock()
 	s, err := p.GetABSSession(id)
 	if err != nil {
 		return err
@@ -308,6 +390,10 @@ func (p *PebbleStore) RevokeAllABSSessionsForUser(userID string) (int, error) {
 	revoked := 0
 	scanErr := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(key, _ []byte) error {
 		id := strings.TrimPrefix(string(key), string(prefix))
+		// Per-session read+revoke under the write lock (see absSessionWriteMu), so
+		// a concurrent extension or refresh cannot write a live copy back over it.
+		absSessionWriteMu.Lock()
+		defer absSessionWriteMu.Unlock()
 		s, err := p.GetABSSession(id)
 		if err != nil {
 			unreadable.add(id, fmt.Errorf("reading session %s: %w", id, err))
