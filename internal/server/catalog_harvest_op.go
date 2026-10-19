@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // Registers catalog.harvest-authors, phase P1 of the author catalog design
 // (.claude/notes/catalog-wanted-requests-design-2026-10-01.md, Draft 3).
@@ -159,13 +159,18 @@ func (s *Server) runCatalogHarvestOp(ctx context.Context, raw json.RawMessage, r
 	if cat == nil {
 		return fmt.Errorf("%s: catalog store unavailable (store is not Pebble-backed)", catalogHarvestOpID)
 	}
-	return runCatalogHarvest(ctx, reporter, store, cat, metadata.NewAudibleClient(), p, dryRun, cfg)
+	return runCatalogHarvest(ctx, reporter, store, cat, metadata.NewAudibleClient(), metadata.DefaultThrottleRegistry(), p, dryRun, cfg)
 }
 
 // runCatalogHarvest is the op body with its dependencies injected, so the
-// tests can drive it with a fixture lister and a real Pebble store.
+// tests can drive it with a fixture lister, a real Pebble store and a private
+// throttle registry. Production passes metadata.DefaultThrottleRegistry(), the
+// process-wide one every other Audible caller shares; a test must NOT, because
+// the harvest both reads that registry (a hold stands the whole run down) and
+// writes to it (a provider error records one), so a hold left by any earlier
+// test in the binary failed the run.
 func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store database.Store, cat *database.CatalogStore,
-	lister metadata.AuthorLister, p catalogHarvestParams, dryRun bool, cfg config.CatalogConfig) error {
+	lister metadata.AuthorLister, throttles *metadata.ThrottleRegistry, p catalogHarvestParams, dryRun bool, cfg config.CatalogConfig) error {
 	authors, census, err := catalog.BuildScope(ctx, store, store)
 	if err != nil {
 		return err
@@ -194,9 +199,9 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 		ReharvestInterval: interval,
 		Concurrency:       p.Concurrency,
 		Limiter:           rate.NewLimiter(rate.Limit(rps), 1),
-		Throttled:         func() bool { return metadata.DefaultThrottleRegistry().Throttled(metadata.SourceIDAudible) },
+		Throttled:         func() bool { return throttles.Throttled(metadata.SourceIDAudible) },
 		OnProviderError: func(err error) {
-			metadata.DefaultThrottleRegistry().RecordFailure(metadata.SourceIDAudible, err)
+			throttles.RecordFailure(metadata.SourceIDAudible, err)
 		},
 		OpID: opsregistry.ReporterOpID(reporter),
 	})

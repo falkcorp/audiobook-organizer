@@ -1,7 +1,7 @@
 // file: internal/server/catalog_stage_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e9c34a70-5b18-4d2f-86a1-3d0f7b92c584
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package server
 
@@ -44,7 +44,7 @@ func TestCatalogStage_EndToEnd_CountersAndSummaryLine(t *testing.T) {
 	ps := seedCatalogLibrary(t)
 	cat := database.NewCatalogStoreFromStore(ps)
 	rep := &catalogTestReporter{}
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, &catalogFakeLister{}, catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, &catalogFakeLister{}, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if joined := strings.Join(rep.logs, "\n"); !strings.Contains(joined, "author aliases: 2 entries read") {
