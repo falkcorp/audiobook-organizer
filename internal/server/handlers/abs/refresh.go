@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
 // last-edited: 2026-10-19
 
@@ -117,7 +117,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 	// The user is checked BEFORE anything is written. A rotate or grace touch
 	// slides ExpiresAt, so doing it first and refusing afterwards would let a
 	// locked or deleted user's session keep extending itself on every attempt.
-	user, ok := h.refreshUser(c, ip, session.ID, session.UserID, servermiddleware.ABSModeJWT)
+	user, ok := h.refreshUser(c, ip, session, servermiddleware.ABSModeJWT)
 	if !ok {
 		return
 	}
@@ -193,14 +193,14 @@ func (h *Handler) refreshForCFIdentity(c *gin.Context, identity *servermiddlewar
 	user := identity.User
 
 	if presented != "" {
-		if session, refreshToken, ok := h.rotateForCF(absauth.HashRefreshToken(presented), user.ID, now); ok {
+		if session, refreshToken, ok := h.rotateForCF(absauth.HashRefreshToken(presented), user, now); ok {
 			h.completeRefresh(c, user, session, refreshToken, servermiddleware.ABSModeCF, identity.Email, ip, now)
 			return
 		}
 		// Otherwise mint a new session: in Mode C we must not fail.
 	}
 
-	session, refreshToken, err := h.createSession(user.ID, deviceInfoFromRequest(c), ip, c.Request.UserAgent(), now)
+	session, refreshToken, err := h.createSession(user, deviceInfoFromRequest(c), ip, c.Request.UserAgent(), now)
 	if err != nil {
 		// The only failure Mode C can produce is a genuine server error, and it is
 		// reported as 5xx so the client retries rather than logging out.
@@ -211,15 +211,17 @@ func (h *Handler) refreshForCFIdentity(c *gin.Context, identity *servermiddlewar
 }
 
 // rotateForCF rotates the session the presented refresh token belongs to, when it
-// is this user's and still live, and reports false otherwise (or on any store
-// error) so the caller mints a fresh session instead.
+// is this user's, still live and issued under the user's current credentials, and
+// reports false otherwise (or on any store error) so the caller mints a fresh
+// session, stamped with the current epoch, instead.
 //
 // The lookup by hash runs unlocked, so the row is re-read and every condition
 // re-checked under the per-session lock before rotating. Rotating the unlocked
 // copy could write an older generation back over a rotation that landed in
 // between and orphan the token that device was just given; the store refuses that
 // write too (ErrABSSessionStale), but the re-read is what keeps it from happening.
-func (h *Handler) rotateForCF(hash, userID string, now time.Time) (*database.ABSSession, string, bool) {
+func (h *Handler) rotateForCF(hash string, user *database.User, now time.Time) (*database.ABSSession, string, bool) {
+	userID := user.ID
 	found, err := h.store.GetABSSessionByRefreshHash(hash)
 	if err != nil || found == nil || found.UserID != userID {
 		return nil, "", false
@@ -229,6 +231,7 @@ func (h *Handler) rotateForCF(hash, userID string, now time.Time) (*database.ABS
 	defer lock.Unlock()
 	session, err := h.store.GetABSSession(found.ID)
 	if err != nil || session == nil || session.UserID != userID || !session.Live(now) ||
+		!session.CredentialsCurrent(user) ||
 		h.cfg.SessionPastMaxLifetime(session.CreatedAt, now) ||
 		(hash != session.RefreshTokenHash && hash != session.PrevRefreshTokenHash) {
 		return nil, "", false
@@ -247,16 +250,29 @@ func (h *Handler) rotateForCF(hash, userID string, now time.Time) (*database.ABS
 }
 
 // refreshUser loads the session's user and refuses the refresh, writing the
-// response, when it is gone (401: the session really is dead), inactive (403) or
-// unreadable (5xx). Called before any session write.
-func (h *Handler) refreshUser(c *gin.Context, ip, sessionID, userID, mode string) (*database.User, bool) {
-	user, err := h.store.GetUserByID(userID)
+// response, when it is gone (401: the session really is dead), inactive (403),
+// unreadable (5xx), or when the session was issued under credentials that have
+// since changed (401, credentials-changed: a password change, reset or
+// deactivation bumped User.CredentialEpoch). Called before any session write.
+//
+// The epoch is checked, never re-stamped: a refresh carries the session's stamp
+// forward, so a session minted with an old password cannot be refreshed into one
+// that passes.
+func (h *Handler) refreshUser(c *gin.Context, ip string, session *database.ABSSession, mode string) (*database.User, bool) {
+	sessionID := session.ID
+	user, err := h.store.GetUserByID(session.UserID)
 	if err != nil {
 		h.errorRefresh(c, ip, "user-lookup-error", "could not load user")
 		return nil, false
 	}
 	if user == nil {
 		h.failRefresh(c, ip, sessionID, "session-user-missing")
+		return nil, false
+	}
+	// Before the active check: a session from before a deactivation is dead
+	// (401, sign in again), not merely suspended (403).
+	if !session.CredentialsCurrent(user) {
+		h.failRefresh(c, ip, sessionID, "credentials-changed")
 		return nil, false
 	}
 	if !isActiveUser(user) {

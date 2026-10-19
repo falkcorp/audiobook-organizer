@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -114,10 +115,77 @@ func (p *PebbleStore) GetUserByEmail(email string) (*User, error) {
 	return p.getUserByIndex("idx:user:email:" + strings.ToLower(email))
 }
 
+// userWriteMu serializes every rewrite of an existing user row (UpdateUser,
+// RehashUserPassword). Pebble has no compare-and-swap, and both are
+// read-modify-write, so without it a write built from a copy read before a
+// password change could land after it and put the old password hash and the old
+// CredentialEpoch back, reviving every session the change was meant to kill.
+var userWriteMu sync.Mutex
+
+// ErrUserStale is returned by UpdateUser for a write that does not follow the
+// stored row's credentials: the caller's copy was read before a credential
+// change landed. Re-read the user and retry.
+var ErrUserStale = errors.New("database: user changed since it was read")
+
+// UpdateUser rewrites a user row. Under userWriteMu it re-reads the stored row
+// and refuses (ErrUserStale) a write that would:
+//   - lower CredentialEpoch, or raise it by more than one;
+//   - change the password hash or algorithm without raising it by exactly one.
+//
+// A credential change therefore always lands with its epoch bump in the same
+// write, and a stale read-modify-write (a role edit, a status change, a
+// best-effort rehash) can never undo one. The password-preserving rehash goes
+// through RehashUserPassword instead.
 func (p *PebbleStore) UpdateUser(user *User) error {
+	userWriteMu.Lock()
+	defer userWriteMu.Unlock()
+	stored, err := p.GetUserByID(user.ID)
+	if err != nil {
+		return err
+	}
+	if stored != nil {
+		bump := user.CredentialEpoch - stored.CredentialEpoch
+		credsChanged := user.PasswordHash != stored.PasswordHash || user.PasswordHashAlgo != stored.PasswordHashAlgo
+		if bump < 0 || bump > 1 || (credsChanged && bump != 1) {
+			return fmt.Errorf("%w: user %s epoch %d, stored %d", ErrUserStale, user.ID, user.CredentialEpoch, stored.CredentialEpoch)
+		}
+	}
 	user.UpdatedAt = time.Now()
 	data, _ := json.Marshal(user)
 	return p.db.Set([]byte("u:"+user.ID), data, pebble.Sync)
+}
+
+// UserPasswordRehasher re-stores a verified password under a stronger algorithm
+// without a lost-update race. Resolve it with AsCapability: it is not on Store.
+type UserPasswordRehasher interface {
+	RehashUserPassword(userID, verifiedHash, algo, hash string) (bool, error)
+}
+
+// RehashUserPassword replaces the user's password hash with (algo, hash) only if
+// the stored hash is still verifiedHash, the one the caller just checked the
+// plaintext against, and reports whether it wrote. It re-reads under userWriteMu
+// and changes only the two hash fields on the fresh row, so a concurrent password
+// change (different hash: nothing written) or deactivation (other fields: kept)
+// is never overwritten by the caller's older copy. It does not move
+// CredentialEpoch: the password itself is unchanged.
+func (p *PebbleStore) RehashUserPassword(userID, verifiedHash, algo, hash string) (bool, error) {
+	userWriteMu.Lock()
+	defer userWriteMu.Unlock()
+	stored, err := p.GetUserByID(userID)
+	if err != nil {
+		return false, err
+	}
+	if stored == nil || stored.PasswordHash != verifiedHash {
+		return false, nil
+	}
+	stored.PasswordHashAlgo = algo
+	stored.PasswordHash = hash
+	stored.UpdatedAt = time.Now()
+	data, _ := json.Marshal(stored)
+	if err := p.db.Set([]byte("u:"+userID), data, pebble.Sync); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListUsers lists every user whose row decodes. An undecodable row is logged

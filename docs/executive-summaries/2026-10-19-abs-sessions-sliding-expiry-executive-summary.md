@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sessions-sliding-expiry-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 50c43bce-f6d8-4831-b9d1-95ea32eda66d -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -100,15 +100,27 @@ switching an account off did nothing to the phone apps' sign-ins.
 signed in before the change would have stayed signed in indefinitely, which
 defeats the point of changing a password after a phone is lost.
 
-**The fix.** All of those actions now end every phone sign-in for that
-person. A password change or reset link that cannot sign the phones out is
-refused, so the password is never changed while they stay signed in; the
-person just tries again. Switching an account off locks it first, so it is
-shut at once even if signing the phones out fails, and the admin is told to
-try again. Switching it back on clears any leftover phone sign-ins before it
-unlocks, so they never come back. A locked account's phone also can no
-longer keep its sign-in alive by renewing it. The web interface has the same
-gap; it is recorded as follow-up work, not fixed here.
+**The fix.** Each account now carries a counter that goes up whenever its
+password is changed or reset, or the account is switched off. Every phone
+sign-in remembers the counter's value from the moment it signed in, and the
+server refuses any sign-in whose value is out of date, every time the phone
+uses it. The counter goes up in the same save as the new password, so there
+is no gap: even a phone that signed in with the old password a split second
+before the change is refused afterwards. The old sign-ins are also cleared
+from the device list, but that is tidying up; if it fails, they are refused
+anyway. Switching an account back on does not bring them back. A reset link
+is not handed out unless the counter was saved.
+
+Two related gaps were closed at the same time. Any save to an account that
+was based on an out-of-date copy (for example, a profile edit made just as the
+password changed) is now refused instead of quietly putting the old password
+back. And when a phone signs in, the server's routine upgrade of how the
+password is stored now only goes ahead if the password has not changed in the
+meantime; before, it could put the old password back, or switch a just-locked
+account back on.
+
+The web interface has the same gap as the phones had; it is recorded as
+follow-up work, not fixed here.
 
 ## Phone-app settings could be saved but never applied
 

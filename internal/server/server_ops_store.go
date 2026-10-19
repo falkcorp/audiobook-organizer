@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package server
 
@@ -293,6 +293,9 @@ type serverUserStore interface {
 	GetUserByUsername(username string) (*database.User, error)
 	GetUserPreference(key string) (*database.UserPreference, error)
 	ListUsers() ([]database.User, error)
+	// UpdateUser: the admin reset link bumps the user's CredentialEpoch, which is
+	// what ends their ABS sessions (handleResetPassword).
+	UpdateUser(user *database.User) error
 }
 
 // serverCredentialStore: Sessions and API keys.

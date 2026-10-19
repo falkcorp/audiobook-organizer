@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.8.0 -->
+<!-- version: 7.9.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -833,11 +833,15 @@ when the request carries header `x-return-tokens: true`, the response body **als
   `token-invalid`. Both are 401.
 - **Account security events end every session (2026-10-19).** Because sessions slide and the
   absolute cap is off by default, a session would otherwise outlive the credentials it was issued
-  for. A password change (self-service or admin), an admin reset link and deactivation call
-  `RevokeAllABSSessionsForUser`. Password change and reset link revoke first and fail closed (500,
-  nothing changed) if the revoke fails; deactivation locks first, then revokes and reports a failed
-  revoke as 500; reactivation revokes again before unlocking. `/auth/refresh` refuses a missing or
-  locked user before it writes to the session.
+  for. `User.CredentialEpoch` (missing = 0) is bumped by exactly one, in the same `UpdateUser` write,
+  by a password change (self-service or admin), an admin reset link and deactivation. Each session
+  stores the epoch of the user record its login was verified against; refresh, every bearer request
+  and `GET /api/me/sessions` refuse a session whose stamp differs (401 `credentials-changed`, checked
+  before the active-account check). Refresh carries the stamp and never re-stamps it. This also
+  kills a session minted with the old password while the change was in flight. A revoke-all runs
+  after the write as cleanup only. `UpdateUser` takes a user write lock, re-reads, and refuses
+  (`ErrUserStale`) lowering the epoch, skipping it, or changing the hash without a bump of one; the
+  §3.5 rehash uses `RehashUserPassword`, conditional on the stored hash still being the verified one.
 - **The ABS keys are environment-only.** Every serialized `abs_*` key has a registered default and
   is re-applied from viper at each boot, so `PUT /api/v1/config` refuses a change to one (400, naming
   the variable) and the settings API reports it as locked.

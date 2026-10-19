@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -187,20 +187,16 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 		return
 	}
 
-	// Lock FIRST: a locked user is refused at once by the ABS bearer and refresh
-	// paths, so the account is shut even if the revoke below fails. Then revoke
-	// every ABS session so reactivating the account later cannot bring them back.
-	// A revoke failure is reported as a failure (the admin retries; this handler
-	// is idempotent) rather than a success that left sessions on disk.
+	// Lock and bump CredentialEpoch in ONE write. The lock refuses the account
+	// at once; the epoch bump means every ABS session issued before it stays dead
+	// after a later reactivation, whether or not the cleanup revoke below lands.
 	user.Status = "locked"
+	user.CredentialEpoch++
 	if err := h.store.UpdateUser(user); err != nil {
 		httputil.InternalError(c, "deactivate user", err)
 		return
 	}
-	if err := RevokeAllABSSessions(h.absSessions, user.ID, "user-deactivated"); err != nil {
-		httputil.InternalError(c, "user locked, but their mobile-app sessions could not all be revoked; deactivate again", err)
-		return
-	}
+	RevokeAllABSSessions(h.absSessions, user.ID, "user-deactivated")
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
 }
@@ -218,14 +214,10 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 		return
 	}
 
-	// Revoke BEFORE unlocking, and stay locked if that fails. Deactivation
-	// already revoked, but if its revoke failed the sessions are still on disk,
-	// unusable only because the account is locked; unlocking would revive them.
-	// A reactivated account always starts with no ABS sessions.
-	if err := RevokeAllABSSessions(h.absSessions, user.ID, "user-reactivated"); err != nil {
-		httputil.InternalError(c, "could not clear the user's old mobile-app sessions; the user stays locked, try again", err)
-		return
-	}
+	// Pre-deactivation ABS sessions cannot come back: deactivation bumped
+	// CredentialEpoch and they carry the old one. This revoke only tidies rows a
+	// failed deactivation cleanup may have left on the device list.
+	RevokeAllABSSessions(h.absSessions, user.ID, "user-reactivated")
 	user.Status = "active"
 	if err := h.store.UpdateUser(user); err != nil {
 		httputil.InternalError(c, "reactivate user", err)

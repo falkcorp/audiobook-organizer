@@ -6,6 +6,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -611,25 +612,27 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return
 	}
-	// Sign the user out of every ABS client BEFORE the password changes, and
-	// refuse the change if that fails. ABS sessions slide with use and have no
-	// absolute cap by default, so one that survived a password change would stay
-	// valid indefinitely. Revoking first fails closed: on error the password is
-	// unchanged and the caller retries, and the worst a later UpdateUser failure
-	// can cost is that the phones sign in again with the old password.
+	// The new password and the CredentialEpoch bump land in ONE write. Every ABS
+	// session stamped with the old epoch is refused from that instant, including
+	// one minted with the old password between our read of target and this write;
+	// a revoke issued before the write could not reach that one. The store
+	// refuses the write (ErrUserStale) if another credential change landed since
+	// target was read, so two concurrent changes cannot both win.
+	target.PasswordHash = newHash
+	target.PasswordHashAlgo = newAlgo
+	target.CredentialEpoch++
+	if err := h.store.UpdateUser(target); err != nil {
+		if errors.Is(err, database.ErrUserStale) {
+			httputil.RespondWithConflict(c, "the account changed while the password was being set; nothing was changed, try again")
+			return
+		}
+		httputil.RespondWithInternalError(c, "failed to update password")
+		return
+	}
 	reason := "password-changed"
 	if isAdminReset {
 		reason = "admin-password-reset"
 	}
-	if err := RevokeAllABSSessions(h.absSessions, target.ID, reason); err != nil {
-		httputil.RespondWithInternalError(c, "could not sign the user out of their mobile apps; the password was not changed, try again")
-		return
-	}
-	target.PasswordHash = newHash
-	target.PasswordHashAlgo = newAlgo
-	if err := h.store.UpdateUser(target); err != nil {
-		httputil.RespondWithInternalError(c, "failed to update password")
-		return
-	}
+	RevokeAllABSSessions(h.absSessions, target.ID, reason)
 	httputil.RespondWithNoContent(c)
 }

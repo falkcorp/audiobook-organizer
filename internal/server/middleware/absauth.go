@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
 // last-edited: 2026-10-19
 
@@ -338,6 +338,14 @@ func (r *ABSIdentityResolver) ResolveBearer(c *gin.Context) (*ABSIdentity, *ABSA
 	}
 	if user == nil {
 		return nil, absErr(http.StatusUnauthorized, "user-missing", "session user no longer exists", ABSModeJWT)
+	}
+	// A password change, reset or deactivation bumps User.CredentialEpoch in the
+	// same write as the change. A session stamped with an older epoch (including
+	// one minted with the old password while the change was in flight) is dead,
+	// whether or not the follow-up revoke-all reached it. Checked before the
+	// active check so a pre-deactivation session reads as dead, not suspended.
+	if !session.CredentialsCurrent(user) {
+		return nil, absErr(http.StatusUnauthorized, "credentials-changed", "session not found", ABSModeJWT)
 	}
 	if e := absCheckUserActive(user, ABSModeJWT); e != nil {
 		return nil, e

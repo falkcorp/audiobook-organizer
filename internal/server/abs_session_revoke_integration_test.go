@@ -1,5 +1,5 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
 // last-edited: 2026-10-19
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,11 +37,18 @@ type absPhone struct {
 
 func signInABSPhone(t *testing.T, s *Server, username, password string) *absPhone {
 	t.Helper()
+	absStore, ok := database.AsCapability[abshandler.Store](s.Ops())
+	require.True(t, ok)
+	return signInABSPhoneVia(t, s, absStore, username, password)
+}
+
+// signInABSPhoneVia is signInABSPhone with the ABS handler's store supplied, so a
+// test can interpose on the login's own writes.
+func signInABSPhoneVia(t *testing.T, s *Server, absStore abshandler.Store, username, password string) *absPhone {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	cfg, err := absauth.Load(absauth.Settings{Enabled: true, JWTSecret: "0123456789abcdef0123456789abcdef", AuthModes: "jwt"})
 	require.NoError(t, err)
-	absStore, ok := database.AsCapability[abshandler.Store](s.Ops())
-	require.True(t, ok)
 	idStore, ok := database.AsCapability[servermiddleware.ABSIdentityStore](s.Ops())
 	require.True(t, ok)
 	resolver := servermiddleware.NewABSIdentityResolver(cfg, nil, nil, idStore)
@@ -142,8 +150,11 @@ func TestAccountSecurityPathsRevokeABSSessions(t *testing.T) {
 			require.NoError(t, err)
 			hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.MinCost)
 			require.NoError(t, err)
-			fresh.PasswordHash, fresh.PasswordHashAlgo = string(hash), "bcrypt"
-			require.NoError(t, s.storeForWiring().UpdateUser(fresh))
+			rehasher, ok := database.AsCapability[database.UserPasswordRehasher](s.Ops())
+			require.True(t, ok)
+			wrote, err := rehasher.RehashUserPassword(u.ID, fresh.PasswordHash, "bcrypt", string(hash))
+			require.NoError(t, err)
+			require.True(t, wrote)
 			c, w := handlerCtx(http.MethodPut, "/api/v1/auth/me/password",
 				map[string]any{"current_password": pw, "new_password": "brand-new-pw"}, u)
 			handlers.NewAuthHandler(s.storeForWiring(), true).ChangePassword(c)
@@ -221,37 +232,142 @@ func TestReactivationDoesNotReviveABSSessions(t *testing.T) {
 	require.True(t, fresh.bearerWorks(t))
 }
 
-// failingABSRevokeStore is the real store with an ABS keyspace whose revoke
-// always fails, so the reset-link path's fail-closed branch can be exercised.
-type failingABSRevokeStore struct {
-	database.Store
-	calls int
+// credentialActions are the four account-security paths. Each must end every
+// ABS session of the user, and none may depend on the revoke-all to do it.
+func credentialActions() map[string]func(t *testing.T, s *Server, store database.Store, u *database.User) {
+	return map[string]func(t *testing.T, s *Server, store database.Store, u *database.User){
+		"admin password reset": func(t *testing.T, s *Server, store database.Store, u *database.User) {
+			admin := &database.User{ID: "admin-1", Username: "admin", Status: "active"}
+			c, w := handlerCtx(http.MethodPut, "/api/v1/auth/me/password",
+				map[string]any{"user_id": u.ID, "new_password": "brand-new-pw"}, admin, auth.PermUsersManage)
+			handlers.NewAuthHandler(store, true).ChangePassword(c)
+			require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+		},
+		"reset-password link": func(t *testing.T, s *Server, store database.Store, u *database.User) {
+			orig := s.store
+			s.store = store
+			defer func() { s.store = orig }()
+			w := httptest.NewRecorder()
+			resetPasswordRouter(s).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/users/"+u.ID+"/reset-password", nil))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		},
+		"deactivate": func(t *testing.T, s *Server, store database.Store, u *database.User) {
+			c, w := handlerCtx(http.MethodPost, "/api/v1/users/"+u.ID+"/deactivate", nil, nil)
+			c.Params = gin.Params{{Key: "id", Value: u.ID}}
+			handlers.NewUserHandler(store).DeactivateUser(c)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		},
+	}
 }
 
-func (f *failingABSRevokeStore) RevokeAllABSSessionsForUser(string) (int, error) {
-	f.calls++
+// noRevokeStore is the real store with a revoke-all that silently does nothing,
+// so a test can show the credential epoch alone ends the sessions.
+type noRevokeStore struct {
+	database.Store
+	revokes int
+}
+
+func (n *noRevokeStore) Unwrap() database.Store { return n.Store }
+
+func (n *noRevokeStore) RevokeAllABSSessionsForUser(string) (int, error) {
+	n.revokes++
 	return 0, errors.New("disk full")
 }
 
-// An admin reset that cannot sign the user's phones out must not hand out a
-// reset link: the admin would believe the account was secured when the old
-// sessions are still valid.
-func TestResetPassword_RevokeFailureIssuesNoLink(t *testing.T) {
+// TestCredentialEpochAloneEndsABSSessions: with the cleanup revoke failing, every
+// account-security path still signs the phones out, because the epoch bump that
+// lands with the change is what every refresh and bearer request checks.
+func TestCredentialEpochAloneEndsABSSessions(t *testing.T) {
+	const pw = "pw-pw-pw-pw-1"
+	for name, act := range credentialActions() {
+		t.Run(name, func(t *testing.T) {
+			s, cleanup := setupTestServer(t)
+			defer cleanup()
+			u := createPasswordUser(t, s, "phoneuser", pw)
+			phone := signInABSPhone(t, s, "phoneuser", pw)
+			require.True(t, phone.bearerWorks(t), "precondition: signed in")
+
+			store := &noRevokeStore{Store: s.storeForWiring()}
+			act(t, s, store, u)
+
+			require.Equal(t, 1, store.revokes, "the cleanup revoke is still attempted")
+			phone.requireSignedOut(t, name)
+		})
+	}
+}
+
+// racingLoginStore holds an ABS login between verifying the password and writing
+// its session, and runs a credential change in that gap: the window a revoke can
+// never reach, since the session does not exist yet when the revoke runs.
+type racingLoginStore struct {
+	abshandler.Store
+	during func()
+	once   sync.Once
+}
+
+func (r *racingLoginStore) CreateABSSession(sess *database.ABSSession) error {
+	r.once.Do(r.during)
+	return r.Store.CreateABSSession(sess)
+}
+
+// TestLoginRacingACredentialChangeIsRefused: a phone that signed in with the old
+// password while the password was being changed (or the account reset or
+// deactivated) gets a session, but it never works: it carries the old epoch. The
+// row is not revoked (the revoke ran before it existed), so the epoch check is
+// the only thing refusing it.
+func TestLoginRacingACredentialChangeIsRefused(t *testing.T) {
+	const pw = "pw-pw-pw-pw-1"
+	for name, act := range credentialActions() {
+		t.Run(name, func(t *testing.T) {
+			s, cleanup := setupTestServer(t)
+			defer cleanup()
+			u := createPasswordUser(t, s, "phoneuser", pw)
+			absStore, ok := database.AsCapability[abshandler.Store](s.Ops())
+			require.True(t, ok)
+			racing := &racingLoginStore{Store: absStore, during: func() { act(t, s, s.storeForWiring(), u) }}
+
+			phone := signInABSPhoneVia(t, s, racing, "phoneuser", pw)
+
+			phone.requireSignedOut(t, name+" racing a login")
+			lister, ok := database.AsCapability[interface {
+				ListABSSessionsForUser(string) ([]database.ABSSession, error)
+			}](s.Ops())
+			require.True(t, ok)
+			sessions, err := lister.ListABSSessionsForUser(u.ID)
+			require.NoError(t, err)
+			require.Len(t, sessions, 1)
+			require.False(t, sessions[0].Revoked, "the revoke ran before this session existed; only the epoch can refuse it")
+		})
+	}
+}
+
+// failingUserWriteStore fails UpdateUser, so the reset link's epoch write fails.
+type failingUserWriteStore struct {
+	database.Store
+}
+
+func (f *failingUserWriteStore) Unwrap() database.Store { return f.Store }
+
+func (f *failingUserWriteStore) UpdateUser(*database.User) error { return errors.New("disk full") }
+
+// An admin reset whose epoch write fails must not hand out a reset link: the
+// admin would believe the account was secured while the old sessions still work.
+func TestResetPassword_EpochWriteFailureIssuesNoLink(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
-
-	user, err := s.storeForWiring().CreateUser("resetfail", "resetfail@example.com", "bcrypt", "hash", []string{"viewer"}, "active")
+	const pw = "pw-pw-pw-pw-1"
+	createPasswordUser(t, s, "resetfail", pw)
+	phone := signInABSPhone(t, s, "resetfail", pw)
+	user, err := s.storeForWiring().GetUserByUsername("resetfail")
 	require.NoError(t, err)
 
 	orig := s.store
-	failing := &failingABSRevokeStore{Store: orig}
-	s.store = failing
-	defer func() { s.store = orig }()
-
+	s.store = &failingUserWriteStore{Store: orig}
 	w := httptest.NewRecorder()
 	resetPasswordRouter(s).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/users/"+user.ID+"/reset-password", nil))
+	s.store = orig
 
 	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, 1, failing.calls, "the reset must try to revoke the user's ABS sessions")
-	require.NotContains(t, w.Body.String(), "token", "no reset link may be issued when the revoke failed")
+	require.NotContains(t, w.Body.String(), "token", "no reset link may be issued when the epoch write failed")
+	require.True(t, phone.bearerWorks(t), "nothing changed, so the phone is still signed in")
 }

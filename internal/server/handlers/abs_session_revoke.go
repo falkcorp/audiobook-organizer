@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs_session_revoke.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b97077b-7dcf-4b7e-85de-cae1671df311
 // last-edited: 2026-10-19
 
@@ -13,12 +13,19 @@ import (
 // ABSSessionRevoker is the one ABS session capability the account-security
 // paths need: sign a user out of every Audiobookshelf-compatible client.
 //
-// WHY THESE PATHS MUST CALL IT. ABS sessions slide: every refresh and every
-// authenticated request pushes their expiry forward, and the absolute cap is off
-// by default. A session or refresh token that leaked is therefore good for as long
-// as someone keeps using it. Changing a password, an admin reset and deactivating
-// an account are exactly the moments an operator expects every existing sign-in to
-// end, so each of them revokes all of the user's ABS sessions.
+// WHAT ACTUALLY ENDS THE SESSIONS. ABS sessions slide (every refresh and every
+// authenticated request pushes their expiry forward) and the absolute cap is off
+// by default, so a session that outlived a password change would be good for as
+// long as someone kept using it. The guarantee comes from User.CredentialEpoch:
+// a password change, admin reset, reset link and deactivation each bump it in the
+// SAME UpdateUser write as the change, and every ABS refresh and bearer request
+// refuses a session stamped with an older epoch. That also covers a session
+// minted with the old password while the change was in flight, which no revoke
+// that runs before the write can reach.
+//
+// The revoke-all that follows the write is cleanup: it marks the dead rows
+// revoked so they leave the device list and get swept. It is not what makes the
+// change safe, so its failure is audited and does not fail the request.
 type ABSSessionRevoker interface {
 	RevokeAllABSSessionsForUser(userID string) (int, error)
 }
@@ -43,12 +50,12 @@ func ResolveABSSessionRevoker(store any) ABSSessionRevoker {
 // "admin-password-reset", "password-reset-link", "user-deactivated",
 // "user-reactivated"). A nil revoker is a no-op (see ResolveABSSessionRevoker).
 //
-// A non-nil error means at least one session may still be live. The store
-// revokes best-effort and reports partial failure, so callers must treat any error
-// as "not done" and fail the request rather than report success.
-func RevokeAllABSSessions(r ABSSessionRevoker, userID, reason string) error {
+// Call it only AFTER the CredentialEpoch bump has been written: by then every
+// session it touches is already refused, so this is cleanup and a failure is
+// audited (reason + "-revoke-failed") rather than returned.
+func RevokeAllABSSessions(r ABSSessionRevoker, userID, reason string) {
 	if r == nil {
-		return nil
+		return
 	}
 	n, err := r.RevokeAllABSSessionsForUser(userID)
 	ev := absauth.AuditEvent{Action: "revoke-all", UserID: userID, Reason: reason, Outcome: absauth.OutcomeSuccess}
@@ -59,5 +66,4 @@ func RevokeAllABSSessions(r ABSSessionRevoker, userID, reason string) error {
 	if err != nil || n > 0 {
 		absauth.Audit(ev)
 	}
-	return err
 }
