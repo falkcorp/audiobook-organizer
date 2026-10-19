@@ -1,7 +1,7 @@
 // file: internal/server/absauth/password.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
-// last-edited: 2026-07-30
+// last-edited: 2026-10-19
 
 package absauth
 
@@ -62,6 +62,11 @@ func HashPassword(plain string) (algo string, hash string, err error) {
 }
 
 // VerifyPassword checks plain against a stored hash.
+//
+// This is the ONE password verifier: the ABS sign-in, the web sign-in and the web
+// password change all call it. The ABS sign-in rehashes bcrypt users to argon2id, so
+// a caller that compares with bcrypt directly (as the web handlers once did) locks
+// that user out; TestNoDirectBcryptVerification keeps new callers from doing so.
 //
 // ok reports whether the password is correct. needsRehash reports whether the caller
 // should re-store the password with HashPassword after a successful login — true for
