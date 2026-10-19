@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.6
+// version: 1.4.7
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-10-19
 
@@ -65,6 +65,7 @@ var layerOf = map[string]int{
 	"internal/audioutil":               0, // computed: imports no module package
 	"internal/authorname":              0, // table: leaf
 	"internal/cache":                   0, // table: leaf
+	"internal/cfaccesspolicy":          0, // computed: imports no module package
 	"internal/chaptershape":            0, // computed: imports no module package
 	"internal/covertext":               0, // computed: imports no module package
 	"internal/database/aggtest":        0, // computed: imports no module package
@@ -84,6 +85,7 @@ var layerOf = map[string]int{
 	"internal/logger/logtest":          0, // computed: imports no module package
 	"internal/logger/mocks":            0, // computed: imports no module package
 	"internal/logging":                 0, // table: leaf
+	"internal/mail":                    0, // computed: imports no module package
 	"internal/matcher":                 0, // reclassified from domain: imports only internal/personname
 	"internal/metadata/dailyquota":     0, // computed: imports no module package
 	"internal/metastate":               0, // computed: imports no module package
@@ -162,6 +164,7 @@ var layerOf = map[string]int{
 	"internal/identification":           3, // computed: max of imports=2 (database), floored at 3
 	"internal/itunes":                   3, // table: domain
 	"internal/itunesguard":              3, // computed: max of imports=3, floored at 3
+	"internal/mail/mailtest":            3, // computed: max of imports=0, floored at 3
 	"internal/mediainfo":                3, // computed: max of imports=0, floored at 3
 	"internal/merge":                    3, // table: domain
 	"internal/metadata":                 3, // table: domain
