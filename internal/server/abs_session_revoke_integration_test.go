@@ -1,5 +1,5 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
 // last-edited: 2026-10-19
 
@@ -105,6 +105,9 @@ func (p *absPhone) requireSignedOut(t *testing.T, why string) {
 	require.Equal(t, http.StatusUnauthorized, p.refreshCode(t), "%s: the ABS refresh token must be dead", why)
 }
 
+// createPasswordUser stores a LEGACY bcrypt hash on purpose: the first ABS
+// sign-in rehashes it to argon2id, which is the state every phone user's
+// account is in when they later change their password on the web.
 func createPasswordUser(t *testing.T, s *Server, username, password string) *database.User {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
@@ -141,7 +144,7 @@ func TestAccountSecurityPathsRevokeABSSessions(t *testing.T) {
 	const pw = "pw-pw-pw-pw-1"
 	cases := map[string]func(t *testing.T, s *Server, u *database.User){
 		"self password change": func(t *testing.T, s *Server, u *database.User) {
-			restoreBcrypt(t, s, u.ID, pw)
+			requireRehashedToArgon2id(t, s, u.ID)
 			c, w := handlerCtx(http.MethodPut, "/api/v1/auth/me/password",
 				map[string]any{"current_password": pw, "new_password": "brand-new-pw"}, u)
 			handlers.NewAuthHandler(s.storeForWiring(), true).ChangePassword(c)
@@ -219,22 +222,15 @@ func TestReactivationDoesNotReviveABSSessions(t *testing.T) {
 	require.True(t, fresh.bearerWorks(t))
 }
 
-// restoreBcrypt puts a bcrypt hash of pw back on the user. An ABS password
-// login rehashes bcrypt to argon2id, and ChangePassword still verifies the
-// current password with bcrypt only (fixed separately in #4082), so after a
-// phone signs in the self-service change would refuse the right password. It
-// goes through the conditional rehash, which does not move the epoch.
-func restoreBcrypt(t *testing.T, s *Server, userID, pw string) {
+// requireRehashedToArgon2id checks that the phone's sign-in rehashed the
+// user's bcrypt password to argon2id, so the self-service change that follows
+// verifies the current password against an argon2id hash: the path every user
+// who has signed in on a phone takes.
+func requireRehashedToArgon2id(t *testing.T, s *Server, userID string) {
 	t.Helper()
 	fresh, err := s.storeForWiring().GetUserByID(userID)
 	require.NoError(t, err)
-	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.MinCost)
-	require.NoError(t, err)
-	rehasher, ok := database.AsCapability[database.UserPasswordRehasher](s.Ops())
-	require.True(t, ok)
-	wrote, err := rehasher.RehashUserPassword(userID, fresh.PasswordHash, "bcrypt", string(hash))
-	require.NoError(t, err)
-	require.True(t, wrote)
+	require.Equal(t, absauth.AlgoArgon2id, fresh.PasswordHashAlgo, "precondition: the ABS sign-in rehashes to argon2id")
 }
 
 // credentialActions are the four account-security paths. Each must end every
@@ -243,7 +239,7 @@ func credentialActions() map[string]func(t *testing.T, s *Server, store database
 	return map[string]func(t *testing.T, s *Server, store database.Store, u *database.User){
 		"self password change": func(t *testing.T, s *Server, store database.Store, u *database.User) {
 			const pw = "pw-pw-pw-pw-1" // every caller signs the user in with this
-			restoreBcrypt(t, s, u.ID, pw)
+			requireRehashedToArgon2id(t, s, u.ID)
 			c, w := handlerCtx(http.MethodPut, "/api/v1/auth/me/password",
 				map[string]any{"current_password": pw, "new_password": "brand-new-pw"}, u)
 			handlers.NewAuthHandler(store, true).ChangePassword(c)

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth_password_algo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f0c7a52-9d3e-4b86-a1c7-6e25b8d0f913
 // last-edited: 2026-10-19
 
@@ -24,6 +24,18 @@ import (
 // sign-in and the self-service password change used to call bcrypt directly and
 // ignore the algorithm column, so after one phone-app sign-in the user could do
 // neither. These tests store hashes exactly as the ABS rehash does.
+
+// savingCreds is the credential capability ChangePassword writes through. It
+// checks the self-service compare-and-swap carries the hash that was verified
+// and records what would be stored in *saved.
+func savingCreds(t *testing.T, user *database.User, saved **database.User) *credsFake {
+	return &credsFake{setPassword: func(userID, expectedHash, algo, hash string) (*database.User, error) {
+		require.Equal(t, user.ID, userID)
+		require.Equal(t, user.PasswordHash, expectedHash, "self-service change is a CAS on the verified hash")
+		*saved = &database.User{ID: userID, PasswordHashAlgo: algo, PasswordHash: hash}
+		return *saved, nil
+	}}
+}
 
 // absRehashedUser returns a user stored the way the ABS rehash leaves it: the
 // hash comes from absauth.HashPassword, the same call rehashPassword makes.
@@ -119,12 +131,7 @@ func TestAuthHandler_ChangePassword_AcceptsArgon2idCurrentPassword(t *testing.T)
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
 	var saved *database.User
-	store.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
-		saved = u
-		return nil
-	})
-
-	h := handlers.NewAuthHandler(store, true)
+	h := handlers.NewAuthHandler(authStoreWithABS{store, &absRevokeRecorder{}, savingCreds(t, user, &saved)}, true)
 	c, w := newAuthCtx("PUT", "/auth/me/password", map[string]any{
 		"current_password": "old-password-1",
 		"new_password":     "new-password-2",
@@ -167,9 +174,8 @@ func TestAuthHandler_ChangePassword_BcryptStillWorks(t *testing.T) {
 	}
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
-	store.EXPECT().UpdateUser(mock.Anything).Return(nil)
-
-	h := handlers.NewAuthHandler(store, true)
+	var saved *database.User
+	h := handlers.NewAuthHandler(authStoreWithABS{store, &absRevokeRecorder{}, savingCreds(t, user, &saved)}, true)
 	c, w := newAuthCtx("PUT", "/auth/me/password", map[string]any{
 		"current_password": "old-password-1",
 		"new_password":     "new-password-2",
@@ -190,12 +196,7 @@ func TestAuthHandler_ChangePassword_LegacyEmptyAlgoBcryptRow(t *testing.T) {
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
 	var saved *database.User
-	store.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
-		saved = u
-		return nil
-	})
-
-	h := handlers.NewAuthHandler(store, true)
+	h := handlers.NewAuthHandler(authStoreWithABS{store, &absRevokeRecorder{}, savingCreds(t, user, &saved)}, true)
 	c, w := newAuthCtx("PUT", "/auth/me/password", map[string]any{
 		"current_password": "old-password-1",
 		"new_password":     "new-password-2",
@@ -217,8 +218,8 @@ func TestAuthHandler_ChangePassword_UnknownAlgoDenied(t *testing.T) {
 				ID: "user-1", Username: "alice", PasswordHash: testBcryptHash(t, "old-password-1"),
 				PasswordHashAlgo: algo, Roles: []string{"user"}, Status: "active", CreatedAt: time.Now(),
 			}
-			// No UpdateUser expectation: the strict mock fails the test if the
-			// handler writes a new password after a denied verification.
+			// No credential writer: a handler that wrote a new password after a
+			// denied verification would answer 500 here, not 401.
 			store := handlersmocks.NewMockAuthStore(t)
 			store.EXPECT().GetUserByID(user.ID).Return(user, nil)
 
