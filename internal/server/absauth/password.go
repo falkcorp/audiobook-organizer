@@ -1,5 +1,5 @@
 // file: internal/server/absauth/password.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
 // last-edited: 2026-10-19
 
@@ -64,6 +64,11 @@ func argonIDKey(password, salt []byte, time, memory uint32, threads uint8, keyLe
 
 // HashPassword hashes a new password with argon2id and returns the algorithm
 // identifier alongside the PHC-encoded hash.
+//
+// It is the ONE hashing policy: every writer of a password (web setup and change,
+// invite acceptance, the generated bootstrap admin, the ABS rehash) stores the
+// algo and hash it returns. TestNoDirectBcrypt bans bcrypt.GenerateFromPassword
+// elsewhere.
 func HashPassword(plain string) (algo string, hash string, err error) {
 	if plain == "" {
 		return "", "", fmt.Errorf("absauth: refusing to hash an empty password")
@@ -86,7 +91,7 @@ func HashPassword(plain string) (algo string, hash string, err error) {
 // This is the ONE password verifier: the ABS sign-in, the web sign-in and the web
 // password change all call it. The ABS sign-in rehashes bcrypt users to argon2id, so
 // a caller that compares with bcrypt directly (as the web handlers once did) locks
-// that user out; TestNoDirectBcryptVerification keeps new callers from doing so.
+// that user out; TestNoDirectBcrypt keeps new callers from doing so.
 //
 // ok reports whether the password is correct. needsRehash reports whether the caller
 // should re-store the password with HashPassword after a successful login — true for
