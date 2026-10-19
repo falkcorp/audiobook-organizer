@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.191.0
+// version: 2.192.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -48,7 +48,7 @@ const DEDUP_CANDIDATES_TIMEOUT_MS = 60_000;
 
 /**
  * Cached metadata review set. Deliberately the most generous of the four. The
- * lane loads the whole set as an index (`view: 'index'`), served from the
+ * lane asks for one filtered page at a time (`view=page`), served from the
  * server's review snapshot in seconds once it is built. This is a backstop
  * against a hung connection, not a latency budget. It stays at 300s (raised
  * from 120s on 2026-10-02, when the unpaged list had grown to 39,689 rows, a
@@ -926,16 +926,9 @@ export interface PathAlias {
 
 export interface Config {
   /**
-   * Review > Metadata lane: ask the server for one filtered page per filter
-   * change (GET .../metadata/cache/review?view=page) instead of loading every
-   * reviewable row into the browser. Absent or false keeps the full-index
-   * lane. The lane reads it once at mount.
-   */
-  review_metadata_server_query?: boolean;
-  /**
    * The fail-safe ceiling on one bulk apply (applycap). Zero or absent means
-   * the server default; the lane reads it once at mount in page mode, where
-   * the page response does not carry it.
+   * the server default; the lane reads it once at mount, because the page
+   * response does not carry it.
    */
   bulk_apply_max_items?: number;
 
@@ -4399,8 +4392,8 @@ export async function batchFetchCandidates(
 // loads its own data through getCachedReviewResults below — and the sole
 // caller of this function reads `total` and discards every field of every row.
 // ("pages its own data" is what this said first, and that was wrong in a
-// misleading direction: useMetadataLane calls getCachedReviewResults(0, 0, true),
-// which is all=true — the whole set, not a page. See todo.d.)
+// misleading direction; since 02-PR19 useMetadataLane calls it only with `ids`,
+// for the full rows of the page it is showing.)
 // The wide row shape is kept because it is a public response contract, but do
 // not treat this comment as a reason to fetch rows you do not read.
 export interface CachedMetadataEntry {
@@ -4443,9 +4436,11 @@ export async function listCachedCandidates(
 //
 // The server caps a request that sends no positive `limit` to a default page
 // (200 rows) unless `all` is true. Pass `all = true` only when the caller
-// genuinely needs every reviewable row in one response -- useMetadataLane does,
-// because its filters, grouping and stale set span the whole library. The
-// response's `truncated` says whether the rows returned are the whole set.
+// genuinely needs every reviewable row in one response. The response's
+// `truncated` says whether the rows returned are the whole set.
+//
+// `view=index` is retired: the server answers it with 410 Gone and points at
+// `view=page` (see getReviewPage).
 /**
  * Which rows `getCachedReviewResults` returns. 'reviewable' (the default) is
  * the review queue; 'unreviewable' is the books the summary counts but the
@@ -4458,16 +4453,10 @@ export type ReviewBucket = 'reviewable' | 'unreviewable';
 /**
  * Extra shapes of the review request.
  *
- * - `view: 'index'` returns every row with each candidate's `description`,
- *   `score_breakdown` and `category_tags` dropped: the large fields, which
- *   only a visible row (its `ids` detail) reads. Counts,
- *   statuses, stale flags and `candidate_hash` are those of the full rows, so
- *   filters, grouping, chips and bulk-apply pins work on the index unchanged.
  * - `ids` returns the full rows of just those books (in bucket order),
  *   ignoring limit/offset -- how the page fetches what it is showing.
  */
 export interface CachedReviewOptions {
-  view?: 'index';
   ids?: string[];
 }
 
@@ -4556,7 +4545,6 @@ export async function getCachedReviewResults(
   // Sent only when it changes something, so the default request is byte-for-
   // byte what it was.
   if (bucket !== 'reviewable') params.set('bucket', bucket);
-  if (options.view) params.set('view', options.view);
   if (options.ids) params.set('ids', options.ids.join(','));
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/cache/review?${params}`, {
     timeoutMs: CACHED_REVIEW_TIMEOUT_MS,

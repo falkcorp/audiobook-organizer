@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.44.0
+// version: 1.45.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -47,7 +47,7 @@ import { isAbortError, isAuthRedirectError } from '../../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
 import type { CandidateDetailState } from '../evidence/adapters';
-import { runtimeHiddenBySwitch, type RowState } from '../spine/rowState';
+import type { RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 import { compileTitleFilter } from '../../../utils/queryGrammar';
 
@@ -165,6 +165,15 @@ export const EXPORT_QUEUE_CHANGED_MESSAGE =
   'The queue changed while the export was being read, twice, so it was stopped rather than ' +
   'write a file with rows repeated or missing. Try again when fewer background jobs are writing.';
 const NO_COUNTS: Record<string, number> = {};
+// The summary before the first page has landed.
+const EMPTY_SUMMARY: MetadataLaneSummary = {
+  matched: 0,
+  no_match: 0,
+  errors: 0,
+  total: 0,
+  unreviewable: 0,
+  stale: 0,
+};
 
 /** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
 const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
@@ -709,18 +718,10 @@ function initialFilters(level: ReviewLevel): MetadataFilters {
 }
 
 /**
- * Page mode (setting review_metadata_server_query): milliseconds a filter
- * change waits for the next one before its query is sent. A burst of
- * keystrokes inside the window sends one request.
+ * Milliseconds a filter change waits for the next one before its query is
+ * sent. A burst of keystrokes inside the window sends one request.
  */
 export const PAGE_QUERY_DEBOUNCE_MS = 150;
-
-/**
- * How long the lane waits for GET /config to say which path it runs before it
- * takes the index path. The default (flag off) lane waits on this read, so it
- * must never be unbounded.
- */
-export const QUERY_MODE_CONFIG_TIMEOUT_MS = 5000;
 
 /**
  * Most ids the `skipped` list of one page-mode query carries. The list rides
@@ -731,7 +732,7 @@ export const QUERY_MODE_CONFIG_TIMEOUT_MS = 5000;
  */
 export const MAX_QUERY_SKIPPED_IDS = 200;
 
-/** The inputs of a page-mode query that come from the lane's state. */
+/** The inputs of a page query that come from the lane's state. */
 export interface ReviewQueryInput {
   filters: MetadataFilters;
   chip: ChipFilter | null;
@@ -827,46 +828,36 @@ export interface MetadataLane {
    */
   error: string | null;
   /**
-   * Every cached row the server returned, unfiltered. In page mode (setting
-   * review_metadata_server_query) the lane never holds the whole set: this is
-   * the current page's rows, and `filteredCount` / `exportRows` are how to
-   * reach the rest.
+   * The current page's rows. The lane never holds the whole set (the server
+   * filters and pages it): `filteredCount` / `exportRows` are how to reach
+   * the rest.
    */
   results: CandidateResult[];
   /**
-   * After filters, before pagination. In page mode: the current page (the
-   * server did the filtering), minus rows this session already applied,
-   * rejected or skipped under their switches.
+   * The current page (the server did the filtering), minus rows this session
+   * already applied, rejected or skipped under their switches.
    */
   filteredResults: CandidateResult[];
   /**
    * How many books the current filters (or chip) match across all pages: the
-   * number "Select all N matching" shows. `filteredResults.length` in index
-   * mode, the server's total in page mode.
+   * number "Select all N matching" shows: the server's total.
    */
   filteredCount: number;
   /** Reviewable books with no match or an error: the "Skip all unmatched (N)" count. */
   unmatchedCount: number;
   /**
-   * 'index' loads every reviewable row and filters in the browser; 'page' asks
-   * the server for one page per filter change; null until the setting has been
-   * read (nothing is fetched before then).
-   */
-  queryMode: 'index' | 'page' | null;
-  /**
    * Row objects the lane holds in state, as measured rather than assumed:
-   * `list` is the rows of the list (every row in index mode, the page in page
-   * mode, plus the unreviewable bucket when loaded) and `details` the full
-   * rows fetched for the page.
+   * `list` is the rows of the current page and `details` the full rows
+   * fetched for it.
    */
   heldRows: { list: number; details: number };
   /**
-   * Every row the current filters match, for an export. Index mode returns
-   * what it holds; page mode pages through the server, 500 rows at a time.
+   * Every row the current filters match, for an export: pages through the
+   * server, 500 rows at a time.
    */
   exportRows: () => Promise<CandidateResult[]>;
   /**
-   * A page-mode export is reading pages. The workspace disables Export while
+   * An export is reading pages. The workspace disables Export while
    * it is; a second call would abort the first.
    */
   exporting: boolean;
@@ -932,10 +923,6 @@ export interface MetadataLane {
   /** Show exactly the books a chip counts; the same chip again clears it. */
   toggleChipFilter: (chip: ChipFilter) => void;
   clearChipFilter: () => void;
-  /** Rows from the server's unreviewable bucket, once loaded. */
-  unreviewableResults: CandidateResult[];
-  unreviewableLoading: boolean;
-  unreviewableError: string | null;
 
   /**
    * The selection minus the books known to have no candidate (unreviewable
@@ -1055,13 +1042,7 @@ function detailMatches(
  *                so switching lanes does not keep three fetches in flight.
  */
 export function useMetadataLane(toast: Toast, active = true): MetadataLane {
-  const [results, setResults] = useState<CandidateResult[]>([]);
-  // Which data path the lane runs, read once from the config (see the effect
-  // below). null until it has been read: neither path fetches before then, so a
-  // lane with the setting on never issues the view=index request.
-  const [queryMode, setQueryMode] = useState<'index' | 'page' | null>(null);
-  const pageMode = queryMode === 'page';
-  // Page mode's list state: the rows of the CURRENT page only, the size of the
+  // The list state: the rows of the CURRENT page only, the size of the
   // filtered list, the server's facet counts and the snapshot generation.
   const [pageRows, setPageRows] = useState<CandidateResult[]>([]);
   const [pageTotal, setPageTotal] = useState(0);
@@ -1084,22 +1065,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [filters, setFiltersState] = useState<MetadataFilters>(() => initialFilters(initialLevel));
   const [reviewLevel, setReviewLevelState] = useState<ReviewLevel>(initialLevel);
   const [chipFilter, setChipFilter] = useState<ChipFilter | null>(null);
-  const [unreviewableResults, setUnreviewableResults] = useState<CandidateResult[]>([]);
   // Full rows (with candidate descriptions) for books the page has shown,
-  // keyed by book id. `results` is the index (descriptions dropped); the page
-  // fetches the full rows for what it shows and swaps their candidates in.
-  // Reset with every index load so a refreshed index never shows an older
-  // detail row.
+  // keyed by book id. The page's rows come without candidate descriptions; the
+  // lane fetches the full rows for what it shows and swaps their candidates in.
+  // Reset with every new snapshot generation so a refreshed list never shows an
+  // older detail row.
   const [detailsById, setDetailsById] = useState<Map<string, CandidateResult>>(() => new Map());
   // Book ids whose detail fetch rejected, or whose book the detail response
   // left out. Without this a failed fetch is indistinguishable from one still
   // in flight. Cleared for the ids of every new ask, and with the index.
   const [detailFailedIds, setDetailFailedIds] = useState<Set<string>>(() => new Set());
-  const [unreviewableError, setUnreviewableError] = useState<string | null>(null);
-  // The refreshKey the loaded bucket belongs to, or -1 for "never loaded". A
-  // refresh invalidates it, and the load effect fetches again only if a chip
-  // still needs it.
-  const [unreviewableFor, setUnreviewableFor] = useState(-1);
   const [searching, setSearching] = useState(false);
   const [applyCap, setApplyCap] = useState(DEFAULT_BULK_APPLY_MAX_ITEMS);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
@@ -1128,14 +1103,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     () => (ungrouped.page === requestedPage ? ungrouped.ids : EMPTY_IDS),
     [ungrouped, requestedPage]
   );
-  const [summary, setSummary] = useState<MetadataLaneSummary>({
-    matched: 0,
-    no_match: 0,
-    errors: 0,
-    total: 0,
-    unreviewable: 0,
-    stale: 0,
-  });
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Discards out-of-order responses. Without it a slow page-1 fetch that
@@ -1206,63 +1173,31 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
-  // Which path this lane runs is a setting, read ONCE when the lane first
-  // becomes active (not a frontend flag system, and not re-read: flipping it
-  // takes effect on the next open). Anything but an explicit true -- the call
-  // failing, a 403 (GET /config needs settings.manage, which a reviewer may
-  // not have), no config, the key absent, or no answer within
-  // QUERY_MODE_CONFIG_TIMEOUT_MS -- is the index path the lane has always run,
-  // so a config outage cannot change what the lane does and a hung /config
-  // cannot hold the default lane on "Loading..." (it waits on this read). An
-  // answer that arrives after the timeout is ignored: the lane has already
-  // started on the index path.
-  const modeReadRef = useRef(false);
-  const modeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (modeTimerRef.current) clearTimeout(modeTimerRef.current);
-    },
-    []
-  );
+  // The page response does not carry the bulk apply cap, so it is read once,
+  // when the lane first becomes active, from the config. Anything but a usable
+  // number (the call failing, a 403 -- GET /config needs settings.manage, which
+  // a reviewer may not have --, no config) leaves the default cap; nothing waits
+  // on this read.
+  const capReadRef = useRef(false);
   useEffect(() => {
-    if (!active || modeReadRef.current) return;
-    modeReadRef.current = true;
-    const controller = new AbortController();
-    let decided = false;
-    const decide = (cfg: api.Config | undefined) => {
-      if (decided) return;
-      decided = true;
-      if (modeTimerRef.current) clearTimeout(modeTimerRef.current);
-      modeTimerRef.current = null;
-      if (!aliveRef.current) return;
-      if (cfg?.review_metadata_server_query === true) {
-        // The page response does not carry the apply cap the index listing
-        // does, so it is read here, from the same config.
-        if (typeof cfg.bulk_apply_max_items === 'number' && cfg.bulk_apply_max_items > 0) {
-          setApplyCap(cfg.bulk_apply_max_items);
-        }
-        setQueryMode('page');
-      } else {
-        setQueryMode('index');
-      }
-    };
-    modeTimerRef.current = setTimeout(() => {
-      controller.abort();
-      decide(undefined);
-    }, QUERY_MODE_CONFIG_TIMEOUT_MS);
+    if (!active || capReadRef.current) return;
+    capReadRef.current = true;
     void Promise.resolve()
-      .then(() =>
-        api.getConfig({ timeoutMs: QUERY_MODE_CONFIG_TIMEOUT_MS, signal: controller.signal })
-      )
+      .then(() => api.getConfig())
       .then(
-        (cfg) => decide(cfg ?? undefined),
-        () => decide(undefined)
+        (cfg) => {
+          if (!aliveRef.current) return;
+          if (typeof cfg?.bulk_apply_max_items === 'number' && cfg.bulk_apply_max_items > 0) {
+            setApplyCap(cfg.bulk_apply_max_items);
+          }
+        },
+        () => undefined
       );
   }, [active]);
 
-  // Reconciles row state with the rows the server just returned: the whole
-  // index in index mode, the current page in page mode (a book that is not on
-  // the page keeps what it has until it appears on one).
+  // Reconciles row state with the rows the server just returned: the current
+  // page (a book that is not on the page keeps what it has until it appears on
+  // one).
   const reconcileRowStates = useCallback((rows: CandidateResult[]) => {
     // Reconcile row state with the server, without clobbering decisions the
     // user made in this session.
@@ -1349,85 +1284,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     });
   }, []);
 
-  // Fetch the entire cached review set once, as an index; paginate and filter
-  // client-side. `limit=0` with all=true tells the server "return all rows";
-  // view=index drops each candidate's description, which only a visible row
-  // reads (fetched per page below). The full list was 93 MB and 119 s on
-  // production and timed out; the index is served from the server's snapshot.
-  // It also drops score_breakdown and category_tags: a breakdown arrives only
-  // through the per-page detail fetch (`ids:` below, swapped into
-  // `pageResults`), which is the only thing the evidence panel renders from.
-  // Never read either field from `results`.
-  useEffect(() => {
-    if (!active || queryMode !== 'index') return;
-    setLoading(true);
-    // Cleared on every attempt, not only on success. Leaving it set would mean a
-    // successful Retry still rendered the failure Alert forever.
-    setError(null);
-    const fetchId = ++fetchIdRef.current;
-    api
-      // all=true is required, not incidental: the server caps an unpaged
-      // request to a default page, and every derivation below (filters,
-      // grouping, chip views) must see the whole library, not its first page.
-      .getCachedReviewResults(0, 0, true, 'reviewable', { view: 'index' })
-      .then((data) => {
-        if (fetchId !== fetchIdRef.current) return; // stale -- a newer fetch is in flight
-        const allResults = data.results || [];
-
-        // all=true should always return the whole set, but if the server still
-        // says the response is truncated, every derivation below (filters,
-        // grouping, chip views) is over a partial set. Say so rather than present
-        // it as the library. A warning, not `error`: the load did succeed, and
-        // `error` is the failure Alert with a Retry that would not help.
-        if (data.truncated === true) {
-          toastRef.current(
-            `Only ${allResults.length} of ${data.total_count ?? 'unknown'} metadata review rows were returned; filters, groups and chip views cover only these rows.`,
-            'warning'
-          );
-        }
-
-        reconcileRowStates(allResults);
-
-        setResults(allResults);
-        detailEpochRef.current += 1;
-        detailAskedRef.current = new Set();
-        setDetailsById(new Map());
-        setDetailFailedIds(new Set());
-        const tc = data.total_count ?? allResults.length;
-        setSummary({
-          matched: data.matched ?? allResults.filter((r) => r.status === 'matched').length,
-          no_match: data.no_match ?? allResults.filter((r) => r.status === 'no_match').length,
-          errors: data.errors ?? 0,
-          total: tc,
-          unreviewable: data.unreviewable ?? 0,
-          stale: data.stale ?? 0,
-          // Left undefined rather than zero-filled when the server omits it:
-          // "no breakdown available" and "every cause is zero" are different
-          // claims, and the rail renders them differently.
-          unreviewable_by_cause: data.unreviewable_by_cause,
-          resolved_no_candidates: data.resolved_no_candidates,
-          deferred: data.deferred,
-          ident_counts: data.ident_counts,
-        });
-        if (typeof data.bulk_apply_max_items === 'number' && data.bulk_apply_max_items > 0) {
-          setApplyCap(data.bulk_apply_max_items);
-        }
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        // The stale guard runs FIRST. A request the user has already superseded
-        // can still reject later, and letting that write `error` would paint a
-        // failure banner over a page that loaded perfectly well.
-        if (fetchId !== fetchIdRef.current) return;
-        setError(
-          err instanceof Error && err.message
-            ? err.message
-            : 'Could not load the metadata review queue.'
-        );
-        setLoading(false);
-      });
-  }, [active, queryMode, refreshKey]);
-
   const setFilters = useCallback((patch: Partial<MetadataFilters>) => {
     setFiltersState((prev) => {
       const next = { ...prev, ...patch };
@@ -1463,50 +1319,19 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setPage(1);
   }, []);
 
-  // The unreviewable bucket is fetched only when a chip needs it: it is
-  // thousands of rows the review queue itself never shows, so the default load
-  // does not pay for it.
+  // The unreviewable bucket's ids are fetched only when a chip needs them: it
+  // is thousands of books the review queue itself never shows, so the default
+  // load does not pay for it.
   const needUnreviewable = chipFilter !== null && CHIPS_NEEDING_UNREVIEWABLE.has(chipFilter);
-  const unreviewableFetchRef = useRef(0);
-  useEffect(() => {
-    if (queryMode !== 'index') return;
-    if (!active || !needUnreviewable || unreviewableFor === refreshKey) return;
-    const fetchId = ++unreviewableFetchRef.current;
-    api
-      .getCachedReviewResults(0, 0, true, 'unreviewable')
-      .then((data) => {
-        if (fetchId !== unreviewableFetchRef.current) return;
-        setUnreviewableResults(data.results || []);
-        setUnreviewableError(null);
-        setUnreviewableFor(refreshKey);
-      })
-      .catch((err: unknown) => {
-        if (fetchId !== unreviewableFetchRef.current) return;
-        // Marked loaded so the effect does not retry in a loop; the rail
-        // shows the error and the refresh button tries again.
-        setUnreviewableFor(refreshKey);
-        setUnreviewableError(
-          err instanceof Error && err.message
-            ? err.message
-            : 'Could not load the books with no candidate.'
-        );
-      });
-  }, [active, queryMode, needUnreviewable, unreviewableFor, refreshKey]);
-  // Derived, not state: loading is exactly "a chip needs the bucket and the
-  // bucket held is not this refresh's". Page mode has no bucket to load: the
-  // server serves a chip's rows as the page itself.
-  const unreviewableLoading =
-    queryMode === 'index' && active && needUnreviewable && unreviewableFor !== refreshKey;
 
-  // Page mode keeps only the IDS of the unreviewable bucket, for one purpose:
-  // Apply selected leaves out books known to have no candidate. Same lifecycle
-  // as the index-mode bucket (loaded when a chip needs it, stale after a
-  // refresh), at ids-only cost. Failure leaves the filter off: the server
-  // skips a book with no candidate on apply, it never applies one.
+  // The lane keeps only the IDS of the unreviewable bucket, for one purpose:
+  // Apply selected leaves out books known to have no candidate. Loaded when a
+  // chip needs it, stale after a refresh. Failure leaves the filter off: the
+  // server skips a book with no candidate on apply, it never applies one.
   const [pageUnreviewableIds, setPageUnreviewableIds] = useState<Set<string>>(() => new Set());
   const [pageUnreviewableFor, setPageUnreviewableFor] = useState(-1);
   useEffect(() => {
-    if (!active || !pageMode || !needUnreviewable || pageUnreviewableFor === refreshKey) return;
+    if (!active || !needUnreviewable || pageUnreviewableFor === refreshKey) return;
     const controller = new AbortController();
     api
       .getReviewMatchingIds({ bucket: 'unreviewable' }, controller.signal)
@@ -1520,7 +1345,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setPageUnreviewableFor(refreshKey);
       });
     return () => controller.abort();
-  }, [active, pageMode, needUnreviewable, pageUnreviewableFor, refreshKey]);
+  }, [active, needUnreviewable, pageUnreviewableFor, refreshKey]);
 
   const setPageSize = useCallback((n: number) => {
     setPageSizeState(n);
@@ -1529,16 +1354,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   }, []);
 
   // --- the derivation chain -------------------------------------------------
-
-  const sourceCounts = useMemo(
-    () =>
-      results.reduce<Record<string, number>>((acc, r) => {
-        const sourceID = reviewProviderID(r.candidate?.source);
-        if (sourceID) acc[sourceID] = (acc[sourceID] || 0) + 1;
-        return acc;
-      }, {}),
-    [results]
-  );
 
   // The Title box takes the SAME grammar as `title:` in the Library search bar
   // (owner decision 2026-10-06: one syntax, RE2 regex): `text` = contains,
@@ -1561,13 +1376,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     return { titleRegex: compiled, titleFilterError: null };
   }, [filters.titleFilter]);
 
-  // --- page mode: one server query per settled filter ------------------------
+  // --- one server query per settled filter ----------------------------------
   //
-  // With the setting on, the lane never loads the review set. The filters
-  // become a server query (reviewQueryFor); the response is the visible page,
-  // the filtered total, the rail's facet counts and the snapshot generation.
-  // The derivation chain below runs over an empty index in this mode, and the
-  // pieces that read its output are mode-aware.
+  // The lane never loads the review set. The filters become a server query
+  // (reviewQueryFor); the response is the visible page, the filtered total, the
+  // rail's facet counts and the snapshot generation.
 
   // Books whose row state is `skipped`: client-only, so the server only knows
   // them if told (the `skipped` parameter).
@@ -1583,8 +1396,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     (filters.hideSkipped || filters.hideRejected) &&
     chipFilter === null;
 
-  // An invalid or half-typed pattern is not sent: like index mode it filters
-  // nothing, and the rail shows `titleFilterError` for it.
+  // An invalid or half-typed pattern is not sent: it filters nothing, and the
+  // rail shows `titleFilterError` for it.
   const queryParams = useMemo(
     () =>
       reviewQueryFor({
@@ -1627,7 +1440,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const skippedWarnedRef = useRef(false);
   useEffect(() => {
-    if (!pageMode || !skippedTruncated || skippedWarnedRef.current) return;
+    if (!skippedTruncated || skippedWarnedRef.current) return;
     skippedWarnedRef.current = true;
     // Both directions, because the server reads a skipped book it is not told
     // about as whatever its own state says: with Hide skipped on, an older
@@ -1642,7 +1455,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         'match are hidden as rejected.',
       'warning'
     );
-  }, [pageMode, skippedTruncated]);
+  }, [skippedTruncated]);
 
   // The generation the rows on screen were listed at, and the one request that
   // may still update state. A response for any other request is dropped.
@@ -1661,9 +1474,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // Review tab heap-snapshot note this effect chain was to be checked against
   // for a closure retaining an old results array. Its Findings section is
   // still empty, so nothing was changed on its account; revisit this chain
-  // (and the index-mode load above) once it is filled in.
+  // once it is filled in.
   useEffect(() => {
-    if (!active || !pageMode) return;
+    if (!active) return;
     const params = JSON.parse(queryKey) as api.ReviewQueryParams;
     const offset = (requestedPage - 1) * pageSize;
     const last = lastIssuedRef.current;
@@ -1676,7 +1489,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     const issue = () => {
       lastIssuedRef.current = { key: queryKey, refresh: refreshKey };
       setLoading(true);
-      // Cleared on every attempt, as the index load does.
+      // Cleared on every attempt, so a successful Retry clears the failure Alert.
       setError(null);
       api
         .getReviewPage({ ...params, limit: pageSize, offset }, controller.signal)
@@ -1699,7 +1512,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           reconcileRowStates(rows);
           if (generationRef.current !== data.generation) {
             // A new snapshot: every detail row fetched for the old one is
-            // suspect, as after an index load.
+            // suspect.
             generationRef.current = data.generation;
             detailEpochRef.current += 1;
             detailAskedRef.current = new Set();
@@ -1766,180 +1579,27 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     // setPage and the reconcile helper are stable; params come from queryKey,
     // and filterQueryKey changes only with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, pageMode, queryKey, filterQueryKey, requestedPage, pageSize, refreshKey]);
+  }, [active, queryKey, filterQueryKey, requestedPage, pageSize, refreshKey]);
 
-  // Split at the runtime filter so the rail can say how many rows that one
-  // filter is hiding: `beforeRuntime` is every row the earlier filters keep.
-  const beforeRuntime = useMemo(
-    () =>
-      results
-        .filter((r) => !titleRegex || titleRegex.test(r.book.title || ''))
-        .filter(
-          (r) =>
-            !filters.sourceFilter || reviewProviderID(r.candidate?.source) === filters.sourceFilter
-        )
-        .filter(
-          (r) =>
-            (r.status === 'matched' &&
-              r.candidate &&
-              r.candidate.score * 100 >= filters.confidenceThreshold) ||
-            r.status !== 'matched'
-        )
-        .filter((r) => !filters.hideApplied || rowStates.get(r.book.id) !== 'applied')
-        .filter((r) => !filters.hideRejected || rowStates.get(r.book.id) !== 'rejected')
-        .filter((r) => !filters.hideSkipped || rowStates.get(r.book.id) !== 'skipped')
-        .filter((r) => !filters.hideNoMatch || (r.status !== 'no_match' && r.status !== 'error')),
-    [results, rowStates, titleRegex, filters]
-  );
-
-  const runtimeHidden = useMemo(
-    () =>
-      filters.hideRuntimeDifferences
-        ? new Set(beforeRuntime.filter((r) => runtimeHiddenBySwitch(r)).map((r) => r.book.id))
-        : new Set<string>(),
-    [beforeRuntime, filters.hideRuntimeDifferences]
-  );
-
-  const preGroupFiltered = useMemo(
-    () =>
-      beforeRuntime
-        // runtimeHiddenBySwitch: the apply gate's 10% rule OR the spine's
-        // ten-minute warning chip, so no warned row survives the switch. An
-        // unknown runtime on either side is not evidence of a mismatch, so
-        // those rows stay reviewable.
-        .filter((r) => !runtimeHidden.has(r.book.id))
-        .filter((r) => {
-          // An unknown language on EITHER side is a no-op, not a hide: a book
-          // with no language set must still be offered its candidates.
-          if (!filters.matchLanguage) return true;
-          if (!r.candidate) return true;
-          const bookLang = normalizeLanguage(r.book.language);
-          const candLang = normalizeLanguage(r.candidate.language);
-          if (!bookLang || !candLang) return true;
-          return bookLang === candLang;
-        })
-        .filter((r) => !filters.onlyWithTranscription || !!r.book.transcribed_title)
-        .filter((r) => !filters.onlyTranscriptionMatched || !!r.candidate?.transcription_boosted),
-    [beforeRuntime, runtimeHidden, filters]
-  );
-
-  // The rows a chip counts, when one is active: exactly those, narrowed by the
-  // Title filter regex and with every OTHER filter paused. The title regex is
-  // the one filter a chip honours because it is how a reviewer picks a subset
-  // of a chip's books to act on ("the stale ones whose title starts with a
-  // digit"); the switches and threshold are what the chip exists to bypass.
-  const chipBaseRows = useMemo((): CandidateResult[] | null => {
-    if (chipFilter === null) return null;
-    switch (chipFilter) {
-      case 'matched':
-        return results.filter((r) => r.status === 'matched');
-      case 'no_match':
-        return results.filter((r) => r.status === 'no_match');
-      case 'total':
-        return results;
-      case 'errors':
-        return unreviewableResults.filter((r) => r.status === 'decode_error');
-      case 'no_candidates':
-        return unreviewableResults.filter((r) => r.status === 'no_candidates');
-      case 'resolved_no_candidates':
-        return unreviewableResults.filter((r) => r.status === 'resolved_no_candidates');
-      case 'identity_stale':
-        return unreviewableResults.filter((r) => r.status === 'identity_stale');
-      case 'stale':
-        // The server's per-row `stale` flag, computed by the same predicate as
-        // the chip's count (and the {stale: true} refetch set). Nothing is
-        // re-derived here: an earlier mirror of the server's exclusions was a
-        // second copy of the rule that could drift from the first. Explicitly
-        // true: an absent flag is not a stale claim.
-        return [...results, ...unreviewableResults].filter((r) => r.stale === true);
-      case 'deferred':
-        // The server's per-row flag, like stale: a book whose fallback
-        // lookup (Google Books' daily budget spent, a hold) waits on a later
-        // run. Most have no candidate, so both buckets are read.
-        return [...results, ...unreviewableResults].filter((r) => r.fallback_deferred === true);
-    }
-  }, [chipFilter, results, unreviewableResults]);
-
-  const chipRows = useMemo(
-    (): CandidateResult[] | null =>
-      chipBaseRows === null || !titleRegex
-        ? chipBaseRows
-        : chipBaseRows.filter((r) => titleRegex.test(r.book.title || '')),
-    [chipBaseRows, titleRegex]
-  );
-
-  // Book ids sharing a candidate with at least one other book.
-  //
-  // Computed over the WHOLE filtered set, not the current page -- unlike the
-  // per-page `groups` below. Two files of one book landing on opposite sides of
-  // a page boundary each look like a singleton to a per-page pass and would
-  // survive the hide, which is the exact case this toggle exists to remove.
-  const multiBookIds = useMemo(() => {
-    // A chip view pauses every filter, this one included.
-    if (!filters.hideMultiBook || chipRows !== null) return new Set<string>();
-    const byKey = new Map<string, string[]>();
-    for (const r of preGroupFiltered) {
-      if (!r.candidate || r.status !== 'matched' || ungroupedIds.has(r.book.id)) continue;
-      const key = candidateKey(r.candidate);
-      const ids = byKey.get(key);
-      if (ids) ids.push(r.book.id);
-      else byKey.set(key, [r.book.id]);
-    }
-    const out = new Set<string>();
-    for (const ids of byKey.values()) {
-      if (ids.length > 1) ids.forEach((id) => out.add(id));
-    }
-    return out;
-  }, [filters.hideMultiBook, preGroupFiltered, ungroupedIds, chipRows]);
-
-  const filteredResults = useMemo(
-    () =>
-      chipRows ??
-      (filters.hideMultiBook
-        ? preGroupFiltered.filter((r) => !multiBookIds.has(r.book.id))
-        : preGroupFiltered),
-    [chipRows, filters.hideMultiBook, preGroupFiltered, multiBookIds]
-  );
-
-  // Deselect anything the multi-book filter has hidden. `selectedIds` is built
-  // by hand and does not shrink when a filter hides its members, so without this
-  // "Apply Selected" would still apply a grouped book that was ticked before the
-  // toggle went on -- the precise opposite of what the toggle is for -- and the
-  // button's count would disagree with what it does.
-  const multiBookKey = useMemo(() => [...multiBookIds].sort().join(','), [multiBookIds]);
-  useEffect(() => {
-    // multiBookIds is empty in a chip view, so this is already a no-op there.
-    if (!filters.hideMultiBook || multiBookIds.size === 0) return;
-    setSelectedIds((prev) => {
-      const next = new Set([...prev].filter((id) => !multiBookIds.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-    // multiBookIds is rebuilt each render; key the effect on its contents.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.hideMultiBook, multiBookKey]);
-
-  // Page mode: the server already cut the page, and the size of the whole
-  // filtered list is its total.
-  const filteredCount = pageMode ? pageTotal : filteredResults.length;
+  // The server already cut the page, and the size of the whole filtered list is
+  // its total.
+  const filteredCount = pageTotal;
   const totalPages = Math.max(1, Math.ceil(filteredCount / pageSize));
 
   // Clamp rather than auto-advance: filters can shrink the set below the current
-  // page index, and with client-side pagination there is no empty page to skip
-  // past.
+  // page index.
   //
   // DERIVED, not synced in an effect. An effect would render one frame at the
-  // out-of-range page before correcting it -- `pageResults` would slice past the
-  // end and the spine would flash empty -- and it would cost a second render
+  // out-of-range page before correcting it, and it would cost a second render
   // pass every time a filter changed. `requestedPage` is what the reviewer
   // asked for; `page` is what is actually reachable.
   const page = Math.min(requestedPage, totalPages);
 
-  // Page mode only: this session's own decisions take effect on the rows on
-  // screen at once, as the index chain does, without waiting for the refresh
-  // that follows an apply. (A chip view pauses every filter, these included.)
+  // This session's own decisions take effect on the rows on screen at once,
+  // without waiting for the refresh that follows an apply. (A chip view pauses every filter, these included.)
   // The page then runs short until that refresh refills it.
   const visiblePageRows = useMemo(() => {
-    if (!pageMode || chipFilter !== null) return pageRows;
+    if (chipFilter !== null) return pageRows;
     return pageRows.filter((r) => {
       const state = rowStates.get(r.book.id);
       if (filters.hideApplied && state === 'applied') return false;
@@ -1948,7 +1608,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       return true;
     });
   }, [
-    pageMode,
     pageRows,
     chipFilter,
     rowStates,
@@ -1957,12 +1616,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     filters.hideSkipped,
   ]);
 
-  const pageIndexRows = useMemo(() => {
-    if (pageMode) return visiblePageRows;
-    const start = (page - 1) * pageSize;
-    return filteredResults.slice(start, start + pageSize);
-  }, [pageMode, visiblePageRows, filteredResults, page, pageSize]);
-
   // The page's rows with their full candidates swapped in once fetched. Only
   // the candidate is taken from the detail row, and only when its hash is the
   // index row's: status, stale flag and book info stay the index's, so a
@@ -1970,11 +1623,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // the page was built from.
   const pageResults = useMemo(
     () =>
-      pageIndexRows.map((r) => {
+      visiblePageRows.map((r) => {
         const d = detailsById.get(r.book.id);
         return detailMatches(r, d) ? { ...r, candidate: d.candidate } : r;
       }),
-    [pageIndexRows, detailsById]
+    [visiblePageRows, detailsById]
   );
 
   // Per visible book: is its candidate the full row yet? Derived from the
@@ -1984,7 +1637,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // whose breakdown the server no longer has.
   const detailState = useMemo(() => {
     const out = new Map<string, CandidateDetailState>();
-    for (const r of pageIndexRows) {
+    for (const r of visiblePageRows) {
       if (!r.candidate) continue;
       const d = detailsById.get(r.book.id);
       out.set(
@@ -1999,7 +1652,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       );
     }
     return out;
-  }, [pageIndexRows, detailsById, detailFailedIds]);
+  }, [visiblePageRows, detailsById, detailFailedIds]);
   const detailPending = useMemo(() => {
     const out = new Set<string>();
     detailState.forEach((state, id) => state === 'pending' && out.add(id));
@@ -2024,7 +1677,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const mismatchRefetchedRef = useRef(false);
   useEffect(() => {
     if (!active) return;
-    const missing = pageIndexRows
+    const missing = visiblePageRows
       .filter((r) => r.candidate && !detailAskedRef.current.has(r.book.id))
       .map((r) => r.book.id);
     if (missing.length === 0) return;
@@ -2060,7 +1713,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // Apply would be refused as stale -- so never leave it silently:
         // refetch the index once, and if that still disagrees, say so.
         const byId = new Map(fetched.map((r) => [r.book.id, r]));
-        const indexHash = new Map(pageIndexRows.map((r) => [r.book.id, r.candidate_hash]));
+        const indexHash = new Map(visiblePageRows.map((r) => [r.book.id, r.candidate_hash]));
         const changed = missing.filter((id) => {
           const d = byId.get(id);
           return !d || d.candidate_hash !== indexHash.get(id);
@@ -2090,7 +1743,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       });
     // refresh and toast are stable callbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, pageIndexRows]);
+  }, [active, visiblePageRows]);
 
   const { groups, groupedBookIds } = useMemo(() => {
     const groupMap = new Map<string, CandidateGroup>();
@@ -2154,23 +1807,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // replace the row's candidate, and the pin must be what the owner saw.
   const applyPinsRef = useRef<Map<string, CandidatePin>>(new Map());
 
-  // The rows the lane can pin from and look up by id: every row in index mode,
-  // the current page in page mode. In page mode a bulk apply does not read
-  // them for books off the page: it takes each pin from pagePinsFor (the page
-  // row, the pin captured on screen, or the select-all list's pin) and refuses
-  // a book with none, so page mode never sends the hashless owner marker.
-  const knownRows = pageMode ? pageRows : results;
-
   // The pin for the candidate one row is showing right now. A row with no
   // candidate, or no server-issued candidate_hash, gets no pin from the
   // single-row Apply, and the server hard-gates it.
   const rowPinFor = useCallback(
     (id: string): CandidatePin | undefined => {
-      const r = knownRows.find((x) => x.book.id === id);
+      const r = pageRows.find((x) => x.book.id === id);
       if (!r?.candidate || !r.candidate_hash) return undefined;
       return pinOfCandidate(r.candidate, r.candidate_hash);
     },
-    [knownRows]
+    [pageRows]
   );
 
   // The pins a bulk button sends: every book it applies is the owner's manual
@@ -2184,7 +1830,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // candidate or lifts a no_match mark on it: nobody saw that candidate.
   const bulkPinsFor = useCallback(
     (ids: string[]): Record<string, ApplyPin> => {
-      const byId = new Map(knownRows.map((r) => [r.book.id, r]));
+      const byId = new Map(pageRows.map((r) => [r.book.id, r]));
       const pins: Record<string, ApplyPin> = {};
       for (const id of ids) {
         const r = byId.get(id);
@@ -2195,7 +1841,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       }
       return pins;
     },
-    [knownRows]
+    [pageRows]
   );
   // Every in-flight apply arms an hour-long bound (see runApplyOp). They are
   // cleared when their race settles, but an unmount while an op is still
@@ -2321,7 +1967,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     // A 'row' pin is one reviewer's look at one book, and the server refuses a
     // request that pairs one with other books (a row pin lifts gates a bulk
     // apply must not). So each row-pinned book goes out as its own request;
-    // books with no pin (index mode) still share one. The dispatches return as
+    // books with no pin still share one. The dispatches return as
     // soon as the op is queued, so splitting costs a few round trips, not a
     // wait on each apply.
     const rowPinned: Array<[string, ApplyPin]> = [];
@@ -2373,12 +2019,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const applyOne = useCallback(
     (bookId: string) => {
       // A single-row Apply is the owner's review of what the row shows: pin
-      // it. Page mode sends no apply without a pin (see pagePinsFor), so a
-      // row with no candidate hash is refused here rather than sent unpinned,
-      // which would apply whatever candidate is on top through the certainty
-      // gate with no stale-candidate check. Index mode keeps its behaviour.
+      // it. No apply goes out without a pin (see pagePinsFor), so a row with no
+      // candidate hash is refused here rather than sent unpinned, which would
+      // apply whatever candidate is on top through the certainty gate with no
+      // stale-candidate check.
       const pin = rowPinFor(bookId);
-      if (pageMode && !pin) {
+      if (!pin) {
         toast(
           'This book has no candidate the page can pin, so it was not applied. Refresh and try again.',
           'warning'
@@ -2402,7 +2048,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       applyTimerRef.current = setTimeout(() => void flushApplyQueue(), 500);
     },
-    [flushApplyQueue, retainInFlight, clearServerDerived, rowPinFor, pageMode, toast]
+    [flushApplyQueue, retainInFlight, clearServerDerived, rowPinFor, toast]
   );
 
   const applyMany = useCallback(
@@ -2694,7 +2340,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // (stale_candidate), including after writes later than any page fetch.
   const refuseStaleSelectAll = useCallback(
     (ids: string[]): boolean => {
-      if (!pageMode || !matchingIds || !matchingIdSet) return false;
+      if (!matchingIds || !matchingIdSet) return false;
       // Rows the reviewer can see: a row this session hid (Hide applied,
       // rejected or skipped) is on the page but not shown.
       const onPage = new Set(visiblePageRows.map((r) => r.book.id));
@@ -2722,7 +2368,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       );
       return true;
     },
-    [pageMode, matchingIds, matchingIdSet, visiblePageRows, listAllMatching, toast]
+    [matchingIds, matchingIdSet, visiblePageRows, listAllMatching, toast]
   );
   // The remembered list belongs to a selection; an emptied selection (Clear,
   // an apply, a search) forgets it.
@@ -2731,18 +2377,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setMatchingIds((prev) => (prev === null ? prev : null));
   }, [selectedIds]);
 
-  // Page mode: a bulk action right after a filter change would act on books
+  // A bulk action right after a filter change would act on books
   // the new filters exclude, because both halves of the view catch up
   // asynchronously. The selection is pruned against the server after a
   // debounce and an ids request (pruneSettledKeyRef), and the page keeps the
   // previous filters' rows until the new page lands (landedKeyRef), which is
   // what Apply page / Apply high confidence / a group's Apply All act on.
   // Until both have caught up, bulk apply, Replace and reject are refused with
-  // a message; the next click after they settle goes through. Index mode
-  // prunes and filters in the render that follows the change, so it never
-  // has this window.
+  // a message; the next click after they settle goes through.
   const refuseUnsettled = useCallback((): boolean => {
-    if (!pageMode) return false;
     if (pruneSettledKeyRef.current !== filtersKey) {
       toast(
         'The selection is being checked against the new filters; apply again in a moment.',
@@ -2766,16 +2409,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       return true;
     }
     return false;
-  }, [pageMode, filtersKey, filterQueryKey, toast]);
+  }, [filtersKey, filterQueryKey, toast]);
 
-  // Page mode: the pin of every book that was selected while its row was on
-  // screen, as last shown (null: the row had no candidate to pin). A bulk apply of a
-  // book on another page sends this pin, so the server still refuses it as
-  // stale if its candidate has changed since; the index-mode equivalent is
-  // bulkPinsFor reading `results`. Only this effect writes the map, and it is
+  // The pin of every book that was selected while its row was on screen, as
+  // last shown (null: the row had no candidate to pin). A bulk apply of a book
+  // on another page sends this pin, so the server still refuses it as stale if
+  // its candidate has changed since. Only this effect writes the map, and it is
   // bounded by the rows visited, not the selection.
   useEffect(() => {
-    if (!pageMode) return;
     const ticked = tickedPinsRef.current;
     if (selectedIds.size === 0) {
       ticked.clear();
@@ -2798,7 +2439,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           : null
       );
     }
-  }, [pageMode, selectedIds, visiblePageRows]);
+  }, [selectedIds, visiblePageRows]);
 
   // The pins a page-mode bulk apply sends. Each book's pin comes from, in
   // order: its row on the current page (what the reviewer is looking at now),
@@ -2883,32 +2524,29 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             toast(applyCapMessage(applyCap, action.ids.length), 'error');
             return;
           }
-          // Page mode pins every book or sends nothing (pagePinsFor): a book
+          // Every book is pinned or nothing is sent (pagePinsFor): a book
           // with no pin would go out with the hashless marker and lose the
           // stale-candidate refusal. Checked here, before a Replace is parked,
           // so neither path can send one.
           let ids = action.ids;
-          let pins: Record<string, ApplyPin> | undefined;
-          if (pageMode) {
-            const r = pagePinsFor(ids);
-            if (r.unknown.length > 0) {
-              toast(unpinnedRefusalMessage(r.unknown.length), 'warning');
-              return;
-            }
-            if (r.noCandidate.length > 0) {
-              const left = new Set(r.noCandidate);
-              ids = ids.filter((id) => !left.has(id));
-              toast(
-                r.noCandidate.length === 1
-                  ? '1 selected book has no candidate to apply and was left out.'
-                  : `${r.noCandidate.length.toLocaleString()} selected books have no candidate to ` +
-                      'apply and were left out.',
-                'info'
-              );
-              if (ids.length === 0) return;
-            }
-            pins = r.pins;
+          const r = pagePinsFor(ids);
+          if (r.unknown.length > 0) {
+            toast(unpinnedRefusalMessage(r.unknown.length), 'warning');
+            return;
           }
+          if (r.noCandidate.length > 0) {
+            const left = new Set(r.noCandidate);
+            ids = ids.filter((id) => !left.has(id));
+            toast(
+              r.noCandidate.length === 1
+                ? '1 selected book has no candidate to apply and was left out.'
+                : `${r.noCandidate.length.toLocaleString()} selected books have no candidate to ` +
+                    'apply and were left out.',
+              'info'
+            );
+            if (ids.length === 0) return;
+          }
+          const pins = r.pins;
           // Replace overwrites values the owner may have curated, on every
           // book in the batch, so it asks first -- here, not in each button,
           // so every bulk entry point confirms exactly once. The request is
@@ -2918,12 +2556,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           if (bulkApplyMode === 'replace' && ids.length > 0 && !skipReplaceConfirm) {
             setPendingReplace({
               ids,
-              pins: pins ?? bulkPinsFor(ids),
+              pins,
               mode: bulkApplyMode,
             });
             return;
           }
-          void applyMany(ids, pins ? { pins, mode: bulkApplyMode } : undefined);
+          void applyMany(ids, { pins, mode: bulkApplyMode });
           return;
         }
         case 'reject':
@@ -2959,22 +2597,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           })();
           return;
         case 'skipAllUnmatched':
-          if (pageMode) {
-            void skipAllUnmatchedPage();
-            return;
-          }
-          clearServerDerived(
-            results
-              .filter((r) => r.status === 'no_match' || r.status === 'error')
-              .map((r) => r.book.id)
-          );
-          setRowStates((prev) => {
-            const next = new Map(prev);
-            results
-              .filter((r) => r.status === 'no_match' || r.status === 'error')
-              .forEach((r) => markSkipped(next, r.book.id));
-            return next;
-          });
+          void skipAllUnmatchedPage();
           return;
         case 'ungroup':
           setUngrouped((prev) => ({
@@ -2989,8 +2612,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       applyMany,
       reject,
       unreject,
-      results,
-      pageMode,
       skipAllUnmatchedPage,
       refuseUnsettled,
       refuseStaleSelectAll,
@@ -3000,7 +2621,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       clearServerDerived,
       bulkApplyMode,
       skipReplaceConfirm,
-      bulkPinsFor,
       applyCap,
     ]
   );
@@ -3043,36 +2663,24 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     });
   }, []);
 
-  // Page mode: the ids (never rows) and their pins come from the server
-  // (listAllMatching).
+  // The ids (never rows) and their pins come from the server (listAllMatching).
   const selectAllMatching = useCallback(() => {
-    if (pageMode) {
-      listAllMatching();
-      return;
-    }
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      filteredResults.forEach((r) => next.add(r.book.id));
-      return next;
-    });
-  }, [pageMode, listAllMatching, filteredResults]);
+    listAllMatching();
+  }, [listAllMatching]);
 
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
-  // Page mode: every id of the list the server returned for THESE filters is
-  // selected, and that list is the whole filtered set.
-  const allMatchingSelected = useMemo(() => {
-    if (pageMode) {
-      return (
-        matchingIds !== null &&
-        matchingIds.key === queryKey &&
-        matchingIds.ids.length > 0 &&
-        matchingIds.ids.length === pageTotal &&
-        matchingIds.ids.every((id) => selectedIds.has(id))
-      );
-    }
-    return filteredResults.length > 0 && filteredResults.every((r) => selectedIds.has(r.book.id));
-  }, [pageMode, matchingIds, queryKey, pageTotal, filteredResults, selectedIds]);
+  // Every id of the list the server returned for THESE filters is selected, and
+  // that list is the whole filtered set.
+  const allMatchingSelected = useMemo(
+    () =>
+      matchingIds !== null &&
+      matchingIds.key === queryKey &&
+      matchingIds.ids.length > 0 &&
+      matchingIds.ids.length === pageTotal &&
+      matchingIds.ids.every((id) => selectedIds.has(id)),
+    [matchingIds, queryKey, pageTotal, selectedIds]
+  );
 
   // SELECTION ACROSS FILTER CHANGES. The selection is a plain id set, so it
   // survives page turns and chip toggles untouched (a chip is a view onto the
@@ -3082,65 +2690,19 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // longer matches are dropped, so a bulk action never reaches books the
   // reviewer can no longer see.
   //
-  // While a chip is active every filter but the Title regex is paused, so only
-  // a Title change prunes, and only narrowly: an id is dropped when its title
-  // is known and fails the new regex. The selection may hold books picked in
-  // other chips (other buckets, other reasons); those are kept unless their
-  // own title now fails, and ids with no loaded row are kept outright. An
-  // empty or invalid regex prunes nothing, so half-typing a pattern never
+  // The server answers it; the lane holds no list to check against. Outside a
+  // chip, ids the new filters no longer list are dropped: the selection is
+  // checked against the ids the filters match now (one ids-only request, after
+  // the same debounce as the page). If that check cannot be made the selection
+  // is cleared, because keeping books the reviewer can no longer see is what
+  // this prune exists to prevent. While a chip is active every filter but the
+  // Title regex is paused, so only a Title change prunes, and only books of
+  // that chip: those the narrowed chip no longer lists.
+  // An empty or invalid regex prunes nothing, so half-typing a pattern never
   // wipes a selection.
-  const prunedForKeyRef = useRef(filtersKey);
-  const prunedTitleRef = useRef(filters.titleFilter);
-  useEffect(() => {
-    // Page mode prunes against the server (below); the lane holds no list here.
-    if (pageMode) return;
-    if (prunedForKeyRef.current === filtersKey) return;
-    prunedForKeyRef.current = filtersKey;
-    const titleChanged = prunedTitleRef.current !== filters.titleFilter;
-    prunedTitleRef.current = filters.titleFilter;
-    if (chipFilter !== null) {
-      if (!titleChanged || !titleRegex) return;
-      const titleById = new Map<string, string>();
-      for (const r of results) titleById.set(r.book.id, r.book.title || '');
-      for (const r of unreviewableResults) titleById.set(r.book.id, r.book.title || '');
-      setSelectedIds((prev) => {
-        const next = new Set(
-          [...prev].filter((id) => {
-            const title = titleById.get(id);
-            return title === undefined || titleRegex.test(title);
-          })
-        );
-        return next.size === prev.size ? prev : next;
-      });
-      return;
-    }
-    const keep = new Set(filteredResults.map((r) => r.book.id));
-    setSelectedIds((prev) => {
-      const next = new Set([...prev].filter((id) => keep.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [
-    pageMode,
-    filtersKey,
-    filters.titleFilter,
-    chipFilter,
-    filteredResults,
-    titleRegex,
-    results,
-    unreviewableResults,
-  ]);
-
-  // The same rule in page mode, answered by the server instead of a held list.
-  // Outside a chip, ids the new filters no longer list are dropped: the
-  // selection is checked against the ids the filters match now (one ids-only
-  // request, after the same debounce as the page). If that check cannot be made
-  // the selection is cleared, because keeping books the reviewer can no longer
-  // see is what this prune exists to prevent. In a chip view only a Title change
-  // prunes, and only books of that chip: those the narrowed chip no longer lists.
   const prunedPageKeyRef = useRef(filtersKey);
   const prunedPageTitleRef = useRef(filters.titleFilter);
   useEffect(() => {
-    if (!pageMode) return;
     if (prunedPageKeyRef.current === filtersKey) return;
     prunedPageKeyRef.current = filtersKey;
     const titleChanged = prunedPageTitleRef.current !== filters.titleFilter;
@@ -3214,7 +2776,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [pageMode, filtersKey, filters.titleFilter]);
+  }, [filtersKey, filters.titleFilter]);
 
   const skipSelected = useCallback(() => {
     const ids = [...selectedIds];
@@ -3343,15 +2905,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const refetchStale = useCallback(() => startRefetch({ stale: true }), [startRefetch]);
 
-  // Books known to have no candidate: the unreviewable bucket's rows. Apply
-  // has nothing to send for them, so they are kept out of Apply selected.
-  const unreviewableIds = useMemo(
-    () => (pageMode ? pageUnreviewableIds : new Set(unreviewableResults.map((r) => r.book.id))),
-    [pageMode, pageUnreviewableIds, unreviewableResults]
-  );
+  // Books known to have no candidate (pageUnreviewableIds) are kept out of
+  // Apply selected: there is nothing to send for them.
   const applicableSelectedIds = useMemo(
-    () => [...selectedIds].filter((id) => !unreviewableIds.has(id)),
-    [selectedIds, unreviewableIds]
+    () => [...selectedIds].filter((id) => !pageUnreviewableIds.has(id)),
+    [selectedIds, pageUnreviewableIds]
   );
 
   const searchAgain = useCallback(
@@ -3360,12 +2918,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       confirm: (message: string) => Promise<boolean>
     ): Promise<string | null> => {
       if (!ids.length) return null;
-      // Page mode knows only the page's rows: a book selected across pages that
+      // The lane knows only the page's rows: a book selected across pages that
       // is marked no-match is not recognised here, so the search skips it (the
       // fetch op never searches a no-match book) without the prompt.
       const byId = new Map<string, CandidateResult>();
-      for (const r of knownRows) byId.set(r.book.id, r);
-      for (const r of unreviewableResults) byId.set(r.book.id, r);
+      for (const r of pageRows) byId.set(r.book.id, r);
       let marked = ids.filter((id) => isMarkedNoMatch(byId.get(id), rowStates.get(id)));
       if (marked.length > 0) {
         const others = ids.length - marked.length;
@@ -3471,23 +3028,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setBulkProgress(null);
       }
     },
-    [knownRows, unreviewableResults, rowStates, toast, refresh, clearServerDerived]
+    [pageRows, rowStates, toast, refresh, clearServerDerived]
   );
 
-  const unmatchedCount = useMemo(
-    () =>
-      pageMode
-        ? (pageFacets?.no_match ?? 0)
-        : results.filter((r) => r.status === 'no_match' || r.status === 'error').length,
-    [pageMode, pageFacets, results]
-  );
+  const unmatchedCount = pageFacets?.no_match ?? 0;
 
   const heldRows = useMemo(
-    () => ({
-      list: pageMode ? pageRows.length : results.length + unreviewableResults.length,
-      details: detailsById.size,
-    }),
-    [pageMode, pageRows, results, unreviewableResults, detailsById]
+    () => ({ list: pageRows.length, details: detailsById.size }),
+    [pageRows, detailsById]
   );
 
   // Every row the filters match, for an export. Page mode pages through the
@@ -3504,7 +3052,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const exportAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => exportAbortRef.current?.abort(), []);
   const exportRows = useCallback(async (): Promise<CandidateResult[]> => {
-    if (!pageMode) return filteredResults;
     exportAbortRef.current?.abort();
     const controller = new AbortController();
     exportAbortRef.current = controller;
@@ -3537,16 +3084,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         if (aliveRef.current) setExporting(false);
       }
     }
-  }, [pageMode, filteredResults]);
+  }, []);
 
   return {
     loading,
     error,
-    results: knownRows,
-    filteredResults: pageMode ? visiblePageRows : filteredResults,
+    results: pageRows,
+    filteredResults: visiblePageRows,
     filteredCount,
     unmatchedCount,
-    queryMode,
     heldRows,
     exportRows,
     exporting,
@@ -3556,8 +3102,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     rows,
     detailPending,
     detailFailed,
-    sourceCounts: pageMode ? (pageFacets?.sources ?? NO_COUNTS) : sourceCounts,
-    summary: pageMode && pageFacets ? summaryFromFacets(pageFacets) : summary,
+    sourceCounts: pageFacets?.sources ?? NO_COUNTS,
+    summary: pageFacets ? summaryFromFacets(pageFacets) : EMPTY_SUMMARY,
     page,
     totalPages,
     pageSize,
@@ -3569,13 +3115,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     reviewLevel,
     setReviewLevel,
     levelCustomised,
-    runtimeHiddenCount: pageMode ? (pageFacets?.runtime_hidden ?? 0) : runtimeHidden.size,
+    runtimeHiddenCount: pageFacets?.runtime_hidden ?? 0,
     chipFilter,
     toggleChipFilter,
     clearChipFilter,
-    unreviewableResults,
-    unreviewableLoading,
-    unreviewableError,
     applicableSelectedIds,
     setSelection,
     selectAllMatching,
