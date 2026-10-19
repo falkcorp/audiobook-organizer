@@ -4,18 +4,21 @@ description: Keep the API contract (Go DTO structs and generated TypeScript type
 disable-model-invocation: true
 ---
 <!-- file: .claude/skills/api-doc/SKILL.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.0.1 -->
 <!-- guid: 5b0e4d1c-8a37-4c52-9f6e-2d7a1c3b9e48 -->
 <!-- last-edited: 2026-10-19 -->
 
 # Update the API Contract
 
 There is no OpenAPI file. `docs/api/openapi.json` was hand-maintained, drifted, and was
-deleted (owner decision D45). **Do not create a replacement spec.** The contract is:
+deleted (owner decision D45). **Do not create a replacement spec.** The contract is the Go
+structs the handlers marshal, plus TypeScript types that are only partly generated:
 
-1. the Go DTO structs the handlers marshal, and
-2. the TypeScript types generated from them into `web/src/types/generated/` (tygo, config in
-   `tygo.yaml`).
+- **Generated (tygo):** only `internal/repairs/wire.go` and, in `internal/database`,
+  `bookcore.go`, `bookfilecore.go`, `scan_state.go` and `wire_types.go` (see `tygo.yaml`)
+  become `web/src/types/generated/*.ts`.
+- **Hand-maintained:** handler response structs under `internal/server/handlers` are NOT
+  generated. Their TypeScript types live in `web/src/services/api.ts`.
 
 ## Arguments
 
@@ -25,16 +28,24 @@ deleted (owner decision D45). **Do not create a replacement spec.** The contract
 
 1. **Find the route.** Routes are registered in the `internal/server/wire_*_routes.go` files
    (and some in `server_lifecycle.go`), usually on a group. Write the full path, not the
-   group-relative fragment: `itunesG.POST("/sync", ...)` on `protected.Group("/itunes")` is
-   `/itunes/sync`.
-2. **Change the DTO struct** the handler marshals or binds, with accurate `json` tags. Pointer
+   group-relative fragment: `itunesG.POST("/import", ...)` on `protected.Group("/itunes")`
+   is `/itunes/import`.
+2. **Change the Go struct** the handler marshals or binds, with accurate `json` tags. Pointer
    or `omitempty` fields must match what the handler really sends.
-3. **Regenerate the types:** `make generate-types`. Commit the changed files under
-   `web/src/types/generated/`. CI runs `make types-check` and fails if they are stale.
-4. **Update the contract goldens** if a covered type changed:
-   `UPDATE_WIRE_GOLDEN=1 go test ./internal/wirecontract/`, then `make generate-types` again.
-5. **Update the handler test** so it asserts the new request and response shapes.
-6. **Run** `make types-check` and the affected Go and `web/` tests.
+3. **Update the TypeScript type**, depending on where the struct lives:
+   - In a `tygo.yaml`-listed file: run `make generate-types` and commit the changed files
+     under `web/src/types/generated/`. CI runs `make types-check` and fails if they are stale.
+   - Anywhere else: either move it into a wire-only file and add a `tygo.yaml` entry (tygo
+     emits every exported type of an included file, so the file must hold nothing else), or
+     edit its hand-maintained type in `web/src/services/api.ts` and say so in the PR.
+4. **Register a newly generated type** in `wireTypes` in
+   `internal/wirecontract/contract_test.go` (`TestWireTypesMatchGeneratedInterfaces`). A nil
+   slice or map field without `omitempty` must be listed in `nilableWithoutOmit`
+   (`TestNilableFieldsAreAccountedFor`).
+5. **Update the contract goldens** if a covered type changed:
+   `UPDATE_WIRE_GOLDEN=1 go test ./internal/wirecontract/`, then `make generate-types`.
+6. **Update the handler test** so it asserts the new request and response shapes.
+7. **Run** `make types-check` and the affected Go and `web/` tests.
 
 ## Rules
 
