@@ -159,7 +159,9 @@ func (r *ABSIdentityResolver) CFAssertionsEnabled() bool {
 // CFCallerKey verifies the request's Cloudflare Access assertion WITHOUT resolving
 // or provisioning a user, and returns a stable key naming the verified credential:
 // "svc:<common_name>" for a service token, "email:<lowercased email>" for a person.
-// ok is false when CF mode is off, there is no assertion, or it does not verify.
+// ok is false when CF mode is off, there is no assertion, it does not verify, or
+// it names neither a person nor a service token (an empty common_name would put
+// every such caller in one anonymous bucket).
 //
 // It exists for per-caller quotas on unauthenticated endpoints (SSO hop 1). The
 // origin trusts no proxy headers (server.go SetTrustedProxies(nil)), so behind the
@@ -167,8 +169,10 @@ func (r *ABSIdentityResolver) CFAssertionsEnabled() bool {
 // it would let one caller lock out everyone. The verified credential is the only
 // per-caller attribute an attacker cannot forge or rotate freely.
 //
-// 🔴 A KEY, NOT IDENTITY. A service token is shared by a group; never resolve a
-// user from this value.
+// 🔴 A KEY, NOT IDENTITY. A service token is shared by a GROUP of people and
+// devices, so a quota keyed on it alone is shared by that whole group; callers
+// must add a per-device discriminator before applying a small cap. Never resolve
+// a user from this value.
 func (r *ABSIdentityResolver) CFCallerKey(c *gin.Context) (string, bool) {
 	if !r.CFAssertionsEnabled() {
 		return "", false
@@ -180,10 +184,11 @@ func (r *ABSIdentityResolver) CFCallerKey(c *gin.Context) (string, bool) {
 	claims, err := r.verifier.Verify(c.Request.Context(), raw)
 	if err != nil {
 		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
-			cn := oauth.CFAssertionCommonName(err)
-			if cn != "" {
-				c.Set(contextABSServiceTokenKey, cn)
+			cn := strings.TrimSpace(oauth.CFAssertionCommonName(err))
+			if cn == "" {
+				return "", false
 			}
+			c.Set(contextABSServiceTokenKey, cn)
 			return "svc:" + cn, true
 		}
 		return "", false
