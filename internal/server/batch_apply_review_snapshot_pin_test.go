@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_review_snapshot_pin_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b7d4e91-6c05-4a38-9f1e-7d3a8c52e0b4
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package server
 
@@ -53,7 +53,7 @@ func TestApply_PinFromAStaleReviewSnapshotIsRefused(t *testing.T) {
 	serve := func() metabatch.CandidateResult {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/x?all=true&view=index", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/x?view=page&limit=500", nil)
 		h.GetCacheReviewResults(c)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		var body struct {

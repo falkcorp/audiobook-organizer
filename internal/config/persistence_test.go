@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.25.2
+// version: 1.26.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package config
 
@@ -340,14 +340,6 @@ func TestApplySetting(t *testing.T) {
 			typ:   "bool",
 			setup: func() { AppConfig.CreateBackups = true },
 			check: func() bool { return !AppConfig.CreateBackups },
-		},
-		{
-			name:  "review_metadata_server_query",
-			key:   "review_metadata_server_query",
-			value: "true",
-			typ:   "bool",
-			setup: func() { AppConfig.ReviewMetadataServerQuery = false },
-			check: func() bool { return AppConfig.ReviewMetadataServerQuery },
 		},
 		{
 			name:  "enable_disk_quota",
@@ -1223,6 +1215,52 @@ func TestLoadConfigFromDatabase_RemovedITunesWriteBackKeysLoad(t *testing.T) {
 	require.NoError(t, LoadConfigFromDatabase(store))
 	assert.Equal(t, "/mnt/ao/iTunes Library.itl", AppConfig.ITunes.LibraryITLPath)
 	assert.Equal(t, "/mnt/orig/iTunes Library.xml", AppConfig.ITunes.LibraryReadPath)
+}
+
+// A stored config written while review_metadata_server_query existed (it was
+// ON in production from 2026-10-18 until 02-PR19 removed it) still carries the
+// key, in the blob and as a flat settings row. It must load without error and
+// keep every other setting; the flag is ignored.
+func TestConfig_LoadsWithRemovedReviewFlag(t *testing.T) {
+	t.Run("blob", func(t *testing.T) {
+		resetConfigTestState()
+		t.Cleanup(resetConfigTestState)
+
+		blob := `{"review_metadata_server_query":true,"root_dir":"/srv/library","bulk_apply_max_items":123}`
+		store := mocks.NewMockStore(t)
+		setupMigrationExpectations(store)
+		store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		store.EXPECT().GetAllSettings().Return([]database.Setting{
+			{Key: "config_blob", Value: blob, Type: "string"},
+			{Key: "review_metadata_server_query", Value: "true", Type: "bool"},
+		}, nil).Once()
+
+		require.NoError(t, LoadConfigFromDatabase(store))
+		assert.Equal(t, "/srv/library", AppConfig.RootDir)
+		assert.Equal(t, 123, AppConfig.BulkApplyMaxItems)
+	})
+
+	t.Run("legacy row", func(t *testing.T) {
+		resetConfigTestState()
+		t.Cleanup(resetConfigTestState)
+
+		store := mocks.NewMockStore(t)
+		setupMigrationExpectations(store)
+		store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		store.EXPECT().GetAllSettings().Return([]database.Setting{
+			{Key: "root_dir", Value: "/srv/library", Type: "string"},
+			{Key: "review_metadata_server_query", Value: "true", Type: "bool"},
+		}, nil).Once()
+
+		require.NoError(t, LoadConfigFromDatabase(store))
+		assert.Equal(t, "/srv/library", AppConfig.RootDir)
+	})
+
+	t.Run("the setting is listed as removed", func(t *testing.T) {
+		msg, ok := removedConfigKeyMessage("review_metadata_server_query")
+		require.True(t, ok, "a PUT or a config file carrying the key must get the removal message")
+		assert.Contains(t, msg, "view=page")
+	})
 }
 
 // A stored config written before the incremental iTunes sync was removed

@@ -1,7 +1,7 @@
 // file: internal/metrics/pipeline_metrics_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b18e9de-8f9d-46b8-91f8-94c25c4bcd6b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package metrics
 
@@ -64,22 +64,22 @@ func TestObserveReviewIndexRequest_RecordsUnderView(t *testing.T) {
 	reviewIndexRequestSeconds.Reset()
 	t.Cleanup(reviewIndexRequestSeconds.Reset)
 
-	ObserveReviewIndexRequest(ReviewViewIndex, 1500*time.Millisecond)
-	ObserveReviewIndexRequest(ReviewViewIndex, 300*time.Millisecond)
+	ObserveReviewIndexRequest(ReviewViewGone, 1500*time.Millisecond)
+	ObserveReviewIndexRequest(ReviewViewGone, 300*time.Millisecond)
 	ObserveReviewIndexRequest(ReviewViewFull, 40*time.Second)
 
 	// CollectAndCount counts series; a HistogramVec exposes one series per
 	// label set (each with its own _bucket/_sum/_count), so two views = 2.
 	if got := testutil.CollectAndCount(reviewIndexRequestSeconds); got != 2 {
-		t.Errorf("series = %d, want 2 (index, full)", got)
+		t.Errorf("series = %d, want 2 (gone, full)", got)
 	}
 
 	Register()
 	rec := httptest.NewRecorder()
 	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
-	if !strings.Contains(body, `audiobook_organizer_review_index_request_seconds_count{view="index"} 2`) {
-		t.Errorf("scrape missing index count=2; body excerpt:\n%s", excerpt(body, "review_index_request_seconds"))
+	if !strings.Contains(body, `audiobook_organizer_review_index_request_seconds_count{view="gone"} 2`) {
+		t.Errorf("scrape missing gone count=2; body excerpt:\n%s", excerpt(body, "review_index_request_seconds"))
 	}
 	if !strings.Contains(body, `audiobook_organizer_review_index_request_seconds_count{view="full"} 1`) {
 		t.Errorf("scrape missing full count=1; body excerpt:\n%s", excerpt(body, "review_index_request_seconds"))
@@ -121,7 +121,7 @@ func TestPipelineMetrics_AppearInScrape(t *testing.T) {
 	Register()
 	IncFilenameParse(ParseShapeUnknown, ParseOutcomeUnparsed)
 	IncMetadataFetch("audnexus", FetchSourceNetwork)
-	ObserveReviewIndexRequest(ReviewViewIndex, time.Second)
+	ObserveReviewIndexRequest(ReviewViewFull, time.Second)
 	SetNumberLeadingTitles(3)
 	ObserveFixerDuration("x", FixerPhasePlan, time.Second)
 

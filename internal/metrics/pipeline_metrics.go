@@ -1,7 +1,7 @@
 // file: internal/metrics/pipeline_metrics.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1bafd1d0-de42-4e6d-a079-b28e4ea4858b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-19
 
 package metrics
 
@@ -54,13 +54,14 @@ const (
 	FetchSourceError     = "error"
 )
 
-// Bounded label values for review_index_request_seconds{view}: the review
-// listing's two shapes. "index" is GET ...?view=index (descriptions, score
-// breakdowns and category tags stripped, what the review page loads first);
-// "full" is every other listing request.
+// Bounded label values for review_index_request_seconds{view}. "full" is a
+// listing request (view=page is dispatched before the observation and is not
+// counted); "gone" is a request for the retired ?view=index, answered 410, so a
+// client that still sends it shows up in the metric. "index" was the label of
+// that view while it was served and is no longer written.
 const (
-	ReviewViewIndex = "index"
-	ReviewViewFull  = "full"
+	ReviewViewFull = "full"
+	ReviewViewGone = "gone"
 )
 
 // Bounded label values for fixer_duration_seconds{phase}: the two framework
@@ -101,7 +102,7 @@ var (
 	reviewIndexRequestSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "review_index_request_seconds",
-		Help:      "Handler latency of the metadata-cache review listing (GET /audiobooks/metadata/cache/review) by view (index, full)",
+		Help:      "Handler latency of the metadata-cache review listing (GET /audiobooks/metadata/cache/review) by view (full, gone)",
 		Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 5, 10, 20, 30, 60, 120},
 	}, []string{"view"})
 
@@ -147,7 +148,7 @@ func IncMetadataFetch(provider, source string) {
 }
 
 // ObserveReviewIndexRequest records one review-listing handler duration under
-// view (ReviewViewIndex or ReviewViewFull).
+// view (ReviewViewFull or ReviewViewGone).
 func ObserveReviewIndexRequest(view string, d time.Duration) {
 	reviewIndexRequestSeconds.WithLabelValues(view).Observe(d.Seconds())
 }

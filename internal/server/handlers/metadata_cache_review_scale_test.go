@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package handlers
 
@@ -270,26 +270,45 @@ func serveReview(t testing.TB, h *MetadataCacheHandler, query string) (reviewRes
 	return r, w.Body.Len()
 }
 
-// TestReviewIndex_SameRowsAndCountsAsAll: the index the page now loads carries
-// the same summary, the same rows in the same order with the same statuses,
+// pageAll is the view=page query (servePage adds view=page) that lists the
+// whole reviewable set in one page: the seeds here are well under the 500-row
+// page cap.
+const pageAll = "limit=500"
+
+// facetInt reads one of the page's facet counts.
+func facetInt(t testing.TB, facets map[string]any, key string) int {
+	t.Helper()
+	v, ok := facets[key].(float64)
+	require.True(t, ok, "facet %q missing or not a number: %v", key, facets[key])
+	return int(v)
+}
+
+// TestReviewPage_SameRowsAndCountsAsAll: the page the lane loads carries the
+// same counts, and the same rows in the same order with the same statuses,
 // stale flags and pins as all=true; ids= returns exactly the asked rows in
 // full; and limit/offset pages tile the bucket.
-func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
+func TestReviewPage_SameRowsAndCountsAsAll(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := reviewSeed(t, 300)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	all, _ := serveReview(t, h, "all=true")
-	idx, _ := serveReview(t, h, "all=true&view=index")
+	idx, _, _ := servePage(t, h, pageAll)
 	a, x := all.Data, idx.Data
-	require.Equal(t, a.Matched, x.Matched)
-	require.Equal(t, a.NoMatch, x.NoMatch)
-	require.Equal(t, a.Errors, x.Errors)
-	require.Equal(t, a.TotalApplied, x.TotalApplied)
-	require.Equal(t, a.Unreviewable, x.Unreviewable)
-	require.Equal(t, a.Stale, x.Stale)
-	require.Equal(t, a.ResolvedNoCandidates, x.ResolvedNoCandidates)
-	require.Equal(t, a.UnreviewableByCause, x.UnreviewableByCause)
+	require.Equal(t, a.Matched, facetInt(t, x.Facets, "matched"))
+	require.Equal(t, a.NoMatch, facetInt(t, x.Facets, "no_match"))
+	require.Equal(t, a.Errors, facetInt(t, x.Facets, "errors"))
+	require.Equal(t, a.Unreviewable, facetInt(t, x.Facets, "unreviewable"))
+	require.Equal(t, a.Stale, facetInt(t, x.Facets, "stale"))
+	require.Equal(t, a.ResolvedNoCandidates, facetInt(t, x.Facets, "resolved_no_candidates"))
+	if a.TotalApplied > 0 {
+		require.Equal(t, a.TotalApplied, facetInt(t, x.Facets, "total_applied"))
+	}
+	byCause, ok := x.Facets["unreviewable_by_cause"].(map[string]any)
+	require.True(t, ok, "unreviewable_by_cause missing: %v", x.Facets["unreviewable_by_cause"])
+	for cause, n := range a.UnreviewableByCause {
+		require.Equal(t, n, int(byCause[cause].(float64)), "unreviewable_by_cause[%s]", cause)
+	}
 	require.Equal(t, a.TotalCount, x.TotalCount)
 	require.Len(t, x.Results, len(a.Results))
 	require.Positive(t, len(a.Results))
@@ -299,9 +318,9 @@ func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
 		require.Equal(t, ar.Status, xr.Status)
 		require.Equal(t, *ar.Stale, *xr.Stale)
 		require.Equal(t, ar.CandidateHash, xr.CandidateHash)
-		require.Empty(t, xr.Candidate.Description, "the index drops descriptions")
-		require.Nil(t, xr.Candidate.ScoreBreakdown, "the index drops score breakdowns")
-		require.Nil(t, xr.Candidate.CategoryTags, "the index drops category tags")
+		require.Empty(t, xr.Candidate.Description, "a page row drops descriptions")
+		require.Nil(t, xr.Candidate.ScoreBreakdown, "a page row drops score breakdowns")
+		require.Nil(t, xr.Candidate.CategoryTags, "a page row drops category tags")
 		full := *ar.Candidate
 		full.Description = ""
 		full.ScoreBreakdown = nil
@@ -344,15 +363,15 @@ func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
 	require.Equal(t, un.Data.Results[:1], one.Data.Results)
 }
 
-// TestMetadataCache_IndexViewOmitsScoreBreakdown: no index row carries a score
-// breakdown or category tags, while each still carries the fields the page
-// filters, groups and pins on (score, title, hash).
-func TestMetadataCache_IndexViewOmitsScoreBreakdown(t *testing.T) {
+// TestMetadataCache_PageViewOmitsScoreBreakdown: no view=page row carries a
+// score breakdown or category tags, while each still carries the fields the
+// lane groups and pins on (score, title, hash).
+func TestMetadataCache_PageViewOmitsScoreBreakdown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := reviewSeed(t, 120)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
-	idx, _ := serveReview(t, h, "all=true&view=index")
+	idx, _, _ := servePage(t, h, pageAll)
 	require.Positive(t, len(idx.Data.Results))
 	for _, r := range idx.Data.Results {
 		require.NotNil(t, r.Candidate)
@@ -366,14 +385,14 @@ func TestMetadataCache_IndexViewOmitsScoreBreakdown(t *testing.T) {
 
 // TestMetadataCache_DetailViewKeepsScoreBreakdown is the anti-over-suppression
 // check: the ids= detail rows the evidence panel is fed from keep the full
-// breakdown and tags, and their hash is the index row's, so the page swaps the
+// breakdown and tags, and their hash is the page row's, so the lane swaps the
 // detail candidate in.
 func TestMetadataCache_DetailViewKeepsScoreBreakdown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := reviewSeed(t, 120)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
-	idx, _ := serveReview(t, h, "all=true&view=index")
+	idx, _, _ := servePage(t, h, pageAll)
 	require.GreaterOrEqual(t, len(idx.Data.Results), 3)
 	pick := []string{idx.Data.Results[0].Book.ID, idx.Data.Results[2].Book.ID}
 	detail, _ := serveReview(t, h, "ids="+strings.Join(pick, ","))
@@ -388,33 +407,33 @@ func TestMetadataCache_DetailViewKeepsScoreBreakdown(t *testing.T) {
 		require.NotEmpty(t, d.Candidate.Description)
 		ix := idx.Data.Results[[]int{0, 2}[i]]
 		require.Equal(t, ix.Book.ID, d.Book.ID)
-		require.Equal(t, ix.CandidateHash, d.CandidateHash, "the index pins the full candidate")
+		require.Equal(t, ix.CandidateHash, d.CandidateHash, "a page row pins the full candidate")
 		require.Equal(t, ix.Candidate.Score, d.Candidate.Score)
 		require.Equal(t, ix.Candidate.Title, d.Candidate.Title)
 	}
 }
 
-// TestMetadataCache_IndexViewDoesNotMutateSnapshot: the index clears fields on
+// TestMetadataCache_PageViewDoesNotMutateSnapshot: view=page clears fields on
 // a copy of the snapshot's candidate. A second request against the same
 // snapshot -- an all=true listing and an ids= detail -- still sees every
-// breakdown, and a second index request is byte-identical to the first.
-func TestMetadataCache_IndexViewDoesNotMutateSnapshot(t *testing.T) {
+// breakdown, and a second page request is byte-identical to the first.
+func TestMetadataCache_PageViewDoesNotMutateSnapshot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := reviewSeed(t, 120)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
-	first, firstBytes := serveReview(t, h, "all=true&view=index")
+	first, _, firstBytes := servePage(t, h, pageAll)
 	all, _ := serveReview(t, h, "all=true")
 	require.Len(t, all.Data.Results, len(first.Data.Results))
 	for _, r := range all.Data.Results {
-		require.NotNil(t, r.Candidate.ScoreBreakdown, "book %s lost its breakdown after an index request", r.Book.ID)
+		require.NotNil(t, r.Candidate.ScoreBreakdown, "book %s lost its breakdown after a page request", r.Book.ID)
 		require.NotEmpty(t, r.Candidate.CategoryTags, "book %s", r.Book.ID)
 	}
 	detail, _ := serveReview(t, h, "ids="+first.Data.Results[1].Book.ID)
 	require.Len(t, detail.Data.Results, 1)
 	require.NotNil(t, detail.Data.Results[0].Candidate.ScoreBreakdown)
 
-	second, secondBytes := serveReview(t, h, "all=true&view=index")
+	second, _, secondBytes := servePage(t, h, pageAll)
 	require.Equal(t, firstBytes, secondBytes)
 	require.Equal(t, first.Data.Results, second.Data.Results)
 }
@@ -512,7 +531,7 @@ func BenchmarkReviewLoad(b *testing.B) {
 	})
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	_, _ = serveReview(b, h, "limit=1") // build the snapshot once
-	for _, q := range []string{"all=true", "all=true&view=index", "limit=50&offset=1000", "ids=" + firstIDs(b, h, 50)} {
+	for _, q := range []string{"all=true", pageAll, "limit=50&offset=1000", "ids=" + firstIDs(b, h, 50)} {
 		b.Run("after_warm_"+strings.NewReplacer("=", "_", "&", "+", ",", "").Replace(q[:min(len(q), 24)]), func(b *testing.B) {
 			var bytes int
 			for i := 0; i < b.N; i++ {
@@ -521,9 +540,9 @@ func BenchmarkReviewLoad(b *testing.B) {
 			b.ReportMetric(float64(bytes), "body_bytes")
 		})
 	}
-	// The index request while books are being written under the snapshot
+	// The page request while books are being written under the snapshot
 	// (no rebuild in between): the overlay reads only the changed books.
-	b.Run("after_warm_index_50_books_changed_since_snapshot", func(b *testing.B) {
+	b.Run("after_warm_page_50_books_changed_since_snapshot", func(b *testing.B) {
 		r, _ := serveReview(b, h, "limit=50&offset=3000")
 		for _, x := range r.Data.Results {
 			_, err := store.ModifyBook(x.Book.ID, func(bk *database.Book) error { st := "no_match"; bk.MetadataReviewStatus = &st; return nil })
@@ -531,7 +550,7 @@ func BenchmarkReviewLoad(b *testing.B) {
 		}
 		var bytes int
 		for i := 0; i < b.N; i++ {
-			_, bytes = serveReview(b, h, "all=true&view=index")
+			_, _, bytes = servePage(b, h, pageAll)
 		}
 		b.ReportMetric(float64(bytes), "body_bytes")
 	})

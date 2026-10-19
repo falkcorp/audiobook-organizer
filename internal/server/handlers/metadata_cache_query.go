@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package handlers
 
@@ -35,17 +35,17 @@ import (
 // The server-side review query: GET /audiobooks/metadata/cache/review with
 // view=page.
 //
-// The Review > Metadata lane loads every reviewable row into the browser and
-// filters, counts, groups and pages them there (useMetadataLane.ts). view=page
-// does that work on the server, over the review snapshot the server already
+// The Review > Metadata lane used to load every reviewable row into the browser
+// and filter, count, group and page them there (view=index, now 410 Gone).
+// view=page does that work on the server, over the review snapshot the server already
 // holds in RAM: ONE evaluation per filter yields the ordered row list, from
 // which the page, the total, the chip facets and the ids-only "select all N"
-// list are all cut. Nothing in the web app calls it until task 02-PR18 switches
-// the lane over; view=index is unchanged.
+// list are all cut. It is the only way the lane lists reviewable rows.
 //
-// The filter chain is a port of the lane's, rule for rule, and the shared
-// fixture testdata/review_query_cases.json is what proves the two agree (02-PR18
-// runs the same file through the TypeScript chain).
+// The filter chain is a port of the lane's former browser-side chain, rule for
+// rule, and the shared fixture testdata/review_query_cases.json pins its
+// answers (the lane's TypeScript tests read the same file to check the
+// requests it sends).
 //
 // Cost: the evaluation is a single sequential pass over the reviewable rows
 // plus one pass for the multi-book key. BenchmarkReviewQuery_40k (40,000
@@ -1355,9 +1355,9 @@ func reviewFacets(l *reviewResultList) gin.H {
 }
 
 // reviewPageResponse cuts the page [offset, offset+limit) from the list.
-// Rows are index rows (candidate description, score_breakdown and
-// category_tags dropped, as view=index serves them); the page fetches full
-// rows for what it shows with ids=, as it does today.
+// Rows are lean (candidate description, score_breakdown and category_tags
+// dropped, see pageResult); the page fetches full rows for what it shows with
+// ids=.
 func reviewPageResponse(l *reviewResultList, q *ReviewQuery, series metabatch.SeriesBatchGetter) gin.H {
 	start := min(q.Offset, len(l.refs))
 	end := min(start+q.Limit, len(l.refs))
@@ -1366,7 +1366,7 @@ func reviewPageResponse(l *reviewResultList, q *ReviewQuery, series metabatch.Se
 	for _, ref := range l.refs[start:end] {
 		if ref >= 0 {
 			r := &l.base.rows.reviewable[ref]
-			results = append(results, r.result(r.row.book, cutoff, true))
+			results = append(results, r.pageResult(r.row.book, cutoff))
 			continue
 		}
 		u := &l.base.rows.unreviewable[-ref-1]
@@ -1418,8 +1418,7 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 		series, _ := database.AsCapability[metabatch.SeriesBatchGetter](h.store)
 		resp := reviewPageResponse(l, q, series)
 		// The rail reads its counts from facets in page mode, so the
-		// identification counts ride there too (the index-mode summary
-		// carries the same block).
+		// identification counts ride there too.
 		resp["facets"].(gin.H)["ident_counts"] = identCountsSummary(h.store)
 		httputil.RespondWithOK(c, resp)
 	}

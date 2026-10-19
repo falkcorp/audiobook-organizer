@@ -1,7 +1,7 @@
 // file: internal/server/owner_rejected_apply_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: d5304ea1-88e0-43c3-9c2b-1b81c01fe9eb
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package server
 
@@ -252,7 +252,7 @@ func TestRejectCandidates_ReordersCachedRow(t *testing.T) {
 }
 
 // The review lane marks an owner-rejected candidate, so the owner sees why
-// its apply buttons refuse it.
+// its apply buttons refuse it. The mark rides on the lane's ids= detail rows.
 func TestReviewLane_MarksOwnerRejectedCandidate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
@@ -272,7 +272,9 @@ func TestReviewLane_MarksOwnerRejectedCandidate(t *testing.T) {
 	h := handlers.NewMetadataCacheHandler(store, metafetch.NewService(store), nil, nil, nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/x?all=true&view=index", nil)
+	// The lane's detail fetch for the rows it shows (ids=), which is where a
+	// row's owner_rejected mark comes from now that view=page serves lean rows.
+	c.Request = httptest.NewRequest(http.MethodGet, "/x?ids="+book.ID, nil)
 	h.GetCacheReviewResults(c)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var body struct {

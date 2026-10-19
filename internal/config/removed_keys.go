@@ -1,7 +1,7 @@
 // file: internal/config/removed_keys.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package config
 
@@ -38,6 +38,12 @@ const downloadClientRemovedMessage = "the qBittorrent and SABnzbd download-clien
 // were loaded, saved and shown on the Settings page but never read by any code.
 const unreadSettingsRemovedMessage = "this setting was removed: it was stored and shown on the Settings page " +
 	"but nothing ever read it, so changing it had no effect"
+
+// reviewServerQueryRemovedMessage explains the removal of the flag that chose
+// between the Review > Metadata lane's two ways of loading its queue.
+const reviewServerQueryRemovedMessage = "the review_metadata_server_query setting was removed: the Review > " +
+	"Metadata lane always asks the server for one filtered page (view=page) and the full-index mode it " +
+	"switched away from is gone, so there is nothing left to switch"
 
 // removedConfigKey is a setting that used to exist and no longer does.
 type removedConfigKey struct {
@@ -99,6 +105,8 @@ var removedConfigKeys = []removedConfigKey{
 	{key: "auth_rate_limit_per_minute", message: unreadSettingsRemovedMessage + "; sign-in attempts are limited by fixed per-IP and per-account throttles, not a setting"},
 	{key: "api_keys", message: unreadSettingsRemovedMessage},
 	{key: "language", message: unreadSettingsRemovedMessage, fileOnly: true},
+	// Removed 2026-10-19 (02-PR19). It was ON in production from 2026-10-18.
+	{key: "review_metadata_server_query", message: reviewServerQueryRemovedMessage},
 }
 
 // removedKeyInUpdate returns the rejection text for the first removed key
