@@ -1,11 +1,12 @@
 // file: internal/audiobooks/helpers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d2b6f1c-4a3e-4d5f-8b2a-1c6e9f0a7d21
-// last-edited: 2026-09-02
+// last-edited: 2026-10-18
 
 package audiobooks
 
 import (
+	"encoding/json"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,5 +58,26 @@ func TestIsProtectedPathCachesImportPaths(t *testing.T) {
 	isProtectedPath(store, "/library/imports/book3.m4b")
 	if got := store.calls.Load(); got != 2 {
 		t.Fatalf("expected GetAllImportPaths to be re-fetched after TTL expiry, got %d", got)
+	}
+}
+
+func TestDecodeRawValue(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want any
+	}{
+		{"nil raw message", nil, nil},
+		{"string value", json.RawMessage(`"test"`), "test"},
+		{"number value", json.RawMessage(`42`), float64(42)},
+		{"boolean value", json.RawMessage(`true`), true},
+		{"invalid json returns the raw text as a string", json.RawMessage(`{invalid`), "{invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := decodeRawValue(tt.raw); got != tt.want {
+				t.Errorf("decodeRawValue(%s) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
 	}
 }

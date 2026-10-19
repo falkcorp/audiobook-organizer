@@ -1684,8 +1684,8 @@ func (s *Server) setupRoutes() {
 		burst := max(rpm/5, 10)
 		limiter := servermiddleware.NewIPRateLimiter(rpm, burst)
 		// SV-04: idle-entry eviction runs on a background ticker instead of
-		// the request path. bgCtx is cancelled by Stop(), which ends the
-		// sweeper goroutine at shutdown.
+		// the request path. bgCtx is cancelled by the s.bgCancel() call in
+		// Start's shutdown sequence, which ends the sweeper goroutine.
 		limiter.Start(s.bgCtx)
 		apiRateLimiter = limiter.Middleware()
 	}

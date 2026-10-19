@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package metafetch
 
@@ -320,6 +320,11 @@ func TestStripChapterFromTitle(t *testing.T) {
 		{"Title #5", "Title"},
 		{"Track 01 - Something", "Something"},
 		{"Disc 1 - Something", "Something"},
+		{"Sample Title Vol. 3", "Sample Title"},
+		{"Sample Title (Chapter 3)", "Sample Title"},
+		{"Sample Title, Chapter 7", "Sample Title"},
+		{"[Made Up Saga 1] Sample Title", "Sample Title"},
+		{"Made Up Saga Book 1", "Made Up Saga"},
 		// Edge: stripping everything returns original
 		{"01", "01"},
 	}
@@ -344,6 +349,9 @@ func TestStripSubtitle(t *testing.T) {
 		{"Title — A Subtitle", "Title"},
 		{"No Subtitle Here", "No Subtitle Here"},
 		{"", ""},
+		{"Colon:NoSpace", "Colon:NoSpace"},
+		{"Alpha: Beta - Gamma", "Alpha"},      // colon wins over dash
+		{"Multi - Word Title - Sub", "Multi"}, // first dash wins
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
