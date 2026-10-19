@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.30.1
+# version: 3.31.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-18
 
@@ -469,6 +469,12 @@ jobs:
       # Same make target `make ci` runs.
       - name: Generated run-status table is fresh
         run: make ops-check
+
+      # web/src/types/generated is generated from Go structs by tygo (tygo.yaml).
+      # A renamed json tag without regenerating leaves the SPA compiling against
+      # the old shape. Same make target `make ci` runs.
+      - name: Generated TypeScript types are fresh
+        run: make types-check
 
       # The auto-revert selector decides which commits get reverted off main, so
       # it gets tested somewhere that actually runs. Stdlib unittest, no pip step

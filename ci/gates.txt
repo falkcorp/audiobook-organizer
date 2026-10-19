@@ -1,7 +1,7 @@
 # file: ci/gates.txt
-# version: 1.2.0
+# version: 1.3.0
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
-# last-edited: 2026-10-12
+# last-edited: 2026-10-18
 #
 # The one list of CI gates (07-G4, owner decision D47). Read by scripts/ci/run_gates.py.
 # Columns are TAB-separated:
@@ -29,3 +29,4 @@ store-references	go test ./internal/database/ -run TestStoreReferenceCount -coun
 layering	go test ./internal/arch/ -count=1	-	check	-	go-suite
 appconfig-reads	go test ./internal/config/ -run TestAppConfigDirectReadRatchet -count=1	internal/config/appconfig_reads_test.go	ratchet-const	-	go-suite
 slog-guard	go test ./internal/logger/ -run TestGuard_NoDirectSlogCalls -count=1	-	check	-	go-suite
+generated-types	bash scripts/ci/check_generated_types.sh	-	check	-	own-job

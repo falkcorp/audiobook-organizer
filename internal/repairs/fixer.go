@@ -1,7 +1,7 @@
 // file: internal/repairs/fixer.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 
 // Package repairs is the shared framework behind the Repairs lane of /review:
 // one contract every library fixer implements, and one engine that plans,
@@ -61,107 +61,6 @@ var ErrRetryLater = errors.New("repairs: row cannot be checked right now; retry 
 // part of a row before finding a change. It is checked before
 // ErrChangedSincePlan, so the row reports partially_applied, not unchanged.
 var ErrPartiallyApplied = errors.New("repairs: row partially applied")
-
-// Row is one unit a fixer proposes to change. Rows are what the plan op
-// stores, the rows endpoint pages and the apply op selects by RowID.
-type Row struct {
-	// RowID is stable across plans of the same state (a version group id, a
-	// book id), so a selection made on one plan names the same thing in a
-	// re-plan.
-	RowID string `json:"row_id"`
-	// BookIDs are every book the row reads or may write. The framework's
-	// guards run over all of them, so a fixer lists the whole unit (every
-	// member of a group, not just the ones it changes).
-	BookIDs []string `json:"book_ids"`
-	Title   string   `json:"title"`
-	Author  string   `json:"author,omitempty"`
-	// Current / Proposed are small display maps: the values the row has now
-	// and the values apply would leave. Keys are fixer-defined.
-	Current  map[string]string `json:"current,omitempty"`
-	Proposed map[string]string `json:"proposed,omitempty"`
-	Reason   string            `json:"reason"`
-	Risk     string            `json:"risk"`
-	// Class is an optional fixer-defined kind of row ("moved", "copy", ...).
-	// The plan tallies rows by it (PlanResult.ByClass) and the rows endpoint
-	// filters on it, so every per-class count in the lane lists its rows.
-	Class string `json:"class,omitempty"`
-	// Members optionally describes every book of the row (its role in the
-	// row and its file counts), so the lane can list and link each of them
-	// rather than show a bare "N books" count.
-	Members []RowMember `json:"members,omitempty"`
-	// Evidence optionally lists what the row's decision was made from, in
-	// words ("import path equals parent row path", "hash equal").
-	Evidence []string `json:"evidence,omitempty"`
-	// Fingerprint hashes every input the row's decision was made from. Apply
-	// re-plans the row and refuses it when the fresh fingerprint differs.
-	Fingerprint string `json:"fingerprint"`
-	// Skipped is set on a row apply will never write: a framework guard
-	// (SkipITunes, SkipOwnerManual) or the fixer's own hold/refusal kind.
-	// SkipReason says why in words.
-	Skipped    string `json:"skipped,omitempty"`
-	SkipReason string `json:"skip_reason,omitempty"`
-	// RetryLater marks a skip (Skipped set) that is transient: a condition
-	// outside the row that clears on its own, such as an index not built yet,
-	// not anything about the row itself. A re-plan returning such a row is
-	// reported retry_later (OutcomeRetryLater, not settled), not
-	// changed_since_plan, so the same plan can be applied again once the
-	// condition clears -- but only when its RetryFingerprint equals the
-	// plan's. The re-plan-time counterpart of ErrRetryLater.
-	RetryLater bool `json:"retry_later,omitempty"`
-	// RetryFingerprint, on a RetryLater row, is the fingerprint the row would
-	// have once the transient condition clears with nothing else changed:
-	// the fixer computes it from the same inputs as Fingerprint, leaving out
-	// only the transient hold. The engine reports retry_later only when it
-	// equals the planned row's Fingerprint; otherwise some other input
-	// changed too and the row is changed_since_plan. Empty (a fixer that sets
-	// RetryLater without it) never matches, so such a row is
-	// changed_since_plan: fail closed.
-	RetryFingerprint string `json:"retry_fingerprint,omitempty"`
-	// OwnerApplicable marks a skipped row the fixer decided, at plan time,
-	// the owner may apply himself by clicking Apply on it (owner.go). It
-	// stays skipped: no bulk selection, scheduled run or plain apply writes
-	// it; only an apply holding a consumed owner grant naming it does.
-	// OwnerApplyReason says why the row qualifies and what that apply writes.
-	OwnerApplicable  bool   `json:"owner_applicable,omitempty"`
-	OwnerApplyReason string `json:"owner_apply_reason,omitempty"`
-	// OwnerWrites are the books an owner apply of the row writes (the rest
-	// of BookIDs are only read). The engine journals the owner's audit note
-	// on these, so a book the row only reads (a parent) gets none.
-	OwnerWrites []string `json:"owner_writes,omitempty"`
-	// OwnerITunesDatabaseOnly are books of an owner row whose files sit
-	// under books/itunes/** and whose DATABASE rows the owner's apply of the
-	// row writes (never a file, never an iTunes id): the fragment
-	// consolidation's iTunes twins, retired into the parent beside their
-	// library copy (docs/plans/2026-10-07-stale-itunes-path.md D7). The
-	// framework guard lifts its books/itunes path check for exactly these
-	// books, and only while the row is owner-applicable (plan) or applied
-	// under the owner's grant for it (apply); every other check (Doctor Who
-	// / Big Finish / Torchwood by path, title, credits, transcription, tags;
-	// an unreadable path) still runs for them. An applicable row, or a plain
-	// apply, gets no exception from it. Every id must also be in BookIDs.
-	OwnerITunesDatabaseOnly []string `json:"owner_itunes_database_only,omitempty"`
-	// State is fixer-private state stored WITH the plan: what Replan needs
-	// from plan time that the row as it is now cannot tell it (the ids of the
-	// rows a group was planned over, the values a compare-and-set must find).
-	// Replan receives it back on the planned row. The framework never reads
-	// it.
-	State json.RawMessage `json:"state,omitempty"`
-	// Detail is fixer-private state carried from Replan to Apply inside one
-	// apply run. It is never persisted: the stored plan holds only the
-	// fields above, and Apply always receives a row fresh from Replan.
-	Detail any `json:"-"`
-}
-
-// RowMember is one book of a Row, for display.
-type RowMember struct {
-	BookID string `json:"book_id"`
-	Title  string `json:"title,omitempty"`
-	// Role is fixer-defined ("parent", "fragment", "survivor").
-	Role string `json:"role,omitempty"`
-	// Files / MissingFiles count the book's book_file rows at plan time.
-	Files        int `json:"files"`
-	MissingFiles int `json:"missing_files,omitempty"`
-}
 
 // Applicable reports whether apply may write this row.
 func (r Row) Applicable() bool { return r.Skipped == "" }
