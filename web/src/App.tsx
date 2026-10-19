@@ -1,7 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.30.0
+// version: 1.31.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate } from 'react-router-dom';
@@ -12,6 +12,8 @@ import { KeyboardShortcutsDialog } from './components/KeyboardShortcutsDialog';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
+import { NotFound } from './pages/NotFound';
+import { ABS_REDIRECTS } from './utils/absRedirects';
 import { eventSourceManager } from './services/eventSourceManager';
 import * as api from './services/api';
 import { useAuth } from './contexts/AuthContext';
@@ -425,6 +427,10 @@ function App() {
                   </ErrorBoundary>
                 }
               />
+              {ABS_REDIRECTS.map(({ from, to }) => (
+                <Route key={from} path={from} element={<Navigate to={to} replace />} />
+              ))}
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
         </MainLayout>
