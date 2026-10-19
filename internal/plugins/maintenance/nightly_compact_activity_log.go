@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
 // last-edited: 2026-10-19
 
@@ -94,7 +94,7 @@ func (p *Plugin) runNightlyCompactActivityLog(ctx context.Context, _ json.RawMes
 // normalizes to the first instant that does (e.g. 01:00), which is still the
 // start of that local day.
 //
-// UTC DIGEST DAYS. Both activity backends bucket digests by UTC day. A local
+// UTC DIGEST DAYS. The Pebble activity store buckets digests by UTC day. A local
 // midnight is mid-UTC-day in most zones, so the boundary UTC day is compacted
 // in two parts on consecutive nights; CompactByDay clamps each pass at the
 // cutoff and merges the second pass into the existing digest. Do not "fix"

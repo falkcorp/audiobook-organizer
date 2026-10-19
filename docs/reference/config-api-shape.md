@@ -1,5 +1,5 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -58,7 +58,7 @@ This field cannot be changed at runtime. The request will return `400` if it app
 
 (`enable_sqlite` was removed with the inert `--enable-sqlite3-i-know-the-risks` flag. A payload that still carries it, with any value, is also rejected with `400`: the error says the setting was removed and SQLite is no longer selectable. It is never silently dropped.)
 
-(`activity_db_path` and `activity_db_move_on_change` were removed with the SQLite activity backend on 2026-10-19. A payload that still carries either is rejected with `400` and a message saying the setting was removed; a stored config or legacy settings row that still holds one loads with a startup warning and the value is ignored. The read-only `activity_db_resolved_path` is no longer in the `GET /config` response.)
+(`activity_db_path` and `activity_db_move_on_change` were removed with the SQLite activity backend on 2026-10-19. A payload that still carries either is rejected with `400` and a message saying the setting was removed; a legacy per-key settings row, a `config.yaml` entry or an environment variable that still holds one loads with a startup warning and the value is ignored, and the same keys inside a stored config blob are dropped silently, with no warning. The read-only `activity_db_resolved_path` is no longer in the `GET /config` response.)
 
 ### Protected settings (not changeable with an API key)
 

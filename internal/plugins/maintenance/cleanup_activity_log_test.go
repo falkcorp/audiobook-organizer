@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_activity_log_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5c8b1f37-92ad-4e60-b3d1-8a4f26c0e7b9
 // last-edited: 2026-10-19
 
@@ -15,7 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// activityCleanupDeps overrides fakeDeps' CompactActivityLog so the cleanup job
+// activityCleanupDeps overrides fakeDeps' MaintainActivityLog so the cleanup job
 // sees a run that removed orphaned activity index entries.
 type activityCleanupDeps struct {
 	fakeDeps
@@ -70,7 +70,7 @@ func TestCleanupActivityLog_SkipsCompactionWhenNightlyEnabled(t *testing.T) {
 }
 
 // TestCleanupActivityLog_ReportsIndexOrphanCount pins the reporting half of the
-// index-repair wiring. The repair pass runs inside CompactActivityLog and its
+// index-repair wiring. The repair pass runs inside MaintainActivityLog and its
 // count is a separate return value; dropping it on the floor here would leave a
 // nightly job that silently deletes millions of index keys and tells the
 // operator nothing, which is indistinguishable from a job that did nothing.

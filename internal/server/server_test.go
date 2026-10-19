@@ -1,5 +1,5 @@
 // file: internal/server/server_test.go
-// version: 2.15.3
+// version: 2.15.4
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 // last-edited: 2026-10-19
 
@@ -176,9 +176,9 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 		if server.fileIOPool != nil {
 			server.fileIOPool.Stop()
 		}
-		// Close the SQLite activity store (stopping its checkpointer) while
-		// tempDir still exists: removing the directory under a live
-		// checkpointer is what made it log a WARN into later tests' captures.
+		// Close the activity store (releaseForTest) while tempDir still
+		// exists, so nothing is left holding files under a directory the
+		// cleanup is about to remove.
 		server.releaseForTest()
 		if store != nil {
 			database.SetGlobalStore(nil)

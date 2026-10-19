@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
 // last-edited: 2026-10-19
 
@@ -115,8 +115,11 @@ var removedConfigKeys = []removedConfigKey{
 	{key: "review_metadata_server_query", message: reviewServerQueryRemovedMessage},
 	// Removed 2026-10-19 (01-P75) with the SQLite activity backend. The
 	// environment names (ACTIVITY_DB_PATH, ACTIVITY_DB_MOVE_ON_CHANGE) are no
-	// longer bound, so only a config file, a stored blob or an update payload
-	// can carry them. activity_backend itself is still a setting: it is
+	// longer explicitly bound, but cmd's initConfig calls viper.AutomaticEnv(),
+	// so a stale ACTIVITY_DB_PATH in the environment still reaches viper and
+	// warnRemovedViperKeys warns about it. A config file, a legacy per-key
+	// settings row and an update payload can carry them too; a stored blob
+	// drops them silently. activity_backend itself is still a setting: it is
 	// validated, and "sqlite" stops startup (config.ValidateActivityBackend).
 	{key: "activity_db_path", message: activityDBRemovedMessage},
 	{key: "activity_db_move_on_change", message: activityDBRemovedMessage},

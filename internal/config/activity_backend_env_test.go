@@ -1,5 +1,5 @@
-// file: internal/config/activity_db_path_env_test.go
-// version: 2.0.0
+// file: internal/config/activity_backend_env_test.go
+// version: 2.0.1
 // guid: 3f1c8a52-9d47-4e6b-8c03-2a7e5b9d1f64
 // last-edited: 2026-10-19
 

@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.27.1
+// version: 1.27.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-19
 
@@ -1288,7 +1288,8 @@ func TestConfig_LoadsWithRemovedReviewFlag(t *testing.T) {
 // A stored config written while the SQLite activity backend existed carries
 // activity_db_path and activity_db_move_on_change, and may still say
 // activity_backend "sqlite". It must load without error and keep every other
-// setting: the two location keys are ignored with the removed-setting warning,
+// setting: the two location keys inside the blob are dropped silently (no warning:
+// only legacy per-key rows and config.yaml warn, see the "legacy rows" subtest),
 // and the stored backend is replaced by the registered "pebble" default (the
 // environment, not a blob, is what may name the backend), so Validate passes.
 // Only a config file or the environment saying "sqlite" stops startup.
