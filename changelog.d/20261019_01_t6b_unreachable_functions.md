@@ -10,6 +10,11 @@ that covered only them: `activity.WithTags`, `cache.All`,
 searchcache tests, which are its only caller, so the job-memory test keeps its
 coverage. `merge.FollowMergeWithStore` was already gone (01-P73).
 
+With its only readers deleted, the `realtime.GlobalHub` variable, its mutex and
+`realtime.SetGlobalHub` were a write-only global, so they and their two call
+sites (server start-up and the integration-test setup) are removed too. The
+server still hands its own hub to every consumer through `Server.hub`.
+
 `metrics.IncFilenameParse` was the only writer of the
 `audiobook_organizer_filename_parse_total` counter, so the counter, its
 `ParseShape*` and `ParseOutcome*` label constants, its row in the `/metrics`
