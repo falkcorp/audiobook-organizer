@@ -1,7 +1,7 @@
 <!-- file: docs/developer-guide.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7f8a9b0c-1d2e-3f4a-5b6c-7d8e9f0a1b2c -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-18 -->
 
 # Developer Guide
 
@@ -171,6 +171,31 @@ All endpoints live under `/api/v1/`. The server uses Gin with optional authentic
 |--------|------|-------------|
 | `POST` | `/api/v1/itunes/validate` | Validate iTunes library XML |
 | `POST` | `/api/v1/itunes/import` | Import from iTunes library |
+
+### Generated TypeScript types
+
+The shapes the server sends the SPA are generated from the Go structs with
+[tygo](https://github.com/gzuidhof/tygo) (a `tool` dependency in `go.mod`; no install step).
+`tygo.yaml` lists one entry per Go package and the files of it to generate from; the output is
+committed under `web/src/types/generated/` and must never be hand-edited.
+
+- Regenerate: `make generate-types`. CI runs `make types-check`
+  (`scripts/ci/check_generated_types.sh`, gate `generated-types` in `ci/gates.txt`) and fails when
+  the committed files are stale.
+- Currently generated: the row/plan/apply shapes of `internal/repairs` (`wire.go`) and the
+  `BookCore` / `BookFileCore` projections of `internal/database` (`bookcore.go`, `bookfilecore.go`,
+  `scan_state.go`, `wire_types.go`). `api.ts` re-exports the repairs types under the names the
+  Repairs lane already uses.
+- tygo emits every exported type of an included file, so list only files that hold wire structs. A
+  struct that is not on the wire (a `Deps` struct, an interface) goes in another file; a type that
+  carries a secret stays out of the wire file.
+- Go marshals a nil map or slice without `omitempty` as `null`, which tygo types as non-null. Where
+  that can happen, say so with a `tstype` tag (`tstype:"{ [key: string]: number } | null"`).
+- Contract goldens: `internal/wirecontract` marshals a fully populated synthetic sample of each
+  generated type to `internal/wirecontract/testdata/*.json`;
+  `web/src/types/generated/contract.test.ts` assigns the same files to the generated types and
+  checks the key sets agree. After an intended change, run
+  `UPDATE_WIRE_GOLDEN=1 go test ./internal/wirecontract/`, then `make generate-types`.
 
 An OpenAPI specification is available at `docs/openapi.yaml`.
 

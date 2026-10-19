@@ -171,14 +171,6 @@ type AuthorAlias struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// BookAuthor represents the many-to-many relationship between books and authors
-type BookAuthor struct {
-	BookID   string `json:"book_id"`
-	AuthorID int    `json:"author_id"`
-	Role     string `json:"role"`     // author, co-author, editor
-	Position int    `json:"position"` // 0 = primary
-}
-
 // Narrator represents an audiobook narrator
 type Narrator struct {
 	ID        int       `json:"id"`
@@ -469,22 +461,6 @@ type BookSummary struct {
 	IsPrimaryVersion     *bool      `json:"is_primary_version,omitempty"`
 	VersionGroupID       *string    `json:"version_group_id,omitempty"`
 	MetadataReviewStatus *string    `json:"metadata_review_status,omitempty"`
-}
-
-// MetadataProvenanceEntry represents the source breakdown for a metadata field.
-type MetadataProvenanceEntry struct {
-	FileValue      any  `json:"file_value,omitempty"`
-	FetchedValue   any  `json:"fetched_value,omitempty"`
-	StoredValue    any  `json:"stored_value,omitempty"`
-	OverrideValue  any  `json:"override_value,omitempty"`
-	OverrideLocked bool `json:"override_locked"`
-	// LockSource names a repair's lock ("repair:<op id>"); empty for a
-	// person's lock (MetadataFieldState.LockSource).
-	LockSource      string     `json:"lock_source,omitempty"`
-	EffectiveValue  any        `json:"effective_value,omitempty"`
-	EffectiveSource string     `json:"effective_source,omitempty"`
-	ComparisonValue any        `json:"comparison_value,omitempty"`
-	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
 }
 
 // Work represents a logical title-level grouping that may span multiple editions,

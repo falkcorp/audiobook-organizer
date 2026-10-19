@@ -19,4 +19,4 @@ packages:
     include_files: ["wire.go"]
   - path: "github.com/falkcorp/audiobook-organizer/internal/database"
     output_path: "web/src/types/generated/database.ts"
-    include_files: ["bookcore.go", "bookfilecore.go"]
+    include_files: ["bookcore.go", "bookfilecore.go", "scan_state.go", "wire_types.go"]

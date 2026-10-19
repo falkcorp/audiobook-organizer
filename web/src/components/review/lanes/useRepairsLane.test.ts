@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -21,6 +21,7 @@ import type {
   RepairRowsFilter,
   RepairRowsPage,
 } from '../../../services/api';
+import { repairsApplyResult, repairsRowsPage } from '../../../test/repairsFixtures';
 import {
   REPAIRS_FIXER_STORAGE_KEY,
   SETTLED_OUTCOMES,
@@ -73,7 +74,7 @@ function mockRows(plans: Record<string, { applicable: RepairRow[]; skipped: Repa
       const plan = plans[planOpId];
       if (!plan) throw Object.assign(new Error('repair plan not found'), { status: 404 });
       const all = q.filter === 'applicable' ? plan.applicable : plan.skipped;
-      const page: RepairRowsPage = {
+      const page: RepairRowsPage = repairsRowsPage({
         plan_op_id: planOpId,
         fixer_id: fixerId,
         planned_at: '2026-09-27T10:01:00Z',
@@ -84,7 +85,7 @@ function mockRows(plans: Record<string, { applicable: RepairRow[]; skipped: Repa
         applicable: plan.applicable.length,
         skipped_by_kind: { skipped_itunes: plan.skipped.length },
         rows: all.slice(q.offset, q.offset + q.limit),
-      };
+      });
       return page;
     }
   );
@@ -95,7 +96,7 @@ function op(id: string, status: OperationV2['status'], error: string | null = nu
 }
 
 function applyResult(extra: Partial<RepairApplyResult> = {}): RepairApplyResult {
-  return {
+  return repairsApplyResult({
     fixer_id: FIXER.id,
     plan_op_id: 'plan-1',
     dry_run: false,
@@ -108,7 +109,7 @@ function applyResult(extra: Partial<RepairApplyResult> = {}): RepairApplyResult 
     standdown_held: false,
     rows: [{ row_id: 'g1', outcome: 'applied' }],
     ...extra,
-  };
+  });
 }
 
 let toast: Mock<(message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void>;
@@ -572,7 +573,7 @@ describe('useRepairsLane: selection and apply', () => {
 
 describe('useRepairsLane: retry_later', () => {
   it('names retry-later rows in the summary and keeps them selectable', () => {
-    const r: RepairApplyResult = {
+    const r: RepairApplyResult = repairsApplyResult({
       fixer_id: 'maintenance.version-twin-metadata',
       plan_op_id: 'op-plan',
       dry_run: false,
@@ -585,7 +586,7 @@ describe('useRepairsLane: retry_later', () => {
       retry_later: 1,
       standdown_held: true,
       rows: [],
-    };
+    });
     expect(summarizeApply(r)).toContain('retry later 1');
     expect(SETTLED_OUTCOMES.has('retry_later')).toBe(false);
   });
@@ -595,7 +596,7 @@ describe('useRepairsLane: canceled_skipped', () => {
   // A 10-row apply canceled after row 3: the server reports the other seven
   // canceled_skipped and leaves `aborted` unset (that field is the lost
   // stand-down lease, not a cancel).
-  const canceled: RepairApplyResult = {
+  const canceled: RepairApplyResult = repairsApplyResult({
     fixer_id: 'maintenance.fragment-consolidation',
     plan_op_id: 'op-plan',
     dry_run: false,
@@ -607,7 +608,7 @@ describe('useRepairsLane: canceled_skipped', () => {
     failed: 0,
     standdown_held: true,
     rows: [],
-  };
+  });
 
   it('counts canceled rows in the summary and reports a warning, not success', () => {
     expect(summarizeApply(canceled)).toContain('canceled before finishing 7');

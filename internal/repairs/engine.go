@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.21.2
+// version: 1.21.3
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-18
 
@@ -298,6 +298,35 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 func settledForResume(outcome string) bool {
 	return outcome != "" && outcome != OutcomeAborted && outcome != OutcomeCanceledSkip &&
 		outcome != OutcomeWouldApply && outcome != OutcomeRetryLater
+}
+
+// ApplyParams are the params of repairs.apply. Only an explicit
+// dry_run:false writes (owner rule 2026-09-25: an omitted mode is a preview).
+type ApplyParams struct {
+	FixerID  string   `json:"fixer_id"`
+	PlanOpID string   `json:"plan_op_id"`
+	RowIDs   []string `json:"row_ids"`
+	DryRun   *bool    `json:"dry_run,omitempty"`
+	DryRunC  *bool    `json:"dryRun,omitempty"`
+	// Resume is the checkpoint of an interrupted run (set by the op through
+	// the registry's checkpoint merge, never by a caller): the rows it had
+	// already settled. A resumed run keeps those results and does not
+	// re-apply them.
+	Resume *ApplyCheckpoint `json:"resume,omitempty"`
+	// OwnerApplyRowIDs are owner rows (Row.OwnerApplicable) the owner chose
+	// to apply, and OwnerGrant the one-shot grant the Repairs handler minted
+	// for them (owner.go). Neither is trusted on its own: the op takes the
+	// grant from the process's grant store and refuses every owner row
+	// without one (ResolveOwnerApproval).
+	OwnerApplyRowIDs []string `json:"owner_apply_row_ids,omitempty"`
+	OwnerGrant       string   `json:"owner_grant,omitempty"`
+}
+
+// ApplyCheckpoint is what repairs.apply checkpoints while it runs: every row
+// settled so far, with its outcome. Merged back into the op's params as
+// "resume" when the server restarts mid-apply (ResumeRestart).
+type ApplyCheckpoint struct {
+	Settled []RowResult `json:"settled"`
 }
 
 // ApplyDeps is what RunApply needs besides the fixer and the plan.

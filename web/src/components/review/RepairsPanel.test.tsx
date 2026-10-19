@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -15,6 +15,7 @@ import type { Book, OperationV2, RepairFixer, RepairRow, RepairRowsFilter } from
 import { RepairsPanel, SKIP_KIND_LABEL } from './RepairsPanel';
 import { useRepairsLane } from './lanes/useRepairsLane';
 import type { SpineViewMode } from './spine/viewMode';
+import { repairsApplyResult, repairsRowsPage } from '../../test/repairsFixtures';
 
 vi.mock('../../services/api');
 
@@ -97,7 +98,7 @@ beforeEach(() => {
           : q.filter === 'skipped'
             ? SKIPPED
             : SKIPPED.filter((r) => `skipped:${r.skipped}` === q.filter);
-      return {
+      return repairsRowsPage({
         plan_op_id: planOpId,
         fixer_id: fixerId,
         planned_at: '2026-09-27T10:01:00Z',
@@ -108,7 +109,7 @@ beforeEach(() => {
         applicable: APPLICABLE.length,
         skipped_by_kind: skippedByKind(),
         rows: all.slice(q.offset, q.offset + q.limit),
-      };
+      });
     }
   );
   vi.mocked(api.startRepairApply).mockResolvedValue({
@@ -122,7 +123,7 @@ beforeEach(() => {
     status: 'completed',
     error_message: null,
   } as OperationV2);
-  vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+  vi.mocked(api.getRepairApplyResult).mockResolvedValue(repairsApplyResult({
     fixer_id: 'vg-primary',
     plan_op_id: 'plan-1',
     dry_run: false,
@@ -134,7 +135,7 @@ beforeEach(() => {
     failed: 0,
     standdown_held: true,
     rows: [{ row_id: 'g2', outcome: 'applied' }],
-  });
+  }));
 });
 
 afterEach(() => {
@@ -180,7 +181,7 @@ describe('RepairsPanel', () => {
   });
 
   it('shows a retry_later row as Retry later and the banner as a warning with a hint', async () => {
-    vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(repairsApplyResult({
       fixer_id: 'vg-primary',
       plan_op_id: 'plan-1',
       dry_run: false,
@@ -193,7 +194,7 @@ describe('RepairsPanel', () => {
       retry_later: 1,
       standdown_held: true,
       rows: [{ row_id: 'g2', outcome: 'retry_later', error: 'memdb is not serving reads' }],
-    });
+    }));
     const user = userEvent.setup();
     renderPanel();
     await screen.findByTestId('repairs-row-g2');
@@ -224,7 +225,7 @@ describe('RepairsPanel', () => {
         },
       },
     ]);
-    vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(repairsApplyResult({
       fixer_id: 'vg-primary',
       plan_op_id: 'plan-1',
       dry_run: false,
@@ -239,7 +240,7 @@ describe('RepairsPanel', () => {
         { row_id: 'g1', outcome: 'applied' },
         { row_id: 'g2', outcome: 'canceled_skipped' },
       ],
-    });
+    }));
     const user = userEvent.setup();
     renderPanel();
     const fixer = await screen.findByTestId('repairs-fixer-vg-primary');
@@ -333,7 +334,7 @@ describe('RepairsPanel', () => {
   });
 
   it('says so when a trial found nothing to repair', async () => {
-    vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => ({
+    vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => (repairsRowsPage({
       plan_op_id: planOpId,
       fixer_id: fixerId,
       planned_at: '2026-09-27T10:01:00Z',
@@ -344,7 +345,7 @@ describe('RepairsPanel', () => {
       applicable: 0,
       skipped_by_kind: {},
       rows: [],
-    }));
+    })));
     renderPanel();
     expect(await screen.findByTestId('repairs-rows-empty')).toHaveTextContent(/nothing to repair/);
     expect(screen.getByTestId('repairs-apply-all')).toBeDisabled();
@@ -394,7 +395,7 @@ describe('RepairsPanel — classified rows', () => {
       ) => {
         const all = q.filter === 'applicable' ? [MOVED, NOPARENT] : [];
         const rows = q.rowClass ? all.filter((r) => r.class === q.rowClass) : all;
-        return {
+        return repairsRowsPage({
           plan_op_id: planOpId,
           fixer_id: fixerId,
           planned_at: '2026-09-28T10:01:00Z',
@@ -408,7 +409,7 @@ describe('RepairsPanel — classified rows', () => {
           by_class: { moved: 1, 'no-parent': 1 },
           by_class_in_filter: (q.filter === 'applicable' ? { moved: 1, 'no-parent': 1 } : {}) as Record<string, number>,
           rows,
-        };
+        });
       }
     );
   });
@@ -492,7 +493,7 @@ describe('RepairsPanel — skip kinds under a selected class', () => {
         for (const r of skipped.filter((r) => r.class === q.rowClass)) {
           kindsInClass[r.skipped!] = (kindsInClass[r.skipped!] ?? 0) + 1;
         }
-        return {
+        return repairsRowsPage({
           plan_op_id: planOpId,
           fixer_id: fixerId,
           planned_at: '2026-09-29T10:01:00Z',
@@ -512,7 +513,7 @@ describe('RepairsPanel — skip kinds under a selected class', () => {
               }
             : {}),
           rows,
-        };
+        });
       }
     );
   });
@@ -585,7 +586,7 @@ describe('RepairsPanel — apply all under a selected class', () => {
         const rows = q.rowClass ? inFilter.filter((r) => r.class === q.rowClass) : inFilter;
         const byClass: Record<string, number> = {};
         for (const r of inFilter) byClass[r.class!] = (byClass[r.class!] ?? 0) + 1;
-        return {
+        return repairsRowsPage({
           plan_op_id: planOpId,
           fixer_id: fixerId,
           planned_at: '2026-09-29T10:01:00Z',
@@ -605,10 +606,10 @@ describe('RepairsPanel — apply all under a selected class', () => {
               }
             : {}),
           rows: rows.slice(q.offset, q.offset + q.limit),
-        };
+        });
       }
     );
-    vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(repairsApplyResult({
       fixer_id: 'vg-primary',
       plan_op_id: 'plan-1',
       dry_run: false,
@@ -620,7 +621,7 @@ describe('RepairsPanel — apply all under a selected class', () => {
       failed: 0,
       standdown_held: true,
       rows: [{ row_id: 'a-moved', outcome: 'applied' }],
-    });
+    }));
   });
 
   it('applies only the selected class\'s rows, and says so', async () => {
@@ -677,7 +678,7 @@ describe('RepairsPanel — owner rows', () => {
             : q.filter === 'owner_applicable'
               ? [OWNER]
               : [OWNER, PLAIN];
-        return {
+        return repairsRowsPage({
           plan_op_id: planOpId,
           fixer_id: fixerId,
           planned_at: '2026-09-27T10:01:00Z',
@@ -689,7 +690,7 @@ describe('RepairsPanel — owner rows', () => {
           owner_applicable: 1,
           skipped_by_kind: { skipped_itunes: 2 },
           rows: all.slice(q.offset, q.offset + q.limit),
-        };
+        });
       }
     );
     vi.mocked(api.startRepairOwnerApply).mockResolvedValue({
@@ -698,7 +699,7 @@ describe('RepairsPanel — owner rows', () => {
       fixer_id: 'vg-primary',
       status: 'queued',
     });
-    vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(repairsApplyResult({
       fixer_id: 'vg-primary',
       plan_op_id: 'plan-1',
       dry_run: false,
@@ -712,7 +713,7 @@ describe('RepairsPanel — owner rows', () => {
       owner_rows: 1,
       owner_user_id: 'u-owner',
       rows: [{ row_id: 'own', outcome: 'applied' }],
-    });
+    }));
   });
 
   it('shows the proof and an Apply (owner) button on owner rows only, with no checkbox', async () => {
@@ -923,7 +924,7 @@ describe('RepairsPanel — view modes', () => {
     vi.mocked(api.getRepairPlanRows).mockImplementation(
       async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
         const all = q.filter === 'applicable' ? ROWS : [];
-        return {
+        return repairsRowsPage({
           plan_op_id: planOpId,
           fixer_id: fixerId,
           planned_at: '2026-09-27T10:01:00Z',
@@ -934,7 +935,7 @@ describe('RepairsPanel — view modes', () => {
           applicable: ROWS.length,
           skipped_by_kind: {},
           rows: all.slice(q.offset, q.offset + q.limit),
-        };
+        });
       }
     );
     vi.mocked(api.getBooksByIds).mockResolvedValue([BOOK_P]);
@@ -1119,7 +1120,7 @@ describe('RepairsPanel — split books', () => {
     vi.mocked(api.getRepairPlanRows).mockImplementation(
       async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
         const all = q.filter === 'applicable' ? [CLUSTER] : q.filter.startsWith('skipped') ? [ITUNES] : [];
-        return {
+        return repairsRowsPage({
           plan_op_id: planOpId,
           fixer_id: fixerId,
           planned_at: '2026-10-12T10:01:00Z',
@@ -1130,7 +1131,7 @@ describe('RepairsPanel — split books', () => {
           applicable: 1,
           skipped_by_kind: { skipped_itunes: 1 },
           rows: all.slice(q.offset, q.offset + q.limit),
-        };
+        });
       }
     );
   });
@@ -1209,7 +1210,7 @@ describe('RepairsPanel — missing files', () => {
     vi.mocked(api.getRepairPlanRows).mockImplementation(
       async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
         const all = q.filter === 'applicable' ? [MATCH] : q.filter.startsWith('skipped') ? [NO_CANDIDATE] : [];
-        return {
+        return repairsRowsPage({
           plan_op_id: planOpId,
           fixer_id: fixerId,
           planned_at: '2026-10-14T10:01:00Z',
@@ -1220,7 +1221,7 @@ describe('RepairsPanel — missing files', () => {
           applicable: 1,
           skipped_by_kind: { no_candidate: 1 },
           rows: all.slice(q.offset, q.offset + q.limit),
-        };
+        });
       }
     );
   });

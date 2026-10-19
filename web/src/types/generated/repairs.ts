@@ -73,7 +73,7 @@ export interface RowsPage {
    * never nil, so an empty tally reads as {}, not as absent); null
    * without a class.
    */
-  skipped_by_kind_in_class: { [key: string]: number /* int */};
+  skipped_by_kind_in_class: { [key: string]: number } | null;
   /**
    * ApplicableInClass counts the applicable rows of Class, whatever the
    * filter: under a selected class the Applicable tab counts exactly the
@@ -82,41 +82,6 @@ export interface RowsPage {
    */
   applicable_in_class?: number /* int */;
   rows: Row[];
-}
-/**
- * ApplyParams are the params of repairs.apply. Only an explicit
- * dry_run:false writes (owner rule 2026-09-25: an omitted mode is a preview).
- */
-export interface ApplyParams {
-  fixer_id: string;
-  plan_op_id: string;
-  row_ids: string[];
-  dry_run?: boolean;
-  dryRun?: boolean;
-  /**
-   * Resume is the checkpoint of an interrupted run (set by the op through
-   * the registry's checkpoint merge, never by a caller): the rows it had
-   * already settled. A resumed run keeps those results and does not
-   * re-apply them.
-   */
-  resume?: ApplyCheckpoint;
-  /**
-   * OwnerApplyRowIDs are owner rows (Row.OwnerApplicable) the owner chose
-   * to apply, and OwnerGrant the one-shot grant the Repairs handler minted
-   * for them (owner.go). Neither is trusted on its own: the op takes the
-   * grant from the process's grant store and refuses every owner row
-   * without one (ResolveOwnerApproval).
-   */
-  owner_apply_row_ids?: string[];
-  owner_grant?: string;
-}
-/**
- * ApplyCheckpoint is what repairs.apply checkpoints while it runs: every row
- * settled so far, with its outcome. Merged back into the op's params as
- * "resume" when the server restarts mid-apply (ResumeRestart).
- */
-export interface ApplyCheckpoint {
-  settled: RowResult[];
 }
 /**
  * RowResult is the apply outcome of one requested row.

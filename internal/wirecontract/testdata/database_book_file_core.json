@@ -1,0 +1,83 @@
+{
+  "id": "synthetic-ID",
+  "book_id": "synthetic-BookID",
+  "version_id": "synthetic-VersionID",
+  "file_path": "synthetic-FilePath",
+  "original_filename": "synthetic-OriginalFilename",
+  "itunes_path": "synthetic-ITunesPath",
+  "itunes_persistent_id": "synthetic-ITunesPersistentID",
+  "track_number": 7,
+  "track_count": 7,
+  "disc_number": 7,
+  "disc_count": 7,
+  "title": "synthetic-Title",
+  "raw_tags": {
+    "synthetic-key": "synthetic-RawTags"
+  },
+  "format": "synthetic-Format",
+  "codec": "synthetic-Codec",
+  "duration": 7,
+  "file_size": 7,
+  "bitrate_kbps": 7,
+  "sample_rate_hz": 7,
+  "channels": 7,
+  "bit_depth": 7,
+  "file_hash": "synthetic-FileHash",
+  "original_file_hash": "synthetic-OriginalFileHash",
+  "original_file_hash_kind": "synthetic-OriginalFileHashKind",
+  "post_metadata_hash": "synthetic-PostMetadataHash",
+  "scan": {
+    "needs_deep": true,
+    "hash_stale": true,
+    "header_bad": true,
+    "attempts": 7,
+    "last_error": "synthetic-LastError",
+    "tagged": {
+      "done": true,
+      "attempts": 7,
+      "last_error": "synthetic-LastError"
+    },
+    "duration_ok": {
+      "done": true,
+      "attempts": 7,
+      "last_error": "synthetic-LastError"
+    },
+    "fp_windowed": {
+      "done": true,
+      "attempts": 7,
+      "last_error": "synthetic-LastError"
+    },
+    "fp_full": {
+      "done": true,
+      "attempts": 7,
+      "last_error": "synthetic-LastError"
+    }
+  },
+  "acoustid_fingerprint_duration_sec": 1.5,
+  "acoustid_fp_version": 7,
+  "fingerprint_failed_at": "2026-01-02T03:04:05Z",
+  "acoustid_online_recording_id": "synthetic-AcoustIDOnlineRecordingID",
+  "acoustid_online_score": 1.5,
+  "acoustid_online_looked_up_at": "2026-01-02T03:04:05Z",
+  "organize_method": "synthetic-OrganizeMethod",
+  "missing": true,
+  "skip_scan": true,
+  "created_at": "2026-01-02T03:04:05Z",
+  "updated_at": "2026-01-02T03:04:05Z",
+  "deluge_hash": "synthetic-DelugeHash",
+  "download_hash": "synthetic-DownloadHash",
+  "deluge_original_path": "synthetic-DelugeOriginalPath",
+  "imported_from_deluge_at": "2026-01-02T03:04:05Z",
+  "transcribed_title": "synthetic-TranscribedTitle",
+  "transcribed_author": "synthetic-TranscribedAuthor",
+  "transcribed_narrator": "synthetic-TranscribedNarrator",
+  "transcribed_translator": "synthetic-TranscribedTranslator",
+  "transcribed_cover_artist": "synthetic-TranscribedCoverArtist",
+  "intro_transcribed_at": "2026-01-02T03:04:05Z",
+  "transcribe_status": "synthetic-TranscribeStatus",
+  "transcribe_error": "synthetic-TranscribeError",
+  "transcribe_attempted_at": "2026-01-02T03:04:05Z",
+  "last_scan_mtime": 7,
+  "last_scan_size": 7,
+  "needs_rescan": true
+}
