@@ -1,5 +1,5 @@
 // file: internal/server/absauth/absauth_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6e1b47a3-0d85-4c92-a731-58f0c3b6d9e2
 // last-edited: 2026-10-19
 
@@ -146,7 +146,7 @@ func TestAccessToken_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintAccessToken: %v", err)
 	}
-	claims, err := cfg.ParseAccessToken(tok)
+	claims, err := cfg.ParseAccessToken(tok, time.Now())
 	if err != nil {
 		t.Fatalf("ParseAccessToken: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestAccessToken_RejectsWrongSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintAccessToken: %v", err)
 	}
-	if _, err := cfg.ParseAccessToken(tok); err == nil {
+	if _, err := cfg.ParseAccessToken(tok, time.Now()); err == nil {
 		t.Fatal("a token signed with a different secret must not verify")
 	}
 }
@@ -221,7 +221,7 @@ func TestAccessToken_RejectsExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintAccessToken: %v", err)
 	}
-	if _, err := cfg.ParseAccessToken(tok); err == nil {
+	if _, err := cfg.ParseAccessToken(tok, time.Now()); err == nil {
 		t.Fatal("an expired access token must be rejected")
 	}
 }
@@ -241,7 +241,7 @@ func TestAccessToken_RejectsAlgNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign none: %v", err)
 	}
-	if _, err := cfg.ParseAccessToken(tok); err == nil {
+	if _, err := cfg.ParseAccessToken(tok, time.Now()); err == nil {
 		t.Fatal("alg=none must be rejected — this would be a full authentication bypass")
 	}
 }
@@ -260,7 +260,7 @@ func TestAccessToken_RejectsWrongType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	if _, err := cfg.ParseAccessToken(tok); err == nil {
+	if _, err := cfg.ParseAccessToken(tok, time.Now()); err == nil {
 		t.Fatal(`a JWT with type != "access" must be rejected`)
 	}
 }

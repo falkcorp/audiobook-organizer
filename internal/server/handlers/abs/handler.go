@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-10-19
 
@@ -590,6 +590,10 @@ func New(o Options) (*Handler, error) {
 		newID:       func() string { return ulid.Make().String() },
 	}
 	h.sessions = newSessionRegistry(h.nowFn)
+	// The resolver judges bearer requests on the handler's clock, so a session
+	// that refresh slides and the token that bearer use verifies share one
+	// timeline (both time.Now in production; SetClock moves both in tests).
+	o.Resolver.UseClock(h.nowFn)
 	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap)
 	h.oidcSharedLimiter = servermiddleware.NewIPRateLimiter(oidcSharedRatePerMinute, oidcSharedRateBurst)
 	h.oidcPersonLimiter = servermiddleware.NewIPRateLimiter(oidcPersonRatePerMinute, oidcPersonRateBurst)
@@ -610,14 +614,14 @@ func (h *Handler) HasBrowseSurface() bool { return h.library != nil && h.identit
 // SetSleep replaces the throttle's delay function. Tests inject a no-op.
 func (h *Handler) SetSleep(fn func(time.Duration)) { h.throttle.SetSleep(fn) }
 
-// SetClock replaces the handler clock. Tests use it to cross a grace boundary. It
-// also moves the identity resolver's clock, so access-token expiry, session
-// liveness and sliding extension all run on the same timeline as refresh.
+// SetClock replaces the handler clock. Tests use it to cross a grace boundary. The
+// identity resolver follows it too (New binds the resolver to nowFn), so
+// access-token expiry, session liveness and sliding extension all run on the
+// same timeline as refresh.
 func (h *Handler) SetClock(fn func() time.Time) {
 	if fn != nil {
 		h.now = fn
 		h.throttle.SetClock(fn)
-		h.resolver.SetClock(fn)
 	}
 }
 

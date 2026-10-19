@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.12.0 -->
+<!-- version: 7.13.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -853,7 +853,8 @@ when the request carries header `x-return-tokens: true`, the response body **als
   not apply to a CF identity).
 - **The ABS keys are environment-only.** Every serialized `abs_*` key has a registered default and
   is re-applied from viper at each boot, so `PUT /api/v1/config` refuses a change to one (400, naming
-  the variable) and the settings API reports it as locked.
+  the variable). They are not listed in `env_locked` / `setting_locks`: those mean an environment
+  variable is forcing a control the Settings page renders, and it renders no ABS key.
 - **`ABS_JWT_SECRET`** is read from env and is **required** when the ABS API is enabled; the server
   **fails closed** at boot if it is missing. Never auto-generated into ephemeral storage.
 
