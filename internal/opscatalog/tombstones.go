@@ -1,7 +1,7 @@
 // file: internal/opscatalog/tombstones.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: edcda6da-4fec-40a7-9b72-643a33849960
-// last-edited: 2026-10-16
+// last-edited: 2026-10-19
 
 package opscatalog
 
@@ -86,4 +86,13 @@ var Tombstones = map[string]string{
 	// boot on it. The probe now uses a maintenance.test-probe-* ID, which
 	// TestOpIDs_NoRenameWithoutAlias already treats as test-only.
 	"maintenance.orphan-row-blocking-probe": "test-only probe that no production build registers; now maintenance.test-probe-orphan-row-blocking",
+	// Removed 2026-10-19 with the SQLite activity backend (01-P75, D11). All
+	// three acted only on the SQLite activity file: optimize ran ANALYZE /
+	// PRAGMA optimize on it, vacuum rewrote it, and reclaim deleted the Pebble
+	// copies of rows already moved into it. Pebble is the only activity store
+	// now; its compaction runs through maintenance.compact-activity-log, which
+	// is a different job, so none of them is aliased there.
+	"maintenance.optimize-activity-db": "removed with the SQLite activity backend; no successor",
+	"maintenance.vacuum-activity-db":   "removed with the SQLite activity backend; no successor",
+	"maintenance.activity-reclaim":     "removed with the SQLite activity backend; no successor",
 }

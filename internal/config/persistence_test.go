@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -1351,6 +1352,27 @@ func TestConfig_LoadsWithRemovedActivityDBSettings(t *testing.T) {
 			assert.Empty(t, *blobs, "a refused PUT must persist nothing")
 			assert.NotEqual(t, "/lib", Snapshot().RootDir, "a refused PUT must apply nothing")
 		}
+	})
+
+	t.Run("a config update selecting sqlite is refused", func(t *testing.T) {
+		// With ACTIVITY_BACKEND set the key is env-locked and refused for that
+		// reason; unset it so this exercises the Validate refusal itself.
+		t.Setenv("ACTIVITY_BACKEND", "")
+		require.NoError(t, os.Unsetenv("ACTIVITY_BACKEND"))
+		restoreAppConfig(t)
+		// UpdateConfig only enforces Validate when the prior config passes it
+		// (so a broken config can be fixed one field at a time); give it a
+		// valid prior, as every real install has.
+		AppConfig.DatabaseType = "pebble"
+		require.NoError(t, AppConfig.Validate(), "precondition: the prior config must be valid")
+		ms, blobs := ladderTestStore(t)
+		status, resp := NewUpdateService(ms).UpdateConfig(context.Background(),
+			map[string]any{"activity_backend": "sqlite", "root_dir": "/lib"})
+		require.Equal(t, http.StatusBadRequest, status, "resp = %v", resp)
+		msg, _ := resp["error"].(string)
+		assert.Contains(t, msg, "activity_backend: sqlite is no longer supported")
+		assert.Empty(t, *blobs, "a refused PUT must persist nothing")
+		assert.NotEqual(t, "/lib", Snapshot().RootDir, "a refused PUT must apply nothing")
 	})
 }
 

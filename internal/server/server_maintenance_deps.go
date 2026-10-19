@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.68.0
+// version: 1.69.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -369,8 +369,7 @@ func (s *Server) MaintainActivityLog(ctx context.Context, changeDays, debugDays 
 }
 
 // CompactActivityEntries is the compaction pass alone: every compactable-tier
-// row older than cutoff collapsed into daily digests, on every activity
-// backend (MigratingActivityStore.CompactByDay fans out to both). It is the
+// row older than cutoff collapsed into daily digests. It is the
 // single implementation behind both the nightly cleanup (CompactActivityLog
 // above) and the user-triggered maintenance.compact-activity-log op.
 //
@@ -383,19 +382,8 @@ func (s *Server) CompactActivityEntries(ctx context.Context, cutoff time.Time, p
 	return s.activityService.CompactByDay(database.WithCompactProgress(ctx, progress), cutoff)
 }
 
-// OptimizeActivityStatistics refreshes the activity store's query-planner
-// statistics. Backends that keep none report Supported=false rather than an
-// error, so "nothing to do here" stays distinguishable from "it failed".
-func (s *Server) OptimizeActivityStatistics(ctx context.Context) (database.ActivityOptimizeResult, error) {
-	if s.activityService == nil {
-		return database.ActivityOptimizeResult{}, nil
-	}
-	return s.activityService.Store().OptimizeStatistics(ctx)
-}
-
-// RecompactActivityDigests re-derives legacy digest items on every activity
-// backend (MigratingActivityStore.RecompactDigests fans out to both). It backs
-// the maintenance.recompact-activity-digests op.
+// RecompactActivityDigests re-derives legacy digest items in the activity
+// store. It backs the maintenance.recompact-activity-digests op.
 func (s *Server) RecompactActivityDigests(ctx context.Context) (database.RecompactResult, error) {
 	if s.activityService == nil {
 		return database.RecompactResult{}, nil
@@ -403,31 +391,10 @@ func (s *Server) RecompactActivityDigests(ctx context.Context) (database.Recompa
 	return s.activityService.RecompactDigests(ctx)
 }
 
-// VacuumActivityDB previews or performs a VACUUM of the SQLite activity
-// database. Backends with no SQLite side report Supported=false rather than an
-// error.
-func (s *Server) VacuumActivityDB(ctx context.Context, dryRun bool) (database.ActivityVacuumReport, error) {
-	if s.activityService == nil {
-		return database.ActivityVacuumReport{DryRun: dryRun}, nil
-	}
-	store := s.activityService.Store()
-	// internal/database cannot import diskstats (it is in the SDK's dependency
-	// closure, see sdkguard), so the free-space probe is wired in here.
-	if v, ok := database.FindActivityVacuumer(store); ok {
-		v.SetFreeBytesFunc(func(path string) (uint64, error) {
-			_, free, err := getDiskStats(path)
-			return free, err
-		})
-	}
-	return database.RunActivityVacuum(ctx, store, dryRun)
-}
-
 // ActivityFilterIndexBackfiller returns the Pebble activity store behind the
-// activity service for maintenance.activity-filter-index-backfill: the store
-// itself in Pebble-only mode, the Pebble side (Primary) under the SQLite
-// migration wrapper — it receives every write there too, which is what lets
-// the indexes be built BEFORE the primary backend switches to Pebble. nil
-// when neither applies; the op refuses in that case rather than no-op.
+// activity service for maintenance.activity-filter-index-backfill, or nil when
+// the service is not wired or holds some other ActivityStorer (a test double);
+// the op refuses in that case rather than no-op.
 func (s *Server) ActivityFilterIndexBackfiller() database.ActivityFilterIndexBackfiller {
 	if s.activityService == nil {
 		return nil
@@ -1137,27 +1104,4 @@ func (s *Server) MergeBooks(opID string, bookIDs []string, primaryID string) (in
 	// SoftDeleted, not MergedCount: BookMerger is documented to return the number
 	// of LOSER records soft-deleted, and MergedCount counts the primary too.
 	return res.SoftDeleted, nil
-}
-
-// ReclaimMigratedActivity deletes the Pebble-side activity copy that the SQLite
-// cutover has made redundant. See database.ReclaimMigratedActivity for the
-// guards; this is the wiring only.
-//
-// A missing activity service is a refusal with a reason rather than an error:
-// the op's job is to report why nothing can be reclaimed, and "the activity
-// service is not wired" is an answer an operator can act on.
-func (s *Server) ReclaimMigratedActivity(
-	ctx context.Context,
-	retain time.Duration,
-	dryRun bool,
-	onTier database.ActivityReclaimProgress,
-) (database.ActivityReclaimResult, error) {
-	if s.activityService == nil {
-		return database.ActivityReclaimResult{
-			Refused:       true,
-			RefusedReason: "activity service is not wired; there is no activity store to reclaim from",
-			DryRun:        dryRun,
-		}, nil
-	}
-	return s.activityService.ReclaimMigratedActivity(ctx, retain, dryRun, onTier)
 }

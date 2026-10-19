@@ -1,7 +1,7 @@
 // file: internal/database/activity_storer.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 package database
 
@@ -26,9 +26,8 @@ type ActivityReader interface {
 // rows strictly older than a cutoff.
 //
 // It is separate from ActivityReader.Query on purpose. Query's total is a
-// pagination probe on both backends — the Pebble store stops at
-// Offset+Limit+1 matches (and again at activityQueryScanBudget), the SQL store
-// caps its COUNT at sqlActCountCap — so neither can be used to size a keyspace.
+// pagination probe — the Pebble store stops at Offset+Limit+1 matches (and
+// again at activityQueryScanBudget) — so it cannot be used to size a keyspace.
 // Anything reporting "how much is there" must ask for it explicitly, and a
 // backend that cannot answer exactly should be refused rather than guessed at.
 //
@@ -41,10 +40,9 @@ type ActivityCounter interface {
 // ActivityRetention covers pruning, compaction and migration.
 type ActivityRetention interface {
 	// Prune hard-deletes every entry of tier older than olderThan and returns
-	// the count actually deleted. It takes a context because, since 2026-09-10,
-	// the migrating wrapper runs it on BOTH backends: a cancelled nightly
-	// cleanup (or one past its op budget) must stop at its next batch rather
-	// than prune both stores to completion. On cancellation it returns the
+	// the count actually deleted. It takes a context because a cancelled
+	// nightly cleanup (or one past its op budget) must stop at its next batch
+	// rather than prune to completion. On cancellation it returns the
 	// rows deleted so far — a lower bound, never a projection — alongside
 	// ctx.Err(); rows not yet reached are left untouched and a plain retry
 	// finishes them.
@@ -69,31 +67,14 @@ type ActivityRetention interface {
 	// MigrateSystemActivityLogs is documented as a no-op on the Pebble backend
 	// — the interface already carries exactly this category, so an optional
 	// interface would be a second pattern for one kind of thing. Second, cost:
-	// the compiler says widening breaks ONE test fake
-	// (metafetch.capturingActivityStore) beyond the three real
-	// implementations. Checkpointable earns its type assertion by hanging off
-	// database.Store, which has ~398 methods and many mocks; ActivityStorer has
-	// four implementations. The assertion would also add a fallback branch that
+	// the compiler said widening broke ONE test fake
+	// (metafetch.capturingActivityStore) beyond the real implementations.
+	// Checkpointable earns its type assertion by hanging off database.Store,
+	// which has ~398 methods and many mocks; ActivityStorer has a handful of
+	// implementations. The assertion would also add a fallback branch that
 	// does nothing and says nothing when it misses — the failure shape this
 	// repo keeps getting burned by — to buy back one three-line fake.
 	RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error)
-	// OptimizeStatistics refreshes whatever query-planner statistics the backend
-	// keeps, so the planner chooses indexes from measurements rather than from
-	// built-in guesses.
-	//
-	// It is on this interface for the same reason RepairActivityIndexes is: it is
-	// backend-specific maintenance that the nightly job must be able to call
-	// without knowing which backend is underneath, and this interface already
-	// carries that category (RecompactDigests, MigrateSystemActivityLogs). A
-	// backend with no such statistics returns a zero result and Supported=false —
-	// explicitly, not by being absent, so "this backend has nothing to do" is
-	// distinguishable from "nobody called it".
-	//
-	// WHY IT EXISTS. Production's activity SQLite database had NO sqlite_stat1
-	// table on 2026-09-09 — ANALYZE had never run in the database's life — so the
-	// planner was estimating blind across 13,256,825 rows. Every implementation
-	// must be idempotent and safe to run on a schedule.
-	OptimizeStatistics(ctx context.Context) (ActivityOptimizeResult, error)
 	MigrateSystemActivityLogs() (int, error)
 }
 

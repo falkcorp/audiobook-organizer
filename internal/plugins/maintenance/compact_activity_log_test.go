@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log_test.go
-// version: 1.3.0
+// version: 2.0.0
 // guid: 6e1a9c47-2b5d-4f83-a0e6-9d3c7b2f5e18
-// last-edited: 2026-09-13
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -32,29 +32,24 @@ func (r *resultReporter) UpdateProgress(_, _ int, msg string) error {
 	return nil
 }
 
-// compactDeps overrides CompactActivityEntries to behave like the migrating
-// store: chunk events, then a Done event per backend, then the summed totals.
+// compactDeps overrides CompactActivityEntries to behave like the Pebble
+// store: chunk events with running totals, then the final totals as the
+// return value (and storeErr, if set, after the work it did complete).
 type compactDeps struct {
 	fakeDeps
-	gotCutoff    time.Time
-	secondaryErr error
+	gotCutoff time.Time
+	storeErr  error
 }
 
 func (d *compactDeps) CompactActivityEntries(_ context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error) {
 	d.gotCutoff = cutoff
 	progress(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 500}})
 	progress(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 2, EntriesDeleted: 900}})
-	progress(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 2, EntriesDeleted: 900}, Done: true})
-	progress(database.CompactProgressEvent{Backend: "sqlite", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 300}})
-	progress(database.CompactProgressEvent{Backend: "sqlite", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 300}, Done: true, Err: d.secondaryErr})
-	total := database.CompactResult{DaysCompacted: 3, EntriesDeleted: 1200}
-	if d.secondaryErr != nil {
-		return total, d.secondaryErr
-	}
-	return total, nil
+	progress(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 3, EntriesDeleted: 1200}})
+	return database.CompactResult{DaysCompacted: 3, EntriesDeleted: 1200}, d.storeErr
 }
 
-func TestCompactActivityLog_LogsPerBackendAndPersistsTotals(t *testing.T) {
+func TestCompactActivityLog_LogsAndPersistsTotals(t *testing.T) {
 	deps := &compactDeps{}
 	p := New(deps)
 	rep := &resultReporter{}
@@ -73,9 +68,7 @@ func TestCompactActivityLog_LogsPerBackendAndPersistsTotals(t *testing.T) {
 	joined := strings.Join(rep.logs, "\n")
 	for _, wantLine := range []string{
 		"older than",
-		"pebble: compacted 2 days, removed 900 entries",
-		"sqlite: compacted 1 days, removed 300 entries",
-		"totals: 3 days compacted, 1200 entries removed across 2 backend(s)",
+		"totals: 3 days compacted, 1200 entries removed",
 	} {
 		if !strings.Contains(joined, wantLine) {
 			t.Errorf("log missing %q; got:\n%s", wantLine, joined)
@@ -95,34 +88,32 @@ func TestCompactActivityLog_LogsPerBackendAndPersistsTotals(t *testing.T) {
 	if res.DaysCompacted != 3 || res.EntriesDeleted != 1200 {
 		t.Errorf("totals = %d/%d, want 3/1200", res.DaysCompacted, res.EntriesDeleted)
 	}
-	if res.Backends["pebble"].EntriesDeleted != 900 || res.Backends["sqlite"].EntriesDeleted != 300 {
-		t.Errorf("per-backend outcomes = %+v", res.Backends)
+	// The persisted shape keeps its backends map, with the one store's outcome
+	// under "active", so old and new results decode the same way.
+	if len(res.Backends) != 1 || res.Backends["active"].EntriesDeleted != 1200 || res.Backends["active"].DaysCompacted != 3 {
+		t.Errorf("backends = %+v, want exactly one \"active\" outcome carrying the totals", res.Backends)
 	}
 }
 
-func TestCompactActivityLog_BackendFailureIsSurfacedAndRecorded(t *testing.T) {
-	deps := &compactDeps{secondaryErr: errors.New("disk full")}
+func TestCompactActivityLog_StoreFailureIsSurfacedAndRecorded(t *testing.T) {
+	deps := &compactDeps{storeErr: errors.New("disk full")}
 	p := New(deps)
 	rep := &resultReporter{}
 
 	err := p.runCompactActivityLog(context.Background(), json.RawMessage(`{"older_than_days": 0}`), rep)
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
-		t.Fatalf("run error = %v, want the backend failure surfaced", err)
+		t.Fatalf("run error = %v, want the store failure surfaced", err)
 	}
 	joined := strings.Join(rep.logs, "\n")
-	if !strings.Contains(joined, "sqlite: FAILED") {
-		t.Errorf("log missing the per-backend failure line; got:\n%s", joined)
+	if !strings.Contains(joined, "FAILED after 3 days compacted, 1200 entries removed: disk full") {
+		t.Errorf("log missing the failure line with the work already done; got:\n%s", joined)
 	}
 	res, ok := rep.result.(CompactActivityLogResult)
 	if !ok {
 		t.Fatalf("result not persisted on failure: %T", rep.result)
 	}
-	if res.Backends["sqlite"].Error != "disk full" {
-		t.Errorf("sqlite outcome = %+v, want the error recorded", res.Backends["sqlite"])
-	}
-	// The other backend's work is still on record.
-	if res.Backends["pebble"].EntriesDeleted != 900 {
-		t.Errorf("pebble outcome lost on secondary failure: %+v", res.Backends["pebble"])
+	if got := res.Backends["active"]; got.Error != "disk full" || got.EntriesDeleted != 1200 {
+		t.Errorf("outcome = %+v, want the error recorded alongside the work that committed", got)
 	}
 }
 
@@ -196,43 +187,36 @@ func TestCompactCutoff_RefusesWrappedCutoff(t *testing.T) {
 	}
 }
 
-// compactLivenessReporter records UpdateProgress numerators and TouchLiveness calls.
-type compactLivenessReporter struct {
+// compactProgressReporter records UpdateProgress numerators.
+type compactProgressReporter struct {
 	resultReporter
 	currents []int
-	touches  int
 }
 
-func (r *compactLivenessReporter) UpdateProgress(cur, total int, msg string) error {
+func (r *compactProgressReporter) UpdateProgress(cur, total int, msg string) error {
 	r.currents = append(r.currents, cur)
 	return r.resultReporter.UpdateProgress(cur, total, msg)
 }
 
-func (r *compactLivenessReporter) TouchLiveness() { r.touches++ }
-
-// TestCompactProgressToReporter_StampsEveryBackendBoundary pins the adapter
-// half of the 2026-09-13 stuck-op cancel: the Done event at the Pebble→SQLite
-// handoff must stamp liveness, the counter must not jump backwards when the
-// second backend starts, the message must name the day, and a heartbeat must
-// touch liveness without writing progress.
-func TestCompactProgressToReporter_StampsEveryBackendBoundary(t *testing.T) {
-	rep := &compactLivenessReporter{}
+// TestCompactProgressToReporter_ForwardsRunningTotals pins the adapter: each
+// chunk event stamps progress with the store's running total for the call, and
+// the message names the day when the event carries one.
+func TestCompactProgressToReporter_ForwardsRunningTotals(t *testing.T) {
+	rep := &compactProgressReporter{}
 	fwd := compactProgressToReporter(rep)
 	day := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 
 	fwd(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 1719}})
-	fwd(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 1719}, Done: true})
-	fwd(database.CompactProgressEvent{Backend: "sqlite", Day: day, Heartbeat: true})
-	fwd(database.CompactProgressEvent{Backend: "sqlite", Day: day, Result: database.CompactResult{EntriesDeleted: 5000}})
+	fwd(database.CompactProgressEvent{Backend: "pebble", Day: day, Result: database.CompactResult{DaysCompacted: 2, EntriesDeleted: 6719}})
 
-	if want := []int{1719, 1719, 6719}; !equalInts(rep.currents, want) {
-		t.Errorf("UpdateProgress numerators = %v, want %v (cumulative, Done forwarded, heartbeat not)", rep.currents, want)
-	}
-	if rep.touches != 1 {
-		t.Errorf("TouchLiveness calls = %d, want 1 (the heartbeat)", rep.touches)
+	if want := []int{1719, 6719}; !equalInts(rep.currents, want) {
+		t.Errorf("UpdateProgress numerators = %v, want %v", rep.currents, want)
 	}
 	joined := strings.Join(rep.progress, "\n")
-	for _, want := range []string{"pebble: finished, 1 days compacted, 1719 entries removed", "sqlite: 0 days compacted, 5000 entries removed so far (day 2026-09-07)"} {
+	for _, want := range []string{
+		"pebble: 1 days compacted, 1719 entries removed so far",
+		"pebble: 2 days compacted, 6719 entries removed so far (day 2026-09-07)",
+	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("progress messages missing %q; got:\n%s", want, joined)
 		}
@@ -266,7 +250,7 @@ func TestCleanupActivityLog_ForwardsProgressToReporter(t *testing.T) {
 	}
 	joined := strings.Join(rep.progress, "\n")
 	for _, want := range []string{
-		"sqlite: 1 days compacted, 40 entries removed",
+		"pebble: 1 days compacted, 40 entries removed",
 		// The summarize/prune/repair passes report through the second hook;
 		// the nightly op must attach it, or the first night over an
 		// unsummarized history is a silent stretch the watchdog strikes.

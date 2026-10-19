@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.32.4
+// version: 1.32.5
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-19
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 276
-	slogRatchetCallCeiling = 1548
+	slogRatchetFileCeiling = 268
+	slogRatchetCallCeiling = 1493
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -35,10 +35,7 @@ var slogRatchet = map[string]int{
 	"cmd/pebble-inject-skip/main.go":                             4,
 	"cmd/root.go":                                                2,
 	"internal/activity/changelog.go":                             3,
-	"internal/activity/register.go":                              5,
-	"internal/activity/relocate.go":                              6,
-	"internal/activity/sql_migration.go":                         7,
-	"internal/activity/sql_migration_report.go":                  2,
+	"internal/activity/register.go":                              2,
 	"internal/ai/dedup_review.go":                                2,
 	"internal/ai/embedding_client.go":                            4,
 	"internal/ai/openai_parser.go":                               2,
@@ -74,7 +71,7 @@ var slogRatchet = map[string]int{
 	"internal/database/memdb_warmup.go":                          8,
 	"internal/database/metadata_fetch_cache.go":                  1,
 	"internal/database/migrations.go":                            76,
-	"internal/database/pebble_activity_store.go":                 11,
+	"internal/database/pebble_activity_store.go":                 10,
 	"internal/database/pebble_quick_queries.go":                  12,
 	"internal/database/pebble_store.go":                          16,
 	"internal/database/pebble_store_atpath_index.go":             9,
@@ -89,11 +86,6 @@ var slogRatchet = map[string]int{
 	"internal/database/pebble_store_versiongroup_backfill.go":    9,
 	"internal/database/series_bookref.go":                        1,
 	"internal/database/settings.go":                              2,
-	"internal/database/sql_activity_backfill.go":                 12,
-	"internal/database/sql_activity_migrating_store.go":          7,
-	"internal/database/sql_activity_progress.go":                 6,
-	"internal/database/sql_activity_relocate.go":                 4,
-	"internal/database/sql_activity_store.go":                    6,
 	"internal/database/transcribe_stats.go":                      1,
 	"internal/dedup/auto_resolve.go":                             6,
 	"internal/dedup/book_dedup.go":                               2,

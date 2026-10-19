@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 package metafetch
 
@@ -80,10 +80,6 @@ func (c *capturingActivityStore) RepairActivityIndexes(context.Context) (databas
 
 func (c *capturingActivityStore) RecompactDigests(context.Context) (database.RecompactResult, error) {
 	return database.RecompactResult{}, nil
-}
-
-func (c *capturingActivityStore) OptimizeStatistics(context.Context) (database.ActivityOptimizeResult, error) {
-	return database.ActivityOptimizeResult{}, nil
 }
 
 func (c *capturingActivityStore) MigrateSystemActivityLogs() (int, error) { return 0, nil }

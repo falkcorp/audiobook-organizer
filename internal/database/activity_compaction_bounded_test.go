@@ -1,14 +1,12 @@
 // file: internal/database/activity_compaction_bounded_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 5b7e0a34-16cf-4d29-8e71-c30a9d4f2b16
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -42,223 +40,6 @@ func recordDayEntries(t *testing.T, rec func(ActivityEntry) (int64, error), day 
 		_, err := rec(e)
 		require.NoError(t, err)
 	}
-}
-
-// sqlActTestChunk is the chunk size shrinkSQLActChunksForTest installs. It stays
-// above maxDigestItems so a chunk can still fill the digest's sample on its
-// own, as production's 5,000 does; a smaller chunk would send digest sampling
-// through a merge pattern production never sees.
-const sqlActTestChunk = 1000
-
-// shrinkSQLActChunksForTest sets sqlActDeleteChunk and sqlActSampleWindow to
-// sqlActTestChunk for the calling test and restores both in Cleanup. A
-// multi-chunk test asserts behaviour at chunk boundaries, which does not depend
-// on the chunk being 5,000 rows; at 5,000 the fixtures were 10-15k rows and
-// under -race the tests spent their time inserting them. Call it first, before
-// any fixture size is computed from either value.
-func shrinkSQLActChunksForTest(t *testing.T) {
-	t.Helper()
-	if sqlActTestChunk <= maxDigestItems {
-		t.Fatalf("sqlActTestChunk %d must exceed maxDigestItems %d", sqlActTestChunk, maxDigestItems)
-	}
-	oldChunk, oldWindow := sqlActDeleteChunk, sqlActSampleWindow
-	sqlActDeleteChunk, sqlActSampleWindow = sqlActTestChunk, sqlActTestChunk
-	t.Cleanup(func() { sqlActDeleteChunk, sqlActSampleWindow = oldChunk, oldWindow })
-}
-
-// recordDayEntriesSQL writes the same rows as recordDayEntries into a SQL store
-// in ONE RecordBatch transaction. RecordBatch runs the same clamp, content key
-// and INSERT ... ON CONFLICT DO NOTHING as Record; only the commit count
-// differs. These tests are about compaction, not the write path, and a
-// separate commit per row made seeding 5,001 rows take 20x as long as the
-// compaction it set up (34 s vs 1.6 s under -race on 2026-10-03). The write
-// path's per-commit behaviour is pinned by the checkpointer tests, which still
-// call Record row by row.
-func recordDayEntriesSQL(t *testing.T, s *SQLActivityStore, day time.Time, n int) {
-	t.Helper()
-	got, err := s.RecordBatch(dayEntries(day, n))
-	require.NoError(t, err)
-	require.Equal(t, n, got, "every seeded row must be inserted, none deduplicated away")
-}
-
-// countRows returns how many non-digest rows remain in the SQL store.
-func countNonDigestRows(t *testing.T, s *SQLActivityStore) int {
-	t.Helper()
-	var n int
-	require.NoError(t, s.reader.QueryRow(`SELECT COUNT(*) FROM activity WHERE tier <> 'digest'`).Scan(&n))
-	return n
-}
-
-func countDigestRows(t *testing.T, s *SQLActivityStore) int {
-	t.Helper()
-	var n int
-	require.NoError(t, s.reader.QueryRow(`SELECT COUNT(*) FROM activity WHERE tier = 'digest'`).Scan(&n))
-	return n
-}
-
-// TestSQLCompactByDay_DeletesMoreThanOneChunk is the regression test for the one
-// unchunked statement in sql_activity_store.go. commitDayDigest used to delete a
-// whole calendar day inside the digest transaction; on production that day held
-// 4,786,930 rows. The delete is now chunked at sqlActDeleteChunk, so this asserts
-// the loop actually iterates: a day with strictly more than one chunk of rows
-// must be fully removed, not just the first chunk.
-//
-// The count is deliberately sqlActDeleteChunk+1 rather than a round number: an
-// off-by-one that stopped after the first chunk (n < chunk breaks the loop) would
-// leave exactly 1 row behind and pass any assertion looser than "zero remain".
-func TestSQLCompactByDay_DeletesMoreThanOneChunk(t *testing.T) {
-	shrinkSQLActChunksForTest(t)
-	s := newTestSQLStore(t)
-	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
-	total := sqlActDeleteChunk + 1
-	recordDayEntriesSQL(t, s, day, total)
-
-	require.Equal(t, total, countNonDigestRows(t, s))
-
-	res, err := s.CompactByDay(context.Background(), day.Add(24*time.Hour))
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, res.DaysCompacted)
-	assert.Equal(t, total, res.EntriesDeleted, "every source row in the day must be reported deleted")
-	assert.Equal(t, 0, countNonDigestRows(t, s), "no source row may survive a completed compaction")
-	assert.Equal(t, 1, countDigestRows(t, s))
-}
-
-// TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount reproduces the
-// production failure mode — the process is killed part-way through compacting a
-// day — and pins the invariant that survives it: the digest's OriginalCount must
-// equal the number of rows the day ACTUALLY held, no matter how many times the
-// job was interrupted and resumed.
-//
-// This test replaces one that could not fail. The earlier version simulated an
-// interruption by compacting a day to completion and then RE-RECORDING fresh
-// rows for it, so it exercised the late-arrival merge path and never an
-// interrupted delete. Under that fixture 40 + 15 = 55 is the correct answer, so
-// the assertion passed against code that was wrong: compaction used to build the
-// whole day's digest, commit it, and delete afterwards, and on resume it
-// recounted the survivors and ADDED them to a digest that already included them.
-// A day of chunk+1 rows interrupted after one chunk would report 2*chunk+1
-// (with the 1,000-row test chunk: 1,001 rows reported as 2,001).
-//
-// The interruption here is real and deterministic: compactDayChunk is called
-// once, which is exactly one committed unit of work, and the process "dies"
-// simply by the test not calling it again. Because that unit folds the counts
-// and deletes the rows it counted in a single transaction, the state left behind
-// is the true post-kill state — 1 row remaining, a digest describing the one
-// chunk of rows that are gone.
-func TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount(t *testing.T) {
-	shrinkSQLActChunksForTest(t)
-	s := newTestSQLStore(t)
-	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
-	total := sqlActDeleteChunk + 1
-	recordDayEntriesSQL(t, s, day, total)
-
-	lo := day.UnixNano()
-	hi := day.Add(24 * time.Hour).UnixNano()
-
-	// The kill: one chunk commits, the rest never runs.
-	n, err := s.compactDayChunk(context.Background(), day, lo, hi, nil)
-	require.NoError(t, err)
-	require.Equal(t, sqlActDeleteChunk, n)
-	require.Equal(t, 1, countNonDigestRows(t, s), "one row must survive the interrupted run")
-	require.Equal(t, 1, countDigestRows(t, s))
-	assert.Equal(t, sqlActDeleteChunk, digestOriginalCount(t, s),
-		"a partial digest must count only the rows it actually consumed")
-
-	// The resume.
-	res, err := s.CompactByDay(context.Background(), day.Add(24*time.Hour))
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.EntriesDeleted, "the resume must report only the rows IT deleted")
-	assert.Equal(t, 0, countNonDigestRows(t, s))
-	assert.Equal(t, 1, countDigestRows(t, s), "the resume must MERGE, not add a second digest")
-
-	assert.Equal(t, total, digestOriginalCount(t, s),
-		"the digest must account for every row the day held, exactly once")
-	var summary string
-	require.NoError(t, s.reader.QueryRow(
-		`SELECT summary FROM activity WHERE tier = 'digest'`).Scan(&summary))
-	assert.Contains(t, summary, fmt.Sprintf("%d entries", total))
-}
-
-// TestSQLCompactByDay_LateArrivalsStillMerge covers the other reason a day can be
-// compacted twice: rows written for a day that was already digested. Those ARE
-// new rows, so they must be ADDED to the existing digest rather than replacing
-// it — the opposite requirement to the interrupted-resume case above, and the
-// reason both are pinned separately.
-func TestSQLCompactByDay_LateArrivalsStillMerge(t *testing.T) {
-	s := newTestSQLStore(t)
-	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
-	recordDayEntriesSQL(t, s, day, 40)
-
-	_, err := s.CompactByDay(context.Background(), day.Add(24*time.Hour))
-	require.NoError(t, err)
-	require.Equal(t, 40, digestOriginalCount(t, s))
-
-	recordDayEntriesSQL(t, s, day, 15)
-	_, err = s.CompactByDay(context.Background(), day.Add(24*time.Hour))
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, countDigestRows(t, s))
-	assert.Equal(t, 55, digestOriginalCount(t, s),
-		"rows written after a day was digested must be added to it")
-}
-
-// digestOriginalCount reads OriginalCount out of the single stored daily digest.
-func digestOriginalCount(t *testing.T, s *SQLActivityStore) int {
-	t.Helper()
-	var stored []byte
-	require.NoError(t, s.reader.QueryRow(
-		`SELECT details FROM activity WHERE tier = 'digest' AND type = 'daily_digest'`).Scan(&stored))
-	raw, err := decodeActivityDetails(stored)
-	require.NoError(t, err)
-	var dd DigestDetails
-	require.NoError(t, json.Unmarshal(raw, &dd))
-	return dd.OriginalCount
-}
-
-// TestSQLOptimizeStatistics_BootstrapsThenIncremental covers the ANALYZE
-// scheduling requirement.
-//
-// The first call must BOOTSTRAP: production's activity database had no
-// sqlite_stat1 table at all on 2026-09-09, and PRAGMA optimize decides what to
-// re-analyze by comparing against stored statistics, so with none stored it
-// cannot be relied on to create them. The second call must report the backend as
-// supported and leave statistics in place.
-func TestSQLOptimizeStatistics_BootstrapsThenIncremental(t *testing.T) {
-	s := newTestSQLStore(t)
-	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
-	recordDayEntriesSQL(t, s, day, 200)
-
-	// Precondition: a fresh database has no statistics, which is the production
-	// state this method exists for.
-	var have int
-	require.NoError(t, s.reader.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`).Scan(&have))
-	require.Equal(t, 0, have, "a fresh activity database must start with no sqlite_stat1")
-
-	first, err := s.OptimizeStatistics(context.Background())
-	require.NoError(t, err)
-	assert.True(t, first.Supported)
-	assert.True(t, first.Bootstrapped, "the first run on a database with no statistics must bootstrap")
-	assert.Positive(t, first.TablesAnalyzed, "bootstrap must actually produce statistics")
-
-	second, err := s.OptimizeStatistics(context.Background())
-	require.NoError(t, err)
-	assert.True(t, second.Supported)
-	assert.False(t, second.Bootstrapped, "a database that already has statistics must take the incremental path")
-	assert.Positive(t, second.TablesAnalyzed, "statistics must survive the incremental run")
-}
-
-// TestPebbleOptimizeStatistics_ReportsUnsupported pins that a backend with no
-// planner reports Supported=false explicitly rather than a bare zero result. A
-// caller that cannot tell "this backend has none" from "the call did nothing"
-// will report a silent no-op as success.
-func TestPebbleOptimizeStatistics_ReportsUnsupported(t *testing.T) {
-	s := newTestPebbleActivityStore(t)
-	res, err := s.OptimizeStatistics(context.Background())
-	require.NoError(t, err)
-	assert.False(t, res.Supported)
-	assert.Zero(t, res.TablesAnalyzed)
 }
 
 // TestPebbleCompactByDay_IsBoundedNotMaterialized is the regression test for the
@@ -329,7 +110,7 @@ func TestPebbleCompactByDay_DigestCountsSurviveTheRewrite(t *testing.T) {
 	assert.Equal(t, total-maxDigestItems, dd.TruncatedCount)
 }
 
-// TestPebbleCompactByDay_MergesOnRetry mirrors the SQL resume test: compacting a
+// TestPebbleCompactByDay_MergesOnRetry: compacting a
 // date twice must merge into one digest whose OriginalCount is the sum, never
 // produce a second digest for the same date.
 func TestPebbleCompactByDay_MergesOnRetry(t *testing.T) {
@@ -350,16 +131,12 @@ func TestPebbleCompactByDay_MergesOnRetry(t *testing.T) {
 	assert.Equal(t, 17, dd.OriginalCount, "a second compaction of the same date must merge, not replace or duplicate")
 }
 
-// TestPebbleCompactByDay_InterruptedDeleteDoesNotDoubleCount is the Pebble twin
-// of TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount, and it exists
-// because the Pebble backend had the identical defect for the identical reason:
-// CompactByDay wrote the day's digest in one commit and deleted the day's
-// entries in later ones, so a process killed between them left survivors that
-// the next run recounted and merged into a digest that already included them.
-//
-// This matters more here than on the SQL side, not less: production is still
-// reading and compacting through the Pebble backend (read_secondary=false), so
-// this is the path a manual "compact everything" actually takes today.
+// TestPebbleCompactByDay_InterruptedDeleteDoesNotDoubleCount pins the
+// chunk-atomic rewrite. CompactByDay used to write the day's digest in one
+// commit and delete the day's entries in later ones, so a process killed
+// between them left survivors that the next run recounted and merged into a
+// digest that already included them. Pebble is the only activity backend, so
+// this is the path every manual "compact everything" takes.
 func TestPebbleCompactByDay_InterruptedDeleteDoesNotDoubleCount(t *testing.T) {
 	s := newTestPebbleActivityStore(t)
 	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)

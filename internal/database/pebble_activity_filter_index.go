@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -11,9 +11,10 @@
 // book_id. Every other filter walked the newest activityQueryScanBudget (20,000)
 // rows of the log and stopped, so a match older than that window was silently
 // never examined — `/activity?source=X` answered "nothing" for a source that
-// last wrote 21,000 rows ago. SQLite answered those from an index, so switching
-// the primary backend back to Pebble (plan 2026-09-19) would have reintroduced
-// that miss for every rare filter over old history.
+// last wrote 21,000 rows ago. The SQLite activity backend (removed 2026-10-19)
+// answered those from an index, so switching the primary backend back to
+// Pebble (plan 2026-09-19) would have reintroduced that miss for every rare
+// filter over old history.
 //
 // Key layout (one family per filter, added to the families in
 // pebble_activity_store.go):
@@ -729,7 +730,7 @@ var pactFilterBackfillBeforeCommit func()
 // backfillFilterIndexRange indexes [lower, upper) in chunks of
 // activityFilterBackfillCommitEvery rows. Each chunk opens its OWN iterator,
 // seeks past the previous chunk's last key, and closes it before committing —
-// the same shape as claimDayChunk/streamTierEntries. One iterator held across
+// the same shape as claimDayChunk. One iterator held across
 // every commit of a window would pin the memtables and sstables it opened on
 // for as long as the window runs, times NumCPU concurrent windows.
 func (s *PebbleActivityStore) backfillFilterIndexRange(ctx context.Context, lower, upper []byte, tally *pactDecodeTally, onChunk func(indexed int)) (indexed int, err error) {
@@ -823,9 +824,8 @@ type ActivityQueryResult struct {
 // ActivityPartialQuerier is implemented by stores that can report a partial
 // answer. Optional, like ActivityCounter, so a backend whose Query is always
 // complete is not forced to implement it; activity.Service falls back to Query
-// with Partial=false. Every activity-store WRAPPER forwards it (see
-// MigratingActivityStore) — a wrapper that did
-// not would hide the flag with no error.
+// with Partial=false. Any future activity-store WRAPPER must forward it — a
+// wrapper that did not would hide the flag with no error.
 type ActivityPartialQuerier interface {
 	QueryWithPartial(ctx context.Context, f ActivityFilter) (ActivityQueryResult, error)
 }

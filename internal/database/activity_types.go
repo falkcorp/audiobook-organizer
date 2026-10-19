@@ -1,12 +1,11 @@
 // file: internal/database/activity_types.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-19
 
-// Package database — activity log types and helpers previously defined in
-// activity_store.go (the legacy SQLite backend). Extracted here in fable5
-// TASK-022 so the activity stores, activity.Service, and their callers continue
-// to compile.
+// Package database — activity log types and helpers shared by the Pebble
+// activity store, activity.Service and their callers. Extracted from the
+// legacy activity_store.go in fable5 TASK-022.
 
 package database
 
@@ -38,8 +37,8 @@ type ActivityEntry struct {
 // activitySummaryMax bounds the stored summary. A summary is a one-line
 // headline; nothing legitimate needs more than this.
 //
-// Not a theoretical limit. Measured on prod 2026-09-07: the activity database
-// was 5.3 GB, of which the summary column alone held 5.48 GB of data. The
+// Not a theoretical limit. Measured on prod 2026-09-07: the SQLite activity
+// database (since removed) was 5.3 GB, of which the summary column alone held 5.48 GB of data. The
 // details column — the one that IS zstd-compressed — held 351 MB, about 6% of
 // the file, so the compression work had been aimed at the wrong column. 208,103
 // `system` rows averaged 27 KB of summary and the single largest was 9,558,930
@@ -56,11 +55,16 @@ const activitySummaryMax = 8 << 10 // 8 KiB
 // message.
 //
 // The RESULT is bounded by activitySummaryMax, marker included — not the
-// truncated prefix alone. That makes the function idempotent, which matters
-// because more than one layer clamps: Record and recordBatch both do, and a
-// dual-write store hands the same entry to two backends. Reserving no room for
-// the marker made the output overshoot the cap, so a second pass truncated again
-// and appended a second marker.
+// truncated prefix alone. That makes the function idempotent: an entry that
+// passes through it twice (a re-recorded row, a future second layer) is not
+// truncated again and does not gain a second marker. Reserving no room for the
+// marker made the output overshoot the cap, which is how a second pass used to
+// append a second marker.
+//
+// The Pebble store applies it in normalizeActivityEntry, the one step both
+// Record and RecordBatch run. Until 2026-10-19 only the SQLite store clamped,
+// so Pebble rows were unbounded; the clamp moved here when that store was
+// removed rather than leaving the storage layer with no bound at all.
 func clampActivitySummary(s string) string {
 	if len(s) <= activitySummaryMax {
 		return s
@@ -287,32 +291,6 @@ type ActivityIndexRepairResult struct {
 	Deleted int64 `json:"deleted"`
 }
 
-// ActivityOptimizeResult holds the outcome of an OptimizeStatistics run.
-type ActivityOptimizeResult struct {
-	// Supported is false when the backend keeps no query-planner statistics, so
-	// there was nothing to refresh. It is reported explicitly rather than left
-	// implicit in a zero result, because "this backend has none" and "the call
-	// did nothing" are different facts and a caller that cannot tell them apart
-	// will report a silent no-op as success.
-	Supported bool `json:"supported"`
-	// Bootstrapped is true when the backend had NO stored statistics at all and
-	// this run created them from scratch — the expensive first pass, as opposed
-	// to the cheap incremental refresh that follows.
-	Bootstrapped bool `json:"bootstrapped"`
-	// TablesAnalyzed counts the statistics rows present after the run (for
-	// SQLite, rows in sqlite_stat1). Zero after a supported run means the
-	// analysis produced nothing, which is a problem worth seeing.
-	TablesAnalyzed int `json:"tables_analyzed"`
-	// Duration is how long the run took, so an operator can watch this grow with
-	// the table rather than discovering the cost when it blows a timeout.
-	Duration time.Duration `json:"duration"`
-	// CoveringIndexesBuilt is true on the run that built the SQLite activity
-	// table's covering time indexes and dropped the ones they replace. That
-	// build sorts the whole table, so it happens here, on the maintenance
-	// schedule, and never at open (see SQLActivityStore.OptimizeStatistics).
-	CoveringIndexesBuilt bool `json:"covering_indexes_built,omitempty"`
-}
-
 // RecompactResult holds the outcome of a RecompactDigests operation.
 type RecompactResult struct {
 	Touched int `json:"touched"`
@@ -425,10 +403,10 @@ func isLegacyItem(item DigestItem) bool {
 // thousands of rows, which is the opposite of summarizing. The ids are still
 // worth keeping for tracing, so each summary records how many distinct
 // operations it covers plus the lowest summarizeOpSampleMax of them (sorted, so
-// all three backends agree on the sample), and says when the sample is cut.
+// the sample is deterministic), and says when the sample is cut.
 const summarizeOpSampleMax = 20
 
-// summarizeGroupKey is the Summarize group key shared by every backend.
+// summarizeGroupKey is the Summarize group key.
 type summarizeGroupKey struct{ day, typ, source string }
 
 // summarizeDetails renders the Details map of one Summarize row. opIDs is the
@@ -453,35 +431,26 @@ func summarizeDetails(source string, opIDs map[string]struct{}) (map[string]any,
 		}
 	}
 	sort.Strings(ids)
-	return summarizeDetailsSorted(source, len(ids), ids), summarizeOpTags(ids)
-}
-
-// summarizeDetailsSorted is summarizeDetails for a caller that already holds
-// the distinct count and an ascending (possibly already capped) id list, as
-// the SQLite backend does from its own query.
-func summarizeDetailsSorted(source string, distinct int, sortedIDs []string) map[string]any {
-	sample := sortedIDs
+	sample := ids
 	if len(sample) > summarizeOpSampleMax {
 		sample = sample[:summarizeOpSampleMax]
 	}
-	return map[string]any{
+	details := map[string]any{
 		"summarized_source": source,
-		"distinct_ops":      distinct,
+		"distinct_ops":      len(ids),
 		"op_ids_sample":     append([]string{}, sample...),
-		"op_ids_truncated":  distinct > len(sample),
+		"op_ids_truncated":  len(ids) > len(sample),
 	}
+	return details, summarizeOpTags(ids)
 }
 
-// summarizeTestHooks lets tests stop or perturb a Summarize pass at its commit
-// boundaries. Both are nil in production.
+// summarizeTestHooks lets tests stop a Summarize pass at its commit
+// boundaries. Nil in production.
 //
-//   - beforeGroup runs after the group scan and before a group's first
-//     transaction (SQLite), where another writer could add a row to the group.
 //   - afterChunk runs after each committed delete chunk (the first one carries
 //     the summary row), so a test can cancel ctx between chunks.
 var summarizeTestHooks struct {
-	beforeGroup func()
-	afterChunk  func()
+	afterChunk func()
 }
 
 // summarizeOpTags renders a summary's sampled operation ids as "op:<id>" tags,

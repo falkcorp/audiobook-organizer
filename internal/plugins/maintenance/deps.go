@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.94.0
+// version: 1.95.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -700,7 +700,7 @@ type ActivityLogOps interface {
 	) (summarized int, pruned int, indexOrphansRemoved int64, err error)
 	// CompactActivityEntries runs ONLY the compaction pass of CompactActivityLog
 	// — every compactable-tier row older than cutoff collapsed into daily
-	// digests on every activity backend — with no summarize, prune or index
+	// digests — with no summarize, prune or index
 	// repair. It backs the user-triggered maintenance.compact-activity-log op,
 	// which replaced the synchronous POST /activity/compact handler: that
 	// handler compacted and nothing else, and the op keeps that contract.
@@ -708,36 +708,16 @@ type ActivityLogOps interface {
 	CompactActivityEntries(ctx context.Context, cutoff time.Time,
 		progress database.CompactProgress,
 	) (database.CompactResult, error)
-	// OptimizeActivityStatistics refreshes the activity store's query-planner
-	// statistics. It is separate from CompactActivityLog on purpose — see
-	// optimizeActivityDBDef for the measurements that forced the split.
-	OptimizeActivityStatistics(ctx context.Context) (database.ActivityOptimizeResult, error)
 	// RecompactActivityDigests re-derives type, tier and tags on every stored
-	// daily-digest item that was compacted before enrichment existed, on every
-	// activity backend. Idempotent: a digest with no legacy items is skipped.
+	// daily-digest item that was compacted before enrichment existed.
+	// Idempotent: a digest with no legacy items is skipped.
 	// It backs the maintenance.recompact-activity-digests op, which replaced
 	// the synchronous POST /admin/recompact-digests handler.
 	RecompactActivityDigests(ctx context.Context) (database.RecompactResult, error)
-	// VacuumActivityDB previews (dryRun) or performs a VACUUM of the SQLite
-	// activity database, followed by the WAL truncate that returns the freed
-	// space. Backends with no SQLite database report Supported=false. It backs
-	// the maintenance.vacuum-activity-db op.
-	VacuumActivityDB(ctx context.Context, dryRun bool) (database.ActivityVacuumReport, error)
 	// ActivityFilterIndexBackfiller returns the Pebble activity store's
 	// filter-index backfill surface, or nil when no Pebble activity store is
-	// wired. In the SQLite-migration wrapper it is the Pebble side, which
-	// receives every write, so the indexes can be built before the primary
-	// backend switches to Pebble.
+	// wired (a test double).
 	ActivityFilterIndexBackfiller() database.ActivityFilterIndexBackfiller
-	// ReclaimMigratedActivity deletes Pebble-side activity rows that the SQLite
-	// cutover has made redundant, freeing space in the main database.
-	//
-	// It reports a census (row counts on both backends, cutover state, how much
-	// is eligible) even when it refuses to delete, so a run that is blocked
-	// still tells the operator what is blocking it and how much is waiting.
-	ReclaimMigratedActivity(ctx context.Context, retain time.Duration, dryRun bool,
-		onTier database.ActivityReclaimProgress,
-	) (database.ActivityReclaimResult, error)
 }
 
 // DedupRunners runs the dedup review and triage operations.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup_activity_log_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5c8b1f37-92ad-4e60-b3d1-8a4f26c0e7b9
-// last-edited: 2026-09-13
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -33,7 +33,7 @@ func (d activityCleanupDeps) CompactActivityEntries(_ context.Context, _ time.Ti
 	// Emit one event the way a real backend would, so the test below can pin
 	// that the scheduled op forwards it to UpdateProgress.
 	if progress != nil {
-		progress(database.CompactProgressEvent{Backend: "sqlite", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 40}})
+		progress(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 40}})
 	}
 	return database.CompactResult{DaysCompacted: 2, EntriesDeleted: 40}, nil
 }
@@ -67,10 +67,6 @@ func TestCleanupActivityLog_SkipsCompactionWhenNightlyEnabled(t *testing.T) {
 			t.Errorf("nightly=%v: summarize/prune must still run; logs:\n%s", tc.nightly, joined)
 		}
 	}
-}
-
-func (d activityCleanupDeps) OptimizeActivityStatistics(_ context.Context) (database.ActivityOptimizeResult, error) {
-	return database.ActivityOptimizeResult{Supported: true, TablesAnalyzed: 6}, nil
 }
 
 // TestCleanupActivityLog_ReportsIndexOrphanCount pins the reporting half of the

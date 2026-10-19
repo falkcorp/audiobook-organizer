@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recompact_activity_digests.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b4f2e61-3d7a-4c95-a0e8-5f1c9d6b2a73
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -42,13 +42,12 @@ type RecompactActivityDigestsResult struct {
 // work is visible in the operations list.
 //
 // LIVENESS. LivenessNone with an explicit budget, not LivenessManual. The
-// store's RecompactDigests is one blocking call per backend with no progress
+// store's RecompactDigests is one blocking call with no progress
 // callback of its own (it checks ctx between digests but reports nothing), so
 // there is nothing to forward to UpdateProgress mid-run. Declaring
 // LivenessManual would invite the five-minute never_reported strike that
 // killed the nightly cleanup until #3214; declaring the truth — coarse
-// granularity, here is the budget — is what maintenance.activity-reclaim does
-// for the same reason. Digests are one row per day per source, so the work is
+// granularity, here is the budget — is the accurate choice. Digests are one row per day per source, so the work is
 // bounded by days of history, not by row volume; 1h is a ceiling, not an
 // estimate.
 //
@@ -61,7 +60,7 @@ func (p *Plugin) recompactActivityDigestsDef() sdk.OperationDef {
 		ProgressTimeout: 60 * time.Minute,
 		Plugin:          "maintenance",
 		DisplayName:     "Recompact activity digests",
-		Description:     "Re-derives type, tier and tags on daily digests that were compacted before enrichment existed, on every activity database.",
+		Description:     "Re-derives type, tier and tags on daily digests that were compacted before enrichment existed.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -74,7 +73,7 @@ func (p *Plugin) recompactActivityDigestsDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runRecompactActivityDigests(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	startMsg := "Re-deriving legacy daily-digest items on every activity database"
+	startMsg := "Re-deriving legacy daily-digest items"
 	logging.Info(ctx, startMsg)
 	_ = reporter.Log(slog.LevelInfo, startMsg)
 	_ = reporter.UpdateProgress(0, 0, startMsg)

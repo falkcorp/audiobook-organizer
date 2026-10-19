@@ -1,7 +1,7 @@
 // file: internal/activity/service.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package activity
 
@@ -138,7 +138,7 @@ func (s *Service) FlushDeferred(ctx context.Context) error {
 //
 // It never closes the store under an in-flight deferred write. If ctx ends
 // first, the store is left open: the flush goroutine keeps writing, the
-// SQLite store's own bounded Close is not reached, and the returned error
+// store's own Close is not reached, and the returned error
 // counts the entries not yet confirmed written, so a loss at process exit is
 // never silent. A later Close retries. Once Close has succeeded, further calls
 // return nil and RecordDeferred refuses new entries.
@@ -279,26 +279,4 @@ func (s *Service) RecompactDigests(ctx context.Context) (database.RecompactResul
 // Store returns the underlying ActivityStorer (e.g. for close or direct access).
 func (s *Service) Store() database.ActivityStorer {
 	return s.store
-}
-
-// ReclaimMigratedActivity deletes Pebble-side activity rows that the SQLite
-// cutover has made redundant, freeing space in the main database.
-//
-// It takes no store parameter on purpose: the Service already holds the store,
-// so threading one through the signature would widen the coupling for nothing
-// (see the worked example in CLAUDE.md). When the wired store is not the
-// migration wrapper — the Pebble-only escape hatch, or a SQLite-open fallback —
-// the reclaim reports a refusal naming the type it got, rather than failing,
-// because "there is no duplicate copy" is an answer and not an error.
-func (s *Service) ReclaimMigratedActivity(
-	ctx context.Context,
-	retain time.Duration,
-	dryRun bool,
-	onTier database.ActivityReclaimProgress,
-) (database.ActivityReclaimResult, error) {
-	// Pass the store as wired. Asserting the wrapper type here would throw away
-	// the concrete type before the refusal could name it, and that name is the
-	// only thing distinguishing "legitimately Pebble-only" from "a wrapper got
-	// wired in front and this op has been silently refusing ever since".
-	return database.ReclaimMigratedActivity(ctx, s.store, retain, dryRun, onTier)
 }

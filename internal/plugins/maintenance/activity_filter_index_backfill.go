@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -107,8 +107,7 @@ type ActivityFilterIndexBackfillResult struct {
 // primary row and skips a missing one, and RepairActivityIndexes deletes them
 // nightly — they only cost space until then. To keep them rare the op shares
 // maintenance.cleanup-activity-log's ConcurrencyKey with every OP that deletes
-// activity rows: cleanup, compact, nightly compact, recompact and
-// maintenance.activity-reclaim (moved onto this key for that reason). The one
+// activity rows: cleanup, compact, nightly compact and recompact. The one
 // deleter that was not an op, the HTTP library wipe, was removed with its
 // route (01-P81a); any ghost keys from a deleter outside the ops are handled
 // as above.

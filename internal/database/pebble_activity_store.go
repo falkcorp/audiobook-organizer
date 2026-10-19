@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -102,8 +102,9 @@ var (
 )
 
 // PebbleActivityStore persists activity log entries in a shared PebbleDB database.
-// It satisfies the ActivityStorer interface and is a drop-in replacement for both
-// ActivityStore (SQLite) and the retired NutsDB activity store.
+// It satisfies the ActivityStorer interface and is the only activity store: it
+// replaced the retired NutsDB store, and the SQLite store was removed on
+// 2026-10-19.
 //
 // The caller retains ownership of the *GatedDB — Close() on this store is a no-op.
 type PebbleActivityStore struct {
@@ -200,21 +201,12 @@ func (s *PebbleActivityStore) DecodeFailures() int64 { return s.decodeFailures.L
 // accesses, and refuses later ones with an error wrapping pebble.ErrClosed
 // (pebble_gate.go). Before the gate, pebble PANICKED ErrClosed from
 // Get/Set/NewIter/Commit on a closed DB, so every method in this file that
-// touches s.db (and SetLastActivityDBPath in
-// sql_activity_relocate.go) defers recoverPebbleClosed: an access
+// touches s.db defers recoverPebbleClosed: an access
 // after close returns an error wrapping pebble.ErrClosed, which every caller
 // already logs (activity.Service.writeDeferred with a lost-entry count),
 // instead of killing the process. Methods whose work runs on another
 // goroutine (repairIndexChunk under errgroup) carry their own guard, because
 // recover only sees panics on its own goroutine.
-//
-// Two readers are deliberately left unguarded: LastActivityDBPath and
-// SQLBackfillDone. Both return a bare bool with no error, so a recovered
-// panic could only come back as "no record" — a false answer that would
-// send relocation looking for the database somewhere else, or start the
-// wiring on the wrong tier. They run only during startup wiring
-// (activity/register.go, activity/relocate.go), before anything can close
-// the DB, so a panic there is a real bug and should crash.
 func (s *PebbleActivityStore) Close() error { return nil }
 
 // DB returns the underlying *GatedDB. Used by callers (e.g., backfill, registry wiring)
@@ -619,14 +611,12 @@ type pactPreparedEntry struct {
 // pactDeleteEntry uses to remove them — rather than from a private fmt.Sprintf.
 // Writer and deleter now share one definition of the key format, so "what this
 // wrote is what Prune deletes" is true by construction, not by inspection.
-// normalizeActivityEntry applies the write-time defaults every activity backend
-// must agree on, so a dual-written entry stores identical field values in each
-// store (and therefore hashes to the same content key — see activitySrcKey).
-// It is the single source of truth for those defaults: prepareEntry (Pebble) and
-// MigratingActivityStore.Record (the SQLite dual-write fan-out) both call it, so
-// the two backends can never normalize a zero timestamp or an empty tier/level
-// to different values. It returns an error only for the one per-entry-attributable
-// failure the batch paths rely on isolating: a pre-epoch timestamp.
+// normalizeActivityEntry applies the write-time defaults and bounds every
+// activity row gets: a zero timestamp becomes now, an empty level "info", an
+// empty tier "change", and the summary is clamped to activitySummaryMax.
+// prepareEntry calls it, so Record and RecordBatch can never disagree. It
+// returns an error only for the one per-entry-attributable failure the batch
+// paths rely on isolating: a pre-epoch timestamp.
 func normalizeActivityEntry(e ActivityEntry) (ActivityEntry, error) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
@@ -656,6 +646,9 @@ func normalizeActivityEntry(e ActivityEntry) (ActivityEntry, error) {
 	if e.Tier == "" {
 		e.Tier = "change"
 	}
+	// Bound the summary at the storage layer; see activitySummaryMax for the
+	// 9.5 MB single summary that made this necessary.
+	e.Summary = clampActivitySummary(e.Summary)
 	return e, nil
 }
 
@@ -1521,8 +1514,7 @@ func (s *PebbleActivityStore) repairIndexChunk(ctx context.Context, rows []pactI
 }
 
 // pactCompactDeleteBatch bounds how many source rows one compaction batch
-// deletes before committing. It plays the same role sqlActDeleteChunk plays on
-// the SQL backend: it keeps a single day's deletion off the heap and out of one
+// deletes before committing. It keeps a single day's deletion off the heap and out of one
 // giant batch, so a multi-million-row day commits as a sequence of small,
 // durable steps instead of one all-or-nothing write.
 const pactCompactDeleteBatch = 5000
@@ -1532,8 +1524,7 @@ const pactCompactDeleteBatch = 5000
 // It keeps three capped item lists rather than one uncapped list that is sorted
 // and truncated at the end. Filling categories in audit → error/warn → normal
 // precedence and capping each at maxDigestItems is equivalent to the old
-// concat-then-truncate (the SQL backend's buildDayDigest already does exactly
-// this), but its memory is bounded at 3*maxDigestItems items regardless of how
+// concat-then-truncate, but its memory is bounded at 3*maxDigestItems items regardless of how
 // many rows the day holds.
 type pactDigestScratch struct {
 	counts                        map[string]int
@@ -1618,8 +1609,7 @@ func (sc *pactDigestScratch) details(dateKey string) DigestDetails {
 // CompactByDay collapses every compactable-tier entry older than olderThan into
 // one daily digest per calendar day, deleting the originals.
 //
-// BOUNDED IN BOTH DIMENSIONS, and EXACTLY-ONCE UNDER INTERRUPTION — the same two
-// contracts SQLActivityStore.CompactByDay documents, for the same reasons. Days
+// BOUNDED IN BOTH DIMENSIONS, and EXACTLY-ONCE UNDER INTERRUPTION. Days
 // are iterated from the data (earliestCompactableDay decodes nothing), and each
 // day is consumed in committed chunks of pactCompactDeleteBatch entries rather
 // than materialized. The previous implementation concatenated every tier's rows
@@ -1905,18 +1895,7 @@ func (s *PebbleActivityStore) stageDayDigest(batch *GatedBatch, startOfDay time.
 	return pactStageFilterIndexes(batch, digestKey, digest)
 }
 
-// OptimizeStatistics is a no-op for the Pebble backend: an LSM store has no
-// query planner and keeps no selectivity statistics, so there is nothing to
-// refresh. Reported as Supported=false rather than a bare zero result so a
-// caller can tell "this backend has none" from "the call did nothing".
-//
-// Pebble's own storage-level compaction is automatic and internal to the engine;
-// it is unrelated to this method and needs no scheduling.
-func (s *PebbleActivityStore) OptimizeStatistics(_ context.Context) (ActivityOptimizeResult, error) {
-	return ActivityOptimizeResult{Supported: false}, nil
-}
-
-// MigrateSystemActivityLogs is a no-op for PebbleActivityStore since it's not backed by SQLite.
+// MigrateSystemActivityLogs is a no-op for PebbleActivityStore: there is no legacy log to migrate into it.
 func (s *PebbleActivityStore) MigrateSystemActivityLogs() (int, error) {
 	return 0, nil
 }
@@ -2173,8 +2152,9 @@ const (
 // encoding/json skips a key with no matching struct field using a byte-level
 // scanner that allocates nothing, so the residual 16.9 ms is pure lexing of
 // bytes we then discard. That is the floor for a JSON value, and it is why this
-// is a mitigation and not the fix: the fix is the SQLite backend, where
-// GetDistinctSources is an indexed `GROUP BY source` that never reads a row.
+// is a mitigation and not the full fix: an index on source (the way the removed
+// SQLite backend answered this with an indexed `GROUP BY source`) would never
+// read a row at all.
 //
 // One deliberate behaviour difference: a row whose `details` is syntactically
 // valid JSON but of the wrong Go type (a string where a map is expected) fails
@@ -2404,158 +2384,6 @@ func (s *PebbleActivityStore) scanTierKVs(ctx context.Context, tier string, sinc
 		out = append(out, pactKV{key: keyCopy, entry: e})
 	}
 	return out, nil
-}
-
-// streamTierEntries iterates a tier's entries in ascending key order and hands
-// them to fn in bounded batches of at most batchSize, NEVER materialising the
-// whole tier. It is the memory-bounded counterpart to scanTierKVs, added for the
-// Pebble→SQLite activity backfill after the materialising scan OOM-killed prod on
-// the ~1.3 GiB `change` tier (2026-09-07): scanTierKVs held every decoded row of
-// the tier live before the first insert, so RSS tracked the whole tier. This
-// holds at most batchSize rows.
-//
-// The batch slice fn receives is REUSED across calls: fn MUST NOT retain it (or
-// any row in it) past its own return — the backing array is truncated and refilled
-// for the next batch. The backfill's fn copies each batch into SQLite and
-// re-presents the same slice for parity, both fully synchronous, which is exactly
-// this contract.
-//
-// A single Pebble iterator (a consistent point-in-time snapshot) is held open
-// across the whole tier while fn commits to SQLite between batches. That is
-// deliberate: seek-based re-pagination would be more code and re-decode work for
-// no benefit at this scale, and the snapshot pin is modest here — do NOT
-// "optimise" it into a re-seek loop. Because the iterator is a snapshot, live
-// dual-writes that land after it opens are invisible to the stream (and handled
-// by the live write path), so fn never races a concurrent writer.
-//
-// startAfter resumes the tier immediately after a previously checkpointed key
-// (empty/nil starts at the top). fn receives that key alongside each batch as
-// lastKey — the primary key of the batch's final row — so the caller can persist
-// a cursor. lastKey's backing array is REUSED, like the batch slice: copy it if
-// you keep it. A startAfter outside this tier's key range is IGNORED rather than
-// obeyed, because honouring one would silently produce an empty scan that a
-// caller could mistake for a fully-scanned tier.
-//
-// ctx is checked every activityCtxCheckInterval rows and again before each fn
-// call. Decode failures are counted and reported in aggregate exactly as
-// scanTierKVs does. A non-nil fn error aborts the stream immediately. Returns the
-// number of entries successfully decoded AND accepted by fn — i.e. what actually
-// reached the batches (decode failures excluded), counting THIS call only: a
-// resumed stream does not know about rows an earlier attempt consumed.
-func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string, batchSize int, startAfter []byte, fn func(batch []ActivityEntry, lastKey []byte) error) (_ int, err error) {
-	// Driven by the SQLite activity backfill op, which can still be running
-	// when the main store (owner of this borrowed DB) closes.
-	defer recoverPebbleClosed("pebble_activity_store.streamTierEntries", &err)
-	if batchSize <= 0 {
-		batchSize = 1
-	}
-	lower, upper := pactTierBounds(tier, nil, nil)
-	// RESUME. Restart the tier immediately AFTER the caller's checkpointed key.
-	// Pebble's LowerBound is inclusive and keys are plain byte strings, so the
-	// successor of K is K+0x00 — that skips exactly K and nothing else.
-	//
-	// This is still ONE snapshot iterator per tier attempt, so it does NOT
-	// contradict the "do not turn this into a re-seek loop" warning above: the
-	// bound is chosen once, at open time.
-	//
-	// ⚠️ Resuming under a NEW snapshot CAN miss a row, and the caller — not this
-	// function — is what makes it safe. Do not restore the argument this comment
-	// used to make ("any row written since the previous snapshot sorts ABOVE the
-	// cursor"): it is false. Keys are act:<tier>:<zero-padded nanos>:<ulid> and
-	// the nanos come from the entry's own Timestamp, which is CALLER-SUPPLIED and
-	// non-monotonic (see the note on timestamp cutoffs in sql_activity_backfill.go),
-	// so a row written later can sort earlier.
-	//
-	// What actually holds: a row written during the migration is dual-written to
-	// SQLite by MigratingActivityStore.Record, so stepping over it costs nothing.
-	// The exceptions are the maintenance paths that deliberately bypass the
-	// dual-write (CompactByDay, Summarize) — and the backfill excludes the tier
-	// they can backdate into. See activityNonResumableTiers in
-	// sql_activity_progress.go for the full argument and its residual.
-	//
-	// The range check is not decoration. A cursor outside the tier would make
-	// this yield zero rows, which the backfill would read as a fully-scanned
-	// tier — see resumeCursorFor, which rejects foreign cursors before they get
-	// here. Belt and braces: an out-of-range key is ignored, never obeyed.
-	if len(startAfter) > 0 && bytes.Compare(startAfter, lower) >= 0 && bytes.Compare(startAfter, upper) < 0 {
-		lower = append(append([]byte(nil), startAfter...), 0x00)
-	}
-
-	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: lower,
-		UpperBound: upper,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("pebble_activity_store: streamTierEntries new iter (tier=%s): %w", tier, err)
-	}
-	defer iter.Close()
-
-	tally := &pactDecodeTally{}
-	defer tally.log("streamTierEntries tier=" + tier)
-
-	batch := make([]ActivityEntry, 0, batchSize)
-	streamed := 0
-	seen := 0
-
-	// lastKey tracks the primary key of the most recently APPENDED entry, so fn
-	// receives a checkpointable cursor alongside each batch.
-	//
-	// Two properties matter. It is only updated on append, so the cursor always
-	// names a row that actually reached fn — never a decode failure that fn has
-	// not seen. And its backing array is REUSED (append(lastKey[:0], …)) rather
-	// than reallocated per row, which keeps this allocation-free across the
-	// ~6.5M-row `change` tier; fn must therefore copy it if it retains it, the
-	// same contract the batch slice already carries.
-	var lastKey []byte
-
-	// flush hands the accumulated batch to fn, then truncates it for reuse. It is
-	// a no-op on an empty batch so the trailing flush after the loop is safe.
-	flush := func() error {
-		if len(batch) == 0 {
-			return nil
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if err := fn(batch, lastKey); err != nil {
-			return err
-		}
-		streamed += len(batch)
-		batch = batch[:0] // reuse backing array; rows overwritten on next fill
-		return nil
-	}
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		if seen%activityCtxCheckInterval == 0 {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				slog.Warn("[activity] streamTierEntries aborted: caller went away",
-					"tier", tier, "rows_scanned", seen, "streamed", streamed, "error", ctxErr)
-				return streamed, ctxErr
-			}
-		}
-		seen++
-
-		var e ActivityEntry
-		s.entriesDecoded.Add(1)
-		if jsonErr := json.Unmarshal(iter.Value(), &e); jsonErr != nil {
-			// Counted and reported in aggregate by the deferred tally.log, exactly
-			// as scanTierKVs — never a silent drop.
-			s.decodeFailures.Add(1)
-			tally.record(iter.Key(), jsonErr)
-			continue
-		}
-		batch = append(batch, e)
-		lastKey = append(lastKey[:0], iter.Key()...)
-		if len(batch) >= batchSize {
-			if err := flush(); err != nil {
-				return streamed, err
-			}
-		}
-	}
-	if err := flush(); err != nil {
-		return streamed, err
-	}
-	return streamed, nil
 }
 
 // queryByIndexPrefix reads ref values from an index prefix, then fetches primary entries.

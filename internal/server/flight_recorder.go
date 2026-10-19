@@ -1,7 +1,7 @@
 // file: internal/server/flight_recorder.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c64f779e-5ec5-46b3-8883-8d6f1b56bec9
-// last-edited: 2026-10-14
+// last-edited: 2026-10-19
 
 package server
 
@@ -22,8 +22,7 @@ type traceSnapshotter interface {
 
 // newFlightRecorder builds the server's flight recorder (not started; see
 // startFlightRecorder). Traces go to a "traces" directory beside the database,
-// the same sibling-directory rule ResolveActivityDBPath and the HNSW index
-// use. With no DatabasePath (most tests) the recorder is disabled.
+// the same sibling-directory rule the HNSW index uses. With no DatabasePath (most tests) the recorder is disabled.
 func newFlightRecorder() *diagflight.Recorder {
 	var dir string
 	if config.AppConfig.DatabasePath != "" {
