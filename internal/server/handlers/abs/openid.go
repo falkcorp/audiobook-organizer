@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -1124,21 +1124,12 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 		respondError(c, http.StatusUnauthorized, "user no longer exists")
 		return
 	}
-	// An account disabled since the code was minted must not be revived by
-	// redeeming it. Mirrors the middleware's own active check.
-	if status := strings.ToLower(strings.TrimSpace(user.Status)); status != "" && status != "active" {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
-			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: user.ID,
-			Username: user.Username, Reason: "user-inactive", Path: c.Request.URL.Path,
-		})
-		respondError(c, http.StatusForbidden, "account is not active")
-		return
-	}
 	// The account's credentials or status changed after the code was minted
 	// (password change, reset, deactivation): the sign-in that produced it
 	// predates the change, so it must not yield a session stamped with the new
-	// epoch. The user signs in again.
+	// epoch. The user signs in again. Checked BEFORE the status check, in the
+	// same order as ResolveBearer, so a code minted before a deactivation is
+	// 401 credentials-changed (dead) rather than 403 account-inactive.
 	if user.CredentialEpoch != pending.CredentialEpoch {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
@@ -1146,6 +1137,19 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 			Username: user.Username, Reason: "credentials-changed", Path: c.Request.URL.Path,
 		})
 		respondError(c, http.StatusUnauthorized, "the account changed since this sign-in started; sign in again")
+		return
+	}
+	// An inactive account never gets a session from a code. A deactivation
+	// through SetUserStatus bumps the epoch and is refused above; this covers
+	// a row whose status is inactive at the same epoch the code carries.
+	// Mirrors the middleware's own active check.
+	if status := strings.ToLower(strings.TrimSpace(user.Status)); status != "" && status != "active" {
+		absauth.Audit(absauth.AuditEvent{
+			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: user.ID,
+			Username: user.Username, Reason: "user-inactive", Path: c.Request.URL.Path,
+		})
+		respondError(c, http.StatusForbidden, "account is not active")
 		return
 	}
 

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-19
 
@@ -493,6 +493,12 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 		if errors.Is(err, database.ErrUserProtectedField) {
 			// The copy was read before a password or status change landed.
 			httputil.RespondWithConflict(c, "the account changed while the profile was being saved; reload and try again")
+			return
+		}
+		if errors.Is(err, database.ErrUserNotFound) {
+			// Defensive: nothing deletes users today, but the store reports a
+			// missing row as ErrUserNotFound, and that is a 404, not a 500.
+			httputil.RespondWithNotFound(c, "user", user.ID)
 			return
 		}
 		httputil.RespondWithInternalError(c, "failed to update profile")
