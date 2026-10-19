@@ -1,5 +1,5 @@
 // file: internal/server/collection_owner_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f6b8d41-a3c7-4e95-b012-7d9e5c1a4f68
 // last-edited: 2026-10-18
 
@@ -155,8 +155,14 @@ func backfillCollectionOwners(store collectionOwnerStore, remat collectionRemate
 
 	admin := auth.FirstActiveAdmin(users)
 	if admin == nil {
+		// These orphans have no per-user field (those were split off above), so
+		// they need no evaluator: a plain query is evaluated with no user at all,
+		// with or without an admin, and keeps working. Assigning an owner is only
+		// bookkeeping, done once there is an admin to assign. A per-user query on
+		// an orphan is the case that needs one, and it is blocked (never evaluated
+		// as a stand-in) until its first active admin adopts it with adopt_owner.
 		res.NoAdmin = true
-		log.Warn("collection owner backfill: %d dynamic collection(s) have no usable owner and there is no active admin to assign; leaving them (reads fall back to the first admin once one exists)", len(orphans))
+		log.Warn("collection owner backfill: %d dynamic collection(s) have no usable owner and there is no active admin to assign; leaving them unowned (their queries use no per-user field, so they are still evaluated with no user and keep working)", len(orphans))
 		return res, nil
 	}
 
@@ -206,7 +212,7 @@ func unownedPerUserWarning(cols []database.Collection) string {
 		more = fmt.Sprintf("; and %d more", len(cols)-len(shown))
 	}
 	return fmt.Sprintf("collection owner backfill: %d dynamic collection(s) use a per-user query field (%s) and have no usable owner, so they were left unowned and will not be evaluated as the first admin; "+
-		"their stored members are unchanged. The first active admin can re-save each query to take ownership, or remove the per-user field: %s%s",
+		"their stored members are unchanged. The first active admin can take ownership of each by saving its query again with adopt_owner: true, or remove the per-user field: %s%s",
 		len(cols), strings.Join(search.PerUserFieldNames(), ", "), strings.Join(parts, "; "), more)
 }
 

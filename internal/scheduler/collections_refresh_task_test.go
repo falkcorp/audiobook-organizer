@@ -1,5 +1,5 @@
 // file: internal/scheduler/collections_refresh_task_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f7a1d58-92c4-4e06-b8a3-6d0e5c1f9b27
 // last-edited: 2026-10-18
 
@@ -8,6 +8,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -93,4 +94,38 @@ func TestCollectionsRefreshTask_DisabledWithoutTheOp(t *testing.T) {
 	task, ok := ts.GetTask(collectionsRefreshTaskName)
 	require.True(t, ok)
 	assert.False(t, task.IsEnabled())
+}
+
+// The tick enqueues only when the server's precondition says a relative-date
+// dynamic collection exists and the search index is open. No collection or a
+// closed index means no operation row at all; an error is surfaced; an unwired
+// hook cannot tell and enqueues.
+func TestCollectionsRefreshTask_PreconditionGatesTheEnqueue(t *testing.T) {
+	cases := []struct {
+		name    string
+		hook    func() (bool, error)
+		want    int
+		wantErr bool
+	}{
+		{"nothing to refresh", func() (bool, error) { return false, nil }, 0, false},
+		{"something to refresh", func() (bool, error) { return true, nil }, 1, false},
+		{"the check fails", func() (bool, error) { return false, errors.New("store down") }, 0, true},
+		{"no hook wired", nil, 1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, inserted := collectionsRefreshTaskFixture(t)
+			ts.deps.CollectionsRefreshPending = tc.hook
+			task, _ := ts.GetTask(collectionsRefreshTaskName)
+			op, err := task.TriggerFn("test")
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "store down")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Len(t, *inserted, tc.want)
+			assert.Equal(t, tc.want == 1, op != nil)
+		})
+	}
 }

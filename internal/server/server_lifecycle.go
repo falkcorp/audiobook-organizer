@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.53.0
+// version: 4.54.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-18
 
@@ -414,6 +414,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 		HasBatchPoller: func() bool {
 			return s.batchPoller != nil
 		},
+		CollectionsRefreshPending: s.collectionsRefreshPending,
 		PollBatches: func(ctx context.Context) (int, error) {
 			if s.batchPoller == nil {
 				return 0, nil

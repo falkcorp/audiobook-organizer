@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_refresh.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2a9c74-1b83-4f06-a7d1-8c4e0b3f6a92
 // last-edited: 2026-10-18
 
@@ -28,10 +28,15 @@ const RelativeRefreshConcurrency = 4
 
 // RelativeRefreshResult is what one RefreshRelativeDynamic run did. The counts
 // partition the collections it considered: Refreshed + Unchanged + Blocked +
-// Conflicts + Failed == Considered.
+// Conflicts + Failed == Considered, except when IndexUnavailable is set, where
+// nothing was evaluated and every count but Considered is zero.
 type RelativeRefreshResult struct {
 	// Considered is the dynamic collections whose query has a relative date term.
 	Considered int
+	// IndexUnavailable is true when the search index was closed or rebuilding at
+	// the start, so no collection was evaluated. That is a normal state around a
+	// start or a reindex, not a failure: the next run retries.
+	IndexUnavailable bool
 	// Refreshed is how many had a changed member list stored (in a dry run, how
 	// many would be).
 	Refreshed int
@@ -72,10 +77,13 @@ type RelativeRefreshResult struct {
 // list is split by collection, one task each), so two workers never touch the same
 // row; evaluate reads shared state but writes none.
 //
-// If the search index is not open, the run still counts every collection it could
-// not evaluate under Failed and returns playlist.ErrSearchIndexUnavailable so the
-// op reports the failure and the next scheduled run retries. progress, when not
-// nil, is called after each collection with (done, total).
+// If the search index is not open when the run starts it evaluates nothing and
+// returns with IndexUnavailable set and no error: a closed or rebuilding index is
+// routine (a start, a reindex) and the next hourly run retries, so it is neither
+// a failed op nor a warning per collection. An index that closes MID-run still
+// fails the collections it cut off (Failed) and returns
+// playlist.ErrSearchIndexUnavailable. progress, when not nil, is called after
+// each collection with (done, total).
 func (h *CollectionHandler) RefreshRelativeDynamic(ctx context.Context, dryRun bool, progress func(done, total int)) (RelativeRefreshResult, error) {
 	var res RelativeRefreshResult
 	cols, _, err := h.store.ListCollections(database.CollectionTypeDynamic, 0, 0)
@@ -90,6 +98,10 @@ func (h *CollectionHandler) RefreshRelativeDynamic(ctx context.Context, dryRun b
 		}
 	}
 	res.Considered = len(due)
+	if len(due) > 0 && !h.indexAvailable() {
+		res.IndexUnavailable = true
+		return res, nil
+	}
 
 	var (
 		mu               sync.Mutex
@@ -156,6 +168,9 @@ func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (r
 	switch {
 	case errors.Is(err, ErrCollectionOwnerMissingPerUserQuery):
 		return refreshBlocked, err
+	case errors.Is(err, playlist.ErrSearchIndexUnavailable):
+		// The run reports this once, not once per collection.
+		return refreshFailed, err
 	case err != nil:
 		collectionLog.Warn("collections: scheduled refresh could not evaluate %s: %s",
 			logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(err.Error()))
@@ -177,4 +192,33 @@ func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (r
 		return refreshFailed, err
 	}
 	return refreshChanged, nil
+}
+
+// indexAvailable reports whether the search index is open and not rebuilding, the
+// same condition playlist.EvaluateSmartPlaylist requires before it answers.
+func (h *CollectionHandler) indexAvailable() bool {
+	idx := h.indexFn()
+	return idx != nil && !idx.Rebuilding()
+}
+
+// RelativeRefreshPending reports whether a refresh run has anything to do right
+// now: at least one dynamic collection whose query has a relative date AND an
+// open search index. The scheduler asks it before enqueueing the hourly op, so an
+// install with no such collection (or a closed index) enqueues nothing: one
+// collection list and no operation row instead of a queued, run and recorded op
+// every hour that cannot change anything.
+func (h *CollectionHandler) RelativeRefreshPending() (bool, error) {
+	if !h.indexAvailable() {
+		return false, nil
+	}
+	cols, _, err := h.store.ListCollections(database.CollectionTypeDynamic, 0, 0)
+	if err != nil {
+		return false, err
+	}
+	for i := range cols {
+		if cols[i].Type == database.CollectionTypeDynamic && search.QueryHasRelativeDate(cols[i].Query) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
