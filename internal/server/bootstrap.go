@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-10-07
+// last-edited: 2026-10-19
 
 package server
 
@@ -23,13 +23,12 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -430,7 +429,7 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 
 	// No admin found — create one.
 	password := generateReadablePassword()
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	algo, hash, err := absauth.HashPassword(password)
 	if err != nil {
 		return nil, "", fmt.Errorf("hash password: %w", err)
 	}
@@ -443,7 +442,7 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 		roleID = adminRole.ID
 	}
 
-	u, err := store.CreateUser("admin", "admin@localhost", "bcrypt", string(hash), []string{roleID}, "active")
+	u, err := store.CreateUser("admin", "admin@localhost", algo, hash, []string{roleID}, "active")
 	if err != nil {
 		return nil, "", fmt.Errorf("create admin user: %w", err)
 	}

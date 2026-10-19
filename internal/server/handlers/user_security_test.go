@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_security_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f1c2a93-4d8e-4b6a-9c10-2e5b7a0d1f44
-// last-edited: 2026-06-09
+// last-edited: 2026-10-19
 
 package handlers_test
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
@@ -48,7 +49,7 @@ func sampleUser() *database.User {
 func TestAcceptInvite_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
-	store.EXPECT().ConsumeInvite("tok-1", "bcrypt", mock.Anything).Return(user, nil)
+	store.EXPECT().ConsumeInvite("tok-1", absauth.AlgoArgon2id, hashOf("supersecret")).Return(user, nil)
 	store.EXPECT().CreateSession(user.ID, mock.Anything, mock.Anything, mock.Anything).
 		Return(&database.Session{ID: "sess-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 

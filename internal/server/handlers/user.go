@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-08-01
+// last-edited: 2026-10-19
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -16,9 +16,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // UserStore is the narrow persistence interface required by UserHandler.
@@ -143,13 +143,13 @@ func (h *UserHandler) AcceptInvite(c *gin.Context) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	algo, hash, err := absauth.HashPassword(req.Password)
 	if err != nil {
 		httputil.InternalError(c, "hash password", err)
 		return
 	}
 
-	user, err := h.store.ConsumeInvite(req.Token, "bcrypt", string(hash))
+	user, err := h.store.ConsumeInvite(req.Token, algo, hash)
 	if err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
@@ -167,7 +167,7 @@ func (h *UserHandler) AcceptInvite(c *gin.Context) {
 	// Session token is delivered via the HttpOnly cookie only — never in the
 	// JSON body (would expose the bearer token to page JS, defeating HttpOnly).
 	// Return the safe user shape, not the raw *database.User, which would leak
-	// the bcrypt password hash (pen-test finding CRIT-2).
+	// the password hash (pen-test finding CRIT-2).
 	httputil.RespondWithCreated(c, gin.H{"user": buildAuthUserResponse(user), "expires_at": sess.ExpiresAt})
 }
 

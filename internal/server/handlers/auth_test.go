@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d5e6f7a8-b9c0-1234-5678-90abcdef0123
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package handlers_test
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,15 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// hashOf matches a stored argon2id hash of plain, so a handler test proves the
+// handler hashed the submitted password with the shared policy.
+func hashOf(plain string) any {
+	return mock.MatchedBy(func(hash string) bool {
+		ok, _ := absauth.VerifyPassword(absauth.AlgoArgon2id, hash, plain)
+		return ok
+	})
+}
 
 func newAuthCtx(method, path string, body any) (*gin.Context, *httptest.ResponseRecorder) {
 	gin.SetMode(gin.TestMode)
@@ -295,7 +305,7 @@ func TestAuthHandler_SetupInitialAdmin_Success(t *testing.T) {
 
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().CountUsers().Return(0, nil)
-	store.EXPECT().CreateUser("admin", "admin@local", "bcrypt", mock.Anything, []string{"admin"}, "active").Return(created, nil)
+	store.EXPECT().CreateUser("admin", "admin@local", absauth.AlgoArgon2id, hashOf("password123"), []string{"admin"}, "active").Return(created, nil)
 
 	h := handlers.NewAuthHandler(store, true)
 	c, w := newAuthCtx("POST", "/auth/setup", map[string]any{
