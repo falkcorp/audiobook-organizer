@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
 // last-edited: 2026-10-19
 
@@ -33,9 +33,9 @@ func pkcePair(verifier string) (string, string) {
 // contract that guarantee rests on. The same store backs minted codes and the
 // parked hop-1 requests.
 func TestOIDCTTLStore_SingleUse(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingCode](8, 0)
+	store := newOIDCTTLStore[oidcPendingCode](8)
 	now := time.Now()
-	store.put("abc", "", oidcPendingCode{UserID: "u1"}, now, time.Minute)
+	store.put("abc", "", 8, oidcPendingCode{UserID: "u1"}, now, time.Minute)
 
 	if v, ok := store.peek("abc", now); !ok || v.UserID != "u1" {
 		t.Fatal("peek must return an unexpired entry")
@@ -58,11 +58,11 @@ func TestOIDCTTLStore_SingleUse(t *testing.T) {
 // delete happening under the same lock as the read, both callers would receive
 // the entry and two sessions would be minted from one authorization.
 func TestOIDCTTLStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingCode](8, 0)
+	store := newOIDCTTLStore[oidcPendingCode](8)
 	now := time.Now()
 	const n = 50
 	for i := range n {
-		store.put("race", "", oidcPendingCode{UserID: "u1"}, now, time.Minute)
+		store.put("race", "", 8, oidcPendingCode{UserID: "u1"}, now, time.Minute)
 
 		results := make(chan bool, 2)
 		start := make(chan struct{})
@@ -90,9 +90,9 @@ func TestOIDCTTLStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
 // cannot be retried later under a skewed clock either. The boundary itself is
 // expired: a TTL of one minute means usable for strictly less than a minute.
 func TestOIDCTTLStore_ExpiredIsRefusedAndDeleted(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingCode](8, 0)
+	store := newOIDCTTLStore[oidcPendingCode](8)
 	now := time.Now()
-	store.put("old", "", oidcPendingCode{UserID: "u1"}, now, time.Minute)
+	store.put("old", "", 8, oidcPendingCode{UserID: "u1"}, now, time.Minute)
 	if _, ok := store.peek("old", now.Add(time.Minute)); ok {
 		t.Fatal("an entry at its expiry instant must not be visible")
 	}
@@ -104,45 +104,77 @@ func TestOIDCTTLStore_ExpiredIsRefusedAndDeleted(t *testing.T) {
 	}
 }
 
-// Per-owner quota: an owner holds at most perOwner live entries, and a new one
-// evicts that owner's OWN oldest — never anyone else's. A caller flooding hop 1
-// only churns its own slots; a person retrying is never blocked.
-func TestOIDCTTLStore_PerOwnerQuotaEvictsOwnOldest(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingRequest](100, 3)
+// Per-owner cap: an owner holds at most its cap of live entries, and a new one
+// evicts that owner's OWN oldest — never anyone else's.
+func TestOIDCTTLStore_PerOwnerCapEvictsOwnOldest(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingRequest](100)
 	now := time.Now()
-	store.put("victim", "svc:family", oidcPendingRequest{}, now, time.Minute)
-	for i, k := range []string{"a1", "a2", "a3", "a4", "a5"} {
-		res := store.put(k, "svc:attacker", oidcPendingRequest{}, now, time.Minute)
-		if wantOwner := max(0, i-2); res.OwnerEvicted != min(wantOwner, 1) {
-			t.Fatalf("put %s: OwnerEvicted = %d", k, res.OwnerEvicted)
-		}
+	store.put("victim", "email:v@example.com", 3, oidcPendingRequest{}, now, time.Minute)
+	for i := range 10 {
+		res := store.put(fmt.Sprintf("a%d", i), "svc:attacker", 4, oidcPendingRequest{}, now, time.Minute)
 		if res.GlobalEvicted != 0 {
-			t.Fatalf("put %s evicted globally below the global cap", k)
+			t.Fatalf("put %d evicted globally below the global cap", i)
 		}
 	}
-	for _, gone := range []string{"a1", "a2"} {
-		if _, ok := store.peek(gone, now); ok {
-			t.Fatalf("%s should have been evicted as the attacker's oldest", gone)
+	if n := store.countOwnerLocked("svc:attacker"); n != 4 {
+		t.Fatalf("attacker holds %d entries, cap 4", n)
+	}
+	for i := range 6 {
+		if _, ok := store.peek(fmt.Sprintf("a%d", i), now); ok {
+			t.Fatalf("a%d should have been evicted as the attacker's oldest", i)
 		}
 	}
-	for _, kept := range []string{"a3", "a4", "a5", "victim"} {
-		if _, ok := store.peek(kept, now); !ok {
-			t.Fatalf("%s must still be live", kept)
-		}
+	if _, ok := store.peek("victim", now); !ok {
+		t.Fatal("another owner's entry must survive a flood that only hits its own cap")
 	}
 }
 
-// Global cap: a full store evicts its oldest entry instead of refusing, so a
-// flood can never pin it shut. Expired entries are swept before anything live
-// is evicted.
-func TestOIDCTTLStore_FullStoreEvictsOldestNeverRefuses(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingRequest](3, 0)
+// One owner flooding all the way to the GLOBAL cap evicts only its own entries:
+// at the global cap the store takes from the owner holding the most, not the
+// globally oldest entry (which here is the victim's).
+func TestOIDCTTLStore_FloodToGlobalCapEvictsOnlyItself(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingRequest](10)
 	now := time.Now()
-	store.put("oldest", "", oidcPendingRequest{}, now, time.Minute)
-	store.put("mid", "", oidcPendingRequest{}, now, time.Minute)
-	store.put("new", "", oidcPendingRequest{}, now, time.Minute)
+	store.put("victim", "email:v@example.com", 3, oidcPendingRequest{}, now, time.Minute)
+	store.put("friend", "svc:friends", 256, oidcPendingRequest{}, now, time.Minute)
+	for i := range 50 {
+		store.put(fmt.Sprintf("flood%d", i), "svc:family", 256, oidcPendingRequest{}, now, time.Minute)
+		if len(store.entries) > 10 {
+			t.Fatalf("store grew to %d, cap 10", len(store.entries))
+		}
+	}
+	for _, k := range []string{"victim", "friend"} {
+		if _, ok := store.peek(k, now); !ok {
+			t.Fatalf("%s was evicted by another credential's flood", k)
+		}
+	}
+	if _, ok := store.peek("flood49", now); !ok {
+		t.Fatal("the flooder's newest entry must land")
+	}
 
-	res := store.put("newest", "", oidcPendingRequest{}, now, time.Minute)
+	// Two flooders at the cap take from each other, largest first, and still
+	// never from the small owner.
+	for i := range 20 {
+		res := store.put(fmt.Sprintf("other%d", i), "svc:other", 256, oidcPendingRequest{}, now, time.Minute)
+		if res.GlobalEvicted > 0 && res.EvictedFrom != "svc:family" && res.EvictedFrom != "svc:other" {
+			t.Fatalf("global eviction took from %q", res.EvictedFrom)
+		}
+	}
+	if _, ok := store.peek("victim", now); !ok {
+		t.Fatal("the small owner must survive two competing floods")
+	}
+}
+
+// A full store evicts instead of refusing, so a flood can never pin it shut,
+// and expired entries are swept before anything live is evicted.
+func TestOIDCTTLStore_FullStoreEvictsNeverRefuses(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingRequest](3)
+	now := time.Now()
+	store.put("oldest", "o", 100, oidcPendingRequest{}, now, time.Minute)
+	store.put("mid", "o", 100, oidcPendingRequest{}, now, time.Minute)
+	store.put("new", "o", 100, oidcPendingRequest{}, now, time.Minute)
+
+	res := store.put("newest", "o", 100, oidcPendingRequest{}, now, time.Minute)
 	if res.GlobalEvicted != 1 {
 		t.Fatalf("GlobalEvicted = %d, want 1", res.GlobalEvicted)
 	}
@@ -150,16 +182,12 @@ func TestOIDCTTLStore_FullStoreEvictsOldestNeverRefuses(t *testing.T) {
 		t.Fatal("a put into a full store must succeed")
 	}
 	if _, ok := store.peek("oldest", now); ok {
-		t.Fatal("the oldest entry must be the one evicted")
-	}
-	if len(store.entries) != 3 {
-		t.Fatalf("store holds %d entries, want the cap of 3", len(store.entries))
+		t.Fatal("within the evicted owner, its oldest entry must go first")
 	}
 
-	// An expired entry is swept first, so nothing live is evicted.
-	store.put("short", "", oidcPendingRequest{}, now, time.Second) // evicts "mid"
+	store.put("short", "o", 100, oidcPendingRequest{}, now, time.Second) // evicts "mid"
 	later := now.Add(2 * time.Second)
-	res = store.put("after", "", oidcPendingRequest{}, later, time.Minute)
+	res = store.put("after", "o", 100, oidcPendingRequest{}, later, time.Minute)
 	if res.GlobalEvicted != 0 {
 		t.Fatalf("GlobalEvicted = %d, want 0: the expired entry should have been swept instead", res.GlobalEvicted)
 	}
@@ -171,14 +199,14 @@ func TestOIDCTTLStore_FullStoreEvictsOldestNeverRefuses(t *testing.T) {
 }
 
 // Eviction stays bounded whatever the mix of owners: the store never exceeds
-// its cap, no owner ever exceeds perOwner, and a put always lands.
+// its cap, no owner ever exceeds its cap, and a put always lands.
 func TestOIDCTTLStore_EvictionBounded(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingRequest](16, 3)
+	store := newOIDCTTLStore[oidcPendingRequest](16)
 	now := time.Now()
 	for i := range 500 {
 		owner := fmt.Sprintf("o%d", i%7)
 		key := fmt.Sprintf("k%d", i)
-		store.put(key, owner, oidcPendingRequest{}, now, time.Minute)
+		store.put(key, owner, 3, oidcPendingRequest{}, now, time.Minute)
 		if _, ok := store.peek(key, now); !ok {
 			t.Fatalf("put %d did not land", i)
 		}
@@ -197,11 +225,11 @@ func TestOIDCTTLStore_EvictionBounded(t *testing.T) {
 
 // Re-putting a key replaces it rather than counting twice against the caps.
 func TestOIDCTTLStore_RePutReplaces(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingCode](2, 2)
+	store := newOIDCTTLStore[oidcPendingCode](2)
 	now := time.Now()
-	store.put("a", "o", oidcPendingCode{UserID: "1"}, now, time.Minute)
-	store.put("b", "o", oidcPendingCode{UserID: "2"}, now, time.Minute)
-	res := store.put("a", "o", oidcPendingCode{UserID: "3"}, now, time.Minute)
+	store.put("a", "o", 2, oidcPendingCode{UserID: "1"}, now, time.Minute)
+	store.put("b", "o", 2, oidcPendingCode{UserID: "2"}, now, time.Minute)
+	res := store.put("a", "o", 2, oidcPendingCode{UserID: "3"}, now, time.Minute)
 	if res.OwnerEvicted != 0 || res.GlobalEvicted != 0 {
 		t.Fatalf("re-put evicted %+v", res)
 	}
@@ -210,6 +238,25 @@ func TestOIDCTTLStore_RePutReplaces(t *testing.T) {
 	}
 	if _, ok := store.peek("b", now); !ok {
 		t.Fatal("re-put must not evict another entry")
+	}
+}
+
+// The rate-limit key ignores Cf-Connecting-Ip and X-Forwarded-For: the origin
+// cannot tell a header Cloudflare set from one a direct caller forged. It uses
+// gin's ClientIP under the router's trusted-proxy list, configured here exactly
+// as server.go configures production (SetTrustedProxies(nil)).
+func TestOIDCRateKey_IgnoresSpoofableForwardedHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, engine := gin.CreateTestContext(httptest.NewRecorder())
+	if err := engine.SetTrustedProxies(nil); err != nil {
+		t.Fatal(err)
+	}
+	c.Request = httptest.NewRequest("GET", "/auth/openid", nil)
+	base := oidcRateKey(c, "svc:family")
+	c.Request.Header.Set("Cf-Connecting-Ip", "203.0.113.9")
+	c.Request.Header.Set("X-Forwarded-For", "203.0.113.10")
+	if got := oidcRateKey(c, "svc:family"); got != base {
+		t.Fatalf("rate key changed with forged headers: %q vs %q", got, base)
 	}
 }
 
