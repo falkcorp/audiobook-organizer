@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-19
 //
@@ -723,12 +723,24 @@ describe('a held selection reaches no command that acts on it', () => {
     await user.click(screen.getByRole('button', { name: 'Show all' }));
     await waitFor(() => expect(screen.getByTestId('search-selected')).toBeDisabled());
     expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected');
-    for (const id of ['skip-selected', 'reject-selected', 'search-selected', 'apply-selected']) {
+    for (const id of [
+      'skip-selected',
+      'reject-selected',
+      'search-selected',
+      'apply-selected',
+      'apply-page',
+      'apply-high-confidence',
+    ]) {
       expect(screen.getByTestId(id)).toBeDisabled();
     }
 
     await user.click(screen.getByTestId('command-menu-metadata'));
-    for (const id of ['command-write-back', 'command-bulk-search-selected']) {
+    for (const id of [
+      'command-write-back',
+      'command-bulk-search-selected',
+      'command-apply-selected-fields',
+      'command-apply-all-fields',
+    ]) {
       const item = await screen.findByTestId(id);
       expect(item).toHaveAttribute('aria-disabled', 'true');
     }

@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.heldSelection.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3e5f21-7c4a-4d96-a0e2-5f1d9c7b3a84
 // last-edited: 2026-10-19
 //
@@ -76,6 +76,8 @@ describe('a held selection and the palette commands', () => {
     await user.click(screen.getByLabelText('Select Book a'));
     // Settled: the commands run.
     expect(command('write-back').disabledReason).toBeUndefined();
+    expect(command('apply-selected-fields').disabledReason).toBeUndefined();
+    expect(command('apply-all-fields').disabledReason).toBeUndefined();
 
     // The Title change asks the server about the selection; the check fails.
     vi.mocked(api.checkReviewSelection).mockRejectedValue(
@@ -87,6 +89,9 @@ describe('a held selection and the palette commands', () => {
       expect(command('write-back').disabledReason).toMatch(/^Actions on the selection are held/)
     );
     expect(command('bulk-search-selected').disabledReason).toMatch(/^Actions on the selection are held/);
+    expect(command('apply-selected-fields').disabledReason).toMatch(/^Actions on the selection are held/);
+    // Page-scoped: the same hold, worded for the page.
+    expect(command('apply-all-fields').disabledReason).toMatch(/^Actions are held until the selection is checked/);
 
     await command('write-back').run();
     await command('bulk-search-selected').run();
