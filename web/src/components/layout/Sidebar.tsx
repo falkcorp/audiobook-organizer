@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.23.0
+// version: 1.24.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-15
+// last-edited: 2026-10-18
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -32,6 +32,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import CollectionsBookmarkIcon from '@mui/icons-material/CollectionsBookmark';
+import BookmarksIcon from '@mui/icons-material/Bookmarks';
 import PeopleIcon from '@mui/icons-material/People';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import WavesIcon from '@mui/icons-material/Waves';
@@ -89,6 +90,7 @@ const menuItems = [
   { text: 'File Browser', icon: <FolderOpenIcon />, path: '/files' },
   { text: 'Works', icon: <MenuBookIcon />, path: '/works' },
   { text: 'Playlists', icon: <MenuBookIcon />, path: '/playlists' },
+  { text: 'Collections', icon: <BookmarksIcon />, path: '/collections' },
   { text: 'Activity', icon: <TimelineIcon />, path: '/activity' },
   { text: 'Review', icon: <FactCheckIcon />, path: '/review' },
   { text: 'Diagnostics', icon: <BugReportIcon />, path: '/diagnostics' },
