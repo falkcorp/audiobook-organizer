@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 2.2.2
+// version: 2.3.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package handlers
 
@@ -342,6 +342,12 @@ func (d *decodeTally) log() {
 // errReviewBuildBackoff is returned while a failed build's backoff runs.
 var errReviewBuildBackoff = errors.New("review listing unavailable: the last build failed; retrying shortly")
 
+// errReviewSnapshotBuilding is what getNoWait returns while the first snapshot
+// after a restart is still being built: the caller answers 503 + Retry-After
+// instead of holding the request open for the build (about two minutes on the
+// production library).
+var errReviewSnapshotBuilding = errors.New("the review snapshot is still being built; retry shortly")
+
 // errReviewBuildNotStarted is a build the server refused to start (shutting down).
 var errReviewBuildNotStarted = errors.New("review listing unavailable: the server is shutting down")
 
@@ -514,6 +520,32 @@ func (c *reviewSnapshotCache) get(ctx context.Context) (*reviewSnapshot, error) 
 	}
 	c.mu.Unlock()
 	return snap, nil
+}
+
+// getNoWait is get for a caller that must not wait on a cold build: with no
+// snapshot it starts (or joins) the build and returns errReviewSnapshotBuilding
+// at once; with one it behaves exactly like get.
+func (c *reviewSnapshotCache) getNoWait(ctx context.Context) (*reviewSnapshot, error) {
+	c.mu.Lock()
+	if c.snap == nil {
+		c.touch()
+		if c.inBackoff() && c.inflight == nil {
+			err := errors.Join(errReviewBuildBackoff, c.failErr)
+			c.mu.Unlock()
+			return nil, err
+		}
+		bc := c.startBuild()
+		c.mu.Unlock()
+		select {
+		case <-bc.done:
+			// The build finished (or was refused) while we looked: use it.
+			return bc.snap, bc.err
+		default:
+			return nil, errReviewSnapshotBuilding
+		}
+	}
+	c.mu.Unlock()
+	return c.get(ctx)
 }
 
 // setBackground makes ctx the parent of every build and spawn the way their

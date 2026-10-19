@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-19
 
@@ -1288,11 +1288,18 @@ func (h *MetadataCacheHandler) buildReviewQueryBase(key reviewBaseKey) (*reviewQ
 // a filter is served the CURRENT snapshot and never waits on a build, except
 // the first request after a cold start, which has nothing else to serve.
 func (h *MetadataCacheHandler) reviewQueryList(ctx context.Context, q *ReviewQuery) (*reviewResultList, error) {
+	return h.reviewQueryListWith(ctx, q, h.reviewSnapshot)
+}
+
+// reviewQueryListWith is reviewQueryList reading its snapshot through snapFn
+// (reviewSnapshot, or reviewSnapshotNoWait for a caller that must not wait on
+// a cold build).
+func (h *MetadataCacheHandler) reviewQueryListWith(ctx context.Context, q *ReviewQuery, snapFn func(context.Context) (*reviewSnapshot, error)) (*reviewResultList, error) {
 	// The generations are read BEFORE the snapshot and the overlay: a write
 	// racing this request moves a generation past the key, so the next
 	// request misses rather than reusing a list that may predate the write.
 	cacheGen, bookGen, tracked := h.liveReviewGenerations()
-	snap, err := h.reviewSnapshot(ctx)
+	snap, err := snapFn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1502,7 +1509,9 @@ type reviewSelectionBody struct {
 // answer was read at. The selection may carry at most as many ids as one
 // apply may (the bulk apply cap): a selection the lane could not apply is a
 // 422, so the request size is bounded by the same limit. A chip is refused:
-// the check is about the filter, a chip pauses it.
+// the check is about the filter, a chip pauses it. While the first snapshot
+// after a restart is still building the answer is 503 with Retry-After, not a
+// request held open for the build.
 func (h *MetadataCacheHandler) ReviewSelectionCheck(c *gin.Context) {
 	began := time.Now()
 	defer func() { metrics.ObserveReviewIndexRequest(metrics.ReviewViewSelection, time.Since(began)) }()
@@ -1533,7 +1542,14 @@ func (h *MetadataCacheHandler) ReviewSelectionCheck(c *gin.Context) {
 			"SELECTION_TOO_LARGE")
 		return
 	}
-	l, err := h.reviewQueryList(c.Request.Context(), q)
+	// Never wait on a cold snapshot build (about two minutes after a restart):
+	// answer 503 + Retry-After and let the lane's bounded retry ask again.
+	l, err := h.reviewQueryListWith(c.Request.Context(), q, h.reviewSnapshotNoWait)
+	if errors.Is(err, errReviewSnapshotBuilding) {
+		c.Header("Retry-After", "10")
+		httputil.RespondWithServiceUnavailable(c, err.Error())
+		return
+	}
 	if errors.As(err, &refused) {
 		respondReviewQueryError(c, refused)
 		return

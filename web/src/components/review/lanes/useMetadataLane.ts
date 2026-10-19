@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.48.0
+// version: 1.49.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-19
 //
@@ -2804,8 +2804,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             hold(`The Title filter could not be checked against the selection (${message}). ${clearHint}`);
             return;
           }
-          if (failed?.status === 503) {
-            // Busy, not broken: hold, and ask again after Retry-After.
+          const timedOut = failed?.name === 'ApiTimeoutError';
+          if (failed?.status === 503 || timedOut) {
+            // Busy (a 503: every pattern slot taken, or the first snapshot still
+            // building) or slow (a timeout), not broken: hold, and ask again
+            // after Retry-After, or the default delay when there is none.
             if (pruneRetriesRef.current.key !== settleKey) {
               pruneRetriesRef.current = { key: settleKey, n: 0 };
             }
@@ -2817,16 +2820,18 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
               );
               pruneRetryTimerRef.current = setTimeout(() => setPruneRetry((n) => n + 1), delay);
               hold(
-                `The server is busy, so the selection could not be checked yet. It will be checked again ` +
-                  `in ${Math.ceil(delay / 1000)}s. ${clearHint}`
+                timedOut
+                  ? `Checking the selection took too long. It will be checked again in ${Math.ceil(delay / 1000)}s. ${clearHint}`
+                  : `The server is busy, so the selection could not be checked yet. It will be checked again ` +
+                      `in ${Math.ceil(delay / 1000)}s. ${clearHint}`
               );
             } else {
-              hold(`The server stayed busy, so the selection could not be checked. ${clearHint}`);
+              hold(
+                timedOut
+                  ? `Checking the selection kept taking too long, so it could not be checked. ${clearHint}`
+                  : `The server stayed busy, so the selection could not be checked. ${clearHint}`
+              );
             }
-            return;
-          }
-          if (failed?.name === 'ApiTimeoutError') {
-            hold(`Checking the selection took too long. ${clearHint}`);
             return;
           }
           if (chip === null) {

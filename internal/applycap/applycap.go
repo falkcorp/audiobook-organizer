@@ -1,5 +1,5 @@
 // file: internal/applycap/applycap.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c1e8f2a-9b7d-4e63-a5c0-2f8d6b1e9a37
 // last-edited: 2026-10-19
 //
@@ -138,6 +138,11 @@ func (c *Counter) Cap() int { return c.limit }
 // per-user rolling window. Because it binds only cooperating clients, losing
 // an entry (an eviction, a restart, the TTL) loosens nothing that was not
 // already loose, which is why a full ledger evicts instead of refusing.
+// Precisely: an eviction mid-batch forgets that batch's running total, so a
+// client that keeps sending past its declared total after its entry was
+// evicted starts a fresh entry and is admitted again (fail-open for an
+// over-sending client). That is accepted: evicting is preferred to refusing
+// every other user once the ledger is full.
 //
 // A batch is keyed by owner (the authenticated user) AND batch id, so one
 // user's id can neither collide with nor poison another's. Each owner may hold
@@ -145,7 +150,10 @@ func (c *Counter) Cap() int { return c.limit }
 // limit the least recently touched batch is evicted (the owner's own first,
 // then the oldest overall), never the new request refused. Entries are
 // forgotten after ttl without a chunk. A chunk carries an index within its
-// batch: a resent index is accepted without counting twice.
+// batch and a digest of its ids: a resent index with the same digest is
+// reported as a resend (Admission.Resent), neither counted twice nor to be
+// enqueued again, and the op id recorded for it (RecordOp) is handed back; a
+// resent index with other ids is refused.
 //
 // Nothing is recorded for a refused request. It is safe for concurrent use.
 type BatchLedger struct {
@@ -161,8 +169,26 @@ type batchEntry struct {
 	owner    string
 	total    int
 	admitted int
-	chunks   map[int]int // chunk index -> its size
+	chunks   map[int]*chunkRecord
 	touched  time.Time
+}
+
+// chunkRecord is what the ledger remembers of one admitted chunk.
+type chunkRecord struct {
+	size   int
+	digest string // of the chunk's ids; a resend must match it
+	opID   string // the op the chunk was queued as; empty until RecordOp
+}
+
+// Admission is the result of an accepted Admit.
+type Admission struct {
+	// Resent: this index was admitted before with the same ids. Nothing was
+	// counted; the caller must not enqueue it again (nor Release it) and
+	// answers with OpID.
+	Resent bool
+	// OpID is the op the first send was queued as; empty when the first send
+	// has not recorded one yet (it is still being queued).
+	OpID string
 }
 
 // BatchErrorKind says why the ledger refused a chunk.
@@ -175,6 +201,9 @@ const (
 	// BatchExceeded: the chunks of the batch would add up past its declared
 	// total or past the cap.
 	BatchExceeded
+	// BatchChunkMismatch: a chunk index that was admitted before is resent
+	// with different ids.
+	BatchChunkMismatch
 )
 
 // BatchError is a ledger refusal of a chunk that is not a plain cap breach.
@@ -185,17 +214,32 @@ type BatchError struct {
 	Op        string
 	Requested int
 	Cap       int
+	// Admitted is how many books of the batch were admitted before this chunk
+	// (zero: no earlier chunk is recorded, so the message must not claim any
+	// was queued).
+	Admitted int
 }
 
 // Code is the stable error code the HTTP body carries.
 func (e *BatchError) Code() string {
-	if e.Kind == BatchTotalMismatch {
+	switch e.Kind {
+	case BatchTotalMismatch:
 		return "BATCH_TOTAL_MISMATCH"
+	case BatchChunkMismatch:
+		return "BATCH_CHUNK_MISMATCH"
 	}
 	return "BATCH_EXCEEDED"
 }
 
 func (e *BatchError) Error() string {
+	if e.Kind == BatchChunkMismatch {
+		return fmt.Sprintf("%s: this chunk index was already sent with different books; a resent chunk must carry "+
+			"the same books. Nothing was queued by this request", e.Op)
+	}
+	if e.Kind == BatchExceeded && e.Admitted == 0 {
+		return fmt.Sprintf("%s: this chunk carries %d books, past the %d the batch declared or the bulk apply cap "+
+			"allows; nothing from this batch was queued", e.Op, e.Requested, e.Cap)
+	}
 	if e.Kind == BatchTotalMismatch {
 		return fmt.Sprintf("%s: this chunk does not match the batch it belongs to (a different declared total, or a "+
 			"resent chunk of another size); chunks of the batch sent before this one were already queued, this one was not",
@@ -224,10 +268,12 @@ func NewBatchLedger(ttl time.Duration, maxBatches, maxPerOwner int) *BatchLedger
 
 func batchKey(owner, id string) string { return owner + "\x00" + id }
 
-// Admit records chunk `index` of `n` items for batch `id` of `owner`, which
-// declared `total`, or refuses it and records nothing. The error is nil,
-// *ExceededError (the declared total is over the cap) or *BatchError.
-func (l *BatchLedger) Admit(op, owner, id string, index, n, total, configured int) error {
+// Admit records chunk `index` of `n` items (whose ids hash to `digest`) for
+// batch `id` of `owner`, which declared `total`, or refuses it and records
+// nothing. The error is nil, *ExceededError (the declared total is over the
+// cap) or *BatchError. A resend of an admitted index with the same digest is
+// accepted with Admission.Resent set and counts nothing.
+func (l *BatchLedger) Admit(op, owner, id string, index, n, total, configured int, digest string) (Admission, error) {
 	limit := Effective(configured)
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -237,38 +283,56 @@ func (l *BatchLedger) Admit(op, owner, id string, index, n, total, configured in
 	e := l.batches[key]
 	if e != nil {
 		if e.total != total {
-			return &BatchError{Kind: BatchTotalMismatch, Op: op, Requested: total, Cap: e.total}
+			return Admission{}, &BatchError{Kind: BatchTotalMismatch, Op: op, Requested: total, Cap: e.total, Admitted: e.admitted}
 		}
-		if size, seen := e.chunks[index]; seen {
-			if size != n {
-				return &BatchError{Kind: BatchTotalMismatch, Op: op, Requested: n, Cap: size}
+		if rec, seen := e.chunks[index]; seen {
+			if rec.size != n {
+				return Admission{}, &BatchError{Kind: BatchTotalMismatch, Op: op, Requested: n, Cap: rec.size, Admitted: e.admitted}
 			}
-			e.touched = now // a resent chunk: already counted
-			return nil
+			if rec.digest != digest {
+				return Admission{}, &BatchError{Kind: BatchChunkMismatch, Op: op, Requested: n, Cap: rec.size, Admitted: e.admitted}
+			}
+			e.touched = now // a resend: already counted, already queued
+			return Admission{Resent: true, OpID: rec.opID}, nil
 		}
 		if e.admitted+n > e.total || e.admitted+n > limit {
-			return &BatchError{Kind: BatchExceeded, Op: op, Requested: e.admitted + n, Cap: min(e.total, limit)}
+			return Admission{}, &BatchError{Kind: BatchExceeded, Op: op, Requested: e.admitted + n, Cap: min(e.total, limit), Admitted: e.admitted}
 		}
 		e.admitted += n
-		e.chunks[index] = n
+		e.chunks[index] = &chunkRecord{size: n, digest: digest}
 		e.touched = now
-		return nil
+		return Admission{}, nil
 	}
 	// A new batch is validated BEFORE it is recorded, so a refused request can
 	// never occupy a slot.
 	if total > limit {
-		return &ExceededError{Op: op, Requested: total, Cap: limit}
+		return Admission{}, &ExceededError{Op: op, Requested: total, Cap: limit}
 	}
 	if n <= 0 || n > total {
-		return &BatchError{Kind: BatchExceeded, Op: op, Requested: n, Cap: total}
+		return Admission{}, &BatchError{Kind: BatchExceeded, Op: op, Requested: n, Cap: total}
 	}
 	l.makeRoomLocked(owner)
-	l.batches[key] = &batchEntry{owner: owner, total: total, admitted: n, chunks: map[int]int{index: n}, touched: now}
-	return nil
+	l.batches[key] = &batchEntry{owner: owner, total: total, admitted: n,
+		chunks: map[int]*chunkRecord{index: {size: n, digest: digest}}, touched: now}
+	return Admission{}, nil
 }
 
-// Release gives back chunk `index` of batch `id` after a chunk that was
-// admitted but failed before anything was queued, so the client can retry it.
+// RecordOp remembers the op chunk `index` was queued as, so a resend of it is
+// answered with that op instead of queueing the books again. A no-op for an
+// entry that was evicted or released meanwhile.
+func (l *BatchLedger) RecordOp(owner, id string, index int, opID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.batches[batchKey(owner, id)]; e != nil {
+		if rec := e.chunks[index]; rec != nil {
+			rec.opID = opID
+		}
+	}
+}
+
+// Release gives back chunk `index` of batch `id` after a FIRST-time chunk that
+// was admitted but failed before anything was queued, so the client can retry
+// it. Never call it for a resend: that chunk is already queued.
 func (l *BatchLedger) Release(owner, id string, index int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -277,8 +341,8 @@ func (l *BatchLedger) Release(owner, id string, index int) {
 	if e == nil {
 		return
 	}
-	if size, ok := e.chunks[index]; ok {
-		e.admitted -= size
+	if rec, ok := e.chunks[index]; ok {
+		e.admitted -= rec.size
 		delete(e.chunks, index)
 	}
 	if e.admitted <= 0 {

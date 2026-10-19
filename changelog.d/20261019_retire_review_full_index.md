@@ -61,10 +61,12 @@ Select all N matching sends its apply in chunks of 500. Each chunk names its bat
 batch id and refuses a chunk when the declared total is over `bulk_apply_max_items`
 (`BULK_APPLY_CAP_EXCEEDED`), when the total changes mid-batch (`BATCH_TOTAL_MISMATCH`), or when
 the chunks add up to more than the declared total (`BATCH_EXCEEDED`; the message says earlier
-chunks were already queued). A resent chunk (same `batch_index`) is accepted without being
-counted twice. A request is validated before it is recorded, so refused requests occupy nothing,
-and a full ledger evicts the least recently touched batch (the user's own first) instead of
-refusing anyone. A user holds at most 16 live batches; the ledger forgets an idle batch after 30
+chunks were already queued, except on the first chunk, where nothing was). A resent chunk
+(same `batch_index`, same books) is neither counted nor queued again: the server answers
+`202` with the op id of its first send, and the same index with different books is a `422`
+`BATCH_CHUNK_MISMATCH`. A request is validated before it is recorded, so refused requests
+occupy nothing, and a full ledger evicts the least recently touched batch (the user's own
+first) instead of refusing anyone. A user holds at most 16 live batches; the ledger forgets an idle batch after 30
 minutes.
 
 This is an accident guard, not a quota. It enforces the total a cooperating client declares: a
@@ -74,6 +76,8 @@ as one request, as before. `batch_id`, `batch_total` and `batch_index` go togeth
 batched request with no `book_ids` is a `400`.
 
 The selection check now asks about a changed Title over both buckets even when the view leaves a
-chip inside the debounce, holds the selection (instead of clearing it) when the server refuses
-the Title pattern or is busy (it asks again after `Retry-After`), and gives each check a 15
-second deadline, treating a timeout as a failed check that holds.
+chip inside the debounce, and holds the selection (instead of clearing it) when the server
+refuses the Title pattern. A busy server, a timeout (each check has a 15 second deadline) and a
+snapshot that is still building after a restart (the endpoint answers `503` with `Retry-After`
+at once instead of waiting for the build) are all held and asked again, at most 5 times,
+before the hold says so.

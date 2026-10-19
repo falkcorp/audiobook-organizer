@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.195.0
+// version: 2.196.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-19
 
@@ -59,8 +59,10 @@ const CACHED_REVIEW_TIMEOUT_MS = 300_000;
 
 /**
  * Deadline of one selection check. The request is as big as the selection and
- * the server answers from an already-built snapshot, so a slow answer is a
- * stuck one: the lane treats the timeout as a failed check and holds.
+ * the server answers from the built snapshot; while the first snapshot after a
+ * restart is still building it answers 503 + Retry-After at once instead of
+ * waiting, so a slow answer is a stuck one. The lane holds the selection on a
+ * timeout and asks again, bounded, exactly as it does for a 503.
  */
 export const SELECTION_CHECK_TIMEOUT_MS = 15_000;
 

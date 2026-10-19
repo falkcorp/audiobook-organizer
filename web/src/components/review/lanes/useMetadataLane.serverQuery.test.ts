@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-10-19
 //
@@ -25,6 +25,7 @@ import {
   EXPORT_QUEUE_CHANGED_MESSAGE,
   MAX_QUERY_SKIPPED_IDS,
   newBatchId,
+  PRUNE_BUSY_MAX_RETRIES,
   useMetadataLane,
   type ChipFilter,
   type MetadataLane,
@@ -1044,6 +1045,99 @@ describe('the lane requests', () => {
       timeout: 4000,
     });
     expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('a busy server is retried at most PRUNE_BUSY_MAX_RETRIES times, then the hold says so', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(
+      Object.assign(new Error('busy'), { status: 503, retryAfterMs: 1000, data: {} })
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    vi.useFakeTimers();
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    for (let i = 0; i < 12; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+    }
+    expect(api.checkReviewSelection).toHaveBeenCalledTimes(1 + PRUNE_BUSY_MAX_RETRIES);
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^The server stayed busy, so the selection could not be checked\..*clear the selection/),
+      'warning'
+    );
+    // No further retry is armed.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(api.checkReviewSelection).toHaveBeenCalledTimes(1 + PRUNE_BUSY_MAX_RETRIES);
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('changing the filters during the retry delay cancels the stale retry', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection)
+      .mockRejectedValueOnce(
+        Object.assign(new Error('busy'), { status: 503, retryAfterMs: 1000, data: {} })
+      )
+      // The check of the new filters answers slowly, so a stale retry that
+      // fired meanwhile would abort it and ask again (a third call).
+      .mockImplementation(
+        (_p, ids) =>
+          new Promise<api.ReviewSelectionCheck>((resolve) => {
+            setTimeout(
+              () => resolve({ matching: ids, not_matching: [], unknown: [], generation: 'g1' }),
+              3000
+            );
+          })
+      );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    vi.useFakeTimers();
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300); // debounce + the 503: the 1s retry is armed
+    });
+    expect(api.checkReviewSelection).toHaveBeenCalledTimes(1);
+    act(() => result.current.setFilters({ confidenceThreshold: 60 }));
+    // In steps, each in its own act: React applies a state update (the stale
+    // retry's bump) and re-runs the effect only when an act ends.
+    for (let i = 0; i < 14; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500); // past the stale retry's 1s and the slow answer
+      });
+    }
+    expect(api.checkReviewSelection).toHaveBeenCalledTimes(2);
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('a timed-out selection check is asked again after the default delay, like a busy server', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection)
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Request timed out after 15000ms'), { name: 'ApiTimeoutError' })
+      )
+      .mockImplementation(async (_p, ids) => ({
+        matching: ids.filter((id) => id === 'a1'),
+        not_matching: ids.filter((id) => id === 'a2'),
+        unknown: [],
+        generation: 'g1',
+      }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    vi.useFakeTimers();
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    for (let i = 0; i < 16; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+    }
+    expect(api.checkReviewSelection).toHaveBeenCalledTimes(2);
+    // The retry succeeded: the books the filters hide are dropped and the hold is over.
+    expect([...result.current.selectedIds]).toEqual(['a1']);
   });
 
   it('a selection check that times out holds the selection and says how to clear the hold', async () => {
