@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sessions-sliding-expiry-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 50c43bce-f6d8-4831-b9d1-95ea32eda66d -->
 <!-- last-edited: 2026-10-19 -->
 
 # Phone apps stay signed in while you use them
 
-Branch `fix/abs-session-sliding-expiry`, not yet merged.
+PR #4081 (branch `fix/abs-session-sliding-expiry`), not yet merged.
 Related spec: `docs/specs/2026-07-29-abs-sync-api-design.md`, section 3.2.
 
 ## Executive Summary
