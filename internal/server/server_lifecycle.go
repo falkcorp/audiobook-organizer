@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.54.0
+// version: 4.55.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-18
 
@@ -387,41 +387,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	var backgroundWG sync.WaitGroup
 
 	// Start unified task scheduler (replaces individual iTunes sync and purge tickers)
-	s.scheduler = scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
-		// Adapter, not a plain method value: function types must be identical
-		// for assignment, so a func() database.Store cannot be assigned to a
-		// func() scheduler.SchedulerStore even though the interface satisfies
-		// it. A nil database.Store converts to a nil SchedulerStore, so the
-		// documented "may return nil before the DB is up" contract holds.
-		Store: func() scheduler.SchedulerStore {
-			st := s.storeForWiring()
-			if st == nil {
-				return nil
-			}
-			return st
-		},
-		OpRegistry: s.opRegistry,
-		// Same condition as the dedup plugin's Build (dedup/register.go).
-		HasDedupPlugin: func() bool {
-			return s.dedupEngine != nil && s.embeddingStore != nil
-		},
-		HasMetadataFetchSvc: func() bool {
-			return s.metadataFetchService != nil
-		},
-		HasActivitySvc: func() bool {
-			return s.activityService != nil
-		},
-		HasBatchPoller: func() bool {
-			return s.batchPoller != nil
-		},
-		CollectionsRefreshPending: s.collectionsRefreshPending,
-		PollBatches: func(ctx context.Context) (int, error) {
-			if s.batchPoller == nil {
-				return 0, nil
-			}
-			return s.batchPoller.Poll(ctx)
-		},
-	})
+	s.scheduler = scheduler.NewTaskScheduler(s.schedulerDeps())
 	// ops.Schedule declarations (05-PR8): registered before Start so the
 	// scheduler's one v3 loop and the maintenance window see them. A def that
 	// fails here is skipped and reported; the rest still schedule.
@@ -2223,4 +2189,45 @@ func (s *Server) stopASINBackfillQueue() {
 		return
 	}
 	s.metadataFetchService.ASINBackfillQueue().Stop()
+}
+
+// schedulerDeps builds the scheduler's dependency hooks. It is its own method
+// so a test can assert the wiring (a dropped CollectionsRefreshPending line
+// would leave a nil hook, and nil means always enqueue).
+func (s *Server) schedulerDeps() scheduler.SchedulerDeps {
+	return scheduler.SchedulerDeps{
+		// Adapter, not a plain method value: function types must be identical
+		// for assignment, so a func() database.Store cannot be assigned to a
+		// func() scheduler.SchedulerStore even though the interface satisfies
+		// it. A nil database.Store converts to a nil SchedulerStore, so the
+		// documented "may return nil before the DB is up" contract holds.
+		Store: func() scheduler.SchedulerStore {
+			st := s.storeForWiring()
+			if st == nil {
+				return nil
+			}
+			return st
+		},
+		OpRegistry: s.opRegistry,
+		// Same condition as the dedup plugin's Build (dedup/register.go).
+		HasDedupPlugin: func() bool {
+			return s.dedupEngine != nil && s.embeddingStore != nil
+		},
+		HasMetadataFetchSvc: func() bool {
+			return s.metadataFetchService != nil
+		},
+		HasActivitySvc: func() bool {
+			return s.activityService != nil
+		},
+		HasBatchPoller: func() bool {
+			return s.batchPoller != nil
+		},
+		CollectionsRefreshPending: s.collectionsRefreshPending,
+		PollBatches: func(ctx context.Context) (int, error) {
+			if s.batchPoller == nil {
+				return 0, nil
+			}
+			return s.batchPoller.Poll(ctx)
+		},
+	}
 }

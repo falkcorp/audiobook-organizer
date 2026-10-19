@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -105,7 +105,8 @@ hourly; its members are at most an hour behind the clock.
 playlist evaluates them as the playlist's user. A dynamic collection is shared
 by the whole server, so it evaluates them as the collection's owner (the user
 who created it; if that user is gone, the first active admin). A user with no
-listening history for a book counts as "unstarted" for that book.
+listening history for a book counts as "unstarted" for that book. With authentication
+off there is one local user, which owns every collection and is the evaluator.
 
 Because a dynamic collection answers with its owner's state for everybody, only
 that owner (or, for a collection that fell back to the first active admin, that
@@ -129,5 +130,4 @@ search index does not stop a good query from being saved.
 One known limit: an `OR` between a per-user term and an indexed term
 (`title:Alpha OR read_status:finished`) is evaluated as an `AND`, because the per-user
 part is applied afterwards to the books the index returned. Write such a search as two
-searches, or avoid mixing them, until that is fixed. With authentication
-off there is one local user, which owns every collection and is the evaluator.
+searches, or avoid mixing them, until that is fixed.

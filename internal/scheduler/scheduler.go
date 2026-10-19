@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
 // version: 1.21.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
