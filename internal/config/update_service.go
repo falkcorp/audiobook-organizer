@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.32.1
+// version: 3.33.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-10-20
 
@@ -470,6 +470,13 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	// below would drop it silently and answer 200 — telling the client a
 	// setting applied that does not exist. See removedConfigKeys.
 	if msg, ok := removedKeyInUpdate(payload); ok {
+		return http.StatusBadRequest, map[string]any{"error": msg}
+	}
+
+	// Invitation email and guest-access keys are environment-only and have no
+	// JSON field (invite_config.go). Refuse them by name so the caller learns
+	// why, rather than getting the generic unknown-key error.
+	if msg, ok := inviteEnvOnlyKeyInUpdate(payload); ok {
 		return http.StatusBadRequest, map[string]any{"error": msg}
 	}
 
