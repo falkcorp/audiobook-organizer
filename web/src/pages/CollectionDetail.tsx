@@ -33,23 +33,18 @@ import {
 import { Delete as DeleteIcon } from '@mui/icons-material';
 import { useCollection } from '../hooks/useCollections';
 import { type Book, getBooksByIds } from '../services/api';
-import type { Collection, CollectionUpdateInput } from '../services/collectionApi';
+import type { CollectionUpdateInput } from '../services/collectionApi';
 import { BookPicker } from '../components/collections/BookPicker';
+import { QueryHelp, SortPicker } from '../components/collections/QueryHelp';
+import { MANAGE_TOOLTIP, memberCount, storedMembers } from '../components/collections/collectionUtils';
 import {
-  QueryHelp,
-  SortPicker,
   decodeSort,
   encodeSort,
   queryError,
   type SortChoice,
-} from '../components/collections/QueryHelp';
-import { MANAGE_TOOLTIP, memberCount } from './Collections';
+} from '../components/collections/queryHelpData';
 
 const PAGE_SIZE = 50;
-
-function storedMembers(col: Collection): string[] {
-  return (col.type === 'dynamic' ? col.materialized_book_ids : col.book_ids) ?? [];
-}
 
 function messageOf(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
@@ -87,7 +82,10 @@ export default function CollectionDetail() {
   }, [collection]);
 
   const members = collection ? storedMembers(collection) : [];
-  const pageIds = members.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // A shrinking list (remove, re-evaluate) must not leave the table on a page that no longer exists.
+  const lastPage = Math.max(0, Math.ceil(members.length / PAGE_SIZE) - 1);
+  const safePage = Math.min(page, lastPage);
+  const pageIds = members.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
   const pageKey = pageIds.join(',');
   const [books, setBooks] = useState<Map<string, Book>>(new Map());
   const [booksLoading, setBooksLoading] = useState(false);
@@ -95,10 +93,8 @@ export default function CollectionDetail() {
   const booksRequest = useRef(0);
 
   useEffect(() => {
-    if (pageKey === '') {
-      setBooks(new Map());
-      return;
-    }
+    // No members: the table is not rendered, so there is nothing to look up.
+    if (pageKey === '') return;
     const mine = ++booksRequest.current;
     const ctl = new AbortController();
     setBooksLoading(true);
@@ -120,12 +116,6 @@ export default function CollectionDetail() {
       ctl.abort();
     };
   }, [pageKey]);
-
-  // A shrinking list (remove, re-evaluate) must not leave the table on a page that no longer exists.
-  const lastPage = Math.max(0, Math.ceil(members.length / PAGE_SIZE) - 1);
-  useEffect(() => {
-    if (page > lastPage) setPage(lastPage);
-  }, [page, lastPage]);
 
   if (loading && !collection) return <Typography sx={{ p: 3 }}>Loading...</Typography>;
   if (!collection) {
@@ -395,7 +385,7 @@ export default function CollectionDetail() {
           <TablePagination
             component="div"
             count={members.length}
-            page={page}
+            page={safePage}
             onPageChange={(_, p) => setPage(p)}
             rowsPerPage={PAGE_SIZE}
             rowsPerPageOptions={[PAGE_SIZE]}

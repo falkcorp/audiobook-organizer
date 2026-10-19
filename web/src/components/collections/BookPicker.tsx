@@ -20,7 +20,7 @@ import {
   Typography,
 } from '@mui/material';
 import { type Book, searchBooks } from '../../services/api';
-import { queryError } from './QueryHelp';
+import { queryError } from './queryHelpData';
 
 /** Most results one search shows; a picker is for choosing, not for browsing the library. */
 export const BOOK_PICKER_RESULT_LIMIT = 50;
@@ -43,7 +43,8 @@ export function BookPicker({ selectedIds, onChange, excludeIds = [], disabled }:
   const [results, setResults] = useState<Book[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const titles = useRef(new Map<string, string>());
+  // Titles of every book ever shown, so a selected chip keeps its title after the results change.
+  const [titles, setTitles] = useState<Map<string, string>>(new Map());
   const requestId = useRef(0);
 
   const parseError = text.trim() ? queryError(text) : null;
@@ -57,7 +58,7 @@ export function BookPicker({ selectedIds, onChange, excludeIds = [], disabled }:
     try {
       const found = await searchBooks(q, BOOK_PICKER_RESULT_LIMIT);
       if (mine !== requestId.current) return;
-      found.forEach((b) => titles.current.set(b.id, b.title));
+      setTitles((prev) => new Map([...prev, ...found.map((b): [string, string] => [b.id, b.title])]));
       setResults(found);
     } catch (err) {
       if (mine !== requestId.current) return;
@@ -107,7 +108,7 @@ export function BookPicker({ selectedIds, onChange, excludeIds = [], disabled }:
             <Chip
               key={id}
               size="small"
-              label={titles.current.get(id) ?? id}
+              label={titles.get(id) ?? id}
               onDelete={disabled ? undefined : () => toggle(id)}
             />
           ))}

@@ -32,20 +32,9 @@ import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { useCollections } from '../hooks/useCollections';
 import type { Collection, CollectionCreateInput, CollectionType } from '../services/collectionApi';
 import { BookPicker } from '../components/collections/BookPicker';
-import {
-  QueryHelp,
-  SortPicker,
-  type SortChoice,
-  encodeSort,
-  queryError,
-} from '../components/collections/QueryHelp';
-
-export const MANAGE_TOOLTIP = 'needs the collections.manage permission';
-
-/** Stored members: a static list, or a dynamic collection's last materialized set. */
-export function memberCount(col: Collection): number {
-  return (col.type === 'dynamic' ? col.materialized_book_ids : col.book_ids)?.length ?? 0;
-}
+import { MANAGE_TOOLTIP, memberCount } from '../components/collections/collectionUtils';
+import { QueryHelp, SortPicker } from '../components/collections/QueryHelp';
+import { type SortChoice, encodeSort, queryError } from '../components/collections/queryHelpData';
 
 type TabValue = 'all' | CollectionType;
 
