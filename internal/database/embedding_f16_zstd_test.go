@@ -1,10 +1,10 @@
 // file: internal/database/embedding_f16_zstd_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2f8a1b9c-d4e7-4a3f-b8c0-5e2d9f1a4b7c
+// last-edited: 2026-10-19
 
 // T021 tests: float16+zstd vector encoding, dual-read compatibility, cosine-drift
 // property, compression-ratio assertion, and the re-encode idempotency contract.
-// last-edited: 2026-10-19
 
 package database
 
