@@ -168,7 +168,7 @@ func goldenIDList(is ...int) string {
 
 // TestReviewQuery_ListingsByteIdentical: the listing shapes that share the
 // extracted derivation are byte-identical to the responses before the
-// extraction. (The view=index entries were deleted with the view, 02-PR19.)
+// extraction. (The index-view entries were deleted with the view, 02-PR19.)
 func TestReviewQuery_ListingsByteIdentical(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)

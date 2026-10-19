@@ -256,7 +256,7 @@ describe('the lane requests', () => {
     expect(result.current.summary.ident_counts).toEqual(identCounts);
   });
 
-  it('never loads the review index: no view=index, no all=true listing, no unreviewable bucket', async () => {
+  it('never loads the review index: no index view, no all=true listing, no unreviewable bucket', async () => {
     vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
     vi.mocked(api.getReviewMatchingIds).mockResolvedValue({ ids: [], total: 0, generation: 'g1' });
     const { result } = renderHook(() => useMetadataLane(toast));

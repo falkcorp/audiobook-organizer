@@ -4439,7 +4439,7 @@ export async function listCachedCandidates(
 // genuinely needs every reviewable row in one response. The response's
 // `truncated` says whether the rows returned are the whole set.
 //
-// `view=index` is retired: the server answers it with 410 Gone and points at
+// The index view of this endpoint is retired: the server answers it with 410 Gone and points at
 // `view=page` (see getReviewPage).
 /**
  * Which rows `getCachedReviewResults` returns. 'reviewable' (the default) is

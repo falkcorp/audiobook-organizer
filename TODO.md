@@ -1178,7 +1178,7 @@ into one of the curated sections below, is a normal direct edit.
       when it is not, and keep the user-state "never lost" probe
       (`owedBookmarks`) agreeing with whatever the copy does.
 
-- [ ] **PERF-REVIEW-WARM** Review page `GET /metadata/cache/review?view=index&all=true` still runs 2.6–4.2 s warm on prod (target < 3 s). The incremental snapshot is already built (metadata_cache_snapshot.go v2.1.0). The slow-listing phase log (snapshot / overlay / prepare / encode) only fires at ≥ 5 s, so the warm phase split on prod is unknown. After perf/slow-page-requests deploys:
+- [ ] **PERF-REVIEW-WARM** Review page `GET /metadata/cache/review?view=index&all=true` (retired 2026-10-19 by 02-PR19: it now answers 410, and the lane sends `view=page`, which `review_index_request_seconds` does not observe, so re-point this target before working it) still runs 2.6–4.2 s warm on prod (target < 3 s). The incremental snapshot is already built (metadata_cache_snapshot.go v2.1.0). The slow-listing phase log (snapshot / overlay / prepare / encode) only fires at ≥ 5 s, so the warm phase split on prod is unknown. After perf/slow-page-requests deploys:
   - lower that threshold (or sample the phase timings at 2 s);
   - read which phase dominates;
   - fix that phase.

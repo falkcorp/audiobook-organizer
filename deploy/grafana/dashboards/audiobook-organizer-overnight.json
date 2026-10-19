@@ -39,7 +39,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Review listing latency p50 / p95 by view",
-      "description": "Handler time of GET /audiobooks/metadata/cache/review. Target: <3s on view=index. The red line is the handler's own slow-request WARN threshold (5s).",
+      "description": "Handler time of GET /audiobooks/metadata/cache/review. Observed views: full and gone (view=index was retired on 2026-10-19 and answers 410); view=page is not observed. The red line is the handler's own slow-request WARN threshold (5s).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
