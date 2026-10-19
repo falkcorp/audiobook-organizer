@@ -5830,6 +5830,68 @@ func (_c *MockStore_BumpDepRev_Call) RunAndReturn(run func(sub database.OpSubjec
 	return _c
 }
 
+// BumpUserCredentialEpoch provides a mock function for the type MockStore
+func (_mock *MockStore) BumpUserCredentialEpoch(userID string) (*database.User, error) {
+	ret := _mock.Called(userID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BumpUserCredentialEpoch")
+	}
+
+	var r0 *database.User
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.User, error)); ok {
+		return returnFunc(userID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.User); ok {
+		r0 = returnFunc(userID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.User)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(userID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_BumpUserCredentialEpoch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BumpUserCredentialEpoch'
+type MockStore_BumpUserCredentialEpoch_Call struct {
+	*mock.Call
+}
+
+// BumpUserCredentialEpoch is a helper method to define mock.On call
+//   - userID string
+func (_e *MockStore_Expecter) BumpUserCredentialEpoch(userID any) *MockStore_BumpUserCredentialEpoch_Call {
+	return &MockStore_BumpUserCredentialEpoch_Call{Call: _e.mock.On("BumpUserCredentialEpoch", userID)}
+}
+
+func (_c *MockStore_BumpUserCredentialEpoch_Call) Run(run func(userID string)) *MockStore_BumpUserCredentialEpoch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_BumpUserCredentialEpoch_Call) Return(user *database.User, err error) *MockStore_BumpUserCredentialEpoch_Call {
+	_c.Call.Return(user, err)
+	return _c
+}
+
+func (_c *MockStore_BumpUserCredentialEpoch_Call) RunAndReturn(run func(userID string) (*database.User, error)) *MockStore_BumpUserCredentialEpoch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CarryOverFingerprintWindows provides a mock function for the type MockStore
 func (_mock *MockStore) CarryOverFingerprintWindows(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error) {
 	ret := _mock.Called(from, to)
@@ -29148,6 +29210,86 @@ func (_c *MockStore_SetUserBookState_Call) RunAndReturn(run func(state *database
 	return _c
 }
 
+// SetUserPassword provides a mock function for the type MockStore
+func (_mock *MockStore) SetUserPassword(userID string, expectedHash string, algo string, hash string) (*database.User, error) {
+	ret := _mock.Called(userID, expectedHash, algo, hash)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetUserPassword")
+	}
+
+	var r0 *database.User
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, string) (*database.User, error)); ok {
+		return returnFunc(userID, expectedHash, algo, hash)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, string) *database.User); ok {
+		r0 = returnFunc(userID, expectedHash, algo, hash)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.User)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string, string) error); ok {
+		r1 = returnFunc(userID, expectedHash, algo, hash)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_SetUserPassword_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetUserPassword'
+type MockStore_SetUserPassword_Call struct {
+	*mock.Call
+}
+
+// SetUserPassword is a helper method to define mock.On call
+//   - userID string
+//   - expectedHash string
+//   - algo string
+//   - hash string
+func (_e *MockStore_Expecter) SetUserPassword(userID any, expectedHash any, algo any, hash any) *MockStore_SetUserPassword_Call {
+	return &MockStore_SetUserPassword_Call{Call: _e.mock.On("SetUserPassword", userID, expectedHash, algo, hash)}
+}
+
+func (_c *MockStore_SetUserPassword_Call) Run(run func(userID string, expectedHash string, algo string, hash string)) *MockStore_SetUserPassword_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetUserPassword_Call) Return(user *database.User, err error) *MockStore_SetUserPassword_Call {
+	_c.Call.Return(user, err)
+	return _c
+}
+
+func (_c *MockStore_SetUserPassword_Call) RunAndReturn(run func(userID string, expectedHash string, algo string, hash string) (*database.User, error)) *MockStore_SetUserPassword_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SetUserPosition provides a mock function for the type MockStore
 func (_mock *MockStore) SetUserPosition(userID string, bookID string, segmentID string, positionSeconds float64) error {
 	ret := _mock.Called(userID, bookID, segmentID, positionSeconds)
@@ -29333,6 +29475,74 @@ func (_c *MockStore_SetUserPreferenceForUser_Call) Return(err error) *MockStore_
 }
 
 func (_c *MockStore_SetUserPreferenceForUser_Call) RunAndReturn(run func(userID string, key string, value string) error) *MockStore_SetUserPreferenceForUser_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetUserStatus provides a mock function for the type MockStore
+func (_mock *MockStore) SetUserStatus(userID string, status string) (*database.User, error) {
+	ret := _mock.Called(userID, status)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetUserStatus")
+	}
+
+	var r0 *database.User
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.User, error)); ok {
+		return returnFunc(userID, status)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string) *database.User); ok {
+		r0 = returnFunc(userID, status)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.User)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
+		r1 = returnFunc(userID, status)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_SetUserStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetUserStatus'
+type MockStore_SetUserStatus_Call struct {
+	*mock.Call
+}
+
+// SetUserStatus is a helper method to define mock.On call
+//   - userID string
+//   - status string
+func (_e *MockStore_Expecter) SetUserStatus(userID any, status any) *MockStore_SetUserStatus_Call {
+	return &MockStore_SetUserStatus_Call{Call: _e.mock.On("SetUserStatus", userID, status)}
+}
+
+func (_c *MockStore_SetUserStatus_Call) Run(run func(userID string, status string)) *MockStore_SetUserStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetUserStatus_Call) Return(user *database.User, err error) *MockStore_SetUserStatus_Call {
+	_c.Call.Return(user, err)
+	return _c
+}
+
+func (_c *MockStore_SetUserStatus_Call) RunAndReturn(run func(userID string, status string) (*database.User, error)) *MockStore_SetUserStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }

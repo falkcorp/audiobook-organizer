@@ -1,7 +1,7 @@
 // file: internal/server/auth_lockout_test.go
-// version: 2.1.2
+// version: 2.2.0
 // guid: 8c4e5f3a-9b5a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 
 package server_test
 
@@ -51,6 +51,9 @@ func (s *stubAuthStore) ListUserSessions(userID string) ([]database.Session, err
 }
 func (s *stubAuthStore) RevokeSession(id string) error        { return nil }
 func (s *stubAuthStore) UpdateUser(user *database.User) error { return nil }
+func (s *stubAuthStore) SetUserPassword(userID, expectedHash, algo, hash string) (*database.User, error) {
+	return nil, nil
+}
 
 func newTestUser(t *testing.T) *database.User {
 	t.Helper()

@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.152.0
+// version: 1.153.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -394,12 +394,15 @@ type MockStore struct {
 	GetPlaylistItemsFunc      func(playlistID int) ([]PlaylistItem, error)
 
 	// Users
-	CreateUserFunc        func(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error)
-	GetUserByIDFunc       func(id string) (*User, error)
-	GetUserByUsernameFunc func(username string) (*User, error)
-	GetUserByEmailFunc    func(email string) (*User, error)
-	UpdateUserFunc        func(user *User) error
-	ListUsersFunc         func() ([]User, error)
+	CreateUserFunc              func(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error)
+	GetUserByIDFunc             func(id string) (*User, error)
+	GetUserByUsernameFunc       func(username string) (*User, error)
+	GetUserByEmailFunc          func(email string) (*User, error)
+	UpdateUserFunc              func(user *User) error
+	SetUserPasswordFunc         func(userID, expectedHash, algo, hash string) (*User, error)
+	SetUserStatusFunc           func(userID, status string) (*User, error)
+	BumpUserCredentialEpochFunc func(userID string) (*User, error)
+	ListUsersFunc               func() ([]User, error)
 
 	// Sessions
 	CreateSessionFunc func(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
@@ -1996,6 +1999,27 @@ func (m *MockStore) UpdateUser(user *User) error {
 		return m.UpdateUserFunc(user)
 	}
 	return nil
+}
+
+func (m *MockStore) SetUserPassword(userID, expectedHash, algo, hash string) (*User, error) {
+	if m.SetUserPasswordFunc != nil {
+		return m.SetUserPasswordFunc(userID, expectedHash, algo, hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetUserStatus(userID, status string) (*User, error) {
+	if m.SetUserStatusFunc != nil {
+		return m.SetUserStatusFunc(userID, status)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) BumpUserCredentialEpoch(userID string) (*User, error) {
+	if m.BumpUserCredentialEpochFunc != nil {
+		return m.BumpUserCredentialEpochFunc(userID)
+	}
+	return nil, nil
 }
 
 func (m *MockStore) ListUsers() ([]User, error) {

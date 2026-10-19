@@ -486,53 +486,70 @@ func (_c *MockUserStore_ListUsers_Call) RunAndReturn(run func() ([]database.User
 	return _c
 }
 
-// UpdateUser provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) UpdateUser(user *database.User) error {
-	ret := _mock.Called(user)
+// SetUserStatus provides a mock function for the type MockUserStore
+func (_mock *MockUserStore) SetUserStatus(userID string, status string) (*database.User, error) {
+	ret := _mock.Called(userID, status)
 
 	if len(ret) == 0 {
-		panic("no return value specified for UpdateUser")
+		panic("no return value specified for SetUserStatus")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(*database.User) error); ok {
-		r0 = returnFunc(user)
-	} else {
-		r0 = ret.Error(0)
+	var r0 *database.User
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.User, error)); ok {
+		return returnFunc(userID, status)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(0).(func(string, string) *database.User); ok {
+		r0 = returnFunc(userID, status)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.User)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
+		r1 = returnFunc(userID, status)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
-// MockUserStore_UpdateUser_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateUser'
-type MockUserStore_UpdateUser_Call struct {
+// MockUserStore_SetUserStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetUserStatus'
+type MockUserStore_SetUserStatus_Call struct {
 	*mock.Call
 }
 
-// UpdateUser is a helper method to define mock.On call
-//   - user *database.User
-func (_e *MockUserStore_Expecter) UpdateUser(user any) *MockUserStore_UpdateUser_Call {
-	return &MockUserStore_UpdateUser_Call{Call: _e.mock.On("UpdateUser", user)}
+// SetUserStatus is a helper method to define mock.On call
+//   - userID string
+//   - status string
+func (_e *MockUserStore_Expecter) SetUserStatus(userID any, status any) *MockUserStore_SetUserStatus_Call {
+	return &MockUserStore_SetUserStatus_Call{Call: _e.mock.On("SetUserStatus", userID, status)}
 }
 
-func (_c *MockUserStore_UpdateUser_Call) Run(run func(user *database.User)) *MockUserStore_UpdateUser_Call {
+func (_c *MockUserStore_SetUserStatus_Call) Run(run func(userID string, status string)) *MockUserStore_SetUserStatus_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.User
+		var arg0 string
 		if args[0] != nil {
-			arg0 = args[0].(*database.User)
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
 }
 
-func (_c *MockUserStore_UpdateUser_Call) Return(err error) *MockUserStore_UpdateUser_Call {
-	_c.Call.Return(err)
+func (_c *MockUserStore_SetUserStatus_Call) Return(user *database.User, err error) *MockUserStore_SetUserStatus_Call {
+	_c.Call.Return(user, err)
 	return _c
 }
 
-func (_c *MockUserStore_UpdateUser_Call) RunAndReturn(run func(user *database.User) error) *MockUserStore_UpdateUser_Call {
+func (_c *MockUserStore_SetUserStatus_Call) RunAndReturn(run func(userID string, status string) (*database.User, error)) *MockUserStore_SetUserStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }

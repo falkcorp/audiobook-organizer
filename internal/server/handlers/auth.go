@@ -46,10 +46,13 @@ type AuthUserReader interface {
 	CountUsers() (int, error)
 }
 
-// AuthUserWriter creates and updates users.
+// AuthUserWriter creates and updates users. UpdateUser writes ordinary fields
+// (the profile email); the password changes only through SetUserPassword, which
+// bumps the credential epoch on the fresh row.
 type AuthUserWriter interface {
 	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
 	UpdateUser(user *database.User) error
+	SetUserPassword(userID, expectedHash, algo, hash string) (*database.User, error)
 }
 
 // AuthRoleReader resolves a role by id. Login needs it to report the user's
@@ -482,6 +485,11 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 	}
 	user.Email = email
 	if err := h.store.UpdateUser(user); err != nil {
+		if errors.Is(err, database.ErrUserProtectedField) {
+			// The copy was read before a password or status change landed.
+			httputil.RespondWithConflict(c, "the account changed while the profile was being saved; reload and try again")
+			return
+		}
 		httputil.RespondWithInternalError(c, "failed to update profile")
 		return
 	}
@@ -612,21 +620,27 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return
 	}
-	// The new password and the CredentialEpoch bump land in ONE write. Every ABS
-	// session stamped with the old epoch is refused from that instant, including
-	// one minted with the old password between our read of target and this write;
-	// a revoke issued before the write could not reach that one. The store
-	// refuses the write (ErrUserStale) if another credential change landed since
-	// target was read, so two concurrent changes cannot both win.
-	target.PasswordHash = newHash
-	target.PasswordHashAlgo = newAlgo
-	target.CredentialEpoch++
-	if err := h.store.UpdateUser(target); err != nil {
-		if errors.Is(err, database.ErrUserStale) {
-			httputil.RespondWithConflict(c, "the account changed while the password was being set; nothing was changed, try again")
-			return
+	// SetUserPassword writes the new hash and bumps CredentialEpoch on the FRESH
+	// row in one write. Every ABS session stamped with an earlier epoch is
+	// refused from that instant, including one minted with the old password
+	// between our read of target and this write; a revoke issued before the
+	// write could not reach that one. A self-service change passes the hash it
+	// verified the current password against, so it lands only if that is still
+	// the password (ErrUserStale otherwise); an admin reset verifies nothing and
+	// passes "".
+	expected := ""
+	if !isAdminReset {
+		expected = target.PasswordHash
+	}
+	if _, err := h.store.SetUserPassword(target.ID, expected, newAlgo, newHash); err != nil {
+		switch {
+		case errors.Is(err, database.ErrUserStale):
+			httputil.RespondWithConflict(c, "the password changed while this request was in flight; nothing was changed, try again")
+		case errors.Is(err, database.ErrUserNotFound):
+			httputil.RespondWithNotFound(c, "user", target.ID)
+		default:
+			httputil.RespondWithInternalError(c, "failed to update password")
 		}
-		httputil.RespondWithInternalError(c, "failed to update password")
 		return
 	}
 	reason := "password-changed"

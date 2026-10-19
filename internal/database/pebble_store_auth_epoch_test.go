@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth_epoch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: da259f0d-609e-4d78-8f4f-d1d0071a7291
 // last-edited: 2026-10-19
 
@@ -29,66 +29,101 @@ func mustGetUser(t *testing.T, p *PebbleStore, id string) *User {
 	return u
 }
 
-// UpdateUser enforces the credential epoch: a password change must bump it by
-// exactly one, and no write may lower it or skip ahead.
-func TestUpdateUser_CredentialEpochRules(t *testing.T) {
+// UpdateUser writes ordinary fields only: any change to the password, Status or
+// CredentialEpoch is refused, so a whole-row write can neither change nor revert
+// them.
+func TestUpdateUser_RefusesProtectedFields(t *testing.T) {
 	p := newABSSessionStore(t)
 	u := newEpochUser(t, p)
-	if u.CredentialEpoch != 0 {
-		t.Fatalf("a new user starts at epoch 0, got %d", u.CredentialEpoch)
+	for name, mutate := range map[string]func(*User){
+		"password hash": func(x *User) { x.PasswordHash = "hash-new" },
+		"password algo": func(x *User) { x.PasswordHashAlgo = "argon2id" },
+		"status":        func(x *User) { x.Status = "locked" },
+		"epoch":         func(x *User) { x.CredentialEpoch++ },
+	} {
+		cp := mustGetUser(t, p, u.ID)
+		mutate(cp)
+		if err := p.UpdateUser(cp); !errors.Is(err, ErrUserProtectedField) {
+			t.Errorf("%s change through UpdateUser = %v, want ErrUserProtectedField", name, err)
+		}
 	}
-
-	noBump := mustGetUser(t, p, u.ID)
-	noBump.PasswordHash = "hash-new"
-	if err := p.UpdateUser(noBump); !errors.Is(err, ErrUserStale) {
-		t.Fatalf("a password change without an epoch bump must be refused, got %v", err)
-	}
-
-	skip := mustGetUser(t, p, u.ID)
-	skip.CredentialEpoch = 2
-	if err := p.UpdateUser(skip); !errors.Is(err, ErrUserStale) {
-		t.Fatalf("an epoch jump of two must be refused, got %v", err)
-	}
-
-	stale := mustGetUser(t, p, u.ID) // read before the change below
-	change := mustGetUser(t, p, u.ID)
-	change.PasswordHash = "hash-new"
-	change.CredentialEpoch++
-	if err := p.UpdateUser(change); err != nil {
-		t.Fatalf("a password change with its bump must land: %v", err)
-	}
-
-	// A read-modify-write built from the copy read before the change (a role edit,
-	// say) would put the old hash and epoch back.
-	stale.Roles = []string{"admin"}
-	if err := p.UpdateUser(stale); !errors.Is(err, ErrUserStale) {
-		t.Fatalf("a stale copy must not overwrite a credential change, got %v", err)
-	}
-	got := mustGetUser(t, p, u.ID)
-	if got.PasswordHash != "hash-new" || got.CredentialEpoch != 1 {
-		t.Fatalf("stored = %q epoch %d, want the change to stand", got.PasswordHash, got.CredentialEpoch)
-	}
-
-	// An ordinary edit from a fresh copy is fine.
-	got.Roles = []string{"admin"}
-	if err := p.UpdateUser(got); err != nil {
-		t.Fatalf("a fresh non-credential edit must land: %v", err)
+	fresh := mustGetUser(t, p, u.ID)
+	fresh.Email = "new@example.com"
+	if err := p.UpdateUser(fresh); err != nil {
+		t.Fatalf("an ordinary edit from a fresh copy must land: %v", err)
 	}
 }
 
-// Two password changes racing from the same read: exactly one wins.
-func TestUpdateUser_ConcurrentPasswordChangesOneWins(t *testing.T) {
+// A copy read before a password or status change cannot revert it.
+func TestUpdateUser_StaleCopyCannotRevertStatusOrPassword(t *testing.T) {
 	p := newABSSessionStore(t)
 	u := newEpochUser(t, p)
-	a, b := mustGetUser(t, p, u.ID), mustGetUser(t, p, u.ID)
-	a.PasswordHash, b.PasswordHash = "hash-a", "hash-b"
-	a.CredentialEpoch++
-	b.CredentialEpoch++
+	stale := mustGetUser(t, p, u.ID)
+	if _, err := p.SetUserStatus(u.ID, "locked"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-new"); err != nil {
+		t.Fatal(err)
+	}
+	stale.Email = "edit@example.com" // an innocent edit on a copy from before both
+	if err := p.UpdateUser(stale); !errors.Is(err, ErrUserProtectedField) {
+		t.Fatalf("stale whole-row write = %v, want ErrUserProtectedField", err)
+	}
+	got := mustGetUser(t, p, u.ID)
+	if got.Status != "locked" || got.PasswordHash != "hash-new" || got.CredentialEpoch != 2 {
+		t.Fatalf("after stale write: status %q hash %q epoch %d; want locked, hash-new, 2", got.Status, got.PasswordHash, got.CredentialEpoch)
+	}
+}
+
+// Two admin resets racing from the same starting row both land, at DISTINCT
+// epochs, and a session stamped with any epoch before the last is refused.
+func TestSetUserPassword_RacingChangesEndAtDistinctEpochs(t *testing.T) {
+	p := newABSSessionStore(t)
+	u := newEpochUser(t, p)
+	var wg sync.WaitGroup
+	epochs := make([]int64, 2)
+	errs := make([]error, 2)
+	for i, hash := range []string{"hash-a", "hash-b"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := p.SetUserPassword(u.ID, "", "bcrypt", hash)
+			errs[i] = err
+			if got != nil {
+				epochs[i] = got.CredentialEpoch
+			}
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if epochs[0] == epochs[1] {
+		t.Fatalf("both racing changes ended at epoch %d; each must bump", epochs[0])
+	}
+	final := mustGetUser(t, p, u.ID)
+	if final.CredentialEpoch != 2 {
+		t.Fatalf("final epoch %d, want 2", final.CredentialEpoch)
+	}
+	for _, stamp := range []int64{0, 1} {
+		if (&ABSSession{CredentialEpoch: stamp}).CredentialsCurrent(final) {
+			t.Fatalf("a session stamped with old epoch %d still passes", stamp)
+		}
+	}
+}
+
+// A self-service change is a compare-and-swap on the password it verified: of
+// two racing from the same verified hash, exactly one lands.
+func TestSetUserPassword_SelfServiceIsCompareAndSwap(t *testing.T) {
+	p := newABSSessionStore(t)
+	u := newEpochUser(t, p)
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
-	for i, cand := range []*User{a, b} {
+	for i, hash := range []string{"hash-a", "hash-b"} {
 		wg.Add(1)
-		go func() { defer wg.Done(); errs[i] = p.UpdateUser(cand) }()
+		go func() { defer wg.Done(); _, errs[i] = p.SetUserPassword(u.ID, "hash-old", "bcrypt", hash) }()
 	}
 	wg.Wait()
 	ok := 0
@@ -100,7 +135,35 @@ func TestUpdateUser_ConcurrentPasswordChangesOneWins(t *testing.T) {
 		}
 	}
 	if ok != 1 {
-		t.Fatalf("%d of 2 racing password changes landed, want exactly 1", ok)
+		t.Fatalf("%d of 2 racing self-service changes landed, want exactly 1", ok)
+	}
+	if got := mustGetUser(t, p, u.ID); got.CredentialEpoch != 1 {
+		t.Fatalf("epoch %d after one landed change, want 1", got.CredentialEpoch)
+	}
+}
+
+// SetUserStatus bumps the epoch on deactivation AND reactivation, and the reset
+// link's epoch bump cannot revert a deactivation that landed after its read.
+func TestSetUserStatus_BumpsBothWaysAndBumpKeepsStatus(t *testing.T) {
+	p := newABSSessionStore(t)
+	u := newEpochUser(t, p)
+	locked, err := p.SetUserStatus(u.ID, "locked")
+	if err != nil || locked.CredentialEpoch != 1 || locked.Status != "locked" {
+		t.Fatalf("deactivate = %+v, %v; want locked at epoch 1", locked, err)
+	}
+	active, err := p.SetUserStatus(u.ID, "active")
+	if err != nil || active.CredentialEpoch != 2 || active.Status != "active" {
+		t.Fatalf("reactivate = %+v, %v; want active at epoch 2", active, err)
+	}
+	if _, err := p.SetUserStatus(u.ID, "locked"); err != nil {
+		t.Fatal(err)
+	}
+	bumped, err := p.BumpUserCredentialEpoch(u.ID)
+	if err != nil || bumped.Status != "locked" || bumped.CredentialEpoch != 4 {
+		t.Fatalf("reset-link bump = %+v, %v; want still locked at epoch 4", bumped, err)
+	}
+	if _, err := p.SetUserStatus("nobody", "locked"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("unknown user = %v, want ErrUserNotFound", err)
 	}
 }
 
@@ -111,10 +174,7 @@ func TestRehashUserPassword_IsConditional(t *testing.T) {
 	u := newEpochUser(t, p)
 	verified := mustGetUser(t, p, u.ID) // what the login checked the password against
 
-	change := mustGetUser(t, p, u.ID)
-	change.PasswordHash = "hash-new"
-	change.CredentialEpoch++
-	if err := p.UpdateUser(change); err != nil {
+	if _, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-new"); err != nil {
 		t.Fatal(err)
 	}
 	wrote, err := p.RehashUserPassword(u.ID, verified.PasswordHash, "argon2id", "argon-of-old")
@@ -128,10 +188,7 @@ func TestRehashUserPassword_IsConditional(t *testing.T) {
 	// Same password, but the account was locked after the login read it: the
 	// rehash lands on the fresh row and keeps the lock and the epoch.
 	verified = mustGetUser(t, p, u.ID)
-	lock := mustGetUser(t, p, u.ID)
-	lock.Status = "locked"
-	lock.CredentialEpoch++
-	if err := p.UpdateUser(lock); err != nil {
+	if _, err := p.SetUserStatus(u.ID, "locked"); err != nil {
 		t.Fatal(err)
 	}
 	wrote, err = p.RehashUserPassword(u.ID, verified.PasswordHash, "argon2id", "argon-of-new")

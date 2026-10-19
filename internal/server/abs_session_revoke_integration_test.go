@@ -1,5 +1,5 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
 // last-edited: 2026-10-19
 
@@ -260,6 +260,34 @@ func credentialActions() map[string]func(t *testing.T, s *Server, store database
 	}
 }
 
+// TestReactivationCannotReviveABSSessionsWhenRevokeFails: with every cleanup
+// revoke failing, a session from before the deactivation (an unstamped legacy one
+// here, epoch 0) is still refused after the account is reactivated, because both
+// status changes bump the credential epoch.
+func TestReactivationCannotReviveABSSessionsWhenRevokeFails(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	const pw = "pw-pw-pw-pw-1"
+	u := createPasswordUser(t, s, "phoneuser", pw)
+	phone := signInABSPhone(t, s, "phoneuser", pw)
+	store := &noRevokeStore{Store: s.storeForWiring()}
+	uh := handlers.NewUserHandler(store)
+
+	c, w := handlerCtx(http.MethodPost, "/deactivate", nil, nil)
+	c.Params = gin.Params{{Key: "id", Value: u.ID}}
+	uh.DeactivateUser(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	c, w = handlerCtx(http.MethodPost, "/reactivate", nil, nil)
+	c.Params = gin.Params{{Key: "id", Value: u.ID}}
+	uh.ReactivateUser(c)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	require.Equal(t, 2, store.revokes, "both cleanup revokes were attempted and failed")
+	phone.requireSignedOut(t, "after reactivation with failed revokes")
+	fresh := signInABSPhone(t, s, "phoneuser", pw)
+	require.True(t, fresh.bearerWorks(t), "the reactivated account signs in normally")
+}
+
 // noRevokeStore is the real store with a revoke-all that silently does nothing,
 // so a test can show the credential epoch alone ends the sessions.
 type noRevokeStore struct {
@@ -341,14 +369,16 @@ func TestLoginRacingACredentialChangeIsRefused(t *testing.T) {
 	}
 }
 
-// failingUserWriteStore fails UpdateUser, so the reset link's epoch write fails.
+// failingUserWriteStore fails the reset link's epoch write.
 type failingUserWriteStore struct {
 	database.Store
 }
 
 func (f *failingUserWriteStore) Unwrap() database.Store { return f.Store }
 
-func (f *failingUserWriteStore) UpdateUser(*database.User) error { return errors.New("disk full") }
+func (f *failingUserWriteStore) BumpUserCredentialEpoch(string) (*database.User, error) {
+	return nil, errors.New("disk full")
+}
 
 // An admin reset whose epoch write fails must not hand out a reset link: the
 // admin would believe the account was secured while the old sessions still work.
