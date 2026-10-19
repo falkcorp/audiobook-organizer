@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-19
 
@@ -1493,6 +1493,13 @@ type reviewSelectionBody struct {
 	IDs []string `json:"ids"`
 }
 
+// Error codes of the selection check's 503s. The lane retries the first for as
+// long as a cold build can take, and the second like any busy answer.
+const (
+	reviewSnapshotBuildingCode = "REVIEW_SNAPSHOT_BUILDING"
+	reviewSnapshotBackoffCode  = "REVIEW_SNAPSHOT_BACKOFF"
+)
+
 // ReviewSelectionCheck handles POST /audiobooks/metadata/cache/review/selection.
 //
 // It answers, for the books the reviewer has selected, which of them the
@@ -1547,7 +1554,16 @@ func (h *MetadataCacheHandler) ReviewSelectionCheck(c *gin.Context) {
 	l, err := h.reviewQueryListWith(c.Request.Context(), q, h.reviewSnapshotNoWait)
 	if errors.Is(err, errReviewSnapshotBuilding) {
 		c.Header("Retry-After", "10")
-		httputil.RespondWithServiceUnavailable(c, err.Error())
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), reviewSnapshotBuildingCode)
+		return
+	}
+	// A failed build is backing off: the same wait-and-ask-again answer, with
+	// the time that is left (at least 1s). A raw build error stays a 500.
+	var backoff *reviewBuildBackoffError
+	if errors.As(err, &backoff) {
+		wait := int(math.Ceil(backoff.remaining.Seconds()))
+		c.Header("Retry-After", strconv.Itoa(max(wait, 1)))
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, errReviewBuildBackoff.Error(), reviewSnapshotBackoffCode)
 		return
 	}
 	if errors.As(err, &refused) {

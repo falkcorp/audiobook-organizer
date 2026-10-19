@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-19
 
@@ -13,12 +13,15 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -220,15 +223,29 @@ type OpEnqueuer interface {
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
 }
 
-// chunkDigest identifies the books of one batch chunk, independent of order,
-// so a resent chunk can be told from another chunk sent under the same index.
-func chunkDigest(ids []string) string {
+// chunkDigest identifies what one batch chunk asks the op to do: its books
+// (order-independent), the apply mode, write-back, and the pins (canonical JSON:
+// map keys sorted by encoding/json). A resend must match all of it, so a
+// "resend" that changes any of them is refused rather than answered with the
+// first send's op. Every input is length-prefixed, so ids that contain NUL (or
+// any separator) cannot collide with another split of the same bytes.
+func chunkDigest(ids []string, mode string, writeBack bool, pins map[string]metafetch.CandidatePin) string {
 	sorted := append([]string(nil), ids...)
 	sort.Strings(sorted)
 	sum := sha256.New()
+	put := func(v string) {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(v)))
+		sum.Write(n[:])
+		sum.Write([]byte(v))
+	}
+	put(mode)
+	put(strconv.FormatBool(writeBack))
+	pinJSON, _ := json.Marshal(pins) // a map of plain structs: cannot fail
+	put(string(pinJSON))
+	put(strconv.Itoa(len(sorted)))
 	for _, id := range sorted {
-		sum.Write([]byte(id))
-		sum.Write([]byte{0})
+		put(id)
 	}
 	return hex.EncodeToString(sum.Sum(nil))
 }
@@ -1323,6 +1340,19 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "a batched request needs at least one book_id")
 		return
 	}
+	// A batched chunk is counted and digested by its ids, so a duplicate id
+	// would inflate the count and let two different bodies look alike: it is
+	// refused, not silently deduplicated.
+	if body.BatchID != "" {
+		seen := make(map[string]struct{}, len(body.BookIDs))
+		for _, id := range body.BookIDs {
+			if _, dup := seen[id]; dup {
+				httputil.RespondWithBadRequest(c, "a batched request must not repeat a book_id")
+				return
+			}
+			seen[id] = struct{}{}
+		}
+	}
 	mode, modeOK := metafetch.NormalizeBulkApplyMode(body.Mode)
 	if !modeOK {
 		httputil.RespondWithBadRequest(c, `invalid mode: want "fill" or "replace"`)
@@ -1379,6 +1409,7 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	// the cap.
 	configuredCap := config.AppConfig.BulkApplyMaxItems
 	admittedBatch := false
+	var batchToken uint64
 	// The owner is the authenticated user. It is empty only when no user is on
 	// the context (auth disabled, or the bootstrap window), where the server is
 	// single-tenant, so one shared owner costs nothing. API keys carry
@@ -1392,7 +1423,7 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// The ledger applies the per-request check too (a chunk over the cap
 		// is a chunk over the declared total or the cap itself).
 		adm, err := h.batchLedger().Admit("batch-apply-cached", batchOwner, body.BatchID, *body.BatchIndex,
-			len(body.BookIDs), body.BatchTotal, configuredCap, chunkDigest(body.BookIDs))
+			len(body.BookIDs), body.BatchTotal, configuredCap, chunkDigest(body.BookIDs, mode, shouldWriteBack, body.Pins))
 		capErr = err
 		if err == nil && adm.Resent {
 			// This chunk was queued by an earlier send: answer with that op and
@@ -1406,8 +1437,10 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 			}
 			c.JSON(http.StatusAccepted, gin.H{
 				"data": gin.H{
-					"op_id":      adm.OpID,
-					"requested":  len(body.BookIDs),
+					"op_id":     adm.OpID,
+					"requested": len(body.BookIDs),
+					// Equal to the first send's: the digest covers write_back,
+					// so a resend with another value was refused above.
 					"write_back": shouldWriteBack,
 					"resent":     true,
 				},
@@ -1416,6 +1449,7 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		}
 		// Only a first-time chunk is released if its enqueue fails.
 		admittedBatch = err == nil
+		batchToken = adm.Token
 	} else if ex := applycap.Refuse("batch-apply-cached", len(body.BookIDs), configuredCap); ex != nil {
 		capErr = ex
 	}
@@ -1448,12 +1482,12 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	}
 	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", params)
 	if err == nil && admittedBatch {
-		h.batchLedger().RecordOp(batchOwner, body.BatchID, *body.BatchIndex, opID)
+		h.batchLedger().RecordOp(batchOwner, body.BatchID, *body.BatchIndex, batchToken, opID)
 	}
 	if err != nil {
 		// Nothing was queued: give the chunk back so the client can retry it.
 		if admittedBatch {
-			h.batchLedger().Release(batchOwner, body.BatchID, *body.BatchIndex)
+			h.batchLedger().Release(batchOwner, body.BatchID, *body.BatchIndex, batchToken)
 		}
 		httputil.InternalError(c, "failed to enqueue metadata apply", err)
 		return

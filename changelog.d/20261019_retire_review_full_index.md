@@ -76,8 +76,15 @@ as one request, as before. `batch_id`, `batch_total` and `batch_index` go togeth
 batched request with no `book_ids` is a `400`.
 
 The selection check now asks about a changed Title over both buckets even when the view leaves a
-chip inside the debounce, and holds the selection (instead of clearing it) when the server
-refuses the Title pattern. A busy server, a timeout (each check has a 15 second deadline) and a
-snapshot that is still building after a restart (the endpoint answers `503` with `Retry-After`
-at once instead of waiting for the build) are all held and asked again, at most 5 times,
-before the hold says so.
+chip inside the debounce. A check that cannot be made never drops the selection: it is kept and
+bulk apply stays held, with a message saying how to clear the hold, whether the server refused the
+Title pattern, answered with an error, was busy, or timed out (each check has a 15 second
+deadline). A busy server and a timeout are asked again at most 5 times. While the first snapshot
+after a restart is still building, the endpoint answers `503` `REVIEW_SNAPSHOT_BUILDING` with
+`Retry-After` at once instead of waiting, and the lane keeps asking for up to 5 minutes outside
+that budget; a failed build that is backing off answers `503` `REVIEW_SNAPSHOT_BACKOFF` with the
+remaining wait.
+
+A resent batch chunk must now match the first send in everything the apply does (books, `mode`,
+`write_back` and pins), not only its books, or it is refused with `BATCH_CHUNK_MISMATCH`. A
+batched chunk that repeats a `book_id` is a `400`.

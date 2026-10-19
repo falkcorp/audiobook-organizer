@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.49.0
+// version: 1.50.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-19
 //
@@ -99,6 +99,14 @@ export const PRUNE_BUSY_DEFAULT_DELAY_MS = 5_000;
 export const PRUNE_BUSY_MIN_DELAY_MS = 1_000;
 export const PRUNE_BUSY_MAX_DELAY_MS = 60_000;
 export const PRUNE_BUSY_MAX_RETRIES = 5;
+/**
+ * The server answers REVIEW_SNAPSHOT_BUILDING while the first snapshot after a
+ * restart is still being built (about two minutes on a large library). That is
+ * waiting, not failing: it is retried at Retry-After outside the retry budget
+ * above, for at most this long, counted from the first such answer.
+ */
+export const PRUNE_BUILDING_MAX_WAIT_MS = 5 * 60_000;
+export const PRUNE_BUILDING_CODE = 'REVIEW_SNAPSHOT_BUILDING';
 
 /**
  * An opaque, unguessable id naming one chunked apply (see api.ApplyBatch). The
@@ -1400,6 +1408,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // cleared with the effect.
   const [pruneRetry, setPruneRetry] = useState(0);
   const pruneRetriesRef = useRef({ key: '', n: 0 });
+  const pruneBuildingRef = useRef({ key: '', since: 0 });
   const pruneRetryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // What the effects below need to read at the moment they fire without
@@ -2708,11 +2717,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   //     not hold stays. An empty or invalid Title asks nothing, so half-typing
   //     a pattern never wipes a selection.
   //
-  // A check that cannot be made never passes silently. Outside a chip the
-  // selection is cleared (keeping books the reviewer can no longer see is
-  // what this prune prevents); inside a chip it is kept, but the reviewer is
+  // A check that cannot be made never passes silently and never drops the
+  // selection: in or out of a chip the selection is kept, the reviewer is
   // told, and bulk apply and reject stay refused (refuseUnsettled) until a
-  // check succeeds, the selection is cleared, or the filters change.
+  // check succeeds, the selection is cleared, or the filters change. A busy
+  // server, a timeout and a snapshot that is still building are asked again
+  // (the first two within a budget, the third for as long as a cold build
+  // takes); a refused Title pattern is not retried.
   useEffect(() => {
     // Nothing differs from what the selection was last checked against, or
     // nothing is selected: settled without asking.
@@ -2790,6 +2801,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             return next.size === prev.size ? prev : next;
           });
           pruneRetriesRef.current = { key: settleKey, n: 0 };
+          pruneBuildingRef.current = { key: '', since: 0 };
           settle(current);
         } catch (err) {
           if (controller.signal.aborted || isAbortError(err)) return;
@@ -2802,6 +2814,33 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             const message = failed.message || 'The Title filter was refused.';
             setServerTitleError(message);
             hold(`The Title filter could not be checked against the selection (${message}). ${clearHint}`);
+            return;
+          }
+          const building =
+            failed?.status === 503 &&
+            (failed.data as { code?: unknown } | undefined)?.code === PRUNE_BUILDING_CODE;
+          if (building) {
+            // Waiting for the snapshot, not failing: its own wall-clock bound,
+            // not the retry budget below.
+            if (pruneBuildingRef.current.key !== settleKey) {
+              pruneBuildingRef.current = { key: settleKey, since: Date.now() };
+            }
+            if (Date.now() - pruneBuildingRef.current.since < PRUNE_BUILDING_MAX_WAIT_MS) {
+              const delay = Math.min(
+                PRUNE_BUSY_MAX_DELAY_MS,
+                Math.max(PRUNE_BUSY_MIN_DELAY_MS, failed?.retryAfterMs ?? PRUNE_BUSY_DEFAULT_DELAY_MS)
+              );
+              pruneRetryTimerRef.current = setTimeout(() => setPruneRetry((n) => n + 1), delay);
+              hold(
+                `The review list is still loading after a restart, so the selection could not be ` +
+                  `checked yet. It will be checked again. ${clearHint}`
+              );
+            } else {
+              hold(
+                `The review list is still loading after several minutes, so the selection could not be ` +
+                  `checked. ${clearHint}`
+              );
+            }
             return;
           }
           const timedOut = failed?.name === 'ApiTimeoutError';
@@ -2834,17 +2873,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             }
             return;
           }
-          if (chip === null) {
-            setSelectedIds(new Set());
-            toastRef.current(
-              'Could not check the selection against the new filters, so it was cleared.',
-              'warning'
-            );
-            // The cleared selection has nothing left to check.
-            settle(current);
-            return;
-          }
-          hold(`Could not check the selection against the new title filter. ${clearHint}`);
+          // Any other failure (a 500, a network error): the selection is kept and
+          // held in or out of a chip. A failed check never silently drops a
+          // reviewer's selection; bulk apply and reject stay refused until a
+          // check succeeds, the selection is cleared, or the filters change.
+          hold(
+            chip === null
+              ? `Could not check the selection against the new filters. ${clearHint}`
+              : `Could not check the selection against the new title filter. ${clearHint}`
+          );
         }
       };
       void run();

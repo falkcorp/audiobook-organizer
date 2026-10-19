@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-10-19
 //
@@ -853,16 +853,31 @@ describe('the lane requests', () => {
     expect(result.current.selectedIds.size).toBe(2300);
   });
 
-  it('a failed check outside a chip clears the selection and says so', async () => {
+  it('a failed check (a 500) outside a chip keeps the selection, says so and holds bulk apply', async () => {
+    armApply();
     vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
-    vi.mocked(api.checkReviewSelection).mockRejectedValue(new Error('boom'));
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(
+      Object.assign(new Error('failed to query the review set'), { status: 500, data: {} })
+    );
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     act(() => result.current.setSelection(['a1', 'a2'], true));
     act(() => result.current.setFilters({ confidenceThreshold: 50 }));
-    await waitFor(() => expect(result.current.selectedIds.size).toBe(0));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/^Could not check the selection against the new filters\..*clear the selection/),
+        'warning'
+      )
+    );
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    toast.mockClear();
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a1'] })
+    );
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(
-      expect.stringMatching(/^Could not check the selection against the new filters/),
+      expect.stringMatching(/^The selection could not be checked against the current filters/),
       'warning'
     );
   });
@@ -1138,6 +1153,111 @@ describe('the lane requests', () => {
     expect(api.checkReviewSelection).toHaveBeenCalledTimes(2);
     // The retry succeeded: the books the filters hide are dropped and the hold is over.
     expect([...result.current.selectedIds]).toEqual(['a1']);
+  });
+
+  const buildingError = (retryAfterMs = 1000) =>
+    Object.assign(new Error('the review snapshot is still being built; retry shortly'), {
+      status: 503,
+      retryAfterMs,
+      data: { code: 'REVIEW_SNAPSHOT_BUILDING' },
+    });
+  const busyError = () =>
+    Object.assign(new Error('busy'), { status: 503, retryAfterMs: 1000, data: {} });
+  const timeoutError = () =>
+    Object.assign(new Error('Request timed out after 15000ms'), { name: 'ApiTimeoutError' });
+
+  /** Steps the fake clock: the retry delay, then the effect's own debounce, in separate acts. */
+  async function stepRetries(cycles: number, delayMs = 1000) {
+    for (let i = 0; i < cycles; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(delayMs + 50);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+    }
+  }
+
+  it('a snapshot that is still building is retried far past the busy budget, then the prune completes', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    const mock = vi.mocked(api.checkReviewSelection);
+    for (let i = 0; i < 15; i++) mock.mockRejectedValueOnce(buildingError());
+    mock.mockImplementation(async (_p, ids) => ({
+      matching: ids.filter((id) => id === 'a1'),
+      not_matching: ids.filter((id) => id === 'a2'),
+      unknown: [],
+      generation: 'g1',
+    }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    vi.useFakeTimers();
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await stepRetries(16);
+    expect(mock).toHaveBeenCalledTimes(16);
+    expect(PRUNE_BUSY_MAX_RETRIES).toBeLessThan(15);
+    expect([...result.current.selectedIds]).toEqual(['a1']);
+    expect(toast).not.toHaveBeenCalledWith(
+      expect.stringMatching(/still loading after several minutes/),
+      'warning'
+    );
+  });
+
+  it('a snapshot that never finishes building holds after the wall-clock bound', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(buildingError(60_000));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    vi.useFakeTimers();
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await stepRetries(8, 60_000);
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/still loading after several minutes.*clear the selection/),
+      'warning'
+    );
+    const calls = vi.mocked(api.checkReviewSelection).mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(vi.mocked(api.checkReviewSelection).mock.calls.length).toBe(calls);
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('busy answers and timeouts share one retry budget, apart from the building wait', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    const mock = vi.mocked(api.checkReviewSelection);
+    mock
+      .mockRejectedValueOnce(buildingError())
+      .mockRejectedValueOnce(buildingError())
+      .mockRejectedValueOnce(busyError())
+      .mockRejectedValueOnce(timeoutError())
+      .mockRejectedValueOnce(busyError())
+      .mockRejectedValueOnce(timeoutError())
+      .mockRejectedValueOnce(busyError())
+      .mockRejectedValue(timeoutError());
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    vi.useFakeTimers();
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await stepRetries(12, 5000);
+    // 2 building (free) + 1 first failure + 5 budgeted retries, then the hold.
+    expect(mock).toHaveBeenCalledTimes(2 + 1 + PRUNE_BUSY_MAX_RETRIES);
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/kept taking too long, so it could not be checked/),
+      'warning'
+    );
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
   });
 
   it('a selection check that times out holds the selection and says how to clear the hold', async () => {
