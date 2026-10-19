@@ -1,5 +1,5 @@
 // file: web/src/utils/absRedirects.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e2b4c90-1d3f-4a58-9b6e-c0a8f5d27e41
 // last-edited: 2026-10-19
 
@@ -17,4 +17,9 @@
 export const ABS_REDIRECTS: ReadonlyArray<{ from: string; to: string }> = [
   { from: '/config', to: '/settings' },
   { from: '/config/api-keys', to: '/settings#api-keys' },
+  // ABS served behind its router base (ROUTER_BASE_PATH=/audiobookshelf), which
+  // its docs and bookmarks commonly use.
+  { from: '/audiobookshelf', to: '/dashboard' },
+  { from: '/audiobookshelf/config', to: '/settings' },
+  { from: '/audiobookshelf/config/api-keys', to: '/settings#api-keys' },
 ];

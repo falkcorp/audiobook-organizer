@@ -1,10 +1,10 @@
 // file: web/src/App.notfound.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d1e8a73-2c94-4b6f-8e07-a3f9c1d4b620
 // last-edited: 2026-10-19
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material';
 import App from './App';
@@ -38,56 +38,7 @@ function renderAt(path: string) {
 }
 
 // Mock API
-vi.mock('./services/api', () => ({
-  getAuthStatus: vi.fn().mockResolvedValue({
-    has_users: false,
-    requires_auth: false,
-    bootstrap_ready: false,
-  }),
-  getMe: vi.fn().mockResolvedValue(null),
-  login: vi.fn(),
-  logout: vi.fn(),
-  setupAdmin: vi.fn(),
-  getConfig: vi.fn().mockResolvedValue({
-    root_dir: '/tmp/library',
-    setup_complete: true,
-  }),
-  getHomeDirectory: vi.fn().mockResolvedValue('/home/user'),
-  getSystemStatus: vi.fn().mockResolvedValue({
-    status: 'ok',
-    library: { book_count: 0, folder_count: 1, total_size: 0 },
-    import_paths: { book_count: 0, folder_count: 0, total_size: 0 },
-    memory: {},
-    runtime: {},
-    operations: { recent: [] },
-  }),
-  getImportPaths: vi.fn().mockResolvedValue([{ path: '/tmp' }]),
-  countBooks: vi.fn().mockResolvedValue(0),
-  getOperationLogsTail: vi.fn().mockResolvedValue([]),
-  getAuthors: vi.fn().mockResolvedValue([]),
-  getSeries: vi.fn().mockResolvedValue([]),
-  getNarrators: vi.fn().mockResolvedValue([]),
-  getBooks: vi.fn().mockResolvedValue([]),
-  searchBooks: vi.fn().mockResolvedValue([]),
-  getSoftDeletedBooks: vi.fn().mockResolvedValue({ items: [], count: 0 }),
-  getAppVersion: vi.fn().mockResolvedValue('1.0.0-test'),
-  getOperationTimeline: vi.fn().mockResolvedValue([]),
-  getSystemStorage: vi.fn().mockResolvedValue({
-    path: '/',
-    total_bytes: 1000000,
-    used_bytes: 500000,
-    free_bytes: 500000,
-    percent_used: 50,
-    quota_enabled: false,
-    quota_percent: 0,
-    user_quotas_enabled: false,
-  }),
-  openOperationsSSE: vi.fn().mockReturnValue({
-    close: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  }),
-}));
+vi.mock('./services/api', async () => (await import('./test/appApiMock')).createAppApiMock());
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -114,17 +65,30 @@ describe('signed-in catch-all and Audiobookshelf redirects', () => {
     expect(screen.getByTestId('loc')).toHaveTextContent('/config/users');
   });
 
-  it.each(['/config/api-keys', '/config/api-keys/'])(
-    '%s redirects to /settings#api-keys and opens the API Keys tab',
-    async (path) => {
-      renderAt(path);
-      expect(await screen.findByTestId('api-keys-tab-body')).toBeInTheDocument();
-      expect(screen.getByTestId('loc')).toHaveTextContent('/settings#api-keys');
-      expect(screen.getByRole('tab', { name: 'API Keys' })).toHaveAttribute(
-        'aria-selected',
-        'true'
-      );
-      expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
-    }
-  );
+  it.each([
+    ['/config', '/settings'],
+    ['/config/', '/settings'],
+    ['/audiobookshelf/config', '/settings'],
+    ['/audiobookshelf/config/', '/settings'],
+    ['/audiobookshelf', '/dashboard'],
+    ['/audiobookshelf/', '/dashboard'],
+  ])('%s redirects to %s', async (path, target) => {
+    renderAt(path);
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent(target));
+    expect(screen.getByTestId('loc').textContent).toBe(target);
+    expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    '/config/api-keys',
+    '/config/api-keys/',
+    '/audiobookshelf/config/api-keys',
+    '/audiobookshelf/config/api-keys/',
+  ])('%s redirects to /settings#api-keys and opens the API Keys tab', async (path) => {
+    renderAt(path);
+    expect(await screen.findByTestId('api-keys-tab-body')).toBeInTheDocument();
+    expect(screen.getByTestId('loc')).toHaveTextContent('/settings#api-keys');
+    expect(screen.getByRole('tab', { name: 'API Keys' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+  });
 });
