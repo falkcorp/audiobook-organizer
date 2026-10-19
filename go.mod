@@ -95,7 +95,6 @@ require (
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/getsentry/sentry-go v0.49.0 // indirect
 	github.com/gin-contrib/sse v1.1.2 // indirect
@@ -110,7 +109,6 @@ require (
 	github.com/google/renameio v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
-	github.com/gzuidhof/tygo v0.2.21 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -162,7 +160,6 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
@@ -174,5 +171,3 @@ require (
 // package list depended on whether `npm ci` had run, or was mid-extraction in
 // a CI step running in parallel.
 ignore ./web
-
-tool github.com/gzuidhof/tygo

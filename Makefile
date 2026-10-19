@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.48.0
+# version: 2.49.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-18
 
@@ -551,10 +551,17 @@ generate-ops:
 ops-check:
 	@go run ./tools/cmd/opsgen -check
 
-## generate-types: Regenerate web/src/types/generated/ from Go structs (tygo.yaml)
-.PHONY: generate-types types-check
-generate-types:
-	@go tool tygo generate
+## tygo-install: Build the pinned tygo into GOBIN from tools/tygo/go.mod (a nested
+## module, like staticcheck/mockery/deadcode: a dev-time generator that must not
+## put its dependencies in the root go.mod).
+TYGO := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)/tygo
+.PHONY: tygo-install generate-types types-check
+tygo-install:
+	@go -C tools/tygo install tool
+
+## generate-types: Regenerate web/src/types/generated/ from Go structs (tygo.yaml, run from the repo root)
+generate-types: tygo-install
+	@$(TYGO) generate
 
 ## types-check: Fail if web/src/types/generated is stale (run make generate-types)
 types-check:
