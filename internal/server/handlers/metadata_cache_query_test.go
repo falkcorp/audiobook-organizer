@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-19
 
@@ -1648,6 +1648,17 @@ func TestReviewPage_RejectionScanOnlyForPagesWithReviewableRows(t *testing.T) {
 	require.False(t, unavailable("view=page&bucket=unreviewable&limit=5"), "nothing to mark, nothing missing")
 }
 
+// selectionErrCode is the "code" of an error body (the exact code, not a
+// substring of the message: a Contains passes for a body that merely mentions it).
+func selectionErrCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var out struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out), w.Body.String())
+	return out.Code
+}
+
 // The selection check never waits on a cold snapshot build: while the first
 // build runs it answers 503 + Retry-After at once, and once the build is done
 // it answers normally. (The page endpoint still waits, as before.)
@@ -1682,7 +1693,7 @@ func TestReviewSelectionCheck_ColdSnapshotAnswers503WithRetryAfter(t *testing.T)
 	case w := <-done:
 		require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 		require.NotEmpty(t, w.Header().Get("Retry-After"))
-		require.Contains(t, w.Body.String(), "REVIEW_SNAPSHOT_BUILDING")
+		require.Equal(t, "REVIEW_SNAPSHOT_BUILDING", selectionErrCode(t, w), w.Body.String())
 	case <-time.After(5 * time.Second):
 		t.Fatal("the selection check waited on the cold build")
 	}
@@ -1728,7 +1739,7 @@ func TestReviewSelectionCheck_FailedColdBuildAnswers503WithRemainingBackoff(t *t
 
 	w := post()
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), "REVIEW_SNAPSHOT_BACKOFF")
+	require.Equal(t, "REVIEW_SNAPSHOT_BACKOFF", selectionErrCode(t, w), w.Body.String())
 	wait, err := strconv.Atoi(w.Header().Get("Retry-After"))
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, wait, 80, "the remaining backoff, not a fixed value")

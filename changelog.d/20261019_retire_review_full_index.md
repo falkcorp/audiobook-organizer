@@ -88,3 +88,9 @@ remaining wait.
 A resent batch chunk must now match the first send in everything the apply does (books, `mode`,
 `write_back` and pins), not only its books, or it is refused with `BATCH_CHUNK_MISMATCH`. A
 batched chunk that repeats a `book_id` is a `400`.
+
+While a selection is being checked against new filters, or its check failed, every command that
+acts on the selected books is held, not only apply and reject: "Write details into audio files",
+"Search again" (button and menu), "Skip selected" and "Reject selected" are disabled with the
+reason, and refuse again if invoked anyway. A snapshot-building wait that was left over from
+another view no longer makes a later visit to the same filters give up at once.
