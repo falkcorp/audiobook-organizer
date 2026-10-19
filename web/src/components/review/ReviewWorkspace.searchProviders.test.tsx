@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.searchProviders.test.tsx
-// version: 1.2.1
+// version: 1.3.0
 // guid: 3f8c2a1d-9e5f-4a2b-8c1e-6d7f9a2b5c3e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // The Search providers… command in the Metadata menu must send an explicit
 // selection for unmatched books, never an empty request body. This test guards
@@ -13,6 +13,7 @@ import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 
@@ -46,14 +47,14 @@ function renderWorkspace() {
 
 /** Seeds the review set and the collaborators the workspace touches on mount. */
 function seed(results: api.CandidateResult[]) {
-  vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+  serveReviewList({
     results,
     total_count: results.length,
     matched: results.length,
     no_match: 0,
     errors: 0,
     stale: 0,
-  } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+  });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getReviewItems).mockResolvedValue({

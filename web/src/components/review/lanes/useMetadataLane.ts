@@ -16,13 +16,14 @@
 // The derivations form a chain, and every link depends on both the filters and
 // `rowStates`:
 //
-//   filters -> preGroupFiltered -> multiBookIds -> filteredResults
-//           -> pageResults -> multiGroups + { highConfidenceIds, ... }
+//   filters -> server page (+ facets) -> visible rows -> multiGroups
+//           + { highConfidenceIds, ... }
 //
 // Split that across a component boundary and the halves either recompute the
 // chain or prop-drill it. So the chain stays here and callers get slices: the
 // rail takes `pageResults`, the spine takes `spineCtx`, the action bar takes the
-// id sets. Nobody downstream re-derives anything.
+// id sets. Nobody downstream re-derives anything. The server filters and pages
+// (view=page); the lane holds one page of rows, never the library.
 //
 // WHAT IS DELIBERATELY NOT HERE
 //
@@ -745,8 +746,7 @@ export interface ReviewQueryInput {
 }
 
 /**
- * The server filters that reproduce the lane's index-mode chain for this
- * state. Only what changes the answer is sent: a chip view pauses every filter
+ * The server filters for this state. Only what changes the answer is sent: a chip view pauses every filter
  * but the Title (so that is all it carries), a switch that is off is omitted,
  * and the skipped / ungrouped lists ride along only under the switches that
  * read them. Two states that list the same rows therefore send the same
@@ -803,8 +803,8 @@ function summaryFromFacets(f: api.ReviewFacets): MetadataLaneSummary {
     total: f.total,
     unreviewable: f.unreviewable,
     stale: f.stale,
-    // Left undefined rather than zero-filled when the server omits it: see the
-    // index-mode summary.
+    // Left undefined rather than zero-filled when the server omits it (an
+    // older server): zero would read as "none", undefined as "not reported".
     unreviewable_by_cause: f.unreviewable_by_cause,
     resolved_no_candidates: f.resolved_no_candidates,
     deferred: f.deferred,
@@ -1665,8 +1665,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   }, [detailState]);
 
   // Fetch the full rows for the visible page's books that have not been asked
-  // for since the index loaded. One request per page change, sized by the
-  // page, never by the library. `detailEpochRef` is bumped with every index
+  // for since the list last changed. One request per page change, sized by the
+  // page, never by the library. `detailEpochRef` is bumped with every page
   // load (below), so a response that started before it is dropped instead of
   // mixing an older index's details into the new one.
   const detailAskedRef = useRef<Set<string>>(new Set());
@@ -2444,10 +2444,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // The pins a page-mode bulk apply sends. Each book's pin comes from, in
   // order: its row on the current page (what the reviewer is looking at now),
   // the pin captured when it was ticked, or the pin the "select all" list
-  // came with. A book none of them knows is `unknown`: page mode never sends
-  // the hashless review_bulk marker index mode falls back to, because that
+  // came with. A book none of them knows is `unknown`: the lane never sends
+  // the hashless review_bulk marker, because that
   // marker applies whatever the top candidate is by then with no staleness
-  // check, and page mode would send it for every book off the page. A book
+  // check, and it would be sent for every book off the page. A book
   // known to have no candidate is `noCandidate`: there is nothing to apply.
   const pagePinsFor = useCallback(
     (ids: string[]) => {

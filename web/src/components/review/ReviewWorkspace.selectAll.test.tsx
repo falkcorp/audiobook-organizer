@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.6.1
+// version: 1.7.0
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // "Select all N matching" across pages (Gmail pattern), and bulk actions that
 // work on that whole set: chunked to what the server accepts, one progress
@@ -26,6 +26,7 @@ import { STORAGE_KEYS } from '../../lib/storageKeys';
 vi.mock('../../services/api');
 
 const N = 1203;
+let seedConfig: api.Config = { root_dir: '' } as api.Config;
 
 function matched(id: string, title = `Book ${id}`) {
   return {
@@ -47,20 +48,75 @@ function empty(id: string) {
 
 const emptyRows = Array.from({ length: N }, (_, i) => empty(`e${i}`));
 
-function seed(reviewable: api.CandidateResult[] = [matched('m1')]) {
-  vi.mocked(api.getCachedReviewResults).mockImplementation(
-    async (_l, _o, _a, bucket) =>
-      ({
-        results: bucket === 'unreviewable' ? emptyRows : reviewable,
-        total_count: bucket === 'unreviewable' ? N : reviewable.length,
+/** Page size the lane asks for; the fake honours `limit`/`offset` as the server does. */
+function seed(reviewable: api.CandidateResult[] = [matched('m1')], bulkCap?: number) {
+  // The server owns the filtering: `chip` picks the set (no_candidates is the
+  // unreviewable bucket, anything else the reviewable rows) and `q` narrows it
+  // by title (`/re/` is a regex, anything else a substring).
+  const pick = (params?: api.ReviewQueryParams) => {
+    const base = params?.chip === 'no_candidates' ? emptyRows : reviewable;
+    const q = params?.q;
+    if (!q) return base;
+    const m = /^\/(.*)\/$/.exec(q);
+    const re = m ? new RegExp(m[1]) : null;
+    return base.filter((r) => (re ? re.test(r.book.title) : r.book.title.includes(q)));
+  };
+  vi.mocked(api.getReviewPage).mockImplementation(async (params) => {
+    const set = pick(params);
+    const offset = params?.offset ?? 0;
+    const limit = params?.limit ?? 25;
+    return {
+      results: set.slice(offset, offset + limit),
+      total_count: set.length,
+      offset,
+      limit,
+      generation: 'g1',
+      facets: {
         matched: reviewable.length,
         no_match: 0,
+        total: reviewable.length,
         errors: 0,
         stale: 0,
         unreviewable: N,
         unreviewable_by_cause: { orphaned: 0, no_candidates: N, decode_errors: 0 },
-      }) as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+        sources: {},
+        runtime_hidden: 0,
+      },
+    } as unknown as api.ReviewPageResponse;
+  });
+  vi.mocked(api.getReviewMatchingIds).mockImplementation(async (params, _signal, options) => {
+    const rows =
+      params?.bucket === 'unreviewable' ? emptyRows : pick(params);
+    const ids = rows.map((r) => r.book.id);
+    const out: api.ReviewMatchingIds = { ids, total: ids.length, generation: 'g1' };
+    if (options?.pins) {
+      // As the server: pins ride along only while the list fits the apply cap.
+      if (ids.length > (bulkCap ?? 5000)) out.pins_omitted = true;
+      else {
+        out.pins = {};
+        for (const r of rows) {
+          if (!r.candidate || !r.candidate_hash) continue;
+          out.pins[r.book.id] = {
+            content_hash: r.candidate_hash,
+            source: r.candidate.source,
+            title: r.candidate.title,
+            author: r.candidate.author,
+          };
+        }
+      }
+    }
+    return out;
+  });
+  vi.mocked(api.getCachedReviewResults).mockImplementation(
+    async (_l, _o, _a, _bucket, options = {}) => {
+      const want = new Set(options.ids ?? []);
+      const results = [...reviewable, ...emptyRows].filter((r) => want.has(r.book.id));
+      return { results, total_count: results.length, matched: 0, no_match: 0, errors: 0 } as Awaited<
+        ReturnType<typeof api.getCachedReviewResults>
+      >;
+    }
   );
+  seedConfig = bulkCap === undefined ? ({ root_dir: '' } as api.Config) : ({ root_dir: '', bulk_apply_max_items: bulkCap } as api.Config);
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getReviewItems).mockResolvedValue({
@@ -76,7 +132,7 @@ function seed(reviewable: api.CandidateResult[] = [matched('m1')]) {
     count: 0,
     by_kind: {},
   });
-  vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '' } as api.Config);
+  vi.mocked(api.getConfig).mockResolvedValue(seedConfig);
   let op = 0;
   vi.mocked(api.batchFetchCandidates).mockImplementation(async (req) => ({
     operation_id: `op-${++op}`,
@@ -209,10 +265,10 @@ describe('lane: chunked apply and filter-change pruning', () => {
 
   it('Apply selected on every matching book goes out in APPLY_CHUNK_SIZE requests', async () => {
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(N));
+    await waitFor(() => expect(result.current.filteredCount).toBe(N));
 
     act(() => result.current.selectAllMatching());
-    expect(result.current.selectedIds.size).toBe(N);
+    await waitFor(() => expect(result.current.selectedIds.size).toBe(N));
     expect(result.current.allMatchingSelected).toBe(true);
 
     act(() =>
@@ -234,10 +290,12 @@ describe('lane: chunked apply and filter-change pruning', () => {
   });
 
   it('refuses an apply above the 5,000 cap with no request, and sends 5,000 in chunks', async () => {
-    const big = Array.from({ length: 5001 }, (_, i) => matched(`c${i}`));
+    const big = Array.from({ length: 5001 }, (_, i) =>
+      matched(`c${i}`, i < 5000 ? `Keep c${i}` : `Drop c${i}`)
+    );
     seed(big);
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(5001));
+    await waitFor(() => expect(result.current.filteredCount).toBe(5001));
 
     const all = big.map((r) => r.book.id);
     act(() => result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: all }));
@@ -248,8 +306,18 @@ describe('lane: chunked apply and filter-change pruning', () => {
         '5,001 selected — narrow the selection or raise the limit in Settings.'
     );
 
+    // The server lists 5,000 for the narrowed filter and sends their pins
+    // (a list over the cap carries none), so the apply is accepted.
+    act(() => result.current.setFilters({ titleFilter: '/^Keep/' }));
+    await waitFor(() => expect(result.current.filteredCount).toBe(5000));
+    act(() => result.current.selectAllMatching());
+    await waitFor(() => expect(result.current.selectedIds.size).toBe(5000));
     act(() =>
-      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: all.slice(0, 5000) })
+      result.current.dispatch({
+        lane: 'metadata',
+        type: 'applySelected',
+        ids: result.current.applicableSelectedIds,
+      })
     );
     await waitFor(() =>
       expect(api.batchApplyFromCache).toHaveBeenCalledTimes(5000 / APPLY_CHUNK_SIZE)
@@ -258,14 +326,9 @@ describe('lane: chunked apply and filter-change pruning', () => {
 
   it('uses the cap the server reports', async () => {
     const rows = Array.from({ length: 101 }, (_, i) => matched(`s${i}`));
-    seed(rows);
-    const base = vi.mocked(api.getCachedReviewResults).getMockImplementation()!;
-    vi.mocked(api.getCachedReviewResults).mockImplementation(async (...args) => ({
-      ...(await base(...args)),
-      bulk_apply_max_items: 100,
-    }));
+    seed(rows, 100);
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(101));
+    await waitFor(() => expect(result.current.filteredCount).toBe(101));
 
     act(() =>
       result.current.dispatch({
@@ -280,15 +343,20 @@ describe('lane: chunked apply and filter-change pruning', () => {
 
   it('a filter change drops selected books the new filter no longer matches', async () => {
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(N));
+    await waitFor(() => expect(result.current.filteredCount).toBe(N));
 
     act(() => result.current.selectAllMatching());
+    await waitFor(() => expect(result.current.selectedIds.size).toBe(N));
     act(() => result.current.setPage(3));
-    expect(result.current.selectedIds.size).toBe(N);
 
     act(() => result.current.setFilters({ titleFilter: '/^Keep/' }));
     await waitFor(() => expect(result.current.selectedIds.size).toBe(10));
-    expect(result.current.allMatchingSelected).toBe(true);
+    // The list the server gave was for the old filters, so "all matching" is
+    // not claimed until it is asked for again; then it is the whole set.
+    expect(result.current.allMatchingSelected).toBe(false);
+    act(() => result.current.selectAllMatching());
+    await waitFor(() => expect(result.current.allMatchingSelected).toBe(true));
+    expect(result.current.selectedIds.size).toBe(10);
   });
 });
 
@@ -302,14 +370,14 @@ describe('lane: title regex inside a chip view', () => {
 
   it('prunes only selections whose title fails the new regex, across chips', async () => {
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.results).toHaveLength(2));
+    await waitFor(() => expect(result.current.filteredCount).toBe(2));
 
     // Picked in the matched chip...
     act(() => result.current.toggleChipFilter('matched'));
     act(() => result.current.setSelection(['m1', 'm2'], true));
     // ...and in the no-candidates chip, plus an id with no loaded row.
     act(() => result.current.toggleChipFilter('no_candidates'));
-    await waitFor(() => expect(result.current.unreviewableResults).toHaveLength(N));
+    await waitFor(() => expect(result.current.filteredCount).toBe(N));
     act(() => result.current.setSelection(['e0', 'not-loaded'], true));
     expect(result.current.selectedIds.size).toBe(4);
 
@@ -318,21 +386,32 @@ describe('lane: title regex inside a chip view', () => {
     await waitFor(() =>
       expect(result.current.filteredResults.map((r) => r.book.id)).toEqual(['e0'])
     );
-    // ...and the selection loses only m2, whose title fails it.
+    // ...and the server is asked which of the CHIP's books still match. The
+    // selection is a plain id set: books picked in the matched chip (m1, m2)
+    // and the id with no loaded row are not in this chip, so they stay.
     await waitFor(() =>
-      expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'not-loaded'])
+      expect(api.getReviewMatchingIds).toHaveBeenCalledWith(
+        expect.objectContaining({ chip: 'no_candidates', q: '/^(Alpha|Book e0$)/' }),
+        expect.anything()
+      )
     );
+    expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'm2', 'not-loaded']);
 
     // A pattern that does not compile is reported and prunes nothing.
     act(() => result.current.setFilters({ titleFilter: '/(/' }));
     expect(result.current.titleFilterError).not.toBeNull();
-    expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'not-loaded']);
-    expect(result.current.filteredResults).toHaveLength(N);
+    expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'm2', 'not-loaded']);
+    // The pattern is never sent: the list stays at its last valid answer.
+    expect(
+      vi.mocked(api.getReviewPage).mock.calls.some((c) => c[0]?.q === '/(/')
+    ).toBe(false);
 
     // RE2 has no lookahead: the shared grammar rejects it visibly (JS would
     // have run it), and it prunes nothing either.
     act(() => result.current.setFilters({ titleFilter: '/^(?!Book)/' }));
     expect(result.current.titleFilterError).toMatch(/lookahead/);
-    expect(result.current.filteredResults).toHaveLength(N);
+    expect(
+      vi.mocked(api.getReviewPage).mock.calls.some((c) => c[0]?.q === '/^(?!Book)/')
+    ).toBe(false);
   });
 });
