@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.manualSearch.test.tsx
-// version: 1.4.1
+// version: 1.5.0
 // guid: 8c04b7e2-5d13-49af-b026-3f7159ea840c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // The manual-search escape hatch on the metadata lane.
 //
@@ -21,6 +21,7 @@ import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 
@@ -43,14 +44,14 @@ function makeResult(id: string, overrides: Partial<api.CandidateResult> = {}) {
 }
 
 function seed(results: api.CandidateResult[]) {
-  vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+  serveReviewList({
     results,
     total_count: results.length,
     matched: results.filter((r) => r.status === 'matched').length,
     no_match: results.filter((r) => r.status === 'no_match').length,
     errors: 0,
     stale: 0,
-  } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+  });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getReviewItems).mockResolvedValue({
@@ -181,7 +182,7 @@ describe('manual metadata search from /review', () => {
     );
     await openWorkspace();
     await showNoMatchRows(user);
-    const loadsBefore = vi.mocked(api.getCachedReviewResults).mock.calls.length;
+    const loadsBefore = vi.mocked(api.getReviewPage).mock.calls.length;
 
     // Book A: pick, close. The dialog is gone at once; A's apply is pending.
     await user.click(await screen.findByLabelText(/Search metadata for Book na/i));
@@ -209,7 +210,7 @@ describe('manual metadata search from /review', () => {
     try {
       finishA({ id: 'op-a', status: 'completed', error_message: null } as api.OperationV2);
       for (let i = 0; i < 100; i++) {
-        if (vi.mocked(api.getCachedReviewResults).mock.calls.length > loadsBefore) break;
+        if (vi.mocked(api.getReviewPage).mock.calls.length > loadsBefore) break;
         await act(async () => {
           await vi.advanceTimersByTimeAsync(100);
         });
@@ -217,7 +218,7 @@ describe('manual metadata search from /review', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(vi.mocked(api.getCachedReviewResults).mock.calls.length).toBeGreaterThan(loadsBefore);
+    expect(vi.mocked(api.getReviewPage).mock.calls.length).toBeGreaterThan(loadsBefore);
     expect(screen.getByRole('dialog')).toHaveTextContent('Book nb');
   });
 });

@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx
-// version: 1.3.1
+// version: 1.4.0
 // guid: 510b281d-e333-4300-8b36-49e93cd8a7aa
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // Owner decision on #3580: with the bulk toggle on "Replace existing", EVERY
 // bulk entry point -- the action bar's buttons, a group's Apply All, and the
@@ -19,6 +19,7 @@ import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
@@ -42,14 +43,14 @@ function makeResult(id: string, candTitle = `Cand ${id}`) {
 }
 
 function seed(results: api.CandidateResult[]) {
-  vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+  serveReviewList({
     results,
     total_count: results.length,
     matched: results.length,
     no_match: 0,
     errors: 0,
     stale: 0,
-  } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+  });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getReviewItems).mockResolvedValue({

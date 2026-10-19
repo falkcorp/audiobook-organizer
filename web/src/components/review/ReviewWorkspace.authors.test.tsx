@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.authors.test.tsx
-// version: 1.2.1
+// version: 1.3.0
 // guid: 0b6d94c3-f7a2-4e18-9d05-62c8e1a7b350
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 /**
  * The Authors & series lane inside the workspace: how it is reached, what the
@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import * as reads from './lanes/authorsReads';
@@ -74,14 +75,14 @@ beforeEach(() => {
   });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
-  vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+  serveReviewList({
     results: [],
     total_count: 0,
     matched: 0,
     no_match: 0,
     errors: 0,
     stale: 0,
-  } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+  });
   vi.mocked(api.getReviewItems).mockResolvedValue({ items: [], count: 0, limit: 500, offset: 0, total: 0 });
   vi.mocked(api.getReviewCount).mockResolvedValue({
     applying: 0,

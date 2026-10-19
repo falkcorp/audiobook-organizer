@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.13.1
+// version: 1.14.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -18,6 +18,7 @@ import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 
@@ -84,15 +85,81 @@ const summary = {
   deferred: 2, // m1 + e2, the rows whose fallback lookup was deferred
 };
 
-function seed() {
+/** The books each chip lists: the server owns the filtering, so the fake answers by chip. */
+const CHIP_IDS: Record<string, string[]> = {
+  matched: ['m1', 'm2'],
+  no_match: ['n1'],
+  total: ['m1', 'm2', 'n1'],
+  no_candidates: ['e1', 'e2'],
+  resolved_no_candidates: ['r1'],
+  errors: ['d1'],
+  identity_stale: ['s1'],
+  stale: ['m1', 'e1'],
+  deferred: ['m1', 'e2'],
+};
+const DEFAULT_IDS = ['m1'];
+const ALL_ROWS = [...reviewable, ...unreviewable];
+
+function serveChips(extra: Record<string, unknown> = {}) {
+  // The Title box (q) narrows whatever the chip lists, as the server does:
+  // `/re/` is a regex over the title, anything else a substring.
+  const titleMatches = (title: string, q?: string) => {
+    if (!q) return true;
+    const m = /^\/(.*)\/$/.exec(q);
+    return m ? new RegExp(m[1]).test(title) : title.includes(q);
+  };
+  const rowsFor = (chip?: string, q?: string, bucket?: string) => {
+    const ids =
+      bucket === 'unreviewable'
+        ? unreviewable.map((r) => r.book.id)
+        : chip
+          ? (CHIP_IDS[chip] ?? [])
+          : DEFAULT_IDS;
+    return ids
+      .map((id) => ALL_ROWS.find((r) => r.book.id === id)!)
+      .filter((r) => titleMatches(r.book.title, q));
+  };
+  vi.mocked(api.getReviewPage).mockImplementation(async (params) => {
+    const results = rowsFor(params?.chip, params?.q, params?.bucket);
+    return {
+      results,
+      total_count: results.length,
+      offset: 0,
+      limit: 25,
+      generation: 'g1',
+      facets: {
+        matched: summary.matched,
+        no_match: summary.no_match,
+        total: reviewable.length,
+        errors: summary.errors,
+        stale: summary.stale,
+        deferred: summary.deferred,
+        resolved_no_candidates: summary.resolved_no_candidates,
+        unreviewable: summary.unreviewable,
+        unreviewable_by_cause: summary.unreviewable_by_cause,
+        sources: {},
+        runtime_hidden: 0,
+        ...extra,
+      },
+    } as unknown as api.ReviewPageResponse;
+  });
+  vi.mocked(api.getReviewMatchingIds).mockImplementation(async (params) => {
+    const ids = rowsFor(params?.chip, params?.q, params?.bucket).map((r) => r.book.id);
+    return { ids, total: ids.length, generation: 'g1' };
+  });
   vi.mocked(api.getCachedReviewResults).mockImplementation(
-    async (_limit, _offset, _all, bucket) =>
-      ({
-        ...summary,
-        results: bucket === 'unreviewable' ? unreviewable : reviewable,
-        total_count: bucket === 'unreviewable' ? unreviewable.length : reviewable.length,
-      }) as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    async (_limit, _offset, _all, _bucket, options = {}) => {
+      const want = new Set(options.ids ?? []);
+      const results = ALL_ROWS.filter((r) => want.has(r.book.id));
+      return { results, total_count: results.length, matched: 0, no_match: 0, errors: 0 } as Awaited<
+        ReturnType<typeof api.getCachedReviewResults>
+      >;
+    }
   );
+}
+
+function seed() {
+  serveChips();
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getReviewItems).mockResolvedValue({
@@ -154,15 +221,6 @@ async function enterTitleFilter(user: ReturnType<typeof userEvent.setup>, text: 
   await user.paste(text);
 }
 
-/**
- * Index loads of the metadata set: calls without `ids`. The lane also fetches
- * full rows for the visible page (`ids`), one request sized by the page; that
- * is not a reload of the set and is not what these tests count.
- */
-function metadataIndexLoads(): number {
-  return vi.mocked(api.getCachedReviewResults).mock.calls.filter((c) => !c[4]?.ids).length;
-}
-
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
@@ -189,8 +247,8 @@ describe('summary chips filter the list to exactly the books they count', () => 
     expect(listedIds()).toHaveLength(count);
     expect(el).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(`Showing the ${count}`);
-    // The reviewable chips need nothing more from the server.
-    expect(metadataIndexLoads()).toBe(1);
+    // One page request for the chip, on top of the opening load.
+    expect(api.getReviewPage).toHaveBeenLastCalledWith(expect.objectContaining({ chip }), expect.anything());
   });
 
   it('clicking the active chip again, or Show all, clears it', async () => {
@@ -218,7 +276,7 @@ describe('summary chips filter the list to exactly the books they count', () => 
     ['stale', ['m1', 'e1']],
     ['deferred', ['m1', 'e2']],
   ] as const)(
-    '%s chip loads the unreviewable bucket and shows exactly its books',
+    '%s chip asks the server for its books and shows exactly them',
     async (chip, ids) => {
       const user = userEvent.setup();
       await openWorkspace();
@@ -226,7 +284,7 @@ describe('summary chips filter the list to exactly the books they count', () => 
       await user.click(screen.getByTestId(`chip-${chip}`));
 
       await waitFor(() => expect(listedIds()).toEqual(ids));
-      expect(api.getCachedReviewResults).toHaveBeenCalledWith(0, 0, true, 'unreviewable');
+      expect(api.getReviewPage).toHaveBeenCalledWith(expect.objectContaining({ chip }), expect.anything());
     }
   );
 
@@ -281,15 +339,7 @@ describe('identification counts in the rail', () => {
       missing: 11,
       ready: true,
     };
-    vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, bucket) =>
-        ({
-          ...summary,
-          ident_counts: identCounts,
-          results: bucket === 'unreviewable' ? unreviewable : reviewable,
-          total_count: bucket === 'unreviewable' ? unreviewable.length : reviewable.length,
-        }) as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>
-    );
+    serveChips({ ident_counts: identCounts });
     await openWorkspace();
     const missing = await screen.findByTestId('ident-chip-missing');
     expect(missing).toHaveAttribute('href', '/library?search=ident%3Amissing');
@@ -334,11 +384,7 @@ describe('Search again on the no-candidate books', () => {
     // The op is watched, and the lane reloads when it finishes.
     await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledWith('op-search'));
     await waitFor(() =>
-      expect(
-        vi
-          .mocked(api.getCachedReviewResults)
-          .mock.calls.filter((c) => c[3] !== 'unreviewable' && !c[4]?.ids).length
-      ).toBeGreaterThanOrEqual(2)
+      expect(vi.mocked(api.getReviewPage).mock.calls.length).toBeGreaterThanOrEqual(3)
     );
   });
 
@@ -449,11 +495,13 @@ describe('runtime differences', () => {
         },
       } as api.CandidateResult;
     };
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveReviewList({
       ...summary,
-      results: [withRuntime('ok', 36000, 35700), withRuntime('off', 36000, 18000)],
-      total_count: 2,
-    } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+      // The server hid 'off' (36000s book, 18000s candidate) and counts it.
+      results: [withRuntime('ok', 36000, 35700)],
+      total_count: 1,
+      runtime_hidden: 1,
+    });
     await openWorkspace();
 
     await waitFor(() => expect(listedIds()).toEqual(['ok']));

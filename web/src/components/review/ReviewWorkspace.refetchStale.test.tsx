@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.6.1
+// version: 1.7.0
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // The refetch path from /review. Before this the stale chip's tooltip ended
 // "refetch to be sure", naming a remedy the workspace had no way to reach --
@@ -22,6 +22,7 @@ import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 
@@ -55,14 +56,14 @@ function renderWorkspace() {
 
 /** Seeds the review set and the collaborators the workspace touches on mount. */
 function seed(results: api.CandidateResult[], stale: number) {
-  vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+  serveReviewList({
     results,
     total_count: results.length,
     matched: results.length,
     no_match: 0,
     errors: 0,
     stale,
-  } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+  });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getReviewItems).mockResolvedValue({

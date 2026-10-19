@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.ownerRejected.test.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4e2b2514-41c9-47c3-b42b-cec3205fd369
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // A candidate the owner rejected is never applied: the server refuses it as
 // owner_rejected whatever pin an apply button sends. The rail marks the row,
@@ -11,6 +11,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 
@@ -33,14 +34,14 @@ function makeResult(id: string, overrides: Partial<api.CandidateResult> = {}) {
 }
 
 function seed(results: api.CandidateResult[]) {
-  vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+  serveReviewList({
     results,
     total_count: results.length,
     matched: results.length,
     no_match: 0,
     errors: 0,
     stale: 0,
-  } as unknown as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+  });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
   vi.mocked(api.getReviewItems).mockResolvedValue({

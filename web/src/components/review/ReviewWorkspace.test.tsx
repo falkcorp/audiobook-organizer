@@ -1,13 +1,14 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.25.0
+// version: 1.26.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';
+import { serveReviewList } from '../../test/reviewServer';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import { resetDedupPipelineForTests } from './useDedupPipeline';
@@ -64,7 +65,7 @@ function renderWorkspace(initialEntries: string[] = ['/review']) {
  * is not a reload of the set and is not what these tests count.
  */
 function metadataIndexLoads(): number {
-  return vi.mocked(api.getCachedReviewResults).mock.calls.filter((c) => !c[4]?.ids).length;
+  return vi.mocked(api.getReviewPage).mock.calls.length;
 }
 
 beforeEach(() => {
@@ -72,7 +73,7 @@ beforeEach(() => {
   window.localStorage.clear();
   resetDedupPipelineForTests();
   vi.mocked(api.isOperationTerminal).mockImplementation(actualApi.isOperationTerminal);
-  vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+  serveReviewList({
     results: [makeResult('a'), makeResult('b')],
     total_count: 2,
     matched: 2,
@@ -531,7 +532,7 @@ describe('cover lightbox', () => {
 
   beforeEach(() => {
     const r = makeResult('a');
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveReviewList({
       results: [
         {
           ...r,
@@ -964,7 +965,7 @@ const METADATA_EMPTY_COPY =
 
 describe('the metadata lane distinguishes failed, loading and empty', () => {
   it('shows the error and NOT the go-search-providers advice when the load fails', async () => {
-    vi.mocked(api.getCachedReviewResults).mockRejectedValue(new Error('server exploded'));
+    vi.mocked(api.getReviewPage).mockRejectedValue(new Error('server exploded'));
     renderWorkspace();
 
     const alert = await screen.findByTestId('metadata-error');
@@ -981,7 +982,7 @@ describe('the metadata lane distinguishes failed, loading and empty', () => {
     // The counterpart. Suppressing the empty copy on error is only correct if a
     // genuinely empty queue still gets it -- otherwise the fix has just traded
     // one indistinguishable pair for another.
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveReviewList({
       results: [],
       total_count: 0,
       matched: 0,
@@ -996,8 +997,8 @@ describe('the metadata lane distinguishes failed, loading and empty', () => {
 
   it('shows a loading state, not the empty copy, while the request is in flight', async () => {
     // A hung request used to render exactly the same screen as an empty queue.
-    vi.mocked(api.getCachedReviewResults).mockReturnValue(
-      new Promise(() => {}) as ReturnType<typeof api.getCachedReviewResults>
+    vi.mocked(api.getReviewPage).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.getReviewPage>
     );
     renderWorkspace();
 
@@ -1007,11 +1008,11 @@ describe('the metadata lane distinguishes failed, loading and empty', () => {
 
   it('retries the load from the error Alert', async () => {
     const user = userEvent.setup();
-    vi.mocked(api.getCachedReviewResults).mockRejectedValueOnce(new Error('server exploded'));
+    vi.mocked(api.getReviewPage).mockRejectedValueOnce(new Error('server exploded'));
     renderWorkspace();
     await screen.findByTestId('metadata-error');
 
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+    serveReviewList({
       results: [makeResult('a')],
       total_count: 1,
       matched: 1,
