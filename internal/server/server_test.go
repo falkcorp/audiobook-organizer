@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.15.0
+// version: 2.15.1
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -925,7 +925,7 @@ func TestBulkFetchMetadataRespectsOverridesAndMissingFields(t *testing.T) {
 	assert.Equal(t, "eng", *updatedBook.Language)
 	assert.NotNil(t, updatedBook.AuthorID)
 
-	state, err := server.loadMetadataState(created.ID)
+	state, err := metafetch.LoadStateSnapshot(server.Ops(), created.ID)
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	entry := state["publisher"]
@@ -1544,7 +1544,7 @@ func TestUpdateAudiobookPersistsOverrides(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	state, err := server.loadMetadataState(book.ID)
+	state, err := metafetch.LoadStateSnapshot(server.Ops(), book.ID)
 	require.NoError(t, err)
 
 	if assert.Contains(t, state, "title") {

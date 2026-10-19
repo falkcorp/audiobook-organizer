@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.43.0
+// version: 1.43.1
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-12
+// last-edited: 2026-10-18
 
 package server
 
@@ -28,7 +28,7 @@ import (
 // cachedApplyService is the narrow slice of *metafetch.Service that applying one
 // cached candidate needs. It exists so the per-book logic can be tested against
 // fakes without standing up a Server — the four regression tests that used to
-// drive this through the HTTP handler now drive applyCachedCandidateForBook
+// drive this through the HTTP handler now drive applyCachedCandidateForBookTimed
 // directly, so the behaviour they pin is still the behaviour production runs.
 //
 // That equivalence is the whole point of the interface. Before this extraction
@@ -734,9 +734,12 @@ func fetchTimeIdentity(fetchedTitle, fetchedAuthor, searchQuery string, book *da
 	return fmt.Errorf("%w: book %s author changed since the fetch (%q -> %q)", metafetch.ErrStaleMetadataCache, book.ID, fetchedAuthor, strings.Join(forms, " | "))
 }
 
-// applyCachedCandidateForBook applies the highest-scored cached candidate for
-// one book — only if the certainty gate allows it — and, when writeBack is
-// true, writes the result into the audio files.
+// applyCachedCandidateForBookTimed applies the highest-scored cached candidate
+// for one book — only if the certainty gate allows it — and, when writeBack is
+// true, writes the result into the audio files. It records its phases into pt
+// (which the caller may already have started, e.g. with the write-back gate
+// wait). The file-side sequel logs the one per-book "apply phase durations"
+// line; a book that is not applied logs none.
 //
 // FILE I/O — KEEP IN STEP WITH THE SINGLE-BOOK PATH. The sibling is
 // applyAudiobookMetadataImpl in internal/server/handlers/metadata/handler.go.
@@ -756,20 +759,6 @@ func fetchTimeIdentity(fetchedTitle, fetchedAuthor, searchQuery string, book *da
 //
 // checkpoint is the op's scan stand-down check (nil in tests); the file-side
 // sequel re-runs it before each file-writing step.
-func applyCachedCandidateForBook(
-	svc cachedApplyService,
-	books bookReader,
-	id string,
-	writeBack bool,
-	checkpoint func() error,
-) applyOutcome {
-	return applyCachedCandidateForBookTimed(context.Background(), svc, books, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil, "")
-}
-
-// applyCachedCandidateForBookTimed is applyCachedCandidateForBook recording
-// its phases into pt (which the caller may already have started, e.g. with the
-// write-back gate wait). The file-side sequel logs the one per-book
-// "apply phase durations" line; a book that is not applied logs none.
 //
 // mode is the request's normalized bulk mode (metafetch.NormalizeBulkApplyMode;
 // "" is fill). It reaches the plan through withBulkMode only, so the dry-run

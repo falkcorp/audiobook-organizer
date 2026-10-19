@@ -259,10 +259,6 @@ func isHTTPSRequest(c *gin.Context) bool {
 	return strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https")
 }
 
-// IsHTTPSRequest reports whether the inbound request is HTTPS.
-// Exported for callers in sibling packages (e.g. auth_temp_login.go).
-func IsHTTPSRequest(c *gin.Context) bool { return isHTTPSRequest(c) }
-
 // SetSessionCookie writes a session cookie to the response.
 func SetSessionCookie(c *gin.Context, token string, expiresAt time.Time) {
 	setSessionCookie(c, token, expiresAt)

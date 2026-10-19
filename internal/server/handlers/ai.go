@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -968,13 +968,6 @@ func (h *AIHandler) ListAIJobs(c *gin.Context) {
 	httputil.RespondWithOK(c, struct {
 		Jobs any `json:"jobs"`
 	}{Jobs: jobs})
-}
-
-// UnwrapAIJobsStore peels Store decorator layers until it finds one satisfying
-// database.AIJobsStore. Delegates to database.GetAIJobs; kept for API compat.
-func UnwrapAIJobsStore(s any) (database.AIJobsStore, bool) {
-	aij := database.GetAIJobs(s)
-	return aij, aij != nil
 }
 
 // AIReviewGroupsMode is the Groups mode of the AI author review: local

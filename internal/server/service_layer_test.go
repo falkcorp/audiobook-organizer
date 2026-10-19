@@ -1,13 +1,12 @@
 // file: internal/server/service_layer_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1394,123 +1393,6 @@ func TestDashboardService_GetHealthCheckResponse_Degraded(t *testing.T) {
 	// Verify metrics are still returned (with default values)
 	if resp.Metrics.Books != 0 || resp.Metrics.Authors != 0 {
 		t.Error("expected zero metrics on error")
-	}
-}
-
-// TestServerHelpers_DecodeRawValue tests decodeRawValue function
-func TestServerHelpers_DecodeRawValue(t *testing.T) {
-	tests := []struct {
-		name     string
-		raw      json.RawMessage
-		expected any
-	}{
-		{
-			name:     "nil raw message",
-			raw:      nil,
-			expected: nil,
-		},
-		{
-			name:     "string value",
-			raw:      json.RawMessage(`"test"`),
-			expected: "test",
-		},
-		{
-			name:     "number value",
-			raw:      json.RawMessage(`42`),
-			expected: float64(42),
-		},
-		{
-			name:     "boolean value",
-			raw:      json.RawMessage(`true`),
-			expected: true,
-		},
-		{
-			name:     "invalid json returns string",
-			raw:      json.RawMessage(`{invalid`),
-			expected: "{invalid",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := decodeRawValue(tt.raw)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
-		})
-	}
-}
-
-// TestServerHelpers_StringVal tests stringVal function
-func TestServerHelpers_StringVal(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    *string
-		expected any
-	}{
-		{
-			name:     "nil pointer returns nil",
-			input:    nil,
-			expected: nil,
-		},
-		{
-			name:     "non-nil pointer returns value",
-			input:    new("test"),
-			expected: "test",
-		},
-		{
-			name:     "empty string pointer returns empty string",
-			input:    new(""),
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := stringVal(tt.input)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
-		})
-	}
-}
-
-// TestServerHelpers_IntVal tests intVal function
-func TestServerHelpers_IntVal(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    *int
-		expected any
-	}{
-		{
-			name:     "nil pointer returns nil",
-			input:    nil,
-			expected: nil,
-		},
-		{
-			name:     "non-nil pointer returns value",
-			input:    new(42),
-			expected: 42,
-		},
-		{
-			name:     "zero value pointer returns zero",
-			input:    new(0),
-			expected: 0,
-		},
-		{
-			name:     "negative value pointer returns negative",
-			input:    new(-10),
-			expected: -10,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := intVal(tt.input)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
-		})
 	}
 }
 

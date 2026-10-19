@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package middleware
 
@@ -264,32 +264,6 @@ func TestIPRateLimiter_StartStopsOnContextCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("sweeper goroutine did not exit after context cancel")
 	}
-
-	// Stop after the goroutine already exited is safe and returns at once.
-	r.Stop()
-	r.Stop()
-}
-
-// TestIPRateLimiter_StopWithoutStart makes sure Stop does not block when the
-// sweeper was never launched, and that a later Start cannot launch one.
-func TestIPRateLimiter_StopWithoutStart(t *testing.T) {
-	t.Parallel()
-
-	r, _ := newTestLimiter(t, 60, 10)
-	done := make(chan struct{})
-	go func() {
-		r.Stop()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Stop blocked without a running sweeper")
-	}
-
-	r.Start(context.Background())
-	time.Sleep(10 * time.Millisecond)
-	assert.Equal(t, int64(0), r.SweepCount(), "Start after Stop must not launch a sweeper")
 }
 
 // TestIPRateLimiter_ConcurrentRequests exercises the critical section under
@@ -301,9 +275,11 @@ func TestIPRateLimiter_ConcurrentRequests(t *testing.T) {
 	r.maxEntries = 500
 	r.sweepInterval = time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	r.Start(ctx)
-	defer r.Stop()
+	defer func() {
+		cancel()
+		<-r.doneCh
+	}()
 
 	var wg sync.WaitGroup
 	for g := range 8 {
@@ -317,4 +293,18 @@ func TestIPRateLimiter_ConcurrentRequests(t *testing.T) {
 	}
 	wg.Wait()
 	assert.LessOrEqual(t, r.Len(), 500)
+}
+
+// Len reports the number of IPs currently tracked. Test-only: the tests assert
+// on the table size, and nothing in the server reads it.
+func (r *IPRateLimiter) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lru.Len()
+}
+
+// SweepCount reports how many sweeps have completed. Test-only: the tests use
+// it to prove the request path never sweeps and that the background sweeper ran.
+func (r *IPRateLimiter) SweepCount() int64 {
+	return r.sweeps.Load()
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package abs
 
@@ -126,18 +126,6 @@ func (r *sessionRegistry) evictExpiredLocked() {
 			delete(r.byID, id)
 		}
 	}
-}
-
-// SessionTimeListening exposes a session's running listened total. Test-only
-// accessor: /sync answers a bare "OK" like real ABS, so the accumulation semantics of
-// §1.8.4 are otherwise unobservable from outside.
-func (h *Handler) SessionTimeListening(sessionID string) float64 {
-	s, ok := h.sessions.get(sessionID)
-	if !ok {
-		return 0
-	}
-	_, total, _ := s.snapshot()
-	return total
 }
 
 // newSessionID mints a 36-char canonical UUIDv4.

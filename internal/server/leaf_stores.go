@@ -1,13 +1,12 @@
 // file: internal/server/leaf_stores.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4d92a6f8-1b07-4e53-9c81-3a05d7e264b9
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package server
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 
@@ -74,8 +73,6 @@ type startupKeyStore interface {
 	DeleteSetting(key string) error
 }
 
-// These two wrappers forward into packages that already declare what they need,
-// so both are embedded by name and re-narrow on their own.
+// This wrapper forwards into a package that already declares what it needs, so
+// it is embedded by name and re-narrows on its own.
 type trashedVersionCleaner = versions.TrashedVersionCleaner
-
-type undoConflictChecker = undo.ConflictChecker

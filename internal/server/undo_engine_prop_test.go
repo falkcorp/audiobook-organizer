@@ -1,13 +1,13 @@
 // file: internal/server/undo_engine_prop_test.go
-// version: 1.5.0
-// last-edited: 2026-09-12
+// version: 1.5.1
+// last-edited: 2026-10-18
 // guid: 1ff3d071-4c60-4bb0-92ed-d197fe8ad9d0
 //
 // Property-based tests for the undo engine (plan 4.5 task 8).
 //
 // One invariant is exercised here: conflict detection is conservative. If the
 // file at NewValue is modified after the change's CreatedAt,
-// PreflightUndoConflicts must classify it as a content-change conflict, never
+// undo.PreflightUndoConflicts must classify it as a content-change conflict, never
 // silently clobber. (The double-undo and undo+redo properties exercised
 // RunUndoOperation, deleted 2026-09-12 with no production caller.)
 
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"pgregory.net/rapid"
 )
 
@@ -36,7 +37,7 @@ func newPropStore(t *testing.T) database.Store {
 	return store
 }
 
-// TestProp_UndoConflictConservative verifies that PreflightUndoConflicts flags
+// TestProp_UndoConflictConservative verifies that undo.PreflightUndoConflicts flags
 // any file_move whose new-location file was modified after CreatedAt as a
 // content-change conflict. The undo engine must refuse to silently clobber
 // user edits made between the original operation and the undo.
@@ -95,7 +96,7 @@ func TestProp_UndoConflictConservative(t *testing.T) {
 			t.Fatalf("chtimes: %v", err)
 		}
 
-		report, err := PreflightUndoConflicts(store, opID)
+		report, err := undo.PreflightUndoConflicts(store, opID)
 		if err != nil {
 			t.Fatalf("preflight: %v", err)
 		}

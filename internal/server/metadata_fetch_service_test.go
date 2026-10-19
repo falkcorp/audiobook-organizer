@@ -1,7 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.4
+// version: 4.4.5
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-09-14
+// last-edited: 2026-10-18
 
 package server
 
@@ -384,67 +384,6 @@ func TestMetadataFetchService_AuthorLookupFails(t *testing.T) {
 	}
 	if resp.Source != "TestSource" {
 		t.Errorf("expected source 'TestSource', got %q", resp.Source)
-	}
-}
-
-func TestStripChapterFromTitle(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"The Hobbit", "The Hobbit"},
-		{"The Hobbit - Chapter 5", "The Hobbit"},
-		{"The Hobbit: Book 2", "The Hobbit"},
-		{"The Hobbit (Chapter 3)", "The Hobbit"},
-		{"Series Name Book 1", "Series Name"},
-		{"Already Clean Title", "Already Clean Title"},
-		{"Title, Chapter 7", "Title"},
-		{"Title (Unabridged)", "Title"},
-		// Bracket series prefix patterns
-		{"[The Expanse 9.0] Leviathan Falls", "Leviathan Falls"},
-		{"[Series Name] The Book Title", "The Book Title"},
-		{"[Dresden Files 1] Storm Front", "Storm Front"},
-		// Trailing brackets
-		{"Title [Unabridged]", "Title"},
-		// Part/Volume patterns
-		{"The Fellowship of the Ring Part 2", "The Fellowship of the Ring"},
-		{"Dune Volume 1", "Dune"},
-		{"Book Title Vol. 3", "Book Title"},
-		// Hash number patterns
-		{"Title #12", "Title"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			got := stripChapterFromTitle(tc.input)
-			if got != tc.want {
-				t.Errorf("stripChapterFromTitle(%q) = %q, want %q", tc.input, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestStripSubtitle(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"Title: Subtitle", "Title"},
-		{"Title - Subtitle", "Title"},
-		{"Title — Subtitle", "Title"},
-		{"No Subtitle", "No Subtitle"},
-		{"", ""},
-		{"Colon:NoSpace", "Colon:NoSpace"},
-		{"A: B - C", "A"},                     // colon takes priority
-		{"Multi - Word Title - Sub", "Multi"}, // first dash wins
-	}
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			got := stripSubtitle(tc.input)
-			if got != tc.want {
-				t.Errorf("stripSubtitle(%q) = %q, want %q", tc.input, got, tc.want)
-			}
-		})
 	}
 }
 

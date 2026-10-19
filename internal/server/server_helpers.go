@@ -1,7 +1,7 @@
 // file: internal/server/server_helpers.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 8a40b808-2bf2-4a35-893c-ad5e3351dbae
-// last-edited: 2026-09-26
+// last-edited: 2026-10-18
 
 package server
 
@@ -16,19 +16,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
 func SetVersion(v string) {
 	appVersion = v
-}
-
-// validateAbsolutePath rejects non-absolute paths and paths containing traversal
-// sequences. Delegates to pathvalidation.CleanAbsolutePath; kept for callers
-// that only need an error signal and don't use the cleaned return value.
-func validateAbsolutePath(path string) error {
-	_, err := pathvalidation.CleanAbsolutePath(path)
-	return err
 }
 
 // resetLibrarySizeCache resets the library size cache (for testing)
@@ -38,20 +29,6 @@ func resetLibrarySizeCache() {
 	cachedLibrarySize = 0
 	cachedImportSize = 0
 	cachedSizeComputedAt = time.Time{}
-}
-
-func stringVal(p *string) any {
-	if p == nil {
-		return nil
-	}
-	return *p
-}
-
-func intVal(p *int) any {
-	if p == nil {
-		return nil
-	}
-	return *p
 }
 
 // warmLibrarySizes runs calculateLibrarySizes once at startup so the

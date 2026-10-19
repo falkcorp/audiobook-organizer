@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-10-14
+// last-edited: 2026-10-18
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -118,10 +118,6 @@ const (
 // not a thing anyone does before being told there is a problem. A counter is
 // what makes the next occurrence visible without knowing to look for it.
 var searchIndexDropped atomic.Int64
-
-// SearchIndexDroppedCount reports index events dropped since process start.
-// Exposed for the metrics endpoint and for tests.
-func SearchIndexDroppedCount() int64 { return searchIndexDropped.Load() }
 
 // nextBatchSize returns how many dirty books to drain this pass.
 //

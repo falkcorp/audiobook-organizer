@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/cache_refresh.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c2e4a91-5b3d-4f08-9e6a-2d1b8c7f4e30
-// last-edited: 2026-09-13
+// last-edited: 2026-10-18
 
 package abs
 
@@ -53,10 +53,6 @@ func (r *cacheRefresher) refresh(name string, build func() error) {
 		}
 	}()
 }
-
-// wait blocks until no refresh is running. Tests use it so a background build
-// never outlives the fixture it reads.
-func (r *cacheRefresher) wait() { r.wg.Wait() }
 
 // servableStale reports whether a build stamped at builtAt may still be served
 // while a rebuild runs.
