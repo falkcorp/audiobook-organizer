@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package config
 
@@ -70,7 +70,8 @@ var configFieldRules = map[string]fieldRule{
 	"abs_api_enabled":            {FieldSignIn, "enables the Audiobookshelf-compatible token sign-in"},
 	"abs_auth_modes":             {FieldSignIn, "which ABS sign-in modes are accepted"},
 	"abs_access_token_ttl":       {FieldSignIn, "lifetime of ABS bearer tokens"},
-	"abs_refresh_token_ttl":      {FieldSignIn, "lifetime of ABS refresh tokens"},
+	"abs_refresh_token_ttl":      {FieldSignIn, "how long an unused ABS session stays signed in (sliding idle TTL)"},
+	"abs_session_max_ttl":        {FieldSignIn, "absolute cap on an ABS session's lifetime (0 = none)"},
 	"abs_refresh_grace":          {FieldSignIn, "how long a used ABS refresh token keeps working"},
 	"write_startup_readonly_key": {FieldSignIn, "mints an API key at every start"},
 	"enable_rate_limit":          {FieldSignIn, "turning it off removes the brute-force limit on sign-in"},

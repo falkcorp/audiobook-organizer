@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-10-19
 
@@ -393,12 +393,16 @@ func (s *Server) wireABSRoutes() {
 		AccessTokenTTL:   snap.ABSAccessTokenTTL,
 		RefreshTokenTTL:  snap.ABSRefreshTokenTTL,
 		RefreshGrace:     snap.ABSRefreshGrace,
+		SessionMaxTTL:    snap.ABSSessionMaxTTL,
 		ServerVersion:    snap.ABSServerVersion,
 		DefaultLibraryID: snap.ABSDefaultLibraryID,
 	})
 	if err != nil {
 		slog.Error("abs: refusing to start — the Audiobookshelf API is enabled but misconfigured", "err", err)
 		os.Exit(1)
+	}
+	for _, w := range cfg.Warnings {
+		logger.New("abs").Warn("abs: %s", w)
 	}
 
 	// Cloudflare-Access verifier for resolver step 1. It is built independently of

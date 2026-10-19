@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle_abssession_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 753d5dbe-11ab-44b4-b8a7-65a78b8a9f27
-// last-edited: 2026-08-22
+// last-edited: 2026-10-19
 
 package server
 
@@ -52,8 +52,13 @@ func TestPruneExpiredSessions_SweepsBothStores(t *testing.T) {
 	if f.absCalls != 1 {
 		t.Errorf("DeleteExpiredABSSessions called %d times, want 1", f.absCalls)
 	}
-	if !f.authNow.Equal(now) || !f.absNow.Equal(now) {
-		t.Errorf("both sweeps must use the same tick time: auth=%v abs=%v want %v", f.authNow, f.absNow, now)
+	if !f.authNow.Equal(now) {
+		t.Errorf("auth sweep must use the tick time: got %v want %v", f.authNow, now)
+	}
+	// Expired ABS rows are kept for a retention window so a returning client's
+	// refresh is logged as session-not-live rather than refresh-token-unknown.
+	if want := now.Add(-absExpiredSessionRetention); !f.absNow.Equal(want) {
+		t.Errorf("ABS sweep cutoff = %v, want tick minus the %v retention (%v)", f.absNow, absExpiredSessionRetention, want)
 	}
 }
 

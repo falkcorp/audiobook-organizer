@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/me.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 63b8c105-2f74-4ea9-8d16-947c0be5a2f3
-// last-edited: 2026-09-12
+// last-edited: 2026-10-19
 
 package abs
 
@@ -118,12 +118,15 @@ func (h *Handler) Sessions(c *gin.Context) {
 	})
 
 	currentID := servermiddleware.ABSSessionID(c)
+	now := h.now()
 	out := make([]sessionDTO, 0, len(sessions))
 	for i := range sessions {
 		s := sessions[i]
-		if s.Revoked {
-			// A revoked session cannot be used and would only invite a pointless
-			// DELETE from the UI.
+		if !s.Live(now) {
+			// A revoked or expired session cannot be used and would only invite a
+			// pointless DELETE from the UI. Expired rows linger for a retention
+			// window before the sweep removes them (absExpiredSessionRetention),
+			// so this filter is what keeps them off the device list.
 			continue
 		}
 		out = append(out, sessionDTO{
