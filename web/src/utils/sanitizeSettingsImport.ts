@@ -1,25 +1,24 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 import type * as api from '../services/api';
 
 // Deny-by-default: anything not named here is dropped from an imported file.
 //
-// activity_db_path and activity_db_move_on_change are deliberately absent. A
-// settings file exported from one host carries that host's path, and importing
-// it would queue a relocation of a multi-gigabyte database on the next start of
-// a machine where that path may not even exist. It is a per-host setting and
-// belongs to the host, not to a portable settings blob.
+// database_path is deliberately absent. A settings file exported from one host
+// carries that host's path; importing it would point this host's server at a
+// database that does not exist there, and it would start an empty library at
+// that path. It is a per-host setting and belongs to the host, not to a
+// portable settings blob.
 //
-// database_path is absent for the same reason, and more so: a settings file
-// from another machine would point this host's server at a database that does
-// not exist there, and it would start an empty library at that path.
-//
-// env_locked, setting_locks and activity_db_resolved_path are absent because
-// they are server-computed and read-only; they appear in a GET response and
-// are not settings at all.
+// env_locked and setting_locks are absent because they are server-computed and
+// read-only; they appear in a GET response and are not settings at all. An
+// older export may still carry activity_db_path, activity_db_move_on_change or
+// activity_db_resolved_path from before the SQLite activity backend was
+// removed (2026-10-19); the server now refuses the first two, so they are
+// dropped here like any other unknown key.
 export const sanitizeSettingsImport = (
   payload: Partial<api.Config>
 ): Partial<api.Config> => {
