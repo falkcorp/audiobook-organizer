@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-18-listening-progress-lock-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: e84972e5-ef31-44af-8de7-9053b3fa1de1 -->
 <!-- last-edited: 2026-10-18 -->
 
 # Every place that saves listening progress now waits its turn
 
-Branch `fix/user-state-writers-take-lock`, not yet merged.
+PR #4073 (branch `fix/user-state-writers-take-lock`), not yet merged.
 There is no separate spec. It closes TODO item ARS-LOCK.
 
 ## Executive Summary
