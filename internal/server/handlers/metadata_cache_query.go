@@ -36,7 +36,7 @@ import (
 // view=page.
 //
 // The Review > Metadata lane used to load every reviewable row into the browser
-// and filter, count, group and page them there (view=index, now 410 Gone).
+// and filter, count, group and page them there (the index view, now 410 Gone).
 // view=page does that work on the server, over the review snapshot the server already
 // holds in RAM: ONE evaluation per filter yields the ordered row list, from
 // which the page, the total, the chip facets and the ids-only "select all N"

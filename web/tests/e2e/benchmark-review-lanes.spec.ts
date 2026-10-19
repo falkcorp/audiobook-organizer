@@ -1,7 +1,7 @@
 // file: web/tests/e2e/benchmark-review-lanes.spec.ts
-// version: 1.5.1
+// version: 1.6.0
 // guid: e0d8440c-7578-4a92-9f69-4d05bae4b33e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-19
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
@@ -65,9 +65,12 @@ import { setupPhase2Interactive } from './utils/test-helpers';
  *            (DUPES_SEARCH_DEBOUNCE_MS), and its label lost the words "this
  *            page" to match. So this lane now reads like regroup below: the ms
  *            carry a 250 ms floor, and the longtask columns are the signal.
- *   metadata "Title filter" is client-side and undebounced. Measured.
- *            (There is no server-side filter pushdown on this lane at all —
- *            see the "metadata review filter-pushdown prerequisite" TODO.)
+ *   metadata "Title filter" is pushed to the server (view=page) after the
+ *            lane's query debounce, so the ms carry that floor like regroup
+ *            below; read the longtask columns. (Until 02-PR19 this was a
+ *            client-side, undebounced filter over the whole set; the
+ *            "production regime" tests at the end predate that and now
+ *            measure a server-paged lane, not a client filter chain.)
  *   regroup  "Search the queue" is pushed to the server and DEBOUNCED 250 ms
  *            (REGROUP_SEARCH_DEBOUNCE_MS). The reported wall-clock therefore
  *            contains a 250 ms floor that is a deliberate product decision, not
@@ -511,21 +514,52 @@ async function seedMetadata(page: Page, n: number, setSize = n) {
     },
     [PAGE_SIZE_STORAGE_KEY, n] as const,
   );
-  await page.route('**/api/v1/audiobooks/metadata/cache/review**', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        data: {
-          results: resultsPayload,
-          total_count: setSize,
+  // The lane asks the server for one filtered page (view=page), the ids of the
+  // whole filtered set (ids=all) and full rows for the page (ids=a,b). This
+  // answers all three the way the server does, over the seeded set.
+  await page.route('**/api/v1/audiobooks/metadata/cache/review**', (route) => {
+    const url = new URL(route.request().url());
+    const q = url.searchParams.get('q') ?? '';
+    const m = /^\/(.*)\/$/.exec(q);
+    const re = m ? new RegExp(m[1]) : null;
+    const rows = resultsPayload.filter((r) =>
+      !q ? true : re ? re.test(r.book.title) : r.book.title.includes(q),
+    );
+    const ids = url.searchParams.get('ids');
+    let data: unknown;
+    if (ids === 'all') {
+      data = { ids: rows.map((r) => r.book.id), total: rows.length, generation: 'g1' };
+    } else if (ids) {
+      const want = new Set(ids.split(','));
+      const picked = resultsPayload.filter((r) => want.has(r.book.id));
+      data = { results: picked, total_count: picked.length, matched: 0, no_match: 0, errors: 0 };
+    } else {
+      const limit = Number(url.searchParams.get('limit') ?? 50);
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      data = {
+        results: rows.slice(offset, offset + limit),
+        total_count: rows.length,
+        offset,
+        limit,
+        generation: 'g1',
+        facets: {
           matched: setSize,
           no_match: 0,
+          total: setSize,
           errors: 0,
+          stale: 0,
+          unreviewable: 0,
+          sources: { audible: setSize },
+          runtime_hidden: 0,
         },
-      }),
-    }),
-  );
+      };
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data }),
+    });
+  });
   await stubReviewCount(page);
 }
 
@@ -697,7 +731,7 @@ async function dupesFilterOnce(page: Page, n: number): Promise<number> {
   return ms;
 }
 
-/** Client-side, undebounced regex filter over the loaded results. */
+/** Title filter in the Library grammar: the server filters, after the lane's query debounce. */
 async function metadataFilterOnce(page: Page, n: number): Promise<number> {
   // Role-scoped, not getByLabel: once the field has text QueueRail renders a
   // "Clear title filter" IconButton, and a bare getByLabel('Title filter')
@@ -705,7 +739,7 @@ async function metadataFilterOnce(page: Page, n: number): Promise<number> {
   const box = page.getByRole('textbox', { name: 'Title filter' });
   const ms = await timed(
     async () => {
-      await box.fill('^Review Book 0001$');
+      await box.fill('/^Review Book 0001$/');
     },
     async () => {
       await expect.poll(() => metadataRows(page).count(), { timeout: 60_000 }).toBe(1);

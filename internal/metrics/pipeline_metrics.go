@@ -56,7 +56,7 @@ const (
 
 // Bounded label values for review_index_request_seconds{view}. "full" is a
 // listing request (view=page is dispatched before the observation and is not
-// counted); "gone" is a request for the retired ?view=index, answered 410, so a
+// counted); "gone" is a request for the retired index view, answered 410, so a
 // client that still sends it shows up in the metric. "index" was the label of
 // that view while it was served and is no longer written.
 const (

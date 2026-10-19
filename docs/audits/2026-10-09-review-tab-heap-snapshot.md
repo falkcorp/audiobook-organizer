@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-10-09-review-tab-heap-snapshot.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 24732b59-4515-42ce-81ee-e36e54b8ee25 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-19 -->
 
 # Review tab heap measurement (2026-10-09)
 
@@ -40,6 +40,9 @@ For each, record in Table 2 the total JS heap (MB); the count of `Array` objects
 `rowStates` map) (MB); and the detached DOM node count.
 
 ### Part 3: the index response (DevTools > Network)
+
+Note (2026-10-19): `view=index` was retired by 02-PR19 and now answers 410 Gone, so this part can only be
+recorded from a build that predates it; on current builds the lane's equivalent is the `view=page` request.
 
 Find the `view=index` request. Record the response size (MB) and the `total_count` from its summary in Table 3, so
 the rows-to-bytes ratio can be checked against appendix D's 3.4 KB per row.

@@ -1,7 +1,7 @@
 <!-- file: deploy/grafana/README.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: b0b4ed29-c562-4f65-b437-bea04f3dd564 -->
-<!-- last-edited: 2026-10-10 -->
+<!-- last-edited: 2026-10-19 -->
 
 # Grafana dashboards + provisioning
 
@@ -94,7 +94,7 @@ All under the `audiobook_organizer_` namespace; defined in
 
 | Metric | Type | Labels | Wired at |
 |---|---|---|---|
-| `review_index_request_seconds` | histogram, 0.1–120 s | `view` = `index` \| `full` | `handlers.GetCacheReviewResults` (defer) |
+| `review_index_request_seconds` | histogram, 0.1–120 s | `view` = `full` \| `gone` (`index` before 2026-10-19) | `handlers.GetCacheReviewResults` (defer) |
 | `number_leading_titles` | gauge | — | `PebbleStore.countPrimaryBooksScan`, same pass as `books_total`; predicate `titleutil.IsNumberLeadingTitle` |
 | `filename_parse_total` | counter | `shape`, `outcome` | instrument only; call sites come with the fixer branch |
 | `metadata_fetch_total` | counter | `provider`, `source` = `cache_hit` \| `cache_miss` \| `network` \| `error` | cache_hit/miss: `metafetch` fetch-cache checks (`service_fetch.go`, `search_fanout.go`, `source_chain_walk.go`); network/error: `metadata.ProtectedSource.recordOutcome`, `metafetch.lookupASIN` |
