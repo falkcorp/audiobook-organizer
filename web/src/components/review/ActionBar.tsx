@@ -1,7 +1,7 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.5.1
+// version: 1.6.0
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
-// last-edited: 2026-09-28
+// last-edited: 2026-10-19
 //
 // The bulk-action footer: Apply Selected, Apply High Confidence, Apply Page,
 // Skip All Unmatched.
@@ -56,6 +56,13 @@ import { metadataLane } from './lanes';
 export interface ActionBarProps {
   selectedIds: Set<string>;
   /**
+   * Why commands on the selection are held (its check against the current
+   * filters is pending or failed), or null/undefined. While set, every button
+   * that acts on the selected books is disabled and shows this as its tooltip;
+   * the lane refuses the same actions in its handlers.
+   */
+  selectionHoldReason?: string | null;
+  /**
    * The part of the selection Apply selected can act on: the selection minus
    * books known to have no candidate. Defaults to the whole selection, which
    * is what it is whenever no candidate-less row is selected.
@@ -106,6 +113,7 @@ export interface ActionBarProps {
 
 export function ActionBar({
   selectedIds,
+  selectionHoldReason = null,
   applicableSelectedIds,
   onSearchSelected,
   searching = false,
@@ -161,6 +169,7 @@ export function ActionBar({
   };
 
   const selected = [...selectedIds];
+  const held = selectionHoldReason !== null;
   const applicable = applicableSelectedIds ?? selected;
 
   return (
@@ -291,39 +300,52 @@ export function ActionBar({
         </Tooltip>
 
         {onSkipSelected && (
-          <Button
-            size="small"
-            disabled={busy || selected.length === 0}
-            data-testid="skip-selected"
-            onClick={onSkipSelected}
-          >
-            Skip selected ({selected.length.toLocaleString()})
-          </Button>
+          <Tooltip title={selectionHoldReason ?? ''}>
+            <span>
+              <Button
+                size="small"
+                disabled={busy || selected.length === 0 || held}
+                data-testid="skip-selected"
+                onClick={onSkipSelected}
+              >
+                Skip selected ({selected.length.toLocaleString()})
+              </Button>
+            </span>
+          </Tooltip>
         )}
         {onRejectSelected && (
-          <Button
-            size="small"
-            color="warning"
-            disabled={busy || bulkProgress !== null || selected.length === 0}
-            data-testid="reject-selected"
-            onClick={() => {
-              void confirm(
-                `Mark ${selected.length.toLocaleString()} book(s) no-match? Future fetches will skip them.`
-              ).then((ok) => {
-                if (ok) onRejectSelected();
-              });
-            }}
-          >
-            Reject selected ({selected.length.toLocaleString()})
-          </Button>
+          <Tooltip title={selectionHoldReason ?? ''}>
+            <span>
+              <Button
+                size="small"
+                color="warning"
+                disabled={busy || bulkProgress !== null || selected.length === 0 || held}
+                data-testid="reject-selected"
+                onClick={() => {
+                  void confirm(
+                    `Mark ${selected.length.toLocaleString()} book(s) no-match? Future fetches will skip them.`
+                  ).then((ok) => {
+                    if (ok) onRejectSelected();
+                  });
+                }}
+              >
+                Reject selected ({selected.length.toLocaleString()})
+              </Button>
+            </span>
+          </Tooltip>
         )}
         {onSearchSelected && (
-          <Tooltip title="Ask the providers again for every selected book, using each book's current title and author. Runs as one background search (watch the bell); the new candidates appear here to review when it finishes.">
+          <Tooltip
+            title={
+              selectionHoldReason ??
+              "Ask the providers again for every selected book, using each book's current title and author. Runs as one background search (watch the bell); the new candidates appear here to review when it finishes."
+            }
+          >
             <span>
               <Button
                 size="small"
                 variant="outlined"
-                disabled={searching || selected.length === 0}
+                disabled={searching || selected.length === 0 || held}
                 data-testid="search-selected"
                 onClick={() => onSearchSelected(selected)}
               >
@@ -333,18 +355,22 @@ export function ActionBar({
           </Tooltip>
         )}
 
-        <Button
-          size="small"
-          variant="contained"
-          disabled={busy || applicable.length === 0}
-          data-testid="apply-selected"
-          onClick={() =>
-            run({ lane: 'metadata', type: 'applySelected', ids: applicable }, applicable.length)
-          }
-        >
-          {verbs.applySelected}
-          {modeSuffix} ({applicable.length})
-        </Button>
+        <Tooltip title={selectionHoldReason ?? ''}>
+          <span>
+            <Button
+              size="small"
+              variant="contained"
+              disabled={busy || applicable.length === 0 || held}
+              data-testid="apply-selected"
+              onClick={() =>
+                run({ lane: 'metadata', type: 'applySelected', ids: applicable }, applicable.length)
+              }
+            >
+              {verbs.applySelected}
+              {modeSuffix} ({applicable.length})
+            </Button>
+          </span>
+        </Tooltip>
       </Stack>
     </Box>
   );

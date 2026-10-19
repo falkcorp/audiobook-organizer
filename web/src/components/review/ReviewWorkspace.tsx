@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.28.0
+// version: 1.29.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, author and series merges, and library repairs.
@@ -540,10 +540,17 @@ export function ReviewWorkspace() {
                 scope: 'selection',
                 description: 'Asks the providers for fresh results for just the books you have ticked.',
                 disabledReason:
-                  metadata.selectedIds.size === 0 ? 'Select one or more books first.' : undefined,
-                run: startJob('Search for selected', () =>
-                  api.batchFetchCandidates({ book_ids: [...metadata.selectedIds] })
-                ),
+                  metadata.selectedIds.size === 0
+                    ? 'Select one or more books first.'
+                    : (metadata.selectionHoldReason ?? undefined),
+                run: () => {
+                  // The palette disables this while held; the handler refuses
+                  // too, so no other way to invoke it reaches the providers.
+                  if (metadata.refuseUnsettledSelection()) return;
+                  return startJob('Search for selected', () =>
+                    api.batchFetchCandidates({ book_ids: [...metadata.selectedIds] })
+                  )();
+                },
               },
               {
                 id: 'apply-selected-fields',
@@ -581,7 +588,7 @@ export function ReviewWorkspace() {
                 disabledReason:
                   metadata.allVisiblePendingIds.length === 0
                     ? 'No undecided matched rows on this page.'
-                    : undefined,
+                    : (metadata.selectionHoldReason ?? undefined),
                 run: () =>
                   metadata.dispatch({
                     lane: 'metadata',
@@ -604,10 +611,17 @@ export function ReviewWorkspace() {
                 description:
                   "Copies each ticked book's saved title, author and other details into its audio files' tags. This changes the files themselves and can rename them.",
                 disabledReason:
-                  metadata.selectedIds.size === 0 ? 'Select one or more books first.' : undefined,
-                run: startJob('Tag write-back', () =>
-                  api.batchWriteBackMetadata([...metadata.selectedIds])
-                ),
+                  metadata.selectedIds.size === 0
+                    ? 'Select one or more books first.'
+                    : (metadata.selectionHoldReason ?? undefined),
+                run: () => {
+                  // Rewrites audio files, so it must never act on a selection
+                  // that has not been checked against the current filters.
+                  if (metadata.refuseUnsettledSelection()) return;
+                  return startJob('Tag write-back', () =>
+                    api.batchWriteBackMetadata([...metadata.selectedIds])
+                  )();
+                },
               },
             ],
           },
@@ -729,6 +743,8 @@ export function ReviewWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       metadata.selectedIds,
+      metadata.selectionHoldReason,
+      metadata.refuseUnsettledSelection,
       metadata.applicableSelectedIds,
       metadata.allVisiblePendingIds,
       metadata.exportRows,

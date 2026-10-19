@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-19
 //
@@ -699,5 +699,40 @@ describe('match score threshold', () => {
     expect(screen.getByRole('slider', { name: 'Minimum match score' })).toBeInTheDocument();
     // The row chips use the same unitless number (score 2.0 -> 200).
     expect(within(screen.getByTestId('queue-list')).getAllByText('200').length).toBeGreaterThan(0);
+  });
+});
+
+describe('a held selection reaches no command that acts on it', () => {
+  it('disables Search again, Skip, Reject, Apply and both palette commands', async () => {
+    window.localStorage.setItem('settings.showAdvanced', 'true');
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-no_match'));
+    await waitFor(() => expect(listedIds()).toEqual(['n1']));
+    await user.click(screen.getByTestId('main-select-page'));
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected');
+    // Before the hold the palette command is live.
+    await user.click(screen.getByTestId('command-menu-metadata'));
+    expect(await screen.findByTestId('command-write-back')).not.toHaveAttribute('aria-disabled', 'true');
+    await user.keyboard('{Escape}');
+
+    // The check of the restored filters fails: the selection is held, not dropped.
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(
+      Object.assign(new Error('failed to query the review set'), { status: 500, data: {} })
+    );
+    await user.click(screen.getByRole('button', { name: 'Show all' }));
+    await waitFor(() => expect(screen.getByTestId('search-selected')).toBeDisabled());
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected');
+    for (const id of ['skip-selected', 'reject-selected', 'search-selected', 'apply-selected']) {
+      expect(screen.getByTestId(id)).toBeDisabled();
+    }
+
+    await user.click(screen.getByTestId('command-menu-metadata'));
+    for (const id of ['command-write-back', 'command-bulk-search-selected']) {
+      const item = await screen.findByTestId(id);
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+    }
+    // The handlers' own refusal (belt and braces) is ReviewWorkspace.heldSelection.test.tsx:
+    // a disabled menu item cannot be clicked, so it is exercised through `run` there.
   });
 });

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-10-19
 //
@@ -25,6 +25,7 @@ import {
   EXPORT_QUEUE_CHANGED_MESSAGE,
   MAX_QUERY_SKIPPED_IDS,
   newBatchId,
+  PRUNE_BUILDING_MAX_WAIT_MS,
   PRUNE_BUSY_MAX_RETRIES,
   useMetadataLane,
   type ChipFilter,
@@ -877,7 +878,7 @@ describe('the lane requests', () => {
     );
     expect(api.batchApplyFromCache).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(
-      expect.stringMatching(/^The selection could not be checked against the current filters/),
+      expect.stringMatching(/^Actions on the selection are held/),
       'warning'
     );
   });
@@ -910,7 +911,7 @@ describe('the lane requests', () => {
     );
     expect(api.batchApplyFromCache).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(
-      expect.stringMatching(/^The selection could not be checked against the current filters/),
+      expect.stringMatching(/^Actions on the selection are held/),
       'warning'
     );
     // Clearing the selection ends the hold: a book picked from here on is
@@ -1257,6 +1258,106 @@ describe('the lane requests', () => {
       expect.stringMatching(/kept taking too long, so it could not be checked/),
       'warning'
     );
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('while the selection is pending or held, every selection-scoped command is disabled and refuses', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(
+      Object.assign(new Error('failed to query the review set'), { status: 500, data: {} })
+    );
+    const confirm = vi.fn(async () => true);
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.selectionSettled).toBe(true);
+    expect(result.current.selectionHoldReason).toBeNull();
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    // Pending: the new filters have not been asked about yet.
+    expect(result.current.selectionSettled).toBe(false);
+    expect(result.current.selectionHoldReason).toMatch(/^The selection is being checked/);
+    // Held: the check failed.
+    await waitFor(() =>
+      expect(result.current.selectionHoldReason).toMatch(/^Actions on the selection are held/)
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    toast.mockClear();
+
+    await act(async () => {
+      expect(await result.current.searchAgain(['a1', 'a2'], confirm)).toBeNull();
+    });
+    expect(api.batchFetchCandidates).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^Actions on the selection are held/),
+      'warning'
+    );
+    act(() => result.current.skipSelected());
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+    await act(async () => {
+      expect(await result.current.rejectSelected()).toBe(0);
+    });
+    expect(api.markNoMatch).not.toHaveBeenCalled();
+    toast.mockClear();
+    expect(result.current.refuseUnsettledSelection()).toBe(true);
+    expect(toast).toHaveBeenCalledTimes(1);
+
+    // Clearing the selection ends the hold: nothing is left to protect.
+    act(() => result.current.setSelection(['a1', 'a2'], false));
+    await waitFor(() => expect(result.current.selectionSettled).toBe(true));
+    expect(result.current.refuseUnsettledSelection()).toBe(false);
+  });
+
+  it('a building answer on view A is not remembered after a visit to view B: returning to A retries', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    const mock = vi.mocked(api.checkReviewSelection);
+    // View A answers building, and later (6 minutes on) answers building
+    // again before it succeeds. View B never asks: it is settled by clearing
+    // the selection, which is a settle with no successful check to reset on.
+    mock
+      .mockRejectedValueOnce(buildingError())
+      .mockRejectedValueOnce(buildingError())
+      .mockImplementation(async (_p, ids) => ({
+        matching: ids,
+        not_matching: [],
+        unknown: [],
+        generation: 'g1',
+      }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    vi.useFakeTimers();
+    // View A: building, so the wall-clock wait starts.
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(mock).toHaveBeenCalledTimes(1);
+    // The reviewer clears the selection and moves to view B: settled, no ask.
+    act(() => result.current.setSelection(['a1', 'a2'], false));
+    act(() => result.current.setFilters({ confidenceThreshold: 60 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(result.current.selectionSettled).toBe(true);
+    expect(mock).toHaveBeenCalledTimes(1);
+    // More than the wall-clock bound passes, then A again with a selection.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PRUNE_BUILDING_MAX_WAIT_MS + 60_000);
+    });
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(mock).toHaveBeenCalledTimes(2);
+    // Building again: it is waited out (a fresh wait), not held on the stale start.
+    expect(toast).not.toHaveBeenCalledWith(
+      expect.stringMatching(/still loading after several minutes/),
+      'warning'
+    );
+    await stepRetries(2);
+    expect(mock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(result.current.selectionSettled).toBe(true);
     expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
   });
 

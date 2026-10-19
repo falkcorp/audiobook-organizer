@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.50.0
+// version: 1.51.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-19
 //
@@ -107,6 +107,14 @@ export const PRUNE_BUSY_MAX_RETRIES = 5;
  */
 export const PRUNE_BUILDING_MAX_WAIT_MS = 5 * 60_000;
 export const PRUNE_BUILDING_CODE = 'REVIEW_SNAPSHOT_BUILDING';
+
+/** Shown (toast and button tooltip) while a failed selection check holds the selection. */
+export const SELECTION_HELD_MESSAGE =
+  'Actions on the selection are held: it could not be checked against the current filters. ' +
+  'Clear the selection or change the filters to continue.';
+/** Shown while the check against the new filters is still running. */
+export const SELECTION_PENDING_MESSAGE =
+  'The selection is being checked against the new filters; try again in a moment.';
 
 /**
  * An opaque, unguessable id naming one chunked apply (see api.ApplyBatch). The
@@ -910,6 +918,20 @@ export interface MetadataLane {
   /** True when every book the current view matches is selected. */
   allMatchingSelected: boolean;
   /** Mark every selected book skipped (client-side, like the row Skip). */
+  /**
+   * Why every command that acts on the selected books is held right now, or
+   * null. Set while the selection is being checked against new filters and
+   * after a check that failed; read it for a disabled button's tooltip.
+   */
+  selectionHoldReason: string | null;
+  /** True when the selection has been checked against the current view. */
+  selectionSettled: boolean;
+  /**
+   * The guard for a selection-scoped command's handler: toasts and returns
+   * true while the selection is unsettled, so the handler must return. The
+   * buttons are disabled too; this is the belt to that pair of braces.
+   */
+  refuseUnsettledSelection: () => boolean;
   skipSelected: () => void;
   /**
    * Mark every selected book no-match on the server, PER_BOOK_CONCURRENCY at
@@ -1408,6 +1430,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // cleared with the effect.
   const [pruneRetry, setPruneRetry] = useState(0);
   const pruneRetriesRef = useRef({ key: '', n: 0 });
+  // Reactive mirrors of pruneSettledKeyRef / pruneFailedKeyRef: the refs are the
+  // synchronous truth the handlers read, these re-render the buttons (a ref
+  // change repaints nothing). Only settle(), hold() and the emptied-selection
+  // effect write them.
+  const [settledKeyState, setSettledKeyState] = useState(pruneKey);
+  const [heldKeyState, setHeldKeyState] = useState<string | null>(null);
   const pruneBuildingRef = useRef({ key: '', since: 0 });
   const pruneRetryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -2380,22 +2408,23 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // what Apply page / Apply high confidence / a group's Apply All act on.
   // Until both have caught up, bulk apply, Replace and reject are refused with
   // a message; the next click after they settle goes through.
+  //
+  // The selection half is a guard of its own (refuseUnsettledSelection) because
+  // EVERY command that acts on the selected books needs it, not only apply:
+  // write-back into audio files, search again, skip and reject all reach the
+  // same books. The page half (landedKeyRef) only matters to what acts on the
+  // visible rows.
+  const refuseUnsettledSelection = useCallback((): boolean => {
+    if (pruneSettledKeyRef.current === pruneKey) return false;
+    toast(
+      pruneFailedKeyRef.current === pruneKey ? SELECTION_HELD_MESSAGE : SELECTION_PENDING_MESSAGE,
+      'warning'
+    );
+    return true;
+  }, [pruneKey, toast]);
+
   const refuseUnsettled = useCallback((): boolean => {
-    if (pruneSettledKeyRef.current !== pruneKey) {
-      if (pruneFailedKeyRef.current === pruneKey) {
-        toast(
-          'The selection could not be checked against the current filters, so applying it is ' +
-            'held. Clear the selection or change the filters to continue.',
-          'warning'
-        );
-        return true;
-      }
-      toast(
-        'The selection is being checked against the new filters; apply again in a moment.',
-        'warning'
-      );
-      return true;
-    }
+    if (refuseUnsettledSelection()) return true;
     if (landedKeyRef.current !== filterQueryKey) {
       if (failedKeyRef.current === filterQueryKey) {
         toast(
@@ -2412,7 +2441,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       return true;
     }
     return false;
-  }, [pruneKey, filterQueryKey, toast]);
+  }, [refuseUnsettledSelection, filterQueryKey, toast]);
 
   // The pin of every book that was selected while its row was on screen, as
   // last shown (null: the row had no candidate to pin). A bulk apply of a book
@@ -2733,6 +2762,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       pruneBaselineRef.current = checked;
       pruneSettledKeyRef.current = settleKey;
       pruneFailedKeyRef.current = null;
+      setSettledKeyState(settleKey);
+      setHeldKeyState(null);
+      // A settled view starts its next busy/building waits from scratch: a
+      // timer left over from a view the reviewer left must not make a later
+      // visit to the same filters hold at once.
+      pruneRetriesRef.current = { key: '', n: 0 };
+      pruneBuildingRef.current = { key: '', since: 0 };
     };
     const current = { filtersKey, chip: chipFilter, title: effectiveTitle };
     if (pruneSettledKeyRef.current === settleKey) return;
@@ -2745,6 +2781,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       settle(current);
       return;
     }
+    // A run for a different view than the one the waits were counted for
+    // starts them over (the same key keeps them: that is a retry).
+    if (pruneBuildingRef.current.key !== settleKey) pruneBuildingRef.current = { key: '', since: 0 };
+    if (pruneRetriesRef.current.key !== settleKey) pruneRetriesRef.current = { key: '', n: 0 };
     const controller = new AbortController();
     const timer = setTimeout(() => {
       const selected = [...selectedIdsRef.current];
@@ -2778,6 +2818,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       // advanced, so the next run asks the same question again.
       const hold = (message: string) => {
         pruneFailedKeyRef.current = settleKey;
+        setHeldKeyState(settleKey);
         toastRef.current(message, 'warning');
       };
       const run = async () => {
@@ -2800,8 +2841,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             const next = new Set([...prev].filter((id) => !(checked.has(id) && drop.has(id))));
             return next.size === prev.size ? prev : next;
           });
-          pruneRetriesRef.current = { key: settleKey, n: 0 };
-          pruneBuildingRef.current = { key: '', since: 0 };
           settle(current);
         } catch (err) {
           if (controller.signal.aborted || isAbortError(err)) return;
@@ -2845,8 +2884,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           }
           const timedOut = failed?.name === 'ApiTimeoutError';
           if (failed?.status === 503 || timedOut) {
-            // Busy (a 503: every pattern slot taken, or the first snapshot still
-            // building) or slow (a timeout), not broken: hold, and ask again
+            // Busy (a 503: every pattern slot taken) or slow (a timeout; a
+            // snapshot still building is the branch above), not broken: hold, and ask again
             // after Retry-After, or the default delay when there is none.
             if (pruneRetriesRef.current.key !== settleKey) {
               pruneRetriesRef.current = { key: settleKey, n: 0 };
@@ -2903,9 +2942,27 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     pruneBaselineRef.current = { filtersKey, chip: chipFilter, title: effectiveTitle };
     pruneSettledKeyRef.current = pruneKey;
     pruneFailedKeyRef.current = null;
+    pruneRetriesRef.current = { key: '', n: 0 };
+    pruneBuildingRef.current = { key: '', since: 0 };
   }, [selectedIds, filtersKey, chipFilter, effectiveTitle, pruneKey]);
 
+  // An emptied selection has nothing to hold: settle the mirrors in the render
+  // itself (React's adjust-state-while-rendering pattern; the emptied-selection
+  // effect above settles the refs, which a render must not write).
+  if (selectedIds.size === 0 && (settledKeyState !== pruneKey || heldKeyState !== null)) {
+    setSettledKeyState(pruneKey);
+    setHeldKeyState(null);
+  }
+
+  const selectionHoldReason: string | null =
+    settledKeyState === pruneKey
+      ? null
+      : heldKeyState === pruneKey
+        ? SELECTION_HELD_MESSAGE
+        : SELECTION_PENDING_MESSAGE;
+
   const skipSelected = useCallback(() => {
+    if (refuseUnsettledSelection()) return;
     const ids = [...selectedIds];
     clearServerDerived(ids);
     setRowStates((prev) => {
@@ -2914,7 +2971,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       return next;
     });
     setSelectedIds(new Set());
-  }, [selectedIds, clearServerDerived]);
+  }, [selectedIds, clearServerDerived, refuseUnsettledSelection]);
 
   const rejectSelected = useCallback(async (): Promise<number> => {
     const ids = [...selectedIds];
@@ -3045,6 +3102,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       confirm: (message: string) => Promise<boolean>
     ): Promise<string | null> => {
       if (!ids.length) return null;
+      // Searching spends provider quota and replaces candidates on the books
+      // it is given: never on a selection that has not been checked against
+      // the current filters.
+      if (refuseUnsettledSelection()) return null;
       // The lane knows only the page's rows: a book selected across pages that
       // is marked no-match is not recognised here, so the search skips it (the
       // fetch op never searches a no-match book) without the prompt.
@@ -3155,7 +3216,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setBulkProgress(null);
       }
     },
-    [pageRows, rowStates, toast, refresh, clearServerDerived]
+    [pageRows, rowStates, toast, refresh, clearServerDerived, refuseUnsettledSelection]
   );
 
   const unmatchedCount = pageFacets?.no_match ?? 0;
@@ -3252,6 +3313,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     selectAllMatching,
     clearSelection,
     allMatchingSelected,
+    selectionHoldReason,
+    selectionSettled: selectionHoldReason === null,
+    refuseUnsettledSelection,
     skipSelected,
     rejectSelected,
     bulkProgress,
