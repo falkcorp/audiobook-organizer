@@ -1,7 +1,7 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
-<!-- last-edited: 2026-10-17 -->
+<!-- last-edited: 2026-10-19 -->
 
 # Config API Shape Reference
 
@@ -58,6 +58,8 @@ This field cannot be changed at runtime. The request will return `400` if it app
 
 (`enable_sqlite` was removed with the inert `--enable-sqlite3-i-know-the-risks` flag. A payload that still carries it, with any value, is also rejected with `400`: the error says the setting was removed and SQLite is no longer selectable. It is never silently dropped.)
 
+(`activity_db_path` and `activity_db_move_on_change` were removed with the SQLite activity backend on 2026-10-19. A payload that still carries either is rejected with `400` and a message saying the setting was removed; a stored config or legacy settings row that still holds one loads with a startup warning and the value is ignored. The read-only `activity_db_resolved_path` is no longer in the `GET /config` response.)
+
 ### Protected settings (not changeable with an API key)
 
 A request that is not an interactive session (an API key, an ABS token) gets
@@ -67,7 +69,7 @@ sign-in settings (`enable_auth`, `basic_auth_*`, `oauth_*`, `cf_access_*`,
 `abs_refresh_grace`, `write_startup_readonly_key`, `enable_rate_limit`),
 executables (`tools.managed_dir`,
 `tools.*.custom_path`, `tools.*.mode`), database locations (`database_path`,
-`activity_backend`, `activity_db_path`, `activity_db_move_on_change`) and
+`activity_backend`) and
 server paths (`root_dir`, `path_aliases`, `playlist_dir`, `backup_dir`,
 `openlibrary_dump_dir`, `whisper_clip_cache_dir`, the naming patterns,
 `protected_paths`, the `itunes` paths and library files, `plugins.*.settings`).
@@ -79,11 +81,17 @@ by letter case (`OAuth_Default_Role`) is rejected as unknown (`400`). Change
 these signed in to the web UI. (Since 2026-10-07; see
 `docs/plans/2026-10-07-apikey-expiry-and-privilege.md`.)
 
-`activity_backend` defaults to `pebble` (the Pebble-only activity log); an
-empty value means the same. `sqlite` is the legacy opt-in, kept until P75
-removes it. With `ACTIVITY_BACKEND` unset in the environment, the default
-replaces whatever the stored config holds at boot, so a restored config can
-never select SQLite on its own.
+`activity_backend` defaults to `pebble`, the only activity store; an empty
+value means the same. Any other value is refused: `sqlite` (the SQLite
+activity backend was removed on 2026-10-19) and unknown names fail
+`Config.Validate`, so a config file or `ACTIVITY_BACKEND` that still says
+`sqlite` stops startup with a message naming the fix, and a `PUT` carrying it
+is rejected with `400` (like every `Validate` failure, provided the stored
+config itself passes `Validate`; with `ACTIVITY_BACKEND` set the key is
+env-locked and refused for that reason first). The old `activity.sqlite` file is neither read nor
+deleted. With `ACTIVITY_BACKEND` unset in the environment, the default
+replaces whatever the stored config holds at boot, so a stored config that
+still says `sqlite` loads as `pebble`.
 
 ### Owner trust root (only the owner)
 
