@@ -1,5 +1,5 @@
 // file: internal/server/middleware/abs_caller_key_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b3e1d47-2c95-4f60-a7d8-5e9c0b1f6a23
 // last-edited: 2026-10-19
 
@@ -92,8 +92,10 @@ func TestCFCallerKey(t *testing.T) {
 // behind one proxy address can be limited independently.
 func TestIPRateLimiter_AllowKeyIsPerKey(t *testing.T) {
 	l := NewIPRateLimiter(1, 2)
-	if !l.AllowKey("a") || !l.AllowKey("a") {
-		t.Fatal("the burst must be allowed")
+	for i := range 2 {
+		if !l.AllowKey("a") {
+			t.Fatalf("request %d is inside the burst and must be allowed", i+1)
+		}
 	}
 	if l.AllowKey("a") {
 		t.Fatal("over the burst must be refused")
