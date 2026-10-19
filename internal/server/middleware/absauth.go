@@ -59,6 +59,11 @@ type ABSIdentityStore interface {
 	oauth.UserStore
 	GetRoleByID(id string) (*database.Role, error)
 	GetABSSession(id string) (*database.ABSSession, error)
+	// ExtendABSSession is how authenticated use keeps a session alive (sliding
+	// expiry). It is part of the required interface, not an optional assertion:
+	// a store that silently lacked it would quietly bring back the fixed 30-day
+	// logout. See PebbleStore.ExtendABSSession for the concurrency contract.
+	ExtendABSSession(id string, now, expiresAt time.Time, minAdvance time.Duration) (bool, error)
 }
 
 // ABSIdentityResolver implements the unified identity resolution of design spec
@@ -94,12 +99,30 @@ type ABSIdentityResolver struct {
 	verifier CFAssertionVerifier
 	oauthCfg *oauth.Config
 	store    ABSIdentityStore
+	// now is the clock for token expiry, session liveness and session extension.
+	// time.Now in production; SetClock swaps it in tests.
+	now func() time.Time
 }
 
 // NewABSIdentityResolver wires the resolver. A nil cfg, or a cfg whose ABS API is
 // disabled, makes every request 401 — a wiring mistake must never open a door.
 func NewABSIdentityResolver(cfg *absauth.Config, verifier CFAssertionVerifier, oauthCfg *oauth.Config, store ABSIdentityStore) *ABSIdentityResolver {
-	return &ABSIdentityResolver{cfg: cfg, verifier: verifier, oauthCfg: oauthCfg, store: store}
+	return &ABSIdentityResolver{cfg: cfg, verifier: verifier, oauthCfg: oauthCfg, store: store, now: time.Now}
+}
+
+// SetClock replaces the resolver's clock. Tests use it to walk a session through
+// weeks of simulated use; a nil fn is ignored.
+func (r *ABSIdentityResolver) SetClock(fn func() time.Time) {
+	if r != nil && fn != nil {
+		r.now = fn
+	}
+}
+
+func (r *ABSIdentityResolver) clock() time.Time {
+	if r == nil || r.now == nil {
+		return time.Now()
+	}
+	return r.now()
 }
 
 // ABSIdentity is a successfully resolved ABS identity.
@@ -283,8 +306,15 @@ func (r *ABSIdentityResolver) ResolveBearer(c *gin.Context) (*ABSIdentity, *ABSA
 	if raw == "" {
 		return nil, nil
 	}
-	claims, err := r.cfg.ParseAccessToken(raw)
+	now := r.clock()
+	claims, err := r.cfg.ParseAccessTokenAt(raw, now)
 	if err != nil {
+		// Both are a 401 — the client's cue to call /auth/refresh — but the audit
+		// reason must say which. Reporting a routine expiry as token-invalid made
+		// the fixed 30-day session death look like an ABS_JWT_SECRET change.
+		if absauth.IsAccessTokenExpired(err) {
+			return nil, absErr(http.StatusUnauthorized, "token-expired", "access token expired", ABSModeJWT)
+		}
 		return nil, absErr(http.StatusUnauthorized, "token-invalid", "invalid access token", ABSModeJWT)
 	}
 
@@ -295,8 +325,11 @@ func (r *ABSIdentityResolver) ResolveBearer(c *gin.Context) (*ABSIdentity, *ABSA
 	}
 	// A cryptographically valid JWT is not enough: revocation and expiry live on the
 	// session record, which is what makes logout and /api/me/sessions meaningful.
-	if session == nil || !session.Live(time.Now()) || session.UserID != claims.UserID {
+	if session == nil || !session.Live(now) || session.UserID != claims.UserID {
 		return nil, absErr(http.StatusUnauthorized, "session-not-live", "session not found", ABSModeJWT)
+	}
+	if r.cfg.SessionPastMaxLifetime(session.CreatedAt, now) {
+		return nil, absErr(http.StatusUnauthorized, "session-max-lifetime", "session not found", ABSModeJWT)
 	}
 
 	user, err := r.store.GetUserByID(claims.UserID)
@@ -309,7 +342,41 @@ func (r *ABSIdentityResolver) ResolveBearer(c *gin.Context) (*ABSIdentity, *ABSA
 	if e := absCheckUserActive(user, ABSModeJWT); e != nil {
 		return nil, e
 	}
+	r.extendSession(c, session, now)
 	return &ABSIdentity{User: user, Mode: ABSModeJWT, SessionID: session.ID, AccessToken: raw}, nil
+}
+
+// extendSession is sliding expiry on use: an authenticated request pushes the
+// session's ExpiresAt out to SessionExpiry(now), so a device that keeps using the
+// app never reaches the end of its session. It runs only after every check in
+// ResolveBearer has passed.
+//
+// Throttled to about one write per session per day (SessionExtendWindow) so it is
+// not a Pebble write per request. The pre-check here is a cheap filter on the copy
+// already in hand; the authoritative decision is re-made by the store under its
+// write lock against a fresh read, which is what keeps a parallel refresh or logout
+// from being overwritten.
+//
+// A failure is audited and swallowed: the request is already authenticated, and
+// failing it over a bookkeeping write would turn a transient store error into a
+// visible error on a request that was entitled to succeed.
+func (r *ABSIdentityResolver) extendSession(c *gin.Context, session *database.ABSSession, now time.Time) {
+	target := r.cfg.SessionExpiry(session.CreatedAt, now)
+	window := r.cfg.SessionExtendWindow()
+	if session.ExpiresAt.IsZero() || target.Sub(session.ExpiresAt) < window {
+		return
+	}
+	if _, err := r.store.ExtendABSSession(session.ID, now, target, window); err != nil {
+		ev := absauth.AuditEvent{
+			Action: "session-extend", Outcome: absauth.OutcomeError, Mode: ABSModeJWT,
+			UserID: session.UserID, SessionID: session.ID, Reason: "session-extend-failed",
+		}
+		if c != nil && c.Request != nil {
+			ev.SourceIP = c.ClientIP()
+			ev.Path = c.Request.URL.Path
+		}
+		absauth.Audit(ev)
+	}
 }
 
 // absAPIKeyStore is the OPTIONAL store slice needed to resolve an `abk_` key. It is

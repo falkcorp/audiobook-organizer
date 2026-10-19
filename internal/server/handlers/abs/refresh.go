@@ -1,12 +1,13 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
-// last-edited: 2026-07-30
+// last-edited: 2026-10-19
 
 package abs
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -34,6 +35,12 @@ import (
 //     its single most common real-world complaint — cannot occur in this mode.
 //  2. Otherwise the rotation-plus-grace logic of §3.4, under a per-session
 //     single-flight lock.
+//
+// SLIDING EXPIRY. Every successful branch — rotate, grace replay and the CF reuse —
+// moves the session's ExpiresAt to cfg.SessionExpiry(now), i.e. now plus the idle
+// TTL, capped by the optional absolute lifetime. Until 2026-10-19 no branch did, so
+// ExpiresAt stayed where login put it and every session died 30 days after login no
+// matter how often it was refreshed.
 func (h *Handler) Refresh(c *gin.Context) {
 	ip := strings.TrimSpace(c.ClientIP())
 	now := h.now()
@@ -103,6 +110,10 @@ func (h *Handler) Refresh(c *gin.Context) {
 		h.failRefresh(c, ip, session.ID, "session-not-live")
 		return
 	}
+	if h.cfg.SessionPastMaxLifetime(session.CreatedAt, now) {
+		h.failRefresh(c, ip, session.ID, "session-max-lifetime")
+		return
+	}
 
 	var refreshToken string
 	switch {
@@ -116,7 +127,13 @@ func (h *Handler) Refresh(c *gin.Context) {
 		session.RefreshTokenHash = absauth.HashRefreshToken(refreshToken)
 		session.GraceUntil = now.Add(h.cfg.RefreshGrace)
 		session.LastUsedAt = now
+		session.ExpiresAt = h.cfg.SessionExpiry(session.CreatedAt, now)
 		if err := h.store.UpdateABSSession(session); err != nil {
+			if errors.Is(err, database.ErrABSSessionRevoked) {
+				// A logout landed after our read: the session really is dead.
+				h.failRefresh(c, ip, session.ID, "session-revoked")
+				return
+			}
 			h.errorRefresh(c, ip, "session-update-error", "could not rotate session")
 			return
 		}
@@ -132,8 +149,15 @@ func (h *Handler) Refresh(c *gin.Context) {
 		// secret, so no live credential is ever stored in the database.
 		refreshToken = h.cfg.DeriveRefreshToken(session.ID, session.Seed, session.Generation)
 		session.LastUsedAt = now
+		session.ExpiresAt = h.cfg.SessionExpiry(session.CreatedAt, now)
 		if err := h.store.UpdateABSSession(session); err != nil {
-			// The touch is cosmetic; do not fail the refresh over it.
+			if errors.Is(err, database.ErrABSSessionRevoked) {
+				h.failRefresh(c, ip, session.ID, "session-revoked")
+				return
+			}
+			// The rotate that minted this pair already slid ExpiresAt to within the
+			// grace window of now, so a failed touch costs at most RefreshGrace of
+			// session life. Do not fail the refresh over it.
 			absauth.Audit(absauth.AuditEvent{
 				Action: "refresh", Outcome: absauth.OutcomeError, Mode: servermiddleware.ABSModeJWT,
 				SourceIP: ip, SessionID: session.ID, Reason: "last-used-touch-failed",
@@ -161,7 +185,8 @@ func (h *Handler) refreshForCFIdentity(c *gin.Context, identity *servermiddlewar
 
 	if presented != "" {
 		if session, err := h.store.GetABSSessionByRefreshHash(absauth.HashRefreshToken(presented)); err == nil &&
-			session != nil && session.UserID == user.ID && session.Live(now) {
+			session != nil && session.UserID == user.ID && session.Live(now) &&
+			!h.cfg.SessionPastMaxLifetime(session.CreatedAt, now) {
 			lock := h.lockForSession(session.ID)
 			lock.Lock()
 			defer lock.Unlock()
@@ -172,6 +197,7 @@ func (h *Handler) refreshForCFIdentity(c *gin.Context, identity *servermiddlewar
 			session.RefreshTokenHash = absauth.HashRefreshToken(refreshToken)
 			session.GraceUntil = now.Add(h.cfg.RefreshGrace)
 			session.LastUsedAt = now
+			session.ExpiresAt = h.cfg.SessionExpiry(session.CreatedAt, now)
 			if err := h.store.UpdateABSSession(session); err == nil {
 				h.completeRefresh(c, session, refreshToken, servermiddleware.ABSModeCF, identity.Email, ip, now)
 				return

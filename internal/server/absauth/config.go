@@ -1,7 +1,7 @@
 // file: internal/server/absauth/config.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c2f0a951-7b34-46de-8a07-1d59b3e6c8f2
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 // Package absauth is the pure auth core for the Audiobookshelf-compatible API
 // (design spec §3). It owns the resolved configuration, access-token (JWT) minting
@@ -38,8 +38,24 @@ const (
 	// refresh route at all and uses 30d). A 1h token would log refresh-less clients
 	// out hourly, which is the single most common ABS-compatibility complaint.
 	DefaultAccessTTL = 30 * 24 * time.Hour
-	// DefaultRefreshTTL matches the access TTL (spec §3.2).
-	DefaultRefreshTTL = 30 * 24 * time.Hour
+	// DefaultRefreshTTL is the SESSION IDLE TTL: 60 days. A session's ExpiresAt is
+	// pushed to now+RefreshTTL on every successful refresh and (throttled to about
+	// once a day, see SessionExtendWindow) on every authenticated request, so a
+	// device that is used at least once every 60 days stays signed in indefinitely.
+	//
+	// It MUST be longer than the access TTL. Until 2026-10-19 both were 30 days and
+	// ExpiresAt was stamped once at login and never moved, so every session died at
+	// the same instant as its access token: the client's 401 arrived when there was
+	// no longer a session for /auth/refresh to rescue, and AudioBooth (which only
+	// refreshes after a 401) was logged out every 30 days mid-use. Load enforces
+	// AccessTTL < RefreshTTL.
+	DefaultRefreshTTL = 60 * 24 * time.Hour
+	// DefaultSessionMaxTTL is the optional ABSOLUTE session lifetime, measured from
+	// login. Zero means off: an actively used session never has to sign in again.
+	DefaultSessionMaxTTL time.Duration = 0
+	// maxSessionExtendWindow bounds how often authenticated use rewrites a
+	// session's ExpiresAt. See SessionExtendWindow.
+	maxSessionExtendWindow = 24 * time.Hour
 	// DefaultRefreshGrace is how long a rotated-out refresh token keeps working so a
 	// concurrent or replayed refresh from the same device is answered idempotently
 	// instead of orphaning the session (spec §3.4).
@@ -84,10 +100,16 @@ type Settings struct {
 	AuthModes string
 	// JWTSecret is ABS_JWT_SECRET. Required when Enabled.
 	JWTSecret string
-	// The three durations accept any time.ParseDuration string. Empty means default.
-	AccessTokenTTL  string
+	// The durations accept any time.ParseDuration string. Empty means default.
+	AccessTokenTTL string
+	// RefreshTokenTTL is ABS_REFRESH_TOKEN_TTL, the session IDLE TTL (see
+	// DefaultRefreshTTL). The name predates sliding expiry and is kept so existing
+	// deployments' environment keeps working.
 	RefreshTokenTTL string
 	RefreshGrace    string
+	// SessionMaxTTL is ABS_SESSION_MAX_TTL, the optional absolute session lifetime.
+	// Empty or "0" means off. Unlike the other durations, zero is valid here.
+	SessionMaxTTL string
 	// ServerVersion and DefaultLibraryID override the constants above.
 	ServerVersion    string
 	DefaultLibraryID string
@@ -103,13 +125,23 @@ type Modes struct {
 
 // Config is the validated ABS auth configuration.
 type Config struct {
-	Enabled          bool
-	Modes            Modes
-	AccessTTL        time.Duration
-	RefreshTTL       time.Duration
-	RefreshGrace     time.Duration
+	Enabled bool
+	Modes   Modes
+	// AccessTTL is the access-token (JWT) lifetime. Always strictly shorter than
+	// RefreshTTL once Load has run.
+	AccessTTL time.Duration
+	// RefreshTTL is the session idle TTL: how far ExpiresAt is pushed past the
+	// last refresh or authenticated use. See DefaultRefreshTTL.
+	RefreshTTL   time.Duration
+	RefreshGrace time.Duration
+	// SessionMaxTTL caps a session's total lifetime from its CreatedAt. Zero = off.
+	SessionMaxTTL    time.Duration
 	ServerVersion    string
 	DefaultLibraryID string
+
+	// Warnings lists configuration problems Load corrected rather than refused
+	// (it has no logger of its own). The caller logs each one at boot.
+	Warnings []string
 
 	// secret is the HMAC key for access tokens and refresh-token derivation. Kept
 	// unexported so it cannot be logged by a %+v on Config.
@@ -156,6 +188,26 @@ func Load(s Settings) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxTTL, err := parseOptionalDuration("ABS_SESSION_MAX_TTL", s.SessionMaxTTL, DefaultSessionMaxTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// The access token must expire strictly BEFORE the session can, so the client's
+	// 401 arrives while there is still a session for /auth/refresh to rescue. A
+	// violation is clamped, not refused: equal values were the shipped default until
+	// 2026-10-19 and are not a security fault, so refusing to boot over them would
+	// turn a stale setting into an outage. The access TTL is the one lowered, never
+	// the session TTL raised, so the operator's chosen idle limit is never widened.
+	var warnings []string
+	if accessTTL >= refreshTTL {
+		clamped := refreshTTL / 2
+		warnings = append(warnings, fmt.Sprintf(
+			"ABS_ACCESS_TOKEN_TTL (%v) must be shorter than ABS_REFRESH_TOKEN_TTL (%v), the session idle TTL, "+
+				"or every session dies at the same instant as its access token and refresh can never rescue it; "+
+				"clamping the access TTL to %v", accessTTL, refreshTTL, clamped))
+		accessTTL = clamped
+	}
 
 	version := strings.TrimSpace(s.ServerVersion)
 	if version == "" {
@@ -177,10 +229,51 @@ func Load(s Settings) (*Config, error) {
 		AccessTTL:        accessTTL,
 		RefreshTTL:       refreshTTL,
 		RefreshGrace:     grace,
+		SessionMaxTTL:    maxTTL,
 		ServerVersion:    version,
 		DefaultLibraryID: libraryID,
+		Warnings:         warnings,
 		secret:           []byte(secret),
 	}, nil
+}
+
+// SessionExpiry is the ExpiresAt a session should carry after being refreshed or
+// used at now: now+RefreshTTL, capped at createdAt+SessionMaxTTL when the absolute
+// cap is on. Every writer of ExpiresAt (login, all three refresh branches and the
+// bearer-path extension) goes through this so the policy lives in one place.
+func (c *Config) SessionExpiry(createdAt, now time.Time) time.Time {
+	exp := now.Add(c.RefreshTTL)
+	if c.SessionMaxTTL > 0 && !createdAt.IsZero() {
+		if hard := createdAt.Add(c.SessionMaxTTL); hard.Before(exp) {
+			exp = hard
+		}
+	}
+	return exp
+}
+
+// SessionPastMaxLifetime reports whether the absolute cap, when on, has been
+// reached. It is checked IN ADDITION to the session's own ExpiresAt because rows
+// written before the cap was switched on carry expiries computed without it.
+func (c *Config) SessionPastMaxLifetime(createdAt, now time.Time) bool {
+	if c == nil || c.SessionMaxTTL <= 0 || createdAt.IsZero() {
+		return false
+	}
+	return !now.Before(createdAt.Add(c.SessionMaxTTL))
+}
+
+// SessionExtendWindow is the minimum amount by which authenticated use must be
+// able to advance a session's ExpiresAt before it is rewritten. It throttles the
+// bearer-path extension to roughly one Pebble write per session per day instead of
+// one per request, and because it compares against the TARGET expiry it also stops
+// writing once a capped session's target has stopped moving.
+//
+// min(24h, RefreshTTL/10), so a short idle TTL configured for testing still slides.
+func (c *Config) SessionExtendWindow() time.Duration {
+	w := c.RefreshTTL / 10
+	if w > maxSessionExtendWindow {
+		w = maxSessionExtendWindow
+	}
+	return w
 }
 
 func parseModes(raw string) (Modes, error) {
@@ -218,6 +311,24 @@ func parseDuration(name, raw string, def time.Duration) (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("absauth: %s must be positive, got %v", name, d)
+	}
+	return d, nil
+}
+
+// parseOptionalDuration is parseDuration for a setting where zero means "off":
+// empty yields def, "0" (or any zero duration) is accepted, a negative value is
+// refused.
+func parseOptionalDuration(name, raw string, def time.Duration) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("absauth: %s=%q is not a valid duration: %w", name, raw, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("absauth: %s must not be negative, got %v", name, d)
 	}
 	return d, nil
 }

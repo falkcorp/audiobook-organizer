@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b41e6d09-8a37-4f52-9c10-25d7b8e0f346
-// last-edited: 2026-08-01
+// last-edited: 2026-10-19
 
 package middleware
 
@@ -64,7 +64,10 @@ type fakeABSStore struct {
 	roles      map[string]*database.Role
 	createErr  error
 	sessionErr error
+	extendErr  error
 	nextID     int
+	// extendWrites counts ExtendABSSession calls that actually wrote.
+	extendWrites int
 }
 
 func newFakeABSStore() *fakeABSStore {
@@ -155,6 +158,26 @@ func (f *fakeABSStore) GetABSSession(id string) (*database.ABSSession, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.sessions[id], nil
+}
+
+// ExtendABSSession mirrors PebbleStore.ExtendABSSession's decision rules.
+func (f *fakeABSStore) ExtendABSSession(id string, now, expiresAt time.Time, minAdvance time.Duration) (bool, error) {
+	if f.extendErr != nil {
+		return false, f.extendErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sessions[id]
+	if !ok || !s.Live(now) || s.ExpiresAt.IsZero() {
+		return false, nil
+	}
+	if expiresAt.Sub(s.ExpiresAt) < minAdvance || !expiresAt.After(s.ExpiresAt) {
+		return false, nil
+	}
+	s.ExpiresAt = expiresAt
+	s.LastUsedAt = now
+	f.extendWrites++
+	return true, nil
 }
 
 // ── harness ─────────────────────────────────────────────────────────────────

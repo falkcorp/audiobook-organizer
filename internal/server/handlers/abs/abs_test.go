@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.9
+// version: 1.7.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-10-19
 
@@ -53,7 +53,11 @@ type fakeStore struct {
 	createSessionErr error
 	updateErr        error
 	revokeAllErr     error // returned alongside the revoked count, as a partial revoke
+	extendErr        error
 	updatedUsers     []string
+	// extendWrites counts ExtendABSSession calls that actually wrote, so tests can
+	// assert the once-a-day throttle.
+	extendWrites int
 }
 
 func newFakeStore() *fakeStore {
@@ -199,6 +203,10 @@ func (f *fakeStore) UpdateABSSession(s *database.ABSSession) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Mirrors PebbleStore: revocation is one-way.
+	if stored, ok := f.sessions[s.ID]; !ok || stored.Revoked {
+		return database.ErrABSSessionRevoked
+	}
 	cp := *s
 	f.sessions[s.ID] = &cp
 	for _, h := range []string{s.RefreshTokenHash, s.PrevRefreshTokenHash} {
@@ -207,6 +215,26 @@ func (f *fakeStore) UpdateABSSession(s *database.ABSSession) error {
 		}
 	}
 	return nil
+}
+
+// ExtendABSSession mirrors PebbleStore.ExtendABSSession's decision rules.
+func (f *fakeStore) ExtendABSSession(id string, now, expiresAt time.Time, minAdvance time.Duration) (bool, error) {
+	if f.extendErr != nil {
+		return false, f.extendErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sessions[id]
+	if !ok || !s.Live(now) || s.ExpiresAt.IsZero() {
+		return false, nil
+	}
+	if expiresAt.Sub(s.ExpiresAt) < minAdvance || !expiresAt.After(s.ExpiresAt) {
+		return false, nil
+	}
+	s.ExpiresAt = expiresAt
+	s.LastUsedAt = now
+	f.extendWrites++
+	return true, nil
 }
 
 func (f *fakeStore) ListABSSessionsForUser(userID string) ([]database.ABSSession, error) {

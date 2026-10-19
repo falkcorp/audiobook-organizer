@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-10-19
 
@@ -607,11 +607,14 @@ func (h *Handler) HasBrowseSurface() bool { return h.library != nil && h.identit
 // SetSleep replaces the throttle's delay function. Tests inject a no-op.
 func (h *Handler) SetSleep(fn func(time.Duration)) { h.throttle.SetSleep(fn) }
 
-// SetClock replaces the handler clock. Tests use it to cross a grace boundary.
+// SetClock replaces the handler clock. Tests use it to cross a grace boundary. It
+// also moves the identity resolver's clock, so access-token expiry, session
+// liveness and sliding extension all run on the same timeline as refresh.
 func (h *Handler) SetClock(fn func() time.Time) {
 	if fn != nil {
 		h.now = fn
 		h.throttle.SetClock(fn)
+		h.resolver.SetClock(fn)
 	}
 }
 

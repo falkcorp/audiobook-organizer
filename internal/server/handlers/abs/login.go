@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
-// last-edited: 2026-07-30
+// last-edited: 2026-10-19
 
 package abs
 
@@ -263,7 +263,9 @@ func (h *Handler) createSession(userID string, deviceInfo json.RawMessage, ip, u
 		IP:         ip,
 		CreatedAt:  now,
 		LastUsedAt: now,
-		ExpiresAt:  now.Add(h.cfg.RefreshTTL),
+		// Sliding: refresh and authenticated use push this forward (see Refresh
+		// and ABSIdentityResolver.extendSession). Login is just the first stamp.
+		ExpiresAt: h.cfg.SessionExpiry(now, now),
 	}
 	refreshToken := h.cfg.DeriveRefreshToken(session.ID, session.Seed, session.Generation)
 	session.RefreshTokenHash = absauth.HashRefreshToken(refreshToken)
