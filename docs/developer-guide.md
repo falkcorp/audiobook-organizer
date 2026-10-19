@@ -1,5 +1,5 @@
 <!-- file: docs/developer-guide.md -->
-<!-- version: 1.2.2 -->
+<!-- version: 1.2.3 -->
 <!-- guid: 7f8a9b0c-1d2e-3f4a-5b6c-7d8e9f0a1b2c -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -182,8 +182,8 @@ committed under `web/src/types/generated/` and must never be hand-edited.
 
 - Regenerate: `make generate-types`. CI runs `make types-check`
   (`scripts/ci/check_generated_types.sh`, gate `generated-types` in `ci/gates.txt`) and fails when
-  the committed files are stale (it wipes `web/src/types/generated/*.ts`, regenerates and asks git, so
-  it needs that directory committed).
+  the committed files are stale (it generates into a temp dir and diffs it against that
+  directory, so stale, missing and orphan files fail and the working tree is never touched).
 - Currently generated: the row/plan/apply shapes of `internal/repairs` (`wire.go`) and the
   `BookCore` / `BookFileCore` projections of `internal/database` (`bookcore.go`, `bookfilecore.go`,
   `scan_state.go`, `wire_types.go`). `api.ts` re-exports the repairs types under the names the

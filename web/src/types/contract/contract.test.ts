@@ -1,5 +1,5 @@
-// file: web/src/types/generated/contract.test.ts
-// version: 1.1.0
+// file: web/src/types/contract/contract.test.ts
+// version: 1.1.1
 // guid: 5d1a9e37-8c42-4b06-a7f3-2e6b0c84d915
 // last-edited: 2026-10-18
 

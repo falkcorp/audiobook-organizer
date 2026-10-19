@@ -1,5 +1,5 @@
 // file: internal/wirecontract/contract_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e3a6b14-0c5d-4f72-9a81-d2b7e4c6f039
 // last-edited: 2026-10-18
 
@@ -21,8 +21,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -167,6 +169,18 @@ func TestWireGoldens(t *testing.T) {
 	}
 }
 
+// wireTypes is every Go struct tygo generates (tygo.yaml), by reflection.
+// TestWireTypesMatchGeneratedInterfaces ties it to the generated TypeScript.
+var wireTypes = []reflect.Type{
+	reflect.TypeOf(repairs.Row{}), reflect.TypeOf(repairs.RowMember{}),
+	reflect.TypeOf(repairs.RowsPage{}), reflect.TypeOf(repairs.RowResult{}),
+	reflect.TypeOf(repairs.ApplyResult{}), reflect.TypeOf(repairs.PlanParams{}),
+	reflect.TypeOf(repairs.PlanResult{}),
+	reflect.TypeOf(database.BookCore{}), reflect.TypeOf(database.BookFileCore{}),
+	reflect.TypeOf(database.ScanState{}), reflect.TypeOf(database.StageStatus{}),
+	reflect.TypeOf(database.BookAuthor{}), reflect.TypeOf(database.MetadataProvenanceEntry{}),
+}
+
 // nilableWithoutOmit lists the slice and map fields of every generated type
 // that lack omitempty/omitzero, i.e. that Go marshals as null when nil while
 // tygo types them non-null. Each entry says why null cannot reach the wire (or,
@@ -183,19 +197,46 @@ var nilableWithoutOmit = map[string]string{
 	"repairs.ApplyResult.Rows":              "RunApply initialises []RowResult{}",
 }
 
-func TestNilableFieldsAreAccountedFor(t *testing.T) {
-	types := []reflect.Type{
-		reflect.TypeOf(repairs.Row{}), reflect.TypeOf(repairs.RowMember{}),
-		reflect.TypeOf(repairs.RowsPage{}), reflect.TypeOf(repairs.RowResult{}),
-		reflect.TypeOf(repairs.ApplyResult{}), reflect.TypeOf(repairs.PlanParams{}),
-		reflect.TypeOf(repairs.PlanResult{}),
-		reflect.TypeOf(database.BookCore{}), reflect.TypeOf(database.BookFileCore{}),
-		reflect.TypeOf(database.ScanState{}), reflect.TypeOf(database.StageStatus{}),
-		reflect.TypeOf(database.BookAuthor{}), reflect.TypeOf(database.MetadataProvenanceEntry{}),
+// TestWireTypesMatchGeneratedInterfaces fails when a generated interface has no
+// entry in wireTypes (a new wire struct would otherwise skip the nil-field audit
+// and the goldens) or wireTypes names a struct that is no longer generated.
+func TestWireTypesMatchGeneratedInterfaces(t *testing.T) {
+	files, err := filepath.Glob("../../web/src/types/generated/*.ts")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no generated TypeScript found: %v", err)
 	}
+	re := regexp.MustCompile(`(?m)^export interface (\w+)`)
+	generated := map[string]bool{}
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			generated[m[1]] = true
+		}
+	}
+	reflected := map[string]bool{}
+	for _, typ := range wireTypes {
+		reflected[typ.Name()] = true
+	}
+	for name := range generated {
+		if !reflected[name] {
+			t.Errorf("generated interface %s is missing from wireTypes", name)
+		}
+	}
+	for name := range reflected {
+		if !generated[name] {
+			t.Errorf("wireTypes lists %s, which tygo does not generate", name)
+		}
+	}
+}
+
+func TestNilableFieldsAreAccountedFor(t *testing.T) {
+	types := wireTypes
 	seen := map[string]bool{}
 	for _, typ := range types {
-		pkg := typ.PkgPath()[len(typ.PkgPath())-len(filepath.Base(typ.PkgPath())):]
+		pkg := path.Base(typ.PkgPath())
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
 			tag := f.Tag.Get("json")
