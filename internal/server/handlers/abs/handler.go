@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.25.1
+// version: 1.26.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-10-19
 
@@ -357,6 +357,11 @@ type Options struct {
 	// LibraryName is the display name of the single library we expose. Empty means
 	// "Books".
 	LibraryName string
+	// PublicOrigin, when non-nil, returns the configured public URL that SSO's
+	// browser hop is built on (openid.go oidcOrigin). It is called per request,
+	// not once here, because the server's ExternalURL is set after routes are
+	// wired. Nil, empty or unusable means "use the request's Host".
+	PublicOrigin func() string
 }
 
 // itemsCountEntry is one cached filtered count and when it was computed.
@@ -412,6 +417,8 @@ type Handler struct {
 	// oidcConsentToken). Random per process: the parked requests it protects
 	// do not survive a restart either.
 	oidcConsentKey []byte
+	// oidcPublicOrigin is Options.PublicOrigin (may be nil).
+	oidcPublicOrigin func() string
 
 	// refreshLocks holds one mutex per session id — the per-session single-flight
 	// lock of §3.4 step 1. It serializes concurrent refreshes of the SAME session so
@@ -583,6 +590,7 @@ func New(o Options) (*Handler, error) {
 	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap)
 	h.oidcSharedLimiter = servermiddleware.NewIPRateLimiter(oidcSharedRatePerMinute, oidcSharedRateBurst)
 	h.oidcPersonLimiter = servermiddleware.NewIPRateLimiter(oidcPersonRatePerMinute, oidcPersonRateBurst)
+	h.oidcPublicOrigin = o.PublicOrigin
 	h.oidcConsentKey = make([]byte, 32)
 	if _, err := rand.Read(h.oidcConsentKey); err != nil {
 		return nil, fmt.Errorf("abs: generate openid consent key: %w", err)

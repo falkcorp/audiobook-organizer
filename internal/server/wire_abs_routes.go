@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.26.1
+// version: 1.27.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-10-19
 
@@ -566,6 +566,16 @@ func (s *Server) wireABSRoutes() {
 		AliasUses:   aliasUses,
 		CoverRoot:   config.AppConfig.RootDir,
 		LibraryName: "Books",
+		// SSO's browser hop prefers a configured public URL over the request Host
+		// (openid.go oidcOrigin), in the same order buildOAuthWiring uses for
+		// provider redirects. Read per request: s.externalURL is set in Start,
+		// after routes are wired.
+		PublicOrigin: func() string {
+			if base := strings.TrimSpace(config.Snapshot().OAuthRedirectBaseURL); base != "" {
+				return base
+			}
+			return s.externalURL
+		},
 	})
 	if err != nil {
 		slog.Error("abs: refusing to start — handler construction failed", "err", err)
