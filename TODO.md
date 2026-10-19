@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.32 -->
+<!-- version: 10.76.33 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -1259,8 +1259,10 @@ into one of the curated sections below, is a normal direct edit.
       and merge combine paths, taken inside `merge.LockMergeRMW`. Each is
       listed on the lock. SetManualStatus and the iTunes finished seed take
       it since the ARS review follow-ups. Done 2026-10-18
-      (`fix/user-state-writers-take-lock`): every writer takes it; the merge
-      follow takes both books through `database.LockUserBookStatePair`.
+      (`fix/user-state-writers-take-lock`, #4073): every writer takes it; the
+      merge follow takes both books through `database.LockUserBookStatePair`.
+      The iTunes position sync was deleted instead: nothing in production ran
+      it (iTunes is a one-time manual import).
 
 - [ ] **AUTH-SNAPSHOT-MEM** `authority.LoadSnapshot` retains about 1 KB per
       person (about 78 MiB for 80,000 persons, about 199 MiB allocated while
