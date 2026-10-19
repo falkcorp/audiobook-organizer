@@ -1,7 +1,7 @@
 // file: internal/appdirs/database_dir_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1a06f2b8-5d47-4e93-8c20-b7e14a385c96
-// last-edited: 2026-09-09
+// last-edited: 2026-10-19
 
 package appdirs
 
@@ -33,17 +33,11 @@ func TestFromConfig_ExcludesProductionsRealLayout(t *testing.T) {
 			"database, so the siblings that resolve beside it (certs/, "+
 			"library.bleve, .bootstrap-token) are excluded too", got, want)
 	}
-	if got, want := app.ActivityDBDir, filepath.Join(root, config.ActivityDBDirName); got != want {
-		t.Errorf("ActivityDBDir = %q, want %q — resolved through "+
-			"ResolveActivityDBPath, not read from the raw (empty) field", got, want)
-	}
-
 	// The properties that actually matter, asserted through the real predicate.
 	for _, dir := range []string{
 		root + "/.appdata",
 		root + "/.appdata/certs",
 		root + "/.appdata/audiobooks.pebble",
-		filepath.Join(root, config.ActivityDBDirName),
 	} {
 		if !pathutil.ShouldSkipDir(root, dir, app) {
 			t.Errorf("ShouldSkipDir(%q) = false; application state must never be walked", dir)
@@ -97,28 +91,26 @@ func TestFromConfig_RelativeDatabasePathExcludesNothing(t *testing.T) {
 	}
 }
 
-// TestClearedBaseline_StillFailsOnAnUnclearedField is the negative control for
-// ClearedBaseline itself.
+// TestFromConfig_ClearedConfigIsZero is the negative control for the
+// `empty AppDirs` guard tests across the codebase, which clear every
+// operator-settable path in config.AppConfig and then compare Current()
+// against the zero AppDirs.
 //
-// ClearedBaseline was introduced because the `empty AppDirs` guard controls
-// could no longer compare against the zero value once ActivityDBDir existed.
-// The obvious way to make those tests pass again is to loosen the comparison
-// until it stops complaining -- which would silently retire eight negative
-// controls across the codebase and nobody would notice for months.
-//
-// So: with a source field left uncleared, Current() MUST still differ from
-// ClearedBaseline(). If this test ever passes trivially, the guard controls
-// have stopped guarding.
-func TestClearedBaseline_StillFailsOnAnUnclearedField(t *testing.T) {
+// RootDir cannot be cleared there (it IS the walk root), so a fully cleared
+// config must still produce the zero value with RootDir set. Until 01-P75 it
+// did not: the activity database's default resolved under RootDir, and a
+// ClearedBaseline helper carried that one field. With the SQLite activity
+// backend gone the helper went too, and this pins the plain comparison: with
+// one source field left set, Current() must differ from the zero value, or the
+// guard controls have stopped guarding.
+func TestFromConfig_ClearedConfigIsZero(t *testing.T) {
 	const root = "/mnt/bigdata/books/audiobook-organizer"
 	prev := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = prev })
 
-	// Everything cleared except RootDir: this is the state the guard helpers
-	// set up, and it must compare equal.
 	config.AppConfig = config.Config{RootDir: root}
-	if got, want := Current(), ClearedBaseline(); got != want {
-		t.Fatalf("a fully cleared config must equal the baseline; got %+v want %+v", got, want)
+	if got := Current(); got != (pathutil.AppDirs{}) {
+		t.Fatalf("a fully cleared config must give the zero AppDirs; got %+v", got)
 	}
 
 	// Now leave ONE source field set, exactly as a future careless caller would.
@@ -131,9 +123,9 @@ func TestClearedBaseline_StillFailsOnAnUnclearedField(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			config.AppConfig = config.Config{RootDir: root}
 			mutate(&config.AppConfig)
-			if got, want := Current(), ClearedBaseline(); got == want {
-				t.Errorf("%s was left set and the baseline comparison still matched (%+v) — "+
-					"the empty-AppDirs negative controls are no longer guarding anything", name, got)
+			if got := Current(); got == (pathutil.AppDirs{}) {
+				t.Errorf("%s was left set and Current() still returned the zero AppDirs — "+
+					"the empty-AppDirs negative controls are no longer guarding anything", name)
 			}
 		})
 	}
@@ -143,7 +135,7 @@ func TestClearedBaseline_StillFailsOnAnUnclearedField(t *testing.T) {
 // a real struct, but FromConfig is exported and the nil branch already exists.
 func TestFromConfig_NilConfigIsSafe(t *testing.T) {
 	app := FromConfig(nil)
-	if app.DatabaseDir != "" || app.ActivityDBDir != "" {
+	if app != (pathutil.AppDirs{}) {
 		t.Errorf("FromConfig(nil) must be the zero value, got %+v", app)
 	}
 }

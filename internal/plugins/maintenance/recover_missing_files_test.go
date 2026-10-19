@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -479,8 +479,7 @@ func TestRecover_SkipsAppOwnedDirsInInventory(t *testing.T) {
 // learns to skip it only from appdirs.Current(), which reads the process-wide
 // config. Every other app dir is pointed OUTSIDE the root so the database dir
 // is the only thing that can exclude the decoy: BackupDir would otherwise
-// resolve to {root}/appdata/backups and the activity DB, with no RootDir, to
-// {root}/appdata itself -- either would pass this test for the wrong reason.
+// resolve to {root}/appdata/backups and pass this test for the wrong reason.
 func TestRecover_SkipsConfiguredDatabaseDirWithoutDot(t *testing.T) {
 	saved := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = saved })
@@ -490,7 +489,6 @@ func TestRecover_SkipsConfiguredDatabaseDirWithoutDot(t *testing.T) {
 	config.AppConfig.RootDir = ""
 	config.AppConfig.DatabasePath = filepath.Join(root, "appdata", "x.pebble")
 	config.AppConfig.BackupDir = filepath.Join(elsewhere, "backups")
-	config.AppConfig.ActivityDBPath = filepath.Join(elsewhere, "activity", "activity.db")
 	config.AppConfig.OpenLibraryDumpDir = ""
 	config.AppConfig.PlaylistDir = ""
 

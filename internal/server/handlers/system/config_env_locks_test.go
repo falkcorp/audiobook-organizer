@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/config_env_locks_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e6b0d47-9a13-4c85-bf20-5d81c7a4e396
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package system_test
 
@@ -20,7 +20,7 @@ import (
 )
 
 // getConfigBody issues GET /config against the handler and returns the decoded
-// config object, which is a map rather than a config.Config because the two
+// config object, which is a map rather than a config.Config because the
 // interesting keys are computed annotations that exist only on the wire.
 func getConfigBody(t *testing.T, h *system.Handler) map[string]any {
 	t.Helper()
@@ -42,15 +42,14 @@ func getConfigBody(t *testing.T, h *system.Handler) map[string]any {
 // TestGetConfig_ReportsEnvLockedSettings is the guard for the Settings page telling
 // the truth about what the operator can change.
 //
-// Production pins ACTIVITY_DB_PATH in its systemd unit. Without this annotation the
+// Production pins DATABASE_PATH in its systemd unit. Without this annotation the
 // path control renders as an ordinary editable field, accepts a value, saves it —
 // and then applyEnvAuthoritativeConfig overwrites it from the environment on the
 // next boot. The edit appears to take and silently does not, which is precisely the
 // failure this whole field was added to make visible.
 func TestGetConfig_ReportsEnvLockedSettings(t *testing.T) {
-	t.Setenv("ACTIVITY_DB_MOVE_ON_CHANGE", "")
 	t.Setenv("ACTIVITY_BACKEND", "")
-	t.Setenv("ACTIVITY_DB_PATH", "/var/lib/audiobook-organizer/activity-v2.sqlite")
+	t.Setenv("DATABASE_PATH", "/var/lib/audiobook-organizer/audiobooks.pebble")
 
 	h, d := newTestHandler(t)
 	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{})
@@ -59,16 +58,16 @@ func TestGetConfig_ReportsEnvLockedSettings(t *testing.T) {
 
 	locked, ok := cfg["env_locked"].([]any)
 	require.True(t, ok, "env_locked missing from the config object; got %T", cfg["env_locked"])
-	assert.Contains(t, locked, "activity_db_path")
-	assert.NotContains(t, locked, "activity_db_move_on_change",
-		"locking the path must not also freeze the unrelated move toggle")
+	assert.Contains(t, locked, "database_path")
+	assert.NotContains(t, locked, "activity_backend",
+		"locking the database path must not also lock an unrelated setting")
 }
 
 // TestGetConfig_EnvLockedIsEmptyWithoutOverrides covers the ordinary deployment: no
 // environment pins, so every control stays editable. An always-populated list would
 // disable the UI everywhere and be just as wrong as an always-empty one.
 func TestGetConfig_EnvLockedIsEmptyWithoutOverrides(t *testing.T) {
-	for _, v := range []string{"ACTIVITY_DB_PATH", "ACTIVITY_DB_MOVE_ON_CHANGE", "ACTIVITY_BACKEND"} {
+	for _, v := range []string{"DATABASE_PATH", "ACTIVITY_BACKEND"} {
 		t.Setenv(v, "")
 	}
 
@@ -82,28 +81,6 @@ func TestGetConfig_EnvLockedIsEmptyWithoutOverrides(t *testing.T) {
 	assert.Empty(t, locked)
 }
 
-// TestGetConfig_ReportsTheResolvedActivityDBPath pins the placeholder source.
-//
-// With activity_db_path empty the UI must still show where the database actually
-// is. The value is computed server-side on purpose: ResolveActivityDBPath has three
-// branches, and a TypeScript reimplementation would drift from it silently and show
-// the operator a location the server does not use.
-func TestGetConfig_ReportsTheResolvedActivityDBPath(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
-		RootDir:      "/mnt/bigdata/books/audiobook-organizer",
-		DatabasePath: "/var/lib/audiobook-organizer/db",
-		// ActivityDBPath deliberately empty — this is the defaulting path.
-	})
-
-	cfg := getConfigBody(t, h)
-
-	assert.Equal(t,
-		"/mnt/bigdata/books/audiobook-organizer/.activity/activity.sqlite",
-		cfg["activity_db_resolved_path"],
-		"an empty activity_db_path must resolve to the dot-directory under the library root")
-}
-
 // TestGetConfig_StillCarriesTheOrdinaryConfigFields guards the grafting itself. The
 // annotations are added by re-marshalling the config into a map, so a mistake there
 // could drop every real setting while leaving both new keys present and both tests
@@ -111,16 +88,21 @@ func TestGetConfig_ReportsTheResolvedActivityDBPath(t *testing.T) {
 func TestGetConfig_StillCarriesTheOrdinaryConfigFields(t *testing.T) {
 	h, d := newTestHandler(t)
 	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
-		RootDir:                "/library",
-		ActivityDBPath:         "/srv/activity.sqlite",
-		ActivityDBMoveOnChange: true,
+		RootDir:         "/library",
+		DatabasePath:    "/srv/audiobooks.pebble",
+		ActivityBackend: "pebble",
 	})
 
 	cfg := getConfigBody(t, h)
 
 	assert.Equal(t, "/library", cfg["root_dir"])
-	assert.Equal(t, "/srv/activity.sqlite", cfg["activity_db_path"])
-	assert.Equal(t, true, cfg["activity_db_move_on_change"])
+	assert.Equal(t, "/srv/audiobooks.pebble", cfg["database_path"])
+	assert.Equal(t, "pebble", cfg["activity_backend"])
+	// Removed with the SQLite activity backend (01-P75): neither the settings
+	// nor the resolved-path annotation may reappear in the response.
+	for _, k := range []string{"activity_db_path", "activity_db_move_on_change", "activity_db_resolved_path"} {
+		assert.NotContains(t, cfg, k)
+	}
 }
 
 // TestGetConfig_PreservesLargeIntegersExactly guards the decode mode, not the

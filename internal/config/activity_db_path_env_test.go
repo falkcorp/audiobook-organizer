@@ -1,34 +1,37 @@
 // file: internal/config/activity_db_path_env_test.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: 3f1c8a52-9d47-4e6b-8c03-2a7e5b9d1f64
-// last-edited: 2026-10-09
+// last-edited: 2026-10-19
 
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
 )
 
-// TestViperIsSetIsTrueForARegisteredDefault pins the trap that caused this bug, so
+// TestViperIsSetIsTrueForARegisteredDefault pins the trap behind envSupplied, so
 // that nobody "simplifies" envSupplied back into viper.IsSet.
 //
 // The doc comment on applyEnvAuthoritativeConfig asserted for months that IsSet is
 // "true only when a real override layer supplied the key, NOT for SetDefault". That is
 // not how viper works: IsSet is Get(key) != nil, and a registered default IS a value.
-// Every key guarded by IsSet is therefore assigned unconditionally.
+// Every key guarded by IsSet is therefore assigned unconditionally. The key here is a
+// probe that names no real setting, so the premise is tested on its own.
 func TestViperIsSetIsTrueForARegisteredDefault(t *testing.T) {
 	resetViper(t)
-	viper.SetDefault("activity_db_path", "")
-	viper.BindEnv("activity_db_path", "ACTIVITY_DB_PATH") //nolint:errcheck
+	viper.SetDefault("isset_probe_key", "")
+	viper.BindEnv("isset_probe_key", "AO_ISSET_PROBE_KEY") //nolint:errcheck
 
-	if !viper.IsSet("activity_db_path") {
+	if !viper.IsSet("isset_probe_key") {
 		t.Fatal("viper.IsSet is now false for a key with only a registered default — " +
 			"the premise behind envSupplied changed; re-read applyEnvAuthoritativeConfig")
 	}
-	if got := viper.GetString("activity_db_path"); got != "" {
+	if got := viper.GetString("isset_probe_key"); got != "" {
 		t.Fatalf("expected the empty default with no env set, got %q", got)
 	}
 }
@@ -36,91 +39,28 @@ func TestViperIsSetIsTrueForARegisteredDefault(t *testing.T) {
 // TestEnvSupplied covers the helper's contract directly, including the deliberate
 // choice to treat an empty value as "not supplied".
 func TestEnvSupplied(t *testing.T) {
-	if envSupplied("ACTIVITY_DB_PATH_DEFINITELY_UNSET_XYZ") {
+	if envSupplied("AO_ENV_SUPPLIED_PROBE_DEFINITELY_UNSET_XYZ") {
 		t.Error("an unset variable must not count as supplied")
 	}
 
-	t.Setenv("ACTIVITY_DB_PATH", "")
-	if envSupplied("ACTIVITY_DB_PATH") {
+	t.Setenv("AO_ENV_SUPPLIED_PROBE", "")
+	if envSupplied("AO_ENV_SUPPLIED_PROBE") {
 		t.Error("an empty value must not count as supplied — systemd `Environment=FOO=` " +
 			"must behave like an unset variable, not blank a persisted setting")
 	}
 
-	t.Setenv("ACTIVITY_DB_PATH", "/mnt/x/activity.sqlite")
-	if !envSupplied("ACTIVITY_DB_PATH") {
+	t.Setenv("AO_ENV_SUPPLIED_PROBE", "/mnt/x/value")
+	if !envSupplied("AO_ENV_SUPPLIED_PROBE") {
 		t.Error("a real value must count as supplied")
 	}
 }
 
-// TestActivityDBPath_BlobSurvivesWhenEnvIsAbsent is the regression guard for the
-// user-visible defect: the activity-database location is settable in Settings, which
-// persists it into the DB config blob. LoadConfigFromDatabase restores the blob and
-// then calls ApplyEnvAuthoritativeConfig, which overwrote the field with the empty
-// default on EVERY boot — so the control silently did nothing, everywhere, whether or
-// not the operator had set ACTIVITY_DB_PATH.
-//
-// This exercises the real save/load path rather than calling the overlay directly,
-// because the blob round-trip is the half that has to keep working for the setting to
-// mean anything.
-func TestActivityDBPath_BlobSurvivesWhenEnvIsAbsent(t *testing.T) {
-	resetViper(t)
-	InitConfig()
-	store := newMockSettingsStore()
-
-	const want = "/mnt/bigdata/books/audiobook-organizer/.activity/activity.sqlite"
-	Mutate(func(c *Config) { c.ActivityDBPath = want })
-	if err := SaveConfigToDatabase(store); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	// The blob must actually carry the value; a passing round-trip that never
-	// serialized it would prove nothing.
-	blob, err := store.GetSetting("config_blob")
-	if err != nil || blob == nil {
-		t.Fatalf("config_blob not persisted: %v", err)
-	}
-	if !strings.Contains(blob.Value, want) {
-		t.Fatal("config_blob does not contain the activity DB path — the setting is not persisted at all")
-	}
-
-	// Simulate the boot-time wipe: the blob load replaces the whole struct.
-	Mutate(func(c *Config) { c.ActivityDBPath = "sentinel-should-be-replaced-by-blob" })
-	if err := LoadConfigFromDatabase(store); err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	if got := Snapshot().ActivityDBPath; got != want {
-		t.Fatalf("ActivityDBPath = %q after load with no ACTIVITY_DB_PATH set, want %q — "+
-			"the persisted setting was destroyed by applyEnvAuthoritativeConfig", got, want)
-	}
-}
-
-// TestActivityDBPath_EnvStillWinsOverBlob guards the other direction. The operator
-// lever must not regress: when ACTIVITY_DB_PATH is set in the unit file it beats
-// whatever the blob holds, which is how production currently pins the activity DB.
-func TestActivityDBPath_EnvStillWinsOverBlob(t *testing.T) {
-	resetViper(t)
-	t.Setenv("ACTIVITY_DB_PATH", "/var/lib/audiobook-organizer/activity-v2.sqlite")
-	InitConfig()
-
-	c := &Config{ActivityDBPath: "/from/the/blob.sqlite"}
-	applyEnvAuthoritativeConfig(c)
-
-	if c.ActivityDBPath != "/var/lib/audiobook-organizer/activity-v2.sqlite" {
-		t.Fatalf("ActivityDBPath = %q, want the environment value — "+
-			"a systemd Environment= line must override the blob", c.ActivityDBPath)
-	}
-}
-
-// TestActivityBackend_BlobStillCannotOverrideTheRollbackLever pins the deliberate
-// asymmetry between the two activity keys, which is easy to "tidy up" into a bug.
-//
-// activity_db_path moved to envSupplied() so the UI can own it. activity_backend must
-// NOT: it is the OOM rollback lever from the 2026-09-07 SQLite incident, and an
-// operator who pulls the env var to stop an OOM loop must not have a restored blob
-// re-engage SQLite underneath them. With the environment silent the applied value
-// is the registered "pebble" default, so the blob's choice is replaced, not kept.
-func TestActivityBackend_BlobStillCannotOverrideTheRollbackLever(t *testing.T) {
+// TestActivityBackend_BlobCannotSelectTheBackend: with the environment silent,
+// the applied value is the registered "pebble" default, so a blob restored from
+// before 01-P75 that still says "sqlite" is replaced rather than kept. A stored
+// blob is not something the operator can see or edit, so it must never be what
+// stops startup; a config file or the environment is (see the next test).
+func TestActivityBackend_BlobCannotSelectTheBackend(t *testing.T) {
 	resetViper(t)
 	InitConfig() // no ACTIVITY_BACKEND in the environment
 
@@ -130,5 +70,74 @@ func TestActivityBackend_BlobStillCannotOverrideTheRollbackLever(t *testing.T) {
 	if c.ActivityBackend != "pebble" {
 		t.Fatalf("ActivityBackend = %q, want \"pebble\" — the blob must not be able to select "+
 			"the activity backend when the operator's environment is silent", c.ActivityBackend)
+	}
+}
+
+// TestActivityBackend_SQLiteFromConfFailsValidate is the fail-loud guarantee of
+// 01-P75: a conf that still says activity_backend: sqlite, in the config file or
+// the environment, loads into the field and is then refused by Validate (which
+// runs at startup and on every PUT) with a message saying what to do. It must
+// never load quietly and run on Pebble.
+func TestActivityBackend_SQLiteFromConfFailsValidate(t *testing.T) {
+	t.Run("config file", func(t *testing.T) {
+		resetViper(t)
+		t.Setenv("ACTIVITY_BACKEND", "")
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("activity_backend: sqlite\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		viper.SetConfigFile(path)
+		if err := viper.ReadInConfig(); err != nil {
+			t.Fatal(err)
+		}
+		InitConfig()
+		assertSQLiteRefused(t, Snapshot())
+	})
+	t.Run("environment", func(t *testing.T) {
+		resetViper(t)
+		t.Setenv("ACTIVITY_BACKEND", "sqlite")
+		InitConfig()
+		c := Snapshot()
+		// The blob overlay must not hide it either: the environment wins.
+		c.ActivityBackend = "pebble"
+		applyEnvAuthoritativeConfig(&c)
+		assertSQLiteRefused(t, c)
+	})
+}
+
+func assertSQLiteRefused(t *testing.T, c Config) {
+	t.Helper()
+	if c.ActivityBackend != "sqlite" {
+		t.Fatalf("ActivityBackend = %q, want the conf's \"sqlite\" to reach the field so it can be refused", c.ActivityBackend)
+	}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted activity_backend: sqlite; startup would run on Pebble with the conf ignored")
+	}
+	if !strings.Contains(err.Error(), "activity_backend: sqlite is no longer supported") {
+		t.Fatalf("Validate error does not name the removed backend: %v", err)
+	}
+}
+
+// TestValidateActivityBackend pins the accepted values: empty (a config that
+// predates the setting) and "pebble", in any case and padding. Everything else
+// is an error, "sqlite" with its own message.
+func TestValidateActivityBackend(t *testing.T) {
+	for _, v := range []string{"", "pebble", "PEBBLE", " pebble "} {
+		if err := ValidateActivityBackend(v); err != nil {
+			t.Errorf("ValidateActivityBackend(%q) = %v, want nil", v, err)
+		}
+	}
+	for _, v := range []string{"sqlite", " SQLite "} {
+		err := ValidateActivityBackend(v)
+		if err == nil || !strings.Contains(err.Error(), "sqlite is no longer supported") {
+			t.Errorf("ValidateActivityBackend(%q) = %v, want the sqlite-removed error", v, err)
+		}
+	}
+	for _, v := range []string{"pebbel", "nutsdb", "dual"} {
+		err := ValidateActivityBackend(v)
+		if err == nil || !strings.Contains(err.Error(), "is not a supported value") {
+			t.Errorf("ValidateActivityBackend(%q) = %v, want the unsupported-value error", v, err)
+		}
 	}
 }

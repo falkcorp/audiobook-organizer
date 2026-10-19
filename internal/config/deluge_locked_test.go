@@ -1,7 +1,7 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 // The five Deluge connection settings are config/env-authoritative (owner
 // decision 2026-10-11): a value the environment (DELUGE_*) or the server's config
@@ -248,24 +248,24 @@ func TestDelugeLock_EnvBeatsConfigFile(t *testing.T) {
 }
 
 // PUT /config on a locked Deluge key is handled exactly like a locked
-// activity_db_move_on_change (the existing env-locked toggle): accepted and
+// activity_backend (the other env-locked setting): accepted and
 // persisted for an interactive session -- the lock is advisory at the API -- and then
 // overridden by the supplied value on the next load.
 func TestDelugeLock_PutIsHandledLikeOtherLockedSettings(t *testing.T) {
 	setAllDelugeEnv(t)
-	t.Setenv("ACTIVITY_DB_MOVE_ON_CHANGE", "true")
+	t.Setenv("ACTIVITY_BACKEND", "pebble")
 	delugeInitConfig(t, "")
 	store := newMockSettingsStore()
 	us := NewUpdateService(store)
 	ctx := auth.WithMethod(context.Background(), auth.MethodSession)
 
-	if !slices.Contains(EnvLockedSettings(), "activity_db_move_on_change") {
+	if !slices.Contains(EnvLockedSettings(), "activity_backend") {
 		t.Fatal("precondition: the comparison setting must be locked")
 	}
-	statusOther, respOther := us.UpdateConfig(ctx, map[string]any{"activity_db_move_on_change": false})
+	statusOther, respOther := us.UpdateConfig(ctx, map[string]any{"activity_backend": "pebble"})
 	statusDeluge, respDeluge := us.UpdateConfig(ctx, map[string]any{"deluge_web_url": delugeStoredURL})
 	if statusDeluge != statusOther || statusDeluge != http.StatusOK {
-		t.Fatalf("PUT of a locked deluge key returned %d (%v); a locked activity_db_move_on_change returned %d (%v) -- must match and be accepted",
+		t.Fatalf("PUT of a locked deluge key returned %d (%v); a locked activity_backend returned %d (%v) -- must match and be accepted",
 			statusDeluge, respDeluge["error"], statusOther, respOther["error"])
 	}
 	blob, err := store.GetSetting("config_blob")
@@ -498,14 +498,11 @@ func TestDelugeLock_EnvFalseBeatsStoredTrue(t *testing.T) {
 // Deluge keys only.
 func TestDelugeLock_ConfigFileDoesNotLockNonDelugeKeys(t *testing.T) {
 	clearDelugeEnv(t)
-	t.Setenv("ACTIVITY_DB_PATH", "")
-	t.Setenv("ACTIVITY_DB_MOVE_ON_CHANGE", "")
 	t.Setenv("ACTIVITY_BACKEND", "")
 	t.Setenv("DATABASE_PATH", "")
-	delugeInitConfig(t, "activity_db_path: /srv/activity-file.sqlite\nactivity_db_move_on_change: true\n"+
-		"activity_backend: sqlite\ndatabase_path: /srv/db-file\n")
+	delugeInitConfig(t, "activity_backend: pebble\ndatabase_path: /srv/db-file\n")
 
-	for _, k := range []string{"activity_db_path", "activity_db_move_on_change", "activity_backend", "database_path"} {
+	for _, k := range []string{"activity_backend", "database_path"} {
 		if slices.Contains(EnvLockedSettings(), k) {
 			t.Errorf("%s was reported locked by the config file", k)
 		}
@@ -948,7 +945,6 @@ func TestSaveConfigToDatabase_SecondSaveNeverLosesToTheFirst(t *testing.T) {
 // before taking it.
 func TestSaveConfigToDatabase_ConcurrentSavesLeaveTheNewestBlob(t *testing.T) {
 	clearDelugeEnv(t)
-	t.Setenv("ACTIVITY_DB_PATH", "")
 	delugeInitConfig(t, "")
 	Mutate(func(c *Config) { c.DatabasePath = ""; c.RootDir = "" })
 	store := &slowStore{inner: newMockSettingsStore()}

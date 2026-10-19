@@ -1,7 +1,7 @@
 // file: internal/pathutil/database_dir_skipped_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c3d9e15-4b82-46a0-91fe-25d8b0a6c374
-// last-edited: 2026-09-09
+// last-edited: 2026-10-19
 
 package pathutil
 
@@ -50,25 +50,6 @@ func TestDatabaseDirSkipped_WhenItHasNoDot(t *testing.T) {
 	}
 }
 
-// TestActivityDBDirSkipped_WhenConfiguredWithoutADot covers the sibling gap.
-//
-// TestActivityDBDirIsSkippedByLibraryWalks already pins the DEFAULT location
-// ({RootDir}/.activity) and states outright that it is safe "only because the
-// dot prefix makes every library walk skip it." But activity_db_path is
-// operator- and UI-settable, so that test guards a default nobody is obliged to
-// keep, and nothing guarded the configured value.
-func TestActivityDBDirSkipped_WhenConfiguredWithoutADot(t *testing.T) {
-	noDotDir := filepath.Join(dbTestRoot, "activity")
-
-	if ShouldSkipDir(dbTestRoot, noDotDir, AppDirs{}) {
-		t.Fatal("control broken: a non-dot directory is skipped with an empty AppDirs")
-	}
-	if !ShouldSkipDir(dbTestRoot, noDotDir, AppDirs{ActivityDBDir: noDotDir}) {
-		t.Errorf("ShouldSkipDir(%q) = false; a configured activity-database directory "+
-			"must be excluded whatever it is named", noDotDir)
-	}
-}
-
 // TestDatabaseDirEqualToRootIsIgnored guards the failure mode that is far worse
 // than walking the database: skipping the entire library.
 //
@@ -82,7 +63,6 @@ func TestDatabaseDirEqualToRootIsIgnored(t *testing.T) {
 
 	for name, app := range map[string]AppDirs{
 		"database dir == root": {DatabaseDir: dbTestRoot},
-		"activity dir == root": {ActivityDBDir: dbTestRoot},
 		"database dir above root": {
 			DatabaseDir: filepath.Dir(dbTestRoot),
 		},
@@ -108,8 +88,8 @@ func TestDatabaseDirEqualToRootIsIgnored(t *testing.T) {
 func TestEmptyDatabaseDirMatchesNothing(t *testing.T) {
 	book := filepath.Join(dbTestRoot, "Some Author", "Some Title")
 
-	if ShouldSkipDir(dbTestRoot, book, AppDirs{DatabaseDir: "", ActivityDBDir: ""}) {
-		t.Error("an empty DatabaseDir/ActivityDBDir must match nothing; it just " +
+	if ShouldSkipDir(dbTestRoot, book, AppDirs{DatabaseDir: ""}) {
+		t.Error("an empty DatabaseDir must match nothing; it just " +
 			"excluded ordinary library content")
 	}
 	// A relative value must be dropped too — it cannot be compared against the

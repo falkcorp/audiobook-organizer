@@ -1,7 +1,7 @@
 // file: internal/config/unknown_keys.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6a4394fd-1b48-48cc-9b88-0642eff0623f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-19
 
 package config
 
@@ -21,7 +21,7 @@ import (
 // GET response still cannot be PUT back as-is: it also carries database_type,
 // which immutableFieldKeys refuses whenever it is present (the web import
 // filter drops it). Keep this list in sync with withEnvLocks.
-var readOnlyConfigKeys = []string{"env_locked", "setting_locks", "activity_db_resolved_path"}
+var readOnlyConfigKeys = []string{"env_locked", "setting_locks"}
 
 var (
 	jsonUnmarshalerType = reflect.TypeFor[json.Unmarshaler]()

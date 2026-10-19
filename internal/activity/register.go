@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.12.1
-// last-edited: 2026-10-15
+// version: 2.0.0
+// last-edited: 2026-10-19
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -12,16 +12,20 @@
 //     NutsDB. Activity is now Pebble-only — NutsDB is no longer opened here at
 //     all, which also removes the process-lifetime NutsDB Close() goroutine
 //     from this path (see TODO.md NUTSDB-CLOSE-GOROUTINE-LEAK).
+//
+// The SQLite activity backend, its Pebble-to-SQLite migration wrapper and the
+// activity-sql-migration Starter were deleted in 01-P75 (owner decision D11;
+// the last build with them is tagged activity-sqlite-last). An
+// activity_backend of "sqlite" now fails the activitystore build with a
+// message instead of being served by Pebble behind the operator's back.
 package activity
 
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -47,7 +51,7 @@ func init() {
 			// database/store_capability.go.
 			s := database.NewPebbleActivityStoreFromStore(store)
 			if s == nil {
-				// Non-Pebble backend (test double, SQLite) — return nil pointer;
+				// Non-Pebble main store (a test double) — return nil pointer;
 				// the activitystore Build treats nil as a hard error (no fallback backend).
 				return (*database.PebbleActivityStore)(nil), nil
 			}
@@ -78,97 +82,23 @@ func init() {
 				return nil, fmt.Errorf("activitystore: DatabasePath not configured")
 			}
 
+			// Validate before anything else: a conf that still names the
+			// removed SQLite backend must stop here with the reason, even on a
+			// host whose Pebble store is fine. Config.Validate refuses the same
+			// values at startup; this is the backstop for any path that builds
+			// the container without it (tests, tools).
+			if err := config.ValidateActivityBackend(cfg.ActivityBackend); err != nil {
+				return nil, fmt.Errorf("activitystore: %w", err)
+			}
+
 			pebbleStore, hasPebble := serviceregistry.TryGet[*database.PebbleActivityStore](c, "pebble-activitystore")
 			if !hasPebble || pebbleStore == nil {
 				// No more NutsDB fallback — a missing Pebble backend is now a
 				// hard error rather than a degraded mode.
 				return nil, fmt.Errorf("activitystore: pebble activity store not available")
 			}
-
-			// ActivityBackend selects the store. Anything but "sqlite" (the
-			// "pebble" default, or an empty value from a config that predates
-			// it) is Pebble-only, with no SQLite opened. "sqlite" is the legacy
-			// opt-in being retired (P75): it engages the SQLite backend behind a
-			// migration wrapper, where writes dual to both and reads stay on
-			// Pebble until the backfill copies history + verifies parity, then
-			// flip (see activity-sql-migration).
-			backend := strings.ToLower(strings.TrimSpace(cfg.ActivityBackend))
-			if backend != "sqlite" {
-				if !recognisedActivityBackend(backend) {
-					logger.New("activity").Warn("unrecognised ActivityBackend value %q; using the Pebble activity store", backend)
-				}
-				slog.Info("[activity] Pebble-only activity store wired", "activity_backend", backend)
-				return pebbleStore, nil
-			}
-
-			sqlPath := cfg.ResolveActivityDBPath()
-
-			// The configured path says where the database should be; the recorded
-			// one says where it actually is. When they disagree there is an
-			// existing database somewhere else, and doing nothing about it would
-			// silently start a fresh log while the history sat unreachable at the
-			// old path — the failure mode this whole path is designed around.
-			relocateActivityDBIfNeeded(pebbleStore, sqlPath, cfg.ActivityDBMoveOnChange)
-
-			sqlStore, err := database.OpenSQLiteActivityStore(sqlPath)
-			if err != nil {
-				// Fail OPEN to Pebble: a SQLite open failure must not take the
-				// activity log offline. Loud, then degrade to the proven backend.
-				slog.Error("[activity] SQLite activity store failed to open — falling back to Pebble-only",
-					"path", sqlPath, "err", err)
-				return pebbleStore, nil
-			}
-			// Record where the database actually is, now that it has opened
-			// cleanly. This is what the next boot compares the configured path
-			// against; writing it before the open would claim a location that
-			// might not work.
-			if err := pebbleStore.SetLastActivityDBPath(sqlPath); err != nil {
-				// Not fatal, but it does disarm the relocation check: a later
-				// path change would start an empty database instead of moving
-				// this one, so it must not pass unnoticed.
-				slog.Error("[activity] could not record the activity database location — "+
-					"a future path change will NOT relocate this database",
-					"path", sqlPath, "err", err)
-			}
-
-			readSecondary := pebbleStore.SQLBackfillDone()
-			slog.Info("[activity] SQLite activity migration wired",
-				"sqlite_path", sqlPath, "read_secondary", readSecondary)
-			return database.NewMigratingActivityStore(pebbleStore, sqlStore, readSecondary), nil
-		},
-	})
-
-	// activity-sql-migration: a Starter that runs the one-time Pebble→SQLite
-	// backfill in the background and flips reads to SQLite once per-tier parity
-	// is verified. A no-op when the store is not a migration wrapper (pebble
-	// escape hatch, or a SQLite-open fallback) or when the migration already
-	// completed on a prior boot.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name: "activity-sql-migration",
-		Needs: []string{
-			serviceregistry.KeyActivityStore,
-			serviceregistry.KeyStore,
-			// KeyOpHub is declared as a Need, not fetched with TryGet, because
-			// neither Get nor TryGet builds on demand — both read c.built — so
-			// Needs is the ONLY thing that orders the hub ahead of this service.
-			// TryGet without it would silently hand back nil on an unlucky build
-			// order and cost every live status update with nothing to show for it.
-			serviceregistry.KeyOpHub,
-		},
-		Groups: []string{serviceregistry.KeyActivity},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
-			mig, _ := store.(*database.MigratingActivityStore)
-			// The main store is what carries the operations_v2 rows the run
-			// reports its status to. Optional by design: a store that does not
-			// implement the three-method recorder leaves ops nil and the
-			// migration runs exactly as it did before, just silently.
-			ops, _ := serviceregistry.Get[any](c, serviceregistry.KeyStore).(migrationOpsRecorder)
-			// Fetched as `any` and asserted, so this package does not import
-			// internal/operations/registry just to name *EventHub. The row is
-			// correct without the hub; it only stops updating live.
-			bus, _ := serviceregistry.Get[any](c, serviceregistry.KeyOpHub).(migrationEventPublisher)
-			return &sqlMigrationStarter{mig: mig, ops: ops, bus: bus}, nil
+			slog.Info("[activity] Pebble activity store wired")
+			return pebbleStore, nil
 		},
 	})
 
@@ -177,8 +107,8 @@ func init() {
 		Needs:  []string{serviceregistry.KeyActivityStore},
 		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			// Use the ActivityStorer interface — the activitystore may be any
-			// ActivityStorer implementation (Pebble, SQL, or the migrating wrapper).
+			// Use the ActivityStorer interface: production wires the Pebble
+			// store, and tests override KeyActivityStore with their own doubles.
 			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
 			return NewService(store), nil
 		},
@@ -196,12 +126,4 @@ func init() {
 			return NewWriter(activitySvc.Store(), 10000), nil
 		},
 	})
-}
-
-// recognisedActivityBackend reports whether v (already lower-cased and
-// trimmed) is a documented ActivityBackend value. Anything else is served by
-// Pebble, so a retired or mistyped value must be called out rather than
-// silently accepted.
-func recognisedActivityBackend(v string) bool {
-	return v == "" || v == "pebble" || v == "sqlite"
 }

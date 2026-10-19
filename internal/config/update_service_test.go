@@ -1,7 +1,7 @@
 // file: internal/config/update_service_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: e5f6g7h8-i9j0-k1l2-m3n4-o5p6q7r8s9t0
-// last-edited: 2026-10-07
+// last-edited: 2026-10-19
 
 package config
 
@@ -167,10 +167,9 @@ func TestUpdateService_ReadOnlyAnnotationsIgnored(t *testing.T) {
 	defer func() { AppConfig.RootDir = originalDir }()
 
 	err := service.ApplyUpdates(sessionCtx(), map[string]any{
-		"root_dir":                  "/annotated",
-		"env_locked":                []any{"database_path"},
-		"setting_locks":             map[string]any{"database_path": "flag --db"},
-		"activity_db_resolved_path": "/somewhere/activity.db",
+		"root_dir":      "/annotated",
+		"env_locked":    []any{"database_path"},
+		"setting_locks": map[string]any{"database_path": "flag --db"},
 	})
 	if err != nil {
 		t.Fatalf("expected the read-only annotations to be ignored, got %v", err)

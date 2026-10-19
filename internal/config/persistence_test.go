@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-19
 
@@ -1281,6 +1281,76 @@ func TestConfig_LoadsWithRemovedReviewFlag(t *testing.T) {
 		msg, ok := removedConfigKeyMessage("review_metadata_server_query")
 		require.True(t, ok, "a PUT or a config file carrying the key must get the removal message")
 		assert.Contains(t, msg, "view=page")
+	})
+}
+
+// A stored config written while the SQLite activity backend existed carries
+// activity_db_path and activity_db_move_on_change, and may still say
+// activity_backend "sqlite". It must load without error and keep every other
+// setting: the two location keys are ignored with the removed-setting warning,
+// and the stored backend is replaced by the registered "pebble" default (the
+// environment, not a blob, is what may name the backend), so Validate passes.
+// Only a config file or the environment saying "sqlite" stops startup.
+func TestConfig_LoadsWithRemovedActivityDBSettings(t *testing.T) {
+	t.Run("blob", func(t *testing.T) {
+		resetConfigTestState()
+		t.Cleanup(resetConfigTestState)
+		t.Setenv("ACTIVITY_BACKEND", "")
+		// Boot order: InitConfig registers the activity_backend default before
+		// the stored config is loaded over it.
+		InitConfig()
+
+		blob := `{"activity_backend":"sqlite","activity_db_path":"/srv/library/.activity/activity.sqlite",` +
+			`"activity_db_move_on_change":false,"root_dir":"/srv/library","bulk_apply_max_items":123}`
+		store := mocks.NewMockStore(t)
+		setupMigrationExpectations(store)
+		store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		store.EXPECT().GetAllSettings().Return([]database.Setting{
+			{Key: "config_blob", Value: blob, Type: "string"},
+		}, nil).Once()
+
+		require.NoError(t, LoadConfigFromDatabase(store))
+		assert.Equal(t, "/srv/library", AppConfig.RootDir)
+		assert.Equal(t, 123, AppConfig.BulkApplyMaxItems)
+		assert.Equal(t, "pebble", AppConfig.ActivityBackend)
+		assert.NoError(t, ValidateActivityBackend(AppConfig.ActivityBackend))
+	})
+
+	t.Run("legacy rows", func(t *testing.T) {
+		resetConfigTestState()
+		t.Cleanup(resetConfigTestState)
+		logs := captureRemovedKeyLogs(t)
+
+		store := mocks.NewMockStore(t)
+		setupMigrationExpectations(store)
+		store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		store.EXPECT().GetAllSettings().Return([]database.Setting{
+			{Key: "root_dir", Value: "/srv/library", Type: "string"},
+			{Key: "activity_db_path", Value: "/srv/library/.activity/activity.sqlite", Type: "string"},
+			{Key: "activity_db_move_on_change", Value: "false", Type: "bool"},
+		}, nil).Once()
+
+		require.NoError(t, LoadConfigFromDatabase(store))
+		assert.Equal(t, "/srv/library", AppConfig.RootDir)
+		for _, key := range []string{"activity_db_path", "activity_db_move_on_change"} {
+			assert.Contains(t, logs.String(), "key="+key)
+		}
+		assert.Contains(t, logs.String(), "removed setting is ignored")
+	})
+
+	t.Run("a config update carrying them is refused", func(t *testing.T) {
+		for _, key := range []string{"activity_db_path", "activity_db_move_on_change"} {
+			restoreAppConfig(t)
+			ms, blobs := ladderTestStore(t)
+			status, resp := NewUpdateService(ms).UpdateConfig(context.Background(),
+				map[string]any{key: "x", "root_dir": "/lib"})
+			require.Equal(t, http.StatusBadRequest, status, "%s: resp = %v", key, resp)
+			msg, _ := resp["error"].(string)
+			assert.Contains(t, msg, key)
+			assert.Contains(t, msg, "removed with the SQLite activity backend")
+			assert.Empty(t, *blobs, "a refused PUT must persist nothing")
+			assert.NotEqual(t, "/lib", Snapshot().RootDir, "a refused PUT must apply nothing")
+		}
 	})
 }
 

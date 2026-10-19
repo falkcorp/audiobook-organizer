@@ -1,7 +1,7 @@
 // file: internal/config/database_path_precedence_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b2e9c14-7a38-4d6f-9e21-c0a4b7d3e582
-// last-edited: 2026-09-09
+// last-edited: 2026-10-19
 
 package config
 
@@ -124,8 +124,8 @@ func TestDatabasePath_UnsuppliedFlagLeavesTheBlobAlone(t *testing.T) {
 //
 // Row 1 is why a value-based guard is wrong: IsSet says "nobody set this" while
 // Get hands back a real-looking path. Row 2 is the trap for a future reader —
-// adding one SetDefault line for database_path, mirroring the one InitConfig
-// already registers for activity_db_path, flips IsSet permanently true (breaking
+// adding one SetDefault line for database_path, of the kind InitConfig
+// registers for most other keys, flips IsSet permanently true (breaking
 // an IsSet guard) and makes Get return the EMPTY default rather than the flag's,
 // because SetDefault outranks a bound flag's default. flagSupplied is immune to
 // both because it never consults viper at all.

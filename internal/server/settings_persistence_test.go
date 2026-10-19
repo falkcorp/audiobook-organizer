@@ -1,7 +1,7 @@
 // file: internal/server/settings_persistence_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package server
 
@@ -363,7 +363,7 @@ func TestConfigRoundTrip_StoredBlobWithRemovedKeys(t *testing.T) {
 
 	// The read-only annotations the handler grafts onto the GET body, plus
 	// database_type, which UpdateConfig refuses in any payload.
-	for _, k := range []string{"env_locked", "setting_locks", "activity_db_resolved_path", "database_type"} {
+	for _, k := range []string{"env_locked", "setting_locks", "database_type"} {
 		delete(got.Data.Config, k)
 	}
 	body, err := json.Marshal(got.Data.Config)

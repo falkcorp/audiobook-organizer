@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/app_dir_guard_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7c94e0a6-5d31-4b82-9e08-3f61b7d425ac
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,7 +53,7 @@ func withPluginAppDirs(t *testing.T, root string, enabled bool) {
 		// the empty case while still passing.
 		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
 		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
-		if got := appdirs.Current(); got != appdirs.ClearedBaseline() {
+		if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
 			t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 		}
 	}

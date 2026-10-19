@@ -1,5 +1,5 @@
 // file: internal/config/config_test.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-19
 
@@ -632,37 +632,32 @@ func TestInitConfig_AcoustIDAPIKeyFromEnv(t *testing.T) {
 	assert.Equal(t, "test-acoustid-key", Snapshot().AcoustIDAPIKey)
 }
 
-// TestInitConfig_ActivityBackendFromEnv locks the prod rollback lever: the
-// activity store backend must be forceable via ACTIVITY_BACKEND without editing
-// config.yaml (which is root:600 on prod and not reachable through the deploy's
-// NOPASSWD levers). AutomaticEnv() is not active in this codebase, so this only
-// works if config.go has an explicit viper.BindEnv for the key. Regression guard
-// for the 2026-09-07 SQLite-migration OOM incident, where a Pebble→SQLite
-// backfill OOM-looped prod and =pebble was the only safe stop-gap.
+// TestInitConfig_ActivityBackendFromEnv locks the environment binding that
+// production relies on: its unit file sets ACTIVITY_BACKEND=pebble, and
+// AutomaticEnv() is not active in this codebase, so the value only reaches the
+// field through config.go's explicit viper.BindEnv. Pebble is the only
+// activity backend since 01-P75; the binding stays so that the production
+// value keeps loading and a leftover "sqlite" is seen and refused by Validate
+// instead of being invisible.
 func TestInitConfig_ActivityBackendFromEnv(t *testing.T) {
 	viper.Reset()
 	InitConfig()
-	assert.Equal(t, "pebble", Snapshot().ActivityBackend, "default backend is pebble (Pebble-only path)")
+	assert.Equal(t, "pebble", Snapshot().ActivityBackend, "default backend is pebble")
 
 	t.Setenv("ACTIVITY_BACKEND", "pebble")
-	t.Setenv("ACTIVITY_DB_PATH", "/tmp/activity-test.sqlite")
 	viper.Reset()
 	InitConfig()
 	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
 		"ACTIVITY_BACKEND did not reach Config.ActivityBackend — check viper.BindEnv")
-	assert.Equal(t, "/tmp/activity-test.sqlite", Snapshot().ActivityDBPath,
-		"ACTIVITY_DB_PATH did not reach Config.ActivityDBPath — check viper.BindEnv")
 
 	// The DB-persisted config blob replaces the whole struct at boot
 	// (LoadConfigFromDatabase). Simulate that wipe, then confirm the
-	// env-authoritative re-apply restores the rollback lever — without this the
-	// systemd env would be silently dropped and SQLite would re-engage.
-	Mutate(func(c *Config) { c.ActivityBackend = ""; c.ActivityDBPath = "" })
+	// env-authoritative re-apply restores the environment value.
+	Mutate(func(c *Config) { c.ActivityBackend = "" })
 	ApplyEnvAuthoritativeConfig()
 	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
 		"ACTIVITY_BACKEND dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
-	assert.Equal(t, "/tmp/activity-test.sqlite", Snapshot().ActivityDBPath,
-		"ACTIVITY_DB_PATH dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
+	assert.NoError(t, ValidateActivityBackend(Snapshot().ActivityBackend))
 }
 
 // TestInitConfig_RetiredDownloadClientKeysAreIgnored pins that a config file
