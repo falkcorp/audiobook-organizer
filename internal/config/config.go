@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.164.2
+// version: 1.165.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-21
 
@@ -1632,6 +1632,35 @@ type Config struct {
 	// (§1.7.1). Placeholder until Phase 3 owns real libraries.
 	ABSDefaultLibraryID string `json:"abs_default_library_id"`
 
+	// ── Invitation email and guest access (invite_config.go) ─────────────────
+	//
+	// ENVIRONMENT-ONLY and `json:"-"`: never in GET /config, never in the blob,
+	// refused by PUT /config. Re-applied after the blob load by
+	// applyEnvAuthoritativeConfig (applyInviteEnv).
+	//
+	// SMTP transport for invitation email. Unconfigured (no host or no From)
+	// means no mail is sent and the admin copies the link by hand. A username
+	// is optional: plain SMTP to a local relay with no AUTH is supported.
+	SMTPHost     string `json:"-" mapstructure:"smtp_host"`
+	SMTPPort     int    `json:"-" mapstructure:"smtp_port"`
+	SMTPUsername string `json:"-" mapstructure:"smtp_username"`
+	SMTPPassword string `json:"-" mapstructure:"smtp_password"`
+	SMTPFrom     string `json:"-" mapstructure:"smtp_from"`
+	// PublicBaseURL is the origin invitation links point at; falls back to
+	// OAuthRedirectBaseURL, then the server's external URL (InviteBaseURL).
+	PublicBaseURL string `json:"-" mapstructure:"public_base_url"`
+	// The SHARED guest Cloudflare Access service token handed to invitees as
+	// the CF-Access-Client-Id / CF-Access-Client-Secret header pair. It carries
+	// no identity; every guest still signs in as themselves.
+	InviteCFAccessClientID     string `json:"-" mapstructure:"invite_cf_access_client_id"`
+	InviteCFAccessClientSecret string `json:"-" mapstructure:"invite_cf_access_client_secret"`
+	// Optional Cloudflare Access guest-policy sync: on accept, the invitee's
+	// email is appended to the include list of this ONE reusable Access policy.
+	// Inert unless all three are set (GuestPolicySyncConfigured).
+	CFAccountID      string `json:"-" mapstructure:"cf_account_id"`
+	CFGuestsPolicyID string `json:"-" mapstructure:"cf_guests_policy_id"`
+	CFPolicyAPIToken string `json:"-" mapstructure:"cf_policy_api_token"`
+
 	// Memory management
 	// CacheInvalidateOnBookUpdate controls whether updating a book's metadata
 	// invalidates the list/facets caches. Defaults to false so caches stay
@@ -2388,6 +2417,8 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	if viper.IsSet("abs_default_library_id") {
 		c.ABSDefaultLibraryID = viper.GetString("abs_default_library_id")
 	}
+	// Invitation email and guest access: environment-only, never in the blob.
+	applyInviteEnv(c)
 	// Activity-log backend name. Env-authoritative for the same reason as the
 	// ABS keys: LoadConfigFromDatabase replaces the whole struct with the persisted
 	// blob. The registered SetDefault keeps IsSet permanently true, so with the
@@ -2678,6 +2709,7 @@ func InitConfig() {
 	viper.BindEnv("owner_email", "OWNER_EMAIL")                               //nolint:errcheck
 
 	registerABSDefaults()
+	registerInviteDefaults()
 
 	// Transcription: remote faster-whisper server URL (env-authoritative).
 	viper.SetDefault("whisper_remote_url", "")
@@ -3538,6 +3570,9 @@ func InitConfig() {
 				},
 			},
 		}
+
+		// Invitation email and guest access (environment-only, json:"-").
+		applyInviteEnv(c)
 
 		// Managed external-tool lifecycle. These were hard-coded constants, so a
 		// config-file tools: section was ignored; they are now viper keys whose
