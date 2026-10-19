@@ -1,13 +1,15 @@
 // file: internal/database/pebble_store_fpwin_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 67f3605a-acce-4382-9555-a1a26ed37eb0
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package database
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,14 @@ import (
 // fpwinRaw builds a raw print of n frames whose bytes are distinguishable by tag.
 func fpwinRaw(tag byte, frames int) []byte {
 	return bytes.Repeat([]byte{tag, tag + 1, tag + 2, tag + 3}, frames)
+}
+
+// PathWindowRef is the ref for an untracked file, keyed by the SHA-256 of its
+// library-relative path. Tests only: no production path builds a "p:" ref yet,
+// so the constructor lives with the tests that plant them.
+func PathWindowRef(libraryRelPath string) FingerprintWindowRef {
+	sum := sha256.Sum256([]byte(libraryRelPath))
+	return FingerprintWindowRef("p:" + hex.EncodeToString(sum[:]))
 }
 
 func fpwinFixture(ref FingerprintWindowRef, kind FingerprintWindowKind, slot int, tag byte) *FingerprintWindow {

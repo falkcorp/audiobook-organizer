@@ -1,7 +1,7 @@
 // file: internal/database/search_rank_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f7c1e0a-9b2d-4e65-8a14-6d0c2b9e7f53
-// last-edited: 2026-09-25
+// last-edited: 2026-10-19
 
 package database
 
@@ -40,8 +40,6 @@ func TestSubstringSearchRank_Tiers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r, ok := SubstringSearchRank("id", tc.title, tc.narrator, tc.authorID, authors, "roll")
 			require.Equal(t, tc.wantOK, ok)
-			require.Equal(t, SubstringSearchMatches(tc.title, tc.narrator, tc.authorID, authors, "roll"), ok,
-				"rank and match predicates must agree on WHETHER a book matches")
 			if ok {
 				require.Equal(t, tc.wantTier, r.Tier)
 			}
@@ -143,31 +141,28 @@ func BenchmarkMemSearchBookIDs_OneChar(b *testing.B) {
 }
 
 // TestSubstringSearch_UnderscoreReadsAsSpace: a title that came from a file
-// name with underscores for spaces must match a query typed with spaces, in
-// both the match predicate and the ranker, and a query typed with underscores
-// must still match a spaced title.
+// name with underscores for spaces must match a query typed with spaces, and a
+// query typed with underscores must still match a spaced title.
 func TestSubstringSearch_UnderscoreReadsAsSpace(t *testing.T) {
 	title := "Arcane_Chef_2__A_LitRPG_Adventure"
 	r, ok := SubstringSearchRank("b2", title, nil, nil, nil, "arcane chef")
 	require.True(t, ok, "spaced query must match an underscored title")
 	require.Equal(t, SearchTierTitlePrefix, r.Tier)
-	require.True(t, SubstringSearchMatches(title, nil, nil, nil, "arcane chef"))
 
-	require.True(t, SubstringSearchMatches("Arcane Chef 2", nil, nil, nil, "arcane_chef"))
 	_, ok = SubstringSearchRank("b1", "Arcane Chef 2", nil, nil, nil, "arcane_chef")
 	require.True(t, ok)
 
 	// A double underscore (a colon in the source title) and "_ " both fold to
 	// ONE space, so a query that spells the words out still matches.
-	require.True(t, SubstringSearchMatches(title, nil, nil, nil, "arcane chef 2 a litrpg"))
-	require.True(t, SubstringSearchMatches("Rebel Stars_ Books 0-2", nil, nil, nil, "stars books"))
+	_, ok = SubstringSearchRank("b5", title, nil, nil, nil, "arcane chef 2 a litrpg")
+	require.True(t, ok)
 	_, ok = SubstringSearchRank("b4", "Rebel Stars_ Books 0-2", nil, nil, nil, "stars books")
 	require.True(t, ok)
 	// A trailing space in the query is not trimmed away.
-	require.False(t, SubstringSearchMatches("Scrolls", nil, nil, nil, "roll "))
+	_, ok = SubstringSearchRank("b6", "Scrolls", nil, nil, nil, "roll ")
+	require.False(t, ok)
 
 	narr := "Some_Reader"
-	require.True(t, SubstringSearchMatches("x", &narr, nil, nil, "some reader"))
 	_, ok = SubstringSearchRank("b3", "x", &narr, nil, nil, "some reader")
 	require.True(t, ok)
 }

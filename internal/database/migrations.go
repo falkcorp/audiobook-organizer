@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.53.0
+// version: 1.53.1
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 package database
 
@@ -593,19 +593,6 @@ func setVersion(store migrationStore, version int) error {
 	return store.SetUserPreference(dbVersionPreferenceKey, payload)
 }
 
-// recordMigration stores a migration record.
-//
-// The runner writes this key via commitMigrationBookkeeping so it lands in the
-// same batch as the version bump; this helper remains for callers that need the
-// record on its own.
-func recordMigration(store migrationStore, m Migration) error {
-	payload, err := migrationRecordPayload(m)
-	if err != nil {
-		return err
-	}
-	return store.SetUserPreference(migrationRecordKey(m.Version), payload)
-}
-
 // Migration implementations
 
 // migration001Up initializes the basic schema
@@ -757,32 +744,6 @@ func migration019Up(store migrationStore) error {
 	slog.Info("- Adding metadata_changes_history table for undo support")
 	// SQLite-only migration; no-op for PebbleStore.
 	return nil
-}
-
-// GetMigrationHistory returns all applied migrations
-func GetMigrationHistory(store migrationStore) ([]MigrationRecord, error) {
-	// Get all preferences that start with "migration_"
-	allPrefs, err := store.GetAllUserPreferences()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get preferences: %w", err)
-	}
-
-	records := []MigrationRecord{}
-	for _, pref := range allPrefs {
-		if len(pref.Key) > 10 && pref.Key[:10] == "migration_" {
-			if pref.Value == nil {
-				continue
-			}
-			var record MigrationRecord
-			if err := json.Unmarshal([]byte(*pref.Value), &record); err != nil {
-				slog.Warn("failed to parse migration record", "key", pref.Key, "error", err)
-				continue
-			}
-			records = append(records, record)
-		}
-	}
-
-	return records, nil
 }
 
 // migration020Up adds narrators and book_narrators tables

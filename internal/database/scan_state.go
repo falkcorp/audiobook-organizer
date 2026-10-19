@@ -1,7 +1,7 @@
 // file: internal/database/scan_state.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a846cd3-3757-482a-b4df-71e02cb47292
-// last-edited: 2026-10-16
+// last-edited: 2026-10-19
 
 package database
 
@@ -148,18 +148,6 @@ func (f BookFileCore) DeepScanExhausted() bool {
 // soft-deletes the losers, and the file it knows least about is exactly the one
 // that might make the pair a false match.
 func AnyProvisional(files []BookFile) bool {
-	for i := range files {
-		if files[i].IsProvisional() {
-			return true
-		}
-	}
-	return false
-}
-
-// AnyProvisionalCore is AnyProvisional over the lightweight projection. Both
-// exist because callers hold whichever the read path gave them, and a caller who
-// has to convert in order to ask is a caller who skips the check.
-func AnyProvisionalCore(files []BookFileCore) bool {
 	for i := range files {
 		if files[i].IsProvisional() {
 			return true

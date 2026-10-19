@@ -1,10 +1,10 @@
 // file: internal/database/embedding_f16_zstd_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f8a1b9c-d4e7-4a3f-b8c0-5e2d9f1a4b7c
 
 // T021 tests: float16+zstd vector encoding, dual-read compatibility, cosine-drift
 // property, compression-ratio assertion, and the re-encode idempotency contract.
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 package database
 
@@ -71,6 +71,17 @@ func TestFloat16SpecialValues(t *testing.T) {
 }
 
 // ─── Encoding version tests ───────────────────────────────────────────────────
+
+// encodeVectorV0 serialises a float32 slice to the legacy v0 wire format (raw
+// little-endian float32, no version header). It exists only to plant legacy
+// rows for the dual-read tests: no production path writes v0 any more.
+func encodeVectorV0(v []float32) []byte {
+	buf := make([]byte, len(v)*4)
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
+	}
+	return buf
+}
 
 // TestEncodeDecodeV0Compat verifies that a v0 blob (planted raw float32 LE, no
 // header) decodes correctly with decodeVector — the dual-read backward-compat path.
@@ -380,17 +391,6 @@ func TestEncodeDecodeV1_ReencodeIdempotent(t *testing.T) {
 		assert.InDelta(t, original[i], finalDecoded[i], 1e-2,
 			"re-encoded element %d: want %v, got %v", i, original[i], finalDecoded[i])
 	}
-}
-
-// ─── vectorEncodeRatio helper test ───────────────────────────────────────────
-
-// TestVectorEncodeRatio verifies the ratio helper returns a plausible value.
-func TestVectorEncodeRatio(t *testing.T) {
-	rng := rand.New(rand.NewSource(99))
-	v := randomUnitVector(rng, 3072)
-	ratio := vectorEncodeRatio(v)
-	assert.GreaterOrEqual(t, ratio, 1.8, "ratio helper must return at least 1.8× for a 3072-dim vector")
-	t.Logf("single 3072-dim vector ratio: %.2f×", ratio)
 }
 
 // ─── Existing tests: ensure v1 encoding does not break UpsertAndGet precision ─

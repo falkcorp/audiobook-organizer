@@ -1,14 +1,12 @@
 // file: internal/database/fingerprint_window.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c23e6967-5192-4584-a48c-2b5d89c2e887
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -157,14 +155,6 @@ type FingerprintWindowRef string
 // FileWindowRef is the ref for the book_file row with this ID.
 func FileWindowRef(fileID string) FingerprintWindowRef {
 	return FingerprintWindowRef("f:" + fileID)
-}
-
-// PathWindowRef is the ref for an untracked file, keyed by the SHA-256 of its
-// library-relative path. The caller normalizes the path (Unicode form, slash
-// direction) before calling; this hashes exactly the bytes it is given.
-func PathWindowRef(libraryRelPath string) FingerprintWindowRef {
-	sum := sha256.Sum256([]byte(libraryRelPath))
-	return FingerprintWindowRef("p:" + hex.EncodeToString(sum[:]))
 }
 
 // validate rejects a ref that would build an ambiguous key. The ID part must not

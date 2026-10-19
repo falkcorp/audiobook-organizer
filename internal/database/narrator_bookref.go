@@ -1,7 +1,7 @@
 // file: internal/database/narrator_bookref.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 36c225c3-b235-4aac-b164-0273255164fd
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package database
 
@@ -58,7 +58,7 @@ import (
 // is cheap. The book pass is the expensive one, and it runs once per op.
 //
 // Both passes read ONE snapshot, so a book written between them cannot be
-// half-seen. See getAllAuthorBookRefCountsPebble for the fail-open direction
+// half-seen. See getAllAuthorBookRefBucketsPebble for the fail-open direction
 // of a torn two-table read.
 
 // NarratorRefs is the answer to "what still refers to each narrator".

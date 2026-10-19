@@ -1,7 +1,7 @@
 // file: internal/database/settings.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8a7b6c5d-4e3f-2a1b-0c9d-8e7f6a5b4c3d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
-	"golang.org/x/crypto/argon2"
 )
 
 // ErrSettingNotFound is returned (wrapped) by GetSetting when the requested key
@@ -184,69 +183,6 @@ func HasEncryptedSettings(settings []Setting) bool {
 		}
 	}
 	return false
-}
-
-// argon2idParams holds the Argon2id tuning parameters used by DeriveKeyFromPassword.
-// These values follow the OWASP recommendation for interactive login scenarios
-// (time=1, memory=64MiB, threads=4) while producing a 32-byte key suitable
-// for AES-256.
-//
-// Security note: DeriveKeyFromPassword should only be used as a fallback KDF
-// when a pre-generated random key is not available. The recommended path is
-// InitEncryption with a random key stored in a file with mode 0600.
-const (
-	argon2idTime    = 1
-	argon2idMemory  = 64 * 1024 // 64 MiB
-	argon2idThreads = 4
-	argon2idKeyLen  = 32 // AES-256
-	argon2idSaltLen = 16
-)
-
-// appKDFSalt is a fixed, application-specific salt for DeriveKeyFromPassword.
-// Fixed so the same password always derives the same AES-256 key, enabling
-// decrypt of previously encrypted data. Still prevents cross-application
-// rainbow tables. Use DeriveKeyFromPasswordWithSalt for per-credential salts.
-var appKDFSalt = []byte("audiobook-org-v1") // 16 bytes = argon2idSaltLen
-
-// DeriveKeyFromPassword derives a 32-byte AES key from a password using
-// Argon2id, which is resistant to brute-force and side-channel attacks.
-//
-// Uses a fixed application salt so the derivation is deterministic: the same
-// password always produces the same AES-256 key, enabling decryption of
-// previously encrypted data. This prevents cross-application rainbow tables
-// while remaining reproducible across process restarts.
-//
-// Use DeriveKeyFromPasswordWithSalt when a per-credential random salt is
-// needed (e.g. storing hashed credentials where you control the salt storage).
-//
-// Replaces the previous implementation that used plain SHA-256 (no salt,
-// no work factor) — see security alert #132.
-func DeriveKeyFromPassword(password string) []byte {
-	return argon2.IDKey([]byte(password), appKDFSalt, argon2idTime, argon2idMemory, argon2idThreads, argon2idKeyLen)
-}
-
-// DeriveKeyFromPasswordWithSalt derives a 32-byte AES key from a password and
-// a caller-supplied salt using Argon2id. The salt must be exactly argon2idSaltLen
-// bytes. This function is deterministic: the same (password, salt) pair always
-// produces the same key, enabling decryption of data encrypted with a previous
-// call to DeriveKeyFromPassword.
-//
-// Usage pattern:
-//
-//	salt, key := GenerateArgon2Salt(), DeriveKeyFromPasswordWithSalt(password, salt)
-//	// persist hex.EncodeToString(salt) alongside the encrypted payload
-func DeriveKeyFromPasswordWithSalt(password string, salt []byte) []byte {
-	return argon2.IDKey([]byte(password), salt, argon2idTime, argon2idMemory, argon2idThreads, argon2idKeyLen)
-}
-
-// GenerateArgon2Salt returns a cryptographically random salt for use with
-// DeriveKeyFromPasswordWithSalt. Returns an error only when the OS RNG fails.
-func GenerateArgon2Salt() ([]byte, error) {
-	salt := make([]byte, argon2idSaltLen)
-	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return nil, fmt.Errorf("generate argon2 salt: %w", err)
-	}
-	return salt, nil
 }
 
 // EncryptValue encrypts a plaintext value
@@ -486,20 +422,4 @@ func (e *UnreadableSettingsError) Remedy() string {
 
 func (s *PebbleStore) DeleteSetting(key string) error {
 	return s.db.Delete([]byte("setting:"+key), nil)
-}
-
-// SQLite implementation
-
-// Helper functions to get decrypted setting value from stores
-func GetDecryptedSetting(store Store, key string) (string, error) {
-	setting, err := store.GetSetting(key)
-	if err != nil {
-		return "", err
-	}
-
-	if !setting.IsSecret {
-		return setting.Value, nil
-	}
-
-	return DecryptValue(setting.Value)
 }

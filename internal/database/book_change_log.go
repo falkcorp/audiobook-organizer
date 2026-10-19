@@ -1,7 +1,7 @@
 // file: internal/database/book_change_log.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 1bbf59f8-a14b-4a96-8905-d33cf3329cf4
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
@@ -144,16 +144,6 @@ type MetadataCacheChangeLogProvider interface {
 // MetadataCacheChangedSince implements MetadataCacheChangeLogProvider.
 func (p *PebbleStore) MetadataCacheChangedSince(gen uint64) ([]string, uint64, bool) {
 	return p.cacheChanges.since(&p.cacheGen, gen)
-}
-
-// MetadataCacheChangedSinceOf resolves MetadataCacheChangeLogProvider from s
-// through any opted-in decorator chain; ok is false when s has none.
-func MetadataCacheChangedSinceOf(s any, gen uint64) (ids []string, upTo uint64, ok bool) {
-	p, found := AsCapability[MetadataCacheChangeLogProvider](s)
-	if !found {
-		return nil, 0, false
-	}
-	return p.MetadataCacheChangedSince(gen)
 }
 
 // bumpMetadataCacheGeneration records a committed write of bookID's

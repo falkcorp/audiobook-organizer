@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-16
+// last-edited: 2026-10-19
 
 package database
 
@@ -375,16 +375,4 @@ func keyFamilyRanges(fams []KeyFamily) []keyRange {
 	}
 	emit(root, nil, nil, true)
 	return out
-}
-
-// familyForKey returns the family whose range holds key, by binary search over
-// a partition built by keyFamilyRanges.
-func familyForKey(ranges []keyRange, key []byte) string {
-	i := sort.Search(len(ranges), func(i int) bool {
-		return ranges[i].Hi == nil || bytes.Compare(key, ranges[i].Hi) < 0
-	})
-	if i >= len(ranges) {
-		return unregisteredFamily
-	}
-	return ranges[i].Family
 }

@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder.go
-// version: 3.3.0
+// version: 3.3.1
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
-// last-edited: 2026-09-26
+// last-edited: 2026-10-19
 
 package database
 
@@ -77,11 +77,6 @@ type OwnFolderSplit struct {
 	outside int
 	// copyIdx are the Copies' indexes in the files slice that was split.
 	copyIdx []int
-}
-
-// Spans reports whether the rows lie both inside the own folder and outside it.
-func (s OwnFolderSplit) Spans() bool {
-	return len(s.Own) > 0 && s.outside > 0
 }
 
 // HasOutside reports whether any row lies outside the own folder.

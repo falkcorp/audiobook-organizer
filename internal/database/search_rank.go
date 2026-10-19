@@ -1,7 +1,7 @@
 // file: internal/database/search_rank.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a46bc2cf-3cc2-4402-b32f-c2fba2c7c95c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-19
 
 package database
 
@@ -53,11 +53,18 @@ func (r SearchRank) Less(o SearchRank) bool {
 	return r.ID < o.ID
 }
 
-// SubstringSearchRank is SubstringSearchMatches plus a relevance tier. ok is
-// false exactly when SubstringSearchMatches is false — it uses the same fields
-// and the same normalization (bare strings.ToLower for title and narrator,
-// authorNames already util.NormalizeAuthor'd, lowerQuery = strings.ToLower of
-// the query), so ranking never changes WHICH books match, only their order.
+// SubstringSearchRank is THE SearchBooks predicate plus a relevance tier: a
+// whole-query substring match over title, primary-author name and narrator, and
+// the single copy shared by the Pebble disk scan, the memdb scan and the
+// audiobooks service's author_id/series_id-scoped fallback search, so all three
+// decide "does this book match" identically. ok is false when the book does not
+// match.
+//
+// authorNames maps author id to util.NormalizeAuthor(name) (lower + TrimSpace);
+// lowerQuery is strings.ToLower(query). Title and narrator compare against a
+// bare strings.ToLower. That asymmetry is pre-existing and kept on purpose --
+// see the quirk list on SearchBookIDs. Ranking never changes WHICH books match,
+// only their order.
 //
 // An empty query matches every book (strings.Contains(x, "") is true). It gets
 // one tier and a zero title length so those results stay in plain ID order, as
@@ -97,7 +104,7 @@ func SubstringSearchRank(id, title string, narrator *string, authorID *int, auth
 	return SearchRank{}, false
 }
 
-// searchFold is the one normalization both search predicates apply to the
+// searchFold is the one normalization the search predicate applies to the
 // query and to every compared field: an underscore reads as a space, and a run
 // of spaces reads as one. Files named by tools that replace spaces carry that
 // into the title ("Arcane_Chef_2__A_LitRPG_Adventure", "Rebel Stars_ Books

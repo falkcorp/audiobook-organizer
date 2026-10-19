@@ -1,6 +1,7 @@
 // file: internal/database/chromem_embedding_store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d0e1f9a-3b4c-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-19
 //
 // chromem-go backed embedding vector store (DES-2).
 //
@@ -38,7 +39,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 
 	chromem "github.com/philippgille/chromem-go"
@@ -207,17 +207,4 @@ func (s *ChromemEmbeddingStore) CountByType(ctx context.Context, entityType stri
 // startup, so there is nothing to flush here.
 func (s *ChromemEmbeddingStore) Close() error {
 	return nil
-}
-
-// Helper to convert metadata to typed values.
-
-// MetaBool reads a boolean metadata value.
-func MetaBool(meta map[string]string, key string) bool {
-	return meta[key] == "true"
-}
-
-// MetaInt reads an integer metadata value.
-func MetaInt(meta map[string]string, key string) int {
-	n, _ := strconv.Atoi(meta[key])
-	return n
 }

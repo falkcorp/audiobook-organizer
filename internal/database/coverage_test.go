@@ -1,7 +1,7 @@
 // file: internal/database/coverage_test.go
-// version: 2.4.1
+// version: 2.4.2
 // guid: 3b82b22e-cd28-49b8-8b9c-e0a34b18e631
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 
 // NOTE(fable5 T022): TestInitializeStoreAndClose, TestDBInterfaceWrapper,
 // and TestWebHelpers removed — they tested SQLite initialisation and global
@@ -75,10 +75,6 @@ func TestEncryptionHelpersAndSettings(t *testing.T) {
 		t.Fatalf("unexpected mask: %q", got)
 	}
 
-	if got := len(DeriveKeyFromPassword("pw")); got != 32 {
-		t.Fatalf("expected 32-byte key, got %d", got)
-	}
-
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
 	pebbleStore := store.(*PebbleStore)
@@ -103,15 +99,6 @@ func TestEncryptionHelpersAndSettings(t *testing.T) {
 		t.Fatalf("DeleteSetting failed: %v", err)
 	}
 
-	// Also verify GetDecryptedSetting works with PebbleStore (previously tested
-	// on SQLiteStore; ported in fable5 T022).
-	decrypted, err := GetDecryptedSetting(pebbleStore, "secret")
-	if err != nil {
-		t.Fatalf("GetDecryptedSetting failed: %v", err)
-	}
-	if decrypted != "shh" {
-		t.Fatalf("expected 'shh', got %q", decrypted)
-	}
 }
 
 // TestMockStore_AllMethods tests all 133 methods of MockStore to ensure 100% coverage.

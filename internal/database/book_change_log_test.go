@@ -1,7 +1,7 @@
 // file: internal/database/book_change_log_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 0b1d4a52-6f0e-4c1a-9d37-5e8a2c7b1f63
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 package database
 
@@ -158,7 +158,7 @@ func TestPebbleStore_MetadataCacheChangedSince(t *testing.T) {
 	require.NoError(t, s.SetRaw("not_cache:raw1", []byte("ignored")))
 	require.NoError(t, s.DeleteRaw("metadata_cache:raw2"))
 	require.NoError(t, s.DeleteRawBatch([]string{"metadata_cache:raw3", "other:raw3", "metadata_cache:raw4"}))
-	ids, upTo, ok := MetadataCacheChangedSinceOf(s, from)
+	ids, upTo, ok := s.MetadataCacheChangedSince(from)
 	require.True(t, ok)
 	require.Equal(t, []string{"x", "y", "raw1", "raw2", "raw3", "raw4"}, ids)
 	require.Equal(t, from+6, upTo, "one bump per cache key written, none for other keys")
@@ -172,23 +172,23 @@ func TestPebbleStore_MetadataCacheChangedSince(t *testing.T) {
 	_, err = s.ModifyBook(book.ID, func(b *Book) error { b.Title = b.Title + " (retitled)"; return nil })
 	require.NoError(t, err)
 	require.NoError(t, s.DeleteBook(other.ID))
-	ids, _, ok = MetadataCacheChangedSinceOf(s, from)
+	ids, _, ok = s.MetadataCacheChangedSince(from)
 	require.True(t, ok)
 	require.Equal(t, []string{book.ID, other.ID}, ids)
 	desc := "no identity change"
 	_, err = s.ModifyBook(book.ID, func(b *Book) error { b.Description = &desc; return nil })
 	require.NoError(t, err)
-	_, upTo2, ok := MetadataCacheChangedSinceOf(s, from)
+	_, upTo2, ok := s.MetadataCacheChangedSince(from)
 	require.True(t, ok)
 	require.Equal(t, from+2, upTo2, "a write that deletes no cache row does not move it")
 
 	// Reset wipes the keyspace: nothing before it is listable.
 	before := s.MetadataCacheGeneration()
 	require.NoError(t, s.Reset())
-	_, upTo, ok = MetadataCacheChangedSinceOf(s, before)
+	_, upTo, ok = s.MetadataCacheChangedSince(before)
 	require.False(t, ok)
 	require.Equal(t, before+1, upTo)
-	ids, _, ok = MetadataCacheChangedSinceOf(s, upTo)
+	ids, _, ok = s.MetadataCacheChangedSince(upTo)
 	require.True(t, ok)
 	require.Empty(t, ids)
 }
@@ -214,7 +214,7 @@ func TestPebbleStore_ResetMakesBookLogUnlistable(t *testing.T) {
 		_, upTo, ok := BooksChangedSinceOf(s, bg)
 		require.False(t, ok)
 		require.Equal(t, bg+1, upTo)
-		_, _, ok = MetadataCacheChangedSinceOf(s, cg)
+		_, _, ok = s.MetadataCacheChangedSince(cg)
 		require.False(t, ok)
 	})
 }
