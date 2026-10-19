@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.32.3
+// version: 1.32.4
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-19
 
