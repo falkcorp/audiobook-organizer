@@ -1,6 +1,7 @@
 // file: internal/database/legacy_migration.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-1234-abcd-ef0123456789
+// last-edited: 2026-10-19
 
 package database
 
@@ -10,8 +11,7 @@ import (
 
 // deriveTypeFromMessage inspects the message (and optionally source) of a legacy
 // system_activity_log row and returns a structured (typ, tier) pair suitable for
-// the unified activity_log schema. The function is used by both
-// MigrateSystemActivityLogs (to set the Type/Tier fields on new rows) and
+// the unified activity_log schema. The function is used by
 // enrichLegacyLogTags (to stay in sync with the action: tags it produces).
 //
 // Priority order: most-specific patterns first, "system_log" / "system" as

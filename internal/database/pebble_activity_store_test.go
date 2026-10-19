@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 // Package database — parity test suite for PebbleActivityStore.
 //
@@ -527,15 +527,6 @@ func TestPebbleActivityStore_RecompactDigests(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, res2.Touched, "second run: should be idempotent")
 	assert.Equal(t, 1, res2.Skipped)
-}
-
-// ── parity: MigrateSystemActivityLogs — no-op ────────────────────────────────
-
-func TestPebbleActivityStore_MigrateSystemActivityLogs_Noop(t *testing.T) {
-	s := newTestPebbleActivityStore(t)
-	n, err := s.MigrateSystemActivityLogs()
-	require.NoError(t, err)
-	assert.Equal(t, 0, n)
 }
 
 // ── parity: Close — no-op ────────────────────────────────────────────────────

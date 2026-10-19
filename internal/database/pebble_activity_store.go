@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.34.0
+// version: 1.34.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-10-19
 
@@ -1893,11 +1893,6 @@ func (s *PebbleActivityStore) stageDayDigest(batch *GatedBatch, startOfDay time.
 		return fmt.Errorf("pebble_activity_store: compact set digest: %w", err)
 	}
 	return pactStageFilterIndexes(batch, digestKey, digest)
-}
-
-// MigrateSystemActivityLogs is a no-op for PebbleActivityStore: there is no legacy log to migrate into it.
-func (s *PebbleActivityStore) MigrateSystemActivityLogs() (int, error) {
-	return 0, nil
 }
 
 // RecompactDigests re-derives type, tier, and tags on every stored daily-digest
