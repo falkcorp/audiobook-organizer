@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -11,6 +11,7 @@ package handlers
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"time"
 
@@ -197,8 +198,14 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "status changes are not supported by this store")
 		return
 	}
-	user, err = h.creds.SetUserStatus(user.ID, "locked")
+	userID := user.ID
+	user, err = h.creds.SetUserStatus(userID, "locked")
 	if err != nil {
+		if errors.Is(err, database.ErrUserNotFound) {
+			// Deleted between the read above and this write.
+			httputil.RespondWithNotFound(c, "user", userID)
+			return
+		}
 		httputil.InternalError(c, "deactivate user", err)
 		return
 	}
@@ -228,8 +235,14 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "status changes are not supported by this store")
 		return
 	}
-	user, err = h.creds.SetUserStatus(user.ID, "active")
+	userID := user.ID
+	user, err = h.creds.SetUserStatus(userID, "active")
 	if err != nil {
+		if errors.Is(err, database.ErrUserNotFound) {
+			// Deleted between the read above and this write.
+			httputil.RespondWithNotFound(c, "user", userID)
+			return
+		}
 		httputil.InternalError(c, "reactivate user", err)
 		return
 	}

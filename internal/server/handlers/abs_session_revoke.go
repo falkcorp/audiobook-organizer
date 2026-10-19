@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs_session_revoke.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b97077b-7dcf-4b7e-85de-cae1671df311
 // last-edited: 2026-10-19
 
@@ -17,8 +17,10 @@ import (
 // authenticated request pushes their expiry forward) and the absolute cap is off
 // by default, so a session that outlived a password change would be good for as
 // long as someone kept using it. The guarantee comes from User.CredentialEpoch:
-// a password change, admin reset, reset link and deactivation each bump it in the
-// SAME UpdateUser write as the change, and every ABS refresh and bearer request
+// a password change, admin reset, reset link, deactivation and reactivation each
+// bump it in the SAME write as the change (the database.UserCredentialWriter ops,
+// which re-read the row under the user write lock), and every ABS refresh and
+// bearer request
 // refuses a session stamped with an older epoch. That also covers a session
 // minted with the old password while the change was in flight, which no revoke
 // that runs before the write can reach.

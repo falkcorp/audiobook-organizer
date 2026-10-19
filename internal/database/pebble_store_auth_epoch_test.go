@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth_epoch_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: da259f0d-609e-4d78-8f4f-d1d0071a7291
 // last-edited: 2026-10-19
 
@@ -7,8 +7,9 @@ package database
 
 import (
 	"errors"
-	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newEpochUser(t *testing.T, p *PebbleStore) *User {
@@ -75,33 +76,49 @@ func TestUpdateUser_StaleCopyCannotRevertStatusOrPassword(t *testing.T) {
 	}
 }
 
+// interleave arms userWriteAfterReadHook so that the FIRST user write to reach
+// its after-read point runs competitor in another goroutine and waits up to one
+// second for it before writing. With userWriteMu held the competitor blocks on
+// the lock, the wait times out and the first write lands first; without the
+// lock the competitor finishes inside the window between the first write's read
+// and its write. Only the first writer waits, so the outcome does not depend on
+// scheduling. The returned func waits for the competitor.
+func interleave(t *testing.T, competitor func()) func() {
+	t.Helper()
+	var armed atomic.Bool
+	armed.Store(true)
+	done := make(chan struct{})
+	hook := func() {
+		if !armed.CompareAndSwap(true, false) {
+			return
+		}
+		go func() { defer close(done); competitor() }()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+	}
+	userWriteAfterReadHook.Store(&hook)
+	t.Cleanup(func() { userWriteAfterReadHook.Store(nil) })
+	return func() { <-done }
+}
+
 // Two admin resets racing from the same starting row both land, at DISTINCT
-// epochs, and a session stamped with any epoch before the last is refused.
+// epochs, and a session stamped with any epoch before the last is refused. The
+// second change is forced into the first one's read-to-write window.
 func TestSetUserPassword_RacingChangesEndAtDistinctEpochs(t *testing.T) {
 	p := newABSSessionStore(t)
 	u := newEpochUser(t, p)
-	var wg sync.WaitGroup
-	epochs := make([]int64, 2)
-	errs := make([]error, 2)
-	for i, hash := range []string{"hash-a", "hash-b"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			got, err := p.SetUserPassword(u.ID, "", "bcrypt", hash)
-			errs[i] = err
-			if got != nil {
-				epochs[i] = got.CredentialEpoch
-			}
-		}()
+	var second *User
+	var secondErr error
+	wait := interleave(t, func() { second, secondErr = p.SetUserPassword(u.ID, "", "bcrypt", "hash-b") })
+	first, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-a")
+	wait()
+	if err != nil || secondErr != nil {
+		t.Fatalf("errors: %v / %v", err, secondErr)
 	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if epochs[0] == epochs[1] {
-		t.Fatalf("both racing changes ended at epoch %d; each must bump", epochs[0])
+	if first.CredentialEpoch == second.CredentialEpoch {
+		t.Fatalf("both racing changes ended at epoch %d; each must bump", first.CredentialEpoch)
 	}
 	final := mustGetUser(t, p, u.ID)
 	if final.CredentialEpoch != 2 {
@@ -115,30 +132,77 @@ func TestSetUserPassword_RacingChangesEndAtDistinctEpochs(t *testing.T) {
 }
 
 // A self-service change is a compare-and-swap on the password it verified: of
-// two racing from the same verified hash, exactly one lands.
+// two from the same verified hash, the one forced into the other's window loses.
 func TestSetUserPassword_SelfServiceIsCompareAndSwap(t *testing.T) {
 	p := newABSSessionStore(t)
 	u := newEpochUser(t, p)
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i, hash := range []string{"hash-a", "hash-b"} {
-		wg.Add(1)
-		go func() { defer wg.Done(); _, errs[i] = p.SetUserPassword(u.ID, "hash-old", "bcrypt", hash) }()
+	var secondErr error
+	wait := interleave(t, func() { _, secondErr = p.SetUserPassword(u.ID, "hash-old", "bcrypt", "hash-b") })
+	_, firstErr := p.SetUserPassword(u.ID, "hash-old", "bcrypt", "hash-a")
+	wait()
+	if firstErr != nil {
+		t.Fatalf("the first change must land: %v", firstErr)
 	}
-	wg.Wait()
-	ok := 0
-	for _, err := range errs {
-		if err == nil {
-			ok++
-		} else if !errors.Is(err, ErrUserStale) {
-			t.Fatalf("unexpected error %v", err)
-		}
+	if !errors.Is(secondErr, ErrUserStale) {
+		t.Fatalf("the second change verified a password that is gone: got %v, want ErrUserStale", secondErr)
 	}
-	if ok != 1 {
-		t.Fatalf("%d of 2 racing self-service changes landed, want exactly 1", ok)
+	got := mustGetUser(t, p, u.ID)
+	if got.PasswordHash != "hash-a" || got.CredentialEpoch != 1 {
+		t.Fatalf("stored %q at epoch %d, want hash-a at 1", got.PasswordHash, got.CredentialEpoch)
 	}
-	if got := mustGetUser(t, p, u.ID); got.CredentialEpoch != 1 {
-		t.Fatalf("epoch %d after one landed change, want 1", got.CredentialEpoch)
+}
+
+// An ordinary UpdateUser cannot revert a status change that lands between its
+// re-read and its write.
+func TestUpdateUser_CannotRevertAConcurrentStatusChange(t *testing.T) {
+	p := newABSSessionStore(t)
+	u := newEpochUser(t, p)
+	var lockErr error
+	wait := interleave(t, func() { _, lockErr = p.SetUserStatus(u.ID, "locked") })
+	edit := mustGetUser(t, p, u.ID)
+	edit.Email = "edit@example.com"
+	if err := p.UpdateUser(edit); err != nil {
+		t.Fatalf("the edit read a current row and must land: %v", err)
+	}
+	wait()
+	if lockErr != nil {
+		t.Fatal(lockErr)
+	}
+	got := mustGetUser(t, p, u.ID)
+	if got.Status != "locked" || got.CredentialEpoch != 1 {
+		t.Fatalf("after the race: status %q epoch %d; the deactivation was reverted", got.Status, got.CredentialEpoch)
+	}
+}
+
+// The login rehash cannot overwrite a password change that lands between its
+// re-read and its write.
+func TestRehashUserPassword_CannotOverwriteAConcurrentChange(t *testing.T) {
+	p := newABSSessionStore(t)
+	u := newEpochUser(t, p)
+	var changeErr error
+	wait := interleave(t, func() { _, changeErr = p.SetUserPassword(u.ID, "", "bcrypt", "hash-new") })
+	if _, err := p.RehashUserPassword(u.ID, "hash-old", "argon2id", "argon-of-old"); err != nil {
+		t.Fatal(err)
+	}
+	wait()
+	if changeErr != nil {
+		t.Fatal(changeErr)
+	}
+	got := mustGetUser(t, p, u.ID)
+	if got.PasswordHash != "hash-new" || got.CredentialEpoch != 1 {
+		t.Fatalf("after the race: hash %q epoch %d; the rehash overwrote the new password", got.PasswordHash, got.CredentialEpoch)
+	}
+}
+
+// UpdateUser never creates a row: users come from CreateUser, which also writes
+// the username and email indexes.
+func TestUpdateUser_UnknownUserIsNotFound(t *testing.T) {
+	p := newABSSessionStore(t)
+	if err := p.UpdateUser(&User{ID: "ghost", Username: "ghost"}); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("UpdateUser(unknown) = %v, want ErrUserNotFound", err)
+	}
+	if got, _ := p.GetUserByID("ghost"); got != nil {
+		t.Fatalf("UpdateUser created an unindexed row: %+v", got)
 	}
 }
 

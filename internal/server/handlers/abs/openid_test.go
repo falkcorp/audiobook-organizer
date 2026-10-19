@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
 // last-edited: 2026-10-19
 
@@ -514,11 +514,11 @@ func TestMintOIDCCode_RequiresS256ShapedChallenge(t *testing.T) {
 	IsolateOIDCCodesForTest(t)
 	_, good := pkcePair("a-verifier-a-verifier-a-verifier-a-verifier")
 	for _, bad := range []string{"", "short", good + "x", strings.Repeat("!", 43)} {
-		if _, err := mintOIDCCode("u1", "e@example.com", bad, "audiobooth://oauth", time.Now()); err == nil {
+		if _, err := mintOIDCCode(&database.User{ID: "u1"}, "e@example.com", bad, "audiobooth://oauth", time.Now()); err == nil {
 			t.Fatalf("challenge %q must be refused", bad)
 		}
 	}
-	if _, err := mintOIDCCode("u1", "e@example.com", good, "audiobooth://oauth", time.Now()); err != nil {
+	if _, err := mintOIDCCode(&database.User{ID: "u1"}, "e@example.com", good, "audiobooth://oauth", time.Now()); err != nil {
 		t.Fatalf("a real S256 challenge must mint: %v", err)
 	}
 }

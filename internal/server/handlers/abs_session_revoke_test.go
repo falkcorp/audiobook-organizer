@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
 // last-edited: 2026-10-19
 
@@ -234,5 +234,26 @@ func TestUserStatusChanges_GoThroughSetUserStatusThenRevoke(t *testing.T) {
 		}
 		require.Equal(t, http.StatusOK, w.Code, "%s (revoke err %v): %s", tc.action, tc.revokeErr, w.Body.String())
 		require.Equal(t, []string{"set-status", "revoke"}, events, tc.action)
+	}
+}
+
+// A user deleted between the handler's read and the status write is a 404, not
+// a 500.
+func TestUserStatusChanges_DeletedUserIs404(t *testing.T) {
+	for _, action := range []string{"deactivate", "reactivate"} {
+		mockStore := handlersmocks.NewMockUserStore(t)
+		mockStore.EXPECT().GetUserByID("u-123").Return(sampleUser(), nil)
+		creds := &credsFake{setStatus: func(id, _ string) (*database.User, error) {
+			return nil, fmt.Errorf("wrapped: %w", database.ErrUserNotFound)
+		}}
+		h := handlers.NewUserHandler(userStoreWithABS{mockStore, &absRevokeRecorder{}, creds})
+		c, w := newAuthCtx(http.MethodPost, "/api/v1/users/u-123/"+action, nil)
+		c.Params = gin.Params{{Key: "id", Value: "u-123"}}
+		if action == "deactivate" {
+			h.DeactivateUser(c)
+		} else {
+			h.ReactivateUser(c)
+		}
+		require.Equal(t, http.StatusNotFound, w.Code, "%s: %s", action, w.Body.String())
 	}
 }

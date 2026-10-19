@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -123,6 +124,18 @@ func (p *PebbleStore) GetUserByEmail(email string) (*User, error) {
 // the old CredentialEpoch back.
 var userWriteMu sync.Mutex
 
+// userWriteAfterReadHook, when set, runs inside every user rewrite between the
+// re-read and the write: the window userWriteMu exists to close. Tests use it to
+// force a competing writer into exactly that window, so a missing lock fails
+// deterministically instead of by chance. Nil (no-op) in production.
+var userWriteAfterReadHook atomic.Pointer[func()]
+
+func runUserWriteAfterReadHook() {
+	if hook := userWriteAfterReadHook.Load(); hook != nil {
+		(*hook)()
+	}
+}
+
 // ErrUserNotFound is returned by the field-scoped user ops for an unknown id.
 var ErrUserNotFound = errors.New("database: user not found")
 
@@ -141,7 +154,8 @@ var ErrUserProtectedField = errors.New("database: UpdateUser cannot change passw
 // UpdateUser rewrites a user row's ordinary fields (email, roles, ...). Under
 // userWriteMu it re-reads the stored row and refuses (ErrUserProtectedField) a
 // write whose password hash, algorithm, Status or CredentialEpoch differs from
-// it, so a whole-row write can never change, or revert, any of them.
+// it, so a whole-row write can never change, or revert, any of them. An unknown
+// id is ErrUserNotFound.
 func (p *PebbleStore) UpdateUser(user *User) error {
 	userWriteMu.Lock()
 	defer userWriteMu.Unlock()
@@ -149,12 +163,16 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 	if err != nil {
 		return err
 	}
-	if stored != nil {
-		if user.PasswordHash != stored.PasswordHash || user.PasswordHashAlgo != stored.PasswordHashAlgo ||
-			user.Status != stored.Status || user.CredentialEpoch != stored.CredentialEpoch {
-			return fmt.Errorf("%w (user %s)", ErrUserProtectedField, user.ID)
-		}
+	if stored == nil {
+		// Users are created by CreateUser, which also writes the username and
+		// email indexes; a write here would leave an unindexed row.
+		return fmt.Errorf("%w: %s", ErrUserNotFound, user.ID)
 	}
+	if user.PasswordHash != stored.PasswordHash || user.PasswordHashAlgo != stored.PasswordHashAlgo ||
+		user.Status != stored.Status || user.CredentialEpoch != stored.CredentialEpoch {
+		return fmt.Errorf("%w (user %s)", ErrUserProtectedField, user.ID)
+	}
+	runUserWriteAfterReadHook()
 	user.UpdatedAt = time.Now()
 	data, _ := json.Marshal(user)
 	return p.db.Set([]byte("u:"+user.ID), data, pebble.Sync)
@@ -178,6 +196,7 @@ func (p *PebbleStore) mutateUserCredentials(userID string, fn func(*User) error)
 	if err := fn(stored); err != nil {
 		return nil, err
 	}
+	runUserWriteAfterReadHook()
 	stored.CredentialEpoch++
 	stored.UpdatedAt = time.Now()
 	data, _ := json.Marshal(stored)
@@ -254,6 +273,7 @@ func (p *PebbleStore) RehashUserPassword(userID, verifiedHash, algo, hash string
 	if stored == nil || stored.PasswordHash != verifiedHash {
 		return false, nil
 	}
+	runUserWriteAfterReadHook()
 	stored.PasswordHashAlgo = algo
 	stored.PasswordHash = hash
 	stored.UpdatedAt = time.Now()

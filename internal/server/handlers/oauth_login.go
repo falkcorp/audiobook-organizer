@@ -1,5 +1,5 @@
 // file: internal/server/handlers/oauth_login.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2e9c0b47-6a31-4d58-8f04-1b5a7c2e9d63
 // last-edited: 2026-10-19
 
@@ -149,7 +149,7 @@ func (h *OAuthHandler) Callback(c *gin.Context) {
 	// so issuing a browser session here would leave an unusable row in the store on
 	// every app login. The app's real session comes from redeeming the code.
 	if payload.AppRedirectURI != "" && payload.AppChallenge != "" {
-		code, mintErr := abs.MintAppAuthorizationCode(user.ID, claims.Email, payload.AppChallenge, payload.AppRedirectURI)
+		code, mintErr := abs.MintAppAuthorizationCode(user, claims.Email, payload.AppChallenge, payload.AppRedirectURI)
 		if mintErr != nil {
 			redirectToLogin(c, "oauth_code_mint_failed")
 			return
