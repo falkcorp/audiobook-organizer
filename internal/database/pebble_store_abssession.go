@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
 // last-edited: 2026-10-19
 
@@ -101,15 +101,22 @@ func (s *ABSSession) InGrace(now time.Time) bool {
 // refresh that read the row before a concurrent logout must not write it back live.
 var ErrABSSessionRevoked = errors.New("abs session: revoked or deleted")
 
-// absSessionWriteMu serializes every read-modify-write of an abs_sess record:
-// UpdateABSSession, ExtendABSSession, RevokeABSSession and
-// RevokeAllABSSessionsForUser. Pebble has no compare-and-swap, so without it two
-// writers that each read the row and write a whole copy back lose each other's
-// changes. The two that matter:
+// absSessionWriteMu serializes EVERY mutation of the abs_sess keyspace:
+// CreateABSSession, UpdateABSSession, ExtendABSSession, RevokeABSSession,
+// RevokeAllABSSessionsForUser and each delete in DeleteExpiredABSSessions. Pebble
+// has no compare-and-swap, so without it two writers that each read the row and
+// write a whole copy back lose each other's changes. The ones that matter:
 //
 //   - the bearer-path ExpiresAt extension writing back a row a refresh rotated in
 //     between, which un-rotates it and logs the device out as refresh-token-unknown;
-//   - any writer writing back a row a logout revoked in between, which un-revokes it.
+//   - any writer writing back a row a logout revoked in between, which un-revokes it;
+//   - a writer writing back a row the expiry sweep deleted in between, which
+//     resurrects it as a live record with no index entries, invisible to
+//     revoke-all and to the sweep itself.
+//
+// Every writer re-reads the stored row under the lock and refuses when it is gone,
+// revoked or (for an extension) expired; the sweep re-reads each candidate under
+// the lock and deletes it only if it is still revoked or expired.
 //
 // One process-wide mutex rather than per-session locks: these writes happen at
 // login, refresh, logout and at most about once a day per session from use, so
@@ -139,6 +146,8 @@ func (p *PebbleStore) CreateABSSession(session *ABSSession) error {
 	if err != nil {
 		return fmt.Errorf("abs session: marshal: %w", err)
 	}
+	absSessionWriteMu.Lock()
+	defer absSessionWriteMu.Unlock()
 	b := p.db.NewBatch()
 	defer b.Close()
 	if err := b.Set(absSessionKey(session.ID), data, nil); err != nil {
@@ -194,6 +203,14 @@ func (p *PebbleStore) UpdateABSSession(session *ABSSession) error {
 	if stored == nil || stored.Revoked {
 		return ErrABSSessionRevoked
 	}
+	return p.writeABSSessionLocked(session)
+}
+
+// writeABSSessionLocked writes the record together with its per-user and
+// refresh-token index entries in ONE batch, so no write can ever leave a record
+// without the indexes revoke-all and the refresh lookup depend on. The caller holds
+// absSessionWriteMu and has already re-read the stored row.
+func (p *PebbleStore) writeABSSessionLocked(session *ABSSession) error {
 	data, err := json.Marshal(session)
 	if err != nil {
 		return fmt.Errorf("abs session: marshal: %w", err)
@@ -234,8 +251,9 @@ func (p *PebbleStore) UpdateABSSession(session *ABSSession) error {
 //     throttle: a burst of parallel cover requests produces one write, and a capped
 //     session whose target has stopped moving produces none.
 //
-// Only the record key is rewritten. The refresh-token indexes are untouched because
-// the hashes did not change.
+// The record is rewritten in the same batch as its index entries (unchanged
+// values, so this is idempotent), so even a bug elsewhere cannot leave an extended
+// record without its indexes.
 func (p *PebbleStore) ExtendABSSession(id string, now, expiresAt time.Time, minAdvance time.Duration) (bool, error) {
 	absSessionWriteMu.Lock()
 	defer absSessionWriteMu.Unlock()
@@ -251,11 +269,7 @@ func (p *PebbleStore) ExtendABSSession(id string, now, expiresAt time.Time, minA
 	}
 	s.ExpiresAt = expiresAt
 	s.LastUsedAt = now
-	data, err := json.Marshal(s)
-	if err != nil {
-		return false, fmt.Errorf("abs session: marshal: %w", err)
-	}
-	if err := p.db.Set(absSessionKey(s.ID), data, pebble.Sync); err != nil {
+	if err := p.writeABSSessionLocked(s); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -418,41 +432,102 @@ func (p *PebbleStore) RevokeAllABSSessionsForUser(userID string) (int, error) {
 	return revoked, errors.Join(errs...)
 }
 
+// absSweepChunk bounds how many candidates DeleteExpiredABSSessions re-checks and
+// deletes per hold of absSessionWriteMu, so a large sweep never stalls login,
+// refresh or logout for longer than one small batch commit.
+const absSweepChunk = 128
+
+// absSweepAfterScanHook, when non-nil, runs after DeleteExpiredABSSessions has
+// collected its candidates and before it re-checks them under the lock. Test-only:
+// it is how a test interleaves an extension between the scan and the delete.
+var absSweepAfterScanHook func()
+
 // DeleteExpiredABSSessions removes revoked and past-expiry sessions along with both
 // of their index entries. Mirrors DeleteExpiredSessions for the browser keyspace.
+//
+// It is two-phase. The scan only nominates candidates; each one is then re-read
+// under absSessionWriteMu and deleted only if it is STILL revoked or expired at
+// now, because an extension or refresh may have slid it between the scan and the
+// delete. The record and its indexes go in one batch per chunk, under the same
+// lock every writer takes, so a writer can neither resurrect a row the sweep just
+// deleted nor have a row it just extended deleted out from under it.
 func (p *PebbleStore) DeleteExpiredABSSessions(now time.Time) (int, error) {
 	prefix := []byte(absSessionKeyPrefix)
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
 	if err != nil {
 		return 0, err
 	}
-	defer iter.Close()
-
-	batch := p.db.NewBatch()
-	defer batch.Close()
-
-	deleted := 0
+	var candidates []string
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := append([]byte(nil), iter.Key()...)
 		var s ABSSession
 		if err := json.Unmarshal(iter.Value(), &s); err != nil {
 			continue
 		}
-		if !s.Revoked && s.ExpiresAt.After(now) {
+		if absSessionSweepable(&s, now) {
+			candidates = append(candidates, s.ID)
+		}
+	}
+	iterErr := iter.Error()
+	if cerr := iter.Close(); iterErr == nil {
+		iterErr = cerr
+	}
+	if iterErr != nil {
+		return 0, iterErr
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+	if absSweepAfterScanHook != nil {
+		absSweepAfterScanHook()
+	}
+
+	deleted := 0
+	for start := 0; start < len(candidates); start += absSweepChunk {
+		end := min(start+absSweepChunk, len(candidates))
+		n, err := p.deleteABSSessionsIfSweepable(candidates[start:end], now)
+		deleted += n
+		if err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
+}
+
+// absSessionSweepable is the sweep's deletion rule: revoked, or expired at now.
+func absSessionSweepable(s *ABSSession, now time.Time) bool {
+	return s.Revoked || !s.ExpiresAt.After(now)
+}
+
+// deleteABSSessionsIfSweepable re-reads each id under absSessionWriteMu and
+// deletes the record plus its indexes, in one batch, only if it is still sweepable.
+func (p *PebbleStore) deleteABSSessionsIfSweepable(ids []string, now time.Time) (int, error) {
+	absSessionWriteMu.Lock()
+	defer absSessionWriteMu.Unlock()
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	deleted := 0
+	for _, id := range ids {
+		s, err := p.GetABSSession(id)
+		if err != nil {
+			// An unreadable row cannot be judged; leave it for a later sweep rather
+			// than delete something that may be live.
 			continue
 		}
-		if err := batch.Delete(key, nil); err != nil {
-			return deleted, err
+		if s == nil || !absSessionSweepable(s, now) {
+			continue
+		}
+		if err := batch.Delete(absSessionKey(s.ID), nil); err != nil {
+			return 0, err
 		}
 		if err := batch.Delete(absSessionUserKey(s.UserID, s.ID), nil); err != nil {
-			return deleted, err
+			return 0, err
 		}
 		for _, h := range []string{s.RefreshTokenHash, s.PrevRefreshTokenHash} {
 			if h == "" {
 				continue
 			}
 			if err := batch.Delete(absSessionTokenKey(h), nil); err != nil {
-				return deleted, err
+				return 0, err
 			}
 		}
 		deleted++
@@ -461,7 +536,7 @@ func (p *PebbleStore) DeleteExpiredABSSessions(now time.Time) (int, error) {
 		return 0, nil
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
-		return deleted, err
+		return 0, err
 	}
 	return deleted, nil
 }
