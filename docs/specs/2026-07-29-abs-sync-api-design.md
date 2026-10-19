@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.10.0 -->
+<!-- version: 7.11.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -840,7 +840,8 @@ when the request carries header `x-return-tokens: true`, the response body **als
   before the active-account check). Refresh carries the stamp and never re-stamps it. This also
   kills a session minted with the old password while the change was in flight. A revoke-all runs
   after the write as cleanup only. Credential and status changes go only through field-scoped store
-  ops that re-read under a user write lock, change their own fields and bump the epoch:
+  ops (`database.UserCredentialWriter`, a capability, not on `Store`) that re-read under a user
+  write lock, change their own fields and bump the epoch:
   `SetUserPassword` (compare-and-swap on the verified hash for self-service), `SetUserStatus`
   (deactivate and reactivate) and `BumpUserCredentialEpoch` (reset link). `UpdateUser` refuses any
   change to the password, `Status` or `CredentialEpoch` (`ErrUserProtectedField`). The §3.5 rehash

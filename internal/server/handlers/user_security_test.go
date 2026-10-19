@@ -75,9 +75,12 @@ func TestDeactivateUser_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
 	store.EXPECT().GetUserByID("u-123").Return(user, nil)
-	store.EXPECT().SetUserStatus("u-123", "locked").Return(user, nil)
+	creds := statusSetterReturning(user)
 
-	h := handlers.NewUserHandler(store)
+	h := handlers.NewUserHandler(struct {
+		*handlersmocks.MockUserStore
+		database.UserCredentialWriter
+	}{store, creds})
 	c, w := newAuthCtx("POST", "/api/v1/users/u-123/deactivate", nil)
 	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
 	h.DeactivateUser(c)
@@ -90,9 +93,12 @@ func TestReactivateUser_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
 	store.EXPECT().GetUserByID("u-123").Return(user, nil)
-	store.EXPECT().SetUserStatus("u-123", "active").Return(user, nil)
+	creds := statusSetterReturning(user)
 
-	h := handlers.NewUserHandler(store)
+	h := handlers.NewUserHandler(struct {
+		*handlersmocks.MockUserStore
+		database.UserCredentialWriter
+	}{store, creds})
 	c, w := newAuthCtx("POST", "/api/v1/users/u-123/reactivate", nil)
 	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
 	h.ReactivateUser(c)
@@ -104,4 +110,14 @@ func TestReactivateUser_DoesNotLeakPasswordHash(t *testing.T) {
 // guard against accidental field-name drift in the banned-substring list.
 func TestSampleUserActuallyHasHash(t *testing.T) {
 	require.True(t, strings.HasPrefix(sampleUser().PasswordHash, "$2a$"))
+}
+
+// statusSetterReturning is a database.UserCredentialWriter whose SetUserStatus
+// answers with u (password hash included, which is what the leak checks need).
+func statusSetterReturning(u *database.User) database.UserCredentialWriter {
+	return &credsFake{setStatus: func(_, status string) (*database.User, error) {
+		cp := *u
+		cp.Status = status
+		return &cp, nil
+	}}
 }

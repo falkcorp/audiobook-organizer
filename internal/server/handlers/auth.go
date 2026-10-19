@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-19
 
@@ -47,12 +47,12 @@ type AuthUserReader interface {
 }
 
 // AuthUserWriter creates and updates users. UpdateUser writes ordinary fields
-// (the profile email); the password changes only through SetUserPassword, which
-// bumps the credential epoch on the fresh row.
+// (the profile email); the password changes only through the
+// database.UserCredentialWriter capability (AuthHandler.creds), which bumps the
+// credential epoch on the fresh row.
 type AuthUserWriter interface {
 	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
 	UpdateUser(user *database.User) error
-	SetUserPassword(userID, expectedHash, algo, hash string) (*database.User, error)
 }
 
 // AuthRoleReader resolves a role by id. Login needs it to report the user's
@@ -130,6 +130,10 @@ type AuthHandler struct {
 	// absSessions signs a user out of every ABS client when their password
 	// changes. nil when the store has no ABS keyspace (no ABS session can exist).
 	absSessions ABSSessionRevoker
+	// creds is the only path that changes a password (SetUserPassword bumps the
+	// credential epoch with it). nil when the store lacks the capability, in
+	// which case ChangePassword refuses.
+	creds database.UserCredentialWriter
 }
 
 // NewAuthHandler constructs an AuthHandler.
@@ -142,6 +146,7 @@ func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
 		ipFails:      make(map[string]*failedAttempt),
 		failureDelay: time.Sleep,
 		absSessions:  ResolveABSSessionRevoker(store),
+		creds:        ResolveUserCredentialWriter(store),
 	}
 }
 
@@ -628,11 +633,15 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	// verified the current password against, so it lands only if that is still
 	// the password (ErrUserStale otherwise); an admin reset verifies nothing and
 	// passes "".
+	if h.creds == nil {
+		httputil.RespondWithInternalError(c, "password changes are not supported by this store")
+		return
+	}
 	expected := ""
 	if !isAdminReset {
 		expected = target.PasswordHash
 	}
-	if _, err := h.store.SetUserPassword(target.ID, expected, newAlgo, newHash); err != nil {
+	if _, err := h.creds.SetUserPassword(target.ID, expected, newAlgo, newHash); err != nil {
 		switch {
 		case errors.Is(err, database.ErrUserStale):
 			httputil.RespondWithConflict(c, "the password changed while this request was in flight; nothing was changed, try again")

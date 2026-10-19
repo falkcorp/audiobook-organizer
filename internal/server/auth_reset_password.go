@@ -1,5 +1,5 @@
 // file: internal/server/auth_reset_password.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6b2d94f1-7a08-4c53-9e16-3d8f05a2c761
 // last-edited: 2026-10-19
 
@@ -69,7 +69,12 @@ func (s *Server) handleResetPassword(c *gin.Context) {
 	// that write landed. The revoke-all after it is cleanup.
 	// BumpUserCredentialEpoch changes only the epoch, on the fresh row, so it
 	// cannot revert a status or password change that landed after our read.
-	if _, err := s.Ops().BumpUserCredentialEpoch(user.ID); err != nil {
+	creds := handlers.ResolveUserCredentialWriter(s.Ops())
+	if creds == nil {
+		httputil.RespondWithInternalError(c, "password resets are not supported by this store; no reset link was issued")
+		return
+	}
+	if _, err := creds.BumpUserCredentialEpoch(user.ID); err != nil {
 		if errors.Is(err, database.ErrUserNotFound) {
 			httputil.RespondWithNotFound(c, "user", id)
 			return

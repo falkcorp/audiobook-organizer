@@ -1,5 +1,5 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
 // last-edited: 2026-10-19
 
@@ -377,6 +377,16 @@ type failingUserWriteStore struct {
 func (f *failingUserWriteStore) Unwrap() database.Store { return f.Store }
 
 func (f *failingUserWriteStore) BumpUserCredentialEpoch(string) (*database.User, error) {
+	return nil, errors.New("disk full")
+}
+
+// The rest of database.UserCredentialWriter, so AsCapability resolves this
+// wrapper's (failing) ops instead of looking through to the real store's.
+func (f *failingUserWriteStore) SetUserPassword(string, string, string, string) (*database.User, error) {
+	return nil, errors.New("disk full")
+}
+
+func (f *failingUserWriteStore) SetUserStatus(string, string) (*database.User, error) {
 	return nil, errors.New("disk full")
 }
 

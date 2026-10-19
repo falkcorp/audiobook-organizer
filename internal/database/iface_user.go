@@ -1,7 +1,7 @@
 // file: internal/database/iface_user.go
-// version: 1.4.0
+// version: 1.3.0
 // guid: ca96abf5-5353-428c-aa7f-903b91a481e8
-// last-edited: 2026-10-19
+// last-edited: 2026-09-02
 
 package database
 
@@ -19,14 +19,7 @@ type UserReader interface {
 // UserWriter is the write-only user slice.
 type UserWriter interface {
 	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error)
-	// UpdateUser writes ordinary fields only; it refuses a change to the
-	// password, Status or CredentialEpoch (ErrUserProtectedField).
 	UpdateUser(user *User) error
-	// The three field-scoped credential ops: each re-reads the row under the
-	// user write lock, changes only its own fields and bumps CredentialEpoch.
-	SetUserPassword(userID, expectedHash, algo, hash string) (*User, error)
-	SetUserStatus(userID, status string) (*User, error)
-	BumpUserCredentialEpoch(userID string) (*User, error)
 }
 
 // UserStore combines both halves.
