@@ -1,5 +1,5 @@
 <!-- file: docs/developer-guide.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.2.2 -->
 <!-- guid: 7f8a9b0c-1d2e-3f4a-5b6c-7d8e9f0a1b2c -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -175,7 +175,8 @@ All endpoints live under `/api/v1/`. The server uses Gin with optional authentic
 ### Generated TypeScript types
 
 The shapes the server sends the SPA are generated from the Go structs with
-[tygo](https://github.com/gzuidhof/tygo) (a `tool` dependency in `go.mod`; no install step).
+[tygo](https://github.com/gzuidhof/tygo) (its own nested module, `tools/tygo/go.mod`, built into GOBIN by `go -C tools/tygo install tool` like
+staticcheck, mockery and deadcode, so its dependencies stay out of the root `go.mod`).
 `tygo.yaml` lists one entry per Go package and the files of it to generate from; the output is
 committed under `web/src/types/generated/` and must never be hand-edited.
 

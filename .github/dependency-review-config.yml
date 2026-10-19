@@ -1,7 +1,7 @@
 # file: .github/dependency-review-config.yml
-# version: 1.5.0
+# version: 1.6.0
 # guid: dep-review-cfg-2025-12-07
-# last-edited: 2026-10-10
+# last-edited: 2026-10-18
 
 # Dependency Review Configuration
 # This file configures the dependency-review-action for automated security scanning
@@ -62,6 +62,11 @@ allow-dependencies-licenses:
   - pkg:golang/golang.org/x/mod
   - pkg:golang/golang.org/x/term
   - pkg:golang/golang.org/x/tools
+  # fatih/structtag (07-F1): a dependency of tygo, the TypeScript type generator
+  # (tools/tygo/go.mod). Dev-time code generator only, never linked into the
+  # binary. Dependency Review flagged its license on #4074, and naming the
+  # package is the narrow fix (same reasoning as the golang.org/x block).
+  - pkg:golang/github.com/fatih/structtag
   # OpenTelemetry Go. Each module's LICENSE is Apache-2.0 followed by a
   # BSD-3-Clause section ("Copyright 2009 The Go Authors") for code copied from
   # the Go standard library. Both licenses are in allow-licenses, but ScanCode
