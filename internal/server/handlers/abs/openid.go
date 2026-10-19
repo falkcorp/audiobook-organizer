@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.3.1
+// version: 2.4.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -166,6 +166,14 @@ const (
 	// oidcReauthParam marks hop 2's single self-redirect (see the file comment).
 	oidcReauthParam = "reauth"
 
+	// oidcMaxClientIDLen caps client_id. Real clients send a short fixed name
+	// ("AudioBooth", "Audiobookshelf-App"); the value is parked, echoed into the
+	// hop-2 URL and logged, so it is bounded like state rather than trusted.
+	oidcMaxClientIDLen = 128
+
+	// oidcMaxLogValueLen caps any caller-supplied string written to a log line.
+	oidcMaxLogValueLen = 128
+
 	// oidcMaxStateLen caps the client's opaque state. It is echoed back in a URL,
 	// so an unbounded value would let hop 1 park arbitrary amounts of memory.
 	oidcMaxStateLen = 512
@@ -194,7 +202,11 @@ var oidcLog = logger.New("abs")
 //     oldest entry of the owner holding the MOST live entries — never simply
 //     the globally oldest — so an owner flooding the store pushes out its own
 //     entries first, and anyone below the largest owner's count is untouched.
-//  4. Expired entries are swept before anything live is evicted.
+//  4. Expired entries are swept before anything live is evicted: every put
+//     sweeps first, so neither eviction loop can pick a live entry while an
+//     expired one is still holding a slot. (Within one store every entry gets
+//     the same TTL, so oldest-by-seq would usually be earliest-expiry anyway,
+//     but that rests on the clock never stepping back; sweeping does not.)
 //  5. take is single-use: the read and the delete happen under one lock.
 //
 // The scans are O(n) with n ≤ max (1024), on a path that runs a handful of times
@@ -205,7 +217,6 @@ type oidcTTLStore[V any] struct {
 	entries map[string]*oidcTTLEntry[V]
 	max     int
 	seq     uint64
-	purgeAt time.Time
 }
 
 type oidcTTLEntry[V any] struct {
@@ -222,7 +233,13 @@ type oidcPutResult struct {
 	EvictedFrom   string // the owner the global eviction took from
 }
 
+// newOIDCTTLStore returns an empty store holding at most maxEntries. A cap
+// below 1 is raised to 1: with max 0 the global eviction loop in put would spin
+// on an empty map, and a store that can hold nothing is never what was meant.
 func newOIDCTTLStore[V any](maxEntries int) *oidcTTLStore[V] {
+	if maxEntries < 1 {
+		maxEntries = 1
+	}
 	return &oidcTTLStore[V]{entries: map[string]*oidcTTLEntry[V]{}, max: maxEntries}
 }
 
@@ -233,13 +250,10 @@ func (s *oidcTTLStore[V]) put(key, owner string, ownerCap int, value V, now time
 	defer s.mu.Unlock()
 	var res oidcPutResult
 	delete(s.entries, key) // re-putting a key replaces it and frees its slot
-	if len(s.entries) >= s.max || now.Sub(s.purgeAt) > time.Minute {
-		for k, e := range s.entries {
-			if !now.Before(e.expiresAt) {
-				delete(s.entries, k)
-			}
+	for k, e := range s.entries {
+		if !now.Before(e.expiresAt) {
+			delete(s.entries, k)
 		}
-		s.purgeAt = now
 	}
 	if ownerCap < 1 {
 		ownerCap = 1
@@ -359,12 +373,12 @@ type oidcPendingRequest struct {
 	// Hop 1's verified Cloudflare credential key (svc:<token> or email:<…>):
 	// the entry's owner in the store, and on the hop-2 audit line.
 	CallerKey string
-	// Hop 1's client, recorded for the audit line. Not enforced: Safari with
-	// iCloud Private Relay legitimately reaches us from a different address than
-	// the app's own URLSession, and behind the shared proxies every caller has
-	// the same address anyway.
-	SourceIP  string
-	UserAgent string
+	// Hop 1's client address, recorded for the audit line. Not enforced: Safari
+	// with iCloud Private Relay legitimately reaches us from a different address
+	// than the app's own URLSession, and behind the shared proxies every caller
+	// has the same address anyway. (The User-Agent is not parked: it is
+	// caller-chosen, unbounded, and nothing reads it back.)
+	SourceIP string
 }
 
 // oidcCodes is package-level because the web OAuth deep-link flow
@@ -439,7 +453,8 @@ func AppRedirectURIAllowed(uri string) bool { return oidcRedirectAllowed(uri) }
 // redirectURI, and to the resolved user. It expires in oidcCodeTTL and is
 // redeemable exactly once, at /auth/openid/callback.
 //
-// challenge is required. A code minted without one would be a bearer credential
+// challenge is required, and must have the S256 shape (43 base64url characters).
+// A code minted without one would be a bearer credential
 // sitting in a URL on a custom scheme that any other installed app can register —
 // which is precisely the takeover PKCE exists to stop — so this refuses rather than
 // defaulting to an unbound code. redirectURI must be on the allowlist, re-checked
@@ -452,8 +467,12 @@ func mintOIDCCode(userID, email, challenge, redirectURI string, now time.Time) (
 	if strings.TrimSpace(userID) == "" {
 		return "", errors.New("abs: cannot mint an authorization code with no user")
 	}
-	if strings.TrimSpace(challenge) == "" {
-		return "", errors.New("abs: cannot mint an authorization code with no PKCE challenge")
+	if !isS256Shaped(challenge) {
+		// Not merely non-empty: a challenge that is not 43 base64url characters
+		// can never equal BASE64URL(SHA256(verifier)), so such a code could never
+		// be redeemed. Refusing here keeps every caller of this seam honest about
+		// passing the client's S256 challenge rather than something else.
+		return "", errors.New("abs: cannot mint an authorization code without an S256 PKCE challenge")
 	}
 	if !oidcRedirectAllowed(redirectURI) {
 		return "", errors.New("abs: cannot mint an authorization code for an unregistered redirect_uri")
@@ -512,7 +531,7 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 	// an unvalidated URI would itself be an open redirect.
 	if !oidcRedirectAllowed(redirectURI) {
 		oidcLog.Warn("openid authorize rejected an unregistered redirect_uri: redirect_uri=%s source_ip=%s",
-			logger.SanitizeLogValue(redirectURI), logger.SanitizeLogValue(strings.TrimSpace(c.ClientIP())))
+			oidcLogValue(redirectURI), logger.SanitizeLogValue(strings.TrimSpace(c.ClientIP())))
 		h.oidcAuthorizeReject(c, "redirect-uri-not-registered", "Invalid redirect_uri")
 		return
 	}
@@ -560,6 +579,10 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 		h.oidcAuthorizeReject(c, "state-too-long", "state is too long")
 		return
 	}
+	if len(clientID) > oidcMaxClientIDLen {
+		h.oidcAuthorizeReject(c, "client-id-too-long", "client_id is too long")
+		return
+	}
 	origin, ok := oidcRequestOrigin(c)
 	if !ok {
 		h.oidcAuthorizeReject(c, "host-invalid", "invalid Host header")
@@ -579,7 +602,6 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 		ClientID:    clientID,
 		CallerKey:   callerKey,
 		SourceIP:    strings.TrimSpace(c.ClientIP()),
-		UserAgent:   c.Request.UserAgent(),
 	}, h.now(), oidcRequestTTL)
 	if res.GlobalEvicted > 0 {
 		// Only reachable when many distinct credentials are parking requests at
@@ -679,7 +701,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		// closes cleanly on it. The parked request is left to expire.
 		oidcLog.Warn("openid browser hop resolved no verified identity: service_token=%s reauth=%t caller=%s client_id=%s",
 			logger.SanitizeLogValue(ev.ServiceToken), c.Query(oidcReauthParam) != "",
-			logger.SanitizeLogValue(pending.CallerKey), logger.SanitizeLogValue(pending.ClientID))
+			logger.SanitizeLogValue(pending.CallerKey), oidcLogValue(pending.ClientID))
 		ev.Outcome = absauth.OutcomeDenied
 		ev.Reason = "no-verified-identity"
 		absauth.Audit(ev)
@@ -1011,6 +1033,16 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 // them to anything and mint fresh rate-limit buckets at will.
 func oidcRateKey(c *gin.Context, callerKey string) string {
 	return "openid:" + callerKey + "|" + strings.TrimSpace(c.ClientIP())
+}
+
+// oidcLogValue sanitizes a caller-supplied value for a log line and caps it at
+// oidcMaxLogValueLen bytes, so a hop-1 caller cannot write arbitrarily long
+// lines (a redirect_uri is bounded only by the server's header limit).
+func oidcLogValue(s string) string {
+	if len(s) > oidcMaxLogValueLen {
+		s = s[:oidcMaxLogValueLen] + "…(truncated)"
+	}
+	return logger.SanitizeLogValue(s)
 }
 
 // oidcNoStore keeps every hop out of caches: their Locations carry a request id

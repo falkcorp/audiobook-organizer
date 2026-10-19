@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-10-19
 
@@ -401,7 +401,11 @@ type Handler struct {
 	// by h.now, so SetClock drives expiry.
 	oidcRequests *oidcTTLStore[oidcPendingRequest]
 	// Hop-1 rate limiters per verified credential (openid.go oidcRateKey):
-	// one for shared group service tokens, one for individual people.
+	// one for shared group service tokens, one for individual people. Never
+	// Start()ed, so no idle sweep runs: the keys are verified credentials times
+	// the proxy address — a handful — and the limiter's least-recently-seen cap
+	// bounds them anyway, so a sweeper goroutine would need a lifecycle for
+	// nothing.
 	oidcSharedLimiter *servermiddleware.IPRateLimiter
 	oidcPersonLimiter *servermiddleware.IPRateLimiter
 	// oidcConsentKey keys the consent form's CSRF token (openid.go

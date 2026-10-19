@@ -212,9 +212,11 @@ func (r *IPRateLimiter) run(ctx context.Context) {
 
 // AllowKey reports whether one more request may proceed for an arbitrary key, for
 // callers whose meaningful client identity is not c.ClientIP() (behind the shared
-// reverse proxies every request has the same RemoteAddr). Same buckets, same LRU
-// bound and idle sweep as the per-IP path; keys share one namespace, so callers
-// should prefix them.
+// reverse proxies every request has the same RemoteAddr). Same buckets and same
+// least-recently-seen bound as the per-IP path; keys share one namespace, so
+// callers should prefix them. Idle keys are swept only if the limiter was
+// Start()ed; otherwise they are reclaimed by that bound (defaultMaxEntries) or
+// refreshed on their next lookup, exactly as for IPs.
 func (r *IPRateLimiter) AllowKey(key string) bool {
 	if key == "" {
 		key = "unknown"
