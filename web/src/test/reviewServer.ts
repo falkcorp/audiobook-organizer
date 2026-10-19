@@ -1,5 +1,5 @@
 // file: web/src/test/reviewServer.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d3a8e17-2c64-4b90-a1f5-7e09c4b2d683
 // last-edited: 2026-10-19
 //
@@ -33,13 +33,15 @@ export interface ReviewListPayload {
   runtime_hidden?: number;
   /** The server's bulk apply cap, sent with every page (absent: an older server). */
   bulk_apply_max_items?: number;
+  /** The server could not read the owner's rejections for this page. */
+  owner_rejections_unavailable?: boolean;
 }
 
 /**
  * The view=page response for a payload: every row is the page, facets carry the
  * counts. Rows are served as given, owner_rejected included: the real page
  * carries that mark on its rows (it is set per request, from the owner's
- * rejections), and the rail's "owner rejected" chip counts it.
+ * rejections), and the per-row Rejected badge shows it.
  */
 export function reviewPageResponse(p: ReviewListPayload, generation = 'g1'): api.ReviewPageResponse {
   const total = p.total_count ?? p.results.length;
@@ -50,6 +52,7 @@ export function reviewPageResponse(p: ReviewListPayload, generation = 'g1'): api
     limit: 25,
     generation,
     ...(p.bulk_apply_max_items !== undefined ? { bulk_apply_max_items: p.bulk_apply_max_items } : {}),
+    ...(p.owner_rejections_unavailable ? { owner_rejections_unavailable: true } : {}),
     facets: {
       matched: p.matched ?? p.results.filter((r) => r.status === 'matched').length,
       no_match: p.no_match ?? p.results.filter((r) => r.status === 'no_match').length,
@@ -100,4 +103,32 @@ export function serveReviewList(...payloads: Array<ReviewListPayload | Promise<R
   });
   vi.mocked(api.getReviewMatchingIds).mockResolvedValue({ ids: [], total: 0, generation: 'g1' });
   serveReviewDetails(() => last);
+}
+
+/**
+ * The selection check's answer, as the server gives it: each id sent is
+ * `matching` when the filter lists it, `not_matching` when it is a book of the
+ * filter's bucket (`universe`) the filter does not list, else `unknown`, in
+ * the order sent and once.
+ */
+export function selectionCheckAnswer(
+  listed: string[],
+  universe: string[],
+  ids: string[],
+  generation = 'g1'
+): api.ReviewSelectionCheck {
+  const inList = new Set(listed);
+  const inUniverse = new Set(universe);
+  const out: api.ReviewSelectionCheck = {
+    matching: [],
+    not_matching: [],
+    unknown: [],
+    generation,
+  };
+  for (const id of new Set(ids)) {
+    if (inList.has(id)) out.matching.push(id);
+    else if (inUniverse.has(id)) out.not_matching.push(id);
+    else out.unknown.push(id);
+  }
+  return out;
 }

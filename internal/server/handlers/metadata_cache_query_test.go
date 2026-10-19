@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-19
 
@@ -579,12 +579,13 @@ func TestReviewQuery_RuntimeRule(t *testing.T) {
 		{"partial upper bound: a candidate between estimate and bound is kept", &metafetch.MetadataCandidate{DurationSec: 3000}, sized, false},
 		{"partial without sizes has no upper bound", &metafetch.MetadataCandidate{DurationSec: 52920}, partial(480), false},
 		{"a failed read drops the upper bound", &metafetch.MetadataCandidate{DurationSec: 52920}, metabatch.BookFileFacts{Runtime: sized.Runtime, Err: errors.New("read failed")}, false},
-		// rowState.test.ts runtimeHiddenBySwitch.
+		// The runtime switch's rule (Go is its only implementation; the TypeScript
+		// twin, rowState.ts runtimeHiddenBySwitch, was deleted).
 		{"hides a warned row the 10% rule alone would keep", &metafetch.MetadataCandidate{DurationSec: 36000 - 3180, DurationDeltaSec: 3180}, complete(36000), true},
 		{"hides a row over 10% off", &metafetch.MetadataCandidate{DurationSec: 3500}, complete(3000), true},
 		{"keeps a row within ten minutes and within 10%", &metafetch.MetadataCandidate{DurationSec: 35700, DurationDeltaSec: 300}, complete(36000), false},
 		{"keeps a row whose runtime is unknown", nil, metabatch.BookFileFacts{}, false},
-		// rowState.test.ts runtimeDiffers, through the switch.
+		// The per-row warning threshold (rowState.ts runtimeDiffers), through the switch.
 		{"warns strictly above ten minutes (at)", &metafetch.MetadataCandidate{DurationDeltaSec: 600}, metabatch.BookFileFacts{}, false},
 		{"warns strictly above ten minutes (over)", &metafetch.MetadataCandidate{DurationDeltaSec: 601}, metabatch.BookFileFacts{}, true},
 		{"symmetric delta", &metafetch.MetadataCandidate{DurationDeltaSec: -900}, metabatch.BookFileFacts{}, true},
@@ -1427,23 +1428,210 @@ func TestReviewPage_CountsUnderPageAndIDsAll(t *testing.T) {
 	require.Equal(t, page+3, reviewRequestCount(t, metrics.ReviewViewPage), "an id list is not a page")
 }
 
-// TestReviewQuery_BucketAnyListsBothBucketsByTitleOnly: bucket=any is every
-// row of both buckets narrowed by the Title and nothing else, the lookup the
-// lane uses to prune a selection across chips.
-func TestReviewQuery_BucketAnyListsBothBucketsByTitleOnly(t *testing.T) {
+// serveSelection posts a selection check: the filter is the query string, the
+// ids the body.
+func serveSelection(t testing.TB, h *MetadataCacheHandler, query string, ids []string) (int, []byte) {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"ids": ids})
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/metadata/cache/review/selection?"+query, strings.NewReader(string(raw)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.ReviewSelectionCheck(c)
+	return w.Code, w.Body.Bytes()
+}
+
+type selectionResp struct {
+	Data struct {
+		Matching    []string `json:"matching"`
+		NotMatching []string `json:"not_matching"`
+		Unknown     []string `json:"unknown"`
+		Generation  string   `json:"generation"`
+	} `json:"data"`
+}
+
+// TestReviewQuery_BucketAnyIsRefusedOnThePage: bucket=any belongs to the
+// selection check; a page or an id list of both buckets is not a request the
+// server answers.
+func TestReviewQuery_BucketAnyIsRefusedOnThePage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	for _, q := range []string{"view=page&bucket=any", "view=page&ids=all&bucket=any"} {
+		code, body, _ := serveReviewRaw(t, h, q)
+		require.Equal(t, http.StatusBadRequest, code, string(body))
+	}
+}
 
+// TestReviewSelectionCheck_ClassifiesTheSelectionAgainstTheFilter: with
+// bucket=any the filter is the Title only, over both buckets; a selected book
+// the Title lists matches, one of either bucket it does not list is
+// not_matching, and an id the review set does not hold is unknown. The
+// response is as big as the selection.
+func TestReviewSelectionCheck_ClassifiesTheSelectionAgainstTheFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	reviewable, _, _ := servePage(t, h, "ids=all")
 	unreviewable, _, _ := servePage(t, h, "ids=all&bucket=unreviewable")
-	require.NotEmpty(t, reviewable.Data.IDs)
+	require.GreaterOrEqual(t, len(reviewable.Data.IDs), 2)
 	require.NotEmpty(t, unreviewable.Data.IDs)
-	all, _, _ := servePage(t, h, "ids=all&bucket=any&hide_applied=true&min_confidence=99")
-	require.ElementsMatch(t, append(append([]string{}, reviewable.Data.IDs...), unreviewable.Data.IDs...), all.Data.IDs,
-		"every other filter is paused, as in a chip view")
-	require.Equal(t, len(all.Data.IDs), all.Data.Total)
+	keep, other, unrev := reviewable.Data.IDs[0], reviewable.Data.IDs[1], unreviewable.Data.IDs[0]
+	keepTitle := titleOfID(t, h, keep)
 
-	byTitle, _, _ := servePage(t, h, "ids=all&bucket=any&q=Title+000003")
-	require.Equal(t, []string{goldenBookID(3)}, byTitle.Data.IDs)
+	code, body := serveSelection(t, h, "bucket=any&q="+url.QueryEscape(keepTitle), []string{unrev, keep, other, "not-in-the-review-set", keep})
+	require.Equal(t, http.StatusOK, code, string(body))
+	var got selectionResp
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.Equal(t, []string{keep}, got.Data.Matching)
+	require.Equal(t, []string{unrev, other}, got.Data.NotMatching, "both buckets count as known, in the order sent, duplicates once")
+	require.Equal(t, []string{"not-in-the-review-set"}, got.Data.Unknown)
+	require.NotEmpty(t, got.Data.Generation)
+}
+
+// The default bucket is the reviewable one under the page's full filter, and
+// an unreviewable book is then outside the universe: unknown, not
+// not_matching, which is what lets the lane leave it selected when a chip is
+// left.
+func TestReviewSelectionCheck_ReviewableBucketUsesTheFullFilterAndLeavesOthersUnknown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	all, _, _ := servePage(t, h, "ids=all")
+	unreviewable, _, _ := servePage(t, h, "ids=all&bucket=unreviewable")
+	filtered, _, _ := servePage(t, h, "ids=all&hide_no_match=true")
+	hidden := ""
+	for _, id := range all.Data.IDs {
+		if !slices.Contains(filtered.Data.IDs, id) {
+			hidden = id
+			break
+		}
+	}
+	require.NotEmpty(t, hidden, "the fixture has a no-match row for hide_no_match to hide")
+	shown, unrev := filtered.Data.IDs[0], unreviewable.Data.IDs[0]
+
+	code, body := serveSelection(t, h, "hide_no_match=true", []string{shown, hidden, unrev})
+	require.Equal(t, http.StatusOK, code, string(body))
+	var got selectionResp
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.Equal(t, []string{shown}, got.Data.Matching)
+	require.Equal(t, []string{hidden}, got.Data.NotMatching)
+	require.Equal(t, []string{unrev}, got.Data.Unknown)
+}
+
+// The selection is bounded by the apply cap (a selection above it could not be
+// applied, so checking it is never needed), a chip is refused, a bad body is a
+// 400, and every request is recorded under view="selection".
+func TestReviewSelectionCheck_RefusalsAndMetric(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	metrics.Register()
+	prev := config.AppConfig.BulkApplyMaxItems
+	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+	config.AppConfig.BulkApplyMaxItems = 2
+	before := reviewRequestCount(t, metrics.ReviewViewSelection)
+
+	code, body := serveSelection(t, h, "", []string{"a", "b", "c"})
+	require.Equal(t, http.StatusUnprocessableEntity, code, string(body))
+	require.Contains(t, string(body), "SELECTION_TOO_LARGE")
+	code, body = serveSelection(t, h, "", []string{"a", "b"})
+	require.Equal(t, http.StatusOK, code, string(body))
+	code, _ = serveSelection(t, h, "chip=matched", []string{"a"})
+	require.Equal(t, http.StatusBadRequest, code)
+	code, _ = serveSelection(t, h, "bucket=elsewhere", []string{"a"})
+	require.Equal(t, http.StatusBadRequest, code)
+	code, _ = serveSelection(t, h, "q=title%3A%2Fa%28b%2F", []string{"a"})
+	require.Equal(t, http.StatusBadRequest, code, "a Title the server cannot compile is the Title error")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("{not json"))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.ReviewSelectionCheck(c)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Equal(t, before+6, reviewRequestCount(t, metrics.ReviewViewSelection))
+}
+
+func titleOfID(t testing.TB, h *MetadataCacheHandler, id string) string {
+	t.Helper()
+	code, body, _ := serveReviewRaw(t, h, "view=page&limit=500")
+	require.Equal(t, http.StatusOK, code)
+	var r pageResp
+	require.NoError(t, json.Unmarshal(body, &r))
+	for _, row := range r.Data.Results {
+		if row.Book.ID == id {
+			return row.Book.Title
+		}
+	}
+	t.Fatalf("book %s not on the page", id)
+	return ""
+}
+
+// TestReviewPage_IDsAllCarriesTheApplyCap: an id list states the cap the way a
+// page does, so the lane that selects "all N" holds the server's limit even
+// when its last page predates a config change.
+func TestReviewPage_IDsAllCarriesTheApplyCap(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	prev := config.AppConfig.BulkApplyMaxItems
+	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+	config.AppConfig.BulkApplyMaxItems = 37
+	_, body, _ := serveReviewRaw(t, h, "view=page&ids=all")
+	var got struct {
+		Data struct {
+			Cap *int `json:"bulk_apply_max_items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.NotNil(t, got.Data.Cap, string(body))
+	require.Equal(t, 37, *got.Data.Cap)
+}
+
+// scanFakeStore counts and can fail the owner-rejection scan.
+type scanFakeStore struct {
+	MetadataCacheBookStore
+	scans int
+	err   error
+}
+
+func (f *scanFakeStore) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	f.scans++
+	return nil, f.err
+}
+
+// TestReviewPage_RejectionScanOnlyForPagesWithReviewableRows: the one scan of
+// the owner's rejections is skipped when the page lists no reviewable row (an
+// unreviewable chip, an offset past the end), and a failed scan is reported as
+// owner_rejections_unavailable instead of as rows nobody rejected.
+func TestReviewPage_RejectionScanOnlyForPagesWithReviewableRows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	fake := &scanFakeStore{MetadataCacheBookStore: store}
+	h.store = fake
+	unavailable := func(query string) bool {
+		code, body, _ := serveReviewRaw(t, h, query)
+		require.Equal(t, http.StatusOK, code, string(body))
+		var got struct {
+			Data struct {
+				Unavailable bool `json:"owner_rejections_unavailable"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(body, &got))
+		return got.Data.Unavailable
+	}
+
+	require.False(t, unavailable("view=page&limit=5"))
+	require.Equal(t, 1, fake.scans, "a page of reviewable rows reads the rejections once")
+	before := fake.scans
+	require.False(t, unavailable("view=page&bucket=unreviewable&limit=5"))
+	require.False(t, unavailable("view=page&limit=5&offset=100000"))
+	require.Equal(t, before, fake.scans, "a page with no reviewable row does not scan")
+
+	fake.err = errors.New("disk")
+	require.True(t, unavailable("view=page&limit=5"), "a failed scan says the marks are missing")
+	require.False(t, unavailable("view=page&bucket=unreviewable&limit=5"), "nothing to mark, nothing missing")
 }

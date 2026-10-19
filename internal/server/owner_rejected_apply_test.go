@@ -1,5 +1,5 @@
 // file: internal/server/owner_rejected_apply_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d5304ea1-88e0-43c3-9c2b-1b81c01fe9eb
 // last-edited: 2026-10-19
 
@@ -292,7 +292,7 @@ func TestReviewLane_MarksOwnerRejectedCandidate(t *testing.T) {
 	require.True(t, body.Data.Results[0].OwnerRejected, "the lane does not mark the rejected candidate")
 }
 
-// The Review > Metadata rail's "owner rejected" chip counts page rows, and
+// The Review > Metadata per-row Rejected badge reads the row's mark, and
 // view=page is the only list the lane loads: its rows must carry the mark
 // themselves (the lane's ids= detail merge copies only the candidate). A row
 // whose candidate the owner did not reject must not carry it.

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.193.0
+// version: 2.194.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-19
 
@@ -4433,10 +4433,10 @@ export async function listCachedCandidates(
  * Which rows a review query lists (the `bucket` of view=page). 'reviewable'
  * (the default) is the review queue; 'unreviewable' is the books the summary
  * counts but the queue cannot hold (no candidate stored, or one that will not
- * decode); 'any' is both, narrowed by the Title only -- how the lane asks which
- * selected books, in whatever chip they sit, still match a new Title.
+ * decode). The selection check (checkReviewSelection) additionally takes 'any',
+ * both buckets narrowed by the Title only, which view=page refuses.
  */
-export type ReviewBucket = 'reviewable' | 'unreviewable' | 'any';
+export type ReviewBucket = 'reviewable' | 'unreviewable';
 
 /**
  * getCachedReviewResults fetches the full rows (candidate description,
@@ -4650,12 +4650,24 @@ export interface ReviewPageResponse {
    * lane needs no settings permission to learn it; absent from an older server.
    */
   bulk_apply_max_items?: number;
+  /**
+   * True when the server could not read the owner's rejections for this page:
+   * no row carries owner_rejected, so a row without the badge is not known to
+   * be one the owner never rejected. The page says so.
+   */
+  owner_rejections_unavailable?: boolean;
 }
 
 export interface ReviewMatchingIds {
   ids: string[];
   total: number;
   generation: string;
+  /**
+   * The server's bulk apply cap, as in a page. Sent with every id list so a
+   * "select all N" holds the limit the server enforces now; absent from an
+   * older server.
+   */
+  bulk_apply_max_items?: number;
   /**
    * Asked for with `pins`: book id to the pin of the candidate the list shows
    * for it (no origin; the lane sets 'review_bulk'), for every listed book
@@ -4666,7 +4678,10 @@ export interface ReviewMatchingIds {
   pins_omitted?: boolean;
 }
 
-function reviewQueryString(params: ReviewPageParams, extra: Record<string, string> = {}): string {
+function reviewQueryString(
+  params: Omit<ReviewPageParams, 'bucket'> & { bucket?: ReviewBucket | 'any' },
+  extra: Record<string, string> = {}
+): string {
   const out = new URLSearchParams({ view: 'page', ...extra });
   const text = (k: string, v: string | undefined) => {
     if (v) out.set(k, v);
@@ -4739,6 +4754,54 @@ export async function getReviewMatchingIds(
     { timeoutMs: CACHED_REVIEW_TIMEOUT_MS, signal }
   );
   if (!response.ok) throw await buildApiError(response, 'Failed to list the matching books');
+  const data = await response.json();
+  return data.data ?? data;
+}
+
+/** The filter of a selection check: the page's filters, minus what a check cannot read. */
+export type ReviewSelectionParams = Omit<ReviewQueryParams, 'bucket' | 'chip'> & {
+  /** 'any' is both buckets, narrowed by q only. Default: the reviewable bucket. */
+  bucket?: ReviewBucket | 'any';
+};
+
+/**
+ * Which of the checked ids a filter lists. `matching` are listed;
+ * `not_matching` are books of the filter's bucket the filter does not list;
+ * `unknown` are not in the bucket at all (not loaded, applied, or in the other
+ * bucket). Every id sent is in exactly one, in the order sent.
+ */
+export interface ReviewSelectionCheck {
+  matching: string[];
+  not_matching: string[];
+  unknown: string[];
+  generation: string;
+}
+
+/**
+ * Asks the server which of the selected books `params` still lists
+ * (POST .../review/selection). The request and the answer are as large as the
+ * selection (at most the bulk apply cap, which the server enforces with a 422),
+ * never the library's id list. The lane calls it when a filter changes to drop
+ * the selected books the new filter hides.
+ */
+export async function checkReviewSelection(
+  params: ReviewSelectionParams,
+  ids: string[],
+  signal?: AbortSignal
+): Promise<ReviewSelectionCheck> {
+  const query = new URLSearchParams(reviewQueryString(params));
+  query.delete('view');
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/metadata/cache/review/selection?${query.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+      timeoutMs: CACHED_REVIEW_TIMEOUT_MS,
+      signal,
+    }
+  );
+  if (!response.ok) throw await buildApiError(response, 'Failed to check the selection');
   const data = await response.json();
   return data.data ?? data;
 }
@@ -4835,11 +4898,24 @@ export type ApplyPin = CandidatePin | OwnerReviewMarker;
  */
 export type BulkApplyMode = 'fill' | 'replace';
 
+/**
+ * One chunk of a bulk apply split over several requests: the same `id` on
+ * every chunk and the `total` number of books the whole apply will reach. The
+ * server holds the batch to the bulk apply cap across the chunks (a total over
+ * the cap, a total that changes, or chunks adding up to more are refused with
+ * the 422 cap body). Without it a request is checked alone.
+ */
+export interface ApplyBatch {
+  id: string;
+  total: number;
+}
+
 export async function batchApplyFromCache(
   bookIds: string[],
   writeBack?: boolean,
   pins?: Record<string, ApplyPin>,
-  mode?: BulkApplyMode
+  mode?: BulkApplyMode,
+  batch?: ApplyBatch
 ): Promise<BatchApplyDispatch> {
   // dry_run:false is explicit: absent, the server enqueues a preview
   // (metadata.bulk-apply-preview) and applies nothing.
@@ -4847,6 +4923,10 @@ export async function batchApplyFromCache(
   if (writeBack !== undefined) body.write_back = writeBack;
   if (pins && Object.keys(pins).length > 0) body.pins = pins;
   if (mode !== undefined) body.mode = mode;
+  if (batch) {
+    body.batch_id = batch.id;
+    body.batch_total = batch.total;
+  }
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/batch-apply-cached`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.ownerRejected.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e2b2514-41c9-47c3-b42b-cec3205fd369
 // last-edited: 2026-10-19
 //
@@ -33,7 +33,7 @@ function makeResult(id: string, overrides: Partial<api.CandidateResult> = {}) {
   } as unknown as api.CandidateResult;
 }
 
-function seed(results: api.CandidateResult[]) {
+function seed(results: api.CandidateResult[], unavailable = false) {
   serveReviewList({
     results,
     total_count: results.length,
@@ -41,6 +41,7 @@ function seed(results: api.CandidateResult[]) {
     no_match: 0,
     errors: 0,
     stale: 0,
+    owner_rejections_unavailable: unavailable,
   });
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.getDedupStats).mockResolvedValue({ stats: [] });
@@ -78,5 +79,33 @@ describe('owner-rejected candidates on /review', () => {
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
     expect(await screen.findByTestId('owner-rejected-a')).toHaveTextContent('Rejected');
     expect(screen.queryByTestId('owner-rejected-b')).not.toBeInTheDocument();
+  });
+
+  it('warns, instead of showing unmarked rows, when the rejections could not be read', async () => {
+    seed([makeResult('a'), makeResult('b')], true);
+    render(
+      <MemoryRouter initialEntries={['/review']}>
+        <ToastProvider>
+          <ReviewWorkspace />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+    expect(await screen.findByTestId('owner-rejections-unavailable')).toHaveTextContent(
+      /could not be loaded/
+    );
+  });
+
+  it('shows no warning when the rejections were read', async () => {
+    seed([makeResult('a')]);
+    render(
+      <MemoryRouter initialEntries={['/review']}>
+        <ToastProvider>
+          <ReviewWorkspace />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
+    expect(screen.queryByTestId('owner-rejections-unavailable')).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-10-19
 //
@@ -226,6 +226,23 @@ describe('the lane requests', () => {
     vi.useRealTimers();
   });
 
+  /** Selects `ids` with "Select all N matching", so every one carries a pin. */
+  async function selectAllPinned(result: { current: MetadataLane }, ids: string[]) {
+    vi.mocked(api.getReviewMatchingIds).mockResolvedValue({
+      ids,
+      total: ids.length,
+      generation: 'g1',
+      pins: Object.fromEntries(
+        ids.map((id) => [
+          id,
+          { content_hash: `h-${id}`, source: 'audible', title: 'Work', author: 'Author 01' },
+        ])
+      ),
+    });
+    act(() => result.current.selectAllMatching());
+    await waitFor(() => expect(result.current.selectedIds.size).toBe(ids.length));
+  }
+
   it('takes the bulk apply cap from the page and never reads the config', async () => {
     // GET /config needs the settings permission, which a reviewer may not
     // hold; a lane that read the cap there would fall back to the default and
@@ -233,6 +250,11 @@ describe('the lane requests', () => {
     vi.mocked(api.getConfig).mockRejectedValue(
       Object.assign(new Error('forbidden'), { status: 403 })
     );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op1',
+      requested: 1,
+      write_back: true,
+    });
     vi.mocked(api.getReviewPage).mockResolvedValue({
       ...pageOf(['b1']),
       bulk_apply_max_items: 37,
@@ -241,19 +263,33 @@ describe('the lane requests', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toBeNull();
     expect(api.getConfig).not.toHaveBeenCalled();
+    // Every id is pinned, so the only thing that can refuse the apply is the
+    // cap: without the cap check the call below would reach the server.
     const ids = Array.from({ length: 38 }, (_, i) => `x${i}`);
+    await selectAllPinned(result, ids);
     await act(async () =>
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids })
     );
     expect(api.batchApplyFromCache).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(applyCapMessage(37, 38), 'error');
+    // The twin: exactly the cap, same pins, is sent.
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ids.slice(0, 37) })
+    );
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
   });
 
   it('a page without the cap (an older server) keeps the default cap', async () => {
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op1',
+      requested: 1,
+      write_back: true,
+    });
     vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     const ids = Array.from({ length: DEFAULT_BULK_APPLY_MAX_ITEMS + 1 }, (_, i) => `x${i}`);
+    await selectAllPinned(result, ids);
     await act(async () =>
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids })
     );
@@ -262,6 +298,32 @@ describe('the lane requests', () => {
       applyCapMessage(DEFAULT_BULK_APPLY_MAX_ITEMS, ids.length),
       'error'
     );
+  });
+
+  it('takes the lower of the held cap and the one an id list carries', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue({
+      ...pageOf(['b1']),
+      bulk_apply_max_items: 100,
+    });
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const ids = Array.from({ length: 60 }, (_, i) => `x${i}`);
+    vi.mocked(api.getReviewMatchingIds).mockResolvedValue({
+      ids,
+      total: ids.length,
+      generation: 'g1',
+      bulk_apply_max_items: 50,
+      pins: Object.fromEntries(
+        ids.map((id) => [id, { content_hash: `h-${id}`, source: 'audible', title: 'Work' }])
+      ),
+    });
+    act(() => result.current.selectAllMatching());
+    await waitFor(() => expect(result.current.selectedIds.size).toBe(60));
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids })
+    );
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(applyCapMessage(50, 60), 'error');
   });
 
   it('passes the facets ident_counts through to the rail summary', async () => {
@@ -707,10 +769,10 @@ describe('the lane requests', () => {
   it('apply and reject inside the selection re-check window are refused', async () => {
     armApply();
     vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
-    let answerPrune: (v: api.ReviewMatchingIds) => void = () => {};
-    vi.mocked(api.getReviewMatchingIds).mockImplementation(
+    let answerPrune: (v: api.ReviewSelectionCheck) => void = () => {};
+    vi.mocked(api.checkReviewSelection).mockImplementation(
       () =>
-        new Promise<api.ReviewMatchingIds>((resolve) => {
+        new Promise<api.ReviewSelectionCheck>((resolve) => {
           answerPrune = resolve;
         })
     );
@@ -736,9 +798,206 @@ describe('the lane requests', () => {
       'warning'
     );
     // The check answers: neither book matches the new filters, so neither is kept.
-    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalled());
-    await act(async () => answerPrune({ ids: [], total: 0, generation: 'g1' }));
+    await waitFor(() => expect(api.checkReviewSelection).toHaveBeenCalled());
+    await act(async () =>
+      answerPrune({ matching: [], not_matching: ['a1', 'a2'], unknown: [], generation: 'g1' })
+    );
     await waitFor(() => expect(result.current.selectedIds.size).toBe(0));
+  });
+
+  it('a filter change checks only the SELECTED books with the server, never a library-sized id list', async () => {
+    armApply();
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2', 'a3'], 3, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockImplementation(async (_p, ids) => ({
+      matching: ids.filter((id) => id !== 'a2'),
+      not_matching: ids.filter((id) => id === 'a2'),
+      unknown: [],
+      generation: 'g1',
+    }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await waitFor(() => expect([...result.current.selectedIds]).toEqual(['a1']));
+    expect(api.checkReviewSelection).toHaveBeenCalledTimes(1);
+    expect(api.checkReviewSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ min_confidence: 50 }),
+      ['a1', 'a2'],
+      expect.anything()
+    );
+    // The whole-library id list is not fetched to answer it.
+    expect(api.getReviewMatchingIds).not.toHaveBeenCalled();
+  });
+
+  it('sends a big selection in pieces no larger than the cap and the chunk limit', async () => {
+    const ids = Array.from({ length: 2300 }, (_, i) => `s${i}`);
+    vi.mocked(api.getReviewPage).mockResolvedValue({
+      ...pageOf(['s0'], ids.length, 'g1'),
+      bulk_apply_max_items: 5000,
+    });
+    vi.mocked(api.checkReviewSelection).mockImplementation(async (_p, chunkIds) => ({
+      matching: chunkIds,
+      not_matching: [],
+      unknown: [],
+      generation: 'g1',
+    }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(ids, true));
+    act(() => result.current.setFilters({ confidenceThreshold: 10 }));
+    await waitFor(() => expect(api.checkReviewSelection).toHaveBeenCalledTimes(3));
+    const sizes = vi.mocked(api.checkReviewSelection).mock.calls.map((c) => c[1].length);
+    expect(sizes).toEqual([1000, 1000, 300]);
+    expect(result.current.selectedIds.size).toBe(2300);
+  });
+
+  it('a failed check outside a chip clears the selection and says so', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(new Error('boom'));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await waitFor(() => expect(result.current.selectedIds.size).toBe(0));
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^Could not check the selection against the new filters/),
+      'warning'
+    );
+  });
+
+  it('a failed Title check inside a chip warns, keeps the selection and holds bulk apply until it is cleared', async () => {
+    armApply();
+    vi.mocked(api.getReviewPage).mockImplementation(async (params) =>
+      params.q ? pageOf(['a1'], 1, 'g1') : pageOf(['a1', 'a2'], 2, 'g1')
+    );
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(new Error('too slow'));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.toggleChipFilter('matched'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ titleFilter: '/^Title a1/' }));
+    await waitFor(() => expect(api.checkReviewSelection).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/^Could not check the selection against the new title filter/),
+        'warning'
+      )
+    );
+    // Kept, not silently trusted.
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    toast.mockClear();
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a1'] })
+    );
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^The selection could not be checked against the current filters/),
+      'warning'
+    );
+    // Clearing the selection ends the hold: a book picked from here on is
+    // picked from the view on screen.
+    act(() => result.current.clearSelection());
+    act(() => result.current.setSelection(['a1'], true));
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a1'] })
+    );
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('a Title change is still pruned when a paused switch is flipped inside its debounce', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockImplementation(async (_params, ids) => ({
+      matching: ids.filter((id) => id === 'a1'),
+      not_matching: ids.filter((id) => id !== 'a1'),
+      unknown: [],
+      generation: 'g1',
+    }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.toggleChipFilter('matched'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    // The Title, then a switch the chip view pauses, before the debounce ends:
+    // the second change supersedes the first run, and must not lose its Title.
+    act(() => result.current.setFilters({ titleFilter: '/^Title a1/' }));
+    act(() => result.current.setFilters({ hideApplied: false }));
+    await waitFor(() => expect([...result.current.selectedIds]).toEqual(['a1']));
+    expect(api.checkReviewSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket: 'any', q: '/^Title a1/' }),
+      ['a1', 'a2'],
+      expect.anything()
+    );
+  });
+
+  it('leaving a chip checks the selection against the filters it paused', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    // The queue lists only a1; a2 is a queue book the restored filters hide;
+    // u1 is in a chip the queue has no row for.
+    vi.mocked(api.checkReviewSelection).mockImplementation(async (_params, ids) => ({
+      matching: ids.filter((id) => id === 'a1'),
+      not_matching: ids.filter((id) => id === 'a2'),
+      unknown: ids.filter((id) => id === 'u1'),
+      generation: 'g1',
+    }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.toggleChipFilter('matched'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2', 'u1'], true));
+    act(() => result.current.clearChipFilter());
+    await waitFor(() => expect([...result.current.selectedIds].sort()).toEqual(['a1', 'u1']));
+    // The question is the full filter over the queue, not the Title over both buckets.
+    const last = vi.mocked(api.checkReviewSelection).mock.calls.at(-1)!;
+    expect(last[0].bucket).toBeUndefined();
+    expect(last[0].hide_no_match).toBe(true);
+  });
+
+  it('flags a page whose owner rejections could not be read', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue({
+      ...pageOf(['a1']),
+      owner_rejections_unavailable: true,
+    });
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.ownerRejectionsUnavailable).toBe(true);
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1']));
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.ownerRejectionsUnavailable).toBe(false));
+  });
+
+  it('every chunk of a split apply carries one batch id and the batch total', async () => {
+    armApply();
+    const ids = Array.from({ length: 1200 }, (_, i) => `c${i}`);
+    vi.mocked(api.getReviewPage).mockResolvedValue({
+      ...pageOf(['c0'], ids.length, 'g1'),
+      bulk_apply_max_items: 5000,
+    });
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await selectAllPinned(result, ids);
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids })
+    );
+    const calls = vi.mocked(api.batchApplyFromCache).mock.calls;
+    expect(calls).toHaveLength(3);
+    const batches = calls.map((c) => c[4]);
+    expect(batches[0]).toEqual({ id: expect.any(String), total: 1200 });
+    expect(new Set(batches.map((b) => b?.id)).size).toBe(1);
+    expect(batches.every((b) => b?.total === 1200)).toBe(true);
+  });
+
+  it('a single-request apply carries no batch', async () => {
+    armApply();
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['c0', 'c1'], 2, 'g1'));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['c0', 'c1'] })
+    );
+    expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.batchApplyFromCache).mock.calls[0][4]).toBeUndefined();
   });
 
   it('Apply page right after a filter change is refused until the new page lands', async () => {
