@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.194.0
+// version: 2.195.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-19
 
@@ -58,6 +58,13 @@ const DEDUP_CANDIDATES_TIMEOUT_MS = 60_000;
 const CACHED_REVIEW_TIMEOUT_MS = 300_000;
 
 /**
+ * Deadline of one selection check. The request is as big as the selection and
+ * the server answers from an already-built snapshot, so a slow answer is a
+ * stuck one: the lane treats the timeout as a failed check and holds.
+ */
+export const SELECTION_CHECK_TIMEOUT_MS = 15_000;
+
+/**
  * wrapTrigger is the single seam every op-launching API call funnels through.
  * It inserts an optimistic placeholder into the ops store BEFORE the network
  * call, then reconciles it with the server's real op_id (which schedules a
@@ -76,12 +83,15 @@ function wrapTrigger<T extends { id?: string; operation_id?: string }>(
 export class ApiError extends Error {
   readonly status: number;
   readonly data?: unknown;
+  /** The response's Retry-After (a count of seconds), in ms; unset when absent or not a count. */
+  readonly retryAfterMs?: number;
 
-  constructor(message: string, status: number, data?: unknown) {
+  constructor(message: string, status: number, data?: unknown, retryAfterMs?: number) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.data = data;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -104,7 +114,10 @@ const buildApiError = async (response: Response, fallbackMessage: string) => {
     typeof (data as { error?: string }).error === 'string'
       ? (data as { error: string }).error
       : fallbackMessage;
-  return new ApiError(message, response.status, data);
+  const retryAfter = Number(response.headers?.get?.('Retry-After'));
+  const retryAfterMs =
+    Number.isFinite(retryAfter) && retryAfter > 0 ? Math.round(retryAfter * 1000) : undefined;
+  return new ApiError(message, response.status, data, retryAfterMs);
 };
 
 // Response types
@@ -4797,7 +4810,7 @@ export async function checkReviewSelection(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
-      timeoutMs: CACHED_REVIEW_TIMEOUT_MS,
+      timeoutMs: SELECTION_CHECK_TIMEOUT_MS,
       signal,
     }
   );
@@ -4900,14 +4913,18 @@ export type BulkApplyMode = 'fill' | 'replace';
 
 /**
  * One chunk of a bulk apply split over several requests: the same `id` on
- * every chunk and the `total` number of books the whole apply will reach. The
- * server holds the batch to the bulk apply cap across the chunks (a total over
- * the cap, a total that changes, or chunks adding up to more are refused with
- * the 422 cap body). Without it a request is checked alone.
+ * every chunk (unguessable: the server keys it per user), the `total` number
+ * of books the whole apply will reach, and this chunk's `index` (a resent
+ * chunk keeps its index and is not counted twice). The server enforces the
+ * total a cooperating client declares: a total over the cap is refused with
+ * the 422 cap body, a total that changes or chunks adding up to more with 422
+ * BATCH_TOTAL_MISMATCH / BATCH_EXCEEDED. It is an accident guard, not a quota:
+ * a request without a batch is checked alone.
  */
 export interface ApplyBatch {
   id: string;
   total: number;
+  index: number;
 }
 
 export async function batchApplyFromCache(
@@ -4926,6 +4943,7 @@ export async function batchApplyFromCache(
   if (batch) {
     body.batch_id = batch.id;
     body.batch_total = batch.total;
+    body.batch_index = batch.index;
   }
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/batch-apply-cached`, {
     method: 'POST',

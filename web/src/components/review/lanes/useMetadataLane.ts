@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.47.0
+// version: 1.48.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-19
 //
@@ -94,12 +94,36 @@ export function pinOfCandidate(
 export const APPLY_CHUNK_SIZE = 500;
 /** Ids per selection-check request (also bounded by the bulk apply cap). */
 export const SELECTION_CHECK_CHUNK = 1000;
+/** A busy (503) selection check is retried after Retry-After, within these bounds. */
+export const PRUNE_BUSY_DEFAULT_DELAY_MS = 5_000;
+export const PRUNE_BUSY_MIN_DELAY_MS = 1_000;
+export const PRUNE_BUSY_MAX_DELAY_MS = 60_000;
+export const PRUNE_BUSY_MAX_RETRIES = 5;
 
-/** An opaque id naming one chunked apply (see api.ApplyBatch). */
+/**
+ * An opaque, unguessable id naming one chunked apply (see api.ApplyBatch). The
+ * server keys the batch per user, so the id is not a secret, but it must not
+ * be predictable either (no Date.now/Math.random fallback): 128 random bits.
+ */
 export function newBatchId(): string {
   const c = globalThis.crypto;
   if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-  return `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  if (c && typeof c.getRandomValues === 'function') {
+    const bytes = c.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('This browser cannot generate a random batch id, so a large apply cannot be split.');
+}
+
+/** Error codes of a batch the server's ledger refused (internal/applycap). */
+const BATCH_REFUSAL_CODES = ['BATCH_TOTAL_MISMATCH', 'BATCH_EXCEEDED'];
+
+/** The server's message when `err` is a batch-ledger refusal, else null. */
+export function batchRefusalMessage(err: unknown): string | null {
+  const e = err as { status?: number; message?: string; data?: { code?: unknown } } | null;
+  if (e?.status !== 422 || typeof e.data?.code !== 'string') return null;
+  if (!BATCH_REFUSAL_CODES.includes(e.data.code)) return null;
+  return typeof e.message === 'string' && e.message ? e.message : null;
 }
 export const FETCH_CHUNK_SIZE = 1000;
 /** Concurrent per-book requests (reject, clear no-match): no bulk endpoint exists. */
@@ -1371,6 +1395,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // action can say the selection could not be checked rather than "is being
   // checked".
   const pruneFailedKeyRef = useRef<string | null>(null);
+  // A busy server (503) is asked again after its Retry-After: the counter
+  // re-runs the prune effect, the ref bounds the attempts, the timer is
+  // cleared with the effect.
+  const [pruneRetry, setPruneRetry] = useState(0);
+  const pruneRetriesRef = useRef({ key: '', n: 0 });
+  const pruneRetryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // What the effects below need to read at the moment they fire without
   // re-running when it changes.
@@ -1811,7 +1841,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         );
         return;
       }
-      toast(`Failed to start applying ${requestedIds.length} book(s)`, 'error');
+      // The batch ledger's refusals say what happened to the chunks before
+      // this one, which a generic failure message cannot.
+      const refusal = batchRefusalMessage(err);
+      toast(refusal ?? `Failed to start applying ${requestedIds.length} book(s)`, 'error');
     },
     [toast, refresh, releaseInFlight]
   );
@@ -1874,8 +1907,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       // the whole batch itself, once.
       announce = true,
       // Set by applyMany for every chunk of an apply split over several
-      // requests: the batch's id and total, which the server holds to the
-      // bulk apply cap across the chunks.
+      // requests: the batch's id, total and this chunk's index, which the
+      // server checks against the total the client declared.
       batch?: api.ApplyBatch
     ): Promise<void> => {
       // mode is passed only by the bulk path (applyMany); the single-row
@@ -2016,15 +2049,20 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // bar shows one progress count across them.
         const { pins, mode } = captured;
         const chunks = chunk(bookIds, APPLY_CHUNK_SIZE);
-        // One id for the whole apply, with its total, on every chunk: the
-        // server holds the chunks to the cap together (applycap.BatchLedger),
-        // so splitting for the body limit can never be a way around it. One
-        // request needs none: it is checked alone.
-        const batch: api.ApplyBatch | undefined =
-          chunks.length > 1 ? { id: newBatchId(), total: bookIds.length } : undefined;
+        // One id for the whole apply, with its total and each chunk's index:
+        // the server (applycap.BatchLedger) holds the chunks of a batch to the
+        // total this client declares, so splitting for the body limit does
+        // not by itself get past the cap. That is the guarantee, and no
+        // more: the ledger trusts the declared total and id, so a client that
+        // leaves them out or changes the id gets only the per-request check
+        // (it is an accident guard, not a per-user quota). One request needs
+        // no batch: it is checked alone.
+        const batchId = chunks.length > 1 ? newBatchId() : undefined;
         let sent = 0;
         try {
-          for (const ids of chunks) {
+          for (const [index, ids] of chunks.entries()) {
+            const batch: api.ApplyBatch | undefined =
+              batchId === undefined ? undefined : { id: batchId, total: bookIds.length, index };
             if (chunks.length > 1) {
               setBulkProgress({ label: 'Queuing apply', done: sent, total: bookIds.length });
             }
@@ -2707,30 +2745,43 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       const leftChip = baseline.chip !== null && chip === null;
       const titleChanged = baseline.title !== (params.q ?? '');
       // What to ask, and which answers drop a book.
-      let ask: api.ReviewSelectionParams;
-      let dropUnknown: boolean;
-      if (chip === null) {
-        ask = params;
-        dropUnknown = !leftChip;
-      } else {
-        if (!titleChanged || !params.q) {
-          settle(current);
-          return;
-        }
-        ask = { bucket: 'any', q: params.q };
-        dropUnknown = false;
+      const asks: { ask: api.ReviewSelectionParams; dropUnknown: boolean }[] = [];
+      // Outside a chip: the full current filter over the reviewable queue.
+      if (chip === null) asks.push({ ask: params, dropUnknown: !leftChip });
+      // A changed Title is also asked over BOTH buckets, in or out of a chip:
+      // the queue question above cannot see a selected book of a chip the
+      // queue has no row for (select B in no-candidates, type a Title that
+      // hides B, leave the chip inside the debounce), and inside a chip this
+      // is the only question. Its not_matching books are dropped; an id the
+      // set does not hold stays. An empty or invalid Title asks nothing.
+      if (titleChanged && params.q) {
+        asks.push({ ask: { bucket: 'any', q: params.q }, dropUnknown: false });
       }
+      if (asks.length === 0) {
+        settle(current);
+        return;
+      }
+      // The check could not be made: keep the selection, say so, and refuse
+      // bulk apply and reject (refuseUnsettled) until a check succeeds, the
+      // selection is cleared, or the filters change. The baseline is NOT
+      // advanced, so the next run asks the same question again.
+      const hold = (message: string) => {
+        pruneFailedKeyRef.current = settleKey;
+        toastRef.current(message, 'warning');
+      };
       const run = async () => {
         try {
           const drop = new Set<string>();
           const checked = new Set<string>();
           const size = Math.max(1, Math.min(applyCapRef.current, SELECTION_CHECK_CHUNK));
-          for (const ids of chunk(selected, size)) {
-            const answer = await api.checkReviewSelection(ask, ids, controller.signal);
-            if (controller.signal.aborted) return;
-            ids.forEach((id) => checked.add(id));
-            answer.not_matching.forEach((id) => drop.add(id));
-            if (dropUnknown) answer.unknown.forEach((id) => drop.add(id));
+          for (const { ask, dropUnknown } of asks) {
+            for (const ids of chunk(selected, size)) {
+              const answer = await api.checkReviewSelection(ask, ids, controller.signal);
+              if (controller.signal.aborted) return;
+              ids.forEach((id) => checked.add(id));
+              answer.not_matching.forEach((id) => drop.add(id));
+              if (dropUnknown) answer.unknown.forEach((id) => drop.add(id));
+            }
           }
           // Only the books that were asked about: one ticked while the check
           // was out was picked from the new view and is not touched.
@@ -2738,9 +2789,46 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             const next = new Set([...prev].filter((id) => !(checked.has(id) && drop.has(id))));
             return next.size === prev.size ? prev : next;
           });
+          pruneRetriesRef.current = { key: settleKey, n: 0 };
           settle(current);
         } catch (err) {
           if (controller.signal.aborted || isAbortError(err)) return;
+          const failed = err as { status?: number; name?: string; retryAfterMs?: number; message?: string; data?: { field?: unknown } } | null;
+          const clearHint = 'Applying the selection is held: clear the selection or change the filters.';
+          if (failed?.status === 400 && failed.data?.field === 'q') {
+            // The server refused the Title pattern (RE2 syntax, too slow,
+            // inexact): the page shows the same refusal under the Title box.
+            // That is a wrong pattern, not a reason to lose the selection.
+            const message = failed.message || 'The Title filter was refused.';
+            setServerTitleError(message);
+            hold(`The Title filter could not be checked against the selection (${message}). ${clearHint}`);
+            return;
+          }
+          if (failed?.status === 503) {
+            // Busy, not broken: hold, and ask again after Retry-After.
+            if (pruneRetriesRef.current.key !== settleKey) {
+              pruneRetriesRef.current = { key: settleKey, n: 0 };
+            }
+            if (pruneRetriesRef.current.n < PRUNE_BUSY_MAX_RETRIES) {
+              pruneRetriesRef.current.n += 1;
+              const delay = Math.min(
+                PRUNE_BUSY_MAX_DELAY_MS,
+                Math.max(PRUNE_BUSY_MIN_DELAY_MS, failed.retryAfterMs ?? PRUNE_BUSY_DEFAULT_DELAY_MS)
+              );
+              pruneRetryTimerRef.current = setTimeout(() => setPruneRetry((n) => n + 1), delay);
+              hold(
+                `The server is busy, so the selection could not be checked yet. It will be checked again ` +
+                  `in ${Math.ceil(delay / 1000)}s. ${clearHint}`
+              );
+            } else {
+              hold(`The server stayed busy, so the selection could not be checked. ${clearHint}`);
+            }
+            return;
+          }
+          if (failed?.name === 'ApiTimeoutError') {
+            hold(`Checking the selection took too long. ${clearHint}`);
+            return;
+          }
           if (chip === null) {
             setSelectedIds(new Set());
             toastRef.current(
@@ -2751,23 +2839,20 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             settle(current);
             return;
           }
-          pruneFailedKeyRef.current = settleKey;
-          toastRef.current(
-            'Could not check the selection against the new title filter. Applying the selection ' +
-              'is held until it can be checked: clear the selection or change the filters.',
-            'warning'
-          );
+          hold(`Could not check the selection against the new title filter. ${clearHint}`);
         }
       };
       void run();
     }, PAGE_QUERY_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
+      clearTimeout(pruneRetryTimerRef.current);
       controller.abort();
     };
-    // Only a change of the view runs the check; the rest is read from refs.
+    // A change of the view runs the check (pruneRetry re-runs it after a busy
+    // server); the rest is read from refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pruneKey]);
+  }, [pruneKey, pruneRetry]);
 
   // An emptied selection has nothing to check: a failed or pending check is
   // moot, and refuseUnsettled must not keep refusing on it.

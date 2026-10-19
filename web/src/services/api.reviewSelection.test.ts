@@ -1,5 +1,5 @@
 // file: web/src/services/api.reviewSelection.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c0e2d5b-3a91-4f68-b4d2-91e6a8c05f17
 // last-edited: 2026-10-19
 //
@@ -72,8 +72,8 @@ describe('batchApplyFromCache batch', () => {
     }) as unknown as typeof fetch;
   });
 
-  it('sends the batch id and total with a chunk, and nothing without one', async () => {
-    await batchApplyFromCache(['a', 'b'], undefined, undefined, 'fill', { id: 'B1', total: 900 });
+  it('sends the batch id, total and index with a chunk, and nothing without one', async () => {
+    await batchApplyFromCache(['a', 'b'], undefined, undefined, 'fill', { id: 'B1', total: 900, index: 2 });
     let body = JSON.parse(
       String(
         (
@@ -89,6 +89,7 @@ describe('batchApplyFromCache batch', () => {
       dry_run: false,
       batch_id: 'B1',
       batch_total: 900,
+      batch_index: 2,
     });
 
     (global.fetch as ReturnType<typeof vi.fn>).mockClear();

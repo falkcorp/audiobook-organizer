@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-10-19
 //
@@ -24,6 +24,7 @@ import {
   DEFAULT_BULK_APPLY_MAX_ITEMS,
   EXPORT_QUEUE_CHANGED_MESSAGE,
   MAX_QUERY_SKIPPED_IDS,
+  newBatchId,
   useMetadataLane,
   type ChipFilter,
   type MetadataLane,
@@ -954,6 +955,115 @@ describe('the lane requests', () => {
     expect(last[0].hide_no_match).toBe(true);
   });
 
+  it('a Title change inside a chip is not lost by leaving the chip within the debounce', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    // A is selected in the queue, B in a chip the queue has no row for. The
+    // Title lists A only. The queue question cannot see B (unknown); only the
+    // Title over both buckets says B is hidden.
+    vi.mocked(api.checkReviewSelection).mockImplementation(async (ask, ids) =>
+      ask.bucket === 'any'
+        ? {
+            matching: ids.filter((id) => id === 'a1'),
+            not_matching: ids.filter((id) => id === 'b1'),
+            unknown: [],
+            generation: 'g1',
+          }
+        : {
+            matching: ids.filter((id) => id === 'a1'),
+            not_matching: [],
+            unknown: ids.filter((id) => id === 'b1'),
+            generation: 'g1',
+          }
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.toggleChipFilter('matched'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'b1'], true));
+    act(() => result.current.setFilters({ titleFilter: '/^Title a1/' }));
+    // Leave the chip before the Title's own debounce has run.
+    act(() => result.current.clearChipFilter());
+    await waitFor(() => expect([...result.current.selectedIds]).toEqual(['a1']));
+    expect(api.checkReviewSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket: 'any', q: '/^Title a1/' }),
+      ['a1', 'b1'],
+      expect.anything()
+    );
+  });
+
+  it('a refused Title pattern outside a chip keeps the selection and shows the refusal', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(
+      Object.assign(new Error('invalid regular expression'), {
+        status: 400,
+        data: { field: 'q', error: 'invalid regular expression' },
+      })
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ titleFilter: '/^Title (a1/' }));
+    await waitFor(() => expect(api.checkReviewSelection).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/^The Title filter could not be checked against the selection/),
+        'warning'
+      )
+    );
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+    expect(toast).not.toHaveBeenCalledWith(
+      expect.stringMatching(/so it was cleared/),
+      'warning'
+    );
+  });
+
+  it('a busy server holds the selection and the check is asked again after Retry-After', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection)
+      .mockRejectedValueOnce(
+        Object.assign(new Error('busy'), { status: 503, retryAfterMs: 1000, data: {} })
+      )
+      .mockImplementation(async (_p, ids) => ({
+        matching: ids,
+        not_matching: [],
+        unknown: [],
+        generation: 'g1',
+      }));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/^The server is busy, so the selection could not be checked yet/),
+        'warning'
+      )
+    );
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+    await waitFor(() => expect(api.checkReviewSelection).toHaveBeenCalledTimes(2), {
+      timeout: 4000,
+    });
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('a selection check that times out holds the selection and says how to clear the hold', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['a1', 'a2'], 2, 'g1'));
+    vi.mocked(api.checkReviewSelection).mockRejectedValue(
+      Object.assign(new Error('Request timed out after 15000ms'), { name: 'ApiTimeoutError' })
+    );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setSelection(['a1', 'a2'], true));
+    act(() => result.current.setFilters({ confidenceThreshold: 50 }));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/^Checking the selection took too long\..*clear the selection or change the filters/),
+        'warning'
+      )
+    );
+    expect([...result.current.selectedIds].sort()).toEqual(['a1', 'a2']);
+  });
+
   it('flags a page whose owner rejections could not be read', async () => {
     vi.mocked(api.getReviewPage).mockResolvedValue({
       ...pageOf(['a1']),
@@ -967,7 +1077,7 @@ describe('the lane requests', () => {
     await waitFor(() => expect(result.current.ownerRejectionsUnavailable).toBe(false));
   });
 
-  it('every chunk of a split apply carries one batch id and the batch total', async () => {
+  it('every chunk of a split apply carries one batch id, the batch total and its own index', async () => {
     armApply();
     const ids = Array.from({ length: 1200 }, (_, i) => `c${i}`);
     vi.mocked(api.getReviewPage).mockResolvedValue({
@@ -983,9 +1093,50 @@ describe('the lane requests', () => {
     const calls = vi.mocked(api.batchApplyFromCache).mock.calls;
     expect(calls).toHaveLength(3);
     const batches = calls.map((c) => c[4]);
-    expect(batches[0]).toEqual({ id: expect.any(String), total: 1200 });
+    expect(batches[0]).toEqual({ id: expect.any(String), total: 1200, index: 0 });
+    expect(batches.map((b) => b?.index)).toEqual([0, 1, 2]);
     expect(new Set(batches.map((b) => b?.id)).size).toBe(1);
     expect(batches.every((b) => b?.total === 1200)).toBe(true);
+  });
+
+  it('a batch refusal from the server is shown as the server said it, after the queued-so-far notice', async () => {
+    armApply();
+    const ids = Array.from({ length: 1200 }, (_, i) => `c${i}`);
+    vi.mocked(api.getReviewPage).mockResolvedValue({
+      ...pageOf(['c0'], ids.length, 'g1'),
+      bulk_apply_max_items: 5000,
+    });
+    const message = 'This chunk was refused: chunks of this batch add up to more than 1200. Earlier chunks were queued.';
+    vi.mocked(api.batchApplyFromCache)
+      .mockResolvedValueOnce({ op_id: 'op1', requested: 500, write_back: true })
+      .mockRejectedValueOnce(
+        Object.assign(new Error(message), { status: 422, data: { code: 'BATCH_EXCEEDED', error: message } })
+      );
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await selectAllPinned(result, ids);
+    toast.mockClear();
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids })
+    );
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/^Queued 500 of 1,200 book\(s\) before a request failed/),
+      'warning'
+    );
+    expect(toast).toHaveBeenCalledWith(message, 'error');
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/^Failed to start applying/), 'error');
+  });
+
+  it('a batch id is random: 128 bits from getRandomValues when randomUUID is missing', () => {
+    vi.stubGlobal('crypto', {
+      getRandomValues: (a: Uint8Array) => a.fill(0xab),
+    });
+    try {
+      expect(newBatchId()).toBe('ab'.repeat(16));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(newBatchId()).not.toBe(newBatchId());
   });
 
   it('a single-request apply carries no batch', async () => {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
 // last-edited: 2026-10-19
 
@@ -266,24 +266,49 @@ func TestBatchApplyFromCache_ZeroConfigMeansDefaultNotUnlimited(t *testing.T) {
 	assert.Equal(t, 0, ops.calls)
 }
 
+// batchSend posts one chunk of a batch as the given user ("" = no user).
+func batchSend(h *handlers.MetadataCacheHandler, user, body string) *httptest.ResponseRecorder {
+	c, w := batchApplyCtx(body)
+	if user != "" {
+		c.Set("auth_user", &database.User{ID: user, Username: user})
+	}
+	h.BatchApplyFromCache(c)
+	return w
+}
+
+func chunkBody(ids string, id string, index, total int) string {
+	return fmt.Sprintf(`{"book_ids":[%s],"dry_run":false,"batch_id":%q,"batch_total":%d,"batch_index":%d}`, ids, id, total, index)
+}
+
+func errCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var out struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out), w.Body.String())
+	return out.Code
+}
+
 // TestBatchApplyFromCache_ChunksOfOneBatchAreHeldToItsTotal: the lane sends a
 // big apply as several requests with one batch id and the batch's total. The
-// server holds the batch to the cap and to the total across the chunks.
+// server holds the batch to the declared total across the chunks, and says a
+// mid-batch refusal left earlier chunks queued.
 func TestBatchApplyFromCache_ChunksOfOneBatchAreHeldToItsTotal(t *testing.T) {
 	withBulkApplyCap(t, 5)
 	ops := &capturingEnqueuer{}
 	h := newDispatchHandler(t, ops)
-	send := func(body string) *httptest.ResponseRecorder {
-		c, w := batchApplyCtx(body)
-		h.BatchApplyFromCache(c)
-		return w
-	}
 
-	require.Equal(t, http.StatusAccepted, send(`{"book_ids":["a","b","c"],"dry_run":false,"batch_id":"B","batch_total":5}`).Code)
-	require.Equal(t, http.StatusAccepted, send(`{"book_ids":["d","e"],"dry_run":false,"batch_id":"B","batch_total":5}`).Code)
-	w := send(`{"book_ids":["f"],"dry_run":false,"batch_id":"B","batch_total":5}`)
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"d","e"`, "B", 1, 5)).Code)
+	w := batchSend(h, "u1", chunkBody(`"f"`, "B", 2, 5))
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "a sixth book of a five-book batch is refused: %s", w.Body.String())
+	assert.Equal(t, "BATCH_EXCEEDED", errCode(t, w))
+	assert.NotContains(t, w.Body.String(), "nothing was applied")
 	assert.Equal(t, 2, ops.calls, "the refused chunk enqueued nothing")
+
+	w = batchSend(h, "u1", chunkBody(`"a"`, "B", 3, 4))
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Equal(t, "BATCH_TOTAL_MISMATCH", errCode(t, w))
 }
 
 // A declared total over the cap is refused on the FIRST chunk, so a client
@@ -293,9 +318,9 @@ func TestBatchApplyFromCache_ABatchTotalOverTheCapIsRefusedUpFront(t *testing.T)
 	ops := &capturingEnqueuer{}
 	h := newDispatchHandler(t, ops)
 
-	c, w := batchApplyCtx(`{"book_ids":["a"],"dry_run":false,"batch_id":"B","batch_total":6}`)
-	h.BatchApplyFromCache(c)
+	w := batchSend(h, "u1", chunkBody(`"a"`, "B", 0, 6))
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	assert.Equal(t, "BULK_APPLY_CAP_EXCEEDED", errCode(t, w))
 	assert.Equal(t, 0, ops.calls)
 }
 
@@ -305,34 +330,55 @@ func TestBatchApplyFromCache_AFailedEnqueueReleasesTheChunk(t *testing.T) {
 	withBulkApplyCap(t, 5)
 	ops := &capturingEnqueuer{err: errors.New("queue down")}
 	h := newDispatchHandler(t, ops)
-	body := `{"book_ids":["a","b","c","d","e"],"dry_run":false,"batch_id":"B","batch_total":5}`
+	body := chunkBody(`"a","b","c","d","e"`, "B", 0, 5)
 
-	c, w := batchApplyCtx(body)
-	h.BatchApplyFromCache(c)
-	require.Equal(t, http.StatusInternalServerError, w.Code)
-
+	require.Equal(t, http.StatusInternalServerError, batchSend(h, "u1", body).Code)
 	ops.err = nil
-	c, w = batchApplyCtx(body)
-	h.BatchApplyFromCache(c)
+	w := batchSend(h, "u1", body)
 	require.Equal(t, http.StatusAccepted, w.Code, "the retry of a chunk that never ran must be admitted: %s", w.Body.String())
 }
 
+// A resent chunk (same index) is accepted without being counted twice.
+func TestBatchApplyFromCache_AResentChunkIsIdempotent(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	ops := &capturingEnqueuer{}
+	h := newDispatchHandler(t, ops)
+
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"d","e"`, "B", 1, 5)).Code, "the resend did not use the second chunk's room")
+}
+
+// Another user cannot poison a batch id: the ledger is keyed by user too.
+func TestBatchApplyFromCache_OneUsersBatchIDDoesNotCollideWithAnothers(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	h := newDispatchHandler(t, &capturingEnqueuer{})
+
+	require.Equal(t, http.StatusAccepted, batchSend(h, "userB", chunkBody(`"x"`, "B", 0, 1)).Code)
+	require.Equal(t, http.StatusAccepted, batchSend(h, "userA", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	require.Equal(t, http.StatusAccepted, batchSend(h, "userA", chunkBody(`"d","e"`, "B", 1, 5)).Code, "A's batch was not touched by B's")
+}
+
 // No batch id keeps the pre-ledger rule: one request, checked against the cap.
-// batch_id and batch_total go together.
+// batch_id, batch_total and batch_index go together, and a batched request
+// carries at least one id.
 func TestBatchApplyFromCache_NoBatchIDIsOneRequestAndHalfABatchIsBad(t *testing.T) {
 	withBulkApplyCap(t, 3)
 	ops := &capturingEnqueuer{}
 	h := newDispatchHandler(t, ops)
 
-	c, w := batchApplyCtx(`{"book_ids":["a","b","c"],"dry_run":false}`)
-	h.BatchApplyFromCache(c)
-	require.Equal(t, http.StatusAccepted, w.Code)
-	c, w = batchApplyCtx(`{"book_ids":["a"],"dry_run":false,"batch_id":"B"}`)
-	h.BatchApplyFromCache(c)
-	require.Equal(t, http.StatusBadRequest, w.Code, "batch_id without a total")
-	c, w = batchApplyCtx(`{"book_ids":["a"],"dry_run":false,"batch_total":3}`)
-	h.BatchApplyFromCache(c)
-	require.Equal(t, http.StatusBadRequest, w.Code, "batch_total without an id")
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", `{"book_ids":["a","b","c"],"dry_run":false}`).Code)
+	require.Equal(t, http.StatusUnprocessableEntity, batchSend(h, "u1", `{"book_ids":["a","b","c","d"],"dry_run":false}`).Code)
+	for name, body := range map[string]string{
+		"batch_id without a total":    `{"book_ids":["a"],"dry_run":false,"batch_id":"B","batch_index":0}`,
+		"batch_total without an id":   `{"book_ids":["a"],"dry_run":false,"batch_total":3,"batch_index":0}`,
+		"batch_id without an index":   `{"book_ids":["a"],"dry_run":false,"batch_id":"B","batch_total":3}`,
+		"a negative index":            `{"book_ids":["a"],"dry_run":false,"batch_id":"B","batch_total":3,"batch_index":-1}`,
+		"an empty batched request":    `{"book_ids":[],"dry_run":false,"batch_id":"B","batch_total":3,"batch_index":0}`,
+		"an index without a batch id": `{"book_ids":["a"],"dry_run":false,"batch_index":0}`,
+	} {
+		assert.Equal(t, http.StatusBadRequest, batchSend(h, "u1", body).Code, name)
+	}
 }
 
 // withBulkApplyCap sets config.AppConfig.BulkApplyMaxItems for one test and

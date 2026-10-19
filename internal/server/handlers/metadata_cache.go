@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-19
 
@@ -12,6 +12,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -220,7 +222,7 @@ type OpEnqueuer interface {
 func (h *MetadataCacheHandler) batchLedger() *applycap.BatchLedger {
 	h.batchesOnce.Do(func() {
 		if h.batches == nil {
-			h.batches = applycap.NewBatchLedger(30*time.Minute, 1024)
+			h.batches = applycap.NewBatchLedger(30*time.Minute, 1024, 16)
 		}
 	})
 	return h.batches
@@ -1258,13 +1260,18 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// without an owner-review pin (still fill-only and fully gated). Any
 		// other value is a 400. The dry run ignores it, like pins.
 		Mode string `json:"mode"`
-		// BatchID and BatchTotal are set by a client that splits ONE bulk
-		// apply into several requests (the review lane sends 500 ids per
-		// chunk): the same opaque id on every chunk and the total number of
-		// books the whole batch will apply to. The server holds the batch to
-		// the cap across chunks (applycap.BatchLedger): a declared total over
-		// the cap, a total that changes mid-batch, or chunks adding up to more
-		// than the declared total are refused with the 422 cap body.
+		// BatchID, BatchTotal and BatchIndex are set by a client that splits
+		// ONE bulk apply into several requests (the review lane sends 500 ids
+		// per chunk): the same opaque id on every chunk, the total number of
+		// books the whole batch will apply to, and this chunk's position. The
+		// ledger (applycap.BatchLedger) enforces the total a COOPERATING
+		// client declares, per user: a declared total over the cap is refused
+		// with the 422 cap body; a total that changes mid-batch or chunks
+		// adding up to more than the declared total are refused with 422
+		// BATCH_TOTAL_MISMATCH / BATCH_EXCEEDED. A resent chunk (same index)
+		// is not counted twice. It is an accident guard, not a rolling quota:
+		// a client that omits or rotates batch_id gets only the per-request
+		// check below.
 		//
 		// A request WITHOUT a batch id is checked against the cap as one
 		// request, exactly as before the ledger: an API client that sends one
@@ -1274,13 +1281,19 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// a positive batch_total, is a 400.
 		BatchID    string `json:"batch_id"`
 		BatchTotal int    `json:"batch_total"`
+		BatchIndex *int   `json:"batch_index"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
 		return
 	}
-	if (body.BatchID == "") != (body.BatchTotal == 0) || body.BatchTotal < 0 || len(body.BatchID) > 128 {
-		httputil.RespondWithBadRequest(c, "batch_id and a positive batch_total go together (batch_id at most 128 characters)")
+	if (body.BatchID == "") != (body.BatchTotal == 0) || (body.BatchID == "") != (body.BatchIndex == nil) ||
+		body.BatchTotal < 0 || len(body.BatchID) > 128 || (body.BatchIndex != nil && *body.BatchIndex < 0) {
+		httputil.RespondWithBadRequest(c, "batch_id, a positive batch_total and a non-negative batch_index go together (batch_id at most 128 characters)")
+		return
+	}
+	if body.BatchID != "" && len(body.BookIDs) == 0 {
+		httputil.RespondWithBadRequest(c, "a batched request needs at least one book_id")
 		return
 	}
 	mode, modeOK := metafetch.NormalizeBulkApplyMode(body.Mode)
@@ -1339,18 +1352,30 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	// the cap.
 	configuredCap := config.AppConfig.BulkApplyMaxItems
 	admittedBatch := false
-	if body.BatchID != "" {
-		if ex := h.batchLedger().Admit("batch-apply-cached", body.BatchID, len(body.BookIDs), body.BatchTotal, configuredCap); ex != nil {
-			httputil.RespondWithApplyCapExceeded(c, ex)
-			return
-		}
-		admittedBatch = true
+	batchOwner := ""
+	if user, ok := servermiddleware.CurrentUser(c); ok && user != nil {
+		batchOwner = user.ID
 	}
-	if ex := applycap.Refuse("batch-apply-cached", len(body.BookIDs), configuredCap); ex != nil {
-		if admittedBatch {
-			h.batchLedger().Release(body.BatchID, len(body.BookIDs))
+	var capErr error
+	if body.BatchID != "" {
+		// The ledger applies the per-request check too (a chunk over the cap
+		// is a chunk over the declared total or the cap itself).
+		capErr = h.batchLedger().Admit("batch-apply-cached", batchOwner, body.BatchID, *body.BatchIndex, len(body.BookIDs), body.BatchTotal, configuredCap)
+		admittedBatch = capErr == nil
+	} else if ex := applycap.Refuse("batch-apply-cached", len(body.BookIDs), configuredCap); ex != nil {
+		capErr = ex
+	}
+	if capErr != nil {
+		var ex *applycap.ExceededError
+		var be *applycap.BatchError
+		switch {
+		case errors.As(capErr, &ex):
+			httputil.RespondWithApplyCapExceeded(c, ex)
+		case errors.As(capErr, &be):
+			httputil.RespondWithError(c, http.StatusUnprocessableEntity, be.Error(), be.Code())
+		default:
+			httputil.InternalError(c, "failed to check the apply cap", capErr)
 		}
-		httputil.RespondWithApplyCapExceeded(c, ex)
 		return
 	}
 
@@ -1371,7 +1396,7 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	if err != nil {
 		// Nothing was queued: give the chunk back so the client can retry it.
 		if admittedBatch {
-			h.batchLedger().Release(body.BatchID, len(body.BookIDs))
+			h.batchLedger().Release(batchOwner, body.BatchID, *body.BatchIndex)
 		}
 		httputil.InternalError(c, "failed to enqueue metadata apply", err)
 		return

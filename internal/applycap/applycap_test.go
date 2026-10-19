@@ -1,5 +1,5 @@
 // file: internal/applycap/applycap_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e2b7c41-3f8a-4d16-b6e5-0a7c4d9f2e18
 // last-edited: 2026-10-19
 
@@ -7,6 +7,7 @@ package applycap
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -115,48 +116,122 @@ type atomicCounter struct {
 func (a *atomicCounter) inc() { a.mu.Lock(); a.n++; a.mu.Unlock() }
 
 func TestBatchLedger_ChunksAddUpToTheDeclaredTotal(t *testing.T) {
-	l := NewBatchLedger(time.Minute, 10)
-	require.Nil(t, l.Admit("op", "b1", 500, 1200, 5000))
-	require.Nil(t, l.Admit("op", "b1", 500, 1200, 5000))
-	require.Nil(t, l.Admit("op", "b1", 200, 1200, 5000))
-	ex := l.Admit("op", "b1", 1, 1200, 5000)
-	require.NotNil(t, ex, "a chunk past the declared total is refused")
-	require.Equal(t, 1201, ex.Requested)
-	require.Equal(t, 1200, ex.Cap)
+	l := NewBatchLedger(time.Minute, 10, 5)
+	require.NoError(t, l.Admit("op", "u", "b1", 0, 500, 1200, 5000))
+	require.NoError(t, l.Admit("op", "u", "b1", 1, 500, 1200, 5000))
+	require.NoError(t, l.Admit("op", "u", "b1", 2, 200, 1200, 5000))
+	err := l.Admit("op", "u", "b1", 3, 1, 1200, 5000)
+	var be *BatchError
+	require.ErrorAs(t, err, &be, "a chunk past the declared total is refused")
+	require.Equal(t, BatchExceeded, be.Kind)
+	require.Equal(t, "BATCH_EXCEEDED", be.Code())
+	require.Equal(t, 1201, be.Requested)
+	require.Equal(t, 1200, be.Cap)
+	require.NotContains(t, be.Error(), "nothing was applied", "a mid-batch refusal must not claim nothing was applied")
+	require.Contains(t, be.Error(), "already queued")
 }
 
 func TestBatchLedger_RefusesADeclaredTotalOverTheCap(t *testing.T) {
-	l := NewBatchLedger(time.Minute, 10)
-	ex := l.Admit("op", "b1", 10, 5001, 5000)
-	require.NotNil(t, ex, "a total over the cap is refused on the first chunk, however small")
+	l := NewBatchLedger(time.Minute, 10, 5)
+	var ex *ExceededError
+	require.ErrorAs(t, l.Admit("op", "u", "b1", 0, 10, 5001, 5000), &ex, "a total over the cap is refused on the first chunk, however small")
 	require.Equal(t, 5001, ex.Requested)
 	require.Equal(t, 5000, ex.Cap)
 	// A zero configured cap is the default, never unlimited.
-	require.NotNil(t, l.Admit("op", "b2", 1, Default+1, 0))
+	require.Error(t, l.Admit("op", "u", "b2", 0, 1, Default+1, 0))
 }
 
 func TestBatchLedger_ATotalCannotGrowMidBatch(t *testing.T) {
-	l := NewBatchLedger(time.Minute, 10)
-	require.Nil(t, l.Admit("op", "b1", 500, 600, 5000))
-	require.NotNil(t, l.Admit("op", "b1", 100, 5000, 5000), "a later chunk may not raise the declared total")
+	l := NewBatchLedger(time.Minute, 10, 5)
+	require.NoError(t, l.Admit("op", "u", "b1", 0, 500, 600, 5000))
+	var be *BatchError
+	require.ErrorAs(t, l.Admit("op", "u", "b1", 1, 100, 5000, 5000), &be)
+	require.Equal(t, BatchTotalMismatch, be.Kind)
+	require.Equal(t, "BATCH_TOTAL_MISMATCH", be.Code())
+}
+
+func TestBatchLedger_AResentChunkIsNotCountedTwice(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 10, 5)
+	require.NoError(t, l.Admit("op", "u", "b1", 0, 500, 1000, 5000))
+	require.NoError(t, l.Admit("op", "u", "b1", 0, 500, 1000, 5000), "the same index again is accepted")
+	require.NoError(t, l.Admit("op", "u", "b1", 1, 500, 1000, 5000), "and did not use up the second chunk's room")
+	require.Error(t, l.Admit("op", "u", "b1", 0, 400, 1000, 5000), "a resent index of another size is refused")
 }
 
 func TestBatchLedger_ReleaseLetsAFailedChunkRetry(t *testing.T) {
-	l := NewBatchLedger(time.Minute, 10)
-	require.Nil(t, l.Admit("op", "b1", 500, 500, 5000))
-	require.NotNil(t, l.Admit("op", "b1", 500, 500, 5000))
-	l.Release("b1", 500)
-	require.Nil(t, l.Admit("op", "b1", 500, 500, 5000))
+	l := NewBatchLedger(time.Minute, 10, 5)
+	require.NoError(t, l.Admit("op", "u", "b1", 0, 500, 1000, 5000))
+	require.NoError(t, l.Admit("op", "u", "b1", 1, 500, 1000, 5000))
+	l.Release("u", "b1", 1)
+	require.NoError(t, l.Admit("op", "u", "b1", 1, 500, 1000, 5000))
+	require.Error(t, l.Admit("op", "u", "b1", 2, 1, 1000, 5000))
 }
 
-func TestBatchLedger_ForgetsIdleBatchesAndBoundsTheMap(t *testing.T) {
-	l := NewBatchLedger(time.Minute, 2)
+// The PoC of the review: refused requests used to be inserted before the check
+// and never swept, so 1024 of them filled the ledger and locked every user out.
+func TestBatchLedger_RefusedRequestsOccupyNoSlot(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 1024, 16)
+	now := time.Now()
+	l.now = func() time.Time { return now }
+	for i := 0; i < 5000; i++ {
+		// n=2 against total=1, and a total over the cap, and an empty chunk.
+		require.Error(t, l.Admit("op", "attacker", fmt.Sprint("x", i), 0, 2, 1, 5000))
+		require.Error(t, l.Admit("op", "attacker", fmt.Sprint("y", i), 0, 1, 99999, 5000))
+		require.Error(t, l.Admit("op", "attacker", fmt.Sprint("z", i), 0, 0, 5, 5000))
+	}
+	require.Empty(t, l.batches, "a refused request recorded nothing")
+	now = now.Add(24 * time.Hour)
+	require.NoError(t, l.Admit("op", "victim", "v", 0, 500, 1000, 5000))
+}
+
+func TestBatchLedger_OneUsersIDCannotPoisonAnothers(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 1024, 16)
+	// B squats on A's (guessable) batch id with a tiny total.
+	require.NoError(t, l.Admit("op", "userB", "shared-id", 0, 1, 1, 5000))
+	// A's batch of the same id is a different batch.
+	require.NoError(t, l.Admit("op", "userA", "shared-id", 0, 500, 1000, 5000))
+	require.NoError(t, l.Admit("op", "userA", "shared-id", 1, 500, 1000, 5000))
+	var be *BatchError
+	require.ErrorAs(t, l.Admit("op", "userB", "shared-id", 1, 1, 1, 5000), &be, "B is held to B's own total")
+}
+
+func TestBatchLedger_AFullLedgerEvictsInsteadOfRefusing(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	l := NewBatchLedger(time.Hour, 8, 3)
+	l.now = func() time.Time { return now }
+	tick := func() { now = now.Add(time.Second) }
+	// One user opens many valid batches: their own oldest goes first.
+	for i := 0; i < 10; i++ {
+		require.NoError(t, l.Admit("op", "hog", fmt.Sprint("h", i), 0, 1, 10, 5000))
+		tick()
+	}
+	count := func(owner string) (n int) {
+		for _, e := range l.batches {
+			if e.owner == owner {
+				n++
+			}
+		}
+		return
+	}
+	require.Equal(t, 3, count("hog"), "the per-owner limit holds")
+	require.NotContains(t, l.batches, batchKey("hog", "h0"), "the least recently touched one was evicted")
+	require.Contains(t, l.batches, batchKey("hog", "h9"))
+	// Many users fill the whole ledger; a newcomer is still admitted.
+	for i := 0; i < 20; i++ {
+		require.NoError(t, l.Admit("op", fmt.Sprint("u", i), "b", 0, 1, 10, 5000))
+		tick()
+	}
+	require.LessOrEqual(t, len(l.batches), 8)
+	require.NoError(t, l.Admit("op", "newcomer", "b", 0, 500, 1000, 5000))
+	require.Contains(t, l.batches, batchKey("newcomer", "b"))
+}
+
+func TestBatchLedger_ForgetsIdleBatches(t *testing.T) {
+	l := NewBatchLedger(time.Minute, 2, 2)
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	l.now = func() time.Time { return now }
-	require.Nil(t, l.Admit("op", "a", 1, 1, 5000))
-	require.Nil(t, l.Admit("op", "b", 1, 1, 5000))
-	require.NotNil(t, l.Admit("op", "c", 1, 1, 5000), "a full ledger refuses a new batch instead of evicting a live one")
+	require.NoError(t, l.Admit("op", "u", "a", 0, 1, 1, 5000))
 	now = now.Add(2 * time.Minute)
-	require.Nil(t, l.Admit("op", "c", 1, 1, 5000), "idle batches are forgotten after the ttl")
-	require.Nil(t, l.Admit("op", "a", 1, 1, 5000), "and a forgotten batch starts over")
+	require.NoError(t, l.Admit("op", "u", "a", 0, 1, 1, 5000), "a forgotten batch starts over")
+	require.Len(t, l.batches, 1)
 }
