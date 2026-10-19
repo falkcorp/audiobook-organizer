@@ -266,3 +266,59 @@ func TestABSSession_ConcurrentExtendSweepRevoke(t *testing.T) {
 		}
 	}
 }
+
+// TestABSSession_BackfillExpiry: rows written before sliding expiry (ExpiresAt =
+// login+30d, the same instant as their access token) are raised to the floor so an
+// unused device still has a live session to refresh against on day 31. Revoked,
+// expired and already-later rows are untouched, and a second run changes nothing.
+func TestABSSession_BackfillExpiry(t *testing.T) {
+	store := newABSSessionStore(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	const day = 24 * time.Hour
+	mk := func(id string, created time.Time, exp time.Time, revoked bool) {
+		s := sampleABSSession(id, "u1")
+		s.CreatedAt, s.LastUsedAt, s.ExpiresAt = created, created, exp
+		if err := store.CreateABSSession(s); err != nil {
+			t.Fatal(err)
+		}
+		if revoked {
+			if err := store.RevokeABSSession(id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	legacyCreated := now.Add(-29 * day)
+	mk("legacy", legacyCreated, legacyCreated.Add(30*day), false)
+	mk("revoked", legacyCreated, legacyCreated.Add(30*day), true)
+	mk("expired", now.Add(-40*day), now.Add(-10*day), false)
+	mk("later", now, now.Add(90*day), false)
+	floor := func(c time.Time) time.Time { return c.Add(60 * day) }
+
+	n, err := store.BackfillABSSessionExpiry(now, floor)
+	if err != nil || n != 1 {
+		t.Fatalf("backfill raised %d (err %v), want exactly the 1 legacy row", n, err)
+	}
+	got, _ := store.GetABSSession("legacy")
+	if want := legacyCreated.Add(60 * day); !got.ExpiresAt.Equal(want) {
+		t.Fatalf("legacy ExpiresAt = %v, want %v", got.ExpiresAt, want)
+	}
+	if !got.LastUsedAt.Equal(legacyCreated) {
+		t.Fatal("backfill must not stamp LastUsedAt: nothing was used")
+	}
+	if !got.Live(legacyCreated.Add(31 * day)) {
+		t.Fatal("an unused legacy session must still be live on day 31")
+	}
+	if s, _ := store.GetABSSession("revoked"); !s.Revoked || !s.ExpiresAt.Equal(legacyCreated.Add(30*day)) {
+		t.Fatalf("revoked row changed: %+v", s)
+	}
+	if s, _ := store.GetABSSession("expired"); !s.ExpiresAt.Equal(now.Add(-10 * day)) {
+		t.Fatal("an expired row must not be revived")
+	}
+	if s, _ := store.GetABSSession("later"); !s.ExpiresAt.Equal(now.Add(90 * day)) {
+		t.Fatal("backfill must never lower an expiry")
+	}
+	if n, _ := store.BackfillABSSessionExpiry(now, floor); n != 0 {
+		t.Fatalf("second run raised %d rows, want 0 (idempotent)", n)
+	}
+	assertABSIndexInvariant(t, store)
+}

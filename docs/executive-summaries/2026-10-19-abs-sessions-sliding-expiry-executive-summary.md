@@ -49,8 +49,11 @@ the middle of listening. Every phone was hit, every 30 days.
 **The fix.** The record now lasts 60 days from its last use, not from sign-in.
 Each renewal resets the clock, and so does ordinary use, recorded at most once
 a day so the server is not writing on every request. Sign-ins that already
-exist move onto the new schedule the next time the app uses them, so nothing
-had to be converted.
+existed had the old 30-day end date. On start-up the server moves each one
+that is still active to 60 days after its sign-in, so a phone that sits unused
+past its old day-30 mark is not caught out either. It never shortens a
+sign-in and never revives one that has ended. Phones whose sign-in had already
+expired before the update have to sign in once more.
 
 ## The pass must expire before the sign-in
 
