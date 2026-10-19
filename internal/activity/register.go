@@ -32,8 +32,8 @@ import (
 func init() {
 	// pebble-activitystore: PebbleDB-backed activity store, sharing the main
 	// PebbleDB instance. Built only when the main store is a *PebbleStore.
-	// Returns a nil *PebbleActivityStore on other backends so dual-write
-	// wiring below can detect and fall back gracefully.
+	// Returns a nil *PebbleActivityStore on other backends; the activitystore
+	// build below turns that nil into a startup error.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   "pebble-activitystore",
 		Needs:  []string{serviceregistry.KeyStore},

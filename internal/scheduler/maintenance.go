@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package scheduler
 
@@ -188,7 +188,6 @@ var taskV2DefIDs = map[string]string{
 	"ai_dedup_batch":              "maintenance.ai-dedup-batch",
 	"purge_old_logs":              "maintenance.purge-old-logs",
 	"cleanup_activity_log":        "maintenance.cleanup-activity-log",
-	"optimize_activity_db":        "maintenance.optimize-activity-db",
 	"nightly_activity_compaction": "maintenance.nightly-compact-activity-log",
 	"ai_journal_prune":            "maintenance.prune-ai-journal",
 	"file_integrity_check":        "maintenance.file-integrity-check",
@@ -224,7 +223,6 @@ var legacyTaskNames = map[string]string{
 	"maintenance.file-integrity-check":         "file_integrity_check",
 	"maintenance.metadata-refresh":             "metadata_refresh",
 	"maintenance.nightly-compact-activity-log": "nightly_activity_compaction",
-	"maintenance.optimize-activity-db":         "optimize_activity_db",
 	"maintenance.orphan-book-files-cleanup":    "orphan_book_files_cleanup",
 	"maintenance.prune-ai-journal":             "ai_journal_prune",
 	"maintenance.purge-deleted":                "purge_deleted",

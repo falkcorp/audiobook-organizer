@@ -1,5 +1,5 @@
 // file: internal/server/server_test.go
-// version: 2.15.2
+// version: 2.15.3
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 // last-edited: 2026-10-19
 
@@ -54,14 +54,13 @@ const releaseForTestBGWait = 10 * time.Second
 // releaseForTest tears down a server that was built but never Started.
 //
 // Production teardown lives at the end of Start, so a test server never runs
-// it. Whenever config.AppConfig.DatabasePath is set, NewServer's container
-// opens the SQLite activity store, and OpenSQLiteActivityStore starts a WAL
-// checkpointer goroutine that only SQLActivityStore.Close stops. Nothing
-// closed it, so every such test leaked a goroutine that ticked every 30s for
-// the rest of the package run, failed its PASSIVE checkpoint once the test's
-// temp dir was removed, and logged that WARN into whatever slog.Default the
-// test running at that moment had installed. That is how
-// TestResolveVectorBackend_HNSWIsSilent raced on its capture buffer.
+// it. It was added when NewServer's container opened the SQLite activity store
+// (removed 2026-10-19), whose WAL checkpointer goroutine only Close stopped:
+// every test server leaked one, and its late WARN landed in whatever
+// slog.Default the test running at that moment had installed — which is how
+// TestResolveVectorBackend_HNSWIsSilent raced on its capture buffer. The bgWG
+// goroutines below can still write activity after a test ends, so the
+// teardown stays.
 //
 // Order follows Start's shutdown: cancel bgCtx and wait (bounded) for the
 // bgWG goroutines, which may still write activity, then close the activity

@@ -1,22 +1,24 @@
 // file: internal/database/activity_summary_clamp_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 21adeec8-3e0a-48f2-9a07-6a196e44026f
-// last-edited: 2026-09-08
+// last-edited: 2026-10-19
 //
-// Guards the activity summary clamp. Prod's activity database reached 5.3 GB on
-// 2026-09-07 with 5.48 GB of it in the summary column alone; the largest single
-// summary was 9,558,930 bytes.
+// Guards the activity summary clamp. Prod's SQLite activity database (since
+// removed) reached 5.3 GB on 2026-09-07 with 5.48 GB of it in the summary
+// column alone; the largest single summary was 9,558,930 bytes. The Pebble
+// store applies the same clamp on every write.
 
 package database
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
 
 func TestClampActivitySummary_LeavesNormalSummariesAlone(t *testing.T) {
-	const s = "Scanning folders: 7960/121940 (The Land - Founding - Chaos Seeds, Book 1)"
+	const s = "Scanning folders: 7960/121940 (Example Title, Book 1)"
 	if got := clampActivitySummary(s); got != s {
 		t.Fatalf("a %d-byte summary was modified; only oversized ones should be touched", len(s))
 	}
@@ -56,12 +58,43 @@ func TestClampActivitySummary_DoesNotSplitARune(t *testing.T) {
 }
 
 func TestClampActivitySummary_IsIdempotent(t *testing.T) {
-	// Record and recordBatch both clamp, and a dual-write store hands the same
-	// entry to two backends. Clamping twice must not keep appending markers.
+	// An entry that passes through the clamp twice must not keep appending
+	// markers.
 	once := clampActivitySummary(strings.Repeat("y", 5_000_000))
 	twice := clampActivitySummary(once)
 
 	if once != twice {
 		t.Fatalf("clamp is not idempotent: second pass changed the value (%d -> %d bytes)", len(once), len(twice))
+	}
+}
+
+// TestPebbleRecord_ClampsOversizedSummaries pins that the Pebble store bounds
+// the summary on both write paths. Until 2026-10-19 only the SQLite store
+// clamped; Pebble stored whatever it was handed.
+func TestPebbleRecord_ClampsOversizedSummaries(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	huge := strings.Repeat("z", 3*activitySummaryMax)
+
+	_, err := s.Record(ActivityEntry{Tier: "change", Type: "test_event", Source: "clamp_test", Summary: huge})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if _, err := s.RecordBatch([]ActivityEntry{{Tier: "debug", Type: "test_event", Source: "clamp_test", Summary: huge}}); err != nil {
+		t.Fatalf("RecordBatch: %v", err)
+	}
+
+	for _, tier := range []string{"change", "debug"} {
+		rows, _, err := s.Query(context.Background(), ActivityFilter{Tier: tier, Limit: 10})
+		if err != nil {
+			t.Fatalf("Query %s: %v", tier, err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("tier %s: got %d rows, want 1", tier, len(rows))
+		}
+		got := rows[0].Summary
+		if len(got) > activitySummaryMax || !strings.Contains(got, "summary truncated") {
+			t.Errorf("tier %s: stored summary is %d bytes (cap %d) and marked=%t; the write path did not clamp",
+				tier, len(got), activitySummaryMax, strings.Contains(got, "summary truncated"))
+		}
 	}
 }

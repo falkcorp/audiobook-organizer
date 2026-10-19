@@ -1,7 +1,7 @@
 // file: internal/database/activity_compact_progress.go
-// version: 1.3.1
+// version: 2.0.0
 // guid: 7f3e9a21-5c4d-4b8e-9d1f-2a6b8c0e4d73
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -11,30 +11,20 @@ import (
 )
 
 // CompactProgressEvent is one liveness/progress notification emitted while
-// CompactByDay runs. Backends emit one after every chunk and every day they
-// finish (Done=false, Result = that backend's running totals so far); a
-// wrapper that fans compaction out across backends (MigratingActivityStore)
-// emits one more per backend when that backend returns (Done=true, Result =
-// its final counters, Err = its error, if any).
+// CompactByDay runs. The store emits one after every chunk and every day it
+// finishes, carrying its running totals so far. There is no completion event:
+// the caller of CompactByDay already has the final counters as its return
+// value. (A Done/Err/Heartbeat trio existed while a migrating wrapper fanned
+// compaction out across a Pebble and a SQLite store; it went with the SQLite
+// backend on 2026-10-19.)
 type CompactProgressEvent struct {
-	// Backend names the store that produced the event: "sqlite" or "pebble".
-	// A wrapper never relabels a backend's own events.
+	// Backend names the store that produced the event ("pebble").
 	Backend string
-	// Result is the running (Done=false) or final (Done=true) counters for
-	// Backend alone — never a cross-backend total.
+	// Result is the store's running counters for this CompactByDay call.
 	Result CompactResult
-	// Day is the UTC calendar day the backend is working on when the event
-	// fired. Zero on Done events and wherever the emitter has no day in hand.
+	// Day is the UTC calendar day the store is working on when the event
+	// fired. Zero wherever the emitter has no day in hand.
 	Day time.Time
-	// Heartbeat marks a liveness-only event: a bounded unit of real work
-	// finished (one window of the SQLite digest-sample scan) but no row was
-	// removed, so Result has not moved. A consumer should stamp liveness and
-	// must not treat it as progress. Never set together with Done.
-	Heartbeat bool
-	// Done is true for the single completion event a wrapper emits per backend.
-	Done bool
-	// Err is set on a Done event when that backend's compaction failed.
-	Err error
 }
 
 // CompactProgress receives CompactProgressEvents. It is called synchronously
@@ -49,9 +39,9 @@ type compactProgressKey struct{}
 // The hook travels in the context rather than in CompactByDay's signature
 // because it is an observability side-channel, not an input that changes what
 // compaction does — the same reason tracing spans live there. ActivityStorer
-// has seven implementations plus wrappers and ~40 call sites; threading a
-// parameter through all of them buys nothing the hook does not, and a store
-// that ignores the hook is still correct, only silent.
+// has several implementations (the Pebble store plus test fakes) and ~40 call
+// sites; threading a parameter through all of them buys nothing the hook does
+// not, and a store that ignores the hook is still correct, only silent.
 //
 // What the hook is FOR: the operations registry cancels an op that reports no
 // progress for def.ProgressTimeout (internal/operations/registry/watchdog.go),
@@ -85,34 +75,14 @@ func reportCompactProgress(ctx context.Context, backend string, day time.Time, r
 	}
 }
 
-// reportCompactHeartbeat emits a liveness-only event (Heartbeat=true) for
-// backend if a hook is attached. Call it only after a bounded unit of real work
-// finished — never from a timer, which would hide a genuinely wedged pass from
-// the op watchdog (see registry.LivenessToucher).
-func reportCompactHeartbeat(ctx context.Context, backend string, day time.Time, result CompactResult) {
-	if fn := compactProgressFrom(ctx); fn != nil {
-		fn(CompactProgressEvent{Backend: backend, Result: result, Day: day, Heartbeat: true})
-	}
-}
-
-// reportCompactDone emits the per-backend completion event. Only wrappers that
-// fan out across backends call it; a bare store's caller already has the
-// return value.
-func reportCompactDone(ctx context.Context, backend string, result CompactResult, err error) {
-	if fn := compactProgressFrom(ctx); fn != nil {
-		fn(CompactProgressEvent{Backend: backend, Result: result, Done: true, Err: err})
-	}
-}
-
 // ── the other maintenance passes ────────────────────────────────────────────
 //
 // The nightly cleanup runs compaction, then Summarize, then Prune, then
-// RepairActivityIndexes, and since 2026-09-10 each of those runs on every
-// activity backend rather than the active one alone. Compaction reports
-// through the hook above; the other passes were silent, which on the first
-// night over an unsummarized SQLite history — tens of thousands of one-
-// transaction groups — is long enough for the registry watchdog to strike the
-// op as never_reported. This second hook carries their liveness the same way.
+// RepairActivityIndexes. Compaction reports through the hook above; the other
+// passes were silent, and a Summarize over a long unsummarized history — tens
+// of thousands of one-transaction groups — is long enough for the registry
+// watchdog to strike the op as never_reported. This second hook carries their
+// liveness the same way.
 
 // Maintenance phase names, as reported in MaintenanceProgressEvent.Phase.
 const (
@@ -127,22 +97,20 @@ const (
 const activityMaintenanceProgressEvery = 100
 
 // MaintenanceProgressEvent is one liveness/progress notification from a
-// non-compaction maintenance pass. Stores emit them mid-run (Done=false, Rows
-// = that backend's running count so far); the migrating wrapper emits one per
-// backend when that backend returns (Done=true, Rows = its final count, Err =
-// its error, if any).
+// non-compaction maintenance pass. The store emits them mid-run with its
+// running count for the phase; the caller stamps a phase boundary with an
+// empty Backend and zero Rows (see Server.CompactActivityLog). There is no
+// completion event: the caller already has each pass's final count as its
+// return value.
 type MaintenanceProgressEvent struct {
 	// Phase is one of the MaintenancePhase* constants.
 	Phase string
-	// Backend names the store the event is about: "sqlite" or "pebble".
+	// Backend names the store the event is about ("pebble"), or is empty on a
+	// phase-boundary stamp from the caller.
 	Backend string
-	// Rows is the running or final count for Backend alone — rows deleted for
+	// Rows is the running count for this phase — rows deleted for
 	// summarize/prune, index entries deleted for repair-indexes.
 	Rows int64
-	// Done is true for the single completion event a wrapper emits per backend.
-	Done bool
-	// Err is set on a Done event when that backend's pass failed.
-	Err error
 }
 
 // MaintenanceProgress receives MaintenanceProgressEvents. Called synchronously
@@ -175,13 +143,5 @@ func maintenanceProgressFrom(ctx context.Context) MaintenanceProgress {
 func ReportMaintenanceProgress(ctx context.Context, phase, backend string, rows int) {
 	if fn := maintenanceProgressFrom(ctx); fn != nil {
 		fn(MaintenanceProgressEvent{Phase: phase, Backend: backend, Rows: int64(rows)})
-	}
-}
-
-// reportMaintenanceDone emits the per-backend completion event for phase.
-// Only wrappers that fan out across backends call it.
-func reportMaintenanceDone(ctx context.Context, phase, backend string, rows int64, err error) {
-	if fn := maintenanceProgressFrom(ctx); fn != nil {
-		fn(MaintenanceProgressEvent{Phase: phase, Backend: backend, Rows: rows, Done: true, Err: err})
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 1.6.0
+// version: 2.0.0
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
-// last-edited: 2026-09-13
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -40,9 +40,11 @@ type CompactActivityLogParams struct {
 	OlderThanDays int `json:"older_than_days"`
 }
 
-// CompactActivityLogResult is the op's persisted result: the cross-backend
-// totals plus each backend's own counters, so a run that compacted Pebble but
-// failed on SQLite is readable as exactly that.
+// CompactActivityLogResult is the op's persisted result: the totals, plus the
+// same counters under Backends["active"]. Backends dates from the dual-backend
+// era, when it held one entry per store so a run that compacted Pebble but
+// failed on SQLite read as exactly that; it is kept so results persisted before
+// and after the SQLite backend's removal decode to the same shape.
 type CompactActivityLogResult struct {
 	Cutoff         time.Time                        `json:"cutoff"`
 	DaysCompacted  int                              `json:"days_compacted"`
@@ -69,19 +71,19 @@ type CompactBackendOutcome struct {
 // TIMEOUT. The nightly cleanup-activity-log uses 30m for compact + summarize +
 // prune + repair, and it only ever has one day's backlog to work through. This
 // op has whatever window the user chose — "Everything (now)" on a store that
-// has never been compacted — and it now runs on BOTH activity backends, the
-// Pebble one being the path the migrating store used to route around as
-// "unbounded". 6h is a ceiling for that worst case, not an estimate; a run
-// that is making progress is not cut off by it, and one that is stuck is
-// caught by ProgressTimeout long before.
+// has never been compacted. 6h is a ceiling for that worst case, not an
+// estimate; a run that is making progress is not cut off by it, and one that
+// is stuck is caught by ProgressTimeout long before.
 //
 // LIVENESS. Declared LivenessManual, and it earns that: the compaction store
 // emits a progress event per chunk and per day (database.WithCompactProgress),
 // which compactProgressToReporter forwards to reporter.UpdateProgress. Log
 // lines alone would not do — reporter.Log does not stamp the watchdog clock
 // (registry/types.go, LivenessManual). ProgressTimeout is raised from the 5m
-// default to 20m because a single chunk statement on a 19.5 GB SQLite file
-// under load has been measured in the minutes (see optimizeActivityDBDef).
+// default to 20m. It was sized for a single chunk statement on the 19.5 GB
+// SQLite activity file, measured in minutes under load; that store is gone
+// (2026-10-19) and a Pebble chunk is far shorter, but the value is kept rather
+// than tightened without a measurement of the Pebble worst case.
 //
 // CONCURRENCY. Shares cleanup-activity-log's key — as does
 // nightly-compact-activity-log — so no two activity compactions (or a
@@ -93,7 +95,7 @@ func (p *Plugin) compactActivityLogDef() sdk.OperationDef {
 		ProgressTimeout: 20 * time.Minute,
 		Plugin:          "maintenance",
 		DisplayName:     "Compact activity log",
-		Description:     "Collapses activity entries older than the chosen cutoff into daily digests, on every activity database.",
+		Description:     "Collapses activity entries older than the chosen cutoff into daily digests.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -115,10 +117,10 @@ func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage,
 		return err
 	}
 
-	startMsg := fmt.Sprintf("Compacting activity entries older than %s (%d days) on every activity database",
+	startMsg := fmt.Sprintf("Compacting activity entries older than %s (%d days)",
 		cutoff.UTC().Format(time.RFC3339), params.OlderThanDays)
 	if params.OlderThanDays == 0 {
-		startMsg = fmt.Sprintf("Compacting every activity entry up to %s on every activity database",
+		startMsg = fmt.Sprintf("Compacting every activity entry up to %s",
 			cutoff.UTC().Format(time.RFC3339))
 	}
 	return p.compactAndRecord(ctx, cutoff, startMsg, "compact-activity-log", reporter)
@@ -126,65 +128,42 @@ func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage,
 
 // compactAndRecord is the reporting half shared by the manual
 // compact-activity-log op and the nightly nightly-compact-activity-log op:
-// one call to CompactActivityEntries (the single compaction implementation,
-// on every activity backend), with per-chunk progress forwarded to the
-// watchdog, a per-backend log line as each backend finishes, and a persisted
+// one call to CompactActivityEntries (the single compaction implementation),
+// with per-chunk progress forwarded to the watchdog and a persisted
 // CompactActivityLogResult. The two ops differ only in how they compute
 // cutoff; everything after that is this function, so a fix to the liveness or
 // result shape cannot land on one and miss the other.
 func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMsg, opName string, reporter sdk.Reporter) error {
 	logging.Info(ctx, startMsg)
 	_ = reporter.Log(slog.LevelInfo, startMsg)
-	// First liveness stamp BEFORE the store is called: on a backend with
-	// nothing to do there are no chunk events, and the watchdog's
-	// never_reported strike must not fire on an op that finished in
-	// milliseconds but was slow to persist.
+	// First liveness stamp BEFORE the store is called: with nothing to do
+	// there are no chunk events, and the watchdog's never_reported strike must
+	// not fire on an op that finished in milliseconds but was slow to persist.
 	_ = reporter.UpdateProgress(0, 0, "starting compaction")
 
-	result := CompactActivityLogResult{Cutoff: cutoff.UTC(), Backends: map[string]CompactBackendOutcome{}}
-	var mu sync.Mutex
-	forward := compactProgressToReporter(reporter)
-	progress := func(ev database.CompactProgressEvent) {
-		forward(ev)
-		if !ev.Done {
-			return
-		}
-		outcome := CompactBackendOutcome{DaysCompacted: ev.Result.DaysCompacted, EntriesDeleted: ev.Result.EntriesDeleted}
-		msg := fmt.Sprintf("%s: compacted %d days, removed %d entries", ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
-		if ev.Err != nil {
-			outcome.Error = ev.Err.Error()
-			msg = fmt.Sprintf("%s: FAILED after compacting %d days, removing %d entries: %v",
-				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted, ev.Err)
-			_ = reporter.Log(slog.LevelError, msg)
-		} else {
-			_ = reporter.Log(slog.LevelInfo, msg)
-		}
-		logging.Info(ctx, msg)
-		mu.Lock()
-		result.Backends[ev.Backend] = outcome
-		mu.Unlock()
+	totals, err := p.deps.CompactActivityEntries(ctx, cutoff, compactProgressToReporter(reporter))
+
+	outcome := CompactBackendOutcome{DaysCompacted: totals.DaysCompacted, EntriesDeleted: totals.EntriesDeleted}
+	if err != nil {
+		outcome.Error = err.Error()
+	}
+	result := CompactActivityLogResult{
+		Cutoff:         cutoff.UTC(),
+		DaysCompacted:  totals.DaysCompacted,
+		EntriesDeleted: totals.EntriesDeleted,
+		Backends:       map[string]CompactBackendOutcome{"active": outcome},
 	}
 
-	totals, err := p.deps.CompactActivityEntries(ctx, cutoff, progress)
-	mu.Lock()
-	result.DaysCompacted = totals.DaysCompacted
-	result.EntriesDeleted = totals.EntriesDeleted
-	if len(result.Backends) == 0 {
-		// A single-backend deployment (no migrating wrapper) emits no Done
-		// events; record the one outcome under a neutral label so the result
-		// never reads as "no backend ran".
-		outcome := CompactBackendOutcome{DaysCompacted: totals.DaysCompacted, EntriesDeleted: totals.EntriesDeleted}
-		if err != nil {
-			outcome.Error = err.Error()
-		}
-		result.Backends["active"] = outcome
+	totalMsg := fmt.Sprintf("Activity compaction totals: %d days compacted, %d entries removed",
+		result.DaysCompacted, result.EntriesDeleted)
+	if err != nil {
+		totalMsg = fmt.Sprintf("Activity compaction FAILED after %d days compacted, %d entries removed: %v",
+			result.DaysCompacted, result.EntriesDeleted, err)
+		_ = reporter.Log(slog.LevelError, totalMsg)
+	} else {
+		_ = reporter.Log(slog.LevelInfo, totalMsg)
 	}
-	mu.Unlock()
-
-	totalMsg := fmt.Sprintf("Activity compaction totals: %d days compacted, %d entries removed across %d backend(s)",
-		result.DaysCompacted, result.EntriesDeleted, len(result.Backends))
 	logging.Info(ctx, totalMsg)
-	_ = reporter.Log(slog.LevelInfo, totalMsg)
 	_ = reporter.UpdateProgress(result.EntriesDeleted, result.EntriesDeleted, totalMsg)
 
 	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {
@@ -244,79 +223,36 @@ func compactCutoff(now time.Time, days int) (time.Time, error) {
 // compactProgressToReporter adapts the compaction store's progress events to
 // reporter.UpdateProgress. Total is unknown up front (the store bounds its
 // loop by the data, not by a pre-count), so it is reported as 0 and the UI
-// shows an indeterminate bar with the running count.
+// shows an indeterminate bar with the running count. ev.Result is the store's
+// running total for this CompactByDay call, so it is forwarded as is.
 //
-// Three things it must get right, each learned from a production failure:
-//
-//   - Done events ARE forwarded. Skipping them (the behaviour until
-//     2026-09-13) left no stamp at the moment one backend finished and the
-//     next backend's pre-chunk setup began. On 2026-09-13 the Pebble tier
-//     finished at 14:15:03 UTC and the next stamp never came: the SQLite tier
-//     was cancelled as stuck 20m15s later, still inside its range query. The
-//     caller still logs the Done event with the backend's final numbers.
-//   - The progress COUNTER is cumulative across backends. ev.Result is per
-//     backend, so forwarding it raw made the bar jump backwards when the
-//     second backend started — the same bug maintenanceProgressToReporter
-//     below already fixed for the other passes.
-//   - Heartbeat events stamp liveness only (registry.TouchLiveness, the
-//     mechanism tag-backfill uses for the same problem): the store finished a
-//     bounded unit of work that removed nothing, so there is no new numerator
-//     to report and no reason to write the op row.
-//
-// The map is guarded because the hook rides a context and nothing promises the
-// fan-out stays single-goroutine.
+// Done and Heartbeat handling lived here while a migrating wrapper fanned
+// compaction out across a Pebble and a SQLite store (per-backend completion
+// stamps, a cross-backend cumulative counter, liveness-only SQLite scan
+// windows). The single Pebble store emits none of those, so they went with
+// the SQLite backend on 2026-10-19.
 func compactProgressToReporter(reporter sdk.Reporter) database.CompactProgress {
-	var (
-		mu     sync.Mutex
-		latest = map[string]int{}
-	)
 	return func(ev database.CompactProgressEvent) {
-		if ev.Heartbeat {
-			opsregistry.TouchLiveness(reporter)
-			return
+		msg := fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
+			ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
+		if !ev.Day.IsZero() {
+			msg += fmt.Sprintf(" (day %s)", ev.Day.UTC().Format("2006-01-02"))
 		}
-		mu.Lock()
-		latest[ev.Backend] = ev.Result.EntriesDeleted
-		total := 0
-		for _, n := range latest {
-			total += n
-		}
-		mu.Unlock()
-
-		var msg string
-		switch {
-		case ev.Done && ev.Err != nil:
-			msg = fmt.Sprintf("%s: FAILED after %d days compacted, %d entries removed: %v",
-				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted, ev.Err)
-		case ev.Done:
-			msg = fmt.Sprintf("%s: finished, %d days compacted, %d entries removed",
-				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
-		default:
-			msg = fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
-				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
-			if !ev.Day.IsZero() {
-				msg += fmt.Sprintf(" (day %s)", ev.Day.UTC().Format("2006-01-02"))
-			}
-		}
-		_ = reporter.UpdateProgress(total, 0, msg)
+		_ = reporter.UpdateProgress(ev.Result.EntriesDeleted, 0, msg)
 	}
 }
 
 // maintenanceProgressToReporter adapts the summarize/prune/repair passes'
-// progress events to reporter.UpdateProgress, for the nightly cleanup. Unlike
-// compactProgressToReporter it forwards Done events too: the nightly op logs
-// only the four final totals, so a per-backend completion is the only place a
-// backend's own number (and failure) is ever seen, and it is a liveness stamp
-// at the moment the next backend's silent stretch begins.
+// progress events to reporter.UpdateProgress, for the nightly cleanup.
+//
 // The progress COUNTER is cumulative across the whole op, which ev.Rows is not:
-// each backend restarts its count at zero for each phase, so forwarding ev.Rows
-// raw made the op's progress bar jump backwards three times a run. Both
-// non-terminal emitters (SQLActivityStore.Summarize, PebbleActivityStore
-// .Summarize) report a running total within their own phase+backend, and the
-// Done event carries that same backend's final number, so keeping the latest
-// value per phase+backend and summing those is the row count actually deleted
-// so far. The map is guarded because the hook rides a context and nothing
-// promises the fan-out stays single-goroutine.
+// the store restarts its count at zero for each phase, so forwarding ev.Rows
+// raw made the op's progress bar jump backwards at every phase boundary. The
+// store's emitters (PebbleActivityStore.Summarize and .Prune) report a running
+// total within their own phase, so keeping the latest value per phase and
+// summing those is the row count actually deleted so far. The map is guarded
+// because the hook rides a context and nothing promises a pass stays
+// single-goroutine.
 func maintenanceProgressToReporter(reporter sdk.Reporter) database.MaintenanceProgress {
 	type phaseBackend struct{ phase, backend string }
 	var (
@@ -333,17 +269,11 @@ func maintenanceProgressToReporter(reporter sdk.Reporter) database.MaintenancePr
 		mu.Unlock()
 
 		var msg string
-		switch {
-		case ev.Done && ev.Err != nil:
-			msg = fmt.Sprintf("%s: %s FAILED after %d rows: %v", ev.Phase, ev.Backend, ev.Rows, ev.Err)
-			_ = reporter.Log(slog.LevelError, msg)
-		case ev.Done:
-			msg = fmt.Sprintf("%s: %s done, %d rows", ev.Phase, ev.Backend, ev.Rows)
-		case ev.Backend == "":
-			// A phase boundary stamped by the caller (see Server.CompactActivityLog):
-			// the only liveness a context-free pass like Prune can have.
+		if ev.Backend == "" {
+			// A phase boundary stamped by the caller (see Server.MaintainActivityLog):
+			// the first liveness a pass has before its first batch.
 			msg = fmt.Sprintf("%s: starting", ev.Phase)
-		default:
+		} else {
 			msg = fmt.Sprintf("%s: %s %d rows so far", ev.Phase, ev.Backend, ev.Rows)
 		}
 		_ = reporter.UpdateProgress(int(total), 0, msg)

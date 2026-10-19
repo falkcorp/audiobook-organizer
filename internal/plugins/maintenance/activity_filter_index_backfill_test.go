@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -217,8 +217,6 @@ func TestActivityFilterIndexBackfill_DefSharesCompactionKey(t *testing.T) {
 	def := p.activityFilterIndexBackfillDef()
 	assert.Equal(t, p.nightlyCompactActivityLogDef().ConcurrencyKey, def.ConcurrencyKey,
 		"must never run while compaction deletes rows")
-	assert.Equal(t, p.activityReclaimDef().ConcurrencyKey, def.ConcurrencyKey,
-		"reclaim prunes Pebble rows too, so it must share the key")
 	assert.Equal(t, "maintenance.activity-filter-index-backfill", def.ID)
 }
 

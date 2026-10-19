@@ -1,7 +1,7 @@
 // file: internal/operations/registry/activity_mirror.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: af8533f9-bdc2-492d-a225-d66ffa0e0e9f
-// last-edited: 2026-09-11
+// last-edited: 2026-10-19
 
 package registry
 
@@ -20,9 +20,9 @@ import (
 //
 // WHY THIS EXISTS. dbReporter.Log mirrors every line into the Activity Log,
 // and until 2026-09-11 it did so synchronously. On the SQLite activity backend
-// that write goes through a writer pool capped at ONE connection, and
-// maintenance.optimize-activity-db holds that connection for minutes while it
-// runs ANALYZE. On 2026-09-11 a library scan logged a line nine seconds after
+// (removed 2026-10-19) that write went through a writer pool capped at ONE
+// connection, and maintenance.optimize-activity-db held that connection for
+// minutes while it ran ANALYZE. On 2026-09-11 a library scan logged a line nine seconds after
 // the optimize job started, blocked inside Record behind the ANALYZE, stopped
 // advancing, and was killed by the watchdog at the five-minute mark together
 // with the optimize job. The watchdog was right — the scan really was frozen —

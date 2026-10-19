@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -19,12 +19,12 @@ import (
 const NightlyCompactActivityLogDefID = "maintenance.nightly-compact-activity-log"
 
 // nightlyCompactActivityLogDef compacts every activity entry from before the
-// kept days into daily digests, on every activity backend (owner decision
+// kept days into daily digests (owner decision
 // 2026-09-13: keep only today in full detail).
 //
 // SAME MACHINERY AS THE MANUAL OP. It computes a different cutoff and then
 // calls compactAndRecord, which is CompactActivityEntries plus the per-chunk
-// liveness and per-backend result the manual compact-activity-log op reports.
+// liveness and persisted result the manual compact-activity-log op reports.
 // There is no second compactor.
 //
 // SCHEDULE. The Schedule field below is documentation and the EnqueueOp
@@ -40,16 +40,11 @@ const NightlyCompactActivityLogDefID = "maintenance.nightly-compact-activity-log
 //
 // TIMEOUT 6h, like the manual op: a production backlog of ~5.9M rows drains at
 // ~10k rows/min, so the first nights are catch-up nights. Each chunk commits
-// atomically on both backends (CompactByDay), so a run cut off by the timeout
+// atomically (CompactByDay), so a run cut off by the timeout
 // leaves nothing half-done and the next night resumes from the data.
 //
 // CONCURRENCY. Shares the cleanup-activity-log key with the manual op and the
 // midnight cleanup, so no two of them ever touch activity rows at once.
-// optimize-activity-db (03:40-ish, via the maintenance window) keeps its own
-// key: it only refreshes planner statistics (one ANALYZE / PRAGMA optimize),
-// deletes nothing, and SQLite serializes its write against a compaction chunk.
-// Statistics taken mid-catch-up are merely staler; the next night refreshes
-// them.
 func (p *Plugin) nightlyCompactActivityLogDef() sdk.OperationDef {
 	sched := "10 0 * * *" // documentation only; the scheduler's DailyAt "00:10" is what fires it
 	return sdk.OperationDef{
@@ -58,7 +53,7 @@ func (p *Plugin) nightlyCompactActivityLogDef() sdk.OperationDef {
 		ProgressTimeout: 20 * time.Minute, // same reason as compactActivityLogDef
 		Plugin:          "maintenance",
 		DisplayName:     "Nightly activity compaction (00:10 local)",
-		Description:     "Collapses every activity entry from before the kept full-detail days (default: before today) into daily digests, on every activity database.",
+		Description:     "Collapses every activity entry from before the kept full-detail days (default: before today) into daily digests.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -81,7 +76,7 @@ func (p *Plugin) runNightlyCompactActivityLog(ctx context.Context, _ json.RawMes
 	if err != nil {
 		return err
 	}
-	startMsg := fmt.Sprintf("Nightly compaction: collapsing every activity entry before %s (local midnight, keeping %d full day(s) before today) on every activity database",
+	startMsg := fmt.Sprintf("Nightly compaction: collapsing every activity entry before %s (local midnight, keeping %d full day(s) before today)",
 		cutoff.Format(time.RFC3339), keep)
 	return p.compactAndRecord(ctx, cutoff, startMsg, "nightly-compact-activity-log", reporter)
 }

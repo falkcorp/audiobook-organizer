@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: cb551e14-7788-4c73-830d-3e0a46bfe67c
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package database
 
@@ -414,11 +414,9 @@ func TestFilterIndex_BackfillWindowRebuildsDroppedIndexes(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestFindPebbleActivityStore_PeelsWrappers(t *testing.T) {
+func TestFindPebbleActivityStore_ReturnsThePebbleStore(t *testing.T) {
 	s := newTestPebbleActivityStore(t)
 	assert.Same(t, s, FindPebbleActivityStore(s))
-	mig := NewMigratingActivityStore(s, nil, false)
-	assert.Same(t, s, FindPebbleActivityStore(mig))
 	assert.Nil(t, FindPebbleActivityStore(nil))
 }
 

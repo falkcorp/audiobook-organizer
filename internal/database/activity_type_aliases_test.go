@@ -1,7 +1,7 @@
 // file: internal/database/activity_type_aliases_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d2f8a41-3b7e-4c09-9e15-a4c8d0b7f362
-// last-edited: 2026-09-25
+// last-edited: 2026-10-19
 
 package database
 
@@ -113,12 +113,6 @@ func TestActivityTypeAliases_Pebble(t *testing.T) {
 			assertTypeAliasQueries(t, s)
 		})
 	}
-}
-
-func TestActivityTypeAliases_SQL(t *testing.T) {
-	s := newTestSQLStore(t)
-	seedTypeAliasRows(t, s)
-	assertTypeAliasQueries(t, s)
 }
 
 func TestActivityFilter_TypeValues(t *testing.T) {

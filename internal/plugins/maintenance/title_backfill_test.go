@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.51.2
+// version: 1.51.3
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -284,14 +284,6 @@ func (d fakeDeps) CompactActivityEntries(_ context.Context, _ time.Time, _ datab
 	return database.CompactResult{}, nil
 }
 
-func (d fakeDeps) VacuumActivityDB(_ context.Context, dryRun bool) (database.ActivityVacuumReport, error) {
-	return database.ActivityVacuumReport{DryRun: dryRun}, nil
-}
-
-func (d fakeDeps) OptimizeActivityStatistics(_ context.Context) (database.ActivityOptimizeResult, error) {
-	return database.ActivityOptimizeResult{}, nil
-}
-
 func (d fakeDeps) ActivityFilterIndexBackfiller() database.ActivityFilterIndexBackfiller {
 	return nil
 }
@@ -300,17 +292,6 @@ func (d fakeDeps) RecompactActivityDigests(_ context.Context) (database.Recompac
 	return database.RecompactResult{}, nil
 }
 
-// ReclaimMigratedActivity defaults to the refusal a Pebble-only deployment
-// gets. Tests that exercise the reclaim op override this on their own fake.
-func (d fakeDeps) ReclaimMigratedActivity(_ context.Context, _ time.Duration, dryRun bool,
-	_ database.ActivityReclaimProgress,
-) (database.ActivityReclaimResult, error) {
-	return database.ActivityReclaimResult{
-		Refused:       true,
-		RefusedReason: "test fake: no migration wrapper",
-		DryRun:        dryRun,
-	}, nil
-}
 func (d fakeDeps) HasDedupEngine() bool          { return false }
 func (d fakeDeps) HasMetadataFetchService() bool { return false }
 func (d fakeDeps) HasAIParsing() bool            { return false }

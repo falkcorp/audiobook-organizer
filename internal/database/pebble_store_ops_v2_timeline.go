@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: f45601a9-ba63-4626-ad91-75720525f1be
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 // Timeline indexes for opv2 operation rows.
 //
@@ -423,8 +423,7 @@ func (p *PebbleStore) listOperationsV2SinceScan(since time.Time, limit int) (row
 //
 // ASSUMPTION (the one-minute slack): every op id is a ULID minted no more
 // than one minute before the row's QueuedAt is set. True for every writer
-// today: registry.go, batch.go, resume.go and activity/sql_migration_report.go
-// call ulid.Make() and set QueuedAt from time.Now() (or the same `now`) on the
+// today: registry.go, batch.go and resume.go call ulid.Make() and set QueuedAt from time.Now() (or the same `now`) on the
 // next lines, so the gap is microseconds. QueuedAt is never rewritten after
 // insert (ResetOperationV2ForResume keeps it). If a writer ever mints an id
 // earlier than that, or sets QueuedAt from a later clock, or uses a non-ULID
@@ -457,7 +456,7 @@ func opv2ULIDSeekBound(since time.Time) []byte {
 //     predicate's QueuedAt clause: a row whose CompletedAt is before since
 //     (clock skew) but which was queued inside the window. Op ids are ULIDs
 //     minted immediately before QueuedAt is set (registry.go, batch.go,
-//     resume.go, activity/sql_migration_report.go); the minute covers an id
+//     resume.go); the minute covers an id
 //     minted slightly before its QueuedAt;
 //  4. a point Get for every id from legs 1-2. Legs 1-2 keep only ids keyed
 //     below leg 3's bound, so leg 3 and leg 4 never see the same row.

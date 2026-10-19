@@ -1,7 +1,7 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.24.0
+# version: 1.24.1
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
-# last-edited: 2026-10-18
+# last-edited: 2026-10-19
 #
 # What `{}` does for every registered operation that can write (declares
 # library.write, files.write or db.migrate, declares the resources it writes
@@ -113,7 +113,6 @@ library.organize-when-scanned	preview
 library.scan	no-mode
 library.transcode	no-mode
 maintenance.activity-filter-index-backfill	no-mode
-maintenance.activity-reclaim	preview
 maintenance.ai-dedup-batch	no-mode
 maintenance.author-conjunction-repair	preview
 maintenance.author-duplicate-merge	preview
@@ -159,7 +158,6 @@ maintenance.missing-file-repoint	preview
 maintenance.move-book-file-rows	preview
 maintenance.movement-atom-cleanup	no-mode
 maintenance.nightly-compact-activity-log	no-mode
-maintenance.optimize-activity-db	no-mode
 maintenance.opchange-book-index-rebuild	preview
 maintenance.probe-directory-books	preview
 maintenance.prune-ai-journal	no-mode
@@ -189,7 +187,6 @@ maintenance.tombstone-cleanup	no-mode
 maintenance.transcode-temp-cleanup	preview
 maintenance.transcribe-book-intros	preview
 maintenance.trash-cleanup	no-mode
-maintenance.vacuum-activity-db	preview
 maintenance.version-group-primary-repair	preview
 maintenance.window	no-mode
 metadata.apply-when-scanned	preview

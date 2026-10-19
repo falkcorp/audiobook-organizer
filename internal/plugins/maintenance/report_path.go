@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/report_path.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5591f89d-611e-4e24-83c2-e02a887bd301
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -28,8 +28,7 @@ import (
 // a place the application owns for artifacts.
 //
 // {RootDir}/.reports follows the same convention as {RootDir}/.wav-cache
-// (intro_transcribe.go) and {RootDir}/.activity (config.ResolveActivityDBPath):
-// app-owned state on the large library volume, dot-prefixed so walkers that
+// (intro_transcribe.go): app-owned state on the large library volume, dot-prefixed so walkers that
 // call pathutil.ShouldSkipDir (sweep.RemoveOldBackupFiles, which cleanup.go
 // calls, and file_provenance_capture.go in this package, for example) stay out
 // of it.

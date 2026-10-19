@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.25.2
+// version: 1.26.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -249,17 +249,17 @@ func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:       "maintenance.cleanup-activity-log",
 		Liveness: sdk.LivenessManual,
-		// Raised from the 5m default on 2026-09-10, when every pass started
-		// running on both activity backends. Compaction and Summarize stamp
-		// per chunk/group, and the wrapper stamps as each backend finishes
-		// each pass, but Prune has no context on the interface and cannot
-		// report mid-run: a first-night SQLite prune over a never-pruned
-		// history is the longest silence this op can have. Same value as
-		// compact-activity-log, for the same reason.
+		// Raised from the 5m default on 2026-09-10, when every pass ran on
+		// both the Pebble and the SQLite activity backend and a first-night
+		// SQLite prune over a never-pruned history was the longest silence
+		// this op could have. Compaction, Summarize and Prune now all stamp
+		// per chunk/group/batch on the one Pebble store; the value is kept,
+		// the same as compact-activity-log, rather than tightened without a
+		// measurement.
 		ProgressTimeout: 20 * time.Minute,
 		Plugin:          "maintenance",
 		DisplayName:     "Clean activity log",
-		Description:     "Compacts old change entries into daily digests, prunes old debug entries, and removes orphaned activity index entries, on every activity database.",
+		Description:     "Compacts old change entries into daily digests, prunes old debug entries, and removes orphaned activity index entries.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -277,10 +277,9 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	// called UpdateProgress — only Log at the end, which the watchdog does not
 	// count — so any night whose compaction backlog exceeded ProgressTimeout
 	// was cancelled as never_reported. The compaction store emits per-chunk
-	// events, and since the other passes started running on both backends the
-	// summarize pass emits per-group events and the migrating wrapper emits a
-	// completion per backend per pass; forwarding all of them is what keeps
-	// this op alive.
+	// events, the summarize pass per-group events and the prune per-batch
+	// events, and MaintainActivityLog stamps each phase boundary; forwarding
+	// all of them is what keeps this op alive.
 	_ = reporter.UpdateProgress(0, 0, "starting activity log cleanup")
 	ctx = database.WithMaintenanceProgress(ctx, maintenanceProgressToReporter(reporter))
 
@@ -312,105 +311,6 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	}
 	msg := fmt.Sprintf("Activity log cleanup: %s, summarized %d, pruned %d, orphaned index entries removed %d",
 		compactMsg, summarized, pruned, indexOrphans)
-	logging.Info(ctx, msg)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	return nil
-}
-
-// --- optimize-activity-db ---
-
-// optimizeActivityDBDef refreshes the activity store's query-planner statistics.
-//
-// WHY A SEPARATE OP RATHER THAN A STEP INSIDE cleanup-activity-log. Compaction
-// is what invalidates the statistics, so appending this to that job is the
-// obvious pairing — and it is the wrong one, because of the shape of the cost.
-// Measured 2026-09-09 on a reflink copy of the production activity database
-// (13,256,788 rows / 19.5 GB / 6 indexes, host at load average ~30):
-//
-//	ANALYZE, no analysis_limit, no stored stats  : >600 s, did NOT complete
-//	ANALYZE, analysis_limit=400, no stored stats :  344 s
-//	PRAGMA optimize, limit=400, no stored stats  :  394 s
-//	PRAGMA optimize, limit=400, stats present    :    0.002 s
-//
-// So the recurring cost is ~2 ms and the one-time bootstrap is ~6.5 minutes.
-// Folding that bootstrap into cleanup-activity-log would spend a fifth of that
-// job's budget, once, on the very run that has the most compaction backlog to
-// work through — starving the thing the statistics are meant to help. Split
-// apart, each has its own timeout and its own failure record, and a bootstrap
-// that overruns cannot take compaction down with it.
-//
-// NIGHTLY, not weekly: at 2 ms steady-state the schedule costs nothing, and
-// statistics that are one day stale are strictly better than seven. The budget
-// was 15m, ~2.3x the measured bootstrap, which is the only run that can
-// approach it; every subsequent run finishes in milliseconds.
-//
-// It is NOT done at startup. 394 s of I/O on the boot path would delay every
-// restart on a host that restarts several times a day.
-//
-// 45m, NOT 15m, SINCE 2026-09-19. This run also builds the SQLite activity
-// table's covering time indexes the first time it sees a database without them
-// (SQLActivityStore.OptimizeStatistics): two whole-table index builds plus an
-// ANALYZE of just those two indexes. On a 1M-row / ~2 GB fixture that was 5.0 s
-// on an idle Mac; production is 13.2M rows / 19.5 GB on a host that has run at
-// load average ~30, and a build cancelled at the deadline rolls back and would
-// be retried — and cancelled — every night. Every later run is still ~2 ms, so
-// the wider budget only changes how long a genuinely wedged statement survives.
-//
-// LIVENESS: NONE, WITH A 45m BUDGET. The whole run is one SQL statement that
-// cannot report progress, so the only true declaration is LivenessNone. Until
-// 2026-09-11 this def declared LivenessManual and posted a reporter.Log line
-// before the call on the belief that the line kept the watchdog satisfied. It
-// does not: reporter.Log deliberately does not stamp liveness, only
-// UpdateProgress does. So the watchdog's default 5-minute ProgressTimeout
-// killed the bootstrap every time, before the 15m Timeout above could matter.
-// Production logged "bootstrap analyze: context canceled" at 5m on 09-10 and
-// again on 09-11. The statistics were never stored, and every run was a new
-// bootstrap. ProgressTimeout equals Timeout because an op that never reports
-// has nothing to measure staleness against except wall time. A heartbeat
-// goroutine was rejected for the reason db.go's db-optimize comment gives: a
-// blind heartbeat keeps a genuinely wedged statement alive forever.
-func (p *Plugin) optimizeActivityDBDef() sdk.OperationDef {
-	sched := "40 3 * * *" // 03:40 daily — after the compaction window, before the morning
-	return sdk.OperationDef{
-		ID:              "maintenance.optimize-activity-db",
-		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 45 * time.Minute, // LivenessNone requires an explicit budget; see above
-		Plugin:          "maintenance",
-		DisplayName:     "Optimize activity database",
-		Description:     "Refreshes the activity store's query-planner statistics (SQLite ANALYZE / PRAGMA optimize).",
-		ResumePolicy:    sdk.ResumeDrop,
-		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.optimize-activity-db",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         45 * time.Minute,
-		Schedule:        &sched,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runOptimizeActivityDB,
-	}
-}
-
-func (p *Plugin) runOptimizeActivityDB(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	// The bootstrap run takes minutes inside a single SQL statement, so this
-	// line is posted BEFORE the call to tell a human watching the op why it is
-	// silent. It is for people only: Log does not reset the watchdog's progress
-	// clock. The def's LivenessNone + ProgressTimeout is what keeps the
-	// watchdog off this op.
-	_ = reporter.Log(slog.LevelInfo, "Refreshing activity-store query planner statistics "+
-		"(first run on a database with no stored statistics takes several minutes)")
-
-	res, err := p.deps.OptimizeActivityStatistics(ctx)
-	if err != nil {
-		return err
-	}
-	if !res.Supported {
-		msg := "Activity backend keeps no query-planner statistics; nothing to optimize"
-		logging.Info(ctx, msg)
-		_ = reporter.Log(slog.LevelInfo, msg)
-		return nil
-	}
-	msg := fmt.Sprintf("Activity statistics refreshed: %d stat rows in %s (bootstrap=%t)",
-		res.TablesAnalyzed, res.Duration.Round(time.Millisecond), res.Bootstrapped)
 	logging.Info(ctx, msg)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil

@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package scheduler — task registrations.
 // Every registered task is defined here. Each task's TriggerFn and
@@ -1040,9 +1040,18 @@ func (ts *TaskScheduler) registerAllTasks() {
 	})
 
 	// acoustid_backfill is the real schedule for acoustid.backfill. The op def
-	// used to declare Schedule "0 3 * * *", which nothing reads (see the
-	// optimize_activity_db comment below), so the backfill never ran
-	// unattended. Ships DISABLED — scheduled.acoustid_backfill.enabled=false —
+	// used to declare Schedule "0 3 * * *", which nothing reads as a timer, so
+	// the backfill never ran unattended.
+	//
+	// OperationDef.Schedule (a v2 cron string) is never evaluated as a timer:
+	// the cron evaluator in cron.go runs only the native ops.Schedule
+	// declarations. The string is still read, in three places:
+	// registry.upsertDefToDB copies it to the ScheduleCron column of
+	// op_definitions_v2; registry.EnqueueOp treats a non-nil Schedule as "fold
+	// a second start into the active run of the same mode"; and
+	// RegisterSchedules (v3_schedule.go) lists a v2 cron that no task here
+	// drives as "disabled" on the v3 defs view. A def that declares Schedule
+	// and has no TaskScheduler task here does not run. Ships DISABLED — scheduled.acoustid_backfill.enabled=false —
 	// because library-wide fingerprinting reads every un-fingerprinted file
 	// and turning that on is an owner decision. Not in maintenanceOrder for
 	// the same reason.
@@ -1646,39 +1655,6 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return v2ScheduledOp(v2ID, "ai_journal_prune"), nil
 		},
 		IsEnabled:              func() bool { return config.AppConfig.AIJournalRetentionDays > 0 },
-		GetInterval:            func() time.Duration { return 24 * time.Hour },
-		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return true },
-	})
-
-	// Activity DB Optimize — refresh the activity store's query-planner statistics.
-	//
-	// Registered here, in the TaskScheduler, and NOT relied upon via the op
-	// def's own Schedule field. OperationDef.Schedule (a v2 cron string) is
-	// never evaluated as a timer: the cron evaluator in cron.go runs only the
-	// native ops.Schedule declarations. The string is still read, in three
-	// places: registry.upsertDefToDB copies it to the ScheduleCron column of
-	// op_definitions_v2; registry.EnqueueOp treats a non-nil Schedule as "fold
-	// a second start into the active run of the same mode"; and
-	// RegisterSchedules (v3_schedule.go) lists a v2 cron that no task here
-	// drives as "disabled" on the v3 defs view. A def that declares Schedule
-	// and has no TaskScheduler task here does not run.
-	ts.registerTask(TaskDefinition{
-		Name:        "optimize_activity_db",
-		Description: "Refresh the activity store's query-planner statistics",
-		Category:    "maintenance",
-		TriggerFn: func(source string) (*database.Operation, error) {
-			store := ts.deps.Store()
-			if store == nil {
-				return nil, fmt.Errorf("database not initialized")
-			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.optimize-activity-db", nil)
-			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue optimize-activity-db: %w", enqErr)
-			}
-			return v2ScheduledOp(v2ID, "optimize_activity_db"), nil
-		},
-		IsEnabled:              func() bool { return ts.deps.HasActivitySvc() },
 		GetInterval:            func() time.Duration { return 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },

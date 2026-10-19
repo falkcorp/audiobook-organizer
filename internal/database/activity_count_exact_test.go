@@ -1,27 +1,21 @@
 // file: internal/database/activity_count_exact_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 41ba9c07-52e8-4f36-a7d1-6e0b83c4915f
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 // CountActivity exists because Query's total is a pagination probe, not a
-// census, on BOTH backends — and that is not obvious from either signature.
+// census — and that is not obvious from its signature.
 //
 // Query returns (entries, total, error). Reading `total` as "how many rows
 // match" is the natural reading and it is wrong: the Pebble store stops walking
 // at Offset+Limit+1 matches (the bounded newest-first scan that replaced a full
-// decode after it OOMed production at 8.86 GB), and the SQL store caps its
-// COUNT subquery at sqlActCountCap. Both are correct for driving a "next page"
-// button and both under-report a large keyspace by orders of magnitude.
+// decode after it OOMed production at 8.86 GB). That is correct for driving a
+// "next page" button and under-reports a large keyspace by orders of magnitude.
 //
-// That misreading was live in the activity reclaim during development: the
-// census called Query with Limit 1 and reported 2 rows for a store holding 5.
-// Scaled to production's keyspace it would have reported single digits for
-// millions — and the parity guard that decides whether deleting is safe would
-// have been comparing two of those numbers.
-//
-// These tests pin the difference on both backends, so a future refactor that
-// routes CountActivity back through Query fails here instead of silently
-// resurrecting a lying census.
+// The misreading was once live: a census called Query with Limit 1 and
+// reported 2 rows for a store holding 5. These tests pin the difference, so a
+// future refactor that routes CountActivity back through Query fails here
+// instead of silently resurrecting a lying census.
 package database
 
 import (
@@ -34,6 +28,20 @@ import (
 )
 
 const countExactRows = 25
+
+// seedActivity writes one row into a store at a chosen age.
+func seedActivity(t *testing.T, s ActivityStorer, tier string, age time.Duration, summary string) {
+	t.Helper()
+	_, err := s.Record(ActivityEntry{
+		Timestamp: time.Now().UTC().Add(-age),
+		Tier:      tier,
+		Type:      "test_event",
+		Level:     "info",
+		Source:    "count_exact_test",
+		Summary:   summary,
+	})
+	require.NoError(t, err)
+}
 
 func TestPebbleCountActivity_IsExactWhereQueryTotalIsNot(t *testing.T) {
 	store := newTestPebbleActivityStore(t)
@@ -54,53 +62,28 @@ func TestPebbleCountActivity_IsExactWhereQueryTotalIsNot(t *testing.T) {
 	assert.Equal(t, countExactRows, n, "CountActivity must count every row, not a page of them")
 }
 
-func TestSQLCountActivity_IsExact(t *testing.T) {
-	store := newTestSQLStore(t)
-	for range countExactRows {
-		seedActivity(t, store, "change", 10*24*time.Hour, "row")
-	}
-
-	n, err := store.CountActivity(context.Background(), "change", nil)
-	require.NoError(t, err)
-	assert.Equal(t, countExactRows, n)
-}
-
 func TestCountActivity_CutoffBoundIsExclusiveAndPerTier(t *testing.T) {
-	// The reclaim decides what to delete from these two numbers, so both the
-	// time bound and the tier bound have to be real.
-	for _, tc := range []struct {
-		name  string
-		build func(t *testing.T) ActivityCounter
-	}{
-		{"pebble", func(t *testing.T) ActivityCounter { return newTestPebbleActivityStore(t) }},
-		{"sqlite", func(t *testing.T) ActivityCounter { return newTestSQLStore(t) }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			counter := tc.build(t)
-			store, ok := counter.(ActivityStorer)
-			require.True(t, ok)
-
-			for range 3 {
-				seedActivity(t, store, "change", 10*24*time.Hour, "old change")
-			}
-			seedActivity(t, store, "change", time.Minute, "new change")
-			seedActivity(t, store, "debug", 10*24*time.Hour, "old debug")
-
-			cutoff := time.Now().UTC().Add(-48 * time.Hour)
-
-			old, err := counter.CountActivity(context.Background(), "change", &cutoff)
-			require.NoError(t, err)
-			assert.Equal(t, 3, old, "only rows behind the cutoff, and only this tier")
-
-			all, err := counter.CountActivity(context.Background(), "change", nil)
-			require.NoError(t, err)
-			assert.Equal(t, 4, all, "a nil cutoff means every row in the tier")
-
-			debug, err := counter.CountActivity(context.Background(), "debug", &cutoff)
-			require.NoError(t, err)
-			assert.Equal(t, 1, debug, "tiers must not bleed into each other")
-		})
+	// Both the time bound and the tier bound have to be real.
+	store := newTestPebbleActivityStore(t)
+	for range 3 {
+		seedActivity(t, store, "change", 10*24*time.Hour, "old change")
 	}
+	seedActivity(t, store, "change", time.Minute, "new change")
+	seedActivity(t, store, "debug", 10*24*time.Hour, "old debug")
+
+	cutoff := time.Now().UTC().Add(-48 * time.Hour)
+
+	old, err := store.CountActivity(context.Background(), "change", &cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, 3, old, "only rows behind the cutoff, and only this tier")
+
+	all, err := store.CountActivity(context.Background(), "change", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 4, all, "a nil cutoff means every row in the tier")
+
+	debug, err := store.CountActivity(context.Background(), "debug", &cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, 1, debug, "tiers must not bleed into each other")
 }
 
 func TestPebbleCountActivity_DoesNotCountSecondaryIndexKeys(t *testing.T) {
@@ -113,7 +96,7 @@ func TestPebbleCountActivity_DoesNotCountSecondaryIndexKeys(t *testing.T) {
 		Tier:        "change",
 		Type:        "test_event",
 		Level:       "info",
-		Source:      "reclaim_test",
+		Source:      "count_exact_test",
 		OperationID: "op-1", // writes an act:op: index key
 		BookID:      "bk-1", // writes an act:bk: index key
 		Summary:     "one row, three keys",

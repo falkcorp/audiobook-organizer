@@ -1,7 +1,7 @@
 // file: internal/scheduler/interval_clock_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c41a7b98-3e26-4d05-9f7a-2b8e6d015c3f
-// last-edited: 2026-09-13
+// last-edited: 2026-10-19
 
 package scheduler
 
@@ -86,9 +86,9 @@ func TestIntervalClock_SeedIsPersisted(t *testing.T) {
 	settings := map[string]string{}
 	ts := settingsBackedScheduler(t, settings)
 
-	ts.stampIntervalTick("optimize_activity_db", time.Now())
+	ts.stampIntervalTick("cleanup_activity_log", time.Now())
 
-	_, stored := settings[intervalLastTickKey("optimize_activity_db")]
+	_, stored := settings[intervalLastTickKey("cleanup_activity_log")]
 	assert.True(t, stored, "the seed must be written to settings, not just held in memory")
 }
 
@@ -119,21 +119,17 @@ func TestIntervalPollFor(t *testing.T) {
 // OperationDef.Schedule is decorative: registry.upsertDefToDB copies it into the
 // ScheduleCron column of op_definitions_v2 and NOTHING reads that column back —
 // there is no cron library in the module. A def that declares a Schedule and has
-// no TaskScheduler task does not run, and says nothing about it. These two are
-// the activity log's whole retention story, so they get an explicit assertion
-// rather than relying on the generic reachability sweep.
+// no TaskScheduler task does not run, and says nothing about it. This one is
+// the activity log's retention story, so it gets an explicit assertion rather
+// than relying on the generic reachability sweep.
 func TestCleanupActivityLogIsReachable(t *testing.T) {
 	ts := settingsBackedScheduler(t, map[string]string{})
-	for _, name := range []string{"cleanup_activity_log", "optimize_activity_db"} {
-		task, ok := ts.tasks[name]
-		require.True(t, ok, "%s must be a registered TaskScheduler task", name)
-		assert.Positive(t, task.GetInterval(), "%s needs an interval or it can only run in the window", name)
-		assert.True(t, ts.inMaintenanceOrder(name), "%s must be in maintenanceOrder", name)
-		assert.Equal(t, "maintenance."+map[string]string{
-			"cleanup_activity_log": "cleanup-activity-log",
-			"optimize_activity_db": "optimize-activity-db",
-		}[name], taskV2DefIDs[name], "%s must map to the def it enqueues", name)
-	}
+	const name = "cleanup_activity_log"
+	task, ok := ts.tasks[name]
+	require.True(t, ok, "%s must be a registered TaskScheduler task", name)
+	assert.Positive(t, task.GetInterval(), "%s needs an interval or it can only run in the window", name)
+	assert.True(t, ts.inMaintenanceOrder(name), "%s must be in maintenanceOrder", name)
+	assert.Equal(t, "maintenance.cleanup-activity-log", taskV2DefIDs[name], "%s must map to the def it enqueues", name)
 }
 
 // TestNightlyActivityCompactionIsReachable: the task is registered, runs at

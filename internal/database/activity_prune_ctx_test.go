@@ -1,7 +1,7 @@
 // file: internal/database/activity_prune_ctx_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 91ca4695-f1b7-4b53-8d7e-8e460d059f2e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
@@ -15,9 +15,8 @@ import (
 // These tests pin the ActivityRetention.Prune context contract: a cancelled
 // ctx stops the prune at its next batch, the rows already committed are
 // returned alongside context.Canceled, the rows not yet reached are left in
-// place, and the migrating wrapper never starts its secondary once the primary
-// was cancelled. Before 2026-09-11 Prune took no context at all, so a cancelled
-// nightly cleanup pruned both backends to completion regardless.
+// place. Before 2026-09-11 Prune took no context at all, so a cancelled
+// nightly cleanup pruned to completion regardless.
 
 // pruneCancelHook returns a WithMaintenanceProgress hook that cancels the
 // prune the first time backend reports a non-zero running count — that is,
@@ -30,15 +29,14 @@ func pruneCancelHook(cancel context.CancelFunc, backend string) (MaintenanceProg
 	fired := false
 	return func(ev MaintenanceProgressEvent) {
 		*seen = append(*seen, ev)
-		if !fired && ev.Phase == MaintenancePhasePrune && ev.Backend == backend && !ev.Done && ev.Rows > 0 {
+		if !fired && ev.Phase == MaintenancePhasePrune && ev.Backend == backend && ev.Rows > 0 {
 			fired = true
 			cancel()
 		}
 	}, seen
 }
 
-// batchRecorder is the slice of the store surface seedPruneRows needs; both
-// PebbleActivityStore and SQLActivityStore satisfy it.
+// batchRecorder is the slice of the store surface seedPruneRows needs.
 type batchRecorder interface {
 	RecordBatch([]ActivityEntry) (int, error)
 }
@@ -106,106 +104,5 @@ func TestPebbleActivityStore_PruneStopsOnCancel(t *testing.T) {
 	assertPrunePartial(t, "pebble", s, rows, deleted, err)
 	if len(*seen) == 0 {
 		t.Errorf("pebble: Prune reported no progress events")
-	}
-}
-
-// TestSQLActivityStore_PruneStopsOnCancel: three sqlActDeleteChunk chunks (the
-// last one partial); the hook cancels after the first commit.
-func TestSQLActivityStore_PruneStopsOnCancel(t *testing.T) {
-	shrinkSQLActChunksForTest(t)
-	s := newTestSQLStore(t)
-	rows := 2*sqlActDeleteChunk + 1
-	seedPruneRows(t, s, "debug", rows)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	hook, seen := pruneCancelHook(cancel, "sqlite")
-	deleted, err := s.Prune(WithMaintenanceProgress(ctx, hook), pruneCancelCutoff, "debug")
-	assertPrunePartial(t, "sqlite", s, rows, deleted, err)
-	if len(*seen) == 0 {
-		t.Errorf("sqlite: Prune reported no progress events")
-	}
-}
-
-// TestSQLActivityStore_PruneGateHonoursCancel: a prune that is waiting on the
-// backfill gate (a batch holds the read side) must give up when ctx is
-// cancelled instead of parking on the mutex, delete nothing, and leave the
-// gate usable once the batch releases it.
-func TestSQLActivityStore_PruneGateHonoursCancel(t *testing.T) {
-	s := newTestSQLStore(t)
-	seedPruneRows(t, s, "debug", 10)
-	s.backfillGate.RLock()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	var (
-		deleted int
-		err     error
-	)
-	go func() {
-		defer close(done)
-		deleted, err = s.Prune(ctx, pruneCancelCutoff, "debug")
-	}()
-	select {
-	case <-done:
-		s.backfillGate.RUnlock()
-		t.Fatalf("Prune returned (%d, %v) while a backfill batch held the gate", deleted, err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		s.backfillGate.RUnlock()
-		t.Fatal("Prune did not return within 5s of cancel while waiting on the gate")
-	}
-	if !errors.Is(err, context.Canceled) || deleted != 0 {
-		t.Fatalf("Prune = (%d, %v), want (0, context.Canceled)", deleted, err)
-	}
-	if got := countExact(t, s, "debug"); got != 10 {
-		t.Errorf("%d rows remain, want 10: a prune that gave up on the gate deleted rows", got)
-	}
-	s.backfillGate.RUnlock()
-
-	// The orphaned acquisition must have handed the write side back: a fresh
-	// prune with a live ctx acquires it and finishes.
-	n, err := s.Prune(context.Background(), pruneCancelCutoff, "debug")
-	if err != nil || n != 10 {
-		t.Fatalf("follow-up Prune = (%d, %v), want (10, nil): the gate was not released after the cancelled wait", n, err)
-	}
-}
-
-// TestMigratingActivityStore_PruneStopsBothBackendsOnCancel: the cancel lands
-// mid-way through the primary (Pebble); the primary stops at its next batch
-// and the secondary (SQLite) is never started — it still holds every row and
-// never reported an event.
-func TestMigratingActivityStore_PruneStopsBothBackendsOnCancel(t *testing.T) {
-	pebbleStore := newTestPebbleActivityStore(t)
-	sqlStore := newTestSQLStore(t)
-	mig := NewMigratingActivityStore(pebbleStore, sqlStore, false)
-	const rows = 1200
-	seedPruneRows(t, pebbleStore, "debug", rows)
-	seedPruneRows(t, sqlStore, "debug", rows)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	hook, seen := pruneCancelHook(cancel, "pebble")
-	deleted, err := mig.Prune(WithMaintenanceProgress(ctx, hook), pruneCancelCutoff, "debug")
-	assertPrunePartial(t, "pebble (primary)", pebbleStore, rows, deleted, err)
-
-	if got := countExact(t, sqlStore, "debug"); got != rows {
-		t.Errorf("sqlite (secondary) holds %d rows, want %d: the secondary ran after the primary was cancelled", got, rows)
-	}
-	var doneEvents []MaintenanceProgressEvent
-	for _, ev := range *seen {
-		if ev.Backend == "sqlite" {
-			t.Errorf("secondary reported an event after cancel: %+v", ev)
-		}
-		if ev.Done {
-			doneEvents = append(doneEvents, ev)
-		}
-	}
-	if len(doneEvents) != 1 || doneEvents[0].Backend != "pebble" || !errors.Is(doneEvents[0].Err, context.Canceled) {
-		t.Errorf("done events = %+v, want exactly one for pebble carrying context.Canceled", doneEvents)
 	}
 }
