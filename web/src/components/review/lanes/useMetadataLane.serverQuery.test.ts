@@ -1,18 +1,17 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 //
-// Page mode (setting review_metadata_server_query) of the Review > Metadata
-// lane, and the proof that it agrees with index mode.
+// The Review > Metadata lane's server-side query (view=page), the only way the
+// lane loads its queue since 02-PR19 retired the full-index mode.
 //
-// The parity tests run the shared fixture the Go review query is held to
-// (internal/server/handlers/testdata/review_query_cases.json) through BOTH
-// lane modes. Index mode filters the fixture rows in the browser; page mode
-// has no rows to filter, so its mock server answers only the request that
-// case's `query` describes and returns nothing for any other. A lane that
-// built a different request than the fixture says gets an empty page and
-// fails, so the page-mode half cannot pass by echoing its own mock.
+// The shared-case test runs the fixture the Go review query is held to
+// (internal/server/handlers/testdata/review_query_cases.json) through the
+// lane. The lane has no rows to filter, so its mock server answers only the
+// request that case's `query` describes and returns nothing for any other. A
+// lane that built a different request than the fixture says gets an empty page
+// and fails, so the test cannot pass by echoing its own mock.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -23,7 +22,6 @@ import * as api from '../../../services/api';
 import {
   EXPORT_QUEUE_CHANGED_MESSAGE,
   MAX_QUERY_SKIPPED_IDS,
-  QUERY_MODE_CONFIG_TIMEOUT_MS,
   useMetadataLane,
   type ChipFilter,
   type MetadataLane,
@@ -73,20 +71,7 @@ function indexPayload(rows: api.CandidateResult[]): IndexResponse {
   } as unknown as IndexResponse;
 }
 
-/** Serves the fixture as the index listing, both buckets, and the ids= detail fetch. */
-function serveFixtureIndex() {
-  vi.mocked(api.getCachedReviewResults).mockImplementation(
-    async (_l, _o, _a, bucket = 'reviewable', options = {}) => {
-      if (options.ids) {
-        const want = new Set(options.ids);
-        return indexPayload(fixture.rows.filter((r) => want.has(r.book.id)) as never);
-      }
-      return indexPayload(fixture.rows.filter((r) => r.bucket === bucket) as never);
-    }
-  );
-}
-
-/** The request a page-mode params object stands for, as a comparable string. */
+/** The request a page params object stands for, as a comparable string. */
 function paramString(params: Record<string, unknown>): string {
   return Object.entries(params)
     .filter(([k, v]) => k !== 'limit' && k !== 'offset' && v !== undefined)
@@ -138,30 +123,7 @@ async function applyCase(lane: { current: MetadataLane }, query: Record<string, 
   }
 }
 
-async function runIndexCase(c: FixtureCase) {
-  vi.mocked(api.getConfig).mockResolvedValue({
-    review_metadata_server_query: false,
-  } as api.Config);
-  serveFixtureIndex();
-  const { result, unmount } = renderHook(() => useMetadataLane(toast));
-  await waitFor(() => expect(result.current.loading).toBe(false));
-  await applyCase(result, c.query);
-  // A skip is a local decision; the server's `applied` outranks it on the next
-  // refresh, which is what the "applied outranks skipped" case is about.
-  if (c.query.skipped) {
-    act(() => result.current.refresh());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-  }
-  await waitFor(() => expect(result.current.unreviewableLoading).toBe(false));
-  const out = {
-    ids: result.current.filteredResults.map((r) => r.book.id),
-    runtimeHidden: result.current.runtimeHiddenCount,
-  };
-  unmount();
-  return out;
-}
-
-/** A page-mode server that answers only the request each case describes. */
+/** A server that answers only the request each case describes. */
 function serveFixturePages() {
   const byRequest = new Map(sharedCases.map((c) => [expectedRequest(c.query), c]));
   const requests: string[] = [];
@@ -198,11 +160,7 @@ function serveFixturePages() {
 }
 
 async function runPageCase(c: FixtureCase, requests: string[]) {
-  vi.mocked(api.getConfig).mockResolvedValue({
-    review_metadata_server_query: true,
-  } as api.Config);
   const { result, unmount } = renderHook(() => useMetadataLane(toast));
-  await waitFor(() => expect(result.current.queryMode).toBe('page'));
   await waitFor(() => expect(result.current.loading).toBe(false));
   await applyCase(result, c.query);
   const want = expectedRequest(c.query);
@@ -223,29 +181,23 @@ beforeEach(() => {
   // applyCase writes every filter.
 });
 
-describe('page mode against the shared review query cases', () => {
-  it('page mode renders the same ids as index mode for every shared case', async () => {
+describe('the lane against the shared review query cases', () => {
+  it('lists the fixture ids and the runtime-hidden count for every shared case', async () => {
     const requests = serveFixturePages();
-    let compared = 0;
+    let checked = 0;
     for (const c of sharedCases) {
-      const idx = await runIndexCase(c);
-      // Index mode is held to the fixture first: the cases were derived from
-      // reading its chain, and this is what shows the reading was right.
-      expect(idx.ids, `index mode: ${c.name}`).toEqual(c.want_ids);
-      expect(idx.runtimeHidden, `index mode runtime hidden: ${c.name}`).toBe(c.want_runtime_hidden);
-
       const page = await runPageCase(c, requests);
-      expect(page.ids, `page mode: ${c.name}`).toEqual(idx.ids);
-      expect(page.runtimeHidden, `page mode runtime hidden: ${c.name}`).toBe(idx.runtimeHidden);
-      compared += 1;
+      expect(page.ids, `ids: ${c.name}`).toEqual(c.want_ids);
+      expect(page.runtimeHidden, `runtime hidden: ${c.name}`).toBe(c.want_runtime_hidden);
+      checked += 1;
     }
-    expect(compared).toBe(sharedCases.length);
-    expect(compared).toBeGreaterThanOrEqual(12);
-    process.stdout.write(`shared cases compared, index mode vs page mode: ${compared}` + '\n');
+    expect(checked).toBe(sharedCases.length);
+    expect(checked).toBeGreaterThanOrEqual(12);
+    process.stdout.write(`shared cases checked against the lane: ${checked}` + '\n');
   }, 120_000);
 });
 
-describe('page mode requests', () => {
+describe('the lane requests', () => {
   function pageOf(ids: string[], total = ids.length, generation = 'g1') {
     return {
       results: ids.map((id) => ({
@@ -263,9 +215,7 @@ describe('page mode requests', () => {
   }
 
   beforeEach(() => {
-    vi.mocked(api.getConfig).mockResolvedValue({
-      review_metadata_server_query: true,
-    } as api.Config);
+    vi.mocked(api.getConfig).mockResolvedValue({} as api.Config);
     vi.mocked(api.getCachedReviewResults).mockImplementation(async (_l, _o, _a, _b, options = {}) =>
       indexPayload(
         (options.ids ?? []).map((id) => pageOf([id]).results[0]) as api.CandidateResult[]
@@ -277,29 +227,13 @@ describe('page mode requests', () => {
     vi.useRealTimers();
   });
 
-  it('flag off sends 1 view=index and 0 view=page requests', async () => {
-    vi.mocked(api.getConfig).mockResolvedValue({
-      review_metadata_server_query: false,
-    } as api.Config);
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(indexPayload([]));
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    const indexCalls = vi
-      .mocked(api.getCachedReviewResults)
-      .mock.calls.filter((c) => c[4]?.view === 'index');
-    expect(indexCalls).toHaveLength(1);
-    expect(api.getReviewPage).not.toHaveBeenCalled();
-    expect(api.getReviewMatchingIds).not.toHaveBeenCalled();
-    expect(result.current.queryMode).toBe('index');
-  });
-
-  it('a config that cannot be read keeps index mode', async () => {
+  it('a config that cannot be read still loads the page, with the default apply cap', async () => {
     vi.mocked(api.getConfig).mockRejectedValue(new Error('down'));
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(indexPayload([]));
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.queryMode).toBe('index'));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(api.getReviewPage).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(api.getReviewPage).toHaveBeenCalledTimes(1);
   });
 
   it('passes the facets ident_counts through to the rail summary', async () => {
@@ -319,18 +253,33 @@ describe('page mode requests', () => {
     });
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.queryMode).toBe('page');
     expect(result.current.summary.ident_counts).toEqual(identCounts);
   });
 
-  it('flag on never loads the review index', async () => {
+  it('never loads the review index: no view=index, no all=true listing, no unreviewable bucket', async () => {
     vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
+    vi.mocked(api.getReviewMatchingIds).mockResolvedValue({ ids: [], total: 0, generation: 'g1' });
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    const indexCalls = vi
-      .mocked(api.getCachedReviewResults)
-      .mock.calls.filter((c) => c[4]?.view === 'index' || c[2] === true);
-    expect(indexCalls).toHaveLength(0);
+    // A chip that needs the unreviewable bucket and a refresh: the two other
+    // places the index lane used to call getCachedReviewResults.
+    act(() => result.current.toggleChipFilter('no_candidates'));
+    await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalled());
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.detailPending.size).toBe(0));
+    const calls = vi.mocked(api.getCachedReviewResults).mock.calls;
+    // The only remaining caller is the per-page detail fetch: ids, never a
+    // listing, never a view, never the unreviewable bucket.
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect(c[2]).not.toBe(true);
+      expect(c[3] ?? 'reviewable').toBe('reviewable');
+      expect(Object.keys(c[4] ?? {})).toEqual(['ids']);
+    }
+    expect(calls.filter((c) => (c[4] as { view?: string } | undefined)?.view === 'index')).toHaveLength(
+      0
+    );
   });
 
   it('a burst of 10 keystrokes inside the debounce window sends exactly 1 request', async () => {
@@ -566,23 +515,6 @@ describe('page mode requests', () => {
         '\n'
     );
   });
-
-  it('index mode holds every row in the same harness', async () => {
-    const TOTAL = 40_000;
-    vi.mocked(api.getConfig).mockResolvedValue({
-      review_metadata_server_query: false,
-    } as api.Config);
-    const rows = pageOf(Array.from({ length: TOTAL }, (_, i) => `id-${i}`)).results;
-    vi.mocked(api.getCachedReviewResults).mockImplementation(async (_l, _o, _a, _b, options = {}) =>
-      indexPayload(options.ids ? rows.filter((r) => options.ids!.includes(r.book.id)) : rows)
-    );
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false), { timeout: 30_000 });
-    expect(result.current.heldRows.list).toBe(TOTAL);
-    process.stdout.write(
-      `index mode, 40,000 rows on the server: list rows held ${result.current.heldRows.list}` + '\n'
-    );
-  }, 60_000);
 
   it('reports the server refusing a Title pattern under the field and keeps the rows', async () => {
     vi.mocked(api.getReviewPage).mockResolvedValueOnce(pageOf(['b1']));
@@ -821,46 +753,24 @@ describe('page mode requests', () => {
     expect(sentPins().a2).toMatchObject({ content_hash: 'h-a2' });
   });
 
-  it('a config read that never answers falls back to index mode, and a late answer changes nothing', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let answer: (c: api.Config) => void = () => {};
-    vi.mocked(api.getConfig).mockImplementation(
-      () =>
-        new Promise<api.Config>((resolve) => {
-          answer = resolve;
-        })
-    );
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(indexPayload([]));
+  it('a config read that never answers does not hold the lane', async () => {
+    vi.mocked(api.getConfig).mockImplementation(() => new Promise<api.Config>(() => {}));
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
     const { result } = renderHook(() => useMetadataLane(toast));
-    expect(result.current.queryMode).toBeNull();
-    // The read itself is bounded too, so apiFetch gives up at the same deadline.
-    await waitFor(() =>
-      expect(vi.mocked(api.getConfig).mock.calls[0]?.[0]).toMatchObject({
-        timeoutMs: QUERY_MODE_CONFIG_TIMEOUT_MS,
-      })
-    );
-    expect(result.current.queryMode).toBeNull();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(QUERY_MODE_CONFIG_TIMEOUT_MS + 10);
-    });
-    await waitFor(() => expect(result.current.queryMode).toBe('index'));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    await act(async () => answer({ review_metadata_server_query: true } as api.Config));
-    expect(result.current.queryMode).toBe('index');
-    expect(api.getReviewPage).not.toHaveBeenCalled();
-    expect(api.getReviewMatchingIds).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(api.getReviewPage).toHaveBeenCalledTimes(1);
   });
 
-  it('a 403 on the config read (no settings permission) keeps index mode', async () => {
+  it('a 403 on the config read (no settings permission) still loads the page', async () => {
     vi.mocked(api.getConfig).mockRejectedValue(
       Object.assign(new Error('forbidden'), { status: 403 })
     );
-    vi.mocked(api.getCachedReviewResults).mockResolvedValue(indexPayload([]));
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
     const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.queryMode).toBe('index'));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toBeNull();
-    expect(api.getReviewPage).not.toHaveBeenCalled();
+    expect(api.getReviewPage).toHaveBeenCalledTimes(1);
   });
 
   /** An export-sized page (limit 500) of `total` rows at `generation`. */
