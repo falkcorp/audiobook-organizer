@@ -213,6 +213,11 @@ func (h *harness) consentPage(t *testing.T, browser, assertion string) (req, csr
 	if xfo := w.Header().Get("X-Frame-Options"); xfo != "DENY" {
 		t.Fatalf("X-Frame-Options = %q, want DENY (a framable consent page can be clickjacked)", xfo)
 	}
+	// no-referrer would make browsers send `Origin: null` on the form POST,
+	// which the Origin check refuses: every real Allow would fail.
+	if rp := w.Header().Get("Referrer-Policy"); rp != "same-origin" {
+		t.Fatalf("Referrer-Policy = %q, want same-origin", rp)
+	}
 	body = w.Body.String()
 	if strings.Contains(body, "code=") {
 		t.Fatal("the consent page must not carry a code")
@@ -624,6 +629,9 @@ func TestOpenIDConsent_PostWithoutValidTokenRefused(t *testing.T) {
 	assertRefused403(t, h.postConsent(t, req, csrf, "allow", "", nil))
 	// A cross-site form post.
 	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "https://evil.example"}))
+	// `Origin: null` is what sandboxed frames and no-referrer documents send;
+	// it proves nothing about where the form came from.
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "null"}))
 
 	// None of the refusals consumed the request.
 	w := h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "https://example.com"})
