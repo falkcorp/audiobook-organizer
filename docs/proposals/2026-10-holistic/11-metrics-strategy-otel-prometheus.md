@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/11-metrics-strategy-otel-prometheus.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: b7aecfb3-f5ea-482f-80e4-3e5cc0453ff1 -->
-<!-- last-edited: 2026-10-10 -->
+<!-- last-edited: 2026-10-19 -->
 
 # 11: Metrics strategy, OTel and Prometheus (decision D14d)
 
@@ -31,7 +31,7 @@ Round-2 author `r5`. Planning only. Evidence anchors are `file:line` at commit `
 | F4 | aidispatch names have no `Namespace`: `ai_dispatch_requests_total{capability,endpoint,outcome}`, `ai_dispatch_inflight{endpoint}`, `ai_dispatch_failover_total{capability,endpoint,class}`, `ai_dispatch_no_capable_total{capability}`, `ai_dispatch_slot_wait_seconds{endpoint}` (exp buckets 1 ms ×4 ×10). | `internal/aidispatch/metrics.go:22-45` | high | Name map keeps them bare; a recording-rule shim is offered if the owner wants the prefix |
 | F5 | Only OTel producer: `otelgin.Middleware("audiobook-organizer")`. No `otel.Meter(` call sites besides `GlobalMeter()`. | `server.go:566`; `grep -rn "otel.Meter(\|Int64Counter(" internal cmd \| grep -v _test` → 1 hit, telemetry.go | high | No existing OTel naming to reconcile |
 | F6 | `MetricsHandler` creates a new exporter per request and writes two placeholder lines; zero references. | `telemetry/metrics_handler.go:30-49`; `grep -rn MetricsHandler --include='*.go' .` → only its own file | high | Delete in PR 1 |
-| F7 | Dashboard references 15 names (`metadata_fetch_total`, `review_index_request_seconds_{bucket,count}`, `number_leading_titles`, `filename_parse_total`, `books_total`, `search_index_docs_total`, `operations_{failed,completed,canceled}_total`, `operation_duration_seconds_bucket`, `op_items_processed`, `fixer_duration_seconds_bucket`, `cache_{hits,misses}_total`); alerts use `operations_failed_total`, `ai_backend_available`, `op_items_processed`, plus `process_resident_memory_bytes`, `up`, `node_filesystem_*`. | `deploy/grafana/dashboards/audiobook-organizer-overnight.json`; `deploy/prometheus/alert-rules.yml:31,54,72,88,105,148` | high | These 15 + 3 names are the "must not drift" set |
+| F7 | Dashboard references 15 names (2026-10-19: `filename_parse_total` was removed by 01-T6b because nothing ever incremented it, so 14 remain) (`metadata_fetch_total`, `review_index_request_seconds_{bucket,count}`, `number_leading_titles`, `filename_parse_total`, `books_total`, `search_index_docs_total`, `operations_{failed,completed,canceled}_total`, `operation_duration_seconds_bucket`, `op_items_processed`, `fixer_duration_seconds_bucket`, `cache_{hits,misses}_total`); alerts use `operations_failed_total`, `ai_backend_available`, `op_items_processed`, plus `process_resident_memory_bytes`, `up`, `node_filesystem_*`. | `deploy/grafana/dashboards/audiobook-organizer-overnight.json`; `deploy/prometheus/alert-rules.yml:31,54,72,88,105,148` | high | These 15 + 3 names are the "must not drift" set |
 | F8 | Histogram buckets are explicit and non-default: operation duration 18 buckets to 86400 s; cache get exponential 500 ns; review index 0.1-120 s; fixer 0.1-7200 s; aidispatch slot wait exp. | `metrics.go:48,236`; `pipeline_metrics.go:104,126`; `aidispatch/metrics.go:44` | high | Views table in PR 1 |
 | F9 | Per-run labels: `op_items_processed{op_id,op_type}`, `op_items_total{op_id,op_type}` gauges; `operation_deprecated_def_id_total{alias,entry}` is bounded. | `metrics.go:275-284,104-108` | high | Cardinality rule C1; replaced in PR 4 |
 | F10 | Pebble collector is a hand-written `prometheus.Collector` with `Describe/Collect` over `Metrics()` and a `store` label (+ `level`). | `pebble_collector.go:114-160` | high | Stays on `client_golang`; OTel equivalent is 25 observable instruments with one callback (L); not in this plan |
