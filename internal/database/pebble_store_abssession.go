@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
 // last-edited: 2026-10-19
 
@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -81,11 +82,17 @@ type ABSSession struct {
 
 // Live reports whether the session may still authenticate: not revoked and not past
 // its expiry at the given instant.
+//
+// A zero ExpiresAt is NOT live. Every writer stamps an expiry (login sets it,
+// refresh and use slide it), so a zero value is a malformed row, and with sliding
+// expiry and no absolute cap by default, reading it as "never expires" would hand
+// out a credential that can never die. The expiry sweep reads it the same way
+// (absSessionSweepable) and deletes such a row.
 func (s *ABSSession) Live(now time.Time) bool {
-	if s == nil || s.Revoked {
+	if s == nil || s.Revoked || s.ExpiresAt.IsZero() {
 		return false
 	}
-	return s.ExpiresAt.IsZero() || now.Before(s.ExpiresAt)
+	return now.Before(s.ExpiresAt)
 }
 
 // InGrace reports whether the previous refresh token is still acceptable.
@@ -100,6 +107,12 @@ func (s *ABSSession) InGrace(now time.Time) bool {
 // been revoked (or deleted) since the caller read it. Revocation is one-way: a
 // refresh that read the row before a concurrent logout must not write it back live.
 var ErrABSSessionRevoked = errors.New("abs session: revoked or deleted")
+
+// ErrABSSessionStale is returned by UpdateABSSession when the caller's copy is not
+// based on the stored row: another writer rotated the session since it was read.
+// Writing it would put an older generation back and orphan the refresh token the
+// other writer just handed to the device.
+var ErrABSSessionStale = errors.New("abs session: stale write (rotated since read)")
 
 // absSessionWriteMu serializes EVERY mutation of the abs_sess keyspace:
 // CreateABSSession, UpdateABSSession, ExtendABSSession, RevokeABSSession,
@@ -190,6 +203,18 @@ func (p *PebbleStore) GetABSSession(id string) (*ABSSession, error) {
 // It refuses with ErrABSSessionRevoked, writing nothing, when the STORED row is
 // revoked or gone: the caller read it before a concurrent logout, and writing its
 // copy back would un-revoke the session and re-index its refresh tokens.
+//
+// It refuses with ErrABSSessionStale when the copy is not derived from the stored
+// row, which is a compare-and-swap on the token chain without a separate version
+// field. Only two writes are legal:
+//
+//   - same generation, same current hash: a touch (grace replay, LastUsedAt);
+//   - generation+1 whose previous hash is the stored current hash: a rotation of
+//     the row as it is now.
+//
+// Anything else (an older generation, or a rotation computed from a row that has
+// since rotated again) is last-writer-wins on the token chain and would orphan the
+// refresh token the other writer just issued.
 func (p *PebbleStore) UpdateABSSession(session *ABSSession) error {
 	if session == nil {
 		return fmt.Errorf("abs session: nil session")
@@ -203,7 +228,23 @@ func (p *PebbleStore) UpdateABSSession(session *ABSSession) error {
 	if stored == nil || stored.Revoked {
 		return ErrABSSessionRevoked
 	}
+	if !absSessionUpdateFollows(stored, session) {
+		return ErrABSSessionStale
+	}
 	return p.writeABSSessionLocked(session)
+}
+
+// absSessionUpdateFollows reports whether next is a legal successor of stored:
+// see UpdateABSSession.
+func absSessionUpdateFollows(stored, next *ABSSession) bool {
+	switch next.Generation {
+	case stored.Generation:
+		return next.RefreshTokenHash == stored.RefreshTokenHash
+	case stored.Generation + 1:
+		return next.PrevRefreshTokenHash == stored.RefreshTokenHash
+	default:
+		return false
+	}
 }
 
 // writeABSSessionLocked writes the record together with its per-user and
@@ -517,10 +558,12 @@ func (p *PebbleStore) RevokeAllABSSessionsForUser(userID string) (int, error) {
 // refresh or logout for longer than one small batch commit.
 const absSweepChunk = 128
 
-// absSweepAfterScanHook, when non-nil, runs after DeleteExpiredABSSessions has
+// absSweepAfterScanHook, when set, runs after DeleteExpiredABSSessions has
 // collected its candidates and before it re-checks them under the lock. Test-only:
-// it is how a test interleaves an extension between the scan and the delete.
-var absSweepAfterScanHook func()
+// it is how a test interleaves an extension between the scan and the delete. An
+// atomic pointer so setting it from a test can never race a sweep that a
+// background ticker started.
+var absSweepAfterScanHook atomic.Pointer[func()]
 
 // DeleteExpiredABSSessions removes revoked and past-expiry sessions along with both
 // of their index entries. Mirrors DeleteExpiredSessions for the browser keyspace.
@@ -557,8 +600,8 @@ func (p *PebbleStore) DeleteExpiredABSSessions(now time.Time) (int, error) {
 	if len(candidates) == 0 {
 		return 0, nil
 	}
-	if absSweepAfterScanHook != nil {
-		absSweepAfterScanHook()
+	if hook := absSweepAfterScanHook.Load(); hook != nil {
+		(*hook)()
 	}
 
 	deleted := 0
@@ -574,8 +617,9 @@ func (p *PebbleStore) DeleteExpiredABSSessions(now time.Time) (int, error) {
 }
 
 // absSessionSweepable is the sweep's deletion rule: revoked, or expired at now.
+// A zero ExpiresAt counts as expired, matching Live, which treats it as not live.
 func absSessionSweepable(s *ABSSession, now time.Time) bool {
-	return s.Revoked || !s.ExpiresAt.After(now)
+	return s.Revoked || s.ExpiresAt.IsZero() || !s.ExpiresAt.After(now)
 }
 
 // deleteABSSessionsIfSweepable re-reads each id under absSessionWriteMu and

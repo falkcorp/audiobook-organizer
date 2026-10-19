@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/sliding_session_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e1047d7e-5e2b-4df6-aa64-51878f896f74
 // last-edited: 2026-10-19
 
@@ -231,5 +231,28 @@ func TestSessions_HidesExpiredRows(t *testing.T) {
 	rows, _ := body["sessions"].([]any)
 	if len(rows) != 1 {
 		t.Fatalf("device list shows %d sessions, want only the live one: %v", len(rows), body)
+	}
+}
+
+// TestRefresh_InactiveUserIsRefusedBeforeAnyWrite: the user is checked before the
+// session is rotated or slid, so a locked user's refresh attempts cannot keep the
+// session alive (or rotate its tokens) while being refused.
+func TestRefresh_InactiveUserIsRefusedBeforeAnyWrite(t *testing.T) {
+	ch := newClockedHarness(t, nil)
+	refresh := str(t, userObj(t, ch.login(t, "owner", "pw-pw-pw-pw")), "refreshToken")
+	before := ch.onlySession(t)
+
+	ch.store.mu.Lock()
+	ch.store.users["u1"].Status = "locked"
+	ch.store.mu.Unlock()
+	ch.now = ch.t0.Add(20 * sDay)
+	if code, _, _ := ch.refresh(t, refresh, nil); code != http.StatusForbidden {
+		t.Fatalf("locked user's refresh got %d, want 403", code)
+	}
+	after := ch.onlySession(t)
+	if !after.ExpiresAt.Equal(before.ExpiresAt) || after.Generation != before.Generation ||
+		after.RefreshTokenHash != before.RefreshTokenHash {
+		t.Fatalf("a refused refresh wrote the session: before exp=%v gen=%d, after exp=%v gen=%d",
+			before.ExpiresAt, before.Generation, after.ExpiresAt, after.Generation)
 	}
 }

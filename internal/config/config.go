@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.160.1
+// version: 1.161.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-19
 
@@ -2149,7 +2149,9 @@ func ResetExplicitFlagsForTest() {
 // Only category-2 keys belong here — the operator-OR-UI settings the Settings page
 // actually renders. The category-1 auth keys (OAuth, CF Access, ABS secrets) are
 // deliberately absent: they have no UI control to annotate, and naming a secret's
-// environment variable in an API response buys nothing.
+// environment variable in an API response buys nothing. The non-secret ABS keys
+// are locked ALWAYS, not only when their variable is set, so they live in
+// absEnvOnlySettings instead.
 //
 // The Deluge keys are the one secret-bearing exception, by owner decision
 // (2026-10-11): the Deluge tab renders them, so a locked one must say so.
@@ -2172,6 +2174,31 @@ var envLockedSettings = map[string]string{
 	"deluge_discovery_enabled": "DELUGE_DISCOVERY_ENABLED",
 	"deluge_move_enabled":      "DELUGE_MOVE_ENABLED",
 }
+
+// absEnvOnlySettings are the Audiobookshelf API keys that only the environment (or
+// the registered default) can set. applyEnvAuthoritativeConfig re-applies viper's
+// value for each on every load, and because every one has a registered default,
+// viper ALWAYS has a value: a value written through PUT /api/v1/config is stored
+// in the blob and then discarded at the next boot, whether or not the variable is
+// set. That is deliberate (the ABS API is an externally reachable sign-in surface
+// and only the operator's environment may configure it), so these keys are
+// reported as locked unconditionally, with the variable as the reason, and
+// UpdateService refuses a PUT that changes one rather than accept a write that can
+// never take effect. abs_jwt_secret is absent because it is never serialized.
+var absEnvOnlySettings = map[string]string{
+	"abs_api_enabled":        "ABS_API_ENABLED",
+	"abs_auth_modes":         "ABS_AUTH_MODES",
+	"abs_access_token_ttl":   "ABS_ACCESS_TOKEN_TTL",
+	"abs_refresh_token_ttl":  "ABS_REFRESH_TOKEN_TTL",
+	"abs_refresh_grace":      "ABS_REFRESH_GRACE",
+	"abs_session_max_ttl":    "ABS_SESSION_MAX_TTL",
+	"abs_server_version":     "ABS_SERVER_VERSION",
+	"abs_default_library_id": "ABS_DEFAULT_LIBRARY_ID",
+}
+
+// EnvOnlySettingsRefusedMessage is the 400 for a PUT /config that changes a key
+// in absEnvOnlySettings.
+const EnvOnlySettingsRefusedMessage = "these settings can only be set through the server's environment; a value saved here would be discarded at the next restart, so nothing was saved"
 
 // LockedByConfigFile is the SettingLocks value for a key that the server's config
 // file locks, followed by " <path>" when viper knows which file it read. It is not
@@ -2256,11 +2283,14 @@ var flagLockedSettings = map[string]string{
 // whose saved value is overwritten on the next boot — the edit appears to take, and
 // then quietly does not. A control the operator cannot actually change must say so.
 func EnvLockedSettings() []string {
-	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings))
+	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings)+len(absEnvOnlySettings))
 	for key, envVar := range envLockedSettings {
 		if envSupplied(envVar) || configFileSupplied(key) {
 			locked = append(locked, key)
 		}
+	}
+	for key := range absEnvOnlySettings {
+		locked = append(locked, key)
 	}
 	// A key can be locked by an explicit flag as well as by the environment, and
 	// a key locked by both must appear once, not twice — the UI renders this list
@@ -2281,6 +2311,9 @@ func EnvLockedSettings() []string {
 // support ticket.
 func SettingLockedBy(key string) string {
 	if envVar, ok := envLockedSettings[key]; ok && envSupplied(envVar) {
+		return envVar
+	}
+	if envVar, ok := absEnvOnlySettings[key]; ok {
 		return envVar
 	}
 	if flag, ok := flagLockedSettings[key]; ok && flagSupplied(key) {

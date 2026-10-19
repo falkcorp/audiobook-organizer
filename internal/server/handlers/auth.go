@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.10.0
+// version: 2.12.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-19
 
@@ -123,6 +123,9 @@ type AuthHandler struct {
 	// failureDelay performs the soft per-account slowdown. Defaults to time.Sleep;
 	// tests override it to keep the suite fast and deterministic.
 	failureDelay func(time.Duration)
+	// absSessions signs a user out of every ABS client when their password
+	// changes. nil when the store has no ABS keyspace (no ABS session can exist).
+	absSessions ABSSessionRevoker
 }
 
 // NewAuthHandler constructs an AuthHandler.
@@ -134,6 +137,7 @@ func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
 		acctFails:    make(map[string]*failedAttempt),
 		ipFails:      make(map[string]*failedAttempt),
 		failureDelay: time.Sleep,
+		absSessions:  ResolveABSSessionRevoker(store),
 	}
 }
 
@@ -605,6 +609,20 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	newAlgo, newHash, err := absauth.HashPassword(req.NewPassword)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to hash password")
+		return
+	}
+	// Sign the user out of every ABS client BEFORE the password changes, and
+	// refuse the change if that fails. ABS sessions slide with use and have no
+	// absolute cap by default, so one that survived a password change would stay
+	// valid indefinitely. Revoking first fails closed: on error the password is
+	// unchanged and the caller retries, and the worst a later UpdateUser failure
+	// can cost is that the phones sign in again with the old password.
+	reason := "password-changed"
+	if isAdminReset {
+		reason = "admin-password-reset"
+	}
+	if err := RevokeAllABSSessions(h.absSessions, target.ID, reason); err != nil {
+		httputil.RespondWithInternalError(c, "could not sign the user out of their mobile apps; the password was not changed, try again")
 		return
 	}
 	target.PasswordHash = newHash

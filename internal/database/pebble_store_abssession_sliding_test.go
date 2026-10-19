@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_abssession_sliding_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a8617fc-1971-4c2c-96c2-a40298b4675e
 // last-edited: 2026-10-19
 
@@ -146,13 +146,14 @@ func TestABSSession_SweepRechecksAfterExtend(t *testing.T) {
 		t.Fatal(err)
 	}
 	slid := base.Add(60 * 24 * time.Hour)
-	absSweepAfterScanHook = func() {
+	hook := func() {
 		wrote, err := store.ExtendABSSession("s1", base.Add(-time.Millisecond), slid, 0)
 		if err != nil || !wrote {
 			t.Errorf("extension inside the sweep window: wrote=%v err=%v", wrote, err)
 		}
 	}
-	t.Cleanup(func() { absSweepAfterScanHook = nil })
+	absSweepAfterScanHook.Store(&hook)
+	t.Cleanup(func() { absSweepAfterScanHook.Store(nil) })
 
 	n, err := store.DeleteExpiredABSSessions(base.Add(time.Millisecond))
 	if err != nil {
@@ -321,4 +322,64 @@ func TestABSSession_BackfillExpiry(t *testing.T) {
 		t.Fatalf("second run raised %d rows, want 0 (idempotent)", n)
 	}
 	assertABSIndexInvariant(t, store)
+}
+
+// TestABSSession_UpdateRefusesStaleGeneration: a rotation computed from a row
+// that has since rotated again (a delayed CF refresh, say) must not write an older
+// token chain back. Same-generation touches and generation+1 rotations of the
+// current row are the only legal writes.
+func TestABSSession_UpdateRefusesStaleGeneration(t *testing.T) {
+	store := newABSSessionStore(t)
+	s := sampleABSSession("s1", "u1")
+	if err := store.CreateABSSession(s); err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := store.GetABSSession("s1") // generation 1, read before the rotation below
+
+	rot, _ := store.GetABSSession("s1")
+	rot.PrevRefreshTokenHash, rot.RefreshTokenHash, rot.Generation = rot.RefreshTokenHash, "hash-s1-2", 2
+	if err := store.UpdateABSSession(rot); err != nil {
+		t.Fatalf("legal rotation: %v", err)
+	}
+	touch, _ := store.GetABSSession("s1")
+	touch.LastUsedAt = touch.LastUsedAt.Add(time.Minute)
+	if err := store.UpdateABSSession(touch); err != nil {
+		t.Fatalf("legal same-generation touch: %v", err)
+	}
+
+	// The delayed writer rotates ITS copy: generation 2 again, but from hash 1.
+	stale.PrevRefreshTokenHash, stale.RefreshTokenHash, stale.Generation = stale.RefreshTokenHash, "hash-s1-2-divergent", 2
+	if err := store.UpdateABSSession(stale); !errors.Is(err, ErrABSSessionStale) {
+		t.Fatalf("divergent rotation = %v, want ErrABSSessionStale", err)
+	}
+	// And an outright older generation.
+	old := *rot
+	old.Generation, old.RefreshTokenHash = 1, "hash-s1-1"
+	if err := store.UpdateABSSession(&old); !errors.Is(err, ErrABSSessionStale) {
+		t.Fatalf("older generation = %v, want ErrABSSessionStale", err)
+	}
+	got, _ := store.GetABSSession("s1")
+	if got.Generation != 2 || got.RefreshTokenHash != "hash-s1-2" {
+		t.Fatalf("stale writes changed the row: gen=%d hash=%s", got.Generation, got.RefreshTokenHash)
+	}
+	if hit, _ := store.GetABSSessionByRefreshHash("hash-s1-2-divergent"); hit != nil {
+		t.Fatal("the refused write's token was indexed")
+	}
+}
+
+// TestABSSession_ZeroExpiryIsNotLiveAndIsSwept: Live and the sweep agree that a
+// row with no expiry is dead.
+func TestABSSession_ZeroExpiryIsNotLiveAndIsSwept(t *testing.T) {
+	store := newABSSessionStore(t)
+	s := sampleABSSession("s1", "u1")
+	s.ExpiresAt = time.Time{}
+	if err := store.CreateABSSession(s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Live(time.Now()) {
+		t.Fatal("a zero expiry must not be live")
+	}
+	if n, err := store.DeleteExpiredABSSessions(time.Now()); err != nil || n != 1 {
+		t.Fatalf("sweep removed %d (err %v), want the zero-expiry row", n, err)
+	}
 }
