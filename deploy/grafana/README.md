@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/README.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: b0b4ed29-c562-4f65-b437-bea04f3dd564 -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -11,7 +11,7 @@ Dashboards for the Prometheus metrics audiobook-organizer serves on `/metrics`
 
 | File | What |
 |---|---|
-| `dashboards/audiobook-organizer-overnight.json` | "Audiobook Organizer — Overnight" (uid `aorg-overnight`): review-page p50/p95, number-leading titles, filename parse by shape, metadata fetch by provider/source, repairs/maintenance op and fixer durations, `books_total`. |
+| `dashboards/audiobook-organizer-overnight.json` | "Audiobook Organizer — Overnight" (uid `aorg-overnight`): review-page p50/p95, number-leading titles, metadata fetch by provider/source, repairs/maintenance op and fixer durations, `books_total`. |
 | `dashboards/audiobook-organizer-ai.json` | "Audiobook Organizer — AI" (uid `aorg-ai`): AI request rate and failure ratio by task, failures by reason, reply-quality failures, latency p50/p95/p99, tokens per minute, parse accepted ratio, and `ai_dispatch_*` beside them. Reads only the `ai_*` and `ai_dispatch_*` families on `/metrics`. |
 | `provisioning/dashboards/audiobook-organizer.yaml` | A Grafana file-provider pointing at `/var/lib/grafana/dashboards`, for a host with no dashboard provider yet. |
 | `TRACING-RUNBOOK.md` | How to stand up Grafana Tempo next to the Loki+Alloy stack and turn on OTLP tracing. **Not done tonight**; tracing stays off in prod. |
@@ -96,7 +96,6 @@ All under the `audiobook_organizer_` namespace; defined in
 |---|---|---|---|
 | `review_index_request_seconds` | histogram, 0.1–120 s | `view` = `page` (`view=page`, the Review lane's request; the 3s target) \| `ids_all` (`view=page&ids=all`) \| `full` (listing, no view) \| `gone` (retired `view=index`, 410; `index` before 2026-10-19) \| `selection` (POST `.../review/selection`, the selection check) | `handlers.getCacheReviewPage` (defer, every exit), `handlers.ReviewSelectionCheck` and `handlers.GetCacheReviewResults` (defer) |
 | `number_leading_titles` | gauge | — | `PebbleStore.countPrimaryBooksScan`, same pass as `books_total`; predicate `titleutil.IsNumberLeadingTitle` |
-| `filename_parse_total` | counter | `shape`, `outcome` | instrument only; call sites come with the fixer branch |
 | `metadata_fetch_total` | counter | `provider`, `source` = `cache_hit` \| `cache_miss` \| `network` \| `error` | cache_hit/miss: `metafetch` fetch-cache checks (`service_fetch.go`, `search_fanout.go`, `source_chain_walk.go`); network/error: `metadata.ProtectedSource.recordOutcome`, `metafetch.lookupASIN` |
 | `operation_duration_seconds` | histogram, 0.1 s–24 h | `type` (op def_id) | `registry/worker.go` `recordRunMetrics`, both completion paths |
 | `operations_{started,completed,failed,canceled}_total` | counter | `type` | same |

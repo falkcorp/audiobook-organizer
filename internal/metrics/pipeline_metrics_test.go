@@ -1,5 +1,5 @@
 // file: internal/metrics/pipeline_metrics_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2b18e9de-8f9d-46b8-91f8-94c25c4bcd6b
 // last-edited: 2026-10-19
 
@@ -15,25 +15,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
-
-func TestIncFilenameParse_CountsPerShapeAndOutcome(t *testing.T) {
-	filenameParseTotal.Reset()
-	t.Cleanup(filenameParseTotal.Reset)
-
-	IncFilenameParse(ParseShapeAuthorSeqTitle, ParseOutcomeRetitled)
-	IncFilenameParse(ParseShapeAuthorSeqTitle, ParseOutcomeRetitled)
-	IncFilenameParse(ParseShapeDigitsOnly, ParseOutcomeUnparsed)
-
-	if got := testutil.ToFloat64(filenameParseTotal.WithLabelValues(ParseShapeAuthorSeqTitle, ParseOutcomeRetitled)); got != 2 {
-		t.Errorf("author_seq_title/retitled = %v, want 2", got)
-	}
-	if got := testutil.ToFloat64(filenameParseTotal.WithLabelValues(ParseShapeDigitsOnly, ParseOutcomeUnparsed)); got != 1 {
-		t.Errorf("digits_only/unparsed = %v, want 1", got)
-	}
-	if got := testutil.CollectAndCount(filenameParseTotal); got != 2 {
-		t.Errorf("series = %d, want 2", got)
-	}
-}
 
 func TestIncMetadataFetch_CountsPerProviderAndSource(t *testing.T) {
 	metadataFetchTotal.Reset()
@@ -126,7 +107,6 @@ func TestObserveFixerDuration_RecordsUnderFixerAndPhase(t *testing.T) {
 // in-process test above and still be invisible to Prometheus.
 func TestPipelineMetrics_AppearInScrape(t *testing.T) {
 	Register()
-	IncFilenameParse(ParseShapeUnknown, ParseOutcomeUnparsed)
 	IncMetadataFetch("audnexus", FetchSourceNetwork)
 	ObserveReviewIndexRequest(ReviewViewFull, time.Second)
 	SetNumberLeadingTitles(3)
@@ -136,7 +116,6 @@ func TestPipelineMetrics_AppearInScrape(t *testing.T) {
 	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	for _, name := range []string{
-		"audiobook_organizer_filename_parse_total",
 		"audiobook_organizer_metadata_fetch_total",
 		"audiobook_organizer_review_index_request_seconds",
 		"audiobook_organizer_number_leading_titles",

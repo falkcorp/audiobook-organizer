@@ -1,7 +1,7 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 // Package contract pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -207,7 +207,6 @@ func buildSeedingTable() []seedRow {
 		{"audiobook_organizer_op_items_total", "metrics.SetOpProgress", do(func() { metrics.SetOpProgress("contract-op", "contract", 1, 2) })},
 		{"audiobook_organizer_abs_listening_stats_read_failures_total", "metrics.IncABSListeningStatsReadFailures", do(metrics.IncABSListeningStatsReadFailures)},
 
-		{"audiobook_organizer_filename_parse_total", "metrics.IncFilenameParse", do(func() { metrics.IncFilenameParse("contract", "ok") })},
 		{"audiobook_organizer_metadata_fetch_total", "metrics.IncMetadataFetch", do(func() { metrics.IncMetadataFetch("contract", "api") })},
 		{"audiobook_organizer_review_index_request_seconds", "metrics.ObserveReviewIndexRequest", do(func() { metrics.ObserveReviewIndexRequest("contract", time.Second) })},
 		{"audiobook_organizer_number_leading_titles", "metrics.SetNumberLeadingTitles", do(func() { metrics.SetNumberLeadingTitles(1) })},

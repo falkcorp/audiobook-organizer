@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "audiobook-organizer overnight dashboard: review-page latency, number-leading titles, filename parse, metadata fetch, repairs/maintenance op durations, books_total. Source: deploy/grafana/dashboards/audiobook-organizer-overnight.json in the audiobook-organizer repo (file header lives in deploy/grafana/README.md because JSON has no comments).",
+  "description": "audiobook-organizer overnight dashboard: review-page latency, number-leading titles, metadata fetch, repairs/maintenance op durations, books_total. Source: deploy/grafana/dashboards/audiobook-organizer-overnight.json in the audiobook-organizer repo (file header lives in deploy/grafana/README.md because JSON has no comments).",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -550,152 +550,13 @@
       }
     },
     {
-      "id": 10,
-      "type": "row",
-      "title": "Filename parse",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 18,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 11,
-      "type": "timeseries",
-      "title": "Filename parse outcomes by shape (per 5m, stacked)",
-      "description": "Counter is instrumented on this branch; the parser call sites are wired by the fixer branch, so this panel is empty until that deploys.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 19,
-        "w": 16,
-        "h": 9
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum by (shape, outcome) (increase(audiobook_organizer_filename_parse_total[5m]))",
-          "legendFormat": "{{shape}} / {{outcome}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisPlacement": "auto"
-          },
-          "color": {
-            "mode": "palette-classic"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 12,
-      "type": "timeseries",
-      "title": "Parse outcome share",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 19,
-        "w": 8,
-        "h": 9
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum by (outcome) (rate(audiobook_organizer_filename_parse_total[$__rate_interval])) / ignoring(outcome) group_left sum(rate(audiobook_organizer_filename_parse_total[$__rate_interval]))",
-          "legendFormat": "{{outcome}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisPlacement": "auto"
-          },
-          "color": {
-            "mode": "palette-classic"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
       "id": 13,
       "type": "row",
       "title": "Metadata fetch",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 18,
         "w": 24,
         "h": 1
       },
@@ -712,7 +573,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 29,
+        "y": 19,
         "w": 16,
         "h": 9
       },
@@ -775,7 +636,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 29,
+        "y": 19,
         "w": 8,
         "h": 9
       },
@@ -838,7 +699,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 28,
         "w": 12,
         "h": 7
       },
@@ -917,7 +778,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 38,
+        "y": 28,
         "w": 12,
         "h": 7
       },
@@ -986,7 +847,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 45,
+        "y": 35,
         "w": 24,
         "h": 1
       },
@@ -1003,7 +864,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 36,
         "w": 12,
         "h": 9
       },
@@ -1066,7 +927,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 46,
+        "y": 36,
         "w": 12,
         "h": 9
       },
@@ -1129,7 +990,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 55,
+        "y": 45,
         "w": 16,
         "h": 8
       },
@@ -1212,7 +1073,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 55,
+        "y": 45,
         "w": 8,
         "h": 8
       },
@@ -1281,7 +1142,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 53,
         "w": 24,
         "h": 1
       },
@@ -1298,7 +1159,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 54,
         "w": 16,
         "h": 8
       },
@@ -1371,7 +1232,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 64,
+        "y": 54,
         "w": 8,
         "h": 4
       },
@@ -1432,7 +1293,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 68,
+        "y": 58,
         "w": 8,
         "h": 4
       },
@@ -1523,6 +1384,6 @@
   "timezone": "browser",
   "title": "Audiobook Organizer \u2014 Overnight",
   "uid": "aorg-overnight",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
