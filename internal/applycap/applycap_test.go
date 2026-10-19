@@ -1,5 +1,5 @@
 // file: internal/applycap/applycap_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e2b7c41-3f8a-4d16-b6e5-0a7c4d9f2e18
 // last-edited: 2026-10-19
 
@@ -168,8 +168,9 @@ func TestBatchLedger_AResentChunkIsNotCountedTwice(t *testing.T) {
 func TestBatchLedger_ReleaseLetsAFailedChunkRetry(t *testing.T) {
 	l := NewBatchLedger(time.Minute, 10, 5)
 	require.NoError(t, errAdm(l, "u", "b1", 0, 500, 1000, 5000))
-	require.NoError(t, errAdm(l, "u", "b1", 1, 500, 1000, 5000))
-	l.Release("u", "b1", 1)
+	adm, err := l.Admit("op", "u", "b1", 1, 500, 1000, 5000, "d1")
+	require.NoError(t, err)
+	l.Release("u", "b1", 1, adm.Token)
 	require.NoError(t, errAdm(l, "u", "b1", 1, 500, 1000, 5000))
 	require.Error(t, errAdm(l, "u", "b1", 2, 1, 1000, 5000))
 }
@@ -248,12 +249,13 @@ func TestBatchLedger_AResendIsReportedAndCarriesTheFirstOp(t *testing.T) {
 	adm, err := l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
 	require.NoError(t, err)
 	require.False(t, adm.Resent)
+	token := adm.Token
 	// Resent before the first send recorded its op: reported, no op id yet.
 	adm, err = l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
 	require.NoError(t, err)
 	require.True(t, adm.Resent)
 	require.Empty(t, adm.OpID)
-	l.RecordOp("u", "b", 0, "op-1")
+	l.RecordOp("u", "b", 0, token, "op-1")
 	adm, err = l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
 	require.NoError(t, err)
 	require.Equal(t, Admission{Resent: true, OpID: "op-1"}, adm)
@@ -281,7 +283,7 @@ func TestBatchLedger_ReleaseOfAResendIsNeverNeededToStayWithinTheTotal(t *testin
 			return // refused, or already queued: the handler enqueues nothing
 		}
 		if !enqueueOK {
-			l.Release("u", "b", index)
+			l.Release("u", "b", index, adm.Token)
 			return
 		}
 		queued += n
@@ -315,9 +317,9 @@ func TestBatchLedger_ConcurrentUse(t *testing.T) {
 				id := fmt.Sprint("b", i%7)
 				adm, err := l.Admit("op", owner, id, i%3, 2, 6, 5000, fmt.Sprint("d", i%3))
 				if err == nil && !adm.Resent {
-					l.RecordOp(owner, id, i%3, "op")
+					l.RecordOp(owner, id, i%3, adm.Token, "op")
 					if i%4 == 0 {
-						l.Release(owner, id, i%3)
+						l.Release(owner, id, i%3, adm.Token)
 					}
 				}
 			}
@@ -340,4 +342,37 @@ func TestBatchLedger_ConcurrentUse(t *testing.T) {
 	for owner, n := range per {
 		require.LessOrEqual(t, n, 4, owner)
 	}
+}
+
+// A RecordOp or Release from an admission whose entry was evicted must not
+// touch the record a later admission created under the same key and index.
+func TestBatchLedger_ALateRecordOpOrReleaseCannotTouchANewerRecord(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	l := NewBatchLedger(time.Hour, 1, 1)
+	l.now = func() time.Time { return now }
+	stale, err := l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
+	require.NoError(t, err)
+	// Another batch of the same user evicts it (per-owner limit 1) ...
+	now = now.Add(time.Second)
+	_, err = l.Admit("op", "u", "other", 0, 1, 5, 5000, "dX")
+	require.NoError(t, err)
+	// ... and a fresh admission recreates ("u","b") index 0.
+	now = now.Add(time.Second)
+	fresh, err := l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
+	require.NoError(t, err)
+	require.NotEqual(t, stale.Token, fresh.Token)
+
+	l.RecordOp("u", "b", 0, stale.Token, "stale-op")
+	again, err := l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
+	require.NoError(t, err)
+	require.Equal(t, Admission{Resent: true}, again, "the stale RecordOp wrote nothing")
+
+	l.Release("u", "b", 0, stale.Token)
+	again, err = l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
+	require.NoError(t, err)
+	require.True(t, again.Resent, "the stale Release removed nothing")
+
+	l.RecordOp("u", "b", 0, fresh.Token, "fresh-op")
+	again, _ = l.Admit("op", "u", "b", 0, 3, 5, 5000, "dA")
+	require.Equal(t, "fresh-op", again.OpID)
 }

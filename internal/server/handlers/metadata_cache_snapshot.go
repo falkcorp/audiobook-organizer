@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
 // last-edited: 2026-10-19
 
@@ -342,6 +342,21 @@ func (d *decodeTally) log() {
 // errReviewBuildBackoff is returned while a failed build's backoff runs.
 var errReviewBuildBackoff = errors.New("review listing unavailable: the last build failed; retrying shortly")
 
+// reviewBuildBackoffError is errReviewBuildBackoff with how much of the backoff
+// is left and the failure that started it, so a caller can answer 503 with a
+// Retry-After instead of an opaque 500.
+type reviewBuildBackoffError struct {
+	remaining time.Duration
+	cause     error
+}
+
+func (e *reviewBuildBackoffError) Error() string {
+	return errReviewBuildBackoff.Error() + ": " + e.cause.Error()
+}
+
+func (e *reviewBuildBackoffError) Is(target error) bool { return target == errReviewBuildBackoff }
+func (e *reviewBuildBackoffError) Unwrap() error        { return e.cause }
+
 // errReviewSnapshotBuilding is what getNoWait returns while the first snapshot
 // after a restart is still being built: the caller answers 503 + Retry-After
 // instead of holding the request open for the build (about two minutes on the
@@ -415,6 +430,13 @@ func (c *reviewSnapshotCache) outOfDate(snap *reviewSnapshot) bool {
 // inBackoff reports whether a failed build is still backing off. Caller holds mu.
 func (c *reviewSnapshotCache) inBackoff() bool {
 	return c.failErr != nil && c.now().Sub(c.failedAt) < c.failBackoff
+}
+
+// backoffErr is the error for a request that arrives while a failed build is
+// backing off. Caller holds mu.
+func (c *reviewSnapshotCache) backoffErr() error {
+	left := c.failBackoff - c.now().Sub(c.failedAt)
+	return &reviewBuildBackoffError{remaining: left, cause: c.failErr}
 }
 
 // touch (re)arms the idle mark. Caller holds mu.
@@ -502,7 +524,7 @@ func (c *reviewSnapshotCache) get(ctx context.Context) (*reviewSnapshot, error) 
 	snap := c.snap
 	if snap == nil {
 		if c.inBackoff() && c.inflight == nil {
-			err := errors.Join(errReviewBuildBackoff, c.failErr)
+			err := c.backoffErr()
 			c.mu.Unlock()
 			return nil, err
 		}
@@ -530,7 +552,7 @@ func (c *reviewSnapshotCache) getNoWait(ctx context.Context) (*reviewSnapshot, e
 	if c.snap == nil {
 		c.touch()
 		if c.inBackoff() && c.inflight == nil {
-			err := errors.Join(errReviewBuildBackoff, c.failErr)
+			err := c.backoffErr()
 			c.mu.Unlock()
 			return nil, err
 		}

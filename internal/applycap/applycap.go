@@ -1,5 +1,5 @@
 // file: internal/applycap/applycap.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c1e8f2a-9b7d-4e63-a5c0-2f8d6b1e9a37
 // last-edited: 2026-10-19
 //
@@ -163,6 +163,7 @@ type BatchLedger struct {
 	maxPerOwner int
 	now         func() time.Time
 	batches     map[string]*batchEntry
+	seq         uint64 // last Token handed out
 }
 
 type batchEntry struct {
@@ -175,6 +176,7 @@ type batchEntry struct {
 
 // chunkRecord is what the ledger remembers of one admitted chunk.
 type chunkRecord struct {
+	seq    uint64 // the Token of the admission that created it
 	size   int
 	digest string // of the chunk's ids; a resend must match it
 	opID   string // the op the chunk was queued as; empty until RecordOp
@@ -182,6 +184,11 @@ type chunkRecord struct {
 
 // Admission is the result of an accepted Admit.
 type Admission struct {
+	// Token identifies this admission of a first-time chunk. RecordOp and
+	// Release act only while the chunk's record still carries it, so a late
+	// call from an admission whose entry was evicted, expired or released
+	// (and perhaps recreated by someone else) cannot touch the newer record.
+	Token uint64
 	// Resent: this index was admitted before with the same ids. Nothing was
 	// counted; the caller must not enqueue it again (nor Release it) and
 	// answers with OpID.
@@ -299,9 +306,10 @@ func (l *BatchLedger) Admit(op, owner, id string, index, n, total, configured in
 			return Admission{}, &BatchError{Kind: BatchExceeded, Op: op, Requested: e.admitted + n, Cap: min(e.total, limit), Admitted: e.admitted}
 		}
 		e.admitted += n
-		e.chunks[index] = &chunkRecord{size: n, digest: digest}
+		l.seq++
+		e.chunks[index] = &chunkRecord{seq: l.seq, size: n, digest: digest}
 		e.touched = now
-		return Admission{}, nil
+		return Admission{Token: l.seq}, nil
 	}
 	// A new batch is validated BEFORE it is recorded, so a refused request can
 	// never occupy a slot.
@@ -312,19 +320,21 @@ func (l *BatchLedger) Admit(op, owner, id string, index, n, total, configured in
 		return Admission{}, &BatchError{Kind: BatchExceeded, Op: op, Requested: n, Cap: total}
 	}
 	l.makeRoomLocked(owner)
+	l.seq++
 	l.batches[key] = &batchEntry{owner: owner, total: total, admitted: n,
-		chunks: map[int]*chunkRecord{index: {size: n, digest: digest}}, touched: now}
-	return Admission{}, nil
+		chunks: map[int]*chunkRecord{index: {seq: l.seq, size: n, digest: digest}}, touched: now}
+	return Admission{Token: l.seq}, nil
 }
 
 // RecordOp remembers the op chunk `index` was queued as, so a resend of it is
-// answered with that op instead of queueing the books again. A no-op for an
-// entry that was evicted or released meanwhile.
-func (l *BatchLedger) RecordOp(owner, id string, index int, opID string) {
+// answered with that op instead of queueing the books again. A no-op unless
+// the chunk's record is still the one `token` (from Admit) created: an entry
+// that was evicted, expired or released meanwhile is left alone.
+func (l *BatchLedger) RecordOp(owner, id string, index int, token uint64, opID string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if e := l.batches[batchKey(owner, id)]; e != nil {
-		if rec := e.chunks[index]; rec != nil {
+		if rec := e.chunks[index]; rec != nil && rec.seq == token {
 			rec.opID = opID
 		}
 	}
@@ -332,8 +342,9 @@ func (l *BatchLedger) RecordOp(owner, id string, index int, opID string) {
 
 // Release gives back chunk `index` of batch `id` after a FIRST-time chunk that
 // was admitted but failed before anything was queued, so the client can retry
-// it. Never call it for a resend: that chunk is already queued.
-func (l *BatchLedger) Release(owner, id string, index int) {
+// it. Never call it for a resend: that chunk is already queued. It acts only
+// while the record is still the one `token` (from Admit) created.
+func (l *BatchLedger) Release(owner, id string, index int, token uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := batchKey(owner, id)
@@ -341,7 +352,7 @@ func (l *BatchLedger) Release(owner, id string, index int) {
 	if e == nil {
 		return
 	}
-	if rec, ok := e.chunks[index]; ok {
+	if rec, ok := e.chunks[index]; ok && rec.seq == token {
 		e.admitted -= rec.size
 		delete(e.chunks, index)
 	}

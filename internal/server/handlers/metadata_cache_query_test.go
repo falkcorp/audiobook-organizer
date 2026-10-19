@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-19
 
@@ -1435,7 +1435,15 @@ func serveSelection(t testing.TB, h *MetadataCacheHandler, query string, ids []s
 	// The selection check answers 503 while the first snapshot builds (see
 	// TestReviewSelectionCheck_ColdSnapshotAnswers503WithRetryAfter), so the
 	// handlers under test are warmed first, as the server does at startup.
-	require.NoError(t, h.WarmReviewSnapshot(context.Background()))
+	// Warmed only while cold, not rebuilt on every call of a test.
+	if sc := h.reviewSnap; sc != nil {
+		sc.mu.Lock()
+		cold := sc.snap == nil
+		sc.mu.Unlock()
+		if cold {
+			require.NoError(t, h.WarmReviewSnapshot(context.Background()))
+		}
+	}
 	raw, err := json.Marshal(map[string]any{"ids": ids})
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
@@ -1674,6 +1682,7 @@ func TestReviewSelectionCheck_ColdSnapshotAnswers503WithRetryAfter(t *testing.T)
 	case w := <-done:
 		require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 		require.NotEmpty(t, w.Header().Get("Retry-After"))
+		require.Contains(t, w.Body.String(), "REVIEW_SNAPSHOT_BUILDING")
 	case <-time.After(5 * time.Second):
 		t.Fatal("the selection check waited on the cold build")
 	}
@@ -1685,4 +1694,55 @@ func TestReviewSelectionCheck_ColdSnapshotAnswers503WithRetryAfter(t *testing.T)
 		return sc.snap != nil
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, http.StatusOK, post().Code)
+}
+
+// A failed cold build backs off; the selection check must answer that as a
+// 503 with the remaining wait (at least 1s) and its own code, not a 500 that
+// makes the lane drop the selection.
+func TestReviewSelectionCheck_FailedColdBuildAnswers503WithRemainingBackoff(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	built := make(chan struct{})
+	sc := newReviewSnapshotCache(func(context.Context, *reviewSnapshot) (*reviewSnapshot, error) {
+		defer close(built)
+		return nil, errors.New("store unavailable")
+	}, nil)
+	sc.failBackoff = 90 * time.Second
+	h := &MetadataCacheHandler{store: queryFakeStore{books: map[string]*database.Book{}, reads: new(atomic.Int64)}, svc: queryFakeSvc{}, reviewSnap: sc, reviewQuery: newReviewQueryCache()}
+	raw, err := json.Marshal(map[string]any{"ids": []string{"a"}})
+	require.NoError(t, err)
+	post := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/x?bucket=any", strings.NewReader(string(raw)))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.ReviewSelectionCheck(c)
+		return w
+	}
+	post() // starts the build (answers "building" or already the failure)
+	<-built
+	require.Eventually(t, func() bool {
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		return sc.failErr != nil && sc.inflight == nil
+	}, 5*time.Second, 5*time.Millisecond)
+
+	w := post()
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "REVIEW_SNAPSHOT_BACKOFF")
+	wait, err := strconv.Atoi(w.Header().Get("Retry-After"))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, wait, 80, "the remaining backoff, not a fixed value")
+	require.LessOrEqual(t, wait, 90)
+}
+
+func TestChunkDigest_LengthPrefixedAndOrderIndependent(t *testing.T) {
+	d := func(ids []string, mode string, wb bool, pins map[string]metafetch.CandidatePin) string {
+		return chunkDigest(ids, mode, wb, pins)
+	}
+	require.Equal(t, d([]string{"a", "b"}, "", true, nil), d([]string{"b", "a"}, "", true, nil))
+	require.NotEqual(t, d([]string{"a\x00b"}, "", true, nil), d([]string{"a", "b"}, "", true, nil), "a NUL inside an id cannot fake a split")
+	require.NotEqual(t, d([]string{"ab", "c"}, "", true, nil), d([]string{"a", "bc"}, "", true, nil))
+	require.NotEqual(t, d([]string{"a"}, "", true, nil), d([]string{"a"}, "replace", true, nil))
+	require.NotEqual(t, d([]string{"a"}, "", true, nil), d([]string{"a"}, "", false, nil))
+	require.NotEqual(t, d([]string{"a"}, "", true, nil), d([]string{"a"}, "", true, map[string]metafetch.CandidatePin{"a": {Origin: "review_bulk"}}))
 }

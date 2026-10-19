@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
 // last-edited: 2026-10-19
 
@@ -424,6 +424,62 @@ func TestBatchApplyFromCache_AResendWhileTheFirstIsInFlightIs409(t *testing.T) {
 	w = batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5))
 	require.Equal(t, http.StatusAccepted, w.Code)
 	assert.Contains(t, w.Body.String(), "op-gated")
+}
+
+// If the first send's enqueue FAILS after an in-flight resend got its 409, the
+// chunk was released, so the client's next resend is a new first send: it is
+// enqueued (calls == 2) and answered 202.
+func TestBatchApplyFromCache_ResendAfterAFailedFirstSendIsEnqueuedAgain(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	ops := &gatedEnqueuer{release: make(chan struct{}), entered: make(chan struct{}, 4), fail: true}
+	h := newDispatchHandler(t, ops)
+
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)) }()
+	<-ops.entered
+	require.Equal(t, http.StatusConflict, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	close(ops.release)
+	require.Equal(t, http.StatusInternalServerError, (<-first).Code)
+
+	ops.fail = false
+	w := batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5))
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "op-gated")
+	assert.NotContains(t, w.Body.String(), "resent", "a new first send, not a resend")
+	assert.EqualValues(t, 2, ops.calls.Load(), "the retry was enqueued")
+}
+
+// A "resend" that changes anything the op would do (mode, write_back, pins) is
+// a different request under the same index: refused, not answered with the
+// first send's op.
+func TestBatchApplyFromCache_AResendWithAnotherPayloadIsRefused(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	ops := &capturingEnqueuer{opID: "op-1"}
+	h := newDispatchHandler(t, ops)
+	base := `{"book_ids":["a","b"],"dry_run":false,"batch_id":"B","batch_total":5,"batch_index":0%s}`
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", fmt.Sprintf(base, "")).Code)
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", fmt.Sprintf(base, "")).Code, "the identical resend is fine")
+	for name, extra := range map[string]string{
+		"mode":       `,"mode":"replace"`,
+		"write_back": `,"write_back":false`,
+		"pins":       `,"pins":{"a":{"origin":"review_bulk"}}`,
+	} {
+		w := batchSend(h, "u1", fmt.Sprintf(base, extra))
+		assert.Equal(t, http.StatusUnprocessableEntity, w.Code, name+": "+w.Body.String())
+		assert.Equal(t, "BATCH_CHUNK_MISMATCH", errCode(t, w), name)
+	}
+	assert.Equal(t, 1, ops.calls)
+}
+
+// A batched chunk with a repeated id is refused: it would inflate the count
+// and let different bodies share a digest.
+func TestBatchApplyFromCache_ADuplicateIDInABatchedChunkIsRefused(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	ops := &capturingEnqueuer{}
+	h := newDispatchHandler(t, ops)
+	w := batchSend(h, "u1", chunkBody(`"a","b","a"`, "B", 0, 5))
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Equal(t, 0, ops.calls)
 }
 
 // The same index with other books is a different chunk pretending to be a resend.
