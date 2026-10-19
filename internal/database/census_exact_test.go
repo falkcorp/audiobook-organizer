@@ -1,7 +1,7 @@
 // file: internal/database/census_exact_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 855ae87b-f3ac-4536-b212-083ff3eba047
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -183,14 +183,24 @@ func growTombstoneFamily(t *testing.T, p *PebbleStore, n int) {
 // Each rerun is killed deterministically, by cancelling its context from the
 // after-save hook once it has saved tombstonesSavesPerRerun in-family
 // positions, not by a wall-clock deadline. A deadline measured from the start
-// of the rerun also pays for everything before the first sub-range (the
-// flush, the sub-range bisection, the iterator open), and on a slow -race
-// runner that alone can outlast it, so no rerun ever saved a position and the
-// loop ran out of attempts without finishing (flaked on a 218s run). Killing
-// on a saved position guarantees every rerun moves the resume point.
+// of the rerun also pays for everything before the first position is saved
+// (the flush, the sub-range bisection, the iterator open, the first
+// sub-range's walk and budget wait), and on a slow -race runner that alone can
+// outlast it, so no rerun ever saved a position and the loop ran out of
+// attempts without finishing (flaked on a 218s run). Killing on a saved
+// position guarantees every rerun moves the resume point.
+//
+// The budget is set so that it binds. Every rerun starts with a fresh limiter
+// whose burst is one second of budget (readBytesPerSec), and counting
+// tombstonesSavesPerRerun sub-ranges costs more than that, so each rerun
+// really sleeps on the limiter and the heartbeats the pass fires while
+// waiting are what keep the gap short. (With a 2 MB/s budget and two saves per
+// rerun the burst covered everything, the pass never waited, and deleting
+// every in-family heartbeat did not fail the test.) catBeats must therefore
+// be positive, which does not depend on any clock.
 func TestRunExactCensus_TombstoneFamilyHeartbeatsAndResumes(t *testing.T) {
 	oldSub, oldBeat, oldRefresh, oldAfterSave := exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh, exactCensusAfterSave
-	exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh = 64<<10, 50*time.Millisecond, 0
+	exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh = 512<<10, 50*time.Millisecond, 0
 	t.Cleanup(func() {
 		exactCensusSubrangeBytes, exactCensusHeartbeat, exactCensusIterRefresh = oldSub, oldBeat, oldRefresh
 		exactCensusAfterSave = oldAfterSave
@@ -204,41 +214,52 @@ func TestRunExactCensus_TombstoneFamilyHeartbeatsAndResumes(t *testing.T) {
 	require.Greater(t, len(subs), 4, "the family is cut into several sub-ranges")
 
 	const (
-		watchdog                = 500 * time.Millisecond
-		tombstonesSavesPerRerun = 2
+		// 40x the heartbeat: a hung pass is caught, one uninterruptible
+		// tombstone walk on a slow -race runner is not mistaken for one.
+		watchdog                = 2 * time.Second
+		tombstonesSavesPerRerun = 5
+		readBytesPerSec         = 1 << 20
 	)
 	var resumePoints []string
+	var catBeats int
 	finished := false
 	for attempt := 0; attempt < len(subs)+2; attempt++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		// refAt is the last moment the pass is known to have been counting:
-		// the first heartbeat, or the return of the last position save. The
-		// gap to the next heartbeat is the time to count one sub-range (and
-		// pay its budget wait), which is what the watchdog bounds. It
-		// excludes the rerun's setup and the save's own fsync, which are
-		// not part of counting a sub-range.
+		// the first heartbeat or position save of the rerun, then each one
+		// after it. The gap from it to the next heartbeat or save is the
+		// time to count (and pay the budget for) part of one sub-range,
+		// which is what the watchdog bounds. Anything before the rerun's
+		// first event (the flush, the bisection, the iterator open) is not
+		// part of the gap; a save's own fsync is, and is far below it.
 		var refAt time.Time
 		var maxGap time.Duration
 		var saves int
+		event := func() {
+			now := time.Now()
+			if !refAt.IsZero() {
+				if g := now.Sub(refAt); g > maxGap {
+					maxGap = g
+				}
+			}
+			refAt = now
+		}
 		exactCensusAfterSave = func(fam string) {
 			if fam != "cat:" {
 				return
 			}
-			refAt = time.Now()
+			event()
 			if saves++; saves >= tombstonesSavesPerRerun {
 				cancel()
 			}
 		}
 		_, err := p.RunExactCensus(ctx, ExactCensusOptions{
-			ReadBytesPerSec: 2 << 20,
-			Progress: func(ExactCensusProgress, string) {
-				now := time.Now()
-				if !refAt.IsZero() {
-					if g := now.Sub(refAt); g > maxGap {
-						maxGap = g
-					}
+			ReadBytesPerSec: readBytesPerSec,
+			Progress: func(_ ExactCensusProgress, fam string) {
+				if fam == "cat:" {
+					catBeats++
 				}
-				refAt = now
+				event()
 			},
 		})
 		cancel()
@@ -257,6 +278,7 @@ func TestRunExactCensus_TombstoneFamilyHeartbeatsAndResumes(t *testing.T) {
 		resumePoints = append(resumePoints, string(st.Partial.ResumeAt))
 	}
 	require.True(t, finished, "the run finished across %d reruns", len(resumePoints)+1)
+	require.Positive(t, catBeats, "the pass reported progress while counting the tombstone family")
 	last, err := p.LastExactCensus()
 	require.NoError(t, err)
 	require.NotNil(t, last, "the finished run is published")
