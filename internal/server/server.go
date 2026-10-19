@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.99.2
+// version: 2.100.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-19
 
@@ -384,6 +384,15 @@ type Server struct {
 	shutdownArmed chan struct{}
 	armShutdown   sync.Once
 	bgWG          namedWaitGroup
+
+	// Accept-time Cloudflare Access guest-policy sync (invite_guest_access.go).
+	// guestPolicy is the ONE shared client, built once on first accept;
+	// guestPolicyOverride, when set before the first accept, replaces it
+	// (tests only).
+	guestPolicyOnce     sync.Once
+	guestPolicy         guestPolicyEnsurer
+	guestPolicyErr      error
+	guestPolicyOverride guestPolicyEnsurer
 	// opsV3Closing is closed when Shutdown begins (closeOpsV3Streams), before
 	// the HTTP server's graceful shutdown: an open /api/v3/ops/events stream
 	// would otherwise hold that shutdown for its whole 30s timeout.

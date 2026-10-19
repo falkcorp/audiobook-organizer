@@ -1,7 +1,7 @@
 // file: internal/server/wire_oauth.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c2e8b04-7a19-4d63-8f05-3b6a0c9e2d47
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -54,6 +54,7 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 		DefaultRole:        cfgSnap.OAuthDefaultRole,
 		CFAccessTeamDomain: cfgSnap.CFAccessTeamDomain,
 		CFAccessAUD:        cfgSnap.CFAccessAUD,
+		ExtraAllowed:       inviteGrantAllowed(s.storeForWiring()),
 	})
 
 	codec, err := oauth.NewStateCodec(10 * time.Minute)
