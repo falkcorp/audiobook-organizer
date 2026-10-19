@@ -1,7 +1,7 @@
 // file: internal/oauth/oauth.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7c2a9e14-6b38-4d05-8f71-3a0e5b9d2c46
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 // Package oauth implements OAuth2 / OIDC single sign-on (GitHub, Google) and
 // Cloudflare Access identity verification for the audiobook organizer. It is the
@@ -57,6 +57,11 @@ type Config struct {
 	DefaultRole        string   // role for a newly auto-created OAuth user
 	CFAccessTeamDomain string   // e.g. myteam.cloudflareaccess.com
 	CFAccessAUD        string   // Access application AUD tag
+	// ExtraAllowed, when set, is consulted after AllowedEmails misses. It lets
+	// an accepted invite grant SSO sign-in to its email without editing the
+	// environment-owned allowlist (see the server's inviteGrantAllowed). It must
+	// fail closed: any error or doubt is false.
+	ExtraAllowed func(email string) bool
 }
 
 // New normalizes an incoming config (lowercases the allowlist, trims blanks).
@@ -89,13 +94,17 @@ func ParseAllowedEmails(csv string) []string {
 }
 
 // IsEmailAllowed reports whether a verified email may log in. Case-insensitive exact
-// match against the allowlist. An empty allowlist denies everyone (fail-closed).
+// match against the allowlist, then ExtraAllowed when set. An empty allowlist with no
+// ExtraAllowed denies everyone (fail-closed).
 func (c *Config) IsEmailAllowed(email string) bool {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
 		return false
 	}
-	return slices.Contains(c.AllowedEmails, email)
+	if slices.Contains(c.AllowedEmails, email) {
+		return true
+	}
+	return c.ExtraAllowed != nil && c.ExtraAllowed(email)
 }
 
 // ProviderEnabled reports whether a given provider is configured.

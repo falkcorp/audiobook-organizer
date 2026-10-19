@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -26,6 +26,7 @@ import (
 type UserStore interface {
 	ListUsers() ([]database.User, error)
 	CreateInvite(invite *database.Invite) (*database.Invite, error)
+	GetInvite(token string) (*database.Invite, error)
 	ListActiveInvites() ([]database.Invite, error)
 	DeleteInvite(token string) error
 	ConsumeInvite(token, algo, hash string) (*database.User, error)
@@ -42,11 +43,23 @@ type UserHandler struct {
 	// creds changes Status (SetUserStatus bumps the credential epoch with it).
 	// nil when the store lacks the capability; status changes then refuse.
 	creds database.UserCredentialWriter
+	// deliveryStore records invitation email sends and lists accepted
+	// invites. nil when the store lacks the capability; sends still go out.
+	deliveryStore database.InviteDeliveryStore
+	// delivery supplies the mail sender, link base and guest headers; nil or
+	// empty means invitation email is off (SetInviteDelivery).
+	delivery *InviteDelivery
+	// sendLimiter bounds invitation emails per invite and per admin.
+	sendLimiter *inviteSendLimiter
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
 func NewUserHandler(store UserStore) *UserHandler {
-	return &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store), creds: ResolveUserCredentialWriter(store)}
+	h := &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store), creds: ResolveUserCredentialWriter(store), sendLimiter: newInviteSendLimiter()}
+	if ds, ok := database.AsCapability[database.InviteDeliveryStore](store); ok {
+		h.deliveryStore = ds
+	}
+	return h
 }
 
 // generateToken produces a cryptographically random 32-byte hex string.
@@ -75,14 +88,31 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 }
 
 // CreateInvite handles POST /api/v1/users/invite — generates an invite token.
+//
+// With an email the invite is addressed to that person: on accept the email
+// becomes theirs and is granted SSO sign-in. With send_email the invitation is
+// emailed after the invite is stored. A failed or unconfigured send never fails
+// the request: the response still carries the token and invite_url, so the
+// admin can hand the link over by hand, plus email_sent=false and email_error.
 func (h *UserHandler) CreateInvite(c *gin.Context) {
 	var req struct {
 		Username  string `json:"username" binding:"required"`
 		RoleID    string `json:"role_id" binding:"required"`
 		ExpiresIn int    `json:"expires_in"` // hours, default 72
+		Email     string `json:"email"`
+		SendEmail bool   `json:"send_email"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+	email, err := normalizeInviteEmail(req.Email)
+	if err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+	if req.SendEmail && email == "" {
+		httputil.RespondWithBadRequest(c, "send_email needs an email address")
 		return
 	}
 
@@ -95,6 +125,7 @@ func (h *UserHandler) CreateInvite(c *gin.Context) {
 	invite := &database.Invite{
 		Token:     token,
 		Username:  strings.TrimSpace(req.Username),
+		Email:     email,
 		RoleID:    req.RoleID,
 		ExpiresAt: time.Now().Add(expiresIn),
 	}
@@ -105,10 +136,31 @@ func (h *UserHandler) CreateInvite(c *gin.Context) {
 	}
 	created, err := h.store.CreateInvite(invite)
 	if err != nil {
+		if errors.Is(err, database.ErrInviteEmailTaken) {
+			httputil.RespondWithConflict(c, err.Error())
+			return
+		}
 		httputil.InternalError(c, "failed to create invite", err)
 		return
 	}
-	httputil.RespondWithCreated(c, gin.H{"invite": created, "token": token})
+	resp := gin.H{
+		"invite": created, "token": token,
+		"invite_url": InviteURL(h.delivery.baseURL(), token),
+		"email_sent": false,
+	}
+	if req.SendEmail {
+		if h.delivery.sender() == nil {
+			resp["email_error"] = "email is not configured on this server (SMTP_HOST and SMTP_FROM); copy the link instead"
+		} else if why := h.sendLimiter.allow(token, currentUserID(c)); why != "" {
+			resp["email_error"] = why
+		} else if sentAt, errMsg := h.sendInviteEmail(c.Request.Context(), created); errMsg != "" {
+			resp["email_error"] = errMsg
+		} else {
+			resp["email_sent"] = true
+			created.EmailSentAt = sentAt
+		}
+	}
+	httputil.RespondWithCreated(c, resp)
 }
 
 // ListInvites handles GET /api/v1/users/invites — returns active invites.
@@ -121,7 +173,16 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 	if invites == nil {
 		invites = []database.Invite{}
 	}
-	httputil.RespondWithOK(c, gin.H{"invites": invites, "count": len(invites)})
+	_, headersOK := h.delivery.headers()
+	httputil.RespondWithOK(c, gin.H{
+		"invites": invites, "count": len(invites),
+		// Accepted invites from the last 30 days with their Cloudflare
+		// guest-policy outcome, so a failed sync can be done by hand.
+		"accepted":                     h.acceptedInvites(),
+		"mail_configured":              h.delivery.sender() != nil,
+		"guest_headers_configured":     headersOK,
+		"guest_policy_sync_configured": h.delivery.policySync(),
+	})
 }
 
 // DeleteInvite handles DELETE /api/v1/users/invites/:token — revokes an invite.

@@ -314,6 +314,68 @@ func (_c *MockUserStore_DeleteInvite_Call) RunAndReturn(run func(token string) e
 	return _c
 }
 
+// GetInvite provides a mock function for the type MockUserStore
+func (_mock *MockUserStore) GetInvite(token string) (*database.Invite, error) {
+	ret := _mock.Called(token)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetInvite")
+	}
+
+	var r0 *database.Invite
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.Invite, error)); ok {
+		return returnFunc(token)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.Invite); ok {
+		r0 = returnFunc(token)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Invite)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(token)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockUserStore_GetInvite_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetInvite'
+type MockUserStore_GetInvite_Call struct {
+	*mock.Call
+}
+
+// GetInvite is a helper method to define mock.On call
+//   - token string
+func (_e *MockUserStore_Expecter) GetInvite(token any) *MockUserStore_GetInvite_Call {
+	return &MockUserStore_GetInvite_Call{Call: _e.mock.On("GetInvite", token)}
+}
+
+func (_c *MockUserStore_GetInvite_Call) Run(run func(token string)) *MockUserStore_GetInvite_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockUserStore_GetInvite_Call) Return(invite *database.Invite, err error) *MockUserStore_GetInvite_Call {
+	_c.Call.Return(invite, err)
+	return _c
+}
+
+func (_c *MockUserStore_GetInvite_Call) RunAndReturn(run func(token string) (*database.Invite, error)) *MockUserStore_GetInvite_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetUserByID provides a mock function for the type MockUserStore
 func (_mock *MockUserStore) GetUserByID(id string) (*database.User, error) {
 	ret := _mock.Called(id)

@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.52.1
+// version: 2.53.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package server
 
@@ -37,7 +37,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	authH := handlers.NewAuthHandler(s.storeForWiring(), config.AppConfig.EnableAuth)
 	apiKeyH := handlers.NewAPIKeyHandler(s.storeForWiring())
 
-	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH)
+	// Built before the auth routes: the public invite lookup is one of them.
+	userH := handlers.NewUserHandler(s.storeForWiring())
+	userH.SetInviteDelivery(s.inviteDelivery())
+
+	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH, userH)
 
 	// ── Build split-book candidate store ─────────────────────────────────────
 	var splitBookCands handlers.SplitBookCandidateStore
@@ -65,7 +69,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 	activityCompactH := handlers.NewActivityCompactHandler(compactEnqueuer, s.storeForWiring())
 	readingH := handlers.NewReadingHandler(s.storeForWiring())
-	userH := handlers.NewUserHandler(s.storeForWiring())
 	splitBookH := handlers.NewSplitBookHandler(s.opRegistry, splitBookCands, s.storeForWiring())
 	// The metadata-cache handler needs the SAME file-I/O pool the single-book
 	// apply path uses (see wiring of metadatahandler below) — without it,
