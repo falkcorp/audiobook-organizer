@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.24.1
+// version: 1.25.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
 // last-edited: 2026-10-18
 
@@ -11,6 +11,7 @@ import * as api from '../../services/api';
 import { ReviewWorkspace } from './ReviewWorkspace';
 import { ToastProvider } from '../toast/ToastProvider';
 import { resetDedupPipelineForTests } from './useDedupPipeline';
+import { repairsRowsPage } from '../../test/repairsFixtures';
 
 vi.mock('../../services/api');
 // A test can freeze the search debounce open (hold.on) so "typed but not applied
@@ -201,7 +202,7 @@ describe('the lane comes from the URL', () => {
         { id: 'fx-a', title: 'Fixer A', description: '', last_plan: plan('a') },
         { id: 'fx-b', title: 'Fixer B', description: '', last_plan: plan('b') },
       ]);
-      vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => ({
+      vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => (repairsRowsPage({
         plan_op_id: planOpId,
         fixer_id: fixerId,
         planned_at: '2026-10-01T00:00:00Z',
@@ -212,7 +213,7 @@ describe('the lane comes from the URL', () => {
         applicable: 0,
         skipped_by_kind: {},
         rows: [],
-      }));
+      })));
     });
 
     it('preselects the fixer named by ?fixer=, without writing it back', async () => {
@@ -441,7 +442,7 @@ describe('view mode', () => {
         last_plan: { operation_id: 'plan-x', status: 'completed', queued_at: '2026-10-01T00:00:00Z', total: 1, applicable: 1 },
       },
     ]);
-    vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => ({
+    vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => (repairsRowsPage({
       plan_op_id: planOpId,
       fixer_id: fixerId,
       planned_at: '2026-10-01T00:00:00Z',
@@ -452,7 +453,7 @@ describe('view mode', () => {
       applicable: 1,
       skipped_by_kind: {},
       rows: [{ row_id: 'r1', book_ids: ['b1'], title: 'Title r1', reason: 'fix r1', risk: 'low', fingerprint: 'fp' }],
-    }));
+    })));
     vi.mocked(api.getBooksByIds).mockResolvedValue([]);
     window.localStorage.setItem('review-repairs-fixer', 'fx');
     const user = userEvent.setup();

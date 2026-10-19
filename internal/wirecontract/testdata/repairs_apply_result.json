@@ -1,0 +1,36 @@
+{
+  "fixer_id": "synthetic-FixerID",
+  "plan_op_id": "synthetic-PlanOpID",
+  "dry_run": true,
+  "requested": 7,
+  "not_in_plan": [
+    "synthetic-NotInPlan"
+  ],
+  "by_outcome": {
+    "synthetic-key": 7
+  },
+  "applied": 7,
+  "changed_since_plan": 7,
+  "partially_applied": 7,
+  "failed": 7,
+  "retry_later": 7,
+  "book_writes": 7,
+  "history_rows": 7,
+  "history_rows_failed": 7,
+  "journal_rows": 7,
+  "standdown_held": true,
+  "follow_up": "synthetic-FollowUp",
+  "follow_up_error": "synthetic-FollowUpError",
+  "aborted": "synthetic-Aborted",
+  "owner_rows": 7,
+  "owner_user_id": "synthetic-OwnerUserID",
+  "rows": [
+    {
+      "row_id": "synthetic-RowID",
+      "outcome": "synthetic-Outcome",
+      "skipped": "synthetic-Skipped",
+      "error": "synthetic-Error",
+      "owner_user_id": "synthetic-OwnerUserID"
+    }
+  ]
+}

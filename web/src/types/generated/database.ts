@@ -375,3 +375,131 @@ export interface BookFileCore {
   last_scan_size?: number /* int64 */;
   needs_rescan?: boolean;
 }
+
+//////////
+// source: scan_state.go
+
+/**
+ * ScanState is everything the staged library scan knows about one file's
+ * completeness. See docs/design/2026-08-23-staged-library-scan-design.md.
+ * Grouped into one struct rather than spread across BookFile as five loose
+ * fields: it is one coherent concept, and BookFile is constructed at many call
+ * sites, where five more zero-valued fields would be five more things to get
+ * wrong.
+ * EVERY field here, and the field on BookFile itself, is tagged `omitzero` and
+ * NOT `omitempty`. This is load-bearing, and it is about the v1 -> v2 migration
+ * this repo is part-way through (GOEXPERIMENT=jsonv2; 17 files already import
+ * encoding/json/v2, internal/database is still on v1).
+ * Measured on this module, both marshalers, 2026-08-23:
+ * 	struct field   tag          v1 output          v2 output
+ * 	bool false     omitempty    omitted            "bo":false
+ * 	int 0          omitempty    omitted            "in":0
+ * 	empty struct   omitempty    "scan":{}          "scan":{"a":false}
+ * 	anything zero  omitzero     omitted            omitted
+ * v1's `omitempty` means "the Go value is a zero value"; v2's means "it encodes
+ * to an EMPTY JSON value", and false/0 are not empty JSON values. So a struct
+ * tagged `omitempty` silently changes shape the day its package moves to v2.
+ * `omitzero` means the same thing in both, so these rows serialize identically
+ * before and after that migration -- which matters here because a book_file row
+ * written by v1 today is read back after the store migrates.
+ * A value type rather than a pointer keeps every reader free of a nil check.
+ */
+export interface ScanState {
+  /**
+   * NeedsDeep marks a row whose tags have been read but whose content has
+   * not: FileHash, chapters and fingerprints are absent or stale until the
+   * deep pass clears this.
+   * This is the field the dedup-sensitive read paths filter on. Do NOT
+   * substitute "FileHash == \"\"" for it: an empty hash is ambiguous between
+   * "not attempted yet" and "attempted and failed", and the second must stay
+   * visible instead of being retried forever.
+   */
+  needs_deep?: boolean;
+  /**
+   * HashStale means FileHash predates the current bytes -- the file changed
+   * and the deep pass has not caught up. The old hash is deliberately KEPT so
+   * a failed deep pass does not leave the row with nothing to match on.
+   */
+  hash_stale?: boolean;
+  /**
+   * HeaderBad means the tag header could not be parsed, so Title is derived
+   * from the path. Flagged so it stays distinguishable from a curated title:
+   * an unflagged path-derived title is exactly how junk-title debt accrues.
+   */
+  header_bad?: boolean;
+  /**
+   * Attempts counts deep-pass tries. At DeepScanMaxAttempts the row stops
+   * retrying, is marked failed and is surfaced to the operator. Silence is
+   * the failure mode this exists to avoid.
+   */
+  attempts?: number /* int */;
+  /**
+   * LastError is why the most recent deep-pass attempt failed.
+   */
+  last_error?: string;
+  /**
+   * Tagged: the tag header was read.
+   */
+  tagged?: StageStatus;
+  /**
+   * DurationOK: the file's duration is known (ffprobe header read, no decode).
+   */
+  duration_ok?: StageStatus;
+  /**
+   * FPWindowed: the windowed fingerprint exists.
+   */
+  fp_windowed?: StageStatus;
+  /**
+   * FPFull: the full-file fingerprint exists.
+   */
+  fp_full?: StageStatus;
+}
+/**
+ * StageStatus is one file stage's completeness: done, or how many attempts
+ * failed and why the last one did. A stage at its attempt ceiling is surfaced
+ * to the operator rather than retried forever, as the deep pass is
+ * (DeepScanMaxAttempts). omitzero on every field, never omitempty (see the
+ * v1/v2 table at the top of this file).
+ */
+export interface StageStatus {
+  done?: boolean;
+  attempts?: number /* int */;
+  last_error?: string;
+}
+/**
+ * DeepScanMaxAttempts is the retry ceiling for the deep pass. A row that has
+ * failed this many times stops being retried and is surfaced instead.
+ */
+export const DeepScanMaxAttempts = 3;
+
+//////////
+// source: wire_types.go
+
+/**
+ * BookAuthor represents the many-to-many relationship between books and authors
+ */
+export interface BookAuthor {
+  book_id: string;
+  author_id: number /* int */;
+  role: string; // author, co-author, editor
+  position: number /* int */; // 0 = primary
+}
+/**
+ * MetadataProvenanceEntry represents the source breakdown for a metadata field.
+ */
+export interface MetadataProvenanceEntry {
+  file_value?: any;
+  fetched_value?: any;
+  stored_value?: any;
+  override_value?: any;
+  override_locked: boolean;
+  /**
+   * LockSource names a repair's lock ("repair:<op id>"); empty for a
+   * person's lock (MetadataFieldState.LockSource).
+   */
+  lock_source?: string;
+  effective_value?: any;
+  effective_source?: string;
+  comparison_value?: any;
+  updated_at?: string;
+}

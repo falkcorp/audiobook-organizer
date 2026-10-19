@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.190.2
+// version: 2.191.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-18
 
@@ -12,6 +12,13 @@ import { withOptimisticOperation } from '../utils/withOptimisticOperation';
 import { apiFetch } from '../utils/apiFetch';
 import { isSettled } from '../generated/ops';
 import type { OperationV2Status } from '../generated/ops';
+import type {
+  ApplyResult as RepairApplyResult,
+  Row as RepairRow,
+  RowMember as RepairRowMember,
+  RowResult as RepairRowResult,
+  RowsPage as RepairRowsPage,
+} from '../types/generated/repairs';
 
 const API_BASE = '/api/v1';
 
@@ -7807,47 +7814,6 @@ export interface RepairFixer {
 /** Plan-row risk. The server writes `low` or `review`; anything else is shown as-is. */
 export type RepairRisk = 'low' | 'review';
 
-/** One unit a fixer proposes to change. */
-export interface RepairRow {
-  row_id: string;
-  book_ids: string[];
-  title: string;
-  author?: string;
-  current?: Record<string, string>;
-  proposed?: Record<string, string>;
-  reason: string;
-  risk: string;
-  fingerprint: string;
-  /** Skip kind; set on a row apply will never write. */
-  skipped?: string;
-  skip_reason?: string;
-  /** Fixer-defined kind of row ("moved", "copy", ...); a filter of the rows endpoint. */
-  class?: string;
-  /** Every book of the row, with its role and file counts, for linking. */
-  members?: RepairRowMember[];
-  /** What the row's decision was made from, in words. */
-  evidence?: string[];
-  /**
-   * A skipped row the owner may apply himself, one at a time
-   * (startRepairOwnerApply); never part of a bulk selection.
-   */
-  owner_applicable?: boolean;
-  /** Why the owner may apply it, in words (the proof). */
-  owner_apply_reason?: string;
-  /** The books an owner apply writes (database rows only). */
-  owner_writes?: string[];
-}
-
-/** One book of a repair row. */
-export interface RepairRowMember {
-  book_id: string;
-  title?: string;
-  /** Fixer-defined: "parent", "fragment", "survivor", ... */
-  role?: string;
-  files: number;
-  missing_files?: number;
-}
-
 /**
  * Which rows of a stored trial to page: the applicable ones, every skipped
  * one, or the skipped rows of one kind (`skipped:<kind>`, a key of
@@ -7859,38 +7825,17 @@ export type RepairRowsFilter =
   | 'owner_applicable'
   | `skipped:${string}`;
 
-export interface RepairRowsPage {
-  plan_op_id: string;
-  fixer_id: string;
-  planned_at: string;
-  filter?: string;
-  offset: number;
-  limit: number;
-  /** Rows matching the filter. */
-  total: number;
-  /** The whole plan's applicable count, whatever the filter. */
-  applicable: number;
-  /** The whole plan's owner-applicable count (rows only the owner applies). */
-  owner_applicable?: number;
-  skipped_by_kind: Record<string, number>;
-  /** The whole plan's per-class tally (fixers that set a class). */
-  by_class?: Record<string, number>;
-  /** The class the page is filtered to, if any. */
-  class?: string;
-  /** Per-class tally of the rows matching the filter: what each chip lists. */
-  by_class_in_filter?: Record<string, number>;
-  /**
-   * Skip-kind tally of the selected class's rows, whatever the filter; set
-   * only when the page is narrowed to a class.
-   */
-  skipped_by_kind_in_class?: Record<string, number>;
-  /**
-   * Applicable rows of the selected class, whatever the filter; set only
-   * when the page is narrowed to a class.
-   */
-  applicable_in_class?: number;
-  rows: RepairRow[];
-}
+// The row/plan/apply shapes are generated from the Go structs in
+// internal/repairs/wire.go (tygo; `make generate-types`), so a renamed json tag
+// is a compile error here rather than a runtime surprise. Aliased to the names
+// the lane already imports.
+export type {
+  RepairApplyResult,
+  RepairRow,
+  RepairRowMember,
+  RepairRowResult,
+  RepairRowsPage,
+};
 
 export interface RepairOpStarted {
   operation_id: string;
@@ -7917,38 +7862,6 @@ export type RepairOutcome =
    * multi-step row's writes may have landed). Nothing was settled for it, so a
    * later apply checks it again and finishes it. */
   | 'canceled_skipped';
-
-export interface RepairRowResult {
-  row_id: string;
-  outcome: string;
-  skipped?: string;
-  error?: string;
-}
-
-/** The stored result of a repairs.apply operation. */
-export interface RepairApplyResult {
-  fixer_id: string;
-  plan_op_id: string;
-  dry_run: boolean;
-  requested: number;
-  not_in_plan?: string[];
-  by_outcome: Record<string, number>;
-  applied: number;
-  changed_since_plan: number;
-  partially_applied: number;
-  failed: number;
-  /** Rows the fixer could not check right now (nothing written); re-apply later. */
-  retry_later?: number;
-  book_writes?: number;
-  history_rows?: number;
-  history_rows_failed?: number;
-  standdown_held: boolean;
-  aborted?: string;
-  rows: RepairRowResult[];
-  /** Owner rows applied by this run, and the user who approved them. */
-  owner_rows?: number;
-  owner_user_id?: string;
-}
 
 export async function listRepairFixers(opts?: {
   signal?: AbortSignal;

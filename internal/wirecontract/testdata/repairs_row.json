@@ -1,0 +1,45 @@
+{
+  "row_id": "synthetic-RowID",
+  "book_ids": [
+    "synthetic-BookIDs"
+  ],
+  "title": "synthetic-Title",
+  "author": "synthetic-Author",
+  "current": {
+    "synthetic-key": "synthetic-Current"
+  },
+  "proposed": {
+    "synthetic-key": "synthetic-Proposed"
+  },
+  "reason": "synthetic-Reason",
+  "risk": "synthetic-Risk",
+  "class": "synthetic-Class",
+  "members": [
+    {
+      "book_id": "synthetic-BookID",
+      "title": "synthetic-Title",
+      "role": "synthetic-Role",
+      "files": 7,
+      "missing_files": 7
+    }
+  ],
+  "evidence": [
+    "synthetic-Evidence"
+  ],
+  "fingerprint": "synthetic-Fingerprint",
+  "skipped": "synthetic-Skipped",
+  "skip_reason": "synthetic-SkipReason",
+  "retry_later": true,
+  "retry_fingerprint": "synthetic-RetryFingerprint",
+  "owner_applicable": true,
+  "owner_apply_reason": "synthetic-OwnerApplyReason",
+  "owner_writes": [
+    "synthetic-OwnerWrites"
+  ],
+  "owner_itunes_database_only": [
+    "synthetic-OwnerITunesDatabaseOnly"
+  ],
+  "state": {
+    "synthetic": true
+  }
+}

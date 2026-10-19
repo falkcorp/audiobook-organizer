@@ -1,0 +1,6 @@
+{
+  "fixer_id": "synthetic-FixerID",
+  "params": {
+    "synthetic": true
+  }
+}

@@ -1,5 +1,5 @@
 // file: internal/repairs/wire.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
 // last-edited: 2026-10-18
 
@@ -66,42 +66,13 @@ type RowsPage struct {
 	// exactly the rows "skipped:<kind>" pages. Set only when Class is (then
 	// never nil, so an empty tally reads as {}, not as absent); null
 	// without a class.
-	SkippedByKindInClass map[string]int `json:"skipped_by_kind_in_class"`
+	SkippedByKindInClass map[string]int `json:"skipped_by_kind_in_class" tstype:"{ [key: string]: number } | null"`
 	// ApplicableInClass counts the applicable rows of Class, whatever the
 	// filter: under a selected class the Applicable tab counts exactly the
 	// rows "applicable" pages. Set only when Class is (then present even at
 	// zero).
 	ApplicableInClass *int  `json:"applicable_in_class,omitempty"`
 	Rows              []Row `json:"rows"`
-}
-
-// ApplyParams are the params of repairs.apply. Only an explicit
-// dry_run:false writes (owner rule 2026-09-25: an omitted mode is a preview).
-type ApplyParams struct {
-	FixerID  string   `json:"fixer_id"`
-	PlanOpID string   `json:"plan_op_id"`
-	RowIDs   []string `json:"row_ids"`
-	DryRun   *bool    `json:"dry_run,omitempty"`
-	DryRunC  *bool    `json:"dryRun,omitempty"`
-	// Resume is the checkpoint of an interrupted run (set by the op through
-	// the registry's checkpoint merge, never by a caller): the rows it had
-	// already settled. A resumed run keeps those results and does not
-	// re-apply them.
-	Resume *ApplyCheckpoint `json:"resume,omitempty"`
-	// OwnerApplyRowIDs are owner rows (Row.OwnerApplicable) the owner chose
-	// to apply, and OwnerGrant the one-shot grant the Repairs handler minted
-	// for them (owner.go). Neither is trusted on its own: the op takes the
-	// grant from the process's grant store and refuses every owner row
-	// without one (ResolveOwnerApproval).
-	OwnerApplyRowIDs []string `json:"owner_apply_row_ids,omitempty"`
-	OwnerGrant       string   `json:"owner_grant,omitempty"`
-}
-
-// ApplyCheckpoint is what repairs.apply checkpoints while it runs: every row
-// settled so far, with its outcome. Merged back into the op's params as
-// "resume" when the server restarts mid-apply (ResumeRestart).
-type ApplyCheckpoint struct {
-	Settled []RowResult `json:"settled"`
 }
 
 // RowResult is the apply outcome of one requested row.
