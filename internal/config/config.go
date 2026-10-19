@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.160.0
+// version: 1.160.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package config
 
@@ -1628,10 +1628,20 @@ type Config struct {
 	ABSJWTSecret string `json:"-" mapstructure:"abs_jwt_secret"`
 	// ABSAccessTokenTTL defaults to 720h = 30 DAYS, not one hour (§1.6 item 1): many
 	// ABS clients implement no refresh at all, and a short access token logs them out
-	// on that cadence. 30d is empirically proven by a known-working ABS shim.
+	// on that cadence. 30d is empirically proven by a known-working ABS shim. It must
+	// be shorter than ABSRefreshTokenTTL; absauth.Load clamps it (with a boot
+	// warning) when it is not.
 	ABSAccessTokenTTL string `json:"abs_access_token_ttl"`
-	// ABSRefreshTokenTTL defaults to 720h (30d).
+	// ABSRefreshTokenTTL is the SESSION IDLE TTL, default 1440h (60d). Every refresh,
+	// and authenticated use at most about once a day, pushes the session's expiry to
+	// now plus this, so a device used at least once per window stays signed in. It
+	// must outlive the access token so the client's 401 arrives while the session
+	// can still be refreshed; with both at 30d (until 2026-10-19) every session died
+	// with its token and AudioBooth was logged out mid-use.
 	ABSRefreshTokenTTL string `json:"abs_refresh_token_ttl"`
+	// ABSSessionMaxTTL optionally caps a session's total lifetime from login,
+	// however actively it is used. "0" (the default) means no cap.
+	ABSSessionMaxTTL string `json:"abs_session_max_ttl"`
 	// ABSRefreshGrace is how long a rotated-out refresh token keeps working so a
 	// concurrent or replayed refresh from the same device is answered idempotently
 	// rather than orphaning the session (§3.4). Default 10m.
@@ -2374,6 +2384,9 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	}
 	if viper.IsSet("abs_refresh_grace") {
 		c.ABSRefreshGrace = viper.GetString("abs_refresh_grace")
+	}
+	if viper.IsSet("abs_session_max_ttl") {
+		c.ABSSessionMaxTTL = viper.GetString("abs_session_max_ttl")
 	}
 	if viper.IsSet("abs_server_version") {
 		c.ABSServerVersion = viper.GetString("abs_server_version")
@@ -3236,6 +3249,7 @@ func InitConfig() {
 			ABSAccessTokenTTL:   viper.GetString("abs_access_token_ttl"),
 			ABSRefreshTokenTTL:  viper.GetString("abs_refresh_token_ttl"),
 			ABSRefreshGrace:     viper.GetString("abs_refresh_grace"),
+			ABSSessionMaxTTL:    viper.GetString("abs_session_max_ttl"),
 			ABSServerVersion:    viper.GetString("abs_server_version"),
 			ABSDefaultLibraryID: viper.GetString("abs_default_library_id"),
 

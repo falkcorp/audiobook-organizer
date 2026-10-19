@@ -1,7 +1,7 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.6.0 -->
+<!-- version: 7.7.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
-<!-- last-edited: 2026-08-02 -->
+<!-- last-edited: 2026-10-19 -->
 
 # Audiobookshelf-Compatible Sync API — Design Spec (Umbrella)
 
@@ -816,7 +816,21 @@ when the request carries header `x-return-tokens: true`, the response body **als
   `ABS_JWT_SECRET`. Real ABS access tokens are JWTs and some clients read `exp`; we mint real JWTs so
   those clients behave. Default TTL **30d** (`ABS_ACCESS_TOKEN_TTL`) — NOT 1h; see §1.6 item 1: many clients implement no refresh at all and would be logged out hourly.
 - **Refresh token = opaque**, `abr_` + base64url(32 random bytes). Only its SHA-256 hash is persisted.
-  Default TTL **30d** (`ABS_REFRESH_TOKEN_TTL`).
+  `ABS_REFRESH_TOKEN_TTL` is the **session idle TTL**, default **60d** (changed 2026-10-19 from 30d).
+  It must be longer than the access TTL; boot clamps the access TTL to half of it, with a warning, if not.
+- **Sliding session expiry (2026-10-19).** A session's `expiresAt` is `now + ABS_REFRESH_TOKEN_TTL`
+  after every successful refresh (rotate, grace replay and the CF reuse branch) and after
+  authenticated use, which rewrites it at most about once a day per session
+  (`min(24h, idle TTL/10)`). A device used at least once per idle window therefore never has to sign in
+  again. Originally `expiresAt` was set once at login and the two TTLs were equal, so every session
+  died 30 days after login, at the same instant as its access token. The client's 401 then arrived
+  with no session left for `/auth/refresh` to rescue, and AudioBooth, which only refreshes after a
+  401, was logged out mid-use.
+- **Optional absolute cap:** `ABS_SESSION_MAX_TTL` (default `0` = off) limits a session's total
+  lifetime from login however actively it is used. It is enforced at refresh and on every bearer
+  request, independently of the stored `expiresAt`.
+- An expired access token is audited as `token-expired`; a forged or malformed one as
+  `token-invalid`. Both are 401.
 - **`ABS_JWT_SECRET`** is read from env and is **required** when the ABS API is enabled; the server
   **fails closed** at boot if it is missing. Never auto-generated into ephemeral storage.
 

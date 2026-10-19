@@ -1,0 +1,13 @@
+### Fixed
+
+#### ABS mobile sessions no longer force a logout 30 days after sign-in
+
+Audiobookshelf-compatible clients (AudioBooth, Absorb) were signed out 30 days after login no matter how often they were used. A session's `ExpiresAt` was stamped once at login and nothing moved it, and the access-token TTL equalled the refresh TTL (both 720h), so the session died at the same instant as its access token. The client's 401 arrived with no session left for `POST /auth/refresh` to rescue, and AudioBooth only refreshes after a 401.
+
+- **Sliding expiry.** Every successful refresh (rotate, grace replay and the Cloudflare-identity reuse branch) sets `ExpiresAt = now + ABS_REFRESH_TOKEN_TTL`. Authenticated bearer use does the same, throttled to one write per session per `min(24h, idle TTL/10)`.
+- **New default: 60-day session idle TTL.** `abs_refresh_token_ttl` / `ABS_REFRESH_TOKEN_TTL` now defaults to `1440h`, and the access token stays at `720h`. The access TTL must be shorter than the session TTL. If it is not, `absauth.Load` clamps it to half the session TTL and logs a boot warning; it never refuses to boot.
+- **Optional absolute cap.** The new `abs_session_max_ttl` / `ABS_SESSION_MAX_TTL` (default `0`, off) caps a session's lifetime from login. It is enforced at refresh and on every bearer request, independently of the stored `ExpiresAt`. It is env-authoritative like the other ABS keys and is a protected sign-in setting.
+- **Concurrency.** Every ABS session mutation (create, update, extend, revoke, revoke-all, sweep delete) now shares one write lock, and each re-reads the stored row first. An extension cannot un-rotate a concurrent refresh, revocation is one-way (`UpdateABSSession` refuses a revoked or deleted row with `ErrABSSessionRevoked`, and refresh answers 401 for it), and the expiry sweep re-checks each candidate under the lock, so it cannot delete a session that was just slid. A write also cannot leave a record without its index entries.
+- **Audit reasons.** An expired access token is now logged as `token-expired` instead of `token-invalid`, which had made routine expiry look like an `ABS_JWT_SECRET` change. A session past the cap logs `session-max-lifetime`.
+- **Expired rows kept 7 days.** The sweep keeps expired (not revoked) ABS session rows for 7 days, so a returning client's refresh logs `session-not-live` rather than `refresh-token-unknown`. `GET /api/me/sessions` hides them.
+- **Existing sessions.** No migration. Rows already on the server move onto the sliding schedule at their next refresh or authenticated request. Rows that had already expired, and been swept, cannot be revived, so those devices sign in once more.

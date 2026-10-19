@@ -2116,6 +2116,15 @@ type expiredSessionPruner interface {
 	DeleteExpiredABSSessions(now time.Time) (int, error)
 }
 
+// absExpiredSessionRetention is how long an EXPIRED (not revoked) ABS session row
+// is kept before the sweep deletes it. While the row exists, a client that comes
+// back with its refresh token gets the same 401 but the audit log says
+// session-not-live (with the session id) instead of refresh-token-unknown, which is
+// what tells a real expiry apart from a forged or foreign token. The row cannot
+// authenticate: every path checks Live() and ExtendABSSession refuses expired rows.
+// Revoked rows are still deleted on the next tick.
+const absExpiredSessionRetention = 7 * 24 * time.Hour
+
 // pruneExpiredSessions deletes expired/revoked auth sessions and their ABS
 // counterparts, logging each outcome. A failure in either delete is logged and
 // does not prevent the other from running: the two stores are independent, and
@@ -2130,7 +2139,7 @@ func pruneExpiredSessions(ops expiredSessionPruner, sessionLog *logger.StandardL
 	} else if deleted > 0 {
 		sessionLog.Info("cleaned up %d expired/revoked sessions", deleted)
 	}
-	if deletedABS, err := ops.DeleteExpiredABSSessions(now); err != nil {
+	if deletedABS, err := ops.DeleteExpiredABSSessions(now.Add(-absExpiredSessionRetention)); err != nil {
 		sessionLog.Warn("failed to clean up expired ABS sessions: %v", err)
 	} else if deletedABS > 0 {
 		sessionLog.Info("cleaned up %d expired/revoked ABS sessions", deletedABS)

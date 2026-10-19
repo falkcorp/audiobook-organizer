@@ -1,7 +1,7 @@
 // file: internal/config/abs_config.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d5f92b03-6a17-4c48-b9e0-2751c8ad3f6b
-// last-edited: 2026-07-30
+// last-edited: 2026-10-19
 
 package config
 
@@ -19,8 +19,17 @@ import "github.com/spf13/viper"
 //
 //   - abs_api_enabled is FALSE. The whole surface is feature-flagged off, so pulling
 //     this change into an existing deployment registers nothing and changes nothing.
-//   - the token TTLs are 720h = 30 DAYS, not one hour (§1.6 item 1). Many ABS clients
-//     implement no refresh at all; a 1h access token logs them out hourly.
+//   - the access-token TTL is 720h = 30 DAYS, not one hour (§1.6 item 1). Many ABS
+//     clients implement no refresh at all; a 1h access token logs them out hourly.
+//   - the refresh TTL is the SESSION IDLE TTL, 1440h = 60 days, and must stay longer
+//     than the access TTL. Refresh and authenticated use slide the session's expiry
+//     forward, so the client's 401 at access-token expiry lands while the session can
+//     still be refreshed. With both at 30d (the default until 2026-10-19) every
+//     session died at the same instant as its token and the app was logged out.
+//     absauth.Load clamps the access TTL if an operator configures them the wrong
+//     way round.
+//   - abs_session_max_ttl is an optional absolute cap on a session's lifetime from
+//     login. "0" (the default) means off.
 //   - abs_jwt_secret has NO default and is never generated. When the ABS API is enabled
 //     without it, the server fails closed at boot — an auto-generated secret would
 //     invalidate every client's stored token on every restart.
@@ -29,8 +38,9 @@ func registerABSDefaults() {
 	viper.SetDefault("abs_auth_modes", "cf,jwt")
 	viper.SetDefault("abs_jwt_secret", "")
 	viper.SetDefault("abs_access_token_ttl", "720h")
-	viper.SetDefault("abs_refresh_token_ttl", "720h")
+	viper.SetDefault("abs_refresh_token_ttl", "1440h")
 	viper.SetDefault("abs_refresh_grace", "10m")
+	viper.SetDefault("abs_session_max_ttl", "0")
 	viper.SetDefault("abs_server_version", "2.36.0")
 	viper.SetDefault("abs_default_library_id", "b5e3a5b2-a76e-471f-b18b-915e4716d053")
 
@@ -40,6 +50,7 @@ func registerABSDefaults() {
 	viper.BindEnv("abs_access_token_ttl", "ABS_ACCESS_TOKEN_TTL")     //nolint:errcheck
 	viper.BindEnv("abs_refresh_token_ttl", "ABS_REFRESH_TOKEN_TTL")   //nolint:errcheck
 	viper.BindEnv("abs_refresh_grace", "ABS_REFRESH_GRACE")           //nolint:errcheck
+	viper.BindEnv("abs_session_max_ttl", "ABS_SESSION_MAX_TTL")       //nolint:errcheck
 	viper.BindEnv("abs_server_version", "ABS_SERVER_VERSION")         //nolint:errcheck
 	viper.BindEnv("abs_default_library_id", "ABS_DEFAULT_LIBRARY_ID") //nolint:errcheck
 }

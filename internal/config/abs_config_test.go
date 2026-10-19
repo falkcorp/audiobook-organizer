@@ -1,7 +1,7 @@
 // file: internal/config/abs_config_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 71c4e830-6b29-4d5f-8a03-92e7b1c6df45
-// last-edited: 2026-07-30
+// last-edited: 2026-10-19
 
 package config
 
@@ -39,8 +39,13 @@ func TestABSConfig_DefaultsAreOffAndSafe(t *testing.T) {
 	if got := viper.GetString("abs_access_token_ttl"); got != "720h" {
 		t.Fatalf("abs_access_token_ttl must default to 720h (30d), got %q", got)
 	}
-	if got := viper.GetString("abs_refresh_token_ttl"); got != "720h" {
-		t.Fatalf("abs_refresh_token_ttl must default to 720h (30d), got %q", got)
+	// The session idle TTL must outlive the access token (2026-10-19 forced-logout
+	// fix): 60d against the 30d access token.
+	if got := viper.GetString("abs_refresh_token_ttl"); got != "1440h" {
+		t.Fatalf("abs_refresh_token_ttl must default to 1440h (60d), got %q", got)
+	}
+	if got := viper.GetString("abs_session_max_ttl"); got != "0" {
+		t.Fatalf("abs_session_max_ttl must default to 0 (no absolute cap), got %q", got)
 	}
 	if got := viper.GetString("abs_refresh_grace"); got != "10m" {
 		t.Fatalf("abs_refresh_grace must default to 10m, got %q", got)
@@ -58,6 +63,7 @@ func TestABSConfig_EnvBindings(t *testing.T) {
 		{"ABS_ACCESS_TOKEN_TTL", "abs_access_token_ttl", "168h"},
 		{"ABS_REFRESH_TOKEN_TTL", "abs_refresh_token_ttl", "2160h"},
 		{"ABS_REFRESH_GRACE", "abs_refresh_grace", "5m"},
+		{"ABS_SESSION_MAX_TTL", "abs_session_max_ttl", "4320h"},
 		{"ABS_SERVER_VERSION", "abs_server_version", "2.36.0"},
 		{"ABS_DEFAULT_LIBRARY_ID", "abs_default_library_id", "b5e3a5b2-a76e-471f-b18b-915e4716d053"},
 	}
@@ -83,10 +89,15 @@ func TestABSConfig_EnvIsAuthoritativeOverBlob(t *testing.T) {
 	t.Setenv("ABS_API_ENABLED", "true")
 	t.Setenv("ABS_JWT_SECRET", "0123456789abcdef0123456789abcdef")
 	t.Setenv("ABS_AUTH_MODES", "cf")
+	t.Setenv("ABS_SESSION_MAX_TTL", "4320h")
 
 	// Simulate the blob overwriting the struct with stale/absent ABS values.
-	c := &Config{ABSAPIEnabled: false, ABSJWTSecret: "", ABSAuthModes: "jwt"}
+	c := &Config{ABSAPIEnabled: false, ABSJWTSecret: "", ABSAuthModes: "jwt", ABSSessionMaxTTL: "1h"}
 	applyEnvAuthoritativeConfig(c)
+
+	if c.ABSSessionMaxTTL != "4320h" {
+		t.Errorf("ABSSessionMaxTTL must be restored from the environment, got %q", c.ABSSessionMaxTTL)
+	}
 
 	if !c.ABSAPIEnabled {
 		t.Error("ABSAPIEnabled must be restored from the environment after a blob load")
