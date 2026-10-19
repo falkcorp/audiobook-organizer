@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -896,13 +896,21 @@ func (h *Handler) renderOIDCConsent(c *gin.Context, reqID string, pending oidcPe
 }
 
 // oidcBrowserHeaders hardens every hop-2 response: no caching (they carry
-// request ids and codes), no referrer, and no framing — a consent page that can
-// be framed can be clickjacked into an Allow. No form-action directive: Chrome
-// applies it to the redirect after a submit, which would block the callback
-// scheme.
+// request ids and codes), no cross-origin referrer, and no framing — a consent
+// page that can be framed can be clickjacked into an Allow. No form-action
+// directive: Chrome applies it to the redirect after a submit, which would block
+// the callback scheme.
+//
+// Referrer-Policy is same-origin, NOT no-referrer. Under no-referrer the Fetch
+// spec sends `Origin: null` on the consent form's POST, which the Origin check
+// in OpenIDBrowserConsent refuses — every real Allow would 403. Measured
+// 2026-10-19 with Playwright: WebKit (what ASWebAuthenticationSession runs) and
+// Chromium both send `Origin: null` under no-referrer and the page's real
+// origin under same-origin. same-origin still sends no referrer off-origin; the
+// only off-origin navigation from hop 2 is the custom-scheme callback.
 func oidcBrowserHeaders(c *gin.Context) {
 	oidcNoStore(c)
-	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("Referrer-Policy", "same-origin")
 	c.Header("X-Frame-Options", "DENY")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
