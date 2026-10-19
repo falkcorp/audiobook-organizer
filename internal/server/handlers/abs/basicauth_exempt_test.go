@@ -27,6 +27,7 @@ var absUnauthenticatedRoutes = map[string]bool{
 	"POST /auth/refresh":                   true,
 	"GET /auth/openid":                     true,
 	"GET /auth/openid/browser":             true,
+	"POST /auth/openid/browser":            true,
 	"GET /auth/openid/callback":            true,
 	"GET /api/items/:id/cover":             true,
 	"HEAD /api/items/:id/cover":            true,

@@ -632,7 +632,7 @@ func TestAbsCollisionDetailReserved_BothNarrowingRules(t *testing.T) {
 // with a name. The browser hop joined the list on 2026-10-19 with the two-hop SSO
 // fix.
 func TestABSRouteListIncludesOpenIDRoutes(t *testing.T) {
-	want := []string{"GET /auth/openid", "GET /auth/openid/browser", "GET /auth/openid/callback"}
+	want := []string{"GET /auth/openid", "GET /auth/openid/browser", "POST /auth/openid/browser", "GET /auth/openid/callback"}
 	for _, w := range want {
 		found := slices.Contains(absRouteList(), w)
 		if !found {

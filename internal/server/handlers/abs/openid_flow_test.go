@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-19
 
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +23,10 @@ import (
 // End-to-end tests of the two-hop SSO flow as AudioBooth actually drives it
 // (see the file comment in openid.go):
 //
-//	hop 1  GET /auth/openid           app URLSession, service token only
-//	hop 2  GET /auth/openid/browser   system browser, CF Access person
-//	hop 3  GET /auth/openid/callback  app URLSession, code + verifier
+//	hop 1  GET  /auth/openid           app URLSession, service token only
+//	hop 2  GET  /auth/openid/browser   system browser, CF Access person → consent page
+//	       POST /auth/openid/browser   the page's Allow → code
+//	hop 3  GET  /auth/openid/callback  app URLSession, code + verifier
 //
 // The regression these pin: hop 1 used to 302 straight to audiobooth://oauth,
 // and AudioBooth hands hop 1's Location to ASWebAuthenticationSession, which
@@ -34,6 +36,8 @@ const (
 	oidcPersonAssertion  = "person-assertion"
 	oidcServiceAssertion = "service-token-assertion"
 	oidcStrangerAssert   = "stranger-assertion"
+	oidcSecondPerson     = "second-person-assertion"
+	oidcOtherService     = "other-service-token-assertion"
 	oidcVerifier         = "audiobooth-verifier-0123456789-abcdefghijklmnopqrstuvwxyz"
 )
 
@@ -47,7 +51,7 @@ func s256(verifier string) string {
 func newOIDCHarness(t *testing.T) *harness {
 	t.Helper()
 	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "")
-	h := newHarness(t, "cf,jwt", []string{"owner@example.com"})
+	h := newHarness(t, "cf,jwt", []string{"owner@example.com", "second@example.com"})
 	h.verifier.byToken[oidcPersonAssertion] = &oauth.IdentityClaims{
 		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: "owner@example.com", EmailVerified: true,
@@ -56,7 +60,12 @@ func newOIDCHarness(t *testing.T) *harness {
 		Provider: oauth.ProviderCFAccess, Subject: "cf|stranger",
 		Email: "stranger@example.com", EmailVerified: true,
 	}
+	h.verifier.byToken[oidcSecondPerson] = &oauth.IdentityClaims{
+		Provider: oauth.ProviderCFAccess, Subject: "cf|second",
+		Email: "second@example.com", EmailVerified: true,
+	}
 	h.verifier.serviceTokens[oidcServiceAssertion] = "family"
+	h.verifier.serviceTokens[oidcOtherService] = "friends"
 	return h
 }
 
@@ -131,8 +140,8 @@ func (h *harness) hop1(t *testing.T, challenge, state string) string {
 // appCallback parses a hop-2 Location that must target the client's callback.
 func appCallback(t *testing.T, w *httptest.ResponseRecorder) url.Values {
 	t.Helper()
-	if w.Code != http.StatusFound {
-		t.Fatalf("hop 2 status = %d, want 302; body %q", w.Code, w.Body.String())
+	if w.Code != http.StatusFound && w.Code != http.StatusSeeOther {
+		t.Fatalf("hop 2 status = %d, want 302/303; body %q", w.Code, w.Body.String())
 	}
 	loc := w.Header().Get("Location")
 	if !strings.HasPrefix(loc, "audiobooth://oauth?") {
@@ -161,6 +170,73 @@ func assertDeadLink(t *testing.T, w *httptest.ResponseRecorder) {
 	}
 	if loc := w.Header().Get("Location"); loc != "" {
 		t.Fatalf("a dead link must not redirect; Location %q", loc)
+	}
+}
+
+var (
+	consentReqRe  = regexp.MustCompile(`name="req" value="([^"]+)"`)
+	consentCSRFRe = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
+)
+
+// consentPage loads hop 2 and asserts it rendered the consent page — and
+// minted nothing: no redirect, no code anywhere in the response.
+func (h *harness) consentPage(t *testing.T, browser, assertion string) (req, csrf, body string) {
+	t.Helper()
+	w := h.get(t, browser, assertion)
+	if w.Code != http.StatusOK {
+		t.Fatalf("hop 2 GET = %d, want 200 consent page; Location %q body %q", w.Code, w.Header().Get("Location"), w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Fatalf("hop 2 GET must not redirect; Location %q", loc)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", ct)
+	}
+	if xfo := w.Header().Get("X-Frame-Options"); xfo != "DENY" {
+		t.Fatalf("X-Frame-Options = %q, want DENY (a framable consent page can be clickjacked)", xfo)
+	}
+	body = w.Body.String()
+	if strings.Contains(body, "code=") {
+		t.Fatal("the consent page must not carry a code")
+	}
+	m1, m2 := consentReqRe.FindStringSubmatch(body), consentCSRFRe.FindStringSubmatch(body)
+	if m1 == nil || m2 == nil {
+		t.Fatalf("consent page lacks req/csrf fields: %s", body)
+	}
+	return m1[1], m2[1], body
+}
+
+// postConsent submits the consent form as a browser would.
+func (h *harness) postConsent(t *testing.T, req, csrf, decision, assertion string, extra map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	form := url.Values{}
+	form.Set("req", req)
+	form.Set("csrf", csrf)
+	form.Set("decision", decision)
+	r := httptest.NewRequest(http.MethodPost, abshandler.OIDCBrowserPath, strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if assertion != "" {
+		r.Header.Set(oauth.CFAccessHeader, assertion)
+	}
+	for k, v := range extra {
+		r.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, r)
+	return w
+}
+
+// allow runs hop 2 to completion for assertion: consent page, then Allow.
+func (h *harness) allow(t *testing.T, browser, assertion string) url.Values {
+	t.Helper()
+	req, csrf, _ := h.consentPage(t, browser, assertion)
+	return appCallback(t, h.postConsent(t, req, csrf, "allow", assertion, nil))
+}
+
+func assertRefused403(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code != http.StatusForbidden || w.Header().Get("Location") != "" {
+		t.Fatalf("status %d Location %q; want 403 and no redirect", w.Code, w.Header().Get("Location"))
 	}
 }
 
@@ -237,6 +313,18 @@ func TestOpenIDHop1_RejectsMalformedHost(t *testing.T) {
 	}
 }
 
+// Hop 1 requires a VERIFIED Cloudflare credential: it is the quota key, and a
+// request that did not come through Access could never complete at hop 2.
+func TestOpenIDHop1_RequiresVerifiedCredential(t *testing.T) {
+	for _, assertion := range []string{"", "forged-assertion"} {
+		h := newOIDCHarness(t)
+		w := h.get(t, authorizePath(s256(oidcVerifier), ""), assertion)
+		if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" {
+			t.Fatalf("assertion %q: status %d Location %q; want 400 and no Location", assertion, w.Code, w.Header().Get("Location"))
+		}
+	}
+}
+
 // Without cf in ABS_AUTH_MODES no browser could ever complete; say so up front.
 func TestOpenIDHop1_SSOUnavailableWithoutCFMode(t *testing.T) {
 	h := newHarness(t, "jwt", []string{"owner@example.com"})
@@ -255,7 +343,7 @@ func TestOpenIDFlow_EndToEndWithVerifierSucceeds(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "client-state-1")
 
-	q := appCallback(t, h.get(t, browser, oidcPersonAssertion))
+	q := h.allow(t, browser, oidcPersonAssertion)
 	if q.Get("error") != "" {
 		t.Fatalf("unexpected error %q", q.Get("error"))
 	}
@@ -280,9 +368,10 @@ func TestOpenIDFlow_EndToEndWithVerifierSucceeds(t *testing.T) {
 func TestOpenIDFlow_NoStateMeansNoStateInCallback(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	w := h.get(t, browser, oidcPersonAssertion)
-	if strings.Contains(w.Header().Get("Location"), "state=") {
-		t.Fatalf("Location %q must omit an empty state", w.Header().Get("Location"))
+	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
+	w := h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, nil)
+	if loc := w.Header().Get("Location"); !strings.Contains(loc, "code=") || strings.Contains(loc, "state=") {
+		t.Fatalf("Location %q must carry a code and omit an empty state", loc)
 	}
 }
 
@@ -291,7 +380,7 @@ func TestOpenIDFlow_NoStateMeansNoStateInCallback(t *testing.T) {
 func TestOpenIDFlow_WrongVerifierFails(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	code := appCallback(t, h.get(t, browser, oidcPersonAssertion)).Get("code")
+	code := h.allow(t, browser, oidcPersonAssertion).Get("code")
 
 	if w := h.redeem(t, code, "a-different-verifier-entirely-0123456789", ""); w.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong verifier = %d, want 401", w.Code)
@@ -304,7 +393,7 @@ func TestOpenIDFlow_WrongVerifierFails(t *testing.T) {
 func TestOpenIDFlow_CodeIsSingleUse(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	code := appCallback(t, h.get(t, browser, oidcPersonAssertion)).Get("code")
+	code := h.allow(t, browser, oidcPersonAssertion).Get("code")
 	if w := h.redeem(t, code, oidcVerifier, ""); w.Code != http.StatusOK {
 		t.Fatalf("first redemption = %d, want 200", w.Code)
 	}
@@ -316,7 +405,7 @@ func TestOpenIDFlow_CodeIsSingleUse(t *testing.T) {
 func TestOpenIDFlow_ExpiredCodeRefused(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	code := appCallback(t, h.get(t, browser, oidcPersonAssertion)).Get("code")
+	code := h.allow(t, browser, oidcPersonAssertion).Get("code")
 	h.handler.SetClock(func() time.Time { return time.Now().Add(61 * time.Second) })
 	if w := h.redeem(t, code, oidcVerifier, ""); w.Code != http.StatusUnauthorized {
 		t.Fatalf("expired code = %d, want 401", w.Code)
@@ -328,13 +417,13 @@ func TestOpenIDFlow_ExpiredCodeRefused(t *testing.T) {
 func TestOpenIDFlow_RedirectURIMismatchRefused(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	code := appCallback(t, h.get(t, browser, oidcPersonAssertion)).Get("code")
+	code := h.allow(t, browser, oidcPersonAssertion).Get("code")
 	if w := h.redeem(t, code, oidcVerifier, "&redirect_uri="+url.QueryEscape("otherapp://cb")); w.Code != http.StatusUnauthorized {
 		t.Fatalf("mismatched redirect_uri = %d, want 401", w.Code)
 	}
 
 	browser = h.hop1(t, s256(oidcVerifier), "")
-	code = appCallback(t, h.get(t, browser, oidcPersonAssertion)).Get("code")
+	code = h.allow(t, browser, oidcPersonAssertion).Get("code")
 	if w := h.redeem(t, code, oidcVerifier, "&redirect_uri="+url.QueryEscape("audiobooth://oauth")); w.Code != http.StatusOK {
 		t.Fatalf("matching redirect_uri = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -343,8 +432,9 @@ func TestOpenIDFlow_RedirectURIMismatchRefused(t *testing.T) {
 // ── hop 2 failure paths ────────────────────────────────────────────────────
 
 // A browser with no identity of its own cannot complete anyone's request: it
-// gets an error through the stored callback, no code, and the request is gone.
-func TestOpenIDHop2_NoIdentityRedirectsErrorAndConsumes(t *testing.T) {
+// gets an error through the stored callback and no code. The GET does not
+// consume the parked request (hop-2 GETs are side-effect free).
+func TestOpenIDHop2_NoIdentityRedirectsErrorWithoutConsuming(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "s9")
 
@@ -355,7 +445,7 @@ func TestOpenIDHop2_NoIdentityRedirectsErrorAndConsumes(t *testing.T) {
 	if q.Get("state") != "s9" {
 		t.Fatalf("state = %q, want s9 round-tripped on the error too", q.Get("state"))
 	}
-	assertDeadLink(t, h.get(t, browser, oidcPersonAssertion))
+	h.consentPage(t, browser, oidcPersonAssertion)
 }
 
 // iOS 17.4+ loads hop 2 with the service token. Hop 2 redirects once to itself
@@ -377,7 +467,7 @@ func TestOpenIDHop2_ServiceTokenBouncesOnceThenCompletes(t *testing.T) {
 		t.Fatalf("bounce %q must carry reauth=1", bounce)
 	}
 
-	q := appCallback(t, h.get(t, bounce.RequestURI(), oidcPersonAssertion))
+	q := h.allow(t, bounce.RequestURI(), oidcPersonAssertion)
 	if q.Get("code") == "" || q.Get("state") != "s1" {
 		t.Fatalf("after the bounce a person must get a code; params %v", q)
 	}
@@ -410,14 +500,14 @@ func TestOpenIDHop2_NonAllowlistedIdentityDenied(t *testing.T) {
 func TestOpenIDHop2_ReplayedReqRefused(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	appCallback(t, h.get(t, browser, oidcPersonAssertion))
+	h.allow(t, browser, oidcPersonAssertion)
 	assertDeadLink(t, h.get(t, browser, oidcPersonAssertion))
 }
 
 func TestOpenIDHop2_ExpiredReqRefused(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	h.handler.SetClock(func() time.Time { return time.Now().Add(10 * time.Minute) })
+	h.handler.SetClock(func() time.Time { return time.Now().Add(5 * time.Minute) })
 	assertDeadLink(t, h.get(t, browser, oidcPersonAssertion))
 }
 
@@ -441,7 +531,7 @@ func TestOpenIDHop2_IgnoresQueryRedirectURIAndState(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "real-state")
 	evil := browser + "&redirect_uri=" + url.QueryEscape("https://evil.example/cb") + "&state=evil"
-	q := appCallback(t, h.get(t, evil, oidcPersonAssertion))
+	q := h.allow(t, evil, oidcPersonAssertion)
 	if q.Get("state") != "real-state" || q.Get("code") == "" {
 		t.Fatalf("params %v: want the stored state and a code", q)
 	}
@@ -456,4 +546,141 @@ func TestMintAppAuthorizationCode_RefusesUnregisteredRedirect(t *testing.T) {
 	if _, err := abshandler.MintAppAuthorizationCode("u1", "e@example.com", s256(oidcVerifier), "audiobooth://oauth"); err != nil {
 		t.Fatalf("minting for the registered redirect_uri: %v", err)
 	}
+}
+
+// ── consent interstitial ───────────────────────────────────────────────────
+
+// The consent page names the app (from the allow-listed redirect_uri), the
+// callback scheme and the signed-in account. Loading it any number of times
+// mints nothing and consumes nothing.
+func TestOpenIDConsent_GetIsSideEffectFree(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "s")
+	_, _, body := h.consentPage(t, browser, oidcPersonAssertion)
+	for _, want := range []string{"AudioBooth", "owner@example.com", "audiobooth://", `method="post"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("consent page lacks %q", want)
+		}
+	}
+	h.consentPage(t, browser, oidcPersonAssertion)
+	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
+	if q := appCallback(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, nil)); q.Get("code") == "" {
+		t.Fatal("after three GETs the request must still complete: GET consumed it")
+	}
+}
+
+// The consent page is only for the parked request's own client name; a
+// caller-supplied client_id is never shown as the app's name.
+func TestOpenIDConsent_IgnoresCallerClientID(t *testing.T) {
+	h := newOIDCHarness(t)
+	u, _ := url.Parse(authorizePath(s256(oidcVerifier), ""))
+	q := u.Query()
+	q.Set("client_id", "Your Bank")
+	w := h.get(t, "/auth/openid?"+q.Encode(), oidcServiceAssertion)
+	browser := assertBrowserHopLocation(t, w).RequestURI()
+	_, _, body := h.consentPage(t, browser, oidcPersonAssertion)
+	if strings.Contains(body, "Your Bank") {
+		t.Fatal("the consent page must not display the caller-supplied client_id")
+	}
+}
+
+func TestOpenIDConsent_PostWithoutValidTokenRefused(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
+
+	assertRefused403(t, h.postConsent(t, req, "", "allow", oidcPersonAssertion, nil))
+	assertRefused403(t, h.postConsent(t, req, csrf+"x", "allow", oidcPersonAssertion, nil))
+	assertRefused403(t, h.postConsent(t, req, strings.ToUpper(csrf), "allow", oidcPersonAssertion, nil))
+	// No identity on the POST: nothing to bind a token to.
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", "", nil))
+	// A cross-site form post.
+	assertRefused403(t, h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "https://evil.example"}))
+
+	// None of the refusals consumed the request.
+	w := h.postConsent(t, req, csrf, "allow", oidcPersonAssertion, map[string]string{"Origin": "https://example.com"})
+	if q := appCallback(t, w); q.Get("code") == "" {
+		t.Fatal("a valid POST after refused ones must still mint: a refusal consumed the request")
+	}
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("consent POST answered %d, want 303", w.Code)
+	}
+}
+
+// A token is bound to (req id, user): it cannot be replayed onto another
+// request, and another person cannot use the token minted for someone else.
+func TestOpenIDConsent_TokenNotReplayableAcrossRequestsOrIdentities(t *testing.T) {
+	h := newOIDCHarness(t)
+	browserA := h.hop1(t, s256(oidcVerifier), "")
+	browserB := h.hop1(t, s256(oidcVerifier), "")
+	reqA, csrfA, _ := h.consentPage(t, browserA, oidcPersonAssertion)
+	reqB, csrfB, _ := h.consentPage(t, browserB, oidcPersonAssertion)
+	if csrfA == csrfB {
+		t.Fatal("two requests must not share a consent token")
+	}
+
+	assertRefused403(t, h.postConsent(t, reqB, csrfA, "allow", oidcPersonAssertion, nil))
+	assertRefused403(t, h.postConsent(t, reqA, csrfA, "allow", oidcSecondPerson, nil))
+
+	_, csrfA2, _ := h.consentPage(t, browserA, oidcSecondPerson)
+	if csrfA2 == csrfA {
+		t.Fatal("two identities must not share a consent token for one request")
+	}
+
+	q := appCallback(t, h.postConsent(t, reqA, csrfA, "allow", oidcPersonAssertion, nil))
+	code := q.Get("code")
+	if code == "" {
+		t.Fatal("the matching token must mint")
+	}
+	if w := h.redeem(t, code, oidcVerifier, ""); !strings.Contains(w.Body.String(), "owner@example.com") {
+		t.Fatalf("the code must be for the person who allowed: %s", w.Body.String())
+	}
+	// And the used token is dead.
+	assertDeadLink(t, h.postConsent(t, reqA, csrfA, "allow", oidcPersonAssertion, nil))
+}
+
+// Deny consumes the request and reports access_denied through the callback.
+func TestOpenIDConsent_DenyReportsAccessDenied(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "st")
+	req, csrf, _ := h.consentPage(t, browser, oidcPersonAssertion)
+	q := appCallback(t, h.postConsent(t, req, csrf, "deny", oidcPersonAssertion, nil))
+	if q.Get("error") != "access_denied" || q.Get("code") != "" || q.Get("state") != "st" {
+		t.Fatalf("params %v: want access_denied, no code, state round-tripped", q)
+	}
+	assertDeadLink(t, h.get(t, browser, oidcPersonAssertion))
+}
+
+// ── quota and rate limit ───────────────────────────────────────────────────
+
+// One credential holds at most three parked requests; a fourth evicts its own
+// oldest, and another credential's request is untouched.
+func TestOpenIDHop1_PerCredentialQuota(t *testing.T) {
+	h := newOIDCHarness(t)
+	other := assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcOtherService)).RequestURI()
+	var mine []string
+	for range 4 {
+		mine = append(mine, h.hop1(t, s256(oidcVerifier), ""))
+	}
+	assertDeadLink(t, h.get(t, mine[0], oidcPersonAssertion))
+	for _, b := range append(mine[1:], other) {
+		h.consentPage(t, b, oidcPersonAssertion)
+	}
+}
+
+// Hop 1 is rate-limited per verified credential (burst 5), not per client IP:
+// behind the shared proxies every caller has the same address.
+func TestOpenIDHop1_RateLimitedPerCredential(t *testing.T) {
+	h := newOIDCHarness(t)
+	for i := range 5 {
+		if w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion); w.Code != http.StatusFound {
+			t.Fatalf("request %d = %d, want 302 within the burst", i, w.Code)
+		}
+	}
+	w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion)
+	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "Too many") {
+		t.Fatalf("over the burst: status %d body %q; want 400 text", w.Code, w.Body.String())
+	}
+	// Same client IP, different credential: unaffected.
+	assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcOtherService))
 }

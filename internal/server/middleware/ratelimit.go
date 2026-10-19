@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package middleware
 
@@ -208,6 +208,18 @@ func (r *IPRateLimiter) run(ctx context.Context) {
 			r.sweep()
 		}
 	}
+}
+
+// AllowKey reports whether one more request may proceed for an arbitrary key, for
+// callers whose meaningful client identity is not c.ClientIP() (behind the shared
+// reverse proxies every request has the same RemoteAddr). Same buckets, same LRU
+// bound and idle sweep as the per-IP path; keys share one namespace, so callers
+// should prefix them.
+func (r *IPRateLimiter) AllowKey(key string) bool {
+	if key == "" {
+		key = "unknown"
+	}
+	return r.limiterForIP(key).Allow()
 }
 
 // Middleware returns a Gin middleware that enforces the configured limit.

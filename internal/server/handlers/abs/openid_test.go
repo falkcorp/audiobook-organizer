@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
 // last-edited: 2026-10-19
 
@@ -8,11 +8,16 @@ package abs
 import (
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // pkcePair returns a verifier and its S256 challenge, exactly as AudioBooth
@@ -27,17 +32,15 @@ func pkcePair(verifier string) (string, string) {
 // contract that guarantee rests on. The same store backs minted codes and the
 // parked hop-1 requests.
 func TestOIDCTTLStore_SingleUse(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingCode](8)
+	store := newOIDCTTLStore[oidcPendingCode](8, 0)
 	now := time.Now()
-	if err := store.put("abc", oidcPendingCode{UserID: "u1"}, now, time.Minute); err != nil {
-		t.Fatal(err)
-	}
+	store.put("abc", "", oidcPendingCode{UserID: "u1"}, now, time.Minute)
 
-	if !store.live("abc", now) {
-		t.Fatal("live must report an unexpired entry")
+	if v, ok := store.peek("abc", now); !ok || v.UserID != "u1" {
+		t.Fatal("peek must return an unexpired entry")
 	}
-	if !store.live("abc", now) {
-		t.Fatal("live must not consume the entry")
+	if _, ok := store.peek("abc", now); !ok {
+		t.Fatal("peek must not consume the entry")
 	}
 	if _, ok := store.take("abc", now); !ok {
 		t.Fatal("first redemption must succeed")
@@ -45,8 +48,8 @@ func TestOIDCTTLStore_SingleUse(t *testing.T) {
 	if _, ok := store.take("abc", now); ok {
 		t.Fatal("second redemption must fail — an authorization code is single-use")
 	}
-	if store.live("abc", now) {
-		t.Fatal("a taken entry must not be live")
+	if _, ok := store.peek("abc", now); ok {
+		t.Fatal("a taken entry must not be visible")
 	}
 }
 
@@ -54,13 +57,11 @@ func TestOIDCTTLStore_SingleUse(t *testing.T) {
 // delete happening under the same lock as the read, both callers would receive
 // the entry and two sessions would be minted from one authorization.
 func TestOIDCTTLStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingCode](8)
+	store := newOIDCTTLStore[oidcPendingCode](8, 0)
 	now := time.Now()
 	const n = 50
 	for i := range n {
-		if err := store.put("race", oidcPendingCode{UserID: "u1"}, now, time.Minute); err != nil {
-			t.Fatal(err)
-		}
+		store.put("race", "", oidcPendingCode{UserID: "u1"}, now, time.Minute)
 
 		results := make(chan bool, 2)
 		start := make(chan struct{})
@@ -88,13 +89,11 @@ func TestOIDCTTLStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
 // cannot be retried later under a skewed clock either. The boundary itself is
 // expired: a TTL of one minute means usable for strictly less than a minute.
 func TestOIDCTTLStore_ExpiredIsRefusedAndDeleted(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingCode](8)
+	store := newOIDCTTLStore[oidcPendingCode](8, 0)
 	now := time.Now()
-	if err := store.put("old", oidcPendingCode{UserID: "u1"}, now, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	if store.live("old", now.Add(time.Minute)) {
-		t.Fatal("an entry at its expiry instant must not be live")
+	store.put("old", "", oidcPendingCode{UserID: "u1"}, now, time.Minute)
+	if _, ok := store.peek("old", now.Add(time.Minute)); ok {
+		t.Fatal("an entry at its expiry instant must not be visible")
 	}
 	if _, ok := store.take("old", now.Add(time.Minute)); ok {
 		t.Fatal("an expired entry must not be redeemable")
@@ -104,35 +103,87 @@ func TestOIDCTTLStore_ExpiredIsRefusedAndDeleted(t *testing.T) {
 	}
 }
 
-// The store is bounded: at its cap a NEW key is refused rather than evicting a
-// live one, expired entries are swept to make room, and re-putting an existing
-// key is allowed. Hop 1 is reachable without an account, so without the cap it
-// is an unbounded map an attacker can fill.
-func TestOIDCTTLStore_BoundedRefusesWhenFull(t *testing.T) {
-	store := newOIDCTTLStore[oidcPendingRequest](2)
+// Per-owner quota: an owner holds at most perOwner live entries, and a new one
+// evicts that owner's OWN oldest — never anyone else's. A caller flooding hop 1
+// only churns its own slots; a person retrying is never blocked.
+func TestOIDCTTLStore_PerOwnerQuotaEvictsOwnOldest(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingRequest](100, 3)
 	now := time.Now()
-	if err := store.put("a", oidcPendingRequest{}, now, time.Minute); err != nil {
-		t.Fatal(err)
+	store.put("victim", "svc:family", oidcPendingRequest{}, now, time.Minute)
+	for i, k := range []string{"a1", "a2", "a3", "a4", "a5"} {
+		res := store.put(k, "svc:attacker", oidcPendingRequest{}, now, time.Minute)
+		if wantOwner := max(0, i-2); res.OwnerEvicted != min(wantOwner, 1) {
+			t.Fatalf("put %s: OwnerEvicted = %d", k, res.OwnerEvicted)
+		}
+		if res.GlobalEvicted != 0 {
+			t.Fatalf("put %s evicted globally below the global cap", k)
+		}
 	}
-	if err := store.put("b", oidcPendingRequest{}, now, 10*time.Second); err != nil {
-		t.Fatal(err)
+	for _, gone := range []string{"a1", "a2"} {
+		if _, ok := store.peek(gone, now); ok {
+			t.Fatalf("%s should have been evicted as the attacker's oldest", gone)
+		}
 	}
-	if err := store.put("c", oidcPendingRequest{}, now, time.Minute); !errors.Is(err, errOIDCStoreFull) {
-		t.Fatalf("put at cap = %v, want errOIDCStoreFull", err)
+	for _, kept := range []string{"a3", "a4", "a5", "victim"} {
+		if _, ok := store.peek(kept, now); !ok {
+			t.Fatalf("%s must still be live", kept)
+		}
 	}
-	if !store.live("a", now) || !store.live("b", now) {
-		t.Fatal("a refused put must not evict live entries")
+}
+
+// Global cap: a full store evicts its oldest entry instead of refusing, so a
+// flood can never pin it shut. Expired entries are swept before anything live
+// is evicted.
+func TestOIDCTTLStore_FullStoreEvictsOldestNeverRefuses(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingRequest](3, 0)
+	now := time.Now()
+	store.put("oldest", "", oidcPendingRequest{}, now, time.Minute)
+	store.put("mid", "", oidcPendingRequest{}, now, time.Minute)
+	store.put("new", "", oidcPendingRequest{}, now, time.Minute)
+
+	res := store.put("newest", "", oidcPendingRequest{}, now, time.Minute)
+	if res.GlobalEvicted != 1 {
+		t.Fatalf("GlobalEvicted = %d, want 1", res.GlobalEvicted)
 	}
-	if err := store.put("a", oidcPendingRequest{}, now, time.Minute); err != nil {
-		t.Fatalf("re-putting an existing key at cap must succeed: %v", err)
+	if _, ok := store.peek("newest", now); !ok {
+		t.Fatal("a put into a full store must succeed")
 	}
-	// "b" expires; the sweep on the next put at cap frees its slot.
-	later := now.Add(11 * time.Second)
-	if err := store.put("c", oidcPendingRequest{}, later, time.Minute); err != nil {
-		t.Fatalf("put after an entry expired must succeed: %v", err)
+	if _, ok := store.peek("oldest", now); ok {
+		t.Fatal("the oldest entry must be the one evicted")
 	}
-	if len(store.entries) != 2 {
-		t.Fatalf("store holds %d entries, want 2 (cap)", len(store.entries))
+	if len(store.entries) != 3 {
+		t.Fatalf("store holds %d entries, want the cap of 3", len(store.entries))
+	}
+
+	// An expired entry is swept first, so nothing live is evicted.
+	store.put("short", "", oidcPendingRequest{}, now, time.Second) // evicts "mid"
+	later := now.Add(2 * time.Second)
+	res = store.put("after", "", oidcPendingRequest{}, later, time.Minute)
+	if res.GlobalEvicted != 0 {
+		t.Fatalf("GlobalEvicted = %d, want 0: the expired entry should have been swept instead", res.GlobalEvicted)
+	}
+	for _, k := range []string{"new", "newest", "after"} {
+		if _, ok := store.peek(k, later); !ok {
+			t.Fatalf("%s must still be live", k)
+		}
+	}
+}
+
+// Re-putting a key replaces it rather than counting twice against the caps.
+func TestOIDCTTLStore_RePutReplaces(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingCode](2, 2)
+	now := time.Now()
+	store.put("a", "o", oidcPendingCode{UserID: "1"}, now, time.Minute)
+	store.put("b", "o", oidcPendingCode{UserID: "2"}, now, time.Minute)
+	res := store.put("a", "o", oidcPendingCode{UserID: "3"}, now, time.Minute)
+	if res.OwnerEvicted != 0 || res.GlobalEvicted != 0 {
+		t.Fatalf("re-put evicted %+v", res)
+	}
+	if v, _ := store.peek("a", now); v.UserID != "3" {
+		t.Fatalf("re-put must replace the value, got %q", v.UserID)
+	}
+	if _, ok := store.peek("b", now); !ok {
+		t.Fatal("re-put must not evict another entry")
 	}
 }
 
@@ -279,5 +330,30 @@ func TestOIDCRedirectAllowlist_EnvOverrideReplaces(t *testing.T) {
 	}
 	if oidcRedirectAllowed("audiobooth://oauth") {
 		t.Fatal("override must REPLACE the defaults, not extend them — otherwise a client can never be retired")
+	}
+}
+
+// Everything on the consent page is escaped. The account name comes from the IdP
+// and the scheme from configuration; neither may inject markup.
+func TestRenderOIDCConsent_EscapesEverything(t *testing.T) {
+	t.Setenv(OIDCRedirectURIsEnvVar, "")
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", OIDCBrowserPath, nil)
+	h := &Handler{oidcConsentKey: []byte("test-key")}
+	hostile := `"><script>alert(1)</script>@example.com`
+	h.renderOIDCConsent(c, "REQ", oidcPendingRequest{RedirectURI: `x<img src=y>:cb`},
+		&servermiddleware.ABSIdentity{User: &database.User{ID: "u1", Username: "u"}, Email: hostile})
+	body := w.Body.String()
+	// (A bare `"><` probe is useless: the template's own <html lang="en"><head>
+	// contains it.)
+	for _, raw := range []string{"<script>", "<img", `"><script`} {
+		if strings.Contains(body, raw) {
+			t.Fatalf("consent page contains unescaped %q:\n%s", raw, body)
+		}
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Fatalf("the account should be rendered escaped:\n%s", body)
 	}
 }

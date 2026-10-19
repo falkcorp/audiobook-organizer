@@ -156,6 +156,45 @@ func (r *ABSIdentityResolver) CFAssertionsEnabled() bool {
 	return r.Enabled() && r.cfg.Modes.CF && r.verifier != nil && r.oauthCfg != nil
 }
 
+// CFCallerKey verifies the request's Cloudflare Access assertion WITHOUT resolving
+// or provisioning a user, and returns a stable key naming the verified credential:
+// "svc:<common_name>" for a service token, "email:<lowercased email>" for a person.
+// ok is false when CF mode is off, there is no assertion, or it does not verify.
+//
+// It exists for per-caller quotas on unauthenticated endpoints (SSO hop 1). The
+// origin trusts no proxy headers (server.go SetTrustedProxies(nil)), so behind the
+// shared reverse proxies every caller has the same c.ClientIP(); a quota keyed on
+// it would let one caller lock out everyone. The verified credential is the only
+// per-caller attribute an attacker cannot forge or rotate freely.
+//
+// 🔴 A KEY, NOT IDENTITY. A service token is shared by a group; never resolve a
+// user from this value.
+func (r *ABSIdentityResolver) CFCallerKey(c *gin.Context) (string, bool) {
+	if !r.CFAssertionsEnabled() {
+		return "", false
+	}
+	raw := absAssertionFromRequest(c)
+	if raw == "" {
+		return "", false
+	}
+	claims, err := r.verifier.Verify(c.Request.Context(), raw)
+	if err != nil {
+		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
+			cn := oauth.CFAssertionCommonName(err)
+			if cn != "" {
+				c.Set(contextABSServiceTokenKey, cn)
+			}
+			return "svc:" + cn, true
+		}
+		return "", false
+	}
+	email := strings.ToLower(strings.TrimSpace(claims.Email))
+	if email == "" {
+		return "", false
+	}
+	return "email:" + email, true
+}
+
 // ResolveCFAssertion runs ONLY step 1. It returns (nil, nil) when there is no
 // assertion to consider — either because none was sent or because Mode CF is
 // disabled — and a terminal error when an assertion was sent but did not fully

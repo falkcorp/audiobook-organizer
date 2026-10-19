@@ -699,6 +699,7 @@ func absRouteList() []string {
 		// Hop 2 of the SSO flow (2026-10-19): the system-browser hop where
 		// Cloudflare Access authenticates the person. See handlers/abs/openid.go.
 		"GET " + abshandler.OIDCBrowserPath,
+		"POST " + abshandler.OIDCBrowserPath, // the consent page's Allow/Deny
 		"GET /auth/openid/callback",
 		"POST /logout",
 		"POST /api/authorize",
