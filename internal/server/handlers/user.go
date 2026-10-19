@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -30,7 +30,9 @@ type UserStore interface {
 	ConsumeInvite(token, algo, hash string) (*database.User, error)
 	CreateSession(userID, ip, ua string, ttl time.Duration) (*database.Session, error)
 	GetUserByID(id string) (*database.User, error)
-	UpdateUser(user *database.User) error
+	// SetUserStatus changes Status and bumps CredentialEpoch on the fresh row in
+	// one write; a whole-row UpdateUser can no longer change Status.
+	SetUserStatus(userID, status string) (*database.User, error)
 }
 
 // UserHandler handles user-management and invite HTTP endpoints.
@@ -187,12 +189,12 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 		return
 	}
 
-	// Lock and bump CredentialEpoch in ONE write. The lock refuses the account
-	// at once; the epoch bump means every ABS session issued before it stays dead
-	// after a later reactivation, whether or not the cleanup revoke below lands.
-	user.Status = "locked"
-	user.CredentialEpoch++
-	if err := h.store.UpdateUser(user); err != nil {
+	// Lock and bump CredentialEpoch in ONE write on the fresh row. The lock
+	// refuses the account at once; the epoch bump means every ABS session issued
+	// before it stays dead after a later reactivation, whether or not the cleanup
+	// revoke below lands.
+	user, err = h.store.SetUserStatus(user.ID, "locked")
+	if err != nil {
 		httputil.InternalError(c, "deactivate user", err)
 		return
 	}
@@ -214,15 +216,16 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 		return
 	}
 
-	// Pre-deactivation ABS sessions cannot come back: deactivation bumped
-	// CredentialEpoch and they carry the old one. This revoke only tidies rows a
-	// failed deactivation cleanup may have left on the device list.
-	RevokeAllABSSessions(h.absSessions, user.ID, "user-reactivated")
-	user.Status = "active"
-	if err := h.store.UpdateUser(user); err != nil {
+	// Unlock and bump CredentialEpoch again in one write: every ABS session
+	// issued before this instant (pre-deactivation ones, legacy unstamped ones,
+	// any a failed cleanup left behind) is refused by construction. The revoke
+	// after it only tidies the device list.
+	user, err = h.store.SetUserStatus(user.ID, "active")
+	if err != nil {
 		httputil.InternalError(c, "reactivate user", err)
 		return
 	}
+	RevokeAllABSSessions(h.absSessions, user.ID, "user-reactivated")
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
 }

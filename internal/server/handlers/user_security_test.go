@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user_security_test.go
-// version: 1.0.2
+// version: 1.2.0
 // guid: 7f1c2a93-4d8e-4b6a-9c10-2e5b7a0d1f44
 // last-edited: 2026-10-19
 
@@ -75,7 +75,7 @@ func TestDeactivateUser_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
 	store.EXPECT().GetUserByID("u-123").Return(user, nil)
-	store.EXPECT().UpdateUser(mock.Anything).Return(nil)
+	store.EXPECT().SetUserStatus("u-123", "locked").Return(user, nil)
 
 	h := handlers.NewUserHandler(store)
 	c, w := newAuthCtx("POST", "/api/v1/users/u-123/deactivate", nil)
@@ -90,7 +90,7 @@ func TestReactivateUser_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
 	store.EXPECT().GetUserByID("u-123").Return(user, nil)
-	store.EXPECT().UpdateUser(mock.Anything).Return(nil)
+	store.EXPECT().SetUserStatus("u-123", "active").Return(user, nil)
 
 	h := handlers.NewUserHandler(store)
 	c, w := newAuthCtx("POST", "/api/v1/users/u-123/reactivate", nil)

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
 // last-edited: 2026-10-19
 
@@ -55,11 +55,12 @@ func passwordUser(t *testing.T, id, password string) *database.User {
 	return &database.User{ID: id, Username: id, Status: "active", PasswordHash: testBcryptHash(t, password), PasswordHashAlgo: "bcrypt"}
 }
 
-// The password change and the CredentialEpoch bump land in one UpdateUser write;
-// that bump is what ends every ABS session (including one minted with the old
-// password while the change was in flight). The revoke-all runs after it as
-// cleanup.
-func TestChangePassword_BumpsEpochInTheSameWriteThenRevokes(t *testing.T) {
+// The password change goes through SetUserPassword, which writes the hash and
+// bumps CredentialEpoch on the fresh row; that bump is what ends every ABS
+// session (including one minted with the old password while the change was in
+// flight). A self-service change passes the hash it verified (a compare-and-
+// swap); an admin reset passes "". The revoke-all runs after it as cleanup.
+func TestChangePassword_GoesThroughSetUserPasswordThenRevokes(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		admin bool
@@ -69,15 +70,18 @@ func TestChangePassword_BumpsEpochInTheSameWriteThenRevokes(t *testing.T) {
 			mockStore := handlersmocks.NewMockAuthStore(t)
 			rec := &absRevokeRecorder{events: &events}
 			target := passwordUser(t, "u-target", "old-password")
-			target.CredentialEpoch = 4
 			oldHash := target.PasswordHash
 			mockStore.EXPECT().GetUserByID("u-target").Return(target, nil)
-			mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
-				require.NotEqual(t, oldHash, u.PasswordHash, "the write carries the new password")
-				require.Equal(t, int64(5), u.CredentialEpoch, "and, in the same write, the next credential epoch")
-				events = append(events, "update")
-				return nil
-			})
+			wantExpected := oldHash
+			if tc.admin {
+				wantExpected = ""
+			}
+			mockStore.EXPECT().SetUserPassword("u-target", wantExpected, "bcrypt", mock.Anything).
+				RunAndReturn(func(_, _, _, hash string) (*database.User, error) {
+					require.NotEqual(t, oldHash, hash, "the write carries the new password")
+					events = append(events, "set-password")
+					return target, nil
+				})
 			h := handlers.NewAuthHandler(authStoreWithABS{mockStore, rec}, true)
 
 			body := map[string]any{"current_password": "old-password", "new_password": "new-password-123"}
@@ -92,7 +96,7 @@ func TestChangePassword_BumpsEpochInTheSameWriteThenRevokes(t *testing.T) {
 
 			require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 			require.Equal(t, []string{"u-target"}, rec.calls, "every ABS session of the TARGET user is cleaned up")
-			require.Equal(t, []string{"update", "revoke"}, events, "the cleanup revoke runs after the epoch write")
+			require.Equal(t, []string{"set-password", "revoke"}, events, "the cleanup revoke runs after the epoch write")
 		})
 	}
 }
@@ -105,7 +109,7 @@ func TestChangePassword_RevokeFailureStillReportsTheChange(t *testing.T) {
 	rec := &absRevokeRecorder{err: errors.New("pebble: partial revoke")}
 	target := passwordUser(t, "u1", "old-password")
 	mockStore.EXPECT().GetUserByID("u1").Return(target, nil)
-	mockStore.EXPECT().UpdateUser(mock.Anything).Return(nil)
+	mockStore.EXPECT().SetUserPassword("u1", target.PasswordHash, "bcrypt", mock.Anything).Return(target, nil)
 	h := handlers.NewAuthHandler(authStoreWithABS{mockStore, rec}, true)
 
 	c, w := newAuthCtx(http.MethodPut, "/api/v1/auth/me/password",
@@ -117,14 +121,15 @@ func TestChangePassword_RevokeFailureStillReportsTheChange(t *testing.T) {
 	require.Equal(t, []string{"u1"}, rec.calls)
 }
 
-// A credential change that lost a race with another one is refused as a
-// conflict, and nothing is revoked on its behalf.
-func TestChangePassword_StaleUserIsConflict(t *testing.T) {
+// A self-service change whose verified password was replaced in the meantime is
+// refused as a conflict, and nothing is revoked on its behalf.
+func TestChangePassword_StalePasswordIsConflict(t *testing.T) {
 	mockStore := handlersmocks.NewMockAuthStore(t)
 	rec := &absRevokeRecorder{}
 	target := passwordUser(t, "u1", "old-password")
 	mockStore.EXPECT().GetUserByID("u1").Return(target, nil)
-	mockStore.EXPECT().UpdateUser(mock.Anything).Return(fmt.Errorf("wrapped: %w", database.ErrUserStale))
+	mockStore.EXPECT().SetUserPassword("u1", target.PasswordHash, "bcrypt", mock.Anything).
+		Return(nil, fmt.Errorf("wrapped: %w", database.ErrUserStale))
 	h := handlers.NewAuthHandler(authStoreWithABS{mockStore, rec}, true)
 
 	c, w := newAuthCtx(http.MethodPut, "/api/v1/auth/me/password",
@@ -141,7 +146,7 @@ func TestChangePassword_NoABSKeyspaceStillChangesPassword(t *testing.T) {
 	mockStore := handlersmocks.NewMockAuthStore(t)
 	target := passwordUser(t, "u1", "old-password")
 	mockStore.EXPECT().GetUserByID("u1").Return(target, nil)
-	mockStore.EXPECT().UpdateUser(mock.Anything).Return(nil)
+	mockStore.EXPECT().SetUserPassword("u1", target.PasswordHash, "bcrypt", mock.Anything).Return(target, nil)
 	h := handlers.NewAuthHandler(mockStore, true)
 
 	c, w := newAuthCtx(http.MethodPut, "/api/v1/auth/me/password",
@@ -151,59 +156,38 @@ func TestChangePassword_NoABSKeyspaceStillChangesPassword(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
 
-func TestDeactivateUser_LocksAndBumpsEpochInOneWriteThenRevokes(t *testing.T) {
-	var events []string
-	mockStore := handlersmocks.NewMockUserStore(t)
-	rec := &absRevokeRecorder{events: &events}
-	user := sampleUser()
-	user.CredentialEpoch = 2
-	mockStore.EXPECT().GetUserByID("u-123").Return(user, nil)
-	mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
-		require.Equal(t, "locked", u.Status)
-		require.Equal(t, int64(3), u.CredentialEpoch, "the lock and the epoch bump are one write")
-		events = append(events, "update")
-		return nil
-	})
-	h := handlers.NewUserHandler(userStoreWithABS{mockStore, rec})
-	c, w := newAuthCtx(http.MethodPost, "/api/v1/users/u-123/deactivate", nil)
-	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
-	h.DeactivateUser(c)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, []string{"u-123"}, rec.calls)
-	require.Equal(t, []string{"update", "revoke"}, events)
-}
-
-func TestDeactivateUser_RevokeFailureStillDeactivates(t *testing.T) {
-	mockStore := handlersmocks.NewMockUserStore(t)
-	rec := &absRevokeRecorder{err: errors.New("pebble: partial revoke")}
-	mockStore.EXPECT().GetUserByID("u-123").Return(sampleUser(), nil)
-	mockStore.EXPECT().UpdateUser(mock.Anything).Return(nil)
-	h := handlers.NewUserHandler(userStoreWithABS{mockStore, rec})
-	c, w := newAuthCtx(http.MethodPost, "/api/v1/users/u-123/deactivate", nil)
-	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
-	h.DeactivateUser(c)
-	require.Equal(t, http.StatusOK, w.Code, "the account is locked and its sessions refused; the revoke is cleanup")
-}
-
-// Reactivation unlocks without moving the epoch back: the sessions the
-// deactivation killed stay dead.
-func TestReactivateUser_KeepsTheEpoch(t *testing.T) {
-	mockStore := handlersmocks.NewMockUserStore(t)
-	rec := &absRevokeRecorder{}
-	locked := sampleUser()
-	locked.Status = "locked"
-	locked.CredentialEpoch = 3
-	mockStore.EXPECT().GetUserByID("u-123").Return(locked, nil)
-	mockStore.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
-		require.Equal(t, "active", u.Status)
-		require.Equal(t, int64(3), u.CredentialEpoch)
-		return nil
-	})
-	h := handlers.NewUserHandler(userStoreWithABS{mockStore, rec})
-	c, w := newAuthCtx(http.MethodPost, "/api/v1/users/u-123/reactivate", nil)
-	c.Params = gin.Params{{Key: "id", Value: "u-123"}}
-	h.ReactivateUser(c)
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, []string{"u-123"}, rec.calls)
+// Deactivation and reactivation both go through SetUserStatus (status and epoch
+// bump on the fresh row, one write), then revoke as cleanup; a revoke failure
+// does not fail either.
+func TestUserStatusChanges_GoThroughSetUserStatusThenRevoke(t *testing.T) {
+	for _, tc := range []struct {
+		action, status string
+		revokeErr      error
+	}{
+		{"deactivate", "locked", nil},
+		{"deactivate", "locked", errors.New("pebble: partial revoke")},
+		{"reactivate", "active", nil},
+		{"reactivate", "active", errors.New("pebble: partial revoke")},
+	} {
+		var events []string
+		mockStore := handlersmocks.NewMockUserStore(t)
+		rec := &absRevokeRecorder{events: &events, err: tc.revokeErr}
+		mockStore.EXPECT().GetUserByID("u-123").Return(sampleUser(), nil)
+		mockStore.EXPECT().SetUserStatus("u-123", tc.status).RunAndReturn(func(string, string) (*database.User, error) {
+			events = append(events, "set-status")
+			u := sampleUser()
+			u.Status = tc.status
+			return u, nil
+		})
+		h := handlers.NewUserHandler(userStoreWithABS{mockStore, rec})
+		c, w := newAuthCtx(http.MethodPost, "/api/v1/users/u-123/"+tc.action, nil)
+		c.Params = gin.Params{{Key: "id", Value: "u-123"}}
+		if tc.action == "deactivate" {
+			h.DeactivateUser(c)
+		} else {
+			h.ReactivateUser(c)
+		}
+		require.Equal(t, http.StatusOK, w.Code, "%s (revoke err %v): %s", tc.action, tc.revokeErr, w.Body.String())
+		require.Equal(t, []string{"set-status", "revoke"}, events, tc.action)
+	}
 }

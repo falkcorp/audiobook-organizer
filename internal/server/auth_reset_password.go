@@ -1,5 +1,5 @@
 // file: internal/server/auth_reset_password.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b2d94f1-7a08-4c53-9e16-3d8f05a2c761
 // last-edited: 2026-10-19
 
@@ -67,10 +67,11 @@ func (s *Server) handleResetPassword(c *gin.Context) {
 	// survived would stay valid indefinitely. Bumping CredentialEpoch is what ends
 	// them (every ABS refresh and request checks it); fail closed: no link unless
 	// that write landed. The revoke-all after it is cleanup.
-	user.CredentialEpoch++
-	if err := s.Ops().UpdateUser(user); err != nil {
-		if errors.Is(err, database.ErrUserStale) {
-			httputil.RespondWithConflict(c, "the account changed while the reset was being issued; no reset link was issued, try again")
+	// BumpUserCredentialEpoch changes only the epoch, on the fresh row, so it
+	// cannot revert a status or password change that landed after our read.
+	if _, err := s.Ops().BumpUserCredentialEpoch(user.ID); err != nil {
+		if errors.Is(err, database.ErrUserNotFound) {
+			httputil.RespondWithNotFound(c, "user", id)
 			return
 		}
 		httputil.RespondWithInternalError(c, "could not sign the user out of their mobile apps; no reset link was issued, try again")

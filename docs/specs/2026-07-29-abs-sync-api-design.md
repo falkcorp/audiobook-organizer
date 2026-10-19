@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.9.0 -->
+<!-- version: 7.10.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -839,9 +839,12 @@ when the request carries header `x-return-tokens: true`, the response body **als
   and `GET /api/me/sessions` refuse a session whose stamp differs (401 `credentials-changed`, checked
   before the active-account check). Refresh carries the stamp and never re-stamps it. This also
   kills a session minted with the old password while the change was in flight. A revoke-all runs
-  after the write as cleanup only. `UpdateUser` takes a user write lock, re-reads, and refuses
-  (`ErrUserStale`) lowering the epoch, skipping it, or changing the hash without a bump of one; the
-  §3.5 rehash uses `RehashUserPassword`, conditional on the stored hash still being the verified one.
+  after the write as cleanup only. Credential and status changes go only through field-scoped store
+  ops that re-read under a user write lock, change their own fields and bump the epoch:
+  `SetUserPassword` (compare-and-swap on the verified hash for self-service), `SetUserStatus`
+  (deactivate and reactivate) and `BumpUserCredentialEpoch` (reset link). `UpdateUser` refuses any
+  change to the password, `Status` or `CredentialEpoch` (`ErrUserProtectedField`). The §3.5 rehash
+  uses `RehashUserPassword`, conditional on the stored hash still being the verified one.
 - **The ABS keys are environment-only.** Every serialized `abs_*` key has a registered default and
   is re-applied from viper at each boot, so `PUT /api/v1/config` refuses a change to one (400, naming
   the variable) and the settings API reports it as locked.

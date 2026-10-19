@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -115,27 +115,33 @@ func (p *PebbleStore) GetUserByEmail(email string) (*User, error) {
 	return p.getUserByIndex("idx:user:email:" + strings.ToLower(email))
 }
 
-// userWriteMu serializes every rewrite of an existing user row (UpdateUser,
-// RehashUserPassword). Pebble has no compare-and-swap, and both are
-// read-modify-write, so without it a write built from a copy read before a
-// password change could land after it and put the old password hash and the old
-// CredentialEpoch back, reviving every session the change was meant to kill.
+// userWriteMu serializes every rewrite of an existing user row (UpdateUser and
+// the field-scoped credential ops below). Pebble has no compare-and-swap, so
+// each op re-reads the row under this lock and changes only its own fields.
+// Without it a write built from a copy read before a password change or a
+// deactivation could land after it and put the old password, the old status or
+// the old CredentialEpoch back.
 var userWriteMu sync.Mutex
 
-// ErrUserStale is returned by UpdateUser for a write that does not follow the
-// stored row's credentials: the caller's copy was read before a credential
-// change landed. Re-read the user and retry.
+// ErrUserNotFound is returned by the field-scoped user ops for an unknown id.
+var ErrUserNotFound = errors.New("database: user not found")
+
+// ErrUserStale is returned by SetUserPassword when the stored password hash is
+// no longer the one the caller verified: another change landed in between.
 var ErrUserStale = errors.New("database: user changed since it was read")
 
-// UpdateUser rewrites a user row. Under userWriteMu it re-reads the stored row
-// and refuses (ErrUserStale) a write that would:
-//   - lower CredentialEpoch, or raise it by more than one;
-//   - change the password hash or algorithm without raising it by exactly one.
-//
-// A credential change therefore always lands with its epoch bump in the same
-// write, and a stale read-modify-write (a role edit, a status change, a
-// best-effort rehash) can never undo one. The password-preserving rehash goes
-// through RehashUserPassword instead.
+// ErrUserProtectedField is returned by UpdateUser for a write that would change
+// the password hash or algorithm, Status or CredentialEpoch. Those change only
+// through SetUserPassword, SetUserStatus and BumpUserCredentialEpoch, which bump
+// the epoch on the fresh row. A caller that hits this either tried to change
+// one of them through the whole-row write (a bug) or is writing back a copy
+// read before one of those ops landed (re-read and retry).
+var ErrUserProtectedField = errors.New("database: UpdateUser cannot change password, status or credential epoch")
+
+// UpdateUser rewrites a user row's ordinary fields (email, roles, ...). Under
+// userWriteMu it re-reads the stored row and refuses (ErrUserProtectedField) a
+// write whose password hash, algorithm, Status or CredentialEpoch differs from
+// it, so a whole-row write can never change, or revert, any of them.
 func (p *PebbleStore) UpdateUser(user *User) error {
 	userWriteMu.Lock()
 	defer userWriteMu.Unlock()
@@ -144,15 +150,74 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 		return err
 	}
 	if stored != nil {
-		bump := user.CredentialEpoch - stored.CredentialEpoch
-		credsChanged := user.PasswordHash != stored.PasswordHash || user.PasswordHashAlgo != stored.PasswordHashAlgo
-		if bump < 0 || bump > 1 || (credsChanged && bump != 1) {
-			return fmt.Errorf("%w: user %s epoch %d, stored %d", ErrUserStale, user.ID, user.CredentialEpoch, stored.CredentialEpoch)
+		if user.PasswordHash != stored.PasswordHash || user.PasswordHashAlgo != stored.PasswordHashAlgo ||
+			user.Status != stored.Status || user.CredentialEpoch != stored.CredentialEpoch {
+			return fmt.Errorf("%w (user %s)", ErrUserProtectedField, user.ID)
 		}
 	}
 	user.UpdatedAt = time.Now()
 	data, _ := json.Marshal(user)
 	return p.db.Set([]byte("u:"+user.ID), data, pebble.Sync)
+}
+
+// mutateUserCredentials re-reads userID under userWriteMu, applies fn to the
+// fresh row, bumps CredentialEpoch by one and writes it back. fn may veto the
+// write by returning an error. Each call bumps once, so N racing calls from the
+// same starting row end at N distinct epochs, and every session stamped with any
+// earlier one is refused.
+func (p *PebbleStore) mutateUserCredentials(userID string, fn func(*User) error) (*User, error) {
+	userWriteMu.Lock()
+	defer userWriteMu.Unlock()
+	stored, err := p.GetUserByID(userID)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		return nil, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
+	}
+	if err := fn(stored); err != nil {
+		return nil, err
+	}
+	stored.CredentialEpoch++
+	stored.UpdatedAt = time.Now()
+	data, _ := json.Marshal(stored)
+	if err := p.db.Set([]byte("u:"+userID), data, pebble.Sync); err != nil {
+		return nil, err
+	}
+	return stored, nil
+}
+
+// SetUserPassword sets a new password hash and bumps CredentialEpoch in one
+// write, returning the updated row. A non-empty expectedHash makes it a
+// compare-and-swap: the write happens only if the stored hash is still the one
+// the caller verified the current password against, otherwise ErrUserStale. The
+// self-service change passes it; an admin reset, which verifies no password,
+// passes "".
+func (p *PebbleStore) SetUserPassword(userID, expectedHash, algo, hash string) (*User, error) {
+	return p.mutateUserCredentials(userID, func(u *User) error {
+		if expectedHash != "" && u.PasswordHash != expectedHash {
+			return fmt.Errorf("%w: password of %s changed since it was verified", ErrUserStale, userID)
+		}
+		u.PasswordHashAlgo, u.PasswordHash = algo, hash
+		return nil
+	})
+}
+
+// SetUserStatus sets Status and bumps CredentialEpoch in one write, returning
+// the updated row. It bumps on every call, deactivation and reactivation alike:
+// a reactivated account starts with no live ABS session even if a cleanup
+// revoke failed somewhere along the way.
+func (p *PebbleStore) SetUserStatus(userID, status string) (*User, error) {
+	return p.mutateUserCredentials(userID, func(u *User) error {
+		u.Status = status
+		return nil
+	})
+}
+
+// BumpUserCredentialEpoch ends every ABS session of userID without changing the
+// password or status (the admin reset link), returning the updated row.
+func (p *PebbleStore) BumpUserCredentialEpoch(userID string) (*User, error) {
+	return p.mutateUserCredentials(userID, func(*User) error { return nil })
 }
 
 // UserPasswordRehasher re-stores a verified password under a stronger algorithm

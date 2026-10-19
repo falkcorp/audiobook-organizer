@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sessions-sliding-expiry-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 50c43bce-f6d8-4831-b9d1-95ea32eda66d -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -108,13 +108,16 @@ uses it. The counter goes up in the same save as the new password, so there
 is no gap: even a phone that signed in with the old password a split second
 before the change is refused afterwards. The old sign-ins are also cleared
 from the device list, but that is tidying up; if it fails, they are refused
-anyway. Switching an account back on does not bring them back. A reset link
-is not handed out unless the counter was saved.
+anyway. Switching an account off and back on moves the counter both times,
+so no earlier phone sign-in comes back. A reset link is not handed out unless
+the counter was saved.
 
-Two related gaps were closed at the same time. Any save to an account that
-was based on an out-of-date copy (for example, a profile edit made just as the
-password changed) is now refused instead of quietly putting the old password
-back. And when a phone signs in, the server's routine upgrade of how the
+Two related gaps were closed at the same time. A password, or whether an
+account is switched on, can now only be changed by a dedicated step that works
+on the latest copy of the account. An ordinary save (for example, a profile
+edit made just as the password changed, or a reset issued just as the account
+was switched off) can no longer quietly put the old password back or switch
+the account back on. And when a phone signs in, the server's routine upgrade of how the
 password is stored now only goes ahead if the password has not changed in the
 meantime; before, it could put the old password back, or switch a just-locked
 account back on.
