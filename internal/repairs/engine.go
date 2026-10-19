@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-13
+// last-edited: 2026-10-18
 
 package repairs
 
@@ -64,30 +64,6 @@ const (
 // ErrStandDownLost aborts an apply whose scan stand-down lease lapsed: the
 // scanner has resumed, so further writes would race it.
 var ErrStandDownLost = errors.New("repairs: scan stand-down lease lost; remaining rows not written")
-
-// PlanParams are the params of repairs.plan.
-type PlanParams struct {
-	FixerID string          `json:"fixer_id"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-// PlanResult is the stored result of repairs.plan: every row, uncapped.
-type PlanResult struct {
-	FixerID    string          `json:"fixer_id"`
-	Params     json.RawMessage `json:"params,omitempty"`
-	PlannedAt  time.Time       `json:"planned_at"`
-	Total      int             `json:"total"`
-	Applicable int             `json:"applicable"`
-	// SkippedByKind counts the rows apply will not write, by Row.Skipped.
-	SkippedByKind map[string]int `json:"skipped_by_kind"`
-	// ByClass counts every row (applicable and skipped) by Row.Class, for a
-	// fixer that sets one. Each count is a filter of the rows endpoint.
-	ByClass map[string]int `json:"by_class,omitempty"`
-	// OwnerApplicable counts the skipped rows the owner may apply himself
-	// (Row.OwnerApplicable); the owner_applicable filter pages them.
-	OwnerApplicable int   `json:"owner_applicable,omitempty"`
-	Rows            []Row `json:"rows"`
-}
 
 // PlanDeps is what RunPlan needs besides the fixer.
 type PlanDeps struct {
@@ -249,41 +225,6 @@ const (
 	FilterOwnerApplicable = "owner_applicable"
 )
 
-// RowsPage is one page of a stored plan.
-type RowsPage struct {
-	PlanOpID   string    `json:"plan_op_id"`
-	FixerID    string    `json:"fixer_id"`
-	PlannedAt  time.Time `json:"planned_at"`
-	Filter     string    `json:"filter,omitempty"`
-	Class      string    `json:"class,omitempty"`
-	Offset     int       `json:"offset"`
-	Limit      int       `json:"limit"`
-	Total      int       `json:"total"` // rows matching the filter
-	Applicable int       `json:"applicable"`
-	// SkippedByKind is the whole plan's tally, whatever the filter.
-	SkippedByKind map[string]int `json:"skipped_by_kind"`
-	// OwnerApplicable is the whole plan's owner-row count, whatever the
-	// filter.
-	OwnerApplicable int `json:"owner_applicable,omitempty"`
-	// ByClass is the whole plan's per-class tally, whatever the filter.
-	ByClass map[string]int `json:"by_class,omitempty"`
-	// ByClassInFilter tallies by class only the rows matching filter (class
-	// aside): exactly the rows a class chip on this tab lists.
-	ByClassInFilter map[string]int `json:"by_class_in_filter,omitempty"`
-	// SkippedByKindInClass is the Skipped tally of the rows of Class,
-	// whatever the filter: under a selected class the skip-kind chips count
-	// exactly the rows "skipped:<kind>" pages. Set only when Class is (then
-	// never nil, so an empty tally reads as {}, not as absent); null
-	// without a class.
-	SkippedByKindInClass map[string]int `json:"skipped_by_kind_in_class"`
-	// ApplicableInClass counts the applicable rows of Class, whatever the
-	// filter: under a selected class the Applicable tab counts exactly the
-	// rows "applicable" pages. Set only when Class is (then present even at
-	// zero).
-	ApplicableInClass *int  `json:"applicable_in_class,omitempty"`
-	Rows              []Row `json:"rows"`
-}
-
 // Page returns rows [offset, offset+limit) of the plan's rows matching
 // filter (all, applicable, skipped, or "skipped:<kind>" for the skipped rows
 // of one kind) and, when class is not empty, of that Row.Class. An unknown
@@ -351,90 +292,12 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 	return out, nil
 }
 
-// ApplyParams are the params of repairs.apply. Only an explicit
-// dry_run:false writes (owner rule 2026-09-25: an omitted mode is a preview).
-type ApplyParams struct {
-	FixerID  string   `json:"fixer_id"`
-	PlanOpID string   `json:"plan_op_id"`
-	RowIDs   []string `json:"row_ids"`
-	DryRun   *bool    `json:"dry_run,omitempty"`
-	DryRunC  *bool    `json:"dryRun,omitempty"`
-	// Resume is the checkpoint of an interrupted run (set by the op through
-	// the registry's checkpoint merge, never by a caller): the rows it had
-	// already settled. A resumed run keeps those results and does not
-	// re-apply them.
-	Resume *ApplyCheckpoint `json:"resume,omitempty"`
-	// OwnerApplyRowIDs are owner rows (Row.OwnerApplicable) the owner chose
-	// to apply, and OwnerGrant the one-shot grant the Repairs handler minted
-	// for them (owner.go). Neither is trusted on its own: the op takes the
-	// grant from the process's grant store and refuses every owner row
-	// without one (ResolveOwnerApproval).
-	OwnerApplyRowIDs []string `json:"owner_apply_row_ids,omitempty"`
-	OwnerGrant       string   `json:"owner_grant,omitempty"`
-}
-
-// ApplyCheckpoint is what repairs.apply checkpoints while it runs: every row
-// settled so far, with its outcome. Merged back into the op's params as
-// "resume" when the server restarts mid-apply (ResumeRestart).
-type ApplyCheckpoint struct {
-	Settled []RowResult `json:"settled"`
-}
-
 // settledForResume reports whether a checkpointed outcome is final. An
 // aborted, canceled-skip or retry_later row wrote nothing and is applied again
 // on resume.
 func settledForResume(outcome string) bool {
 	return outcome != "" && outcome != OutcomeAborted && outcome != OutcomeCanceledSkip &&
 		outcome != OutcomeWouldApply && outcome != OutcomeRetryLater
-}
-
-// RowResult is the apply outcome of one requested row.
-type RowResult struct {
-	RowID   string `json:"row_id"`
-	Outcome string `json:"outcome"`
-	// Skipped is the guard kind (skipped_guard), the plan row's skip kind
-	// (not_applicable), or the re-plan's skip kind (changed_since_plan, with
-	// its reason in Error).
-	Skipped string `json:"skipped,omitempty"`
-	Error   string `json:"error,omitempty"`
-	// OwnerUserID is set on an owner row (owner.go): the user whose grant
-	// the row ran under.
-	OwnerUserID string `json:"owner_user_id,omitempty"`
-}
-
-// ApplyResult is the stored result of repairs.apply.
-type ApplyResult struct {
-	FixerID          string         `json:"fixer_id"`
-	PlanOpID         string         `json:"plan_op_id"`
-	DryRun           bool           `json:"dry_run"`
-	Requested        int            `json:"requested"`
-	NotInPlan        []string       `json:"not_in_plan,omitempty"`
-	ByOutcome        map[string]int `json:"by_outcome"`
-	Applied          int            `json:"applied"`
-	ChangedSincePlan int            `json:"changed_since_plan"`
-	Partial          int            `json:"partially_applied"`
-	Failed           int            `json:"failed"`
-	// RetryLater counts rows refused with ErrRetryLater (nothing written).
-	RetryLater    int `json:"retry_later"`
-	BookWrites    int `json:"book_writes"`
-	HistoryRows   int `json:"history_rows"`
-	HistoryFailed int `json:"history_rows_failed"`
-	// JournalRows counts the operation-journal rows the apply recorded
-	// (book_file steps and credit writes alike); the op revert replays them.
-	JournalRows int `json:"journal_rows,omitempty"`
-	// StandDownHeld: the library-scan stand-down was held for the writes.
-	StandDownHeld bool `json:"standdown_held"`
-	// FollowUp is what an AfterApplier fixer started for the applied books
-	// (an operation id); FollowUpError is why it could not. Neither changes
-	// any row's outcome: the writes were already made.
-	FollowUp      string `json:"follow_up,omitempty"`
-	FollowUpError string `json:"follow_up_error,omitempty"`
-	Aborted       string `json:"aborted,omitempty"`
-	// OwnerRows / OwnerUserID: the owner rows the run was asked for and the
-	// user whose grant they ran under ("" when refused).
-	OwnerRows   int         `json:"owner_rows,omitempty"`
-	OwnerUserID string      `json:"owner_user_id,omitempty"`
-	Rows        []RowResult `json:"rows"`
 }
 
 // ApplyDeps is what RunApply needs besides the fixer and the plan.

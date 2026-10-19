@@ -1,0 +1,22 @@
+# file: tygo.yaml
+# version: 1.0.0
+# guid: 7a1e5c3b-9d24-4f60-b8a2-1c6e0d4f7b93
+# last-edited: 2026-10-18
+#
+# TypeScript types generated from Go structs (07-F1, owner decision D46).
+# Regenerate with `make generate-types`; scripts/ci/check_generated_types.sh
+# fails CI when the committed output is stale. Never hand-edit the output.
+#
+# One entry per Go package. Generate only from files that hold nothing but
+# wire shapes: tygo emits every exported type of an included file, and a Deps
+# struct or interface drags unresolvable names into the TypeScript.
+type_mappings:
+  time.Time: "string"
+  json.RawMessage: "unknown"
+packages:
+  - path: "github.com/falkcorp/audiobook-organizer/internal/repairs"
+    output_path: "web/src/types/generated/repairs.ts"
+    include_files: ["wire.go"]
+  - path: "github.com/falkcorp/audiobook-organizer/internal/database"
+    output_path: "web/src/types/generated/database.ts"
+    include_files: ["bookcore.go", "bookfilecore.go"]

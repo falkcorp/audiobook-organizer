@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.47.1
+# version: 2.48.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-18
 
@@ -551,6 +551,15 @@ generate-ops:
 ops-check:
 	@go run ./tools/cmd/opsgen -check
 
+## generate-types: Regenerate web/src/types/generated/ from Go structs (tygo.yaml)
+.PHONY: generate-types types-check
+generate-types:
+	@go tool tygo generate
+
+## types-check: Fail if web/src/types/generated is stale (run make generate-types)
+types-check:
+	@bash scripts/ci/check_generated_types.sh
+
 ## bench-check: Typecheck the //go:build bench code (nothing else did)
 #
 # Deliberately NOT the same as build-bench above, despite the near-identical
@@ -763,7 +772,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck oplint sdkguard ops-check bench-check pprof-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
+ci: mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool
