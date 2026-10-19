@@ -1,5 +1,6 @@
 // file: internal/serviceregistry/groups_test.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-10-19
 
 package serviceregistry
 
@@ -120,20 +121,5 @@ func TestIncludeGroup_Composable(t *testing.T) {
 	want := []string{"g", "h"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("composable: got %v, want %v", got, want)
-	}
-}
-
-func TestGroups_ReturnsSortedDeduplicatedList(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
-
-	Register(ServiceDef{Name: "a", Groups: []string{"zebra", "alpha"}, Build: func(c *Container) (any, error) { return nil, nil }})
-	Register(ServiceDef{Name: "b", Groups: []string{"alpha", "mike"}, Build: func(c *Container) (any, error) { return nil, nil }})
-	Register(ServiceDef{Name: "c", Build: func(c *Container) (any, error) { return nil, nil }}) // no groups
-
-	got := Groups()
-	want := []string{"alpha", "mike", "zebra"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Groups() = %v, want %v", got, want)
 	}
 }

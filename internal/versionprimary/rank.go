@@ -1,7 +1,7 @@
 // file: internal/versionprimary/rank.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c2a14de5-3125-41f3-a4e8-e0126c71293f
-// last-edited: 2026-10-01
+// last-edited: 2026-10-19
 
 // Package versionprimary is the ONE rule for which member of a version group
 // is its primary. Before 2026-09-24 four places answered that question with
@@ -457,6 +457,3 @@ func tierName(t int) string {
 	}
 	return "none"
 }
-
-// TierName is the report label for a tier.
-func TierName(t int) string { return tierName(t) }

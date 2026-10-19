@@ -1,6 +1,6 @@
 // file: internal/serviceregistry/container.go
-// version: 1.2.2
-// last-edited: 2026-09-02
+// version: 1.2.3
+// last-edited: 2026-10-19
 
 package serviceregistry
 
@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 )
 
 type containerPhase int
@@ -71,7 +70,6 @@ func (c *Container) IncludeAll() *Container {
 //	grep -rn 'Groups.*"<groupname>"' internal/ --include="*.go"
 //
 // Unknown group names are silently no-ops — they include zero services.
-// Callers that want to assert a group exists can check via Groups().
 func (c *Container) IncludeGroup(names ...string) *Container {
 	want := make(map[string]bool, len(names))
 	for _, g := range names {
@@ -86,24 +84,6 @@ func (c *Container) IncludeGroup(names ...string) *Container {
 		}
 	}
 	return c
-}
-
-// Groups returns a sorted, deduplicated list of every group name declared
-// on any registered ServiceDef. Useful for diagnostics, audit tooling,
-// and tests that want to assert a group exists.
-func Groups() []string {
-	seen := map[string]struct{}{}
-	for _, def := range registered {
-		for _, g := range def.Groups {
-			seen[g] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for g := range seen {
-		out = append(out, g)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // Override substitutes an instance for the named service. Factory Build

@@ -1,7 +1,7 @@
 // file: internal/realtime/events_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-10
+// last-edited: 2026-10-19
 
 package realtime
 
@@ -341,27 +341,6 @@ func TestCalculatePercentage(t *testing.T) {
 			t.Errorf("calculatePercentage(%d, %d) = %d, want %d",
 				tt.current, tt.total, result, tt.expected)
 		}
-	}
-}
-
-func TestInitializeEventHub(t *testing.T) {
-	// Save old global hub
-	oldHub := GetGlobalHub()
-	defer func() { SetGlobalHub(oldHub) }()
-
-	// Reset and initialize
-	SetGlobalHub(nil)
-	InitializeEventHub()
-
-	if GetGlobalHub() == nil {
-		t.Error("Expected GlobalHub to be initialized")
-	}
-
-	// Test idempotency
-	prevHub := GetGlobalHub()
-	InitializeEventHub()
-	if GetGlobalHub() != prevHub {
-		t.Error("InitializeEventHub should be idempotent")
 	}
 }
 

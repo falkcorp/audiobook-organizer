@@ -1,7 +1,7 @@
 // file: internal/search/index_builder.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8a1c2f4d-5b3e-4f70-b7d6-2e8d0f1b9a57
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // Helpers that project a database.Book (with its author, series,
 // and tag relations resolved) into a BookDocument ready for
@@ -21,11 +21,10 @@ import (
 )
 
 // indexBuilderStore is what this package actually calls, measured by emptying the
-// interface and reading the compiler's enumeration: 4 methods. It was an
+// interface and reading the compiler's enumeration: 3 methods. It was an
 // inline anonymous interface of database.* embeds — 81 methods — repeated
 // at 2 parameters, invisible to any line-oriented tool.
 type indexBuilderStore interface {
-	GetBookByID(id string) (*database.Book, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetSeriesByID(id int) (*database.Series, error)
 	GetBookTags(bookID string) ([]string, error)
@@ -291,18 +290,4 @@ func bookToDocCore(book *database.Book) BookDocument {
 	}
 	doc.HasCover = book.CoverURL != nil && *book.CoverURL != ""
 	return doc
-}
-
-// ReindexBookByID convenience: load the book + project + index.
-// Used by the update/create hook path; callers that already have a
-// Book struct should call BookToDoc + IndexBook directly.
-func ReindexBookByID(store indexBuilderStore, idx *BleveIndex, bookID string) error {
-	if store == nil || idx == nil {
-		return nil
-	}
-	book, err := store.GetBookByID(bookID)
-	if err != nil || book == nil {
-		return err
-	}
-	return idx.IndexBook(BookToDoc(store, book))
 }

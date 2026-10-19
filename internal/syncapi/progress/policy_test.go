@@ -1,7 +1,7 @@
 // file: internal/syncapi/progress/policy_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 74b0ad2a-9045-4293-b79b-886bf28d0428
-// last-edited: 2026-07-30
+// last-edited: 2026-10-19
 
 package progress
 
@@ -13,7 +13,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// The four decision paths, written out before any test was written (TASK-08
+// The three decision paths, written out before any test was written (TASK-08
 // step 2). Each endpoint family gets its OWN merge function; the rules below
 // must never be collapsed into a shared code path, because "sticky finished"
 // (spec §5 rule 4) and the offline-replay guard (spec §1.8.7 last bullet) are
@@ -42,12 +42,6 @@ import (
 //     and is forward-only on CurrentTime alone. Note this is a DIFFERENT
 //     requirement from §1.7.3 #2's "200 for unknown IDs", which is an
 //     HTTP-layer concern and not this package's job.
-//
-//  4. Dedup merge-follow (§4.2 / §5 rule 5)             -> MergeCombine
-//     Two previously-independent progress records for what turned out to be
-//     one book. Both are real positions from real devices, so there is no
-//     stale/forward-only question at all: unconditional max(currentTime),
-//     OR(isFinished), max(updatedAt).
 //
 // ---------------------------------------------------------------------------
 
@@ -682,63 +676,6 @@ func TestMergeOfflineReplay_DerivesFinished(t *testing.T) {
 	ahead := Progress{CurrentTime: 300, Duration: 10000, IsFinished: false, UpdatedAtMs: 6000}
 	if got, _ := MergeOfflineReplay(finishedServer, ahead); !got.IsFinished {
 		t.Errorf("IsFinished = false, want true (sticky on the replay path)")
-	}
-}
-
-// -------------------------------- MergeCombine -----------------------------
-//
-// Path 4: dedup merge-follow (spec §4.2 / §5 rule 5). Unconditional.
-
-func TestMergeCombine_TakesMaxAndOr(t *testing.T) {
-	tests := []struct {
-		name string
-		a    Progress
-		b    Progress
-		want Progress
-	}{
-		{
-			name: "a is ahead, b is finished and newer",
-			a:    Progress{CurrentTime: 5000, Duration: 10000, IsFinished: false, UpdatedAtMs: 7000},
-			b:    Progress{CurrentTime: 300, Duration: 10000, IsFinished: true, UpdatedAtMs: 9000},
-			want: Progress{CurrentTime: 5000, Duration: 10000, IsFinished: true, UpdatedAtMs: 9000},
-		},
-		{
-			name: "b is ahead and newer, a is finished",
-			a:    Progress{CurrentTime: 100, Duration: 10000, IsFinished: true, UpdatedAtMs: 1000},
-			b:    Progress{CurrentTime: 800, Duration: 10000, IsFinished: false, UpdatedAtMs: 4000},
-			want: Progress{CurrentTime: 800, Duration: 10000, IsFinished: true, UpdatedAtMs: 4000},
-		},
-		{
-			name: "neither finished",
-			a:    Progress{CurrentTime: 100, Duration: 10000, UpdatedAtMs: 1000},
-			b:    Progress{CurrentTime: 200, Duration: 10000, UpdatedAtMs: 2000},
-			want: Progress{CurrentTime: 200, Duration: 10000, UpdatedAtMs: 2000},
-		},
-		{
-			name: "a has no known duration",
-			a:    Progress{CurrentTime: 900, Duration: 0, UpdatedAtMs: 3000},
-			b:    Progress{CurrentTime: 100, Duration: 10000, UpdatedAtMs: 1000},
-			want: Progress{CurrentTime: 900, Duration: 10000, UpdatedAtMs: 3000},
-		},
-		{
-			name: "identical records",
-			a:    Progress{CurrentTime: 42, Duration: 100, IsFinished: false, UpdatedAtMs: 5},
-			b:    Progress{CurrentTime: 42, Duration: 100, IsFinished: false, UpdatedAtMs: 5},
-			want: Progress{CurrentTime: 42, Duration: 100, IsFinished: false, UpdatedAtMs: 5},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := MergeCombine(tt.a, tt.b)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("MergeCombine(%+v, %+v) = %+v, want %+v", tt.a, tt.b, got, tt.want)
-			}
-			// Commutative: merge order must not matter for a dedup follow-up.
-			if swapped := MergeCombine(tt.b, tt.a); !reflect.DeepEqual(swapped, tt.want) {
-				t.Fatalf("MergeCombine(%+v, %+v) = %+v, want %+v (must be commutative)",
-					tt.b, tt.a, swapped, tt.want)
-			}
-		})
 	}
 }
 
