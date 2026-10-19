@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.9.1
+// version: 2.9.2
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-19
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -386,7 +387,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+	if ok, _ := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
 		// Soft, progressive per-account slowdown — never a hard lock, so the
 		// real user with the correct password is never denied (HIGH-3).
 		if delay := h.recordFailure(user.ID, ip); delay > 0 {
@@ -597,7 +598,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "current_password is required")
 			return
 		}
-		if err := bcrypt.CompareHashAndPassword([]byte(target.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		if ok, _ := absauth.VerifyPassword(target.PasswordHashAlgo, target.PasswordHash, req.CurrentPassword); !ok {
 			httputil.RespondWithUnauthorized(c, "current password is incorrect")
 			return
 		}
