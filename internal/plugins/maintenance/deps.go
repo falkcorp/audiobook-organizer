@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.95.0
+// version: 1.95.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-19
 
@@ -682,29 +682,29 @@ type CleanupRunners interface {
 type ActivityLogOps interface {
 	// ActivityFlushOp flushes the activity log for the given operation.
 	ActivityFlushOp(opID string)
-	// CompactActivityLog runs the activity log compact+summarize+prune cycle
-	// and then repairs orphaned activity secondary index entries.
+	// MaintainActivityLog runs the summarize+prune cycle and then repairs
+	// orphaned activity secondary index entries.
 	// indexOrphansRemoved is reported separately because it counts index keys,
 	// not activity rows: folding it into pruned would overstate how much
 	// history the run discarded.
 	//
-	// progress receives the compaction store's per-chunk/per-day events; the op
-	// forwards them to reporter.UpdateProgress so the registry watchdog hears a
-	// long compaction (reporter.Log alone does not count as liveness). nil is
-	// allowed and means silent.
-	//
-	// It no longer compacts: the cleanup op decides whether to compact (only
+	// It does not compact: the cleanup op decides whether to compact (only
 	// while nightly compaction is disabled) and calls CompactActivityEntries
-	// itself, so there is exactly one compaction entry point.
+	// itself, so there is exactly one compaction entry point. Liveness for the
+	// summarize/prune/repair passes rides the context
+	// (database.WithMaintenanceProgress), not a parameter.
 	MaintainActivityLog(ctx context.Context, changeDays, debugDays int,
 	) (summarized int, pruned int, indexOrphansRemoved int64, err error)
-	// CompactActivityEntries runs ONLY the compaction pass of CompactActivityLog
+	// CompactActivityEntries runs ONLY the compaction pass of the nightly cleanup
 	// — every compactable-tier row older than cutoff collapsed into daily
 	// digests — with no summarize, prune or index
 	// repair. It backs the user-triggered maintenance.compact-activity-log op,
 	// which replaced the synchronous POST /activity/compact handler: that
 	// handler compacted and nothing else, and the op keeps that contract.
-	// progress is as for CompactActivityLog.
+	// progress receives the compaction store's per-chunk/per-day events; the op
+	// forwards them to reporter.UpdateProgress so the registry watchdog hears a
+	// long compaction (reporter.Log alone does not count as liveness). nil is
+	// allowed and means silent.
 	CompactActivityEntries(ctx context.Context, cutoff time.Time,
 		progress database.CompactProgress,
 	) (database.CompactResult, error)

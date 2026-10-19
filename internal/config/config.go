@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.164.0
+// version: 1.164.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-19
 
@@ -2928,9 +2928,10 @@ func InitConfig() {
 	viper.SetDefault("dedup.chromem_lazy", false)
 	viper.BindEnv("dedup.chromem_lazy", "DEDUP_CHROMEM_LAZY") //nolint:errcheck
 
-	// Activity-log store backend name. Bound to env so ACTIVITY_BACKEND (set to
-	// pebble in production's unit file) is read; AutomaticEnv() is not active in
-	// this codebase. Pebble is the only backend; any other value is refused by
+	// Activity-log store backend name. Bound explicitly to ACTIVITY_BACKEND (set
+	// to pebble in production's unit file). cmd's initConfig also calls
+	// viper.AutomaticEnv(), but the explicit bind keeps the lookup working
+	// where InitConfig runs without it (tests, other entry points). Pebble is the only backend; any other value is refused by
 	// Validate (ValidateActivityBackend).
 	viper.SetDefault("activity_backend", "pebble")
 	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND") //nolint:errcheck

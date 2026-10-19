@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.69.0
+// version: 1.69.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-19
 
@@ -370,7 +370,7 @@ func (s *Server) MaintainActivityLog(ctx context.Context, changeDays, debugDays 
 
 // CompactActivityEntries is the compaction pass alone: every compactable-tier
 // row older than cutoff collapsed into daily digests. It is the
-// single implementation behind both the nightly cleanup (CompactActivityLog
+// single implementation behind both the nightly cleanup (MaintainActivityLog
 // above) and the user-triggered maintenance.compact-activity-log op.
 //
 // The progress hook rides the context (database.WithCompactProgress) rather

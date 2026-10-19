@@ -1,5 +1,5 @@
 // file: internal/database/activity_compact_progress.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 7f3e9a21-5c4d-4b8e-9d1f-2a6b8c0e4d73
 // last-edited: 2026-10-19
 
@@ -99,7 +99,7 @@ const activityMaintenanceProgressEvery = 100
 // MaintenanceProgressEvent is one liveness/progress notification from a
 // non-compaction maintenance pass. The store emits them mid-run with its
 // running count for the phase; the caller stamps a phase boundary with an
-// empty Backend and zero Rows (see Server.CompactActivityLog). There is no
+// empty Backend and zero Rows (see Server.MaintainActivityLog). There is no
 // completion event: the caller already has each pass's final count as its
 // return value.
 type MaintenanceProgressEvent struct {
