@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.31.1
+# version: 3.31.2
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-18
 
@@ -86,6 +86,9 @@ jobs:
                 # Generated from Go by tygo (tygo.yaml); the Go job's types-check
                 # must run when only a generated type file changed.
                 web/src/types/generated/*) go=true ;;
+                # The contract goldens are marshalled from Go (internal/wirecontract),
+                # whose test must run when only a golden or the TS test changed.
+                web/src/types/contract/*) go=true ;;
                 web/*|docs/*|*.md|changelog.d/*|todo.d/*|.claude/*|agents/*|skills/*) ;;
                 *) go=true ;;
               esac

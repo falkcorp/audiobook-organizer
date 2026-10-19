@@ -1,5 +1,5 @@
 // file: internal/repairs/wire_null_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4e1d62-3b85-4c07-8d19-f26c0e7a5b43
 // last-edited: 2026-10-18
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +75,29 @@ func TestRunApply_EarlyReturnsKeepRowsAnArray(t *testing.T) {
 	m := marshalMap(t, res)
 	require.JSONEq(t, `[]`, string(m["rows"]))
 	require.JSONEq(t, `{}`, string(m["by_outcome"]))
+}
+
+// LoadPlan is the one place a plan stored before normalize existed re-enters
+// the wire path, so a stored null must come back as an empty collection.
+func TestLoadPlan_NormalizesStoredNulls(t *testing.T) {
+	for name, stored := range map[string]string{
+		"rows null":     `{"fixer_id":"fx","skipped_by_kind":null,"rows":null}`,
+		"book_ids null": `{"fixer_id":"fx","rows":[{"row_id":"r","book_ids":null}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newMemStore()
+			data := stored
+			s.ops["plan-1"] = &database.OperationV2Row{ID: "plan-1", DefID: PlanOpID, Status: "completed", ResultData: &data}
+			plan, err := LoadPlan(s, "plan-1", "fx")
+			require.NoError(t, err)
+			require.NotNil(t, plan.Rows)
+			require.NotNil(t, plan.SkippedByKind)
+			for _, r := range plan.Rows {
+				require.NotNil(t, r.BookIDs)
+			}
+			m := marshalMap(t, plan)
+			require.JSONEq(t, `{}`, string(m["skipped_by_kind"]))
+			require.NotEqual(t, "null", string(m["rows"]))
+		})
+	}
 }
