@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.8
+// version: 1.5.9
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package abs_test
 
@@ -247,11 +247,19 @@ func (f *fakeStore) RevokeAllABSSessionsForUser(userID string) (int, error) {
 
 type fakeVerifier struct {
 	byToken map[string]*oauth.IdentityClaims
+	// serviceTokens maps a raw assertion to a service token's common_name. Such
+	// an assertion verifies but names no person, which is exactly what Cloudflare
+	// mints for a request admitted on a service token (the shape SSO hop 1 and,
+	// on iOS 17.4+, the first browser load of hop 2 really carry).
+	serviceTokens map[string]string
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
 	if c, ok := f.byToken[raw]; ok {
 		return c, nil
+	}
+	if cn, ok := f.serviceTokens[raw]; ok {
+		return nil, &oauth.NonIdentityAssertionError{Subject: "", CommonName: cn}
 	}
 	return nil, errors.New("cfaccess: verify jwt: signature is invalid")
 }
@@ -323,7 +331,7 @@ func newHarness(t *testing.T, modes string, allowed []string, opts ...harnessOpt
 		t.Fatalf("absauth.Load: %v", err)
 	}
 	store := newFakeStore()
-	verifier := &fakeVerifier{byToken: map[string]*oauth.IdentityClaims{}}
+	verifier := &fakeVerifier{byToken: map[string]*oauth.IdentityClaims{}, serviceTokens: map[string]string{}}
 	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, oauth.New(oauth.Config{AllowedEmails: allowed, DefaultRole: "viewer"}), store)
 
 	o := abshandler.Options{Config: cfg, Store: store, Resolver: resolver}

@@ -1,13 +1,14 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 1.1.1
+// version: 2.0.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 package abs
 
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -21,38 +22,52 @@ func pkcePair(verifier string) (string, string) {
 	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// A code must be redeemable exactly once. Enforced inside the store under a
+// A key must be redeemable exactly once. Enforced inside the store under a
 // single lock so two concurrent redemptions cannot both win; this pins the
-// contract that guarantee rests on.
-func TestOIDCCodeStore_SingleUse(t *testing.T) {
-	store := &oidcCodeStore{codes: map[string]oidcPendingCode{}}
+// contract that guarantee rests on. The same store backs minted codes and the
+// parked hop-1 requests.
+func TestOIDCTTLStore_SingleUse(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingCode](8)
 	now := time.Now()
-	store.put("abc", oidcPendingCode{UserID: "u1", ExpiresAt: now.Add(time.Minute)}, now)
+	if err := store.put("abc", oidcPendingCode{UserID: "u1"}, now, time.Minute); err != nil {
+		t.Fatal(err)
+	}
 
-	if _, ok := store.take("abc"); !ok {
+	if !store.live("abc", now) {
+		t.Fatal("live must report an unexpired entry")
+	}
+	if !store.live("abc", now) {
+		t.Fatal("live must not consume the entry")
+	}
+	if _, ok := store.take("abc", now); !ok {
 		t.Fatal("first redemption must succeed")
 	}
-	if _, ok := store.take("abc"); ok {
+	if _, ok := store.take("abc", now); ok {
 		t.Fatal("second redemption must fail — an authorization code is single-use")
+	}
+	if store.live("abc", now) {
+		t.Fatal("a taken entry must not be live")
 	}
 }
 
-// Concurrent redemption of one code must yield exactly one winner. Without the
+// Concurrent redemption of one key must yield exactly one winner. Without the
 // delete happening under the same lock as the read, both callers would receive
-// the code and two sessions would be minted from one authorization.
-func TestOIDCCodeStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
-	store := &oidcCodeStore{codes: map[string]oidcPendingCode{}}
+// the entry and two sessions would be minted from one authorization.
+func TestOIDCTTLStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingCode](8)
 	now := time.Now()
 	const n = 50
 	for i := range n {
-		store.put("race", oidcPendingCode{UserID: "u1", ExpiresAt: now.Add(time.Minute)}, now)
+		if err := store.put("race", oidcPendingCode{UserID: "u1"}, now, time.Minute); err != nil {
+			t.Fatal(err)
+		}
 
 		results := make(chan bool, 2)
 		start := make(chan struct{})
 		for range 2 {
 			go func() {
 				<-start
-				_, ok := store.take("race")
+				_, ok := store.take("race", now)
 				results <- ok
 			}()
 		}
@@ -64,25 +79,73 @@ func TestOIDCCodeStore_ConcurrentRedemptionHasOneWinner(t *testing.T) {
 			}
 		}
 		if wins != 1 {
-			t.Fatalf("iteration %d: %d goroutines redeemed the same code; want exactly 1", i, wins)
+			t.Fatalf("iteration %d: %d goroutines redeemed the same key; want exactly 1", i, wins)
 		}
 	}
 }
 
-// An expired code must not be redeemable. take() deliberately still removes it —
-// expiry is checked by the caller — so this asserts the stored deadline is what
-// the handler will compare against.
-func TestOIDCCodeStore_ExpiryIsRecorded(t *testing.T) {
-	store := &oidcCodeStore{codes: map[string]oidcPendingCode{}}
+// An expired entry is not redeemable, and the failed attempt deletes it, so it
+// cannot be retried later under a skewed clock either. The boundary itself is
+// expired: a TTL of one minute means usable for strictly less than a minute.
+func TestOIDCTTLStore_ExpiredIsRefusedAndDeleted(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingCode](8)
 	now := time.Now()
-	store.put("old", oidcPendingCode{UserID: "u1", ExpiresAt: now.Add(-time.Second)}, now)
-
-	pending, ok := store.take("old")
-	if !ok {
-		t.Fatal("take should return the record; expiry is the caller's check")
+	if err := store.put("old", oidcPendingCode{UserID: "u1"}, now, time.Minute); err != nil {
+		t.Fatal(err)
 	}
-	if !now.After(pending.ExpiresAt) {
-		t.Fatal("stored deadline must be in the past for an expired code")
+	if store.live("old", now.Add(time.Minute)) {
+		t.Fatal("an entry at its expiry instant must not be live")
+	}
+	if _, ok := store.take("old", now.Add(time.Minute)); ok {
+		t.Fatal("an expired entry must not be redeemable")
+	}
+	if _, ok := store.take("old", now); ok {
+		t.Fatal("the expired entry must have been deleted by the failed take")
+	}
+}
+
+// The store is bounded: at its cap a NEW key is refused rather than evicting a
+// live one, expired entries are swept to make room, and re-putting an existing
+// key is allowed. Hop 1 is reachable without an account, so without the cap it
+// is an unbounded map an attacker can fill.
+func TestOIDCTTLStore_BoundedRefusesWhenFull(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingRequest](2)
+	now := time.Now()
+	if err := store.put("a", oidcPendingRequest{}, now, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.put("b", oidcPendingRequest{}, now, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.put("c", oidcPendingRequest{}, now, time.Minute); !errors.Is(err, errOIDCStoreFull) {
+		t.Fatalf("put at cap = %v, want errOIDCStoreFull", err)
+	}
+	if !store.live("a", now) || !store.live("b", now) {
+		t.Fatal("a refused put must not evict live entries")
+	}
+	if err := store.put("a", oidcPendingRequest{}, now, time.Minute); err != nil {
+		t.Fatalf("re-putting an existing key at cap must succeed: %v", err)
+	}
+	// "b" expires; the sweep on the next put at cap frees its slot.
+	later := now.Add(11 * time.Second)
+	if err := store.put("c", oidcPendingRequest{}, later, time.Minute); err != nil {
+		t.Fatalf("put after an entry expired must succeed: %v", err)
+	}
+	if len(store.entries) != 2 {
+		t.Fatalf("store holds %d entries, want 2 (cap)", len(store.entries))
+	}
+}
+
+// Every S256 challenge, and every request id, is 43 unpadded base64url chars.
+func TestIsS256Shaped(t *testing.T) {
+	_, good := pkcePair("a-verifier-of-reasonable-length-1234567890")
+	if !isS256Shaped(good) {
+		t.Fatalf("a real S256 challenge %q must be accepted", good)
+	}
+	for _, bad := range []string{"", good[:42], good + "A", good[:42] + "=", good[:42] + "+", good[:42] + "/", good[:42] + " "} {
+		if isS256Shaped(bad) {
+			t.Errorf("%q must be rejected", bad)
+		}
 	}
 }
 
@@ -141,10 +204,10 @@ func TestOIDCRedirectOmitsEmptyParams(t *testing.T) {
 	}
 }
 
-// An error must come back through the client's own callback, not as a rendered
-// page: the flow runs inside ASWebAuthenticationSession, which only closes when
-// the callback scheme is hit. A JSON error body would hang it until the user
-// cancels.
+// A hop-2 error must come back through the client's own callback, not as a
+// rendered page: by then the flow runs inside ASWebAuthenticationSession, which
+// only closes when the callback scheme is hit. (Hop 1 is the opposite: it is the
+// app's own HTTP client, and it must never see the custom scheme.)
 func TestOIDCRedirectErrorUsesCallbackScheme(t *testing.T) {
 	built := buildOIDCRedirect("audiobooth://oauth", map[string]string{
 		"error":             "access_denied",

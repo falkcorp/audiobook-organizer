@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
 // version: 1.32.3
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package logger
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 277
-	slogRatchetCallCeiling = 1550
+	slogRatchetFileCeiling = 276
+	slogRatchetCallCeiling = 1548
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -231,7 +231,6 @@ var slogRatchet = map[string]int{
 	"internal/server/folder_autoscan_op.go":                      1,
 	"internal/server/handlers/abs/browse.go":                     20,
 	"internal/server/handlers/abs/me.go":                         2,
-	"internal/server/handlers/abs/openid.go":                     2,
 	"internal/server/handlers/abs/stats.go":                      1,
 	"internal/server/handlers/abs/stream.go":                     1,
 	"internal/server/handlers/activity.go":                       1,
