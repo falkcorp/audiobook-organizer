@@ -1,5 +1,5 @@
 // file: internal/server/absauth/password.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
 // last-edited: 2026-10-19
 
@@ -10,6 +10,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -42,6 +43,25 @@ const (
 	argonVersion        = argon2.Version
 )
 
+// argonSem caps how many argon2id computations run at once, process-wide. Each one
+// allocates argonMemory (64 MiB), so unbounded concurrent logins would allocate that
+// many times over: 100 parallel sign-ins by one rehashed user is about 6.4 GB. It is
+// sized to the CPU count because argon2id is CPU-bound as well. The acquire is a
+// plain blocking one: neither HashPassword nor VerifyPassword takes a context.
+var argonSem = make(chan struct{}, max(1, runtime.NumCPU()))
+
+// argonCompute is the raw argon2id derivation. It is a variable only so the
+// concurrency test can observe how many computations overlap inside argonIDKey.
+var argonCompute = argon2.IDKey
+
+// argonIDKey is argon2.IDKey run under argonSem. Every argon2id derivation in this
+// package, hashing and verifying, goes through it.
+func argonIDKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+	argonSem <- struct{}{}
+	defer func() { <-argonSem }()
+	return argonCompute(password, salt, time, memory, threads, keyLen)
+}
+
 // HashPassword hashes a new password with argon2id and returns the algorithm
 // identifier alongside the PHC-encoded hash.
 func HashPassword(plain string) (algo string, hash string, err error) {
@@ -52,7 +72,7 @@ func HashPassword(plain string) (algo string, hash string, err error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", "", fmt.Errorf("absauth: read password salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(plain), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	key := argonIDKey([]byte(plain), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	encoded := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argonVersion, argonMemory, argonTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt),
@@ -127,6 +147,6 @@ func verifyArgon2id(encoded, plain string) bool {
 	if err != nil || len(want) == 0 {
 		return false
 	}
-	got := argon2.IDKey([]byte(plain), salt, time, memory, threads, uint32(len(want)))
+	got := argonIDKey([]byte(plain), salt, time, memory, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
