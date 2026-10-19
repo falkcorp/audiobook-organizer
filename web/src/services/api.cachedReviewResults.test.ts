@@ -1,14 +1,13 @@
 // file: web/src/services/api.cachedReviewResults.test.ts
-// version: 1.0.0
+// version: 1.2.0
 // guid: c3b7a114-67a4-4458-9425-4f872c5160a4
-// last-edited: 2026-09-12
+// last-edited: 2026-10-19
 //
-// getCachedReviewResults must send all=true when asked and ONLY when asked.
-//
-// The server caps a request with no positive limit to a default page unless it
-// sends all=true. A client that dropped the flag would silently get the first
-// page; one that always sent it would defeat the cap for every caller. Both are
-// asserted on the URL that actually reaches fetch.
+// getCachedReviewResults is the lane's detail fetch: it sends the ids of the
+// books it wants and nothing else. The listing's paging (all, limit, offset)
+// and its bucket have no caller and are not parameters, so a request can never
+// ask for the whole library or for a view the server retired. Asserted on the
+// URL that actually reaches fetch.
 
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { getCachedReviewResults } from './api';
@@ -40,24 +39,22 @@ describe('getCachedReviewResults query string', () => {
     global.fetch = fetchMock as unknown as typeof fetch;
   });
 
-  it('sends all=true when the caller asks for the whole set', async () => {
-    await getCachedReviewResults(0, 0, true);
+  it('sends the ids, comma-joined, and no listing parameter', async () => {
+    await getCachedReviewResults(['b1', 'b2', 'b3']);
     const params = requestedParams(fetchMock);
-    expect(params.get('all')).toBe('true');
-    expect(params.get('limit')).toBe('0');
-    expect(params.get('offset')).toBe('0');
+    expect(params.get('ids')).toBe('b1,b2,b3');
+    expect([...params.keys()]).toEqual(['ids']);
   });
 
-  it('omits all by default so the server cap applies', async () => {
-    await getCachedReviewResults(50, 100);
+  it('never sends a view, so the retired index view cannot be asked for', async () => {
+    await getCachedReviewResults(['b1']);
     const params = requestedParams(fetchMock);
+    expect(params.has('view')).toBe(false);
     expect(params.has('all')).toBe(false);
-    expect(params.get('limit')).toBe('50');
-    expect(params.get('offset')).toBe('100');
   });
 
   it('carries truncated and limit through from the response', async () => {
-    const data = await getCachedReviewResults(0, 0, true);
+    const data = await getCachedReviewResults(['b1']);
     expect(data.truncated).toBe(false);
     expect(data.limit).toBe(0);
   });

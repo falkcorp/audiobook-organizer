@@ -1,5 +1,5 @@
 // file: internal/server/owner_rejected_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d5304ea1-88e0-43c3-9c2b-1b81c01fe9eb
 // last-edited: 2026-10-19
 
@@ -290,6 +290,55 @@ func TestReviewLane_MarksOwnerRejectedCandidate(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.Len(t, body.Data.Results, 1)
 	require.True(t, body.Data.Results[0].OwnerRejected, "the lane does not mark the rejected candidate")
+}
+
+// The Review > Metadata rail's "owner rejected" chip counts page rows, and
+// view=page is the only list the lane loads: its rows must carry the mark
+// themselves (the lane's ids= detail merge copies only the candidate). A row
+// whose candidate the owner did not reject must not carry it.
+func TestReviewPage_MarksOwnerRejectedCandidate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	seed := func(title string) *database.Book {
+		book, cerr := store.CreateBook(&database.Book{Title: title, FilePath: "/lib/B/" + title + ".m4b", Format: "m4b"})
+		require.NoError(t, cerr)
+		raw, merr := json.Marshal(metafetch.MetadataCandidate{Title: title, Author: "Synthetic Penwright", Source: "Audible", Score: 0.95})
+		require.NoError(t, merr)
+		require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{
+			BookID: book.ID, Candidates: []json.RawMessage{raw}, FetchedAt: time.Now(),
+			SearchFingerprint: metafetch.FingerprintPrefix + "x",
+		}))
+		return book
+	}
+	rejected := seed("Synthetic Field Notes 3")
+	kept := seed("Synthetic Field Notes 4")
+	require.NoError(t, store.SetRaw("rejected_candidate:"+rejected.ID+":Audible|Synthetic Field Notes 3", []byte("1")))
+
+	h := handlers.NewMetadataCacheHandler(store, metafetch.NewService(store), nil, nil, nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/x?view=page&limit=50", nil)
+	h.GetCacheReviewResults(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body struct {
+		Data struct {
+			Results []struct {
+				Book struct {
+					ID string `json:"id"`
+				} `json:"book"`
+				OwnerRejected bool `json:"owner_rejected"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	got := map[string]bool{}
+	for _, r := range body.Data.Results {
+		got[r.Book.ID] = r.OwnerRejected
+	}
+	require.Equal(t, map[string]bool{rejected.ID: true, kept.ID: false}, got,
+		"a view=page row must carry owner_rejected for exactly the rejected candidate")
 }
 
 // The search dialog's plain fetch replaces the cached row. With the owner's

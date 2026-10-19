@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-review-full-index-retired-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 6b0c1e52-93f4-4d7a-8e21-5a7c3f9d4b60 -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -22,11 +22,19 @@ Branch `task/02-pr19`, PR not yet merged. Spec: `docs/proposals/2026-10-holistic
 - **Anything still asking for the old download gets a clear refusal.** The old request now
   answers "410 Gone" and names the replacement. Each such request is counted on the review
   latency dashboard under the label `gone`, so a forgotten client would show up.
-- **What did not change.** Nothing is written by either way of loading, no book data was
-  touched, and applying, rejecting, skipping and searching again behave as before.
-- **A dashboard panel needs a decision.** The "review index p95" panel reads the label
-  `index`, which no longer receives data, and the screenful requests are not timed at all.
-  Whether to time them is an open choice, filed in the to-do list.
+- **What did not change.** Nothing is written by either way of loading, and no book data
+  was touched.
+- **Two things were wrong in the screenful version, and are fixed in the same change.**
+  The red "Rejected" mark on a book whose suggested match you had rejected was never shown
+  while the tab loaded by screenfuls (the server did not send that fact with each row); it
+  is now. The limit on how many books one Apply may carry was read from the settings, which
+  a reviewer without the settings permission cannot open, so their tab fell back to a default
+  instead of the real limit; the server now sends the limit with every screenful. In the same
+  pass, changing the Title box once again drops selected books in every chip whose title no
+  longer matches, not only the chip on screen.
+- **The review latency dashboard times the screenful requests.** They are recorded under
+  the label `page` (and lists of ids under `ids_all`), and the "Review page p95" panel with
+  its 3-second target reads them.
 
 ## Why it is safe to do now
 

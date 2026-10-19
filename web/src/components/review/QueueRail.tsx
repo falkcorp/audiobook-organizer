@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-10-19
 //
@@ -552,11 +552,18 @@ export function QueueRail({
               )
             }
           >
-            {`Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books${
-              filters.titleFilter && !titleFilterError
-                ? ` matching title ${filters.titleFilter}`
-                : ''
-            }. Other filters are paused.`}
+            {
+              // The count is the server's total for the list on screen. While
+              // the next page is loading it is still the PREVIOUS list's, so
+              // it is not shown as the number of books this view holds.
+              loading
+                ? `Loading the ${CHIP_LABELS[chipFilter]} books…`
+                : `Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books${
+                    filters.titleFilter && !titleFilterError
+                      ? ` matching title ${filters.titleFilter}`
+                      : ''
+                  }. Other filters are paused.`
+            }
           </Alert>
         )}
 

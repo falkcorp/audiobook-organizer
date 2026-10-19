@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -15,7 +15,6 @@ import {
   runtimeDiffers,
   runtimeDiffersFromBook,
   runtimeExceedsUpperBound,
-  runtimeHiddenBySwitch,
   scoreColor,
   type RowState,
 } from './rowState';
@@ -151,35 +150,6 @@ describe('runtimeDiffers', () => {
   });
 });
 
-describe('runtimeHiddenBySwitch', () => {
-  // The screenshot case: 53 minutes off a ~10-hour book is under the gate's
-  // 10%, but the spine shows the warning chip, so the switch must hide it.
-  it('hides a warned row the 10% rule alone would keep', () => {
-    const r = {
-      book: { duration_seconds: 36000 },
-      candidate: { duration_sec: 36000 - 3180, duration_delta_sec: 3180 },
-    };
-    expect(runtimeHiddenBySwitch(r)).toBe(true);
-  });
-
-  it('hides a row over 10% off', () => {
-    const r = { book: { duration_seconds: 3000 }, candidate: { duration_sec: 3500 } };
-    expect(runtimeHiddenBySwitch(r)).toBe(true);
-  });
-
-  it('keeps a row within ten minutes and within 10%', () => {
-    const r = {
-      book: { duration_seconds: 36000 },
-      candidate: { duration_sec: 35700, duration_delta_sec: 300 },
-    };
-    expect(runtimeHiddenBySwitch(r)).toBe(false);
-  });
-
-  it('keeps a row whose runtime is unknown', () => {
-    expect(runtimeHiddenBySwitch({ book: {}, candidate: null })).toBe(false);
-  });
-});
-
 // A partial runtime (some files never measured) with sizes on every file has an
 // upper bound; the server derives it as applygate does (internal/database
 // BookRuntime.EstimatedUpperSeconds). Two 4 MB files, one measured at 480 s:
@@ -191,30 +161,25 @@ describe('a partial runtime upper bound', () => {
     const r = { book: partial, candidate: { duration_sec: 52920, duration_delta_sec: 0 } };
     expect(runtimeExceedsUpperBound(r)).toBe(true);
     expect(runtimeDiffersFromBook(r)).toBe(true);
-    // Hide switch: the row is hidden although the ten-minute chip rule is silent.
+    // The ten-minute chip rule is silent for it; only the bound catches it.
     expect(runtimeDiffers(r.candidate.duration_delta_sec)).toBe(false);
-    expect(runtimeHiddenBySwitch(r)).toBe(true);
   });
 
   it('is strict: a candidate exactly at the bound is kept', () => {
     const at = { book: partial, candidate: { duration_sec: 8000 } };
     expect(runtimeExceedsUpperBound(at)).toBe(false);
-    expect(runtimeHiddenBySwitch(at)).toBe(false);
     const past = { book: partial, candidate: { duration_sec: 8001 } };
     expect(runtimeExceedsUpperBound(past)).toBe(true);
-    expect(runtimeHiddenBySwitch(past)).toBe(true);
   });
 
   it('keeps a candidate between the known part and the bound', () => {
     const r = { book: partial, candidate: { duration_sec: 3000 } };
     expect(runtimeDiffersFromBook(r)).toBe(false);
-    expect(runtimeHiddenBySwitch(r)).toBe(false);
   });
 
   it('proves nothing without an upper bound or without a candidate runtime', () => {
     const noBound = { book: { runtime_lower_bound_seconds: 480 }, candidate: { duration_sec: 52920 } };
     expect(runtimeExceedsUpperBound(noBound)).toBe(false);
-    expect(runtimeHiddenBySwitch(noBound)).toBe(false);
     const noCand = { book: partial, candidate: { duration_sec: 0 } };
     expect(runtimeExceedsUpperBound(noCand)).toBe(false);
     expect(runtimeExceedsUpperBound({ book: partial, candidate: null })).toBe(false);

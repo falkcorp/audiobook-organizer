@@ -1,12 +1,15 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.34.0
+// version: 1.35.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-10-19
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
 // are the kind that only misbehave under a race or an unusual filter sequence,
-// which is exactly the kind a port quietly drops because nothing goes red.
+// which is exactly the kind a port quietly drops because nothing goes red. The
+// lane loads one server page at a time (view=page), so both are tested against
+// a fake server that cuts pages: a late page response is dropped, and a page
+// asked for beyond a shrunken total is replaced by one request for the last page.
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -31,6 +34,7 @@ import {
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import {
   reviewPageResponse as pageResponse,
+  serveReviewDetails,
   serveReviewList as serveList,
   type ReviewListPayload as ListPayload,
 } from '../../../test/reviewServer';
@@ -208,6 +212,88 @@ describe('stale-response discard', () => {
 
     expect(result.current.results).toHaveLength(1);
     expect(result.current.results[0].book.id).toBe('second');
+  });
+});
+
+describe('page clamp', () => {
+  // The server owns the list: a page request returns the rows at
+  // [offset, offset+limit) of whatever the server holds now, and the total.
+  // `held` is what it holds; `title` is the regex the request's q names.
+  let held: string[] = [];
+  const offsets: number[] = [];
+  function serveHeld() {
+    offsets.length = 0;
+    const rowsFor = (params: api.ReviewPageParams) => {
+      const m = params.q ? /^\/(.*)\/$/.exec(params.q) : null;
+      return held.filter((id) => !m || new RegExp(m[1]).test(`Book ${id}`));
+    };
+    vi.mocked(api.getReviewPage).mockImplementation(async (params) => {
+      offsets.push(params.offset ?? 0);
+      const all = rowsFor(params);
+      const slice = all.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 25));
+      return pageResponse({ results: slice.map((id) => makeResult(id)), total_count: all.length });
+    });
+    vi.mocked(api.getReviewMatchingIds).mockResolvedValue({ ids: [], total: 0, generation: 'g1' });
+    serveReviewDetails(() => held.map((id) => makeResult(id)));
+  }
+
+  beforeEach(() => {
+    held = Array.from({ length: 60 }, (_, i) => `b${i}`);
+    serveHeld();
+  });
+
+  it('moves to the last page once, without rendering an empty page, when the server total shrinks below the page asked for', async () => {
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setPageSize(25));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setPage(3));
+    await waitFor(() => expect(result.current.page).toBe(3));
+    await waitFor(() => expect(result.current.results).toHaveLength(10));
+
+    // The queue shrinks to 30 rows (two pages) under the page the reviewer is
+    // on. The next load of page 3 comes back empty with total 30.
+    held = held.slice(0, 30);
+    let finishLast: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      finishLast = r;
+    });
+    const before = offsets.length;
+    vi.mocked(api.getReviewPage).mockImplementation(async (params) => {
+      offsets.push(params.offset ?? 0);
+      // Hold the clamped request (offset 25) in flight to look at the screen.
+      if ((params.offset ?? 0) === 25) await gate;
+      const slice = held.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 25));
+      return pageResponse({ results: slice.map((id) => makeResult(id)), total_count: held.length });
+    });
+    act(() => result.current.refresh());
+    await waitFor(() => expect(offsets.slice(before)).toEqual([50, 25]));
+    // While the last page loads, the rows on screen are still the old ones,
+    // never an empty list from the out-of-range answer.
+    expect(result.current.results.length).toBeGreaterThan(0);
+    await act(async () => finishLast());
+    await waitFor(() => expect(result.current.results).toHaveLength(5));
+    expect(result.current.page).toBe(2);
+    expect(result.current.page).toBeLessThanOrEqual(result.current.totalPages);
+    // Exactly one request for the last page: no loop.
+    expect(offsets.slice(before)).toEqual([50, 25]);
+  });
+
+  it('never reports a page above totalPages after a filter change', async () => {
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setPageSize(25));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setPage(3));
+    await waitFor(() => expect(result.current.page).toBe(3));
+
+    // A title that matches one book -> one page. The server answers page 3
+    // empty with total 1; the lane pulls the page back and asks for page 1.
+    act(() => result.current.setFilters({ titleFilter: '/^Book b1$/' }));
+    await waitFor(() => expect(result.current.page).toBe(1));
+    await waitFor(() => expect(result.current.results.map((r) => r.book.id)).toEqual(['b1']));
+    expect(result.current.page).toBeLessThanOrEqual(result.current.totalPages);
+    expect(result.current.totalPages).toBe(1);
   });
 });
 
@@ -1400,14 +1486,12 @@ describe('page rows + per-page details (the 93 MB / 119 s full list timed out)',
       const rows = pageOfIds(ids, params.offset ?? 0, params.limit ?? 25);
       return pageResponse({ ...reviewPayload(rows), total_count: n });
     });
-    vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, _bucket, options = {}) => {
-        const rows = (options.ids ?? []).map((id) =>
-          makeResult(id, { candidate_hash: `h-${id}` }, { description: `About ${id}` })
-        );
-        return reviewPayload(rows) as ReviewResponse;
-      }
-    );
+    vi.mocked(api.getCachedReviewResults).mockImplementation(async (ids) => {
+      const rows = ids.map((id) =>
+        makeResult(id, { candidate_hash: `h-${id}` }, { description: `About ${id}` })
+      );
+      return reviewPayload(rows) as ReviewResponse;
+    });
     return ids;
   }
 
@@ -1425,13 +1509,13 @@ describe('page rows + per-page details (the 93 MB / 119 s full list timed out)',
     await waitFor(() =>
       expect(result.current.pageResults[0].candidate?.description).toBe(`About ${ids[0]}`)
     );
-    const detailCalls = () => calls.filter((c) => c[4]?.ids);
+    const detailCalls = () => calls.filter((c) => c[0]?.length);
     // Nothing but the detail fetch calls getCachedReviewResults: never a
     // listing, never a view.
     expect(detailCalls()).toHaveLength(calls.length);
     // Every detail request is for rows the page showed, never the library.
-    for (const c of detailCalls()) expect(c[4]?.ids?.length).toBeLessThanOrEqual(25);
-    const asked = new Set(detailCalls().flatMap((c) => c[4]?.ids ?? []));
+    for (const c of detailCalls()) expect(c[0]?.length).toBeLessThanOrEqual(25);
+    const asked = new Set(detailCalls().flatMap((c) => c[0] ?? []));
     expect(asked.has(ids[0])).toBe(true);
     expect(asked.has(ids[100])).toBe(false);
     // The lane holds one page, and the whole filtered list is the total.
@@ -1464,7 +1548,7 @@ describe('page rows + per-page details (the 93 MB / 119 s full list timed out)',
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     await waitFor(() =>
-      expect(vi.mocked(api.getCachedReviewResults).mock.calls.some((c) => c[4]?.ids)).toBe(true)
+      expect(vi.mocked(api.getCachedReviewResults).mock.calls.some((c) => c[0]?.length)).toBe(true)
     );
     // The mismatch refreshes the list once; still mismatched, it warns
     // instead of leaving a row whose Apply would be refused.
@@ -1508,9 +1592,9 @@ describe('page rows + per-page details (the 93 MB / 119 s full list timed out)',
       )
     );
     vi.mocked(api.getCachedReviewResults).mockImplementation(
-      async (_limit, _offset, _all, _bucket, options = {}) =>
+      async (askedIds) =>
         reviewPayload(
-          (options.ids ?? []).map((id) =>
+          askedIds.map((id) =>
             makeResult(id, { candidate_hash: `h-${id}` }, { score_breakdown: breakdown })
           )
         ) as ReviewResponse

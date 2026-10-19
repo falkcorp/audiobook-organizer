@@ -39,7 +39,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Review listing latency p50 / p95 by view",
-      "description": "Handler time of GET /audiobooks/metadata/cache/review. Observed views: full and gone (view=index was retired on 2026-10-19 and answers 410); view=page is not observed. The red line is the handler's own slow-request WARN threshold (5s).",
+      "description": "Handler time of GET /audiobooks/metadata/cache/review. Views: page (view=page, the Review lane's own request), ids_all (view=page&ids=all, an id list), full (the listing with no view) and gone (the retired view=index, answered 410). The red line is the handler's own slow-request WARN threshold (5s).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -131,8 +131,8 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Review p95 (index view, 1h)",
-      "description": "",
+      "title": "Review page p95 (view=page, 1h; target 3s)",
+      "description": "p95 handler time of view=page requests (one filtered page of rows plus the chip counts), the surface the 3s target applies to. Orange above 3s. view=index was retired on 2026-10-19; id lists (view=ids_all) are a different cost and are not in this number.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -149,7 +149,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(audiobook_organizer_review_index_request_seconds_bucket{view=\"index\"}[1h])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(audiobook_organizer_review_index_request_seconds_bucket{view=\"page\"}[1h])))",
           "legendFormat": "p95",
           "range": true,
           "refId": "A"
@@ -201,7 +201,7 @@
       "id": 4,
       "type": "stat",
       "title": "Review requests / h",
-      "description": "",
+      "description": "Every review listing request in the last hour, all views: page, ids_all, full and gone.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -262,7 +262,7 @@
       "id": 5,
       "type": "stat",
       "title": "Review slow (>5s) / h",
-      "description": "",
+      "description": "Review listing requests over 5s in the last hour, all views (page and ids_all included).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

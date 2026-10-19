@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.192.0
+// version: 2.193.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-19
 
@@ -4429,43 +4429,29 @@ export async function listCachedCandidates(
   return data.data ?? data;
 }
 
-// getCachedReviewResults returns a paginated CandidateResult list sourced
-// from the persistent metadata cache. Used by the
-// MetadataReviewDialog. Status values: "matched" (pending review),
-// "no_match" (user rejected), "applied" (already applied).
-//
-// The server caps a request that sends no positive `limit` to a default page
-// (200 rows) unless `all` is true. Pass `all = true` only when the caller
-// genuinely needs every reviewable row in one response. The response's
-// `truncated` says whether the rows returned are the whole set.
-//
-// The index view of this endpoint is retired: the server answers it with 410 Gone and points at
-// `view=page` (see getReviewPage).
 /**
- * Which rows `getCachedReviewResults` returns. 'reviewable' (the default) is
- * the review queue; 'unreviewable' is the books the summary counts but the
- * queue cannot hold -- no candidate stored, or one that will not decode --
- * with `status` set to an UnreviewableStatus. The summary counts are the same
- * either way; `total_count` is the size of the bucket asked for.
+ * Which rows a review query lists (the `bucket` of view=page). 'reviewable'
+ * (the default) is the review queue; 'unreviewable' is the books the summary
+ * counts but the queue cannot hold (no candidate stored, or one that will not
+ * decode); 'any' is both, narrowed by the Title only -- how the lane asks which
+ * selected books, in whatever chip they sit, still match a new Title.
  */
-export type ReviewBucket = 'reviewable' | 'unreviewable';
+export type ReviewBucket = 'reviewable' | 'unreviewable' | 'any';
 
 /**
- * Extra shapes of the review request.
+ * getCachedReviewResults fetches the full rows (candidate description,
+ * score_breakdown, category_tags) of just the books in `ids`, from the
+ * persistent metadata cache. It is the Review > Metadata lane's detail fetch:
+ * view=page serves lean rows, and the lane asks for the full ones of the books
+ * it is showing. A book that is not in the review set is absent from `results`.
  *
- * - `ids` returns the full rows of just those books (in bucket order),
- *   ignoring limit/offset -- how the page fetches what it is showing.
+ * It is the listing without a `view`, which the server still answers with
+ * `ids`. The listing's own paging (limit, offset, all) and its bucket have no
+ * caller, so they are not parameters; the page of rows is getReviewPage, and
+ * the full-index view of this endpoint is retired (410 Gone, `view=index`).
  */
-export interface CachedReviewOptions {
-  ids?: string[];
-}
-
 export async function getCachedReviewResults(
-  limit: number,
-  offset: number,
-  all = false,
-  bucket: ReviewBucket = 'reviewable',
-  options: CachedReviewOptions = {}
+  ids: string[]
 ): Promise<{
   results: CandidateResult[];
   total_count: number;
@@ -4540,12 +4526,7 @@ export async function getCachedReviewResults(
   /** Identification state counts (02-PR4); absent from an older server. */
   ident_counts?: IdentCounts;
 }> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  if (all) params.set('all', 'true');
-  // Sent only when it changes something, so the default request is byte-for-
-  // byte what it was.
-  if (bucket !== 'reviewable') params.set('bucket', bucket);
-  if (options.ids) params.set('ids', options.ids.join(','));
+  const params = new URLSearchParams({ ids: ids.join(',') });
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/cache/review?${params}`, {
     timeoutMs: CACHED_REVIEW_TIMEOUT_MS,
   });
@@ -4576,7 +4557,7 @@ export type ReviewChip =
 export interface ReviewQueryParams {
   /** The Title box, in the Library search grammar. */
   q?: string;
-  /** A provider id (reviewProviderID's vocabulary). */
+  /** A provider id (the server's provider ids: audible, google_books, openlibrary, ...). */
   source?: string;
   /** A percentage of the candidate score; matched rows only. */
   min_confidence?: number;
@@ -4663,6 +4644,12 @@ export interface ReviewPageResponse {
   /** Names the snapshot the list was cut from; an ids list is valid only for the generation it came with. */
   generation: string;
   facets: ReviewFacets;
+  /**
+   * The server's bulk apply fail-safe (setting bulk_apply_max_items, applycap):
+   * the most books one apply request may carry. Sent with every page so the
+   * lane needs no settings permission to learn it; absent from an older server.
+   */
+  bulk_apply_max_items?: number;
 }
 
 export interface ReviewMatchingIds {

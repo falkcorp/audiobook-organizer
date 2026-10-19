@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.45.0
+// version: 1.46.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-19
 //
@@ -491,80 +491,6 @@ export function saveReviewPageSize(size: number): void {
 }
 
 /**
- * Normalizes a language string to an ISO 639-1 code for comparison. Mirrors the
- * server's `metadataLanguageTag`: book and candidate can come from different
- * provider APIs that spell the same language three different ways.
- *
- * Unknown languages fall through lowercased so equality still works.
- */
-export function normalizeLanguage(lang: string | undefined | null): string {
-  if (!lang) return '';
-  const s = lang.trim().toLowerCase();
-  if (!s) return '';
-  const canonical: Record<string, string> = {
-    english: 'en',
-    eng: 'en',
-    spanish: 'es',
-    spa: 'es',
-    french: 'fr',
-    fre: 'fr',
-    fra: 'fr',
-    german: 'de',
-    ger: 'de',
-    deu: 'de',
-    italian: 'it',
-    ita: 'it',
-    japanese: 'ja',
-    jpn: 'ja',
-    chinese: 'zh',
-    chi: 'zh',
-    zho: 'zh',
-    mandarin: 'zh',
-    portuguese: 'pt',
-    por: 'pt',
-    russian: 'ru',
-    rus: 'ru',
-    dutch: 'nl',
-    nld: 'nl',
-    korean: 'ko',
-    kor: 'ko',
-    arabic: 'ar',
-    ara: 'ar',
-  };
-  if (canonical[s]) return canonical[s];
-  if (s.length === 2) return s;
-  return s;
-}
-
-// reviewProviderID converts the display names persisted in candidate cache rows
-// into the stable ids owned by QueueRail's provider chips. Cache data comes from
-// several provider clients, so it is intentionally tolerant of their historical
-// spelling variants; counts and filtering must use this same function.
-// 'Audible Catalog (local)' (the local catalog stage's review-only candidates)
-// is a copy of Audible's own catalog and counts under the Audible chip. Server
-// twin: reviewProviderID in internal/server/handlers/metadata_cache_query.go.
-export function reviewProviderID(source: string | undefined | null): string {
-  const normalized = source?.trim().toLowerCase() ?? '';
-  switch (normalized) {
-    case 'audible':
-    case 'audnexus':
-    case 'audnexus (audible)':
-    case 'audible catalog (local)':
-      return 'audible';
-    case 'google':
-    case 'google books':
-    case 'google_books':
-      return 'google_books';
-    case 'open library':
-    case 'open_library':
-    case 'openlibrary':
-      return 'openlibrary';
-    default:
-      return normalized;
-  }
-}
-
-/**
  * Group key for "these books were assigned the same candidate".
  * Priority: asin (most specific) -> isbn -> source+title+author.
  */
@@ -1052,7 +978,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // The load effect reads toast through a ref: adding `toast` to its deps would
-  // re-fetch the whole review set whenever a caller passed an unmemoized toast.
+  // re-fetch the page whenever a caller passed an unmemoized toast.
   const toastRef = useRef(toast);
   useEffect(() => {
     toastRef.current = toast;
@@ -1073,7 +999,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [detailsById, setDetailsById] = useState<Map<string, CandidateResult>>(() => new Map());
   // Book ids whose detail fetch rejected, or whose book the detail response
   // left out. Without this a failed fetch is indistinguishable from one still
-  // in flight. Cleared for the ids of every new ask, and with the index.
+  // in flight. Cleared for the ids of every new ask, and with every new page load.
   const [detailFailedIds, setDetailFailedIds] = useState<Set<string>>(() => new Set());
   const [searching, setSearching] = useState(false);
   const [applyCap, setApplyCap] = useState(DEFAULT_BULK_APPLY_MAX_ITEMS);
@@ -1172,28 +1098,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   }, []);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
-
-  // The page response does not carry the bulk apply cap, so it is read once,
-  // when the lane first becomes active, from the config. Anything but a usable
-  // number (the call failing, a 403 -- GET /config needs settings.manage, which
-  // a reviewer may not have --, no config) leaves the default cap; nothing waits
-  // on this read.
-  const capReadRef = useRef(false);
-  useEffect(() => {
-    if (!active || capReadRef.current) return;
-    capReadRef.current = true;
-    void Promise.resolve()
-      .then(() => api.getConfig())
-      .then(
-        (cfg) => {
-          if (!aliveRef.current) return;
-          if (typeof cfg?.bulk_apply_max_items === 'number' && cfg.bulk_apply_max_items > 0) {
-            setApplyCap(cfg.bulk_apply_max_items);
-          }
-        },
-        () => undefined
-      );
-  }, [active]);
 
   // Reconciles row state with the rows the server just returned: the current
   // page (a book that is not on the page keeps what it has until it appears on
@@ -1501,6 +1405,15 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           const total = data.total_count ?? rows.length;
           setPageTotal(total);
           setPageFacets(data.facets ?? null);
+          // The cap one apply request may carry, from the server that enforces
+          // it. It rides every page response: GET /config needs the settings
+          // permission, which a reviewer may not hold, and a lane that fell
+          // back to the default would let the chunking in applyMany slip a
+          // longer apply past the real limit. A response without it (an older
+          // server) keeps the cap the lane already holds.
+          if (typeof data.bulk_apply_max_items === 'number' && data.bulk_apply_max_items > 0) {
+            setApplyCap(data.bulk_apply_max_items);
+          }
           // A filter (or an apply) can shrink the list beneath the page asked
           // for. Move to the last page that exists and let that request fill
           // the rows; rendering this empty one would flash an empty spine.
@@ -1668,11 +1581,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // for since the list last changed. One request per page change, sized by the
   // page, never by the library. `detailEpochRef` is bumped with every page
   // load (below), so a response that started before it is dropped instead of
-  // mixing an older index's details into the new one.
+  // mixing an older page's details into the new one.
   const detailAskedRef = useRef<Set<string>>(new Set());
   const detailEpochRef = useRef(0);
-  // Set when a detail mismatch refetched the index; cleared by a detail
-  // response that agrees with its index. A mismatch that survives the
+  // Set when a detail mismatch reloaded the page; cleared by a detail
+  // response that agrees with its page row. A mismatch that survives the
   // refetch warns instead of refetching again, so this can never loop.
   const mismatchRefetchedRef = useRef(false);
   useEffect(() => {
@@ -1691,7 +1604,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     });
     const epoch = detailEpochRef.current;
     api
-      .getCachedReviewResults(0, 0, false, 'reviewable', { ids: missing })
+      .getCachedReviewResults(missing)
       .then((data) => {
         if (epoch !== detailEpochRef.current) return;
         const fetched = data.results || [];
@@ -1702,16 +1615,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         });
         // A book the response left out has nothing to swap in and nothing
         // in flight: it is failed, not pending. (Below, it is also a
-        // `changed` row, which refetches the index once.)
+        // `changed` row, which reloads the page once.)
         const absent = missing.filter((id) => !fetched.some((r) => r.book.id === id));
         if (absent.length > 0) {
           setDetailFailedIds((prev) => new Set([...prev, ...absent]));
         }
-        // A detail whose hash is not the index row's, or a book the server no
-        // longer lists, means the server's candidates moved since the index
+        // A detail whose hash is not the page row's, or a book the server no
+        // longer lists, means the server's candidates moved since the page
         // was loaded. The row would show without its description and its
         // Apply would be refused as stale -- so never leave it silently:
-        // refetch the index once, and if that still disagrees, say so.
+        // reload the page once, and if that still disagrees, say so.
         const byId = new Map(fetched.map((r) => [r.book.id, r]));
         const indexHash = new Map(visiblePageRows.map((r) => [r.book.id, r.candidate_hash]));
         const changed = missing.filter((id) => {
@@ -1733,7 +1646,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         );
       })
       .catch(() => {
-        // The index rows are still shown, just without their descriptions and
+        // The page rows are still shown, just without their descriptions and
         // breakdowns. Say so (`detailFailed`): left as pending, the evidence
         // panel would spin for ever. Forget the ask so the next page change
         // or refresh tries again.
@@ -1819,30 +1732,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [pageRows]
   );
 
-  // The pins a bulk button sends: every book it applies is the owner's manual
-  // apply (owner ruling 2026-09-27). A book whose row is loaded with a
-  // candidate_hash gets a 'review_bulk' pin of the candidate it shows, so a
-  // cache refetched since the page loaded is still refused as stale. A book
-  // the lane holds no hash for (the selection outlived a refresh that dropped
-  // its row, or the row came without a hash) gets the hashless owner marker:
-  // still owner-reviewed, on whatever the server's top candidate is -- except
-  // that the server never applies a review-only (Open Library / Google Books)
-  // candidate or lifts a no_match mark on it: nobody saw that candidate.
-  const bulkPinsFor = useCallback(
-    (ids: string[]): Record<string, ApplyPin> => {
-      const byId = new Map(pageRows.map((r) => [r.book.id, r]));
-      const pins: Record<string, ApplyPin> = {};
-      for (const id of ids) {
-        const r = byId.get(id);
-        pins[id] =
-          r?.candidate && r.candidate_hash
-            ? pinOfCandidate(r.candidate, r.candidate_hash, 'review_bulk')
-            : { origin: 'review_bulk' };
-      }
-      return pins;
-    },
-    [pageRows]
-  );
   // Every in-flight apply arms an hour-long bound (see runApplyOp). They are
   // cleared when their race settles, but an unmount while an op is still
   // running would otherwise leave one armed for the rest of the hour.
@@ -2054,9 +1943,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const applyMany = useCallback(
     async (
       bookIds: string[],
-      // A confirmed Replace passes what it captured at the click (see
-      // PendingReplace); every other bulk apply captures them here, now.
-      captured?: { pins: Record<string, ApplyPin>; mode: BulkApplyMode }
+      // The pins and mode captured at the click (pagePinsFor, and a confirmed
+      // Replace's PendingReplace). Required: every bulk apply is pinned, and
+      // nothing here can fall back to the hashless {origin:'review_bulk'}
+      // marker that would lose the stale-candidate refusal.
+      captured: { pins: Record<string, ApplyPin>; mode: BulkApplyMode }
     ) => {
       if (bookIds.length === 0) return;
       setApplying(true);
@@ -2069,15 +1960,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // certainty refusals a single-row Apply lifts. Unlike a single row,
         // a bulk apply is fill-only (A3#3) unless the owner switched the
         // bulk toggle to 'replace' (owner ruling 2026-09-27), which is sent
-        // with every bulk request. Pins are captured now, at the click, from
-        // the rows the owner is looking at.
+        // with every bulk request. Pins are captured at the click, from the
+        // rows the owner is looking at (pagePinsFor).
         //
         // Sent in APPLY_CHUNK_SIZE requests: "select all matching" can hand
         // this thousands of books, past both the JSON body limit and the
         // server's bulk apply cap. Each chunk is its own background op; the
         // bar shows one progress count across them.
-        const pins = captured?.pins ?? bulkPinsFor(bookIds);
-        const mode = captured?.mode ?? bulkApplyMode;
+        const { pins, mode } = captured;
         const chunks = chunk(bookIds, APPLY_CHUNK_SIZE);
         let sent = 0;
         try {
@@ -2148,8 +2038,6 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       handleApplyError,
       retainInFlight,
       clearServerDerived,
-      bulkPinsFor,
-      bulkApplyMode,
       toast,
     ]
   );
@@ -2696,8 +2584,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // the same debounce as the page). If that check cannot be made the selection
   // is cleared, because keeping books the reviewer can no longer see is what
   // this prune exists to prevent. While a chip is active every filter but the
-  // Title regex is paused, so only a Title change prunes, and only books of
-  // that chip: those the narrowed chip no longer lists.
+  // Title regex is paused, so only a Title change prunes, and it prunes the
+  // selected books of ANY chip whose title the new pattern no longer matches
+  // (the selection is one id set across chips, and so is the Title).
   // An empty or invalid regex prunes nothing, so half-typing a pattern never
   // wipes a selection.
   const prunedPageKeyRef = useRef(filtersKey);
@@ -2744,15 +2633,23 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             settle();
             return;
           }
+          // A chip view pauses every filter but the Title, and the Title
+          // applies to every book, in whatever chip it sits. So the question
+          // is asked of every book of both buckets (bucket 'any', the Title
+          // only): which of them match the old view of the set (no Title), and
+          // which still match the new Title. A selected book the Title no
+          // longer matches is dropped, in this chip or another; a selected id
+          // the server does not list at all is not one the Title can speak
+          // for, and stays.
           const [base, narrowed] = await Promise.all([
-            api.getReviewMatchingIds({ chip }, controller.signal),
-            api.getReviewMatchingIds(params, controller.signal),
+            api.getReviewMatchingIds({ bucket: 'any' }, controller.signal),
+            api.getReviewMatchingIds({ bucket: 'any', q: params.q }, controller.signal),
           ]);
           if (controller.signal.aborted) return;
-          const inChip = new Set(base.ids);
+          const known = new Set(base.ids);
           const keep = new Set(narrowed.ids);
           setSelectedIds((prev) => {
-            const next = new Set([...prev].filter((id) => !inChip.has(id) || keep.has(id)));
+            const next = new Set([...prev].filter((id) => !known.has(id) || keep.has(id)));
             return next.size === prev.size ? prev : next;
           });
           settle();

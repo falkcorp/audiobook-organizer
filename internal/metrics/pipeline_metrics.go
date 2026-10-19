@@ -1,5 +1,5 @@
 // file: internal/metrics/pipeline_metrics.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1bafd1d0-de42-4e6d-a079-b28e4ea4858b
 // last-edited: 2026-10-19
 
@@ -54,14 +54,19 @@ const (
 	FetchSourceError     = "error"
 )
 
-// Bounded label values for review_index_request_seconds{view}. "full" is a
-// listing request (view=page is dispatched before the observation and is not
-// counted); "gone" is a request for the retired index view, answered 410, so a
-// client that still sends it shows up in the metric. "index" was the label of
-// that view while it was served and is no longer written.
+// Bounded label values for review_index_request_seconds{view}. "page" is a
+// view=page request that returns a page of rows and "ids_all" one that
+// returns every matching book id (ids=all, the "Select all N matching" and
+// prune lookups); they are separate because the page is the surface the "<3s"
+// target applies to and an id list is a different cost. "full" is a listing
+// request (no view). "gone" is a request for the retired index view, answered
+// 410, so a client that still sends it shows up in the metric. "index" was the
+// label of that view while it was served and is no longer written.
 const (
-	ReviewViewFull = "full"
-	ReviewViewGone = "gone"
+	ReviewViewPage   = "page"
+	ReviewViewIDsAll = "ids_all"
+	ReviewViewFull   = "full"
+	ReviewViewGone   = "gone"
 )
 
 // Bounded label values for fixer_duration_seconds{phase}: the two framework
@@ -102,7 +107,7 @@ var (
 	reviewIndexRequestSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "review_index_request_seconds",
-		Help:      "Handler latency of the metadata-cache review listing (GET /audiobooks/metadata/cache/review) by view (full, gone)",
+		Help:      "Handler latency of the metadata-cache review listing (GET /audiobooks/metadata/cache/review) by view (page, ids_all, full, gone)",
 		Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 5, 10, 20, 30, 60, 120},
 	}, []string{"view"})
 
@@ -148,7 +153,7 @@ func IncMetadataFetch(provider, source string) {
 }
 
 // ObserveReviewIndexRequest records one review-listing handler duration under
-// view (ReviewViewFull or ReviewViewGone).
+// view (a ReviewView* constant).
 func ObserveReviewIndexRequest(view string, d time.Duration) {
 	reviewIndexRequestSeconds.WithLabelValues(view).Observe(d.Seconds())
 }

@@ -1,14 +1,16 @@
 // file: internal/config/persistence_test.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-19
 
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -1243,6 +1245,7 @@ func TestConfig_LoadsWithRemovedReviewFlag(t *testing.T) {
 	t.Run("legacy row", func(t *testing.T) {
 		resetConfigTestState()
 		t.Cleanup(resetConfigTestState)
+		logs := captureRemovedKeyLogs(t)
 
 		store := mocks.NewMockStore(t)
 		setupMigrationExpectations(store)
@@ -1254,6 +1257,24 @@ func TestConfig_LoadsWithRemovedReviewFlag(t *testing.T) {
 
 		require.NoError(t, LoadConfigFromDatabase(store))
 		assert.Equal(t, "/srv/library", AppConfig.RootDir)
+		// The owner who left the flag in the settings table is told it does
+		// nothing now, once, with the reason.
+		assert.Contains(t, logs.String(), "key=review_metadata_server_query")
+		assert.Contains(t, logs.String(), "removed setting is ignored")
+		assert.Contains(t, logs.String(), "settings database (legacy per-key row)")
+	})
+
+	t.Run("a config update carrying it is refused", func(t *testing.T) {
+		restoreAppConfig(t)
+		ms, blobs := ladderTestStore(t)
+		status, resp := NewUpdateService(ms).UpdateConfig(context.Background(),
+			map[string]any{"review_metadata_server_query": true, "root_dir": "/lib"})
+		require.Equal(t, http.StatusBadRequest, status, "resp = %v", resp)
+		msg, _ := resp["error"].(string)
+		assert.Contains(t, msg, "review_metadata_server_query")
+		assert.Contains(t, msg, "view=page")
+		assert.Empty(t, *blobs, "a refused PUT must persist nothing")
+		assert.NotEqual(t, "/lib", Snapshot().RootDir, "a refused PUT must apply nothing")
 	})
 
 	t.Run("the setting is listed as removed", func(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: web/src/test/reviewServer.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d3a8e17-2c64-4b90-a1f5-7e09c4b2d683
 // last-edited: 2026-10-19
 //
@@ -7,7 +7,7 @@
 // the workspace over the auto-mocked `services/api` module.
 //
 // The lane asks the server for one filtered page (`getReviewPage`) and for the
-// full rows of the books on it (`getCachedReviewResults` with `ids`). The
+// full rows of the books on it (`getCachedReviewResults(ids)`). The
 // server owns the filtering, so this fake does none: it serves the rows a test
 // hands it as the page, whatever the request. A test that needs the lane to
 // send a particular request asserts on the mock's calls instead.
@@ -31,9 +31,16 @@ export interface ReviewListPayload {
   ident_counts?: api.IdentCounts;
   sources?: Record<string, number>;
   runtime_hidden?: number;
+  /** The server's bulk apply cap, sent with every page (absent: an older server). */
+  bulk_apply_max_items?: number;
 }
 
-/** The view=page response for a payload: every row is the page, facets carry the counts. */
+/**
+ * The view=page response for a payload: every row is the page, facets carry the
+ * counts. Rows are served as given, owner_rejected included: the real page
+ * carries that mark on its rows (it is set per request, from the owner's
+ * rejections), and the rail's "owner rejected" chip counts it.
+ */
 export function reviewPageResponse(p: ReviewListPayload, generation = 'g1'): api.ReviewPageResponse {
   const total = p.total_count ?? p.results.length;
   return {
@@ -42,6 +49,7 @@ export function reviewPageResponse(p: ReviewListPayload, generation = 'g1'): api
     offset: 0,
     limit: 25,
     generation,
+    ...(p.bulk_apply_max_items !== undefined ? { bulk_apply_max_items: p.bulk_apply_max_items } : {}),
     facets: {
       matched: p.matched ?? p.results.filter((r) => r.status === 'matched').length,
       no_match: p.no_match ?? p.results.filter((r) => r.status === 'no_match').length,
@@ -60,21 +68,19 @@ export function reviewPageResponse(p: ReviewListPayload, generation = 'g1'): api
   };
 }
 
-/** Answers the per-page detail fetch (`ids=`) with the rows of `last()` it names. */
+/** Answers the per-page detail fetch (`ids`) with the rows of `last()` it names. */
 export function serveReviewDetails(last: () => api.CandidateResult[]) {
-  vi.mocked(api.getCachedReviewResults).mockImplementation(
-    async (_limit, _offset, _all, _bucket, options = {}) => {
-      const want = new Set(options.ids ?? []);
-      const rows = last().filter((r) => want.has(r.book.id));
-      return {
-        results: rows,
-        total_count: rows.length,
-        matched: 0,
-        no_match: 0,
-        errors: 0,
-      } as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
-    }
-  );
+  vi.mocked(api.getCachedReviewResults).mockImplementation(async (ids) => {
+    const want = new Set(ids);
+    const rows = last().filter((r) => want.has(r.book.id));
+    return {
+      results: rows,
+      total_count: rows.length,
+      matched: 0,
+      no_match: 0,
+      errors: 0,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+  });
 }
 
 /**

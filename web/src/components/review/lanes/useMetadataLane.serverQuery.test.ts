@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-10-19
 //
@@ -20,6 +20,8 @@ import { renderHook, render, screen, act, waitFor } from '@testing-library/react
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../../services/api';
 import {
+  applyCapMessage,
+  DEFAULT_BULK_APPLY_MAX_ITEMS,
   EXPORT_QUEUE_CHANGED_MESSAGE,
   MAX_QUERY_SKIPPED_IDS,
   useMetadataLane,
@@ -152,8 +154,8 @@ function serveFixturePages() {
     total: unreviewable.length,
     generation: 'g1',
   });
-  vi.mocked(api.getCachedReviewResults).mockImplementation(async (_l, _o, _a, _b, options = {}) => {
-    const want = new Set(options.ids ?? []);
+  vi.mocked(api.getCachedReviewResults).mockImplementation(async (ids) => {
+    const want = new Set(ids);
     return indexPayload(fixture.rows.filter((r) => want.has(r.book.id)) as never);
   });
   return requests;
@@ -215,11 +217,8 @@ describe('the lane requests', () => {
   }
 
   beforeEach(() => {
-    vi.mocked(api.getConfig).mockResolvedValue({} as api.Config);
-    vi.mocked(api.getCachedReviewResults).mockImplementation(async (_l, _o, _a, _b, options = {}) =>
-      indexPayload(
-        (options.ids ?? []).map((id) => pageOf([id]).results[0]) as api.CandidateResult[]
-      )
+    vi.mocked(api.getCachedReviewResults).mockImplementation(async (ids) =>
+      indexPayload(ids.map((id) => pageOf([id]).results[0]) as api.CandidateResult[])
     );
   });
 
@@ -227,13 +226,42 @@ describe('the lane requests', () => {
     vi.useRealTimers();
   });
 
-  it('a config that cannot be read still loads the page, with the default apply cap', async () => {
-    vi.mocked(api.getConfig).mockRejectedValue(new Error('down'));
-    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
+  it('takes the bulk apply cap from the page and never reads the config', async () => {
+    // GET /config needs the settings permission, which a reviewer may not
+    // hold; a lane that read the cap there would fall back to the default and
+    // let a longer apply through its own check.
+    vi.mocked(api.getConfig).mockRejectedValue(
+      Object.assign(new Error('forbidden'), { status: 403 })
+    );
+    vi.mocked(api.getReviewPage).mockResolvedValue({
+      ...pageOf(['b1']),
+      bulk_apply_max_items: 37,
+    });
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toBeNull();
-    expect(api.getReviewPage).toHaveBeenCalledTimes(1);
+    expect(api.getConfig).not.toHaveBeenCalled();
+    const ids = Array.from({ length: 38 }, (_, i) => `x${i}`);
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids })
+    );
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(applyCapMessage(37, 38), 'error');
+  });
+
+  it('a page without the cap (an older server) keeps the default cap', async () => {
+    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const ids = Array.from({ length: DEFAULT_BULK_APPLY_MAX_ITEMS + 1 }, (_, i) => `x${i}`);
+    await act(async () =>
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids })
+    );
+    expect(api.batchApplyFromCache).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(
+      applyCapMessage(DEFAULT_BULK_APPLY_MAX_ITEMS, ids.length),
+      'error'
+    );
   });
 
   it('passes the facets ident_counts through to the rail summary', async () => {
@@ -272,14 +300,12 @@ describe('the lane requests', () => {
     // The only remaining caller is the per-page detail fetch: ids, never a
     // listing, never a view, never the unreviewable bucket.
     expect(calls.length).toBeGreaterThan(0);
+    // Its only argument is the list of ids (the signature has no listing,
+    // view or bucket to send).
     for (const c of calls) {
-      expect(c[2]).not.toBe(true);
-      expect(c[3] ?? 'reviewable').toBe('reviewable');
-      expect(Object.keys(c[4] ?? {})).toEqual(['ids']);
+      expect(c).toHaveLength(1);
+      expect(Array.isArray(c[0])).toBe(true);
     }
-    expect(calls.filter((c) => (c[4] as { view?: string } | undefined)?.view === 'index')).toHaveLength(
-      0
-    );
   });
 
   it('a burst of 10 keystrokes inside the debounce window sends exactly 1 request', async () => {
@@ -751,26 +777,6 @@ describe('the lane requests', () => {
     );
     expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
     expect(sentPins().a2).toMatchObject({ content_hash: 'h-a2' });
-  });
-
-  it('a config read that never answers does not hold the lane', async () => {
-    vi.mocked(api.getConfig).mockImplementation(() => new Promise<api.Config>(() => {}));
-    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.error).toBeNull();
-    expect(api.getReviewPage).toHaveBeenCalledTimes(1);
-  });
-
-  it('a 403 on the config read (no settings permission) still loads the page', async () => {
-    vi.mocked(api.getConfig).mockRejectedValue(
-      Object.assign(new Error('forbidden'), { status: 403 })
-    );
-    vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(['b1']));
-    const { result } = renderHook(() => useMetadataLane(toast));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.error).toBeNull();
-    expect(api.getReviewPage).toHaveBeenCalledTimes(1);
   });
 
   /** An export-sized page (limit 500) of `total` rows at `generation`. */
