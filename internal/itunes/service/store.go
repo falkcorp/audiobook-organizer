@@ -1,10 +1,10 @@
 // file: internal/itunes/service/store.go
-// version: 1.2.0
-// last-edited: 2026-10-07
+// version: 1.3.0
+// last-edited: 2026-10-18
 // guid: 4f9bbf9f-0d28-46d5-be9c-e9ce3a422593
 
 // Package itunesservice contains the iTunes integration: import pipeline,
-// position import, playlist import, and ITL download. iTunes is an
+// playlist import, and ITL download. iTunes is an
 // import-only source (owner decision 2026-10-07; the write-back batcher,
 // path reconcile/repair and track provisioner were removed). The low-level
 // ITL parser, fingerprint,
@@ -24,7 +24,7 @@ package itunesservice
 // That width was never a statement about iTunes being a hub; it was the sum of
 // six subsystems and an import pipeline each holding the aggregate rather than
 // the slice it used. The fix was applied to those parameter types first
-// (playlist_sync.go, position_sync.go, importer.go and the since-removed
+// (playlist_sync.go, importer.go and the since-removed position sync and
 // write-back subsystems), and this
 // declaration then followed from them rather than being negotiated on its own.
 //
@@ -32,6 +32,5 @@ package itunesservice
 // needs it, in that subsystem's file, and let this stay a list of names.
 type Store interface {
 	playlistSyncStore
-	positionSyncStore
 	importerStore
 }

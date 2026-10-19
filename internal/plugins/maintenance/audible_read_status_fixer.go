@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package maintenance
 
@@ -80,9 +80,9 @@ const (
 // whole book (handlers/abs absProgressSegmentID).
 const arsSegmentID = "abs"
 
-// arsLocalUserID is the iTunes sync user. Its finishes are pushed into the
-// iTunes library as play counts (itunes/service position_sync.go), and the
-// iTunes library is hands-off, so the import refuses it as a target.
+// arsLocalUserID is the single local user the iTunes code works as (the
+// itunes service's adminUserID). The iTunes library is hands-off, so the
+// import refuses it as a target.
 const arsLocalUserID = "_local"
 
 // arsPlanWorkers bounds the per-item pass: point reads (files, credits, user

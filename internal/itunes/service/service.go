@@ -1,7 +1,7 @@
 // file: internal/itunes/service/service.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 81ccaec6-42b0-4828-83c8-7a96680112d9
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package itunesservice
 
@@ -61,7 +61,6 @@ type Service struct {
 
 	// Sub-components. Nil when the service is disabled; populated by New.
 	Importer  *Importer
-	Positions *PositionSync
 	Playlists *PlaylistSync
 	Transfer  *TransferService
 }
@@ -79,9 +78,6 @@ func New(deps Deps) (*Service, error) {
 	svc := &Service{
 		deps: deps,
 	}
-
-	// PositionSync: pulls iTunes bookmarks into the admin user's positions.
-	svc.Positions = newPositionSync(deps.Store)
 
 	// PlaylistSync: imports smart playlists from the ITL.
 	svc.Playlists = newPlaylistSync(deps.Store)

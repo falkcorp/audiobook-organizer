@@ -1,7 +1,7 @@
 // file: internal/itunes/service/playlist_sync.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 1e9f0a8b-2c3d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 //
 // iTunes playlist sync (spec 3.4 tasks 5-6).
 //
@@ -27,6 +27,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
+
+// adminUserID owns imported smart playlists when the import names no owner:
+// the single-user bootstrap account ("_local"). It moved here from the
+// deleted position_sync.go.
+const adminUserID = "_local"
 
 // playlistSyncStore is the playlist half of the iTunes sync.
 //
