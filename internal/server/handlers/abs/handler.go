@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -393,6 +393,11 @@ type Handler struct {
 	// errors and loses the status code) and so will never re-create one (§1.8.8 #8).
 	sessions *sessionRegistry
 
+	// oidcRequests parks /auth/openid (hop 1) requests until the system browser
+	// arrives at /auth/openid/browser (hop 2). Bounded and single-use; see
+	// openid.go. Per handler, and timed by h.now, so SetClock drives expiry.
+	oidcRequests *oidcTTLStore[oidcPendingRequest]
+
 	// refreshLocks holds one mutex per session id — the per-session single-flight
 	// lock of §3.4 step 1. It serializes concurrent refreshes of the SAME session so
 	// two simultaneous requests cannot rotate twice and orphan each other, while
@@ -560,6 +565,7 @@ func New(o Options) (*Handler, error) {
 		newID:       func() string { return ulid.Make().String() },
 	}
 	h.sessions = newSessionRegistry(h.nowFn)
+	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap)
 	return h, nil
 }
 
@@ -602,11 +608,19 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.POST("/login", h.Login)
 	r.POST("/auth/refresh", h.Refresh)
 
-	// Single sign-on. Both are unauthenticated at the app layer by necessity:
-	// /auth/openid is opened in the client's web session and derives identity
-	// from the Cloudflare Access assertion on the request, and the callback is
-	// authenticated by the one-time PKCE code it carries. See openid.go.
+	// Single sign-on, three hops (see openid.go). All are unauthenticated at the
+	// app layer by necessity, and none of them completes without a verified
+	// person:
+	//   - /auth/openid is called by the app's own HTTP client with only a
+	//     service token. It resolves nobody; it parks the request and 302s to
+	//     the browser hop on this origin.
+	//   - /auth/openid/browser runs in the system browser, where Cloudflare
+	//     Access authenticates the PERSON. It mints a code only for a verified
+	//     identity.
+	//   - /auth/openid/callback is authenticated by the one-time code plus its
+	//     PKCE verifier.
 	r.GET("/auth/openid", h.OpenIDAuthorize)
+	r.GET(OIDCBrowserPath, h.OpenIDBrowser)
 	r.GET("/auth/openid/callback", h.OpenIDCallback)
 
 	auth := servermiddleware.ABSRequireAuth(h.resolver)

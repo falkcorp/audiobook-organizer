@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
 // last-edited: 2026-10-19
 
@@ -138,6 +138,22 @@ func absErr(status int, reason, message, mode string) *ABSAuthError {
 // Enabled reports whether the resolver can authenticate anything at all.
 func (r *ABSIdentityResolver) Enabled() bool {
 	return r != nil && r.cfg != nil && r.cfg.Enabled && r.store != nil
+}
+
+// Config exposes the resolved ABS config to handlers wired alongside the resolver.
+func (r *ABSIdentityResolver) Config() *absauth.Config {
+	if r == nil {
+		return nil
+	}
+	return r.cfg
+}
+
+// CFAssertionsEnabled reports whether ResolveCFAssertion can ever resolve a person:
+// the resolver is enabled, ABS_AUTH_MODES includes cf, and a verifier and
+// allowlist config are wired. Single sign-on (/auth/openid) uses it to refuse up
+// front instead of sending a browser through a sign-in that cannot complete.
+func (r *ABSIdentityResolver) CFAssertionsEnabled() bool {
+	return r.Enabled() && r.cfg.Modes.CF && r.verifier != nil && r.oauthCfg != nil
 }
 
 // ResolveCFAssertion runs ONLY step 1. It returns (nil, nil) when there is no

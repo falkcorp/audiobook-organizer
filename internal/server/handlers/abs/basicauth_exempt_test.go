@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/basicauth_exempt_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1a51d292-2d49-43bb-b5d1-afc53fd96f5b
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package abs_test
 
@@ -26,6 +26,7 @@ var absUnauthenticatedRoutes = map[string]bool{
 	"POST /login":                          true,
 	"POST /auth/refresh":                   true,
 	"GET /auth/openid":                     true,
+	"GET /auth/openid/browser":             true,
 	"GET /auth/openid/callback":            true,
 	"GET /api/items/:id/cover":             true,
 	"HEAD /api/items/:id/cover":            true,
