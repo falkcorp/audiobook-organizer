@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sso-two-hop-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: f9284f41-8fc0-48da-a93d-763d1a975a5e -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -20,11 +20,14 @@ Branch `fix/abs-oidc-two-hop`, PR not yet merged. No separate spec.
   Cloudflare login, and sees a page that asks "Sign in to AudioBooth as
   <account>?" with Allow and Deny buttons. Only Allow sends the app back with
   a one-time code it can exchange for a session.
-- **The official Audiobookshelf app can use it too.** That app does not open
-  the server's answer as given; it rebuilds the address from four expected
-  pieces and checks one of them when it comes back. The server's answer now
-  carries all four. The official app still has to be allowed by the server's
-  operator (its return address is not on the default list).
+- **The server now speaks the official Audiobookshelf app's dialect too, but
+  that app still cannot sign in here.** That app does not open the server's
+  answer as given; it rebuilds the address from four expected pieces and
+  checks one of them when it comes back, and the server's answer now carries
+  all four. But the app's very first sign-in request does not include the
+  extra Cloudflare pass that this site requires, so Cloudflare stops it before
+  it reaches the server. Its return address is also not on the server's
+  default list.
 - **Why there is an Allow button.** Nothing ties the browser to the phone that
   started the sign-in. Without the button, anyone who started a sign-in could
   send the link to someone else, and simply opening it would sign them in on
@@ -91,5 +94,6 @@ findings were fixed in this PR:
 A further independent review found nothing blocking. Its smaller points were
 also fixed here: the server now compares web addresses in one consistent form,
 refuses oversized app names, can use a configured public address, logs what
-Cloudflare sent on each sign-in page load, and works with the official
-Audiobookshelf app.
+Cloudflare sent on each sign-in page load, and answers in the form the official
+Audiobookshelf app expects (that app is still blocked by Cloudflare here; see
+above).
