@@ -1,7 +1,7 @@
 // file: internal/merge/pending_repair.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4c8a2e71-9f3d-4b06-8e5a-1d7c3b9f2e84
-// last-edited: 2026-10-05
+// last-edited: 2026-10-18
 
 package merge
 
@@ -113,7 +113,7 @@ func CompletePendingUserStateRepair(db UserProgressMerger, rec PendingUserStateR
 		return fmt.Errorf("%w: %s", ErrPendingLoserLive, rec.LoserBookID)
 	}
 	follower := asFollower(db)
-	if moveErr := moveLoserState(db, follower, winner, rec.LoserBookID, nil, rec.Slice); moveErr != nil {
+	if moveErr := moveLoserState(db, follower, winner, rec.LoserBookID, nil, rec.Slice, false); moveErr != nil {
 		return moveErr
 	}
 	if err := db.DeleteRaw(pendingRepairKey(rec.LoserBookID, rec.WinnerBookID)); err != nil {

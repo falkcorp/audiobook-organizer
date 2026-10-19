@@ -1,5 +1,5 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
 // last-edited: 2026-10-18
 
@@ -39,6 +39,13 @@ func FollowAbsorbedJournaled(db UserProgressMerger, survivorID, absorbedID strin
 		return nil, false, fmt.Errorf("list users: %w", err)
 	}
 	completePendingInvolving(db, []string{survivorID, absorbedID})
+	// Every listed user's stripes on both books are held from the
+	// before-snapshot through the after-snapshot (followStripes says why), so
+	// the journal describes exactly what the follow moved. Taken after
+	// completePendingInvolving, whose follows take their own stripes. persist
+	// writes only the caller's journal. Lock order: the caller holds
+	// merge.LockMergeRMW; these stripes; nothing under them takes another.
+	defer database.LockUserBookStates(followStripes(users, absorbedID, survivorID)...)()
 	// Per user (snapshotPair): a user whose progress cannot be read is
 	// skipped and logged, their rows left where they are, and only the users
 	// in the before-snapshot are followed, so no progress moves unjournaled.
@@ -56,10 +63,7 @@ func FollowAbsorbedJournaled(db UserProgressMerger, survivorID, absorbedID strin
 	// above keep it alive so the sweep moves them once they read cleanly. An
 	// error here means the move failed AND no record holds it: the caller
 	// must not retire the absorbed book.
-	if followable == nil {
-		followable = []database.User{} // nil would mean every user
-	}
-	if err := followOneLoser(db, follower, survivorID, absorbedID, followable, slice, len(skipped) > 0); err != nil {
+	if err := followUsersLocked(db, follower, survivorID, absorbedID, followable, slice, len(skipped) > 0); err != nil {
 		return buildProgressJournal(before, progressSnap{}), true, err
 	}
 	after, _, afterSkipped := snapshotPair(db, followable, absorbedID, survivorID)
@@ -107,6 +111,12 @@ type SliceMapping struct {
 // same lock order: the caller holds merge.LockMergeRMW and no stripe).
 func followSliceFor(db userPositionStore, userID, survivorID, absorbedID string, slice SliceMapping) error {
 	defer database.LockUserBookStatePair(userID, absorbedID, survivorID)()
+	return followSliceForLocked(db, userID, survivorID, absorbedID, slice)
+}
+
+// followSliceForLocked is followSliceFor for a caller that already holds
+// userID's stripes on both books (FollowAbsorbedJournaled).
+func followSliceForLocked(db userPositionStore, userID, survivorID, absorbedID string, slice SliceMapping) error {
 	loserState, err := db.GetUserBookState(userID, absorbedID)
 	if err != nil {
 		return fmt.Errorf("get absorbed state: %w", err)

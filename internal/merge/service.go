@@ -2091,20 +2091,34 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		// followed, so no progress moves without its undo journal. With no
 		// sync layer (a nil syncFollower) the progress is still journaled
 		// and followed; only the redirect is not recorded.
-		before, followable, skipped := snapshotPair(ms.db, users, id, survivor.ID)
-		ms.reportSkippedProgress(journal, id, "not journaled or followed; a pending-repair record holds their move", skipped)
-		a.Progress = buildProgressJournal(before, progressSnap{})
-		a.SyncRedirected = ms.syncFollower != nil
-		if err := persist("following the progress of " + id); err != nil {
+		//
+		// A pending repair naming either book is completed first (its follows
+		// take their own stripes), then every user's stripes on both books are
+		// held from the before-snapshot through the after-snapshot
+		// (followStripes says why), so the journal describes exactly what the
+		// follow moved. persist writes only the combine journal. Lock order:
+		// mergeSerializeMu (held), then these stripes.
+		completePendingInvolving(ms.db, []string{survivor.ID, id})
+		if err := func() error {
+			defer database.LockUserBookStates(followStripes(users, id, survivor.ID)...)()
+			before, followable, skipped := snapshotPair(ms.db, users, id, survivor.ID)
+			ms.reportSkippedProgress(journal, id, "not journaled or followed; a pending-repair record holds their move", skipped)
+			a.Progress = buildProgressJournal(before, progressSnap{})
+			a.SyncRedirected = ms.syncFollower != nil
+			if err := persist("following the progress of " + id); err != nil {
+				return err
+			}
+			if err := followUsersLocked(ms.db, ms.syncFollower, survivor.ID, id, followable, nil, len(skipped) > 0); err != nil {
+				// Not retired: the absorbed book keeps its state and stays live.
+				return fmt.Errorf("carry user state of %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
+			}
+			after, _, afterSkipped := snapshotPair(ms.db, followable, id, survivor.ID)
+			ms.reportSkippedProgress(journal, id, "followed, but the after-snapshot failed; undo leaves their survivor progress as is", afterSkipped)
+			a.Progress = buildProgressJournal(before, after)
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
-		if err := FollowMergeUsers(ms.db, ms.syncFollower, survivor.ID, []string{id}, followable, len(skipped) > 0); err != nil {
-			// Not retired: the absorbed book keeps its state and stays live.
-			return nil, fmt.Errorf("carry user state of %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
-		}
-		after, _, afterSkipped := snapshotPair(ms.db, followable, id, survivor.ID)
-		ms.reportSkippedProgress(journal, id, "followed, but the after-snapshot failed; undo leaves their survivor progress as is", afterSkipped)
-		a.Progress = buildProgressJournal(before, after)
 		// The after-snapshot is what lets an undo tell the follow's write
 		// from listening done on the survivor since: journal it now, not only
 		// with the next step.
