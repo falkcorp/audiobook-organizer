@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.40.2
+// version: 1.40.3
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-18
 
@@ -1176,7 +1176,7 @@ func (r *reviewRows) summary(set *reviewOverlay) gin.H {
 // server went on applying for another minute. The user was told the opposite of
 // what happened.
 //
-// The per-book logic now lives in applyCachedCandidateForBook
+// The per-book logic now lives in applyCachedCandidateForBookTimed
 // (internal/server/batch_apply_one.go), which the op calls. There is
 // deliberately NO inline fallback here: a fallback would be a second
 // implementation reachable only when the registry is absent, so the tested path

@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.12.0
+// version: 2.12.1
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -81,9 +81,6 @@ var (
 	GlobalFileIOPool   *FileIOPool
 	globalFileIOPoolMu sync.Mutex
 
-	// globalServer holds a Server reference used by the default recovery handler.
-	globalServer *Server
-
 	recoveryDispatch   = map[string]FileOpRecoveryFunc{}
 	recoveryDispatchMu sync.RWMutex
 )
@@ -104,14 +101,6 @@ func lookupFileOpRecovery(opType string) (FileOpRecoveryFunc, bool) {
 	fn, ok := recoveryDispatch[opType]
 	recoveryDispatchMu.RUnlock()
 	return fn, ok
-}
-
-// GetGlobalFileIOPool returns the pool safely.
-func GetGlobalFileIOPool() *FileIOPool {
-	globalFileIOPoolMu.Lock()
-	p := GlobalFileIOPool
-	globalFileIOPoolMu.Unlock()
-	return p
 }
 
 // SetGlobalFileIOPool sets the pool safely.
@@ -307,19 +296,6 @@ func (p *FileIOPool) Stop() {
 	case <-time.After(30 * time.Second):
 		slog.Warn("file I/O pool shutdown timed out after 30s, jobs may be incomplete", "p", p.Pending())
 	}
-}
-
-// InitFileIOPool creates the global pool and registers the default recovery handler.
-func InitFileIOPool() {
-	SetGlobalFileIOPool(NewFileIOPool(4))
-	RegisterFileOpRecovery("apply_metadata", func(bookID string) {
-		srv := globalServer
-		if srv == nil || srv.metadataFetchService == nil {
-			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
-			return
-		}
-		recoverApplyMetadataFileOp(srv.metadataFetchService, bookID)
-	})
 }
 
 // RecoverInterruptedFileOps re-queues any interrupted file I/O jobs.

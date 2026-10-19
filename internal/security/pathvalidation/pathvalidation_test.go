@@ -1,5 +1,5 @@
 // file: internal/security/pathvalidation/pathvalidation_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7b3d9f1e-2a6c-4f8d-8e0b-5c4a3b2d1e0f
 // last-edited: 2026-10-18
 
@@ -338,5 +338,58 @@ func TestIsDangerousRoot(t *testing.T) {
 		if pathvalidation.IsDangerousRoot(p) {
 			t.Errorf("IsDangerousRoot(%q) = true, want false", p)
 		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CleanAbsolutePath
+//
+// These cases were carried over from internal/server's validate_path_test.go,
+// which reached CleanAbsolutePath only through a one-line wrapper that had no
+// production caller. They now call the function directly.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestCleanAbsolutePath_Valid(t *testing.T) {
+	cases := []string{
+		"/tmp/audio.m4b",
+		"/mnt/bigdata/books/itunes/iTunes Library.xml",
+		"/var/lib/audiobook-organizer",
+	}
+	for _, p := range cases {
+		got, err := pathvalidation.CleanAbsolutePath(p)
+		if err != nil {
+			t.Errorf("CleanAbsolutePath(%q) unexpected error: %v", p, err)
+		}
+		if got != p {
+			t.Errorf("CleanAbsolutePath(%q) = %q, want the path unchanged", p, got)
+		}
+	}
+}
+
+func TestCleanAbsolutePath_Relative(t *testing.T) {
+	_, err := pathvalidation.CleanAbsolutePath("relative/path/to/file.xml")
+	if !errors.Is(err, pathvalidation.ErrNotAbsolute) {
+		t.Fatalf("expected ErrNotAbsolute, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("error %q should mention the absolute-path requirement", err)
+	}
+}
+
+func TestCleanAbsolutePath_TraversalSequence(t *testing.T) {
+	cases := []string{
+		"/tmp/../../etc/passwd",
+		"/mnt/books/../../../root/.ssh/authorized_keys",
+	}
+	for _, p := range cases {
+		if _, err := pathvalidation.CleanAbsolutePath(p); !errors.Is(err, pathvalidation.ErrPathTraversal) {
+			t.Errorf("CleanAbsolutePath(%q): expected ErrPathTraversal, got %v", p, err)
+		}
+	}
+}
+
+func TestCleanAbsolutePath_Empty(t *testing.T) {
+	if _, err := pathvalidation.CleanAbsolutePath(""); err == nil {
+		t.Fatal("expected an error for an empty path")
 	}
 }

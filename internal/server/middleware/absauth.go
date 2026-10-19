@@ -131,33 +131,13 @@ type ABSAuthError struct {
 	Email   string
 }
 
-func (e *ABSAuthError) Error() string { return e.Reason }
-
 func absErr(status int, reason, message, mode string) *ABSAuthError {
 	return &ABSAuthError{Status: status, Reason: reason, Message: message, Mode: mode}
-}
-
-// ABSCredentialPresent reports whether the request carries anything the ABS resolver
-// could act on. Used by POST /login, which must work with no credential at all but
-// must skip the password check when a verified assertion is present.
-func (r *ABSIdentityResolver) ABSCredentialPresent(c *gin.Context) bool {
-	if r == nil {
-		return false
-	}
-	return absAssertionFromRequest(c) != "" || absBearerFromRequest(c) != ""
 }
 
 // Enabled reports whether the resolver can authenticate anything at all.
 func (r *ABSIdentityResolver) Enabled() bool {
 	return r != nil && r.cfg != nil && r.cfg.Enabled && r.store != nil
-}
-
-// Config exposes the resolved ABS config to handlers wired alongside the resolver.
-func (r *ABSIdentityResolver) Config() *absauth.Config {
-	if r == nil {
-		return nil
-	}
-	return r.cfg
 }
 
 // ResolveCFAssertion runs ONLY step 1. It returns (nil, nil) when there is no

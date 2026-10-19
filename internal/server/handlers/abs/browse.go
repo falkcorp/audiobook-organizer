@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.36.1
+// version: 1.36.2
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-10-11
+// last-edited: 2026-10-18
 
 package abs
 
@@ -618,15 +618,6 @@ func (h *Handler) RecentEpisodes(c *gin.Context) {
 		return
 	}
 	respondJSON(c, http.StatusOK, episodesResponse{Episodes: []any{}})
-}
-
-// EmptyPage serves the collections/playlists stubs. §1.8.6: `{}` throws because
-// Page<T> requires total AND page even with no results.
-func (h *Handler) EmptyPage(c *gin.Context) {
-	if !h.knownLibrary(c) {
-		return
-	}
-	respondJSON(c, http.StatusOK, pageResponse{Results: []any{}})
 }
 
 // ── GET /api/libraries/:libraryId/personalized ──────────────────────────────

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/aibackends/aibackends.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7c3d9e21-4a5b-4f6c-9d8e-1a2b3c4d5e6f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-18
 
 // Package aibackendshandler provides HTTP handlers for the AI backend-mode
 // toggle (TASK-10's AIBackendConfig): a status probe that reports the
@@ -55,16 +55,6 @@ type Handler struct {
 
 // Option configures a Handler.
 type Option func(*Handler)
-
-// WithAttribution makes EndpointsStatus report a from a instead of the
-// process-wide ledger. Production wiring leaves the default.
-func WithAttribution(a *aidispatch.Attribution) Option {
-	return func(h *Handler) {
-		if a != nil {
-			h.attribution = a
-		}
-	}
-}
 
 // New constructs a Handler. registry may be nil in tests that only exercise
 // Status (pull-model requires a non-nil registry to resolve the ollama

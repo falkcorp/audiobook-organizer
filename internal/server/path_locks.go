@@ -1,7 +1,7 @@
 // file: internal/server/path_locks.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6e2a9c14-7d3b-4f58-9a01-2c8b4d5e6f70
-// last-edited: 2026-10-10
+// last-edited: 2026-10-18
 
 package server
 
@@ -43,15 +43,8 @@ type pathLocks struct {
 	// trace, when set, is told of every acquire ("+key", before it blocks)
 	// and release ("-key"), under mu. Tests use it to check the lock order
 	// across the server and metafetch, which share this table. Nil in
-	// production.
+	// production; tests install it through setTrace (server_test_seams_test.go).
 	trace func(event string)
-}
-
-// setTrace installs (or, with nil, removes) the table's trace hook.
-func (pl *pathLocks) setTrace(fn func(event string)) {
-	pl.mu.Lock()
-	pl.trace = fn
-	pl.mu.Unlock()
 }
 
 // pathLockEntry is one path's lock plus the number of goroutines currently

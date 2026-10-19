@@ -1,12 +1,11 @@
 // file: internal/server/server_metadata.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 588350bc-83db-47ed-9590-2b6513aadcda
-// last-edited: 2026-10-03
+// last-edited: 2026-10-18
 
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -16,29 +15,10 @@ import (
 )
 
 // These helpers are methods on *Server so they use the server's resolved
-// store (SERVER-GLOBAL-STORE-AUDIT phase 3b). A read is loadMetadataState; a
-// change goes through metafetch.WithStateSnapshot, which holds the book's
-// field-state stripe from the read through the save.
-
-// loadMetadataState is the read-only load (metafetch.LoadStateSnapshot).
-func (s *Server) loadMetadataState(bookID string) (map[string]metafetch.MetadataFieldState, error) {
-	store := s.Ops()
-	if store == nil {
-		return map[string]metafetch.MetadataFieldState{}, fmt.Errorf("database not initialized")
-	}
-	return metafetch.LoadStateSnapshot(store, bookID)
-}
-
-func decodeRawValue(raw json.RawMessage) any {
-	if raw == nil {
-		return nil
-	}
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return string(raw)
-	}
-	return value
-}
+// store (SERVER-GLOBAL-STORE-AUDIT phase 3b). A read is
+// metafetch.LoadStateSnapshot; a change goes through
+// metafetch.WithStateSnapshot, which holds the book's field-state stripe from
+// the read through the save.
 
 func (s *Server) updateFetchedMetadataState(bookID string, values map[string]any) error {
 	store := s.Ops()

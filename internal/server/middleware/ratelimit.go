@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
-// last-edited: 2026-09-11
+// last-edited: 2026-10-18
 
 package middleware
 
@@ -78,9 +78,9 @@ type IPRateLimiter struct {
 	sweeps atomic.Int64
 
 	startOnce sync.Once
-	stopOnce  sync.Once
-	stopCh    chan struct{}
-	doneCh    chan struct{}
+	// doneCh is closed when the sweeper goroutine exits (the Start context was
+	// cancelled). Tests wait on it to prove cancellation ends the goroutine.
+	doneCh chan struct{}
 }
 
 // NewIPRateLimiter builds a limiter allowing requestsPerMinute per client IP
@@ -104,7 +104,6 @@ func NewIPRateLimiter(requestsPerMinute int, burst int) *IPRateLimiter {
 		sweepInterval:  defaultSweepInterval,
 		maxEntries:     defaultMaxEntries,
 		now:            time.Now,
-		stopCh:         make(chan struct{}),
 		doneCh:         make(chan struct{}),
 	}
 }
@@ -182,12 +181,12 @@ func (r *IPRateLimiter) sweep() int {
 	return evicted
 }
 
-// Start launches the background sweeper. It runs until ctx is cancelled or
-// Stop is called, whichever comes first, and is safe to call at most once
-// (subsequent calls are no-ops). The server wires ctx to its background
-// context so shutdown stops the goroutine. A nil ctx is treated as a
-// context that is never cancelled (Stop remains the only exit); tests that
-// build a bare Server without a background context rely on this.
+// Start launches the background sweeper. It runs until ctx is cancelled and
+// is safe to call at most once (subsequent calls are no-ops). The server wires
+// ctx to its background context so shutdown stops the goroutine. A nil ctx is
+// treated as a context that is never cancelled, so the sweeper then runs for
+// the life of the process; tests that build a bare Server without a background
+// context rely on this.
 func (r *IPRateLimiter) Start(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -205,38 +204,10 @@ func (r *IPRateLimiter) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-r.stopCh:
-			return
 		case <-ticker.C:
 			r.sweep()
 		}
 	}
-}
-
-// Stop halts the background sweeper and waits for it to exit. It is
-// idempotent and safe to call even if Start was never called.
-func (r *IPRateLimiter) Stop() {
-	r.stopOnce.Do(func() { close(r.stopCh) })
-	r.startOnce.Do(func() {
-		// Start was never called: nothing to wait for. Consuming the once
-		// here also guarantees a later Start cannot launch a goroutine
-		// after Stop.
-		close(r.doneCh)
-	})
-	<-r.doneCh
-}
-
-// SweepCount reports how many sweeps have completed. Exposed for tests and
-// diagnostics.
-func (r *IPRateLimiter) SweepCount() int64 {
-	return r.sweeps.Load()
-}
-
-// Len reports the number of IPs currently tracked.
-func (r *IPRateLimiter) Len() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.lru.Len()
 }
 
 // Middleware returns a Gin middleware that enforces the configured limit.

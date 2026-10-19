@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-10-17
+// last-edited: 2026-10-18
 
 package handlers
 
@@ -80,15 +80,6 @@ type PlaylistStore interface {
 type PlaylistHandler struct {
 	store   PlaylistStore
 	indexFn func() *search.BleveIndex // lazily resolved — smart playlists return 503 when nil
-}
-
-// NewPlaylistHandler constructs a PlaylistHandler.
-// searchIndexFn is called at request time so the handler works correctly
-// when the search index is opened after construction (e.g. in Start()).
-// Pass nil or a function that returns nil to disable smart-playlist evaluation.
-func NewPlaylistHandler(store PlaylistStore, searchIndex *search.BleveIndex) *PlaylistHandler {
-	fn := func() *search.BleveIndex { return searchIndex }
-	return &PlaylistHandler{store: store, indexFn: fn}
 }
 
 // NewPlaylistHandlerWithGetter constructs a PlaylistHandler with a lazy index getter.

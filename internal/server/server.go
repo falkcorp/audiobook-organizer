@@ -1294,13 +1294,6 @@ type seriesPrunePreviewResult struct {
 
 // computeSeriesPrunePreview builds the preview of what a series prune would do.
 
-// stripChapterFromTitle removes chapter/book numbers from titles to improve search results
-// Examples: "The Odyssey: Book 01" -> "The Odyssey", "Harry Potter - Chapter 5" -> "Harry Potter"
-
-// stripSubtitle removes subtitle portions from a title, e.g.
-// "Title: A Subtitle" → "Title", "Title - A Subtitle" → "Title".
-// Returns the original title if no subtitle separator is found.
-
 // bulkFetchMetadataRequest / bulkFetchMetadataResult moved to the
 // handlers/metadata sub-package (mirrored there) along with the bulkFetchMetadata
 // HTTP handler (ADR-003 Phase 4). They were only used by that handler.

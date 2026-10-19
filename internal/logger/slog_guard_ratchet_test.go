@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.32.2
+// version: 1.32.3
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-18
 
@@ -227,7 +227,7 @@ var slogRatchet = map[string]int{
 	"internal/server/entities_ops.go":                            1,
 	"internal/server/entity_cache_warmers.go":                    6,
 	"internal/server/external_id_backfill.go":                    2,
-	"internal/server/file_io_pool.go":                            13,
+	"internal/server/file_io_pool.go":                            12,
 	"internal/server/folder_autoscan_op.go":                      1,
 	"internal/server/handlers/abs/browse.go":                     20,
 	"internal/server/handlers/abs/me.go":                         2,
