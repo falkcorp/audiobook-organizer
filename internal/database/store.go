@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.116.1
+// version: 2.117.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-19
 
@@ -827,14 +827,27 @@ type APIKey struct {
 // invite row deleted + user created + role membership written in
 // one Pebble batch.
 type Invite struct {
-	Token           string     `json:"token"`
-	Username        string     `json:"username"`
+	Token    string `json:"token"`
+	Username string `json:"username"`
+	// Email is the invitee's address, stored lowercase. Optional. On accept it
+	// becomes the new user's email and is granted SSO sign-in
+	// (InviteEmailGrantStore).
 	Email           string     `json:"email,omitempty"`
 	RoleID          string     `json:"role_id"`
 	CreatedByUserID string     `json:"created_by_user_id"`
 	CreatedAt       time.Time  `json:"created_at"`
 	ExpiresAt       time.Time  `json:"expires_at"`
 	UsedAt          *time.Time `json:"used_at,omitempty"`
+	// EmailSentAt is when the invitation email last went out; nil = never.
+	EmailSentAt *time.Time `json:"email_sent_at,omitempty"`
+	// AcceptedUserID is the user the accept created.
+	AcceptedUserID string `json:"accepted_user_id,omitempty"`
+	// GuestPolicy* record the Cloudflare Access guest-policy sync run on
+	// accept, so the admin can see it: status is one of the
+	// InviteGuestPolicy* constants; detail is a short reason on failure.
+	GuestPolicyStatus string     `json:"guest_policy_status,omitempty"`
+	GuestPolicyDetail string     `json:"guest_policy_detail,omitempty"`
+	GuestPolicyAt     *time.Time `json:"guest_policy_at,omitempty"`
 }
 
 // Session represents an authenticated session token

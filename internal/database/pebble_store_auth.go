@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -708,7 +708,12 @@ func (p *PebbleStore) TouchAPIKeyLastUsed(id string, at time.Time, ip string) er
 	return p.db.Set([]byte("apikey:"+id), data, pebble.NoSync)
 }
 
+// CreateInvite stores a new invite. An invite with an email is refused when a
+// user already owns that email: accepting it would repoint idx:user:email at
+// the new account, and an SSO login would then resolve to the wrong user.
 func (p *PebbleStore) CreateInvite(invite *Invite) (*Invite, error) {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
 	if invite == nil || invite.Token == "" {
 		return nil, fmt.Errorf("invite: token required")
 	}
@@ -723,6 +728,13 @@ func (p *PebbleStore) CreateInvite(invite *Invite) (*Invite, error) {
 	}
 	if invite.ExpiresAt.IsZero() {
 		invite.ExpiresAt = invite.CreatedAt.Add(7 * 24 * time.Hour)
+	}
+	invite.Email = strings.ToLower(strings.TrimSpace(invite.Email))
+	if invite.Email != "" {
+		if _, closer, err := p.db.Get([]byte("idx:user:email:" + invite.Email)); err == nil {
+			closer.Close()
+			return nil, ErrInviteEmailTaken
+		}
 	}
 	lower := strings.ToLower(invite.Username)
 	if v, closer, err := p.db.Get([]byte("idx:invite:username:" + lower)); err == nil {
@@ -795,6 +807,8 @@ func (p *PebbleStore) ListActiveInvites() ([]Invite, error) {
 }
 
 func (p *PebbleStore) DeleteInvite(token string) error {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
 	inv, err := p.GetInvite(token)
 	if err != nil {
 		return err
@@ -814,7 +828,14 @@ func (p *PebbleStore) DeleteInvite(token string) error {
 	return b.Commit(pebble.Sync)
 }
 
+// ConsumeInvite creates the invitee's user and marks the invite used, in one
+// batch under inviteMu, so two concurrent accepts of one token cannot both
+// pass the used check. When the invite carries an email, the same batch sets
+// the user's email (refused if another user owns it) and writes the SSO grant
+// (InviteEmailGrantStore), so the grant exists exactly when the account does.
 func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string) (*User, error) {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
 	inv, err := p.GetInvite(token)
 	if err != nil {
 		return nil, err
@@ -833,6 +854,13 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		closer.Close()
 		return nil, fmt.Errorf("username %q taken since invite was created", inv.Username)
 	}
+	lowerEmail := strings.ToLower(strings.TrimSpace(inv.Email))
+	if lowerEmail != "" {
+		if _, closer, err := p.db.Get([]byte("idx:user:email:" + lowerEmail)); err == nil {
+			closer.Close()
+			return nil, ErrInviteEmailTaken
+		}
+	}
 
 	id, err := newULID()
 	if err != nil {
@@ -840,12 +868,13 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 	}
 	now := time.Now()
 	user := &User{
-		ID: id, Username: inv.Username, Email: inv.Email,
+		ID: id, Username: inv.Username, Email: lowerEmail,
 		PasswordHashAlgo: passwordHashAlgo, PasswordHash: passwordHash,
 		Roles: []string{inv.RoleID}, Status: "active",
 		CreatedAt: now, UpdatedAt: now, Version: 1,
 	}
 	inv.UsedAt = &now
+	inv.AcceptedUserID = id
 
 	userData, err := json.Marshal(user)
 	if err != nil {
@@ -865,8 +894,17 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		b.Close()
 		return nil, err
 	}
-	if inv.Email != "" {
-		if err := b.Set([]byte("idx:user:email:"+strings.ToLower(inv.Email)), []byte(id), nil); err != nil {
+	if lowerEmail != "" {
+		if err := b.Set([]byte("idx:user:email:"+lowerEmail), []byte(id), nil); err != nil {
+			b.Close()
+			return nil, err
+		}
+		grant, err := json.Marshal(inviteEmailGrant{UserID: id, GrantedAt: now})
+		if err != nil {
+			b.Close()
+			return nil, err
+		}
+		if err := b.Set([]byte(inviteEmailGrantPrefix+lowerEmail), grant, nil); err != nil {
 			b.Close()
 			return nil, err
 		}
