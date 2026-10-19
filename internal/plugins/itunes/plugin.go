@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-08
+// last-edited: 2026-10-18
 
 // Package itunes is the UOS plugin for iTunes/Music library operations.
 // It wraps the internal iTunes service and registers OperationDefs through
@@ -78,9 +78,10 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 		// positionSyncDef is a stub too, but it has no server-side counterpart,
 		// so it stays registered: dropping it would make the op vanish rather
 		// than fail, and "unknown op" is a worse error than a plain refusal. Its
-		// Run returns an error instead of nil -- see runPositionSync. The real
-		// implementation it should call, svc.Positions.Sync, exists and has
-		// never been wired to anything.
+		// Run returns an error instead of nil -- see runPositionSync. The
+		// service-side PositionSync it once pointed at was never wired to
+		// anything and was deleted on 2026-10-18 (iTunes is a one-time manual
+		// import).
 		p.positionSyncDef(),
 	}
 }

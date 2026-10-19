@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/position_sync.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f6a7b8c9-d0e1-2345-fghi-456789012345
-// last-edited: 2026-08-19
+// last-edited: 2026-10-18
 
 package itunes
 
@@ -35,7 +35,8 @@ func (p *Plugin) positionSyncDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runPositionSync(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	// TODO: Implement iTunes position sync operation.
-	// This should call p.svc.Positions.Sync().
+	// No implementation: iTunes is a one-time manual import (owner
+	// decision), and the never-wired service-side PositionSync was deleted
+	// on 2026-10-18. Whether to drop this stub op is the owner's call.
 	return errNotImplemented("itunes.position-sync")
 }

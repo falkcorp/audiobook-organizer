@@ -1,7 +1,7 @@
 // file: internal/itunes/service/service_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4ab6d921-bccd-4265-b04b-31faaacd5826
-// last-edited: 2026-10-07
+// last-edited: 2026-10-18
 
 package itunesservice
 
@@ -79,9 +79,6 @@ func TestNew_Enabled_ConstructsAllSubComponents(t *testing.T) {
 	}
 
 	// All sub-components must be wired — nil means a wiring step was skipped.
-	if svc.Positions == nil {
-		t.Error("Positions is nil")
-	}
 	if svc.Playlists == nil {
 		t.Error("Playlists is nil")
 	}

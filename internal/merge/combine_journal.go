@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.31.1
+// version: 1.31.2
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-18
 
@@ -1298,8 +1298,8 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 // before this runs), and nothing called under this one takes a user-state
 // stripe, which is not reentrant. Since 2026-10-18 every writer of a user's
 // state or positions takes the stripe (database.LockUserBookState's HELD BY
-// list: the web reading heartbeat, readstatus' recompute and rebuild, the
-// iTunes position sync and backfill, the merge follow), so none can land
+// list: the web reading heartbeat and its recompute, readstatus' rebuild,
+// the iTunes position backfill, the merge follow), so none can land
 // between these reads and the writes.
 //
 // Until round 6 of the #4064 review the reads came before the stripe; each
