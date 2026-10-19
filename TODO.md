@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.33 -->
+<!-- version: 10.76.34 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-19 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,94 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **LIBRARY-READ-STATUS-ALTERNATION-EMPTY** The Library list's `filters=` JSON
+      route answers `200` with `count: 0` for a read_status value written as an
+      alternation: `[{"field":"read_status","value":"(finished|in_progress)"}]`
+      and `"finished|in_progress"` both return an empty list (probed 2026-10-18
+      with the `TestLibraryListDateFilters` setup), the "0 reads as none exist"
+      failure the handler already guards against for other fields. The cause is
+      `internal/audiobooks/filter_compiled.go`: the `read_status` case only checks
+      `IsPlainLiteral`, which accepts `(a|b)`, and `matchesPerUserFilter` then
+      compares the whole string to one status with EqualFold. `last_played` with
+      an alternation is already a 400 ("is not a single value"). Found while
+      auditing the consumers of `PerUserFilters` in 07-F5a (#4071); that PR fixed
+      the search-DSL path (Bleve, playlists, dynamic collections), which builds one
+      OR-group filter, but the Library `filters=` route builds one `FieldFilter` per
+      term and has no alternation. Fix properly: either split the alternation into
+      an OR-group in `FieldFilter`-to-`PerUserFilter` conversion
+      (`internal/audiobooks/filter_date.go`) so it agrees with the DSL path, or
+      refuse a value that is not a single known status with a 400 that names the
+      valid statuses.
+
+- [ ] **OR-WITH-PER-USER-ANDED** A query that ORs an indexed term with a per-user
+      term (`title:Alpha OR read_status:finished`) is evaluated as an AND.
+      `translateOr` in `internal/search/bleve_translator.go` drops the per-user
+      child (it returns no Bleve query for it) and appends it to the per-user filter
+      list, which `MatchPerUserFilters` ANDs over the candidates of the remaining
+      Bleve query, so the result is `title:Alpha AND read_status:finished`. Found
+      while fixing per-user value alternation in 07-F5a (#4071), which only changed
+      `field:(a|b)`. It affects the library search, smart playlists and the hourly
+      dynamic-collection refresh. Fix properly: either represent OR over per-user
+      terms in the filter tree (evaluate the whole boolean expression in Go when it
+      mixes per-user and indexed terms, using Bleve only to fetch candidates) or
+      refuse the mix with a clear error at translation time.
+
+- [ ] **01-P81J-CATALOG-READ** 01-P81j retired `GET /api/v1/catalog/entries` and
+      `/catalog/entries/:id` (410, no replacement). Nothing else lists harvested
+      catalog entries now: `catalog.coverage-report` only gives aggregate counts,
+      so an operator cannot look at what `catalog.harvest-authors` wrote for one
+      author or series. 02 PR 7a/7b build on the local catalog; if they want a
+      read surface it should be a v3 endpoint (05 PR 9 adds `/api/v3/ops/*`, but
+      there is no catalog read there). Also decide whether the `cat_series` and
+      `cat_eg` (edition group) index writes in
+      `internal/database/catalog_entry_store.go` stay: no production code reads
+      them: `ListEntries` and `EditionGroupMembers`, their last readers, were deleted
+      with the routes, so those index rows are write-only.
+- [ ] **01-P81J-REPLAY-ALL** 01-P81j retired `POST /api/v1/review/replay-approved`
+      (410; replacement is `POST /api/v1/review/bulk` with explicit `ids`). Bulk
+      approve now reports per-item apply errors in `failed`, skips already-applied
+      ids and sets `apply_disabled` when apply is off, so the failure and retry
+      behaviour of the old route is covered. Still missing: a dry run (the old
+      `would_replay`, skip reasons and apply cap preview), a `kind` scope over
+      approved items (bulk by `kind` only targets pending ones, so an operator must
+      list the approved items and send their ids), and a `limit` canary. If bulk
+      re-approve is how approved-while-off decisions are meant to execute, give
+      `/review/bulk` an `include_approved` option with a dry run.
+
+- [ ] **SELECT-ALL-PER-USER-FILTERS** The background select-all resolver in
+      `internal/server/metadata_ops.go` (the `for _, ff := range f.FieldFilters`
+      loop near line 572, doc comment at line 563) silently drops every per-user
+      `field_filters` entry (`read_status`, `progress_pct`, `last_played`)
+      because a background op has no user context. A select-all on a view that is
+      filtered by `read_status:unread` therefore resolves to the whole filtered
+      view minus that filter, and the op runs against more books than the
+      operator saw on screen. Found while reviewing 07-F5a (#4071); that PR left
+      the code alone because it is a separate code path. Fix properly: carry the
+      requesting user's id in the op params and evaluate the per-user filters
+      against that user's rows, or refuse the select-all with a clear error when
+      a per-user filter is present, instead of widening it silently.
+
+- [ ] **Make `absauth.HashPassword` / `VerifyPassword` context-aware** — the argon2id
+  semaphore (`internal/server/absauth/password.go`, `argonSem`) is a plain blocking
+  acquire, so a request whose client has gone still waits its turn and then runs a full
+  64 MiB derivation. Take a `context.Context` and `select` on `ctx.Done()` while
+  waiting for a slot. Touches all 7 call sites (web Login/ChangePassword/setup, invite
+  accept ×2, bootstrap admin, ABS login + rehash); do it after #4081 lands, since that
+  PR rewrites the ChangePassword and rehash call sites. From the #4082 re-review (NIT 2).
+
+- [ ] **TEST-LEAVES-AUDIBLE-HOLD** Find which `internal/server` test left a hold on
+      audible in the process-wide throttle registry on Woodpecker pipeline 1222
+      (mac agent). The harvest tests are now immune (#4083 injects the registry), but
+      the leaking test is still unknown. A full local `go test ./internal/server/ -v`
+      with a stack print in `RecordFailure` showed no audible hold outside the
+      deliberate installs (`metadata_ops_throttle_test.go` lines 41/144/196, which
+      reset and clean up), so it likely needs real network or a different order.
+      Candidates that build a real `metadata.NewAudibleClient()`:
+      `internal/server/metadata_ops_test.go` (~L317, bulk fetch with sources
+      disabled still constructs the real client) and
+      `internal/server/metadata_ops_throttle_test.go`. Pin it by running the package
+      on the mac agent with that stack print, or by blocking DNS for api.audible.com.
 
 - [ ] **05-PR9 follow-up** `POST /api/v3/ops/runs/{id}/approve` answers 501
       after all its checks: nothing records a decision against a run yet.
