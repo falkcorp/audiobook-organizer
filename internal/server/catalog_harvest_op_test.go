@@ -1,5 +1,5 @@
 // file: internal/server/catalog_harvest_op_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 2d7e9b41-5c3a-4f86-9e10-4b8a6c2d1f57
 // last-edited: 2026-10-19
 
@@ -64,8 +64,8 @@ func (l *catalogFakeLister) ListByAuthor(_ context.Context, name string, page, _
 }
 func (l *catalogFakeLister) LookupProduct(context.Context, string) (*metadata.CatalogProduct, error) {
 	// Not-found, never a generic error: the harvest feeds provider errors to
-	// the process-wide throttle registry, and a hold recorded here would leak
-	// into every later test in this binary.
+	// the throttle registry it was handed, so a generic error here would write
+	// a hold into the test's private registry and stand that run down.
 	return nil, metadata.ErrCatalogProductNotFound
 }
 
@@ -197,6 +197,36 @@ func TestCatalogHarvest_DryRunThenLive(t *testing.T) {
 	// An out-of-scope manual trigger is refused, not silently a no-op.
 	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"Ghost Writer"}}, false, config.AppConfig.Catalog); err == nil {
 		t.Error("out-of-scope author accepted")
+	}
+}
+
+// throttledLister answers every listing with a 429: a provider that is
+// refusing the harvest.
+type throttledLister struct{ catalogFakeLister }
+
+func (l *throttledLister) ListByAuthor(context.Context, string, int, int) (metadata.AuthorPage, error) {
+	return metadata.AuthorPage{}, &metadata.ProviderStatusError{
+		Provider: metadata.SourceIDAudible, Status: 429,
+		Body: "Quota exceeded for quota metric 'Queries' and limit 'Queries per day'",
+	}
+}
+
+// The write side: a provider error the harvest meets lands in the registry the
+// harvest was handed, and never in the process-wide one every other Audible
+// caller shares.
+func TestCatalogHarvest_RecordsHoldInItsOwnRegistryOnly(t *testing.T) {
+	withCatalogEnabled(t, true)
+	resetThrottles(t)
+	ps := seedCatalogLibrary(t)
+	cat := database.NewCatalogStoreFromStore(ps)
+	private := newCatalogTestThrottles()
+	// The run stands down on the hold it just recorded; that error is expected.
+	_ = runCatalogHarvest(context.Background(), &catalogTestReporter{}, ps, cat, &throttledLister{}, private, catalogHarvestParams{}, false, config.AppConfig.Catalog)
+	if !private.Throttled(metadata.SourceIDAudible) {
+		t.Error("the harvest's own registry did not record the 429 hold")
+	}
+	if metadata.DefaultThrottleRegistry().Throttled(metadata.SourceIDAudible) {
+		t.Error("the harvest wrote its hold into the process-wide registry")
 	}
 }
 
