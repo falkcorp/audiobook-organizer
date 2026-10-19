@@ -1,5 +1,5 @@
 // file: internal/metrics/pipeline_metrics.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1bafd1d0-de42-4e6d-a079-b28e4ea4858b
 // last-edited: 2026-10-19
 
@@ -9,35 +9,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-)
-
-// Bounded label values for filename_parse_total{shape}. The parser classifies
-// a filename into exactly one of these before counting; a raw filename or an
-// unlisted shape string must never reach the label (cardinality). ParseShapeOther
-// is for a recognised-but-unlisted layout, ParseShapeUnknown for "the parser
-// could not tell what layout this is at all".
-const (
-	ParseShapeAuthorSeqTitle       = "author_seq_title"
-	ParseShapeSeriesSeqTitle       = "series_seq_title"
-	ParseShapeSeriesSeqAuthorTitle = "series_seq_author_title"
-	ParseShapeSeqTitle             = "seq_title"
-	ParseShapeDigitsOnly           = "digits_only"
-	ParseShapeRangeSpan            = "range_span"
-	ParseShapeYearTitle            = "year_title"
-	ParseShapeOther                = "other"
-	ParseShapeUnknown              = "unknown"
-)
-
-// Bounded label values for filename_parse_total{outcome}: what the parse did
-// with the file. matched = the parse agreed with the stored title; retitled =
-// the parse produced a title and it was written; skipped = a parse existed but
-// a gate (allowlist, lock, iTunes rule, ...) declined to apply it; unparsed =
-// no usable parse.
-const (
-	ParseOutcomeMatched  = "matched"
-	ParseOutcomeRetitled = "retitled"
-	ParseOutcomeSkipped  = "skipped"
-	ParseOutcomeUnparsed = "unparsed"
 )
 
 // Bounded label values for metadata_fetch_total{source}: where one provider
@@ -82,16 +53,6 @@ const (
 )
 
 var (
-	// filenameParseTotal counts filename-parse decisions by the shape the
-	// parser recognised and what it did with the result. Instrument only: the
-	// call sites are wired by the number-leading-titles fixer branch, which is
-	// where the shape classification lives.
-	filenameParseTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "audiobook_organizer",
-		Name:      "filename_parse_total",
-		Help:      "Filename parse decisions by recognised shape (author_seq_title, series_seq_title, series_seq_author_title, seq_title, digits_only, range_span, year_title, other, unknown) and outcome (matched, retitled, skipped, unparsed)",
-	}, []string{"shape", "outcome"})
-
 	// metadataFetchTotal counts provider lookups by provider and by where the
 	// answer came from. The provider label is metadata.ProviderKey(src): a
 	// configured provider id (audible, audnexus, google-books, hardcover,
@@ -141,14 +102,7 @@ var (
 
 // pipelineCollectors is what Register adds for this file.
 var pipelineCollectors = []prometheus.Collector{
-	filenameParseTotal, metadataFetchTotal, reviewIndexRequestSeconds, numberLeadingTitlesGauge, fixerDurationSeconds,
-}
-
-// IncFilenameParse counts one filename-parse decision. shape and outcome MUST
-// be the ParseShape*/ParseOutcome* constants above; the caller classifies, this
-// function only counts.
-func IncFilenameParse(shape, outcome string) {
-	filenameParseTotal.WithLabelValues(shape, outcome).Inc()
+	metadataFetchTotal, reviewIndexRequestSeconds, numberLeadingTitlesGauge, fixerDurationSeconds,
 }
 
 // IncMetadataFetch counts one provider lookup event. provider is
