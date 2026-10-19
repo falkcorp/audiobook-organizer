@@ -1,5 +1,5 @@
 // file: internal/server/handlers/reading.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
 // last-edited: 2026-10-18
 
@@ -37,7 +37,7 @@ type PatchStatusRequest struct {
 //
 // Measured with an empty-interface compiler probe: 4 direct calls, plus
 // readstatus.Store because the handler forwards its store to
-// readstatus.RecomputeUserBookState and SetManualStatus.
+// readstatus.RecomputeUserBookStateLocked and SetManualStatus.
 //
 // It previously embedded database.BookFileStore + database.UserPositionStore
 // wholesale, with a comment explaining that this was to satisfy the ANONYMOUS

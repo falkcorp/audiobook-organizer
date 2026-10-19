@@ -1,6 +1,6 @@
 // file: internal/readstatus/readstatus_test.go
-// version: 1.0.1
-// last-edited: 2026-09-19
+// version: 1.1.0
+// last-edited: 2026-10-18
 // guid: 9e2a8c4d-5b1f-4f70-a7c6-2d8e0f1b9a57
 
 package readstatus
@@ -43,7 +43,7 @@ func setupReadTestStore(t *testing.T) database.Store {
 
 func TestRecompute_Unstarted(t *testing.T) {
 	store := setupReadTestStore(t)
-	state, err := RecomputeUserBookState(store, "u1", "b1")
+	state, err := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if err != nil {
 		t.Fatalf("recompute: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRecompute_InProgress(t *testing.T) {
 	// Listened 300s of the first segment (of 1800 total = 16.6%).
 	_ = store.SetUserPosition("u1", "b1", "s1", 300)
 
-	state, err := RecomputeUserBookState(store, "u1", "b1")
+	state, err := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if err != nil || state == nil {
 		t.Fatalf("recompute: %v / %v", state, err)
 	}
@@ -80,7 +80,7 @@ func TestRecompute_AutoFinished(t *testing.T) {
 	_ = store.SetUserPosition("u1", "b1", "s2", 600)
 	_ = store.SetUserPosition("u1", "b1", "s3", 600)
 
-	state, err := RecomputeUserBookState(store, "u1", "b1")
+	state, err := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if err != nil || state == nil {
 		t.Fatalf("recompute: %v / %v", state, err)
 	}
@@ -99,7 +99,7 @@ func TestRecompute_ThresholdBoundary(t *testing.T) {
 	_ = store.SetUserPosition("u1", "b1", "s2", 600)
 	_ = store.SetUserPosition("u1", "b1", "s3", 510) // 600+600+510 = 1710
 
-	state, _ := RecomputeUserBookState(store, "u1", "b1")
+	state, _ := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if state == nil {
 		t.Fatal("state nil")
 	}
@@ -114,7 +114,7 @@ func TestRecompute_OverflowCapped(t *testing.T) {
 	// end). Should be capped at segment duration, not double-count.
 	_ = store.SetUserPosition("u1", "b1", "s1", 9999)
 
-	state, _ := RecomputeUserBookState(store, "u1", "b1")
+	state, _ := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if state == nil {
 		t.Fatal("state nil")
 	}
@@ -131,7 +131,7 @@ func TestRecompute_ManualOverrideNotClobbered(t *testing.T) {
 	// Later they listen to a bit. Recompute must NOT flip status
 	// away from abandoned.
 	_ = store.SetUserPosition("u1", "b1", "s1", 300)
-	state, _ := RecomputeUserBookState(store, "u1", "b1")
+	state, _ := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if state.Status != database.UserBookStatusAbandoned {
 		t.Errorf("Manual status clobbered by recompute: %q, want abandoned", state.Status)
 	}
@@ -146,7 +146,7 @@ func TestSetManualStatus_ClearReturnsToAuto(t *testing.T) {
 
 	// Play a bit, auto-status = in_progress.
 	_ = store.SetUserPosition("u1", "b1", "s1", 300)
-	_, _ = RecomputeUserBookState(store, "u1", "b1")
+	_, _ = RecomputeUserBookStateLocked(store, "u1", "b1")
 
 	// Manually force to finished.
 	_, _ = SetManualStatus(store, "u1", "b1", database.UserBookStatusFinished)
@@ -174,8 +174,8 @@ func TestRecompute_PerUserIsolation(t *testing.T) {
 	_ = store.SetUserPosition("u1", "b1", "s1", 600)
 	_ = store.SetUserPosition("u2", "b1", "s1", 30)
 
-	s1, _ := RecomputeUserBookState(store, "u1", "b1")
-	s2, _ := RecomputeUserBookState(store, "u2", "b1")
+	s1, _ := RecomputeUserBookStateLocked(store, "u1", "b1")
+	s2, _ := RecomputeUserBookStateLocked(store, "u2", "b1")
 
 	if s1.Status != database.UserBookStatusInProgress {
 		t.Errorf("u1 status = %q", s1.Status)

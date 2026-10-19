@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus_failclosed_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8b5d17-6a2c-4f91-8d40-c2a7e9f5b6d1
-// last-edited: 2026-09-19
+// last-edited: 2026-10-18
 
 package readstatus
 
@@ -48,7 +48,7 @@ func assertStateIntact(t *testing.T, store database.Store) {
 
 func TestRecompute_UnreadableStateFailsClosed(t *testing.T) {
 	store := seedTombstoned(t)
-	_, err := RecomputeUserBookState(unreadableStateStore{store}, "u1", "b1")
+	_, err := RecomputeUserBookStateLocked(unreadableStateStore{store}, "u1", "b1")
 	if !errors.Is(err, ErrStateUnreadable) {
 		t.Fatalf("recompute over an unreadable state: err = %v, want ErrStateUnreadable", err)
 	}
@@ -75,7 +75,7 @@ func (unreadablePositionsStore) ListUserPositionsForBook(string, string) ([]data
 
 func TestRecompute_UnreadablePositionsFailClosed(t *testing.T) {
 	store := seedTombstoned(t)
-	_, err := RecomputeUserBookState(unreadablePositionsStore{store}, "u1", "b1")
+	_, err := RecomputeUserBookStateLocked(unreadablePositionsStore{store}, "u1", "b1")
 	if !errors.Is(err, ErrPositionsUnreadable) {
 		t.Fatalf("recompute over unreadable positions: err = %v, want ErrPositionsUnreadable", err)
 	}
@@ -131,7 +131,7 @@ func (unreadableFilesStore) GetBookFiles(string) ([]database.BookFile, error) {
 // a finished book and a 0 percent: fail closed instead.
 func TestRecompute_UnreadableBookFilesFailClosed(t *testing.T) {
 	store := seedTombstoned(t)
-	if _, err := RecomputeUserBookState(unreadableFilesStore{store}, "u1", "b1"); !errors.Is(err, ErrBookFilesUnreadable) {
+	if _, err := RecomputeUserBookStateLocked(unreadableFilesStore{store}, "u1", "b1"); !errors.Is(err, ErrBookFilesUnreadable) {
 		t.Fatalf("recompute over unreadable files: err = %v, want ErrBookFilesUnreadable", err)
 	}
 	assertStateIntact(t, store)
@@ -163,7 +163,7 @@ func TestRecompute_CorruptPositionRowFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if _, err := RecomputeUserBookState(store, "u1", "b1"); !errors.Is(err, ErrPositionsUnreadable) || !errors.Is(err, database.ErrUserPositionUndecodable) {
+	if _, err := RecomputeUserBookStateLocked(store, "u1", "b1"); !errors.Is(err, ErrPositionsUnreadable) || !errors.Is(err, database.ErrUserPositionUndecodable) {
 		t.Fatalf("recompute over a corrupt position row: err = %v, want ErrPositionsUnreadable wrapping ErrUserPositionUndecodable", err)
 	}
 }
