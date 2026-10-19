@@ -1,7 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.29.0
+// version: 1.30.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-16
+// last-edited: 2026-10-18
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate } from 'react-router-dom';
@@ -41,6 +41,8 @@ const Diagnostics = lazy(() =>
 const ActivityLog = lazy(() => import('./pages/ActivityLog'));
 const Playlists = lazy(() => import('./pages/Playlists'));
 const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'));
+const Collections = lazy(() => import('./pages/Collections'));
+const CollectionDetail = lazy(() => import('./pages/CollectionDetail'));
 const AuthorDetail = lazy(() => import('./pages/AuthorDetail'));
 const Setup = lazy(() => import('./pages/Setup'));
 const Users = lazy(() => import('./pages/Users'));
@@ -372,6 +374,22 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <PlaylistDetail />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/collections"
+                element={
+                  <ErrorBoundary>
+                    <Collections />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/collections/:id"
+                element={
+                  <ErrorBoundary>
+                    <CollectionDetail />
                   </ErrorBoundary>
                 }
               />
