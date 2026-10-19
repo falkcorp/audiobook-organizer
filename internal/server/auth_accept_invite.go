@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-06-09
+// last-edited: 2026-10-19
 
 // Rescued from user_handlers.go during Phase 2 handler extraction.
 // handleAcceptInvite remains a *Server method because it bridges auth
@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // handleAcceptInvite accepts an invite token and creates a new user session.
@@ -44,13 +44,13 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	algo, hash, err := absauth.HashPassword(req.Password)
 	if err != nil {
 		httputil.InternalError(c, "hash password", err)
 		return
 	}
 
-	user, err := s.Ops().ConsumeInvite(req.Token, "bcrypt", string(hash))
+	user, err := s.Ops().ConsumeInvite(req.Token, algo, hash)
 	if err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
@@ -66,6 +66,6 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 	// Session token is delivered via the HttpOnly cookie only — never in the
 	// JSON body (would expose the bearer token to page JS, defeating HttpOnly).
 	// Return the safe user shape, not the raw *database.User, which would leak
-	// the bcrypt password hash (pen-test finding CRIT-2).
+	// the password hash (pen-test finding CRIT-2).
 	httputil.RespondWithCreated(c, gin.H{"user": handlers.BuildAuthUserResponse(user), "expires_at": sess.ExpiresAt})
 }

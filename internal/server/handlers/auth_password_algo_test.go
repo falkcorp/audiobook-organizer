@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth_password_algo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f0c7a52-9d3e-4b86-a1c7-6e25b8d0f913
 // last-edited: 2026-10-19
 
@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // The ABS sign-in rehashes a bcrypt user to argon2id and records
@@ -135,12 +134,13 @@ func TestAuthHandler_ChangePassword_AcceptsArgon2idCurrentPassword(t *testing.T)
 
 	require.Equal(t, http.StatusNoContent, c.Writer.Status(), w.Body.String())
 	require.NotNil(t, saved)
-	// The web path keeps writing bcrypt, and the algo column must say so, or the
-	// new hash would be read as argon2id and nobody could sign in.
-	assert.Equal(t, absauth.AlgoBcrypt, saved.PasswordHashAlgo)
-	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(saved.PasswordHash), []byte("new-password-2")))
+	// Web password writes use the shared policy (argon2id), and the algo column
+	// must say so, or the new hash would be read with the wrong algorithm.
+	assert.Equal(t, absauth.AlgoArgon2id, saved.PasswordHashAlgo)
 	ok, _ := absauth.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
 	assert.True(t, ok)
+	oldOK, _ := absauth.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "old-password-1")
+	assert.False(t, oldOK)
 }
 
 func TestAuthHandler_ChangePassword_Argon2idWrongCurrentPasswordDenied(t *testing.T) {
@@ -178,6 +178,36 @@ func TestAuthHandler_ChangePassword_BcryptStillWorks(t *testing.T) {
 	h.ChangePassword(c)
 
 	assert.Equal(t, http.StatusNoContent, c.Writer.Status(), w.Body.String())
+}
+
+// A row written before the algo column was populated has an empty algo and a bcrypt
+// hash. The user can change their password, and the new hash is argon2id.
+func TestAuthHandler_ChangePassword_LegacyEmptyAlgoBcryptRow(t *testing.T) {
+	user := &database.User{
+		ID: "user-1", Username: "alice", PasswordHash: testBcryptHash(t, "old-password-1"),
+		PasswordHashAlgo: "", Roles: []string{"user"}, Status: "active", CreatedAt: time.Now(),
+	}
+	store := handlersmocks.NewMockAuthStore(t)
+	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
+	var saved *database.User
+	store.EXPECT().UpdateUser(mock.Anything).RunAndReturn(func(u *database.User) error {
+		saved = u
+		return nil
+	})
+
+	h := handlers.NewAuthHandler(store, true)
+	c, w := newAuthCtx("PUT", "/auth/me/password", map[string]any{
+		"current_password": "old-password-1",
+		"new_password":     "new-password-2",
+	})
+	setAuthUser(c, user)
+	h.ChangePassword(c)
+
+	require.Equal(t, http.StatusNoContent, c.Writer.Status(), w.Body.String())
+	require.NotNil(t, saved)
+	assert.Equal(t, absauth.AlgoArgon2id, saved.PasswordHashAlgo)
+	ok, _ := absauth.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
+	assert.True(t, ok)
 }
 
 func TestAuthHandler_ChangePassword_UnknownAlgoDenied(t *testing.T) {

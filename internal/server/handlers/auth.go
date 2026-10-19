@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.9.2
+// version: 2.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-19
 
@@ -18,7 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // AuthUserResponse is the JSON shape returned after login and token refresh.
@@ -248,7 +247,7 @@ func permissionStrings(perms []auth.Permission) []string {
 // BuildAuthUserResponse is the exported form of buildAuthUserResponse for
 // callers in sibling packages (e.g. the server package's accept-invite handler).
 // Always use this instead of returning a raw *database.User, which would leak
-// the bcrypt password hash (pen-test finding CRIT-2).
+// the password hash (pen-test finding CRIT-2).
 func BuildAuthUserResponse(user *database.User) AuthUserResponse {
 	return buildAuthUserResponse(user)
 }
@@ -340,12 +339,12 @@ func (h *AuthHandler) SetupInitialAdmin(c *gin.Context) {
 		httputil.RespondWithConflict(c, "initial setup already completed")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	algo, hash, err := absauth.HashPassword(req.Password)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return
 	}
-	created, err := h.store.CreateUser(req.Username, req.Email, "bcrypt", string(hash), []string{"admin"}, "active")
+	created, err := h.store.CreateUser(req.Username, req.Email, algo, hash, []string{"admin"}, "active")
 	if err != nil {
 		httputil.RespondWithBadRequest(c, "failed to create initial user")
 		return
@@ -603,13 +602,13 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 			return
 		}
 	}
-	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	newAlgo, newHash, err := absauth.HashPassword(req.NewPassword)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return
 	}
-	target.PasswordHash = string(newHash)
-	target.PasswordHashAlgo = "bcrypt"
+	target.PasswordHash = newHash
+	target.PasswordHashAlgo = newAlgo
 	if err := h.store.UpdateUser(target); err != nil {
 		httputil.RespondWithInternalError(c, "failed to update password")
 		return
