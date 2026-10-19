@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e7a545a5-fab9-47d7-9f05-5851bcf6cdb8
-// last-edited: 2026-10-16
+// last-edited: 2026-10-19
 
 package server
 
@@ -315,7 +315,7 @@ func TestHarvestMarksAuthorBooksDirty(t *testing.T) {
 	cat := database.NewCatalogStoreFromStore(ps)
 	lister := &catalogFakeLister{}
 	rep := &catalogTestReporter{}
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
 		t.Fatal(err)
 	}
 	live, err := ps.GetBookByFilePath("/lib/Live Book")
@@ -330,7 +330,7 @@ func TestHarvestMarksAuthorBooksDirty(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Same listing again (manual trigger): no new entry, nothing staled.
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, catalogHarvestParams{Authors: []string{"Ann Author"}}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"Ann Author"}}, false, config.AppConfig.Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := cat.GetAuthorState(catalog.HarvestKey("Ann Author")); st == nil || st.Created != 0 {
