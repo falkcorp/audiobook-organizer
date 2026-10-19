@@ -1,7 +1,7 @@
 // file: internal/testutil/integration.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-03
+// last-edited: 2026-10-19
 
 package testutil
 
@@ -16,7 +16,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -79,9 +78,6 @@ func SetupIntegration(t *testing.T) (*IntegrationEnv, func()) {
 	// Previous test runs in the same process may have left a stale
 	// pkgStore via scanner.SetStore from NewServer.
 	scanner.SetStore(store)
-
-	hub := realtime.NewEventHub()
-	realtime.SetGlobalHub(hub)
 
 	origCfg := config.Snapshot()
 	// WHY Mutate: test setup writes the global AppConfig before starting any

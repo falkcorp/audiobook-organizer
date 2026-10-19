@@ -1,5 +1,5 @@
 // file: internal/realtime/events.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9e8d7f6a-5c4b-3a21-0f9e-8d7c6b5a4392
 // last-edited: 2026-10-19
 
@@ -305,17 +305,4 @@ func calculatePercentage(current, total int) int {
 		return 100
 	}
 	return percentage
-}
-
-// Global event hub instance
-var (
-	GlobalHub   *EventHub
-	globalHubMu sync.RWMutex
-)
-
-// SetGlobalHub updates the global event hub in a race-safe way.
-func SetGlobalHub(hub *EventHub) {
-	globalHubMu.Lock()
-	defer globalHubMu.Unlock()
-	GlobalHub = hub
 }

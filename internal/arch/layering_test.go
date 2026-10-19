@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.4
+// version: 1.4.5
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -251,7 +251,7 @@ var layerOf = map[string]int{
 	"internal/server/handlers/system/mocks":     5, // family: internal/server/** is transport
 	"internal/server/handlers/tools":            5, // family: internal/server/** is transport
 	"internal/server/middleware":                5, // family: internal/server/** is transport
-	"internal/testutil":                         5, // computed: max of imports=5, floored at 3
+	"internal/testutil":                         4, // computed: max of imports=4, floored at 3
 
 	// Layer 6: entry
 	".":                                  6, // entry: module root main package

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.99.1
+// version: 2.99.2
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-19
 
@@ -991,7 +991,6 @@ func NewServer(store database.Store) *Server {
 
 	// Create hub, batcher, and file I/O pool as Server fields
 	server.hub = realtime.NewEventHub()
-	realtime.SetGlobalHub(server.hub)
 
 	// books.changed: every committed book write (the store's library-generation
 	// funnel) is coalesced into 250 ms batches and broadcast, so the Library
