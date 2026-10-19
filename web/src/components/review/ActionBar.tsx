@@ -1,5 +1,5 @@
 // file: web/src/components/review/ActionBar.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5a91c73e-2d48-4b06-9f15-8c3e0a7b6d29
 // last-edited: 2026-10-19
 //
@@ -63,6 +63,13 @@ export interface ActionBarProps {
    */
   selectionHoldReason?: string | null;
   /**
+   * Why the page buttons (Apply page, Apply high confidence) are held, or
+   * null/undefined. They act on the page's rows, not the selection, but go
+   * through the same guard in the lane, so they are disabled with this reason
+   * while the selection is unsettled.
+   */
+  pageActionHoldReason?: string | null;
+  /**
    * The part of the selection Apply selected can act on: the selection minus
    * books known to have no candidate. Defaults to the whole selection, which
    * is what it is whenever no candidate-less row is selected.
@@ -114,6 +121,7 @@ export interface ActionBarProps {
 export function ActionBar({
   selectedIds,
   selectionHoldReason = null,
+  pageActionHoldReason = null,
   applicableSelectedIds,
   onSearchSelected,
   searching = false,
@@ -170,6 +178,7 @@ export function ActionBar({
 
   const selected = [...selectedIds];
   const held = selectionHoldReason !== null;
+  const pageHeld = pageActionHoldReason !== null;
   const applicable = applicableSelectedIds ?? selected;
 
   return (
@@ -261,12 +270,17 @@ export function ActionBar({
           </span>
         </Tooltip>
 
-        <Tooltip title="Rows on this page scoring above the confidence threshold that also name a narrator.">
+        <Tooltip
+          title={
+            pageActionHoldReason ??
+            'Rows on this page scoring above the confidence threshold that also name a narrator.'
+          }
+        >
           <span>
             <Button
               size="small"
               variant="outlined"
-              disabled={busy || highConfidenceIds.length === 0}
+              disabled={busy || highConfidenceIds.length === 0 || pageHeld}
               data-testid="apply-high-confidence"
               onClick={() =>
                 run(
@@ -280,12 +294,12 @@ export function ActionBar({
           </span>
         </Tooltip>
 
-        <Tooltip title="Every undecided matched row on this page.">
+        <Tooltip title={pageActionHoldReason ?? 'Every undecided matched row on this page.'}>
           <span>
             <Button
               size="small"
               variant="outlined"
-              disabled={busy || allVisiblePendingIds.length === 0}
+              disabled={busy || allVisiblePendingIds.length === 0 || pageHeld}
               data-testid="apply-page"
               onClick={() =>
                 run(

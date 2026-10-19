@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-10-19
 //
@@ -320,6 +320,7 @@ export function MetadataPanel({
         onSkipSelected={metadata.skipSelected}
         onRejectSelected={() => void metadata.rejectSelected()}
         selectionHoldReason={metadata.selectionHoldReason}
+        pageActionHoldReason={metadata.pageActionHoldReason}
         onSearchSelected={(ids) =>
           void metadata.searchAgain(ids, (message) => Promise.resolve(window.confirm(message)))
         }

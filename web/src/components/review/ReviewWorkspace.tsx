@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.29.0
+// version: 1.30.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
 // last-edited: 2026-10-19
 //
@@ -566,7 +566,7 @@ export function ReviewWorkspace() {
                 disabledReason:
                   metadata.applicableSelectedIds.length === 0
                     ? 'Select one or more books with a candidate first.'
-                    : undefined,
+                    : (metadata.selectionHoldReason ?? undefined),
                 run: () =>
                   metadata.dispatch({
                     lane: 'metadata',
@@ -588,7 +588,7 @@ export function ReviewWorkspace() {
                 disabledReason:
                   metadata.allVisiblePendingIds.length === 0
                     ? 'No undecided matched rows on this page.'
-                    : (metadata.selectionHoldReason ?? undefined),
+                    : (metadata.pageActionHoldReason ?? undefined),
                 run: () =>
                   metadata.dispatch({
                     lane: 'metadata',
@@ -744,6 +744,7 @@ export function ReviewWorkspace() {
     [
       metadata.selectedIds,
       metadata.selectionHoldReason,
+      metadata.pageActionHoldReason,
       metadata.refuseUnsettledSelection,
       metadata.applicableSelectedIds,
       metadata.allVisiblePendingIds,

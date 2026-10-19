@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.51.0
+// version: 1.52.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-19
 //
@@ -113,6 +113,9 @@ export const SELECTION_HELD_MESSAGE =
   'Actions on the selection are held: it could not be checked against the current filters. ' +
   'Clear the selection or change the filters to continue.';
 /** Shown while the check against the new filters is still running. */
+export const PAGE_ACTIONS_HELD_MESSAGE =
+  'Actions are held until the selection is checked against the current filters. ' +
+  'Wait for the check, clear the selection or change the filters.';
 export const SELECTION_PENDING_MESSAGE =
   'The selection is being checked against the new filters; try again in a moment.';
 
@@ -917,7 +920,6 @@ export interface MetadataLane {
   clearSelection: () => void;
   /** True when every book the current view matches is selected. */
   allMatchingSelected: boolean;
-  /** Mark every selected book skipped (client-side, like the row Skip). */
   /**
    * Why every command that acts on the selected books is held right now, or
    * null. Set while the selection is being checked against new filters and
@@ -932,6 +934,14 @@ export interface MetadataLane {
    * buttons are disabled too; this is the belt to that pair of braces.
    */
   refuseUnsettledSelection: () => boolean;
+  /**
+   * Why the page-scoped bulk actions (Apply page, Apply high confidence, Apply
+   * all fields) are held right now, or null. They go through the same guard as
+   * the selection commands (refuseUnsettled), so they are held while the
+   * selection is.
+   */
+  pageActionHoldReason: string | null;
+  /** Mark every selected book skipped (client-side, like the row Skip). */
   skipSelected: () => void;
   /**
    * Mark every selected book no-match on the server, PER_BOOK_CONCURRENCY at
@@ -1432,8 +1442,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const pruneRetriesRef = useRef({ key: '', n: 0 });
   // Reactive mirrors of pruneSettledKeyRef / pruneFailedKeyRef: the refs are the
   // synchronous truth the handlers read, these re-render the buttons (a ref
-  // change repaints nothing). Only settle(), hold() and the emptied-selection
-  // effect write them.
+  // change repaints nothing). Only settle(), hold() and the render-time block
+  // that settles an emptied selection write them.
   const [settledKeyState, setSettledKeyState] = useState(pruneKey);
   const [heldKeyState, setHeldKeyState] = useState<string | null>(null);
   const pruneBuildingRef = useRef({ key: '', since: 0 });
@@ -3315,6 +3325,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     allMatchingSelected,
     selectionHoldReason,
     selectionSettled: selectionHoldReason === null,
+    pageActionHoldReason: selectionHoldReason === null ? null : PAGE_ACTIONS_HELD_MESSAGE,
     refuseUnsettledSelection,
     skipSelected,
     rejectSelected,
