@@ -1,7 +1,7 @@
 // file: internal/database/store_extra_test.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 68b2b2f9-2b8f-4f7f-9d8f-26e6306a3c8e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 
 // NOTE(fable5 T022): SQLiteStore type assertions replaced with PebbleStore;
 // TestSQLiteExtendedFeatures renamed to TestPebbleExtendedFeatures.
@@ -66,13 +66,20 @@ func TestPebbleExtendedFeatures(t *testing.T) {
 		t.Fatalf("GetUserByID(missing) should return nil,nil: err=%v user=%+v", err, missing)
 	}
 
-	fetched.Status = "disabled"
+	// Status changes only through SetUserStatus (UpdateUser refuses it).
+	fetched.Email = "renamed@example.com"
 	if err := sqliteStore.UpdateUser(fetched); err != nil {
 		t.Fatalf("UpdateUser failed: %v", err)
 	}
 	updated, _ := sqliteStore.GetUserByID(fetched.ID)
-	if updated.Status != "disabled" {
-		t.Fatalf("UpdateUser didn't persist: status=%s", updated.Status)
+	if updated.Email != "renamed@example.com" {
+		t.Fatalf("UpdateUser didn't persist: email=%s", updated.Email)
+	}
+	if _, err := sqliteStore.SetUserStatus(fetched.ID, "disabled"); err != nil {
+		t.Fatalf("SetUserStatus failed: %v", err)
+	}
+	if updated, _ = sqliteStore.GetUserByID(fetched.ID); updated.Status != "disabled" {
+		t.Fatalf("SetUserStatus didn't persist: status=%s", updated.Status)
 	}
 
 	// ---- Sessions ----
@@ -491,7 +498,8 @@ func exercisePebbleAdvanced(t *testing.T, store *PebbleStore) {
 	if _, err := store.GetUserByEmail(user.Email); err != nil {
 		t.Fatalf("GetUserByEmail failed: %v", err)
 	}
-	user.Status = "disabled"
+	// UpdateUser writes ordinary fields; Status goes through SetUserStatus.
+	user.Roles = []string{"viewer"}
 	if err := store.UpdateUser(user); err != nil {
 		t.Fatalf("UpdateUser failed: %v", err)
 	}

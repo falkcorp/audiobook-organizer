@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -185,6 +185,17 @@ func (p *PebbleStore) mutateUserCredentials(userID string, fn func(*User) error)
 		return nil, err
 	}
 	return stored, nil
+}
+
+// UserCredentialWriter is the only way to change a user's password, status or
+// CredentialEpoch: each op re-reads the row under userWriteMu, changes only its
+// own fields and bumps the epoch in the same write. Resolve it with
+// AsCapability: it is deliberately not on Store (the Store width baseline only
+// goes down), and a store without it cannot change credentials at all.
+type UserCredentialWriter interface {
+	SetUserPassword(userID, expectedHash, algo, hash string) (*User, error)
+	SetUserStatus(userID, status string) (*User, error)
+	BumpUserCredentialEpoch(userID string) (*User, error)
 }
 
 // SetUserPassword sets a new password hash and bumps CredentialEpoch in one

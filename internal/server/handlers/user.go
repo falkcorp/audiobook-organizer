@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -30,9 +30,6 @@ type UserStore interface {
 	ConsumeInvite(token, algo, hash string) (*database.User, error)
 	CreateSession(userID, ip, ua string, ttl time.Duration) (*database.Session, error)
 	GetUserByID(id string) (*database.User, error)
-	// SetUserStatus changes Status and bumps CredentialEpoch on the fresh row in
-	// one write; a whole-row UpdateUser can no longer change Status.
-	SetUserStatus(userID, status string) (*database.User, error)
 }
 
 // UserHandler handles user-management and invite HTTP endpoints.
@@ -41,11 +38,14 @@ type UserHandler struct {
 	// absSessions signs a user out of every ABS client on deactivation and
 	// reactivation. nil when the store has no ABS keyspace.
 	absSessions ABSSessionRevoker
+	// creds changes Status (SetUserStatus bumps the credential epoch with it).
+	// nil when the store lacks the capability; status changes then refuse.
+	creds database.UserCredentialWriter
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
 func NewUserHandler(store UserStore) *UserHandler {
-	return &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store)}
+	return &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store), creds: ResolveUserCredentialWriter(store)}
 }
 
 // generateToken produces a cryptographically random 32-byte hex string.
@@ -193,7 +193,11 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 	// refuses the account at once; the epoch bump means every ABS session issued
 	// before it stays dead after a later reactivation, whether or not the cleanup
 	// revoke below lands.
-	user, err = h.store.SetUserStatus(user.ID, "locked")
+	if h.creds == nil {
+		httputil.RespondWithInternalError(c, "status changes are not supported by this store")
+		return
+	}
+	user, err = h.creds.SetUserStatus(user.ID, "locked")
 	if err != nil {
 		httputil.InternalError(c, "deactivate user", err)
 		return
@@ -220,7 +224,11 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 	// issued before this instant (pre-deactivation ones, legacy unstamped ones,
 	// any a failed cleanup left behind) is refused by construction. The revoke
 	// after it only tidies the device list.
-	user, err = h.store.SetUserStatus(user.ID, "active")
+	if h.creds == nil {
+		httputil.RespondWithInternalError(c, "status changes are not supported by this store")
+		return
+	}
+	user, err = h.creds.SetUserStatus(user.ID, "active")
 	if err != nil {
 		httputil.InternalError(c, "reactivate user", err)
 		return
