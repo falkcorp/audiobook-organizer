@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
 // last-edited: 2026-10-19
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
@@ -75,7 +76,7 @@ func passwordSetter(t *testing.T, wantID, wantExpected string, events *[]string,
 	return &credsFake{setPassword: func(userID, expectedHash, algo, hash string) (*database.User, error) {
 		require.Equal(t, wantID, userID)
 		require.Equal(t, wantExpected, expectedHash, "self-service passes the verified hash, admin reset passes \"\"")
-		require.Equal(t, "bcrypt", algo)
+		require.Equal(t, absauth.AlgoArgon2id, algo, "every password writer hashes with absauth.HashPassword")
 		require.NotEmpty(t, hash)
 		if events != nil {
 			*events = append(*events, "set-password")
