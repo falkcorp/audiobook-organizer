@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.17.1
+// version: 1.18.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -179,9 +179,6 @@ export interface QueueRailProps {
   /** Toggle a chip's filter. Optional: without it the chips are read-outs. */
   onToggleChip?: (chip: ChipFilter) => void;
   onClearChip?: () => void;
-  /** The unreviewable bucket (no candidate / decode error) is loading. */
-  unreviewableLoading?: boolean;
-  unreviewableError?: string | null;
   page: number;
   totalPages: number;
   pageSize: number;
@@ -199,9 +196,8 @@ export interface QueueRailProps {
   onSelectPage?: (ids: string[], selected: boolean) => void;
   /**
    * Gmail's pattern: once the whole page is ticked, offer every book the view
-   * matches across all pages. In index mode the lane holds every matching row
-   * (it loads with all=true), so this needs no request; in page mode (setting
-   * review_metadata_server_query) it fetches the matching ids, ids only.
+   * matches across all pages. The lane holds only the current page, so this
+   * fetches the matching ids, ids only.
    */
   onSelectAllMatching?: () => void;
   onClearSelection?: () => void;
@@ -343,8 +339,6 @@ export function QueueRail({
   chipFilter = null,
   onToggleChip,
   onClearChip,
-  unreviewableLoading = false,
-  unreviewableError = null,
   page,
   totalPages,
   pageSize,
@@ -558,18 +552,11 @@ export function QueueRail({
               )
             }
           >
-            {unreviewableLoading
-              ? `Loading the ${CHIP_LABELS[chipFilter]} books…`
-              : `Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books${
-                  filters.titleFilter && !titleFilterError
-                    ? ` matching title ${filters.titleFilter}`
-                    : ''
-                }. Other filters are paused.`}
-          </Alert>
-        )}
-        {chipFilter && unreviewableError && (
-          <Alert severity="error" data-testid="unreviewable-error">
-            {unreviewableError}
+            {`Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books${
+              filters.titleFilter && !titleFilterError
+                ? ` matching title ${filters.titleFilter}`
+                : ''
+            }. Other filters are paused.`}
           </Alert>
         )}
 

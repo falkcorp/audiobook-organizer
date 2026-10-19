@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/adapters.ts
-// version: 2.2.0
+// version: 2.2.1
 // guid: e21a8c47-3f60-4b95-8d1e-7a4c0b6f2953
-// last-edited: 2026-10-09
+// last-edited: 2026-10-19
 //
 // Lane payload -> Evidence. One adapter per lane, each choosing the evidence
 // kind that matches how that lane's number was actually computed.
@@ -133,8 +133,8 @@ export function regroupEvidence(
  * which are signal summaries rather than contributions and would not replay to
  * the score.
  *
- * BUT only once the candidate is known to be the full row. The review index
- * (`?view=index`) serves every candidate without its breakdown, and the lane
+ * BUT only once the candidate is known to be the full row. The review list
+ * (`?view=page`) serves every candidate without its breakdown, and the lane
  * fills the breakdown in per page from an `ids=` detail fetch. Until that
  * fetch lands the candidate has no breakdown for a reason that has nothing to
  * do with how it was scored, and after it fails the same is true. Saying "no
