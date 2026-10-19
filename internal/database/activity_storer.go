@@ -1,5 +1,5 @@
 // file: internal/database/activity_storer.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
 // last-edited: 2026-10-19
 
@@ -63,9 +63,7 @@ type ActivityRetention interface {
 	// It sits here rather than behind an optional interface + type assertion
 	// (the backup.Checkpointable shape) for two measured reasons, both checked
 	// rather than assumed. First, precedent: RecompactDigests directly above is
-	// equally backend-specific and already lives here, and
-	// MigrateSystemActivityLogs is documented as a no-op on the Pebble backend
-	// — the interface already carries exactly this category, so an optional
+	// equally backend-specific and already lives here, so an optional
 	// interface would be a second pattern for one kind of thing. Second, cost:
 	// the compiler said widening broke ONE test fake
 	// (metafetch.capturingActivityStore) beyond the real implementations.
@@ -75,7 +73,6 @@ type ActivityRetention interface {
 	// does nothing and says nothing when it misses — the failure shape this
 	// repo keeps getting burned by — to buy back one three-line fake.
 	RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error)
-	MigrateSystemActivityLogs() (int, error)
 }
 
 // ActivityLifecycle covers store teardown.
@@ -93,10 +90,7 @@ type ActivityLifecycle interface {
 // 30.8 GB inside the scan with ZERO connected clients, and only a restart
 // freed it. A parallel non-context method would let the next caller
 // reintroduce that outage, so the cancellable path is the only path.
-// MigrateSystemActivityLogs remains intentionally context-free: it shares the
-// same defect shape but is not reachable from a live request path today, so
-// widening it is left as a follow-up. (Summarize, Prune and CompactByDay
-// already take a context.)
+// (Summarize, Prune and CompactByDay already take a context.)
 //
 // Split into the 4 interfaces above on 2026-08-18. This name is retained as
 // their composition so the method set is byte-identical and no consumer moves;
