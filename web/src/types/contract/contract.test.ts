@@ -1,20 +1,31 @@
 // file: web/src/types/generated/contract.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d1a9e37-8c42-4b06-a7f3-2e6b0c84d915
 // last-edited: 2026-10-18
 
 import { describe, expect, it } from 'vitest';
 
-import apply from '../../../../internal/wirecontract/testdata/repairs_apply_result.json';
-import bookCore from '../../../../internal/wirecontract/testdata/database_book_core.json';
-import bookFileCore from '../../../../internal/wirecontract/testdata/database_book_file_core.json';
-import planParams from '../../../../internal/wirecontract/testdata/repairs_plan_params.json';
-import planResult from '../../../../internal/wirecontract/testdata/repairs_plan_result.json';
-import row from '../../../../internal/wirecontract/testdata/repairs_row.json';
-import rowMember from '../../../../internal/wirecontract/testdata/repairs_row_member.json';
-import rowResult from '../../../../internal/wirecontract/testdata/repairs_row_result.json';
-import rowsPage from '../../../../internal/wirecontract/testdata/repairs_rows_page.json';
-import type { BookCore, BookFileCore } from './database';
+import apply from './testdata/repairs_apply_result.json';
+import bookCore from './testdata/database_book_core.json';
+import bookAuthor from './testdata/database_book_author.json';
+import bookFileCore from './testdata/database_book_file_core.json';
+import provenance from './testdata/database_metadata_provenance_entry.json';
+import planParams from './testdata/repairs_plan_params.json';
+import planResult from './testdata/repairs_plan_result.json';
+import row from './testdata/repairs_row.json';
+import rowMember from './testdata/repairs_row_member.json';
+import rowResult from './testdata/repairs_row_result.json';
+import rowsPage from './testdata/repairs_rows_page.json';
+import scanState from './testdata/database_scan_state.json';
+import stageStatus from './testdata/database_stage_status.json';
+import type {
+  BookAuthor,
+  BookCore,
+  BookFileCore,
+  MetadataProvenanceEntry,
+  ScanState,
+  StageStatus,
+} from '../generated/database';
 import type {
   ApplyResult,
   PlanParams,
@@ -23,7 +34,7 @@ import type {
   RowMember,
   RowResult,
   RowsPage,
-} from './repairs';
+} from '../generated/repairs';
 
 // The goldens are marshalled from a fully populated Go sample by
 // internal/wirecontract/contract_test.go. Assigning them to the generated types
@@ -83,5 +94,21 @@ describe('generated types match the Go wire format', () => {
     expect(bookCore satisfies BookCore).toBeTruthy();
     expect(bookFileCore satisfies BookFileCore).toBeTruthy();
     expect([core, fileCore]).toEqual([true, true]);
+  });
+
+  it('the structs BookCore reaches, nested key sets included', () => {
+    const scan: SameKeys<typeof scanState, ScanState> = true;
+    const stage: SameKeys<typeof stageStatus, StageStatus> = true;
+    const author: SameKeys<typeof bookAuthor, BookAuthor> = true;
+    const entry: SameKeys<typeof provenance, MetadataProvenanceEntry> = true;
+    // The nested copies inside the parents' goldens must agree with the types too.
+    const nestedScan: SameKeys<typeof bookFileCore.scan, ScanState> = true;
+    const nestedEntry: SameKeys<(typeof bookCore.metadata_provenance)['synthetic-key'], MetadataProvenanceEntry> = true;
+    const nestedAuthor: SameKeys<(typeof bookCore.authors)[number], BookAuthor> = true;
+    expect(scanState satisfies ScanState).toBeTruthy();
+    expect(stageStatus satisfies StageStatus).toBeTruthy();
+    expect(bookAuthor satisfies BookAuthor).toBeTruthy();
+    expect(provenance satisfies MetadataProvenanceEntry).toBeTruthy();
+    expect([scan, stage, author, entry, nestedScan, nestedEntry, nestedAuthor]).toEqual(Array(7).fill(true));
   });
 });

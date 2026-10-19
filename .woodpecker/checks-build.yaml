@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.9.0
+# version: 1.9.1
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
 # last-edited: 2026-10-18
 #
@@ -69,6 +69,7 @@ steps:
       - make --no-print-directory fmt-check
       - make --no-print-directory sdkguard
       - make --no-print-directory ops-check
+      - make --no-print-directory types-check
       - make --no-print-directory bench-check
       - make --no-print-directory pprof-check
 

@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.21.3
+// version: 1.22.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-18
 
@@ -93,6 +93,12 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	if err != nil {
 		return nil, fmt.Errorf("repairs: plan %s: %w", f.ID(), err)
 	}
+	// The wire format promises book_ids and rows are arrays, never null: a
+	// fixer that returns no rows, or builds a row without BookIDs, would
+	// otherwise marshal null and break the lane's iteration over them.
+	if rows == nil {
+		rows = []Row{}
+	}
 	seen := make(map[string]bool, len(rows))
 	for i := range rows {
 		if rows[i].RowID == "" || seen[rows[i].RowID] {
@@ -169,7 +175,26 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 			res.ByClass[c]++
 		}
 	}
+	res.normalize()
 	return res, nil
+}
+
+// normalize makes every always-present collection of the plan non-nil, so it
+// marshals as [] / {} rather than null (the generated TypeScript types them
+// non-null). RunPlan calls it, and LoadPlan again for plans stored before it
+// existed.
+func (p *PlanResult) normalize() {
+	if p.Rows == nil {
+		p.Rows = []Row{}
+	}
+	if p.SkippedByKind == nil {
+		p.SkippedByKind = map[string]int{}
+	}
+	for i := range p.Rows {
+		if p.Rows[i].BookIDs == nil {
+			p.Rows[i].BookIDs = []string{}
+		}
+	}
 }
 
 // OpReader reads a stored operation row.
@@ -208,6 +233,7 @@ func LoadPlan(r OpReader, planOpID, fixerID string) (*PlanResult, error) {
 	if plan.FixerID != fixerID {
 		return nil, fmt.Errorf("%w: %s was planned for %s", ErrPlanOtherFixer, planOpID, plan.FixerID)
 	}
+	plan.normalize()
 	return &plan, nil
 }
 
@@ -399,7 +425,8 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	defer func(start time.Time) {
 		metrics.ObserveFixerDuration(f.ID(), metrics.FixerPhaseApply, time.Since(start))
 	}(time.Now())
-	res := &ApplyResult{FixerID: f.ID(), PlanOpID: planOpID, DryRun: dryRun, ByOutcome: map[string]int{}}
+	res := &ApplyResult{FixerID: f.ID(), PlanOpID: planOpID, DryRun: dryRun, ByOutcome: map[string]int{},
+		Rows: []RowResult{}}
 	if deps.Guard == nil {
 		return res, fmt.Errorf("repairs: apply %s: no guard reader", f.ID())
 	}
@@ -606,7 +633,9 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	})
 
 	sort.Slice(results, func(i, j int) bool { return results[i].RowID < results[j].RowID })
-	res.Rows = results
+	if results != nil { // never null on the wire; early returns keep the []RowResult{} above
+		res.Rows = results
+	}
 	for _, r := range results {
 		res.ByOutcome[r.Outcome]++
 		switch r.Outcome {
