@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
 // last-edited: 2026-10-19
 
@@ -8,6 +8,7 @@ package abs
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -165,6 +166,31 @@ func TestOIDCTTLStore_FullStoreEvictsOldestNeverRefuses(t *testing.T) {
 	for _, k := range []string{"new", "newest", "after"} {
 		if _, ok := store.peek(k, later); !ok {
 			t.Fatalf("%s must still be live", k)
+		}
+	}
+}
+
+// Eviction stays bounded whatever the mix of owners: the store never exceeds
+// its cap, no owner ever exceeds perOwner, and a put always lands.
+func TestOIDCTTLStore_EvictionBounded(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingRequest](16, 3)
+	now := time.Now()
+	for i := range 500 {
+		owner := fmt.Sprintf("o%d", i%7)
+		key := fmt.Sprintf("k%d", i)
+		store.put(key, owner, oidcPendingRequest{}, now, time.Minute)
+		if _, ok := store.peek(key, now); !ok {
+			t.Fatalf("put %d did not land", i)
+		}
+		if len(store.entries) > 16 {
+			t.Fatalf("store grew to %d entries, cap 16", len(store.entries))
+		}
+		per := map[string]int{}
+		for _, e := range store.entries {
+			per[e.owner]++
+			if per[e.owner] > 3 {
+				t.Fatalf("owner %s holds %d entries, cap 3", e.owner, per[e.owner])
+			}
 		}
 	}
 }

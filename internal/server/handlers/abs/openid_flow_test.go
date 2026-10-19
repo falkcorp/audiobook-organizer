@@ -8,6 +8,7 @@ package abs_test
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -38,6 +39,7 @@ const (
 	oidcStrangerAssert   = "stranger-assertion"
 	oidcSecondPerson     = "second-person-assertion"
 	oidcOtherService     = "other-service-token-assertion"
+	oidcNoCNService      = "service-token-without-common-name"
 	oidcVerifier         = "audiobooth-verifier-0123456789-abcdefghijklmnopqrstuvwxyz"
 )
 
@@ -66,6 +68,7 @@ func newOIDCHarness(t *testing.T) *harness {
 	}
 	h.verifier.serviceTokens[oidcServiceAssertion] = "family"
 	h.verifier.serviceTokens[oidcOtherService] = "friends"
+	h.verifier.serviceTokens[oidcNoCNService] = ""
 	return h
 }
 
@@ -84,6 +87,16 @@ func authorizePath(challenge, state string) string {
 		q.Set("state", state)
 	}
 	return "/auth/openid?" + q.Encode()
+}
+
+// hop1From runs hop 1 under the shared service token from one device address,
+// as Cloudflare reports it in Cf-Connecting-Ip.
+func (h *harness) hop1From(t *testing.T, assertion, deviceIP string) *httptest.ResponseRecorder {
+	t.Helper()
+	w, _ := h.do(t, request{method: http.MethodGet, path: authorizePath(s256(oidcVerifier), ""), headers: map[string]string{
+		oauth.CFAccessHeader: assertion, "Cf-Connecting-Ip": deviceIP,
+	}})
+	return w
 }
 
 func (h *harness) get(t *testing.T, path, assertion string) *httptest.ResponseRecorder {
@@ -535,6 +548,16 @@ func TestOpenIDHop2_IgnoresQueryRedirectURIAndState(t *testing.T) {
 	if q.Get("state") != "real-state" || q.Get("code") == "" {
 		t.Fatalf("params %v: want the stored state and a code", q)
 	}
+
+	// The error branches redirect too, and must use the stored target as well.
+	browser = h.hop1(t, s256(oidcVerifier), "real-state")
+	evil = browser + "&redirect_uri=" + url.QueryEscape("https://evil.example/cb") + "&state=evil"
+	for _, assertion := range []string{"", oidcStrangerAssert} {
+		q = appCallback(t, h.get(t, evil, assertion))
+		if q.Get("error") != "access_denied" || q.Get("state") != "real-state" {
+			t.Fatalf("assertion %q: params %v: want access_denied with the stored state", assertion, q)
+		}
+	}
 }
 
 // The web OAuth deep-link seam binds every code to an allow-listed redirect_uri.
@@ -653,9 +676,11 @@ func TestOpenIDConsent_DenyReportsAccessDenied(t *testing.T) {
 
 // ── quota and rate limit ───────────────────────────────────────────────────
 
-// One credential holds at most three parked requests; a fourth evicts its own
-// oldest, and another credential's request is untouched.
-func TestOpenIDHop1_PerCredentialQuota(t *testing.T) {
+// One (credential, device) bucket holds at most three parked requests; a fourth
+// evicts that bucket's own oldest, and another credential's request is
+// untouched. (httptest sends no Cf-Connecting-Ip, so every request here is the
+// same device.)
+func TestOpenIDHop1_PerDeviceQuotaEvictsOwnOldest(t *testing.T) {
 	h := newOIDCHarness(t)
 	other := assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcOtherService)).RequestURI()
 	var mine []string
@@ -668,9 +693,55 @@ func TestOpenIDHop1_PerCredentialQuota(t *testing.T) {
 	}
 }
 
-// Hop 1 is rate-limited per verified credential (burst 5), not per client IP:
-// behind the shared proxies every caller has the same address.
-func TestOpenIDHop1_RateLimitedPerCredential(t *testing.T) {
+// A service token is shared by a whole group of people and devices. Many
+// concurrent sign-ins under ONE token, from different devices, must not evict
+// each other while the store is below its global cap.
+func TestOpenIDHop1_SharedServiceTokenDevicesDoNotEvictEachOther(t *testing.T) {
+	h := newOIDCHarness(t)
+	var links []string
+	for i := range 12 {
+		w := h.hop1From(t, oidcServiceAssertion, fmt.Sprintf("198.51.100.%d", i+1))
+		links = append(links, assertBrowserHopLocation(t, w).RequestURI())
+	}
+	for i, b := range links {
+		if w := h.get(t, b, oidcPersonAssertion); w.Code != http.StatusOK {
+			t.Fatalf("device %d's sign-in was evicted by other devices on the same token (status %d)", i+1, w.Code)
+		}
+	}
+}
+
+// The device address is unauthenticated, so rotating it mints fresh buckets.
+// The per-credential ceiling (burst 30) bounds that: the 31st request under one
+// token is refused however many addresses it claims, and another token is
+// unaffected. Without it one credential could churn the global store.
+func TestOpenIDHop1_CredentialCeilingBoundsRotatedBuckets(t *testing.T) {
+	h := newOIDCHarness(t)
+	for i := range 30 {
+		if w := h.hop1From(t, oidcServiceAssertion, fmt.Sprintf("203.0.113.%d", i+1)); w.Code != http.StatusFound {
+			t.Fatalf("request %d = %d, want 302 within the credential burst", i+1, w.Code)
+		}
+	}
+	w := h.hop1From(t, oidcServiceAssertion, "203.0.113.200")
+	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "Too many") {
+		t.Fatalf("over the credential ceiling: status %d body %q; want 400 text", w.Code, w.Body.String())
+	}
+	assertBrowserHopLocation(t, h.hop1From(t, oidcOtherService, "203.0.113.200"))
+}
+
+// A service-token assertion with no common_name names no credential: it would
+// put every such caller in one anonymous bucket, so it is refused like no
+// credential at all.
+func TestOpenIDHop1_EmptyCommonNameIsNotACredential(t *testing.T) {
+	h := newOIDCHarness(t)
+	w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcNoCNService)
+	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" {
+		t.Fatalf("status %d Location %q; want 400 and no Location", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// Hop 1 is rate-limited per (credential, device) bucket (burst 5), not per
+// client IP: behind the shared proxies every caller has the same address.
+func TestOpenIDHop1_RateLimitedPerDevice(t *testing.T) {
 	h := newOIDCHarness(t)
 	for i := range 5 {
 		if w := h.get(t, authorizePath(s256(oidcVerifier), ""), oidcServiceAssertion); w.Code != http.StatusFound {
@@ -681,6 +752,8 @@ func TestOpenIDHop1_RateLimitedPerCredential(t *testing.T) {
 	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "Too many") {
 		t.Fatalf("over the burst: status %d body %q; want 400 text", w.Code, w.Body.String())
 	}
-	// Same client IP, different credential: unaffected.
+	// Same proxy address, different credential: unaffected.
 	assertBrowserHopLocation(t, h.get(t, authorizePath(s256(oidcVerifier), ""), oidcOtherService))
+	// Same credential, different device: unaffected by the first device's burst.
+	assertBrowserHopLocation(t, h.hop1From(t, oidcServiceAssertion, "198.51.100.77"))
 }

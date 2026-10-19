@@ -10,8 +10,12 @@ answered that request with a redirect straight to `audiobooth://oauth` (an
 crashed on every SSO attempt. Reproduced in production.
 
 `/auth/openid` now requires a verified Cloudflare credential (the app's service
-token), rate-limits and quotas per that credential (at most three parked
-requests each; a fourth evicts the caller's own oldest), validates
+token; one with no common name does not count), and rate-limits and quotas per
+(credential, device) bucket, the device being Cloudflare's `Cf-Connecting-Ip`.
+A service token is shared by a whole group, so the bucket keeps one group's
+devices from evicting each other: at most three parked requests per bucket, a
+fourth evicting that bucket's own oldest, with a per-credential rate ceiling
+above the buckets because the device address is not authenticated. It validates
 `redirect_uri` and PKCE, parks the request under a random single-use id (five
 minute expiry, in a store capped at 1024 entries that evicts its oldest entry
 rather than refusing), and always 302s to

@@ -400,8 +400,10 @@ type Handler struct {
 	// single-use; see openid.go. Per handler, and timed by h.now, so SetClock
 	// drives expiry.
 	oidcRequests *oidcTTLStore[oidcPendingRequest]
-	// oidcLimiter rate-limits hop 1 per verified Cloudflare credential.
-	oidcLimiter *servermiddleware.IPRateLimiter
+	// oidcLimiter rate-limits hop 1 per (credential, device) bucket, and
+	// oidcCredLimiter caps each verified credential across all its buckets.
+	oidcLimiter     *servermiddleware.IPRateLimiter
+	oidcCredLimiter *servermiddleware.IPRateLimiter
 	// oidcConsentKey keys the consent form's CSRF token (openid.go
 	// oidcConsentToken). Random per process: the parked requests it protects
 	// do not survive a restart either.
@@ -574,8 +576,9 @@ func New(o Options) (*Handler, error) {
 		newID:       func() string { return ulid.Make().String() },
 	}
 	h.sessions = newSessionRegistry(h.nowFn)
-	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap, oidcPerCallerCap)
+	h.oidcRequests = newOIDCTTLStore[oidcPendingRequest](oidcStoreCap, oidcPerBucketCap)
 	h.oidcLimiter = servermiddleware.NewIPRateLimiter(oidcRatePerMinute, oidcRateBurst)
+	h.oidcCredLimiter = servermiddleware.NewIPRateLimiter(oidcCredRatePerMinute, oidcCredRateBurst)
 	h.oidcConsentKey = make([]byte, 32)
 	if _, err := rand.Read(h.oidcConsentKey); err != nil {
 		return nil, fmt.Errorf("abs: generate openid consent key: %w", err)

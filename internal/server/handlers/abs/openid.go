@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -67,8 +68,9 @@ import (
 //
 //	hop 1  GET  /auth/openid           (app's URLSession, service token only)
 //	       require a verified Cloudflare credential, rate-limit and quota per
-//	       credential, validate redirect_uri + PKCE, park the request under a
-//	       random id, 302 → https://<this host>/auth/openid/browser?req=<id>
+//	       (credential, device) bucket, validate redirect_uri + PKCE, park the
+//	       request under a random id,
+//	       302 → https://<this host>/auth/openid/browser?req=<id>
 //	       errors: 400 text/plain, never a redirect
 //
 //	hop 2  GET  /auth/openid/browser   (system browser — Cloudflare Access
@@ -136,22 +138,32 @@ const (
 
 	// oidcStoreCap is the most entries either in-memory store holds. When the
 	// store is full the OLDEST entry is evicted, so a flood can never pin the
-	// store shut: new sign-ins always get in. Combined with oidcPerCallerCap, a
-	// flood would need oidcStoreCap/oidcPerCallerCap distinct verified
-	// Cloudflare credentials to push anyone else out. Human login rates are a
-	// handful an hour; 1024 live entries is far beyond any legitimate peak.
+	// store shut: new sign-ins always get in. Human login rates are a handful an
+	// hour; 1024 live entries is far beyond any legitimate peak.
 	oidcStoreCap = 1024
 
-	// oidcPerCallerCap is the most live parked requests (or unredeemed codes)
-	// one key may hold. A new one evicts that key's own oldest, so a person who
-	// abandons a sign-in and retries is never blocked, and a caller flooding
-	// hop 1 only ever churns its own slots.
-	oidcPerCallerCap = 3
+	// oidcPerBucketCap is the most live parked requests (or unredeemed codes)
+	// one bucket may hold. A new one evicts that bucket's own oldest, so a
+	// person who abandons a sign-in and retries is never blocked, and a caller
+	// flooding hop 1 only ever churns its own slots.
+	//
+	// A hop-1 bucket is (verified credential, device address), NOT the
+	// credential alone: a Cloudflare service token is shared by a whole group of
+	// people and devices (see oidcBucketKey), so a 3-slot cap on the token would
+	// let a fourth concurrent sign-in anywhere in the group evict a real one.
+	oidcPerBucketCap = 3
 
-	// Hop-1 rate limit per verified Cloudflare credential. Generous for a person
-	// retrying; tight enough that one credential cannot spin the store.
-	oidcRatePerMinute = 10
-	oidcRateBurst     = 5
+	// Hop-1 rate limits. Per bucket: generous for a person retrying, tight for
+	// one device. Per credential: a CEILING over all of a credential's buckets,
+	// because the device address is unauthenticated and a credential holder can
+	// rotate it to mint fresh buckets. The ceiling bounds one credential to
+	// about oidcCredRatePerMinute*5min = 300 live parked requests, under
+	// oidcStoreCap, so no single credential can churn the global store and
+	// evict other groups' sign-ins.
+	oidcRatePerMinute     = 10
+	oidcRateBurst         = 5
+	oidcCredRatePerMinute = 60
+	oidcCredRateBurst     = 30
 
 	// oidcAuthMethod labels this path in audit records and ABSIdentity.Mode.
 	oidcAuthMethod = "openid"
@@ -326,7 +338,7 @@ type oidcPendingRequest struct {
 	State       string
 	ClientID    string
 	// Hop 1's verified Cloudflare credential key (svc:<token> or email:<…>),
-	// for the per-caller quota and the hop-2 audit line.
+	// for the hop-2 audit line. The quota bucket is in the store entry's owner.
 	CallerKey string
 	// Hop 1's client, recorded for the audit line. Not enforced: Safari with
 	// iCloud Private Relay legitimately reaches us from a different address than
@@ -339,7 +351,7 @@ type oidcPendingRequest struct {
 // oidcCodes is package-level because the web OAuth deep-link flow
 // (internal/server/handlers) mints into it through MintAppAuthorizationCode.
 // Codes are owned by the user they were minted for.
-var oidcCodes = newOIDCTTLStore[oidcPendingCode](oidcStoreCap, oidcPerCallerCap)
+var oidcCodes = newOIDCTTLStore[oidcPendingCode](oidcStoreCap, oidcPerBucketCap)
 
 // OIDCRedirectURIsEnvVar overrides the redirect_uri allowlist (comma-separated,
 // exact matches). Set it when adding a client whose callback scheme differs.
@@ -450,9 +462,10 @@ func AppRedirectURL(target, code, state string) string {
 // client, which does not follow redirects and carries only a service token.
 //
 // It resolves no identity. It requires a VERIFIED Cloudflare credential (the
-// app's service token, or a person's assertion), rate-limits and quotas per that
-// credential, validates redirect_uri and PKCE, parks the request under a random
-// single-use id, and 302s to hop 2 on this server's own https origin.
+// app's service token, or a person's assertion), rate-limits per credential and
+// per (credential, device) bucket, quotas per bucket, validates redirect_uri and
+// PKCE, parks the request under a random single-use id, and 302s to hop 2 on
+// this server's own https origin.
 //
 // Every failure is a 400 with a plain-text body and no Location: the app shows a
 // 400 body to the user and treats any other status as a generic error, and it
@@ -505,8 +518,14 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 			"Single sign-on must go through Cloudflare Access. Check the app's custom headers.")
 		return
 	}
-	if !h.oidcLimiter.AllowKey("openid:" + callerKey) {
-		oidcLog.Warn("openid authorize rate-limited: caller=%s", logger.SanitizeLogValue(callerKey))
+	bucket := oidcBucketKey(c, callerKey)
+	if !h.oidcCredLimiter.AllowKey("openid-cred:" + callerKey) {
+		oidcLog.Warn("openid authorize rate-limited at the credential ceiling: caller=%s", logger.SanitizeLogValue(callerKey))
+		h.oidcAuthorizeReject(c, "rate-limited-credential", "Too many sign-in attempts. Wait a minute and try again.")
+		return
+	}
+	if !h.oidcLimiter.AllowKey("openid:" + bucket) {
+		oidcLog.Warn("openid authorize rate-limited: bucket=%s", logger.SanitizeLogValue(bucket))
 		h.oidcAuthorizeReject(c, "rate-limited", "Too many sign-in attempts. Wait a minute and try again.")
 		return
 	}
@@ -535,7 +554,7 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 		h.oidcAuthorizeReject(c, "request-id-error", "Could not start sign-in. Try again.")
 		return
 	}
-	res := h.oidcRequests.put(id, callerKey, oidcPendingRequest{
+	res := h.oidcRequests.put(id, bucket, oidcPendingRequest{
 		Challenge:   challenge,
 		RedirectURI: redirectURI,
 		State:       state,
@@ -547,8 +566,8 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 	if res.GlobalEvicted > 0 {
 		// Only reachable when many distinct credentials are parking requests at
 		// once: a flood signal worth a line.
-		oidcLog.Warn("openid authorize evicted %d parked request(s) at the global cap %d (caller=%s)",
-			res.GlobalEvicted, oidcStoreCap, logger.SanitizeLogValue(callerKey))
+		oidcLog.Warn("openid authorize evicted %d parked request(s) at the global cap %d (bucket=%s)",
+			res.GlobalEvicted, oidcStoreCap, logger.SanitizeLogValue(bucket))
 	}
 
 	absauth.Audit(absauth.AuditEvent{
@@ -951,6 +970,35 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 	// Same session-issuing path as POST /login, so the response shape, the audit
 	// record and the token lifetimes cannot drift between password and SSO login.
 	h.issueSession(c, user, nil, oidcAuthMethod, pending.Email, now)
+}
+
+// oidcBucketKey is hop 1's quota and rate-limit bucket: the verified credential
+// plus the device's address.
+//
+// The credential is necessary but not sufficient. A person's assertion names one
+// person, but a service token is shared by a group (the owner mints one per
+// friends/family/… group), so every device in the group presents the same key.
+// The device address separates them. It comes from Cf-Connecting-Ip, which
+// Cloudflare sets to the client's address: the origin trusts no forwarded
+// headers (server.go SetTrustedProxies(nil)), and behind the shared reverse
+// proxies c.ClientIP() is the proxy's address, identical for everyone.
+//
+// Cf-Connecting-Ip is NOT authenticated at the origin; a credential holder who
+// reaches the origin directly can set it to anything. That is why it is used
+// ONLY to split a credential's quota into buckets, never to decide access, and
+// why a per-credential rate ceiling sits above the buckets: rotating the header
+// buys an attacker fresh buckets of their OWN credential's ceiling, and nothing
+// from anyone else's. AudioBooth sends no per-device identifier on hop 1
+// (OIDCAuthenticationManager sends only the URL and its custom headers), so
+// there is nothing better to use.
+func oidcBucketKey(c *gin.Context, callerKey string) string {
+	addr := strings.TrimSpace(c.GetHeader("Cf-Connecting-Ip"))
+	if ip := net.ParseIP(addr); ip != nil {
+		addr = ip.String()
+	} else {
+		addr = strings.TrimSpace(c.ClientIP())
+	}
+	return callerKey + "|ip:" + addr
 }
 
 // oidcNoStore keeps every hop out of caches: their Locations carry a request id

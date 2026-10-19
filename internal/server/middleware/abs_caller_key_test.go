@@ -52,6 +52,9 @@ func TestCFCallerKey(t *testing.T) {
 		if raw == "svc" {
 			return nil, svc
 		}
+		if raw == "svc-no-cn" {
+			return nil, &oauth.NonIdentityAssertionError{Subject: "s"}
+		}
 		return v.Verify(context.Background(), raw)
 	}), oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com"}}), store)
 
@@ -61,6 +64,7 @@ func TestCFCallerKey(t *testing.T) {
 	}{
 		{"person", "email:owner@example.com", true},
 		{"svc", "svc:family", true},
+		{"svc-no-cn", "", false},
 		{"forged", "", false},
 		{"", "", false},
 	}
