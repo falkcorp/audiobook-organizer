@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.40.3
+// version: 1.41.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -63,14 +63,11 @@ const (
 	unreviewableStatusIdentityStale        = "identity_stale"
 )
 
-// reviewViewLabel maps the request's view flag onto the bounded
-// review_index_request_seconds{view} label.
-func reviewViewLabel(indexView bool) string {
-	if indexView {
-		return metrics.ReviewViewIndex
-	}
-	return metrics.ReviewViewFull
-}
+// reviewViewIndex is the retired `view` value that used to serve every row of
+// the bucket with the large candidate fields stripped, for the Review page to
+// filter in the browser. The page asks the server for one filtered page
+// (reviewViewPage) instead, and this value answers 410 Gone.
+const reviewViewIndex = "index"
 
 // slowReviewListing is the handler-time threshold past which
 // GetCacheReviewResults logs a WARN with enough context to correlate the slow
@@ -484,14 +481,11 @@ func (h *MetadataCacheHandler) cachedListingFields(ids []string) map[string]data
 // per-row file read (metabatch.BuildCandidateBookInfoNoFiles). The default
 // (absent or bucket=reviewable) response is unchanged.
 //
-// view=index serves the review page's index: the same summary and every row
-// of the bucket, with each candidate's description, score_breakdown and
-// category_tags dropped -- the large fields nothing but the visible row reads
-// (the breakdown only by the evidence panel; the tags by nothing in the web
-// UI). The page filters, groups, counts and selects over the index exactly as
-// it did over the full list, and fetches full rows for the rows it shows with
-// ids=. candidate_hash is the full candidate's, so the dropped fields never
-// change a pin.
+// view=index is retired: it answers 410 Gone with a JSON body naming view=page,
+// and is counted in review_index_request_seconds under view="gone" so a client
+// still sending it shows up on the dashboard. It used to serve every row of the
+// bucket for the Review page to filter in the browser; the lane now asks for
+// view=page (below) and fetches full rows for the rows it shows with ids=.
 //
 // ids=a,b,c (comma separated) restricts `results` to those books, in bucket
 // order, ignoring limit and offset. Only those books are re-read, so the
@@ -533,11 +527,19 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
 		return
 	}
-	if c.Query("view") == reviewViewPage {
+	switch c.Query("view") {
+	case reviewViewPage:
 		// Dispatched before the review_index_request_seconds observation:
-		// that histogram's view label is a bounded set (index, full) in
-		// internal/metrics, which this task does not change.
+		// that histogram counts the listing shapes below and the retired
+		// view=index, not page requests.
 		h.getCacheReviewPage(c)
+		return
+	case reviewViewIndex:
+		began := time.Now()
+		httputil.RespondWithErrorFields(c, http.StatusGone,
+			"view=index was removed; use view=page, which returns one filtered page of rows plus the counts",
+			"VIEW_INDEX_GONE", map[string]any{"use": "view=page"})
+		metrics.ObserveReviewIndexRequest(metrics.ReviewViewGone, time.Since(began))
 		return
 	}
 	began := time.Now()
@@ -551,12 +553,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		offset = 0
 	}
 	all := httputil.ParseQueryBool(c, "all", false)
-	indexView := c.Query("view") == "index"
-	// Handler latency by view, every exit path from here on (the WARN below
-	// only fires past slowReviewListing; the histogram sees every request).
-	defer func(view string) {
-		metrics.ObserveReviewIndexRequest(view, time.Since(began))
-	}(reviewViewLabel(indexView))
+	// Handler latency, every exit path from here on (the WARN below only
+	// fires past slowReviewListing; the histogram sees every request).
+	defer func() {
+		metrics.ObserveReviewIndexRequest(metrics.ReviewViewFull, time.Since(began))
+	}()
 	var wantIDs map[string]bool
 	if raw := strings.TrimSpace(c.Query("ids")); raw != "" {
 		wantIDs = map[string]bool{}
@@ -757,9 +758,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		if book == nil {
 			continue
 		}
-		res := page[i].result(book, freshCutoff, indexView)
-		// Judged against the stored candidate, not res.Candidate: the index
-		// view blanks the description and breakdown on the copy it serves.
+		res := page[i].result(book, freshCutoff)
+		// Judged against the stored candidate, not res.Candidate, so the check
+		// holds for a row whose large fields have been stripped (pageResult).
 		res.OwnerRejected = rejectedByBook[book.ID].HasCandidate(page[i].row.cand)
 		results = append(results, res)
 	}
@@ -859,18 +860,27 @@ type reviewableRow struct {
 	stale bool
 }
 
-// result is the row as the API serves it. The candidate is a copy of the
-// snapshot's; with indexView its description, score_breakdown and
-// category_tags are cleared on the copy (ScoreBreakdown is a pointer and
-// CategoryTags a slice header, so clearing them leaves the snapshot's row,
-// and every later detail response, intact).
-func (r *reviewableRow) result(book *database.Book, freshCutoff time.Time, indexView bool) metabatch.CandidateResult {
+// pageResult is the row as view=page serves it: result with the candidate's
+// description, score_breakdown and category_tags cleared -- the large fields
+// nothing but the visible row reads (the breakdown only by the evidence panel;
+// the tags by nothing in the web UI). The lane fetches full rows for the rows
+// it shows with ids=. candidate_hash is still the full candidate's, so the
+// dropped fields never change a pin.
+//
+// The candidate in a result is a copy of the snapshot's (ScoreBreakdown is a
+// pointer and CategoryTags a slice header), so clearing them on the copy
+// leaves the snapshot's row, and every later detail response, intact.
+func (r *reviewableRow) pageResult(book *database.Book, freshCutoff time.Time) metabatch.CandidateResult {
+	res := r.result(book, freshCutoff)
+	res.Candidate.Description = ""
+	res.Candidate.ScoreBreakdown = nil
+	res.Candidate.CategoryTags = nil
+	return res
+}
+
+// result is the row as the API serves it, the full candidate included.
+func (r *reviewableRow) result(book *database.Book, freshCutoff time.Time) metabatch.CandidateResult {
 	cand := *r.row.cand
-	if indexView {
-		cand.Description = ""
-		cand.ScoreBreakdown = nil
-		cand.CategoryTags = nil
-	}
 	// Age travels with the row. MetadataCacheTTL's contract is that stale
 	// entries stay readable and the UI flags them -- but this endpoint sent
 	// no age at all, so the review surface could not honour it. On the live
@@ -892,7 +902,7 @@ func (r *reviewableRow) result(book *database.Book, freshCutoff time.Time, index
 		FallbackDeferred: r.row.fallbackDeferred,
 		// The same hash the apply recomputes from the same cache row: every
 		// review-page apply button echoes it back in its pin. Hashed over the
-		// full stored candidate (with its description), so the index view's
+		// full stored candidate (with its description), so a pageResult
 		// pin matches what the apply recomputes.
 		CandidateHash: r.row.hash,
 	}

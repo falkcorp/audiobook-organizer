@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.162.0
+// version: 1.163.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-19
 
@@ -1551,13 +1551,6 @@ type Config struct {
 	// handlers, not just regroup.
 	ReviewApplyEnabled bool `json:"review_apply_enabled"`
 
-	// ReviewMetadataServerQuery switches the Review > Metadata lane from
-	// loading every reviewable row into the browser (view=index) to asking the
-	// server for one filtered page plus the facet counts per filter change
-	// (view=page, task 02-PR18). Default false: the lane behaves as before.
-	// Read once by the lane at mount. Neither mode writes anything.
-	ReviewMetadataServerQuery bool `json:"review_metadata_server_query"`
-
 	// BulkApplyMaxItems is the fail-safe ceiling on how many books ONE bulk apply
 	// (metadata review apply, review-queue bulk approve/replay, auto-match,
 	// batch update, reconcile apply, diagnostics suggestions) may touch. Exceeding
@@ -2702,8 +2695,6 @@ func InitConfig() {
 	viper.SetDefault("enable_rate_limit", true)
 	// Fail-safe ceiling for one bulk apply; see Config.BulkApplyMaxItems.
 	viper.SetDefault("bulk_apply_max_items", 5000)
-	// Review > Metadata server-side query; see Config.ReviewMetadataServerQuery.
-	viper.SetDefault("review_metadata_server_query", false)
 	viper.SetDefault("basic_auth_enabled", false)
 	viper.SetDefault("basic_auth_username", "")
 	viper.SetDefault("basic_auth_password", "")
@@ -3247,7 +3238,6 @@ func InitConfig() {
 			AIJournalRetentionDays:              viper.GetInt("ai_journal_retention_days"),
 			EnableRateLimit:                     viper.GetBool("enable_rate_limit"),
 			ReviewApplyEnabled:                  viper.GetBool("review_apply_enabled"),
-			ReviewMetadataServerQuery:           viper.GetBool("review_metadata_server_query"),
 			BulkApplyMaxItems:                   viper.GetInt("bulk_apply_max_items"),
 			BasicAuthEnabled:                    viper.GetBool("basic_auth_enabled"),
 			BasicAuthUsername:                   viper.GetString("basic_auth_username"),
@@ -4056,7 +4046,6 @@ func ResetToDefaults() {
 			EnableAuth:                       true,
 			EnableRateLimit:                  true,
 			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled
-			ReviewMetadataServerQuery:        false, // OFF by default — the Metadata lane loads the full index
 			FingerprintRemoteWorkersEnabled:  false, // OFF by default — worker routes 404 until enabled
 			FingerprintWindowReferenceTools:  "",    // unset — remote-only window backfill refuses to start
 			BulkApplyMaxItems:                5000,

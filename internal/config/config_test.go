@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.24.2
+// version: 1.25.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package config
 
@@ -59,12 +59,6 @@ func TestInitConfig(t *testing.T) {
 	// Verify backup defaults
 	if createBackups := viper.GetBool("create_backups"); !createBackups {
 		t.Error("Expected create_backups to be true by default")
-	}
-
-	// The Review > Metadata server query ships OFF: the lane keeps loading the
-	// full index until an operator turns it on.
-	if viper.GetBool("review_metadata_server_query") {
-		t.Error("Expected review_metadata_server_query to be false by default")
 	}
 }
 
@@ -381,10 +375,6 @@ func TestResetToDefaults(t *testing.T) {
 	// Verify backup defaults
 	if !AppConfig.CreateBackups {
 		t.Error("expected CreateBackups to be reset to true")
-	}
-
-	if AppConfig.ReviewMetadataServerQuery {
-		t.Error("expected ReviewMetadataServerQuery to be reset to false")
 	}
 
 	// Verify storage quota defaults

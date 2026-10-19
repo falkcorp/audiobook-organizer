@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package handlers
 
@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -34,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
@@ -140,19 +142,17 @@ func serveReviewRaw(t testing.TB, h *MetadataCacheHandler, query string) (int, [
 // reviewGoldenHashes pins the bytes of every listing shape the extraction of
 // buildReviewableRows touches, captured on the code BEFORE the extraction
 // (task 02-PR17 step 2). Regenerate only for an intended response change:
-// REVIEW_GOLDEN_PRINT=1 go test -run TestReviewQuery_IndexViewByteIdentical.
+// REVIEW_GOLDEN_PRINT=1 go test -run TestReviewQuery_ListingsByteIdentical.
 // 02-PR5b added unreviewable_by_cause.identity_stale (0 here, no retitled
 // row) and nothing else: stripping that key reproduces the previous hashes.
 // 02-PR4 added the summary's ident_counts block and nothing else: without
 // that one assignment the previous hashes pass unchanged.
 var reviewGoldenHashes = map[string]string{
-	"all=true&view=index":                   "f283a183fe1194dad47e0b4d3827b0560a00b80b17451597cfddb8545f23f14d",
 	"all=true":                              "130cfc616eedf1df0333438fe21268c4c78d4b9cf1bba27b287f6727bae53464",
 	"limit=5&offset=3":                      "ed15ddd735bcf7f8a3154b1f0b91dea9bde046804cf6abf5b3ced5a16ec69a2f",
 	"all=true&bucket=unreviewable":          "52fd8fdbd85592d4eaed72afb77c3681dc6def29081cbb86dcaf770a9a30361b",
 	"bucket=unreviewable&limit=2&offset=1":  "5fe9f5de7dc2f71cfe5754376ce3fc9db0642a610c57af7dd555f3a244f907e0",
 	"ids=" + goldenIDList(0, 3, 13, 17, 22): "f12d519f2c97dfad651cd00279db66cd41a6645f4f1c9577886d49c966652b8f",
-	"view=index&ids=" + goldenIDList(1, 4):  "a0b1bb21141fb896c6ebd36313b1d30840aecaffd20a9a071f24222f6d5379a5",
 }
 
 func goldenIDList(is ...int) string {
@@ -166,10 +166,10 @@ func goldenIDList(is ...int) string {
 	return s
 }
 
-// TestReviewQuery_IndexViewByteIdentical: view=index (and the other listing
-// shapes that share the extracted derivation) are byte-identical to the
-// responses before the extraction.
-func TestReviewQuery_IndexViewByteIdentical(t *testing.T) {
+// TestReviewQuery_ListingsByteIdentical: the listing shapes that share the
+// extracted derivation are byte-identical to the responses before the
+// extraction. (The view=index entries were deleted with the view, 02-PR19.)
+func TestReviewQuery_ListingsByteIdentical(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
@@ -184,6 +184,63 @@ func TestReviewQuery_IndexViewByteIdentical(t *testing.T) {
 			continue
 		}
 		require.Equal(t, want, got, "response for %q changed (%d bytes): %s", q, len(body), body)
+	}
+}
+
+// TestReviewList_ViewIndexIs410: the retired view=index answers 410 Gone with
+// a JSON body that names view=page, whatever else the request carries, and the
+// request is counted under view="gone" in review_index_request_seconds.
+func TestReviewList_ViewIndexIs410(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	metrics.Register()
+	before := reviewRequestCount(t, metrics.ReviewViewGone)
+	queries := []string{"view=index", "all=true&view=index", "view=index&ids=" + goldenIDList(1, 4)}
+	for _, q := range queries {
+		code, body, _ := serveReviewRaw(t, h, q)
+		require.Equal(t, http.StatusGone, code, "%s: %s", q, body)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(body, &got), "%s: %s", q, body)
+		require.Equal(t, "VIEW_INDEX_GONE", got["code"])
+		require.Equal(t, "view=page", got["use"])
+		require.Contains(t, got["error"], "view=page")
+		require.NotContains(t, got, "results", "a 410 must carry no rows")
+	}
+	require.Equal(t, before+uint64(len(queries)), reviewRequestCount(t, metrics.ReviewViewGone),
+		"every view=index request is counted under view=gone")
+}
+
+// reviewRequestCount is the sample count of review_index_request_seconds for
+// one view label, read from the default Prometheus registry.
+func reviewRequestCount(t testing.TB, view string) uint64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, mf := range families {
+		if mf.GetName() != "audiobook_organizer_review_index_request_seconds" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "view" && l.GetValue() == view {
+					return m.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// TestReviewList_ViewPageUnchanged: view=page is not touched by the 410, and
+// neither is a listing with no view.
+func TestReviewList_ViewPageUnchanged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	for _, q := range []string{"view=page&limit=5", "view=page&ids=all", "all=true", "limit=5&offset=3"} {
+		code, body, _ := serveReviewRaw(t, h, q)
+		require.Equal(t, http.StatusOK, code, "%s: %s", q, body)
 	}
 }
 
