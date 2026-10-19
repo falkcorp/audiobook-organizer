@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-19
 
@@ -63,13 +63,14 @@ import (
 // so it resolved no person, and the resulting custom-scheme Location crashed the
 // app — reproduced in production.
 //
-// # The flow now: two hops, like real ABS
+// # The flow now: two hops
 //
 //	hop 1  GET  /auth/openid           (app's URLSession, service token only)
 //	       require a verified Cloudflare credential, rate-limit and cap live
 //	       requests per credential, validate redirect_uri + PKCE, park the
 //	       request under a random id,
-//	       302 → https://<this host>/auth/openid/browser?req=<id>
+//	       302 → https://<origin>/auth/openid/browser?req=<id>&state=<id>
+//	             &client_id=…&scope=openid&redirect_uri=<allow-listed uri>
 //	       errors: 400 text/plain, never a redirect
 //
 //	hop 2  GET  /auth/openid/browser   (system browser — Cloudflare Access
@@ -91,6 +92,30 @@ import (
 // Hop 1 resolves no identity at all, even when a person assertion is present,
 // and never redirects to a custom scheme. It is the hop the app inspects with
 // its own HTTP client, so the only thing it may ever hand back is an https URL.
+//
+// # The official Audiobookshelf app
+//
+// Real ABS answers hop 1 with its identity provider's authorize URL, and the
+// official app (audiobookshelf-app ServerConnectForm.vue, clickLoginWithOpenId)
+// does not open that Location as given: it requires client_id, scope, state
+// and redirect_uri in it, then REBUILDS the URL from host + pathname plus
+// those four (and its own code_challenge), dropping every other parameter, and
+// later refuses a callback whose state differs from the Location's. So hop 1's
+// Location carries all four, with the request id as `state`, and hop 2 accepts
+// the id from `state` when `req` is absent. AudioBooth opens the Location
+// verbatim and uses `req`. Either way hop 2 ignores everything else in its
+// query: client_id, scope and redirect_uri are echoes for the official app's
+// presence check, and redirect_uri and state are taken from the parked
+// request.
+//
+// The callback's state is the client's own state when it sent one. When it
+// sent none — neither app does — it is the request id, which is the state the
+// official app saw in the Location and will compare against. The id is echoed
+// only after the consent POST has consumed the request; an error from the
+// hop-2 GET leaves the request parked, so that redirect carries only the
+// client's own state (the official app reads `error` before comparing state).
+// audiobookshelf://oauth is not on the default redirect allowlist; an
+// operator adds it with ABS_OIDC_REDIRECT_URIS.
 //
 // # Why there is a consent page
 //
@@ -644,7 +669,7 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		ServiceToken: servermiddleware.ABSServiceToken(c),
 	})
-	c.Header("Location", oidcBrowserURL(origin, id, false))
+	c.Header("Location", oidcHop1Location(origin, id, clientID, redirectURI))
 	c.Status(http.StatusFound)
 }
 
@@ -677,8 +702,8 @@ func (h *Handler) oidcAuthorizeReject(c *gin.Context, reason, message string) {
 func (h *Handler) OpenIDBrowser(c *gin.Context) {
 	oidcBrowserHeaders(c)
 
-	reqID := c.Query("req")
-	if !isS256Shaped(reqID) {
+	reqID, ok := oidcBrowserReqID(c)
+	if !ok || !isS256Shaped(reqID) {
 		h.oidcBrowserDead(c)
 		return
 	}
@@ -822,11 +847,17 @@ func (h *Handler) OpenIDBrowserConsent(c *gin.Context) {
 	ev := h.oidcBrowserAudit(c, pending)
 	ev.UserID, ev.Username, ev.Email = identity.User.ID, identity.User.Username, identity.Email
 
+	// The request is consumed, so its id may now stand in for a state the
+	// client did not send (see "The official Audiobookshelf app").
+	state := pending.State
+	if state == "" {
+		state = reqID
+	}
 	if c.PostForm("decision") != "allow" {
 		ev.Outcome = absauth.OutcomeDenied
 		ev.Reason = "consent-declined"
 		absauth.Audit(ev)
-		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, pending.State, "access_denied",
+		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, state, "access_denied",
 			"the user declined the sign-in")
 		return
 	}
@@ -838,13 +869,13 @@ func (h *Handler) OpenIDBrowserConsent(c *gin.Context) {
 		ev.Outcome = absauth.OutcomeError
 		ev.Reason = "code-mint-error"
 		absauth.Audit(ev)
-		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, pending.State, "server_error", "could not mint code")
+		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, state, "server_error", "could not mint code")
 		return
 	}
 	ev.Outcome = absauth.OutcomeSuccess
 	ev.Reason = "code-issued"
 	absauth.Audit(ev)
-	oidcRedirect(c, http.StatusSeeOther, pending.RedirectURI, map[string]string{"code": code, "state": pending.State})
+	oidcRedirect(c, http.StatusSeeOther, pending.RedirectURI, map[string]string{"code": code, "state": state})
 }
 
 // oidcConsentToken is the consent form's CSRF token: HMAC-SHA256 over the req id
@@ -881,13 +912,11 @@ func (h *Handler) oidcConsentRefuse(c *gin.Context, reason, message string) {
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: reason,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
-	c.Header("Content-Type", "text/plain; charset=utf-8")
-	c.String(http.StatusForbidden, message)
-	c.Abort()
+	oidcBrowserMessage(c, http.StatusForbidden, "Sign-in not confirmed", message)
 }
 
 // oidcBrowserDead answers hop 2 for an unknown, expired or used id. There is no
-// trusted redirect target for such an id, so this renders text in the browser
+// trusted redirect target for such an id, so this renders a message page in the browser
 // rather than redirecting anywhere.
 func (h *Handler) oidcBrowserDead(c *gin.Context) {
 	absauth.Audit(absauth.AuditEvent{
@@ -895,22 +924,32 @@ func (h *Handler) oidcBrowserDead(c *gin.Context) {
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: "request-unknown-expired-or-used",
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
-	c.Header("Content-Type", "text/plain; charset=utf-8")
-	c.String(http.StatusBadRequest,
+	oidcBrowserMessage(c, http.StatusBadRequest, "Sign-in link expired",
 		"This sign-in link is invalid, has expired, or was already used. Close this window and sign in again from the app.")
+}
+
+// oidcBrowserMessage renders oidcMessageTemplate and aborts. html/template
+// escapes both values; neither is caller-supplied today.
+func oidcBrowserMessage(c *gin.Context, status int, title, message string) {
+	var buf bytes.Buffer
+	if err := oidcMessageTemplate.Execute(&buf, map[string]string{"Title": title, "Message": message}); err != nil {
+		oidcLog.Error("openid message page failed to render: %v", err)
+		c.String(status, message)
+		c.Abort()
+		return
+	}
+	c.Data(status, "text/html; charset=utf-8", buf.Bytes())
 	c.Abort()
 }
 
 // oidcKnownClients names apps by their registered callback scheme. The consent
 // page names the app from the ALLOW-LISTED redirect_uri, never from the
 // caller-supplied client_id, which anyone starting hop 1 can set to anything.
-var oidcKnownClients = map[string]string{"audiobooth": "AudioBooth"}
+var oidcKnownClients = map[string]string{"audiobooth": "AudioBooth", "audiobookshelf": "Audiobookshelf"}
 
-var oidcConsentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in to {{.App}}?</title>
-<style>
+// oidcPageStyle is shared by every hop-2 page. Inline because the pages' CSP
+// (oidcBrowserHeaders) allows inline style and nothing else.
+const oidcPageStyle = `<style>
 :root{color-scheme:light dark;--bg:#f6f6f4;--fg:#1c1c1a;--muted:#5d5d58;--card:#fff;--accent:#2f5d50;--line:#d9d9d4}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ececea;--muted:#a3a39d;--card:#20201f;--accent:#7fb8a6;--line:#3a3a37}}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,system-ui,sans-serif}
@@ -923,7 +962,27 @@ code{font-size:.9rem}
 .row{display:flex;gap:.75rem;margin-top:1.25rem}
 button{flex:1;font:inherit;padding:.7rem 1rem;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--fg)}
 button.allow{background:var(--accent);border-color:var(--accent);color:var(--card);font-weight:600}
-</style></head>
+</style>`
+
+// oidcMessageTemplate is the page for a hop-2 failure that has no trusted
+// redirect target (a dead link, a refused consent POST). A page rather than
+// text/plain so it is readable at phone width inside the sign-in sheet.
+var oidcMessageTemplate = template.Must(template.New("message").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}}</title>
+` + oidcPageStyle + `</head>
+<body><main><div class="card">
+<h1>{{.Title}}</h1>
+<p>{{.Message}}</p>
+</div></main></body></html>
+`))
+
+var oidcConsentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in to {{.App}}?</title>
+` + oidcPageStyle + `</head>
 <body><main><div class="card">
 <h1>Sign in to {{.App}}?</h1>
 <p>{{.App}} is asking to sign in to this server as</p>
@@ -1177,7 +1236,52 @@ func oidcNormalizeOrigin(raw string, allowPath bool) (string, bool) {
 	return "https://" + host, true
 }
 
-// oidcBrowserURL is hop 2's absolute URL for a parked request.
+// oidcDefaultClientID stands in for a client_id the app did not send: the
+// official app refuses a hop-1 Location without one. It names nothing and is
+// never displayed (the consent page names the app from redirect_uri).
+const oidcDefaultClientID = "abs-client"
+
+// oidcHop1Location is hop 1's Location: hop 2 on our origin, carrying the
+// request id as both `req` (AudioBooth opens this URL verbatim) and `state`
+// (the official app rebuilds the URL keeping only client_id, scope, state and
+// redirect_uri), plus those echoes for the official app's presence check.
+// scope is always "openid": hop 2 ignores it, so echoing the caller's would
+// only reflect input. client_id is at most oidcMaxClientIDLen by now.
+func oidcHop1Location(origin, reqID, clientID, redirectURI string) string {
+	if clientID == "" {
+		clientID = oidcDefaultClientID
+	}
+	q := url.Values{}
+	q.Set("req", reqID)
+	q.Set("state", reqID)
+	q.Set("client_id", clientID)
+	q.Set("scope", "openid")
+	q.Set("redirect_uri", redirectURI)
+	return origin + OIDCBrowserPath + "?" + q.Encode()
+}
+
+// oidcBrowserReqID returns the parked request's id from a hop-2 GET: `req`, or
+// `state` when the official app's rebuild dropped `req`. Each may appear at
+// most once, and when both are present they must agree; anything else is
+// ambiguous and refused rather than guessed at.
+func oidcBrowserReqID(c *gin.Context) (string, bool) {
+	reqs, states := c.QueryArray("req"), c.QueryArray("state")
+	if len(reqs) > 1 || len(states) > 1 {
+		return "", false
+	}
+	switch {
+	case len(reqs) == 1 && (len(states) == 0 || states[0] == reqs[0]):
+		return reqs[0], true
+	case len(reqs) == 0 && len(states) == 1:
+		return states[0], true
+	default:
+		return "", false
+	}
+}
+
+// oidcBrowserURL is hop 2's absolute URL for a parked request, as used by
+// hop 2's own reauth bounce (the browser follows it directly, so it needs no
+// echoes for the official app).
 func oidcBrowserURL(origin, reqID string, reauth bool) string {
 	u := origin + OIDCBrowserPath + "?req=" + url.QueryEscape(reqID)
 	if reauth {
