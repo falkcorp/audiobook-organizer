@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
 // last-edited: 2026-10-19
 
@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -428,5 +429,96 @@ func TestRenderOIDCConsent_EscapesEverything(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;") {
 		t.Fatalf("the account should be rendered escaped:\n%s", body)
+	}
+}
+
+// A cap below 1 is raised to 1. With max 0, put's global eviction loop would
+// spin forever on an empty map.
+func TestOIDCTTLStore_MaxBelowOneIsClamped(t *testing.T) {
+	for _, limit := range []int{0, -5} {
+		store := newOIDCTTLStore[oidcPendingCode](limit)
+		now := time.Now()
+		store.put("a", "o", 1, oidcPendingCode{}, now, time.Minute)
+		store.put("b", "p", 1, oidcPendingCode{}, now, time.Minute)
+		if len(store.entries) != 1 {
+			t.Fatalf("max %d: store holds %d entries, want 1", limit, len(store.entries))
+		}
+		if _, ok := store.peek("b", now); !ok {
+			t.Fatalf("max %d: the newest put must land", limit)
+		}
+	}
+}
+
+// Every put sweeps expired entries BEFORE the per-owner eviction, so an
+// owner's live entry is never evicted while its own expired entry still holds
+// a slot. Here the expired entry is the owner's newer one (a different TTL on
+// the same owner), so eviction-by-age alone would pick the live one.
+func TestOIDCTTLStore_SweepsBeforeOwnerEviction(t *testing.T) {
+	store := newOIDCTTLStore[oidcPendingCode](100)
+	now := time.Now()
+	store.put("live", "o", 2, oidcPendingCode{}, now, time.Hour)
+	store.put("short", "o", 2, oidcPendingCode{}, now, time.Second)
+	later := now.Add(2 * time.Second)
+	res := store.put("new", "o", 2, oidcPendingCode{}, later, time.Hour)
+	if res.OwnerEvicted != 0 {
+		t.Fatalf("OwnerEvicted = %d, want 0: the expired entry should have been swept instead", res.OwnerEvicted)
+	}
+	for _, k := range []string{"live", "new"} {
+		if _, ok := store.peek(k, later); !ok {
+			t.Fatalf("%s must still be live", k)
+		}
+	}
+}
+
+// Concurrent puts, takes and peeks across owners keep both caps and never
+// lose a fresh put to a data race. Meaningful under -race: every path takes
+// the store's one lock, and this proves no path skips it.
+func TestOIDCTTLStore_ConcurrentPutsKeepInvariants(t *testing.T) {
+	const limit, ownerCap, workers, perWorker = 64, 5, 16, 300
+	store := newOIDCTTLStore[oidcPendingCode](limit)
+	now := time.Now()
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Go(func() {
+			owner := fmt.Sprintf("o%d", w%6)
+			for i := range perWorker {
+				key := fmt.Sprintf("w%d-%d", w, i)
+				store.put(key, owner, ownerCap, oidcPendingCode{UserID: owner}, now, time.Minute)
+				if i%3 == 0 {
+					store.take(key, now)
+				} else {
+					store.peek(fmt.Sprintf("w%d-%d", (w+1)%workers, i), now)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.entries) > limit {
+		t.Fatalf("store holds %d entries, cap %d", len(store.entries), limit)
+	}
+	per := map[string]int{}
+	for _, e := range store.entries {
+		per[e.owner]++
+		if per[e.owner] > ownerCap {
+			t.Fatalf("owner %s holds %d entries, cap %d", e.owner, per[e.owner], ownerCap)
+		}
+	}
+}
+
+// mintOIDCCode refuses a challenge that is not S256-shaped: such a code could
+// never be redeemed, so minting it only hides a caller's mistake.
+func TestMintOIDCCode_RequiresS256ShapedChallenge(t *testing.T) {
+	t.Setenv(OIDCRedirectURIsEnvVar, "")
+	IsolateOIDCCodesForTest(t)
+	_, good := pkcePair("a-verifier-a-verifier-a-verifier-a-verifier")
+	for _, bad := range []string{"", "short", good + "x", strings.Repeat("!", 43)} {
+		if _, err := mintOIDCCode("u1", "e@example.com", bad, "audiobooth://oauth", time.Now()); err == nil {
+			t.Fatalf("challenge %q must be refused", bad)
+		}
+	}
+	if _, err := mintOIDCCode("u1", "e@example.com", good, "audiobooth://oauth", time.Now()); err != nil {
+		t.Fatalf("a real S256 challenge must mint: %v", err)
 	}
 }

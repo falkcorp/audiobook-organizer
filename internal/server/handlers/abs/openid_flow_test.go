@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-19
 
@@ -53,6 +53,9 @@ func s256(verifier string) string {
 func newOIDCHarness(t *testing.T) *harness {
 	t.Helper()
 	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "")
+	// Each test gets its own code store: it is package-level, so caps and
+	// codes would otherwise carry over from earlier tests.
+	abshandler.IsolateOIDCCodesForTest(t)
 	h := newHarness(t, "cf,jwt", []string{"owner@example.com", "second@example.com"})
 	// As server.go configures production: trust no forwarded headers, so
 	// c.ClientIP() is the connection's address.
@@ -303,6 +306,8 @@ func TestOpenIDHop1_ErrorsAre400PlainTextNeverRedirects(t *testing.T) {
 		{"no challenge", base(func(q url.Values) { q.Del("code_challenge") }), ""},
 		{"malformed challenge", base(func(q url.Values) { q.Set("code_challenge", "short") }), ""},
 		{"state too long", base(func(q url.Values) { q.Set("state", strings.Repeat("s", 513)) }), "state is too long"},
+		// client_id is parked, echoed into the hop-2 URL and logged.
+		{"client_id too long", base(func(q url.Values) { q.Set("client_id", strings.Repeat("c", 129)) }), "client_id is too long"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -573,11 +578,15 @@ func TestOpenIDHop2_IgnoresQueryRedirectURIAndState(t *testing.T) {
 // The web OAuth deep-link seam binds every code to an allow-listed redirect_uri.
 func TestMintAppAuthorizationCode_RefusesUnregisteredRedirect(t *testing.T) {
 	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "")
+	abshandler.IsolateOIDCCodesForTest(t)
 	if _, err := abshandler.MintAppAuthorizationCode("u1", "e@example.com", s256(oidcVerifier), "https://evil.example/cb"); err == nil {
 		t.Fatal("minting for an unregistered redirect_uri must fail")
 	}
 	if _, err := abshandler.MintAppAuthorizationCode("u1", "e@example.com", s256(oidcVerifier), "audiobooth://oauth"); err != nil {
 		t.Fatalf("minting for the registered redirect_uri: %v", err)
+	}
+	if _, err := abshandler.MintAppAuthorizationCode("u1", "e@example.com", "not-an-s256-challenge", "audiobooth://oauth"); err == nil {
+		t.Fatal("minting with a challenge that is not S256-shaped must fail")
 	}
 }
 
