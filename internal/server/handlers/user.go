@@ -36,11 +36,14 @@ type UserStore interface {
 // UserHandler handles user-management and invite HTTP endpoints.
 type UserHandler struct {
 	store UserStore
+	// absSessions signs a user out of every ABS client on deactivation and
+	// reactivation. nil when the store has no ABS keyspace.
+	absSessions ABSSessionRevoker
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
 func NewUserHandler(store UserStore) *UserHandler {
-	return &UserHandler{store: store}
+	return &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store)}
 }
 
 // generateToken produces a cryptographically random 32-byte hex string.
@@ -184,9 +187,18 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 		return
 	}
 
+	// Lock FIRST: a locked user is refused at once by the ABS bearer and refresh
+	// paths, so the account is shut even if the revoke below fails. Then revoke
+	// every ABS session so reactivating the account later cannot bring them back.
+	// A revoke failure is reported as a failure (the admin retries; this handler
+	// is idempotent) rather than a success that left sessions on disk.
 	user.Status = "locked"
 	if err := h.store.UpdateUser(user); err != nil {
 		httputil.InternalError(c, "deactivate user", err)
+		return
+	}
+	if err := RevokeAllABSSessions(h.absSessions, user.ID, "user-deactivated"); err != nil {
+		httputil.InternalError(c, "user locked, but their mobile-app sessions could not all be revoked; deactivate again", err)
 		return
 	}
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
@@ -206,6 +218,14 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 		return
 	}
 
+	// Revoke BEFORE unlocking, and stay locked if that fails. Deactivation
+	// already revoked, but if its revoke failed the sessions are still on disk,
+	// unusable only because the account is locked; unlocking would revive them.
+	// A reactivated account always starts with no ABS sessions.
+	if err := RevokeAllABSSessions(h.absSessions, user.ID, "user-reactivated"); err != nil {
+		httputil.InternalError(c, "could not clear the user's old mobile-app sessions; the user stays locked, try again", err)
+		return
+	}
 	user.Status = "active"
 	if err := h.store.UpdateUser(user); err != nil {
 		httputil.InternalError(c, "reactivate user", err)

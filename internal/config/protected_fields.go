@@ -1,5 +1,5 @@
 // file: internal/config/protected_fields.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
 // last-edited: 2026-10-19
 
@@ -184,6 +184,24 @@ func ChangedProtectedFields(before, after *Config) []string {
 			// A rule that no longer resolves is reported as changed: the
 			// check fails closed, and the completeness test names it.
 			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// ChangedEnvOnlyFields lists the absEnvOnlySettings keys whose value differs
+// between before and after, sorted, each as "key (VARIABLE)".
+func ChangedEnvOnlyFields(before, after *Config) []string {
+	if before == nil || after == nil {
+		return nil
+	}
+	var changed []string
+	for key, envVar := range absEnvOnlySettings {
+		a, errA := projectField(reflect.ValueOf(*before), []string{key})
+		b, errB := projectField(reflect.ValueOf(*after), []string{key})
+		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
+			changed = append(changed, key+" ("+envVar+")")
 		}
 	}
 	sort.Strings(changed)

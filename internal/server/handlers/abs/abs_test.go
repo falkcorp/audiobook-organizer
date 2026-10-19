@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-10-19
 
@@ -203,9 +203,15 @@ func (f *fakeStore) UpdateABSSession(s *database.ABSSession) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// Mirrors PebbleStore: revocation is one-way.
-	if stored, ok := f.sessions[s.ID]; !ok || stored.Revoked {
+	// Mirrors PebbleStore: revocation is one-way, and a write must follow the
+	// stored token chain (same generation and hash, or the next rotation of it).
+	stored, ok := f.sessions[s.ID]
+	if !ok || stored.Revoked {
 		return database.ErrABSSessionRevoked
+	}
+	if !(s.Generation == stored.Generation && s.RefreshTokenHash == stored.RefreshTokenHash) &&
+		!(s.Generation == stored.Generation+1 && s.PrevRefreshTokenHash == stored.RefreshTokenHash) {
+		return database.ErrABSSessionStale
 	}
 	cp := *s
 	f.sessions[s.ID] = &cp

@@ -1,7 +1,7 @@
 // file: internal/config/env_locked_settings_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f1c9a83-6d27-4b50-9e18-2c7a5b0e3d64
-// last-edited: 2026-09-07
+// last-edited: 2026-10-19
 
 package config
 
@@ -27,15 +27,52 @@ func configJSONFieldNames(t *testing.T) []string {
 	return names
 }
 
+// absEnvOnlyKeys is the sorted key set of absEnvOnlySettings, which is locked
+// whatever the environment says.
+func absEnvOnlyKeys() []string {
+	keys := make([]string, 0, len(absEnvOnlySettings))
+	for k := range absEnvOnlySettings {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 // TestEnvLockedSettings_EmptyWhenTheEnvironmentIsSilent is the case that matters
 // for every developer machine and for any deployment that does not pin these in a
-// unit file: with nothing set, no control should be marked read-only.
+// unit file: with nothing set, no ordinary control is marked read-only. Only the
+// environment-only ABS keys remain, because the overlay applies their registered
+// default over any saved value even when no variable is set.
 func TestEnvLockedSettings_EmptyWhenTheEnvironmentIsSilent(t *testing.T) {
 	for _, v := range []string{"ACTIVITY_DB_PATH", "ACTIVITY_DB_MOVE_ON_CHANGE", "ACTIVITY_BACKEND"} {
 		t.Setenv(v, "")
 	}
-	if got := EnvLockedSettings(); len(got) != 0 {
-		t.Fatalf("EnvLockedSettings() = %v, want empty — nothing in the environment is set", got)
+	if got := EnvLockedSettings(); !slices.Equal(got, absEnvOnlyKeys()) {
+		t.Fatalf("EnvLockedSettings() = %v, want only the environment-only ABS keys %v", got, absEnvOnlyKeys())
+	}
+}
+
+// TestEnvLockedSettings_ABSKeysAreAlwaysLockedWithTheirVariable: every ABS key is
+// locked with no variable set, and SettingLocks names the variable to set.
+func TestEnvLockedSettings_ABSKeysAreAlwaysLockedWithTheirVariable(t *testing.T) {
+	t.Setenv("ABS_SESSION_MAX_TTL", "")
+	locks := SettingLocks()
+	for key, envVar := range absEnvOnlySettings {
+		if got := locks[key]; got != envVar {
+			t.Errorf("SettingLocks()[%s] = %q, want %q", key, got, envVar)
+		}
+	}
+	if locks["abs_session_max_ttl"] != "ABS_SESSION_MAX_TTL" {
+		t.Error("abs_session_max_ttl must be reported env-locked")
+	}
+}
+
+func TestABSEnvOnlySettings_EveryKeyNamesARealConfigField(t *testing.T) {
+	fields := configJSONFieldNames(t)
+	for key := range absEnvOnlySettings {
+		if !slices.Contains(fields, key) {
+			t.Errorf("absEnvOnlySettings key %q is not a json field on Config", key)
+		}
 	}
 }
 
@@ -85,8 +122,8 @@ func TestEnvLockedSettings_IsSorted(t *testing.T) {
 	if !slices.IsSorted(got) {
 		t.Errorf("EnvLockedSettings() = %v, want sorted", got)
 	}
-	if len(got) != 3 {
-		t.Errorf("EnvLockedSettings() = %v, want all three keys locked", got)
+	if len(got) != 3+len(absEnvOnlySettings) {
+		t.Errorf("EnvLockedSettings() = %v, want all three keys locked plus the ABS keys", got)
 	}
 }
 

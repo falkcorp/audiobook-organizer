@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-abs-sessions-sliding-expiry-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 50c43bce-f6d8-4831-b9d1-95ea32eda66d -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -30,6 +30,14 @@ Related spec: `docs/specs/2026-07-29-abs-sync-api-design.md`, section 3.2.
   app renewal happened at the same moment, the renewal could quietly bring
   the logged-out sign-in back. The server now handles every change to a
   sign-in one at a time and never revives one that was ended.
+- **Changing a password now signs the phones out.** Because a sign-in now
+  lasts as long as it is used, a phone could otherwise have stayed signed in
+  forever after the password was changed, an admin reset it, or the account
+  was switched off. All of those now end every phone sign-in for that person.
+- **Settings that could never take effect are now refused.** The phone-app
+  settings can only be set on the server itself. Saving one from the settings
+  page used to look like it worked and was then quietly thrown away; it is now
+  refused with a message naming the server setting to use instead.
 - **Logs now say what really happened.** An expired pass used to be logged as
   an "invalid" one, which made a routine 30-day expiry look like a changed
   server secret. The two are now logged separately.
@@ -82,6 +90,38 @@ just deleted, in a form the logout function could no longer find.
 **The fix.** These changes now happen one at a time. Each one re-reads the
 record first, and a sign-in that has been logged out or deleted stays that
 way. The clean-up re-checks each record just before deleting it.
+
+## Changing a password now signs the phones out
+
+**What it was.** Changing your password, an admin resetting it, or an admin
+switching an account off did nothing to the phone apps' sign-ins.
+
+**Why it mattered.** Once sign-ins renew themselves with use, a phone that was
+signed in before the change would have stayed signed in indefinitely, which
+defeats the point of changing a password after a phone is lost.
+
+**The fix.** All of those actions now end every phone sign-in for that
+person. A password change or reset link that cannot sign the phones out is
+refused, so the password is never changed while they stay signed in; the
+person just tries again. Switching an account off locks it first, so it is
+shut at once even if signing the phones out fails, and the admin is told to
+try again. Switching it back on clears any leftover phone sign-ins before it
+unlocks, so they never come back. A locked account's phone also can no
+longer keep its sign-in alive by renewing it. The web interface has the same
+gap; it is recorded as follow-up work, not fixed here.
+
+## Phone-app settings could be saved but never applied
+
+**What it was.** The settings page allowed changing the phone-app settings,
+including the new sign-in lengths, but the server always replaced them with
+its own environment values when it started.
+
+**Why it mattered.** An admin could shorten or lengthen sign-ins, see the
+change accepted, and have it silently undone at the next restart.
+
+**The fix.** Those settings are now shown as locked and a save that changes
+one is refused, with the name of the server environment setting to change
+instead.
 
 ## Clearer logs
 

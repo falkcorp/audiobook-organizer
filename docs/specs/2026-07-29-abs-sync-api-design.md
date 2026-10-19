@@ -1,5 +1,5 @@
 <!-- file: docs/specs/2026-07-29-abs-sync-api-design.md -->
-<!-- version: 7.7.0 -->
+<!-- version: 7.8.0 -->
 <!-- guid: 0869d58c-b186-45cb-9915-64bd18eaa45f -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -831,6 +831,16 @@ when the request carries header `x-return-tokens: true`, the response body **als
   request, independently of the stored `expiresAt`.
 - An expired access token is audited as `token-expired`; a forged or malformed one as
   `token-invalid`. Both are 401.
+- **Account security events end every session (2026-10-19).** Because sessions slide and the
+  absolute cap is off by default, a session would otherwise outlive the credentials it was issued
+  for. A password change (self-service or admin), an admin reset link and deactivation call
+  `RevokeAllABSSessionsForUser`. Password change and reset link revoke first and fail closed (500,
+  nothing changed) if the revoke fails; deactivation locks first, then revokes and reports a failed
+  revoke as 500; reactivation revokes again before unlocking. `/auth/refresh` refuses a missing or
+  locked user before it writes to the session.
+- **The ABS keys are environment-only.** Every serialized `abs_*` key has a registered default and
+  is re-applied from viper at each boot, so `PUT /api/v1/config` refuses a change to one (400, naming
+  the variable) and the settings API reports it as locked.
 - **`ABS_JWT_SECRET`** is read from env and is **required** when the ABS API is enabled; the server
   **fails closed** at boot if it is missing. Never auto-generated into ephemeral storage.
 
@@ -853,6 +863,12 @@ is the #1 real-world ABS complaint; the grace design below is the mitigation.
    token pair idempotently** (do NOT rotate again). This is what prevents two simultaneous refreshes
    from orphaning each other or minting divergent tokens.
 4. Otherwise (unknown / expired / beyond grace / revoked): **401 "Session not found"** (rare, by design).
+
+Implementation note (2026-10-19): Pebble has no compare-and-swap, so every ABS session mutation
+(create, update, extend, revoke, revoke-all, sweep delete) takes one process-wide lock and re-reads the
+stored row. `UpdateABSSession` accepts a write only if it follows the stored row (same generation and
+refresh hash, or exactly the next generation whose `prevRefreshTokenHash` is the stored current hash),
+otherwise `ErrABSSessionStale`; a revoked or deleted row is refused with `ErrABSSessionRevoked`.
 
 Two *different* devices are two *different* sessions with independent tokens, so they can never be
 issued the same refresh token. Rotation invalidates the chain beyond one grace window, bounding replay

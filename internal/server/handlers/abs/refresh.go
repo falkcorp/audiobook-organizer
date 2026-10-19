@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
 // last-edited: 2026-10-19
 
@@ -114,6 +114,13 @@ func (h *Handler) Refresh(c *gin.Context) {
 		h.failRefresh(c, ip, session.ID, "session-max-lifetime")
 		return
 	}
+	// The user is checked BEFORE anything is written. A rotate or grace touch
+	// slides ExpiresAt, so doing it first and refusing afterwards would let a
+	// locked or deleted user's session keep extending itself on every attempt.
+	user, ok := h.refreshUser(c, ip, session.ID, session.UserID, servermiddleware.ABSModeJWT)
+	if !ok {
+		return
+	}
 
 	var refreshToken string
 	switch {
@@ -134,6 +141,8 @@ func (h *Handler) Refresh(c *gin.Context) {
 				h.failRefresh(c, ip, session.ID, "session-revoked")
 				return
 			}
+			// ErrABSSessionStale lands here too: another writer rotated since our
+			// read. 5xx so the client retries and takes the grace path.
 			h.errorRefresh(c, ip, "session-update-error", "could not rotate session")
 			return
 		}
@@ -170,7 +179,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 		return
 	}
 
-	h.completeRefresh(c, session, refreshToken, servermiddleware.ABSModeJWT, "", ip, now)
+	h.completeRefresh(c, user, session, refreshToken, servermiddleware.ABSModeJWT, "", ip, now)
 }
 
 // refreshForCFIdentity implements the "always succeeds" branch.
@@ -184,26 +193,11 @@ func (h *Handler) refreshForCFIdentity(c *gin.Context, identity *servermiddlewar
 	user := identity.User
 
 	if presented != "" {
-		if session, err := h.store.GetABSSessionByRefreshHash(absauth.HashRefreshToken(presented)); err == nil &&
-			session != nil && session.UserID == user.ID && session.Live(now) &&
-			!h.cfg.SessionPastMaxLifetime(session.CreatedAt, now) {
-			lock := h.lockForSession(session.ID)
-			lock.Lock()
-			defer lock.Unlock()
-
-			session.PrevRefreshTokenHash = session.RefreshTokenHash
-			session.Generation++
-			refreshToken := h.cfg.DeriveRefreshToken(session.ID, session.Seed, session.Generation)
-			session.RefreshTokenHash = absauth.HashRefreshToken(refreshToken)
-			session.GraceUntil = now.Add(h.cfg.RefreshGrace)
-			session.LastUsedAt = now
-			session.ExpiresAt = h.cfg.SessionExpiry(session.CreatedAt, now)
-			if err := h.store.UpdateABSSession(session); err == nil {
-				h.completeRefresh(c, session, refreshToken, servermiddleware.ABSModeCF, identity.Email, ip, now)
-				return
-			}
-			// Fall through to minting a new session: in Mode C we must not fail.
+		if session, refreshToken, ok := h.rotateForCF(absauth.HashRefreshToken(presented), user.ID, now); ok {
+			h.completeRefresh(c, user, session, refreshToken, servermiddleware.ABSModeCF, identity.Email, ip, now)
+			return
 		}
+		// Otherwise mint a new session: in Mode C we must not fail.
 	}
 
 	session, refreshToken, err := h.createSession(user.ID, deviceInfoFromRequest(c), ip, c.Request.UserAgent(), now)
@@ -213,31 +207,74 @@ func (h *Handler) refreshForCFIdentity(c *gin.Context, identity *servermiddlewar
 		h.errorRefresh(c, ip, "session-create-failed", "could not create session")
 		return
 	}
-	h.completeRefresh(c, session, refreshToken, servermiddleware.ABSModeCF, identity.Email, ip, now)
+	h.completeRefresh(c, user, session, refreshToken, servermiddleware.ABSModeCF, identity.Email, ip, now)
 }
 
-// completeRefresh mints the access token and writes the shared auth response.
-func (h *Handler) completeRefresh(c *gin.Context, session *database.ABSSession, refreshToken, mode, email, ip string, now time.Time) {
-	user, err := h.store.GetUserByID(session.UserID)
+// rotateForCF rotates the session the presented refresh token belongs to, when it
+// is this user's and still live, and reports false otherwise (or on any store
+// error) so the caller mints a fresh session instead.
+//
+// The lookup by hash runs unlocked, so the row is re-read and every condition
+// re-checked under the per-session lock before rotating. Rotating the unlocked
+// copy could write an older generation back over a rotation that landed in
+// between and orphan the token that device was just given; the store refuses that
+// write too (ErrABSSessionStale), but the re-read is what keeps it from happening.
+func (h *Handler) rotateForCF(hash, userID string, now time.Time) (*database.ABSSession, string, bool) {
+	found, err := h.store.GetABSSessionByRefreshHash(hash)
+	if err != nil || found == nil || found.UserID != userID {
+		return nil, "", false
+	}
+	lock := h.lockForSession(found.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	session, err := h.store.GetABSSession(found.ID)
+	if err != nil || session == nil || session.UserID != userID || !session.Live(now) ||
+		h.cfg.SessionPastMaxLifetime(session.CreatedAt, now) ||
+		(hash != session.RefreshTokenHash && hash != session.PrevRefreshTokenHash) {
+		return nil, "", false
+	}
+	session.PrevRefreshTokenHash = session.RefreshTokenHash
+	session.Generation++
+	refreshToken := h.cfg.DeriveRefreshToken(session.ID, session.Seed, session.Generation)
+	session.RefreshTokenHash = absauth.HashRefreshToken(refreshToken)
+	session.GraceUntil = now.Add(h.cfg.RefreshGrace)
+	session.LastUsedAt = now
+	session.ExpiresAt = h.cfg.SessionExpiry(session.CreatedAt, now)
+	if err := h.store.UpdateABSSession(session); err != nil {
+		return nil, "", false
+	}
+	return session, refreshToken, true
+}
+
+// refreshUser loads the session's user and refuses the refresh, writing the
+// response, when it is gone (401: the session really is dead), inactive (403) or
+// unreadable (5xx). Called before any session write.
+func (h *Handler) refreshUser(c *gin.Context, ip, sessionID, userID, mode string) (*database.User, bool) {
+	user, err := h.store.GetUserByID(userID)
 	if err != nil {
 		h.errorRefresh(c, ip, "user-lookup-error", "could not load user")
-		return
+		return nil, false
 	}
 	if user == nil {
-		// The user really is gone, so the session really is dead.
-		h.failRefresh(c, ip, session.ID, "session-user-missing")
-		return
+		h.failRefresh(c, ip, sessionID, "session-user-missing")
+		return nil, false
 	}
 	if !isActiveUser(user) {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "refresh", Outcome: absauth.OutcomeDenied, Mode: mode, SourceIP: ip,
-			UserID: user.ID, Username: user.Username, SessionID: session.ID,
+			UserID: user.ID, Username: user.Username, SessionID: sessionID,
 			Reason: "user-inactive", Path: c.Request.URL.Path,
 		})
 		respondError(c, http.StatusForbidden, "account is not active")
-		return
+		return nil, false
 	}
+	return user, true
+}
 
+// completeRefresh mints the access token and writes the shared auth response for
+// a user the caller has already loaded and checked: refreshUser on the JWT path,
+// ResolveCFAssertion (which refuses inactive users) on the CF path.
+func (h *Handler) completeRefresh(c *gin.Context, user *database.User, session *database.ABSSession, refreshToken, mode, email, ip string, now time.Time) {
 	// §1.8.8 item 5: accessToken must be a real, parseable JWT with a numeric exp.
 	accessToken, _, err := h.cfg.MintAccessToken(user.ID, session.ID, now)
 	if err != nil {

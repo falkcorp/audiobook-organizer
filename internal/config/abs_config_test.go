@@ -1,11 +1,14 @@
 // file: internal/config/abs_config_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 71c4e830-6b29-4d5f-8a03-92e7b1c6df45
 // last-edited: 2026-10-19
 
 package config
 
 import (
+	"context"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -135,5 +138,48 @@ func TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI(t *testing.T) {
 	}
 	if c.ABSAuthModes != "cf,jwt" {
 		t.Errorf("auth modes must come from the environment/default, got %q", c.ABSAuthModes)
+	}
+}
+
+// TestABSConfig_UpdateRefusesEnvOnlyKeys: a config API write to an ABS key could
+// never take effect (the environment-or-default overlay replaces it at the next
+// boot), so it is refused with nothing saved instead of being accepted and then
+// silently discarded. Sending the current value back (a GET-then-PUT round trip)
+// is still accepted.
+func TestABSConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) {
+		c.EnableAuth = false
+		c.ABSSessionMaxTTL = "0"
+		c.ABSRefreshTokenTTL = "1440h"
+	})
+	ms, blobs := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+		"abs_session_max_ttl": "2160h",
+		"log_level":           "warn",
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; resp = %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "abs_session_max_ttl (ABS_SESSION_MAX_TTL)") {
+		t.Fatalf("error must name the key and its variable: %q", msg)
+	}
+	if snap := Snapshot(); snap.ABSSessionMaxTTL != "0" || snap.LogLevel == "warn" {
+		t.Fatalf("refused PUT applied something: max=%q log_level=%q", snap.ABSSessionMaxTTL, snap.LogLevel)
+	}
+	if len(*blobs) != 0 {
+		t.Fatal("refused PUT persisted a blob")
+	}
+
+	status, resp = svc.UpdateConfig(context.Background(), map[string]any{
+		"abs_session_max_ttl":   "0",
+		"abs_refresh_token_ttl": "1440h",
+		"log_level":             "warn",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("an unchanged ABS value must not block a save: %d %v", status, resp)
 	}
 }

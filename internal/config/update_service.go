@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.31.0
+// version: 3.32.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package config
 
@@ -548,6 +548,10 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// change, and why; see ownerTrustRootWhyNot.
 		ownerRefused []string
 		ownerWhy     string
+		// envOnlyRefused: environment-only keys (absEnvOnlySettings) the PUT
+		// tried to change. Refused for every caller: the value could never
+		// take effect, so accepting it would report a change that is not one.
+		envOnlyRefused []string
 		// prior is a DEEP copy of the whole in-memory config as it stood
 		// immediately before the update, captured under the write lock. It is
 		// the rollback target when the save fails, and includes the secret
@@ -627,6 +631,12 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 			return
 		}
 		candidate.EnabledSortIndexes = slices.Clone(prior.EnabledSortIndexes)
+		// Only a CHANGED value is refused, so a GET-then-PUT round trip (which
+		// carries back the env/default value the overlay applied) still saves.
+		if changed := ChangedEnvOnlyFields(prior, candidate); len(changed) > 0 {
+			envOnlyRefused = changed
+			return
+		}
 		// Post-process: trim root_dir whitespace, derive setup_complete
 		candidate.RootDir = strings.TrimSpace(candidate.RootDir)
 		candidate.SetupComplete = candidate.RootDir != ""
@@ -707,6 +717,12 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		return http.StatusBadRequest, map[string]any{
 			"error":        bootOnlyErr.Error() + " — nothing was saved",
 			"refused_keys": []string{"enabled_sort_indexes"},
+		}
+	}
+	if len(envOnlyRefused) > 0 {
+		updateServiceLog.Warn("config update refused: environment-only settings; nothing persisted: refused_keys=%v", envOnlyRefused)
+		return http.StatusBadRequest, map[string]any{
+			"error": EnvOnlySettingsRefusedMessage + ": " + strings.Join(envOnlyRefused, ", "),
 		}
 	}
 	if len(ownerRefused) > 0 {

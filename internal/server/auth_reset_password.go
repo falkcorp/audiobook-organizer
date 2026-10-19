@@ -1,7 +1,7 @@
 // file: internal/server/auth_reset_password.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2d94f1-7a08-4c53-9e16-3d8f05a2c761
-// last-edited: 2026-08-01
+// last-edited: 2026-10-19
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 
 // handleResetPassword handles POST /api/v1/users/:id/reset-password.
@@ -54,6 +55,15 @@ func (s *Server) handleResetPassword(c *gin.Context) {
 	user, err := s.Ops().GetUserByID(id)
 	if err != nil || user == nil {
 		httputil.RespondWithNotFound(c, "user", id)
+		return
+	}
+
+	// An admin reset means the account's credentials are no longer trusted, so
+	// end every ABS session now rather than when the user later sets a password.
+	// ABS sessions slide with use and have no absolute cap by default; one that
+	// survived would stay valid indefinitely. Fail closed: no link on error.
+	if err := handlers.RevokeAllABSSessions(handlers.ResolveABSSessionRevoker(s.Ops()), user.ID, "password-reset-link"); err != nil {
+		httputil.RespondWithInternalError(c, "could not sign the user out of their mobile apps; no reset link was issued, try again")
 		return
 	}
 
