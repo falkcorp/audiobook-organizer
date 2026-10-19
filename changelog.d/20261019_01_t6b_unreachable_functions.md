@@ -18,7 +18,7 @@ server still hands its own hub to every consumer through `Server.hub`.
 `metrics.IncFilenameParse` was the only writer of the
 `audiobook_organizer_filename_parse_total` counter, so the counter, its
 `ParseShape*` and `ParseOutcome*` label constants, its row in the `/metrics`
-series contract (`series.golden`) and the two "Filename parse" panels of the
+series contract (`series.golden`) and the three "Filename parse" panels (the row and its two graphs) of the
 overnight Grafana dashboard (dashboard version 2) are removed with it. The
 series never carried a sample in production because nothing incremented it, so
 no panel loses data. `search`'s internal store interface drops `GetBookByID`,
