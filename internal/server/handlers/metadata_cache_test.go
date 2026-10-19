@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
 // last-edited: 2026-10-19
 
@@ -338,15 +338,52 @@ func TestBatchApplyFromCache_AFailedEnqueueReleasesTheChunk(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, w.Code, "the retry of a chunk that never ran must be admitted: %s", w.Body.String())
 }
 
-// A resent chunk (same index) is accepted without being counted twice.
+// A resent chunk (same index, same books) is neither counted nor queued
+// twice: it is answered with the op of its first send.
 func TestBatchApplyFromCache_AResentChunkIsIdempotent(t *testing.T) {
 	withBulkApplyCap(t, 5)
-	ops := &capturingEnqueuer{}
+	ops := &capturingEnqueuer{opID: "op-first"}
 	h := newDispatchHandler(t, ops)
 
 	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
-	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	require.Equal(t, 1, ops.calls)
+	ops.opID = "op-second"
+	w := batchSend(h, "u1", chunkBody(`"c","a","b"`, "B", 0, 5)) // same books, other order
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "op-first", "the resend is answered with the first send's op")
+	assert.Equal(t, 1, ops.calls, "the resend queued nothing")
 	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"d","e"`, "B", 1, 5)).Code, "the resend did not use the second chunk's room")
+	assert.Equal(t, 2, ops.calls)
+}
+
+// The review's probe: a resend whose enqueue would fail never reaches the
+// enqueue, so it cannot Release the chunk that was already queued.
+func TestBatchApplyFromCache_AResendCannotUncountAQueuedChunk(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	ops := &capturingEnqueuer{opID: "op-1"}
+	h := newDispatchHandler(t, ops)
+
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	ops.err = errors.New("queue down")
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code, "answered from the ledger, no enqueue")
+	ops.err = nil
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"d","e"`, "B", 1, 5)).Code)
+	w := batchSend(h, "u1", chunkBody(`"f","g","h"`, "B", 2, 5))
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "8 books of a 5-book batch were not queued: %s", w.Body.String())
+	assert.Equal(t, 2, ops.calls)
+}
+
+// The same index with other books is a different chunk pretending to be a resend.
+func TestBatchApplyFromCache_AResentIndexWithOtherBooksIsRefused(t *testing.T) {
+	withBulkApplyCap(t, 5)
+	ops := &capturingEnqueuer{opID: "op-1"}
+	h := newDispatchHandler(t, ops)
+
+	require.Equal(t, http.StatusAccepted, batchSend(h, "u1", chunkBody(`"a","b","c"`, "B", 0, 5)).Code)
+	w := batchSend(h, "u1", chunkBody(`"x","y","z"`, "B", 0, 5))
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	assert.Equal(t, "BATCH_CHUNK_MISMATCH", errCode(t, w))
+	assert.Equal(t, 1, ops.calls)
 }
 
 // Another user cannot poison a batch id: the ledger is keyed by user too.

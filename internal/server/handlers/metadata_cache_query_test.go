@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-19
 
@@ -1432,6 +1432,10 @@ func TestReviewPage_CountsUnderPageAndIDsAll(t *testing.T) {
 // ids the body.
 func serveSelection(t testing.TB, h *MetadataCacheHandler, query string, ids []string) (int, []byte) {
 	t.Helper()
+	// The selection check answers 503 while the first snapshot builds (see
+	// TestReviewSelectionCheck_ColdSnapshotAnswers503WithRetryAfter), so the
+	// handlers under test are warmed first, as the server does at startup.
+	require.NoError(t, h.WarmReviewSnapshot(context.Background()))
 	raw, err := json.Marshal(map[string]any{"ids": ids})
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
@@ -1634,4 +1638,51 @@ func TestReviewPage_RejectionScanOnlyForPagesWithReviewableRows(t *testing.T) {
 	fake.err = errors.New("disk")
 	require.True(t, unavailable("view=page&limit=5"), "a failed scan says the marks are missing")
 	require.False(t, unavailable("view=page&bucket=unreviewable&limit=5"), "nothing to mark, nothing missing")
+}
+
+// The selection check never waits on a cold snapshot build: while the first
+// build runs it answers 503 + Retry-After at once, and once the build is done
+// it answers normally. (The page endpoint still waits, as before.)
+func TestReviewSelectionCheck_ColdSnapshotAnswers503WithRetryAfter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	snap := snapshotFromCases(t, []queryCaseRow{})
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	sc := newReviewSnapshotCache(func(context.Context, *reviewSnapshot) (*reviewSnapshot, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return snap, nil
+	}, nil)
+	h := &MetadataCacheHandler{store: queryFakeStore{books: map[string]*database.Book{}, reads: new(atomic.Int64)}, svc: queryFakeSvc{}, reviewSnap: sc, reviewQuery: newReviewQueryCache()}
+
+	raw, err := json.Marshal(map[string]any{"ids": []string{"a"}})
+	require.NoError(t, err)
+	post := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/x?bucket=any", strings.NewReader(string(raw)))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.ReviewSelectionCheck(c)
+		return w
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- post() }()
+	select {
+	case w := <-done:
+		require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+		require.NotEmpty(t, w.Header().Get("Retry-After"))
+	case <-time.After(5 * time.Second):
+		t.Fatal("the selection check waited on the cold build")
+	}
+	<-started
+	close(release)
+	require.Eventually(t, func() bool {
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		return sc.snap != nil
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, http.StatusOK, post().Code)
 }

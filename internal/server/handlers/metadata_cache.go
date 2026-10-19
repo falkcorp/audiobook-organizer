@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-19
 
@@ -12,10 +12,13 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -217,6 +220,19 @@ type OpEnqueuer interface {
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
 }
 
+// chunkDigest identifies the books of one batch chunk, independent of order,
+// so a resent chunk can be told from another chunk sent under the same index.
+func chunkDigest(ids []string) string {
+	sorted := append([]string(nil), ids...)
+	sort.Strings(sorted)
+	sum := sha256.New()
+	for _, id := range sorted {
+		sum.Write([]byte(id))
+		sum.Write([]byte{0})
+	}
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
 // batchLedger returns the cross-request cap ledger, creating it on first use
 // so a handler built as a struct literal (tests) still has one.
 func (h *MetadataCacheHandler) batchLedger() *applycap.BatchLedger {
@@ -279,6 +295,15 @@ type metadataCacheGenerationReader interface {
 func (h *MetadataCacheHandler) reviewSnapshot(ctx context.Context) (*reviewSnapshot, error) {
 	if h.reviewSnap != nil {
 		return h.reviewSnap.get(ctx)
+	}
+	return newReviewSnapshotBuilder(h.store, h.svc).build(ctx, nil)
+}
+
+// reviewSnapshotNoWait is reviewSnapshot for a request that answers 503 +
+// Retry-After rather than waiting on the cold build (the selection check).
+func (h *MetadataCacheHandler) reviewSnapshotNoWait(ctx context.Context) (*reviewSnapshot, error) {
+	if h.reviewSnap != nil {
+		return h.reviewSnap.getNoWait(ctx)
 	}
 	return newReviewSnapshotBuilder(h.store, h.svc).build(ctx, nil)
 }
@@ -1268,8 +1293,10 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// client declares, per user: a declared total over the cap is refused
 		// with the 422 cap body; a total that changes mid-batch or chunks
 		// adding up to more than the declared total are refused with 422
-		// BATCH_TOTAL_MISMATCH / BATCH_EXCEEDED. A resent chunk (same index)
-		// is not counted twice. It is an accident guard, not a rolling quota:
+		// BATCH_TOTAL_MISMATCH / BATCH_EXCEEDED. A resent chunk (same index,
+		// same books) is not counted or queued twice: it is answered with the
+		// op of its first send; the same index with other books is a 422
+		// BATCH_CHUNK_MISMATCH. It is an accident guard, not a rolling quota:
 		// a client that omits or rotates batch_id gets only the per-request
 		// check below.
 		//
@@ -1352,6 +1379,10 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	// the cap.
 	configuredCap := config.AppConfig.BulkApplyMaxItems
 	admittedBatch := false
+	// The owner is the authenticated user. It is empty only when no user is on
+	// the context (auth disabled, or the bootstrap window), where the server is
+	// single-tenant, so one shared owner costs nothing. API keys carry
+	// key.UserID and arrive here as that user.
 	batchOwner := ""
 	if user, ok := servermiddleware.CurrentUser(c); ok && user != nil {
 		batchOwner = user.ID
@@ -1360,8 +1391,31 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	if body.BatchID != "" {
 		// The ledger applies the per-request check too (a chunk over the cap
 		// is a chunk over the declared total or the cap itself).
-		capErr = h.batchLedger().Admit("batch-apply-cached", batchOwner, body.BatchID, *body.BatchIndex, len(body.BookIDs), body.BatchTotal, configuredCap)
-		admittedBatch = capErr == nil
+		adm, err := h.batchLedger().Admit("batch-apply-cached", batchOwner, body.BatchID, *body.BatchIndex,
+			len(body.BookIDs), body.BatchTotal, configuredCap, chunkDigest(body.BookIDs))
+		capErr = err
+		if err == nil && adm.Resent {
+			// This chunk was queued by an earlier send: answer with that op and
+			// queue nothing. Counting it twice was already avoided; queueing it
+			// twice would apply its books twice. Neither enqueue nor Release.
+			if adm.OpID == "" {
+				httputil.RespondWithError(c, http.StatusConflict,
+					"this chunk is still being queued by an earlier request; resend it in a moment",
+					"BATCH_CHUNK_IN_FLIGHT")
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{
+				"data": gin.H{
+					"op_id":      adm.OpID,
+					"requested":  len(body.BookIDs),
+					"write_back": shouldWriteBack,
+					"resent":     true,
+				},
+			})
+			return
+		}
+		// Only a first-time chunk is released if its enqueue fails.
+		admittedBatch = err == nil
 	} else if ex := applycap.Refuse("batch-apply-cached", len(body.BookIDs), configuredCap); ex != nil {
 		capErr = ex
 	}
@@ -1393,6 +1447,9 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		params["mode"] = mode
 	}
 	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", params)
+	if err == nil && admittedBatch {
+		h.batchLedger().RecordOp(batchOwner, body.BatchID, *body.BatchIndex, opID)
+	}
 	if err != nil {
 		// Nothing was queued: give the chunk back so the client can retry it.
 		if admittedBatch {
