@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.32.5
+// version: 1.32.6
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-19
 
@@ -11,7 +11,7 @@ package logger
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
 	slogRatchetFileCeiling = 268
-	slogRatchetCallCeiling = 1493
+	slogRatchetCallCeiling = 1491
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -196,7 +196,7 @@ var slogRatchet = map[string]int{
 	"internal/plugins/maintenance/transcribe_stats_accum.go":     1,
 	"internal/plugins/metafetch/register.go":                     1,
 	"internal/quarantine/service.go":                             7,
-	"internal/realtime/events.go":                                11,
+	"internal/realtime/events.go":                                9,
 	"internal/reconcile/elect_primaries.go":                      6,
 	"internal/reconcile/itunes_heal.go":                          2,
 	"internal/reconcile/reconcile.go":                            15,

@@ -1,7 +1,7 @@
 // file: internal/syncapi/progress/policy.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f93d8147-df19-4993-a09b-39f727b522ad
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 // Package progress implements the ABS-sync progress conflict-resolution policy
 // from docs/specs/2026-07-29-abs-sync-api-design.md §5, §5b and §1.8.7 as pure,
@@ -244,24 +244,6 @@ func MergeOfflineReplay(server, incoming Progress) (result Progress, accepted bo
 	result.UpdatedAtMs = NextServerTimestampMs(server.UpdatedAtMs, incoming.UpdatedAtMs)
 	result.IsFinished = server.IsFinished || IsWithinFinishedTolerance(result.CurrentTime, result.Duration)
 	return result, true
-}
-
-// MergeCombine implements spec §5 rule 5 / §4.2's merge-follow hook: when two
-// items combine (a dedup merge surfacing two previously-independent progress
-// records for the same book), the combined record takes max(currentTime),
-// OR(isFinished) and max(updatedAt). Duration takes the larger of the two so a
-// zero/unknown duration never clobbers a known one.
-//
-// Unlike the Merge* functions above this is unconditional and commutative: both
-// inputs are already "this device's real position", so there is no
-// stale/forward-only question to answer.
-func MergeCombine(a, b Progress) Progress {
-	return Progress{
-		CurrentTime: math.Max(a.CurrentTime, b.CurrentTime),
-		Duration:    math.Max(a.Duration, b.Duration),
-		IsFinished:  a.IsFinished || b.IsFinished,
-		UpdatedAtMs: max(a.UpdatedAtMs, b.UpdatedAtMs),
-	}
 }
 
 // NextServerTimestampMs returns an UpdatedAtMs value for a server-initiated

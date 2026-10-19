@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache_test.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: 88a06138-3f42-4544-a283-88594317ab8b
-// last-edited: 2026-09-26
+// last-edited: 2026-10-19
 
 package searchcache
 
@@ -451,6 +451,15 @@ func (s *slowLessEval) Less(ctx context.Context, a, b string) (bool, error) {
 	return a < b, nil
 }
 
+// jobHoldsIDs reports whether the finished job for searchID still references
+// a result list.
+func jobHoldsIDs(c *Cache, searchID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	j := c.jobs[searchID]
+	return j != nil && j.ids != nil
+}
+
 // Finding 1/11: a finished job keeps no ID list once its waiters have read
 // it, whether they read it or timed out.
 func TestCache_FinishedJobsDoNotPinIDs(t *testing.T) {
@@ -466,7 +475,7 @@ func TestCache_FinishedJobsDoNotPinIDs(t *testing.T) {
 	}
 	c.mu.Unlock()
 	for _, id := range ids {
-		if c.jobHoldsIDs(id) {
+		if jobHoldsIDs(c, id) {
 			t.Fatalf("job %s still holds its result after the waiter read it", id)
 		}
 	}
@@ -478,7 +487,7 @@ func TestCache_FinishedJobsDoNotPinIDs(t *testing.T) {
 	}
 	close(ev.block)
 	waitFor(t, func() bool { s, _ := c.Job(pe.SearchID); return s.Status == "done" })
-	if c.jobHoldsIDs(pe.SearchID) {
+	if jobHoldsIDs(c, pe.SearchID) {
 		t.Fatal("a job whose only waiter timed out pinned its result")
 	}
 }

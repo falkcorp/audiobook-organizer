@@ -1,12 +1,11 @@
 // file: internal/cache/registry.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package cache
 
 import (
-	"sort"
 	"sync"
 )
 
@@ -35,16 +34,4 @@ func Lookup(name string) (Introspectable, bool) {
 	defer registryMu.RUnlock()
 	c, ok := registry[name]
 	return c, ok
-}
-
-// All returns a sorted list of registered cache names.
-func All() []string {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	names := make([]string, 0, len(registry))
-	for name := range registry {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: bcadc16f-696c-468a-a3e4-afea4c81bc5c
-// last-edited: 2026-09-28
+// last-edited: 2026-10-19
 
 package searchcache
 
@@ -908,15 +908,6 @@ func (c *Cache) Stats() Stats {
 		Evicted: c.evicted.Load(),
 		Jobs:    nj, Building: nb,
 	}
-}
-
-// jobHoldsIDs reports whether the finished job for searchID still references
-// a result list. Test hook for the job-memory contract.
-func (c *Cache) jobHoldsIDs(searchID string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	j := c.jobs[searchID]
-	return j != nil && j.ids != nil
 }
 
 func newSearchID() string {
