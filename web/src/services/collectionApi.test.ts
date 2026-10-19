@@ -31,7 +31,11 @@ function reply(status: number, body: unknown) {
 
 function lastCall() {
   const [url, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
-  return { url, method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : undefined };
+  return {
+    url,
+    method: init.method ?? 'GET',
+    body: init.body ? JSON.parse(String(init.body)) : undefined,
+  };
 }
 
 beforeEach(() => {
@@ -95,7 +99,11 @@ describe('collectionApi', () => {
   it('updates with PUT and sends only the given fields', async () => {
     reply(200, { data: col });
     await updateCollection('c1', { name: 'Renamed' });
-    expect(lastCall()).toEqual({ url: '/api/v1/collections/c1', method: 'PUT', body: { name: 'Renamed' } });
+    expect(lastCall()).toEqual({
+      url: '/api/v1/collections/c1',
+      method: 'PUT',
+      body: { name: 'Renamed' },
+    });
   });
 
   it('deletes and materializes', async () => {
@@ -118,7 +126,9 @@ describe('collectionApi', () => {
     reply(200, { data: col });
     await removeBookFromCollection('c1', 'b1');
     expect(lastCall()).toMatchObject({ url: '/api/v1/collections/c1/books/b1', method: 'DELETE' });
-    expect(fetchMock.mock.calls.every(([, init]) => (init as RequestInit).method !== 'PUT')).toBe(true);
+    expect(fetchMock.mock.calls.every(([, init]) => (init as RequestInit).method !== 'PUT')).toBe(
+      true
+    );
   });
 
   it('maps 409 to CollectionConflictError with the server message and code', async () => {
@@ -141,7 +151,10 @@ describe('collectionApi', () => {
     const err = await updateCollection('c1', { query: 'last_played:30d' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CollectionApiError);
     expect(err).not.toBeInstanceOf(CollectionConflictError);
-    expect(err).toMatchObject({ status: 400, message: 'last_played:30d — date offset needs a sign' });
+    expect(err).toMatchObject({
+      status: 400,
+      message: 'last_played:30d — date offset needs a sign',
+    });
   });
 
   it('falls back to the status text when an error body is not JSON', async () => {
@@ -153,6 +166,9 @@ describe('collectionApi', () => {
         throw new Error('not json');
       },
     });
-    await expect(getCollection('c1')).rejects.toMatchObject({ message: 'Internal Server Error', status: 500 });
+    await expect(getCollection('c1')).rejects.toMatchObject({
+      message: 'Internal Server Error',
+      status: 500,
+    });
   });
 });

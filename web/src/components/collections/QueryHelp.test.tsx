@@ -17,7 +17,9 @@ import {
   WORKED_EXAMPLES,
   decodeSort,
   encodeSort,
+  applySortChoice,
   queryError,
+  sameSortChoice,
   suggestFields,
   usesPerUserField,
 } from './queryHelpData';
@@ -37,9 +39,19 @@ describe('query help field list', () => {
 
   it('lists the book fields, the date fields and the per-user fields', () => {
     expect(names).toEqual([
-      'title', 'author', 'narrator', 'series', 'format', 'genre', 'year', 'duration',
-      'date_added', 'date_modified',
-      'read_status', 'progress_pct', 'last_played',
+      'title',
+      'author',
+      'narrator',
+      'series',
+      'format',
+      'genre',
+      'year',
+      'duration',
+      'date_added',
+      'date_modified',
+      'read_status',
+      'progress_pct',
+      'last_played',
     ]);
     expect(PER_USER_FIELDS).toEqual(['read_status', 'progress_pct', 'last_played']);
     for (const f of QUERY_FIELD_HELP) expect(f.example.startsWith(`${f.name}:`)).toBe(true);
@@ -79,8 +91,12 @@ describe('query help field list', () => {
 
   it('offers date_added and date_modified in both the help and the sort picker', () => {
     render(<Harness />);
-    expect(within(screen.getByLabelText('Query help')).getByText(/date_added:>-1y/)).toBeInTheDocument();
-    expect(within(screen.getByLabelText('Query help')).getByText(/date_modified:>-30d/)).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText('Query help')).getByText(/date_added:>-1y/)
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText('Query help')).getByText(/date_modified:>-30d/)
+    ).toBeInTheDocument();
     expect(SORT_FIELDS.map((s) => s.value)).toEqual(
       expect.arrayContaining(['date_added', 'date_modified'])
     );
@@ -100,17 +116,23 @@ describe('worked examples', () => {
     expect(box().value).toBe('read_status:finished last_played:>-30d');
     fireEvent.click(buttons[1]);
     expect(box().value).toBe('duration:>20h read_status:unstarted');
-    expect(screen.getByText(/Relative dates roll forward each time the collection refreshes/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Relative dates roll forward each time the collection refreshes/)
+    ).toBeInTheDocument();
   });
 });
 
 describe('per-user note', () => {
-  it.each(['read_status:finished', 'progress_pct:>50', 'last_played:>-30d'])('shows for %s', (q) => {
-    render(<Harness initial={q} creatorId="u-owner" />);
-    const note = screen.getByText(new RegExp(PER_USER_NOTE.slice(0, 40)));
-    expect(note.textContent).toContain(PER_USER_NOTE);
-    expect(note.textContent).toContain('Creator: u-owner');
-  });
+  it.each(['read_status:finished', 'progress_pct:>50', 'last_played:>-30d'])(
+    'shows for %s',
+    (q) => {
+      render(<Harness initial={q} creatorId="u-owner" />);
+      const note = screen.getByText(new RegExp(PER_USER_NOTE.slice(0, 40)));
+      expect(note.textContent).toContain(PER_USER_NOTE);
+      expect(note.textContent).toContain('Creator: u-owner');
+      expect(note.closest('[role="status"]')).not.toBeNull();
+    }
+  );
 
   it('does not show for a book-only query', () => {
     render(<Harness initial="author:smith year:>=2015" />);
@@ -155,17 +177,52 @@ describe('sort picker', () => {
     const onChange = vi.fn();
     render(<SortPicker value={{ field: '', direction: 'asc' }} onChange={onChange} />);
     expect(screen.getByRole('option', { name: 'Rating (sort only)' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'iTunes play count (sort only)' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: 'iTunes play count (sort only)' })
+    ).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Date added' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'rating' } });
     expect(onChange).toHaveBeenCalledWith({ field: 'rating', direction: 'asc' });
   });
 
   it('round-trips sort_json', () => {
-    expect(encodeSort({ field: 'year', direction: 'desc' })).toBe('[{"field":"year","direction":"desc"}]');
+    expect(encodeSort({ field: 'year', direction: 'desc' })).toBe(
+      '[{"field":"year","direction":"desc"}]'
+    );
     expect(encodeSort({ field: '', direction: 'asc' })).toBe('');
-    expect(decodeSort('[{"field":"year","direction":"desc"}]')).toEqual({ field: 'year', direction: 'desc' });
+    expect(decodeSort('[{"field":"year","direction":"desc"}]')).toEqual({
+      field: 'year',
+      direction: 'desc',
+    });
     expect(decodeSort('not json')).toEqual({ field: '', direction: 'asc' });
     expect(decodeSort(undefined)).toEqual({ field: '', direction: 'asc' });
+  });
+
+  it('compares decoded choices and keeps directives past the first on write', () => {
+    expect(
+      sameSortChoice(
+        { field: 'title', direction: 'asc' },
+        decodeSort('[{"direction":"asc","field":"title"}]')
+      )
+    ).toBe(true);
+    expect(sameSortChoice({ field: '', direction: 'asc' }, { field: '', direction: 'desc' })).toBe(
+      true
+    );
+    expect(
+      sameSortChoice({ field: 'title', direction: 'asc' }, { field: 'title', direction: 'desc' })
+    ).toBe(false);
+    const two = '[{"field":"title","direction":"asc"},{"field":"year","direction":"desc"}]';
+    expect(applySortChoice(two, { field: 'rating', direction: 'desc' })).toBe(
+      '[{"field":"rating","direction":"desc"},{"field":"year","direction":"desc"}]'
+    );
+    expect(applySortChoice(two, { field: '', direction: 'asc' })).toBe(
+      '[{"field":"year","direction":"desc"}]'
+    );
+    expect(applySortChoice(undefined, { field: 'year', direction: 'asc' })).toBe(
+      '[{"field":"year","direction":"asc"}]'
+    );
+    expect(
+      applySortChoice('[{"field":"title","direction":"asc"}]', { field: '', direction: 'asc' })
+    ).toBe('');
   });
 });

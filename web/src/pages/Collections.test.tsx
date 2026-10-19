@@ -16,12 +16,12 @@ vi.mock('../services/collectionApi', async (orig) => ({
 }));
 vi.mock('../services/api', async (orig) => ({
   ...(await orig<typeof import('../services/api')>()),
-  searchBooks: vi.fn(),
+  searchBooksPage: vi.fn(),
 }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: vi.fn() }));
 
 import { useAuth } from '../contexts/AuthContext';
-import { searchBooks } from '../services/api';
+import { searchBooksPage } from '../services/api';
 import * as api from '../services/collectionApi';
 import Collections from './Collections';
 
@@ -30,18 +30,30 @@ const m = vi.mocked(api);
 function asUser(permissions: string[]) {
   vi.mocked(useAuth).mockReturnValue({
     initialized: true,
-    requiresAuth: true,
+    authEnabled: true,
     user: { id: 'u1', permissions },
   } as never);
 }
 
 const staticCol = {
-  id: 'c-static', name: 'Test Static', description: 'A static one', type: 'static',
-  book_ids: ['b1', 'b2', 'b3'], version: 1, created_at: '', updated_at: '',
+  id: 'c-static',
+  name: 'Test Static',
+  description: 'A static one',
+  type: 'static',
+  book_ids: ['b1', 'b2', 'b3'],
+  version: 1,
+  created_at: '',
+  updated_at: '',
 } as api.Collection;
 const dynamicCol = {
-  id: 'c-dynamic', name: 'Test Dynamic', type: 'dynamic', query: 'author:smith',
-  materialized_book_ids: ['b1', 'b2'], version: 1, created_at: '', updated_at: '',
+  id: 'c-dynamic',
+  name: 'Test Dynamic',
+  type: 'dynamic',
+  query: 'author:smith',
+  materialized_book_ids: ['b1', 'b2'],
+  version: 1,
+  created_at: '',
+  updated_at: '',
 } as api.Collection;
 
 function renderPage() {
@@ -78,8 +90,12 @@ describe('Collections list', () => {
     expect(screen.getByText('Test Dynamic')).toBeInTheDocument();
     expect(screen.getByText('A static one')).toBeInTheDocument();
     expect(screen.getByText('Query: author:smith')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /the 3 books in Test Static/ })).toHaveTextContent('3 books');
-    expect(screen.getByRole('button', { name: /the 2 books in Test Dynamic/ })).toHaveTextContent('2 books');
+    expect(screen.getByRole('button', { name: /the 3 books in Test Static/ })).toHaveTextContent(
+      '3 books'
+    );
+    expect(screen.getByRole('button', { name: /the 2 books in Test Dynamic/ })).toHaveTextContent(
+      '2 books'
+    );
     expect(m.listCollections).toHaveBeenCalledTimes(1);
   });
 
@@ -130,7 +146,11 @@ describe('without collections.manage', () => {
   });
 
   it('fails closed on a user with no permission list', async () => {
-    vi.mocked(useAuth).mockReturnValue({ initialized: true, requiresAuth: true, user: { id: 'u1' } } as never);
+    vi.mocked(useAuth).mockReturnValue({
+      initialized: true,
+      authEnabled: true,
+      user: { id: 'u1' },
+    } as never);
     renderPage();
     await screen.findByText('Test Static');
     expect(screen.queryByRole('button', { name: /New Collection/ })).toBeNull();
@@ -139,7 +159,10 @@ describe('without collections.manage', () => {
 
 describe('create dialog', () => {
   it('sends the exact static payload: books, never a query', async () => {
-    vi.mocked(searchBooks).mockResolvedValue([{ id: 'b1', title: 'Test Book One' }] as never);
+    vi.mocked(searchBooksPage).mockResolvedValue({
+      items: [{ id: 'b1', title: 'Test Book One' }],
+      count: 0,
+    } as never);
     const dlg = await openDialog();
     const create = within(dlg).getByRole('button', { name: 'Create' });
     expect(create).toBeDisabled();
@@ -152,7 +175,12 @@ describe('create dialog', () => {
     fireEvent.click(create);
     await waitFor(() => expect(m.createCollection).toHaveBeenCalledTimes(1));
     const sent = m.createCollection.mock.calls[0][0];
-    expect(sent).toEqual({ type: 'static', name: 'Test Static', description: 'About it', book_ids: ['b1'] });
+    expect(sent).toEqual({
+      type: 'static',
+      name: 'Test Static',
+      description: 'About it',
+      book_ids: ['b1'],
+    });
     expect(sent).not.toHaveProperty('query');
   });
 
@@ -161,7 +189,10 @@ describe('create dialog', () => {
     fireEvent.change(nameField(), { target: { value: 'Bare' } });
     fireEvent.click(within(dlg).getByRole('button', { name: 'Create' }));
     await waitFor(() => expect(m.createCollection).toHaveBeenCalled());
-    expect(JSON.parse(JSON.stringify(m.createCollection.mock.calls[0][0]))).toEqual({ type: 'static', name: 'Bare' });
+    expect(JSON.parse(JSON.stringify(m.createCollection.mock.calls[0][0]))).toEqual({
+      type: 'static',
+      name: 'Bare',
+    });
   });
 
   it('sends the exact dynamic payload: query, sort, limit, never book_ids', async () => {
@@ -198,7 +229,9 @@ describe('create dialog', () => {
   });
 
   it('shows the 409 name-in-use message and keeps the dialog open', async () => {
-    m.createCollection.mockRejectedValueOnce(new api.CollectionConflictError('collection name already in use'));
+    m.createCollection.mockRejectedValueOnce(
+      new api.CollectionConflictError('collection name already in use')
+    );
     const dlg = await openDialog();
     fireEvent.change(nameField(), { target: { value: 'Test Static' } });
     fireEvent.click(within(dlg).getByRole('button', { name: 'Create' }));
@@ -206,16 +239,79 @@ describe('create dialog', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  it('puts a 400 on a dynamic collection under the query field', async () => {
+    m.createCollection.mockRejectedValueOnce(
+      new api.CollectionApiError('last_played:30d — date offset needs a sign', 400)
+    );
+    const dlg = await openDialog();
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Dynamic' }));
+    fireEvent.change(nameField(), { target: { value: 'x' } });
+    fireEvent.change(within(dlg).getByLabelText('Query'), { target: { value: 'author:smith' } });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Create' }));
+    expect(
+      await within(dlg).findByText('last_played:30d — date offset needs a sign')
+    ).toBeInTheDocument();
+    expect(within(dlg).getByLabelText('Query')).toHaveAttribute('aria-invalid', 'true');
+    // editing the query clears the server's message
+    fireEvent.change(within(dlg).getByLabelText('Query'), { target: { value: 'author:jones' } });
+    expect(within(dlg).queryByText('last_played:30d — date offset needs a sign')).toBeNull();
+  });
+
   it('shows a 400 body verbatim', async () => {
-    m.createCollection.mockRejectedValueOnce(new api.CollectionApiError('a dynamic collection requires a query', 400));
+    m.createCollection.mockRejectedValueOnce(
+      new api.CollectionApiError('a dynamic collection requires a query', 400)
+    );
     const dlg = await openDialog();
     fireEvent.change(nameField(), { target: { value: 'x' } });
     fireEvent.click(within(dlg).getByRole('button', { name: 'Create' }));
-    expect(await within(dlg).findByText('a dynamic collection requires a query')).toBeInTheDocument();
+    expect(
+      await within(dlg).findByText('a dynamic collection requires a query')
+    ).toBeInTheDocument();
+  });
+});
+
+describe('reload after a write', () => {
+  it('keeps the rows on screen while the list refetches, never swapping in Loading', async () => {
+    renderPage();
+    await screen.findByText('Test Static');
+    let release!: (v: { collections: api.Collection[]; count: number }) => void;
+    m.listCollections.mockImplementationOnce(() => new Promise((res) => (release = res)));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Test Static' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(m.deleteCollection).toHaveBeenCalled());
+    await waitFor(() => expect(m.listCollections).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Test Dynamic')).toBeInTheDocument();
+    expect(screen.queryByText('Loading...')).toBeNull();
+    release({ collections: [dynamicCol], count: 1 });
+    await waitFor(() => expect(screen.queryByText('Test Static')).toBeNull());
+  });
+
+  it('keeps the old rows and shows the error when the refetch fails', async () => {
+    renderPage();
+    await screen.findByText('Test Static');
+    m.listCollections.mockRejectedValueOnce(new Error('refetch failed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Test Static' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText('refetch failed')).toBeInTheDocument();
+    expect(screen.getByText('Test Dynamic')).toBeInTheDocument();
   });
 });
 
 describe('delete', () => {
+  it('sends one DELETE even when Delete is clicked twice', async () => {
+    let finish!: () => void;
+    m.deleteCollection.mockImplementationOnce(() => new Promise<void>((res) => (finish = res)));
+    renderPage();
+    await screen.findByText('Test Static');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Test Static' }));
+    const confirm = within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    finish();
+    await waitFor(() => expect(m.listCollections).toHaveBeenCalledTimes(2));
+    expect(m.deleteCollection).toHaveBeenCalledTimes(1);
+  });
+
   it('asks first, and only deletes on confirm', async () => {
     renderPage();
     await screen.findByText('Test Static');

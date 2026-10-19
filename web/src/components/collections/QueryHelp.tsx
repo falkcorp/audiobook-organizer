@@ -1,18 +1,9 @@
 // file: web/src/components/collections/QueryHelp.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: ba818f08-1260-44b3-99c2-11db1dd24fab
 // last-edited: 2026-10-18
 
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  Paper,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material';
+import { Alert, Box, Button, Chip, Paper, Stack, TextField, Typography } from '@mui/material';
 import {
   PER_USER_NOTE,
   QUERY_FIELD_HELP,
@@ -59,7 +50,12 @@ export function QueryHelp({ value, onChange, disabled, creatorId, serverError }:
         slotProps={{ htmlInput: { 'aria-label': 'Query' } }}
       />
       {suggestions.length > 0 && !disabled && (
-        <Stack direction="row" spacing={1} sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }} aria-label="Field suggestions">
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }}
+          aria-label="Field suggestions"
+        >
           {suggestions.map((name) => (
             <Chip
               key={name}
@@ -71,7 +67,7 @@ export function QueryHelp({ value, onChange, disabled, creatorId, serverError }:
         </Stack>
       )}
       {perUser && (
-        <Alert severity="info" sx={{ mb: 1 }}>
+        <Alert severity="info" role="status" sx={{ mb: 1 }}>
           {PER_USER_NOTE}
           {creatorId ? ` Creator: ${creatorId}.` : ''}
         </Alert>
@@ -94,7 +90,10 @@ export function QueryHelp({ value, onChange, disabled, creatorId, serverError }:
           Examples
         </Typography>
         {WORKED_EXAMPLES.map((ex) => (
-          <Box key={ex.query} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
+          <Box
+            key={ex.query}
+            sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}
+          >
             <Typography variant="body2">
               {ex.title}: <code>{ex.query}</code>
             </Typography>
@@ -153,4 +152,3 @@ export function SortPicker({ value, onChange, disabled }: SortPickerProps) {
     </Stack>
   );
 }
-

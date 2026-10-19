@@ -152,7 +152,9 @@ export function updateCollection(id: string, patch: CollectionUpdateInput): Prom
 }
 
 export async function deleteCollection(id: string): Promise<void> {
-  await jsonFetch<unknown>(`${API_BASE}/collections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  await jsonFetch<unknown>(`${API_BASE}/collections/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
 }
 
 /** Re-evaluate and store a dynamic collection's members. 503 while the index is closed. */

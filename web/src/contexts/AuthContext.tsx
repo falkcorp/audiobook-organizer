@@ -1,6 +1,7 @@
 // file: web/src/contexts/AuthContext.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 2b3c4d5e-6f70-4819-a2b3-c4d5e6f70819
+// last-edited: 2026-10-18
 
 import {
   createContext,
@@ -20,6 +21,13 @@ interface AuthContextValue {
   loading: boolean;
   user: AuthUser | null;
   requiresAuth: boolean;
+  /**
+   * Whether the server has authentication switched on (/auth/status auth_enabled).
+   * null = unknown (the status call failed or an older server did not say). Unlike
+   * requiresAuth this is true on a fresh install with no users yet, so a consumer
+   * deciding "may this caller write?" can fail closed on null and on true.
+   */
+  authEnabled: boolean | null;
   bootstrapReady: boolean;
   isAuthenticated: boolean;
   refresh: () => Promise<void>;
@@ -35,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [requiresAuth, setRequiresAuth] = useState(false);
+  const [authEnabled, setAuthEnabled] = useState<boolean | null>(null);
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const isMountedRef = useRef(true);
 
@@ -60,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const status = await api.getAuthStatus();
         if (!isMountedRef.current) return;
         setRequiresAuth(status.requires_auth);
+        setAuthEnabled(typeof status.auth_enabled === 'boolean' ? status.auth_enabled : null);
         setBootstrapReady(status.bootstrap_ready);
 
         if (!status.requires_auth) {
@@ -132,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       user,
       requiresAuth,
+      authEnabled,
       bootstrapReady,
       isAuthenticated: Boolean(user),
       refresh,
@@ -139,7 +150,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       setupAdmin,
     }),
-    [initialized, loading, user, requiresAuth, bootstrapReady, refresh, login, logout, setupAdmin]
+    [
+      initialized,
+      loading,
+      user,
+      requiresAuth,
+      authEnabled,
+      bootstrapReady,
+      refresh,
+      login,
+      logout,
+      setupAdmin,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

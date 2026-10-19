@@ -20,26 +20,43 @@ vi.mock('../services/collectionApi', async (orig) => ({
 vi.mock('../services/api', async (orig) => ({
   ...(await orig<typeof import('../services/api')>()),
   getBooksByIds: vi.fn(),
-  searchBooks: vi.fn(),
+  searchBooksPage: vi.fn(),
 }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: vi.fn() }));
 
 import { useAuth } from '../contexts/AuthContext';
-import { getBooksByIds, searchBooks } from '../services/api';
+import { getBooksByIds, searchBooksPage } from '../services/api';
 import * as api from '../services/collectionApi';
 import CollectionDetail from './CollectionDetail';
 
 const m = vi.mocked(api);
 
 function asUser(permissions: string[]) {
-  vi.mocked(useAuth).mockReturnValue({ initialized: true, requiresAuth: true, user: { id: 'u1', permissions } } as never);
+  vi.mocked(useAuth).mockReturnValue({
+    initialized: true,
+    authEnabled: true,
+    user: { id: 'u1', permissions },
+  } as never);
 }
 
 const base = { version: 3, created_at: '', updated_at: '', created_by_user_id: 'u-owner' };
-const staticCol = { ...base, id: 'c1', name: 'Test Static', description: 'Desc', type: 'static', book_ids: ['b1', 'b2'] } as api.Collection;
+const staticCol = {
+  ...base,
+  id: 'c1',
+  name: 'Test Static',
+  description: 'Desc',
+  type: 'static',
+  book_ids: ['b1', 'b2'],
+} as api.Collection;
 const dynamicCol = {
-  ...base, id: 'c2', name: 'Test Dynamic', type: 'dynamic', query: 'author:smith',
-  sort_json: '[{"field":"title","direction":"asc"}]', limit: 10, materialized_book_ids: ['b1'],
+  ...base,
+  id: 'c2',
+  name: 'Test Dynamic',
+  type: 'dynamic',
+  query: 'author:smith',
+  sort_json: '[{"field":"title","direction":"asc"}]',
+  limit: 10,
+  materialized_book_ids: ['b1'],
 } as api.Collection;
 
 function renderPage(id: string) {
@@ -57,7 +74,8 @@ beforeEach(() => {
   asUser(['library.view', 'collections.manage']);
   m.getCollection.mockImplementation(async (id) => (id === 'c1' ? staticCol : dynamicCol));
   vi.mocked(getBooksByIds).mockImplementation(
-    async (ids) => ids.map((id) => ({ id, title: `Test Book ${id}`, author_name: 'Test Author' })) as never
+    async (ids) =>
+      ids.map((id) => ({ id, title: `Test Book ${id}`, author_name: 'Test Author' })) as never
   );
 });
 
@@ -85,11 +103,14 @@ describe('static collection', () => {
   });
 
   it('adds picked books with one POST and never a PUT', async () => {
-    vi.mocked(searchBooks).mockResolvedValue([
-      { id: 'b1', title: 'Test Book b1' },
-      { id: 'b3', title: 'Test Book b3' },
-      { id: 'b4', title: 'Test Book b4' },
-    ] as never);
+    vi.mocked(searchBooksPage).mockResolvedValue({
+      items: [
+        { id: 'b1', title: 'Test Book b1' },
+        { id: 'b3', title: 'Test Book b3' },
+        { id: 'b4', title: 'Test Book b4' },
+      ],
+      count: 0,
+    } as never);
     m.addBooksToCollection.mockResolvedValue({ ...staticCol, book_ids: ['b1', 'b2', 'b3', 'b4'] });
     renderPage('c1');
     await screen.findByRole('link', { name: 'Test Book b1' });
@@ -115,7 +136,9 @@ describe('static collection', () => {
     renderPage('c1');
     await screen.findByRole('link', { name: 'Test Book b1' });
     fireEvent.click(screen.getByRole('button', { name: 'Remove Test Book b1' }));
-    expect(await screen.findByText('a dynamic collection has no editable members')).toBeInTheDocument();
+    expect(
+      await screen.findByText('a dynamic collection has no editable members')
+    ).toBeInTheDocument();
     await waitFor(() => expect(m.getCollection).toHaveBeenCalledTimes(2));
   });
 
@@ -150,9 +173,128 @@ describe('static collection', () => {
   });
 });
 
+describe('unsaved edits', () => {
+  it('survive a membership write', async () => {
+    m.removeBookFromCollection.mockResolvedValue({ ...staticCol, book_ids: ['b2'] });
+    renderPage('c1');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    fireEvent.change(nameField(), { target: { value: 'Half typed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Test Book b1' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Test Book b1' })).toBeNull());
+    expect(nameField().value).toBe('Half typed');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('survive Preview, Materialize and add books on a dynamic collection', async () => {
+    m.materializeCollection.mockResolvedValue({
+      ...dynamicCol,
+      materialized_book_ids: ['b1', 'b2'],
+    });
+    renderPage('c2');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    fireEvent.change(screen.getByLabelText('Query'), { target: { value: 'author:jones' } });
+    fireEvent.change(nameField(), { target: { value: 'Half typed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview saved query' }));
+    await waitFor(() => expect(m.getCollection).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Materialize' }));
+    await waitFor(() => expect(m.materializeCollection).toHaveBeenCalled());
+    expect(await screen.findByRole('heading', { name: 'Members (2)' })).toBeInTheDocument();
+    expect((screen.getByLabelText('Query') as HTMLInputElement).value).toBe('author:jones');
+    expect(nameField().value).toBe('Half typed');
+  });
+
+  it('survive a 409 rename conflict and its refetch', async () => {
+    m.updateCollection.mockRejectedValue(
+      new api.CollectionConflictError('collection name already in use')
+    );
+    renderPage('c1');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    fireEvent.change(nameField(), { target: { value: 'Taken Name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('collection name already in use')).toBeInTheDocument();
+    await waitFor(() => expect(m.getCollection).toHaveBeenCalledTimes(2));
+    expect(nameField().value).toBe('Taken Name');
+    // and the retry still sends only the name
+    m.updateCollection.mockResolvedValue({ ...staticCol, name: 'Free Name' });
+    fireEvent.change(nameField(), { target: { value: 'Free Name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(m.updateCollection).toHaveBeenCalledTimes(2));
+    expect(m.updateCollection).toHaveBeenLastCalledWith('c1', { name: 'Free Name' });
+  });
+
+  it('are replaced by the saved collection after a successful Save', async () => {
+    m.updateCollection.mockResolvedValue({ ...staticCol, name: 'Server Name' });
+    renderPage('c1');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    fireEvent.change(nameField(), { target: { value: 'Typed Name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(nameField().value).toBe('Server Name'));
+    expect(screen.getByText('Saved.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+});
+
 describe('dynamic collection', () => {
+  it('labels Preview as the saved query only while the query box is dirty', async () => {
+    renderPage('c2');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Query'), { target: { value: 'author:jones' } });
+    expect(screen.getByRole('button', { name: 'Preview saved query' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+  });
+
+  it('keeps extra sort directives when the first one is changed', async () => {
+    m.getCollection.mockResolvedValue({
+      ...dynamicCol,
+      sort_json: '[{"field":"title","direction":"asc"},{"field":"year","direction":"desc"}]',
+    });
+    m.updateCollection.mockResolvedValue(dynamicCol);
+    renderPage('c2');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'rating' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(m.updateCollection).toHaveBeenCalled());
+    expect(m.updateCollection).toHaveBeenCalledWith('c2', {
+      sort_json: '[{"field":"rating","direction":"asc"},{"field":"year","direction":"desc"}]',
+    });
+  });
+
+  it('does not treat reformatted but equal sort JSON as an edit', async () => {
+    m.getCollection.mockResolvedValue({
+      ...dynamicCol,
+      sort_json: '[{"direction":"asc","field":"title"}]',
+    });
+    renderPage('c2');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('puts a 400 on the query under the query field, not in the page alert', async () => {
+    m.updateCollection.mockRejectedValue(
+      new api.CollectionApiError('title:/( — invalid regex', 400)
+    );
+    renderPage('c2');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    fireEvent.change(screen.getByLabelText('Query'), { target: { value: 'author:jones' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('title:/( — invalid regex')).toBeInTheDocument();
+    expect(screen.getByLabelText('Query')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+  });
+
+  it('shows Loading rather than a raw id while a book is still being looked up', async () => {
+    vi.mocked(getBooksByIds).mockImplementation(() => new Promise(() => {}));
+    renderPage('c2');
+    expect(await screen.findByRole('link', { name: 'Loading...' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'b1' })).toBeNull();
+  });
+
   it('previews by re-reading and materializes by POST', async () => {
-    m.materializeCollection.mockResolvedValue({ ...dynamicCol, materialized_book_ids: ['b1', 'b2'] });
+    m.materializeCollection.mockResolvedValue({
+      ...dynamicCol,
+      materialized_book_ids: ['b1', 'b2'],
+    });
     renderPage('c2');
     await screen.findByRole('link', { name: 'Test Book b1' });
     expect(screen.queryByRole('button', { name: 'Remove Test Book b1' })).toBeNull(); // no per-row remove
@@ -235,7 +377,10 @@ describe('dynamic collection', () => {
     fireEvent.click(screen.getByLabelText(/Take ownership when saving/));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(m.updateCollection).toHaveBeenCalled());
-    expect(m.updateCollection).toHaveBeenCalledWith('c2', { query: 'read_status:finished', adopt_owner: true });
+    expect(m.updateCollection).toHaveBeenCalledWith('c2', {
+      query: 'read_status:finished',
+      adopt_owner: true,
+    });
   });
 });
 
@@ -262,7 +407,9 @@ describe('without collections.manage', () => {
 
 describe('load states', () => {
   it('shows a failed load as an error with retry, not as an empty page', async () => {
-    m.getCollection.mockRejectedValueOnce(new api.CollectionApiError('collection c9 not found', 404));
+    m.getCollection.mockRejectedValueOnce(
+      new api.CollectionApiError('collection c9 not found', 404)
+    );
     renderPage('c9');
     expect(await screen.findByText('collection c9 not found')).toBeInTheDocument();
     m.getCollection.mockResolvedValueOnce(staticCol);

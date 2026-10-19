@@ -1,5 +1,5 @@
 // file: web/src/hooks/useCollections.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2672340e-bb50-4079-a288-928e62a50163
 // last-edited: 2026-10-18
 
@@ -25,16 +25,19 @@ export const COLLECTIONS_MANAGE_PERMISSION = 'collections.manage';
 
 /**
  * Whether the caller may write collections. Advisory (every route enforces its
- * own permission) and fail-closed: until auth has initialised, or when the
- * signed-in user's permission list is missing or empty, there are no write
- * controls. The one exception is an install with authentication OFF: there the
- * server's permission gate is a no-op and every caller may write, so hiding the
- * controls would lock a single-user install out of its own page.
+ * own permission) and fail-closed: until auth has initialised, when the server's
+ * auth setting is unknown (the status call failed), when authentication is on
+ * but nobody is signed in (including a fresh install with no users yet), and
+ * when the user's permission list is missing or empty, there are no write
+ * controls. The one open case is authentication explicitly OFF
+ * (auth_enabled === false): there the server's permission gate is a no-op and
+ * every caller may write, so hiding the controls would lock a single-user
+ * install out of its own page.
  */
 export function useCanManageCollections(): boolean {
-  const { initialized, requiresAuth, user } = useAuth();
+  const { initialized, authEnabled, user } = useAuth();
   if (!initialized) return false;
-  if (!requiresAuth) return true;
+  if (authEnabled === false) return true;
   return user?.permissions?.includes(COLLECTIONS_MANAGE_PERMISSION) ?? false;
 }
 
@@ -46,8 +49,15 @@ export interface UseCollectionsResult {
   collections: Collection[];
   /** Server-side total, which exceeds collections.length only when the page cap was hit. */
   count: number;
+  /**
+   * True only while there is nothing for the current filter to show yet (first
+   * load, or a switch to another type). A reload of what is already on screen
+   * sets `refreshing` instead and keeps the rows mounted.
+   */
   loading: boolean;
-  /** The list request's failure message; null while loading or on success. */
+  /** A reload is in flight and rows for this filter are already on screen. */
+  refreshing: boolean;
+  /** The list request's failure message; null while loading or on success. Rows from the last success stay. */
   error: string | null;
   canManage: boolean;
   reload: () => Promise<void>;
@@ -57,18 +67,24 @@ export interface UseCollectionsResult {
   materialize: (id: string) => Promise<Collection>;
 }
 
+interface ListData {
+  type: CollectionType | undefined;
+  collections: Collection[];
+  count: number;
+}
+
 /**
  * The collection list: one fetch on mount (and when the type filter changes),
  * aborted on unmount, with a request counter so a slow earlier response can
- * never overwrite a newer one. Every write refetches. Mutations reject with the
- * server's error (CollectionConflictError for 409, CollectionUnavailableError
- * for 503) so the caller can show the message where the user is looking.
+ * never overwrite a newer one. Every write refetches, keeping the current rows
+ * mounted meanwhile. Mutations reject with the server's error
+ * (CollectionConflictError for 409, CollectionUnavailableError for 503) so the
+ * caller can show the message where the user is looking.
  */
 export function useCollections(type?: CollectionType): UseCollectionsResult {
   const canManage = useCanManageCollections();
-  const [collections, setCollections] = useState<Collection[]>([]);
-  const [count, setCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<ListData | null>(null);
+  const [inFlight, setInFlight] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
   const controller = useRef<AbortController | null>(null);
@@ -78,30 +94,35 @@ export function useCollections(type?: CollectionType): UseCollectionsResult {
     const ctl = new AbortController();
     controller.current = ctl;
     const mine = ++requestId.current;
-    setLoading(true);
+    setInFlight(true);
     setError(null);
     try {
       const res = await listCollections(type, 200, 0, ctl.signal);
       if (mine !== requestId.current) return;
-      setCollections(res.collections);
-      setCount(res.count);
+      setData({ type, collections: res.collections, count: res.count });
     } catch (err) {
       if (isAbortError(err) || mine !== requestId.current) return;
-      setCollections([]);
-      setCount(0);
       setError(messageOf(err, 'Failed to load collections'));
     } finally {
-      if (mine === requestId.current) setLoading(false);
+      if (mine === requestId.current) setInFlight(false);
     }
   }, [type]);
 
   useEffect(() => {
-    void reload();
+    let live = true;
+    // Started from a microtask (house pattern, see useServerMatchingCount) so no
+    // state is set synchronously in the effect body.
+    void Promise.resolve().then(() => (live ? reload() : undefined));
     return () => {
+      live = false;
+      // A request counter, not a DOM node: reading .current at cleanup time is the point.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       requestId.current++;
       controller.current?.abort();
     };
   }, [reload]);
+
+  const hasRows = data !== null && data.type === type;
 
   const create = useCallback(
     async (input: CollectionCreateInput) => {
@@ -135,7 +156,19 @@ export function useCollections(type?: CollectionType): UseCollectionsResult {
     [reload]
   );
 
-  return { collections, count, loading, error, canManage, reload, create, update, remove, materialize };
+  return {
+    collections: hasRows ? data.collections : [],
+    count: hasRows ? data.count : 0,
+    loading: inFlight && !hasRows,
+    refreshing: inFlight && hasRows,
+    error,
+    canManage,
+    reload,
+    create,
+    update,
+    remove,
+    materialize,
+  };
 }
 
 export interface UseCollectionResult {
@@ -156,7 +189,8 @@ export interface UseCollectionResult {
 /**
  * One collection for the detail page. Same guards as useCollections: a single
  * fetch on mount/id change, abort on unmount, stale-response counter. Each
- * write stores the collection the server answered with.
+ * write stores the collection the server answered with, unless the route moved
+ * to another collection while the write was in flight.
  */
 export function useCollection(id: string | undefined): UseCollectionResult {
   const canManage = useCanManageCollections();
@@ -165,6 +199,7 @@ export function useCollection(id: string | undefined): UseCollectionResult {
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
   const controller = useRef<AbortController | null>(null);
+  const currentId = useRef(id);
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -187,16 +222,26 @@ export function useCollection(id: string | undefined): UseCollectionResult {
   }, [id]);
 
   useEffect(() => {
-    setCollection(null);
-    void refresh();
+    currentId.current = id;
+    let live = true;
+    void Promise.resolve().then(() => {
+      if (!live) return undefined;
+      setCollection(null);
+      return refresh();
+    });
     return () => {
+      live = false;
+      // A request counter, not a DOM node: reading .current at cleanup time is the point.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       requestId.current++;
       controller.current?.abort();
     };
-  }, [refresh]);
+  }, [id, refresh]);
 
-  const store = useCallback(async (p: Promise<Collection>) => {
+  const store = useCallback(async (forId: string | undefined, p: Promise<Collection>) => {
     const col = await p;
+    // The route moved to another collection mid-write: that answer is not for this page.
+    if (currentId.current !== forId) return col;
     // A write answer supersedes any in-flight read.
     requestId.current++;
     setLoading(false);
@@ -205,21 +250,32 @@ export function useCollection(id: string | undefined): UseCollectionResult {
   }, []);
 
   const update = useCallback(
-    (patch: CollectionUpdateInput) => store(updateCollection(id ?? '', patch)),
+    (patch: CollectionUpdateInput) => store(id, updateCollection(id ?? '', patch)),
     [id, store]
   );
-  const materialize = useCallback(() => store(materializeCollection(id ?? '')), [id, store]);
+  const materialize = useCallback(() => store(id, materializeCollection(id ?? '')), [id, store]);
   const addBooks = useCallback(
-    (bookIds: string[]) => store(addBooksToCollection(id ?? '', bookIds)),
+    (bookIds: string[]) => store(id, addBooksToCollection(id ?? '', bookIds)),
     [id, store]
   );
   const removeBook = useCallback(
-    (bookId: string) => store(removeBookFromCollection(id ?? '', bookId)),
+    (bookId: string) => store(id, removeBookFromCollection(id ?? '', bookId)),
     [id, store]
   );
   const remove = useCallback(async () => {
     await deleteCollection(id ?? '');
   }, [id]);
 
-  return { collection, loading, error, canManage, refresh, update, materialize, addBooks, removeBook, remove };
+  return {
+    collection,
+    loading,
+    error,
+    canManage,
+    refresh,
+    update,
+    materialize,
+    addBooks,
+    removeBook,
+    remove,
+  };
 }

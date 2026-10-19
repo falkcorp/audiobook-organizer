@@ -26,16 +26,27 @@ import { useCanManageCollections, useCollection, useCollections } from './useCol
 const m = vi.mocked(api);
 const mockAuth = vi.mocked(useAuth);
 
-function auth(over: { initialized?: boolean; requiresAuth?: boolean; permissions?: string[] | undefined }) {
+function auth(over: {
+  initialized?: boolean;
+  authEnabled?: boolean | null;
+  permissions?: string[];
+}) {
   const { permissions = ['collections.manage'] } = over;
   mockAuth.mockReturnValue({
     initialized: over.initialized ?? true,
-    requiresAuth: over.requiresAuth ?? true,
+    authEnabled: over.authEnabled === undefined ? true : over.authEnabled,
     user: { id: 'u1', permissions } as never,
   } as never);
 }
 
-const c1 = { id: 'c1', name: 'Test One', type: 'static', version: 1, created_at: '', updated_at: '' } as api.Collection;
+const c1 = {
+  id: 'c1',
+  name: 'Test One',
+  type: 'static',
+  version: 1,
+  created_at: '',
+  updated_at: '',
+} as api.Collection;
 const c2 = { ...c1, id: 'c2', name: 'Test Two', type: 'dynamic' } as api.Collection;
 
 beforeEach(() => {
@@ -53,20 +64,40 @@ describe('useCanManageCollections', () => {
     auth({ permissions: [] });
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
     // a user object with no permissions field at all (an older server)
-    mockAuth.mockReturnValue({ initialized: true, requiresAuth: true, user: { id: 'u1' } } as never);
+    mockAuth.mockReturnValue({ initialized: true, authEnabled: true, user: { id: 'u1' } } as never);
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
   });
 
   it('is false before auth initialises and with no user', () => {
     auth({ initialized: false });
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
-    mockAuth.mockReturnValue({ initialized: true, requiresAuth: true, user: null } as never);
+    mockAuth.mockReturnValue({ initialized: true, authEnabled: true, user: null } as never);
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
   });
 
-  it('is true on an install with authentication off (the server gate is a no-op there)', () => {
-    mockAuth.mockReturnValue({ initialized: true, requiresAuth: false, user: null } as never);
+  it('is true on an install with authentication explicitly off (the server gate is a no-op there)', () => {
+    mockAuth.mockReturnValue({ initialized: true, authEnabled: false, user: null } as never);
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(true);
+  });
+
+  it('fails closed with auth on but zero users (requires_auth is false there, auth_enabled is true)', () => {
+    mockAuth.mockReturnValue({
+      initialized: true,
+      requiresAuth: false,
+      authEnabled: true,
+      user: null,
+    } as never);
+    expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
+  });
+
+  it('fails closed when the auth setting is unknown (the status call failed after its retries)', () => {
+    mockAuth.mockReturnValue({
+      initialized: true,
+      requiresAuth: false,
+      authEnabled: null,
+      user: null,
+    } as never);
+    expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
   });
 });
 
@@ -104,10 +135,48 @@ describe('useCollections', () => {
     expect(empty.result.current.collections).toEqual([]);
   });
 
-  it('passes the type filter and refetches when it changes', async () => {
-    const { result, rerender } = renderHook(({ t }: { t?: api.CollectionType }) => useCollections(t), {
-      initialProps: { t: undefined as api.CollectionType | undefined },
+  it('keeps the rows mounted while a reload after a write is in flight', async () => {
+    m.deleteCollection.mockResolvedValue();
+    const { result } = renderHook(() => useCollections());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let release!: (v: { collections: api.Collection[]; count: number }) => void;
+    m.listCollections.mockImplementationOnce(() => new Promise((res) => (release = res)));
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.remove('c1');
     });
+    await waitFor(() => expect(result.current.refreshing).toBe(true));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.collections).toEqual([c1, c2]);
+    await act(async () => {
+      release({ collections: [c2], count: 1 });
+      await pending;
+    });
+    expect(result.current.refreshing).toBe(false);
+    expect(result.current.collections).toEqual([c2]);
+  });
+
+  it('shows the spinner state again when the type filter changes', async () => {
+    const { result, rerender } = renderHook(
+      ({ t }: { t?: api.CollectionType }) => useCollections(t),
+      {
+        initialProps: { t: undefined as api.CollectionType | undefined },
+      }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    m.listCollections.mockImplementationOnce(() => new Promise(() => {}));
+    rerender({ t: 'static' });
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    expect(result.current.collections).toEqual([]);
+  });
+
+  it('passes the type filter and refetches when it changes', async () => {
+    const { result, rerender } = renderHook(
+      ({ t }: { t?: api.CollectionType }) => useCollections(t),
+      {
+        initialProps: { t: undefined as api.CollectionType | undefined },
+      }
+    );
     await waitFor(() => expect(result.current.loading).toBe(false));
     rerender({ t: 'dynamic' });
     await waitFor(() => expect(m.listCollections).toHaveBeenCalledTimes(2));
@@ -117,11 +186,11 @@ describe('useCollections', () => {
   it('never lets a slow earlier response overwrite a newer one', async () => {
     let releaseFirst!: (v: { collections: api.Collection[]; count: number }) => void;
     m.listCollections.mockReset();
-    m.listCollections.mockImplementationOnce(
-      () => new Promise((res) => (releaseFirst = res))
-    );
+    m.listCollections.mockImplementationOnce(() => new Promise((res) => (releaseFirst = res)));
     m.listCollections.mockResolvedValueOnce({ collections: [c2], count: 1 });
     const { result } = renderHook(() => useCollections());
+    // the mount fetch is the slow one; start the newer one on top of it
+    await waitFor(() => expect(m.listCollections).toHaveBeenCalledTimes(1));
     await act(async () => {
       await result.current.reload();
     });
@@ -181,7 +250,9 @@ describe('useCollections', () => {
       await expect(result.current.create({ type: 'static', name: 'dup' })).rejects.toBeInstanceOf(
         api.CollectionConflictError
       );
-      await expect(result.current.materialize('c2')).rejects.toBeInstanceOf(api.CollectionUnavailableError);
+      await expect(result.current.materialize('c2')).rejects.toBeInstanceOf(
+        api.CollectionUnavailableError
+      );
     });
     expect(m.listCollections).toHaveBeenCalledTimes(1);
   });
@@ -225,6 +296,27 @@ describe('useCollection', () => {
     expect(m.deleteCollection).toHaveBeenCalledWith('c2');
   });
 
+  it('does not store a write answer for a collection the route has left', async () => {
+    m.getCollection.mockImplementation(async (id) => (id === 'c1' ? c1 : c2));
+    let release!: (v: api.Collection) => void;
+    m.updateCollection.mockImplementationOnce(() => new Promise((res) => (release = res)));
+    const { result, rerender } = renderHook(({ id }: { id: string }) => useCollection(id), {
+      initialProps: { id: 'c1' },
+    });
+    await waitFor(() => expect(result.current.collection).toEqual(c1));
+    let pending!: Promise<api.Collection>;
+    act(() => {
+      pending = result.current.update({ name: 'Renamed' });
+    });
+    rerender({ id: 'c2' });
+    await waitFor(() => expect(result.current.collection).toEqual(c2));
+    await act(async () => {
+      release({ ...c1, name: 'Renamed' });
+      await pending;
+    });
+    expect(result.current.collection).toEqual(c2);
+  });
+
   it('reports a failed load as an error, not as an empty collection', async () => {
     m.getCollection.mockRejectedValue(new Error('not found'));
     const { result } = renderHook(() => useCollection('nope'));
@@ -235,11 +327,15 @@ describe('useCollection', () => {
 
   it('surfaces a 503 from materialize to the caller and keeps the stored collection', async () => {
     m.getCollection.mockResolvedValue(c2);
-    m.materializeCollection.mockRejectedValue(new api.CollectionUnavailableError('search index is not ready'));
+    m.materializeCollection.mockRejectedValue(
+      new api.CollectionUnavailableError('search index is not ready')
+    );
     const { result } = renderHook(() => useCollection('c2'));
     await waitFor(() => expect(result.current.collection).toEqual(c2));
     await act(async () => {
-      await expect(result.current.materialize()).rejects.toBeInstanceOf(api.CollectionUnavailableError);
+      await expect(result.current.materialize()).rejects.toBeInstanceOf(
+        api.CollectionUnavailableError
+      );
     });
     expect(result.current.collection).toEqual(c2);
   });
