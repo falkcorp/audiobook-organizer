@@ -1,5 +1,5 @@
 // file: internal/database/user_state_lock.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
 // last-edited: 2026-10-18
 
@@ -29,18 +29,13 @@ var userStateLocks [userStateStripes]sync.Mutex
 //     sync: taken before readStoredProgress, held through persistProgress,
 //     then session.mu inside it), applyLocalSession (offline replay) and the
 //     progress reset;
-//   - readstatus.SetManualStatus (the web "mark as" endpoints),
-//     readstatus.RecomputeUserBookState (a wrapper over
-//     RecomputeUserBookStateLocked, whose caller holds it) and
-//     readstatus.RebuildUserBookState (the web status repair);
+//   - readstatus.SetManualStatus (the web "mark as" endpoints) and
+//     readstatus.RebuildUserBookState (the web status repair), each taking
+//     it itself; readstatus.RecomputeUserBookStateLocked takes none, its
+//     caller holds it;
 //   - the web reading heartbeat (handlers.ReadingHandler.SetPosition): its
 //     position write and the RecomputeUserBookStateLocked after it, in one
 //     hold;
-//   - the iTunes position sync (itunesservice.PositionSync), per book: the
-//     bookmark seed's "no position yet" check, the seed and its
-//     RecomputeUserBookStateLocked, then the "seed finished" check-then-write,
-//     in one hold, on a NumCPU worker pool (books are disjoint, so two
-//     workers never want one stripe for the same key);
 //   - the iTunes position backfill job (maintenance/jobs
 //     backfill-itunes-positions), per book, from its position and state
 //     reads through its last state write, on its NumCPU worker pool;
@@ -89,9 +84,9 @@ var userStateLocks [userStateStripes]sync.Mutex
 // Striped, not per key: two keys can share a stripe. A holder of one stripe
 // never takes a second user-state lock while holding it; a path that needs
 // several keys at once takes them all in one LockUserBookStates (or
-// LockUserBookStatePair) call, which orders the stripes. Not reentrant: a function that runs both with and without the
-// stripe held comes as a ...Locked variant (the caller holds it) and a
-// wrapper that takes it.
+// LockUserBookStatePair) call, which orders the stripes. Not reentrant: a
+// function that runs both with and without the stripe held comes as a
+// ...Locked variant (the caller holds it) and a wrapper that takes it.
 func LockUserBookState(userID, bookID string) (unlock func()) {
 	mu := &userStateLocks[userStateStripe(userID, bookID)]
 	mu.Lock()

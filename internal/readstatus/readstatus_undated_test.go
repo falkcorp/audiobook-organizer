@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus_undated_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ae477977-e81a-4ed8-9798-de127c538696
-// last-edited: 2026-10-06
+// last-edited: 2026-10-18
 
 package readstatus
 
@@ -30,7 +30,7 @@ func TestRecompute_UndatedPositionsGetARecordTimestamp(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := time.Now()
-	state, err := RecomputeUserBookState(store, "u1", "b1")
+	state, err := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if err != nil {
 		t.Fatalf("recompute: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestRecompute_DatedPositionKeepsItsTime(t *testing.T) {
 	if err := timestampWriter(t, store).SetUserPositionAt("u1", "b1", "s2", 120, at); err != nil {
 		t.Fatal(err)
 	}
-	state, err := RecomputeUserBookState(store, "u1", "b1")
+	state, err := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if err != nil {
 		t.Fatalf("recompute: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRecompute_NoPositionsIsNotDated(t *testing.T) {
 	if err := store.SetUserBookState(&database.UserBookState{UserID: "u1", BookID: "b1", HideFromContinueListening: true}); err != nil {
 		t.Fatal(err)
 	}
-	state, err := RecomputeUserBookState(store, "u1", "b1")
+	state, err := RecomputeUserBookStateLocked(store, "u1", "b1")
 	if err != nil {
 		t.Fatalf("recompute: %v", err)
 	}

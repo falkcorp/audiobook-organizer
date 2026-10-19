@@ -1,7 +1,7 @@
 // file: internal/readstatus/rebuild_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b2d6f4a-3c19-4e57-a6d0-f1e9c7b5a382
-// last-edited: 2026-09-19
+// last-edited: 2026-10-18
 
 package readstatus
 
@@ -77,7 +77,7 @@ func TestRebuild_ApplyRebuildsFromPositions(t *testing.T) {
 		t.Fatalf("rebuilt state = %+v, %v; want in_progress with 300 s listened", st, err)
 	}
 	// And the book is writable again.
-	if _, err := RecomputeUserBookState(store, "u1", "b1"); err != nil {
+	if _, err := RecomputeUserBookStateLocked(store, "u1", "b1"); err != nil {
 		t.Fatalf("recompute after repair: %v", err)
 	}
 }

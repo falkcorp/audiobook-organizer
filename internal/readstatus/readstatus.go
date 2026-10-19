@@ -1,9 +1,9 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.7.0
+// version: 3.0.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
 // last-edited: 2026-10-18
 //
-// RecomputeUserBookState derives a UserBookState from the current
+// RecomputeUserBookStateLocked derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
 // status_manual override flag per spec 3.6 §6-7.
 //
@@ -23,9 +23,8 @@
 //      `abandoned` is never auto-computed — user-set only.
 
 // Extracted from internal/server/ to internal/readstatus/ (pre-work P5)
-// so internal/itunes/service/ can call Recompute / SetManual without
-// creating a cyclic dep (server imports itunes/service; iTunes
-// position-sync calls into here).
+// so internal/itunes/service/ could call it without a cyclic dep; that
+// caller (the iTunes position sync) was deleted on 2026-10-18.
 
 package readstatus
 
@@ -49,7 +48,7 @@ import (
 // cannot carry a //nolint, and interfacebloat never reports it because it is
 // not a declaration. Naming it is what makes the width reviewable at all, and
 // it is why callers had to satisfy the full surfaces to call a four-method
-// function -- see internal/itunes/service/position_sync.go.
+// function.
 type Store interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
@@ -74,30 +73,20 @@ var ErrPositionsUnreadable = errors.New("readstatus: stored positions are unread
 // the status is derived from) could not be read. Nothing is written; 503.
 var ErrBookFilesUnreadable = errors.New("readstatus: book files are unreadable")
 
-// RecomputeUserBookState reads positions + segment durations and
-// updates user_book_state with fresh auto-computed fields. Returns
-// the new state (or a no-op unchanged state if there's nothing to
-// record — e.g. a user who's never touched this book).
+// RecomputeUserBookStateLocked reads positions + segment durations and
+// updates user_book_state with fresh auto-computed fields. Returns the new
+// state (or nil if there's nothing to record — e.g. a user who's never
+// touched this book).
 //
-// It takes database.LockUserBookState for (userID, bookID) around the read
-// and the write. A caller that writes a position first and then recomputes
-// (the web heartbeat, the iTunes bookmark seed) must hold the stripe across
-// both and call RecomputeUserBookStateLocked instead: the stripe is not
-// reentrant.
-func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserBookState, error) {
-	if store == nil || userID == "" || bookID == "" {
-		return nil, nil
-	}
-	defer database.LockUserBookState(userID, bookID)()
-	return RecomputeUserBookStateLocked(store, userID, bookID)
-}
-
-// RecomputeUserBookStateLocked is RecomputeUserBookState for a caller that
-// already holds database.LockUserBookState for (userID, bookID). Without the
-// stripe its read of the positions and the state and its write of the derived
-// state are not one step: a locked read-decide-write (an ABS sync, the merge
-// undo's put-back) could land between them and be overwritten by a state
-// derived from what it replaced.
+// The caller holds database.LockUserBookState for (userID, bookID) across
+// this call -- and across the position write that usually precedes it (the
+// web heartbeat, handlers.ReadingHandler.SetPosition, its only production
+// caller). Without the stripe its read of the positions and the state and
+// its write of the derived state are not one step: a locked read-decide-write
+// (an ABS sync, the merge undo's put-back) could land between them and be
+// overwritten by a state derived from what it replaced. There is no locking
+// wrapper: the one caller that ran it without the stripe, the never-wired
+// iTunes position sync, was deleted on 2026-10-18.
 func RecomputeUserBookStateLocked(store Store, userID, bookID string) (*database.UserBookState, error) {
 	if store == nil || userID == "" || bookID == "" {
 		return nil, nil
@@ -210,7 +199,7 @@ func deriveState(store Store, userID, bookID string, existing *database.UserBook
 
 // SetManualStatus records a user-forced status (Finished, Unstarted,
 // Abandoned, or back to InProgress) and flips StatusManual=true so
-// RecomputeUserBookState leaves it alone going forward. Passing
+// RecomputeUserBookStateLocked leaves it alone going forward. Passing
 // empty string reverts to auto — next Recompute call derives a
 // fresh status from positions.
 //
@@ -282,7 +271,7 @@ type RebuildReport struct {
 // A readable row is never touched, and neither is one whose read failed for
 // any reason other than a decode error (database.ErrUserBookStateUndecodable):
 // that is ErrStateUnreadable, nothing written. For an undecodable row it derives a fresh
-// state from the positions (exactly as RecomputeUserBookState would for a
+// state from the positions (exactly as RecomputeUserBookStateLocked would for a
 // user with no stored state) and, only when apply is true, writes it over the
 // bad row. Dry run by default at the call sites. Fields only the lost row
 // carried (a manual status, hide-from-continue-listening, the progress-reset
