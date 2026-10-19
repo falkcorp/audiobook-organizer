@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-19
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
@@ -160,8 +161,11 @@ type ReviewQuery struct {
 	Skipped []string
 	// Chip is a chip view (reviewChip*); it pauses every filter but Q.
 	Chip string
-	// Bucket is reviewable (default) or unreviewable; with unreviewable and no
-	// chip the list is the unreviewable rows narrowed by Q only.
+	// Bucket is reviewable (default), unreviewable or any; with unreviewable
+	// and no chip the list is the unreviewable rows narrowed by Q only, and
+	// with any it is every row of both buckets (reviewable first) narrowed by
+	// Q only. any is how the lane asks which selected books, in whatever chip
+	// they sit, still match a new Title.
 	Bucket string
 	// Sort is reviewSort*.
 	Sort string
@@ -299,8 +303,8 @@ func parseReviewQuery(get func(string) string) (*ReviewQuery, error) {
 	if q.Bucket == "" {
 		q.Bucket = reviewBucketReviewable
 	}
-	if q.Bucket != reviewBucketReviewable && q.Bucket != reviewBucketUnreviewable {
-		return nil, badReviewQuery("bucket must be reviewable or unreviewable")
+	if q.Bucket != reviewBucketReviewable && q.Bucket != reviewBucketUnreviewable && q.Bucket != reviewBucketAny {
+		return nil, badReviewQuery("bucket must be reviewable, unreviewable or any")
 	}
 	switch q.Sort {
 	case reviewSortDefault, reviewSortTitle, reviewSortConfidence:
@@ -345,8 +349,8 @@ func (q *ReviewQuery) normalize() string {
 		fmt.Fprintf(&b, "chip=%s", q.Chip)
 		return b.String()
 	}
-	if q.Bucket == reviewBucketUnreviewable {
-		b.WriteString("bucket=unreviewable")
+	if q.Bucket == reviewBucketUnreviewable || q.Bucket == reviewBucketAny {
+		fmt.Fprintf(&b, "bucket=%s", q.Bucket)
 		return b.String()
 	}
 	fmt.Fprintf(&b, "src=%q|minc=%s|ha=%t|hr=%t|hs=%t|hn=%t|rt=%t|lang=%t|tr=%t|trm=%t|mb=%t",
@@ -911,6 +915,9 @@ func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, budget *querygra
 		}
 	case q.Bucket == reviewBucketUnreviewable:
 		addUnreviewable(func(*unreviewableRow) bool { return true })
+	case q.Bucket == reviewBucketAny:
+		addReviewable(func(*reviewableRow) bool { return true })
+		addUnreviewable(func(*unreviewableRow) bool { return true })
 	default:
 		evaluateReviewFilters(out, q, budget)
 	}
@@ -1358,7 +1365,15 @@ func reviewFacets(l *reviewResultList) gin.H {
 // Rows are lean (candidate description, score_breakdown and category_tags
 // dropped, see pageResult); the page fetches full rows for what it shows with
 // ids=.
-func reviewPageResponse(l *reviewResultList, q *ReviewQuery, series metabatch.SeriesBatchGetter) gin.H {
+//
+// rejected is the owner's rejections (metafetch.LoadAllRejectedCandidates,
+// read once per request); a reviewable row whose stored candidate the owner
+// rejected carries owner_rejected, which the rail's chip counts. A nil map
+// marks nothing (the listing does the same when the read fails). applyCap is
+// the effective bulk apply cap, sent as bulk_apply_max_items so the lane
+// enforces the limit the server enforces without a settings permission.
+func reviewPageResponse(l *reviewResultList, q *ReviewQuery, series metabatch.SeriesBatchGetter,
+	rejected map[string]metafetch.RejectedSet, applyCap int) gin.H {
 	start := min(q.Offset, len(l.refs))
 	end := min(start+q.Limit, len(l.refs))
 	cutoff := l.base.rows.freshCutoff
@@ -1366,7 +1381,11 @@ func reviewPageResponse(l *reviewResultList, q *ReviewQuery, series metabatch.Se
 	for _, ref := range l.refs[start:end] {
 		if ref >= 0 {
 			r := &l.base.rows.reviewable[ref]
-			results = append(results, r.pageResult(r.row.book, cutoff))
+			res := r.pageResult(r.row.book, cutoff)
+			// Judged against the stored candidate, not res.Candidate: the
+			// page's copy has its large fields stripped.
+			res.OwnerRejected = rejected[r.row.book.ID].HasCandidate(r.row.cand)
+			results = append(results, res)
 			continue
 		}
 		u := &l.base.rows.unreviewable[-ref-1]
@@ -1381,12 +1400,22 @@ func reviewPageResponse(l *reviewResultList, q *ReviewQuery, series metabatch.Se
 		"truncated":   end-start < len(l.refs),
 		"generation":  l.base.generation,
 		"facets":      reviewFacets(l),
+		// The cap one apply request may carry. The lane reads it here, not
+		// from GET /config (settings permission), so a reviewer without that
+		// permission is held to the same limit the server enforces.
+		"bulk_apply_max_items": applyCap,
 	}
 }
 
 // getCacheReviewPage serves view=page (see GetCacheReviewResults).
 func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 	began := time.Now()
+	// Every exit is observed (a refused request, a 503, an id list), under
+	// the label of what was asked for: the "<3s" target is read off view="page",
+	// so a page that errors must still be counted. An unparsable request
+	// cannot tell which shape it wanted and counts as a page.
+	view := metrics.ReviewViewPage
+	defer func() { metrics.ObserveReviewIndexRequest(view, time.Since(began)) }()
 	// A page is a statement about one generation; a cached copy would be one
 	// about a generation that may be gone.
 	c.Header("Cache-Control", "no-store")
@@ -1399,6 +1428,9 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 	if err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
+	}
+	if q.IDsAll {
+		view = metrics.ReviewViewIDsAll
 	}
 	l, err := h.reviewQueryList(c.Request.Context(), q)
 	if errors.As(err, &refused) {
@@ -1416,7 +1448,15 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 		httputil.RespondWithOK(c, reviewIDsResponse(l, q.Pins, applycap.Effective(config.AppConfig.BulkApplyMaxItems)))
 	} else {
 		series, _ := database.AsCapability[metabatch.SeriesBatchGetter](h.store)
-		resp := reviewPageResponse(l, q, series)
+		// The owner's rejections, read in ONE scan per request (never per
+		// row), live and not from the snapshot: a rejection is a raw key
+		// that moves no cache generation. A failed read marks nothing; every
+		// apply path still refuses a rejected candidate on its own read.
+		rejected, rerr := metafetch.LoadAllRejectedCandidates(h.store)
+		if rerr != nil {
+			metadataCacheLog.Warn("review page: owner rejections unreadable; rows are not marked: %v", rerr)
+		}
+		resp := reviewPageResponse(l, q, series, rejected, applycap.Effective(config.AppConfig.BulkApplyMaxItems))
 		// The rail reads its counts from facets in page mode, so the
 		// identification counts ride there too.
 		resp["facets"].(gin.H)["ident_counts"] = identCountsSummary(h.store)

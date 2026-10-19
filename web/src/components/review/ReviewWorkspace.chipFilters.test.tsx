@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-19
 //
@@ -109,11 +109,12 @@ function serveChips(extra: Record<string, unknown> = {}) {
     return m ? new RegExp(m[1]).test(title) : title.includes(q);
   };
   const rowsFor = (chip?: string, q?: string, bucket?: string) => {
-    const ids =
-      bucket === 'unreviewable'
+    const ids = chip
+      ? (CHIP_IDS[chip] ?? [])
+      : bucket === 'unreviewable'
         ? unreviewable.map((r) => r.book.id)
-        : chip
-          ? (CHIP_IDS[chip] ?? [])
+        : bucket === 'any'
+          ? ALL_ROWS.map((r) => r.book.id)
           : DEFAULT_IDS;
     return ids
       .map((id) => ALL_ROWS.find((r) => r.book.id === id)!)
@@ -147,15 +148,13 @@ function serveChips(extra: Record<string, unknown> = {}) {
     const ids = rowsFor(params?.chip, params?.q, params?.bucket).map((r) => r.book.id);
     return { ids, total: ids.length, generation: 'g1' };
   });
-  vi.mocked(api.getCachedReviewResults).mockImplementation(
-    async (_limit, _offset, _all, _bucket, options = {}) => {
-      const want = new Set(options.ids ?? []);
-      const results = ALL_ROWS.filter((r) => want.has(r.book.id));
-      return { results, total_count: results.length, matched: 0, no_match: 0, errors: 0 } as Awaited<
-        ReturnType<typeof api.getCachedReviewResults>
-      >;
-    }
-  );
+  vi.mocked(api.getCachedReviewResults).mockImplementation(async (ids) => {
+    const want = new Set(ids);
+    const results = ALL_ROWS.filter((r) => want.has(r.book.id));
+    return { results, total_count: results.length, matched: 0, no_match: 0, errors: 0 } as Awaited<
+      ReturnType<typeof api.getCachedReviewResults>
+    >;
+  });
 }
 
 function seed() {
@@ -249,6 +248,33 @@ describe('summary chips filter the list to exactly the books they count', () => 
     expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(`Showing the ${count}`);
     // One page request for the chip, on top of the opening load.
     expect(api.getReviewPage).toHaveBeenLastCalledWith(expect.objectContaining({ chip }), expect.anything());
+  });
+
+  it('the chip banner says it is loading, not the previous list\'s total, while the next page loads', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-total'));
+    await waitFor(() => expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent('Showing the 3'));
+
+    // The next chip's page is held in flight: until it lands, the lane still
+    // holds the total chip's 3, which is not what the matched chip holds.
+    const served = vi.mocked(api.getReviewPage).getMockImplementation()!;
+    let land: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      land = r;
+    });
+    vi.mocked(api.getReviewPage).mockImplementation(async (params, signal) => {
+      await gate;
+      return served(params, signal);
+    });
+    await user.click(screen.getByTestId('chip-matched'));
+    await waitFor(() =>
+      expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(/^Loading the .*books/)
+    );
+    expect(screen.getByTestId('chip-filter-banner')).not.toHaveTextContent('Showing the');
+
+    land();
+    await waitFor(() => expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent('Showing the 2'));
   });
 
   it('clicking the active chip again, or Show all, clears it', async () => {

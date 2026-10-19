@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -139,8 +139,10 @@ export function runtimeDiffers(deltaSec: number | undefined | null): boolean {
 /**
  * The apply gate's runtime tolerance: `internal/applygate/evidence.go`
  * RuntimeBlockRatio. A candidate more than 10% off the book's runtime is a
- * runtime_mismatch there, and the gate refuses it. The hide switch uses this
- * together with the warning chip's rule (runtimeHiddenBySwitch below).
+ * runtime_mismatch there, and the gate refuses it. The server's hide-runtime
+ * switch (internal/server/handlers/metadata_cache_query.go) hides a row on
+ * this rule or the warning chip's, so a row the chip flags is never listed
+ * while the switch is on.
  *
  * Mirrors the gate's rule, not RUNTIME_WARN_THRESHOLD_SEC above: that flat
  * ten minutes is the spine's warning chip, and on a 40-hour book it flags a
@@ -201,20 +203,6 @@ export function runtimeExceedsUpperBound(r: RuntimeRow): boolean {
   const cand = r.candidate?.duration_sec ?? 0;
   const ub = r.book.runtime_upper_bound_seconds ?? 0;
   return cand > 0 && ub > 0 && cand > ub;
-}
-
-/**
- * Whether the "Hide runtime differences" switch hides this row.
- *
- * The union of the two runtime rules: the gate's 10% rule
- * (runtimeDiffersFromBook) and the spine's flat ten-minute warning chip
- * (runtimeDiffers). The owner's rule (2026-09-30): a row showing the
- * "runtime differs" chip must never appear while the switch is on, even when
- * the gate would accept it -- a 53-minute gap on a nine-hour book is under
- * 10% but still warned.
- */
-export function runtimeHiddenBySwitch(r: RuntimeRow): boolean {
-  return runtimeDiffers(r.candidate?.duration_delta_sec) || runtimeDiffersFromBook(r);
 }
 
 /** What a candidate-less row's chip says, and how loud it is. */

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
 // last-edited: 2026-10-19
 
@@ -531,11 +531,21 @@ func BenchmarkReviewLoad(b *testing.B) {
 	})
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	_, _ = serveReview(b, h, "limit=1") // build the snapshot once
-	for _, q := range []string{"all=true", pageAll, "limit=50&offset=1000", "ids=" + firstIDs(b, h, 50)} {
-		b.Run("after_warm_"+strings.NewReplacer("=", "_", "&", "+", ",", "").Replace(q[:min(len(q), 24)]), func(b *testing.B) {
+	// view=page is what the lane loads, so it is what is timed; the listing
+	// shapes ("all=true", ids=) stay for the numbers other callers see. A
+	// query without view=page would hit the listing, not the page, and say
+	// nothing about the lane.
+	for _, bc := range []struct{ name, query string }{
+		{"listing_all_true", "all=true"},
+		{"view_page_limit_500", "view=page&" + pageAll},
+		{"view_page_limit_50_offset_1000", "view=page&limit=50&offset=1000"},
+		{"view_page_ids_all", "view=page&ids=all"},
+		{"listing_ids_detail_50", "ids=" + firstIDs(b, h, 50)},
+	} {
+		b.Run("after_warm_"+bc.name, func(b *testing.B) {
 			var bytes int
 			for i := 0; i < b.N; i++ {
-				_, bytes = serveReview(b, h, q)
+				_, bytes = serveReview(b, h, bc.query)
 			}
 			b.ReportMetric(float64(bytes), "body_bytes")
 		})

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-19
 
@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -205,6 +206,9 @@ func TestReviewList_ViewIndexIs410(t *testing.T) {
 		require.Equal(t, "VIEW_INDEX_GONE", got["code"])
 		require.Equal(t, "view=page", got["use"])
 		require.Contains(t, got["error"], "view=page")
+		// The text an old browser tab shows in its error Alert: it must tell
+		// the reviewer what to do.
+		require.Contains(t, got["error"], "reload the page")
 		require.NotContains(t, got, "results", "a 410 must carry no rows")
 	}
 	require.Equal(t, before+uint64(len(queries)), reviewRequestCount(t, metrics.ReviewViewGone),
@@ -794,6 +798,10 @@ func (f queryFakeStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
 	return out, nil
 }
 
+// ScanPrefix is what a page request reads for the owner's rejections
+// (metafetch.LoadAllRejectedCandidates): this fake holds none.
+func (f queryFakeStore) ScanPrefix(string) ([]database.KVPair, error) { return nil, nil }
+
 func (f queryFakeStore) GetBookByID(id string) (*database.Book, error) { return f.books[id], nil }
 
 type queryFakeSvc struct{ MetadataCacheFetchService }
@@ -1371,4 +1379,71 @@ func TestReviewSearchFields_MatchSearchParser(t *testing.T) {
 		_, ok := ui[f]
 		require.Truef(t, ok, "%s is in reviewSearchFields but not in SEARCH_FIELDS", f)
 	}
+}
+
+// TestReviewPage_CarriesTheApplyCap: the page response states the bulk apply
+// cap the server enforces (bulk_apply_max_items), so the lane never needs
+// GET /config (settings permission) to learn it.
+func TestReviewPage_CarriesTheApplyCap(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	prev := config.AppConfig.BulkApplyMaxItems
+	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+
+	for _, tc := range []struct{ configured, want int }{{0, applycap.Effective(0)}, {37, 37}} {
+		config.AppConfig.BulkApplyMaxItems = tc.configured
+		code, body, _ := serveReviewRaw(t, h, "view=page&limit=5")
+		require.Equal(t, http.StatusOK, code, string(body))
+		var got struct {
+			Data struct {
+				Cap *int `json:"bulk_apply_max_items"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(body, &got))
+		require.NotNil(t, got.Data.Cap, "the page must state the cap: %s", body)
+		require.Equal(t, tc.want, *got.Data.Cap, "configured %d", tc.configured)
+	}
+}
+
+// TestReviewPage_CountsUnderPageAndIDsAll: a view=page request is recorded
+// under view="page" whatever it answers (a page, a refusal), and an id list
+// under view="ids_all", so the "<3s" target panel sees every page request.
+func TestReviewPage_CountsUnderPageAndIDsAll(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	metrics.Register()
+	page, ids := reviewRequestCount(t, metrics.ReviewViewPage), reviewRequestCount(t, metrics.ReviewViewIDsAll)
+
+	for _, q := range []string{"view=page&limit=5", "view=page&limit=5&offset=5", "view=page&limit=0"} {
+		serveReviewRaw(t, h, q) // the last is a 400: still a page request
+	}
+	require.Equal(t, page+3, reviewRequestCount(t, metrics.ReviewViewPage))
+	require.Equal(t, ids, reviewRequestCount(t, metrics.ReviewViewIDsAll), "no id list was asked for")
+
+	serveReviewRaw(t, h, "view=page&ids=all")
+	require.Equal(t, ids+1, reviewRequestCount(t, metrics.ReviewViewIDsAll))
+	require.Equal(t, page+3, reviewRequestCount(t, metrics.ReviewViewPage), "an id list is not a page")
+}
+
+// TestReviewQuery_BucketAnyListsBothBucketsByTitleOnly: bucket=any is every
+// row of both buckets narrowed by the Title and nothing else, the lookup the
+// lane uses to prune a selection across chips.
+func TestReviewQuery_BucketAnyListsBothBucketsByTitleOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	reviewable, _, _ := servePage(t, h, "ids=all")
+	unreviewable, _, _ := servePage(t, h, "ids=all&bucket=unreviewable")
+	require.NotEmpty(t, reviewable.Data.IDs)
+	require.NotEmpty(t, unreviewable.Data.IDs)
+	all, _, _ := servePage(t, h, "ids=all&bucket=any&hide_applied=true&min_confidence=99")
+	require.ElementsMatch(t, append(append([]string{}, reviewable.Data.IDs...), unreviewable.Data.IDs...), all.Data.IDs,
+		"every other filter is paused, as in a chip view")
+	require.Equal(t, len(all.Data.IDs), all.Data.Total)
+
+	byTitle, _, _ := servePage(t, h, "ids=all&bucket=any&q=Title+000003")
+	require.Equal(t, []string{goldenBookID(3)}, byTitle.Data.IDs)
 }

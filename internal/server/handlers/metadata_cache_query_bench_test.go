@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_bench_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b5d2c8e4-1f6a-4a37-9c08-7e4b3d2a6f91
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package handlers
 
@@ -163,7 +163,7 @@ func TestReviewQuery_ResponseSizes40k(t *testing.T) {
 
 	pageQ := mustReviewQuery(t, map[string]string{"limit": "50"})
 	page := mustEvaluate(t, base, pageQ)
-	pageBody, err := json.Marshal(gin.H{"data": reviewPageResponse(page, pageQ, nil)})
+	pageBody, err := json.Marshal(gin.H{"data": reviewPageResponse(page, pageQ, nil, nil, 5000)})
 	require.NoError(t, err)
 
 	// ids=all over a set where all 40,000 rows are listed.

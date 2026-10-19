@@ -1,5 +1,5 @@
 // file: internal/metrics/pipeline_metrics_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b18e9de-8f9d-46b8-91f8-94c25c4bcd6b
 // last-edited: 2026-10-19
 
@@ -67,11 +67,13 @@ func TestObserveReviewIndexRequest_RecordsUnderView(t *testing.T) {
 	ObserveReviewIndexRequest(ReviewViewGone, 1500*time.Millisecond)
 	ObserveReviewIndexRequest(ReviewViewGone, 300*time.Millisecond)
 	ObserveReviewIndexRequest(ReviewViewFull, 40*time.Second)
+	ObserveReviewIndexRequest(ReviewViewPage, 800*time.Millisecond)
+	ObserveReviewIndexRequest(ReviewViewIDsAll, 200*time.Millisecond)
 
 	// CollectAndCount counts series; a HistogramVec exposes one series per
 	// label set (each with its own _bucket/_sum/_count), so two views = 2.
-	if got := testutil.CollectAndCount(reviewIndexRequestSeconds); got != 2 {
-		t.Errorf("series = %d, want 2 (gone, full)", got)
+	if got := testutil.CollectAndCount(reviewIndexRequestSeconds); got != 4 {
+		t.Errorf("series = %d, want 4 (gone, full, page, ids_all)", got)
 	}
 
 	Register()
@@ -83,6 +85,11 @@ func TestObserveReviewIndexRequest_RecordsUnderView(t *testing.T) {
 	}
 	if !strings.Contains(body, `audiobook_organizer_review_index_request_seconds_count{view="full"} 1`) {
 		t.Errorf("scrape missing full count=1; body excerpt:\n%s", excerpt(body, "review_index_request_seconds"))
+	}
+	for _, view := range []string{ReviewViewPage, ReviewViewIDsAll} {
+		if !strings.Contains(body, `audiobook_organizer_review_index_request_seconds_count{view="`+view+`"} 1`) {
+			t.Errorf("scrape missing %s count=1; body excerpt:\n%s", view, excerpt(body, "review_index_request_seconds"))
+		}
 	}
 	// The bucket ladder must reach the requested 120s ceiling, so a 40s
 	// request lands in a finite bucket rather than only +Inf.

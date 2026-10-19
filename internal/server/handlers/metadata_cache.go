@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-19
 
@@ -56,6 +56,7 @@ const defaultReviewPageSize = 200
 const (
 	reviewBucketReviewable   = "reviewable"
 	reviewBucketUnreviewable = "unreviewable"
+	reviewBucketAny          = "any"
 
 	unreviewableStatusNoCandidates         = "no_candidates"
 	unreviewableStatusResolvedNoCandidates = "resolved_no_candidates"
@@ -529,15 +530,15 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 	switch c.Query("view") {
 	case reviewViewPage:
-		// Dispatched before the review_index_request_seconds observation:
-		// that histogram counts the listing shapes below and the retired
-		// view=index, not page requests.
+		// getCacheReviewPage records its own review_index_request_seconds
+		// observation (view="page", or "ids_all" for an id list), because it
+		// has several exits; the listing below records "full".
 		h.getCacheReviewPage(c)
 		return
 	case reviewViewIndex:
 		began := time.Now()
 		httputil.RespondWithErrorFields(c, http.StatusGone,
-			"view=index was removed; use view=page, which returns one filtered page of rows plus the counts",
+			"view=index was removed: reload the page to get the current Review screen (an API client should use view=page, which returns one filtered page of rows plus the counts)",
 			"VIEW_INDEX_GONE", map[string]any{"use": "view=page"})
 		metrics.ObserveReviewIndexRequest(metrics.ReviewViewGone, time.Since(began))
 		return
