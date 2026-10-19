@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -182,13 +182,18 @@ Dynamic collections whose query has a relative date (`last_played:>-30d`,
 serves follow the clock without anyone opening the collection. It evaluates each as
 its owner, skips and counts a per-user query whose owner is gone, skips a collection
 edited while the run was in flight (picked up next hour), and stores a member list
-only when it changed. Launched by hand (`POST /operations/v2`) it is a preview unless
+only when it changed. The hourly task enqueues the op only when such a collection
+exists and the search index is open (there is no collections-disabled config switch),
+and a run that still finds the index closed finishes as a clean no-op with one log
+line. Launched by hand (`POST /operations/v2`) it is a preview unless
 `dry_run` is `false`; the hourly run sends `dry_run: false`.
 
 Per-user fields in a query (`read_status`, `progress_pct`, `last_played`) read the
-evaluating user's own listening state. A malformed date on one of them
-(`last_played:>30d`, missing the sign) is a `400` at create and update time, not a
-collection that silently matches nothing. To stop anyone with `collections.manage`
+evaluating user's own listening state. A query that cannot be parsed or
+translated, such as a malformed date on one of them (`last_played:>30d`, missing the
+sign), is a `400` at create time and when the query is changed (the message names the
+parse or translate error and nothing is stored), not a collection that silently
+matches nothing; a closed search index does not block saving a good query. To stop anyone with `collections.manage`
 from reading the owner's state back out of the members, only the evaluating user
 may write one into a query. `POST /collections` (dynamic) and `PUT
 /collections/:id` answer `403` with code `COLLECTION_PER_USER_QUERY_OWNER_ONLY`

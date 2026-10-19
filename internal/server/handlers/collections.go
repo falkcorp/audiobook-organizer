@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-18
 
@@ -7,9 +7,11 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -315,6 +317,18 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 		CreatedByUserID: CallingUserID(c),
 	}
 
+	// A query that cannot be parsed or translated (a per-user date with no sign,
+	// an unknown operator) is a 400 now, before anything is stored: the evaluate
+	// below swallows its errors on purpose (a closed index must not block a
+	// save), which used to let a query that can never work be stored and only
+	// fail later on materialize.
+	if col.Type == database.CollectionTypeDynamic {
+		if err := validateCollectionQuery(col.Query); err != nil {
+			httputil.RespondWithBadRequest(c, err.Error())
+			return
+		}
+	}
+
 	// The creator is the owner and the evaluator, never a stand-in: a per-user
 	// query is refused unless evaluatorFor resolves to the creator, which it does
 	// whenever the creator is a user row, or is "_local" with auth off. A creator
@@ -516,8 +530,16 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		// Only a CHANGED query is checked: renaming a collection whose stored query
 		// already has a per-user field, or re-sending that query unchanged, writes
 		// nothing new into what the evaluator's state is asked about.
-		if *req.Query != origQuery && !h.requirePerUserQueryEvaluator(c, col, *req.Query) {
-			return
+		if *req.Query != origQuery {
+			// Syntax first (400), then who may write it (403). A query stored
+			// before this check existed is not re-validated unless it changes.
+			if err := validateCollectionQuery(*req.Query); err != nil {
+				httputil.RespondWithBadRequest(c, err.Error())
+				return
+			}
+			if !h.requirePerUserQueryEvaluator(c, col, *req.Query) {
+				return
+			}
 		}
 		// The first active admin takes an ownerless per-user collection over, but
 		// only by asking: the stand-in never evaluates such a query (see the file
@@ -673,6 +695,23 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 		}
 	}
 	httputil.RespondWithOK(c, col)
+}
+
+// validateCollectionQuery reports whether query can be evaluated at all, without
+// searching: it parses and translates it, the same pair playlist.EvaluateSmartPlaylist
+// runs first, so every error EvaluateSmartPlaylist would return for the query's
+// text is returned here (an unsigned per-user date such as last_played:>30d among
+// them). It does not need the search index, so it works while the index is closed
+// or rebuilding. It deliberately does not look at the evaluator or the owner.
+func validateCollectionQuery(query string) error {
+	ast, err := search.ParseQuery(query)
+	if err != nil {
+		return fmt.Errorf("parse query: %w", err)
+	}
+	if _, _, err := search.TranslateAt(ast, time.Now()); err != nil {
+		return fmt.Errorf("translate query: %w", err)
+	}
+	return nil
 }
 
 // evaluate runs a dynamic collection's query as the collection's owner.

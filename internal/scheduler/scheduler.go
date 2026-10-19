@@ -1,5 +1,5 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
 // last-edited: 2026-10-17
 
@@ -74,6 +74,12 @@ type SchedulerDeps struct {
 
 	// HasBatchPoller returns true when a batch poller is available.
 	HasBatchPoller func() bool
+
+	// CollectionsRefreshPending reports whether the hourly collections_refresh
+	// task has anything to do: a relative-date dynamic collection exists and the
+	// search index is open. The task enqueues nothing when it says false. Nil
+	// means "cannot tell", and the task enqueues (the op then reports the reason).
+	CollectionsRefreshPending func() (bool, error)
 }
 
 // TaskDefinition defines a registered task in the unified task system.

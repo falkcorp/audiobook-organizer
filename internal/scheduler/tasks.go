@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-18
 
@@ -916,9 +916,12 @@ func (ts *TaskScheduler) registerAllTasks() {
 
 	// collections_refresh: re-materialize the relative-date dynamic
 	// collections every hour so what the ABS surface serves slides with the
-	// clock. Not on startup (the search index may still be warming; a refresh
-	// that finds it closed fails and the next hour retries) and not in the
-	// maintenance window (it has its own short interval).
+	// clock. A tick enqueues only when a relative-date dynamic collection exists
+	// and the search index is open (CollectionsRefreshPending); a run that still
+	// finds the index closed ends as a clean no-op. Not on startup (the search
+	// index may still be warming) and not in the maintenance window (it has its
+	// own short interval). There is no collections-disabled config switch: the
+	// precondition is what keeps an install without such collections quiet.
 	ts.registerTask(TaskDefinition{
 		Name:        collectionsRefreshTaskName,
 		Description: "Re-evaluate dynamic collections whose query has a relative date (collections.refresh-relative-dynamic)",
@@ -927,6 +930,17 @@ func (ts *TaskScheduler) registerAllTasks() {
 			store := ts.deps.Store()
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
+			}
+			if pending := ts.deps.CollectionsRefreshPending; pending != nil {
+				due, err := pending()
+				if err != nil {
+					return nil, fmt.Errorf("%s: check for relative-date collections: %w", collectionsRefreshTaskName, err)
+				}
+				if !due {
+					schedLog.Debug("%s: no relative-date dynamic collection, or the search index is not open, skipping this tick (source=%s)",
+						collectionsRefreshTaskName, source)
+					return nil, nil
+				}
 			}
 			if ts.hasActiveV2Op(collectionsRefreshOpID) {
 				schedLog.Debug("%s: a %s run is already queued or running, skipping this tick (source=%s)",

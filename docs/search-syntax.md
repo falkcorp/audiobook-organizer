@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -52,6 +52,12 @@ Months and years keep the day of the month, and a day that does not exist in the
 target month rolls forward into the next one, so `-1m` on 31 March is 3 March
 (there is no 31 February, so it becomes 3 March), not 28 February. Use days (`-30d`)
 when you need an exact length.
+
+A list of values in parentheses, `field:(a|b)`, matches when ANY of them does, and
+`-field:(a|b)` when NONE does. This holds for the per-user fields as well as the
+indexed ones, so `read_status:(finished|in_progress)` finds books in either state.
+Each value in a list is a value on its own, not a comparison: `last_played:(2026-03-31|-2d)`
+works, `last_played:(>-7d|...)` does not.
 
 A date with no time of day names a whole UTC day, and the operator says what you mean
 by it:
@@ -114,7 +120,14 @@ first administrator saves its query again with `adopt_owner` set to true to take
 over or the per-user terms are removed. Saving it again without the flag does not
 take it over.
 
-A malformed date on a per-user field (for example `last_played:>30d`, which needs a
-sign) is refused when the query is saved, with the same message the library search
-gives, instead of producing a collection that matches nothing. With authentication
+A query that cannot be parsed or translated, such as a malformed date on a per-user
+field (for example `last_played:>30d`, which needs a sign), is refused with a 400 when
+the collection is created or its query is changed, with the same message the library
+search gives, instead of being stored as a collection that matches nothing. A closed
+search index does not stop a good query from being saved.
+
+One known limit: an `OR` between a per-user term and an indexed term
+(`title:Alpha OR read_status:finished`) is evaluated as an `AND`, because the per-user
+part is applied afterwards to the books the index returned. Write such a search as two
+searches, or avoid mixing them, until that is fixed. With authentication
 off there is one local user, which owns every collection and is the evaluator.

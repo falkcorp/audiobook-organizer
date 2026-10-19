@@ -1,19 +1,24 @@
 // file: internal/server/collection_refresh_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4e1c27-5d83-4b60-8f12-0c7b3d6e9a58
 // last-edited: 2026-10-18
 
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // The refresh op is registered in a booted server, is a previewed writer gated on
@@ -38,5 +43,67 @@ func TestCollectionRefreshOp_IsRegisteredAsAGatedPreviewWriter(t *testing.T) {
 		got, err := opmode.ResolveDryRun(collectionRefreshOpID, p.DryRun, p.DryRunCamel)
 		require.NoError(t, err)
 		assert.Equal(t, want, got, "params %q", raw)
+	}
+}
+
+type refreshOpReporter struct {
+	mu       sync.Mutex
+	logs     []string
+	progress int
+}
+
+func (r *refreshOpReporter) UpdateProgress(int, int, string) error {
+	r.mu.Lock()
+	r.progress++
+	r.mu.Unlock()
+	return nil
+}
+func (r *refreshOpReporter) Log(_ slog.Level, m string, _ ...slog.Attr) error {
+	r.mu.Lock()
+	r.logs = append(r.logs, m)
+	r.mu.Unlock()
+	return nil
+}
+func (r *refreshOpReporter) Logger() *slog.Logger                       { return slog.Default() }
+func (r *refreshOpReporter) Checkpoint(any) error                       { return nil }
+func (r *refreshOpReporter) IsCanceled() bool                           { return false }
+func (r *refreshOpReporter) Trigger(context.Context, string, any) error { return nil }
+func (r *refreshOpReporter) SetCurrentItem(string)                      {}
+func (r *refreshOpReporter) RunPhase(ctx context.Context, _ string, fn func(context.Context, opsregistry.Reporter) error) error {
+	return fn(ctx, r)
+}
+
+// With the search index closed (a test server never opens one) the op finishes
+// cleanly with ONE log line, instead of failing and warning per collection, and
+// the scheduler's precondition says there is nothing to do.
+func TestCollectionRefreshOp_ClosedIndexIsACleanNoOp(t *testing.T) {
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	for _, name := range []string{"one", "two", "three"} {
+		_, err := store.CreateCollection(&database.Collection{Name: name, Type: database.CollectionTypeDynamic,
+			Query: "date_added:>-30d", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b9"}})
+		require.NoError(t, err)
+	}
+	srv := newTestServer(t, store)
+	require.Nil(t, srv.SearchIndex(), "this fixture has no open index")
+
+	pending, err := srv.collectionsRefreshPending()
+	require.NoError(t, err)
+	assert.False(t, pending, "no open index: the tick has nothing to do")
+
+	rep := &refreshOpReporter{}
+	err = srv.runCollectionRefreshOp(context.Background(), json.RawMessage(`{"dry_run":false}`), rep)
+	require.NoError(t, err, "a closed index is not a failed op")
+	require.Len(t, rep.logs, 1, "one line for the run, not one per collection")
+	assert.Contains(t, rep.logs[0], "search index not open")
+	assert.Contains(t, rep.logs[0], "3 relative-date")
+	assert.Positive(t, rep.progress, "a manual-liveness op must report progress")
+
+	cols, _, err := store.ListCollections("", 0, 0)
+	require.NoError(t, err)
+	for _, c := range cols {
+		assert.Equal(t, []string{"b9"}, c.MaterializedBookIDs, "%s untouched", c.Name)
+		assert.EqualValues(t, 1, c.Version, "%s not rewritten", c.Name)
 	}
 }

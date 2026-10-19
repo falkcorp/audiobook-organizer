@@ -1,5 +1,5 @@
 // file: internal/server/collection_refresh_op.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 0c8d3b61-7e94-4a25-b3f0-9d1a6e2c5b47
 // last-edited: 2026-10-18
 
@@ -18,7 +18,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
-// collectionRefreshOpID is the op the hourly collections_refresh_relative task
+// collectionRefreshOpID is the op the hourly collections_refresh task
 // enqueues.
 const collectionRefreshOpID = "collections.refresh-relative-dynamic"
 
@@ -72,6 +72,15 @@ func (s *Server) RegisterCollectionRefreshOp(reg *opsregistry.Registry) error {
 	})
 }
 
+// collectionsRefreshPending is the scheduler's precondition for the hourly task:
+// a relative-date dynamic collection exists and the search index is open.
+func (s *Server) collectionsRefreshPending() (bool, error) {
+	if s.storeForWiring() == nil {
+		return false, nil
+	}
+	return s.collectionHandler().RelativeRefreshPending()
+}
+
 func (s *Server) runCollectionRefreshOp(ctx context.Context, raw json.RawMessage, reporter opsregistry.Reporter) error {
 	var p collectionRefreshParams
 	if len(raw) > 0 {
@@ -86,6 +95,15 @@ func (s *Server) runCollectionRefreshOp(ctx context.Context, raw json.RawMessage
 	res, runErr := s.collectionHandler().RefreshRelativeDynamic(ctx, dryRun, func(done, total int) {
 		_ = reporter.UpdateProgress(done, total, fmt.Sprintf("refreshed %d of %d collections", done, total))
 	})
+	if res.IndexUnavailable {
+		// One line, and a clean finish: the index being closed or rebuilding is
+		// routine around a start or a reindex, and the next hourly run retries.
+		msg := fmt.Sprintf("search index not open: skipped %d relative-date dynamic collection(s); the next run retries", res.Considered)
+		_ = reporter.Log(slog.LevelInfo, msg)
+		collectionRefreshLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(opsregistry.ReporterOpID(reporter)))
+		_ = reporter.UpdateProgress(1, 1, msg)
+		return nil
+	}
 	mode := ""
 	if dryRun {
 		mode = "dry run: "

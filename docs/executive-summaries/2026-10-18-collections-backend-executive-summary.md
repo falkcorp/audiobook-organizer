@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-18-collections-backend-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: bc1b7020-e5ad-4493-90ab-243c0a1234fc -->
 <!-- last-edited: 2026-10-18 -->
 
@@ -31,7 +31,10 @@ relative dates in the one search syntax, atomic add and remove).
   that is saved with a mistyped listening date, which is now refused when it is
   saved instead of quietly matching nothing. A date with no time of day, such as
   `2026-03-31`, means that whole day, so "up to 31 March" includes a book added
-  that afternoon.
+  that afternoon. A list of choices such as `read_status:(finished|in_progress)`
+  now means "either" for listening-history terms too (it used to demand both at once,
+  which no book can satisfy). The hourly refresh does nothing when no collection needs
+  it or the search index is not ready, and that is not treated as a failure.
 - **The Library page now honours those searches.** Until now the Library page
   treated any `last_played:` value as "has ever been played", and refused
   `date_added:` altogether. Both now work, and "added" and "modified" are new

@@ -12,7 +12,8 @@ and a unit (`d` days, `w` weeks, `m` months, `y` years), for example
 resolved each time the search runs, so a saved search keeps sliding (a scheduled
 op, `collections.refresh-relative-dynamic`, refreshes the stored members of
 relative-date dynamic collections hourly); an unsigned `30d` is refused with a
-message showing `-30d`, including on a per-user field when a collection is saved.
+message showing `-30d`, including on a per-user field: creating a dynamic collection or changing its query
+with a query that cannot be parsed or translated answers 400 and stores nothing.
 A date with no time of day names its whole UTC day: `<=2026-03-31` and
 `2026-03-01..2026-03-31` include everything added on 31 March, `>2026-03-31`
 starts after it. `date_added` (alias `added`) and
@@ -73,4 +74,8 @@ dynamic collections, and a query with no per-user field never answers 503.
 `PUT /api/v1/collections/:id` with `book_ids` now requires `version` (400 when
 missing, 409 with `current_version` when stale). `date_added:(a|b)` alternations
 work. A `PUT` that changes only `sort_json` or `limit` on a blocked collection
-answers with the `evaluation_blocked` flag.
+answers with the `evaluation_blocked` flag. A value list on a per-user field
+(`read_status:(finished|in_progress)`, `last_played:(2026-03-31|2026-01-01)`) now
+means any of the values, as it already did on indexed fields (it used to require all
+of them at once). The hourly refresh runs only when a relative-date dynamic collection
+exists and the search index is open, and ends as a clean no-op when the index is closed.

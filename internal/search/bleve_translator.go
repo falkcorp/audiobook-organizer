@@ -1,5 +1,5 @@
 // file: internal/search/bleve_translator.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
 // last-edited: 2026-10-18
 //
@@ -31,8 +31,17 @@ import (
 // (read_status, progress_pct, last_played). Translator collects
 // these into a slice the caller applies after Bleve returns
 // candidate book IDs.
+//
+// A filter is either one term (Node) or an alternation (Alternatives): a query
+// like read_status:(finished|in_progress) is ONE filter that holds when ANY of the
+// alternatives does, exactly as the same alternation does on an indexed field.
+// MatchPerUserFilters ANDs across filters and ORs inside one.
 type PerUserFilter struct {
+	// Node is the single term. It is nil when Alternatives is set.
 	Node *FieldNode
+	// Alternatives, when not empty, replaces Node: the filter matches when at
+	// least one of these terms does. Negated then means none of them.
+	Alternatives []*FieldNode
 	// Negated is true when this filter sat under a NotNode in the
 	// AST. Go post-filter must invert the match.
 	Negated bool
@@ -423,17 +432,28 @@ func translateValueAlt(n *ValueAltNode, tc *translateCtx, negated bool) (query.Q
 	// Per-user field alternation still goes to post-filter. Rare in
 	// practice but handle it for correctness.
 	if _, ok := perUserFieldSet[n.Field]; ok {
-		// Build a synthetic set of PerUserFilter entries.
+		// ONE filter holding every alternative, so the matcher can OR them. Each
+		// alternative used to be its own filter, and filters are ANDed: a book
+		// cannot be both finished and in_progress, so read_status:(a|b) matched
+		// nothing, and the date alternation disagreed with date_added's OR.
+		// Negation applies to the whole group: -f:(a|b) is "none of them", which
+		// is what ANDing the negated alternatives meant, so it is unchanged.
+		alts := make([]*FieldNode, 0, len(n.Values))
 		for _, v := range n.Values {
+			node := &FieldNode{Field: n.Field, Value: v}
 			if IsDateField(n.Field) {
-				if err := CheckDateNode(&FieldNode{Field: n.Field, Value: v}, tc.now); err != nil {
+				if err := CheckDateNode(node, tc.now); err != nil {
 					return nil, err
 				}
 			}
-			tc.perUser = append(tc.perUser, PerUserFilter{
-				Node:    &FieldNode{Field: n.Field, Value: v},
-				Negated: negated,
-			})
+			alts = append(alts, node)
+		}
+		switch len(alts) {
+		case 0:
+		case 1:
+			tc.perUser = append(tc.perUser, PerUserFilter{Node: alts[0], Negated: negated})
+		default:
+			tc.perUser = append(tc.perUser, PerUserFilter{Alternatives: alts, Negated: negated})
 		}
 		return nil, nil
 	}

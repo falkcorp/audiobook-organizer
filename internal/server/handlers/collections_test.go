@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
 // last-edited: 2026-10-18
 
@@ -179,6 +179,14 @@ func (f *colFakeStore) UpdateCollection(col *database.Collection) error {
 	}
 	for i := range f.cols {
 		if f.cols[i].ID == col.ID {
+			// Same compare-and-swap as PebbleStore.UpdateCollection (plain equality,
+			// no zero bypass), so a handler that writes a row it did not just read
+			// is caught here and not only against a real store.
+			if col.Version != f.cols[i].Version {
+				return fmt.Errorf("collection %s: %w: expected %d, got %d",
+					col.ID, database.ErrCollectionVersionConflict, f.cols[i].Version, col.Version)
+			}
+			col.Version = f.cols[i].Version + 1
 			f.cols[i] = *col
 			return nil
 		}

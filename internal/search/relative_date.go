@@ -1,5 +1,5 @@
 // file: internal/search/relative_date.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3a96e18-5d47-4b02-8f1e-a7d2b04c6e93
 // last-edited: 2026-10-18
 
@@ -145,8 +145,9 @@ func dateDayBounds(day time.Time) (lo, hi time.Time) {
 
 // dateInterval is the span of time a date term selects: from lo (inclusive)
 // until hi (exclusive); a missing side is unbounded. Matching and translating
-// both go through it, so the Go matcher and the Bleve date range cannot disagree
-// about what an operator means.
+// both go through it, so the Go matcher and the Bleve date range read the same
+// bounds for a single term. (A query that combines terms is a separate matter:
+// see MatchPerUserFilters for how per-user terms combine.)
 type dateInterval struct {
 	lo, hi       time.Time
 	hasLo, hasHi bool
@@ -171,7 +172,7 @@ func (iv dateInterval) contains(t time.Time) bool {
 // ">t" starts just after it.
 func dateTermInterval(n *FieldNode, now time.Time) (dateInterval, error) {
 	var iv dateInterval
-	// startOf is the first instant a bound reaches; endOf is the first instant
+	// start is the first instant a bound reaches; end is the first instant
 	// after it. For a day they are the day's two edges, for an instant t and t+1ns.
 	bound := func(s string) (start, end time.Time, err error) {
 		t, perr := ParseDateTermErr(s, now)

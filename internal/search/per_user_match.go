@@ -1,5 +1,5 @@
 // file: internal/search/per_user_match.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a82911d7-d9dc-4f47-9863-1a7638e47194
 // last-edited: 2026-10-18
 
@@ -21,7 +21,9 @@ import (
 )
 
 // MatchPerUserFilters reports whether state satisfies EVERY filter
-// (AND semantics; Negated inverts per filter). state==nil is evaluated
+// (AND semantics; Negated inverts per filter). A filter with Alternatives holds
+// when ANY alternative matches (OR within the group, AND across groups); negated,
+// it holds when none does. state==nil is evaluated
 // as the zero-value UserBookState — read_status:finished rejects an
 // unstarted book, negated filters can still succeed.
 //
@@ -31,7 +33,17 @@ import (
 // clock is not read here. A caller with no relative terms still passes it.
 func MatchPerUserFilters(state *database.UserBookState, filters []PerUserFilter, now time.Time) bool {
 	for _, f := range filters {
-		ok := perUserFilterMatches(state, f.Node, now)
+		var ok bool
+		if len(f.Alternatives) > 0 {
+			for _, alt := range f.Alternatives {
+				if perUserFilterMatches(state, alt, now) {
+					ok = true
+					break
+				}
+			}
+		} else {
+			ok = perUserFilterMatches(state, f.Node, now)
+		}
 		if f.Negated {
 			ok = !ok
 		}
