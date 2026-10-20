@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_round5_probe_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0b6f2a8e-4c1d-4e7a-9f35-8d2c61e0a4b7
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -366,7 +366,7 @@ func BenchmarkGetCachedCandidates(b *testing.B) {
 	require.NoError(b, err)
 	in := mfs.resolveSearchInputs(bk, bk.Title, "", "")
 	var cands []json.RawMessage
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		raw, merr := json.Marshal(MetadataCandidate{Title: "Rogue Ascension 8", Author: raAuthor, Series: "Rogue Ascension", SeriesPosition: "8"})
 		require.NoError(b, merr)
 		cands = append(cands, raw)

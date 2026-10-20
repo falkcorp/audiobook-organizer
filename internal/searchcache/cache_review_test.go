@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 474e41ca-6072-44de-b9c3-da8b78639664
-// last-edited: 2026-09-28
+// last-edited: 2026-10-20
 
 package searchcache
 
@@ -193,7 +193,7 @@ func TestCache_DriftRebuildIsNotLostToOlderBuild(t *testing.T) {
 		t.Fatalf("patch 2 = %+v, %v", res, err)
 	}
 	// Let every build finish: B1 (refused) and the follow-up.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		fe.block <- struct{}{}
 	}
 	waitFor(t, func() bool { return fe.builds.Load() >= 3 && c.Stats().Building == 0 })

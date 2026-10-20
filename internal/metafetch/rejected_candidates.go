@@ -1,7 +1,7 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -273,7 +273,7 @@ func canonicalISBN(v string) string {
 	if len(n) != 10 {
 		return n
 	}
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		if n[i] < '0' || n[i] > '9' {
 			return n
 		}

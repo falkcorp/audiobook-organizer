@@ -1,7 +1,7 @@
 // file: internal/authority/lookup.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8214ae7d-59fb-46c8-9d73-9301ffdd21eb
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package authority
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -158,9 +159,7 @@ func mergePerson(f string, base *Person, ovr *PersonOverride) *Entry {
 		for r, st := range base.Roles {
 			cp := st
 			cp.ByTier = map[Tier]int{}
-			for t, n := range st.ByTier {
-				cp.ByTier[t] = n
-			}
+			maps.Copy(cp.ByTier, st.ByTier)
 			e.Roles[r] = cp
 		}
 	}

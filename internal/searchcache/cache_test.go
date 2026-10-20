@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache_test.go
-// version: 2.1.4
+// version: 2.1.5
 // guid: 88a06138-3f42-4544-a283-88594317ab8b
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package searchcache
 
@@ -150,7 +150,7 @@ func TestCache_HitPatchAndOverflow(t *testing.T) {
 
 	// Overflow: more changes than the ring holds. Stale served, rebuild runs.
 	ev.set("b0", "red ant")
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		changes.Record(fmt.Sprintf("x%d", i))
 	}
 	changes.Record("b0")
@@ -245,7 +245,7 @@ func TestCache_PendingAndPoll(t *testing.T) {
 func TestCache_MemoryCapEvictsLRU(t *testing.T) {
 	ctx := context.Background()
 	corpus := map[string]string{}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		corpus[fmt.Sprintf("b%02d", i)] = "red"
 	}
 	ev := newFake(corpus, "red")
@@ -285,17 +285,17 @@ func TestCache_ConcurrentReadsAndWrites(t *testing.T) {
 	changes := NewChangeLog(64)
 	c := New(changes, Config{})
 	corpus := map[string]string{}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		corpus[fmt.Sprintf("b%02d", i)] = "red"
 	}
 	ev := newFake(corpus, "red")
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	for w := 0; w < 8; w++ {
+	for w := range 8 {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				if w%2 == 0 {
 					id := fmt.Sprintf("b%02d", (i*7+w)%50)
 					text := "red"
@@ -316,7 +316,7 @@ func TestCache_ConcurrentReadsAndWrites(t *testing.T) {
 	wg.Wait()
 	// Quiesced: every key must now converge on the truth.
 	want, _ := ev.Build(ctx, func(int) {})
-	for k := 0; k < 3; k++ {
+	for k := range 3 {
 		key := fmt.Sprintf("k%d", k)
 		waitFor(t, func() bool {
 			r, err := c.Lookup(ctx, key, ev, webOpts(time.Second))
@@ -346,7 +346,7 @@ func TestCache_ExactCallerNeverGetsStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev.set("b2", "red")
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		changes.Record(fmt.Sprintf("x%d", i))
 	}
 	changes.Record("b2")
@@ -501,7 +501,7 @@ func TestCache_BuildsAreBounded(t *testing.T) {
 	mk := func() Evaluator {
 		return &countingEval{running: &running, peak: &peak, gate: gate}
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := c.Lookup(context.Background(), fmt.Sprintf("k%d", i), mk(), webOpts(time.Millisecond))
 		if _, ok := errors.AsType[*PendingError](err); !ok {
 			t.Fatalf("lookup %d: %v, want pending", i, err)
@@ -543,7 +543,7 @@ func (e *countingEval) Less(ctx context.Context, a, b string) (bool, error) { re
 // array by capacity.
 func TestCache_EntrySizeChargesAllocation(t *testing.T) {
 	ids := make([]string, 0, 4)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		ids = append(ids, fmt.Sprintf("01J%023d", i)) // 26 bytes: 32-byte class
 	}
 	got := entrySize("k", ids)

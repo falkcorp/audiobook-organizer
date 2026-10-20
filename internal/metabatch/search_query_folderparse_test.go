@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_folderparse_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b7e9d40-6a15-4c83-8f2e-d0a41c9b7e56
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package metabatch
 
@@ -33,9 +33,10 @@ func withFolderParse(t *testing.T, on bool) {
 // liveAuthorFiles serves one live author link, "Mara Quill", for any book.
 func liveAuthorFiles(files []database.BookFile, raw map[string][]byte) fakeBookFilesAuthors {
 	return fakeBookFilesAuthors{
-		fakeBookFiles: fakeBookFiles{files: files, raw: raw},
-		links:         []database.BookAuthor{{AuthorID: 1, Position: 0}},
-		authors:       map[int]string{1: "Mara Quill"},
+		files:   files,
+		raw:     raw,
+		links:   []database.BookAuthor{{AuthorID: 1, Position: 0}},
+		authors: map[int]string{1: "Mara Quill"},
 	}
 }
 

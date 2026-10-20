@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_match4_versiongroup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7669f76e-d58c-4ea7-9a18-44badb294ca5
-// last-edited: 2026-09-24
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -51,7 +51,7 @@ func (f *match4Fixture) book(t *testing.T, id, gid, state, dir string, files int
 	}
 	_, err := f.store.CreateBook(b)
 	require.NoError(t, err)
-	for i := 0; i < files; i++ {
+	for i := range files {
 		path := filepath.Join(dir, "Author", "The Lost Star Gate "+id, id+string(rune('a'+i))+".m4b")
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, []byte("m4b"), 0o644))

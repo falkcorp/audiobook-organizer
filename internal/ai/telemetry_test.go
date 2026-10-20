@@ -1,7 +1,7 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package ai
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -213,9 +214,7 @@ func assertSiteTelemetry(t *testing.T, tel *aiTelemetry, task, model string, wan
 	base := map[string]string{"provider": "local", "model": model, "task": task}
 	with := func(k, v string) map[string]string {
 		m := map[string]string{k: v}
-		for bk, bv := range base {
-			m[bk] = bv
-		}
+		maps.Copy(m, base)
 		return m
 	}
 	if got := counterSum(rm, "ai.requests", with("outcome", "ok")); got != 1 {

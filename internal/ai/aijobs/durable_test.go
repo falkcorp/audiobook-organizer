@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/durable_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d96ffcde-7b33-4014-985a-a56c427cac9d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package aijobs
 
@@ -136,7 +136,7 @@ func TestDispatch_CompletionMarkFailure_CallbackRunsOnce(t *testing.T) {
 	clock := withClock(t, time.Now())
 	results := []RowResult{{CustomID: "JM-0", Content: "{}"}}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		require.Error(t, Dispatch(context.Background(), store, "batch_mark", results))
 		j := store.jobs["JM"]
 		require.True(t, j.Applied)
@@ -254,7 +254,7 @@ func seedSubmitted(t *testing.T, store *fakeStore, id, typ, batch string) {
 // A transient apply failure is retried after backoff and applied exactly once.
 func TestDispatch_TransientFailureRetriedThenAppliedOnce(t *testing.T) {
 	store := newFakeStore()
-	fc := &flakyCallback{effectSink: effectSink{effects: map[string]int{}}, failN: 1}
+	fc := &flakyCallback{effects: map[string]int{}, failN: 1}
 	Register("durable_transient", fc.cb)
 	seedSubmitted(t, store, "JT", "durable_transient", "batch_t")
 	clock := withClock(t, time.Now())
@@ -290,7 +290,7 @@ func TestDispatch_TransientFailureRetriedThenAppliedOnce(t *testing.T) {
 // Dispatch then returns nil so the poller stops offering the batch.
 func TestDispatch_PermanentFailureTerminalAfterMaxAttempts(t *testing.T) {
 	store := newFakeStore()
-	fc := &flakyCallback{effectSink: effectSink{effects: map[string]int{}}, failN: 1 << 30}
+	fc := &flakyCallback{effects: map[string]int{}, failN: 1 << 30}
 	Register("durable_permanent", fc.cb)
 	seedSubmitted(t, store, "JP", "durable_permanent", "batch_perm")
 	clock := withClock(t, time.Now())

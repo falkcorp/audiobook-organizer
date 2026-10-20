@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser_numeric_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5f0c2e7a-8d41-4b6e-9a3c-2e7d1b4f6a90
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package ai
 
@@ -108,7 +108,7 @@ func TestDecodeResultElement_LenientNumericFields(t *testing.T) {
 
 func TestParseBatch_OneNonNumericYearDoesNotFailTheBatch(t *testing.T) {
 	var elems []string
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		year := fmt.Sprintf("%d", 2000+i)
 		if i == 5 {
 			year = `"not available"`

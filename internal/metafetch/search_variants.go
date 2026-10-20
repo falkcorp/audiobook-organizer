@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -189,7 +189,7 @@ func personShaped(s string) bool {
 	if !metadata.LooksLikeAuthorSegment(s) || strings.ContainsAny(s, "0123456789") {
 		return false
 	}
-	for _, w := range strings.Fields(strings.ToLower(s)) {
+	for w := range strings.FieldsSeq(strings.ToLower(s)) {
 		if strings.HasSuffix(w, "'s") || strings.HasSuffix(w, "’s") || notPersonWords[strings.Trim(w, ".,:;")] {
 			return false
 		}
@@ -1373,7 +1373,7 @@ func personNames(s string) [][]string {
 	var out [][]string
 	for _, group := range personSepRe.Split(s, -1) {
 		var parts [][]string
-		for _, part := range strings.Split(group, ",") {
+		for part := range strings.SplitSeq(group, ",") {
 			if words := nameWords(part); len(words) > 0 {
 				parts = append(parts, words)
 			}
@@ -1398,7 +1398,7 @@ func personNames(s string) [][]string {
 func nameWords(part string) []string {
 	var words []string
 	roleOnly := true
-	for _, w := range strings.Fields(foldAccents(strings.ToLower(part))) {
+	for w := range strings.FieldsSeq(foldAccents(strings.ToLower(part))) {
 		w = strings.ReplaceAll(strings.Trim(w, ".,;:'\"()"), ".", "")
 		if w == "" {
 			continue
@@ -1431,8 +1431,8 @@ func foldAccents(s string) string {
 // -1 for none. Every particle directly in front is taken into it, so none is
 // ever left before that index for givenInitial to read an initial from.
 func surname(words []string) (string, int) {
-	for i := len(words) - 1; i >= 0; i-- {
-		if w := words[i]; len([]rune(w)) > 1 && !personRoleWords[w] {
+	for i, w := range slices.Backward(words) {
+		if len([]rune(w)) > 1 && !personRoleWords[w] {
 			j := i
 			for j > 0 && surnameParticles[words[j-1]] {
 				j--

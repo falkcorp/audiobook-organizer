@@ -1,7 +1,7 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
-// last-edited: 2026-10-16
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -315,7 +315,7 @@ func TestSearch_PartialRuntimePenalisesDirectASINAnswer(t *testing.T) {
 // 3.5x the book's, so x3 over the estimate (~3 h) is far below the real 10 h.
 func coverArtIntroFiles() []database.BookFile {
 	files := []database.BookFile{{ID: "intro", BookID: "b1", FileSize: 25*8000 + 500_000, Duration: 25}}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("ch%02d", i), BookID: "b1", FileSize: 1800*8000 + 500_000})
 	}
 	return files
@@ -328,7 +328,7 @@ func mixedEncodeFiles() []database.BookFile {
 		{ID: "p0", BookID: "b1", FileSize: 1800 * 16000, Duration: 1800},
 		{ID: "p1", BookID: "b1", FileSize: 1800 * 16000, Duration: 1800},
 	}
-	for i := 0; i < 18; i++ {
+	for i := range 18 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("q%02d", i), BookID: "b1", FileSize: 1800 * 4000})
 	}
 	return files

@@ -1,11 +1,12 @@
 // file: internal/metadata/book_name_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: fd994992-1a70-4204-b1cc-72148bda319a
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package metadata
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,12 +19,7 @@ import (
 func TestParseBookName_CensusShapes(t *testing.T) {
 	known := func(names ...string) func(string) bool {
 		return func(n string) bool {
-			for _, x := range names {
-				if x == n {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(names, n)
 		}
 	}
 	cases := []struct {

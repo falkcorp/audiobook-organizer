@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_authors_undo_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b4f2c61-3e9a-4d07-a5c2-6f1d9e8b3a47
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -115,7 +115,7 @@ func TestUndoLastApply_ConcurrentCreditAddSurvives(t *testing.T) {
 
 	const rounds = 30
 	lost := 0
-	for r := 0; r < rounds; r++ {
+	for r := range rounds {
 		book, aID, bID := coAuthoredBook(t, pebble, 100+r)
 		_, err := svc.ApplyMetadataCandidate(book.ID, MetadataCandidate{Title: book.Title, Author: fmt.Sprintf("Author D%d", r), Source: "audible"}, nil)
 		require.NoError(t, err)

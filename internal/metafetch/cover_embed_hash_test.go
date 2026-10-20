@@ -1,7 +1,7 @@
 // file: internal/metafetch/cover_embed_hash_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4d8b2f60-1a97-4e3c-8c52-b6e9a0d7f314
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -41,8 +41,8 @@ func TestEmbedCoverInBookFiles_RecordsNewFileHash(t *testing.T) {
 	}
 
 	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
-	for x := 0; x < 16; x++ {
-		for y := 0; y < 16; y++ {
+	for x := range 16 {
+		for y := range 16 {
 			img.Set(x, y, color.RGBA{R: uint8(x * 16), G: uint8(y * 16), B: 128, A: 255})
 		}
 	}
@@ -116,8 +116,8 @@ func writeEmbedFixture(t *testing.T, dir string) (audioPath, coverPath string) {
 		t.Fatalf("ffmpeg: %v: %s", err, out)
 	}
 	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
-	for x := 0; x < 16; x++ {
-		for y := 0; y < 16; y++ {
+	for x := range 16 {
+		for y := range 16 {
 			img.Set(x, y, color.RGBA{R: uint8(x * 16), G: uint8(y * 16), B: 128, A: 255})
 		}
 	}

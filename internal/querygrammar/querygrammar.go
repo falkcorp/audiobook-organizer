@@ -1,7 +1,7 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 // Package querygrammar is the ONE value grammar behind the Library search bar
 // and the Review → Metadata Title filter (owner decision 2026-10-06: one
@@ -59,6 +59,7 @@ import (
 	"math"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -341,12 +342,7 @@ func regexEndSensitive(expr string) bool {
 		case syntax.OpEndText, syntax.OpEndLine, syntax.OpWordBoundary, syntax.OpNoWordBoundary:
 			return true
 		}
-		for _, sub := range n.Sub {
-			if walk(sub) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(n.Sub, walk)
 	}
 	return walk(re)
 }
@@ -604,17 +600,7 @@ func (c Comparison) MatchAny(values []float64) bool {
 		return false
 	}
 	if c.Op == "!=" {
-		for _, v := range values {
-			if v == c.Lo {
-				return false
-			}
-		}
-		return true
+		return !slices.Contains(values, c.Lo)
 	}
-	for _, v := range values {
-		if c.Match(v) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(values, c.Match)
 }
