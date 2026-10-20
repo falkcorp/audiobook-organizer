@@ -17,8 +17,6 @@ import os
 import sys
 from pathlib import Path
 
-from openai import OpenAI
-
 # Load .env from scripts/ directory
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
@@ -27,6 +25,8 @@ if env_path.exists():
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
+
+from openai import OpenAI  # noqa: E402  # must import after .env is loaded: openai reads OPENAI_* env at import
 
 
 def check_batches(run_dir: str, api_key: str, label: str):

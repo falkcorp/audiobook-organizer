@@ -2,6 +2,7 @@
 # file: scripts/test-api-endpoints.py
 # version: 1.1.2
 # guid: a1b2c3d4-e5f6-7890-abcd-1234567890ab
+# last-edited: 2026-10-20
 
 """
 Comprehensive manual API endpoint testing script.

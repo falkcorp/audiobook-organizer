@@ -2,6 +2,7 @@
 # file: scripts/build-all.py
 # version: 1.0.1
 # guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
+# last-edited: 2026-10-20
 
 """
 Build script for audiobook-organizer

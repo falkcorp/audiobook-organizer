@@ -5,7 +5,6 @@
 # last-edited: 2026-10-20
 
 """
-# file: scripts/issue_manager.py
 Unified GitHub issue management script.
 
 This script provides comprehensive issue management functionality:

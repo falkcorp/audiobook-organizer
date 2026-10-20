@@ -45,9 +45,9 @@ def has_conflicts():
 
 def main():
     # Get current branch to restore later
-    try:
-        current_branch = run("git rev-parse --abbrev-ref HEAD", capture=True)
-    except subprocess.CalledProcessError:
+    # run(capture=True) returns None (it does not raise) when the command fails.
+    current_branch = run("git rev-parse --abbrev-ref HEAD", capture=True)
+    if current_branch is None:
         print("Error: not in a git repository")
         sys.exit(1)
 
@@ -93,13 +93,14 @@ def main():
                 run("git rebase --abort")
                 failed_branches.append(branch)
 
-    # Restore original branch
-    with contextlib.suppress(subprocess.CalledProcessError):
-        run(f"git checkout {current_branch}")
-
-    # Restore stashed changes
-    print("\nRestoring stashed changes...")
-    run("git stash pop || true")
+    # Restore original branch; the stash pop must still run if this is interrupted
+    try:
+        with contextlib.suppress(subprocess.CalledProcessError):
+            run(f"git checkout {current_branch}")
+    finally:
+        # Restore stashed changes
+        print("\nRestoring stashed changes...")
+        run("git stash pop || true")
 
     # Report
     print(f"\n{'=' * 60}")
