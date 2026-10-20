@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.101.0
+// version: 2.102.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
@@ -614,10 +614,15 @@ func NewServer(store database.Store) *Server {
 	// CF-Connecting-IP) are still not trusted globally, because the service
 	// cannot prove on its own that any given request came through the tunnel
 	// rather than from a direct caller who set them. A route that needs the real
-	// client address must opt in, and only for a request that provably passed
-	// Cloudflare Access: see inviteRateLimits.inviteClientKey. If a trusted
-	// reverse proxy with a fixed address is ever added, replace nil with its CIDR
-	// allowlist, e.g. router.SetTrustedProxies([]string{"192.0.2.0/24"}).
+	// client address opts in through trustedClientIP, which believes
+	// CF-Connecting-IP only when the peer is this host (the tunnel connector;
+	// Cloudflare's edge overwrites the header on everything it proxies) and
+	// otherwise keys on the peer's own address. It does not need a Cloudflare
+	// Access assertion, so it also works on routes that bypass Access (the invite
+	// routes). A local peer with no usable header has no attributable address; the
+	// invite limiter skips its per-client layer for it and the bootstrap limiter
+	// uses one fixed shared key. If a trusted reverse proxy with a fixed address
+	// is ever added, replace nil with its CIDR allowlist, e.g. router.SetTrustedProxies([]string{"192.0.2.0/24"}).
 	if err := router.SetTrustedProxies(nil); err != nil {
 		slog.Warn("failed to disable trusted proxies", "err", err)
 	}

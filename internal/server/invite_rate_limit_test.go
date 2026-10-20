@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,8 +25,8 @@ type inviteLimitHarness struct {
 }
 
 // newInviteLimitHarness builds one harness per case so no bucket is shared.
-// A request carrying the X-Test-Verified header stands in for one whose Access
-// assertion CloudflareAccessAuth verified.
+// localPeer stands in for "the request came through the local tunnel connector"
+// (every peer address is reported local or none is).
 func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -40,11 +39,6 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	if err := r.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
-	r.Use(func(c *gin.Context) {
-		if c.GetHeader("X-Test-Verified") != "" {
-			servermiddleware.MarkCFAccessVerified(c)
-		}
-	})
 	r.GET("/invite/:token", limits.middleware(inviteTokenFromParam), func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 	r.POST("/accept", limits.middleware(inviteTokenFromBody), func(c *gin.Context) {
 		// What handleAcceptInvite would act on: the limiter's stashed parse.
@@ -238,73 +232,124 @@ func TestInviteRateLimit_Global(t *testing.T) {
 	}
 }
 
-// TestInviteRateLimit_ClientKey covers which address buckets a client.
-func TestInviteRateLimit_ClientKey(t *testing.T) {
-	tests := []struct {
-		name      string
-		localPeer bool
-		verified  bool
-		// spoofed means each request carries a different CF-Connecting-IP.
-		// wantShared is true when the requests must still land in ONE client
-		// bucket (the tunnel address), false when each CF-Connecting-IP gets
-		// its own bucket.
-		wantShared bool
-	}{
-		{"no verified Access: CF-Connecting-IP ignored", true, false, true},
-		{"verified Access but peer is not this host: ignored", false, true, true},
-		{"neither verified nor local: ignored", false, false, true},
-		{"verified Access through the local tunnel: honored", true, true, false},
+// TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader: a caller that is not
+// the local tunnel connector is keyed on its own address; a spoofed
+// CF-Connecting-IP (new value every request) buys no fresh buckets.
+func TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), "198.51.100.5", map[string]string{"CF-Connecting-IP": fmt.Sprintf("203.0.113.%d", i%254+1)})
+	})
+	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
+		t.Fatalf("spoofed CF-Connecting-IP got fresh buckets: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := newInviteLimitHarness(t, tt.localPeer)
-			hdr := func(i int) map[string]string {
-				m := map[string]string{"CF-Connecting-IP": fmt.Sprintf("203.0.113.%d", i%254+1)}
-				if tt.verified {
-					m["X-Test-Verified"] = "1"
+	// Another direct peer has its own bucket, whatever header it sends.
+	if w := h.get(inviteTestToken(900), "198.51.100.6", map[string]string{"CF-Connecting-IP": "203.0.113.1"}); w.Code != http.StatusOK {
+		t.Fatalf("a second direct peer while the first is limited: %d, want 200", w.Code)
+	}
+}
+
+// TestInviteRateLimit_ClientKey_TunnelClientsAreIndependent is the regression
+// for the shared tunnel bucket: through the local connector with NO Access
+// assertion (the invite routes bypass Access), 11 garbage-token requests from
+// one visitor must not lock out a real guest at a different address.
+func TestInviteRateLimit_ClientKey_TunnelClientsAreIndependent(t *testing.T) {
+	h := newInviteLimitHarness(t, true)
+	attacker := map[string]string{"CF-Connecting-IP": "203.0.113.50"}
+	guest := map[string]string{"CF-Connecting-IP": "198.51.100.60"}
+
+	for i := range inviteAuthRateBurst + 1 {
+		w := h.get(inviteTestToken(100+i), "192.0.2.1", attacker)
+		if i < inviteAuthRateBurst && w.Code != http.StatusOK {
+			t.Fatalf("attacker request %d: %d, want 200 (still inside its burst)", i, w.Code)
+		}
+		if i == inviteAuthRateBurst && w.Code != http.StatusTooManyRequests {
+			t.Fatalf("attacker request %d: %d, want 429 (its own bucket is spent)", i, w.Code)
+		}
+	}
+	if w := h.get(inviteTestToken(1), "192.0.2.1", guest); w.Code != http.StatusOK {
+		t.Fatalf("real guest after the attacker was limited: %d, want 200", w.Code)
+	}
+	// The same header spelled differently is the same client.
+	attackerV6 := map[string]string{"CF-Connecting-IP": " ::ffff:203.0.113.50 "}
+	if w := h.get(inviteTestToken(2), "192.0.2.1", attackerV6); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("attacker via an equivalent spelling: %d, want 429", w.Code)
+	}
+}
+
+// TestInviteRateLimit_ClientKey_UnattributedSkipsClientLayer: a local peer with
+// no usable CF-Connecting-IP has no attributable client, so the per-client
+// layer is skipped instead of putting everyone in one shared bucket. The token
+// layer still applies.
+func TestInviteRateLimit_ClientKey_UnattributedSkipsClientLayer(t *testing.T) {
+	for name, hdr := range map[string]func(i int) map[string]string{
+		"no header": func(int) map[string]string { return nil },
+		"garbage header": func(i int) map[string]string {
+			return map[string]string{"CF-Connecting-IP": fmt.Sprintf("not-an-ip-%d", i)}
+		},
+		"empty header": func(int) map[string]string { return map[string]string{"CF-Connecting-IP": "  "} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newInviteLimitHarness(t, true)
+			// Well past the per-client burst, a new token each time: nothing but
+			// a (wrongly) shared client bucket could refuse these.
+			for i := range inviteAuthRateBurst + 10 {
+				if w := h.get(inviteTestToken(i), "192.0.2.1", hdr(i)); w.Code != http.StatusOK {
+					t.Fatalf("unattributed request %d: %d, want 200 (client layer skipped)", i, w.Code)
 				}
-				return m
 			}
-			// One tunnel peer, a new token and a new CF-Connecting-IP each time,
-			// so only the client layer can trip.
-			allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-				return h.get(inviteTestToken(i), "192.0.2.1", hdr(i))
+			// The per-token layer still bounds one token.
+			allowed, limited, _ := countAllowedUntilLimited(t, inviteTokenRateBurst+10, func(int) *httptest.ResponseRecorder {
+				return h.get(inviteTestToken(9000), "192.0.2.1", hdr(0))
 			})
-			if tt.wantShared {
-				if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
-					t.Fatalf("spoofed CF-Connecting-IP got fresh buckets: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
-				}
-				return
-			}
-			if limited {
-				t.Fatalf("distinct verified CF-Connecting-IP values shared a bucket: limited after %d", allowed)
-			}
-			// Exhaust ONE verified client; another verified client is unaffected.
-			one := map[string]string{"CF-Connecting-IP": "203.0.113.200", "X-Test-Verified": "1"}
-			_, limited, _ = countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-				return h.get(inviteTestToken(500+i), "192.0.2.1", one)
-			})
-			if !limited {
-				t.Fatal("a single verified client was never limited")
-			}
-			other := map[string]string{"CF-Connecting-IP": "203.0.113.201", "X-Test-Verified": "1"}
-			if w := h.get(inviteTestToken(900), "192.0.2.1", other); w.Code != http.StatusOK {
-				t.Fatalf("a second verified client while the first is limited: %d, want 200", w.Code)
+			if !limited || allowed > inviteTokenRateBurst+2 {
+				t.Fatalf("token layer did not apply to unattributed requests: allowed %d (limited=%v)", allowed, limited)
 			}
 		})
 	}
 }
 
-// TestInviteRateLimit_ClientKey_InvalidHeader: a verified request whose
-// CF-Connecting-IP is not an address falls back to the peer address rather
-// than keying on attacker-chosen text.
-func TestInviteRateLimit_ClientKey_InvalidHeader(t *testing.T) {
-	h := newInviteLimitHarness(t, true)
-	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-		return h.get(inviteTestToken(i), "192.0.2.1", map[string]string{"X-Test-Verified": "1", "CF-Connecting-IP": fmt.Sprintf("not-an-ip-%d", i)})
-	})
-	if !limited || allowed > inviteAuthRateBurst+2 {
-		t.Fatalf("invalid CF-Connecting-IP got fresh buckets: allowed %d (limited=%v)", allowed, limited)
+// TestTrustedClientIP pins the rule itself.
+func TestTrustedClientIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	local := func(addr string) bool {
+		return strings.HasPrefix(addr, "127.") || strings.HasPrefix(addr, "[::1]") || strings.HasPrefix(addr, "::1")
+	}
+	tests := []struct {
+		name   string
+		remote string
+		header string
+		want   string
+		wantOK bool
+	}{
+		{"local peer, valid header", "127.0.0.1:5000", "203.0.113.9", "203.0.113.9", true},
+		{"local peer, header with spaces", "127.0.0.1:5000", " 203.0.113.9 ", "203.0.113.9", true},
+		{"local peer, ipv6 header normalised", "127.0.0.1:5000", "2001:DB8:0:0:0:0:0:1", "2001:db8::1", true},
+		{"local ipv6 peer, valid header", "[::1]:5000", "198.51.100.4", "198.51.100.4", true},
+		{"local peer, no header", "127.0.0.1:5000", "", "127.0.0.1", false},
+		{"local peer, garbage header", "127.0.0.1:5000", "evil", "127.0.0.1", false},
+		{"remote peer, spoofed header ignored", "198.51.100.7:5000", "203.0.113.9", "198.51.100.7", true},
+		{"remote peer, no header", "198.51.100.7:5000", "", "198.51.100.7", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := gin.New()
+			if err := r.SetTrustedProxies(nil); err != nil {
+				t.Fatal(err)
+			}
+			var gotIP string
+			var gotOK bool
+			r.GET("/x", func(c *gin.Context) { gotIP, gotOK = trustedClientIP(c, local); c.Status(http.StatusOK) })
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			req.RemoteAddr = tt.remote
+			if tt.header != "" {
+				req.Header.Set("CF-Connecting-IP", tt.header)
+			}
+			r.ServeHTTP(httptest.NewRecorder(), req)
+			if gotIP != tt.want || gotOK != tt.wantOK {
+				t.Fatalf("trustedClientIP = (%q, %v), want (%q, %v)", gotIP, gotOK, tt.want, tt.wantOK)
+			}
+		})
 	}
 }
 
