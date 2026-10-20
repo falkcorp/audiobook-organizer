@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-19
 
@@ -191,6 +191,58 @@ func TestAcceptInvite_NonAdminCreatorGetsNoGrantOrCloudflare(t *testing.T) {
 	if inv.SSOGrant != database.InviteSSOCreatorNotAdmin || inv.GuestPolicyStatus != database.InviteGuestPolicySkipped || !strings.Contains(inv.GuestPolicyDetail, "admin") {
 		t.Fatalf("admin must see why: %+v", inv)
 	}
+	if inv.EmailBinding != database.InviteEmailCreatorNotAdmin {
+		t.Fatalf("EmailBinding = %q, want creator_not_admin", inv.EmailBinding)
+	}
+	if u, _ := store.GetUserByUsername("guest"); u == nil || u.Email != "" {
+		t.Fatalf("an editor's invite must not bind the address: %+v", u)
+	}
+}
+
+// S2: an accepted admin invitation emailed to an address takes it from an
+// account that had only typed it in, and the admin's audit log says so.
+func TestAcceptInvite_DisplacesAProfileTypedEmailAndAudits(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	srv.guestPolicyOverride = &fakeGuestPolicy{res: cfaccesspolicy.Added}
+	db, err := pebble.Open("act.pebble", &pebble.Options{FS: vfs.NewMem()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	svc := activity.NewService(database.NewPebbleActivityStore(database.NewGatedDB(db)))
+	srv.activityService = svc
+	token := strings.Repeat("d", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest", "guest@example.com")
+	squatter, err := store.CreateUser("squatter", "squatter@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	squatter.Email = "guest@example.com"
+	if err := store.UpdateUser(squatter); err != nil {
+		t.Fatal(err)
+	}
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d %s", w.Code, w.Body.String())
+	}
+	srv.bgWG.Wait()
+	if got, _ := store.GetUserByID(squatter.ID); got.Email != "" {
+		t.Fatalf("the squatter must lose the address: %q", got.Email)
+	}
+	guest, _ := store.GetUserByUsername("guest")
+	if guest == nil || guest.Email != "guest@example.com" {
+		t.Fatalf("the guest holds the address: %+v", guest)
+	}
+	entries, _, err := svc.Query(context.Background(), database.ActivityFilter{Type: "auth_email_displaced", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Source != "invite" || !strings.Contains(entries[0].Summary, guest.ID) ||
+		fmt.Sprint(entries[0].Details["displaced_user_ids"]) != "["+squatter.ID+"]" {
+		t.Fatalf("audit entries = %+v", entries)
+	}
+	if strings.Contains(entries[0].Summary, "guest@example.com") {
+		t.Fatal("the audit entry must not record the address")
+	}
 }
 
 func TestAcceptInvite_ManualLinkBindsNoEmail(t *testing.T) {
@@ -311,7 +363,7 @@ func TestRevokeGuestAccess_SelfSetEmailDoesNotBlockRemoval(t *testing.T) {
 }
 
 // Through the real route, a second account cannot take an address another
-// account holds.
+// account holds, and the answer does not say the address is registered.
 func TestUpdateMeRoute_RefusesAnotherAccountsEmail(t *testing.T) {
 	saved := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
@@ -334,8 +386,11 @@ func TestUpdateMeRoute_RefusesAnotherAccountsEmail(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+sess.ID)
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("PATCH /auth/me with a taken email: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "another account") || strings.Contains(w.Body.String(), "already") {
+		t.Fatalf("PATCH /auth/me with a taken email: %d %s; want a generic 400", w.Code, w.Body.String())
+	}
+	if got, _ := store.GetUserByID(me.ID); got.Email != "me@example.com" {
+		t.Fatalf("the refused change must not be written: %q", got.Email)
 	}
 }
 

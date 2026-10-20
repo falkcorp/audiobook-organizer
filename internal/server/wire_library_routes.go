@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-10-19
 
@@ -159,6 +159,10 @@ func (s *Server) wireLibraryRoutes(
 		s.credRoute(users, http.MethodPost, "/:id/deactivate", s.perm("users.manage"), userH.DeactivateUser)
 		s.credRoute(users, http.MethodPost, "/:id/reactivate", s.perm("users.manage"), userH.ReactivateUser)
 		s.credRoute(users, http.MethodPost, "/:id/reset-password", s.perm("users.manage"), s.handleResetPassword)
+		// Sets or clears another user's email as verified, so SSO sign-ins
+		// with it link to that account: an identity change, hence credRoute;
+		// the handler also requires the acting user to hold the admin role.
+		s.credRoute(users, http.MethodPut, "/:id/email", s.perm("users.manage"), userH.SetUserEmail)
 	}
 
 	// Version groups

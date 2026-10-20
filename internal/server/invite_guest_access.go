@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
 // last-edited: 2026-10-19
 
@@ -381,22 +381,31 @@ func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 	return ""
 }
 
-// recordEmailDisplaced is oauth.Config.OnEmailDisplaced: it writes an audit
-// activity entry when a verified SSO login took its address back from
-// accounts that held it unverified, so an admin can see whose profile lost
-// its email and why. Account ids only; the address is not recorded.
+// emailDisplacedByInvite is the provider value recordEmailDisplaced gets
+// when an accepted emailed invitation, not an SSO login, took the address.
+const emailDisplacedByInvite = "invite"
+
+// recordEmailDisplaced is oauth.Config.OnEmailDisplaced, and is also called
+// by handleAcceptInvite: it writes an audit activity entry when a verified SSO
+// login or an accepted emailed invitation took its address back from accounts
+// that held it unverified, so an admin can see whose profile lost its email
+// and why. Account ids only; the address is not recorded.
 func (s *Server) recordEmailDisplaced(newUserID string, displacedUserIDs []string, provider string) {
 	if s.activityService == nil {
 		return
+	}
+	how, source := fmt.Sprintf("a verified %s sign-in", provider), "oauth"
+	if provider == emailDisplacedByInvite {
+		how, source = "an accepted emailed invitation", "invite"
 	}
 	if err := s.activityService.Record(database.ActivityEntry{
 		Timestamp: time.Now().UTC(),
 		Tier:      "audit",
 		Type:      "auth_email_displaced",
 		Level:     "warn",
-		Source:    "oauth",
-		Summary: fmt.Sprintf("a verified %s sign-in claimed an email that %d account(s) had set without verification; their email was cleared and account %s was created",
-			provider, len(displacedUserIDs), newUserID),
+		Source:    source,
+		Summary: fmt.Sprintf("%s claimed an email that %d account(s) had set without verification; their email was cleared and account %s was created",
+			how, len(displacedUserIDs), newUserID),
 		Details: map[string]any{
 			"new_user_id":        newUserID,
 			"displaced_user_ids": displacedUserIDs,

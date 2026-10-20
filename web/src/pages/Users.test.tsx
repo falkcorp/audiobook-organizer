@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 26b39541-b8d3-4fc8-b131-190f15f5a5ab
 // last-edited: 2026-10-19
 
@@ -144,6 +144,84 @@ describe('Users', () => {
       expect(listCalls).toHaveLength(2);
     });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  describe('set email', () => {
+    const withEmail = { ...activeUser, email: 'old@example.com' };
+
+    it('PUTs the address and reloads with a notice', async () => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith('/users/u1/email')) {
+          expect(init?.method).toBe('PUT');
+          expect(JSON.parse(String(init?.body))).toEqual({ email: 'new@example.com' });
+          return envelope({ user: { ...withEmail, email: 'new@example.com' } });
+        }
+        if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
+        return envelope({ users: [withEmail], count: 1 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+
+      await screen.findByText('test-user');
+      await user.click(screen.getByRole('button', { name: /set email for test-user/i }));
+      const field = screen.getByLabelText(/^email/i);
+      await user.clear(field);
+      await user.type(field, 'new@example.com');
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      expect(await screen.findByText(/set to new@example.com/i)).toBeInTheDocument();
+      const userListCalls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/users'));
+      expect(userListCalls).toHaveLength(2);
+    });
+
+    it('clears the address with an empty string', async () => {
+      const bodies: unknown[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url.endsWith('/users/u1/email')) {
+            bodies.push(JSON.parse(String(init?.body)));
+            return envelope({ user: { ...withEmail, email: '' } });
+          }
+          if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
+          return envelope({ users: [withEmail], count: 1 });
+        })
+      );
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+
+      await screen.findByText('test-user');
+      await user.click(screen.getByRole('button', { name: /set email for test-user/i }));
+      await user.click(screen.getByRole('button', { name: /clear email/i }));
+
+      expect(await screen.findByText(/cleared/i)).toBeInTheDocument();
+      expect(bodies).toEqual([{ email: '' }]);
+    });
+
+    it('keeps the dialog open and shows the server refusal', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          if (url.endsWith('/users/u1/email'))
+            return jsonResponse(
+              { error: "setting another user's email needs the admin role", status: 403 },
+              403
+            );
+          if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
+          return envelope({ users: [withEmail], count: 1 });
+        })
+      );
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+
+      await screen.findByText('test-user');
+      await user.click(screen.getByRole('button', { name: /set email for test-user/i }));
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      expect(await screen.findByText(/needs the admin role/i)).toBeInTheDocument();
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
   });
 
   describe('invitations', () => {
