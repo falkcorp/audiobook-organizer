@@ -43,7 +43,8 @@ Bootstrap tells a direct LAN caller from tunnel traffic by the Cloudflare
 markers (any `Cf-*` header or the `CF_Authorization` cookie); with the
 setting unset, a connector request stripped of every one of them would count
 as a direct caller. The accept body is capped at 4 KiB (413
-above it) and parsed once for both the limiter and the handler. Invite tokens
+above it) and must arrive within 5 seconds (408 otherwise; a per-request
+connection read deadline, cleared afterwards) and parsed once for both the limiter and the handler. Invite tokens
 are redacted from request logs, trace span attributes (`url.path`) and error
 logs.
 
