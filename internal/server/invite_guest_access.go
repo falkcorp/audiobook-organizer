@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
 // last-edited: 2026-10-19
 
@@ -279,6 +279,16 @@ func (s *Server) revokeGuestAccess(userID, email, reason string) {
 
 // keepGuestPolicyEmail returns why email must stay in the Cloudflare guest
 // policy after userID gave it up, or "" when it may be removed.
+//
+// Only operator configuration and verified holders count. A user's email is
+// self-service (PATCH /auth/me), so a matching address alone proves nothing:
+// counting it would let anyone pin an address in the policy by typing it into
+// their profile. Another active user holding the address keeps the entry only
+// when that holding was verified, either by an accepted invite emailed to the
+// address (their own inviteallow grant) or by an identity provider (a linked
+// OAuth identity recorded with that email, which ResolveUser links only after
+// the IdP verified it). If the users cannot be read the entry is kept: a
+// failed removal is fixed by hand, a wrong one cuts someone off.
 func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 	snap := config.Snapshot()
 	if strings.EqualFold(strings.TrimSpace(snap.OwnerEmail), email) {
@@ -289,14 +299,33 @@ func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 			return "it is on OAUTH_ALLOWED_EMAILS"
 		}
 	}
-	users, err := s.Ops().ListUsers()
+	store := s.storeForWiring()
+	users, err := store.ListUsers()
 	if err != nil {
-		return "the user list could not be read, so another holder cannot be ruled out"
+		return "the user list could not be read, so another verified holder cannot be ruled out"
 	}
+	grants, _ := database.AsCapability[database.InviteEmailGrantStore](store)
 	for _, u := range users {
-		if u.ID != userID && u.Status == "active" && strings.EqualFold(strings.TrimSpace(u.Email), email) {
-			return "another active user still has this email"
+		if u.ID == userID || u.Status != "active" || !strings.EqualFold(strings.TrimSpace(u.Email), email) {
+			continue
 		}
+		if grants != nil {
+			if g, err := grants.GetInviteEmailGrant(email); err != nil {
+				return "an SSO grant could not be read, so another verified holder cannot be ruled out"
+			} else if g != nil && g.UserID == u.ID {
+				return "another active user holds this email through an accepted invite"
+			}
+		}
+		ids, err := store.GetOAuthIdentitiesForUser(u.ID)
+		if err != nil {
+			return "linked identities could not be read, so another verified holder cannot be ruled out"
+		}
+		for _, id := range ids {
+			if strings.EqualFold(strings.TrimSpace(id.Email), email) {
+				return "another active user holds this email, verified by an identity provider"
+			}
+		}
+		inviteAccessLog.Info("guest access revoke: another account has this email set on its profile without verification; not counted")
 	}
 	return ""
 }

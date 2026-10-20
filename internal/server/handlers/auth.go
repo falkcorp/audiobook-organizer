@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-19
 
@@ -497,6 +497,10 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 		if errors.Is(err, database.ErrUserProtectedField) {
 			// The copy was read before a password or status change landed.
 			httputil.RespondWithConflict(c, "the account changed while the profile was being saved; reload and try again")
+			return
+		}
+		if errors.Is(err, database.ErrUserEmailTaken) {
+			httputil.RespondWithConflict(c, "another account already uses that email address")
 			return
 		}
 		if errors.Is(err, database.ErrUserNotFound) {

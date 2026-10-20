@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-19
 
@@ -207,13 +207,11 @@ func TestRevokeGuestAccess_KeepsSharedOwnerAndAllowlistedEmails(t *testing.T) {
 		name  string
 		setup func(t *testing.T, store database.Store)
 	}{
-		{"another active user holds it", func(t *testing.T, store database.Store) {
-			u, err := store.CreateUser("twin", "twin-placeholder@example.com", "bcrypt", "h", []string{"viewer"}, "active")
-			if err != nil {
-				t.Fatal(err)
-			}
-			u.Email = "guest@example.com"
-			if err := store.UpdateUser(u); err != nil {
+		{"another active user holds it, verified by an identity provider", func(t *testing.T, store database.Store) {
+			twin := claimGuestEmailAfterMove(t, store)
+			if _, err := store.CreateOAuthIdentity(&database.OAuthIdentity{
+				Provider: "google", Subject: "sub-twin", Email: "Guest@example.com", UserID: twin.ID,
+			}); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -249,6 +247,77 @@ func TestRevokeGuestAccess_KeepsSharedOwnerAndAllowlistedEmails(t *testing.T) {
 				t.Fatalf("Cloudflare entry removed although %s", tc.name)
 			}
 		})
+	}
+}
+
+// claimGuestEmailAfterMove moves the accepted guest off guest@example.com
+// and lets a second user set that address on their own profile, returning
+// that second user.
+func claimGuestEmailAfterMove(t *testing.T, store database.Store) *database.User {
+	t.Helper()
+	guest, _ := store.GetUserByUsername("guest")
+	guest.Email = "moved@example.com"
+	if err := store.UpdateUser(guest); err != nil {
+		t.Fatal(err)
+	}
+	twin, err := store.CreateUser("twin", "twin-placeholder@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin.Email = "guest@example.com"
+	if err := store.UpdateUser(twin); err != nil {
+		t.Fatal(err)
+	}
+	return twin
+}
+
+// A self-set profile email is not verification: it must not pin the address
+// in the Cloudflare policy after the invitee who was granted it gives it up.
+func TestRevokeGuestAccess_SelfSetEmailDoesNotBlockRemoval(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("7", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest", "guest@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d", w.Code)
+	}
+	srv.bgWG.Wait()
+	guest, _ := store.GetUserByUsername("guest")
+	claimGuestEmailAfterMove(t, store)
+	srv.revokeGuestAccess(guest.ID, "guest@example.com", "email changed")
+	srv.bgWG.Wait()
+	if len(fake.removed) != 1 || fake.removed[0] != "guest@example.com" {
+		t.Fatalf("Cloudflare removals = %v; a self-set email must not keep the entry", fake.removed)
+	}
+}
+
+// Through the real route, a second account cannot take an address another
+// account holds.
+func TestUpdateMeRoute_RefusesAnotherAccountsEmail(t *testing.T) {
+	saved := config.Snapshot()
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
+	config.Mutate(func(c *config.Config) { c.EnableAuth = true })
+	srv, store := setupUserHandlerServer(t)
+	if _, err := store.CreateUser("holder", "held@example.com", "bcrypt", "h", []string{"viewer"}, "active"); err != nil {
+		t.Fatal(err)
+	}
+	me, err := store.CreateUser("me", "me@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.CreateSession(me.ID, "127.0.0.1", "test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"email": "HELD@example.com"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/auth/me", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+sess.ID)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("PATCH /auth/me with a taken email: %d %s", w.Code, w.Body.String())
 	}
 }
 
