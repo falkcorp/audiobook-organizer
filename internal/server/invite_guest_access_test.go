@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-19
 
@@ -36,15 +36,17 @@ type fakeGuestPolicy struct {
 	removed []string
 	res     cfaccesspolicy.Result
 	err     error
-	entered chan struct{}
-	release chan struct{}
+	// removeErr, when set, is returned by RemoveEmail alongside Removed.
+	removeErr error
+	entered   chan struct{}
+	release   chan struct{}
 }
 
 func (f *fakeGuestPolicy) RemoveEmail(_ context.Context, email string) (cfaccesspolicy.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removed = append(f.removed, email)
-	return cfaccesspolicy.Removed, nil
+	return cfaccesspolicy.Removed, f.removeErr
 }
 
 func (f *fakeGuestPolicy) EnsureEmail(_ context.Context, email string) (cfaccesspolicy.Result, error) {
@@ -573,4 +575,53 @@ func TestRecordEmailDisplaced_WritesAnAuditEntry(t *testing.T) {
 		t.Fatalf("displaced_user_ids = %s", got)
 	}
 	(&Server{}).recordEmailDisplaced("x", nil, "google") // no activity service: no panic
+}
+
+// An add whose write could not be verified must still set CFAdded, so a later
+// revoke removes the address; the admin sees a note on the invite.
+func TestGuestPolicySync_UnverifiedAddStillRecordsCFAddedAndRevokeRemoves(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added,
+		err: fmt.Errorf("%w: %w", cfaccesspolicy.ErrWriteUnverified, errors.New("cfaccesspolicy: policy not as intended after 3 attempts"))}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("e", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest5", "guest5@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d", w.Code)
+	}
+	srv.bgWG.Wait()
+
+	inv, _ := store.GetInvite(token)
+	if inv.GuestPolicyStatus != database.InviteGuestPolicyAdded || !strings.Contains(inv.GuestPolicyDetail, "could not confirm") {
+		t.Fatalf("unverified add not surfaced: %q %q", inv.GuestPolicyStatus, inv.GuestPolicyDetail)
+	}
+	gs, _ := database.AsCapability[database.InviteEmailGrantStore](store)
+	if g, _ := gs.GetInviteEmailGrant("guest5@example.com"); g == nil || !g.CFAdded {
+		t.Fatalf("CFAdded must be set after an unverified add, grant = %+v", g)
+	}
+	u, _ := store.GetUserByUsername("guest5")
+	srv.revokeGuestAccess(u.ID, "guest5@example.com", "deactivated")
+	srv.bgWG.Wait()
+	if len(fake.removed) != 1 || fake.removed[0] != "guest5@example.com" {
+		t.Fatalf("revoke must remove the possibly-added address, removed = %v", fake.removed)
+	}
+}
+
+func TestRevokeGuestAccess_UnverifiedRemovalDoesNotPanicOrRetry(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added,
+		removeErr: fmt.Errorf("%w: %w", cfaccesspolicy.ErrWriteUnverified, errors.New("verify failed"))}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("f", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest6", "guest6@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d", w.Code)
+	}
+	srv.bgWG.Wait()
+	u, _ := store.GetUserByUsername("guest6")
+	srv.revokeGuestAccess(u.ID, "guest6@example.com", "deactivated")
+	srv.bgWG.Wait()
+	if len(fake.removed) != 1 {
+		t.Fatalf("removed = %v", fake.removed)
+	}
 }

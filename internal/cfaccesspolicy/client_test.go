@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/client_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b7e2d5a-91c4-4f38-8a6d-e3f15c2b9a70
 // last-edited: 2026-10-19
 
@@ -8,6 +8,7 @@ package cfaccesspolicy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,10 @@ type fakeCF struct {
 	clobbers int
 	clobber  func(policy map[string]any)
 	putCount int
+	// staleGets: after a PUT, the next N GETs return the pre-PUT policy
+	// (a lagging read), then fresh state.
+	staleGets int
+	stale     map[string]any
 }
 
 func (f *fakeCF) handler(t *testing.T) http.Handler {
@@ -49,7 +54,12 @@ func (f *fakeCF) handler(t *testing.T) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "errors": []any{}, "result": f.policy})
+			p := f.policy
+			if f.stale != nil && f.staleGets > 0 {
+				f.staleGets--
+				p = f.stale
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "errors": []any{}, "result": p})
 		case http.MethodPut:
 			if f.failPut {
 				w.WriteHeader(http.StatusForbidden)
@@ -66,6 +76,9 @@ func (f *fakeCF) handler(t *testing.T) http.Handler {
 			}
 			f.putBody = body
 			f.putCount++
+			if f.staleGets > 0 {
+				f.stale = f.policy
+			}
 			f.policy = body
 			if f.clobbers > 0 && f.clobber != nil {
 				f.clobbers--
@@ -367,9 +380,9 @@ func TestVerify_PersistentMismatchErrorsAfterBoundedRetries(t *testing.T) {
 		p["include"] = inc[:len(inc)-1]
 	}
 	c := newClient(t, f)
-	_, err := c.EnsureEmail(context.Background(), "new@example.com")
-	if err == nil {
-		t.Fatal("persistent verify mismatch must be an error")
+	res, err := c.EnsureEmail(context.Background(), "new@example.com")
+	if !errors.Is(err, ErrWriteUnverified) || res != Added {
+		t.Fatalf("res=%q err=%v, want Added + ErrWriteUnverified", res, err)
 	}
 	if f.putCount != maxAttempts {
 		t.Fatalf("putCount=%d, want %d", f.putCount, maxAttempts)
@@ -386,8 +399,9 @@ func TestVerify_RemoveDetectsEmailStillPresent(t *testing.T) {
 		p["include"] = append(p["include"].([]any), map[string]any{"email": map[string]any{"email": "guest@example.com"}})
 	}
 	c := newClient(t, f)
-	if _, err := c.RemoveEmail(context.Background(), "guest@example.com"); err == nil {
-		t.Fatal("remove that did not stick must be an error")
+	res, err := c.RemoveEmail(context.Background(), "guest@example.com")
+	if !errors.Is(err, ErrWriteUnverified) || res != Removed {
+		t.Fatalf("res=%q err=%v, want Removed + ErrWriteUnverified", res, err)
 	}
 }
 
@@ -433,6 +447,66 @@ func TestPlan_ErrorNeverContainsToken(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c, _ := New(Config{AccountID: testAccount, PolicyID: testPolicy, APIToken: testToken, BaseURL: srv.URL})
 	_, _, err := c.PlanAdd(context.Background(), "x@example.com")
+	if err == nil || strings.Contains(err.Error(), testToken) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestApply_RetrySeesOwnWriteStillReportsAdded(t *testing.T) {
+	// Verify read lags (shows the old policy); the retry's fresh read shows
+	// the email present. That is our own write: Added, not AlreadyPresent.
+	f := &fakeCF{policy: newPolicy(), staleGets: 1}
+	c := newClient(t, f)
+	res, err := c.EnsureEmail(context.Background(), "new@example.com")
+	if err != nil || res != Added {
+		t.Fatalf("res=%q err=%v, want added", res, err)
+	}
+	if f.putCount != 1 {
+		t.Fatalf("putCount=%d, want 1 (the retry must not re-PUT)", f.putCount)
+	}
+}
+
+func TestApply_RetrySeesOwnRemoveStillReportsRemoved(t *testing.T) {
+	f := &fakeCF{policy: newPolicy(), staleGets: 1}
+	f.policy["include"] = append(f.policy["include"].([]any), map[string]any{"email": map[string]any{"email": "guest@example.com"}})
+	c := newClient(t, f)
+	res, err := c.RemoveEmail(context.Background(), "guest@example.com")
+	if err != nil || res != Removed {
+		t.Fatalf("res=%q err=%v, want removed", res, err)
+	}
+	if f.putCount != 1 {
+		t.Fatalf("putCount=%d, want 1", f.putCount)
+	}
+}
+
+func TestVerify_UnrelatedRuleDeletedByOtherWriterIsNotOurFailure(t *testing.T) {
+	f := &fakeCF{policy: newPolicy(), clobbers: 1}
+	f.clobber = func(p map[string]any) { // someone deletes the domain rule after our PUT
+		inc := p["include"].([]any)
+		p["include"] = append([]any{}, inc[0], inc[2])
+	}
+	c := newClient(t, f)
+	res, err := c.EnsureEmail(context.Background(), "new@example.com")
+	if err != nil || res != Added {
+		t.Fatalf("res=%q err=%v", res, err)
+	}
+	if f.putCount != 1 {
+		t.Fatalf("putCount=%d, want 1: no retry for someone else's deletion", f.putCount)
+	}
+	inc, _ := includeList(f.policy)
+	if len(inc) != 2 {
+		t.Fatalf("a rule another writer deleted was re-added: %v", inc)
+	}
+}
+
+func TestApply_UnverifiedErrorNeverContainsToken(t *testing.T) {
+	f := &fakeCF{policy: newPolicy(), clobbers: 100}
+	f.clobber = func(p map[string]any) {
+		inc := p["include"].([]any)
+		p["include"] = inc[:len(inc)-1]
+	}
+	c := newClient(t, f)
+	_, err := c.EnsureEmail(context.Background(), "new@example.com")
 	if err == nil || strings.Contains(err.Error(), testToken) {
 		t.Fatalf("err = %v", err)
 	}
