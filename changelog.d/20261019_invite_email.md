@@ -93,19 +93,24 @@ allowlist, guest-access revocation, the Cloudflare policy list), so a
 compatibility spelling such as a Kelvin sign (U+212A) for `k` is the same
 address.
 
-At every start the store stamps a source on rows written before this field: an
-identity with that email gives `idp`; an invite that created the account gives
-`invite` when an admin sent it, else `invite_link`; an email index entry
-written by account creation gives `setup`; anything else is `self`. Stamping
-never makes a second verified holder: a row whose history points to a trusted
-source is stamped `self` when another account already holds the address
-verified, or when another old row also qualifies (the creation key outranks an
-admin-sent invite, which outranks an identity; a tie demotes both); those ids
-are logged. Admin accounts stamped `self` are logged by id at warning level:
-an SSO login with that address will take it from them. When no other account
-holds the address verified, an admin can set it for them to keep it; when one
-does, the log says so, and the duplicate has to be cleared or the accounts
-merged instead.
+At every start the store stamps a source on rows written before this field,
+the best one the row's history supports (the creation key outranks an
+admin-sent invite, which outranks an identity): an email index entry written
+by account creation gives `setup`; an invite that created the account gives
+`invite` when an admin sent it, else `invite_link` (older accepts also wrote
+the index entry, which then does not count as `setup`); an identity with that
+email gives `idp`; anything else is `self`. A row with both the creation key
+and an identity is therefore `setup`, not `idp`. Stamping never makes a second
+verified holder: a row whose history points to a trusted source is stamped
+`self` when another account already holds the address verified, or when
+another old row also qualifies with a higher rank. On a tie for the highest
+rank, the row the existing email index entry names keeps it (the account an
+SSO login reached before this update); with no entry naming one of them, all
+tied rows are demoted. Those ids are logged. Admin accounts stamped `self` are
+logged by id at warning level: an SSO login with that address will take it
+from them. The log says to leave it or merge the accounts with the
+account-merge tool, not to set the address for them, which would make that
+account the verified holder.
 
 When an identity-provider-verified login, or the acceptance of an invite an
 admin emailed, finds its address held unproven by other accounts, the verified
