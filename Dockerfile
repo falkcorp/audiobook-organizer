@@ -10,7 +10,7 @@
 # Stage 1: Build frontend
 # SHA pinned 2026-06-23 (node:26-alpine manifest-list). Refresh with:
 #   docker buildx imagetools inspect node:26-alpine --format '{{.Manifest.Digest}}'
-FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS frontend-builder
 
 WORKDIR /build/web
 
