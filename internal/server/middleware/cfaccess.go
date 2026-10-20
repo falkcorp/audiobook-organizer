@@ -6,6 +6,7 @@
 package middleware
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +14,31 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
+
+// cfAccessVerifiedKey is the gin context key CloudflareAccessAuth sets once a
+// request's Cf-Access-Jwt-Assertion has been verified (signature, issuer, expiry
+// and AUD). Unexported on purpose: only a verified assertion can set it, so
+// reading it via CFAccessVerified is proof the request passed Cloudflare Access
+// (or service-token) verification at the edge.
+const cfAccessVerifiedKey = "cf_access_verified"
+
+// CFAccessVerified reports whether CloudflareAccessAuth verified this
+// request's Access assertion. It is true for a human login AND for a service
+// token (a verified assertion that names no person), whether or not the
+// identity was admitted to a local user; it is false when Access is not
+// configured, no assertion was presented, or the assertion did not verify.
+// Callers use it to decide whether Cloudflare-set request headers such as
+// CF-Connecting-IP can be believed.
+func CFAccessVerified(c *gin.Context) bool {
+	v, _ := c.Get(cfAccessVerifiedKey)
+	ok, _ := v.(bool)
+	return ok
+}
+
+// MarkCFAccessVerified records that c's Access assertion verified. Exported
+// only so tests in other packages can stand in for CloudflareAccessAuth;
+// production code reaches it solely through that middleware.
+func MarkCFAccessVerified(c *gin.Context) { c.Set(cfAccessVerifiedKey, true) }
 
 // CFAccessAuthenticator resolves a Cloudflare-Access-authenticated request to a local
 // user: it verifies the signed Access JWT, applies the same allowlist gate as the
@@ -77,6 +103,13 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 			return
 		}
 		claims, err := a.verifier.Verify(c.Request.Context(), raw)
+		// Verify reports a service-token assertion (valid signature, issuer,
+		// expiry and AUD, but no email claim) as ErrNonIdentityAssertion. That
+		// token is still proof the request passed Cloudflare Access, so it
+		// sets the verified marker; it just resolves no user.
+		if err == nil || errors.Is(err, oauth.ErrNonIdentityAssertion) {
+			MarkCFAccessVerified(c)
+		}
 		if err != nil {
 			// Diagnostic: a JWT was present but did not verify (aud/issuer/keyset/expiry).
 			// Rate-limited-ish by being Warn; falls through to normal auth.
