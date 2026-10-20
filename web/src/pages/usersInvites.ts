@@ -1,5 +1,5 @@
 // file: web/src/pages/usersInvites.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1f6b3d82-7c45-4e9a-b2d0-8a5e9c3f7b61
 // last-edited: 2026-10-19
 
@@ -38,6 +38,15 @@ export function guestPolicyLabel(a: AcceptedInvite): { label: string; ok: boolea
       return { label: 'Cloudflare update failed: add manually', ok: false };
     case 'not_configured':
       return { label: 'Not automated: add to Cloudflare manually', ok: false };
+    case 'pending':
+      return {
+        label: 'Cloudflare update in progress (if this stays, check the policy by hand)',
+        ok: false,
+      };
+    case 'revoked':
+      return { label: 'Access revoked before Cloudflare was updated', ok: true };
+    case 'removed':
+      return { label: 'Access revoked during the update: removed from Cloudflare', ok: true };
     case 'skipped':
       return a.sso_grant === 'creator_not_admin'
         ? { label: 'No access granted: invited by a non-admin', ok: false }

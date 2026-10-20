@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
 // last-edited: 2026-10-19
 
@@ -156,6 +156,20 @@ func (s *Server) guestPolicyClient() (guestPolicyEnsurer, error) {
 // It runs only for an invite whose accept wrote an SSO grant (emailed to that
 // address, created by an active admin); any other emailed invite is recorded
 // as skipped with the reason, and Cloudflare is not touched.
+//
+// A revoke (deactivation, email change) can land while the add is in flight.
+// The revoke deletes the grant and removes the Cloudflare entry only if the
+// grant says the sync added it (CFAdded); the add sets CFAdded only after
+// Cloudflare answers. SetInviteEmailGrantCFAdded and DeleteInviteEmailGrant
+// run under one store lock, so exactly one side sees the add: either the flag
+// lands first and the revoke removes the entry, or the delete lands first,
+// SetInviteEmailGrantCFAdded reports the grant gone, and this goroutine
+// removes the entry it just added. A revoke that lands before Cloudflare is
+// called is caught by the re-read of the grant just before the call.
+//
+// A revoke does not treat an in-flight add as an add: if Cloudflare answers
+// that the email was already present, someone put it there by hand, and only
+// this goroutine learns that.
 func (s *Server) startGuestPolicySync(token, userID string) {
 	inv, err := s.storeForWiring().GetInvite(token)
 	if err != nil || inv == nil || inv.Email == "" {
@@ -191,35 +205,89 @@ func (s *Server) startGuestPolicySync(token, userID string) {
 		record(database.InviteGuestPolicyNotConfigured, "")
 		return
 	}
+	grants, ok := database.AsCapability[database.InviteEmailGrantStore](s.storeForWiring())
+	if !ok {
+		record(database.InviteGuestPolicyFailed, "the store cannot track SSO grants, so the Cloudflare entry could not be managed; add it by hand")
+		return
+	}
 	parent := s.bgCtx
 	if parent == nil {
 		parent = context.Background()
 	}
 	s.bgWG.Go("invite-guest-policy-sync", func() {
-		ctx, cancel := context.WithTimeout(parent, guestPolicySyncTimeout)
-		defer cancel()
-		res, err := client.EnsureEmail(ctx, email)
-		switch {
-		case err != nil:
-			detail := err.Error()
-			if errors.Is(err, context.Canceled) {
-				detail = "server shut down before Cloudflare answered"
-			}
-			inviteAccessLog.Warn("invite accept: adding the invitee to the Cloudflare guest policy failed, add it by hand: %v", logger.SanitizeLogValue(detail))
-			record(database.InviteGuestPolicyFailed, detail)
-		case res == cfaccesspolicy.AlreadyPresent:
-			record(database.InviteGuestPolicyAlreadyPresent, "")
-		default:
-			inviteAccessLog.Info("invite accept: invitee added to the Cloudflare guest policy")
-			record(database.InviteGuestPolicyAdded, "")
-			// Only an email this sync added is ever removed again.
-			if gs, ok := database.AsCapability[database.InviteEmailGrantStore](s.storeForWiring()); ok {
-				if err := gs.SetInviteEmailGrantCFAdded(email, userID); err != nil {
-					inviteAccessLog.Warn("invite accept: recording the Cloudflare add on the grant failed: %v", err)
-				}
-			}
-		}
+		s.syncGuestPolicy(parent, client, grants, record, email, userID)
 	})
+}
+
+// syncGuestPolicy is the body of the accept-time sync goroutine; see
+// startGuestPolicySync for the ordering argument.
+func (s *Server) syncGuestPolicy(parent context.Context, client guestPolicyEnsurer, grants database.InviteEmailGrantStore,
+	record func(status, detail string), email, userID string) {
+	granted := func() (bool, error) {
+		g, err := grants.GetInviteEmailGrant(email)
+		if err != nil {
+			return false, err
+		}
+		return g != nil && g.UserID == userID, nil
+	}
+	if ok, err := granted(); err != nil {
+		record(database.InviteGuestPolicyFailed, "the SSO grant could not be read, so Cloudflare was not updated: "+err.Error())
+		return
+	} else if !ok {
+		record(database.InviteGuestPolicyRevoked, "the access was revoked before Cloudflare was updated; nothing was added")
+		return
+	}
+	record(database.InviteGuestPolicyPending, "")
+
+	ctx, cancel := context.WithTimeout(parent, guestPolicySyncTimeout)
+	defer cancel()
+	res, err := client.EnsureEmail(ctx, email)
+	switch {
+	case err != nil:
+		detail := err.Error()
+		if errors.Is(err, context.Canceled) {
+			detail = "server shut down before Cloudflare answered"
+		}
+		if ok, gerr := granted(); gerr == nil && !ok {
+			detail += "; the access was also revoked meanwhile, so if the address is in the policy, remove it by hand"
+		}
+		inviteAccessLog.Warn("invite accept: adding the invitee to the Cloudflare guest policy failed, add it by hand: %v", logger.SanitizeLogValue(detail))
+		record(database.InviteGuestPolicyFailed, detail)
+		return
+	case res == cfaccesspolicy.AlreadyPresent:
+		// Put there by hand: never removed by this code, revoked or not.
+		record(database.InviteGuestPolicyAlreadyPresent, "")
+		return
+	}
+
+	still, err := grants.SetInviteEmailGrantCFAdded(email, userID)
+	if err != nil {
+		inviteAccessLog.Warn("invite accept: recording the Cloudflare add on the grant failed: %v", err)
+		record(database.InviteGuestPolicyAdded, "added, but the server could not note that it added it, so revoking this user will not remove it: remove it by hand then")
+		return
+	}
+	if still {
+		inviteAccessLog.Info("invite accept: invitee added to the Cloudflare guest policy")
+		record(database.InviteGuestPolicyAdded, "")
+		return
+	}
+	// The grant was revoked while Cloudflare was answering. The revoke saw
+	// CFAdded=false and left the entry; this goroutine added it, so it
+	// removes it, under the same keep rules as a revoke.
+	if why := s.keepGuestPolicyEmail(userID, email); why != "" {
+		inviteAccessLog.Info("invite accept: access was revoked during the Cloudflare update; entry kept: %s", why)
+		record(database.InviteGuestPolicyAdded, "the access was revoked during the update; the entry was kept because "+why)
+		return
+	}
+	rctx, rcancel := context.WithTimeout(parent, guestPolicySyncTimeout)
+	defer rcancel()
+	if _, err := client.RemoveEmail(rctx, email); err != nil {
+		inviteAccessLog.Warn("invite accept: access was revoked during the Cloudflare update and removing the entry again failed, remove it by hand: %v", logger.SanitizeLogValue(err.Error()))
+		record(database.InviteGuestPolicyFailed, "the access was revoked while Cloudflare was being updated, and removing the address again failed: remove it by hand")
+		return
+	}
+	inviteAccessLog.Info("invite accept: access was revoked during the Cloudflare update; entry removed again")
+	record(database.InviteGuestPolicyRemoved, "the access was revoked while Cloudflare was being updated, so the address was removed again")
 }
 
 // revokeGuestAccess ends the access an accepted invite granted to email for
