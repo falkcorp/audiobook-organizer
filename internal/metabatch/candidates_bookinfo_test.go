@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_bookinfo_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 52b4b4c0-7157-4e40-901c-2a88bddf805e
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package metabatch_test
 
@@ -86,7 +86,7 @@ func TestResolveSeriesNames_OneBatchReadForTheWholeListing(t *testing.T) {
 		t.Fatalf("stale embedded series leaked: %q", info.Series)
 	}
 	var results []metabatch.CandidateResult
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		b := &database.Book{ID: fmt.Sprintf("b%d", i), SeriesID: intp(i % 3)}
 		results = append(results, metabatch.CandidateResult{Book: metabatch.BuildCandidateBookInfoNoFiles(b)})
 	}

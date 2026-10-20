@@ -1,13 +1,14 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package aiscan
 
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,12 +42,7 @@ func TestBatchCreatedAfterCancelIsCanceled(t *testing.T) {
 	close(llm.createGate)
 
 	require.Eventually(t, func() bool {
-		for _, id := range llm.canceled() {
-			if id == "batch_1" {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(llm.canceled(), "batch_1")
 	}, 5*time.Second, 5*time.Millisecond, "the batch created after the cancel must be canceled")
 	require.Equal(t, "canceled", phaseStatus(t, pm, scan.ID, "full_scan"))
 }
@@ -104,12 +100,7 @@ func TestFailedPhaseCancelsSiblingBatch(t *testing.T) {
 	require.Error(t, awaitRun(t, run))
 
 	require.Eventually(t, func() bool {
-		for _, id := range llm.canceled() {
-			if id == groups.BatchID {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(llm.canceled(), groups.BatchID)
 	}, 5*time.Second, 5*time.Millisecond, "the sibling's live batch must be canceled")
 	require.NotEqual(t, "submitted", phaseStatus(t, pm, scan.ID, "groups_scan"))
 	require.NoError(t, pm.CollectBatch(context.Background(), groups.BatchID), "a dead scan's batch is handled, not retried forever")

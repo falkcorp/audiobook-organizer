@@ -1,7 +1,7 @@
 // file: internal/metafetch/pcache_followup_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: e971d44a-1aa0-4ff3-8223-e9a5a43c932b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -188,7 +188,7 @@ func TestPCache_ConcurrentFanoutRecordsEveryKey(t *testing.T) {
 		&scriptedProvider{id: metadata.SourceIDOpenLibrary},
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -198,7 +198,7 @@ func TestPCache_ConcurrentFanoutRecordsEveryKey(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		pointed, err := pcachePointedKeys(svc.db, fmt.Sprintf("book-%d", i))
 		require.NoError(t, err)
 		assert.Len(t, pointed, len(srcs), "book-%d: every source's key is on the pointer row", i)

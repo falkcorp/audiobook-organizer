@@ -1,7 +1,7 @@
 // file: internal/ai/openai_batch.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package ai
 
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -48,9 +49,7 @@ var ErrBatchListTruncated = errors.New("batch listing truncated before reaching 
 // it in the poller.
 func batchMetadata(batchType string, extra map[string]string) shared.Metadata {
 	md := shared.Metadata{}
-	for k, v := range extra {
-		md[k] = v
-	}
+	maps.Copy(md, extra)
 	md["project"] = "audiobook-organizer"
 	md["service"] = "ao-metadata-batch"
 	md["type"] = batchType
@@ -188,9 +187,7 @@ func (p *OpenAIParser) GetBatch(ctx context.Context, batchID string) (BatchInfo,
 
 func batchInfoFrom(b openai.Batch) BatchInfo {
 	md := make(map[string]string, len(b.Metadata))
-	for k, v := range b.Metadata {
-		md[k] = v
-	}
+	maps.Copy(md, b.Metadata)
 	return BatchInfo{
 		Metadata:     md,
 		ID:           b.ID,

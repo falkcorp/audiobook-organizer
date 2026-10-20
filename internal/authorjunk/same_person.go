@@ -1,11 +1,14 @@
 // file: internal/authorjunk/same_person.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c0f5485b-cc4e-48f6-b64d-fff72775e96e
-// last-edited: 2026-09-29
+// last-edited: 2026-10-20
 
 package authorjunk
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // SamePersonName reports whether two spellings name the same person: equal
 // under FoldKey (case, diacritics and their Unicode form, punctuation and
@@ -19,10 +22,8 @@ import "strings"
 func SamePersonName(a, b string) bool {
 	ka, kb := personKeys(a), personKeys(b)
 	for _, x := range ka {
-		for _, y := range kb {
-			if x == y {
-				return true
-			}
+		if slices.Contains(kb, x) {
+			return true
 		}
 	}
 	return false

@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.5
+// version: 1.7.6
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package catalog
 
@@ -1095,7 +1095,7 @@ func TestHarvest_ErrorRunResetsShortRuns(t *testing.T) {
 	h := NewHarvester(l, st, Settings{Language: "english", PageSize: 2, Concurrency: 1})
 	a := ScopeAuthor{Key: HarvestKey("Ann Author"), Name: "Ann Author"}
 	var got []int
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		failing.Store(i == 2)
 		s, err := h.harvestAuthor(context.Background(), a, nil, nil)
 		if err != nil {

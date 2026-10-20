@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 31722b4f-1d15-4404-a9f4-7a792efd86f0
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package metadata
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -220,9 +221,7 @@ func (f *fakeThrottleStore) LoadProviderThrottles() (map[string][]byte, error) {
 		return nil, f.loadErr
 	}
 	out := make(map[string][]byte, len(f.rows))
-	for k, v := range f.rows {
-		out[k] = v
-	}
+	maps.Copy(out, f.rows)
 	return out, nil
 }
 
@@ -481,7 +480,7 @@ func TestProtectedSource_NotFoundDoesNotThrottle(t *testing.T) {
 	resetDefaultThrottles(t)
 	stub := &stubSource{id: "hardcover", err: statusErrorFor(t, "hardcover", 404, "no such book", nil)}
 	ps := NewChainSource(stub)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, _ = ps.SearchByTitle(context.Background(), "obscure")
 	}
 	if DefaultThrottleRegistry().Throttled("hardcover") {

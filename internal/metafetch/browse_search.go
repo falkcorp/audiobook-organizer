@@ -1,7 +1,7 @@
 // file: internal/metafetch/browse_search.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5bc1837f-3fbc-42c0-ad1c-7faf383b5983
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 //
 // BrowseSearch is the Candidates view's "Search again": a free search by what
 // the reviewer typed, not a search for the book's own identity.
@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -139,9 +140,7 @@ func (mfs *Service) BrowseSearch(ctx context.Context, bookID string, q BrowseQue
 			live, ltried, lfailed := mfs.browseProviders(lctx, title, author)
 			answers = append(answers, live...)
 			tried = append(tried, ltried...)
-			for k, v := range lfailed {
-				failed[k] = v
-			}
+			maps.Copy(failed, lfailed)
 		}
 	}
 

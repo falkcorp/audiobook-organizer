@@ -1,7 +1,7 @@
 // file: internal/metafetch/state_snapshot_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0b9d0f57-6fc7-45ea-9c21-992a7ba92708
-// last-edited: 2026-10-03
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -127,7 +127,7 @@ func TestWithStateSnapshot_RaceWithRepairLock(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 40; i++ {
+		for i := range 40 {
 			assert.NoError(t, svc.updateFetchedMetadataState("b1", map[string]any{"description": i}))
 		}
 	}()

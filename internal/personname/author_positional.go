@@ -1,7 +1,7 @@
 // file: internal/personname/author_positional.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1b54b5ba-45b5-4f3a-8674-43ad240b4c53
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package personname
 
@@ -88,7 +88,7 @@ var structuralPartWords = map[string]bool{
 // "019" keeps its digits so the caller can reject it as a whole.
 func StripPositionalPrefix(name string) string {
 	s := strings.TrimSpace(name)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		stripped := false
 		for _, rx := range positionalPrefixShapes {
 			if loc := rx.FindStringIndex(s); loc != nil && loc[1] > 0 {

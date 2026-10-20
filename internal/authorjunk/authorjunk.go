@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -436,7 +436,7 @@ var genreTaglineWords = func() map[string]bool {
 	w := map[string]bool{"a": true, "an": true, "the": true}
 	for _, set := range []map[string]bool{genreNames, genreLabels, genreWrapWords} {
 		for name := range set {
-			for _, f := range strings.Fields(name) {
+			for f := range strings.FieldsSeq(name) {
 				w[f] = true
 			}
 		}
@@ -501,7 +501,7 @@ func oneCoinedWordTagline(s string, f []string) bool {
 	}
 	coined := 0
 	for _, w := range raw[1:] {
-		for _, part := range strings.Fields(Normalize(w)) {
+		for part := range strings.FieldsSeq(Normalize(w)) {
 			if !genreTaglineWords[part] {
 				coined++
 				break
@@ -719,7 +719,7 @@ func classifyBaseParts(s string) (Verdict, *nameParts) {
 
 	// A possessive word: "Shadow's Edge", "Ender's Game". Names do not
 	// inflect that way ("O'Brien", "D'Angelo" do not end in s).
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		lw := strings.ToLower(strings.Trim(w, ".,;:\"()[]"))
 		if strings.HasSuffix(lw, "'s") || strings.HasSuffix(lw, "’s") {
 			return strong(ClassWorkTitle, RulePossessive), nil
@@ -1008,7 +1008,7 @@ func IsCollectiveCredit(name string) bool {
 	if s == "" || hasCreditSeparator(s) {
 		return false
 	}
-	for _, w := range strings.Fields(Normalize(s)) {
+	for w := range strings.FieldsSeq(Normalize(s)) {
 		if protectedCollectiveWords[w] {
 			return true
 		}
@@ -1026,7 +1026,7 @@ func SplitUnderscoreCredit(name string) ([]string, bool) {
 		return nil, false
 	}
 	var parts []string
-	for _, p := range strings.Split(name, "_") {
+	for p := range strings.SplitSeq(name, "_") {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
@@ -1224,7 +1224,7 @@ func leadsWithArticle(s string) bool {
 // letters (author-path-link's authorPathLinkIsAllCapsWord).
 func shoutWords(s string) int {
 	n := 0
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		upper, lower := 0, false
 		for _, r := range w {
 			if unicode.IsLower(r) {

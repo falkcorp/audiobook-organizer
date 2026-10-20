@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_authors_concurrent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d2e9b41-7a3c-4f18-b6d0-2c8e4f1a9b73
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -35,7 +35,7 @@ func TestApplyMetadataToBook_ConcurrentFillOnlyAppliesKeepBothAuthors(t *testing
 
 	const rounds = 40
 	lost := 0
-	for r := 0; r < rounds; r++ {
+	for r := range rounds {
 		book, err := store.CreateBook(&database.Book{
 			Title: fmt.Sprintf("Book %d", r), FilePath: fmt.Sprintf("/library/%d.m4b", r), Format: "m4b", AuthorID: &a.ID,
 		})

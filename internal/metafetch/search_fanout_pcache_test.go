@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_pcache_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4f9b2d61-8e07-4c5a-a3f1-7d26c0b95e18
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -318,7 +318,7 @@ func TestSearchByContext_KeyIncludesSeriesAndISBN(t *testing.T) {
 	// End to end through the call FetchMetadataForBook makes.
 	withSharedCache(t, true)
 	svc, _ := newPCacheService(t)
-	src := &contextProvider{scriptedProvider: scriptedProvider{id: metadata.SourceIDAudnexus}}
+	src := &contextProvider{id: metadata.SourceIDAudnexus}
 	ctx := context.Background()
 	got, err := svc.cachedSearchByContext(ctx, "book-a", src, src, &base)
 	require.NoError(t, err)
@@ -482,7 +482,7 @@ func scenarioQuestion(i int) (title string, answered bool) {
 // askVariant, and returns the live calls the pass made.
 func runScenarioPass(svc *Service, src *scriptedProvider) int64 {
 	before := src.calls.Load()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		title, _ := scenarioQuestion(i)
 		askFor(svc, src, fmt.Sprintf("book-%04d", i), titleAuthor(title, "Author 07"), SearchOptions{})
 	}
@@ -537,7 +537,7 @@ func providerAnswerCounters(t *testing.T) (hits, misses float64) {
 
 func TestPCacheScenario_SyntheticLibrary(t *testing.T) {
 	distinct := map[string]bool{}
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		title, _ := scenarioQuestion(i)
 		distinct[title] = true
 	}

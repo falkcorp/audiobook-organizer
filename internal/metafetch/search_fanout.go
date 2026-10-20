@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -272,10 +273,8 @@ func (mfs *Service) runSearchFanout(p fanoutParams, sources []metadata.MetadataS
 
 func poolHasStrong(states []*fanoutSource, c strongCriteria) bool {
 	for _, st := range states {
-		for _, r := range st.results {
-			if c.matches(r) {
-				return true
-			}
+		if slices.ContainsFunc(st.results, c.matches) {
+			return true
 		}
 	}
 	return false

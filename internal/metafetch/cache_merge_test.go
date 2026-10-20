@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_merge_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 6f2d8a41-93c7-4e0b-b5a2-1d7c4e9f3a58
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 // The candidate fetch's provider fallback MERGES its answer into the book's
 // cached candidates (SearchOptions.MergeWithCached). These pin the rows a
@@ -251,7 +251,7 @@ func TestCacheSearchResponse_EmptyChainAnswerKeepsCarriedRow(t *testing.T) {
 func TestMergeCandidateRows_CapEvictsWorstRankFirst(t *testing.T) {
 	const reviewable, rejected = 2, 3
 	var chain []json.RawMessage
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		chain = append(chain, mergeCand(t, "Audible", fmt.Sprintf("Below Floor %d", i), 0.5))
 	}
 	chain = append(chain, mergeCand(t, "Audible", "Rejected A", 0.95), mergeCand(t, "Audible", "Rejected B", 0.9))
@@ -268,7 +268,7 @@ func TestMergeCandidateRows_CapEvictsWorstRankFirst(t *testing.T) {
 	got := candSources(t, mergeCandidateRows(fresh, chain, rank))
 	require.Len(t, got, metadataCacheTopN)
 	assert.Equal(t, []string{"Google Books:Usable G1", "Google Books:Usable G2"}, got[:2])
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		assert.Contains(t, got, fmt.Sprintf("Audible:Below Floor %d", i), "a reviewable chain candidate was evicted before a rejected one")
 	}
 	assert.NotContains(t, got, "Audible:Rejected A")

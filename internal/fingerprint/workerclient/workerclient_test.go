@@ -1,7 +1,7 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package workerclient
 
@@ -45,7 +45,7 @@ var testVersions = fingerprint.ToolVersionInfo{Fpcalc: "1.6.1", FFmpeg: "8.0.1"}
 func fakeRaw(content []byte, offset float64) []byte {
 	seed := sha256.Sum256(append(append([]byte{}, content...), []byte(strconv.FormatFloat(offset, 'f', 3, 64))...))
 	raw := make([]byte, 100*4)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		binary.LittleEndian.PutUint32(raw[i*4:], binary.LittleEndian.Uint32(seed[(i%8)*4:])+uint32(i))
 	}
 	return raw
@@ -253,7 +253,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	for _, w := range testWindows {
 		sum := sha256.Sum256(fakeRaw(calContent, w.OffsetSec))
 		cf.Windows = append(cf.Windows, workerapi.CalibrationWindow{Window: w, RawSHA256: hex.EncodeToString(sum[:]),
-			Frames: 100, ToolVersions: workerapi.ToolVersions{Fpcalc: testVersions.Fpcalc, FFmpeg: testVersions.FFmpeg}})
+			Frames: 100, Fpcalc: testVersions.Fpcalc, FFmpeg: testVersions.FFmpeg})
 	}
 	e.srv.hello = workerapi.HelloResponse{
 		Roots:        []workerapi.Root{{ID: "libroot", Remote: true}, {ID: "books", Remote: false}},

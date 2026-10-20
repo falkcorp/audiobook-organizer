@@ -1,7 +1,7 @@
 // file: internal/metafetch/segment_titles_stale_write_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b9d6f14-c3a7-4e58-9f01-d8e6a4b7c250
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -60,7 +60,7 @@ func TestGenerateSegmentTitles_KeepsFileFieldsWrittenAfterTheRead(t *testing.T) 
 
 	book, err := inner.CreateBook(&database.Book{Title: "Book", FilePath: "/library/book", Format: "mp3"})
 	require.NoError(t, err)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		require.NoError(t, inner.CreateBookFile(&database.BookFile{
 			BookID: book.ID, FilePath: fmt.Sprintf("/library/book/%02d.mp3", i+1), Format: "mp3",
 		}))

@@ -1,7 +1,7 @@
 // file: internal/catalog/scenario_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4d8b0e26-9c71-4f35-a2b8-6e1f3a05d947
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package catalog
 
@@ -145,7 +145,7 @@ func TestScenario_LocalCatalogStage_5000Books_800Blocks(t *testing.T) {
 	}
 	for f := range scenarioFranchise {
 		name := fmt.Sprintf("Franchise %03d", f)
-		for n := 0; n < MaxBlockEntries+1; n++ {
+		for n := range MaxBlockEntries + 1 {
 			batch = append(batch, synthProduct(fmt.Sprintf("B0F%03d%05d", f, n), fmt.Sprintf("Franchise Title %05d", n), name, fmt.Sprintf("AUTHF%03d", f)))
 			if len(batch) == 1000 {
 				flush(HarvestKey(name))

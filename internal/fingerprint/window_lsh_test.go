@@ -1,7 +1,7 @@
 // file: internal/fingerprint/window_lsh_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b0f7c55-2e4a-4d8b-9a61-0c7e5f2d9b14
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package fingerprint
 
@@ -28,7 +28,7 @@ func synthStream(rng *rand.Rand, n int) []uint32 {
 	out[0] = rng.Uint32()
 	for i := 1; i < n; i++ {
 		var mask uint32
-		for bit := 0; bit < 32; bit++ {
+		for bit := range 32 {
 			if rng.Float64() < 0.15 {
 				mask |= 1 << bit
 			}
@@ -43,7 +43,7 @@ func withNoise(rng *rand.Rand, frames []uint32, p float64) []uint32 {
 	out := make([]uint32, len(frames))
 	for i, f := range frames {
 		var mask uint32
-		for bit := 0; bit < 32; bit++ {
+		for bit := range 32 {
 			if rng.Float64() < p {
 				mask |= 1 << bit
 			}
@@ -91,7 +91,7 @@ func measureRates(t testing.TB, b, r, trials, minHits int, noise float64, seed u
 	seeds := makeWindowBandSeeds(b * r)
 	rng := rand.New(rand.NewPCG(seed, seed^0xa5a5))
 	hit, fp := 0, 0
-	for i := 0; i < trials; i++ {
+	for range trials {
 		a := synthStream(rng, windowFrames)
 		noisy := withNoise(rng, a, noise)
 		if sharedBands(mustBands(t, rawOf(a), b, r, seeds), mustBands(t, rawOf(noisy), b, r, seeds)) >= minHits {
@@ -200,7 +200,7 @@ func TestWindowBands_FalseCandidateRate(t *testing.T) {
 	rng := rand.New(rand.NewPCG(17, 19))
 	fp := 0
 	const trials = 2000
-	for i := 0; i < trials; i++ {
+	for range trials {
 		sting := synthStream(rng, threeSecFrames)
 		a := synthStream(rng, windowFrames)
 		b := synthStream(rng, windowFrames)
@@ -228,7 +228,7 @@ func TestWindowBandContainment_SliceAndUnrelated(t *testing.T) {
 	for _, frac := range []float64{1.0, 0.95, 0.9, 0.8, 0.5} {
 		const parents = 200
 		sum := 0.0
-		for i := 0; i < parents; i++ {
+		for range parents {
 			parent := synthStream(rng, windowFrames)
 			pb, _ := WindowBands(rawOf(parent))
 			n := int(frac * float64(windowFrames))

@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.39.0
+// version: 1.39.1
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -432,10 +432,8 @@ func CurrentAuthorForms(book *database.Book, liveAuthors []string) []string {
 		forms = append(forms, snapshot)
 	}
 	add := func(a string) {
-		for _, f := range forms {
-			if f == a {
-				return
-			}
+		if slices.Contains(forms, a) {
+			return
 		}
 		forms = append(forms, a)
 	}
@@ -945,8 +943,8 @@ func joinCatalogRows(existing, catalogRaw []json.RawMessage, rank func(MetadataC
 		seen[key(c)] = true
 		cr := rank(c)
 		at := 0
-		for i := len(out) - 1; i >= 0; i-- {
-			if out[i].decoded && out[i].rank <= cr {
+		for i, o := range slices.Backward(out) {
+			if o.decoded && o.rank <= cr {
 				at = i + 1
 				break
 			}

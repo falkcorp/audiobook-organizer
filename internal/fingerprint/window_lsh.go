@@ -1,7 +1,7 @@
 // file: internal/fingerprint/window_lsh.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: da1962cc-7911-4882-8b7e-1d58442414ef
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package fingerprint
 
@@ -135,14 +135,14 @@ func windowBandsWith(raw []byte, b, r int, seeds []uint64) ([]WindowBand, error)
 		mins[k] = ^uint64(0)
 	}
 	for _, s := range shingles {
-		for k := 0; k < rows; k++ {
+		for k := range rows {
 			if h := mix64(s ^ seeds[k]); h < mins[k] {
 				mins[k] = h
 			}
 		}
 	}
 	out := make([]WindowBand, b)
-	for band := 0; band < b; band++ {
+	for band := range b {
 		h := mins[band*r]
 		for row := 1; row < r; row++ {
 			h = mix64(h ^ mins[band*r+row] ^ uint64(row))

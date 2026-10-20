@@ -1,7 +1,7 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
-// last-edited: 2026-09-13
+// last-edited: 2026-10-20
 
 package metadata
 
@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
@@ -135,8 +136,8 @@ func googleBooksCategories(main string, cats []string) []string {
 func googleBooksGenre(cats []string, main string) string {
 	for _, c := range cats {
 		segs := strings.Split(c, "/")
-		for i := len(segs) - 1; i >= 0; i-- {
-			s := strings.TrimSpace(segs[i])
+		for _, seg := range slices.Backward(segs) {
+			s := strings.TrimSpace(seg)
 			if s != "" && !strings.EqualFold(s, "General") {
 				return s
 			}

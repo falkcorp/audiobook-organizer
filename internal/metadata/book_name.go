@@ -1,7 +1,7 @@
 // file: internal/metadata/book_name.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 8eab30cb-5e6e-4bc7-bfba-dfb603b81ef2
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 //
 // ParseBookName: the one reader of the title/author/series/number shapes that
 // file and folder names pack into a book's title. Scan-time folder parsing
@@ -15,6 +15,7 @@ import (
 	"html"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -112,12 +113,7 @@ type BookName struct {
 
 // Has reports whether shape was read.
 func (b BookName) Has(shape string) bool {
-	for _, s := range b.Shapes {
-		if s == shape {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(b.Shapes, shape)
 }
 
 var (
@@ -514,12 +510,7 @@ func (f dashFields) text() string {
 }
 
 func (f dashFields) hasLetter() bool {
-	for _, s := range f.segs {
-		if bookNameLetterRe.MatchString(s) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(f.segs, bookNameLetterRe.MatchString)
 }
 
 func hasLetterBefore(s string, i int) bool { return bookNameLetterRe.MatchString(s[:i]) }
@@ -537,7 +528,7 @@ func dropShape(shapes []string, shape string) []string {
 // namesASet reports whether a field names a set of books ("Icewind Dale
 // Trilogy", "The Expanse Series").
 func namesASet(f string) bool {
-	for _, w := range strings.Fields(strings.ToLower(f)) {
+	for w := range strings.FieldsSeq(strings.ToLower(f)) {
 		if setWords[strings.Trim(w, ".,:;()")] {
 			return true
 		}
@@ -613,8 +604,8 @@ func ancestorFolders(path string) []string {
 	}
 	segs := splitPathSegments(filepath.Dir(filepath.ToSlash(path)))
 	out := make([]string, 0, len(segs))
-	for i := len(segs) - 1; i >= 0; i-- {
-		out = append(out, segs[i])
+	for _, seg := range slices.Backward(segs) {
+		out = append(out, seg)
 	}
 	return out
 }

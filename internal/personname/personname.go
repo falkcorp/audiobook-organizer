@@ -1,7 +1,7 @@
 // file: internal/personname/personname.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 8c3f6a15-2e94-4d78-b1a0-5f7e2c9d3b48
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 // Package personname answers "does this string look like a human author's
 // name, rather than a title or a structural marker?" -- the heuristic that
@@ -224,7 +224,7 @@ func HasSeriesMarker(s string) bool {
 	if HasPaddedVolumeNumber(s) {
 		return true
 	}
-	for _, w := range strings.Fields(StripEditionSuffix(s)) {
+	for w := range strings.FieldsSeq(StripEditionSuffix(s)) {
 		if workWords[strings.ToLower(strings.Trim(w, ".,:;-_()[]0123456789"))] {
 			return true
 		}
@@ -237,7 +237,7 @@ func HasSeriesMarker(s string) bool {
 // SEQUENCE POSITION, so "Series NN - X" names a series and a book in it; see
 // authorname.ParseDashFilename for the one place this decides an orientation.
 func HasPaddedVolumeNumber(s string) bool {
-	for _, w := range strings.Fields(StripEditionSuffix(s)) {
+	for w := range strings.FieldsSeq(StripEditionSuffix(s)) {
 		if paddedNumberRe.MatchString(strings.Trim(w, ".,:;-_()[]")) {
 			return true
 		}

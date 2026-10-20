@@ -1,11 +1,12 @@
 // file: internal/ai/ai_metrics_models.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5d720f86-7e84-4490-9507-66a96a2fc61a
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package ai
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
@@ -62,10 +63,8 @@ func configuredModelPairs(cfg *config.Config) []modelPair {
 			return
 		}
 		p := modelPair{provider, model}
-		for _, have := range out {
-			if have == p {
-				return
-			}
+		if slices.Contains(out, p) {
+			return
 		}
 		out = append(out, p)
 	}

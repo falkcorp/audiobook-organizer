@@ -1,7 +1,7 @@
 // file: internal/metafetch/review_only_autofetch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b881bf7b-f075-494b-b50e-cdc671118002
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -116,8 +116,9 @@ func TestFetchMetadataForBookByTitle_CancelledCtxWritesNothing(t *testing.T) {
 	t.Run("cancelled during the search", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		src := &cancelOnSearchSource{
-			verdictSource: verdictSource{name: "Audible", results: autoFetchRecord("audible description")},
-			cancel:        cancel,
+			name:    "Audible",
+			results: autoFetchRecord("audible description"),
+			cancel:  cancel,
 		}
 		f, id := autoFetchFixture(t, src)
 		_, err := f.mfs.FetchMetadataForBookByTitle(ctx, id)
