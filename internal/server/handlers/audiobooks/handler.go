@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.36.0
+// version: 1.36.1
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -796,8 +796,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// needs the request to have opted in (Prefer: respond-async), which keeps
 	// it off the shared path today; it is still handled here for both, so the
 	// shared path can never turn a pending search into a 500.
-	var pending *searchcache.PendingError
-	if errors.As(err, &pending) {
+	if pending, ok := errors.AsType[*searchcache.PendingError](err); ok {
 		// The search is still running (detached from this request) and will
 		// land in the search result cache. The client polls
 		// GET /api/v1/search/:search_id and re-issues this request when done.
@@ -1306,18 +1305,15 @@ func respondIdentIndexBuilding(c *gin.Context, err error) bool {
 }
 
 func respondSearchLimit(c *gin.Context, err error) bool {
-	var slow *querygrammar.TooSlowError
-	if errors.As(err, &slow) {
+	if slow, ok := errors.AsType[*querygrammar.TooSlowError](err); ok {
 		httputil.RespondWithBadRequest(c, slow.Error())
 		return true
 	}
-	var inexact *querygrammar.InexactError
-	if errors.As(err, &inexact) {
+	if inexact, ok := errors.AsType[*querygrammar.InexactError](err); ok {
 		httputil.RespondWithBadRequest(c, inexact.Error())
 		return true
 	}
-	var busy *querygrammar.BusyError
-	if errors.As(err, &busy) {
+	if busy, ok := errors.AsType[*querygrammar.BusyError](err); ok {
 		c.Header("Retry-After", "2")
 		httputil.RespondWithServiceUnavailable(c, busy.Error())
 		return true

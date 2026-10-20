@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.95.2
+// version: 1.95.3
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package dedup
 
@@ -1487,8 +1487,7 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		// book tag — this path applies none.
 		result, _, err := de.MergeBooksJournaled(0, []string{book.ID, other.ID}, "", "dedup:merge-source:file-hash-auto")
 		if err != nil {
-			var stale *merge.SoftDeletedInputError
-			if errors.As(err, &stale) {
+			if _, ok := errors.AsType[*merge.SoftDeletedInputError](err); ok {
 				slog.Warn("dedup exact-file-hash: auto-merge skipped a soft-deleted row", "book", book.ID, "other", other.ID, "err", err)
 				return false, nil
 			}

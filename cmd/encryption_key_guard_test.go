@@ -1,7 +1,7 @@
 // file: cmd/encryption_key_guard_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2f58c3a9-6e41-4b07-90d8-7a13e5b2f846
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package cmd
 
@@ -156,8 +156,7 @@ func TestGuard_UnreadableSettingsRowGetsItsOwnMessage(t *testing.T) {
 	if err == nil {
 		t.Fatal("guard proceeded despite unreadable settings rows")
 	}
-	var got *database.UnreadableSettingsError
-	if !errors.As(err, &got) {
+	if _, ok := errors.AsType[*database.UnreadableSettingsError](err); !ok {
 		t.Errorf("typed error not preserved: %v", err)
 	}
 	for _, want := range []string{`"openai_api_key"`, `"config_blob"`, unreadable.Remedy()} {

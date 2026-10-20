@@ -1,7 +1,7 @@
 // file: internal/wirecontract/contract_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8e3a6b14-0c5d-4f72-9a81-d2b7e4c6f039
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package wirecontract pins the JSON the generated TypeScript types describe
 // (07-F1). For each type tygo generates (tygo.yaml) it marshals a fully
@@ -45,10 +45,10 @@ var sampleTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 // json:"-" are left alone: they are not on the wire.
 func fill(v reflect.Value, name string) {
 	switch v.Type() {
-	case reflect.TypeOf(time.Time{}):
+	case reflect.TypeFor[time.Time]():
 		v.Set(reflect.ValueOf(sampleTime))
 		return
-	case reflect.TypeOf(json.RawMessage{}):
+	case reflect.TypeFor[json.RawMessage]():
 		v.Set(reflect.ValueOf(json.RawMessage(`{"synthetic":true}`)))
 		return
 	}
@@ -106,11 +106,11 @@ func sample[T any]() T {
 // type it overrides: a tag is only valid on a nil-able map or slice, which is
 // the one case where Go's null differs from what tygo infers.
 func TestTSTypeTagsMatchGoTypes(t *testing.T) {
-	f, ok := reflect.TypeOf(repairs.RowsPage{}).FieldByName("SkippedByKindInClass")
+	f, ok := reflect.TypeFor[repairs.RowsPage]().FieldByName("SkippedByKindInClass")
 	if !ok {
 		t.Fatal("RowsPage.SkippedByKindInClass is gone; update its tstype tag and this test")
 	}
-	if f.Type != reflect.TypeOf(map[string]int{}) {
+	if f.Type != reflect.TypeFor[map[string]int]() {
 		t.Fatalf("SkippedByKindInClass is %s; its tstype tag says { [key: string]: number } | null", f.Type)
 	}
 	if got := f.Tag.Get("tstype"); got != "{ [key: string]: number } | null" {
@@ -172,13 +172,13 @@ func TestWireGoldens(t *testing.T) {
 // wireTypes is every Go struct tygo generates (tygo.yaml), by reflection.
 // TestWireTypesMatchGeneratedInterfaces ties it to the generated TypeScript.
 var wireTypes = []reflect.Type{
-	reflect.TypeOf(repairs.Row{}), reflect.TypeOf(repairs.RowMember{}),
-	reflect.TypeOf(repairs.RowsPage{}), reflect.TypeOf(repairs.RowResult{}),
-	reflect.TypeOf(repairs.ApplyResult{}), reflect.TypeOf(repairs.PlanParams{}),
-	reflect.TypeOf(repairs.PlanResult{}),
-	reflect.TypeOf(database.BookCore{}), reflect.TypeOf(database.BookFileCore{}),
-	reflect.TypeOf(database.ScanState{}), reflect.TypeOf(database.StageStatus{}),
-	reflect.TypeOf(database.BookAuthor{}), reflect.TypeOf(database.MetadataProvenanceEntry{}),
+	reflect.TypeFor[repairs.Row](), reflect.TypeFor[repairs.RowMember](),
+	reflect.TypeFor[repairs.RowsPage](), reflect.TypeFor[repairs.RowResult](),
+	reflect.TypeFor[repairs.ApplyResult](), reflect.TypeFor[repairs.PlanParams](),
+	reflect.TypeFor[repairs.PlanResult](),
+	reflect.TypeFor[database.BookCore](), reflect.TypeFor[database.BookFileCore](),
+	reflect.TypeFor[database.ScanState](), reflect.TypeFor[database.StageStatus](),
+	reflect.TypeFor[database.BookAuthor](), reflect.TypeFor[database.MetadataProvenanceEntry](),
 }
 
 // nilableWithoutOmit lists the slice and map fields of every generated type
@@ -237,10 +237,9 @@ func TestNilableFieldsAreAccountedFor(t *testing.T) {
 	seen := map[string]bool{}
 	for _, typ := range types {
 		pkg := path.Base(typ.PkgPath())
-		for i := 0; i < typ.NumField(); i++ {
-			f := typ.Field(i)
+		for f := range typ.Fields() {
 			tag := f.Tag.Get("json")
-			if !f.IsExported() || tag == "-" || f.Type == reflect.TypeOf(json.RawMessage{}) {
+			if !f.IsExported() || tag == "-" || f.Type == reflect.TypeFor[json.RawMessage]() {
 				continue
 			}
 			if f.Type.Kind() != reflect.Slice && f.Type.Kind() != reflect.Map {

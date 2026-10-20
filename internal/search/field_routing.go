@@ -1,7 +1,7 @@
 // file: internal/search/field_routing.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package search
 
@@ -32,9 +32,9 @@ import (
 // source struct.
 var indexedFields = func() map[string]struct{} {
 	out := map[string]struct{}{}
-	t := reflect.TypeOf(BookDocument{})
-	for i := 0; i < t.NumField(); i++ {
-		name := strings.Split(t.Field(i).Tag.Get("json"), ",")[0]
+	t := reflect.TypeFor[BookDocument]()
+	for field := range t.Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if name != "" && name != "-" {
 			out[name] = struct{}{}
 		}

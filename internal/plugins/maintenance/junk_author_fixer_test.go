@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3d080ff3-6e67-4d08-a849-8bc0996a8315
-// last-edited: 2026-09-29
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -51,8 +51,7 @@ func (f *junkFixture) author(name string) int {
 		return id
 	}
 	a, err := f.s.CreateAuthor(name)
-	var gate *database.ImplausibleAuthorNameError
-	if errors.As(err, &gate) {
+	if _, ok := errors.AsType[*database.ImplausibleAuthorNameError](err); ok {
 		// Prod holds rows the creation gate now refuses ("read by narrator",
 		// "Book 1 (Unabridged)"): make a stand-in and rename it, which the
 		// gate does not cover, so those classes run through plan and apply.

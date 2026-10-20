@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/store_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: be635650-8d61-463e-b257-fce48c067cd3
-// last-edited: 2026-10-14
+// last-edited: 2026-10-19
 
 package opstest
 
@@ -47,9 +47,9 @@ func TestWorldStoreServesEveryCapability(t *testing.T) {
 	root := repoRoot(t)
 	r := newIfaceResolver(t, root)
 	have := map[string]bool{}
-	ws := reflect.TypeOf((*worldStore)(nil))
-	for i := range ws.NumMethod() {
-		have[ws.Method(i).Name] = true
+	ws := reflect.TypeFor[*worldStore]()
+	for method := range ws.Methods() {
+		have[method.Name] = true
 	}
 	caps := registryCapabilities(t, filepath.Join(root, capabilityPackages["registry"]))
 	if len(caps) == 0 {

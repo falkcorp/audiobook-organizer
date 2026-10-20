@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package abs_test
 
@@ -936,10 +936,7 @@ func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl da
 	for _, h := range hits {
 		ranked = append(ranked, h.book)
 	}
-	offset = max(offset, 0)
-	if offset > len(ranked) {
-		offset = len(ranked)
-	}
+	offset = min(max(offset, 0), len(ranked))
 	ranked = ranked[offset:]
 	if limit > 0 && len(ranked) > limit {
 		ranked = ranked[:limit]

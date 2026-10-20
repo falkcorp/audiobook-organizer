@@ -1,5 +1,5 @@
 // file: internal/database/census_exact.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5d2b8e71-0c4a-4f3e-9b6d-2a7c1e8f4b90
 // last-edited: 2026-10-19
 
@@ -266,10 +266,7 @@ func (f *exactHistoryFold) finish(m *MemStore) *HistoryCensus {
 	h.Max = bins[len(bins)-1].entries
 	// Exact nearest-rank percentiles from the distribution.
 	pct := func(p float64) int64 {
-		rank := int64(math.Ceil(p * float64(f.Books)))
-		if rank < 1 {
-			rank = 1
-		}
+		rank := max(int64(math.Ceil(p*float64(f.Books))), 1)
 		var cum int64
 		for _, b := range bins {
 			cum += b.books
@@ -485,10 +482,7 @@ func (p *PebbleStore) RunExactCensus(ctx context.Context, opts ExactCensusOption
 
 	run := &exactCensusRun{p: p, ctx: ctx, st: st, all: len(names), lastBeat: time.Now(), lastSave: time.Now()}
 	if opts.ReadBytesPerSec > 0 {
-		burst := opts.ReadBytesPerSec
-		if burst < exactCensusCheckBytes*2 {
-			burst = exactCensusCheckBytes * 2
-		}
+		burst := max(opts.ReadBytesPerSec, exactCensusCheckBytes*2)
 		run.lim = rate.NewLimiter(rate.Limit(opts.ReadBytesPerSec), int(burst))
 	}
 	run.report = func(fam string) {
@@ -797,10 +791,7 @@ func (p *PebbleStore) exactSubranges(lo, hi []byte) ([][2][]byte, error) {
 // censusMidKey returns a key strictly between a and b (a < b), or nil when
 // there is none at this length.
 func censusMidKey(a, b []byte) []byte {
-	n := len(a)
-	if len(b) > n {
-		n = len(b)
-	}
+	n := max(len(b), len(a))
 	n++
 	pad := func(x []byte) []byte {
 		out := make([]byte, n)
@@ -845,10 +836,7 @@ func censusWaitBytes(ctx context.Context, lim *rate.Limiter, n int64, beat func(
 		chunkMax = b
 	}
 	for n > 0 {
-		chunk := chunkMax
-		if chunk > n {
-			chunk = n
-		}
+		chunk := min(chunkMax, n)
 		if err := lim.WaitN(ctx, int(chunk)); err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return cerr

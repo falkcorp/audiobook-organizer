@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 
 package audiobooks
 
@@ -203,8 +203,7 @@ func TestRevertOperation_OnlyRecordOnlyRows_ErrorsAndMarksNothing(t *testing.T) 
 		t.Run(ct, func(t *testing.T) {
 			s := &ledgerStub{changes: []*database.OperationChange{deleteRow("c1", ct), deleteRow("c2", ct), deleteRow("c3", ct)}}
 			result, err := NewRevertService(s).RevertOperation("op")
-			var nr *NotRestorableError
-			if !errors.As(err, &nr) {
+			if _, ok := errors.AsType[*NotRestorableError](err); !ok {
 				t.Fatalf("err = %v, want *NotRestorableError", err)
 			}
 			want := "cannot be undone automatically: 3 " + ct + " rows"
@@ -369,8 +368,7 @@ func TestRevertOperation_AllRestorableRowsReverted_SaysAlreadyReverted(t *testin
 	if err == nil || !strings.Contains(err.Error(), "already been reverted") {
 		t.Fatalf("err = %v, want an already-reverted error", err)
 	}
-	var nr *NotRestorableError
-	if errors.As(err, &nr) {
+	if _, ok := errors.AsType[*NotRestorableError](err); ok {
 		t.Errorf("err is a NotRestorableError, want already-reverted")
 	}
 	if s.markCalls != 0 {

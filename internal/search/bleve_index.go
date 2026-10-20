@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -85,8 +85,8 @@ func AsyncErrorCount() int64 { return asyncErrors.Load() }
 
 // runtimeConfig is passed on EVERY open, not just create: bleve.Open with no
 // config would drop the callback on the second boot of any index.
-func runtimeConfig() map[string]interface{} {
-	return map[string]interface{}{"asyncErrorCallbackName": asyncErrorCallbackName}
+func runtimeConfig() map[string]any {
+	return map[string]any{"asyncErrorCallbackName": asyncErrorCallbackName}
 }
 
 // BleveIndex wraps a bleve.Index with a small, opinionated API tuned
@@ -336,7 +336,7 @@ func (b *BleveIndex) HealthStats() map[string]uint64 {
 	if idx == nil {
 		return out
 	}
-	sm, ok := idx.StatsMap()["index"].(map[string]interface{})
+	sm, ok := idx.StatsMap()["index"].(map[string]any)
 	if !ok {
 		return out
 	}

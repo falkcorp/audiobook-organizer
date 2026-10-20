@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-11
+// last-edited: 2026-10-19
 
 //go:build bench
 
@@ -374,7 +374,7 @@ func downloadBatchResult(ctx context.Context, client *openai.Client, outputFileI
 	}
 
 	// Save parsed suggestions
-	_ = writeJSON(filepath.Join(job.RunDir, "parsed_stats.json"), map[string]interface{}{
+	_ = writeJSON(filepath.Join(job.RunDir, "parsed_stats.json"), map[string]any{
 		"action_counts":     actionCounts,
 		"confidence_counts": confidenceCounts,
 		"num_suggestions":   numSuggestions,

@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7e3f5a-9c21-4d84-a6f3-5e8d2c1b7a90
-// last-edited: 2026-10-07
+// last-edited: 2026-10-19
 
 package server
 
@@ -111,8 +111,7 @@ func apiKeyCreateForAnotherUser(c *gin.Context) bool {
 		// A body that decoded but failed a binding rule (no name) is
 		// still readable; the handler answers 400 for it. Anything that
 		// did not decode is refused here.
-		var ve validator.ValidationErrors
-		if !errors.As(err, &ve) {
+		if _, ok := errors.AsType[validator.ValidationErrors](err); !ok {
 			return true
 		}
 	}

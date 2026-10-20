@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-07
+// last-edited: 2026-10-19
 
 package audiobooks
 
@@ -329,7 +329,6 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 	kv, _ := rs.db.(rawKV)
 	owed := rs.loadSettleOwed(kv, operationID)
 	for gid, og := range owed.Groups {
-		og := og
 		if og.Pending {
 			if !in.priorPending[gid] {
 				continue // this run's own intent: not evidence

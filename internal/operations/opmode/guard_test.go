@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/guard_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4e03d07d-8575-4704-af45-0699789f2293
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package opmode
 
@@ -167,7 +167,7 @@ func scanFile(t *testing.T, path, rel string) []plainBoolField {
 			if err != nil {
 				continue
 			}
-			name := strings.Split(reflect.StructTag(tagVal).Get("json"), ",")[0]
+			name, _, _ := strings.Cut(reflect.StructTag(tagVal).Get("json"), ",")
 			if !previewWhenTrueTags[name] {
 				continue
 			}

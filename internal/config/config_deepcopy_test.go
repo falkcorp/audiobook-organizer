@@ -1,7 +1,7 @@
 // file: internal/config/config_deepcopy_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8e4b1c05-3a97-42d6-9f18-7c206ba4e35d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 package config
 
@@ -99,12 +99,11 @@ func TestConfigClone_EveryReferenceFieldIsExported(t *testing.T) {
 			walk(rt.Elem(), path+"[]")
 			return
 		}
-		if rt.Kind() != reflect.Struct || seen[rt] || rt == reflect.TypeOf(time.Time{}) {
+		if rt.Kind() != reflect.Struct || seen[rt] || rt == reflect.TypeFor[time.Time]() {
 			return
 		}
 		seen[rt] = true
-		for i := range rt.NumField() {
-			f := rt.Field(i)
+		for f := range rt.Fields() {
 			fp := path + "." + f.Name
 			if !f.IsExported() {
 				switch f.Type.Kind() {
@@ -125,7 +124,7 @@ func TestConfigClone_EveryReferenceFieldIsExported(t *testing.T) {
 			walk(f.Type, fp)
 		}
 	}
-	walk(reflect.TypeOf(Config{}), "Config")
+	walk(reflect.TypeFor[Config](), "Config")
 }
 
 // walkUnexportedRefs reports every reference-kind field reachable underneath an
@@ -138,12 +137,11 @@ func walkUnexportedRefs(t *testing.T, rt reflect.Type, path string, seen map[ref
 	for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Array {
 		rt = rt.Elem()
 	}
-	if rt.Kind() != reflect.Struct || seen[rt] || rt == reflect.TypeOf(time.Time{}) {
+	if rt.Kind() != reflect.Struct || seen[rt] || rt == reflect.TypeFor[time.Time]() {
 		return
 	}
 	seen[rt] = true
-	for i := range rt.NumField() {
-		f := rt.Field(i)
+	for f := range rt.Fields() {
 		fp := path + "." + f.Name
 		switch f.Type.Kind() {
 		case reflect.Map, reflect.Slice, reflect.Pointer, reflect.Chan, reflect.Interface, reflect.Func:

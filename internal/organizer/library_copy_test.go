@@ -1,7 +1,7 @@
 // file: internal/organizer/library_copy_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 93a1faee-be59-4abb-ab7d-eb7996f3665e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package organizer
 
@@ -143,8 +143,7 @@ func TestOrganizeBook_TrueDuplicateStillRefusedAndReported(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Fatalf("OrganizeBook(original) = %v; want %q", err, want)
 	}
-	var hasCopy *LibraryCopyExistsError
-	if errors.As(err, &hasCopy) {
+	if _, ok := errors.AsType[*LibraryCopyExistsError](err); ok {
 		t.Errorf("an unrelated same-hash book was treated as this book's library copy")
 	}
 	if n := spy.count(); n != 1 {

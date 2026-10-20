@@ -1,5 +1,5 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-10-19
 
@@ -483,11 +483,11 @@ func parseExposition(body string) (map[string]*scrapedFamily, error) {
 		if cur == nil {
 			return nil, fmt.Errorf("line %d: sample before any TYPE line: %q", n+1, line)
 		}
-		open := strings.IndexByte(line, '{')
-		if open < 0 {
+		_, after, ok := strings.Cut(line, "{")
+		if !ok {
 			continue // a sample with no labels
 		}
-		labels, err := parseLabels(line[open+1:])
+		labels, err := parseLabels(after)
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %v", n+1, err)
 		}

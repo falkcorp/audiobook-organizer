@@ -1,7 +1,7 @@
 // file: internal/config/config_deepcopy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0c2b7e-9d41-4c6a-8e5b-2a7f1d9c4b60
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 package config
 
@@ -42,7 +42,7 @@ func (c *Config) Clone() *Config {
 	return dst
 }
 
-var timeType = reflect.TypeOf(time.Time{})
+var timeType = reflect.TypeFor[time.Time]()
 
 // deepCopyValue copies src into dst (which must be settable and of the same
 // type), allocating fresh backing storage for every map, slice, pointer and

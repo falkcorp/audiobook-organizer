@@ -1,7 +1,7 @@
 // file: internal/authorname/parse_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3b8e5f27-14a9-4c03-9d6b-8e21f70a4c95
-// last-edited: 2026-09-29
+// last-edited: 2026-10-19
 
 package authorname
 
@@ -307,7 +307,7 @@ func TestParseDashFilename(t *testing.T) {
 		"/mnt/bigdata/books/audiobook-organizer/Terry Pratchett/Pratchett 036/Pratchett 036 - Terry Pratchett.mp3",
 	} {
 		base := strings.TrimSuffix(filepath.Base(path), ".mp3")
-		left := strings.SplitN(base, " - ", 2)[0]
+		left, _, _ := strings.Cut(base, " - ")
 		org := ParseDashFilename(base, path)
 		if org.Author != "Terry Pratchett" || org.Title != left || org.Series != "" {
 			t.Errorf("organizer layout %s: %+v, want author Terry Pratchett, title %q", path, org, left)

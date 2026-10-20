@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b036c68e-a6da-48df-806b-b765cda262ef
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -50,10 +50,7 @@ func (f *rewriteFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCo
 	if offset >= len(f.books) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(f.books) {
-		end = len(f.books)
-	}
+	end := min(offset+limit, len(f.books))
 	return f.books[offset:end], nil
 }
 

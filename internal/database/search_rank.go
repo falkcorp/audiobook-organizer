@@ -1,5 +1,5 @@
 // file: internal/database/search_rank.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: a46bc2cf-3cc2-4402-b32f-c2fba2c7c95c
 // last-edited: 2026-10-19
 
@@ -227,10 +227,8 @@ func newSearchRanker[T any](limit, offset int) *searchRanker[T] {
 	}
 	r := &searchRanker[T]{}
 	if limit > 0 {
-		k := offset + limit
-		if k < 0 { // overflow: a hostile offset; keep everything (bounded by the library)
-			k = 0
-		}
+		// overflow: a hostile offset; keep everything (bounded by the library)
+		k := max(offset+limit, 0)
 		r.k = k
 	}
 	return r

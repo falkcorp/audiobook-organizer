@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edited_state_save_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 45968a65-7a57-4c9e-b71b-7ee203c64c8a
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package audiobooks
 
@@ -31,7 +31,6 @@ func TestSaveEditedMetadataState_AppliesOnlyTheEdit(t *testing.T) {
 		{BookID: "b1", Field: "title", OverrideLocked: true, LockSource: src},
 		{BookID: "b1", Field: "publisher", OverrideLocked: true},
 	} {
-		st := st
 		require.NoError(t, store.UpsertMetadataFieldState(&st))
 	}
 	loaded, err := svc.loadMetadataState("b1")
@@ -195,9 +194,9 @@ func TestSaveEditedMetadataState_RemovedFieldChangedSinceIsKept(t *testing.T) {
 // the merge may copy from the edit, or the merge needs a rule for it.
 func TestMergeEditedMetadataState_FieldSetIsKnown(t *testing.T) {
 	var names []string
-	ty := reflect.TypeOf(metadataFieldState{})
-	for i := 0; i < ty.NumField(); i++ {
-		names = append(names, ty.Field(i).Name)
+	ty := reflect.TypeFor[metadataFieldState]()
+	for field := range ty.Fields() {
+		names = append(names, field.Name)
 	}
 	require.Equal(t, []string{"FetchedValue", "OverrideValue", "OverrideLocked", "LockSource", "UpdatedAt"}, names)
 }

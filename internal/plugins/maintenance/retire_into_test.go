@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-09
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -787,7 +787,6 @@ func TestRevert_EveryOriginalYieldsToALaterPick(t *testing.T) {
 	groupOf(t, d, "vg-dune", map[string]*bool{s: &no, l: &yes, l2: &yes, m: &no})
 	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-f")
 	for _, id := range []string{l, l2} {
-		id := id
 		require.NoError(t, w.Step(id, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false", func() error {
 			_, err := d.s.ModifyBook(id, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
 			return err

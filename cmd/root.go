@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.28.5
+// version: 1.28.6
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package cmd
 
@@ -763,8 +763,7 @@ func guardAgainstKeyRegeneration(store database.Store, stateDir, legacyKeyDir st
 	}
 
 	settings, err := store.GetAllSettings()
-	var unreadable *database.UnreadableSettingsError
-	if errors.As(err, &unreadable) {
+	if unreadable, ok := errors.AsType[*database.UnreadableSettingsError](err); ok {
 		// Refused regardless of allowKeyRegenEnv; see the doc comment.
 		return fmt.Errorf("settings row(s) %s cannot be read; %s. No encryption "+
 			"key was found in %q or %q, and whether encrypted settings exist "+

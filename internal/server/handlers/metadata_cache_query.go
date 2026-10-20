@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-19
 
@@ -1559,8 +1559,7 @@ func (h *MetadataCacheHandler) ReviewSelectionCheck(c *gin.Context) {
 	}
 	// A failed build is backing off: the same wait-and-ask-again answer, with
 	// the time that is left (at least 1s). A raw build error stays a 500.
-	var backoff *reviewBuildBackoffError
-	if errors.As(err, &backoff) {
+	if backoff, ok := errors.AsType[*reviewBuildBackoffError](err); ok {
 		wait := int(math.Ceil(backoff.remaining.Seconds()))
 		c.Header("Retry-After", strconv.Itoa(max(wait, 1)))
 		httputil.RespondWithError(c, http.StatusServiceUnavailable, errReviewBuildBackoff.Error(), reviewSnapshotBackoffCode)
@@ -1712,18 +1711,15 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 // The Title (q) is the only pattern this endpoint evaluates, so both 400s
 // name it as their field.
 func respondSearchLimit(c *gin.Context, err error) bool {
-	var slow *querygrammar.TooSlowError
-	if errors.As(err, &slow) {
+	if slow, ok := errors.AsType[*querygrammar.TooSlowError](err); ok {
 		respondReviewQueryError(c, &reviewQueryError{msg: slow.Error(), field: reviewQueryFieldQ})
 		return true
 	}
-	var inexact *querygrammar.InexactError
-	if errors.As(err, &inexact) {
+	if inexact, ok := errors.AsType[*querygrammar.InexactError](err); ok {
 		respondReviewQueryError(c, &reviewQueryError{msg: inexact.Error(), field: reviewQueryFieldQ})
 		return true
 	}
-	var busy *querygrammar.BusyError
-	if errors.As(err, &busy) {
+	if busy, ok := errors.AsType[*querygrammar.BusyError](err); ok {
 		c.Header("Retry-After", "2")
 		httputil.RespondWithServiceUnavailable(c, busy.Error())
 		return true

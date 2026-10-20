@@ -1,5 +1,5 @@
 // file: internal/server/absauth/config.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c2f0a951-7b34-46de-8a07-1d59b3e6c8f2
 // last-edited: 2026-10-19
 
@@ -269,10 +269,7 @@ func (c *Config) SessionPastMaxLifetime(createdAt, now time.Time) bool {
 //
 // min(24h, RefreshTTL/10), so a short idle TTL configured for testing still slides.
 func (c *Config) SessionExtendWindow() time.Duration {
-	w := c.RefreshTTL / 10
-	if w > maxSessionExtendWindow {
-		w = maxSessionExtendWindow
-	}
+	w := min(c.RefreshTTL/10, maxSessionExtendWindow)
 	return w
 }
 

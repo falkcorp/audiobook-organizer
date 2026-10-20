@@ -1,5 +1,5 @@
 // file: internal/config/protected_fields_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4f2a8c61-d93e-4b07-a5c8-1e6b3d9f7a20
 // last-edited: 2026-10-19
 
@@ -44,8 +44,7 @@ func configLeafPaths() []string {
 				out = append(out, prefix)
 				return
 			}
-			for i := range t.NumField() {
-				f := t.Field(i)
+			for f := range t.Fields() {
 				if !f.IsExported() {
 					continue
 				}
@@ -81,8 +80,8 @@ func configLeafPaths() []string {
 // configFieldRules directly (it had a production twin, ConfigFieldClass, with
 // no caller outside these tests until 2026-10-18).
 func parentFieldPath(p string) string {
-	if strings.HasSuffix(p, "[]") {
-		return strings.TrimSuffix(p, "[]")
+	if before, ok := strings.CutSuffix(p, "[]"); ok {
+		return before
 	}
 	i := strings.LastIndex(p, ".")
 	if i < 0 {

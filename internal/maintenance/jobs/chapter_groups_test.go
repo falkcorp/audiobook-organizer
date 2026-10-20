@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package jobs
 
@@ -461,7 +461,6 @@ func TestMergeChapterGroups_MetadataFillsOrConflictBlocks(t *testing.T) {
 	}
 	saga := chSeedGroup(t, s, "/lib/B/Saga", "Saga", 3, 300)
 	for i, v := range []string{"Reader One", "Reader Two"} {
-		v := v
 		if _, err := s.ModifyBook(saga[i+1].ID, func(b *database.Book) error { b.Narrator = &v; return nil }); err != nil {
 			t.Fatalf("ModifyBook: %v", err)
 		}

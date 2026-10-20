@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package repairs
 
@@ -309,10 +309,7 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 		SkippedByKind: p.SkippedByKind, OwnerApplicable: p.OwnerApplicable, ByClass: p.ByClass, ByClassInFilter: inFilter,
 		SkippedByKindInClass: kindsInClass, ApplicableInClass: applicableInClass, Rows: []Row{}}
 	if offset < len(match) {
-		end := offset + limit
-		if end > len(match) {
-			end = len(match)
-		}
+		end := min(offset+limit, len(match))
 		out.Rows = append(out.Rows, match[offset:end]...)
 	}
 	return out, nil

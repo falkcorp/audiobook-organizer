@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -35,10 +35,7 @@ func (f *repointFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCo
 	if offset >= len(f.books) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(f.books) {
-		end = len(f.books)
-	}
+	end := min(offset+limit, len(f.books))
 	return f.books[offset:end], nil
 }
 func (f *repointFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {

@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -432,8 +432,7 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 			break
 		}
 		staged, err := attempt(clones, pres)
-		var stale *staleStageError
-		if errors.As(err, &stale) {
+		if stale, ok := errors.AsType[*staleStageError](err); ok {
 			newlyRefused := 0
 			refuse := func(c *BookFile, reason string) {
 				if o := origOf[c]; o != nil && !refused[o] {

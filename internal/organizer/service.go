@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.63.1
+// version: 1.63.2
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package organizer
 
@@ -1672,9 +1672,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 
 		// --- Step 2: DB operations ---
 		var commitErr error
-		var conflict *DestinationConflictError
-		var hasCopy *LibraryCopyExistsError
-		if errors.As(err, &hasCopy) {
+		if hasCopy, ok := errors.AsType[*LibraryCopyExistsError](err); ok {
 			// The book's content is already in the library as its own
 			// library copy (same hash, same version group). Nothing to
 			// do and nothing wrong: a skip, not a failure, and the
@@ -1697,7 +1695,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 					log.Warn("Organize: record library-copy skip for %s: %v", book.ID, cerr)
 				}
 			}
-		} else if errors.As(err, &conflict) {
+		} else if conflict, ok := errors.AsType[*DestinationConflictError](err); ok {
 			// A declined destination conflict is a counted outcome, not a
 			// failure: one debug line per pair here, one tally line per
 			// batch below.

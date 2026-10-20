@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.225.1
+// version: 1.225.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-19
 
@@ -975,10 +975,7 @@ func newOrderedULIDSource(now func() time.Time, random io.Reader) *orderedULIDSo
 func (s *orderedULIDSource) next() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ms := ulid.Timestamp(s.now())
-	if ms < s.lastMS {
-		ms = s.lastMS
-	}
+	ms := max(ulid.Timestamp(s.now()), s.lastMS)
 	id, err := ulid.New(ms, s.entropy)
 	if errors.Is(err, ulid.ErrMonotonicOverflow) {
 		// The 80-bit entropy ran out of room inside this millisecond. Borrow

@@ -1,5 +1,5 @@
 // file: internal/searchcache/cache_test.go
-// version: 2.1.3
+// version: 2.1.4
 // guid: 88a06138-3f42-4544-a283-88594317ab8b
 // last-edited: 2026-10-19
 
@@ -503,8 +503,7 @@ func TestCache_BuildsAreBounded(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		_, err := c.Lookup(context.Background(), fmt.Sprintf("k%d", i), mk(), webOpts(time.Millisecond))
-		var pe *PendingError
-		if !errors.As(err, &pe) {
+		if _, ok := errors.AsType[*PendingError](err); !ok {
 			t.Fatalf("lookup %d: %v, want pending", i, err)
 		}
 	}

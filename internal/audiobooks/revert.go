@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.79.1
+// version: 1.79.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package audiobooks
 
@@ -564,8 +564,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 				already, err = true, nil
 			}
 		}
-		var superseded *supersededRestore
-		if errors.As(err, &superseded) {
+		if superseded, ok := errors.AsType[*supersededRestore](err); ok {
 			// Nothing was written and nothing is owed: the row is done, so
 			// it is marked reverted, but it is not reported Restored.
 			result.Superseded++
@@ -575,8 +574,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			markedIDs = append(markedIDs, c.ID)
 			continue
 		}
-		var partial *partialTagRestore
-		if errors.As(err, &partial) {
+		if partial, ok := errors.AsType[*partialTagRestore](err); ok {
 			// Every tag that still held what the operation wrote was put
 			// back; the rest are later changes and stay. The row is done:
 			// a retry could only overwrite those later changes. A combine
@@ -596,8 +594,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			if c.ChangeType == undo.ChangeTypeBookPrimaryDemote {
 				refusedDemote[c.BookID] = true
 			}
-			var partlyAuthor *undo.AuthorPartlyRestoredError
-			if errors.As(err, &partlyAuthor) {
+			if _, ok := errors.AsType[*undo.AuthorPartlyRestoredError](err); ok {
 				result.AuthorsPartlyRestored++
 			}
 			result.Failed++

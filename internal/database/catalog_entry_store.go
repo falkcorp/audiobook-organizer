@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -668,11 +668,11 @@ func (s *CatalogStore) CountAuthorNameBlocks() (int, error) {
 	have := false
 	for iter.First(); iter.Valid(); iter.Next() {
 		rest := bytes.TrimPrefix(iter.Key(), p)
-		i := bytes.IndexByte(rest, ':')
-		if i < 0 {
+		before, _, ok := bytes.Cut(rest, []byte{':'})
+		if !ok {
 			continue
 		}
-		fold := rest[:i]
+		fold := before
 		if have && bytes.Equal(fold, last) {
 			continue
 		}

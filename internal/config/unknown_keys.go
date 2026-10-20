@@ -1,5 +1,5 @@
 // file: internal/config/unknown_keys.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6a4394fd-1b48-48cc-9b88-0642eff0623f
 // last-edited: 2026-10-19
 
@@ -93,8 +93,7 @@ func walkUnknownKeys(t reflect.Type, v any, path string, out *[]string) {
 func jsonFieldTypes(t reflect.Type) map[string]reflect.Type {
 	fields := make(map[string]reflect.Type)
 	promoted := make(map[string]reflect.Type)
-	for i := range t.NumField() {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		tag := f.Tag.Get("json")
 		if tag == "-" {
 			continue

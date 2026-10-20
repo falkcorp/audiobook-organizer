@@ -1,7 +1,7 @@
 // file: internal/database/metadata_field_locks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 041867f9-1429-4696-8eac-a3faef717c4d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 package database
 
@@ -16,7 +16,7 @@ import (
 // Every Column in the vocabulary must be a real Book field, so the mapping
 // cannot silently name a column that was renamed away.
 func TestUserLockableFieldsNameRealBookColumns(t *testing.T) {
-	bookType := reflect.TypeOf(Book{})
+	bookType := reflect.TypeFor[Book]()
 	seen := map[string]bool{}
 	for _, f := range UserLockableFields {
 		if f.Key == "" || f.Column == "" {

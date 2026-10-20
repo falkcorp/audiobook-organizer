@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
-// last-edited: 2026-10-05
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -385,8 +385,8 @@ func TestJoinRegroupErrs(t *testing.T) {
 // the bulk read, never a database.BookFile per row (792 B each: larger than
 // the BookFileCore it was copied from).
 func TestRegroupSnapshotFiles_HoldsNoBookFilePerRow(t *testing.T) {
-	typ := reflect.TypeOf(regroupSnapshotFiles{})
-	bookFile := reflect.TypeOf(database.BookFile{})
+	typ := reflect.TypeFor[regroupSnapshotFiles]()
+	bookFile := reflect.TypeFor[database.BookFile]()
 	var holds func(reflect.Type, int) bool
 	holds = func(t reflect.Type, depth int) bool {
 		if t == bookFile {
@@ -401,8 +401,8 @@ func TestRegroupSnapshotFiles_HoldsNoBookFilePerRow(t *testing.T) {
 		case reflect.Map:
 			return holds(t.Key(), depth+1) || holds(t.Elem(), depth+1)
 		case reflect.Struct:
-			for i := 0; i < t.NumField(); i++ {
-				if holds(t.Field(i).Type, depth+1) {
+			for field := range t.Fields() {
+				if holds(field.Type, depth+1) {
 					return true
 				}
 			}
@@ -412,7 +412,7 @@ func TestRegroupSnapshotFiles_HoldsNoBookFilePerRow(t *testing.T) {
 	require.False(t, holds(typ, 0), "regroupSnapshotFiles holds a database.BookFile")
 	f, ok := typ.FieldByName("byBook")
 	require.True(t, ok)
-	require.Equal(t, reflect.TypeOf(int32(0)), f.Type.Elem().Elem(), "the per-row index must be int32")
+	require.Equal(t, reflect.TypeFor[int32](), f.Type.Elem().Elem(), "the per-row index must be int32")
 
 	// And it serves the same rows the check reads, live books only.
 	dw := "Doctor Who: Shada"

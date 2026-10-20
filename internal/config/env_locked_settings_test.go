@@ -1,5 +1,5 @@
 // file: internal/config/env_locked_settings_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4f1c9a83-6d27-4b50-9e18-2c7a5b0e3d64
 // last-edited: 2026-10-19
 
@@ -15,10 +15,10 @@ import (
 // configJSONFieldNames reflects over Config and returns every json tag name.
 func configJSONFieldNames(t *testing.T) []string {
 	t.Helper()
-	typ := reflect.TypeOf(Config{})
+	typ := reflect.TypeFor[Config]()
 	names := make([]string, 0, typ.NumField())
-	for i := range typ.NumField() {
-		tag := typ.Field(i).Tag.Get("json")
+	for field := range typ.Fields() {
+		tag := field.Tag.Get("json")
 		if tag == "" || tag == "-" {
 			continue
 		}

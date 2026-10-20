@@ -1,7 +1,7 @@
 // file: internal/diag/flight/flight.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 77f150f0-6e2a-4983-9ab6-3b77b267821f
-// last-edited: 2026-10-14
+// last-edited: 2026-10-19
 
 // Package flight runs one runtime/trace.FlightRecorder for the life of the
 // server and writes its window to disk when a watchdog notices a stall.
@@ -399,11 +399,12 @@ func (r *Recorder) write(at time.Time, reason string) {
 
 	// Fix the name now: reasons requested while this write ran are part of it.
 	covered := r.freezeCovered(reason)
-	base := filepath.Base(prefix)
+	var base strings.Builder
+	base.WriteString(filepath.Base(prefix))
 	for _, c := range covered {
-		base += coveredJoin + c
+		base.WriteString(coveredJoin + c)
 	}
-	final := filepath.Join(r.dir, base)
+	final := filepath.Join(r.dir, base.String())
 	if err := os.Rename(traceTmp, final+traceSuffix); err != nil {
 		_ = os.Remove(traceTmp)
 		_ = os.Remove(dumpTmp)
@@ -419,8 +420,8 @@ func (r *Recorder) write(at time.Time, reason string) {
 
 	// Only now is the reason rate limited: a failed write leaves it free to
 	// retry on the next strike.
-	r.recordSuccess(at, base, append([]string{reason}, covered...))
-	flightLog.Info("wrote %s (%d bytes of trace, goroutine dump %t)", base+traceSuffix, n, haveDump)
+	r.recordSuccess(at, base.String(), append([]string{reason}, covered...))
+	flightLog.Info("wrote %s (%d bytes of trace, goroutine dump %t)", base.String()+traceSuffix, n, haveDump)
 	r.rotate()
 }
 

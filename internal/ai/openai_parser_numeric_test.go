@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser_numeric_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f0c2e7a-8d41-4b6e-9a3c-2e7d1b4f6a90
-// last-edited: 2026-09-13
+// last-edited: 2026-10-19
 
 package ai
 
@@ -173,16 +173,14 @@ func TestDecodeResultElement_StringFieldTypeErrorStillFails(t *testing.T) {
 // parsedMetadataWire, which would bring back the whole-batch failure.
 func TestParsedMetadataWire_ShadowsEveryNumericField(t *testing.T) {
 	shadows := map[string]bool{}
-	wt := reflect.TypeOf(parsedMetadataWire{})
-	for i := 0; i < wt.NumField(); i++ {
-		f := wt.Field(i)
-		if f.Type == reflect.TypeOf(lenientInt{}) {
+	wt := reflect.TypeFor[parsedMetadataWire]()
+	for f := range wt.Fields() {
+		if f.Type == reflect.TypeFor[lenientInt]() {
 			shadows[strings.Split(f.Tag.Get("json"), ",")[0]] = true
 		}
 	}
-	pt := reflect.TypeOf(ParsedMetadata{})
-	for i := 0; i < pt.NumField(); i++ {
-		f := pt.Field(i)
+	pt := reflect.TypeFor[ParsedMetadata]()
+	for f := range pt.Fields() {
 		if !f.IsExported() {
 			continue
 		}
@@ -190,7 +188,7 @@ func TestParsedMetadataWire_ShadowsEveryNumericField(t *testing.T) {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 			reflect.Float32, reflect.Float64:
-			key := strings.Split(f.Tag.Get("json"), ",")[0]
+			key, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 			if !shadows[key] {
 				t.Errorf("ParsedMetadata.%s (%q) is numeric but has no lenient shadow in parsedMetadataWire", f.Name, key)
 			}

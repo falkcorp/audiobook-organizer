@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit
@@ -125,7 +125,7 @@ const (
 
 var bookSpec = &entitySpec{
 	name:   entityBook,
-	fields: buildFieldIndex(reflect.TypeOf(database.Book{})),
+	fields: buildFieldIndex(reflect.TypeFor[database.Book]()),
 	immutable: map[string]string{
 		"id":         "the primary key",
 		"created_at": "set by the store",
@@ -140,7 +140,7 @@ var bookSpec = &entitySpec{
 
 var bookFileSpec = &entitySpec{
 	name:   entityBookFile,
-	fields: buildFieldIndex(reflect.TypeOf(database.BookFile{})),
+	fields: buildFieldIndex(reflect.TypeFor[database.BookFile]()),
 	immutable: map[string]string{
 		"id":         "the primary key",
 		"book_id":    "part of the primary key; moving a file between books is a merge, not a field edit",

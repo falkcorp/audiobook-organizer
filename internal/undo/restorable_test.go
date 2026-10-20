@@ -1,7 +1,7 @@
 // file: internal/undo/restorable_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package undo
 
@@ -86,7 +86,7 @@ func TestNotRestorableLabel(t *testing.T) {
 // panicked on an *int: SetString on an int Value), so the preflight would
 // promise a row the revert then counts as Failed.
 func TestRevertableBookFields_NameRestorableFieldsOfBook(t *testing.T) {
-	bt := reflect.TypeOf(database.Book{})
+	bt := reflect.TypeFor[database.Book]()
 	for field, name := range revertableBookFields {
 		f, ok := bt.FieldByName(name)
 		if !ok {

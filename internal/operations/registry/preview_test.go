@@ -1,7 +1,7 @@
 // file: internal/operations/registry/preview_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 4000c6f3-ba9e-43d9-b294-eb3b2b4b70a8
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package registry
 
@@ -226,8 +226,7 @@ func TestPreviewSpec_ResolveRefuses(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
 			}
-			var me *ModeError
-			if !errors.As(err, &me) {
+			if _, ok := errors.AsType[*ModeError](err); !ok {
 				t.Fatalf("error %T is not a *ModeError", err)
 			}
 		})

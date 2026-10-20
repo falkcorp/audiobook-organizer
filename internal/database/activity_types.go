@@ -1,5 +1,5 @@
 // file: internal/database/activity_types.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-19
 
@@ -72,10 +72,7 @@ func clampActivitySummary(s string) string {
 	// Render the marker first: its length depends on the sizes it reports, so
 	// the budget for the prefix cannot be known until it exists.
 	marker := fmt.Sprintf("... [summary truncated: %d bytes total]", len(s))
-	cut := activitySummaryMax - len(marker)
-	if cut < 0 {
-		cut = 0
-	}
+	cut := max(activitySummaryMax-len(marker), 0)
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}

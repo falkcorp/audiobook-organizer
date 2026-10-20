@@ -1,7 +1,7 @@
 // file: internal/database/author_membership_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 76c6e630-e4b4-4ae7-8b7e-63d560a5af55
-// last-edited: 2026-09-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -66,7 +66,7 @@ func degradeAuthorMemdbJunction(t *testing.T, p *PebbleStore, bookID string) {
 		defer txn.Commit()
 		iter, err := txn.Get(memTableBookAuthors, memIdxBookID, bookID)
 		require.NoError(t, err)
-		var rows []interface{}
+		var rows []any
 		for obj := iter.Next(); obj != nil; obj = iter.Next() {
 			rows = append(rows, obj)
 		}

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_lock_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 511d8e1c-2f2f-49f7-a5f0-1e48bce72f0f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // A1#10: applyBookMergeReroute used to copy the losers' iTunes stats onto the
 // keep book itself -- GetBookByID + full-row UpdateBook, outside
@@ -171,8 +171,7 @@ func TestApplyBookMergeReroute_ConsumedLoserDoesNotCarry(t *testing.T) {
 		t.Fatalf("first merge: %v", err)
 	}
 	_, err := applyBookMergeReroute(ms, "", keepB, []string{loserID})
-	var sd *merge.SoftDeletedInputError
-	if !errors.As(err, &sd) {
+	if _, ok := errors.AsType[*merge.SoftDeletedInputError](err); !ok {
 		t.Fatalf("second merge err = %v, want SoftDeletedInputError for the consumed loser", err)
 	}
 	if b := mustGetRerouteBook(t, store, keepB); b.ITunesRating != nil {

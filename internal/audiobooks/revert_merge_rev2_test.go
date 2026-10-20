@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_rev2_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d0c7a52-8e7b-4f1e-9c36-2a4b6f1d8e90
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package audiobooks
 
@@ -138,7 +138,6 @@ func TestRevert_PendingCombine_KeepsLaterRenumber(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, files)
 		for _, fl := range files {
-			fl := fl
 			fl.DiscNumber, fl.TrackNumber = 2, track
 			require.NoError(t, store.UpdateBookFile(fl.ID, &fl))
 			track++
@@ -473,7 +472,6 @@ func TestRevert_SplitMergeLeftLive_KeepsLaterRenumber(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
 	for i, fl := range files {
-		fl := fl
 		fl.DiscNumber, fl.TrackNumber = 5, 50+i
 		require.NoError(t, store.UpdateBookFile(fl.ID, &fl))
 	}

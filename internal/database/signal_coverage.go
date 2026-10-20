@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -302,13 +302,8 @@ func CountBookFileSignals(ctx context.Context, n int, at func(i int) *BookFile, 
 	if workers < 1 {
 		workers = runtime.NumCPU()
 	}
-	shards := workers * 4 // smaller shards than workers keeps stragglers short
-	if shards > n {
-		shards = n
-	}
-	if shards < 1 {
-		shards = 1
-	}
+	// smaller shards than workers keeps stragglers short
+	shards := max(min(workers*4, n), 1)
 	accs := make([]signalAcc, shards)
 	var g errgroup.Group
 	g.SetLimit(workers)

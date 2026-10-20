@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 
 package scanner
 
@@ -196,8 +196,7 @@ func requirePathRowHeld(ctx context.Context, path string) error {
 }
 
 func asWiden(err error) (*errScanLockWiden, bool) {
-	var w *errScanLockWiden
-	if errors.As(err, &w) {
+	if w, ok := errors.AsType[*errScanLockWiden](err); ok {
 		return w, true
 	}
 	return nil, false

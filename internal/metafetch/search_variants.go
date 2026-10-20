@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package metafetch
 
@@ -762,7 +762,6 @@ func buildQueryVariants(p parsedTitle, literal, rawTitle, author, narrator strin
 	// re-derive it with the narrator or slot still attached.
 	if p.Series == "" {
 		for _, ev := range extraTitleVariants(rawTitle, literal) {
-			ev := ev
 			who := author
 			if who == "" {
 				who = narrator

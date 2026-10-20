@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench_batch.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-08-20
+// last-edited: 2026-10-19
 
 //go:build bench
 
@@ -67,7 +67,7 @@ func submitBatchJobs(
 			}
 
 			// Save config
-			_ = writeJSON(filepath.Join(outDir, "config.json"), map[string]interface{}{
+			_ = writeJSON(filepath.Join(outDir, "config.json"), map[string]any{
 				"model":          tc.Model,
 				"prompt_variant": tc.PromptVariant,
 				"temperature":    tc.Temperature,
@@ -114,7 +114,7 @@ func submitBatchJobs(
 			for ci, chunk := range chunks {
 				userPrompt := userPromptPrefix + string(chunk)
 
-				body := map[string]interface{}{
+				body := map[string]any{
 					"model": tc.Model,
 					"messages": []map[string]string{
 						{"role": "system", "content": systemPrompt},

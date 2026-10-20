@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench_runner.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d4e5f6a7-b8c9-0123-defa-456789012345
-// last-edited: 2026-08-20
+// last-edited: 2026-10-19
 
 //go:build bench
 
@@ -45,7 +45,7 @@ func executeBenchRun(
 	}
 
 	// Save config
-	configWithMode := map[string]interface{}{
+	configWithMode := map[string]any{
 		"model":          tc.Model,
 		"prompt_variant": tc.PromptVariant,
 		"temperature":    tc.Temperature,
@@ -81,7 +81,7 @@ func executeBenchRun(
 	slog.Info("Input size", "bytes", len(inputJSON), "chunks", len(chunks))
 
 	// Save the full request data
-	request := map[string]interface{}{
+	request := map[string]any{
 		"model":             tc.Model,
 		"prompt_variant":    tc.PromptVariant,
 		"temperature":       tc.Temperature,
@@ -121,7 +121,7 @@ func executeBenchRun(
 
 		// Save per-chunk request
 		if len(chunks) > 1 {
-			chunkReq := map[string]interface{}{
+			chunkReq := map[string]any{
 				"chunk_index":   ci,
 				"system_prompt": systemPrompt,
 				"user_prompt":   userPrompt,
@@ -160,7 +160,7 @@ func executeBenchRun(
 		elapsed := time.Since(start)
 
 		if err != nil {
-			errResult := map[string]interface{}{
+			errResult := map[string]any{
 				"error":       err.Error(),
 				"duration_ms": elapsed.Milliseconds(),
 				"chunk":       ci,
@@ -263,10 +263,7 @@ func chunkInput(inputJSON []byte, chunkSize int, mode string) [][]byte {
 		}
 		var chunks [][]byte
 		for i := 0; i < len(items); i += chunkSize {
-			end := i + chunkSize
-			if end > len(items) {
-				end = len(items)
-			}
+			end := min(i+chunkSize, len(items))
 			// Reindex within the chunk
 			chunk := make([]ai.AuthorDedupInput, end-i)
 			copy(chunk, items[i:end])
@@ -286,10 +283,7 @@ func chunkInput(inputJSON []byte, chunkSize int, mode string) [][]byte {
 	}
 	var chunks [][]byte
 	for i := 0; i < len(items); i += chunkSize {
-		end := i + chunkSize
-		if end > len(items) {
-			end = len(items)
-		}
+		end := min(i+chunkSize, len(items))
 		data, _ := json.Marshal(items[i:end])
 		chunks = append(chunks, data)
 	}

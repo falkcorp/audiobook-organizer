@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
-// last-edited: 2026-10-14
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -64,10 +64,7 @@ func (f *markFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore,
 	if offset >= len(books) {
 		return nil, nil
 	}
-	end := offset + limit
-	if end > len(books) {
-		end = len(books)
-	}
+	end := min(offset+limit, len(books))
 	return books[offset:end], nil
 }
 func (f *markFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {

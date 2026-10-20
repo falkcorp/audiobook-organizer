@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // ai_scan_apply_op registers ai.author-scan-apply: the op behind "Apply selected"
 // in the Authors & series lane's AI scans sub-view. Until 2026-10-13 that button
@@ -450,8 +450,7 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 						logging.Warn(ctx, "ai scan apply: could not void the undo note of a result that was not marked applied",
 							"scan_id", p.ScanID, "result_id", rid, "err", verr)
 					}
-					var sup *database.ScanSupersededError
-					if stderrors.As(merr, &sup) {
+					if _, ok := stderrors.AsType[*database.ScanSupersededError](merr); ok {
 						res.Errors = append(res.Errors, fmt.Sprintf("merged, but scan %d was superseded meanwhile, so the result was not marked applied: %v", p.ScanID, merr))
 					} else {
 						res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result could not be marked applied: %v", merr))

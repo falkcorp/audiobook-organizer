@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_multifile_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c2a9e4d-7b13-4f58-a0d2-3e9b1c5f8a47
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package organizer
 
@@ -234,8 +234,7 @@ func TestReOrganizeInPlace_MultiFileRollbackFailureIsAFailureNotASkip(t *testing
 		t.Fatalf("test reset: %v", err)
 	}
 	_, err := svc.OrganizeOneBook(svc.newOrganizer(), getInPlaceBook(t, store, b.ID), &noopLogger{})
-	var c *DestinationConflictError
-	if errors.As(err, &c) {
+	if c, ok := errors.AsType[*DestinationConflictError](err); ok {
 		t.Fatalf("a failed rollback surfaced as a declined move (%s): %v", c.Category, err)
 	}
 }
@@ -273,8 +272,7 @@ func TestReOrganizeInPlace_MultiFileRowWriteFailureUndoesTheMove(t *testing.T) {
 	if err == nil {
 		t.Fatal("OrganizeOneBook succeeded; want the injected row-write failure")
 	}
-	var c *DestinationConflictError
-	if errors.As(err, &c) {
+	if _, ok := errors.AsType[*DestinationConflictError](err); ok {
 		t.Fatalf("a failed write surfaced as a declined move: %v", err)
 	}
 	requireUnmoved(t, pebble, b, first, second)

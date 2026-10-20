@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 589d6eef-182c-4245-9722-d24bbd3dcf06
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package metadata
 
@@ -165,8 +165,7 @@ func ClassifyProviderError(err error) (reason ThrottleReason, hold time.Duration
 		return "", 0, false
 	}
 
-	var se *ProviderStatusError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*ProviderStatusError](err); ok {
 		// READ THE BODY BEFORE THE STATUS CODE.
 		//
 		// The status alone is ambiguous for the exact provider that motivated
@@ -190,13 +189,7 @@ func ClassifyProviderError(err error) (reason ThrottleReason, hold time.Duration
 				// never shorter than the burst default (a server saying "1
 				// second" while refusing every call just reproduces the
 				// hammering) and never longer than maxThrottleHold.
-				hold := throttleDurations[ThrottleRateLimit]
-				if se.RetryAfter > hold {
-					hold = se.RetryAfter
-				}
-				if hold > maxThrottleHold {
-					hold = maxThrottleHold
-				}
+				hold := min(max(se.RetryAfter, throttleDurations[ThrottleRateLimit]), maxThrottleHold)
 				return ThrottleRateLimit, hold, true
 			}
 		}
@@ -213,8 +206,7 @@ func ClassifyProviderError(err error) (reason ThrottleReason, hold time.Duration
 	}
 
 	// Transport-level trouble: dial refused, DNS, connection reset.
-	var ne net.Error
-	if errors.As(err, &ne) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return ThrottleTransport, throttleDurations[ThrottleTransport], true
 	}
 	return "", 0, false

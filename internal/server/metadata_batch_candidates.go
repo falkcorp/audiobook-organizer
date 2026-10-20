@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.28.2
+// version: 4.28.3
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -105,8 +105,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		resolved, err := operations.ResolveBookIDs(*req.Selection, func(f operations.FilterSpec) ([]string, error) {
 			return s.resolveFilterToBookIDs(c.Request.Context(), f)
 		})
-		var busy *querygrammar.BusyError
-		if errors.As(err, &busy) {
+		if busy, ok := errors.AsType[*querygrammar.BusyError](err); ok {
 			// Load, not a bad request: the client may retry.
 			c.Header("Retry-After", "2")
 			httputil.RespondWithServiceUnavailable(c, "failed to resolve selection: "+busy.Error())
