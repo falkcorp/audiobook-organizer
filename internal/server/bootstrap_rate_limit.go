@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -26,6 +26,8 @@ import (
 //   - the key is an IPv4 address or an IPv6 /64 (bootstrapRateKey), so an
 //     attacker who owns a /64 cannot mint 2^64 keys, and an unparseable or
 //     unattributed client uses one fixed key rather than attacker-chosen text;
+//     a direct LAN peer is keyed on its full address (bootstrapDirectKey),
+//     because LAN devices share one ULA /64;
 //   - entries are kept in creation order, and every call first drops the ones
 //     whose window has ended, so the map holds only live windows;
 //   - the map is hard-capped at bootstrapMaxTrackedKeys, evicting the oldest;
@@ -103,6 +105,20 @@ func bootstrapRateKey(ip string, attributed bool) string {
 	return key
 }
 
+// bootstrapDirectKey is the bucket of a direct LAN peer: its FULL address,
+// with a prefix of its own. Not the /64: on an IPv6 ULA network every machine
+// on the LAN shares one /64, so a /64 key would let one LAN device spend the
+// owner's attempts. The prefix keeps a direct bucket from ever being the same
+// key as a tunnel visitor's. bootstrapDirectLANPeer already parsed the address,
+// so an unparseable one cannot reach here; it falls back to the shared key.
+func bootstrapDirectKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return untrustedLocalClientKey
+	}
+	return "direct:" + a.WithZone("").Unmap().String()
+}
+
 // bootstrapClientKey returns the bootstrap limiter key for the request, the
 // address to log, and whether the request is exempt from the global ceiling
 // (a direct LAN peer, bootstrapDirectLANPeer). Every other request is keyed
@@ -112,7 +128,7 @@ func bootstrapRateKey(ip string, attributed bool) string {
 func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key, logIP string, exempt bool) {
 	if bootstrapDirectLANPeer(c, connectors) {
 		ip := strings.TrimSpace(c.ClientIP())
-		return bootstrapRateKey(ip, true), ip, true
+		return bootstrapDirectKey(ip), ip, true
 	}
 	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
 	ip = strings.TrimSpace(ip)
