@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-10-20
 
@@ -358,7 +358,6 @@ type versionFlagWrite struct {
 func (h *VersionsHandler) undoLinkWrites(targetGroup string, written []versionFlagWrite) []string {
 	var stuck []string
 	for _, w := range slices.Backward(written) {
-
 		if _, err := h.modifyBook(w.id, func(cur *database.Book) error {
 			if versionGroupOf(cur) != targetGroup {
 				return fmt.Errorf("book %s left version group %s after the link wrote it", cur.ID, targetGroup)
