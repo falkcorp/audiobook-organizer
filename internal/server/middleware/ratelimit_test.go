@@ -1,5 +1,5 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
 // last-edited: 2026-10-20
 
@@ -311,36 +311,103 @@ func (r *IPRateLimiter) SweepCount() int64 {
 }
 
 // ReserveKey takes tokens atomically: concurrent callers never get more than
-// the bucket holds.
+// the bucket holds, whether the key is tracked or not, and whether the
+// admitted requests commit (insert the entry) while others are in flight.
 func TestIPRateLimiter_ReserveKeyIsAtomic(t *testing.T) {
-	r := NewIPRateLimiter(1, 5)
-	var got atomic.Int64
-	var wg sync.WaitGroup
-	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, ok := r.ReserveKey("k"); ok {
-				got.Add(1)
+	for _, tracked := range []bool{false, true} {
+		r := NewIPRateLimiter(1, 5)
+		if tracked {
+			res, ok := r.ReserveKey("k")
+			if !ok {
+				t.Fatal("first reservation refused")
 			}
-		}()
+			res.Commit() // "k" is now tracked with 4 tokens left
+		}
+		var got atomic.Int64
+		var wg sync.WaitGroup
+		for i := range 100 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				res, ok := r.ReserveKey("k")
+				if !ok {
+					return
+				}
+				got.Add(1)
+				if i%2 == 0 {
+					res.Commit()
+				} else {
+					res.Cancel()
+					got.Add(-1)
+				}
+			}()
+		}
+		wg.Wait()
+		// Cancelled reservations give their token back, so later goroutines
+		// may reuse it; what must hold is that committed admissions never
+		// exceed the burst.
+		want := int64(5)
+		if tracked {
+			want = 4
+		}
+		if n := got.Load(); n > want {
+			t.Fatalf("tracked=%v: %d reservations committed on %d available", tracked, n, want)
+		}
+		if n := got.Load(); n < 1 {
+			t.Fatalf("tracked=%v: nothing was admitted", tracked)
+		}
 	}
-	wg.Wait()
-	if n := got.Load(); n > 6 {
-		t.Fatalf("%d concurrent reservations succeeded on a burst of 5", n)
+}
+
+// Pending admissions of an unseen key count against its burst: with the
+// burst held by in-flight reservations, a new request is refused even after
+// one of them commits and the key becomes tracked.
+func TestIPRateLimiter_PendingAdmissionsCountAgainstTheBurst(t *testing.T) {
+	r := NewIPRateLimiter(1, 3)
+	var held []KeyReservation
+	for range 3 {
+		res, ok := r.ReserveKey("k")
+		if !ok {
+			t.Fatal("an unseen key has a full burst")
+		}
+		held = append(held, res)
+	}
+	if _, ok := r.ReserveKey("k"); ok {
+		t.Fatal("a fourth in-flight reservation exceeded the burst of 3")
+	}
+	held[0].Commit() // inserts "k"; two admissions still pending
+	if _, ok := r.ReserveKey("k"); ok {
+		t.Fatal("the tracked key ignored its two pending admissions")
+	}
+	held[1].Cancel() // one token back
+	res, ok := r.ReserveKey("k")
+	if !ok {
+		t.Fatal("a cancelled pending admission did not free its slot")
+	}
+	res.Commit()
+	held[2].Commit()
+	if _, ok := r.ReserveKey("k"); ok {
+		t.Fatal("three committed on a burst of 3, yet a fourth was admitted")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.pending) != 0 {
+		t.Fatalf("pending admissions leaked: %v", r.pending)
 	}
 }
 
 // ReserveKeys gives back every token it took when a later step refuses, and
-// drops the entries it created for the refused request.
+// a refused request inserts no entry anywhere.
 func TestReserveKeys_RefusalCancelsEverything(t *testing.T) {
 	a := NewIPRateLimiter(1, 3)
 	b := NewIPRateLimiter(1, 1)
-	if !ReserveKeys(KeyStep{a, "x"}, KeyStep{b, "y"}) {
+	held, ok := ReserveKeys(KeyStep{a, "x"}, KeyStep{b, "y"})
+	if !ok {
 		t.Fatal("first request must pass")
 	}
+	CommitReservations(held)
 	for range 5 {
-		if ReserveKeys(KeyStep{a, "x"}, KeyStep{b, "y"}) {
+		if _, ok := ReserveKeys(KeyStep{a, "x"}, KeyStep{b, "y"}); ok {
 			t.Fatal("b is empty; the request must be refused")
 		}
 	}
@@ -354,14 +421,39 @@ func TestReserveKeys_RefusalCancelsEverything(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("a allowed %d more, want 2 (refused requests must have spent nothing)", n)
 	}
-	// A refused request leaves no new key behind.
-	if ReserveKeys(KeyStep{a, "fresh"}, KeyStep{b, "y"}) {
-		t.Fatal("b is still empty")
+	// Refused requests leave no new key behind and no pending admission.
+	for i := range 50 {
+		if _, ok := ReserveKeys(KeyStep{a, fmt.Sprintf("fresh-%d", i)}, KeyStep{b, "y"}); ok {
+			t.Fatal("b is still empty")
+		}
+	}
+	if got := a.Len(); got != 1 {
+		t.Fatalf("a tracks %d keys after refused requests, want 1 (only x)", got)
 	}
 	a.mu.Lock()
-	_, tracked := a.entries["fresh"]
-	a.mu.Unlock()
-	if tracked {
-		t.Fatal("a refused request left a new entry behind")
+	defer a.mu.Unlock()
+	if len(a.pending) != 0 {
+		t.Fatalf("refused requests left pending admissions: %v", a.pending)
 	}
+}
+
+// A refused request never inserts an entry, so at the tracked-entry cap it
+// cannot evict another key either (insert-then-drop on refusal would evict
+// the least-recently-seen key, and the evicted key would come back with a
+// fresh burst).
+func TestReserveKeys_RefusalEvictsNobody(t *testing.T) {
+	a := NewIPRateLimiter(1, 2)
+	a.maxEntries = 2
+	b := NewIPRateLimiter(1, 1)
+	for range 2 {
+		require.True(t, a.AllowKey("victim")) // victim's bucket is now empty
+	}
+	require.True(t, a.AllowKey("other"))
+	require.False(t, b.AllowKey("y") && b.AllowKey("y")) // b is empty
+	for i := range 20 {
+		_, ok := ReserveKeys(KeyStep{a, fmt.Sprintf("fresh-%d", i)}, KeyStep{b, "y"})
+		require.False(t, ok)
+	}
+	assert.False(t, a.AllowKey("victim"), "refused requests evicted the victim, refreshing its empty bucket")
+	assert.Equal(t, 2, a.Len())
 }

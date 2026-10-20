@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -774,6 +774,9 @@ func TestInviteRateLimit_GlobalIsCheckedBeforeAnyBucketIsCreated(t *testing.T) {
 func TestInviteRateLimit_ConcurrentClientCannotDrainGlobal(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
 	h.limits.global = servermiddleware.NewIPRateLimiter(1, 3*inviteAuthRateBurst)
+	// Refill once a minute, so a goroutine scheduled seconds late on a loaded
+	// -race run cannot earn a refilled token and break the exact bound.
+	h.limits.perClient = servermiddleware.NewIPRateLimiter(1, inviteAuthRateBurst)
 	var admitted atomic.Int64
 	var wg sync.WaitGroup
 	for i := range 200 {
@@ -786,12 +789,43 @@ func TestInviteRateLimit_ConcurrentClientCannotDrainGlobal(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if n := admitted.Load(); n > inviteAuthRateBurst+1 {
+	if n := admitted.Load(); n > inviteAuthRateBurst {
 		t.Fatalf("one client got %d requests through, want at most its burst of %d", n, inviteAuthRateBurst)
 	}
 	for i := range 5 {
 		if w := h.get(inviteTestToken(1000+i), fmt.Sprintf("198.51.100.%d", 50+i), nil); w.Code != http.StatusOK {
 			t.Fatalf("another client after the concurrent flood: %d, want 200 (global not drained)", w.Code)
 		}
+	}
+}
+
+// Ordering (review): tokenOf runs before any layer, so a request it rejects
+// (413) is answered 413 even from a client that is already limited (the
+// previous order reserved the client first and answered 429), and it spends
+// nothing of the global budget. (That a refused request inserts no per-key
+// entry is proved on the limiter itself, TestReserveKeys_RefusalEvictsNobody;
+// the table size is not visible from this package.)
+func TestInviteRateLimit_RejectedBodyReachesNoLimiter(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	h.limits.perClient = servermiddleware.NewIPRateLimiter(1, 2)
+	h.limits.global = servermiddleware.NewIPRateLimiter(1, 3)
+	const peer = "198.51.100.9"
+	for i := range 2 {
+		if w := h.get(inviteTestToken(i), peer, nil); w.Code != http.StatusOK {
+			t.Fatalf("admitted request %d: %d", i, w.Code)
+		}
+	}
+	if w := h.get(inviteTestToken(2), peer, nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("client should be limited now: %d", w.Code)
+	}
+	big := `{"token":"` + inviteTestToken(7) + `","password":"` + strings.Repeat("p", inviteAcceptBodyLimit) + `"}`
+	for range 5 {
+		if w := h.post(big, peer); w.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("oversize body from a limited client: %d, want 413 (the body is read before any layer)", w.Code)
+		}
+	}
+	// The one global slot the two admitted requests left is still there.
+	if w := h.get(inviteTestToken(8), "198.51.100.10", nil); w.Code != http.StatusOK {
+		t.Fatalf("after the rejected bodies: %d, want 200 (they spent no global slot)", w.Code)
 	}
 }

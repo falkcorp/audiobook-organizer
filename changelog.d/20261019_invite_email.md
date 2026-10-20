@@ -28,6 +28,12 @@ never takes a caller out of per-client limiting; an unlisted connector is
 therefore one bucket for everyone it relays. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
 skipped rather than shared, and the per-token and global layers still apply.
+The token is read first; then all three layers are reserved together, and a
+refusal from any layer cancels the others, so a refused request spends
+nothing and adds no entry to the per-client or per-token tables (a key seen
+for the first time is recorded only once the request is admitted), and
+concurrent requests from one client can take at most its own burst of global
+slots.
 Bootstrap tells a direct LAN caller from tunnel traffic by the Cloudflare
 markers (any `Cf-*` header or the `CF_Authorization` cookie); with the
 setting unset, a connector request stripped of every one of them would count
