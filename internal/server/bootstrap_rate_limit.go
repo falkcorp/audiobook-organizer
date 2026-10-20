@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -40,7 +40,10 @@ import (
 // directly from the LAN, so unauthenticated internet traffic can spend the
 // global budget but cannot touch the owner's path, which keeps only its own
 // per-address bucket. It takes bootstrapGlobalMaxAttempts/bootstrapMaxAttempts
-// distinct tunnel clients (20) to spend the global budget.
+// distinct tunnel clients (20) to spend the global budget. The tunnel
+// connectors are themselves LAN hosts with private addresses, so "private
+// peer" alone does not mean direct: a configured connector, or any request
+// with Cloudflare markers, is tunnel traffic.
 const (
 	bootstrapMaxAttempts    = 5
 	bootstrapWindowDuration = time.Hour
@@ -85,23 +88,35 @@ func newBootstrapLimiter() *bootstrapLimiter {
 // bootstrapLimits is the limiter handleBootstrap uses.
 var bootstrapLimits = newBootstrapLimiter()
 
-// bootstrapRateKey is the limiter key for a client address: the address for
-// IPv4 (and IPv4-mapped IPv6), the /64 for IPv6, and the one shared
+// bootstrapRateKey is the limiter key for a client address: clientPrefixKey
+// (the address for IPv4, the /64 for IPv6), or the one shared
 // untrustedLocalClientKey when the client is not attributed or ip does not
 // parse.
 func bootstrapRateKey(ip string, attributed bool) string {
 	if !attributed {
 		return untrustedLocalClientKey
 	}
-	a, err := netip.ParseAddr(ip)
-	if err != nil {
+	key, ok := clientPrefixKey(ip)
+	if !ok {
 		return untrustedLocalClientKey
 	}
-	a = a.WithZone("").Unmap()
-	if a.Is6() {
-		return netip.PrefixFrom(a, 64).Masked().String()
+	return key
+}
+
+// bootstrapClientKey returns the bootstrap limiter key for the request, the
+// address to log, and whether the request is exempt from the global ceiling
+// (a direct LAN peer, bootstrapDirectLANPeer). Every other request is keyed
+// through trustedClientIP: a visitor's own address when it can be believed,
+// otherwise the shared untrustedLocalClientKey. A connector request with no
+// usable CF-Connecting-IP is therefore untrusted-local and NOT exempt.
+func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key, logIP string, exempt bool) {
+	if bootstrapDirectLANPeer(c, connectors) {
+		ip := strings.TrimSpace(c.ClientIP())
+		return bootstrapRateKey(ip, true), ip, true
 	}
-	return a.String()
+	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
+	ip = strings.TrimSpace(ip)
+	return bootstrapRateKey(ip, attributed), ip, false
 }
 
 // sweepLocked drops every window that has ended. Entries are in creation
@@ -123,12 +138,14 @@ func (l *bootstrapLimiter) removeLocked(el *list.Element) {
 // bootstrapDirectLANPeer reports whether the request is a direct caller on this
 // network rather than tunnel or proxy traffic: the peer is a private
 // (RFC 1918 / ULA) or loopback address, is not a configured tunnel connector,
-// and the request carries none of the Cloudflare markers (any Cf-* header,
-// which covers CF-Connecting-IP, Cf-Access-* and Cf-Ray, or the CF_Authorization
-// cookie). Cloudflare's edge adds those to everything it proxies and a caller
-// cannot strip them, so tunnel traffic is never direct even though cloudflared
-// connects from a loopback or private address. A direct caller keeps only its
-// own per-address bucket and is exempt from the global ceiling.
+// and the request carries none of the Cloudflare markers
+// (hasCloudflareMarkers). Cloudflare's edge adds those to everything it
+// proxies and the connector passes them through, so tunnel traffic is never
+// direct even though the connectors reach this service from private LAN
+// addresses. A direct caller keeps only its own per-address bucket and is
+// exempt from the global ceiling. With TUNNEL_CONNECTOR_ADDRS unset, a
+// connector request stripped of every Cloudflare header on the way would
+// count as direct too (see trustedClientIP).
 func bootstrapDirectLANPeer(c *gin.Context, connectors connectorPeers) bool {
 	peer := c.Request.RemoteAddr
 	if connectors.contains(peer) {
@@ -146,15 +163,7 @@ func bootstrapDirectLANPeer(c *gin.Context, connectors connectorPeers) bool {
 	if !a.IsLoopback() && !a.IsPrivate() {
 		return false
 	}
-	for k := range c.Request.Header {
-		if strings.HasPrefix(strings.ToLower(k), "cf-") {
-			return false
-		}
-	}
-	if _, err := c.Request.Cookie("CF_Authorization"); err == nil {
-		return false
-	}
-	return true
+	return !hasCloudflareMarkers(c)
 }
 
 // allow records one attempt for key and reports whether it may proceed. A

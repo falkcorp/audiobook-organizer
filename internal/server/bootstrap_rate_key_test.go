@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -135,7 +135,9 @@ func TestHandleBootstrap_ConnectorWithoutHeaderSharesTheUntrustedBucket(t *testi
 }
 
 // TestHandleBootstrap_NonLocalPeerKeyedOnOwnAddress: a direct caller cannot
-// dodge the limiter by cycling a spoofed CF-Connecting-IP.
+// dodge the limiter by cycling a spoofed CF-Connecting-IP: the header is a
+// Cloudflare marker from a peer that is not a configured connector, so every
+// such attempt lands in the one shared untrusted-local bucket.
 func TestHandleBootstrap_NonLocalPeerKeyedOnOwnAddress(t *testing.T) {
 	resetBootstrapRate(t)
 	setTunnelConnectors(t, bootstrapTestConnector)
@@ -439,6 +441,59 @@ func TestBootstrapDirectLANPeer(t *testing.T) {
 			c.Request = req
 			if got := bootstrapDirectLANPeer(c, connectors); got != tt.want {
 				t.Fatalf("bootstrapDirectLANPeer = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// bootstrapKeyFor runs bootstrapClientKey for one request. Nothing counts as
+// this host, so a 10.x connector address is a LAN peer as in production (a CI
+// runner may own 10.x addresses itself, so the real remoteAddrIsLocal is not
+// used).
+func bootstrapKeyFor(t *testing.T, connectorsCSV, remote string, hdr map[string]string) (string, bool) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	connectors, bad := parseConnectorPeers(connectorsCSV)
+	if len(bad) != 0 {
+		t.Fatal(bad)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/bootstrap", nil)
+	req.RemoteAddr = remote
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	key, _, exempt := bootstrapClientKey(c, connectors, func(string) bool { return false })
+	return key, exempt
+}
+
+// SF1: the production shape, three tunnel connectors on LAN hosts.
+func TestBootstrapClientKey_PiConnectors(t *testing.T) {
+	pis := "10.0.0.11,10.0.0.12,10.0.0.13"
+	tunnel := map[string]string{"CF-Connecting-IP": "203.0.113.5", "Cf-Ray": "x"}
+	tests := []struct {
+		name       string
+		connectors string
+		remote     string
+		hdr        map[string]string
+		wantKey    string
+		wantExempt bool
+	}{
+		{"set: a visitor through a Pi is keyed on the visitor", pis, "10.0.0.12:4000", tunnel, "203.0.113.5", false},
+		{"set: a Pi with no CF-Connecting-IP is untrusted-local, not exempt", pis, "10.0.0.13:4000", map[string]string{"Cf-Ray": "x"}, untrustedLocalClientKey, false},
+		{"set: a Pi with no headers at all is untrusted-local, not exempt", pis, "10.0.0.11:4000", nil, untrustedLocalClientKey, false},
+		{"unset: a Pi carrying markers is untrusted-local, not exempt", "", "10.0.0.11:4000", tunnel, untrustedLocalClientKey, false},
+		// NIT1: documented, not prevented: with the setting unset, a Pi request
+		// stripped of every Cloudflare header looks like a direct LAN caller.
+		{"unset: a Pi with every Cloudflare header stripped counts as direct", "", "10.0.0.11:4000", nil, "10.0.0.11", true},
+		{"a direct LAN caller keeps its own exempt bucket", pis, "10.0.0.50:4000", nil, "10.0.0.50", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, exempt := bootstrapKeyFor(t, tt.connectors, tt.remote, tt.hdr)
+			if key != tt.wantKey || exempt != tt.wantExempt {
+				t.Fatalf("bootstrapClientKey = (%q, exempt %v), want (%q, exempt %v)", key, exempt, tt.wantKey, tt.wantExempt)
 			}
 		})
 	}

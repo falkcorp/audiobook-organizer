@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.104.0
+// version: 2.105.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-20
 
@@ -607,22 +607,26 @@ func NewServer(store database.Store) *Server {
 	// Trust no proxy headers. Without this, Gin honors X-Forwarded-For from any
 	// source, so c.ClientIP() can be spoofed — bypassing every per-IP rate
 	// limiter (bootstrap, login throttle) by cycling the header (pen-test
-	// finding HIGH-2). Production is reached through a Cloudflare tunnel:
-	// cloudflared on the host connects to the service locally, so c.ClientIP()
-	// is the tunnel's local address for every request and a per-IP limiter on it
-	// alone is one shared bucket. Proxy headers (X-Forwarded-For,
-	// CF-Connecting-IP) are still not trusted globally, because the service
-	// cannot prove on its own that any given request came through the tunnel
-	// rather than from a direct caller who set them. A route that needs the real
-	// client address opts in through trustedClientIP, which believes
-	// CF-Connecting-IP only when it can be attributed to Cloudflare: the peer is
-	// an address configured as the tunnel connector (TUNNEL_CONNECTOR_ADDRS), or
-	// the request carries a verified Access assertion and the peer is this host.
-	// "The peer is local" alone proves nothing, because any local process can
-	// set the header. Otherwise it keys on the peer's own address, and a request
-	// whose client cannot be established skips the invite per-client limit
-	// (the bootstrap limiter keys it on one fixed shared key). Invite routes
-	// bypass Access, so production must set TUNNEL_CONNECTOR_ADDRS to get a
+	// finding HIGH-2). Production is reached through a Cloudflare tunnel whose
+	// connectors (cloudflared) run on other LAN hosts and connect to the
+	// service from their own private addresses, so c.ClientIP() is a
+	// connector's address for every tunnel request and a per-IP limiter on it
+	// alone is one bucket shared by every visitor. Proxy headers
+	// (X-Forwarded-For, CF-Connecting-IP) are still not trusted globally,
+	// because the service cannot prove on its own that any given request came
+	// through the tunnel rather than from a direct caller who set them. A route
+	// that needs the real client address opts in through trustedClientIP, which
+	// believes CF-Connecting-IP only when it can be attributed to Cloudflare:
+	// the peer is an address configured as a tunnel connector
+	// (TUNNEL_CONNECTOR_ADDRS), or the request carries a verified Access
+	// assertion and the peer is this host. "The peer is local" or "the peer is
+	// private" alone proves nothing, because anything that reaches the port
+	// can set the header. Otherwise it keys on the peer's own address, unless
+	// the request carries Cloudflare markers (unlisted-connector traffic); a
+	// request whose client cannot be established skips the invite per-client
+	// limit (the bootstrap limiter keys it on one fixed shared key). Invite
+	// routes bypass Access, so the deploy must set TUNNEL_CONNECTOR_ADDRS to
+	// every connector's address to get a
 	// per-client limit there. If a trusted reverse proxy with a fixed address
 	// is ever added, replace nil with its CIDR allowlist,
 	// e.g. router.SetTrustedProxies([]string{"192.0.2.0/24"}).

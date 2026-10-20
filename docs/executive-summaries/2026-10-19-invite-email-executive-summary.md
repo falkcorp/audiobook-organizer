@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-20 -->
 
@@ -146,8 +146,11 @@ that makes the account the verified holder, which is wrong when the same
 person already signs in through another account. Leave it, or merge the two
 accounts with the account-merge tool once it is available.
 
-**A second thing to set.** The invite pages limit how often one visitor can
-try a link. Behind the Cloudflare tunnel, the server can only tell visitors
-apart when `TUNNEL_CONNECTOR_ADDRS` names the address the tunnel connects
-from. Until it is set, that per-visitor limit is off for tunnel traffic; the
-per-link and overall limits still apply.
+**A second setting, set by this deploy.** The invite pages limit how often
+one visitor can try a link. The Cloudflare tunnel reaches the server through
+three small relay machines on the home network, so every visitor arrives from
+one of those three addresses. `TUNNEL_CONNECTOR_ADDRS` names them, which lets
+the server read the real visitor address that Cloudflare attaches and give
+each visitor their own limit. It ships with this deploy. Without it, traffic
+through the relays gets no per-visitor limit (the per-link and overall limits
+still apply), rather than one limit shared by every guest.

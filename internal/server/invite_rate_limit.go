@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -26,26 +26,31 @@ import (
 // three. The token space is 256 bits, so this is about load and about
 // protecting one guest's invitation from another caller, not about guessing.
 //
-// Production sits behind a Cloudflare tunnel and the router trusts no proxy
-// headers (SetTrustedProxies(nil), see NewServer), so c.ClientIP() is the
-// tunnel's local address for every request: a limiter keyed on it alone is ONE
-// bucket shared by everyone, and a single caller could exhaust it for every
-// guest. The invite routes also bypass Cloudflare Access (a guest accepts
-// before being allowed in), so there is no Access assertion to lean on. The
-// layers therefore do not rely on c.ClientIP():
+// Production sits behind a Cloudflare tunnel whose connectors (cloudflared)
+// run on other LAN hosts and connect to the service from their own private
+// addresses, and the router trusts no proxy headers (SetTrustedProxies(nil),
+// see NewServer), so c.ClientIP() is a connector's address for every tunnel
+// request: a limiter keyed on it alone is one bucket per connector, shared by
+// every visitor, and a single caller could exhaust it for every guest. The
+// invite routes also bypass Cloudflare Access (a guest accepts before being
+// allowed in), so there is no Access assertion to lean on. The layers
+// therefore do not rely on c.ClientIP():
 //
 //  1. per token: a token's lookups and accept attempts, from anywhere, share
 //     one small bucket (keyed by a hash of the token, never the raw token).
 //  2. per client: keyed by trustedClientIP, i.e. CF-Connecting-IP when it can
-//     be believed (the peer is the configured tunnel connector, or the
-//     request carries a verified Access assertion and the peer is this host),
-//     otherwise the peer's own address. A request whose client cannot be
-//     established (a connector or local peer with no trusted header) SKIPS
-//     this layer: a key taken from an unproven header would let a caller pick
-//     its own bucket, and one shared bucket would let one abuser lock out
-//     every guest. Layers 1 and 3 still apply to it. The invite routes bypass
-//     Access, so until TUNNEL_CONNECTOR_ADDRS names the tunnel connector this
-//     layer is effectively off for tunnel traffic (logged once at start-up).
+//     be believed (the peer is a configured tunnel connector, or the request
+//     carries a verified Access assertion and the peer is this host),
+//     otherwise the peer's own address; IPv6 clients are grouped by /64
+//     (clientPrefixKey). A request whose client cannot be established SKIPS
+//     this layer: a connector or local peer with no trusted header, or a peer
+//     that is not a configured connector but carries Cloudflare markers
+//     (tunnel traffic from an unlisted connector). A key taken from an
+//     unproven header would let a caller pick its own bucket, and one shared
+//     bucket would let one abuser lock out every guest. Layers 1 and 3 still
+//     apply to it. TUNNEL_CONNECTOR_ADDRS must therefore list every connector
+//     for this layer to apply to tunnel traffic; with it unset the layer is
+//     off for the tunnel (logged once at start-up).
 //  3. global: a generous ceiling across every token and client, so
 //     enumeration spread over many tokens or many clients is still bounded.
 //
@@ -158,7 +163,7 @@ func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 		connectors:  tunnelConnectorPeers(),
 	}
 	if len(l.connectors) == 0 {
-		inviteLimitLog.Info("invite per-client rate limit is off for tunnel traffic: TUNNEL_CONNECTOR_ADDRS is not set, so no client address can be established; the per-token and global limits still apply")
+		inviteLimitLog.Info("invite per-client rate limit is off for tunnel traffic: TUNNEL_CONNECTOR_ADDRS does not list the tunnel connectors, so no visitor address can be established; the per-token and global limits still apply")
 	}
 	l.perToken.Start(ctx)
 	l.perClient.Start(ctx)
@@ -180,13 +185,19 @@ func inviteTokenKey(token string) string {
 // inviteClientKey returns the per-client bucket key for the request, and false
 // when no trusted client address can be established (see trustedClientIP), in
 // which case the per-client layer is skipped for the request. The key is never
-// derived from an unproven header.
+// derived from an unproven header. IPv6 clients share one bucket per /64
+// (clientPrefixKey), as the bootstrap limiter keys them, so one host cannot
+// rotate through its /64 for fresh buckets.
 func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (string, bool) {
 	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
 	if !ok {
 		return "", false
 	}
-	return "invite-client:" + ip, true
+	key, ok := clientPrefixKey(ip)
+	if !ok {
+		return "", false
+	}
+	return "invite-client:" + key, true
 }
 
 // remoteAddrIsLocal reports whether addr ("host:port") is a loopback address or

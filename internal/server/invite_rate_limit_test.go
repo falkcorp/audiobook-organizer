@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -262,30 +262,58 @@ func spoofed(i int, extra ...string) map[string]string {
 	return m
 }
 
-// TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader: a caller that is not
-// the configured connector and not this host is keyed on its own address, with
-// or without an Access assertion; a spoofed CF-Connecting-IP buys no fresh
-// buckets.
-func TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader(t *testing.T) {
+// TestInviteRateLimit_ClientKey_DirectPeerIsKeyedOnItsOwnAddress: a caller that
+// is not a configured connector, not this host and carries no Cloudflare
+// markers is a direct caller, keyed on its own address.
+func TestInviteRateLimit_ClientKey_DirectPeerIsKeyedOnItsOwnAddress(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), "198.51.100.5", nil)
+	})
+	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
+		t.Fatalf("direct peer: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+	}
+	// Another direct peer has its own bucket.
+	if w := h.get(inviteTestToken(900), "198.51.100.6", nil); w.Code != http.StatusOK {
+		t.Fatalf("a second direct peer while the first is limited: %d, want 200", w.Code)
+	}
+}
+
+// TestInviteRateLimit_ClientKey_MarkersFromAnUnlistedPeerAreUnattributed: a
+// peer that is not a configured connector but sends Cloudflare markers (a
+// spoofed CF-Connecting-IP is one) is treated as tunnel traffic from an
+// unlisted connector: neither the header nor the peer's own address is used,
+// and the per-client layer is skipped. A spoofed header buys no fresh buckets
+// either way; the per-token and global layers still bound it.
+func TestInviteRateLimit_ClientKey_MarkersFromAnUnlistedPeerAreUnattributed(t *testing.T) {
 	for name, extra := range map[string][]string{"no assertion": nil, "verified assertion": {"X-Test-Verified"}} {
 		t.Run(name, func(t *testing.T) {
 			h := newInviteLimitHarness(t, false)
-			allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-				return h.get(inviteTestToken(i), "198.51.100.5", spoofed(i, extra...))
-			})
-			if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
-				t.Fatalf("spoofed CF-Connecting-IP got fresh buckets: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+			for i := range inviteAuthRateBurst + 10 {
+				req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+				req.RemoteAddr = "198.51.100.5:4000"
+				for k, v := range spoofed(i, extra...) {
+					req.Header.Set(k, v)
+				}
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = req
+				if _, ok := h.limits.inviteClientKey(c); ok {
+					t.Fatal("an unlisted peer with Cloudflare markers got a per-client key")
+				}
 			}
-			// Another direct peer has its own bucket, whatever header it sends.
-			if w := h.get(inviteTestToken(900), "198.51.100.6", map[string]string{"CF-Connecting-IP": "203.0.113.1"}); w.Code != http.StatusOK {
-				t.Fatalf("a second direct peer while the first is limited: %d, want 200", w.Code)
+			// One token hammered from it is still refused by the token layer.
+			allowed, limited, _ := countAllowedUntilLimited(t, inviteTokenRateBurst+10, func(i int) *httptest.ResponseRecorder {
+				return h.get(inviteTestToken(1), "198.51.100.5", spoofed(i, extra...))
+			})
+			if !limited || allowed > inviteTokenRateBurst+2 {
+				t.Fatalf("token flood: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteTokenRateBurst)
 			}
 		})
 	}
 }
 
 // TestInviteRateLimit_ClientKey_UntrustedLocalSkipsClientLayer: with no
-// connector configured (production today) a header from a local peer without a
+// connector configured, a header from a local peer without a
 // verified Access assertion is not believed, and the request has no trusted
 // client address. The per-client layer is SKIPPED for it, not shared: a flood
 // from that population must not block a second token beyond the per-token and
@@ -420,9 +448,11 @@ func TestTrustedClientIP(t *testing.T) {
 		{"local peer, header but no Access", "127.0.0.1:5000", "203.0.113.9", false, "127.0.0.1", false},
 		{"local peer, garbage header, no Access", "127.0.0.1:5000", "evil", false, "127.0.0.1", false},
 		{"local ipv6 peer, header but no Access", "[::1]:5000", "198.51.100.4", false, "::1", false},
-		{"remote peer, spoofed header ignored", "198.51.100.7:5000", "203.0.113.9", false, "198.51.100.7", true},
-		{"remote peer, verified Access, spoofed header ignored", "198.51.100.7:5000", "203.0.113.9", true, "198.51.100.7", true},
-		{"remote peer, no header", "198.51.100.7:5000", "", false, "198.51.100.7", true},
+		{"unlisted peer with a header is unattributed", "198.51.100.7:5000", "203.0.113.9", false, "198.51.100.7", false},
+		{"unlisted peer, verified Access, header: unattributed", "198.51.100.7:5000", "203.0.113.9", true, "198.51.100.7", false},
+		{"unlisted private connector with a header is unattributed", "10.0.0.11:5000", "203.0.113.9", false, "10.0.0.11", false},
+		{"direct peer, no header", "198.51.100.7:5000", "", false, "198.51.100.7", true},
+		{"direct private peer, no header", "10.0.0.50:5000", "", false, "10.0.0.50", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -582,5 +612,122 @@ func TestPublicInviteRoute_TokenLimitDoesNotBlockOthers(t *testing.T) {
 	}
 	if code := get(strings.Repeat("b", 64)); code != http.StatusNotFound {
 		t.Fatalf("a different unknown token: %d, want 404 (not limited)", code)
+	}
+}
+
+// piConnectors are the production shape: three tunnel connectors on other LAN
+// hosts, connecting from private addresses that are not this host.
+var piConnectors = []string{"10.0.0.11", "10.0.0.12", "10.0.0.13"}
+
+// cfHeaders is what a tunnel request from visitor carries.
+func cfHeaders(visitor string) map[string]string {
+	return map[string]string{"CF-Connecting-IP": visitor, "Cf-Ray": "8c0ffee-LHR"}
+}
+
+// SF1: with TUNNEL_CONNECTOR_ADDRS unset, a Pi connector's request carries
+// Cloudflare markers, so it is unattributed and skips the per-client layer.
+// Keyed on the Pi's own private address, the 11th visitor through one Pi
+// would have been refused.
+func TestInviteRateLimit_PiConnectorsUnset_MarkedRequestsSkipClientLayer(t *testing.T) {
+	h := newInviteLimitHarness(t, false) // nothing is this host
+	for i := range 40 {
+		w := h.get(inviteTestToken(i), piConnectors[0], cfHeaders(fmt.Sprintf("203.0.113.%d", i+1)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("visitor %d through an unlisted Pi: %d, want 200 (client layer skipped)", i, w.Code)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+	req.RemoteAddr = piConnectors[1] + ":4000"
+	for k, v := range cfHeaders("203.0.113.99") {
+		req.Header.Set(k, v)
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	if key, ok := h.limits.inviteClientKey(c); ok {
+		t.Fatalf("an unlisted Pi got per-client key %q", key)
+	}
+}
+
+// SF1: with TUNNEL_CONNECTOR_ADDRS naming the three Pis, each visitor gets
+// its own bucket whichever Pi carried the request: one abusive visitor is
+// refused at its own burst, and after it and 40 other distinct visitors an
+// innocent guest still gets 200.
+func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	peers, bad := parseConnectorPeers(strings.Join(piConnectors, ","))
+	if len(bad) != 0 {
+		t.Fatal(bad)
+	}
+	h.limits.connectors = peers
+
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(1000+i), piConnectors[i%3], cfHeaders("203.0.113.66"))
+	})
+	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
+		t.Fatalf("abusive visitor across the Pis: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+	}
+	for i := range 40 {
+		if w := h.get(inviteTestToken(i), piConnectors[i%3], cfHeaders(fmt.Sprintf("198.51.100.%d", i+1))); w.Code != http.StatusOK {
+			t.Fatalf("distinct visitor %d: %d, want 200", i, w.Code)
+		}
+	}
+	if w := h.get(inviteTestToken(5000), piConnectors[2], cfHeaders("192.0.2.200")); w.Code != http.StatusOK {
+		t.Fatalf("innocent guest after 41 other visitors: %d, want 200", w.Code)
+	}
+	// The key is the visitor's, never the Pi's.
+	req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+	req.RemoteAddr = piConnectors[0] + ":4000"
+	req.Header.Set("CF-Connecting-IP", "198.51.100.7")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	if key, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:198.51.100.7" {
+		t.Fatalf("inviteClientKey = %q, %v; want the visitor's address", key, ok)
+	}
+}
+
+// SF1 (b): IPv6 visitors share one per-client bucket per /64, so rotating
+// addresses inside one /64 buys no fresh bucket.
+func TestInviteRateLimit_IPv6VisitorsShareTheirSlash64(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	peers, _ := parseConnectorPeers(piConnectors[0])
+	h.limits.connectors = peers
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), piConnectors[0], cfHeaders(fmt.Sprintf("2001:db8:5:6::%x", i+1)))
+	})
+	if !limited || allowed > inviteAuthRateBurst+2 {
+		t.Fatalf("one /64 rotating addresses: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+	}
+	if w := h.get(inviteTestToken(900), piConnectors[0], cfHeaders("2001:db8:5:7::1")); w.Code != http.StatusOK {
+		t.Fatalf("a different /64: %d, want 200", w.Code)
+	}
+}
+
+func TestHasCloudflareMarkers(t *testing.T) {
+	for name, tt := range map[string]struct {
+		hdr    map[string]string
+		cookie bool
+		want   bool
+	}{
+		"none":             {nil, false, false},
+		"unrelated":        {map[string]string{"X-Request-Id": "1"}, false, false},
+		"CF-Connecting-IP": {map[string]string{"CF-Connecting-IP": "203.0.113.1"}, false, true},
+		"Cf-Ray":           {map[string]string{"Cf-Ray": "x"}, false, true},
+		"Cf-Access-Jwt":    {map[string]string{"Cf-Access-Jwt-Assertion": "x"}, false, true},
+		"CF_Authorization": {nil, true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			for k, v := range tt.hdr {
+				req.Header.Set(k, v)
+			}
+			if tt.cookie {
+				req.AddCookie(&http.Cookie{Name: "CF_Authorization", Value: "x"})
+			}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = req
+			if got := hasCloudflareMarkers(c); got != tt.want {
+				t.Fatalf("hasCloudflareMarkers = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

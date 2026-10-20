@@ -7,10 +7,6 @@
       a browser before the policy sync adds them;
       (3) OAuth login and the Cloudflare Access middleware still do not refuse
       a deactivated user (pre-existing);
-      (4) set `TUNNEL_CONNECTOR_ADDRS` in production to the address the
-      Cloudflare tunnel connector reaches the service from: until then the
-      public invite limiter skips its per-client layer for tunnel traffic and
-      bootstrap callers share one bucket;
-      (5) `UserHandler.AcceptInvite` (internal/server/handlers/user.go) is not
+      (4) `UserHandler.AcceptInvite` (internal/server/handlers/user.go) is not
       routed (the route uses `Server.handleAcceptInvite`) and still echoes
       store errors as a 400: delete it or route through the generic refusal.
