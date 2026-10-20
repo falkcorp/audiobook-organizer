@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
 // last-edited: 2026-10-19
 
@@ -401,9 +401,17 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	httputil.RespondWithOK(c, rsp)
 }
 
-// findOrCreateAdminUser returns the first user with PermUsersManage, creating
-// one if none exists. Returns (user, generatedPassword, error); generatedPassword
-// is non-empty only when a new user was created.
+// findOrCreateAdminUser returns the first ACTIVE user with PermUsersManage,
+// creating one if none exists. Returns (user, generatedPassword, error);
+// generatedPassword is non-empty only when a new user was created.
+//
+// A locked or otherwise inactive admin is skipped: a key minted for it is
+// refused at authentication, so returning it made bootstrap look successful
+// and then fail. The new admin takes the first free name of "admin",
+// "admin-2", ... (an inactive or demoted "admin" row may still hold
+// "admin"), and no email: the fixed address "admin@localhost" collided with
+// the row an earlier bootstrap left, and an address nobody receives mail at
+// would otherwise be recorded as a verified one (EmailSource setup).
 func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, error) {
 	// (Removed the SQLite-RBAC-unsupported guard: PebbleDB is the only backend and
 	// always resolves roles, so the guard's sentinel check was permanently dead.)
@@ -411,8 +419,13 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	if err != nil {
 		return nil, "", err
 	}
+	taken := make(map[string]bool, len(users))
 	for i := range users {
 		u := &users[i]
+		taken[strings.ToLower(u.Username)] = true
+		if u.Status != "active" {
+			continue
+		}
 		for _, roleName := range u.Roles {
 			role, err := store.GetRoleByName(roleName)
 			if err != nil || role == nil {
@@ -442,11 +455,18 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 		roleID = adminRole.ID
 	}
 
-	u, err := store.CreateUser("admin", "admin@localhost", algo, hash, []string{roleID}, "active")
+	username := "admin"
+	for n := 2; taken[username]; n++ {
+		if n > 100 {
+			return nil, "", fmt.Errorf("create admin user: no free name among admin, admin-2 ... admin-100")
+		}
+		username = fmt.Sprintf("admin-%d", n)
+	}
+	u, err := store.CreateUser(username, "", algo, hash, []string{roleID}, "active")
 	if err != nil {
 		return nil, "", fmt.Errorf("create admin user: %w", err)
 	}
-	slog.Info("No admin found — created useradmin with generated password")
+	slog.Info("No active admin found — created an admin user with a generated password", "username", username)
 	return u, password, nil
 }
 

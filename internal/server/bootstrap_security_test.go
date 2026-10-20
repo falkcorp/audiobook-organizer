@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_security_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b9d4e6a-1c3f-4a8b-bd72-5e0a9c4f1d36
 // last-edited: 2026-10-07
 
@@ -121,7 +121,7 @@ func TestHandleBootstrap_IssuesExpiringKey(t *testing.T) {
 	settings := newFakeSettingsStore()
 	_ = settings.SetSetting(bootstrapTokenKey, hashBootstrapToken("abbs_correct"), "string", false)
 
-	adminUser := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}}
+	adminUser := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}, Status: "active"}
 	adminRole := &database.Role{ID: "admin", Name: "admin", Permissions: []string{string(auth.PermUsersManage)}}
 
 	var createdKey *database.APIKey
@@ -200,7 +200,7 @@ func TestHandleBootstrap_LegacyDaysCappedAt24h(t *testing.T) {
 
 	settings := newFakeSettingsStore()
 	_ = settings.SetSetting(bootstrapTokenKey, hashBootstrapToken("abbs_legacy"), "string", false)
-	adminUser := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}}
+	adminUser := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}, Status: "active"}
 	adminRole := &database.Role{ID: "admin", Name: "admin", Permissions: []string{string(auth.PermUsersManage)}}
 	var createdKey *database.APIKey
 	mockStore := &database.MockStore{
