@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 // The book_atpath: multi-valued path index.
 //
@@ -297,10 +297,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 	}
 	p.clearUndecodableMarkersUpTo(markerGen)
 
-	workers := bookAtPathBackfillWorkers
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(bookAtPathBackfillWorkers, 1)
 	slog.Info("book-atpath-backfill: starting", "mode", mode,
 		"chunk", bookAtPathBackfillChunk, "workers", workers)
 

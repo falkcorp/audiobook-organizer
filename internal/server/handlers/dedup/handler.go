@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.33.0
+// version: 1.33.1
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, link / reject /
@@ -2365,8 +2365,7 @@ func (h *Handler) LinkDedupCandidate(c *gin.Context) {
 			// row" is a stale candidate. A store I/O error whose text happens to
 			// mention "not found" used to take this branch and mark a candidate
 			// merged that never was.
-			var notFound *merge.BookNotFoundError
-			if errors.As(mergeErr, &notFound) {
+			if _, ok := errors.AsType[*merge.BookNotFoundError](mergeErr); ok {
 				if statusErr := es.UpdateCandidateStatus(id, "merged"); statusErr != nil {
 					slog.Warn("dedup merge already-merged: failed to update candidate status", "candidate_id", id, "err", statusErr)
 				}

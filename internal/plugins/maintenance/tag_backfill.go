@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.8.2
+// version: 2.8.3
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -290,8 +290,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			if err := store.BatchUpsertBookFiles(pending[:n]); err != nil {
 				// One deleted book refuses only its own rows; the rest of the
 				// batch IS written. Count both and keep going.
-				var refused *database.BookFileRowsRefusedError
-				if errors.As(err, &refused) {
+				if refused, ok := errors.AsType[*database.BookFileRowsRefusedError](err); ok {
 					written += refused.Committed
 					notWritten += len(refused.RefusedFileIDs)
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(

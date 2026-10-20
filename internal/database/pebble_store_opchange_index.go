@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 // The opchange_by_book: secondary index over the operation-change journal.
 //
@@ -624,10 +624,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 		mode, opChangeByBookBackfillChunk, logger.SanitizeLogValue(res.ResumedAfter))
 
 	upper := []byte(opChangeScanUpperBound)
-	chunk := opChangeByBookBackfillChunk
-	if chunk < 1 {
-		chunk = 1
-	}
+	chunk := max(opChangeByBookBackfillChunk, 1)
 	nextLog := opChangeByBookLogEveryRows
 	for {
 		if err := ctx.Err(); err != nil {

@@ -1,7 +1,7 @@
 // file: tools/cmd/oplint/analyzer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 48295d11-35d4-4ecf-b2e5-cb82b9451d3d
-// last-edited: 2026-10-16
+// last-edited: 2026-10-19
 
 package main
 
@@ -569,8 +569,7 @@ func (c *lintState) storeInDeps() {
 			return
 		}
 		checked[st] = true
-		for i := 0; i < st.NumFields(); i++ {
-			fld := st.Field(i)
+		for fld := range st.Fields() {
 			if !c.isStore(fld.Type()) {
 				continue
 			}
@@ -601,8 +600,8 @@ func (c *lintState) storeInDeps() {
 	}
 	if c.ops != nil {
 		sig := c.pass.TypesInfo.Defs[c.ops.Name].Type().(*types.Signature)
-		for i := 0; i < sig.Params().Len(); i++ {
-			t := sig.Params().At(i).Type()
+		for v := range sig.Params().Variables() {
+			t := v.Type()
 			if p, ok := t.(*types.Pointer); ok {
 				t = p.Elem()
 			}

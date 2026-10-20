@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -410,7 +410,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			if n < 2 {
 				continue
 			}
-			bookID := strings.SplitN(key, "\x00", 2)[0]
+			bookID, _, _ := strings.Cut(key, "\x00")
 			if _, ok := affected[bookID]; !ok {
 				affected[bookID] = nil // visited for folding only
 				supersededCandidates++
@@ -436,7 +436,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			if n < 2 {
 				continue
 			}
-			bookID := strings.SplitN(key, "\x00", 2)[0]
+			bookID, _, _ := strings.Cut(key, "\x00")
 			if _, ok := affected[bookID]; !ok {
 				affected[bookID] = nil // visited for cross-folder purging only
 				crossFolderCandidates++

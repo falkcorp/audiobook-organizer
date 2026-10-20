@@ -1,7 +1,7 @@
 // file: internal/server/bench.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5e6f7a8b-9c0d-1234-ef01-555555555555
-// last-edited: 2026-08-20
+// last-edited: 2026-10-19
 
 //go:build bench
 
@@ -487,21 +487,21 @@ func benchResolveModes(mode string) []string {
 	}
 }
 
-func benchBuildGroupsInput(groups []dedup.AuthorDedupGroup, data *benchAuthorData) []map[string]interface{} {
-	var input []map[string]interface{}
+func benchBuildGroupsInput(groups []dedup.AuthorDedupGroup, data *benchAuthorData) []map[string]any {
+	var input []map[string]any
 	for _, g := range groups {
-		canonical := map[string]interface{}{
+		canonical := map[string]any{
 			"id":   g.Canonical.ID,
 			"name": g.Canonical.Name,
 		}
-		var variants []map[string]interface{}
+		var variants []map[string]any
 		for _, v := range g.Variants {
-			variants = append(variants, map[string]interface{}{
+			variants = append(variants, map[string]any{
 				"id":   v.ID,
 				"name": v.Name,
 			})
 		}
-		input = append(input, map[string]interface{}{
+		input = append(input, map[string]any{
 			"canonical": canonical,
 			"variants":  variants,
 		})
@@ -509,10 +509,10 @@ func benchBuildGroupsInput(groups []dedup.AuthorDedupGroup, data *benchAuthorDat
 	return input
 }
 
-func benchBuildFullInput(data *benchAuthorData) []map[string]interface{} {
-	var input []map[string]interface{}
+func benchBuildFullInput(data *benchAuthorData) []map[string]any {
+	var input []map[string]any
 	for _, a := range data.Authors {
-		input = append(input, map[string]interface{}{
+		input = append(input, map[string]any{
 			"id":            a.ID,
 			"name":          a.Name,
 			"book_count":    data.BookCounts[a.ID],
@@ -533,10 +533,7 @@ func benchChunkData(data []byte, chunkSize int, mode string) [][]byte {
 	}
 	var chunks [][]byte
 	for i := 0; i < len(items); i += chunkSize {
-		end := i + chunkSize
-		if end > len(items) {
-			end = len(items)
-		}
+		end := min(i+chunkSize, len(items))
 		chunk, _ := json.Marshal(items[i:end])
 		chunks = append(chunks, chunk)
 	}
@@ -554,7 +551,7 @@ func benchGetSystemPrompt(mode, variant string) string {
 func benchSubmitBatchJob(ctx context.Context, client *openai.Client, tc benchTestConfig, mode, systemPrompt, userPrompt string, maxTokens int64, customID, outDir string) (gin.H, error) {
 	isReasoning := strings.HasPrefix(tc.Model, "o3") || strings.HasPrefix(tc.Model, "o4") || strings.HasPrefix(tc.Model, "o1") || strings.HasPrefix(tc.Model, "gpt-5")
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model": tc.Model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
@@ -614,7 +611,7 @@ func benchSubmitBatchJob(ctx context.Context, client *openai.Client, tc benchTes
 	return job, nil
 }
 
-func benchWriteJSON(path string, v interface{}) error {
+func benchWriteJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err

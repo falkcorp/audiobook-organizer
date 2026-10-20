@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package applygate
 
@@ -514,10 +514,7 @@ func titleSim(a, b string) float64 {
 	if !alpha && (hasWord(tokens(a, false)) || hasWord(tokens(b, false))) {
 		return 0
 	}
-	den := len(A)
-	if len(B) > den {
-		den = len(B)
-	}
+	den := max(len(B), len(A))
 	return float64(inter) / float64(den)
 }
 

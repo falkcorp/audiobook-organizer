@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -547,8 +547,7 @@ func (h *AIHandler) StartScan(c *gin.Context) {
 		// authoritative check (the store makes it and the create one step): the
 		// page's own "a scan is running" guard only knows what it last read, and
 		// the nightly ai-dedup-batch creates scans too.
-		var running *database.ScanAlreadyRunningError
-		if stderrors.As(err, &running) {
+		if running, ok := stderrors.AsType[*database.ScanAlreadyRunningError](err); ok {
 			httputil.RespondWithConflict(c, running.Error())
 			return
 		}

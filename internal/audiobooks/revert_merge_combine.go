@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_combine.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3f7b0d52-c1e4-4a98-8d26-9e5a7c13b0f4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package audiobooks
 
@@ -72,8 +72,7 @@ func (rs *RevertService) revertMergeCombineJournal(c *database.OperationChange) 
 	}
 	res, err := u.UndoCombine(c.NewValue)
 	if err != nil {
-		var refused *merge.CombineUndoRefusedError
-		if errors.As(err, &refused) {
+		if refused, ok := errors.AsType[*merge.CombineUndoRefusedError](err); ok {
 			// The pre-read above and the undo are not atomic: another undo
 			// (a second revert, a direct UndoCombine) may have finished in
 			// between, and then UndoCombine refuses a journal that is done.

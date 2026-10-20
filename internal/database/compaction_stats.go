@@ -1,7 +1,7 @@
 // file: internal/database/compaction_stats.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e3014758-0b25-4fcb-8a87-c8b158b6be42
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -81,10 +81,7 @@ type CompactionStats struct {
 // Comparing it between two samples gives "bytes compacted in between", and it
 // keeps rising during one long compaction because InProgressBytes does.
 func (s CompactionStats) WrittenBytes() uint64 {
-	in := s.InProgressBytes
-	if in < 0 {
-		in = 0
-	}
+	in := max(s.InProgressBytes, 0)
 	return s.CompletedBytes + uint64(in)
 }
 

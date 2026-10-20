@@ -1,7 +1,7 @@
 // file: internal/telemetry/endpoint.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 6e0f4b1a-52c7-4d83-9a1e-3b7c8d2f5a40
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package telemetry
 
@@ -116,8 +116,8 @@ func parseOTLPEndpoint(key, endpoint string) (otlpTarget, error) {
 
 	ep := strings.TrimSpace(endpoint)
 	scheme, rest := "", ep
-	if i := strings.Index(ep, "://"); i >= 0 {
-		scheme, rest = strings.ToLower(ep[:i]), ep[i+3:]
+	if before, after, ok0 := strings.Cut(ep, "://"); ok0 {
+		scheme, rest = strings.ToLower(before), after
 	}
 	switch scheme {
 	case "http", "https":

@@ -1,7 +1,7 @@
 // file: internal/database/user_state_lock_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: dc3f20c5-76f7-46d2-af45-723d3651b19d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -148,7 +148,6 @@ func TestUserStateLocks_ManyKeysHeldOnceEach(t *testing.T) {
 		t.Fatal("LockUserBookStates deadlocked on duplicate / shared-stripe keys")
 	}
 	for _, k := range keys {
-		k := k
 		waitsWhileHeld(t, func() func() { return LockUserBookState(k.UserID, k.BookID) })
 	}
 	unlock()

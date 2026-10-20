@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 // Package handlers — OrganizeHandler covers the organize-preview and
 // single-book organize HTTP endpoints.
@@ -255,8 +255,7 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		// of it -- a copy the resolver did not hand back (it rejects a copy
 		// with a file row still in a protected tree), or one made after it
 		// ran. Organizing would make a second copy; say which row to use.
-		var hasCopy *organizer.LibraryCopyExistsError
-		if errors.As(err, &hasCopy) {
+		if hasCopy, ok := errors.AsType[*organizer.LibraryCopyExistsError](err); ok {
 			r.json(http.StatusConflict, gin.H{
 				"error":        "organize declined: this book already has a library copy; organize that copy instead",
 				"category":     organizer.CollisionLibraryCopyExists,
@@ -267,8 +266,7 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 			})
 			return
 		}
-		var conflict *organizer.DestinationConflictError
-		if errors.As(err, &conflict) {
+		if conflict, ok := errors.AsType[*organizer.DestinationConflictError](err); ok {
 			r.json(http.StatusConflict, gin.H{
 				"error":    "organize declined: " + conflict.Reason,
 				"category": conflict.Category,

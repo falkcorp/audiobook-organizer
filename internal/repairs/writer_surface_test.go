@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_surface_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f69b17c-331b-4c43-9317-c7276540fe70
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package repairs
 
@@ -66,10 +66,10 @@ func TestWriterMethodSetPinned(t *testing.T) {
 		"LockWaiting", "Modify", "ModifyCredits", "MoveBookFiles", "OpID", "Recompute", "RecordChange",
 		"RepointBookFile", "SetPrimaryAuthor", "SetTrackNumber", "SetUserState", "Step", "SupersedeChanges", "Touch", "WithCredits",
 		"WithFieldStates", "WithJournal", "WithLiveness", "WithTags", "WithUserState", "Writes"}
-	typ := reflect.TypeOf(&Writer{})
+	typ := reflect.TypeFor[*Writer]()
 	got := make([]string, 0, typ.NumMethod())
-	for i := range typ.NumMethod() {
-		got = append(got, typ.Method(i).Name)
+	for method := range typ.Methods() {
+		got = append(got, method.Name)
 	}
 	slices.Sort(got)
 	slices.Sort(want)

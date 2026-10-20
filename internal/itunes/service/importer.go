@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.41.0
+// version: 1.41.1
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package itunesservice
 
@@ -490,8 +490,7 @@ func (imp *Importer) executeLibrary(ctx context.Context, opID string, req Import
 			// deletion) is a skip: nothing is wrong with the import, the
 			// album just cannot be placed safely. A failed lookup is a
 			// failure. Both are listed in the run's errors.
-			var refused *importTargetRefusedError
-			if errors.As(lookupErr, &refused) {
+			if _, ok := errors.AsType[*importTargetRefusedError](lookupErr); ok {
 				incImportSkipped(status)
 				recordImportError(status, lookupErr.Error())
 			} else {

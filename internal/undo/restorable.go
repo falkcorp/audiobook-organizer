@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.38.0
+// version: 1.38.1
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package undo
 
@@ -553,8 +553,7 @@ func (e *ReferentError) Error() string { return e.Reason + ": " + e.Detail }
 // RefusalReason returns the Reason of a CheckRestoreReferent refusal, or ""
 // when err is not one.
 func RefusalReason(err error) string {
-	var re *ReferentError
-	if errors.As(err, &re) {
+	if re, ok := errors.AsType[*ReferentError](err); ok {
 		return re.Reason
 	}
 	return ""

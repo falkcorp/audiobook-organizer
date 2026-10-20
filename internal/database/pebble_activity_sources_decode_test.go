@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_sources_decode_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f1c9a52-7d64-4c18-9b0e-2a6f5d81c447
-// last-edited: 2026-09-07
+// last-edited: 2026-10-19
 
 package database
 
@@ -22,8 +22,8 @@ import (
 // it as the zero value: the filter matches the wrong rows and nothing errors.
 // A comment cannot catch that. This does.
 func TestPactEntryNoDetails_MirrorsActivityEntry(t *testing.T) {
-	full := reflect.TypeOf(ActivityEntry{})
-	narrow := reflect.TypeOf(pactEntryNoDetails{})
+	full := reflect.TypeFor[ActivityEntry]()
+	narrow := reflect.TypeFor[pactEntryNoDetails]()
 
 	type fieldSpec struct {
 		typ reflect.Type
@@ -31,8 +31,7 @@ func TestPactEntryNoDetails_MirrorsActivityEntry(t *testing.T) {
 	}
 	collect := func(rt reflect.Type) map[string]fieldSpec {
 		out := make(map[string]fieldSpec, rt.NumField())
-		for i := 0; i < rt.NumField(); i++ {
-			f := rt.Field(i)
+		for f := range rt.Fields() {
 			out[f.Name] = fieldSpec{typ: f.Type, tag: f.Tag.Get("json")}
 		}
 		return out

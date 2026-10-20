@@ -1,7 +1,7 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 // Package authorcredit turns one author credit string ("J.N. Chaney, Jonathan
 // P. Brazee") into the author rows a book should be credited to, in order.
@@ -163,7 +163,7 @@ var (
 // titlesOf returns the title index of ts (every live book title and series
 // name), cached per store for titleIndexTTL.
 func titlesOf(ts TitleSource) (*titleIndex, error) {
-	cacheable := reflect.TypeOf(ts).Kind() == reflect.Ptr
+	cacheable := reflect.TypeOf(ts).Kind() == reflect.Pointer
 	if cacheable {
 		titleMu.Lock()
 		e := titleCache[ts]

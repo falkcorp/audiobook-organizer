@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package jobs
 
@@ -547,8 +547,7 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chap
 		// mints an id of its own and returns it, recorded on the outcome
 		// below, so that merge is still undoable on its own.
 		dedup.SplitMergeOptions{OrderByBooks: true, FillEmpty: true, Precheck: precheck, OperationID: opID})
-	var stepErr *chapterStepError
-	if errors.As(merr, &stepErr) {
+	if stepErr, ok := errors.AsType[*chapterStepError](merr); ok {
 		out.Status = stepErr.status
 		out.Blockers = stepErr.blockers
 		if stepErr.blockers == nil {

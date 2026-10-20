@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 04ccc271-b21f-4dfa-b788-6ab9e21ca3ca
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 package metafetch
 
@@ -258,7 +258,7 @@ func TestPCacheSweep_DeadMatchesTheReadPath(t *testing.T) {
 		if kind == database.PCacheKindPointer {
 			continue
 		}
-		provider := strings.SplitN(strings.TrimPrefix(strings.TrimPrefix(kv.Key, database.PCacheQuestionPrefix), database.PCacheASINPrefix), ":", 2)[0]
+		provider, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(kv.Key, database.PCacheQuestionPrefix), database.PCacheASINPrefix), ":")
 		e, _, err := database.GetPCache(f.store, kv.Key, metafetch.PCacheTTLFor(kind, provider), now)
 		if err != nil {
 			t.Fatal(err)

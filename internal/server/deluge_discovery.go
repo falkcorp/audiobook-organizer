@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.7.1
+// version: 3.7.2
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 //
 // Deluge label-based audiobook discovery — HTTP handlers.
 //
@@ -117,8 +117,7 @@ func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
 		// A doubled request passes the pre-check above twice (it runs outside
 		// ImportFile's per-torrent lock); the second one is refused there,
 		// before any book exists, and gets the same 409 as the sequential case.
-		var linkedErr *importer.TorrentAlreadyLinkedError
-		if errors.As(err, &linkedErr) {
+		if linkedErr, ok := errors.AsType[*importer.TorrentAlreadyLinkedError](err); ok {
 			respondDiscoverAlreadyLinked(c, linkedErr.BookID)
 			return
 		}

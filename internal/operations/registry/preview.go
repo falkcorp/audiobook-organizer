@@ -1,7 +1,7 @@
 // file: internal/operations/registry/preview.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 1d72f677-0951-40e4-9b15-cb9211c3e50a
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package registry
 
@@ -583,8 +583,7 @@ func collectJSONFields(t reflect.Type, out map[string]reflect.Type, depth int) {
 		return
 	}
 	var embedded []reflect.Type
-	for i := range t.NumField() {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		tag, hasTag := f.Tag.Lookup("json")
 		tagName, _, _ := strings.Cut(tag, ",")
 		if tagName == "-" {

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package jobs
 
@@ -661,10 +661,7 @@ func repointDurationAgrees(member, twin *database.BookCore) string {
 	if diff < 0 {
 		diff = -diff
 	}
-	longer := m
-	if t > longer {
-		longer = t
-	}
+	longer := max(t, m)
 	tol := repointDurationTolerance
 	if pct := longer / 100; pct > tol {
 		tol = pct

@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package opswriter
 
@@ -359,11 +359,11 @@ func TestFenceRevokedWhileWritingRefusesEveryLaterWrite(t *testing.T) {
 }
 
 func TestNoDeleteMethod(t *testing.T) {
-	for _, typ := range []reflect.Type{reflect.TypeOf((*ops.Writer)(nil)).Elem(), reflect.TypeOf(&Writer{})} {
-		for i := range typ.NumMethod() {
-			n := strings.ToLower(typ.Method(i).Name)
+	for _, typ := range []reflect.Type{reflect.TypeFor[ops.Writer](), reflect.TypeFor[*Writer]()} {
+		for method := range typ.Methods() {
+			n := strings.ToLower(method.Name)
 			if strings.Contains(n, "delete") || strings.Contains(n, "remove") || strings.Contains(n, "purge") {
-				t.Errorf("%s exposes %s", typ, typ.Method(i).Name)
+				t.Errorf("%s exposes %s", typ, method.Name)
 			}
 		}
 	}

@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench_pass2.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2b3c4d5e-6f7a-8901-bcde-222222222222
-// last-edited: 2026-08-20
+// last-edited: 2026-10-19
 
 //go:build bench
 
@@ -91,7 +91,7 @@ func runDedupBenchPass2(cmd *cobra.Command, args []string) error {
 	if pass2Threshold == "medium" {
 		thresholds["medium"] = true
 	}
-	var uncertain []map[string]interface{}
+	var uncertain []map[string]any
 	for _, s := range suggestions {
 		conf, _ := s["confidence"].(string)
 		if thresholds[conf] {
@@ -126,7 +126,7 @@ func runDedupBenchPass2(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build enriched items
-	var enriched []map[string]interface{}
+	var enriched []map[string]any
 	for _, s := range uncertain {
 		gi, _ := s["group_index"].(float64)
 		idx := int(gi)
@@ -134,12 +134,12 @@ func runDedupBenchPass2(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		var group map[string]interface{}
+		var group map[string]any
 		json.Unmarshal(groups[idx], &group)
 
 		evidence := buildBookEvidence(group, booksByAuthor)
 
-		enriched = append(enriched, map[string]interface{}{
+		enriched = append(enriched, map[string]any{
 			"group_index":         idx,
 			"original_group":      group,
 			"previous_suggestion": s,
@@ -164,13 +164,13 @@ func runDedupBenchPass2(cmd *cobra.Command, args []string) error {
 }
 
 // loadSuggestionsFromJSONL loads suggestions from a batch_output.jsonl file.
-func loadSuggestionsFromJSONL(path string) ([]map[string]interface{}, error) {
+func loadSuggestionsFromJSONL(path string) ([]map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var suggestions []map[string]interface{}
+	var suggestions []map[string]any
 	for _, line := range splitJSONLines(data) {
 		var resp struct {
 			Response struct {
@@ -195,7 +195,7 @@ func loadSuggestionsFromJSONL(path string) ([]map[string]interface{}, error) {
 
 		content := extractJSONFromContent(completion.Choices[0].Message.Content)
 		var parsed struct {
-			Suggestions []map[string]interface{} `json:"suggestions"`
+			Suggestions []map[string]any `json:"suggestions"`
 		}
 		if json.Unmarshal([]byte(content), &parsed) == nil {
 			suggestions = append(suggestions, parsed.Suggestions...)
@@ -204,7 +204,7 @@ func loadSuggestionsFromJSONL(path string) ([]map[string]interface{}, error) {
 	return suggestions, nil
 }
 
-func collectAuthorIDsFromGroups(uncertain []map[string]interface{}, groups []json.RawMessage) map[int]bool {
+func collectAuthorIDsFromGroups(uncertain []map[string]any, groups []json.RawMessage) map[int]bool {
 	ids := map[int]bool{}
 	for _, s := range uncertain {
 		gi, _ := s["group_index"].(float64)
@@ -234,9 +234,9 @@ func collectAuthorIDsFromGroups(uncertain []map[string]interface{}, groups []jso
 	return ids
 }
 
-func buildBookEvidence(group map[string]interface{}, booksByAuthor map[int][]BookInfo) map[string][]string {
+func buildBookEvidence(group map[string]any, booksByAuthor map[int][]BookInfo) map[string][]string {
 	evidence := map[string][]string{}
-	if canonical, ok := group["canonical"].(map[string]interface{}); ok {
+	if canonical, ok := group["canonical"].(map[string]any); ok {
 		if id, ok := canonical["id"].(float64); ok {
 			name, _ := canonical["name"].(string)
 			if books, ok := booksByAuthor[int(id)]; ok {
@@ -252,9 +252,9 @@ func buildBookEvidence(group map[string]interface{}, booksByAuthor map[int][]Boo
 			}
 		}
 	}
-	if variants, ok := group["variants"].([]interface{}); ok {
+	if variants, ok := group["variants"].([]any); ok {
 		for _, vi := range variants {
-			v, ok := vi.(map[string]interface{})
+			v, ok := vi.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -344,7 +344,7 @@ func submitSingleBatch(ctx context.Context, apiKey, model, systemPrompt, userPro
 	isReasoning := strings.HasPrefix(model, "o3") || strings.HasPrefix(model, "o4") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "gpt-5")
 
 	maxTokens := int64(16000)
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model": model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},

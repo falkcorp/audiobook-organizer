@@ -1,7 +1,7 @@
 // file: cmd/diagnostics_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 5480d7f7-4a6a-4b7f-9d16-6b589c8a3c0b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-19
 
 // NOTE(fable5 T022): Tests that used NewSQLiteStore have been ported to
 // PebbleStore. Tests that set DatabaseType="sqlite" now verify that
@@ -329,8 +329,7 @@ func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
 		_ = s.Close()
 		t.Fatal("NewPebbleStore opened a store stamped newer than this build")
 	} else {
-		var tooNew *database.StorageFormatTooNewError
-		if !errors.As(err, &tooNew) {
+		if _, ok := errors.AsType[*database.StorageFormatTooNewError](err); !ok {
 			t.Fatalf("NewPebbleStore: want *StorageFormatTooNewError, got %T: %v", err, err)
 		}
 	}

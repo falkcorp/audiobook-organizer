@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9b41c7de-25a8-4f6c-b0e3-71d84af52c19
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -16,10 +16,10 @@ import (
 // satisfy interfacebloat's 8-entry cap on a single declaration; if it ever
 // changes what the interface REQUIRES, every fake in the repo shifts silently.
 func TestOpV2LifecycleStore_MethodSetUnchanged(t *testing.T) {
-	typ := reflect.TypeOf((*OpV2LifecycleStore)(nil)).Elem()
+	typ := reflect.TypeFor[OpV2LifecycleStore]()
 	var got []string
-	for i := 0; i < typ.NumMethod(); i++ {
-		got = append(got, typ.Method(i).Name)
+	for method := range typ.Methods() {
+		got = append(got, method.Name)
 	}
 	sort.Strings(got)
 	want := []string{

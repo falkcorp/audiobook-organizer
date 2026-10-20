@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -132,10 +132,7 @@ func (p *PebbleStore) pruneExpiredChunked(
 	}
 	defer iter.Close()
 
-	chunk := logPruneChunk
-	if chunk < 1 {
-		chunk = 1
-	}
+	chunk := max(logPruneChunk, 1)
 	tick := max(pruneScanTick, 1)
 	batch := p.db.NewBatch()
 	defer func() { batch.Close() }()
@@ -298,10 +295,7 @@ func (p *PebbleStore) PruneOperationChanges(ctx context.Context, olderThan time.
 	}
 	defer iter.Close()
 
-	chunk := opChangePruneChunk
-	if chunk < 1 {
-		chunk = 1
-	}
+	chunk := max(opChangePruneChunk, 1)
 	tick := max(pruneScanTick, 1)
 	scanned, deleted := 0, 0
 	report := func() {

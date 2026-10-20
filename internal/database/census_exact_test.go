@@ -1,5 +1,5 @@
 // file: internal/database/census_exact_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 855ae87b-f3ac-4536-b212-083ff3eba047
 // last-edited: 2026-10-19
 
@@ -59,17 +59,11 @@ func buildHistoryCensus(counts map[string]int64) *HistoryCensus {
 	})
 	h.Max = all[0].Entries
 	pct := func(p float64) int64 {
-		rank := int(math.Ceil(p * float64(len(all))))
-		if rank < 1 {
-			rank = 1
-		}
+		rank := max(int(math.Ceil(p*float64(len(all)))), 1)
 		return all[len(all)-rank].Entries
 	}
 	h.P50, h.P90, h.P99 = pct(0.50), pct(0.90), pct(0.99)
-	top := censusHistoryTopN
-	if top > len(all) {
-		top = len(all)
-	}
+	top := min(censusHistoryTopN, len(all))
 	h.Top = append([]BookHistoryCount(nil), all[:top]...)
 	return h
 }

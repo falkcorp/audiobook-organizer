@@ -1,7 +1,7 @@
 // file: internal/database/book_field_render.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7c1e4b2a-93d5-4f60-8a1b-5e2d9c0f7a34
-// last-edited: 2026-10-04
+// last-edited: 2026-10-19
 
 package database
 
@@ -52,10 +52,9 @@ func bookFieldJSONName(f reflect.StructField) string {
 // its callback changed, so no changed column can go unrecorded because a
 // hand-kept field list missed it (internal/repairs.Writer).
 func TrackedBookFields() []string {
-	t := reflect.TypeOf(Book{})
+	t := reflect.TypeFor[Book]()
 	out := make([]string, 0, t.NumField())
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		if bookFieldSkip(f) || bookFieldJSONName(f) == "-" {
 			continue
 		}

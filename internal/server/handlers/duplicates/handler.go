@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series
@@ -369,8 +369,7 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 
 	// Pass ALL ids (the absorbed books plus the survivor) and the survivor id.
 	result, err := ms.CombineBooks(append(req.MergeIDs, req.KeepID), req.KeepID, req.Override)
-	var incomplete *merge.CombineIncompleteError
-	if errors.As(err, &incomplete) {
+	if incomplete, ok := errors.AsType[*merge.CombineIncompleteError](err); ok {
 		respondCombineIncomplete(c, incomplete)
 		return
 	}

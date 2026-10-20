@@ -1,7 +1,7 @@
 // file: pkg/ops/validate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c975d2f3-cff0-4c7b-9f24-535762042e04
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package ops
 
@@ -41,8 +41,7 @@ func refusals(err error) map[Refusal]bool {
 	out := map[Refusal]bool{}
 	var walk func(error)
 	walk = func(e error) {
-		var ce *CatalogError
-		if errors.As(e, &ce) {
+		if ce, ok := errors.AsType[*CatalogError](e); ok {
 			out[ce.Refusal] = true
 		}
 		if j, ok := e.(interface{ Unwrap() []error }); ok {

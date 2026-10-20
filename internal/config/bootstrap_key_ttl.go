@@ -1,7 +1,7 @@
 // file: internal/config/bootstrap_key_ttl.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 462bfc58-0e43-477d-b724-c90fd6c2cfa5
-// last-edited: 2026-10-07
+// last-edited: 2026-10-19
 
 package config
 
@@ -47,10 +47,7 @@ func (c *Config) ResolveBootstrapKeyTTL() (time.Duration, string) {
 		return d, ""
 	}
 	if c.BootstrapKeyTTLDays > 0 {
-		d := time.Duration(c.BootstrapKeyTTLDays) * 24 * time.Hour
-		if d > MaxBootstrapKeyTTL {
-			d = MaxBootstrapKeyTTL
-		}
+		d := min(time.Duration(c.BootstrapKeyTTLDays)*24*time.Hour, MaxBootstrapKeyTTL)
 		return d, fmt.Sprintf("bootstrap_key_ttl_days=%d is deprecated; bootstrap keys now live at most %s, so using %s. Replace it with bootstrap_key_ttl (a duration, default %s)",
 			c.BootstrapKeyTTLDays, MaxBootstrapKeyTTL, d, DefaultBootstrapKeyTTL)
 	}

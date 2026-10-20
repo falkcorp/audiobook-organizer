@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package jobs
 
@@ -139,10 +139,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		end := start + hashBackfillChunkSize
-		if end > len(files) {
-			end = len(files)
-		}
+		end := min(start+hashBackfillChunkSize, len(files))
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(workers)

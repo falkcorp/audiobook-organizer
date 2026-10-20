@@ -1,7 +1,7 @@
 // file: internal/ai/cover_text.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9a4c2e71-3b8d-4f16-a5e0-8d7c1b6f2e93
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package ai
 
@@ -158,8 +158,7 @@ func (r *RoutedCoverTextReader) ReadCoverText(ctx context.Context, image []byte,
 	if err == nil || ctx.Err() != nil {
 		return res, err
 	}
-	var quality *aidispatch.QualityError
-	if errors.As(err, &quality) {
+	if _, ok := errors.AsType[*aidispatch.QualityError](err); ok {
 		return nil, err
 	}
 	return aidispatch.Call(ctx, r.dispatcher(false), aidispatch.LLMCoverArtVision, r.coverTextAttempt(dataURL))
@@ -195,8 +194,8 @@ func (r *RoutedCoverTextReader) coverTextAttempt(dataURL string) func(context.Co
 // and any prose before the first "{" or after the last "}".
 func stripJSONFence(s string) string {
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		s = strings.TrimPrefix(s, "```")
+	if after, ok := strings.CutPrefix(s, "```"); ok {
+		s = after
 		if nl := strings.IndexByte(s, '\n'); nl >= 0 && !strings.Contains(s[:nl], "{") {
 			s = s[nl+1:] // drop the info string ("json")
 		}

@@ -1,7 +1,7 @@
 // file: internal/database/settings_getall_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0d6a52-9c1e-4b7a-8e25-6d4c1f0a9b83
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -140,8 +140,7 @@ func TestCollectSettings_IteratorErrorFails(t *testing.T) {
 	}
 	// Not reported as unreadable rows: the census itself failed, so the
 	// caller's "repair the named rows" remedy would be wrong.
-	var unreadable *UnreadableSettingsError
-	if errors.As(err, &unreadable) {
+	if _, ok := errors.AsType[*UnreadableSettingsError](err); ok {
 		t.Fatalf("iterator error reported as unreadable rows: %v", err)
 	}
 	if got != nil {

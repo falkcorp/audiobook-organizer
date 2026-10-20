@@ -1,7 +1,7 @@
 // file: internal/opscatalog/validate_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 15d7de21-ccf4-4692-992b-95f1056c2b6a
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 package opscatalog
 
@@ -29,8 +29,7 @@ func refusals(err error) []string {
 			}
 			return
 		}
-		var ce *ops.CatalogError
-		if errors.As(e, &ce) {
+		if ce, ok := errors.AsType[*ops.CatalogError](e); ok {
 			out = append(out, ce.DefID+":"+string(ce.Refusal))
 		}
 	}

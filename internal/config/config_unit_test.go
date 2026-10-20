@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.20.0
-// last-edited: 2026-10-17
+// version: 1.20.1
+// last-edited: 2026-10-19
 
 package config
 
@@ -527,7 +527,7 @@ func TestInitConfigITLPathEnablesNoWriteBack(t *testing.T) {
 	viper.Set("itunes.write_back_dry_run", true)
 	InitConfig()
 	assert.Equal(t, "/some/path.itl", AppConfig.ITunes.LibraryITLPath)
-	_, ok := reflect.TypeOf(ITunesConfig{}).FieldByName("WriteBackEnabled")
+	_, ok := reflect.TypeFor[ITunesConfig]().FieldByName("WriteBackEnabled")
 	assert.False(t, ok, "ITunesConfig must carry no write-back switch")
 }
 

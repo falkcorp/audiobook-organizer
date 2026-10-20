@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback.go
-// version: 2.1.3
+// version: 2.1.4
 // guid: 487502d2-faea-4677-8c9d-171a796ad643
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 //
 // The batch candidate fetch's provider fallback: Open Library, then Google
 // Books, asked only for books the rest of the chain left without a usable
@@ -235,8 +235,7 @@ func fallbackDeferrable(err error) bool {
 		errors.Is(err, context.DeadlineExceeded):
 		return true
 	}
-	var se *metadata.ProviderStatusError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*metadata.ProviderStatusError](err); ok {
 		if se.Status == 429 || se.Status >= 500 {
 			return true
 		}

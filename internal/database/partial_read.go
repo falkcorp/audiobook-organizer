@@ -1,7 +1,7 @@
 // file: internal/database/partial_read.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b7e2c91-3f4d-4a8e-9c61-d02f7a3e8b54
-// last-edited: 2026-09-12
+// last-edited: 2026-10-19
 
 package database
 
@@ -57,8 +57,7 @@ func (e *UnreadableMembersError) Unwrap() []error { return e.Errs }
 // and false when err carries no *UnreadableMembersError (nil, or a hard
 // failure such as a scan error, whose rows must not be used).
 func UnreadableMemberCount(err error) (int, bool) {
-	var u *UnreadableMembersError
-	if errors.As(err, &u) {
+	if u, ok := errors.AsType[*UnreadableMembersError](err); ok {
 		return u.Count(), true
 	}
 	return 0, false

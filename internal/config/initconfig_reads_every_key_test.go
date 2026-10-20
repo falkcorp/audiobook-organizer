@@ -1,7 +1,7 @@
 // file: internal/config/initconfig_reads_every_key_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d3f6a21-5c87-4e0b-b2d4-8f1a7c6e0b39
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 // InitConfig builds AppConfig from a hand-written struct literal, and that
 // literal is the ONLY place a viper value (shipped default, config file, env)
@@ -157,8 +157,7 @@ func sentinelFor(t reflect.Type, key string, i int) any {
 		return sentinelFor(t.Elem(), key, i)
 	case reflect.Struct:
 		m := map[string]any{}
-		for j := range t.NumField() {
-			f := t.Field(j)
+		for f := range t.Fields() {
 			if name, _ := configKeyName(f); f.IsExported() && name != "" {
 				m[name] = sentinelFor(f.Type, key+"."+name, i)
 			}

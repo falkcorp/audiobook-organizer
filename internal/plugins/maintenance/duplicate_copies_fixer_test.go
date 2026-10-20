@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package maintenance
 
@@ -211,7 +211,6 @@ func TestDuplicateCopies_PlanClassifiesEveryClass(t *testing.T) {
 	a1 := d.copyBook(t, "a1", "Emma", "lib/Emma", dcRow{track: 1, dur: 600, hash: "e1"}, dcRow{track: 2, dur: 600, hash: "e2"})
 	a2 := d.copyBook(t, "a2", "Emma", "lib/Emma 2", dcRow{track: 1, dur: 600, hash: "e1"}, dcRow{track: 2, dur: 600, hash: "e2"})
 	for id, asin := range map[string]string{a1: "B000000001", a2: "B000000002"} {
-		asin := asin
 		_, err := d.s.ModifyBook(id, func(b *database.Book) error { b.ASIN = &asin; return nil })
 		require.NoError(t, err)
 	}

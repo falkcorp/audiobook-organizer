@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package repairs
 
@@ -1156,10 +1156,10 @@ func TestPartitionRows_SharedBooksNeverSplit(t *testing.T) {
 // TestWriter_HasNoDeletePrimitive pins the write surface a fixer gets: the
 // framework must never offer a way to delete a book or a book_file row.
 func TestWriter_HasNoDeletePrimitive(t *testing.T) {
-	typ := reflect.TypeOf(&Writer{})
+	typ := reflect.TypeFor[*Writer]()
 	var names []string
-	for i := 0; i < typ.NumMethod(); i++ {
-		n := typ.Method(i).Name
+	for method := range typ.Methods() {
+		n := method.Name
 		names = append(names, n)
 		lower := strings.ToLower(n)
 		require.False(t, strings.Contains(lower, "delete") || strings.Contains(lower, "remove") ||

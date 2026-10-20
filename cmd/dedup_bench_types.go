@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench_types.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-08-20
+// last-edited: 2026-10-19
 
 //go:build bench
 
@@ -169,7 +169,7 @@ func buildTestConfigs(models []string) []TestConfig {
 }
 
 // writeJSON marshals v to a JSON file at path.
-func writeJSON(path string, v interface{}) error {
+func writeJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)

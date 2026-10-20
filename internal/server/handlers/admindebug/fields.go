@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/fields.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 61820a5b-9226-486c-b5cd-efc491764ce4
-// last-edited: 2026-09-25
+// last-edited: 2026-10-19
 
 package admindebug
 
@@ -27,7 +27,7 @@ func buildFieldIndex(t reflect.Type) fieldIndex {
 		if !f.IsExported() {
 			continue
 		}
-		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if name == "-" {
 			continue
 		}

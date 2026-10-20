@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.45.1
+// version: 1.45.2
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -770,18 +770,15 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 
 	resp, err := h.applyCandidateCore(c.Request.Context(), id, body.Candidate, body.Fields, body.WriteBack, "", body.OverrideASINConflict)
 	if err != nil {
-		var conflict *errASINConflict
-		if errors.As(err, &conflict) {
+		if conflict, ok := errors.AsType[*errASINConflict](err); ok {
 			respondASINConflict(c, conflict)
 			return
 		}
-		var rejected *errOwnerRejected
-		if errors.As(err, &rejected) {
+		if _, ok := errors.AsType[*errOwnerRejected](err); ok {
 			respondOwnerRejected(c, err)
 			return
 		}
-		var refused *errRenameWouldFail
-		if errors.As(err, &refused) {
+		if refused, ok := errors.AsType[*errRenameWouldFail](err); ok {
 			httputil.RespondWithErrorFields(c, http.StatusConflict, refused.Error(), "CONFLICT",
 				map[string]any{"reason": metafetch.ApplyRefusedReasonFileWorkWouldFail})
 			return
@@ -999,8 +996,7 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 
 	res, err := h.writeBackCore(c.Request.Context(), id, body.SegmentIDs, doRename)
 	if err != nil {
-		var conflict *errWriteBackConflict
-		if errors.As(err, &conflict) {
+		if conflict, ok := errors.AsType[*errWriteBackConflict](err); ok {
 			if conflict.status == http.StatusNotFound {
 				httputil.RespondWithNotFound(c, "audiobook", "")
 				return

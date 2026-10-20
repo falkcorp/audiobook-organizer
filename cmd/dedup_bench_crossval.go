@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench_crossval.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3c4d5e6f-7a8b-9012-cdef-333333333333
-// last-edited: 2026-08-20
+// last-edited: 2026-10-19
 
 //go:build bench
 
@@ -153,7 +153,7 @@ func runDedupBenchCrossval(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_ = writeJSON(filepath.Join(runDir, "config.json"), map[string]interface{}{
+	_ = writeJSON(filepath.Join(runDir, "config.json"), map[string]any{
 		"model_a":     crossvalModelA,
 		"mode_a":      crossvalModeA,
 		"model_b":     crossvalModelB,
@@ -207,7 +207,7 @@ func runDedupBenchCrossval(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadAllSuggestions(path string) ([]map[string]interface{}, error) {
+func loadAllSuggestions(path string) ([]map[string]any, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -218,7 +218,7 @@ func loadAllSuggestions(path string) ([]map[string]interface{}, error) {
 	}
 
 	// Load from directory (multiple chunk subdirs)
-	var all []map[string]interface{}
+	var all []map[string]any
 	entries, _ := os.ReadDir(path)
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -233,8 +233,8 @@ func loadAllSuggestions(path string) ([]map[string]interface{}, error) {
 	return all, nil
 }
 
-func filterUncertain(suggestions []map[string]interface{}) []map[string]interface{} {
-	var uncertain []map[string]interface{}
+func filterUncertain(suggestions []map[string]any) []map[string]any {
+	var uncertain []map[string]any
 	for _, s := range suggestions {
 		conf, _ := s["confidence"].(string)
 		if conf == "medium" || conf == "low" {

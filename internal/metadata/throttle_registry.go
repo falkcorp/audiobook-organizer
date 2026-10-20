@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle_registry.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0317e94d-7c76-4a4b-97a3-3cdfbf327945
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package metadata
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -400,14 +401,14 @@ func ThrottleSummary(ids []string) string {
 }
 
 func joinComma(parts []string) string {
-	out := ""
+	var out strings.Builder
 	for i, p := range parts {
 		if i > 0 {
-			out += ", "
+			out.WriteString(", ")
 		}
-		out += p
+		out.WriteString(p)
 	}
-	return out
+	return out.String()
 }
 
 // ResetThrottlesForTesting clears every hold from the process-global registry.

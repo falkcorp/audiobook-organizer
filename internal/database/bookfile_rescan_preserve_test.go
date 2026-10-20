@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_preserve_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 65fa9323-39c2-4f89-a480-e74c18c02036
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
@@ -71,8 +71,8 @@ func fillValueNonZero(t *testing.T, v reflect.Value, path string) {
 func TestBookFileFieldClasses_EveryFieldClassified(t *testing.T) {
 	typ := reflect.TypeFor[BookFile]()
 	fields := make(map[string]bool, typ.NumField())
-	for i := range typ.NumField() {
-		name := typ.Field(i).Name
+	for field := range typ.Fields() {
+		name := field.Name
 		fields[name] = true
 		if _, ok := bookFileFieldClasses[name]; !ok {
 			t.Errorf("BookFile.%s is not classified in bookFileFieldClasses (internal/database/bookfile_merge.go): "+
