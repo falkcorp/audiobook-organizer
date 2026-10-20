@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-20
 
@@ -382,6 +382,15 @@ func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) 
 	if p.emailAlreadyIdPVerified(userID, email) {
 		return false, nil // the common repeat login: no locks needed
 	}
+	if p.emailProvenForOtherByKey(userID, email) {
+		// Another account holds the address proven: a no-op, decided without
+		// the locks or the full user scan, which every Cloudflare Access
+		// request of a self-stamped account would otherwise pay.
+		return false, nil
+	}
+	if markEmailVerifiedLockedHook != nil {
+		markEmailVerifiedLockedHook()
+	}
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
 	userWriteMu.Lock() // the row's EmailSource is rewritten
@@ -459,6 +468,35 @@ func (p *PebbleStore) emailAlreadyIdPVerified(userID, email string) bool {
 	return err == nil && u != nil && u.EmailSource == EmailSourceIdP &&
 		util.NormalizeEmail(u.Email) == lower
 }
+
+// emailProvenForOtherByKey is MarkUserEmailVerified's second unlocked fast
+// path: true when the cache key for email names a different user and that
+// user's own row holds email proven (emailProven). The answer is then a no-op
+// whatever else is true, because another proven holder always wins, so the key
+// is only a hint: the decision is the other row's own proof. A missing or
+// stale key, a read error or an unproven row returns false and the locked path
+// decides (it also covers two proven holders, where the cache has no key).
+func (p *PebbleStore) emailProvenForOtherByKey(userID, email string) bool {
+	lower := util.NormalizeEmail(email)
+	if lower == "" {
+		return false
+	}
+	v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + lower))
+	if err != nil {
+		return false
+	}
+	other := string(v)
+	closer.Close()
+	if other == "" || other == userID {
+		return false
+	}
+	u, err := p.GetUserByID(other)
+	return err == nil && u != nil && emailProven(u, lower)
+}
+
+// markEmailVerifiedLockedHook, when set (tests only), runs each time
+// MarkUserEmailVerified falls through its fast paths to the locked path.
+var markEmailVerifiedLockedHook func()
 
 // userWriteMu serializes every rewrite of an existing user row (UpdateUser and
 // the field-scoped credential ops below). Pebble has no compare-and-swap, so
