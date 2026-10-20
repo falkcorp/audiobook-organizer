@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -827,5 +827,38 @@ func TestInviteRateLimit_RejectedBodyReachesNoLimiter(t *testing.T) {
 	// The one global slot the two admitted requests left is still there.
 	if w := h.get(inviteTestToken(8), "198.51.100.10", nil); w.Code != http.StatusOK {
 		t.Fatalf("after the rejected bodies: %d, want 200 (they spent no global slot)", w.Code)
+	}
+}
+
+// NIT6: a LAN IPv6 peer is keyed on its full address, as bootstrap keys a
+// direct LAN peer: every device on an IPv6 LAN shares one /64, so a /64 key
+// would let one device spend every other device's budget. A public IPv6
+// address still groups by /64.
+func TestClientPrefixKey_LANIPv6KeepsItsFullAddress(t *testing.T) {
+	for in, want := range map[string]string{
+		"10.0.0.5":                "10.0.0.5",
+		"::ffff:10.0.0.5":         "10.0.0.5",
+		"fd12:3456:789a:1::5":     "fd12:3456:789a:1::5",
+		"fe80::1%en0":             "fe80::1",
+		"::1":                     "::1",
+		"2001:db8:5:6::1":         "2001:db8:5:6::/64",
+		"2001:db8:5:6:aaaa::9999": "2001:db8:5:6::/64",
+	} {
+		got, ok := clientPrefixKey(in)
+		if !ok || got != want {
+			t.Errorf("clientPrefixKey(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+}
+
+func TestInviteRateLimit_LANIPv6PeersInOneSlash64HaveTheirOwnBuckets(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	if _, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), "[fd12:3456:789a:1::5]", nil)
+	}); !limited {
+		t.Fatal("the first LAN device was never limited")
+	}
+	if w := h.get(inviteTestToken(500), "[fd12:3456:789a:1::6]", nil); w.Code != http.StatusOK {
+		t.Fatalf("another device on the same LAN /64: %d, want 200 (its own bucket)", w.Code)
 	}
 }

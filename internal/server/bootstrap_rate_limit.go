@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -91,7 +91,7 @@ func newBootstrapLimiter() *bootstrapLimiter {
 var bootstrapLimits = newBootstrapLimiter()
 
 // bootstrapRateKey is the limiter key for a client address: clientPrefixKey
-// (the address for IPv4, the /64 for IPv6), or the one shared
+// (the address for IPv4 and LAN IPv6, the /64 for public IPv6), or the one shared
 // untrustedLocalClientKey when the client is not attributed or ip does not
 // parse.
 func bootstrapRateKey(ip string, attributed bool) string {

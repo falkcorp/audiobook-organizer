@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -41,8 +41,8 @@ import (
 //  2. per client: keyed by trustedClientIP, i.e. CF-Connecting-IP when it can
 //     be believed (the peer is a configured tunnel connector, or the request
 //     carries a verified Access assertion and the peer is this host),
-//     otherwise the peer's own address; IPv6 clients are grouped by /64
-//     (clientPrefixKey); sending Cf-* headers does not change a non-connector
+//     otherwise the peer's own address; public IPv6 clients are grouped by
+//     /64, LAN IPv6 peers keep their full address (clientPrefixKey); sending Cf-* headers does not change a non-connector
 //     peer's key. A request whose client cannot be established (a configured
 //     connector or a local peer with no trusted header) SKIPS this layer: a
 //     key taken from an unproven header would let a caller pick its own
@@ -192,9 +192,10 @@ func inviteTokenKey(token string) string {
 // inviteClientKey returns the per-client bucket key for the request, and false
 // when no trusted client address can be established (see trustedClientIP), in
 // which case the per-client layer is skipped for the request. The key is never
-// derived from an unproven header. IPv6 clients share one bucket per /64
-// (clientPrefixKey), as the bootstrap limiter keys them, so one host cannot
-// rotate through its /64 for fresh buckets.
+// derived from an unproven header. Public IPv6 clients share one bucket per
+// /64 (clientPrefixKey), as the bootstrap limiter keys them, so one host cannot
+// rotate through its /64 for fresh buckets; a LAN IPv6 peer (ULA, link-local)
+// keeps its full address, so LAN devices sharing a /64 do not share a bucket.
 func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (string, bool) {
 	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
 	if !ok {
