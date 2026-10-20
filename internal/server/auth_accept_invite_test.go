@@ -1,5 +1,5 @@
 // file: internal/server/auth_accept_invite_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-10-20
 
@@ -173,11 +173,19 @@ func TestAcceptInvite_StorageFailureIs500(t *testing.T) {
 }
 
 // The email-taken refusal keeps its own 409.
-func TestAcceptInvite_EmailTakenStillConflict(t *testing.T) {
+// An invited address another account holds verified gets the same generic
+// 400 as an invalid link: a distinct answer would tell the link holder the
+// address has a verified account.
+func TestAcceptInvite_EmailTakenIsTheGenericRefusal(t *testing.T) {
 	_, store := setupUserHandlerServer(t)
 	srv := newTestServer(t, consumeFailStore{Store: store, err: fmt.Errorf("%w: holder", database.ErrInviteEmailTaken)})
 	w := acceptInvite(t, srv, strings.Repeat("e", 64))
-	if w.Code != http.StatusConflict {
-		t.Fatalf("code = %d, want 409: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), acceptInviteInvalidMessage) {
+		t.Fatalf("code = %d, body %s; want the generic 400", w.Code, w.Body.String())
+	}
+	for _, leak := range []string{"already", "belongs", "account"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Fatalf("body reveals holder status (%q): %s", leak, w.Body.String())
+		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-20
 
@@ -501,15 +501,6 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 		if errors.Is(err, database.ErrUserProtectedField) {
 			// The copy was read before a password or status change landed.
 			httputil.RespondWithConflict(c, "the account changed while the profile was being saved; reload and try again")
-			return
-		}
-		if errors.Is(err, database.ErrUserEmailTaken) {
-			// Another account holds the address verified. Generic on purpose:
-			// the answer does not say the address has an account, and
-			// addresses that are only typed in elsewhere are not refused at
-			// all. The detail stays in the server log, by user id only.
-			authHandlerLog.Info("profile email change refused for user %s: another account has the address verified", user.ID)
-			httputil.RespondWithBadRequest(c, "that email address can't be used; ask an admin if it should be yours")
 			return
 		}
 		if errors.Is(err, database.ErrUserNotFound) {

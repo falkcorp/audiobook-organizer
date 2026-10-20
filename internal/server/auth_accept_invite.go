@@ -1,5 +1,5 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 // last-edited: 2026-10-20
 
@@ -27,8 +27,13 @@ const acceptInviteInvalidMessage = "this invitation link is not valid; ask the p
 
 // isInviteRefusal reports whether ConsumeInvite refused the invite itself
 // (a client-side problem) rather than failing on storage.
+//
+// ErrInviteEmailTaken (another account holds the invited address verified)
+// is one of them: a distinct answer would tell whoever holds the link that
+// the address has a verified account somewhere.
 func isInviteRefusal(err error) bool {
-	return errors.Is(err, database.ErrInviteNotFound) ||
+	return errors.Is(err, database.ErrInviteEmailTaken) ||
+		errors.Is(err, database.ErrInviteNotFound) ||
 		errors.Is(err, database.ErrInviteUsed) ||
 		errors.Is(err, database.ErrInviteExpired) ||
 		errors.Is(err, database.ErrInviteUsernameTaken)
@@ -80,10 +85,6 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 
 	user, err := s.Ops().ConsumeInvite(req.Token, algo, hash)
 	if err != nil {
-		if errors.Is(err, database.ErrInviteEmailTaken) {
-			httputil.RespondWithConflict(c, "this invitation's email address already belongs to an account; ask the person who invited you for a new invitation")
-			return
-		}
 		if isInviteRefusal(err) {
 			// Missing, used, expired and similar refusals share one answer:
 			// the route is public, so distinct messages would tell a caller

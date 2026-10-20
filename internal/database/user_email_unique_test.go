@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-20
 
@@ -16,42 +16,31 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-// A self-service change may not park on an address another account holds
-// proven: refused, and nothing is written.
-func TestUpdateUser_RefusesAnAddressAnotherAccountHoldsProven(t *testing.T) {
+// A self-service change onto an address another account holds proven is
+// accepted (refusing it would be an oracle for which addresses have verified
+// accounts), stamped "self", and proves nothing: the verified lookup and an
+// SSO link by email still reach the proven holder.
+func TestUpdateUser_AcceptsAProvenHoldersAddressUnproven(t *testing.T) {
 	s := newInviteTestStore(t)
 	alice := mustUser(t, s, "alice", "viewer", "active") // setup: proven
 	bob := mustUser(t, s, "bob", "viewer", "active")
 
 	bob.Email = "ALICE@Admins.Example.com"
-	if err := s.UpdateUser(bob); !errors.Is(err, ErrUserEmailTaken) {
-		t.Fatalf("UpdateUser onto another account's proven address = %v, want ErrUserEmailTaken", err)
+	if err := s.UpdateUser(bob); err != nil {
+		t.Fatalf("UpdateUser onto another account's proven address = %v, want nil", err)
 	}
-	if stored, _ := s.GetUserByID(bob.ID); stored.Email != "bob@admins.example.com" {
-		t.Fatalf("a refused update must not write: email = %q", stored.Email)
+	if got, _ := s.GetUserByID(bob.ID); got.EmailSource != EmailSourceSelf {
+		t.Fatalf("bob's copy has source %q, want self", got.EmailSource)
 	}
 	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u == nil || u.ID != alice.ID {
-		t.Fatalf("alice's verified email must still resolve to alice: %+v", u)
+		t.Fatalf("the verified lookup = %+v; want alice", u)
 	}
-}
-
-// SF2: an address other accounts only typed in is allowed (refusing it would
-// tell any signed-in user which addresses have accounts) and stays
-// unverified for everyone.
-func TestUpdateUser_AllowsAnAddressHeldOnlyUnproven(t *testing.T) {
-	s := newInviteTestStore(t)
-	alice := mustUser(t, s, "alice", "viewer", "active")
-	bob := mustUser(t, s, "bob", "viewer", "active")
-	alice.Email = "shared@example.com"
-	if err := s.UpdateUser(alice); err != nil {
-		t.Fatal(err)
+	if keyFor(t, s, "alice@admins.example.com") != alice.ID {
+		t.Fatal("bob's copy must not move alice's key")
 	}
-	bob.Email = "Shared@Example.com"
-	if err := s.UpdateUser(bob); err != nil {
-		t.Fatalf("UpdateUser onto an address held only unproven = %v, want nil", err)
-	}
-	if u, _ := s.GetUserByVerifiedEmail("shared@example.com"); u != nil {
-		t.Fatalf("neither self-set copy may be verified: %+v", u)
+	id := &OAuthIdentity{Provider: "google", Subject: "g-alice", Email: "alice@admins.example.com"}
+	if u, err := s.LinkIdentityToVerifiedEmailHolder(id, "alice@admins.example.com"); err != nil || u == nil || u.ID != alice.ID {
+		t.Fatalf("SSO link by email = %+v, %v; want alice", u, err)
 	}
 }
 
