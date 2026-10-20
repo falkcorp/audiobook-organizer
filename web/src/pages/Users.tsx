@@ -1,12 +1,17 @@
 // file: web/src/pages/Users.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-19
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { apiFetch } from '../utils/apiFetch';
 import { describeRequestError, responseErrorMessage, unwrapData } from '../utils/apiResponse';
-import { guestPolicyLabel, inviteLink, type AcceptedInvite } from './usersInvites';
+import {
+  emailBindingLabel,
+  guestPolicyLabel,
+  inviteLink,
+  type AcceptedInvite,
+} from './usersInvites';
 import {
   Box,
   Button,
@@ -390,7 +395,7 @@ export default function Users() {
                   return (
                     <TableRow key={`${a.username}-${a.accepted_at}`}>
                       <TableCell>{a.username}</TableCell>
-                      <TableCell>{a.email || '—'}</TableCell>
+                      <TableCell>{emailBindingLabel(a)}</TableCell>
                       <TableCell>{new Date(a.accepted_at).toLocaleString()}</TableCell>
                       <TableCell>
                         <Tooltip title={a.guest_policy_detail || ''}>
@@ -546,7 +551,7 @@ function CreateInviteDialog({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               margin="normal"
-              helperText="Optional. Becomes their account email and allows single sign-on with it."
+              helperText="Optional. When the invitation is emailed, accepting it sets this as their account email and allows single sign-on with it."
             />
             <FormControlLabel
               control={
