@@ -27,12 +27,11 @@ import os
 import sys
 import time
 
+import requests
 import urllib3
 
 # Suppress InsecureRequestWarning for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-import requests
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
@@ -162,7 +161,6 @@ def apply_g51_groups(agreed, groups, server, dry_run, id_to_name=None):
         group = groups[idx]
         canonical_id = group["canonical"]["id"]
         variant_ids = [v["id"] for v in group.get("variants", [])]
-        variant_names = [v["name"] for v in group.get("variants", [])]
 
         print(f"  [{action.upper():12s}] group {idx}: {canonical_name}")
 

@@ -48,6 +48,7 @@
 #   WHISPER_PORT        port (default 19848 -- one above the CUDA server's
 #                       19847, so both can run on one host without colliding)
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -56,7 +57,7 @@ import shutil
 import sys
 import tempfile
 import threading
-from typing import List
+from typing import Annotated, List
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("whisper_mlx_server")
@@ -183,21 +184,19 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
         return {"text": "", "error": str(e)}
     finally:
         if tmp_path:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...)):
+async def transcribe(file: Annotated[UploadFile, File()]):
     """Single-file endpoint, used by the Go client's per-file fallback path."""
     data = await file.read()
     return _do_transcribe(data, file.filename)
 
 
 @app.post("/transcribe-batch")
-async def transcribe_batch(files: List[UploadFile] = File(...)):
+async def transcribe_batch(files: Annotated[List[UploadFile], File()]):
     """Multi-file endpoint. Returns {"results": {"<filename>": {...}}}.
 
     The key is each part's filename VERBATIM -- the Go client sends the book ID

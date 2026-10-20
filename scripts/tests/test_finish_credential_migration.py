@@ -169,7 +169,7 @@ class MoveKeyTests(unittest.TestCase):
         self.assertEqual(self.state.stat().st_mode & 0o777, 0o700)
 
     def test_unknown_service_user_refuses_before_touching_anything(self):
-        with self.assertRaises(fcm.Refused) as cm:
+        with self.assertRaises(fcm.RefusedError) as cm:
             self._move(owner="definitely-not-a-user-9f3b")
         self.assertIn("does not exist", str(cm.exception))
         # Order matters: the lookup must happen BEFORE the copy, or a bad
@@ -185,7 +185,7 @@ class MoveKeyTests(unittest.TestCase):
             calls["n"] += 1
             return "corrupted" if calls["n"] == 2 else real(path)
 
-        with mock.patch.object(fcm, "sha256", flaky), self.assertRaises(fcm.Refused) as cm:
+        with mock.patch.object(fcm, "sha256", flaky), self.assertRaises(fcm.RefusedError) as cm:
             self._move()
         self.assertIn("digest mismatch", str(cm.exception))
         self.assertEqual(self.src.read_bytes(), KEY)
@@ -277,7 +277,7 @@ class RunDecodeTests(unittest.TestCase):
         self.assertIn("token_file=/a", out)
 
     def test_nonzero_raises_when_checked(self):
-        with self.assertRaises(fcm.Refused):
+        with self.assertRaises(fcm.RefusedError):
             fcm.run([sys.executable, "-c", "raise SystemExit(3)"])
 
 
@@ -363,7 +363,7 @@ class BinaryMarkerTests(unittest.TestCase):
         self.assertTrue(fcm.binary_has_marker(p))
 
     def test_missing_binary_refuses(self):
-        with self.assertRaises(fcm.Refused) as cm:
+        with self.assertRaises(fcm.RefusedError) as cm:
             fcm.binary_has_marker(Path(self.td.name, "nope"))
         self.assertIn("not found", str(cm.exception))
 

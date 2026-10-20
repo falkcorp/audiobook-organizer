@@ -17,6 +17,7 @@ It generates a detailed report showing:
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -115,15 +116,11 @@ class SeriesPatternMatcher:
 
                 # Extract position based on pattern
                 if method in ["numbered_series", "book_numbered", "hash_numbered"]:
-                    try:
+                    with contextlib.suppress(ValueError, IndexError):
                         position = int(match.group(2))
-                    except (ValueError, IndexError):
-                        pass
                 elif method == "volume_numbered" and len(match.groups()) >= 3:
-                    try:
+                    with contextlib.suppress(ValueError, IndexError):
                         position = int(match.group(3))
-                    except (ValueError, IndexError):
-                        pass
 
                 return series, position, f"pattern:{method}"
 

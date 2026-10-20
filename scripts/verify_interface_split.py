@@ -38,16 +38,16 @@ def sigs(text, target):
         if name in seen:
             return
         seen.add(name)
-        for l in decls.get(name, "").splitlines():
-            l = re.sub(r"\s*//.*$", "", l).strip()
-            if not l:
+        for line in decls.get(name, "").splitlines():
+            line = re.sub(r"\s*//.*$", "", line).strip()
+            if not line:
                 continue
-            if "(" in l:
-                out.add(re.sub(r"\s+", " ", l))
-            elif l in decls:
-                walk(l)  # a split sibling: recurse
+            if "(" in line:
+                out.add(re.sub(r"\s+", " ", line))
+            elif line in decls:
+                walk(line)  # a split sibling: recurse
             else:
-                out.add(l)  # a foreign embed: a leaf
+                out.add(line)  # a foreign embed: a leaf
 
     walk(target)
     return out

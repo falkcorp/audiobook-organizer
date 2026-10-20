@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/create-org-labels.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: fc5b0ad9-d1f2-4846-acc0-11dbe893f435
 # last-edited: 2026-10-20
 
@@ -538,7 +538,7 @@ def get_existing_labels(org):
         return set()
     try:
         data = json.loads(result.stdout)
-        return {l["name"].lower() for l in data}
+        return {label_info["name"].lower() for label_info in data}
     except Exception:
         return set()
 
@@ -595,16 +595,16 @@ def main():
     # Deduplicate inventory by name (keep first occurrence)
     seen = set()
     unique_labels = []
-    for l in LABELS:
-        key = l["name"].lower()
+    for entry in LABELS:
+        key = entry["name"].lower()
         if key not in seen:
             seen.add(key)
-            unique_labels.append(l)
+            unique_labels.append(entry)
 
-    to_create = [l for l in unique_labels if l["name"].lower() not in existing]
+    to_create = [entry for entry in unique_labels if entry["name"].lower() not in existing]
     print(f"  {len(to_create)} labels to create\n")
 
-    created, skipped, failed = [], [], []
+    created, failed = [], []
 
     for label in to_create:
         ok = create_label(args.org, label, dry_run=args.dry_run)

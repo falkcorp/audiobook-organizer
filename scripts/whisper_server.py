@@ -51,8 +51,9 @@ import hashlib
 import io
 import json
 import logging
+import os
 import sys
-from typing import List
+from typing import Annotated, List
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("whisper_server")
@@ -66,7 +67,6 @@ except ImportError as e:
     print('Install with: pip install "faster-whisper>=1.0.0" fastapi "uvicorn[standard]"')
     sys.exit(1)
 
-import os
 
 model_name = sys.argv[1] if len(sys.argv) > 1 else "base.en"
 
@@ -242,14 +242,14 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
 
 
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...)):
+async def transcribe(file: Annotated[UploadFile, File()]):
     """Single-file endpoint — kept for backward compatibility."""
     data = await file.read()
     return _do_transcribe(data, file.filename)
 
 
 @app.post("/transcribe-batch")
-async def transcribe_batch(files: List[UploadFile] = File(...)):
+async def transcribe_batch(files: Annotated[List[UploadFile], File()]):
     """
     Multi-file endpoint. Accepts up to 64 WAV files in one multipart request.
     The filename of each part is used as the result key (Go sends book IDs).

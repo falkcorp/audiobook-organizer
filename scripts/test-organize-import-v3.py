@@ -15,6 +15,7 @@ Version 3 improvements:
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -255,10 +256,8 @@ class SeriesPatternMatcher:
                 position = 0
 
                 # Extract position from second capture group
-                try:
+                with contextlib.suppress(ValueError, IndexError):
                     position = int(groups[1])
-                except (ValueError, IndexError):
-                    pass
 
                 return series, position, method
 
@@ -340,10 +339,7 @@ class PathExtractor:
             return False
 
         # Skip if it's a chapter pattern
-        if re.match(r"(?i)^chapter\s+\d+", author):
-            return False
-
-        return True
+        return not re.match(r"(?i)^chapter\s+\d+", author)
 
     @staticmethod
     def extract_title_from_filename(filename: str) -> str:
@@ -438,17 +434,18 @@ class PathExtractor:
 
         # Check for multi-word names with proper capitalization
         words = s.split()
-        if len(words) >= 2 and len(words) <= 4:
-            # Check if all words start with uppercase
-            if all(word and word[0].isupper() for word in words):
-                return True
+        # Check if all words start with uppercase
+        if 2 <= len(words) <= 4 and all(word and word[0].isupper() for word in words):
+            return True
 
         # Check for "FirstName LastName" pattern
-        if len(words) >= 2:
-            if words[0] and words[0][0].isupper() and words[1] and words[1][0].isupper():
-                return True
-
-        return False
+        return bool(
+            len(words) >= 2
+            and words[0]
+            and words[0][0].isupper()
+            and words[1]
+            and words[1][0].isupper()
+        )
 
     @staticmethod
     def is_chapter_file(filename: str) -> tuple[bool, int | None]:
@@ -756,7 +753,7 @@ class BookGrouper:
             books_by_id[book.book_id].append(book)
 
         duplicate_group_counter = 0
-        for book_id, book_group in books_by_id.items():
+        for book_group in books_by_id.values():
             if len(book_group) > 1:
                 duplicate_group_counter += 1
                 group_id = f"DUP{duplicate_group_counter:04d}"
