@@ -1,5 +1,5 @@
 // file: internal/database/invite_delivery_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2a8c5e71-4b9d-4f03-a6e2-7d1c9b3f5e86
 // last-edited: 2026-10-19
 
@@ -166,14 +166,14 @@ func TestInviteEmailGrant_CFAddedAndDeleteOnlyForItsUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetInviteEmailGrantCFAdded("guest@example.com", "someone-else"); err != nil {
-		t.Fatal(err)
+	if still, err := s.SetInviteEmailGrantCFAdded("guest@example.com", "someone-else"); err != nil || still {
+		t.Fatalf("SetInviteEmailGrantCFAdded for another user = %v, %v; want false, nil", still, err)
 	}
 	if g, _ := s.GetInviteEmailGrant("guest@example.com"); g.CFAdded {
 		t.Fatal("CFAdded set for a different user id")
 	}
-	if err := s.SetInviteEmailGrantCFAdded("guest@example.com", u.ID); err != nil {
-		t.Fatal(err)
+	if still, err := s.SetInviteEmailGrantCFAdded("guest@example.com", u.ID); err != nil || !still {
+		t.Fatalf("SetInviteEmailGrantCFAdded = %v, %v; want true, nil", still, err)
 	}
 	if g, _ := s.GetInviteEmailGrant("guest@example.com"); !g.CFAdded {
 		t.Fatal("CFAdded not recorded")
@@ -190,6 +190,10 @@ func TestInviteEmailGrant_CFAddedAndDeleteOnlyForItsUser(t *testing.T) {
 	}
 	if g, err := s.DeleteInviteEmailGrant("guest@example.com", u.ID); err != nil || g != nil {
 		t.Fatal("second delete must be a no-op")
+	}
+	// After a revoke, a late add learns the grant is gone.
+	if still, err := s.SetInviteEmailGrantCFAdded("guest@example.com", u.ID); err != nil || still {
+		t.Fatalf("SetInviteEmailGrantCFAdded after delete = %v, %v; want false, nil", still, err)
 	}
 }
 

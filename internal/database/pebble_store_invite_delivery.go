@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_invite_delivery.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
 // last-edited: 2026-10-19
 
@@ -33,6 +33,16 @@ const (
 	// InviteGuestPolicySkipped: no SSO grant (email not delivered, or the
 	// creator is not an admin), so Cloudflare was not touched.
 	InviteGuestPolicySkipped = "skipped"
+	// InviteGuestPolicyPending is written just before Cloudflare is called.
+	// One that stays pending means the server stopped mid-update: check the
+	// policy by hand.
+	InviteGuestPolicyPending = "pending"
+	// InviteGuestPolicyRevoked: the access was revoked before the sync
+	// reached Cloudflare, so Cloudflare was not touched.
+	InviteGuestPolicyRevoked = "revoked"
+	// InviteGuestPolicyRemoved: the sync added the email, found the access
+	// had been revoked while it was doing so, and removed the email again.
+	InviteGuestPolicyRemoved = "removed"
 )
 
 // Invite.EmailBinding and Invite.SSOGrant values.
@@ -101,8 +111,12 @@ type InviteEmailGrantStore interface {
 	GetInviteEmailGrant(email string) (*InviteEmailGrant, error)
 	// SetInviteEmailGrantCFAdded marks the grant for email as having been
 	// added to the Cloudflare guest policy by the sync, if it still names
-	// userID.
-	SetInviteEmailGrantCFAdded(email, userID string) error
+	// userID, and reports whether it did. false means the grant was revoked
+	// (deleted) in the meantime, and the caller, which just added the email,
+	// must remove it again: the revoke saw CFAdded=false and left it alone.
+	// It takes the same lock as DeleteInviteEmailGrant, so exactly one of the
+	// two sees the add.
+	SetInviteEmailGrantCFAdded(email, userID string) (stillGranted bool, err error)
 	// DeleteInviteEmailGrant removes the grant for email when it names userID
 	// and returns what was removed (nil when there was nothing to remove).
 	DeleteInviteEmailGrant(email, userID string) (*InviteEmailGrant, error)
@@ -205,19 +219,25 @@ func (p *PebbleStore) GetInviteEmailGrant(email string) (*InviteEmailGrant, erro
 }
 
 // SetInviteEmailGrantCFAdded implements InviteEmailGrantStore.
-func (p *PebbleStore) SetInviteEmailGrantCFAdded(email, userID string) error {
+func (p *PebbleStore) SetInviteEmailGrantCFAdded(email, userID string) (bool, error) {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
 	g, err := p.GetInviteEmailGrant(email)
-	if err != nil || g == nil || g.UserID != userID {
-		return err
+	if err != nil {
+		return false, err
+	}
+	if g == nil || g.UserID != userID {
+		return false, nil
 	}
 	g.CFAdded = true
 	data, err := json.Marshal(g)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return p.db.Set([]byte(inviteEmailGrantPrefix+strings.ToLower(strings.TrimSpace(email))), data, pebble.Sync)
+	if err := p.db.Set([]byte(inviteEmailGrantPrefix+strings.ToLower(strings.TrimSpace(email))), data, pebble.Sync); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // DeleteInviteEmailGrant implements InviteEmailGrantStore.

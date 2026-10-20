@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 26b39541-b8d3-4fc8-b131-190f15f5a5ab
 // last-edited: 2026-10-19
 
@@ -302,6 +302,14 @@ describe('Users', () => {
                   guest_policy_detail: 'HTTP 403',
                 },
                 {
+                  username: 'revoked-guest',
+                  email: 'revoked@example.com',
+                  accepted_at: '2026-10-19T12:00:00Z',
+                  email_binding: 'bound',
+                  sso_grant: 'granted',
+                  guest_policy_status: 'removed',
+                },
+                {
                   username: 'manual-guest',
                   email: 'manual@example.com',
                   accepted_at: '2026-10-19T12:00:00Z',
@@ -317,6 +325,9 @@ describe('Users', () => {
       expect(await screen.findByText('Added to Cloudflare guest policy')).toBeInTheDocument();
       expect(screen.getByText('Cloudflare update failed: add manually')).toBeInTheDocument();
       expect(screen.getByText('Email not verified: not granted')).toBeInTheDocument();
+      expect(
+        screen.getByText('Access revoked during the update: removed from Cloudflare')
+      ).toBeInTheDocument();
       expect(screen.getByText(/manual@example.com \(not verified/i)).toBeInTheDocument();
     });
   });

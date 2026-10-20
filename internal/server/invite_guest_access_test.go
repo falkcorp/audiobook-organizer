@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-19
 
@@ -23,13 +23,17 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
-// fakeGuestPolicy records EnsureEmail and RemoveEmail calls.
+// fakeGuestPolicy records EnsureEmail and RemoveEmail calls. When entered
+// and release are set, EnsureEmail signals entered and then blocks until
+// release is closed (without holding mu, so RemoveEmail is not blocked).
 type fakeGuestPolicy struct {
 	mu      sync.Mutex
 	emails  []string
 	removed []string
 	res     cfaccesspolicy.Result
 	err     error
+	entered chan struct{}
+	release chan struct{}
 }
 
 func (f *fakeGuestPolicy) RemoveEmail(_ context.Context, email string) (cfaccesspolicy.Result, error) {
@@ -40,6 +44,10 @@ func (f *fakeGuestPolicy) RemoveEmail(_ context.Context, email string) (cfaccess
 }
 
 func (f *fakeGuestPolicy) EnsureEmail(_ context.Context, email string) (cfaccesspolicy.Result, error) {
+	if f.entered != nil {
+		f.entered <- struct{}{}
+		<-f.release
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.emails = append(f.emails, email)
@@ -429,5 +437,107 @@ func TestConfigGET_NeverReturnsInviteSecrets(t *testing.T) {
 				t.Fatalf("%s leaked an invite secret", path)
 			}
 		}
+	}
+}
+
+// deactivateViaRoute deactivates userID through the real route.
+func deactivateViaRoute(t *testing.T, srv *Server, userID string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+userID+"/deactivate", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("deactivate: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func (f *fakeGuestPolicy) snapshot() (added, removed []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.emails...), append([]string(nil), f.removed...)
+}
+
+// A revoke that lands while EnsureEmail is in flight sees CFAdded=false; the
+// sync, which then adds the email, must find the grant gone and remove it.
+func TestGuestPolicySync_RevokeDuringAddRemovesTheEntry(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added, entered: make(chan struct{}), release: make(chan struct{})}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("b", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest", "guest@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d", w.Code)
+	}
+	<-fake.entered // the sync is now inside EnsureEmail
+	inv, _ := store.GetInvite(token)
+	if inv.GuestPolicyStatus != database.InviteGuestPolicyPending {
+		t.Fatalf("status before Cloudflare answers = %q, want pending", inv.GuestPolicyStatus)
+	}
+	guest, _ := store.GetUserByUsername("guest")
+	deactivateViaRoute(t, srv, guest.ID)
+	close(fake.release)
+	srv.bgWG.Wait()
+
+	added, removed := fake.snapshot()
+	if len(added) != 1 || len(removed) != 1 || removed[0] != "guest@example.com" {
+		t.Fatalf("added=%v removed=%v; the entry added after the revoke must be removed again", added, removed)
+	}
+	inv, _ = store.GetInvite(token)
+	if inv.GuestPolicyStatus != database.InviteGuestPolicyRemoved {
+		t.Fatalf("status = %q, want removed", inv.GuestPolicyStatus)
+	}
+	gs, _ := database.AsCapability[database.InviteEmailGrantStore](store)
+	if g, _ := gs.GetInviteEmailGrant("guest@example.com"); g != nil {
+		t.Fatalf("grant must stay deleted, got %+v", g)
+	}
+}
+
+// Same interleaving, but the address was already in the policy (added by
+// hand): nothing is removed.
+func TestGuestPolicySync_RevokeDuringAddLeavesAHandAddedEntry(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.AlreadyPresent, entered: make(chan struct{}), release: make(chan struct{})}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("c", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest", "guest@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d", w.Code)
+	}
+	<-fake.entered
+	guest, _ := store.GetUserByUsername("guest")
+	deactivateViaRoute(t, srv, guest.ID)
+	close(fake.release)
+	srv.bgWG.Wait()
+	if _, removed := fake.snapshot(); len(removed) != 0 {
+		t.Fatalf("removed %v; an entry that was already present must stay", removed)
+	}
+	inv, _ := store.GetInvite(token)
+	if inv.GuestPolicyStatus != database.InviteGuestPolicyAlreadyPresent {
+		t.Fatalf("status = %q, want already_present", inv.GuestPolicyStatus)
+	}
+}
+
+// A revoke that lands before the sync reaches Cloudflare: Cloudflare is
+// never called.
+func TestGuestPolicySync_RevokedBeforeSyncNeverCallsCloudflare(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("e", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest", "guest@example.com")
+	// Accept straight through the store so no sync starts yet.
+	u, err := store.ConsumeInvite(token, "bcrypt", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.revokeGuestAccess(u.ID, "guest@example.com", "user deactivated")
+	srv.startGuestPolicySync(token, u.ID)
+	srv.bgWG.Wait()
+	if added, removed := fake.snapshot(); len(added) != 0 || len(removed) != 0 {
+		t.Fatalf("added=%v removed=%v; Cloudflare must not be touched", added, removed)
+	}
+	inv, _ := store.GetInvite(token)
+	if inv.GuestPolicyStatus != database.InviteGuestPolicyRevoked {
+		t.Fatalf("status = %q, want revoked", inv.GuestPolicyStatus)
 	}
 }
