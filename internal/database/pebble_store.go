@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.227.0
+// version: 1.228.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-19
 
@@ -697,6 +697,13 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 	if err := store.migrateImportPathKeys(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate import path keys: %w", err)
+	}
+
+	// Not fatal: GetUserByVerifiedEmail already ignores a key whose user no
+	// longer has the address, and without the sentinel this retries on the
+	// next open.
+	if _, err := store.backfillVerifiedEmailIndex(); err != nil {
+		authLog.Error("verified-email index repair failed; retried at next open: %v", err)
 	}
 
 	// Initialize counters if they don't exist

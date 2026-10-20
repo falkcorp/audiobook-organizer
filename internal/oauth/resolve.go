@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
-// last-edited: 2026-07-31
+// last-edited: 2026-10-19
 
 package oauth
 
@@ -17,6 +17,12 @@ import (
 var (
 	ErrEmailNotVerified = errors.New("oauth: identity email is not verified")
 	ErrEmailNotAllowed  = errors.New("oauth: email is not on the allowlist")
+	// ErrEmailHeldUnverified: an existing account has this address as a
+	// self-set, unverified email. The login is not linked to that account
+	// (anyone can type any address into a profile) and no second account is
+	// made with the same address. It wraps ErrEmailNotAllowed so every
+	// caller's existing deny path (403, never 500) applies.
+	ErrEmailHeldUnverified = fmt.Errorf("%w: an existing account has this email unverified, so the login is not linked to it", ErrEmailNotAllowed)
 )
 
 // UserStore is the slice of database.Store the resolver needs. database.Store
@@ -24,7 +30,7 @@ var (
 type UserStore interface {
 	GetOAuthIdentityByProviderSubject(provider, subject string) (*database.OAuthIdentity, error)
 	CreateOAuthIdentity(identity *database.OAuthIdentity) (*database.OAuthIdentity, error)
-	GetUserByEmail(email string) (*database.User, error)
+	GetUserByVerifiedEmail(email string) (*database.User, error)
 	GetUserByUsername(username string) (*database.User, error)
 	GetUserByID(id string) (*database.User, error)
 	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
@@ -35,9 +41,15 @@ type UserStore interface {
 //  1. Reject if the IdP did not verify the email (never trust an unverified address).
 //  2. Reject if the email is not on the allowlist — a valid IdP login by an
 //     unauthorized account must NOT create a user or a session (verified ≠ authorized).
-//  3. Resolve by (provider, subject) → existing linked user.
-//  4. Else resolve by verified email → auto-link this identity to that user.
-//  5. Else auto-create a user (DefaultRole) + link the identity.
+//  3. Resolve by (provider, subject) → existing linked user. When the IdP's
+//     verified email is that user's current email, it is recorded as verified
+//     (database.VerifiedEmailMarker, best-effort).
+//  4. Else resolve by an account's VERIFIED email (GetUserByVerifiedEmail) →
+//     auto-link this identity to that user. A self-set profile email is never
+//     matched: it would let anyone capture another person's first SSO login.
+//  5. Else auto-create a user (DefaultRole) + link the identity. If an account
+//     already has the address unverified, CreateUser refuses it and the login
+//     is denied (ErrEmailHeldUnverified).
 //
 // A rejected identity never touches the user/identity store past the lookups.
 func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.User, error) {
@@ -59,11 +71,18 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 		if user == nil {
 			return nil, fmt.Errorf("oauth resolve: linked identity %s points to missing user %s", id.ID, id.UserID)
 		}
+		if strings.EqualFold(strings.TrimSpace(user.Email), strings.TrimSpace(claims.Email)) {
+			if m, ok := database.AsCapability[database.VerifiedEmailMarker](store); ok {
+				// Best-effort: the login itself is already decided. A failure
+				// only means the address stays unverified for now.
+				_, _ = m.MarkUserEmailVerified(user.ID, claims.Email)
+			}
+		}
 		return user, nil
 	}
 
-	// (4) Link to an existing user with the same verified email.
-	existing, err := store.GetUserByEmail(claims.Email)
+	// (4) Link to an existing user whose email is verified and the same.
+	existing, err := store.GetUserByVerifiedEmail(claims.Email)
 	if err != nil {
 		return nil, fmt.Errorf("oauth resolve: lookup user by email: %w", err)
 	}
@@ -79,6 +98,9 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 	// (5) Auto-create a new user + link the identity.
 	username := c.uniqueUsername(store, claims)
 	user, err := store.CreateUser(username, claims.Email, "oauth", "", []string{c.DefaultRole}, "active")
+	if errors.Is(err, database.ErrUserEmailTaken) {
+		return nil, ErrEmailHeldUnverified
+	}
 	if err != nil {
 		return nil, fmt.Errorf("oauth resolve: create user: %w", err)
 	}

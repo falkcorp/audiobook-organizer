@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-19
 
@@ -216,11 +216,15 @@ func TestRevokeGuestAccess_KeepsSharedOwnerAndAllowlistedEmails(t *testing.T) {
 		setup func(t *testing.T, store database.Store)
 	}{
 		{"another active user holds it, verified by an identity provider", func(t *testing.T, store database.Store) {
+			// What oauth.ResolveUser records when a linked identity's verified
+			// email equals the account's.
 			twin := claimGuestEmailAfterMove(t, store)
-			if _, err := store.CreateOAuthIdentity(&database.OAuthIdentity{
-				Provider: "google", Subject: "sub-twin", Email: "Guest@example.com", UserID: twin.ID,
-			}); err != nil {
-				t.Fatal(err)
+			m, ok := database.AsCapability[database.VerifiedEmailMarker](store)
+			if !ok {
+				t.Fatal("store lacks VerifiedEmailMarker")
+			}
+			if marked, err := m.MarkUserEmailVerified(twin.ID, "Guest@example.com"); err != nil || !marked {
+				t.Fatalf("MarkUserEmailVerified = %v, %v", marked, err)
 			}
 		}},
 		{"owner email", func(t *testing.T, _ database.Store) {

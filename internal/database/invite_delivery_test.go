@@ -1,5 +1,5 @@
 // file: internal/database/invite_delivery_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2a8c5e71-4b9d-4f03-a6e2-7d1c9b3f5e86
 // last-edited: 2026-10-19
 
@@ -73,7 +73,7 @@ func TestConsumeInvite_EmailGrantAndUserEmail(t *testing.T) {
 	if u.Email != "guest@example.com" {
 		t.Fatalf("user email = %q", u.Email)
 	}
-	if byEmail, _ := s.GetUserByEmail("guest@example.com"); byEmail == nil || byEmail.ID != u.ID {
+	if byEmail, _ := s.GetUserByVerifiedEmail("guest@example.com"); byEmail == nil || byEmail.ID != u.ID {
 		t.Fatal("email index does not point at the new user")
 	}
 	if g, err := s.GetInviteEmailGrant("GUEST@example.com"); err != nil || g == nil || g.UserID != u.ID || g.CFAdded {
@@ -100,7 +100,7 @@ func TestConsumeInvite_ManualLinkBindsNoEmail(t *testing.T) {
 	if u.Email != "" {
 		t.Fatalf("user email = %q, want none for a never-emailed invite", u.Email)
 	}
-	if byEmail, _ := s.GetUserByEmail("guest@example.com"); byEmail != nil {
+	if byEmail, _ := s.GetUserByVerifiedEmail("guest@example.com"); byEmail != nil {
 		t.Fatal("email index written for an unproven address")
 	}
 	if g, _ := s.GetInviteEmailGrant("guest@example.com"); g != nil {
@@ -226,7 +226,7 @@ func TestInvite_EmailOwnedByExistingUserIsRefused(t *testing.T) {
 	if _, err := s.ConsumeInvite("t2", "bcrypt", "h"); !errors.Is(err, ErrInviteEmailTaken) {
 		t.Fatalf("ConsumeInvite err = %v, want ErrInviteEmailTaken", err)
 	}
-	if u, _ := s.GetUserByEmail("later@example.com"); u == nil || u.ID != owner2.ID {
+	if u, _ := s.GetUserByVerifiedEmail("later@example.com"); u == nil || u.ID != owner2.ID {
 		t.Fatal("email index was repointed")
 	}
 	if inv, _ := s.GetInvite("t2"); inv.UsedAt != nil {

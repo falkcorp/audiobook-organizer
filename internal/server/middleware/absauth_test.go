@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b41e6d09-8a37-4f52-9c10-25d7b8e0f346
 // last-edited: 2026-10-19
 
@@ -110,7 +110,7 @@ func (f *fakeABSStore) GetUserByUsername(u string) (*database.User, error) {
 	return f.byUsername[strings.ToLower(u)], nil
 }
 
-func (f *fakeABSStore) GetUserByEmail(e string) (*database.User, error) {
+func (f *fakeABSStore) GetUserByVerifiedEmail(e string) (*database.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.byEmail[strings.ToLower(e)], nil

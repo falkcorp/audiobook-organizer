@@ -1,7 +1,7 @@
 // file: internal/database/iface_user.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ca96abf5-5353-428c-aa7f-903b91a481e8
-// last-edited: 2026-09-02
+// last-edited: 2026-10-19
 
 package database
 
@@ -11,7 +11,10 @@ import "time"
 type UserReader interface {
 	GetUserByID(id string) (*User, error)
 	GetUserByUsername(username string) (*User, error)
-	GetUserByEmail(email string) (*User, error)
+	// GetUserByVerifiedEmail finds a user by a VERIFIED email only (an
+	// address an admin, an emailed invite or an identity provider vouched
+	// for), never by a self-set one. See pebble_store_auth.go.
+	GetUserByVerifiedEmail(email string) (*User, error)
 	ListUsers() ([]User, error)
 	CountUsers() (int, error)
 }

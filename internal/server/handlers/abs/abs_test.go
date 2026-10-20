@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
 // last-edited: 2026-10-19
 
@@ -101,7 +101,7 @@ func (f *fakeStore) GetUserByUsername(u string) (*database.User, error) {
 	return f.byUsername[strings.ToLower(u)], nil
 }
 
-func (f *fakeStore) GetUserByEmail(e string) (*database.User, error) {
+func (f *fakeStore) GetUserByVerifiedEmail(e string) (*database.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.byEmail[strings.ToLower(e)], nil

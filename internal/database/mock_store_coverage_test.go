@@ -1,7 +1,7 @@
 // file: internal/database/mock_store_coverage_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9f8e7d6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4
-// last-edited: 2026-07-07
+// last-edited: 2026-10-19
 
 package database
 
@@ -106,7 +106,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	mock.CreateUserFunc = func(string, string, string, string, []string, string) (*User, error) { return nil, nil }
 	mock.GetUserByIDFunc = func(string) (*User, error) { return nil, nil }
 	mock.GetUserByUsernameFunc = func(string) (*User, error) { return nil, nil }
-	mock.GetUserByEmailFunc = func(string) (*User, error) { return nil, nil }
+	mock.GetUserByVerifiedEmailFunc = func(string) (*User, error) { return nil, nil }
 	mock.UpdateUserFunc = func(*User) error { return nil }
 
 	// Sessions
@@ -211,7 +211,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	_, _ = mock.CreateUser("user", "email", "algo", "hash", []string{"user"}, "active")
 	_, _ = mock.GetUserByID("user-1")
 	_, _ = mock.GetUserByUsername("username")
-	_, _ = mock.GetUserByEmail("email")
+	_, _ = mock.GetUserByVerifiedEmail("email")
 	_ = mock.UpdateUser(&User{})
 	_, _ = mock.CreateSession("user-1", "127.0.0.1", "agent", 24*time.Hour)
 	_, _ = mock.GetSession("session-1")

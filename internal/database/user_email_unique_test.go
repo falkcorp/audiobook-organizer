@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-19
 
@@ -27,12 +27,14 @@ func TestUpdateUser_RefusesAnEmailAnotherUserHasAnyCase(t *testing.T) {
 	if stored.Email != "bob@admins.example.com" {
 		t.Fatalf("a refused update must not write: email = %q", stored.Email)
 	}
-	if u, _ := s.GetUserByEmail("alice@admins.example.com"); u == nil || u.Username != "alice" {
-		t.Fatalf("the email index must still point at alice: %+v", u)
+	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u == nil || u.Username != "alice" {
+		t.Fatalf("alice's verified email must still resolve to alice: %+v", u)
 	}
 }
 
-func TestUpdateUser_MovesTheEmailIndex(t *testing.T) {
+// A self-service email change never makes an address verified, and gives up
+// the verification of the old one.
+func TestUpdateUser_EmailChangeIsNeverVerified(t *testing.T) {
 	s := newInviteTestStore(t)
 	alice := mustUser(t, s, "alice", "viewer", "active")
 	bob := mustUser(t, s, "bob", "viewer", "active")
@@ -41,24 +43,136 @@ func TestUpdateUser_MovesTheEmailIndex(t *testing.T) {
 	if err := s.UpdateUser(alice); err != nil {
 		t.Fatal(err)
 	}
-	if u, _ := s.GetUserByEmail("alice.new@example.com"); u == nil || u.ID != alice.ID {
-		t.Fatalf("new email must resolve to alice: %+v", u)
+	if u, _ := s.GetUserByVerifiedEmail("alice.new@example.com"); u != nil {
+		t.Fatalf("a self-set email must not be verified: %+v", u)
 	}
-	if u, _ := s.GetUserByEmail("alice@admins.example.com"); u != nil {
-		t.Fatalf("old email must no longer resolve: %+v", u)
+	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u != nil {
+		t.Fatalf("the address alice gave up must no longer be verified for anyone: %+v", u)
 	}
-	// The freed address can be taken by someone else.
+	if _, closer, err := s.db.Get([]byte(userEmailIndexPrefix + "alice@admins.example.com")); err == nil {
+		closer.Close()
+		t.Fatal("the old verified key must be deleted, not just ignored")
+	}
+	// The freed address can be taken by someone else, unverified.
 	bob.Email = "alice@admins.example.com"
 	if err := s.UpdateUser(bob); err != nil {
 		t.Fatalf("a freed email must be usable: %v", err)
 	}
-	// A case-only change of one's own email is not a conflict.
-	alice.Email = "ALICE.NEW@example.com"
-	if err := s.UpdateUser(alice); err != nil {
+	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u != nil {
+		t.Fatalf("bob's self-set copy must not be verified: %+v", u)
+	}
+	// A case-only change of a verified email keeps it verified.
+	carol := mustUser(t, s, "carol", "viewer", "active")
+	carol.Email = "CAROL@admins.example.com"
+	if err := s.UpdateUser(carol); err != nil {
 		t.Fatalf("case-only change of own email: %v", err)
 	}
-	if u, _ := s.GetUserByEmail("alice.new@example.com"); u == nil || u.ID != alice.ID {
-		t.Fatalf("case-only change must keep the index: %+v", u)
+	if u, _ := s.GetUserByVerifiedEmail("carol@admins.example.com"); u == nil || u.ID != carol.ID {
+		t.Fatalf("a case-only change must keep the verification: %+v", u)
+	}
+}
+
+func TestCreateUser_RefusesAnEmailSetThroughUpdateUser(t *testing.T) {
+	s := newInviteTestStore(t)
+	bob := mustUser(t, s, "bob", "viewer", "active")
+	bob.Email = "Taken@example.com"
+	if err := s.UpdateUser(bob); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUser("newcomer", "taken@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("CreateUser with a self-set email of another user = %v, want ErrUserEmailTaken", err)
+	}
+}
+
+func TestMarkUserEmailVerified_OnlyTheCurrentEmailAndNeverAnotherUsers(t *testing.T) {
+	s := newInviteTestStore(t)
+	alice := mustUser(t, s, "alice", "viewer", "active")
+	bob := mustUser(t, s, "bob", "viewer", "active")
+	bob.Email = "bob.self@example.com"
+	if err := s.UpdateUser(bob); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.MarkUserEmailVerified(bob.ID, "someone-else@example.com"); err != nil || ok {
+		t.Fatalf("marking an address that is not bob's = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkUserEmailVerified(bob.ID, "alice@admins.example.com"); err != nil || ok {
+		t.Fatalf("marking alice's verified address for bob = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkUserEmailVerified(bob.ID, "BOB.SELF@example.com"); err != nil || !ok {
+		t.Fatalf("marking bob's own current email = %v, %v", ok, err)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("bob.self@example.com"); u == nil || u.ID != bob.ID {
+		t.Fatalf("bob's email must now be verified: %+v", u)
+	}
+	if ok, _ := s.MarkUserEmailVerified(bob.ID, "bob.self@example.com"); ok {
+		t.Fatal("a second mark must be a no-op")
+	}
+	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u == nil || u.ID != alice.ID {
+		t.Fatal("alice's verification must be untouched")
+	}
+}
+
+// setRawUserEmail rewrites a user row's email directly, the way a pre-fix
+// UpdateUser did: no index change.
+func setRawUserEmail(t *testing.T, s *PebbleStore, u *User, email string) {
+	t.Helper()
+	u.Email = email
+	data, _ := json.Marshal(u)
+	if err := s.db.Set([]byte("u:"+u.ID), data, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The open-time repair keeps every address that links today, drops keys for
+// addresses users changed away from, and adds IdP-verified current emails.
+func TestBackfillVerifiedEmailIndex(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "admin1", "admin", "active") // admin1@admins.example.com, keyed by CreateUser
+	mover := mustUser(t, s, "mover", "viewer", "active")
+	setRawUserEmail(t, s, mover, "mover.now@example.com") // stale key for mover@admins..., none for the new one
+	linked := mustUser(t, s, "linked", "viewer", "active")
+	setRawUserEmail(t, s, linked, "linked@example.com")
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "sub-linked", Email: "Linked@example.com", UserID: linked.ID}); err != nil {
+		t.Fatal(err)
+	}
+	selfSet := mustUser(t, s, "selfset", "viewer", "active")
+	setRawUserEmail(t, s, selfSet, "selfset@example.com")
+
+	// The store ran the repair at open on an empty store; run it again as a
+	// store upgraded from an older build would.
+	if err := s.db.Delete([]byte(verifiedEmailBackfillKey), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.backfillVerifiedEmailIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stale keys: mover's, linked's and selfset's old CreateUser addresses.
+	if res.StaleDropped != 3 || res.IdPAdded != 1 {
+		t.Fatalf("result = %+v, want 3 stale dropped and 1 IdP-verified added", res)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("admin1@admins.example.com"); u == nil || u.ID != admin.ID {
+		t.Fatalf("an admin-created email must stay verified: %+v", u)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("linked@example.com"); u == nil || u.ID != linked.ID {
+		t.Fatalf("an IdP-verified current email must become verified: %+v", u)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("selfset@example.com"); u != nil {
+		t.Fatalf("a self-set email must not become verified: %+v", u)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("mover.now@example.com"); u != nil {
+		t.Fatalf("a self-set new email must not become verified: %+v", u)
+	}
+	if _, closer, err := s.db.Get([]byte(userEmailIndexPrefix + "mover@admins.example.com")); err == nil {
+		closer.Close()
+		t.Fatal("the key for the address mover changed away from must be dropped")
+	}
+	if id, _ := s.GetOAuthIdentityByProviderSubject("google", "sub-linked"); id == nil || id.UserID != linked.ID {
+		t.Fatal("linked identities must be untouched")
+	}
+	again, err := s.backfillVerifiedEmailIndex()
+	if err != nil || !again.Skipped {
+		t.Fatalf("second run = %+v, %v; want skipped by the sentinel", again, err)
 	}
 }
 
