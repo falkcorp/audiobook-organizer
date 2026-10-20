@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled_bench_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8d90d532-6d88-49e0-b5b8-a4bba9dc1ace
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -31,7 +31,7 @@ func BenchmarkCompiledPredicate_100k(b *testing.B) {
 			books[i].Title = fmt.Sprintf("%d Title", i)
 		}
 		if i%2 == 0 {
-			books[i].LibraryState = strp("organized")
+			books[i].LibraryState = new("organized")
 		}
 	}
 	ri := newRuntimeIndex()

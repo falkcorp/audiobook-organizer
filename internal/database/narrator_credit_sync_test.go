@@ -1,7 +1,7 @@
 // file: internal/database/narrator_credit_sync_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3345795a-09fa-4889-a511-4bb98ed412d5
-// last-edited: 2026-10-03
+// last-edited: 2026-10-20
 
 package database
 
@@ -40,7 +40,7 @@ func equalStrings(a, b []string) bool {
 // when authorName is set, credits that author on it.
 func createNarratedBook(t *testing.T, s *PebbleStore, path, credit, authorName string) *Book {
 	t.Helper()
-	b := &Book{Title: "T", FilePath: path, Narrator: strp(credit)}
+	b := &Book{Title: "T", FilePath: path, Narrator: new(credit)}
 	if authorName != "" {
 		a, err := s.CreateAuthor(authorName)
 		if err != nil {
@@ -100,7 +100,7 @@ func TestNarratorSync_DropsJoinOnlyAuthor(t *testing.T) {
 	if err := s.SetBookAuthors(b.ID, []BookAuthor{{AuthorID: a.ID, Role: "author"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Michael Anderle, Kate Reading"); return nil }); err != nil {
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = new("Michael Anderle, Kate Reading"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Kate Reading"}) {
@@ -112,7 +112,7 @@ func TestNarratorSync_DropsJoinOnlyAuthor(t *testing.T) {
 func TestNarratorSync_AllAuthorsLeavesJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
 	b := createNarratedBook(t, s, "/tmp/nsync-allauth.m4b", "Old Reader", "Craig Martelle")
-	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Craig Martelle"); return nil }); err != nil {
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = new("Craig Martelle"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if got := narratorNamesOf(t, s, b.ID); !equalStrings(got, []string{"Old Reader"}) {
@@ -169,7 +169,7 @@ func newNarratorSyncTestStore(t *testing.T) *PebbleStore {
 
 func TestCreateBook_SyncsNarratorJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-create.m4b", Narrator: strp("Kate Reading, Michael Kramer")})
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-create.m4b", Narrator: new("Kate Reading, Michael Kramer")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,11 +181,11 @@ func TestCreateBook_SyncsNarratorJunction(t *testing.T) {
 
 func TestModifyBook_NarratorChangeReplacesJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-modify.m4b", Narrator: strp("Old Reader")})
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-modify.m4b", Narrator: new("Old Reader")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Dorrie Sacks & Jeff Hays"); return nil }); err != nil {
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = new("Dorrie Sacks & Jeff Hays"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"Dorrie Sacks", "Jeff Hays"}
@@ -196,7 +196,7 @@ func TestModifyBook_NarratorChangeReplacesJunction(t *testing.T) {
 
 func TestUpdateBook_NarratorChangeReplacesJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-update.m4b", Narrator: strp("Old Reader")})
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-update.m4b", Narrator: new("Old Reader")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestUpdateBook_NarratorChangeReplacesJunction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh.Narrator = strp("Kate Reading; Michael Kramer")
+	fresh.Narrator = new("Kate Reading; Michael Kramer")
 	if _, err := s.UpdateBook(b.ID, fresh); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestUpdateBook_NarratorChangeReplacesJunction(t *testing.T) {
 // A write that leaves Narrator alone must not touch a hand-curated junction.
 func TestModifyBook_UnchangedNarratorLeavesCuratedJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-curated.m4b", Narrator: strp("Kate Reading")})
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-curated.m4b", Narrator: new("Kate Reading")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestModifyBook_UnchangedNarratorLeavesCuratedJunction(t *testing.T) {
 // Clearing the column is not "no narrators": the junction stays.
 func TestModifyBook_ClearedNarratorLeavesJunction(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-clear.m4b", Narrator: strp("Kate Reading")})
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-clear.m4b", Narrator: new("Kate Reading")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestModifyBook_ClearedNarratorLeavesJunction(t *testing.T) {
 // the stripe, owns the junction: the stale sync must not overwrite it.
 func TestNarratorSync_LaterWriteWinsTheRace(t *testing.T) {
 	s := newNarratorSyncTestStore(t)
-	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-race.m4b", Narrator: strp("Old Reader")})
+	b, err := s.CreateBook(&Book{Title: "T", FilePath: "/tmp/nsync-race.m4b", Narrator: new("Old Reader")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,13 +268,13 @@ func TestNarratorSync_LaterWriteWinsTheRace(t *testing.T) {
 			return
 		}
 		fired = true
-		if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Later Writer"); return nil }); err != nil {
+		if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = new("Later Writer"); return nil }); err != nil {
 			t.Errorf("racing write: %v", err)
 		}
 	}
 	t.Cleanup(func() { narratorSyncAfterResolveHook = nil })
 
-	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = strp("Stale Credit"); return nil }); err != nil {
+	if _, err := s.ModifyBook(b.ID, func(bk *Book) error { bk.Narrator = new("Stale Credit"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if !fired {

@@ -1,7 +1,7 @@
 // file: internal/database/ident_state_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 325f377a-6217-41c5-9b34-7f92c945f8d9
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package database
 
@@ -28,9 +28,6 @@ func newIdentStore(t testing.TB) *PebbleStore {
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
-
-func identStrPtr(v string) *string { return &v }
-func identBoolPtr(v bool) *bool    { return &v }
 
 func identCands(n int) []json.RawMessage {
 	out := make([]json.RawMessage, n)
@@ -69,11 +66,11 @@ func TestDeriveIdent_Table(t *testing.T) {
 		{"candidates", &Book{}, &MetadataCandidateCache{Candidates: identCands(2)}, IdentHasCandidates, ""},
 		{"stale candidates", &Book{}, &MetadataCandidateCache{Candidates: identCands(1), Stale: true}, IdentHasCandidates, IdentReasonStale},
 		{"stale row with no candidates is asked_empty", &Book{}, &MetadataCandidateCache{Stale: true}, IdentAskedEmpty, ""},
-		{"matched is applied, whatever the row", &Book{MetadataReviewStatus: identStrPtr("matched")}, nil, IdentApplied, ""},
-		{"audio_confirmed is applied", &Book{MetadataReviewStatus: identStrPtr("audio_confirmed")}, &MetadataCandidateCache{Candidates: identCands(1), Stale: true}, IdentApplied, ""},
-		{"no_match is held", &Book{MetadataReviewStatus: identStrPtr("no_match")}, &MetadataCandidateCache{Candidates: identCands(3)}, IdentHeld, IdentReasonNoMatch},
-		{"no_match without a row is held", &Book{MetadataReviewStatus: identStrPtr("no_match")}, nil, IdentHeld, IdentReasonNoMatch},
-		{"unknown status reads as unruled", &Book{MetadataReviewStatus: identStrPtr("something_else")}, nil, IdentUnasked, ""},
+		{"matched is applied, whatever the row", &Book{MetadataReviewStatus: new("matched")}, nil, IdentApplied, ""},
+		{"audio_confirmed is applied", &Book{MetadataReviewStatus: new("audio_confirmed")}, &MetadataCandidateCache{Candidates: identCands(1), Stale: true}, IdentApplied, ""},
+		{"no_match is held", &Book{MetadataReviewStatus: new("no_match")}, &MetadataCandidateCache{Candidates: identCands(3)}, IdentHeld, IdentReasonNoMatch},
+		{"no_match without a row is held", &Book{MetadataReviewStatus: new("no_match")}, nil, IdentHeld, IdentReasonNoMatch},
+		{"unknown status reads as unruled", &Book{MetadataReviewStatus: new("something_else")}, nil, IdentUnasked, ""},
 		{"nil book with candidates", nil, &MetadataCandidateCache{Candidates: identCands(1)}, IdentHasCandidates, ""},
 	}
 	for _, tc := range cases {
@@ -87,9 +84,9 @@ func TestDeriveIdent_Table(t *testing.T) {
 	// Scope: a nil primary flag counts as primary (EffectiveIsPrimaryVersion,
 	// the Library's own rule); trash and quarantine leave the scope.
 	require.True(t, InLibraryDefaultView(&Book{}), "nil IsPrimaryVersion is primary")
-	require.True(t, InLibraryDefaultView(&Book{IsPrimaryVersion: identBoolPtr(true)}))
-	require.False(t, InLibraryDefaultView(&Book{IsPrimaryVersion: identBoolPtr(false)}))
-	require.False(t, InLibraryDefaultView(&Book{MarkedForDeletion: identBoolPtr(true)}))
+	require.True(t, InLibraryDefaultView(&Book{IsPrimaryVersion: new(true)}))
+	require.False(t, InLibraryDefaultView(&Book{IsPrimaryVersion: new(false)}))
+	require.False(t, InLibraryDefaultView(&Book{MarkedForDeletion: new(true)}))
 	require.False(t, InLibraryDefaultView(&Book{QuarantinedAt: &now}))
 	require.False(t, InLibraryDefaultView(nil))
 }
@@ -188,11 +185,11 @@ func identRandomOp(s *PebbleStore, pool *identPool, r *rand.Rand) error {
 	case 1: // delete the cache row
 		return s.DeleteMetadataCache(id)
 	case 2: // review status
-		statuses := []*string{nil, identStrPtr("matched"), identStrPtr("audio_confirmed"), identStrPtr("no_match")}
+		statuses := []*string{nil, new("matched"), new("audio_confirmed"), new("no_match")}
 		st := statuses[r.Intn(len(statuses))]
 		return modify(func(b *Book) { b.MetadataReviewStatus = st })
 	case 3: // primary flip, including back to nil
-		flags := []*bool{nil, identBoolPtr(true), identBoolPtr(false)}
+		flags := []*bool{nil, new(true), new(false)}
 		f := flags[r.Intn(len(flags))]
 		return modify(func(b *Book) { b.IsPrimaryVersion = f })
 	case 4: // retitle: the Stale stamp
@@ -330,9 +327,9 @@ func seedIdentBooksMixed(t testing.TB, s *PebbleStore, n int, r *rand.Rand) []st
 			b := &Book{ID: id, Title: fmt.Sprintf("Title %06d", i), FilePath: "/lib/mixed/" + id + ".m4b", Format: "m4b"}
 			switch r.Intn(10) {
 			case 0:
-				b.MetadataReviewStatus = identStrPtr("matched")
+				b.MetadataReviewStatus = new("matched")
 			case 1:
-				b.MetadataReviewStatus = identStrPtr("no_match")
+				b.MetadataReviewStatus = new("no_match")
 			case 2:
 				b.IsPrimaryVersion = &f
 			case 3:
@@ -511,7 +508,7 @@ func TestIdentBookIDs_Membership(t *testing.T) {
 	b := identCreateBook(t, s, pool)
 	c := identCreateBook(t, s, pool)
 	require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: b, Candidates: identCands(1)}))
-	_, err := s.ModifyBook(c, func(bk *Book) error { bk.MetadataReviewStatus = identStrPtr("no_match"); return nil })
+	_, err := s.ModifyBook(c, func(bk *Book) error { bk.MetadataReviewStatus = new("no_match"); return nil })
 	require.NoError(t, err)
 
 	got, err := s.IdentBookIDs([]IdentState{IdentUnasked, IdentAskedEmpty})
@@ -712,7 +709,7 @@ func TestIdentTxn_FailedCommitMovesNoCounter(t *testing.T) {
 	}
 	identCommitFault.Store(&fault)
 	err := s.PutMetadataCache(&MetadataCandidateCache{BookID: id, Candidates: identCands(1)})
-	_, merr := s.ModifyBook(id, func(b *Book) error { b.MetadataReviewStatus = identStrPtr("matched"); return nil })
+	_, merr := s.ModifyBook(id, func(b *Book) error { b.MetadataReviewStatus = new("matched"); return nil })
 	derr := s.DeleteBook(id)
 	identCommitFault.Store(nil)
 	require.ErrorIs(t, err, boom)

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_rename_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c7d2e91-5f3a-4b86-9e14-a8b6d3f5c227
-// last-edited: 2026-09-12
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -23,7 +23,7 @@ func seriesRenameRow(id string, seriesID *int, old, new string) *database.Operat
 
 func TestRevertOperation_SeriesRename_RenamesBack(t *testing.T) {
 	s := &ledgerStub{
-		changes: []*database.OperationChange{seriesRenameRow("c1", intp(10), "Old Name", "New Name")},
+		changes: []*database.OperationChange{seriesRenameRow("c1", new(10), "Old Name", "New Name")},
 		series:  map[int]*database.Series{10: {ID: 10, Name: "New Name"}},
 	}
 	result, err := NewRevertService(s).RevertOperation("op")
@@ -57,7 +57,7 @@ func TestRevertOperation_SeriesRename_Refusals(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &ledgerStub{
-				changes:   []*database.OperationChange{seriesRenameRow("c1", intp(10), "Old Name", "New Name")},
+				changes:   []*database.OperationChange{seriesRenameRow("c1", new(10), "Old Name", "New Name")},
 				series:    tc.series,
 				seriesErr: tc.err,
 			}
@@ -82,7 +82,7 @@ func TestRevertOperation_SeriesRename_Refusals(t *testing.T) {
 // another series hold the old name?" the rename back is not attempted.
 func TestRevertOperation_SeriesRename_NameLookupErrorFailsClosed(t *testing.T) {
 	s := &ledgerStub{
-		changes: []*database.OperationChange{seriesRenameRow("c1", intp(10), "Old Name", "New Name")},
+		changes: []*database.OperationChange{seriesRenameRow("c1", new(10), "Old Name", "New Name")},
 		series:  map[int]*database.Series{10: {ID: 10, Name: "New Name"}},
 		nameErr: errors.New("pebble: closed"),
 	}
@@ -102,10 +102,10 @@ func TestRevertOperation_SeriesRename_NameLookupErrorFailsClosed(t *testing.T) {
 // store's name index is keyed by author.
 func TestRevertOperation_SeriesRename_SameNameOtherAuthorIsNoCollision(t *testing.T) {
 	s := &ledgerStub{
-		changes: []*database.OperationChange{seriesRenameRow("c1", intp(10), "Old Name", "New Name")},
+		changes: []*database.OperationChange{seriesRenameRow("c1", new(10), "Old Name", "New Name")},
 		series: map[int]*database.Series{
 			10: {ID: 10, Name: "New Name"},
-			11: {ID: 11, Name: "Old Name", AuthorID: intp(3)},
+			11: {ID: 11, Name: "Old Name", AuthorID: new(3)},
 		},
 	}
 	if _, err := NewRevertService(s).RevertOperation("op"); err != nil {
@@ -154,7 +154,7 @@ func TestRevertOperation_SeriesRename_StoreRefusalAtWriteIsFailed(t *testing.T) 
 	} {
 		t.Run(tc.reason, func(t *testing.T) {
 			s := &ledgerStub{
-				changes:   []*database.OperationChange{seriesRenameRow("c1", intp(10), "Old Name", "New Name")},
+				changes:   []*database.OperationChange{seriesRenameRow("c1", new(10), "Old Name", "New Name")},
 				series:    map[int]*database.Series{10: {ID: 10, Name: "New Name"}},
 				renameErr: fmt.Errorf("series 11 got there first: %w", tc.sentinel),
 			}

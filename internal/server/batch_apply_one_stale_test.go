@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_stale_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b0e5c3a-4d92-4f61-9a38-2c1d6e8f0b47
-// last-edited: 2026-10-09
+// last-edited: 2026-10-20
 
 package server
 
@@ -51,7 +51,7 @@ func TestPlanCachedApply_TranscriptionDoesNotLiftStaleRow(t *testing.T) {
 	const transcribed = "Title 000456"
 	mk := func() fakeBooks {
 		dur := 36000
-		return fakeBooks{"b1": {ID: "b1", Title: "", TranscribedTitle: strPtr(transcribed),
+		return fakeBooks{"b1": {ID: "b1", Title: "", TranscribedTitle: new(transcribed),
 			FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}}
 	}
 	cand := metafetch.MetadataCandidate{Title: transcribed, Author: "Author 07", Score: 0.95, DurationSec: 36000, Source: "Google Books"}

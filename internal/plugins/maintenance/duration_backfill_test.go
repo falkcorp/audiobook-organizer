@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 
 func mustReextractParams(t *testing.T, dryRun bool, limit int) json.RawMessage {
 	t.Helper()
-	b, err := json.Marshal(durationReextractParams{DryRun: boolPtr(dryRun), Limit: limit})
+	b, err := json.Marshal(durationReextractParams{DryRun: new(dryRun), Limit: limit})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestDurationReextract_ParallelWorkers_AllBooksProcessed(t *testing.T) {
 		},
 	}
 
-	params, _ := json.Marshal(durationReextractParams{DryRun: boolPtr(false), Workers: 4})
+	params, _ := json.Marshal(durationReextractParams{DryRun: new(false), Workers: 4})
 	p := New(fakeDeps{store: store})
 	if err := p.runDurationBackfill(context.Background(), params, &fakeReporter{}); err != nil {
 		t.Fatalf("run: %v", err)
@@ -554,7 +554,7 @@ func TestDurationReextract_OnlyMissingDuration_SkipsKnownDuration(t *testing.T) 
 	p := New(fakeDeps{store: store})
 	reporter := &fakeReporter{}
 
-	params, err := json.Marshal(durationReextractParams{DryRun: boolPtr(true), OnlyMissingDuration: true})
+	params, err := json.Marshal(durationReextractParams{DryRun: new(true), OnlyMissingDuration: true})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
@@ -578,7 +578,7 @@ func TestDurationReextract_OnlyMissingDuration_DefaultExaminesAll(t *testing.T) 
 	p := New(fakeDeps{store: store})
 	reporter := &fakeReporter{}
 
-	params, err := json.Marshal(durationReextractParams{DryRun: boolPtr(true)})
+	params, err := json.Marshal(durationReextractParams{DryRun: new(true)})
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}

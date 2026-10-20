@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache_identity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c7f2a91-5e4b-4d08-9a6c-e1b8d2f40a57
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package database
 
@@ -21,17 +21,17 @@ const testFetchIdentity = "v1:test-identity"
 // TestMetadataSearchIdentity_Recipe pins what the stamp depends on: title,
 // author, ASIN and both ISBNs change it; case and surrounding whitespace do not.
 func TestMetadataSearchIdentity_Recipe(t *testing.T) {
-	base := MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", strp("B003P2WO5E"), strp("9780765326355"), nil)
+	base := MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", new("B003P2WO5E"), new("9780765326355"), nil)
 	require.NotEmpty(t, base)
-	require.Equal(t, base, MetadataSearchIdentity("  the way of KINGS ", "brandon sanderson", strp("b003p2wo5e"), strp("9780765326355"), nil),
+	require.Equal(t, base, MetadataSearchIdentity("  the way of KINGS ", "brandon sanderson", new("b003p2wo5e"), new("9780765326355"), nil),
 		"normalization must not change the stamp")
 
 	for name, other := range map[string]string{
-		"title":  MetadataSearchIdentity("Words of Radiance", "Brandon Sanderson", strp("B003P2WO5E"), strp("9780765326355"), nil),
-		"author": MetadataSearchIdentity("The Way of Kings", "Somebody Else", strp("B003P2WO5E"), strp("9780765326355"), nil),
-		"asin":   MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", strp("B00OTHER00"), strp("9780765326355"), nil),
-		"isbn13": MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", strp("B003P2WO5E"), nil, nil),
-		"isbn10": MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", strp("B003P2WO5E"), strp("9780765326355"), strp("0765326353")),
+		"title":  MetadataSearchIdentity("Words of Radiance", "Brandon Sanderson", new("B003P2WO5E"), new("9780765326355"), nil),
+		"author": MetadataSearchIdentity("The Way of Kings", "Somebody Else", new("B003P2WO5E"), new("9780765326355"), nil),
+		"asin":   MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", new("B00OTHER00"), new("9780765326355"), nil),
+		"isbn13": MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", new("B003P2WO5E"), nil, nil),
+		"isbn10": MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", new("B003P2WO5E"), new("9780765326355"), new("0765326353")),
 	} {
 		require.NotEqual(t, base, other, "changing %s must change the stamp", name)
 	}

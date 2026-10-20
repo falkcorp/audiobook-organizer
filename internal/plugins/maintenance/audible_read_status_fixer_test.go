@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 569aec15-d845-4f39-9a8e-63ba7e93162a
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -167,12 +167,10 @@ func (l *arsLib) positions(key string) []database.UserPosition {
 	return p
 }
 
-func ptrTime(t time.Time) *time.Time { return &t }
-
 func TestAudibleReadStatus_TargetUserRequired(t *testing.T) {
 	l := newARSLib(t)
 	l.book("a", arsBook{title: "Synthetic One", author: "Pat Example", asin: "B0TEST0001", minutes: 600})
-	l.item("B0TEST0001", "Synthetic One", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0001", "Synthetic One", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	items := l.items
 	cases := map[string]any{
 		"no params":        nil,
@@ -209,85 +207,85 @@ func TestAudibleReadStatus_PlanClasses(t *testing.T) {
 	older, newer := arsAudibleTS.Add(-48*time.Hour), arsAudibleTS.Add(48*time.Hour)
 
 	l.book("fresh", arsBook{title: "Fresh Finish", author: "Pat Example", asin: "B0TEST0001", minutes: 600})
-	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("done", arsBook{title: "Done Already", author: "Pat Example", asin: "B0TEST0002", minutes: 600})
 	l.setState("done", database.UserBookState{Status: database.UserBookStatusFinished, ProgressPct: 100, LastActivityAt: older})
-	l.item("B0TEST0002", "Done Already", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0002", "Done Already", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	// In progress on Audible, finished here: never un-finished.
 	l.book("doneprog", arsBook{title: "Finished Here", author: "Pat Example", asin: "B0TEST0022", minutes: 600})
 	l.setState("doneprog", database.UserBookState{Status: database.UserBookStatusFinished, ProgressPct: 100, LastActivityAt: older})
-	l.item("B0TEST0022", "Finished Here", "Pat Example", 600, "progress", 20, ptrTime(newer))
+	l.item("B0TEST0022", "Finished Here", "Pat Example", 600, "progress", 20, new(newer))
 
 	l.book("newer", arsBook{title: "Newer Here", author: "Pat Example", asin: "B0TEST0003", minutes: 600})
 	l.setState("newer", database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 40, LastActivityAt: older})
 	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["newer"], "abs", 900, newer))
-	l.item("B0TEST0003", "Newer Here", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0003", "Newer Here", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("partial", arsBook{title: "Partial Older", author: "Pat Example", asin: "B0TEST0004", minutes: 600})
 	l.setState("partial", database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 30, LastActivityAt: older,
 		HideFromContinueListening: true})
 	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["partial"], "abs", 600, older))
-	l.item("B0TEST0004", "Partial Older", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0004", "Partial Older", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("prog", arsBook{title: "Halfway There", author: "Pat Example", asin: "B0TEST0005", minutes: 600})
-	l.item("B0TEST0005", "Halfway There", "Pat Example", 600, "progress", 40, ptrTime(arsAudibleTS))
+	l.item("B0TEST0005", "Halfway There", "Pat Example", 600, "progress", 40, new(arsAudibleTS))
 
 	l.book("haspos", arsBook{title: "Has Position", author: "Pat Example", asin: "B0TEST0006", minutes: 600})
 	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["haspos"], "abs", 60, older))
-	l.item("B0TEST0006", "Has Position", "Pat Example", 600, "progress", 40, ptrTime(arsAudibleTS))
+	l.item("B0TEST0006", "Has Position", "Pat Example", 600, "progress", 40, new(arsAudibleTS))
 
 	l.book("quit", arsBook{title: "Gave Up", author: "Pat Example", asin: "B0TEST0007", minutes: 600})
 	l.setState("quit", database.UserBookState{Status: database.UserBookStatusAbandoned, StatusManual: true, LastActivityAt: older})
-	l.item("B0TEST0007", "Gave Up", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0007", "Gave Up", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("idle", arsBook{title: "Not Yet", author: "Pat Example", asin: "B0TEST0008", minutes: 600})
 	l.item("B0TEST0008", "Not Yet", "Pat Example", 600, "none", 0, nil)
 
 	l.book("twinA", arsBook{title: "Twin Copy", author: "Pat Example", asin: "B0TEST0009", vg: "vg-a", primary: &yes, minutes: 600})
 	l.book("twinB", arsBook{title: "Twin Copy", author: "Pat Example", asin: "B0TEST0009", vg: "vg-b", primary: &yes, minutes: 610})
-	l.item("B0TEST0009", "Twin Copy", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0009", "Twin Copy", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("rtA", arsBook{title: "Settled By Runtime", author: "Pat Example", asin: "B0TEST0010", vg: "vg-c", primary: &yes, minutes: 600})
 	l.book("rtB", arsBook{title: "Settled By Runtime", author: "Pat Example", asin: "B0TEST0010", vg: "vg-d", primary: &yes, minutes: 200})
-	l.item("B0TEST0010", "Settled By Runtime", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0010", "Settled By Runtime", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	// A non-primary member carries the ASIN; its group's primary is the target.
 	l.book("member", arsBook{title: "Grouped", author: "Pat Example", asin: "B0TEST0011", vg: "vg-e", primary: &no, minutes: 600})
 	l.book("primary", arsBook{title: "Grouped", author: "Pat Example", vg: "vg-e", primary: &yes, minutes: 600})
-	l.item("B0TEST0011", "Grouped", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0011", "Grouped", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("short", arsBook{title: "Short Copy", author: "Pat Example", asin: "B0TEST0012", minutes: 300})
-	l.item("B0TEST0012", "Short Copy", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0012", "Short Copy", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("junk", arsBook{title: "Read by Sam Voice", author: "Pat Example", asin: "B0TEST0013", minutes: 600})
-	l.item("B0TEST0013", "Real Name Of It", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0013", "Real Name Of It", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("bytitle", arsBook{title: "Synthetic Saga 2", author: "Robin Q. Sample", minutes: 600})
-	l.item("B0TEST0014", "Synthetic Saga: Book 2 (Unabridged)", "Robin Sample", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0014", "Synthetic Saga: Book 2 (Unabridged)", "Robin Sample", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("otherauthor", arsBook{title: "Lonely Title", author: "Someone Else", minutes: 600})
-	l.item("B0TEST0015", "Lonely Title", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0015", "Lonely Title", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
-	l.item("B0TEST0016", "Nowhere To Be Found", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0016", "Nowhere To Be Found", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("swapped", arsBook{title: "Read by Sam Voice", author: "Lost Title Here", minutes: 600})
-	l.item("B0TEST0017", "Lost Title Here", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0017", "Lost Title Here", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	// Two items on one book: one by ASIN, one by title.
 	l.book("claimed", arsBook{title: "Claimed Twice", author: "Pat Example", asin: "B0TEST0018", minutes: 600})
-	l.item("B0TEST0018", "Claimed Twice", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
-	l.item("B0TEST0019", "Claimed Twice", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0018", "Claimed Twice", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
+	l.item("B0TEST0019", "Claimed Twice", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	// The same ASIN twice in the export.
-	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	l.book("nots", arsBook{title: "No Stamp", author: "Pat Example", asin: "B0TEST0020", minutes: 600})
 	l.item("B0TEST0020", "No Stamp", "Pat Example", 600, "finished", 0, nil)
 
 	l.book("dw", arsBook{title: "Doctor Who: Synthetic Adventure", author: "Pat Example", asin: "B0TEST0021", minutes: 600})
-	l.item("B0TEST0021", "Doctor Who: Synthetic Adventure", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0021", "Doctor Who: Synthetic Adventure", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	plan, rows := l.plan()
 	want := map[string]string{
@@ -355,17 +353,17 @@ func TestAudibleReadStatus_ApplyAndRevert(t *testing.T) {
 	l := newARSLib(t)
 	older := arsAudibleTS.Add(-48 * time.Hour)
 	l.book("fresh", arsBook{title: "Fresh Finish", author: "Pat Example", asin: "B0TEST0001", minutes: 600})
-	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	l.book("partial", arsBook{title: "Partial Older", author: "Pat Example", asin: "B0TEST0004", minutes: 600})
 	l.setState("partial", database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 30, LastActivityAt: older,
 		HideFromContinueListening: true, LastSegmentID: "abs", TotalListenedSeconds: 600})
 	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["partial"], "abs", 600, older))
-	l.item("B0TEST0004", "Partial Older", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0004", "Partial Older", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	l.book("prog", arsBook{title: "Halfway There", author: "Pat Example", asin: "B0TEST0005", minutes: 500})
-	l.item("B0TEST0005", "Halfway There", "Pat Example", 500, "progress", 40, ptrTime(arsAudibleTS))
+	l.item("B0TEST0005", "Halfway There", "Pat Example", 500, "progress", 40, new(arsAudibleTS))
 	l.book("done", arsBook{title: "Done Already", author: "Pat Example", asin: "B0TEST0002", minutes: 600})
 	l.setState("done", database.UserBookState{Status: database.UserBookStatusFinished, ProgressPct: 100, LastActivityAt: older})
-	l.item("B0TEST0002", "Done Already", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0002", "Done Already", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	doneBefore := l.state("done")
 	plan, rows := l.plan()
@@ -472,7 +470,7 @@ func TestAudibleReadStatus_ApplyAndRevert(t *testing.T) {
 func TestAudibleReadStatus_NewerLocalWinsAtApply(t *testing.T) {
 	l := newARSLib(t)
 	l.book("fresh", arsBook{title: "Fresh Finish", author: "Pat Example", asin: "B0TEST0001", minutes: 600})
-	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0001", "Fresh Finish", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	plan, rows := l.plan()
 	require.True(t, rows["asin:B0TEST0001"].Applicable())
 
@@ -552,7 +550,7 @@ func TestAudibleReadStatus_WrongASINDuplicateTarget(t *testing.T) {
 	for name, setup := range map[string]func(l *arsLib){
 		"local progress": func(l *arsLib) {
 			require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["x"], "abs", 900, arsAudibleTS.Add(-time.Hour)))
-			l.item("B0TEST0101", "Alpha Tale", "Pat Example", 600, "progress", 30, ptrTime(arsAudibleTS))
+			l.item("B0TEST0101", "Alpha Tale", "Pat Example", 600, "progress", 30, new(arsAudibleTS))
 		},
 		"not started": func(l *arsLib) {
 			l.item("B0TEST0101", "Alpha Tale", "Pat Example", 600, "none", 0, nil)
@@ -564,7 +562,7 @@ func TestAudibleReadStatus_WrongASINDuplicateTarget(t *testing.T) {
 			// book carries Alpha's ASIN, so Alpha matches x by title.
 			l.book("x", arsBook{title: "Alpha Tale", author: "Pat Example", asin: "B0TEST0102", minutes: 600})
 			setup(l)
-			l.item("B0TEST0102", "Beta Tale", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+			l.item("B0TEST0102", "Beta Tale", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 			plan, rows := l.plan()
 			beta := rows["asin:B0TEST0102"]
 			require.Equal(t, arsReviewDuplicateTarget, beta.Class, beta.Reason)
@@ -583,9 +581,9 @@ func TestAudibleReadStatus_WrongASINDuplicateTarget(t *testing.T) {
 func TestAudibleReadStatus_ASINSeriesNumberConflict(t *testing.T) {
 	l := newARSLib(t)
 	l.book("one", arsBook{title: "Gamma Saga 1", author: "Pat Example", asin: "B0TEST0201", minutes: 600})
-	l.item("B0TEST0201", "Gamma Saga: Book 2", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0201", "Gamma Saga: Book 2", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	l.book("plain", arsBook{title: "Delta Saga", author: "Pat Example", asin: "B0TEST0202", minutes: 600})
-	l.item("B0TEST0202", "Delta Saga: Book 1", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0202", "Delta Saga: Book 1", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	_, rows := l.plan()
 	require.Equal(t, arsReviewSeriesMismatch, rows["asin:B0TEST0201"].Class, rows["asin:B0TEST0201"].Reason)
 	require.False(t, rows["asin:B0TEST0201"].Applicable())
@@ -597,11 +595,11 @@ func TestAudibleReadStatus_ASINSeriesNumberConflict(t *testing.T) {
 func TestAudibleReadStatus_UnknownRuntimeIsReviewRisk(t *testing.T) {
 	l := newARSLib(t)
 	l.book("nodur", arsBook{title: "Epsilon", author: "Pat Example", asin: "B0TEST0301", minutes: 0})
-	l.item("B0TEST0301", "Epsilon", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0301", "Epsilon", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	l.book("known", arsBook{title: "Zeta", author: "Pat Example", asin: "B0TEST0302", minutes: 600})
-	l.item("B0TEST0302", "Zeta", "Pat Example", 0, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0302", "Zeta", "Pat Example", 0, "finished", 0, new(arsAudibleTS))
 	l.book("both", arsBook{title: "Eta", author: "Pat Example", asin: "B0TEST0303", minutes: 600})
-	l.item("B0TEST0303", "Eta", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0303", "Eta", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	_, rows := l.plan()
 	for _, id := range []string{"asin:B0TEST0301", "asin:B0TEST0302"} {
 		require.Equal(t, arsWouldFinish, rows[id].Class, id)
@@ -621,22 +619,22 @@ func TestAudibleReadStatus_VersionGroupCopiesCount(t *testing.T) {
 	l.book("p1", arsBook{title: "Theta", author: "Pat Example", vg: "g1", primary: &yes, minutes: 600})
 	l.book("m1", arsBook{title: "Theta", author: "Pat Example", asin: "B0TEST0401", vg: "g1", primary: &no, minutes: 600})
 	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["m1"], "abs", 100, newer))
-	l.item("B0TEST0401", "Theta", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0401", "Theta", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	// Group g2: the ASIN is on the primary; another member s2 has progress.
 	l.book("p2", arsBook{title: "Iota", author: "Pat Example", asin: "B0TEST0402", vg: "g2", primary: &yes, minutes: 600})
 	l.book("s2", arsBook{title: "Iota", author: "Pat Example", vg: "g2", primary: &no, minutes: 600})
 	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["s2"], "abs", 100, arsAudibleTS.Add(-time.Hour)))
-	l.item("B0TEST0402", "Iota", "Pat Example", 600, "progress", 30, ptrTime(arsAudibleTS))
+	l.item("B0TEST0402", "Iota", "Pat Example", 600, "progress", 30, new(arsAudibleTS))
 	// Group g3: a sibling marked unstarted by hand.
 	l.book("p3", arsBook{title: "Kappa", author: "Pat Example", asin: "B0TEST0403", vg: "g3", primary: &yes, minutes: 600})
 	l.book("s3", arsBook{title: "Kappa", author: "Pat Example", vg: "g3", primary: &no, minutes: 600})
 	l.setState("s3", database.UserBookState{Status: database.UserBookStatusUnstarted, StatusManual: true, LastActivityAt: arsAudibleTS.Add(-time.Hour)})
-	l.item("B0TEST0403", "Kappa", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0403", "Kappa", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	// Group g4: a quiet sibling: applies.
 	l.book("p4", arsBook{title: "Lambda", author: "Pat Example", asin: "B0TEST0404", vg: "g4", primary: &yes, minutes: 600})
 	l.book("s4", arsBook{title: "Lambda", author: "Pat Example", vg: "g4", primary: &no, minutes: 600})
 	l.setState("s4", database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 10, LastActivityAt: arsAudibleTS.Add(-time.Hour)})
-	l.item("B0TEST0404", "Lambda", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0404", "Lambda", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	plan, rows := l.plan()
 	require.Equal(t, arsSkipNewerLocal, rows["asin:B0TEST0401"].Class, rows["asin:B0TEST0401"].Reason)
@@ -653,7 +651,7 @@ func TestAudibleReadStatus_VersionGroupCopiesCount(t *testing.T) {
 	l2 := newARSLib(t)
 	l2.book("p", arsBook{title: "Mu", author: "Pat Example", asin: "B0TEST0405", vg: "g5", primary: &yes, minutes: 600})
 	l2.book("s", arsBook{title: "Mu", author: "Pat Example", vg: "g5", primary: &no, minutes: 600})
-	l2.item("B0TEST0405", "Mu", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l2.item("B0TEST0405", "Mu", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	plan2, rows2 := l2.plan()
 	require.True(t, rows2["asin:B0TEST0405"].Applicable())
 	require.NoError(t, l2.store.SetUserPositionAt(l2.user, l2.ids["s"], "abs", 50, newer))
@@ -669,19 +667,19 @@ func TestAudibleReadStatus_TimestampsAndOwnerIntent(t *testing.T) {
 	l.fixer.now = func() time.Time { return fixed }
 
 	l.book("future", arsBook{title: "Nu", author: "Pat Example", asin: "B0TEST0501", minutes: 600})
-	l.item("B0TEST0501", "Nu", "Pat Example", 600, "finished", 0, ptrTime(fixed.Add(time.Hour)))
+	l.item("B0TEST0501", "Nu", "Pat Example", 600, "finished", 0, new(fixed.Add(time.Hour)))
 	l.book("skew", arsBook{title: "Xi", author: "Pat Example", asin: "B0TEST0502", minutes: 600})
-	l.item("B0TEST0502", "Xi", "Pat Example", 600, "finished", 0, ptrTime(fixed.Add(5*time.Minute)))
+	l.item("B0TEST0502", "Xi", "Pat Example", 600, "finished", 0, new(fixed.Add(5*time.Minute)))
 	l.book("zoneless", arsBook{title: "Omicron", author: "Pat Example", asin: "B0TEST0503", minutes: 600})
 	l.items = append(l.items, map[string]any{"asin": "B0TEST0503", "title": "Omicron", "runtime_length_min": 600,
 		"authors": []map[string]string{{"name": "Pat Example"}}, "is_finished": true, "percent_complete": 99.0,
 		"listening_status": map[string]any{"finished_at_timestamp": "2026-09-01T12:00:00"}})
 	l.book("manual", arsBook{title: "Pi", author: "Pat Example", asin: "B0TEST0504", minutes: 600})
 	l.setState("manual", database.UserBookState{Status: database.UserBookStatusUnstarted, StatusManual: true, LastActivityAt: arsAudibleTS.Add(time.Hour)})
-	l.item("B0TEST0504", "Pi", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0504", "Pi", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	l.book("listened", arsBook{title: "Rho", author: "Pat Example", asin: "B0TEST0505", minutes: 600})
 	l.setState("listened", database.UserBookState{Status: database.UserBookStatusUnstarted, TotalListenedSeconds: 50000, LastActivityAt: arsAudibleTS.Add(-time.Hour)})
-	l.item("B0TEST0505", "Rho", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0505", "Rho", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 
 	plan, rows := l.plan()
 	require.Equal(t, arsReviewFutureTimestamp, rows["asin:B0TEST0501"].Class, rows["asin:B0TEST0501"].Reason)
@@ -741,7 +739,7 @@ func TestAudibleReadStatus_TitleHitsOnlyTheTargetsCopies(t *testing.T) {
 	l.book("mine", arsBook{title: "Omega Story", author: "Pat Example", minutes: 600})
 	l.book("theirs", arsBook{title: "Omega Story", author: "Quinn Other", minutes: 600})
 	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["theirs"], "abs", 100, arsAudibleTS.Add(time.Hour)))
-	l.item("B0TEST0701", "Omega Story", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.item("B0TEST0701", "Omega Story", "Pat Example", 600, "finished", 0, new(arsAudibleTS))
 	plan, rows := l.plan()
 	r := rows["asin:B0TEST0701"]
 	require.Equal(t, arsWouldFinish, r.Class, r.Reason)

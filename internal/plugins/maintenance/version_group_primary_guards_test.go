@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_guards_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e2c4a61-7b3d-4f58-a0c2-6d1e8b5f3a47
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -15,8 +15,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
-
-func vgBoolPtr(v bool) *bool { return &v }
 
 func vgGroupReportOf(t *testing.T, rep *vgRepairReport, gid string) vgRepairGroupReport {
 	t.Helper()
@@ -40,7 +38,7 @@ func (f *vgRepairFixture) seedDouble(t *testing.T, gid string, mut func(*databas
 func TestVGPrimaryRepair_DryRunFalseWritesAndShowsDemotedIDs(t *testing.T) {
 	f := newVGRepairFixture(t)
 	f.seed(t)
-	prev, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(true)})
+	prev, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(true)})
 	require.NoError(t, err)
 	require.True(t, prev.DryRun)
 	g := vgGroupReportOf(t, prev, "vg-double")
@@ -50,7 +48,7 @@ func TestVGPrimaryRepair_DryRunFalseWritesAndShowsDemotedIDs(t *testing.T) {
 	require.Equal(t, 1, prev.SkippedByReason[versionprimary.HoldBetterCopyNotInLibrary])
 	require.Equal(t, "true", f.flag(t, "B"), "dry_run:true writes nothing")
 
-	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false), GroupIDs: []string{"vg-double"}})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(false), GroupIDs: []string{"vg-double"}})
 	require.NoError(t, err)
 	require.False(t, rep.DryRun)
 	require.Equal(t, 1, rep.Applied)
@@ -62,7 +60,7 @@ func TestVGPrimaryRepair_DryRunFalseWritesAndShowsDemotedIDs(t *testing.T) {
 func TestVGPrimaryRepair_DryRunFalseStillNeedsGroupIDs(t *testing.T) {
 	f := newVGRepairFixture(t)
 	f.seed(t)
-	_, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false)})
+	_, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(false)})
 	require.ErrorContains(t, err, "group_ids")
 	require.Equal(t, "true", f.flag(t, "B"))
 }
@@ -70,7 +68,7 @@ func TestVGPrimaryRepair_DryRunFalseStillNeedsGroupIDs(t *testing.T) {
 func TestVGPrimaryRepair_ApplyContradictingDryRunIsRefused(t *testing.T) {
 	f := newVGRepairFixture(t)
 	f.seed(t)
-	_, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, DryRun: vgBoolPtr(true), GroupIDs: []string{"vg-double"}})
+	_, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, DryRun: new(true), GroupIDs: []string{"vg-double"}})
 	require.ErrorContains(t, err, "contradicts")
 	require.Equal(t, "true", f.flag(t, "B"))
 }
@@ -82,7 +80,7 @@ func TestVGPrimaryRepair_SkipsITunesGroup(t *testing.T) {
 	it := filepath.Join(f.root, "books", "itunes", "Author", "Y.m4b")
 	require.NoError(t, f.s.CreateBookFile(&database.BookFile{ID: "bf-it", BookID: "vg-it-Y", FilePath: it}))
 
-	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false), GroupIDs: []string{"vg-it"}})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(false), GroupIDs: []string{"vg-it"}})
 	require.NoError(t, err)
 	g := vgGroupReportOf(t, rep, "vg-it")
 	require.Equal(t, vgDecisionSkipITunes, g.Kind)
@@ -100,7 +98,7 @@ func TestVGPrimaryRepair_SkipsOwnerManualBySeries(t *testing.T) {
 	require.NoError(t, err)
 	f.seedDouble(t, "vg-dw", func(b *database.Book) { b.SeriesID = &s.ID })
 
-	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false), GroupIDs: []string{"vg-dw"}})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(false), GroupIDs: []string{"vg-dw"}})
 	require.NoError(t, err)
 	g := vgGroupReportOf(t, rep, "vg-dw")
 	require.Equal(t, vgDecisionSkipOwnerManual, g.Kind)
@@ -129,7 +127,7 @@ func TestVGPrimaryRepair_NoEligibleMemberIsReportedNotWritten(t *testing.T) {
 	f.book(t, "N1", "vg-none", "imported", "nil", 0, false, base, nil)
 	f.book(t, "N2", "vg-none", "organized", "nil", 0, true, base.Add(time.Hour), nil)
 
-	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false), GroupIDs: []string{"vg-none"}})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(false), GroupIDs: []string{"vg-none"}})
 	require.NoError(t, err)
 	g := vgGroupReportOf(t, rep, "vg-none")
 	require.Equal(t, versionprimary.DecisionHeld, g.Kind)
@@ -151,7 +149,7 @@ func TestVGPrimaryRepair_NeverDemotesOrganizedForNonOrganized(t *testing.T) {
 	f.book(t, "O2", "vg-mix2", "organized", "true", 1, false, base.Add(time.Hour), nil)
 	f.book(t, "I2", "vg-mix2", "imported", "nil", 20, false, base, nil)
 
-	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false), GroupIDs: []string{"vg-mix", "vg-mix2"}})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(false), GroupIDs: []string{"vg-mix", "vg-mix2"}})
 	require.NoError(t, err)
 	require.Equal(t, "O1", vgGroupReportOf(t, rep, "vg-mix").WinnerID)
 	require.Equal(t, "true", f.flag(t, "O1"))
@@ -179,7 +177,7 @@ func TestVGPrimaryRepair_SkipsITunesGroupEvenWhenRowIsMissing(t *testing.T) {
 	it := filepath.Join(f.root, "books", "itunes", "Author", "Y.m4b")
 	require.NoError(t, f.s.CreateBookFile(&database.BookFile{ID: "bf-itm", BookID: "vg-itm-Y", FilePath: it, Missing: true}))
 
-	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: vgBoolPtr(false), GroupIDs: []string{"vg-itm"}})
+	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{DryRun: new(false), GroupIDs: []string{"vg-itm"}})
 	require.NoError(t, err)
 	require.Equal(t, vgDecisionSkipITunes, vgGroupReportOf(t, rep, "vg-itm").Kind)
 	require.Equal(t, "true", f.flag(t, "vg-itm-Y"))

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
 // last-edited: 2026-10-20
 
@@ -576,8 +576,6 @@ func TestAuthorStripMerge_PlaceholderDryRunWritesNothing(t *testing.T) {
 
 // --- title-as-author (TODO JUNK-TITLE-AUTHORS) ---
 
-func titleAsAuthorIntPtr(n int) *int { return &n }
-
 // TestNormalizeForTitleAuthorCompare covers the TODO's exact normalization
 // rule: case, punctuation, '_'->space, whitespace.
 func TestNormalizeForTitleAuthorCompare(t *testing.T) {
@@ -639,8 +637,8 @@ func TestBookTitleNamesAuthor(t *testing.T) {
 			author: "Broken Circle 3",
 			book: database.BookCore{
 				Title:          "Prologue",
-				SeriesID:       titleAsAuthorIntPtr(1),
-				SeriesSequence: titleAsAuthorIntPtr(3),
+				SeriesID:       new(1),
+				SeriesSequence: new(3),
 			},
 			want: true,
 		},
@@ -649,8 +647,8 @@ func TestBookTitleNamesAuthor(t *testing.T) {
 			author: "Broken Circle 3",
 			book: database.BookCore{
 				Title:             "Prologue",
-				SeriesID:          titleAsAuthorIntPtr(1),
-				SeriesPositionRaw: strPtr("3"),
+				SeriesID:          new(1),
+				SeriesPositionRaw: new("3"),
 			},
 			want: true,
 		},
@@ -767,13 +765,13 @@ func titleAsAuthorFixture() []database.Author {
 
 func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
 	books := []database.BookCore{
-		{ID: "bk-arcane", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: titleAsAuthorIntPtr(100)},
-		{ID: "bk-king-self", Title: "Stephen King", AuthorID: titleAsAuthorIntPtr(101)},
-		{ID: "bk-king-stand", Title: "The Stand", AuthorID: titleAsAuthorIntPtr(101)},
-		{ID: "bk-solo", Title: "Solo Title", AuthorID: titleAsAuthorIntPtr(102)},
-		{ID: "bk-broken-circle", Title: "Prologue", AuthorID: titleAsAuthorIntPtr(103), SeriesID: titleAsAuthorIntPtr(1), SeriesSequence: titleAsAuthorIntPtr(3)},
-		{ID: "bk-cowriter-self", Title: "Co Writer", AuthorID: titleAsAuthorIntPtr(104)},
-		{ID: "bk-cowriter-other", Title: "Other Book", AuthorID: titleAsAuthorIntPtr(101)},
+		{ID: "bk-arcane", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: new(100)},
+		{ID: "bk-king-self", Title: "Stephen King", AuthorID: new(101)},
+		{ID: "bk-king-stand", Title: "The Stand", AuthorID: new(101)},
+		{ID: "bk-solo", Title: "Solo Title", AuthorID: new(102)},
+		{ID: "bk-broken-circle", Title: "Prologue", AuthorID: new(103), SeriesID: new(1), SeriesSequence: new(3)},
+		{ID: "bk-cowriter-self", Title: "Co Writer", AuthorID: new(104)},
+		{ID: "bk-cowriter-other", Title: "Other Book", AuthorID: new(101)},
 	}
 	// Junction-only credit: 104 co-wrote "Other Book" (primary is 101).
 	return newTitleAsAuthorPluginWith(calls, titleAsAuthorFixture(), books,
@@ -964,8 +962,8 @@ func TestAuthorStripMerge_TitleAsAuthorRowIsNeverAMergeTarget(t *testing.T) {
 					{ID: ids.s, Name: "01 Arcane Chef 2"},
 				}
 				books := []database.BookCore{
-					{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: titleAsAuthorIntPtr(ids.t)},
-					{ID: "bk-s", Title: "Fish Tales", AuthorID: titleAsAuthorIntPtr(ids.s)},
+					{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: new(ids.t)},
+					{ID: "bk-s", Title: "Fish Tales", AuthorID: new(ids.s)},
 				}
 				p := newTitleAsAuthorPluginWith(calls, authors, books, nil)
 				rep := &summaryReporter{}
@@ -1045,8 +1043,8 @@ func titleTwinRun(t *testing.T, params string, extra []database.Author, extraBoo
 		{ID: 200, Name: "01 Arcane Chef 2"},
 	}, extra...)
 	books := append([]database.BookCore{
-		{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: titleAsAuthorIntPtr(100)},
-		{ID: "bk-s", Title: "Fish Tales", AuthorID: titleAsAuthorIntPtr(200)},
+		{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: new(100)},
+		{ID: "bk-s", Title: "Fish Tales", AuthorID: new(200)},
 	}, extraBooks...)
 	p := newTitleAsAuthorPluginWith(calls, authors, books, nil)
 	if creditErr != nil {
@@ -1100,9 +1098,9 @@ func TestAuthorStripMerge_FlagOffStillMergesIntoRealAuthor(t *testing.T) {
 	calls, summary := titleTwinRun(t, `{"apply":true}`,
 		[]database.Author{{ID: 101, Name: "Stephen King"}, {ID: 201, Name: "01 Stephen King"}},
 		[]database.BookCore{
-			{ID: "bk-king-self", Title: "Stephen King", AuthorID: titleAsAuthorIntPtr(101)},
-			{ID: "bk-king-stand", Title: "The Stand", AuthorID: titleAsAuthorIntPtr(101)},
-			{ID: "bk-king-numbered", Title: "Carrie", AuthorID: titleAsAuthorIntPtr(201)},
+			{ID: "bk-king-self", Title: "Stephen King", AuthorID: new(101)},
+			{ID: "bk-king-stand", Title: "The Stand", AuthorID: new(101)},
+			{ID: "bk-king-numbered", Title: "Carrie", AuthorID: new(201)},
 		}, nil)
 	if !containsInt(calls.deleted, 201) {
 		t.Errorf("numbered row 201 was not merged away; deleted=%v", calls.deleted)

@@ -1,5 +1,5 @@
 // file: internal/applygate/partial_upper_bound_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8b4e1d27-5c93-4a60-b7f2-0d6a9e3c1f58
 // last-edited: 2026-10-20
 
@@ -39,11 +39,11 @@ func tenHourRows() []database.BookFile {
 
 func TestCheckRuntime_PartialUpperBound(t *testing.T) {
 	// Book.Duration is the partial known sum, as RecomputeBookAggregates stores.
-	ownerRT := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: intp(480)}, ownerCaseRows())
-	tenRT := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: intp(3600)}, tenHourRows())
+	ownerRT := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: new(480)}, ownerCaseRows())
+	tenRT := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: new(3600)}, tenHourRows())
 	noSize := ownerCaseRows()
 	noSize[1].FileSize = 0
-	noSizeRT := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: intp(480)}, noSize)
+	noSizeRT := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: new(480)}, noSize)
 	upper, ok := ownerRT.EstimatedUpperSeconds()
 	if !ok || upper != 8000 {
 		t.Fatalf("fixture: owner upper = %d, %v, want 8000", upper, ok)
@@ -100,7 +100,7 @@ func TestCheckRuntime_PartialUpperBound(t *testing.T) {
 	})
 	t.Run("the existing lower-bound block is kept", func(t *testing.T) {
 		// 30 x 30 min with 20 probed and no sizes: at least 10 h; a 5 h candidate blocks.
-		rt := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: intp(36000)}, chapters(30, 1800, 20))
+		rt := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: new(36000)}, chapters(30, 1800, 20))
 		if got := checkRuntime(rt, &metafetch.MetadataCandidate{DurationSec: 18000}, false); got.Outcome != OutcomeBlock {
 			t.Fatalf("checkRuntime = %+v, want block", got)
 		}
@@ -154,7 +154,7 @@ func TestCheckRuntime_NonRepresentativeSampleDoesNotBlockTheRightCandidate(t *te
 		"measured parts denser than the rest":              mixedEncodeRows(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			rt := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: intp(rt0(files))}, files)
+			rt := database.ComputeBookRuntime(&database.Book{ID: "b", Duration: new(rt0(files))}, files)
 			got := checkRuntime(rt, &metafetch.MetadataCandidate{DurationSec: 36000}, false)
 			if got.Outcome != OutcomeUnknown || got.Reason != "" {
 				t.Fatalf("10h candidate for a 10h book: %+v, want unknown (not blocked)", got)

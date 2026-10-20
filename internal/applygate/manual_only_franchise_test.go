@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only_franchise_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4c1e8a73-9b2d-4f60-a5e7-3d8f1b6c2a94
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -33,8 +33,6 @@ func moReaders(f moFake) ManualOnlyReaders {
 	return ManualOnlyReaders{Files: f, Series: f, Authors: f, Tags: f}
 }
 
-func sp(s string) *string { return &s }
-
 // The bulk-apply guard now reads narrator, publisher, author credits and the
 // book's franchise tags (census gaps 1 and 2).
 func TestBulkManualOnlyGuard_CreditsAndTags(t *testing.T) {
@@ -42,12 +40,12 @@ func TestBulkManualOnlyGuard_CreditsAndTags(t *testing.T) {
 		return &database.Book{ID: "b", Title: "Gift of the Gods", FilePath: "/lib/Unknown Author/Gift of the Gods"}
 	}
 	b := neutral()
-	b.Narrator = sp("Stargate SG-1 - Series 2")
+	b.Narrator = new("Stargate SG-1 - Series 2")
 	if g := BulkManualOnlyGuard(moReaders(moFake{}), b, ""); !strings.Contains(g.StoreDetail, "narrator") {
 		t.Errorf("narrator album not held: %+v", g)
 	}
 	b = neutral()
-	b.Publisher = sp("Big Finish Productions")
+	b.Publisher = new("Big Finish Productions")
 	if g := BulkManualOnlyGuard(moReaders(moFake{}), b, ""); !strings.Contains(g.StoreDetail, "publisher") {
 		t.Errorf("publisher not held: %+v", g)
 	}
@@ -82,7 +80,7 @@ func TestBulkManualOnlyGuard_CreditsAndTags(t *testing.T) {
 
 // ManualOnlyDetail reads the narrator and publisher without a store.
 func TestManualOnlyDetail_NarratorPublisher(t *testing.T) {
-	b := &database.Book{ID: "b", Title: "Killing Time", FilePath: "/lib/x", Narrator: sp("The War Master - Series 12")}
+	b := &database.Book{ID: "b", Title: "Killing Time", FilePath: "/lib/x", Narrator: new("The War Master - Series 12")}
 	if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != ReasonOwnerManualOnly {
 		t.Errorf("narrator album: reason %q", r)
 	}
@@ -95,20 +93,20 @@ func TestManualOnlyDetail_NarratorPublisher(t *testing.T) {
 // Owner decision 2026-10-05: "Missy" alone in a narrator or publisher credit
 // no longer holds a book; in a title, path or series it still does.
 func TestMissyCreditNotHeld_TitleStillHeld(t *testing.T) {
-	b := &database.Book{ID: "b", Title: "To Boldly Go", FilePath: "/lib/Em Stevens/To Boldly Go", Narrator: sp("Missy Cambridge")}
+	b := &database.Book{ID: "b", Title: "To Boldly Go", FilePath: "/lib/Em Stevens/To Boldly Go", Narrator: new("Missy Cambridge")}
 	if g := BulkManualOnlyGuard(moReaders(moFake{}), b, ""); g.StoreDetail != "" || g.ReadErr != "" {
 		t.Errorf("narrator Missy Cambridge held by the store guard: %+v", g)
 	}
 	if r, d := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
 		t.Errorf("narrator Missy Cambridge held: %s", d)
 	}
-	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Publisher: sp("Missy Elliott Publishing")}
+	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Publisher: new("Missy Elliott Publishing")}
 	if r, d := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
 		t.Errorf("publisher Missy held: %s", d)
 	}
 	// The range's album shape in a narrator still holds.
 	for _, n := range []string{"Missy - Series 2", "Missy Series 2", "Missy: The Lumiat", "Michelle Gomez - Missy"} {
-		b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: sp(n)}
+		b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: new(n)}
 		if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != ReasonOwnerManualOnly {
 			t.Errorf("narrator %q not held", n)
 		}
@@ -116,12 +114,12 @@ func TestMissyCreditNotHeld_TitleStillHeld(t *testing.T) {
 			t.Errorf("narrator %q not held by the store guard", n)
 		}
 	}
-	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: sp("Missy Elliott")}
+	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: new("Missy Elliott")}
 	if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
 		t.Error("narrator Missy Elliott held")
 	}
 	// A narrator naming more than Missy still holds.
-	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: sp("Missy - Big Finish Productions")}
+	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: new("Missy - Big Finish Productions")}
 	if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != ReasonOwnerManualOnly {
 		t.Error("narrator naming Big Finish not held")
 	}
@@ -147,10 +145,10 @@ func TestBookRowManualOnly(t *testing.T) {
 	}{
 		{database.BookCore{FilePath: "/lib/Doctor Who/x"}, true},
 		{database.BookCore{FilePath: "/lib/x", Title: "Genesis of the Cybermen"}, true},
-		{database.BookCore{FilePath: "/lib/x", Narrator: sp("Stargate SG-1 - Series 2")}, true},
-		{database.BookCore{FilePath: "/lib/x", Publisher: sp("Big Finish Productions")}, true},
-		{database.BookCore{FilePath: "/lib/x", TranscribedTitle: sp("Doctor Who: The Chimes of Midnight")}, true},
-		{database.BookCore{FilePath: "/lib/x", Narrator: sp("Missy Cambridge")}, false},
+		{database.BookCore{FilePath: "/lib/x", Narrator: new("Stargate SG-1 - Series 2")}, true},
+		{database.BookCore{FilePath: "/lib/x", Publisher: new("Big Finish Productions")}, true},
+		{database.BookCore{FilePath: "/lib/x", TranscribedTitle: new("Doctor Who: The Chimes of Midnight")}, true},
+		{database.BookCore{FilePath: "/lib/x", Narrator: new("Missy Cambridge")}, false},
 		{database.BookCore{FilePath: "/lib/Adrian Tchaikovsky/War Master's Gate", Title: "War Master's Gate"}, false},
 	}
 	for _, c := range cases {

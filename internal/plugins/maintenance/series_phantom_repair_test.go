@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
-// last-edited: 2026-09-15
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -63,7 +63,7 @@ func seedSeriesPhantomFixture(t *testing.T, s *database.PebbleStore) seriesPhant
 	tb, err := s.GetBookByID(fx.trashed777)
 	require.NoError(t, err)
 	now := time.Now()
-	tb.MarkedForDeletion = boolPtr(true)
+	tb.MarkedForDeletion = new(true)
 	tb.MarkedForDeletionAt = &now
 	_, err = s.UpdateBook(tb.ID, tb)
 	require.NoError(t, err)
@@ -108,8 +108,6 @@ func requireFixtureUntouched(t *testing.T, s *database.PebbleStore, fx seriesPha
 	require.NoError(t, err)
 	require.Len(t, all, 1, "series list must be untouched")
 }
-
-func boolPtr(b bool) *bool { return &b }
 
 func runSeriesPhantom(t *testing.T, p *Plugin, params seriesPhantomRepairParams) (*seriesPhantomRepairResult, error) {
 	t.Helper()
@@ -168,7 +166,7 @@ func TestSeriesPhantomRepair_NoPhantomsIsAQuietZero(t *testing.T) {
 	require.NoError(t, err)
 	p := &Plugin{deps: fakeDeps{store: s}}
 
-	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false)})
+	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: new(false)})
 	require.NoError(t, err)
 	require.Equal(t, 0, res.PhantomSeries)
 	require.Equal(t, 0, res.Nulled)
@@ -188,7 +186,7 @@ func TestSeriesPhantomRepair_UnknownModeIsRejected(t *testing.T) {
 	fx := seedSeriesPhantomFixture(t, s)
 	p := &Plugin{deps: fakeDeps{store: s}}
 
-	_, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: "delete", DryRun: boolPtr(false)})
+	_, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: "delete", DryRun: new(false)})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `unknown mode "delete"`)
 	requireFixtureUntouched(t, s, fx)
@@ -215,7 +213,7 @@ func TestSeriesPhantomRepair_NullApplyClearsEveryHolderAndJournalsEachOne(t *tes
 	fx := seedSeriesPhantomFixture(t, s)
 	p := &Plugin{deps: fakeDeps{store: s}}
 
-	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false)})
+	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: new(false)})
 	require.NoError(t, err)
 	require.False(t, res.DryRun)
 	require.Equal(t, 4, res.Nulled)
@@ -261,7 +259,7 @@ func TestSeriesPhantomRepair_NullApplyUndoIsRefused(t *testing.T) {
 	fx := seedSeriesPhantomFixture(t, s)
 	p := &Plugin{deps: fakeDeps{store: s}}
 
-	_, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false)})
+	_, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: new(false)})
 	require.NoError(t, err)
 	require.Nil(t, seriesIDOf(t, s, fx.live777[0]), "precondition: the apply cleared it")
 
@@ -299,7 +297,7 @@ func TestSeriesPhantomRepair_JournalFailureLeavesTheBookIntact(t *testing.T) {
 	fx := seedSeriesPhantomFixture(t, s)
 	p := &Plugin{deps: fakeDeps{store: phantomJournalFailStore{PebbleStore: s}}}
 
-	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false)})
+	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: new(false)})
 	require.NoError(t, err, "a per-book failure degrades the run, it does not abort it")
 	require.Equal(t, 4, res.Failed)
 	require.Equal(t, 0, res.Nulled)
@@ -319,7 +317,7 @@ func TestSeriesPhantomRepair_RespectsTheUsersSeriesLock(t *testing.T) {
 		OverrideLocked: true,
 	}))
 
-	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false)})
+	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: new(false)})
 	require.NoError(t, err)
 	require.Equal(t, 3, res.Nulled)
 	require.Equal(t, map[string]int{"locked": 1}, res.Skipped)
@@ -341,7 +339,7 @@ func TestSeriesPhantomRepair_LimitCapsTheApplyNotTheReport(t *testing.T) {
 	seedSeriesPhantomFixture(t, s)
 	p := &Plugin{deps: fakeDeps{store: s}}
 
-	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false), Limit: 1})
+	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: new(false), Limit: 1})
 	require.NoError(t, err)
 	require.Equal(t, 2, res.PhantomSeries, "the census is complete regardless of limit")
 	require.Equal(t, 1, res.Nulled)
@@ -372,7 +370,7 @@ func TestSeriesPhantomRepair_RecreateApplyCreatesTheSeriesAndRepointsItsHolders(
 
 	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{
 		Mode:   seriesPhantomModeRecreate,
-		DryRun: boolPtr(false),
+		DryRun: new(false),
 		Names:  map[string]string{strconv.Itoa(phantomA): "Recovered Series"},
 	})
 	require.NoError(t, err)
@@ -418,7 +416,7 @@ func TestSeriesPhantomRepair_RefusesToRunWithoutTheUnfilteredCount(t *testing.T)
 	fx := seedSeriesPhantomFixture(t, s)
 	p := &Plugin{deps: fakeDeps{store: noSeriesRefCountStore{Store: s}}}
 
-	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: boolPtr(false)})
+	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{Mode: seriesPhantomModeNull, DryRun: new(false)})
 	require.Error(t, err)
 	require.Nil(t, res)
 	require.Contains(t, err.Error(), "unfiltered reference counts")

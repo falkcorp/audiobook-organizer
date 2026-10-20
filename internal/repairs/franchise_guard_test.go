@@ -1,7 +1,7 @@
 // file: internal/repairs/franchise_guard_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2b7d4e19-6a3c-4f05-8e91-c4d7a2b6f3e0
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -67,7 +67,7 @@ func TestGuardBooks_TranscribedFields(t *testing.T) {
 func TestGuardBooks_CensusRangeTerms(t *testing.T) {
 	s := newMemStore()
 	s.add("sg", "Gift of the Gods", "/lib/Unknown Author/x", nil)
-	s.books["sg"].Narrator = strPtr("Stargate SG-1 - Series 2")
+	s.books["sg"].Narrator = new("Stargate SG-1 - Series 2")
 	s.add("cy", "Genesis of the Cybermen", "/lib/Unknown Author/y", nil)
 	s.add("tg", "War Master's Gate", "/lib/Adrian Tchaikovsky/Shadows of the Apt/09", nil)
 	for id, held := range map[string]bool{"sg": true, "cy": true, "tg": false} {
@@ -76,8 +76,6 @@ func TestGuardBooks_CensusRangeTerms(t *testing.T) {
 		require.Equal(t, held, k == SkipOwnerManual, "%s: %s", id, why)
 	}
 }
-
-func strPtr(s string) *string { return &s }
 
 type tagsOnlyFixer struct{ testFixer }
 

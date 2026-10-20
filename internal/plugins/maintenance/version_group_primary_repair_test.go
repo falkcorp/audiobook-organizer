@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b6c88f6f-930b-4ea7-bded-52290d5a52aa
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -89,8 +89,6 @@ func (f *vgRepairFixture) flag(t *testing.T, id string) string {
 	return storedPrimaryFlag(b.IsPrimaryVersion)
 }
 
-func strPtr(s string) *string { return &s }
-
 // seed builds three groups:
 //   - vg-double: A (10 chapters, true, thin metadata, narrator "Keep"),
 //     B (1 chapter, true, rich metadata, narrator "Other"), C (organized but
@@ -101,13 +99,13 @@ func strPtr(s string) *string { return &s }
 func (f *vgRepairFixture) seed(t *testing.T) {
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	f.book(t, "A", "vg-double", "organized", "true", 10, false, base.Add(2*time.Hour), func(b *database.Book) {
-		b.Narrator = strPtr("Keep")
+		b.Narrator = new("Keep")
 	})
 	f.book(t, "B", "vg-double", "organized", "true", 1, false, base, func(b *database.Book) {
-		b.Narrator = strPtr("Other")
-		b.Description = strPtr("donor description")
-		b.Publisher = strPtr("Donor House")
-		b.ASIN = strPtr("B0TESTASIN")
+		b.Narrator = new("Other")
+		b.Description = new("donor description")
+		b.Publisher = new("Donor House")
+		b.ASIN = new("B0TESTASIN")
 	})
 	f.book(t, "C", "vg-double", "organized", "nil", 0, true, base.Add(time.Hour), nil)
 	f.book(t, "S", "vg-held", "organized_source", "true", 10, false, base, nil)
@@ -319,7 +317,7 @@ func TestVGPrimaryRepair_ReportsNonLiveEffectivePrimaries(t *testing.T) {
 	f.seed(t)
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	f.book(t, "LOSER", "vg-ok", "organized", "true", 5, false, base.Add(3*time.Hour), func(b *database.Book) {
-		b.MergedIntoBookID = strPtr("OK1")
+		b.MergedIntoBookID = new("OK1")
 	})
 	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{})
 	require.NoError(t, err)
@@ -357,7 +355,7 @@ func (f *vgRepairFixture) seedBackwardsMerge(t *testing.T, gid, src, org string)
 	t.Helper()
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	f.book(t, src, gid, "organized_source", "true", 10, false, base, func(b *database.Book) {
-		b.Description = strPtr("source description")
+		b.Description = new("source description")
 	})
 	f.book(t, org, gid, "organized", "true", 10, false, base.Add(time.Hour), nil)
 	require.NoError(t, f.s.FlagMetadataHashDuplicate(src, org))
@@ -497,7 +495,7 @@ func TestVGPrimaryRepair_NonLiveKeptWhenGroupHeld(t *testing.T) {
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	f.book(t, "SRC", "vg-h", "organized_source", "nil", 10, false, base, nil)
 	f.book(t, "LOSER", "vg-h", "imported", "true", 10, false, base.Add(time.Hour), func(b *database.Book) {
-		b.MergedIntoBookID = strPtr("SRC")
+		b.MergedIntoBookID = new("SRC")
 	})
 	rep, err := f.run(t, fakeDeps{store: f.s}, vgPrimaryRepairParams{Apply: true, GroupIDs: []string{"vg-h"}})
 	require.NoError(t, err)

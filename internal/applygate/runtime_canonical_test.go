@@ -1,5 +1,5 @@
 // file: internal/applygate/runtime_canonical_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: ab7beb30-e82f-4592-8e09-9527424f2aed
 // last-edited: 2026-10-20
 
@@ -32,7 +32,7 @@ func chapters(n, sec, known int) []database.BookFile {
 func TestCheckRuntime_MultiFileBookComparedAtFullRuntime(t *testing.T) {
 	files := chapters(30, 1200, 30)
 	// Book.Duration deliberately stale at one chapter's length.
-	book := &database.Book{ID: "b", Duration: intp(1200)}
+	book := &database.Book{ID: "b", Duration: new(1200)}
 	rt := database.ComputeBookRuntime(book, files)
 	if rt.Seconds != 36000 || !rt.Complete() {
 		t.Fatalf("runtime = %+v, want 36000s complete", rt)
@@ -48,7 +48,7 @@ func TestCheckRuntime_MultiFileBookComparedAtFullRuntime(t *testing.T) {
 // evidence, never a runtime_mismatch veto.
 func TestCheckRuntime_PartialDurationsAreNotAMismatch(t *testing.T) {
 	files := chapters(30, 1200, 2)
-	book := &database.Book{ID: "b", Duration: intp(2400)} // what RecomputeBookAggregates stores
+	book := &database.Book{ID: "b", Duration: new(2400)} // what RecomputeBookAggregates stores
 	rt := database.ComputeBookRuntime(book, files)
 	if rt.Complete() || !rt.Partial() {
 		t.Fatalf("runtime = %+v, want partial", rt)
@@ -67,7 +67,7 @@ func TestCheckRuntime_PartialDurationsAreNotAMismatch(t *testing.T) {
 // TestCheckEvidence_PartialRuntimeDoesNotBlock runs the whole evidence leg:
 // a partial-coverage book must not be refused for runtime_mismatch.
 func TestCheckEvidenceInBatch_PartialRuntimeDoesNotBlock(t *testing.T) {
-	book := &database.Book{ID: "b", Title: "Shadow Rising", Duration: intp(2400)}
+	book := &database.Book{ID: "b", Title: "Shadow Rising", Duration: new(2400)}
 	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 2))
 	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", DurationSec: 36000}
 	v := CheckEvidenceInBatch(book, snap(book), rt, c, false, nil)
@@ -79,7 +79,7 @@ func TestCheckEvidenceInBatch_PartialRuntimeDoesNotBlock(t *testing.T) {
 // probeBook is a book the other evidence checks accept for its candidate
 // (same title, author in the path), so the runtime and narrator legs decide.
 func probeBook(narrator string, dur int) *database.Book {
-	b := &database.Book{ID: "b", Title: "Shadow Rising", FilePath: "/lib/Robert Jordan/Shadow Rising/01.mp3", Duration: intp(dur)}
+	b := &database.Book{ID: "b", Title: "Shadow Rising", FilePath: "/lib/Robert Jordan/Shadow Rising/01.mp3", Duration: new(dur)}
 	if narrator != "" {
 		b.Narrator = &narrator
 	}

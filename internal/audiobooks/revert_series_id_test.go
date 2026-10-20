@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_id_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5a0e7c3d-9b41-4f62-8d17-c2e4a6f19b08
-// last-edited: 2026-10-03
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -15,8 +15,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
-func intp(n int) *int { return &n }
-
 func seriesIDRow(id, old, new string) *database.OperationChange {
 	return &database.OperationChange{ID: id, OperationID: "op", BookID: "b1", ChangeType: "metadata_update",
 		FieldName: "series_id", OldValue: old, NewValue: new}
@@ -27,7 +25,7 @@ func seriesIDRow(id, old, new string) *database.OperationChange {
 // the classifier, so this returned a NotRestorableError.
 func TestRevertOperation_SeriesID_RestoresOldSeries(t *testing.T) {
 	s := &ledgerStub{
-		book:    &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		book:    &database.Book{ID: "b1", Title: "T", SeriesID: new(9)},
 		changes: []*database.OperationChange{seriesIDRow("c1", "4", "9")},
 		series:  map[int]*database.Series{4: {ID: 4, Name: "Old"}, 9: {ID: 9, Name: "Kept"}},
 	}
@@ -50,7 +48,7 @@ func TestRevertOperation_SeriesID_RestoresOldSeries(t *testing.T) {
 // Writing *0 would point the book at a series id that never exists.
 func TestRevertOperation_SeriesID_EmptyOldValueClearsToNil(t *testing.T) {
 	s := &ledgerStub{
-		book:    &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		book:    &database.Book{ID: "b1", Title: "T", SeriesID: new(9)},
 		changes: []*database.OperationChange{seriesIDRow("c1", "", "9")},
 	}
 	result, err := NewRevertService(s).RevertOperation("op")
@@ -71,7 +69,7 @@ func TestRevertOperation_SeriesID_EmptyOldValueClearsToNil(t *testing.T) {
 // maintenance.relink-stale-series re-proposed the reverted link.
 func TestRevertOperation_SeriesID_RecordsHistory(t *testing.T) {
 	s := &ledgerStub{
-		book:    &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		book:    &database.Book{ID: "b1", Title: "T", SeriesID: new(9)},
 		changes: []*database.OperationChange{seriesIDRow("c1", "", "9")},
 		series:  map[int]*database.Series{9: {ID: 9, Name: "Kept"}},
 	}
@@ -112,7 +110,7 @@ func TestRevertOperation_SeriesID_AlreadyRestoredRecordsNothing(t *testing.T) {
 // refused: counted Failed, left unmarked, book untouched.
 func TestRevertOperation_SeriesID_DeletedSeriesIsRefused(t *testing.T) {
 	s := &ledgerStub{
-		book:    &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		book:    &database.Book{ID: "b1", Title: "T", SeriesID: new(9)},
 		changes: []*database.OperationChange{seriesIDRow("c1", "4", "9")},
 		series:  map[int]*database.Series{9: {ID: 9, Name: "Kept"}},
 	}
@@ -135,7 +133,7 @@ func TestRevertOperation_SeriesID_DeletedSeriesIsRefused(t *testing.T) {
 // series_merge row) is an error, never a silent no-op that gets marked.
 func TestRevertOperation_SeriesID_UnparsableOldValueFails(t *testing.T) {
 	s := &ledgerStub{
-		book:    &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		book:    &database.Book{ID: "b1", Title: "T", SeriesID: new(9)},
 		changes: []*database.OperationChange{seriesIDRow("c1", "12 (Foo)", "9 (Bar)")},
 		series:  map[int]*database.Series{12: {ID: 12}},
 	}
@@ -154,7 +152,7 @@ func TestRevertOperation_SeriesID_UnparsableOldValueFails(t *testing.T) {
 // A series lookup that errors fails closed: Failed, unmarked, book untouched.
 func TestRevertOperation_SeriesID_LookupErrorFailsClosed(t *testing.T) {
 	s := &ledgerStub{
-		book:      &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		book:      &database.Book{ID: "b1", Title: "T", SeriesID: new(9)},
 		changes:   []*database.OperationChange{seriesIDRow("c1", "4", "9")},
 		series:    map[int]*database.Series{4: {ID: 4}},
 		seriesErr: errors.New("pebble: closed"),

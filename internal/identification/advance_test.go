@@ -1,7 +1,7 @@
 // file: internal/identification/advance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e90a505f-13b3-43db-9f19-8cb48e771f05
-// last-edited: 2026-10-16
+// last-edited: 2026-10-20
 
 package identification
 
@@ -133,8 +133,6 @@ func sortStrings(s []string) {
 	}
 }
 
-func strPtr(s string) *string { return &s }
-
 func primaryBook(id string) *database.Book {
 	author := 7
 	return &database.Book{ID: id, Title: "Title " + id, AuthorID: &author}
@@ -204,8 +202,8 @@ func TestItem_ClearsMarkOnlyWhenEpochMatches(t *testing.T) {
 // its mark is cleared.
 func TestItem_AppliedBookClearsMarkWithoutFetch(t *testing.T) {
 	cases := map[string]func(*database.Book) *database.Book{
-		"applied":     func(b *database.Book) *database.Book { b.MetadataReviewStatus = strPtr("matched"); return b },
-		"held":        func(b *database.Book) *database.Book { b.MetadataReviewStatus = strPtr("no_match"); return b },
+		"applied":     func(b *database.Book) *database.Book { b.MetadataReviewStatus = new("matched"); return b },
+		"held":        func(b *database.Book) *database.Book { b.MetadataReviewStatus = new("no_match"); return b },
 		"gone":        func(*database.Book) *database.Book { return nil },
 		"not_primary": func(b *database.Book) *database.Book { f := false; b.IsPrimaryVersion = &f; return b },
 		"quarantined": func(b *database.Book) *database.Book { now := time.Now(); b.QuarantinedAt = &now; return b },

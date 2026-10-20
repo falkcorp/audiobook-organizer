@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -102,8 +102,6 @@ const (
 	rgITunes = "/media/books/itunes/Media"
 )
 
-func rgFlag(v bool) *bool { return &v }
-
 // rgBook builds a book row. vg "" means ungrouped; flag nil means unset.
 func rgBook(id, vg string, flag *bool) database.Book {
 	now := time.Unix(1700000000, 0)
@@ -139,7 +137,7 @@ func rgOrganized(b database.Book) database.Book {
 // fragment record. A fixture file is in the iTunes tree unless placed with
 // rgFileAt. Every case plans ONE heal group "G" over every PID in its files.
 func TestITunesRegroupEntanglementRule(t *testing.T) {
-	tr, fa := rgFlag(true), rgFlag(false)
+	tr, fa := new(true), new(false)
 	cases := []struct {
 		name        string
 		books       []database.Book
@@ -358,7 +356,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 // book is skipped: the grouped book is an edition, and taking files from it
 // changes what that edition is.
 func TestITunesRegroupEntanglementRule_SplitOutOfGroupedSkipped(t *testing.T) {
-	fa, tr := rgFlag(false), rgFlag(true)
+	fa, tr := new(false), new(true)
 	r := &regroupFakeReader{
 		books: []database.Book{rgBook("I1", "vg1", fa), rgBook("L1", "vg1", tr)},
 		files: []database.BookFileCore{
@@ -391,9 +389,9 @@ func TestITunesRegroupEntanglementRule_SplitOutOfGroupedSkipped(t *testing.T) {
 // can never be a target or source). Ungrouped books read unset as primary.
 // Rows with no CreatedAt must not panic the snapshot (they used to).
 func TestBuildRegroupSnapshot_IncumbentSemantics(t *testing.T) {
-	tr, fa := rgFlag(true), rgFlag(false)
+	tr, fa := new(true), new(false)
 	trashed := rgBook("T1", "vg4", tr)
-	trashed.MarkedForDeletion = rgFlag(true)
+	trashed.MarkedForDeletion = new(true)
 	noCreated := rgBook("U2", "", fa)
 	noCreated.CreatedAt = nil
 	books := []database.Book{
@@ -470,7 +468,7 @@ const regroupDeltaXML = `<?xml version="1.0" encoding="UTF-8"?>
 func TestITunesRegroupDryRun_ReportsRuleDelta(t *testing.T) {
 	s := regroupStore(t)
 	vg := "vg-delta"
-	tr, fa := rgFlag(true), rgFlag(false)
+	tr, fa := new(true), new(false)
 	lib, err := s.CreateBook(&database.Book{Title: "Delta (library)", VersionGroupID: &vg, IsPrimaryVersion: tr})
 	if err != nil {
 		t.Fatalf("CreateBook library: %v", err)
@@ -518,7 +516,7 @@ func TestITunesRegroupDryRun_ReportsRuleDelta(t *testing.T) {
 func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 	s := regroupStore(t)
 	vg := "vg-apply"
-	tr, fa := rgFlag(true), rgFlag(false)
+	tr, fa := new(true), new(false)
 	lib, err := s.CreateBook(&database.Book{Title: "Library copy", VersionGroupID: &vg, IsPrimaryVersion: tr})
 	if err != nil {
 		t.Fatalf("CreateBook library: %v", err)
@@ -618,7 +616,7 @@ func rgAssertNeverTouches(t *testing.T, plan itunesservice.RegroupPlan, id strin
 // find. The second variant keeps X's row but soft-deleted.
 func TestITunesRegroupEntanglementRule_TrashedBookNeverTarget(t *testing.T) {
 	trashed := rgBook("X", "", nil)
-	trashed.MarkedForDeletion = rgFlag(true)
+	trashed.MarkedForDeletion = new(true)
 	for name, books := range map[string][]database.Book{
 		"row absent from book scan": {rgBook("Y", "", nil)},
 		"row present, soft-deleted": {rgBook("Y", "", nil), trashed},
@@ -804,7 +802,7 @@ func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := regroupStore(t)
 			vg := "vg-recheck"
-			tr, fa := rgFlag(true), rgFlag(false)
+			tr, fa := new(true), new(false)
 			if _, err := s.CreateBook(&database.Book{Title: "Library copy", VersionGroupID: &vg, IsPrimaryVersion: tr}); err != nil {
 				t.Fatalf("CreateBook library: %v", err)
 			}
@@ -977,7 +975,7 @@ func TestITunesRegroupApply_LibraryCopyKeepsTitle(t *testing.T) {
 // strings, so "/library/./" and "/library/" used to miss the library copy and
 // plan a move into it.
 func TestITunesRegroupEntanglementRule_ProbeARootSpellings(t *testing.T) {
-	tr, fa := rgFlag(true), rgFlag(false)
+	tr, fa := new(true), new(false)
 	for _, root := range []string{"/library", "/library/", "/library/./", "/library//"} {
 		t.Run(root, func(t *testing.T) {
 			r := &regroupFakeReader{
@@ -1076,7 +1074,7 @@ func (s *rgLockProbeStore) ModifyBook(id string, fn func(*database.Book) error) 
 func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 	s := regroupStore(t)
 	vg := "vg-lock"
-	tr, fa := rgFlag(true), rgFlag(false)
+	tr, fa := new(true), new(false)
 	lib, err := s.CreateBook(&database.Book{Title: "Library copy", VersionGroupID: &vg, IsPrimaryVersion: tr})
 	if err != nil {
 		t.Fatalf("CreateBook library: %v", err)

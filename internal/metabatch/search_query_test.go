@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package metabatch
 
@@ -78,8 +78,6 @@ func (f fakeBookFiles) LiveBookPathsUnderDir(dir string) (map[string]string, err
 func (f fakeBookFiles) GetBookAuthors(string) ([]database.BookAuthor, error) { return nil, nil }
 func (f fakeBookFiles) GetAuthorByID(int) (*database.Author, error)          { return nil, nil }
 
-func strp(s string) *string { return &s }
-
 func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -89,44 +87,44 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 		wantSrc    string // "" = not usable
 		wantAuthor string
 	}{
-		{name: "real title wins", book: database.Book{Title: "Eldest", TranscribedTitle: strp("Other")},
+		{name: "real title wins", book: database.Book{Title: "Eldest", TranscribedTitle: new("Other")},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceTitle},
-		{name: "empty title uses book transcription", book: database.Book{Title: "", TranscribedTitle: strp("Marvel's Planet Hulk")},
+		{name: "empty title uses book transcription", book: database.Book{Title: "", TranscribedTitle: new("Marvel's Planet Hulk")},
 			wantTitle: "Marvel's Planet Hulk", wantSrc: SearchQuerySourceTranscribedTitle},
-		{name: "chapter number uses book transcription", book: database.Book{Title: "Chapter 3", TranscribedTitle: strp("Eldest")},
+		{name: "chapter number uses book transcription", book: database.Book{Title: "Chapter 3", TranscribedTitle: new("Eldest")},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceTranscribedTitle},
 		{name: "bare number uses file transcription", book: database.Book{Title: "03"},
-			files:     fakeBookFiles{files: []database.BookFile{{Missing: true, TranscribedTitle: strp("Gone")}, {TranscribedTitle: strp("Eldest")}}},
+			files:     fakeBookFiles{files: []database.BookFile{{Missing: true, TranscribedTitle: new("Gone")}, {TranscribedTitle: new("Eldest")}}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFileTranscribedText},
-		{name: "book transcription carries its heard author", book: database.Book{Title: "", TranscribedTitle: strp("Planet Hulk"), TranscribedAuthor: strp("Greg Pak")},
+		{name: "book transcription carries its heard author", book: database.Book{Title: "", TranscribedTitle: new("Planet Hulk"), TranscribedAuthor: new("Greg Pak")},
 			wantTitle: "Planet Hulk", wantSrc: SearchQuerySourceTranscribedTitle, wantAuthor: "Greg Pak"},
 		{name: "file transcription comes from the lowest disc and track, with its author", book: database.Book{Title: "03"},
 			files: fakeBookFiles{files: []database.BookFile{
-				{DiscNumber: 2, TrackNumber: 1, TranscribedTitle: strp("Mid Book"), TranscribedAuthor: strp("Wrong")},
-				{DiscNumber: 1, TrackNumber: 2, TranscribedTitle: strp("Also Mid Book")},
-				{DiscNumber: 1, TrackNumber: 1, TranscribedTitle: strp("Eldest"), TranscribedAuthor: strp("Christopher Paolini")},
+				{DiscNumber: 2, TrackNumber: 1, TranscribedTitle: new("Mid Book"), TranscribedAuthor: new("Wrong")},
+				{DiscNumber: 1, TrackNumber: 2, TranscribedTitle: new("Also Mid Book")},
+				{DiscNumber: 1, TrackNumber: 1, TranscribedTitle: new("Eldest"), TranscribedAuthor: new("Christopher Paolini")},
 			}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFileTranscribedText, wantAuthor: "Christopher Paolini"},
 		{name: "no fall-through to a later file's transcription", book: database.Book{Title: "03", FilePath: "/library/Paolini/Eldest/03.mp3"},
 			files: fakeBookFiles{files: []database.BookFile{
-				{TrackNumber: 2, FilePath: "/library/Paolini/Eldest/02.mp3", TranscribedTitle: strp("Mid Book")},
+				{TrackNumber: 2, FilePath: "/library/Paolini/Eldest/02.mp3", TranscribedTitle: new("Mid Book")},
 				{TrackNumber: 1, FilePath: "/library/Paolini/Eldest/01.mp3"},
 			}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
 		// A heading in words or a front-matter name is a real title unless
 		// the book's files say it names a part.
-		{name: "heading title on a single-file book is searched as-is", book: database.Book{Title: "Act One", TranscribedTitle: strp("Other")},
+		{name: "heading title on a single-file book is searched as-is", book: database.Book{Title: "Act One", TranscribedTitle: new("Other")},
 			files:     fakeBookFiles{files: []database.BookFile{{FilePath: "/library/Nina Kiriki/Act One/act one.m4b"}}},
 			wantTitle: "Act One", wantSrc: SearchQuerySourceTitle},
 		{name: "front-matter title on a single-file book is searched as-is", book: database.Book{Title: "Epilogue"},
 			wantTitle: "Epilogue", wantSrc: SearchQuerySourceTitle},
-		{name: "heading title under a folder naming another work uses the transcription", book: database.Book{Title: "Book Two", TranscribedTitle: strp("Eldest")},
+		{name: "heading title under a folder naming another work uses the transcription", book: database.Book{Title: "Book Two", TranscribedTitle: new("Eldest")},
 			files: fakeBookFiles{files: []database.BookFile{
 				{TrackNumber: 1, FilePath: "/library/Paolini/Inheritance/01.mp3"}, {TrackNumber: 2, FilePath: "/library/Paolini/Inheritance/02.mp3"}}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceTranscribedTitle},
 		// The number of files is not evidence: a real book in chapters, in a
 		// folder of its own name, is searched by its title.
-		{name: "multi-file Act One in its own folder is searched as-is", book: database.Book{Title: "Act One", TranscribedTitle: strp("Other")},
+		{name: "multi-file Act One in its own folder is searched as-is", book: database.Book{Title: "Act One", TranscribedTitle: new("Other")},
 			files: fakeBookFiles{files: []database.BookFile{
 				{TrackNumber: 1, FilePath: "/library/Nina Kiriki/Act One/01.mp3"}, {TrackNumber: 2, FilePath: "/library/Nina Kiriki/Act One/02.mp3"}}},
 			wantTitle: "Act One", wantSrc: SearchQuerySourceTitle},
@@ -150,9 +148,9 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 		{name: "front-matter title that is a numbered file's own tag uses the folder", book: database.Book{Title: "Prologue"},
 			files:     fakeBookFiles{files: []database.BookFile{{TrackNumber: 1, Title: "Prologue", FilePath: "/library/Paolini/Eldest/01.mp3"}}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
-		{name: "front-matter transcription on a single-file book is a usable stand-in", book: database.Book{Title: "", TranscribedTitle: strp("Interlude")},
+		{name: "front-matter transcription on a single-file book is a usable stand-in", book: database.Book{Title: "", TranscribedTitle: new("Interlude")},
 			wantTitle: "Interlude", wantSrc: SearchQuerySourceTranscribedTitle},
-		{name: "front-matter transcription on a multi-file book is refused", book: database.Book{Title: "", TranscribedTitle: strp("Introduction"), FilePath: "/library/Paolini/Eldest"},
+		{name: "front-matter transcription on a multi-file book is refused", book: database.Book{Title: "", TranscribedTitle: new("Introduction"), FilePath: "/library/Paolini/Eldest"},
 			files:     fakeBookFiles{files: []database.BookFile{{FilePath: "/library/Paolini/Eldest/01.mp3"}, {FilePath: "/library/Paolini/Eldest/02.mp3"}}},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
 		{name: "heading folder on a single-file book is a usable stand-in", book: database.Book{Title: "", FilePath: "/library/Ron Carlson/Dedication/book.m4b"},
@@ -167,7 +165,7 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
 		{name: "directory FilePath names its own folder", book: database.Book{Title: "Unknown Title", FilePath: "/library/Paolini/Eldest"},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
-		{name: "transcription that is itself a placeholder is refused", book: database.Book{Title: "", TranscribedTitle: strp("Chapter 1"), FilePath: "/library/Paolini/Eldest/01.mp3"},
+		{name: "transcription that is itself a placeholder is refused", book: database.Book{Title: "", TranscribedTitle: new("Chapter 1"), FilePath: "/library/Paolini/Eldest/01.mp3"},
 			wantTitle: "Eldest", wantSrc: SearchQuerySourceFolderTitle},
 		{name: "organizer placeholder folder is refused", book: database.Book{Title: "Unknown Title", FilePath: "/library/Unknown Author/Unknown Title/book.m4b"}},
 		{name: "library-root folder is refused", book: database.Book{Title: "03", FilePath: "/library/03.mp3"}},
@@ -265,7 +263,7 @@ func TestResolveCandidateSearchQuery_AuthorFolderIsNoHeadingEvidence(t *testing.
 		// discard it. "Book Two" tagged "Book Two" on its file is a part, so
 		// the transcription stands in.
 		{name: "file-tag evidence survives an author read fault",
-			book: database.Book{ID: "b1", Title: "Book Two", TranscribedTitle: strp("Eldest"), FilePath: path, AuthorID: &aid},
+			book: database.Book{ID: "b1", Title: "Book Two", TranscribedTitle: new("Eldest"), FilePath: path, AuthorID: &aid},
 			reader: fakeBookFilesAuthors{fakeBookFiles: fakeBookFiles{files: []database.BookFile{{Title: "Book Two", FilePath: path}}},
 				err: errors.New("boom")},
 			want: "Eldest", wantSrc: SearchQuerySourceTranscribedTitle},
@@ -310,10 +308,6 @@ func siblingRows(dir, self string, names ...string) map[string]string {
 	}
 	return rows
 }
-
-func ip(n int) *int { return &n }
-
-func i64p(n int64) *int64 { return &n }
 
 // A row that is one file of a set the scanner filed as separate book rows
 // must be SKIPPED, not searched -- by its own title, its folder or a
@@ -366,8 +360,8 @@ func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("%s/%ds", tc.name, dur), func(t *testing.T) {
 				path := tc.dir + "/" + tc.self
-				book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: strp("Whole Work Title"), Duration: ip(dur)}
-				file := database.BookFile{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: strp("Whole Work Title")}
+				book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: new("Whole Work Title"), Duration: new(dur)}
+				file := database.BookFile{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: new("Whole Work Title")}
 				files := fakeBookFiles{files: []database.BookFile{file}, dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
 				for _, memo := range []*FolderMemo{nil, NewFolderMemo(files)} {
 					q := ResolveCandidateSearchQueryMemo(files, &book, memo)
@@ -457,7 +451,7 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 		// a longer one is saved by its durations.
 		{name: "Mistborn 1 beside Mistborn 2 (too few)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b"},
 			dir: siblingRows(author, "Mistborn 1.m4b", "Mistborn 2.m4b"), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle},
-		{name: "Mistborn 1 of a long flat set (whole-book duration)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b", Duration: ip(long), FileSize: i64p(longSize)},
+		{name: "Mistborn 1 of a long flat set (whole-book duration)", book: database.Book{ID: "self", Title: "Mistborn 1", FilePath: author + "/Mistborn 1.m4b", Duration: new(long), FileSize: new(longSize)},
 			dir: siblingRows(author, "Mistborn 1.m4b", "Mistborn 2.m4b", "Mistborn 3.m4b"), want: "Mistborn 1", wantSrc: SearchQuerySourceTitle, noList: true},
 		// B2: twin rows at one path, and a same-stem file differing only by
 		// extension, are not siblings.
@@ -480,14 +474,14 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 			dir: siblingRows(author, "Dune (1 of 2).m4b"), want: "Dune (1 of 2)", wantSrc: SearchQuerySourceTitle},
 		{name: "Wheel of Time #3 of 14 beside unrelated books", book: database.Book{ID: "self", Title: "Wheel of Time #3 of 14", FilePath: author + "/Wheel of Time 3.m4b"},
 			dir: siblingRows(author, "Wheel of Time 3.m4b", others...), want: "Wheel of Time #3 of 14", wantSrc: SearchQuerySourceTitle},
-		{name: "Mistborn Series 1 of 3 with a whole-book duration", book: database.Book{ID: "self", Title: "Mistborn Series 1 of 3", FilePath: author + "/Mistborn Series 1 of 3.m4b", Duration: ip(long), FileSize: i64p(longSize)},
+		{name: "Mistborn Series 1 of 3 with a whole-book duration", book: database.Book{ID: "self", Title: "Mistborn Series 1 of 3", FilePath: author + "/Mistborn Series 1 of 3.m4b", Duration: new(long), FileSize: new(longSize)},
 			dir: siblingRows(author, "Mistborn Series 1 of 3.m4b", "Mistborn Series 2 of 3.m4b", "Mistborn Series 3 of 3.m4b"), want: "Mistborn Series 1 of 3", wantSrc: SearchQuerySourceTitle, noList: true},
 		// W2: a row filed directly under a configured root never lists it.
 		{name: "row directly under an import root", book: database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"},
 			dir: siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "a.mp3", "b.mp3"), importRoot: "/imports/Zahn Rips",
 			want: "Cobra 100 of 151", wantSrc: SearchQuerySourceTitle, noList: true},
 		// W-b: same-stem counted siblings only.
-		{name: "Golden Son beside other products' parts", book: database.Book{ID: "self", Title: "Golden Son (Part 1 of 2)", FilePath: "/library/Authors/Pierce Brown/Golden Son (Part 1 of 2).m4b", Duration: ip(1500)},
+		{name: "Golden Son beside other products' parts", book: database.Book{ID: "self", Title: "Golden Son (Part 1 of 2)", FilePath: "/library/Authors/Pierce Brown/Golden Son (Part 1 of 2).m4b", Duration: new(1500)},
 			dir: siblingRows("/library/Authors/Pierce Brown", "Golden Son (Part 1 of 2).m4b",
 				"Red Rising (Part 1 of 2).m4b", "Red Rising (Part 2 of 2).m4b", "Morning Star (Part 1 of 2).m4b"),
 			want: "Golden Son (Part 1 of 2)", wantSrc: SearchQuerySourceTitle},
@@ -576,13 +570,13 @@ func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
 	}{
 		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"},
 			siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")},
-		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 100 of 151.mp3", Duration: ip(1200)},
+		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 100 of 151.mp3", Duration: new(1200)},
 			siblingRows("/library/Authors/Timothy Zahn/Cobra", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")},
 		{database.Book{ID: "self", Title: "98", FilePath: "/library/Paolini/Eldest/98.mp3"},
 			siblingRows("/library/Paolini/Eldest", "98.mp3", "97.mp3")},
 		{database.Book{ID: "self", Title: "Plan B", FilePath: "/library/Authors/Various/Plan B.m4b"},
 			siblingRows("/library/Authors/Various", "Plan B.m4b", "Dune.m4b")},
-		{database.Book{ID: "self", Title: "Great Sky River 18 6", FilePath: wrappedPath("/library/Authors/Gregory Benford", "Great Sky River 18 6.mp3"), Duration: ip(1200)},
+		{database.Book{ID: "self", Title: "Great Sky River 18 6", FilePath: wrappedPath("/library/Authors/Gregory Benford", "Great Sky River 18 6.mp3"), Duration: new(1200)},
 			wrappedRows("/library/Authors/Gregory Benford", "Great Sky River 18 6.mp3", "Great Sky River 18 5.mp3", "Great Sky River 18 4.mp3")},
 	}
 	for _, r := range rows {
@@ -661,10 +655,10 @@ func TestResolveCandidateSearchQuery_PartRowEvidence(t *testing.T) {
 		// E-B: a value that may be milliseconds is unknown (6-row set: a part).
 		{"2.5 h with no size is unknown", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 9000, 0, nil, nil, true},
 		{"2.5 h with a size is a product", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 9000, 9000 * 8000, nil, nil, false},
-		{"file rejected as ms, book copy not used", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, ms, 4_800_000, ip(ms), nil, true},
-		{"book value judged by the book size", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 0, 0, ip(ms), i64p(4_800_000), true},
-		{"book value with no size is unknown", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 0, 0, ip(9000), nil, true},
-		{"file without size judged by the book size", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 9000, 0, nil, i64p(9000 * 8000), false},
+		{"file rejected as ms, book copy not used", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, ms, 4_800_000, new(ms), nil, true},
+		{"book value judged by the book size", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 0, 0, new(ms), new(int64(4_800_000)), true},
+		{"book value with no size is unknown", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 0, 0, new(9000), nil, true},
+		{"file without size judged by the book size", sun, "001 The Sunrise Lands 1.mp3", "The Sunrise Lands 1", sunSibs, 9000, 0, nil, new(int64(9000 * 8000)), false},
 
 		// W-2: rip-folder rows are judged by duration first (an untitled
 		// row reaches the folder check before any transcription stand-in).
@@ -1007,7 +1001,7 @@ func TestResolveCandidateSearchQuery_FolderWrappedPartRowsAreSkipped(t *testing.
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := wrappedPath(tc.parent, tc.self)
-			book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: strp("Whole Work Title")}
+			book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: new("Whole Work Title")}
 			file := database.BookFile{FilePath: path, Duration: tc.dur, FileSize: int64(tc.dur) * 8000}
 			files := fakeBookFiles{files: []database.BookFile{file}, dir: wrappedRows(tc.parent, tc.self, tc.cousins...)}
 			for _, memo := range []*FolderMemo{nil, NewFolderMemo(files)} {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credit_census_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 974607e6-4eb5-4df4-8e22-9eefce977bf4
 // last-edited: 2026-10-20
 
@@ -119,9 +119,6 @@ func (s *censusFakeStore) GetNarratorByID(id int) (*database.Narrator, error) {
 
 var _ creditCensusStore = (*censusFakeStore)(nil)
 
-func strp(s string) *string { return &s }
-func intp(i int) *int       { return &i }
-
 func authorsJoin(bookID string, pairs ...[2]int) []database.BookAuthor {
 	out := make([]database.BookAuthor, len(pairs))
 	for i, p := range pairs {
@@ -156,7 +153,7 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 
 	// cleanBook: AuthorID primary in a normalized join, column == junction.
 	cleanBook := func(id string) {
-		s.books[id] = &database.Book{ID: id, Title: id, AuthorID: intp(1), Narrator: strp("Michael Kramer, Kate Reading")}
+		s.books[id] = &database.Book{ID: id, Title: id, AuthorID: new(1), Narrator: new("Michael Kramer, Kate Reading")}
 		s.joins[id] = authorsJoin(id, [2]int{1, 0}, [2]int{2, 1})
 		s.junctions[id] = narratorsJunction(id, [2]int{10, 0}, [2]int{11, 1})
 	}
@@ -167,12 +164,12 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 	// A clean book whose snapshot matches and whose NarratorsJSON agrees.
 	cleanBook("clean-snapshot")
 	s.books["clean-snapshot"].Author = &database.Author{ID: 1, Name: "Brandon Sanderson"}
-	s.books["clean-snapshot"].NarratorsJSON = strp(`["Michael Kramer","Kate Reading"]`)
+	s.books["clean-snapshot"].NarratorsJSON = new(`["Michael Kramer","Kate Reading"]`)
 	// A co-narrating author: CleanNarratorCredit drops the author's name, so the
 	// cleaned column equals the junction.
 	cleanBook("clean-selfread")
 	s.joins["clean-selfread"] = authorsJoin("clean-selfread", [2]int{1, 0})
-	s.books["clean-selfread"].Narrator = strp("Michael Kramer, Brandon Sanderson")
+	s.books["clean-selfread"].Narrator = new("Michael Kramer, Brandon Sanderson")
 	s.junctions["clean-selfread"] = narratorsJunction("clean-selfread", [2]int{10, 0})
 
 	want := map[string][]string{}
@@ -183,52 +180,52 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 	put(ccNoAuthor, "b-noauthor")
 
 	// author_id_join_empty
-	s.books["b-joinempty"] = &database.Book{ID: "b-joinempty", AuthorID: intp(1)}
+	s.books["b-joinempty"] = &database.Book{ID: "b-joinempty", AuthorID: new(1)}
 	put(ccAuthorIDJoinEmpty, "b-joinempty")
 
 	// author_id_not_primary: AuthorID 2 is at position 1, author 1 at 0.
-	s.books["b-notprimary"] = &database.Book{ID: "b-notprimary", AuthorID: intp(2)}
+	s.books["b-notprimary"] = &database.Book{ID: "b-notprimary", AuthorID: new(2)}
 	s.joins["b-notprimary"] = authorsJoin("b-notprimary", [2]int{1, 0}, [2]int{2, 1})
 	put(ccAuthorIDNotPrimary, "b-notprimary")
 
 	// author_id_not_in_join
-	s.books["b-notinjoin"] = &database.Book{ID: "b-notinjoin", AuthorID: intp(4)}
+	s.books["b-notinjoin"] = &database.Book{ID: "b-notinjoin", AuthorID: new(4)}
 	s.joins["b-notinjoin"] = authorsJoin("b-notinjoin", [2]int{1, 0})
 	put(ccAuthorIDNotInJoin, "b-notinjoin")
 
 	// author_positions_not_normalized + all_zero: "A @0, B @0".
-	s.books["b-allzero"] = &database.Book{ID: "b-allzero", AuthorID: intp(1)}
+	s.books["b-allzero"] = &database.Book{ID: "b-allzero", AuthorID: new(1)}
 	s.joins["b-allzero"] = authorsJoin("b-allzero", [2]int{1, 0}, [2]int{2, 0})
 	put(ccAuthorPositionsNotNorm, "b-allzero")
 	put(ccAuthorPositionsAllZero, "b-allzero")
 
 	// author_positions_not_normalized only: a gap (0, 2).
-	s.books["b-gap"] = &database.Book{ID: "b-gap", AuthorID: intp(1)}
+	s.books["b-gap"] = &database.Book{ID: "b-gap", AuthorID: new(1)}
 	s.joins["b-gap"] = authorsJoin("b-gap", [2]int{1, 0}, [2]int{2, 2})
 	put(ccAuthorPositionsNotNorm, "b-gap")
 
 	// author_join_combined
-	s.books["b-combined"] = &database.Book{ID: "b-combined", AuthorID: intp(3)}
+	s.books["b-combined"] = &database.Book{ID: "b-combined", AuthorID: new(3)}
 	s.joins["b-combined"] = authorsJoin("b-combined", [2]int{3, 0})
 	put(ccAuthorJoinCombined, "b-combined")
 
 	// author_snapshot_stale: snapshot names author 2, AuthorID is 1.
-	s.books["b-snapshot"] = &database.Book{ID: "b-snapshot", AuthorID: intp(1), Author: &database.Author{ID: 2, Name: "Mary Robinette Kowal"}}
+	s.books["b-snapshot"] = &database.Book{ID: "b-snapshot", AuthorID: new(1), Author: &database.Author{ID: 2, Name: "Mary Robinette Kowal"}}
 	s.joins["b-snapshot"] = authorsJoin("b-snapshot", [2]int{1, 0})
 	put(ccAuthorSnapshotStale, "b-snapshot")
 
 	// author_snapshot_stale: same id, old name.
-	s.books["b-snapname"] = &database.Book{ID: "b-snapname", AuthorID: intp(1), Author: &database.Author{ID: 1, Name: "B. Sanderson"}}
+	s.books["b-snapname"] = &database.Book{ID: "b-snapname", AuthorID: new(1), Author: &database.Author{ID: 1, Name: "B. Sanderson"}}
 	s.joins["b-snapname"] = authorsJoin("b-snapname", [2]int{1, 0})
 	put(ccAuthorSnapshotStale, "b-snapname")
 
 	// author_id_dangling: join names author 77, which does not exist.
-	s.books["b-dangling"] = &database.Book{ID: "b-dangling", AuthorID: intp(1)}
+	s.books["b-dangling"] = &database.Book{ID: "b-dangling", AuthorID: new(1)}
 	s.joins["b-dangling"] = authorsJoin("b-dangling", [2]int{1, 0}, [2]int{77, 1})
 	put(ccAuthorIDDangling, "b-dangling")
 
 	// author_id_tombstoned: AuthorID 90 redirects to 4, join credits 90.
-	s.books["b-tomb"] = &database.Book{ID: "b-tomb", AuthorID: intp(90)}
+	s.books["b-tomb"] = &database.Book{ID: "b-tomb", AuthorID: new(90)}
 	s.joins["b-tomb"] = authorsJoin("b-tomb", [2]int{90, 0})
 	put(ccAuthorIDTombstoned, "b-tomb")
 
@@ -236,36 +233,36 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 	// spelling, reached through merged id 90. Cleaning must still drop it as one
 	// of the book's own authors, so the narrator classes stay clean.
 	put(ccAuthorIDTombstoned, "b-selfread-tomb")
-	s.books["b-selfread-tomb"] = &database.Book{ID: "b-selfread-tomb", AuthorID: intp(1), Narrator: strp("Michael Kramer, Ursula K. Le Guin")}
+	s.books["b-selfread-tomb"] = &database.Book{ID: "b-selfread-tomb", AuthorID: new(1), Narrator: new("Michael Kramer, Ursula K. Le Guin")}
 	s.joins["b-selfread-tomb"] = authorsJoin("b-selfread-tomb", [2]int{1, 0}, [2]int{90, 1})
 	s.junctions["b-selfread-tomb"] = narratorsJunction("b-selfread-tomb", [2]int{10, 0})
 
 	// narrator_column_no_junction
-	s.books["n-nojunction"] = &database.Book{ID: "n-nojunction", AuthorID: intp(1), Narrator: strp("Michael Kramer")}
+	s.books["n-nojunction"] = &database.Book{ID: "n-nojunction", AuthorID: new(1), Narrator: new("Michael Kramer")}
 	s.joins["n-nojunction"] = authorsJoin("n-nojunction", [2]int{1, 0})
 	put(ccNarratorColumnNoJunction, "n-nojunction")
 
 	// narrator_column_differs_junction: column says Kate, junction says Michael.
-	s.books["n-differs"] = &database.Book{ID: "n-differs", AuthorID: intp(1), Narrator: strp("Kate Reading")}
+	s.books["n-differs"] = &database.Book{ID: "n-differs", AuthorID: new(1), Narrator: new("Kate Reading")}
 	s.joins["n-differs"] = authorsJoin("n-differs", [2]int{1, 0})
 	s.junctions["n-differs"] = narratorsJunction("n-differs", [2]int{10, 0})
 	put(ccNarratorColumnDiffers, "n-differs")
 
 	// narrator_column_differs_junction: same people, different order.
-	s.books["n-order"] = &database.Book{ID: "n-order", AuthorID: intp(1), Narrator: strp("Kate Reading, Michael Kramer")}
+	s.books["n-order"] = &database.Book{ID: "n-order", AuthorID: new(1), Narrator: new("Kate Reading, Michael Kramer")}
 	s.joins["n-order"] = authorsJoin("n-order", [2]int{1, 0})
 	s.junctions["n-order"] = narratorsJunction("n-order", [2]int{10, 0}, [2]int{11, 1})
 	put(ccNarratorColumnDiffers, "n-order")
 
 	// narrator_junction_no_column
-	s.books["n-nocolumn"] = &database.Book{ID: "n-nocolumn", AuthorID: intp(1)}
+	s.books["n-nocolumn"] = &database.Book{ID: "n-nocolumn", AuthorID: new(1)}
 	s.joins["n-nocolumn"] = authorsJoin("n-nocolumn", [2]int{1, 0})
 	s.junctions["n-nocolumn"] = narratorsJunction("n-nocolumn", [2]int{10, 0})
 	put(ccNarratorJunctionNoColumn, "n-nocolumn")
 
 	// narrator_column_not_people: a self-read (column names only the author).
 	// Junction empty, and NOT counted as narrator_column_no_junction.
-	s.books["n-selfread"] = &database.Book{ID: "n-selfread", AuthorID: intp(1), Narrator: strp("Brandon Sanderson")}
+	s.books["n-selfread"] = &database.Book{ID: "n-selfread", AuthorID: new(1), Narrator: new("Brandon Sanderson")}
 	s.joins["n-selfread"] = authorsJoin("n-selfread", [2]int{1, 0})
 	put(ccNarratorColumnNotPeople, "n-selfread")
 
@@ -275,21 +272,21 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 	put(ccAuthorJoinNoAuthorID, "b-joinnoid")
 
 	// Junk column (a URL) with a stale junction.
-	s.books["n-junk-stale"] = &database.Book{ID: "n-junk-stale", AuthorID: intp(1), Narrator: strp("https://example.com")}
+	s.books["n-junk-stale"] = &database.Book{ID: "n-junk-stale", AuthorID: new(1), Narrator: new("https://example.com")}
 	s.joins["n-junk-stale"] = authorsJoin("n-junk-stale", [2]int{1, 0})
 	s.junctions["n-junk-stale"] = narratorsJunction("n-junk-stale", [2]int{10, 0})
 	put(ccNarratorColumnNotPeople, "n-junk-stale")
 	put(ccNarratorColumnNotPeopleJunctionDiffers, "n-junk-stale")
 
 	// Column empty after cleaning (only a translator) with a stale junction.
-	s.books["n-empty-stale"] = &database.Book{ID: "n-empty-stale", AuthorID: intp(1), Narrator: strp("Translated by Someone")}
+	s.books["n-empty-stale"] = &database.Book{ID: "n-empty-stale", AuthorID: new(1), Narrator: new("Translated by Someone")}
 	s.joins["n-empty-stale"] = authorsJoin("n-empty-stale", [2]int{1, 0})
 	s.junctions["n-empty-stale"] = narratorsJunction("n-empty-stale", [2]int{10, 0})
 	put(ccNarratorColumnNotPeople, "n-empty-stale")
 	put(ccNarratorColumnNotPeopleJunctionDiffers, "n-empty-stale")
 
 	// All-authors column (a self-read) with a stale junction naming someone else.
-	s.books["n-self-stale"] = &database.Book{ID: "n-self-stale", AuthorID: intp(1), Narrator: strp("Brandon Sanderson")}
+	s.books["n-self-stale"] = &database.Book{ID: "n-self-stale", AuthorID: new(1), Narrator: new("Brandon Sanderson")}
 	s.joins["n-self-stale"] = authorsJoin("n-self-stale", [2]int{1, 0})
 	s.junctions["n-self-stale"] = narratorsJunction("n-self-stale", [2]int{10, 0})
 	put(ccNarratorColumnNotPeople, "n-self-stale")
@@ -298,14 +295,14 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 	// All-authors column with a junction crediting that author: a real
 	// self-read, clean apart from the quality class.
 	s.narrators[13] = database.Narrator{ID: 13, Name: "Brandon Sanderson"}
-	s.books["n-self-match"] = &database.Book{ID: "n-self-match", AuthorID: intp(1), Narrator: strp("Brandon Sanderson")}
+	s.books["n-self-match"] = &database.Book{ID: "n-self-match", AuthorID: new(1), Narrator: new("Brandon Sanderson")}
 	s.joins["n-self-match"] = authorsJoin("n-self-match", [2]int{1, 0})
 	s.junctions["n-self-match"] = narratorsJunction("n-self-match", [2]int{13, 0})
 	put(ccNarratorColumnNotPeople, "n-self-match")
 
 	// narrators_json_junction_empty + narrators_json_disagrees_both: JSON names
 	// Kate, junction empty, column names Michael.
-	s.books["n-json"] = &database.Book{ID: "n-json", AuthorID: intp(1), Narrator: strp("Michael Kramer"), NarratorsJSON: strp(`["Kate Reading"]`)}
+	s.books["n-json"] = &database.Book{ID: "n-json", AuthorID: new(1), Narrator: new("Michael Kramer"), NarratorsJSON: new(`["Kate Reading"]`)}
 	s.joins["n-json"] = authorsJoin("n-json", [2]int{1, 0})
 	put(ccNarratorsJSONNoJunction, "n-json")
 	put(ccNarratorsJSONDisagrees, "n-json")
@@ -313,25 +310,25 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 
 	// NarratorsJSON as a bare string with no column and no junction: the only
 	// narrator source, so it matches neither.
-	s.books["n-jsonok"] = &database.Book{ID: "n-jsonok", AuthorID: intp(1), NarratorsJSON: strp("Kate Reading")}
+	s.books["n-jsonok"] = &database.Book{ID: "n-jsonok", AuthorID: new(1), NarratorsJSON: new("Kate Reading")}
 	s.joins["n-jsonok"] = authorsJoin("n-jsonok", [2]int{1, 0})
 	put(ccNarratorsJSONNoJunction, "n-jsonok")
 	put(ccNarratorsJSONDisagrees, "n-jsonok") // no column, no junction: matches neither
 	// A JSON that agrees with the junction (set equality) is not a disagreement.
-	s.books["n-jsonjunction"] = &database.Book{ID: "n-jsonjunction", AuthorID: intp(1), Narrator: strp("Michael Kramer"),
-		NarratorsJSON: strp(`["Michael Kramer"]`)}
+	s.books["n-jsonjunction"] = &database.Book{ID: "n-jsonjunction", AuthorID: new(1), Narrator: new("Michael Kramer"),
+		NarratorsJSON: new(`["Michael Kramer"]`)}
 	s.joins["n-jsonjunction"] = authorsJoin("n-jsonjunction", [2]int{1, 0})
 	s.junctions["n-jsonjunction"] = narratorsJunction("n-jsonjunction", [2]int{10, 0})
 
 	// narrator_positions_not_normalized
-	s.books["n-pos"] = &database.Book{ID: "n-pos", AuthorID: intp(1), Narrator: strp("Michael Kramer, Kate Reading")}
+	s.books["n-pos"] = &database.Book{ID: "n-pos", AuthorID: new(1), Narrator: new("Michael Kramer, Kate Reading")}
 	s.joins["n-pos"] = authorsJoin("n-pos", [2]int{1, 0})
 	s.junctions["n-pos"] = narratorsJunction("n-pos", [2]int{10, 0}, [2]int{11, 0})
 	put(ccNarratorPositionsNotNorm, "n-pos")
 
 	// narrator_junction_combined: one record named for two people. The column
 	// splits into the two people, so it also differs from the junction.
-	s.books["n-combined"] = &database.Book{ID: "n-combined", AuthorID: intp(1), Narrator: strp("Kate Reading, Michael Kramer")}
+	s.books["n-combined"] = &database.Book{ID: "n-combined", AuthorID: new(1), Narrator: new("Kate Reading, Michael Kramer")}
 	s.joins["n-combined"] = authorsJoin("n-combined", [2]int{1, 0})
 	s.junctions["n-combined"] = narratorsJunction("n-combined", [2]int{12, 0})
 	put(ccNarratorJunctionCombined, "n-combined")
@@ -339,7 +336,7 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 
 	// narrator_id_dangling: junction names narrator 99. Its name is unknown, so
 	// the column also differs from what the junction resolves to.
-	s.books["n-dangling"] = &database.Book{ID: "n-dangling", AuthorID: intp(1), Narrator: strp("Michael Kramer, Kate Reading")}
+	s.books["n-dangling"] = &database.Book{ID: "n-dangling", AuthorID: new(1), Narrator: new("Michael Kramer, Kate Reading")}
 	s.joins["n-dangling"] = authorsJoin("n-dangling", [2]int{1, 0})
 	s.junctions["n-dangling"] = narratorsJunction("n-dangling", [2]int{10, 0}, [2]int{99, 1})
 	put(ccNarratorIDDangling, "n-dangling")
@@ -514,7 +511,7 @@ func TestCreditCensus_ReadErrorMarksIncomplete(t *testing.T) {
 func TestCreditCensus_GoneBook(t *testing.T) {
 	s := newCensusFakeStore()
 	s.authors[1] = database.Author{ID: 1, Name: "A Person"}
-	s.books["b1"] = &database.Book{ID: "b1", AuthorID: intp(1)}
+	s.books["b1"] = &database.Book{ID: "b1", AuthorID: new(1)}
 	s.joins["b1"] = authorsJoin("b1", [2]int{1, 0})
 	s.listed = []string{"b1", "b-gone"}
 	res, err := runCensusForTest(t, s, 2)
@@ -630,9 +627,9 @@ func TestCreditCensus_SwitchCoverage(t *testing.T) {
 		want     string
 	}{
 		{"no id, no join", nil, nil, ccNoAuthor},
-		{"id, no join", intp(1), nil, ccAuthorIDJoinEmpty},
+		{"id, no join", new(1), nil, ccAuthorIDJoinEmpty},
 		{"no id, join", nil, authorsJoin("x", [2]int{1, 0}), ccAuthorJoinNoAuthorID},
-		{"id, join agrees", intp(1), authorsJoin("x", [2]int{1, 0}), ""},
+		{"id, join agrees", new(1), authorsJoin("x", [2]int{1, 0}), ""},
 	}
 	authorRelation := []string{ccNoAuthor, ccAuthorIDJoinEmpty, ccAuthorJoinNoAuthorID, ccAuthorIDNotPrimary, ccAuthorIDNotInJoin}
 	for _, tc := range authorCases {
@@ -674,9 +671,9 @@ func TestCreditCensus_SwitchCoverage(t *testing.T) {
 		ccNarratorColumnNotPeople, ccNarratorColumnNotPeopleJunctionDiffers}
 	for _, tc := range narratorCases {
 		t.Run("narrator/"+tc.name, func(t *testing.T) {
-			b := &database.Book{ID: "x", AuthorID: intp(1)}
+			b := &database.Book{ID: "x", AuthorID: new(1)}
 			if tc.column != "" {
-				b.Narrator = strp(tc.column)
+				b.Narrator = new(tc.column)
 			}
 			got, err := classifyCreditBook(idx, b, authorsJoin("x", [2]int{1, 0}), tc.junction)
 			if err != nil {

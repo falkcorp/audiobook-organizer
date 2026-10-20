@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5d2e8a41-9c3b-4f7e-8a10-2b6c4d9e1f30
 // last-edited: 2026-10-20
 
@@ -58,17 +58,14 @@ func diff(ids []string, primary string) []string {
 	return out
 }
 
-func strptr(s string) *string { return &s }
-func boolptr(b bool) *bool    { return &b }
-
 // Two single-file records on the same file with matching hashes merge, keeping the
 // metadata-bearing record as primary.
 func TestMergeSamePath_MergesHashConfirmedDuplicate(t *testing.T) {
 	path := "/lib/Author/Book.m4b"
 	store := &mergeFakeStore{
 		books: []database.BookCore{
-			{ID: "shell", FilePath: path},                                         // bare rescanned shell
-			{ID: "meta", FilePath: path, MetadataReviewStatus: strptr("matched")}, // the applied record
+			{ID: "shell", FilePath: path},                                      // bare rescanned shell
+			{ID: "meta", FilePath: path, MetadataReviewStatus: new("matched")}, // the applied record
 		},
 		rows: map[string][]database.BookFile{
 			"shell": {{ID: "r1", BookID: "shell", FilePath: path, FileHash: "HASH-A"}},
@@ -171,7 +168,7 @@ func TestMergeSamePath_ExcludesSoftDeleted(t *testing.T) {
 	store := &mergeFakeStore{
 		books: []database.BookCore{
 			{ID: "live", FilePath: path},
-			{ID: "trashed", FilePath: path, MarkedForDeletion: boolptr(true)},
+			{ID: "trashed", FilePath: path, MarkedForDeletion: new(true)},
 		},
 		rows: map[string][]database.BookFile{
 			"live":    {{ID: "r1", BookID: "live", FilePath: path, FileHash: "H"}},
@@ -193,7 +190,7 @@ func TestElectPrimary_PrefersOrganizedThenOldest(t *testing.T) {
 	newer := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	group := []database.BookCore{
 		{ID: "z-new-plain", CreatedAt: &newer},
-		{ID: "a-organized", LibraryState: strptr("organized"), CreatedAt: &newer},
+		{ID: "a-organized", LibraryState: new("organized"), CreatedAt: &newer},
 		{ID: "m-old-plain", CreatedAt: &older},
 	}
 	require.Equal(t, "a-organized", electPrimary(group).ID)
@@ -207,8 +204,8 @@ func TestElectPrimary_PrefersOrganizedThenOldest(t *testing.T) {
 
 	// A metadata match beats an organized record.
 	group3 := []database.BookCore{
-		{ID: "organized", LibraryState: strptr("organized"), CreatedAt: &older},
-		{ID: "matched", MetadataReviewStatus: strptr("matched"), CreatedAt: &newer},
+		{ID: "organized", LibraryState: new("organized"), CreatedAt: &older},
+		{ID: "matched", MetadataReviewStatus: new("matched"), CreatedAt: &newer},
 	}
 	require.Equal(t, "matched", electPrimary(group3).ID)
 }

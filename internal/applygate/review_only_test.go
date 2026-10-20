@@ -1,7 +1,7 @@
 // file: internal/applygate/review_only_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c09f46a0-0fa5-4191-b572-ea43cc5ace8b
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -20,7 +20,7 @@ import (
 // evaluation refuses one however good it is; an owner review applies it --
 // but never past a stale identity.
 func TestEvaluate_ReviewOnlySources(t *testing.T) {
-	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: intp(36000)}
+	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: new(36000)}
 	rt := database.ComputeBookRuntime(book, nil)
 	for _, source := range []string{"Open Library", "Google Books"} {
 		c := metafetch.MetadataCandidate{Source: source, Title: "Synthetic Field Notes 1", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
@@ -64,7 +64,7 @@ func TestEvaluate_ReviewOnlySources(t *testing.T) {
 // perfect-score one is refused by the gate in every bulk path, and only an
 // owner review of the candidate that was shown applies it.
 func TestCatalogCandidate_IsReviewOnly(t *testing.T) {
-	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: intp(36000)}
+	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: new(36000)}
 	rt := database.ComputeBookRuntime(book, nil)
 	c := metafetch.MetadataCandidate{Source: metadata.CatalogSourceName, Title: "Synthetic Field Notes 1",
 		SeriesPosition: "1", Score: 1.0, DurationSec: 36000, Stage: metadata.CatalogStageAuthor}
@@ -96,7 +96,7 @@ func TestCatalogCandidate_IsReviewOnly(t *testing.T) {
 // (title, first series, publisher, author) can leave neutral. An owner review
 // pin lifts review_only_source (review_bulk) but never this.
 func TestCatalogCandidate_ManualOnlyTagIsHeldByTheBulkGuard(t *testing.T) {
-	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: intp(36000)}
+	book := &database.Book{Title: "Synthetic Field Notes 1", Duration: new(36000)}
 	rt := database.ComputeBookRuntime(book, nil)
 	c := metafetch.MetadataCandidate{Source: metadata.CatalogSourceName, Title: "Synthetic Field Notes 1", Publisher: "Synthetic Press",
 		Series: "Synthetic Series", SeriesPosition: "1", Score: 1.0, DurationSec: 36000, Stage: metadata.CatalogStageAuthor}

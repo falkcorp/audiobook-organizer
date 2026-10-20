@@ -1,7 +1,7 @@
 // file: internal/scanner/version_link_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8adc2c96-c929-436d-8dae-1fb17ee04210
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -68,13 +68,13 @@ func vlPrimary(t *testing.T, b *database.Book) bool {
 func TestSmartVersionLink_ChapterSiblingsAreNotVersions(t *testing.T) {
 	dir := "/lib/Isaac Asimov/Foundation and Empire"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation and Empire", FilePath: dir + "/01 Foundation and Empire.mp3", Format: "mp3", Duration: intPtr(1800)},
-		{ID: "b2", Title: "Foundation and Empire", FilePath: dir + "/02 Foundation and Empire.mp3", Format: "mp3", Duration: intPtr(1810)},
+		{ID: "b1", Title: "Foundation and Empire", FilePath: dir + "/01 Foundation and Empire.mp3", Format: "mp3", Duration: new(1800)},
+		{ID: "b2", Title: "Foundation and Empire", FilePath: dir + "/02 Foundation and Empire.mp3", Format: "mp3", Duration: new(1810)},
 	}
 	store := newVLStore(&siblings[0], &siblings[1])
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation and Empire", FilePath: dir + "/03 Foundation and Empire.mp3", Format: "mp3", Duration: intPtr(1795)}
+	newBook := &database.Book{Title: "Foundation and Empire", FilePath: dir + "/03 Foundation and Empire.mp3", Format: "mp3", Duration: new(1795)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID != nil {
@@ -111,12 +111,12 @@ func TestSmartVersionLink_PositionTitleIsNotAVersion(t *testing.T) {
 func TestSmartVersionLink_MixedFormatCopiesGroupWithM4BPrimary(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000)},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID == nil {
@@ -140,12 +140,12 @@ func TestSmartVersionLink_MixedFormatCopiesGroupWithM4BPrimary(t *testing.T) {
 func TestSmartVersionLink_SameFormatCopiesElectOnePrimary(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000)},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000)},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation (1).mp3", Format: "mp3", Duration: intPtr(36000)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation (1).mp3", Format: "mp3", Duration: new(36000)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID == nil {
@@ -173,13 +173,13 @@ func TestSmartVersionLink_SameFormatCopiesElectOnePrimary(t *testing.T) {
 func TestSmartVersionLink_LongestDurationWinsWhenNoM4B(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000)},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000)},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
 
 	// 37000 vs 36000 is inside the 5% same-content tolerance.
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation (1).mp3", Format: "mp3", Duration: intPtr(37000)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation (1).mp3", Format: "mp3", Duration: new(37000)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID == nil {
@@ -198,12 +198,12 @@ func TestSmartVersionLink_LongestDurationWinsWhenNoM4B(t *testing.T) {
 func TestSmartVersionLink_ConflictingDurationsDoNotGroup(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000)},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(1800)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(1800)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID != nil {
@@ -217,12 +217,12 @@ func TestSmartVersionLink_DeadSiblingsAreNotCandidates(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	gone := "b0"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000), MergedIntoBookID: &gone},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000), MergedIntoBookID: &gone},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID != nil {
@@ -239,12 +239,12 @@ func TestSmartVersionLink_DeadSiblingsAreNotCandidates(t *testing.T) {
 func TestSmartVersionLink_RescanIsIdempotent(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000)},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
 
-	first := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000)}
+	first := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000)}
 	applySmartVersionLink(first, siblings, dir)
 	if first.VersionGroupID == nil {
 		t.Fatal("first pass did not group the two copies")
@@ -255,13 +255,13 @@ func TestSmartVersionLink_RescanIsIdempotent(t *testing.T) {
 	// carries the group, and the row the first pass created is itself a
 	// sibling in the store.
 	created := &database.Book{
-		ID: "b2", Title: "Foundation", FilePath: first.FilePath, Format: "mp3", Duration: intPtr(36000),
+		ID: "b2", Title: "Foundation", FilePath: first.FilePath, Format: "mp3", Duration: new(36000),
 		VersionGroupID: first.VersionGroupID, IsPrimaryVersion: first.IsPrimaryVersion,
 	}
 	store.rows["b2"] = created
 	next := []database.Book{*store.rows["b1"], *created}
 
-	second := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000)}
+	second := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000)}
 	applySmartVersionLink(second, next, dir)
 
 	if store.writes != writesAfterFirst {
@@ -284,12 +284,12 @@ func TestSmartVersionLink_RescanIsIdempotent(t *testing.T) {
 func TestSmartVersionLink_NoOrphanGroupWhenLinkFails(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000)},
 	}
 	store := newVLStore() // b1 is not in the store: the link write cannot land
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID != nil {
@@ -308,13 +308,13 @@ func TestSmartVersionLink_JoiningZeroPrimaryGroupTakesPrimacy(t *testing.T) {
 	siblings := []database.Book{
 		{
 			ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3",
-			Duration: intPtr(36000), VersionGroupID: &group, IsPrimaryVersion: &no,
+			Duration: new(36000), VersionGroupID: &group, IsPrimaryVersion: &no,
 		},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID == nil || *newBook.VersionGroupID != group {
@@ -336,7 +336,7 @@ func TestSmartVersionLink_JoiningZeroPrimaryGroupTakesPrimacy(t *testing.T) {
 func TestSmartVersionLink_DoesNotOverwriteAHashGroup(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	siblings := []database.Book{
-		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)},
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000)},
 	}
 	store := newVLStore(&siblings[0])
 	useVLStore(t, store)
@@ -344,7 +344,7 @@ func TestSmartVersionLink_DoesNotOverwriteAHashGroup(t *testing.T) {
 	hashGroup := "vg-0123456789abcdef"
 	yes := true
 	newBook := &database.Book{
-		Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000),
+		Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000),
 		VersionGroupID: &hashGroup, IsPrimaryVersion: &yes,
 	}
 	applySmartVersionLink(newBook, siblings, dir)
@@ -376,19 +376,19 @@ func TestSmartVersionLink_IncumbentOutsideCandidatesStillCounts(t *testing.T) {
 		// excludes it from the candidate set, but it IS the group's primary.
 		{
 			ID: "b1", Title: "Foundation", FilePath: dir + "/01 Foundation.mp3", Format: "mp3",
-			Duration: intPtr(1800), VersionGroupID: &group, IsPrimaryVersion: &yes,
+			Duration: new(1800), VersionGroupID: &group, IsPrimaryVersion: &yes,
 		},
 		// A full-length mp3 in the same group: a genuine candidate, and the
 		// row through which the new .m4b reaches the group.
 		{
 			ID: "b2", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3",
-			Duration: intPtr(36000), VersionGroupID: &group, IsPrimaryVersion: &no,
+			Duration: new(36000), VersionGroupID: &group, IsPrimaryVersion: &no,
 		},
 	}
 	store := newVLStore(&siblings[0], &siblings[1])
 	useVLStore(t, store)
 
-	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)}
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: new(36000)}
 	applySmartVersionLink(newBook, siblings, dir)
 
 	if newBook.VersionGroupID == nil || *newBook.VersionGroupID != group {

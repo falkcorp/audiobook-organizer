@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package server
 
@@ -80,7 +80,7 @@ func TestBulkFetchByIDs_LogsPerBookOutcomes(t *testing.T) {
 		"b-frag":   {ID: "b-frag", Title: "06 Chapter 6"},
 		"b-empty":  {ID: "b-empty", Title: ""},
 		"b-ph":     {ID: "b-ph", Title: "Unknown Title", FilePath: "/library/Unknown Author/Unknown Title/book.m4b"},
-		"b-trans":  {ID: "b-trans", Title: "", TranscribedTitle: strPtr("Marvel's Planet Hulk")},
+		"b-trans":  {ID: "b-trans", Title: "", TranscribedTitle: new("Marvel's Planet Hulk")},
 		"b-folder": {ID: "b-folder", Title: "Chapter 3", FilePath: "/library/Paolini/Eldest/03.mp3"},
 	}
 	store, _, _ := newFastpathMockStore(books, nil)
@@ -156,7 +156,7 @@ func TestBulkFetchByIDs_LogsPerBookOutcomes(t *testing.T) {
 func TestResolveBulkFetchQuery_IdentityFollowsStandIn(t *testing.T) {
 	asin := "B00TESTASN"
 	books := map[string]*database.Book{
-		"b-trans": {ID: "b-trans", Title: "Unknown Title", TranscribedTitle: strPtr("Planet Hulk"), ASIN: &asin},
+		"b-trans": {ID: "b-trans", Title: "Unknown Title", TranscribedTitle: new("Planet Hulk"), ASIN: &asin},
 	}
 	store, _, _ := newFastpathMockStore(books, nil)
 
@@ -292,8 +292,6 @@ func TestBulkFetchOutcomeLine_SharedCacheHitIsFromCache(t *testing.T) {
 	}
 }
 
-func strPtr(s string) *string { return &s }
-
 // TestBulkFetchByIDs_SkipsBooksMarkedNoMatch: a book the owner marked "no_match"
 // is left out of the fetch entirely -- no walk of the source chain, so no
 // ledger row and no provider call -- while an unmarked book in the same
@@ -304,7 +302,7 @@ func TestBulkFetchByIDs_SkipsBooksMarkedNoMatch(t *testing.T) {
 	disableMetadataSourcesForTest(t)
 
 	books := map[string]*database.Book{
-		"b-marked": {ID: "b-marked", Title: "Synthetic Marked Title", MetadataReviewStatus: strPtr("no_match")},
+		"b-marked": {ID: "b-marked", Title: "Synthetic Marked Title", MetadataReviewStatus: new("no_match")},
 		"b-plain":  {ID: "b-plain", Title: "Synthetic Plain Title"},
 	}
 	store, _, _ := newFastpathMockStore(books, nil)
@@ -347,8 +345,8 @@ func TestBulkFetchAll_SkipsBooksMarkedNoMatch(t *testing.T) {
 	store := &database.MockStore{
 		GetAllBooksCoreFunc: func(_, _ int) ([]database.BookCore, error) {
 			return []database.BookCore{
-				{ID: "b1", Title: "Synthetic Marked One", MetadataReviewStatus: strPtr("no_match")},
-				{ID: "b2", Title: "Synthetic Marked Two", MetadataReviewStatus: strPtr("no_match")},
+				{ID: "b1", Title: "Synthetic Marked One", MetadataReviewStatus: new("no_match")},
+				{ID: "b2", Title: "Synthetic Marked Two", MetadataReviewStatus: new("no_match")},
 			}, nil
 		},
 		GetAllAuthorsFunc:       func() ([]database.Author, error) { return nil, nil },

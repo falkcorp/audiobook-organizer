@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package database
 
@@ -122,8 +122,6 @@ func rawSetOp(t testing.TB, p *PebbleStore, row OperationV2Row) {
 	}
 }
 
-func tp(t time.Time) *time.Time { return &t }
-
 // ── random history model ────────────────────────────────────────────────────
 
 type timelineSim struct {
@@ -179,7 +177,7 @@ func (s *timelineSim) insert(status string, queuedAt time.Time) string {
 	id := s.newID(queuedAt)
 	row := OperationV2Row{ID: id, DefID: "test.def", Plugin: "test", Status: status, Params: "{}", QueuedAt: queuedAt}
 	if status == "running" {
-		row.StartedAt = tp(s.between(queuedAt, s.base))
+		row.StartedAt = new(s.between(queuedAt, s.base))
 	}
 	_ = s.p.InsertOperationV2(row)
 	return id
@@ -276,10 +274,10 @@ func (s *timelineSim) noise(id string) {
 func (s *timelineSim) legacy() {
 	q := s.drawQueuedAt()
 	id := s.newID(q)
-	row := OperationV2Row{ID: id, DefID: "legacy", Plugin: "test", Status: "running", QueuedAt: q, StartedAt: tp(s.between(q, s.base))}
+	row := OperationV2Row{ID: id, DefID: "legacy", Plugin: "test", Status: "running", QueuedAt: q, StartedAt: new(s.between(q, s.base))}
 	if s.rng.IntN(3) > 0 {
 		row.Status = "completed"
-		row.CompletedAt = tp(s.drawCompletedAt(q))
+		row.CompletedAt = new(s.drawCompletedAt(q))
 	}
 	rawSetOp(s.t, s.p, row)
 }
@@ -514,7 +512,7 @@ func TestOpsV2Timeline_ReadBeforeReconcileUsesScan(t *testing.T) {
 	// Id minted at QueuedAt, so the ULID-seek leg does not cover it and only
 	// an index key could.
 	id := ulid.MustNew(ulid.Timestamp(q), rngReader{rand.New(rand.NewPCG(3, 0))}).String()
-	rawSetOp(t, p, OperationV2Row{ID: id, Status: "completed", QueuedAt: q, CompletedAt: tp(now.Add(-10 * time.Minute))})
+	rawSetOp(t, p, OperationV2Row{ID: id, Status: "completed", QueuedAt: q, CompletedAt: new(now.Add(-10 * time.Minute))})
 
 	if p.OpsV2TimelineIndexTrusted() {
 		t.Fatal("trusted before any reconcile")
@@ -630,7 +628,7 @@ func TestOpsV2Timeline_ProgressWritesStageNoIndexKeys(t *testing.T) {
 	c := now.Add(-time.Minute)
 	for _, pair := range [][2]*OperationV2Row{
 		{{ID: id}, {ID: id, ProgressCurrent: 5}},
-		{{ID: id, CompletedAt: &c}, {ID: id, CompletedAt: tp(c)}},
+		{{ID: id, CompletedAt: &c}, {ID: id, CompletedAt: new(c)}},
 		{nil, nil},
 	} {
 		b := p.db.NewBatch()

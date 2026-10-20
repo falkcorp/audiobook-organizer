@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.51.3
+// version: 1.51.4
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -361,7 +361,7 @@ func newTestPlugin(books []database.Book) (*Plugin, *[]database.Book) {
 }
 
 func mustParams(dryRun bool) json.RawMessage {
-	b, _ := json.Marshal(titleBackfillParams{DryRun: boolPtr(dryRun)})
+	b, _ := json.Marshal(titleBackfillParams{DryRun: new(dryRun)})
 	return b
 }
 

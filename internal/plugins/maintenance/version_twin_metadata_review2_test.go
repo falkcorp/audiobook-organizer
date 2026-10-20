@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review2_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d63428b5-a8b1-4678-86f0-28e71e7b90a9
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -135,8 +135,8 @@ func TestVersionTwinFixer_Review2_S2_NarratorDoesNotOverrideRuntimeGap(t *testin
 	cand := vtSagaASIN("B0SYNTH022")
 	cand.DurationSec = 75600
 	l.book("p", "gs2", true, func(b *database.Book) {
-		b.Duration = vtPtr(73300)
-		b.Narrator = vtPtr(cand.Narrator)
+		b.Duration = new(73300)
+		b.Narrator = new(cand.Narrator)
 	})
 	l.appliedTwin("t", "gs2", cand, nil)
 	plan, rows := l.plan()
@@ -160,7 +160,7 @@ func TestVersionTwinFixer_Review2_S2_NarratorEvidenceWhenRuntimesUnknown(t *test
 	cand := vtSagaASIN("B0SYNTH023")
 	l.book("p", "gs2b", true, func(b *database.Book) {
 		b.Duration = nil
-		b.Narrator = vtPtr(cand.Narrator)
+		b.Narrator = new(cand.Narrator)
 	})
 	l.appliedTwin("t", "gs2b", cand, func(b *database.Book) { b.Duration = nil })
 	plan, rows := l.plan()
@@ -276,9 +276,9 @@ func TestVersionTwinFixer_Review2_S3_CopyThenCrashIsJournaledOnResume(t *testing
 // row, and neither does an unbuilt ISBN/ASIN index.
 func TestVersionTwinFixer_Review2_N2_UncopiedASINDoesNotHold(t *testing.T) {
 	l := newVTLib(t)
-	l.book("out", "g-out", true, func(b *database.Book) { b.ASIN = vtPtr("B0SYNTH024"); b.Title = "Synthetic Other" })
+	l.book("out", "g-out", true, func(b *database.Book) { b.ASIN = new("B0SYNTH024"); b.Title = "Synthetic Other" })
 	// 2% off the twin and no narrator: no evidence, so no ASIN copy.
-	l.book("p", "gn2", true, func(b *database.Book) { b.Duration = vtPtr(74000) })
+	l.book("p", "gn2", true, func(b *database.Book) { b.Duration = new(74000) })
 	l.appliedTwin("t", "gn2", vtSagaASIN("B0SYNTH024"), nil)
 	_, rows := l.plan()
 	row := rows["gn2"]
@@ -295,13 +295,13 @@ func TestVersionTwinFixer_Review2_N2_UncopiedASINDoesNotHold(t *testing.T) {
 // finds a book storing the ASIN in another case.
 func TestVersionTwinFixer_Review2_N2_ISBNAndASINCaseHold(t *testing.T) {
 	l := newVTLib(t)
-	l.book("out-isbn", "g-out1", true, func(b *database.Book) { b.ISBN13 = vtPtr("9790000000251"); b.Title = "Synthetic Other" })
+	l.book("out-isbn", "g-out1", true, func(b *database.Book) { b.ISBN13 = new("9790000000251"); b.Title = "Synthetic Other" })
 	isbnCand := vtSagaASIN("B0SYNTH025")
 	isbnCand.ISBN13 = "9790000000251"
 	l.book("p1", "gn2a", true, nil)
 	l.appliedTwin("t1", "gn2a", isbnCand, nil)
 
-	l.book("out-asin", "g-out2", true, func(b *database.Book) { b.ASIN = vtPtr("b0synth026"); b.Title = "Synthetic Other Two" })
+	l.book("out-asin", "g-out2", true, func(b *database.Book) { b.ASIN = new("b0synth026"); b.Title = "Synthetic Other Two" })
 	l.book("p2", "gn2b", true, nil)
 	l.appliedTwin("t2", "gn2b", vtSagaASIN("B0SYNTH026"), nil)
 
@@ -347,7 +347,7 @@ func TestVersionTwinFixer_Review2_S2_PrimaryAndRecordRuntimeEvidence(t *testing.
 	l := newVTLib(t)
 	cand := vtSagaASIN("B0SYNTH027")
 	cand.DurationSec = 75600
-	l.book("p", "gs2c", true, func(b *database.Book) { b.Narrator = vtPtr(cand.Narrator) })
+	l.book("p", "gs2c", true, func(b *database.Book) { b.Narrator = new(cand.Narrator) })
 	l.appliedTwin("t", "gs2c", cand, func(b *database.Book) { b.Duration = nil })
 	_, rows := l.plan()
 	row := rows["gs2c"]
@@ -367,9 +367,9 @@ func TestVersionTwinFixer_Review3_S2_NarratorEvidenceWithPrimaryRuntimeUnknown(t
 	cand.DurationSec = 3600
 	l.book("p", "gr3a", true, func(b *database.Book) {
 		b.Duration = nil
-		b.Narrator = vtPtr(cand.Narrator)
+		b.Narrator = new(cand.Narrator)
 	})
-	l.appliedTwin("t", "gr3a", cand, func(b *database.Book) { b.Duration = vtPtr(3600) })
+	l.appliedTwin("t", "gr3a", cand, func(b *database.Book) { b.Duration = new(3600) })
 	_, rows := l.plan()
 	row := rows["gr3a"]
 	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
@@ -386,9 +386,9 @@ func TestVersionTwinFixer_Review3_S2_TwinRecordDisagreeStillConflicts(t *testing
 	cand.DurationSec = 3800
 	l.book("p", "gr3b", true, func(b *database.Book) {
 		b.Duration = nil
-		b.Narrator = vtPtr(cand.Narrator)
+		b.Narrator = new(cand.Narrator)
 	})
-	l.appliedTwin("t", "gr3b", cand, func(b *database.Book) { b.Duration = vtPtr(3600) })
+	l.appliedTwin("t", "gr3b", cand, func(b *database.Book) { b.Duration = new(3600) })
 	_, rows := l.plan()
 	require.Equal(t, vtHoldEvidenceConflict, rows["gr3b"].Skipped, rows["gr3b"].SkipReason)
 }
@@ -403,7 +403,7 @@ func TestVersionTwinFixer_Review3_IdentifierGainedAfterReplanRefuses(t *testing.
 	fresh := l.vtFresh("gr3c")
 	require.Equal(t, "B0SYNTH033", vtDetailOf(t, fresh).ids.asin)
 
-	_, err := l.st.ModifyBook(l.ids["out"], func(b *database.Book) error { b.ASIN = vtPtr("B0SYNTH033"); return nil })
+	_, err := l.st.ModifyBook(l.ids["out"], func(b *database.Book) error { b.ASIN = new("B0SYNTH033"); return nil })
 	require.NoError(t, err)
 	err = l.fixer.Apply(context.Background(), l.writer(), fresh)
 	require.Error(t, err)
@@ -507,16 +507,16 @@ func TestVersionTwinFixer_Review4_TwinRecordRuntimeDisagreementIsNotEvidence(t *
 	l := newVTLib(t)
 	cand := vtSagaASIN("B0SYNTH043")
 	cand.DurationSec = 3100
-	l.book("p", "gr4c", true, func(b *database.Book) { b.Duration = vtPtr(3060) })
-	l.appliedTwin("t", "gr4c", cand, func(b *database.Book) { b.Duration = vtPtr(3000) })
+	l.book("p", "gr4c", true, func(b *database.Book) { b.Duration = new(3060) })
+	l.appliedTwin("t", "gr4c", cand, func(b *database.Book) { b.Duration = new(3000) })
 
 	cand2 := vtSagaASIN("B0SYNTH044")
 	cand2.DurationSec = 3100
 	l.book("p2", "gr4d", true, func(b *database.Book) {
-		b.Duration = vtPtr(3060)
-		b.Narrator = vtPtr(cand2.Narrator)
+		b.Duration = new(3060)
+		b.Narrator = new(cand2.Narrator)
 	})
-	l.appliedTwin("t2", "gr4d", cand2, func(b *database.Book) { b.Duration = vtPtr(3000) })
+	l.appliedTwin("t2", "gr4d", cand2, func(b *database.Book) { b.Duration = new(3000) })
 
 	_, rows := l.plan()
 	row := rows["gr4c"]
@@ -538,8 +538,8 @@ func TestVersionTwinFixer_Review5_UnbuiltIndexDoesNotMaskRefreshedRecord(t *test
 
 	fresh := vtSagaASIN("B0SYNTH052")
 	_, err := l.st.ModifyBook(tid, func(b *database.Book) error {
-		b.MetadataSourceHash = vtPtr(metafetch.CandidateSourceHash(fresh))
-		b.ASIN = vtPtr(fresh.ASIN)
+		b.MetadataSourceHash = new(metafetch.CandidateSourceHash(fresh))
+		b.ASIN = new(fresh.ASIN)
 		return nil
 	})
 	require.NoError(t, err)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b036c68e-a6da-48df-806b-b765cda262ef
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -277,7 +277,7 @@ func TestRewritePathPrefix_MissingTargetRefused(t *testing.T) {
 	store := seedRewrite(t, oldDir)
 
 	plan, err := planRewritePathPrefix(context.Background(), store, nil,
-		rewritePathPrefixParams{OldPrefix: oldDir, NewPrefix: newDir, DryRun: boolPtr(false)},
+		rewritePathPrefixParams{OldPrefix: oldDir, NewPrefix: newDir, DryRun: new(false)},
 		&fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.TargetMissing)
@@ -288,7 +288,7 @@ func TestRewritePathPrefix_MissingTargetRefused(t *testing.T) {
 	store2 := seedRewrite(t, oldDir)
 	plan2, err := planRewritePathPrefix(context.Background(), store2, nil,
 		rewritePathPrefixParams{OldPrefix: oldDir, NewPrefix: newDir,
-			DryRun: boolPtr(false), RequireTargetExists: boolPtr(false)},
+			DryRun: new(false), RequireTargetExists: new(false)},
 		&fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan2.BooksRewritten)

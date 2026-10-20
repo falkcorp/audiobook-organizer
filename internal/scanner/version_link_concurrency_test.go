@@ -1,7 +1,7 @@
 // file: internal/scanner/version_link_concurrency_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c1d7a84-0f2b-49e6-9a31-7d6c4b8e2f05
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -80,7 +80,7 @@ func (s *vlConcStore) publish(b *database.Book) {
 func TestSmartVersionLink_ConcurrentArrivalsElectOnePrimary(t *testing.T) {
 	dir := "/lib/Author/Foundation"
 	store := newVLConcStore(&database.Book{
-		ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000),
+		ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: new(36000),
 	})
 	prev := getStore()
 	SetStore(store)
@@ -88,7 +88,7 @@ func TestSmartVersionLink_ConcurrentArrivalsElectOnePrimary(t *testing.T) {
 
 	arrive := func(format string) {
 		row := &database.Book{
-			Title: "Foundation", FilePath: dir + "/Foundation." + format, Format: format, Duration: intPtr(36000),
+			Title: "Foundation", FilePath: dir + "/Foundation." + format, Format: format, Duration: new(36000),
 		}
 		// Exactly the sequence scanner.go runs, lock span included.
 		unlock := lockVersionLinkFor(row, dir)

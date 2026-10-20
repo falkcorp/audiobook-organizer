@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -16,8 +16,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
-func strp(s string) *string { return &s }
-
 // snap is the fixture book's Author as its live credit. The gate never reads
 // Book.Author itself (see Authors); these fixtures predate that and use the
 // field as a convenient place to say "this book's author is X".
@@ -27,7 +25,6 @@ func snap(b *database.Book) Authors {
 	}
 	return Authors{b.Author.Name}
 }
-func intp(i int) *int { return &i }
 
 // TestCheckSequence is the table for the guard's decision rule. The Big Cats
 // rows are the owner's reported failure: every cross pairing of 1/2/3 must
@@ -74,7 +71,7 @@ func TestCheckSequence(t *testing.T) {
 			metafetch.MetadataCandidate{Title: "Big Cats", SeriesPosition: "3"}, false, ReasonSequenceMismatch},
 		tc{"decimal is not its integer", database.Book{Title: "Big Cats 1.5"},
 			metafetch.MetadataCandidate{Title: "Big Cats", SeriesPosition: "1"}, false, ReasonSequenceMismatch},
-		tc{"decimal matches decimal", database.Book{SeriesPositionRaw: strp("1.5"), Title: "Big Cats: A Novella"},
+		tc{"decimal matches decimal", database.Book{SeriesPositionRaw: new("1.5"), Title: "Big Cats: A Novella"},
 			metafetch.MetadataCandidate{Title: "Big Cats: A Novella", SeriesPosition: "1.5"}, true, ""},
 		tc{"year is not a number", database.Book{Title: "Big Cats (2019)"},
 			metafetch.MetadataCandidate{Title: "Big Cats"}, true, ""},
@@ -86,7 +83,7 @@ func TestCheckSequence(t *testing.T) {
 			metafetch.MetadataCandidate{Title: "Big Cats", SeriesPosition: "3"}, false, ReasonSequenceMismatch},
 		tc{"number from folder only", database.Book{Title: "Big Cats", FilePath: "/lib/A/Big Cats Book 2"},
 			metafetch.MetadataCandidate{Title: "Big Cats", SeriesPosition: "2"}, true, ""},
-		tc{"series position vs title disagree on book", database.Book{Title: "Big Cats 3", SeriesSequence: intp(1)},
+		tc{"series position vs title disagree on book", database.Book{Title: "Big Cats 3", SeriesSequence: new(1)},
 			metafetch.MetadataCandidate{Title: "Big Cats 3", SeriesPosition: "3"}, false, ReasonBookSequenceConflict},
 		tc{"title vs file disagree on book (earlier bad apply)", database.Book{Title: "Big Cats 3", FilePath: "/lib/A/Big Cats/Big Cats 1.m4b"},
 			metafetch.MetadataCandidate{Title: "Big Cats 3", SeriesPosition: "3"}, false, ReasonBookSequenceConflict},
@@ -107,7 +104,7 @@ func TestCheckSequence(t *testing.T) {
 func TestEvaluate(t *testing.T) {
 	// 10 h of files; a matching candidate carries the same runtime, so the
 	// evidence leg has its two agreements (runtime and title).
-	book := &database.Book{Title: "Big Cats 1", Duration: intp(36000)}
+	book := &database.Book{Title: "Big Cats 1", Duration: new(36000)}
 	good := metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
 
 	if v := Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), &good, nil); !v.Allowed {
@@ -136,7 +133,7 @@ func TestEvaluate(t *testing.T) {
 	}
 
 	// Audio confirmation relaxes the floor to 0.85 ...
-	heard := &database.Book{Title: "Big Cats 1", TranscribedTitle: strp("Big Cats 1")}
+	heard := &database.Book{Title: "Big Cats 1", TranscribedTitle: new("Big Cats 1")}
 	relaxed := good
 	relaxed.Score = 0.86
 	if v := Evaluate(heard, snap(heard), database.ComputeBookRuntime(heard, nil), &relaxed, nil); !v.Allowed || !v.AudioConfirmed {
@@ -198,7 +195,7 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			book := &database.Book{TranscribedTitle: strp(tc.heardTitle), TranscribedAuthor: strp(tc.heardAuthor)}
+			book := &database.Book{TranscribedTitle: new(tc.heardTitle), TranscribedAuthor: new(tc.heardAuthor)}
 			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor}
 			if got := TranscriptionConfirms(book, c); got != tc.unreviewed {
 				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.unreviewed)
@@ -258,12 +255,12 @@ func TestTranscriptionConfirms_Basics(t *testing.T) {
 		candTitle, candAuthor   string
 		want                    bool
 	}{
-		{"title and author match", strp("Silver Harbor Lights"), strp("Ann Author"), "Silver Harbor Lights", "Ann Author", true},
-		{"title match, no heard author", strp("Big Cats"), nil, "Big Cats", "Bob Writer", true},
-		{"title match, heard author too short", strp("Big Cats"), strp("F"), "Big Cats", "Bob Writer", true},
-		{"heard author is a surname substring", strp("The Glass Road"), strp("Penwright"), "The Glass Road", "Carl Penwright", true},
-		{"title mismatch", strp("Small Boats"), strp("Ann Author"), "Silver Harbor Lights", "Ann Author", false},
-		{"author mismatch", strp("Silver Harbor Lights"), strp("Dana Other"), "Silver Harbor Lights", "Ann Author", false},
+		{"title and author match", new("Silver Harbor Lights"), new("Ann Author"), "Silver Harbor Lights", "Ann Author", true},
+		{"title match, no heard author", new("Big Cats"), nil, "Big Cats", "Bob Writer", true},
+		{"title match, heard author too short", new("Big Cats"), new("F"), "Big Cats", "Bob Writer", true},
+		{"heard author is a surname substring", new("The Glass Road"), new("Penwright"), "The Glass Road", "Carl Penwright", true},
+		{"title mismatch", new("Small Boats"), new("Ann Author"), "Silver Harbor Lights", "Ann Author", false},
+		{"author mismatch", new("Silver Harbor Lights"), new("Dana Other"), "Silver Harbor Lights", "Ann Author", false},
 		{"nothing transcribed", nil, nil, "Big Cats", "Bob Writer", false},
 	}
 	for _, tc := range cases {
@@ -296,7 +293,7 @@ func TestTranscriptionConfirms_InitialsFold(t *testing.T) {
 		{"Ra Harrowgate", false},
 	}
 	for _, tc := range cases {
-		book := &database.Book{TranscribedTitle: strp("Big Cats"), TranscribedAuthor: strp(tc.heardAuthor)}
+		book := &database.Book{TranscribedTitle: new("Big Cats"), TranscribedAuthor: new(tc.heardAuthor)}
 		c := &metafetch.MetadataCandidate{Title: "Big Cats", Author: "R. A. Harrowgate", SeriesPosition: "2"}
 		if got := TranscriptionConfirms(book, c); got != tc.want {
 			t.Errorf("TranscriptionConfirms on heard %q = %v, want %v", tc.heardAuthor, got, tc.want)
@@ -336,7 +333,7 @@ func TestTranscriptionConfirms_RefusesEveryPairMainRefused(t *testing.T) {
 		if util.MainTranscriptionConfirms(p.candTitle, p.candAuthor, p.heardTitle, p.heardAuthor) {
 			t.Fatalf("fixture %q ~ %q: origin/main confirms it, so it tests nothing", p.candTitle, p.heardTitle)
 		}
-		book := &database.Book{TranscribedTitle: strp(p.heardTitle), TranscribedAuthor: strp(p.heardAuthor)}
+		book := &database.Book{TranscribedTitle: new(p.heardTitle), TranscribedAuthor: new(p.heardAuthor)}
 		c := &metafetch.MetadataCandidate{Title: p.candTitle, Author: p.candAuthor, SeriesPosition: p.pos}
 		if TranscriptionConfirms(book, c) {
 			t.Errorf("TranscriptionConfirms confirmed %q ~ heard %q/%q, which origin/main refused", p.candTitle, p.heardTitle, p.heardAuthor)
@@ -391,7 +388,7 @@ func refusedPairsFor(t *testing.T, ct, ht string) int {
 			}
 			for _, pos := range []string{"", "1", "2", "3"} {
 				refused++
-				book := &database.Book{TranscribedTitle: strp(ht), TranscribedAuthor: strp(ha)}
+				book := &database.Book{TranscribedTitle: new(ht), TranscribedAuthor: new(ha)}
 				c := &metafetch.MetadataCandidate{Title: ct, Author: ca, SeriesPosition: pos, Score: 0.99}
 				if TranscriptionConfirms(book, c) {
 					t.Fatalf("TranscriptionConfirms accepted %q/%q (pos %q) ~ heard %q/%q, which origin/main refused", ct, ca, pos, ht, ha)
@@ -431,9 +428,9 @@ func TestTranscriptionConfirms_ReviewerFalsePositivesRefuse(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			book := &database.Book{TranscribedTitle: strp(tc.heardTitle), TranscribedAuthor: strp(tc.heardAuthor)}
+			book := &database.Book{TranscribedTitle: new(tc.heardTitle), TranscribedAuthor: new(tc.heardAuthor)}
 			if tc.intro != "" {
-				book.IntroTranscription = strp(tc.intro)
+				book.IntroTranscription = new(tc.intro)
 			}
 			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor}
 			if TranscriptionConfirms(book, c) {

@@ -1,7 +1,7 @@
 // file: internal/metadata/signal_fields_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d6b1f90-2a7c-4e58-9b03-1c8e5a2f7d64
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package metadata
 
@@ -19,9 +19,9 @@ func TestAudible_ProductToMetadata_FormatTypeAndSubtitle(t *testing.T) {
 		formatType string
 		want       *bool // nil = expect unset
 	}{
-		{"abridged", "abridged", ptrBool(true)},
-		{"unabridged", "unabridged", ptrBool(false)},
-		{"mixed_case", "Unabridged", ptrBool(false)},
+		{"abridged", "abridged", new(true)},
+		{"unabridged", "unabridged", new(false)},
+		{"mixed_case", "Unabridged", new(false)},
 		{"unknown", "", nil},
 		{"garbage", "something-else", nil},
 	}
@@ -97,5 +97,3 @@ func TestHardcover_DocumentToMetadata_RuntimePagesAndISBNSplit(t *testing.T) {
 		t.Errorf("DurationSec: got %d, want 43200", meta.DurationSec)
 	}
 }
-
-func ptrBool(b bool) *bool { return &b }

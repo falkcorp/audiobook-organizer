@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package opsv3
 
@@ -629,7 +629,7 @@ func TestDefsListEffectsScheduleReadinessAndLastRun(t *testing.T) {
 		"test.nightly": {ID: "new", DefID: "test.nightly", State: state.V3Succeeded, CompletedAt: &fin},
 		// Finished a month ago: a manual def's last run is shown however
 		// old it is.
-		"test.weekly": {ID: "monthAgo", DefID: "test.weekly", State: state.V3Canceled, CompletedAt: ptr(now.AddDate(0, -1, 0))},
+		"test.weekly": {ID: "monthAgo", DefID: "test.weekly", State: state.V3Canceled, CompletedAt: new(now.AddDate(0, -1, 0))},
 	}}
 	defs := &fakeDefs{
 		defs: map[string]DefInfo{
@@ -689,8 +689,6 @@ func TestDefsListEffectsScheduleReadinessAndLastRun(t *testing.T) {
 type fakeSched map[string]ScheduleInfo
 
 func (f fakeSched) Schedules() map[string]ScheduleInfo { return f }
-
-func ptr[T any](v T) *T { return &v }
 
 // TestStartAndCancelNeedScanTriggerFloor: a definition that declares only
 // library.view cannot be started by a viewer (v1's POST /operations/v2 floor

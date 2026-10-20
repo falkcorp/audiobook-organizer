@@ -1,7 +1,7 @@
 // file: internal/database/metadata_cache_asin_stamp_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9c3f1a7e-52d8-4b6a-8e0f-d41b7c2a9e53
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package database
 
@@ -38,16 +38,16 @@ func TestUpdateBook_ReplacedASINStampsTheKeptRow(t *testing.T) {
 	seedCachedCandidate(t, s, b.ID, "")
 
 	g := s.MetadataCacheGeneration()
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00FIRSTAS"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00FIRSTAS"); return nil })
 	require.NoError(t, err)
 	require.Empty(t, cacheStamp(t, s, b.ID), "filling an empty ASIN records nothing")
 	require.Equal(t, g, s.MetadataCacheGeneration(), "a fill rewrites no cache row")
 
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp(" b00firstas "); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new(" b00firstas "); return nil })
 	require.NoError(t, err)
 	require.Empty(t, cacheStamp(t, s, b.ID), "the same ASIN in another case is not a replacement")
 
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00SECONDA"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00SECONDA"); return nil })
 	require.NoError(t, err)
 	requireCandidates(t, s, b.ID, 1, "a replaced ASIN keeps the row")
 	// The book held " b00firstas " (the case-only rewrite above), stored
@@ -56,19 +56,19 @@ func TestUpdateBook_ReplacedASINStampsTheKeptRow(t *testing.T) {
 	require.Equal(t, g+1, s.MetadataCacheGeneration(), "the rewritten row moves the generation")
 	entry, err := s.GetMetadataCache(b.ID)
 	require.NoError(t, err)
-	was, replaced := entry.ASINReplaced(strp("B00SECONDA"))
+	was, replaced := entry.ASINReplaced(new("B00SECONDA"))
 	require.True(t, replaced)
 	require.Equal(t, "b00firstas", was)
 
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00THIRDAS"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00THIRDAS"); return nil })
 	require.NoError(t, err)
 	require.Equal(t, "b00firstas", cacheStamp(t, s, b.ID), "a second replacement keeps the first stamp")
 
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00FIRSTAS"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00FIRSTAS"); return nil })
 	require.NoError(t, err)
 	entry, err = s.GetMetadataCache(b.ID)
 	require.NoError(t, err)
-	_, replaced = entry.ASINReplaced(strp("B00FIRSTAS"))
+	_, replaced = entry.ASINReplaced(new("B00FIRSTAS"))
 	require.False(t, replaced, "the ASIN the row was fetched for is current again")
 }
 
@@ -76,7 +76,7 @@ func TestUpdateBook_ReplacedASINStampsTheKeptRow(t *testing.T) {
 // record the candidates were matched against off the book.
 func TestUpdateBook_ClearedASINStampsTheKeptRow(t *testing.T) {
 	s := newKeepCacheStore(t)
-	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/y.m4b", Format: "m4b", ASIN: strp("B00GONEASI")})
+	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/y.m4b", Format: "m4b", ASIN: new("B00GONEASI")})
 	require.NoError(t, err)
 	seedCachedCandidate(t, s, b.ID, "")
 	_, err = s.UpdateBook(b.ID, func() *Book { c := *b; c.ASIN = nil; return &c }())
@@ -92,13 +92,13 @@ func TestUpdateBook_ClearedASINStampsTheKeptRow(t *testing.T) {
 // stamped (with the ASIN it searched under) is not rewritten.
 func TestUpdateBook_ReplacedASINKeepsAnExistingStamp(t *testing.T) {
 	s := newKeepCacheStore(t)
-	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/z.m4b", Format: "m4b", ASIN: strp("B00BOOKASI")})
+	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/z.m4b", Format: "m4b", ASIN: new("B00BOOKASI")})
 	require.NoError(t, err)
 	raw, _ := json.Marshal(map[string]any{"title": "The Book"})
 	require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: b.ID, FetchedAt: time.Now(),
 		Candidates: []json.RawMessage{raw}, SourceHash: "h", FetchedForASIN: "B00FETCHED"}))
 	g := s.MetadataCacheGeneration()
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00NEWONEA"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00NEWONEA"); return nil })
 	require.NoError(t, err)
 	require.Equal(t, "B00FETCHED", cacheStamp(t, s, b.ID))
 	require.Equal(t, g, s.MetadataCacheGeneration(), "an already-stamped row is not rewritten")
@@ -108,9 +108,9 @@ func TestUpdateBook_ReplacedASINKeepsAnExistingStamp(t *testing.T) {
 // stamp, and no cache key is created.
 func TestUpdateBook_ReplacedASINWithoutRowWritesNothing(t *testing.T) {
 	s := newKeepCacheStore(t)
-	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/w.m4b", Format: "m4b", ASIN: strp("B00NOROWAS")})
+	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/w.m4b", Format: "m4b", ASIN: new("B00NOROWAS")})
 	require.NoError(t, err)
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00NOROWAT"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00NOROWAT"); return nil })
 	require.NoError(t, err)
 	requireCandidates(t, s, b.ID, 0, "no row is created")
 }
@@ -124,7 +124,7 @@ func TestUpdateBook_ReplacedASINWithoutRowWritesNothing(t *testing.T) {
 // stale candidates back.
 func TestUpdateBook_ASINStampDoesNotClobberAConcurrentFetch(t *testing.T) {
 	s := newKeepCacheStore(t)
-	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/v.m4b", Format: "m4b", ASIN: strp("B00RACEOLD")})
+	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/s/v.m4b", Format: "m4b", ASIN: new("B00RACEOLD")})
 	require.NoError(t, err)
 	seedCachedCandidate(t, s, b.ID, "")
 
@@ -151,7 +151,7 @@ func TestUpdateBook_ASINStampDoesNotClobberAConcurrentFetch(t *testing.T) {
 	}
 	t.Cleanup(func() { bookWriteBatchPreCommitHook = nil })
 
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00RACENEW"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00RACENEW"); return nil })
 	require.NoError(t, err)
 	wg.Wait()
 	bookWriteBatchPreCommitHook = nil
@@ -170,17 +170,17 @@ func TestMetadataCandidateCache_ASINReplaced(t *testing.T) {
 		want  bool
 	}{
 		{"", nil, false},
-		{"", strp("B00ANYASIN"), false},
-		{"B00ONEASIN", strp("B00ONEASIN"), false},
-		{" b00oneasin", strp("B00ONEASIN "), false},
-		{"B00ONEASIN", strp("B00TWOASIN"), true},
+		{"", new("B00ANYASIN"), false},
+		{"B00ONEASIN", new("B00ONEASIN"), false},
+		{" b00oneasin", new("B00ONEASIN "), false},
+		{"B00ONEASIN", new("B00TWOASIN"), true},
 		{"B00ONEASIN", nil, true},
-		{"B00ONEASIN", strp("  "), true},
+		{"B00ONEASIN", new("  "), true},
 	}
 	for _, tc := range cases {
 		_, got := (&MetadataCandidateCache{FetchedForASIN: tc.stamp}).ASINReplaced(tc.book)
 		require.Equal(t, tc.want, got, "stamp %q book %v", tc.stamp, tc.book)
 	}
-	_, got := (*MetadataCandidateCache)(nil).ASINReplaced(strp("B00ANYASIN"))
+	_, got := (*MetadataCandidateCache)(nil).ASINReplaced(new("B00ANYASIN"))
 	require.False(t, got)
 }

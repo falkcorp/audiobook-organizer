@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -24,7 +24,7 @@ func TestCheckEvidenceInBatch_OwnerExamples(t *testing.T) {
 	}{
 		{
 			name: "Eldest matched to a 15-minute C.L.O.W.N. 242",
-			book: database.Book{Title: "Eldest", Duration: intp(33 * 3600),
+			book: database.Book{Title: "Eldest", Duration: new(33 * 3600),
 				FilePath: "/lib/Christopher Paolini/Inheritance Cycle/Eldest/Eldest.m4b",
 				Author:   &database.Author{Name: "Christopher Paolini"}},
 			cand: metafetch.MetadataCandidate{Title: "C.L.O.W.N. 242", Author: "Someone Else", DurationSec: 15 * 60},
@@ -32,49 +32,49 @@ func TestCheckEvidenceInBatch_OwnerExamples(t *testing.T) {
 		},
 		{
 			name: "an editor credited as the author",
-			book: database.Book{Title: "Wastelands", Duration: intp(36000),
+			book: database.Book{Title: "Wastelands", Duration: new(36000),
 				FilePath: "/lib/John Joseph Adams/Wastelands/Wastelands.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Wastelands", Author: "John Joseph Adams - editor", DurationSec: 36000},
 			want: ReasonAuthorRoleCredit,
 		},
 		{
 			name: "translator credit in a list",
-			book: database.Book{Title: "Clear Threat", Duration: intp(36000),
+			book: database.Book{Title: "Clear Threat", Duration: new(36000),
 				FilePath: "/lib/Dan Sugralinov/Clear Threat/Clear Threat.m4a"},
 			cand: metafetch.MetadataCandidate{Title: "Clear Threat", Author: "Dan Sugralinov, Alix Merlin Williamson - translator", DurationSec: 36000},
 			want: ReasonAuthorRoleCredit,
 		},
 		{
 			name: "series name as the candidate title replaces a real title with no runtime to confirm",
-			book: database.Book{Title: "A New Dawn: Star Wars", Duration: intp(6*3600 + 19*60),
+			book: database.Book{Title: "A New Dawn: Star Wars", Duration: new(6*3600 + 19*60),
 				FilePath: "/lib/John Jackson Miller/Star Wars/A New Dawn_ Star Wars/A New Dawn_ Star Wars - John Jackson Miller.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Star Wars", Author: "John Jackson Miller", Series: "Star Wars"},
 			want: ReasonRuntimeUnknownOverwrite,
 		},
 		{
 			name: "new author whose name is nowhere in the path",
-			book: database.Book{Title: "Operation Vengeance", Duration: intp(36000),
+			book: database.Book{Title: "Operation Vengeance", Duration: new(36000),
 				FilePath: "/lib/Unknown Author/Operation Vengeance/Operation Vengeance.mp3"},
 			cand: metafetch.MetadataCandidate{Title: "Operation Vengeance", Author: "Mark O'Neill", DurationSec: 36000},
 			want: ReasonAuthorNotInPath,
 		},
 		{
 			name: "different book in the same series",
-			book: database.Book{Title: "Wayfarers", Duration: intp(36000),
+			book: database.Book{Title: "Wayfarers", Duration: new(36000),
 				FilePath: "/lib/Becky Chambers/Wayfarers/Wayfarers"},
 			cand: metafetch.MetadataCandidate{Title: "The Long Way to a Small, Angry Planet", Author: "Becky Chambers", DurationSec: 36000},
 			want: ReasonTitleDisagrees,
 		},
 		{
 			name: "different narrator and a different runtime",
-			book: database.Book{Title: "Dune", Duration: intp(21 * 3600), Narrator: strp("Scott Brick"),
+			book: database.Book{Title: "Dune", Duration: new(21 * 3600), Narrator: new("Scott Brick"),
 				FilePath: "/lib/Frank Herbert/Dune/Dune.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Dune", Author: "Frank Herbert", Narrator: "Simon Vance", DurationSec: 21*3600 + 90*60},
 			want: ReasonNarratorMismatch,
 		},
 		{
 			name: "ASIN conflict",
-			book: database.Book{Title: "Dune", Duration: intp(36000), ASIN: strp("B002V1OF70"),
+			book: database.Book{Title: "Dune", Duration: new(36000), ASIN: new("B002V1OF70"),
 				FilePath: "/lib/Frank Herbert/Dune/Dune.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Dune", Author: "Frank Herbert", ASIN: "B0XXXXXXXX", DurationSec: 36000},
 			want: ReasonASINConflict,
@@ -92,53 +92,53 @@ func TestCheckEvidenceInBatch_OwnerExamples(t *testing.T) {
 		},
 		{
 			name: "accented surname matches an unaccented path",
-			book: database.Book{Title: "The Wayward Bard", Duration: intp(36000),
+			book: database.Book{Title: "The Wayward Bard", Duration: new(36000),
 				FilePath: "/lib/Lars Machmuller/World of Chains/The Wayward Bard.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "The Wayward Bard", Author: "Lars Machmüller", DurationSec: 36100},
 		},
 		{
 			name: "subtitle carries the real title",
-			book: database.Book{Title: "A New Dawn: Star Wars", Duration: intp(22740),
+			book: database.Book{Title: "A New Dawn: Star Wars", Duration: new(22740),
 				FilePath: "/lib/John Jackson Miller/Star Wars/A New Dawn.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Star Wars", Subtitle: "A New Dawn", Author: "John Jackson Miller", Series: "Star Wars", DurationSec: 22700},
 		},
 		// Review findings on #3380.
 		{
 			name: "series name as title passes through a series-named folder",
-			book: database.Book{Title: "A New Dawn: Star Wars", Duration: intp(22740),
+			book: database.Book{Title: "A New Dawn: Star Wars", Duration: new(22740),
 				FilePath: "/lib/John Jackson Miller/Star Wars/A New Dawn.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Star Wars", Author: "John Jackson Miller", Series: "Star Wars", DurationSec: 22700},
 			want: ReasonTitleDisagrees,
 		},
 		{
 			name: "a book whose title really is the series name still passes",
-			book: database.Book{Title: "Dune", Duration: intp(36000),
+			book: database.Book{Title: "Dune", Duration: new(36000),
 				FilePath: "/lib/Frank Herbert/Dune/Dune.m4b", Author: &database.Author{Name: "Frank Herbert"}},
 			cand: metafetch.MetadataCandidate{Title: "Dune", Author: "Frank Herbert", Series: "Dune", DurationSec: 36000},
 		},
 		{
 			name: "Last, First candidate does not agree with a shared first name",
-			book: database.Book{Title: "Carrie", Duration: intp(36000),
+			book: database.Book{Title: "Carrie", Duration: new(36000),
 				FilePath: "/lib/Unknown/Carrie/Carrie.m4b", Author: &database.Author{Name: "Stephen King"}},
 			cand: metafetch.MetadataCandidate{Title: "Carrie", Author: "Baxter, Stephen", DurationSec: 36000},
 			want: ReasonAuthorNotInPath,
 		},
 		{
 			name: "Last, First candidate agrees with the same person",
-			book: database.Book{Title: "Carrie", Duration: intp(36000),
+			book: database.Book{Title: "Carrie", Duration: new(36000),
 				FilePath: "/lib/Stephen King/Carrie/Carrie.m4b", Author: &database.Author{Name: "Stephen King"}},
 			cand: metafetch.MetadataCandidate{Title: "Carrie", Author: "King, Stephen", DurationSec: 36000},
 		},
 		{
 			name: "narrators sharing only a first name do not agree",
-			book: database.Book{Title: "Dune", Duration: intp(21 * 3600), Narrator: strp("Scott Brick"),
+			book: database.Book{Title: "Dune", Duration: new(21 * 3600), Narrator: new("Scott Brick"),
 				FilePath: "/lib/Frank Herbert/Dune/Dune.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Dune", Author: "Frank Herbert", Narrator: "Scott Sowers", DurationSec: 21*3600 + 90*60},
 			want: ReasonNarratorMismatch,
 		},
 		{
 			name: "narrator mismatch with no runtime does not block a fill",
-			book: database.Book{Title: "It", Narrator: strp("Stephen King"),
+			book: database.Book{Title: "It", Narrator: new("Stephen King"),
 				FilePath: "/lib/Stephen King/It/It.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "It", Author: "Stephen King", Narrator: "Steven Weber"},
 		},
@@ -150,26 +150,26 @@ func TestCheckEvidenceInBatch_OwnerExamples(t *testing.T) {
 		},
 		{
 			name: "(ed) in parentheses is a role credit",
-			book: database.Book{Title: "Wastelands", Duration: intp(36000),
+			book: database.Book{Title: "Wastelands", Duration: new(36000),
 				FilePath: "/lib/John Joseph Adams/Wastelands/Wastelands.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Wastelands", Author: "John Joseph Adams (ed)", DurationSec: 36000},
 			want: ReasonAuthorRoleCredit,
 		},
 		{
 			name: "Ed as a first name is not a role credit",
-			book: database.Book{Title: "Spellfire", Duration: intp(36000),
+			book: database.Book{Title: "Spellfire", Duration: new(36000),
 				FilePath: "/lib/Ed Greenwood/Spellfire/Spellfire.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Spellfire", Author: "Ed Greenwood", DurationSec: 36000},
 		},
 		{
 			name: "a dotted folder name is the title, not an extension",
-			book: database.Book{Title: "Mage Academy 1.5", Duration: intp(36000),
+			book: database.Book{Title: "Mage Academy 1.5", Duration: new(36000),
 				FilePath: "/lib/Jane Roe/Mage Academy 1.5"},
 			cand: metafetch.MetadataCandidate{Title: "Mage Academy 1.5", Author: "Jane Roe", DurationSec: 36000},
 		},
 		{
 			name: "slash-joined role credit is a role credit",
-			book: database.Book{Title: "Best Lesbian Romance 2009", Duration: intp(24900),
+			book: database.Book{Title: "Best Lesbian Romance 2009", Duration: new(24900),
 				FilePath: "/lib/Radclyffe/Best Lesbian Romance 2009/Best Lesbian Romance 2009 - read by narrator.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Best Lesbian Romance 2009", Author: "Radclyffe - author/editor", DurationSec: 24720},
 			want: ReasonAuthorRoleCredit,
@@ -204,7 +204,7 @@ func TestTitleSim_SubsetIsNotAMatch(t *testing.T) {
 
 // TestCheckRuntime_Bands pins the band edges.
 func TestCheckRuntime_Bands(t *testing.T) {
-	book := &database.Book{Duration: intp(10000)}
+	book := &database.Book{Duration: new(10000)}
 	for _, c := range []struct {
 		cand int
 		want string

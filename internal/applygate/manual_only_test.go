@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: ed721904-7696-436b-95ae-8ef5a85c91aa
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -134,7 +134,7 @@ func TestBulkManualOnlyGuard_EachLegAlone(t *testing.T) {
 			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `search query "Doctor Who: Spare Parts"`},
 		{name: "book transcribed title", book: database.Book{ID: "b1", FilePath: neutralPath, TranscribedTitle: &dw},
 			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `; transcribed title "Doctor Who: Spare Parts"`},
-		{name: "book transcribed author", book: database.Book{ID: "b1", FilePath: neutralPath, TranscribedAuthor: strp("Big Finish Productions")},
+		{name: "book transcribed author", book: database.Book{ID: "b1", FilePath: neutralPath, TranscribedAuthor: new("Big Finish Productions")},
 			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `; transcribed author "Big Finish Productions"`},
 		{name: "series", book: database.Book{ID: "b1", FilePath: neutralPath, SeriesID: &seriesID}, series: "Doctor Who: The Monthly Adventures",
 			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `series "Doctor Who: The Monthly Adventures"`},
@@ -143,7 +143,7 @@ func TestBulkManualOnlyGuard_EachLegAlone(t *testing.T) {
 		{name: "file transcribed title", book: database.Book{ID: "b1", FilePath: neutralPath},
 			files: guardFiles{{FilePath: neutralPath, TranscribedTitle: &dw}}, wantDetail: `file transcribed title "Doctor Who: Spare Parts"`},
 		{name: "file transcribed author", book: database.Book{ID: "b1", FilePath: neutralPath},
-			files: guardFiles{{FilePath: neutralPath, TranscribedAuthor: strp("Big Finish Productions")}}, wantDetail: `file transcribed author "Big Finish Productions"`},
+			files: guardFiles{{FilePath: neutralPath, TranscribedAuthor: new("Big Finish Productions")}}, wantDetail: `file transcribed author "Big Finish Productions"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

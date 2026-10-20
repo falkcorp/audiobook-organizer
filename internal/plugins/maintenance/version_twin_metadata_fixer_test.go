@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -49,8 +49,6 @@ func newVTLib(t *testing.T) *vtLib {
 	return &vtLib{t: t, st: st, p: p, fixer: newVersionTwinFixer(p), ids: map[string]string{}, author: a}
 }
 
-func vtPtr[T any](v T) *T { return &v }
-
 // vtSaga is the record the twins are applied from.
 func vtSaga() metafetch.MetadataCandidate { return vtSagaASIN("B0SYNTH001") }
 
@@ -74,8 +72,8 @@ func (l *vtLib) book(key, group string, primary bool, edit func(*database.Book))
 	l.t.Helper()
 	path := "/lib/Synthetic Author A/" + key
 	b := &database.Book{Title: "Synthetic Saga", Format: "m4b", FilePath: path, AuthorID: &l.author.ID,
-		VersionGroupID: vtPtr(group), IsPrimaryVersion: vtPtr(primary), LibraryState: vtPtr("organized"),
-		Duration: vtPtr(75600)}
+		VersionGroupID: new(group), IsPrimaryVersion: new(primary), LibraryState: new("organized"),
+		Duration: new(75600)}
 	if edit != nil {
 		edit(b)
 	}
@@ -92,11 +90,11 @@ func (l *vtLib) appliedTwin(key, group string, cand metafetch.MetadataCandidate,
 	l.t.Helper()
 	hash := metafetch.CandidateSourceHash(cand)
 	id := l.book(key, group, false, func(b *database.Book) {
-		b.MetadataReviewStatus = vtPtr("matched")
-		b.MetadataSource = vtPtr(cand.Source)
-		b.MetadataSourceHash = vtPtr(hash)
-		b.ASIN = vtPtr(cand.ASIN)
-		b.Narrator = vtPtr(cand.Narrator)
+		b.MetadataReviewStatus = new("matched")
+		b.MetadataSource = new(cand.Source)
+		b.MetadataSourceHash = new(hash)
+		b.ASIN = new(cand.ASIN)
+		b.Narrator = new(cand.Narrator)
 		if edit != nil {
 			edit(b)
 		}
@@ -284,17 +282,17 @@ func TestVersionTwinFixer_Holds(t *testing.T) {
 	l.book("lock-p", "g-locked", true, nil)
 	l.appliedTwin("lock-t", "g-locked", vtSagaASIN("B0TWIN0001"), nil)
 	require.NoError(t, l.st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: l.ids["lock-p"],
-		Field: database.FieldKeyTitle, OverrideValue: vtPtr(`"Synthetic Saga"`), OverrideLocked: true, UpdatedAt: time.Now()}))
+		Field: database.FieldKeyTitle, OverrideValue: new(`"Synthetic Saga"`), OverrideLocked: true, UpdatedAt: time.Now()}))
 	hold("g-locked", vtHoldLocked)
 
 	// Different editions: runtime, abridgement, narrator.
-	l.book("dur-p", "g-duration", true, func(b *database.Book) { b.Duration = vtPtr(60000) })
+	l.book("dur-p", "g-duration", true, func(b *database.Book) { b.Duration = new(60000) })
 	l.appliedTwin("dur-t", "g-duration", vtSagaASIN("B0TWIN0002"), nil)
 	hold("g-duration", vtHoldEdition)
-	l.book("abr-p", "g-abridged", true, func(b *database.Book) { b.Abridged = vtPtr(true) })
-	l.appliedTwin("abr-t", "g-abridged", vtSagaASIN("B0TWIN0003"), func(b *database.Book) { b.Abridged = vtPtr(false) })
+	l.book("abr-p", "g-abridged", true, func(b *database.Book) { b.Abridged = new(true) })
+	l.appliedTwin("abr-t", "g-abridged", vtSagaASIN("B0TWIN0003"), func(b *database.Book) { b.Abridged = new(false) })
 	hold("g-abridged", vtHoldEdition)
-	l.book("nar-p", "g-narrator", true, func(b *database.Book) { b.Narrator = vtPtr("Synthetic Narrator C") })
+	l.book("nar-p", "g-narrator", true, func(b *database.Book) { b.Narrator = new("Synthetic Narrator C") })
 	l.appliedTwin("nar-t", "g-narrator", vtSagaASIN("B0TWIN0004"), nil)
 	hold("g-narrator", vtHoldEdition)
 
@@ -306,12 +304,12 @@ func TestVersionTwinFixer_Holds(t *testing.T) {
 	hold("g-dw", vtHoldOwnerManual)
 
 	// An iTunes-linked primary.
-	l.book("it-p", "g-itunes", true, func(b *database.Book) { b.ITunesPersistentID = vtPtr("ABCDEF0123456789") })
+	l.book("it-p", "g-itunes", true, func(b *database.Book) { b.ITunesPersistentID = new("ABCDEF0123456789") })
 	l.appliedTwin("it-t", "g-itunes", vtSagaASIN("B0TWIN0006"), nil)
 	hold("g-itunes", vtHoldITunes)
 
 	// A primary ABS does not list.
-	l.book("abs-p", "g-abs", true, func(b *database.Book) { b.LibraryState = vtPtr("imported") })
+	l.book("abs-p", "g-abs", true, func(b *database.Book) { b.LibraryState = new("imported") })
 	l.appliedTwin("abs-t", "g-abs", vtSagaASIN("B0TWIN0007"), nil)
 	hold("g-abs", vtHoldNotABSListed)
 
@@ -327,7 +325,7 @@ func TestVersionTwinFixer_Holds(t *testing.T) {
 	hold("g-lost", vtHoldUnrecoverable)
 
 	// The primary carries another ASIN.
-	l.book("asin-p", "g-asin", true, func(b *database.Book) { b.ASIN = vtPtr("B00ELSEWH1") })
+	l.book("asin-p", "g-asin", true, func(b *database.Book) { b.ASIN = new("B00ELSEWH1") })
 	l.appliedTwin("asin-t", "g-asin", vtSagaASIN("B0TWIN0010"), nil)
 	hold("g-asin", vtHoldASINConflict)
 
@@ -335,8 +333,8 @@ func TestVersionTwinFixer_Holds(t *testing.T) {
 	l.book("hash-p", "g-hash", true, nil)
 	l.appliedTwin("hash-t", "g-hash", vtSaga(), nil)
 	l.book("hash-out", "g-elsewhere", true, func(b *database.Book) {
-		b.MetadataReviewStatus = vtPtr("matched")
-		b.MetadataSourceHash = vtPtr(metafetch.CandidateSourceHash(vtSaga()))
+		b.MetadataReviewStatus = new("matched")
+		b.MetadataSourceHash = new(metafetch.CandidateSourceHash(vtSaga()))
 	})
 	hold("g-hash", vtHoldHashShared)
 
@@ -351,7 +349,7 @@ func TestVersionTwinFixer_Holds(t *testing.T) {
 	// the twin no longer carries, and the record does not carry the new one.
 	l.book("stale-p", "g-stale-applied", true, nil)
 	stale := vtSagaASIN("B0TWIN0016")
-	st := l.appliedTwin("stale-t", "g-stale-applied", stale, func(b *database.Book) { b.ASIN = vtPtr("B0TWINNEW1") })
+	st := l.appliedTwin("stale-t", "g-stale-applied", stale, func(b *database.Book) { b.ASIN = new("B0TWINNEW1") })
 	entry, err := l.st.GetMetadataCache(st)
 	require.NoError(t, err)
 	entry.FetchedForASIN = "B0TWIN0016"
@@ -430,9 +428,9 @@ func TestVersionTwinFixer_ChangedSincePlan(t *testing.T) {
 	for _, g := range []string{"g-demote", "g-applied-later", "g-retitle"} {
 		require.True(t, rows[g].Applicable(), "%s: %s", g, rows[g].SkipReason)
 	}
-	_, err := l.st.ModifyBook(l.ids["demote-p"], func(b *database.Book) error { b.IsPrimaryVersion = vtPtr(false); return nil })
+	_, err := l.st.ModifyBook(l.ids["demote-p"], func(b *database.Book) error { b.IsPrimaryVersion = new(false); return nil })
 	require.NoError(t, err)
-	_, err = l.st.ModifyBook(l.ids["applied-p"], func(b *database.Book) error { b.MetadataReviewStatus = vtPtr("matched"); return nil })
+	_, err = l.st.ModifyBook(l.ids["applied-p"], func(b *database.Book) error { b.MetadataReviewStatus = new("matched"); return nil })
 	require.NoError(t, err)
 	_, err = l.st.ModifyBook(l.ids["retitle-p"], func(b *database.Book) error { b.Title = "Synthetic Saga (Unabridged)"; return nil })
 	require.NoError(t, err)
@@ -455,7 +453,7 @@ func TestVersionTwinFixer_UnderLockGuardRefusesDemotedPrimary(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, fresh.Applicable(), fresh.SkipReason)
 
-	_, err = l.st.ModifyBook(l.ids["p"], func(b *database.Book) error { b.IsPrimaryVersion = vtPtr(false); return nil })
+	_, err = l.st.ModifyBook(l.ids["p"], func(b *database.Book) error { b.IsPrimaryVersion = new(false); return nil })
 	require.NoError(t, err)
 	w := repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, vtTestOpID)
 	err = l.fixer.Apply(context.Background(), w, fresh)

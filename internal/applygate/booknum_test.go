@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 5e8a0b17-4c3d-4f92-a6e1-2d9c7b0f8e35
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -60,7 +60,7 @@ func TestCheckSeriesNumberLost(t *testing.T) {
 		},
 		{
 			name:       "kept under the book's own series when the candidate gives none",
-			book:       database.Book{Title: "Big Cats, Book 3", Series: &database.Series{Name: "Big Cats"}, SeriesPositionRaw: strp("3")},
+			book:       database.Book{Title: "Big Cats, Book 3", Series: &database.Series{Name: "Big Cats"}, SeriesPositionRaw: new("3")},
 			cand:       metafetch.MetadataCandidate{Title: "Lions"},
 			overwrites: title,
 		},
@@ -78,7 +78,7 @@ func TestCheckSeriesNumberLost(t *testing.T) {
 		},
 		{
 			name:       "trailing number corroborated by the stored position, then dropped",
-			book:       database.Book{Title: "Big Cats 3", SeriesPositionRaw: strp("3")},
+			book:       database.Book{Title: "Big Cats 3", SeriesPositionRaw: new("3")},
 			cand:       metafetch.MetadataCandidate{Title: "Lions", Series: "Zoo", SeriesPosition: "7"},
 			overwrites: title, want: ReasonSeriesNumberLost,
 		},
@@ -102,7 +102,7 @@ func TestCheckSeriesNumberLost(t *testing.T) {
 		},
 		{
 			name:       "sequence kept in the series field, not the title",
-			book:       database.Book{Title: "Dune", Series: &database.Series{Name: "Dune Chronicles"}, SeriesPositionRaw: strp("1")},
+			book:       database.Book{Title: "Dune", Series: &database.Series{Name: "Dune Chronicles"}, SeriesPositionRaw: new("1")},
 			cand:       metafetch.MetadataCandidate{Title: "Dune: Deluxe Edition", Series: "Dune Chronicles", SeriesPosition: "1"},
 			overwrites: title,
 		},
@@ -128,7 +128,7 @@ func TestCheckSeriesNumberLost(t *testing.T) {
 // does not list "title" and series_number stays neutral, although the same
 // pair blocks when the title IS overwritten.
 func TestCheckEvidenceInBatch_FillOnlyTitleIsNotChecked(t *testing.T) {
-	book := database.Book{Title: "Pixel Dust Book 1", Duration: intp(30000),
+	book := database.Book{Title: "Pixel Dust Book 1", Duration: new(30000),
 		Author: &database.Author{Name: "Ann Author"}, FilePath: "/lib/Ann Author/Pixel Dust/Pixel Dust Book 1.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "Pixel Dust 1 Party Hard", Author: "Ann Author", DurationSec: 30000}
 	v := CheckEvidenceInBatch(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false, nil)
