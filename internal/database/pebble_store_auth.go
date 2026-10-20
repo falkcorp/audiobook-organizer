@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -830,9 +830,17 @@ func (p *PebbleStore) DeleteInvite(token string) error {
 
 // ConsumeInvite creates the invitee's user and marks the invite used, in one
 // batch under inviteMu, so two concurrent accepts of one token cannot both
-// pass the used check. When the invite carries an email, the same batch sets
-// the user's email (refused if another user owns it) and writes the SSO grant
-// (InviteEmailGrantStore), so the grant exists exactly when the account does.
+// pass the used check.
+//
+// What happens to the invite's email (all in the same batch):
+//   - It is bound to the new account (user.Email plus the email index; refused
+//     if another user owns it) only when the invitation was emailed to exactly
+//     that address (inviteEmailDelivered). Otherwise the account is created
+//     with no email and EmailBinding records why; an admin can set it later.
+//   - A bound email also gets an SSO grant (InviteEmailGrantStore) only when
+//     the invite's creator is still an active admin (inviteCreatorMayGrant).
+//     A users.manage holder who is not an admin can invite, but cannot widen
+//     who may sign in through SSO or Cloudflare Access.
 func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string) (*User, error) {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
@@ -854,11 +862,29 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		closer.Close()
 		return nil, fmt.Errorf("username %q taken since invite was created", inv.Username)
 	}
-	lowerEmail := strings.ToLower(strings.TrimSpace(inv.Email))
-	if lowerEmail != "" {
-		if _, closer, err := p.db.Get([]byte("idx:user:email:" + lowerEmail)); err == nil {
+	inviteEmail := strings.ToLower(strings.TrimSpace(inv.Email))
+	lowerEmail := "" // the email bound to the new account, if any
+	grantSSO := false
+	switch {
+	case inviteEmail == "":
+	case !inviteEmailDelivered(inv):
+		inv.EmailBinding = InviteEmailNotEmailed
+	default:
+		if _, closer, err := p.db.Get([]byte("idx:user:email:" + inviteEmail)); err == nil {
 			closer.Close()
 			return nil, ErrInviteEmailTaken
+		}
+		lowerEmail = inviteEmail
+		inv.EmailBinding = InviteEmailBound
+		creator, err := p.GetUserByID(inv.CreatedByUserID)
+		if err != nil {
+			return nil, err
+		}
+		if inviteCreatorMayGrant(creator) {
+			grantSSO = true
+			inv.SSOGrant = InviteSSOGranted
+		} else {
+			inv.SSOGrant = InviteSSOCreatorNotAdmin
 		}
 	}
 
@@ -899,7 +925,9 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 			b.Close()
 			return nil, err
 		}
-		grant, err := json.Marshal(inviteEmailGrant{UserID: id, GrantedAt: now})
+	}
+	if grantSSO {
+		grant, err := json.Marshal(InviteEmailGrant{UserID: id, InviteToken: token, GrantedAt: now})
 		if err != nil {
 			b.Close()
 			return nil, err

@@ -1,11 +1,11 @@
 // file: internal/cfaccesspolicy/client.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c863e806-fb62-4ceb-9226-d971b7d4d048
 // last-edited: 2026-10-19
 
-// Package cfaccesspolicy adds an email address to ONE Cloudflare Access
-// reusable policy's include list. It backs the optional "accepted invitees
-// get browser access" sync (owner decision 2026-10-19).
+// Package cfaccesspolicy adds an email address to, and removes one from, ONE
+// Cloudflare Access reusable policy's include list. It backs the optional
+// "accepted invitees get browser access" sync (owner decision 2026-10-19).
 //
 // Scope is fixed at construction: the account id and policy id are fields of
 // the Client, never parameters, so no caller can point it at another policy.
@@ -15,8 +15,9 @@
 // The PUT replaces the whole policy, so the GET result is round-tripped
 // losslessly as a generic JSON object (numbers kept as json.Number): every
 // field, including ones this package does not know about, goes back exactly
-// as read, with only the include list extended. Existing rules are never
-// removed or rewritten.
+// as read, with only the include list changed. EnsureEmail only appends;
+// RemoveEmail drops only rules that are exactly {"email":{"email":<that
+// address>}} and leaves every other rule as it was.
 //
 // The API token is sent only in the Authorization header and never appears in
 // an error. Package imports nothing from this module and logs nothing.
@@ -54,6 +55,10 @@ const (
 	Added Result = "added"
 	// AlreadyPresent: the email was already an include rule; nothing written.
 	AlreadyPresent Result = "already_present"
+	// Removed: the email's include rule was dropped and the policy saved.
+	Removed Result = "removed"
+	// NotPresent: the email was not an include rule; nothing written.
+	NotPresent Result = "not_present"
 )
 
 var (
@@ -166,6 +171,69 @@ func (c *Client) EnsureEmail(ctx context.Context, email string) (Result, error) 
 		return "", errors.New("cfaccesspolicy: policy saved but the email is not in its include list")
 	}
 	return Added, nil
+}
+
+// RemoveEmail drops email's include rule from the configured policy. It is
+// idempotent: an email that is not there writes nothing and returns
+// NotPresent. Only plain email rules for exactly that address are removed.
+func (c *Client) RemoveEmail(ctx context.Context, email string) (Result, error) {
+	e, err := NormalizeEmail(email)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	policy, err := c.do(ctx, http.MethodGet, nil)
+	if err != nil {
+		return "", fmt.Errorf("cfaccesspolicy: read policy: %w", err)
+	}
+	include, err := includeList(policy)
+	if err != nil {
+		return "", err
+	}
+	kept := make([]any, 0, len(include))
+	for _, rule := range include {
+		if isEmailRule(rule, e) {
+			continue
+		}
+		kept = append(kept, rule)
+	}
+	if len(kept) == len(include) {
+		return NotPresent, nil
+	}
+	if len(kept) == 0 {
+		// Cloudflare refuses a policy with an empty include list, and an
+		// allow policy with no include would admit nobody anyway. Leave the
+		// last rule for the owner to remove by hand.
+		return "", errors.New("cfaccesspolicy: refusing to remove the policy's only include rule; remove it by hand")
+	}
+	policy["include"] = kept
+	saved, err := c.do(ctx, http.MethodPut, policy)
+	if err != nil {
+		return "", fmt.Errorf("cfaccesspolicy: save policy: %w", err)
+	}
+	if inc, err := includeList(saved); err == nil && hasEmail(inc, e) {
+		return "", errors.New("cfaccesspolicy: policy saved but the email is still in its include list")
+	}
+	return Removed, nil
+}
+
+// isEmailRule reports whether rule is exactly {"email":{"email":email}}.
+func isEmailRule(rule any, email string) bool {
+	r, ok := rule.(map[string]any)
+	if !ok || len(r) != 1 {
+		return false
+	}
+	inner, ok := r["email"].(map[string]any)
+	if !ok || len(inner) != 1 {
+		return false
+	}
+	s, ok := inner["email"].(string)
+	return ok && strings.EqualFold(strings.TrimSpace(s), email)
 }
 
 func includeList(policy map[string]any) ([]any, error) {

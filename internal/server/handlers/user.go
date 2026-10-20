@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -51,6 +51,9 @@ type UserHandler struct {
 	delivery *InviteDelivery
 	// sendLimiter bounds invitation emails per invite and per admin.
 	sendLimiter *inviteSendLimiter
+	// revokeGuestAccess ends invite-granted SSO / Cloudflare access on
+	// deactivation; nil = nothing to revoke (SetGuestAccessRevoker).
+	revokeGuestAccess GuestAccessRevoker
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
@@ -272,6 +275,9 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 		return
 	}
 	RevokeAllABSSessions(h.absSessions, user.ID, "user-deactivated")
+	if h.revokeGuestAccess != nil {
+		h.revokeGuestAccess(user.ID, user.Email, "user deactivated")
+	}
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
 }

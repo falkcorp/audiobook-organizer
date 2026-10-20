@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-10-19
 
@@ -323,7 +323,7 @@ func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite)
 	}
 	now := h.delivery.now()
 	if h.deliveryStore != nil {
-		if _, err := h.deliveryStore.MarkInviteEmailSent(inv.Token, now); err != nil {
+		if _, err := h.deliveryStore.MarkInviteEmailSent(inv.Token, msg.To, now); err != nil {
 			// The mail went out; only the bookkeeping failed (or the invite was
 			// accepted meanwhile). Report the send, log the rest.
 			inviteLog.Warn("invite email: sent, but recording it failed for invite of %s: %v", logger.SanitizeLogValue(inv.Username), err)
@@ -405,6 +405,8 @@ type acceptedInviteView struct {
 	Email             string     `json:"email,omitempty"`
 	AcceptedAt        *time.Time `json:"accepted_at"`
 	AcceptedUserID    string     `json:"accepted_user_id,omitempty"`
+	EmailBinding      string     `json:"email_binding,omitempty"`
+	SSOGrant          string     `json:"sso_grant,omitempty"`
 	GuestPolicyStatus string     `json:"guest_policy_status,omitempty"`
 	GuestPolicyDetail string     `json:"guest_policy_detail,omitempty"`
 	GuestPolicyAt     *time.Time `json:"guest_policy_at,omitempty"`
@@ -426,8 +428,22 @@ func (h *UserHandler) acceptedInvites() []acceptedInviteView {
 	for _, i := range list {
 		out = append(out, acceptedInviteView{
 			Username: i.Username, Email: i.Email, AcceptedAt: i.UsedAt, AcceptedUserID: i.AcceptedUserID,
+			EmailBinding: i.EmailBinding, SSOGrant: i.SSOGrant,
 			GuestPolicyStatus: i.GuestPolicyStatus, GuestPolicyDetail: i.GuestPolicyDetail, GuestPolicyAt: i.GuestPolicyAt,
 		})
 	}
 	return out
 }
+
+// GuestAccessRevoker ends the invite-granted SSO access (and, when it was added
+// by the sync, the Cloudflare guest-policy entry) for an email a user no longer
+// holds. Called after a deactivation or an email change; best-effort, it never
+// fails the request that triggered it.
+type GuestAccessRevoker func(userID, email, reason string)
+
+// SetGuestAccessRevoker installs the revoker DeactivateUser calls.
+func (h *UserHandler) SetGuestAccessRevoker(r GuestAccessRevoker) { h.revokeGuestAccess = r }
+
+// SetGuestAccessRevoker installs the revoker UpdateMe calls when the email
+// changes.
+func (h *AuthHandler) SetGuestAccessRevoker(r GuestAccessRevoker) { h.revokeGuestAccess = r }

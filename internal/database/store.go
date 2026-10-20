@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.117.0
+// version: 2.118.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-19
 
@@ -839,9 +839,20 @@ type Invite struct {
 	ExpiresAt       time.Time  `json:"expires_at"`
 	UsedAt          *time.Time `json:"used_at,omitempty"`
 	// EmailSentAt is when the invitation email last went out; nil = never.
+	// EmailSentTo is the address it went to. Accept binds Email to the new
+	// account only when the invitation was delivered to exactly that address:
+	// then holding the token proves control of the inbox. A link the admin
+	// copied by hand proves nothing about the address.
 	EmailSentAt *time.Time `json:"email_sent_at,omitempty"`
+	EmailSentTo string     `json:"email_sent_to,omitempty"`
 	// AcceptedUserID is the user the accept created.
 	AcceptedUserID string `json:"accepted_user_id,omitempty"`
+	// EmailBinding and SSOGrant record what accept did with Email, for the
+	// admin: EmailBinding is InviteEmailBound or InviteEmailNotEmailed;
+	// SSOGrant is InviteSSOGranted or InviteSSOCreatorNotAdmin. Empty when the
+	// invite had no email.
+	EmailBinding string `json:"email_binding,omitempty"`
+	SSOGrant     string `json:"sso_grant,omitempty"`
 	// GuestPolicy* record the Cloudflare Access guest-policy sync run on
 	// accept, so the admin can see it: status is one of the
 	// InviteGuestPolicy* constants; detail is a short reason on failure.

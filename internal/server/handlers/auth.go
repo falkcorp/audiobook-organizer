@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-19
 
@@ -134,6 +134,9 @@ type AuthHandler struct {
 	// credential epoch with it). nil when the store lacks the capability, in
 	// which case ChangePassword refuses.
 	creds database.UserCredentialWriter
+	// revokeGuestAccess ends invite-granted SSO / Cloudflare access for an
+	// email the user gave up in UpdateMe; nil = nothing to revoke.
+	revokeGuestAccess GuestAccessRevoker
 }
 
 // NewAuthHandler constructs an AuthHandler.
@@ -488,6 +491,7 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "email is required")
 		return
 	}
+	oldEmail := user.Email
 	user.Email = email
 	if err := h.store.UpdateUser(user); err != nil {
 		if errors.Is(err, database.ErrUserProtectedField) {
@@ -503,6 +507,11 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 		}
 		httputil.RespondWithInternalError(c, "failed to update profile")
 		return
+	}
+	// The old address no longer belongs to this account, so neither does any
+	// SSO or Cloudflare access an accepted invite granted to it.
+	if h.revokeGuestAccess != nil && oldEmail != "" && !strings.EqualFold(strings.TrimSpace(oldEmail), email) {
+		h.revokeGuestAccess(user.ID, oldEmail, "email changed")
 	}
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
 }

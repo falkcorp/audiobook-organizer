@@ -1,5 +1,5 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 // last-edited: 2026-10-19
 
@@ -26,12 +26,13 @@ import (
 // POST /api/v1/auth/accept-invite
 //
 // The invite is consumed exactly once (ConsumeInvite runs under the store's
-// invite lock). When the invite carries an email, the same store batch gives
-// the new user that email and writes its SSO grant (inviteGrantAllowed), so
-// the invitee can also sign in through OAuth or Cloudflare Access. After the
-// response is decided, the email is added to the Cloudflare Access guest
-// policy in the background when that sync is configured; its outcome is
-// recorded on the invite for the admin and never affects this request.
+// invite lock). The invite's email is bound to the new user only when the
+// invitation was emailed to that address (holding the token then proves the
+// inbox), and it gets an SSO grant (inviteGrantAllowed) only when the invite's
+// creator is an active admin; both decisions are made in the same store batch.
+// For a granted email, the address is then added to the Cloudflare Access
+// guest policy in the background when that sync is configured. Every outcome
+// is recorded on the invite for the admin and never affects this request.
 func (s *Server) handleAcceptInvite(c *gin.Context) {
 	var req struct {
 		Token    string `json:"token" binding:"required"`
@@ -69,7 +70,7 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	s.startGuestPolicySync(req.Token, user.Email)
+	s.startGuestPolicySync(req.Token, user.ID)
 
 	sess, err := s.Ops().CreateSession(user.ID, c.ClientIP(), c.Request.UserAgent(), 30*24*time.Hour)
 	if err != nil {

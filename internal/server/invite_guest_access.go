@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
 // last-edited: 2026-10-19
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
+	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 
@@ -45,10 +46,12 @@ const guestPolicySyncTimeout = 30 * time.Second
 // path until a restart. The grant instead lives in the store, written in the
 // same batch as the accept.
 //
-// The grant counts only while it still describes a live account: the user it
-// names exists, is active, and still has exactly this email. Deactivating the
-// user, or the user changing their email, ends it, so no separate revoke is
-// needed. Any error is a refusal.
+// A grant exists only when the invitation was emailed to that address and
+// its creator was an active admin (ConsumeInvite). It counts only while it
+// still describes a live account: the user it names exists, is active, and
+// still has exactly this email, so it fails closed even before
+// revokeGuestAccess deletes it on deactivation or an email change. Any error
+// is a refusal.
 func inviteGrantAllowed(store any) func(string) bool {
 	grants, ok := database.AsCapability[database.InviteEmailGrantStore](store)
 	if !ok {
@@ -62,11 +65,11 @@ func inviteGrantAllowed(store any) func(string) bool {
 	}
 	return func(email string) bool {
 		email = strings.ToLower(strings.TrimSpace(email))
-		id, err := grants.InviteEmailGrantUserID(email)
-		if err != nil || id == "" {
+		g, err := grants.GetInviteEmailGrant(email)
+		if err != nil || g == nil || g.UserID == "" {
 			return false
 		}
-		u, err := users.GetUserByID(id)
+		u, err := users.GetUserByID(g.UserID)
 		if err != nil || u == nil {
 			return false
 		}
@@ -112,9 +115,11 @@ func (s *Server) inviteDelivery() *handlers.InviteDelivery {
 	}
 }
 
-// guestPolicyEnsurer is the slice of *cfaccesspolicy.Client accept uses.
+// guestPolicyEnsurer is the slice of *cfaccesspolicy.Client the invite flow
+// uses: add on accept, remove on revoke.
 type guestPolicyEnsurer interface {
 	EnsureEmail(ctx context.Context, email string) (cfaccesspolicy.Result, error)
+	RemoveEmail(ctx context.Context, email string) (cfaccesspolicy.Result, error)
 }
 
 // guestPolicyClient returns the ONE shared policy client (its mutex is what
@@ -147,10 +152,16 @@ func (s *Server) guestPolicyClient() (guestPolicyEnsurer, error) {
 // Access guest policy, in the background, and records the outcome on the
 // invite for the admin (Users page, accepted invites). It never affects the
 // accept: the account and session already exist when this runs.
-func (s *Server) startGuestPolicySync(token, email string) {
-	if email == "" {
+//
+// It runs only for an invite whose accept wrote an SSO grant (emailed to that
+// address, created by an active admin); any other emailed invite is recorded
+// as skipped with the reason, and Cloudflare is not touched.
+func (s *Server) startGuestPolicySync(token, userID string) {
+	inv, err := s.storeForWiring().GetInvite(token)
+	if err != nil || inv == nil || inv.Email == "" {
 		return
 	}
+	email := inv.Email
 	record := func(status, detail string) {
 		ds, ok := database.AsCapability[database.InviteDeliveryStore](s.storeForWiring())
 		if !ok {
@@ -159,6 +170,16 @@ func (s *Server) startGuestPolicySync(token, email string) {
 		if err := ds.RecordInviteGuestPolicy(token, status, detail, time.Now()); err != nil {
 			inviteAccessLog.Warn("invite accept: recording the guest-policy outcome failed: %v", err)
 		}
+	}
+	switch {
+	case inv.EmailBinding == database.InviteEmailNotEmailed:
+		record(database.InviteGuestPolicySkipped, "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted")
+		return
+	case inv.SSOGrant == database.InviteSSOCreatorNotAdmin:
+		record(database.InviteGuestPolicySkipped, "the invitation was created by someone without the admin role, so no SSO or Cloudflare access was granted")
+		return
+	case inv.SSOGrant != database.InviteSSOGranted:
+		return
 	}
 	client, err := s.guestPolicyClient()
 	if err != nil {
@@ -191,6 +212,91 @@ func (s *Server) startGuestPolicySync(token, email string) {
 		default:
 			inviteAccessLog.Info("invite accept: invitee added to the Cloudflare guest policy")
 			record(database.InviteGuestPolicyAdded, "")
+			// Only an email this sync added is ever removed again.
+			if gs, ok := database.AsCapability[database.InviteEmailGrantStore](s.storeForWiring()); ok {
+				if err := gs.SetInviteEmailGrantCFAdded(email, userID); err != nil {
+					inviteAccessLog.Warn("invite accept: recording the Cloudflare add on the grant failed: %v", err)
+				}
+			}
 		}
 	})
+}
+
+// revokeGuestAccess ends the access an accepted invite granted to email for
+// userID: it deletes the SSO grant and, when the accept-time sync itself added
+// the email to the Cloudflare guest policy, removes it from that one policy.
+//
+// Best-effort and idempotent: failures are logged, never returned, and a
+// second call finds nothing to do. The Cloudflare entry is left alone when
+// another active user still holds the address, when it is the owner's email,
+// or when it is on the operator's OAUTH_ALLOWED_EMAILS: in each case someone
+// still intends that address to have access.
+func (s *Server) revokeGuestAccess(userID, email, reason string) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || userID == "" {
+		return
+	}
+	gs, ok := database.AsCapability[database.InviteEmailGrantStore](s.storeForWiring())
+	if !ok {
+		return
+	}
+	grant, err := gs.DeleteInviteEmailGrant(email, userID)
+	if err != nil {
+		inviteAccessLog.Warn("guest access revoke (%s): deleting the SSO grant failed: %v", reason, err)
+		return
+	}
+	if grant == nil {
+		return // nothing granted to this user for this address
+	}
+	inviteAccessLog.Info("guest access revoke (%s): SSO grant removed", reason)
+	if !grant.CFAdded {
+		return
+	}
+	if why := s.keepGuestPolicyEmail(userID, email); why != "" {
+		inviteAccessLog.Info("guest access revoke (%s): Cloudflare guest-policy entry kept: %s", reason, why)
+		return
+	}
+	client, err := s.guestPolicyClient()
+	if err != nil || client == nil {
+		inviteAccessLog.Warn("guest access revoke (%s): the email was added to the Cloudflare guest policy but the sync is no longer configured; remove it by hand", reason)
+		return
+	}
+	parent := s.bgCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	s.bgWG.Go("invite-guest-policy-revoke", func() {
+		ctx, cancel := context.WithTimeout(parent, guestPolicySyncTimeout)
+		defer cancel()
+		res, err := client.RemoveEmail(ctx, email)
+		if err != nil {
+			inviteAccessLog.Warn("guest access revoke (%s): removing the email from the Cloudflare guest policy failed, remove it by hand: %v", reason, logger.SanitizeLogValue(err.Error()))
+			return
+		}
+		inviteAccessLog.Info("guest access revoke (%s): Cloudflare guest policy: %s", reason, string(res))
+	})
+}
+
+// keepGuestPolicyEmail returns why email must stay in the Cloudflare guest
+// policy after userID gave it up, or "" when it may be removed.
+func (s *Server) keepGuestPolicyEmail(userID, email string) string {
+	snap := config.Snapshot()
+	if strings.EqualFold(strings.TrimSpace(snap.OwnerEmail), email) {
+		return "it is the owner's email"
+	}
+	for _, allowed := range oauth.ParseAllowedEmails(snap.OAuthAllowedEmails) {
+		if strings.EqualFold(allowed, email) {
+			return "it is on OAUTH_ALLOWED_EMAILS"
+		}
+	}
+	users, err := s.Ops().ListUsers()
+	if err != nil {
+		return "the user list could not be read, so another holder cannot be ruled out"
+	}
+	for _, u := range users {
+		if u.ID != userID && u.Status == "active" && strings.EqualFold(strings.TrimSpace(u.Email), email) {
+			return "another active user still has this email"
+		}
+	}
+	return ""
 }
