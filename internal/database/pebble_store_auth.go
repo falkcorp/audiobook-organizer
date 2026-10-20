@@ -1347,22 +1347,21 @@ func (p *PebbleStore) DeleteInvite(token string) error {
 	return b.Commit(pebble.Sync)
 }
 
-// ConsumeInvite creates the invitee's user and marks the invite used, in one
-// batch under inviteMu, so two concurrent accepts of one token cannot both
-// pass the used check.
-//
-// What happens to the invite's email (all in the same batch):
-//   - It is bound to the new account (user.Email plus the verified-email
-//     key; refused if another user has it) only when the invitation was emailed to exactly
-//     that address (inviteEmailDelivered). Otherwise the account is created
-//     with no email and EmailBinding records why; an admin can set it later.
-//   - A bound email also gets an SSO grant (InviteEmailGrantStore) only when
-//     the invite's creator is still an active admin (inviteCreatorMayGrant).
-//     A users.manage holder who is not an admin can invite, but cannot widen
-//     who may sign in through SSO or Cloudflare Access.
-func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string) (*User, error) {
-	p.inviteMu.Lock()
-	defer p.inviteMu.Unlock()
+// inviteAcceptPlan is what accepting an invite would do: planInviteAcceptLocked
+// decides it, ConsumeInvite applies it.
+type inviteAcceptPlan struct {
+	inv        *Invite // EmailBinding and SSOGrant decided
+	lowerUser  string
+	lowerEmail string // the email bound to the new account, if any
+	grantSSO   bool
+	displace   []User // accounts that typed the bound address in
+}
+
+// planInviteAcceptLocked decides, without writing, everything accepting token
+// at now would do, or returns the refusal ConsumeInvite would return
+// (IsInviteRefusal). Caller holds inviteMu; ConsumeInvite also holds
+// userWriteMu, because it rewrites the displaced holders it reads here.
+func (p *PebbleStore) planInviteAcceptLocked(token string, now time.Time) (*inviteAcceptPlan, error) {
 	inv, err := p.GetInvite(token)
 	if err != nil {
 		return nil, err
@@ -1373,7 +1372,7 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 	if inv.UsedAt != nil {
 		return nil, ErrInviteUsed
 	}
-	if time.Now().After(inv.ExpiresAt) {
+	if now.After(inv.ExpiresAt) {
 		return nil, ErrInviteExpired
 	}
 	lowerUser := strings.ToLower(inv.Username)
@@ -1415,8 +1414,6 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		if held, err := p.emailHeldByAny(inviteEmail); err != nil {
 			return nil, err
 		} else if held {
-			userWriteMu.Lock() // the holders' rows are rewritten
-			defer userWriteMu.Unlock()
 			holders, err := p.unprovenHoldersLocked(inviteEmail)
 			if err != nil {
 				if errors.Is(err, ErrUserEmailTaken) {
@@ -1431,6 +1428,54 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		grantSSO = true
 		inv.SSOGrant = InviteSSOGranted
 	}
+	return &inviteAcceptPlan{inv: inv, lowerUser: lowerUser, lowerEmail: lowerEmail, grantSSO: grantSSO, displace: displace}, nil
+}
+
+// InviteAcceptChecker answers whether an invite could be accepted now. Not on
+// Store; resolve it with AsCapability.
+type InviteAcceptChecker interface {
+	// CheckInviteAcceptable returns nil when accepting token now would
+	// succeed as far as the store can tell, or the refusal ConsumeInvite
+	// would return (IsInviteRefusal), or a storage error. It writes nothing.
+	CheckInviteAcceptable(token string) error
+}
+
+var _ InviteAcceptChecker = (*PebbleStore)(nil)
+
+// CheckInviteAcceptable implements InviteAcceptChecker with the same
+// planInviteAcceptLocked ConsumeInvite applies.
+func (p *PebbleStore) CheckInviteAcceptable(token string) error {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
+	_, err := p.planInviteAcceptLocked(token, time.Now())
+	return err
+}
+
+// ConsumeInvite creates the invitee's user and marks the invite used, in one
+// batch under inviteMu, so two concurrent accepts of one token cannot both
+// pass the used check.
+//
+// What happens to the invite's email (all in the same batch) is decided by
+// planInviteAcceptLocked, the same read-only function CheckInviteAcceptable
+// runs for the public lookup, so the lookup and the accept cannot disagree:
+//   - It is bound to the new account (user.Email plus the verified-email
+//     key; refused if another user has it) only when the invitation was emailed to exactly
+//     that address (inviteEmailDelivered). Otherwise the account is created
+//     with no email and EmailBinding records why; an admin can set it later.
+//   - A bound email also gets an SSO grant (InviteEmailGrantStore) only when
+//     the invite's creator is still an active admin (inviteCreatorMayGrant).
+//     A users.manage holder who is not an admin can invite, but cannot widen
+//     who may sign in through SSO or Cloudflare Access.
+func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string) (*User, error) {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
+	userWriteMu.Lock() // displaced holders' rows are rewritten
+	defer userWriteMu.Unlock()
+	plan, err := p.planInviteAcceptLocked(token, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	inv, lowerUser, lowerEmail, grantSSO, displace := plan.inv, plan.lowerUser, plan.lowerEmail, plan.grantSSO, plan.displace
 
 	id, err := newULID()
 	if err != nil {

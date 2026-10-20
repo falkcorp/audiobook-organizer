@@ -11,12 +11,13 @@ admin still gets the link to hand over.
 
 The link opens a new public page, `/invite/:token`, backed by
 `GET /api/v1/auth/invite/:token`. It shows the username, expiry and header
-steps only for a valid, unused, unexpired token, answers every other token
-with the same 404. `POST /auth/accept-invite` answers a missing, used or
-expired token, a username taken since the invite was made, and an invited
-address another account already holds verified with one identical 400 (the
-detail is logged), so the public route does not tell a caller which tokens
-or addresses exist. Both routes share a limiter with three layers: per
+steps only for a token accept would take. `POST /auth/accept-invite` answers a
+missing, used or expired token, a username taken since the invite was made,
+and an invited address another account already holds verified with one
+identical 400 (the detail is logged), and the lookup answers every one of
+those cases with one identical 404: both run the same store checks, so a link
+holder cannot learn from a working lookup and a refused accept that a username
+or an address has an account. Both routes share a limiter with three layers: per
 client, per token (keys are hashed), and global. `CF-Connecting-IP` is
 believed only from a peer listed in the new `TUNNEL_CONNECTOR_ADDRS`, or from
 a local peer whose request carried a verified Cloudflare Access assertion;

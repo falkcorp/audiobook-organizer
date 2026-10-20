@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-20
 
@@ -59,6 +59,10 @@ type UserHandler struct {
 	// emailSetter sets another user's email as verified (SetUserEmail). nil
 	// when the store lacks the capability; SetUserEmail then refuses.
 	emailSetter database.AdminEmailSetter
+	// acceptChecker runs accept's own checks for the public lookup, so it
+	// answers 404 whenever accept would refuse. nil when the store lacks the
+	// capability; the lookup then checks only missing, used and expired.
+	acceptChecker database.InviteAcceptChecker
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
@@ -69,6 +73,9 @@ func NewUserHandler(store UserStore) *UserHandler {
 	}
 	if es, ok := database.AsCapability[database.AdminEmailSetter](store); ok {
 		h.emailSetter = es
+	}
+	if ac, ok := database.AsCapability[database.InviteAcceptChecker](store); ok {
+		h.acceptChecker = ac
 	}
 	return h
 }
