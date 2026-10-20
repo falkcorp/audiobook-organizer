@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -59,7 +59,7 @@ func goldenReviewStore(t testing.TB) (*database.PebbleStore, *metafetch.Service)
 	future := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	statuses := []string{"", "", "no_match", "matched", "audio_confirmed", ""}
 	langs := []string{"en", "English", "", "de", "spa"}
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		id := goldenBookID(i)
 		title := fmt.Sprintf("Title %06d", i)
 		path := fmt.Sprintf("/lib/Author %02d/Title %06d", i%5, i)
@@ -105,7 +105,7 @@ func goldenReviewStore(t testing.TB) (*database.PebbleStore, *metafetch.Service)
 		case i == 13:
 			entry.Candidates = []json.RawMessage{json.RawMessage(`"not an object"`)}
 		default:
-			for k := 0; k < 2; k++ {
+			for k := range 2 {
 				raw, merr := json.Marshal(map[string]any{
 					"title": fmt.Sprintf("%s cand %d", title, k), "author": fmt.Sprintf("Author %02d", i%5),
 					"source":       []string{"Audible", "Google Books", "Open Library"}[(i+k)%3],

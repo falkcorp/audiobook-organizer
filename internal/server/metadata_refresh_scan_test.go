@@ -1,7 +1,7 @@
 // file: internal/server/metadata_refresh_scan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c9e5a71-84d2-4f06-b1a7-6d20e8c4f953
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package server
 
@@ -18,7 +18,7 @@ import (
 
 func seedRefreshScanBooks(t *testing.T, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		_, err := database.GetGlobalStore().CreateBook(&database.Book{
 			Title:    "Refresh Scan " + string(rune('A'+i)),
 			FilePath: "/tmp/refresh-scan-" + string(rune('a'+i)) + ".m4b",

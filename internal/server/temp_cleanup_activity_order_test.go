@@ -1,13 +1,14 @@
 // file: internal/server/temp_cleanup_activity_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3b9e52-4c1a-4f68-9a0e-2b5c8d1f6a37
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package server
 
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -81,10 +82,8 @@ func TestCleanupOrphanedTempFiles_NoOpSummaryTagged(t *testing.T) {
 	}
 	for _, e := range drainActivity(w) {
 		if strings.HasPrefix(e.Summary, "Removed 0 orphaned") {
-			for _, tg := range e.Tags {
-				if tg == activity.NoOpTag {
-					return
-				}
+			if slices.Contains(e.Tags, activity.NoOpTag) {
+				return
 			}
 			t.Fatalf("summary lacks %q tag: %+v", activity.NoOpTag, e)
 		}

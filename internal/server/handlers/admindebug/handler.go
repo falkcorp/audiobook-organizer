@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit
@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"reflect"
@@ -658,9 +659,7 @@ func (h *Handler) audit(c *gin.Context, typ string, rec *editRecord, changes []d
 		"fields":      fields,
 		"changes":     changes,
 	}
-	for k, v := range extra {
-		details[k] = v
-	}
+	maps.Copy(details, extra)
 	verb := "edit"
 	if typ == "admin_debug_undo" {
 		verb = "undo of edit " + rec.EditID

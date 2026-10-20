@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_review_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b4e8c1a7-6f23-4d95-8a10-3c9d7e5f2b61
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package handlers_test
 
@@ -323,7 +323,7 @@ func TestCollectionOwnerFallbackWarnsOncePerCollection(t *testing.T) {
 	}}
 	rig := newOwnerRig(t, store, ownerUsers(), ownerStates(), handlers.WithCollectionLogger(rec))
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
 		rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
 	}
@@ -527,7 +527,7 @@ func TestRefreshRelativeDynamic(t *testing.T) {
 
 	t.Run("many collections, bounded concurrency, counts partition the work", func(t *testing.T) {
 		store := &colFakeStore{}
-		for i := 0; i < 40; i++ {
+		for i := range 40 {
 			store.cols = append(store.cols, database.Collection{
 				ID: fmt.Sprintf("c%02d", i), Name: fmt.Sprintf("c%02d", i), Type: database.CollectionTypeDynamic,
 				Query: "last_played:>-30d", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b9"}, Version: 1,

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -114,7 +114,7 @@ func (o *fakeOps) SetSetting(key, value, _ string, _ bool) error {
 
 func planRows(n int) []repairs.Row {
 	rows := make([]repairs.Row, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		r := repairs.Row{RowID: fmt.Sprintf("vg-%03d", i), BookIDs: []string{fmt.Sprintf("b%03d", i)},
 			Title: fmt.Sprintf("Book %d", i), Reason: "two primaries", Risk: repairs.RiskLow, Fingerprint: "fp"}
 		if i%4 == 3 {

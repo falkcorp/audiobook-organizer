@@ -1,7 +1,7 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package server
 
@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -78,7 +79,7 @@ func newSearchCacheServer(t testing.TB, n, ringSize int, cfg searchcache.Config)
 
 	fx := &searchCacheFixture{srv: srv, pebble: store}
 	rng := rand.New(rand.NewSource(7))
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		a, err := srv.store.CreateAuthor(fmt.Sprintf("%s Writer%d", fixtureWords[i%len(fixtureWords)], i))
 		if err != nil {
 			t.Fatalf("author: %v", err)
@@ -90,7 +91,7 @@ func newSearchCacheServer(t testing.TB, n, ringSize int, cfg searchcache.Config)
 		}
 		fx.series = append(fx.series, s)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		title := fmt.Sprintf("%s %s %d", fixtureWords[rng.Intn(len(fixtureWords))], fixtureWords[rng.Intn(len(fixtureWords))], i)
 		a := fx.authors[rng.Intn(len(fx.authors))]
 		b := &database.Book{
@@ -155,12 +156,7 @@ func (fx *searchCacheFixture) ids(t testing.TB, q string, f audiobookspkg.ListFi
 }
 
 func containsID(ids []string, id string) bool {
-	for _, x := range ids {
-		if x == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ids, id)
 }
 
 // TestSearchResultCache_PagesMatchUncached is the property test: over random
@@ -171,7 +167,7 @@ func TestSearchResultCache_PagesMatchUncached(t *testing.T) {
 	cache := fx.srv.searchResults
 	rng := rand.New(rand.NewSource(42))
 	sorts := []struct{ by, order string }{{"", ""}, {"title", "asc"}, {"title", "desc"}, {"author", "asc"}}
-	for i := 0; i < 250; i++ {
+	for range 250 {
 		var q string
 		switch rng.Intn(5) {
 		case 0:
@@ -296,7 +292,7 @@ func TestSearchResultCache_RenamesAreReflected(t *testing.T) {
 				}
 				if overflow {
 					// Unrelated writes push the rename's records out of the ring.
-					for i := 0; i < 8; i++ {
+					for i := range 8 {
 						bid := fx.bookIDs[i]
 						if _, err := fx.srv.store.ModifyBook(bid, func(b *database.Book) error { b.Title += " x"; return nil }); err != nil {
 							t.Fatal(err)
@@ -406,11 +402,11 @@ func TestSearchResultCache_PendingReturns202(t *testing.T) {
 func TestSearchResultCache_ConcurrentReadsAndWrites(t *testing.T) {
 	fx := newSearchCacheServer(t, 150, 0, searchcache.Config{})
 	var wg sync.WaitGroup
-	for w := 0; w < 6; w++ {
+	for w := range 6 {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < 40; i++ {
+			for i := range 40 {
 				if w%2 == 0 {
 					id := fx.bookIDs[(i*5+w)%len(fx.bookIDs)]
 					word := fixtureWords[(i+w)%len(fixtureWords)]
@@ -578,7 +574,7 @@ func TestSearchResultCache_ExactCallerNeverStale(t *testing.T) {
 	if _, err := fx.srv.store.ModifyBook(target, func(b *database.Book) error { b.Title = "alpha kilo"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 20; i++ { // overflow the 8-record ring
+	for i := range 20 { // overflow the 8-record ring
 		if _, err := fx.srv.store.ModifyBook(fx.bookIDs[i], func(b *database.Book) error { b.Title += " x"; return nil }); err != nil {
 			t.Fatal(err)
 		}
@@ -615,7 +611,7 @@ func TestSearchResultCache_LibraryListNeverStale(t *testing.T) {
 	if _, err := fx.srv.store.ModifyBook(target, func(b *database.Book) error { b.Title = "alpha kilo"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 20; i++ { // overflow the 8-record ring: the entry cannot be patched
+	for i := range 20 { // overflow the 8-record ring: the entry cannot be patched
 		if _, err := fx.srv.store.ModifyBook(fx.bookIDs[i], func(b *database.Book) error { b.Title += " x"; return nil }); err != nil {
 			t.Fatal(err)
 		}

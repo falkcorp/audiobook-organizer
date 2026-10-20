@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_already_applied_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b2e8c71-4d9a-4f06-a3e1-7c8d2f9b0e46
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package server
 
@@ -183,8 +183,8 @@ func TestClaimIndex_AppliedBookClaimsItsOwnASIN(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			books := moondustBooks(tc.sibling)
 			svc := perBookSvc{
-				listingSvc: listingSvc{fakeApplySvc: &fakeApplySvc{candidates: candidateJSON(t, moon)}, ids: []string{"b1", "b2"}},
-				byBook:     map[string][]json.RawMessage{"b1": candidateJSON(t, moon), "b2": candidateJSON(t, otherRec)},
+				fakeApplySvc: &fakeApplySvc{candidates: candidateJSON(t, moon)}, ids: []string{"b1", "b2"},
+				byBook: map[string][]json.RawMessage{"b1": candidateJSON(t, moon), "b2": candidateJSON(t, otherRec)},
 			}
 			claims, err := cachedClaimIndex(context.Background(), svc, books)
 			if err != nil {

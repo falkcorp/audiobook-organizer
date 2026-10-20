@@ -1,7 +1,7 @@
 // file: internal/server/pebble_metrics_sources_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4af3bbc9-4f8d-4fe4-9da3-1c7942a13084
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package server
 
@@ -37,7 +37,7 @@ func TestMetricsScrape_ExportsPebbleSeriesForMainStore(t *testing.T) {
 	} {
 		require.Contains(t, body, want)
 	}
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if strings.HasPrefix(line, "audiobook_organizer_pebble_") && strings.Contains(line, "{store=\"main\"}") {
 			t.Log(line)
 		}

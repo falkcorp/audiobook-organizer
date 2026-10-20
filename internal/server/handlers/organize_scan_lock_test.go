@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package handlers_test
 
@@ -64,7 +64,7 @@ func lockBook(t *testing.T, id string) *scanlock.Hold {
 }
 
 func inPlaceSvc() *countingOrganizeSvc {
-	return &countingOrganizeSvc{organizeSvcSpy: organizeSvcSpy{landing: &organizer.Landing{Path: "/lib/New/New.m4b", InPlace: true}}}
+	return &countingOrganizeSvc{landing: &organizer.Landing{Path: "/lib/New/New.m4b", InPlace: true}}
 }
 
 // The scanner holds the book: the organize waits (touching no file), then
@@ -194,7 +194,7 @@ func TestRunQueuedOrganize_WaitsThenRunsAndReportsFailure(t *testing.T) {
 		t.Fatalf("OrganizeOneBook calls = %d", svc.calls.Load())
 	}
 
-	failing := &countingOrganizeSvc{organizeSvcSpy: organizeSvcSpy{err: errors.New("disk on fire")}}
+	failing := &countingOrganizeSvc{err: errors.New("disk on fire")}
 	h2 := handlers.NewOrganizeHandler(store, nil, failing, nil, false)
 	err := h2.RunQueuedOrganize(context.Background(), "b1", nil)
 	if err == nil || !strings.Contains(err.Error(), "disk on fire") {

@@ -1,12 +1,13 @@
 // file: internal/server/handlers/abs/sliding_session_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e1047d7e-5e2b-4df6-aa64-51878f896f74
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package abs_test
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"testing"
 	"time"
@@ -52,9 +53,7 @@ func (ch *clockedHarness) onlySession(t *testing.T) database.ABSSession {
 func (ch *clockedHarness) refresh(t *testing.T, token string, extra map[string]string) (int, string, string) {
 	t.Helper()
 	hdrs := map[string]string{"x-refresh-token": token}
-	for k, v := range extra {
-		hdrs[k] = v
-	}
+	maps.Copy(hdrs, extra)
 	w, body := ch.do(t, request{method: http.MethodPost, path: "/auth/refresh", headers: hdrs})
 	if w.Code != http.StatusOK {
 		return w.Code, "", ""

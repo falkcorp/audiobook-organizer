@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -251,9 +252,7 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	// for the hard gate.
 	if len(current.Pins)+len(next.Pins) > 0 {
 		merged.Pins = make(map[string]metafetch.CandidatePin, len(current.Pins)+len(next.Pins))
-		for id, pin := range current.Pins {
-			merged.Pins[id] = pin
-		}
+		maps.Copy(merged.Pins, current.Pins)
 		for _, id := range next.BookIDs {
 			if pin, ok := next.Pins[id]; ok {
 				merged.Pins[id] = pin

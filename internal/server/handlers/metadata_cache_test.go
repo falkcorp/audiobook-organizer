@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.19.0
+// version: 2.19.1
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -1017,7 +1017,7 @@ func pagedReviewHandler(t *testing.T, n int) *handlers.MetadataCacheHandler {
 
 	summaries := make([]metafetch.MetadataCacheSummary, 0, n)
 	books := make([]database.Book, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("b%04d", i)
 		summaries = append(summaries, metafetch.MetadataCacheSummary{BookID: id})
 		books = append(books, database.Book{ID: id})

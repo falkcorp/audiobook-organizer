@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_race_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2a8e4f6-7c19-4d53-a0e8-3f5d1c9b6a27
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package abs_test
 
@@ -110,7 +110,7 @@ func TestCollectionMembership_ABSAndNativeWritesDoNotLoseEachOther(t *testing.T)
 
 	for _, v := range variants {
 		t.Run(v.name, func(t *testing.T) {
-			for round := 0; round < raceRounds; round++ {
+			for round := range raceRounds {
 				col, err := store.CreateCollection(&database.Collection{
 					Name: fmt.Sprintf("%s round %d", v.name, round),
 					Type: database.CollectionTypeStatic, BookIDs: slices.Clone(v.seedBooks),

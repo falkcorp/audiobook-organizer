@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache_census_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c670ed15-3169-4e19-8d06-5680b094bc8d
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -46,7 +46,7 @@ func TestHandleCacheStats_MetadataFetchSizeFromCensus(t *testing.T) {
 	metrics.Register()
 	metrics.RecordCacheSet("metadata_fetch") // makes the cache appear in the gather
 	p := newCensusHandlerStore(t)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		putFetchCacheRow(t, p, i, time.Now())
 	}
 

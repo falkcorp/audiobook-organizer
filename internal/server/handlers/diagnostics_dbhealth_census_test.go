@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_dbhealth_census_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 637c4ea3-5b82-4c17-88fb-4256b6233cd3
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -35,7 +35,7 @@ func putFetchCacheRow(t *testing.T, p *database.PebbleStore, i int, cachedAt tim
 
 func TestGetDBHealth_UsesCensusAndSkipsDecode(t *testing.T) {
 	p := newCensusHandlerStore(t)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		putFetchCacheRow(t, p, i, time.Now())
 	}
 
@@ -57,7 +57,7 @@ func TestGetDBHealth_DeepCountsExpired(t *testing.T) {
 
 	p := newCensusHandlerStore(t)
 	old := time.Now().Add(-90 * 24 * time.Hour)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		putFetchCacheRow(t, p, i, old)
 	}
 	for i := 3; i < 5; i++ {
@@ -73,7 +73,7 @@ func TestGetDBHealth_DeepCountsExpired(t *testing.T) {
 func TestCountExpiredMetadataFetches_PagesThroughTheFamily(t *testing.T) {
 	p := newCensusHandlerStore(t)
 	old := time.Now().Add(-90 * 24 * time.Hour)
-	for i := 0; i < 2500; i++ {
+	for i := range 2500 {
 		putFetchCacheRow(t, p, i, old)
 	}
 	n, pages, err := countExpiredMetadataFetches(context.Background(), p, time.Now().Add(-30*24*time.Hour))

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/cluster_verbs_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 94c1d7e3-6a20-4f58-b3e9-2d8a5c0f7b14
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package deduphandler_test
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -45,10 +46,8 @@ func decodeCluster(t *testing.T, body []byte) clusterResp {
 
 func failWritesFor(h *deduphandler.Handler, bad ...int64) {
 	deduphandler.SetCandidateStatusWriterForTest(h, func(id int64, status string) error {
-		for _, b := range bad {
-			if id == b {
-				return errors.New("write refused")
-			}
+		if slices.Contains(bad, id) {
+			return errors.New("write refused")
 		}
 		return nil
 	})

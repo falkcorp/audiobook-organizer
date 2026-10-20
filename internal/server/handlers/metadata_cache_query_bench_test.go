@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_bench_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b5d2c8e4-1f6a-4a37-9c08-7e4b3d2a6f91
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func syntheticReviewSnapshot(n int, allReviewable bool) *reviewSnapshot {
 		books:     make(map[string]*database.Book, n),
 		orphanIDs: map[string]struct{}{},
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("01J%023d", i)
 		b := &database.Book{ID: id, Title: fmt.Sprintf("Title %06d", i), FilePath: fmt.Sprintf("/lib/Author %03d/Title %06d", i%997, i), Format: "m4b"}
 		if st := statuses[i%len(statuses)]; st != "" {
@@ -100,12 +101,8 @@ func BenchmarkReviewQuery_40k(b *testing.B) {
 	}
 	with := func(extra map[string]string) map[string]string {
 		out := map[string]string{}
-		for k, v := range chips {
-			out[k] = v
-		}
-		for k, v := range extra {
-			out[k] = v
-		}
+		maps.Copy(out, chips)
+		maps.Copy(out, extra)
 		return out
 	}
 	cases := []struct {

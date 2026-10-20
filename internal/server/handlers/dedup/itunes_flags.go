@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/itunes_flags.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1e5a94-3b82-4d6f-a0e9-52f8d4c1b673
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package deduphandler
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -128,9 +129,7 @@ func iTunesFlags(ctx context.Context, store iTunesFlagStore, books []*database.B
 			len(ids)-len(run.flags), len(ids), iTunesFlagBudget)
 	}
 	out := make(map[string]bool, len(run.flags))
-	for id, v := range run.flags {
-		out[id] = v
-	}
+	maps.Copy(out, run.flags)
 	return out, nil
 }
 

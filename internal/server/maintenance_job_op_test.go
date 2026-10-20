@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d6fc8245-22c3-4636-a194-c57f613cf3af
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package server
 
@@ -188,14 +188,14 @@ func TestMaintenanceOpPermissionsMatchTheV1Rule(t *testing.T) {
 	require.Positive(t, plain, "every job implements PermissionAware — the default branch asserted nothing")
 
 	// The PermissionAware branch, with a synthetic job.
-	aware := &permissionAwareProbeJob{customParamsProbeJob: customParamsProbeJob{id: "synthetic-aware"}, perm: string(auth.PermLibraryEditMetadata)}
+	aware := &permissionAwareProbeJob{id: "synthetic-aware", perm: string(auth.PermLibraryEditMetadata)}
 	require.NoError(t, (&Server{}).registerMaintenanceJobOp(reg, aware))
 	def, ok := reg.Def("maintenance.synthetic-aware")
 	require.True(t, ok)
 	require.Equal(t, []auth.Permission{auth.PermLibraryEditMetadata}, def.Permissions)
 
 	// An empty Permission() falls back to the default rather than declaring "".
-	blank := &permissionAwareProbeJob{customParamsProbeJob: customParamsProbeJob{id: "synthetic-blank"}}
+	blank := &permissionAwareProbeJob{id: "synthetic-blank"}
 	require.NoError(t, (&Server{}).registerMaintenanceJobOp(reg, blank))
 	def, ok = reg.Def("maintenance.synthetic-blank")
 	require.True(t, ok)

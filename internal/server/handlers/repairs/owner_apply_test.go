@@ -1,13 +1,14 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package repairs
 
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -174,12 +175,8 @@ func TestOwnerApply_OnlyTheAccessOwner(t *testing.T) {
 			t.Run(rowID+"/"+name, func(t *testing.T) {
 				r, enq, _ := ownerSetupWithEmail(t, tc.caller, tc.ownerEmail)
 				hdr := map[string]string{}
-				for k, v := range browserHdrs {
-					hdr[k] = v
-				}
-				for k, v := range tc.hdr {
-					hdr[k] = v
-				}
+				maps.Copy(hdr, browserHdrs)
+				maps.Copy(hdr, tc.hdr)
 				w := ownerPost(r, ownerPath, body, hdr)
 				require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 				require.Empty(t, enq.calls)
