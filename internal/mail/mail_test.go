@@ -1,5 +1,5 @@
 // file: internal/mail/mail_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4390d39b-6ec5-4a8e-a468-83a1beaa191b
 // last-edited: 2026-10-19
 
@@ -291,6 +291,82 @@ func TestSend_RemoteNoStartTLSRefusesAuth(t *testing.T) {
 	}
 	if f.authPlain != "" {
 		t.Fatal("credentials were sent in clear text")
+	}
+}
+
+func TestSend_NonLoopbackWithoutStartTLSRefused(t *testing.T) {
+	f := &fakeSMTP{}
+	port, _ := startFake(t, f)
+	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com", Username: "u", Password: "pw-SENTINEL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.treatAsRemote = true
+	err = s.Send(context.Background(), testMsg)
+	if err == nil {
+		t.Fatal("a non-loopback host without STARTTLS must be refused")
+	}
+	if !strings.Contains(err.Error(), "STARTTLS") || strings.Contains(err.Error(), "pw-SENTINEL") {
+		t.Fatalf("error = %q", err)
+	}
+	f.wait(t)
+	if f.mailFrom != "" || f.rcptTo != "" || f.data != "" || f.authPlain != "" {
+		t.Fatalf("server saw commands: from=%q rcpt=%q data=%q auth=%q", f.mailFrom, f.rcptTo, f.data, f.authPlain)
+	}
+}
+
+func TestSend_NonLoopbackNoUsernameStillRequiresTLS(t *testing.T) {
+	f := &fakeSMTP{}
+	port, _ := startFake(t, f)
+	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.treatAsRemote = true
+	if err := s.Send(context.Background(), testMsg); err == nil {
+		t.Fatal("an unauthenticated relay off this machine must still use TLS")
+	}
+	f.wait(t)
+	if f.mailFrom != "" || f.data != "" {
+		t.Fatal("message sent without TLS")
+	}
+}
+
+func TestSend_NonLoopbackWithStartTLSSucceeds(t *testing.T) {
+	f := &fakeSMTP{offerTLS: true}
+	port, pool := startFake(t, f)
+	s, err := NewSMTPSender(SMTPConfig{
+		Host: "127.0.0.1", Port: port, From: "books@example.com",
+		TLSConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.treatAsRemote = true
+	if err := s.Send(context.Background(), testMsg); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	f.wait(t)
+	if !f.startTLSUsed {
+		t.Fatal("STARTTLS must be used for a non-loopback host")
+	}
+	checkMIME(t, f.data)
+}
+
+func TestSend_NonLoopbackStartTLSBadCertRefused(t *testing.T) {
+	f := &fakeSMTP{offerTLS: true}
+	port, _ := startFake(t, f) // pool deliberately not trusted
+	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.treatAsRemote = true
+	if err := s.Send(context.Background(), testMsg); err == nil {
+		t.Fatal("an unverifiable certificate must fail the send")
+	}
+	f.wait(t)
+	if f.data != "" {
+		t.Fatal("message sent over an unverified connection")
 	}
 }
 
