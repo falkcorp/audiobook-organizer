@@ -1,11 +1,12 @@
 // file: internal/oauth/resolve_verified_email_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b7d1909a-d742-41fb-b8cf-25bdae5ca124
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package oauth
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -67,9 +68,10 @@ func TestResolveUser_VerifiedLoginTakesBackASelfSetEmail(t *testing.T) {
 	}
 }
 
-// Without a store that can take the address back, an unverified holder still
-// blocks linking: the login is denied, nothing is linked.
-func TestResolveUser_UnverifiedHolderWithoutDisplacerIsDenied(t *testing.T) {
+// Without a store that can take the address back, CreateUser decides: its
+// ErrUserEmailTaken now means another account holds the address proven, so
+// the login is denied as a conflict and nothing is linked.
+func TestResolveUser_ProvenHolderWithoutDisplacerIsDenied(t *testing.T) {
 	store := newResolverStore()
 	store.CreateUserFunc = func(string, string, string, string, []string, string) (*database.User, error) {
 		return nil, database.ErrUserEmailTaken
@@ -80,8 +82,8 @@ func TestResolveUser_UnverifiedHolderWithoutDisplacerIsDenied(t *testing.T) {
 		return nil, nil
 	}
 	cfg := New(Config{AllowedEmails: []string{"victim@example.com"}, DefaultRole: "viewer"})
-	if _, err := cfg.ResolveUser(store, verifiedClaims("victim@example.com", "g-1")); !errors.Is(err, ErrEmailHeldUnverified) || !errors.Is(err, ErrEmailNotAllowed) {
-		t.Fatalf("err = %v, want ErrEmailHeldUnverified (an ErrEmailNotAllowed)", err)
+	if _, err := cfg.ResolveUser(store, verifiedClaims("victim@example.com", "g-1")); !errors.Is(err, ErrEmailConflict) || !errors.Is(err, ErrEmailNotAllowed) {
+		t.Fatalf("err = %v, want ErrEmailConflict (an ErrEmailNotAllowed)", err)
 	}
 	if linked {
 		t.Fatal("nothing may be linked")
@@ -251,5 +253,106 @@ func TestResolveUser_SelfSetListedAddressIsDisplacedByTheRealIdPLogin(t *testing
 	}
 	if v, _ := s.GetUserByVerifiedEmail("guest@example.com"); v == nil || v.ID != user.ID || v.EmailSource != database.EmailSourceIdP {
 		t.Fatalf("the guest's account must hold it verified, source idp: %+v", v)
+	}
+}
+
+// writeLegacyUserRow rewrites u's row the way a build from before
+// email_source existed left it: the given email, no EmailSource, and no
+// change to any index.
+func writeLegacyUserRow(t *testing.T, s *database.PebbleStore, u *database.User, email string) {
+	t.Helper()
+	u.Email, u.EmailSource = email, ""
+	data, err := json.Marshal(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRaw("u:"+u.ID, data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// NIT8: a legacy row that typed a guest's address into its profile on an
+// older build has no EmailSource. Reconcile (run at every store open) stamps
+// it "self", and the guest's first verified SSO login then takes the address
+// back instead of linking to the squatter. A legacy row whose address was set
+// when the account was created (the key CreateUser wrote) is stamped "setup"
+// and is linked to.
+func TestResolveUser_LegacySquatterRowAfterReconcile(t *testing.T) {
+	s := newResolvePebble(t)
+	squatter, err := s.CreateUser("squatter", "", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLegacyUserRow(t, s, squatter, "guest@example.com")
+	creator, err := s.CreateUser("creator", "creator@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLegacyUserRow(t, s, creator, "creator@example.com")
+
+	res, err := s.ReconcileVerifiedEmails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Stamped[database.EmailSourceSelf] != 1 || res.Stamped[database.EmailSourceSetup] != 1 {
+		t.Fatalf("stamped %v, want one self and one setup", res.Stamped)
+	}
+
+	var hookDisplaced []string
+	cfg := New(Config{
+		AllowedEmails: []string{"guest@example.com", "creator@example.com"}, DefaultRole: "viewer",
+		OnEmailDisplaced: func(_ string, displaced []string, _ string) { hookDisplaced = displaced },
+	})
+	user, err := cfg.ResolveUser(s, verifiedClaims("Guest@Example.com", "g-guest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.ID == squatter.ID {
+		t.Fatal("the guest's SSO login was linked to the legacy squatter")
+	}
+	if len(hookDisplaced) != 1 || hookDisplaced[0] != squatter.ID {
+		t.Fatalf("displaced %v, want the squatter", hookDisplaced)
+	}
+	if got, _ := s.GetUserByID(squatter.ID); got.Email != "" {
+		t.Fatalf("the squatter keeps its account and loses the address: %q", got.Email)
+	}
+
+	linked, err := cfg.ResolveUser(s, verifiedClaims("creator@example.com", "g-creator"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked.ID != creator.ID {
+		t.Fatalf("the setup-stamped legacy account must be linked; got %s", linked.ID)
+	}
+}
+
+// NIT4: step 4 decides and links in one locked store call. An account that
+// gave its verified address up is not linked to, and nothing is written when
+// no account holds the address proven.
+func TestLinkIdentityToVerifiedEmailHolder(t *testing.T) {
+	s := newResolvePebble(t)
+	holder, err := s.CreateUser("holder", "held@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := &database.OAuthIdentity{Provider: ProviderGoogle, Subject: "g-1", Email: "held@example.com"}
+	got, err := s.LinkIdentityToVerifiedEmailHolder(id, "HELD@example.com")
+	if err != nil || got == nil || got.ID != holder.ID {
+		t.Fatalf("link = %+v, %v; want the holder", got, err)
+	}
+	if linked, _ := s.GetOAuthIdentityByProviderSubject(ProviderGoogle, "g-1"); linked == nil || linked.UserID != holder.ID {
+		t.Fatalf("identity = %+v; want it linked to the holder", linked)
+	}
+
+	holder.Email = "moved@example.com"
+	if err := s.UpdateUser(holder); err != nil {
+		t.Fatal(err)
+	}
+	id2 := &database.OAuthIdentity{Provider: ProviderGoogle, Subject: "g-2", Email: "held@example.com"}
+	if got, err := s.LinkIdentityToVerifiedEmailHolder(id2, "held@example.com"); err != nil || got != nil {
+		t.Fatalf("link after the holder moved = %+v, %v; want nil", got, err)
+	}
+	if linked, _ := s.GetOAuthIdentityByProviderSubject(ProviderGoogle, "g-2"); linked != nil {
+		t.Fatalf("nothing may be written without a proven holder: %+v", linked)
 	}
 }

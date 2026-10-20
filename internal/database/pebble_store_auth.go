@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -53,15 +53,57 @@ type StrictUserLister interface {
 // self-service email change (UpdateUser) never writes it; it only drops the
 // key for the address the user gave up.
 //
-// Email uniqueness is not this index: User.Email is unique among all users,
-// compared case-insensitively by scanning the rows (emailHeldByOther), because
-// a self-set address has no key.
+// Email uniqueness is enforced among PROVEN holders only: at most one account
+// holds a given address proven (emailProvenFor). Every path that makes an
+// address proven (CreateUser, ConsumeInvite, SetUserEmailAsAdmin,
+// MarkUserEmailVerified, CreateUserDisplacingUnverifiedEmail) refuses, or
+// does nothing, when another account already holds it proven
+// (provenHolderOtherLocked). A self-set address (UpdateUser) is never proven,
+// so it is not checked at all: two accounts may type in the same address, and
+// neither copy links an SSO login. Refusing a self-set duplicate would tell
+// any signed-in user which addresses have accounts, and would protect nothing.
 const userEmailIndexPrefix = "idx:user:email:"
 
-// emailHeldByOther reports whether any user other than exceptID has lower
-// (already lowercased and trimmed) as its current email. User counts are
-// small, so this scans the rows instead of trusting an index.
-func (p *PebbleStore) emailHeldByOther(lower, exceptID string) (bool, error) {
+// provenHolderOtherLocked reports whether any user other than exceptID holds
+// lower (already normalized) proven (emailProvenFor). It sees the rows the
+// verified lookup sees (verifiedHolderLocked): an unreadable user row is
+// skipped and logged, as it is there. That row cannot be linked to by an SSO
+// login while it is unreadable, and if it is ever repaired into a second
+// proven holder, the lookup reports a conflict and links nobody. (The
+// displacement paths are stricter, unprovenHoldersLocked: they rewrite other
+// accounts' rows, so they refuse when any row is unreadable.) Caller holds
+// inviteMu.
+func (p *PebbleStore) provenHolderOtherLocked(lower, exceptID string) (bool, error) {
+	if lower == "" {
+		return false, nil
+	}
+	users, badKeys, err := p.listUsers()
+	if err != nil {
+		return false, err
+	}
+	if len(badKeys) > 0 {
+		authLog.Warn("verified-email uniqueness check: %d user row(s) unreadable and skipped", len(badKeys))
+	}
+	for i := range users {
+		if users[i].ID == exceptID {
+			continue
+		}
+		proven, err := p.emailProvenFor(&users[i], lower)
+		if err != nil {
+			return false, err
+		}
+		if proven {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// emailHeldByAny reports whether any readable user row has lower (already
+// normalized) as its current email, proven or not. ConsumeInvite and
+// CreateUserDisplacingUnverifiedEmail use it only to skip the displacement
+// pass when nobody holds the address.
+func (p *PebbleStore) emailHeldByAny(lower string) (bool, error) {
 	if lower == "" {
 		return false, nil
 	}
@@ -70,7 +112,7 @@ func (p *PebbleStore) emailHeldByOther(lower, exceptID string) (bool, error) {
 		return false, err
 	}
 	for _, u := range users {
-		if u.ID != exceptID && strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+		if util.NormalizeEmail(u.Email) == lower {
 			return true, nil
 		}
 	}
@@ -79,7 +121,8 @@ func (p *PebbleStore) emailHeldByOther(lower, exceptID string) (bool, error) {
 
 // CreateUser creates a user and records its email as verified (see the email
 // keys above), so it is for trusted callers only. An email another user
-// already has is refused with an error wrapping ErrUserEmailTaken.
+// already holds proven is refused with an error wrapping ErrUserEmailTaken;
+// accounts that only typed it in keep their unverified copy.
 func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error) {
 	// inviteMu guards every email uniqueness check-then-write (CreateUser,
 	// UpdateUser, CreateInvite, ConsumeInvite), so none of them can claim an
@@ -87,17 +130,17 @@ func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
 	lowerUser := strings.ToLower(username)
-	lowerEmail := strings.ToLower(strings.TrimSpace(email))
+	lowerEmail := util.NormalizeEmail(email)
 
 	// uniqueness checks
 	if _, closer, err := p.db.Get([]byte("idx:user:username:" + lowerUser)); err == nil {
 		closer.Close()
 		return nil, fmt.Errorf("username already exists")
 	}
-	if taken, err := p.emailHeldByOther(lowerEmail, ""); err != nil {
+	if taken, err := p.provenHolderOtherLocked(lowerEmail, ""); err != nil {
 		return nil, err
 	} else if taken {
-		return nil, fmt.Errorf("email already exists: %w", ErrUserEmailTaken)
+		return nil, fmt.Errorf("email already verified for another account: %w", ErrUserEmailTaken)
 	}
 
 	id, err := newULID()
@@ -162,7 +205,7 @@ func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passw
 	userWriteMu.Lock() // the holders' rows are rewritten
 	defer userWriteMu.Unlock()
 	lowerUser := strings.ToLower(username)
-	lowerEmail := strings.ToLower(strings.TrimSpace(email))
+	lowerEmail := util.NormalizeEmail(email)
 	if lowerEmail == "" {
 		return nil, nil, fmt.Errorf("create user displacing unverified email: email required")
 	}
@@ -170,9 +213,16 @@ func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passw
 		closer.Close()
 		return nil, nil, fmt.Errorf("username already exists")
 	}
-	holders, err := p.unprovenHoldersLocked(lowerEmail)
-	if err != nil {
+	// Only an address someone holds needs the strict scan: it refuses on an
+	// unreadable row, which must not deny every first login when nobody
+	// holds the address at all.
+	var holders []User
+	if held, err := p.emailHeldByAny(lowerEmail); err != nil {
 		return nil, nil, err
+	} else if held {
+		if holders, err = p.unprovenHoldersLocked(lowerEmail); err != nil {
+			return nil, nil, err
+		}
 	}
 	now := time.Now()
 	b := p.db.NewBatch()
@@ -227,7 +277,7 @@ func (p *PebbleStore) unprovenHoldersLocked(lower string) ([]User, error) {
 	var holders []User
 	for i := range users {
 		u := users[i]
-		if !strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+		if util.NormalizeEmail(u.Email) != lower {
 			continue
 		}
 		proven, err := p.emailProvenFor(&u, lower)
@@ -303,7 +353,7 @@ func (p *PebbleStore) GetUserByUsername(username string) (*User, error) {
 // cache; it then repairs that cache key if it disagrees. A self-set address
 // is never found here.
 func (p *PebbleStore) GetUserByVerifiedEmail(email string) (*User, error) {
-	lower := strings.ToLower(strings.TrimSpace(email))
+	lower := util.NormalizeEmail(email)
 	if lower == "" {
 		return nil, nil
 	}
@@ -325,7 +375,7 @@ func (p *PebbleStore) GetUserByVerifiedEmail(email string) (*User, error) {
 // current email. Not on Store; resolve it with AsCapability.
 type VerifiedEmailMarker interface {
 	// MarkUserEmailVerified records email as verified for userID when it is
-	// the user's current email and no other user's verified email, and sets
+	// the user's current email and no other account holds it proven, and sets
 	// the user's EmailSource to EmailSourceIdP. Anything else is a no-op
 	// (false, nil): it never takes an address from someone.
 	MarkUserEmailVerified(userID, email string) (bool, error)
@@ -342,26 +392,27 @@ func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) 
 	defer p.inviteMu.Unlock()
 	userWriteMu.Lock() // the row's EmailSource is rewritten
 	defer userWriteMu.Unlock()
-	lower := strings.ToLower(strings.TrimSpace(email))
+	lower := util.NormalizeEmail(email)
 	if lower == "" {
 		return false, nil
 	}
 	u, err := p.GetUserByID(userID)
-	if err != nil || u == nil || !strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+	if err != nil || u == nil || util.NormalizeEmail(u.Email) != lower {
 		return false, err
+	}
+	// Another account holding the address proven wins, whatever the cache
+	// key says: checking only the key let two accounts take turns rewriting
+	// it, each login pointing it at itself.
+	if taken, err := p.provenHolderOtherLocked(lower, userID); err != nil {
+		return false, err
+	} else if taken {
+		return false, nil // someone else's verified address
 	}
 	key := []byte(userEmailIndexPrefix + lower)
 	keyed := false
 	if v, closer, err := p.db.Get(key); err == nil {
-		holder := string(v)
+		keyed = string(v) == userID
 		closer.Close()
-		if holder == userID {
-			keyed = true
-		} else if other, err := p.GetUserByID(holder); err != nil {
-			return false, err
-		} else if other != nil && strings.EqualFold(strings.TrimSpace(other.Email), lower) {
-			return false, nil // someone else's verified address
-		}
 	} else if err != pebble.ErrNotFound {
 		return false, err
 	}
@@ -397,7 +448,7 @@ func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) 
 // holds email with EmailSource idp, so there is nothing to write. Any doubt
 // (a read error, a mismatch) returns false and the locked path decides.
 func (p *PebbleStore) emailAlreadyIdPVerified(userID, email string) bool {
-	lower := strings.ToLower(strings.TrimSpace(email))
+	lower := util.NormalizeEmail(email)
 	if lower == "" {
 		return false
 	}
@@ -412,7 +463,7 @@ func (p *PebbleStore) emailAlreadyIdPVerified(userID, email string) bool {
 	}
 	u, err := p.GetUserByID(userID)
 	return err == nil && u != nil && u.EmailSource == EmailSourceIdP &&
-		strings.EqualFold(strings.TrimSpace(u.Email), lower)
+		util.NormalizeEmail(u.Email) == lower
 }
 
 // userWriteMu serializes every rewrite of an existing user row (UpdateUser and
@@ -450,9 +501,10 @@ var ErrUserStale = errors.New("database: user changed since it was read")
 // read before one of those ops landed (re-read and retry).
 var ErrUserProtectedField = errors.New("database: UpdateUser cannot change password, status or credential epoch")
 
-// ErrUserEmailTaken is returned by UpdateUser when another account already
-// has the new email (compared case-insensitively).
-var ErrUserEmailTaken = errors.New("database: another account already uses that email address")
+// ErrUserEmailTaken is returned when an address is about to be made proven
+// for an account while another account already holds it proven, or when an
+// unreadable user row means that cannot be ruled out.
+var ErrUserEmailTaken = errors.New("database: another account already has that email address verified")
 
 // UpdateUser rewrites a user row's ordinary fields (email, roles, ...). Under
 // userWriteMu it re-reads the stored row and refuses (ErrUserProtectedField) a
@@ -460,9 +512,9 @@ var ErrUserEmailTaken = errors.New("database: another account already uses that 
 // it, so a whole-row write can never change, or revert, any of them. An unknown
 // id is ErrUserNotFound.
 //
-// An email change is refused (ErrUserEmailTaken) when any other user's current
-// email matches the new one case-insensitively. A change never makes the new
-// address verified: UpdateUser is the self-service path (PATCH /auth/me), so it
+// An email change is never refused for being another account's address (see
+// the email keys: uniqueness is among proven holders, and a self-set address
+// is never proven). A change never makes the new address verified: UpdateUser is the self-service path (PATCH /auth/me), so it
 // never writes the verified-email key, and it drops the key for the address the
 // user gave up, in the same batch as the row, when that key points here. (A
 // self-set address that was verified would let anyone take over another
@@ -470,9 +522,9 @@ var ErrUserEmailTaken = errors.New("database: another account already uses that 
 // store owns User.EmailSource: an email change sets it to EmailSourceSelf,
 // and otherwise the stored value is kept whatever the caller sent.
 //
-// inviteMu is taken first (lock order inviteMu, then userWriteMu): it guards
-// every email uniqueness check-then-write, so none of CreateUser, CreateInvite
-// or ConsumeInvite can claim the address between this check and this write.
+// inviteMu is taken first (lock order inviteMu, then userWriteMu): the proven
+// checks of the other email writers read this row's email under it, so a
+// change cannot land between one of their checks and its write.
 func (p *PebbleStore) UpdateUser(user *User) error {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
@@ -491,15 +543,8 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 		user.Status != stored.Status || user.CredentialEpoch != stored.CredentialEpoch {
 		return fmt.Errorf("%w (user %s)", ErrUserProtectedField, user.ID)
 	}
-	oldEmail := strings.ToLower(strings.TrimSpace(stored.Email))
-	newEmail := strings.ToLower(strings.TrimSpace(user.Email))
-	if newEmail != oldEmail {
-		if taken, err := p.emailHeldByOther(newEmail, user.ID); err != nil {
-			return err
-		} else if taken {
-			return ErrUserEmailTaken
-		}
-	}
+	oldEmail := util.NormalizeEmail(stored.Email)
+	newEmail := util.NormalizeEmail(user.Email)
 	// EmailSource is the store's to set: a self-service change makes it
 	// "self", anything else keeps what is stored, whatever the caller sent.
 	user.EmailSource = stored.EmailSource
@@ -543,8 +588,11 @@ type AdminEmailSetter interface {
 	// EmailSource admin, so the address counts as verified: the caller must
 	// have checked that the acting user holds the admin role, who can
 	// already give any address access directly. An address another account
-	// has is refused with ErrUserEmailTaken (clear it there first); an
-	// unknown id is ErrUserNotFound. It returns the email the user had.
+	// holds proven is refused with ErrUserEmailTaken, even when it is already
+	// this user's (re-setting it would make it proven for two accounts); clear
+	// it there or merge the accounts first. Accounts that only typed it in
+	// keep their unverified copy. An unknown id is ErrUserNotFound. It
+	// returns the email the user had.
 	SetUserEmailAsAdmin(userID, email string) (previous string, err error)
 }
 
@@ -567,14 +615,14 @@ func (p *PebbleStore) SetUserEmailAsAdmin(userID, email string) (string, error) 
 	}
 	previous := stored.Email
 	email = strings.TrimSpace(email)
-	oldLower := strings.ToLower(strings.TrimSpace(stored.Email))
-	newLower := strings.ToLower(email)
-	if newLower != oldLower {
-		if taken, err := p.emailHeldByOther(newLower, userID); err != nil {
-			return "", err
-		} else if taken {
-			return "", ErrUserEmailTaken
-		}
+	oldLower := util.NormalizeEmail(stored.Email)
+	newLower := util.NormalizeEmail(email)
+	// Checked even when the address is unchanged: the write below makes it
+	// proven for this user, so another proven holder must not exist.
+	if taken, err := p.provenHolderOtherLocked(newLower, userID); err != nil {
+		return "", err
+	} else if taken {
+		return "", ErrUserEmailTaken
 	}
 	runUserWriteAfterReadHook()
 	stored.Email = email
@@ -1146,9 +1194,11 @@ func (p *PebbleStore) TouchAPIKeyLastUsed(id string, at time.Time, ip string) er
 	return p.db.Set([]byte("apikey:"+id), data, pebble.NoSync)
 }
 
-// CreateInvite stores a new invite. An invite with an email is refused when a
-// user already has that email (ErrInviteEmailTaken): emails are unique, and
-// accepting it would give a second account the same address.
+// CreateInvite stores a new invite. An invite with an email is refused
+// (ErrInviteEmailTaken) when another account holds that address proven:
+// accepting it could never bind the address. An account that only typed it
+// in does not block the invite; accepting a delivered admin invite takes the
+// address from it (ConsumeInvite).
 func (p *PebbleStore) CreateInvite(invite *Invite) (*Invite, error) {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
@@ -1167,8 +1217,8 @@ func (p *PebbleStore) CreateInvite(invite *Invite) (*Invite, error) {
 	if invite.ExpiresAt.IsZero() {
 		invite.ExpiresAt = invite.CreatedAt.Add(7 * 24 * time.Hour)
 	}
-	invite.Email = strings.ToLower(strings.TrimSpace(invite.Email))
-	if taken, err := p.emailHeldByOther(invite.Email, ""); err != nil {
+	invite.Email = util.NormalizeEmail(invite.Email)
+	if taken, err := p.provenHolderOtherLocked(invite.Email, ""); err != nil {
 		return nil, err
 	} else if taken {
 		return nil, ErrInviteEmailTaken
@@ -1299,7 +1349,7 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		closer.Close()
 		return nil, fmt.Errorf("username %q taken since invite was created", inv.Username)
 	}
-	inviteEmail := strings.ToLower(strings.TrimSpace(inv.Email))
+	inviteEmail := util.NormalizeEmail(inv.Email)
 	lowerEmail := "" // the email bound to the new account, if any
 	grantSSO := false
 	var displace []User // accounts that typed the bound address in
@@ -1330,7 +1380,7 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		// login does, so the same rule applies: accounts that only typed the
 		// address in lose it, in this batch; a holder with the address
 		// proven, or an unreadable user row, refuses the accept.
-		if held, err := p.emailHeldByOther(inviteEmail, ""); err != nil {
+		if held, err := p.emailHeldByAny(inviteEmail); err != nil {
 			return nil, err
 		} else if held {
 			userWriteMu.Lock() // the holders' rows are rewritten

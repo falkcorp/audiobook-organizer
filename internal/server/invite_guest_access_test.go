@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
@@ -362,14 +362,17 @@ func TestRevokeGuestAccess_SelfSetEmailDoesNotBlockRemoval(t *testing.T) {
 	}
 }
 
-// Through the real route, a second account cannot take an address another
-// account holds, and the answer does not say the address is registered.
-func TestUpdateMeRoute_RefusesAnotherAccountsEmail(t *testing.T) {
+// SF2: through the real route, typing in an address another account holds
+// verified succeeds and stays unverified: the profile form answers the same
+// way for every address, so it cannot be used to test which ones have
+// accounts, and the copy links no SSO login.
+func TestUpdateMeRoute_AnotherAccountsEmailIsAllowedUnverified(t *testing.T) {
 	saved := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
 	config.Mutate(func(c *config.Config) { c.EnableAuth = true })
 	srv, store := setupUserHandlerServer(t)
-	if _, err := store.CreateUser("holder", "held@example.com", "bcrypt", "h", []string{"viewer"}, "active"); err != nil {
+	holder, err := store.CreateUser("holder", "held@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
 		t.Fatal(err)
 	}
 	me, err := store.CreateUser("me", "me@example.com", "bcrypt", "h", []string{"viewer"}, "active")
@@ -386,11 +389,15 @@ func TestUpdateMeRoute_RefusesAnotherAccountsEmail(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+sess.ID)
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "another account") || strings.Contains(w.Body.String(), "already") {
-		t.Fatalf("PATCH /auth/me with a taken email: %d %s; want a generic 400", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("PATCH /auth/me with another account's address: %d %s; want 200", w.Code, w.Body.String())
 	}
-	if got, _ := store.GetUserByID(me.ID); got.Email != "me@example.com" {
-		t.Fatalf("the refused change must not be written: %q", got.Email)
+	got, _ := store.GetUserByID(me.ID)
+	if got.EmailSource != database.EmailSourceSelf {
+		t.Fatalf("the copy has source %q, want self", got.EmailSource)
+	}
+	if u, _ := store.GetUserByVerifiedEmail("held@example.com"); u == nil || u.ID != holder.ID {
+		t.Fatalf("the verified holder must be unchanged: %+v", u)
 	}
 }
 

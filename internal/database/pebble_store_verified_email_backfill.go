@@ -1,15 +1,17 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Verified email, computed live.
@@ -45,7 +47,7 @@ func trustedEmailSource(source string) bool {
 // next store open stamps it) prove nothing. It does not look at other
 // holders; callers treat two proven holders as a conflict.
 func (p *PebbleStore) emailProvenFor(u *User, lower string) (bool, error) {
-	if !strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+	if util.NormalizeEmail(u.Email) != lower {
 		return false, nil
 	}
 	if trustedEmailSource(u.EmailSource) {
@@ -63,7 +65,7 @@ func (p *PebbleStore) emailProvenFor(u *User, lower string) (bool, error) {
 		return false, err
 	}
 	for _, id := range ids {
-		if strings.EqualFold(strings.TrimSpace(id.Email), lower) {
+		if util.NormalizeEmail(id.Email) == lower {
 			return true, nil
 		}
 	}
@@ -135,7 +137,12 @@ type ReconcileResult struct {
 	Stamped map[string]int
 	// StampedSelfAdmins lists admin-role accounts stamped "self": after this,
 	// an SSO login with that address takes it from them.
-	StampedSelfAdmins              []string
+	StampedSelfAdmins []string
+	// SelfAdminsVerifiedElsewhere is the subset of StampedSelfAdmins whose
+	// address another account already holds proven. Setting the address for
+	// them is refused (it would be proven twice); the duplicate account has
+	// to be cleared or merged instead.
+	SelfAdminsVerifiedElsewhere    []string
 	Kept, Added, Dropped, Conflict int // cache keys
 }
 
@@ -164,12 +171,43 @@ func (p *PebbleStore) ReconcileVerifiedEmails() (ReconcileResult, error) {
 	if n := len(res.Stamped); n > 0 {
 		authLog.Info("verified email: stamped email sources on rows from an older build: %v", res.Stamped)
 	}
-	if len(res.StampedSelfAdmins) > 0 {
-		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves; an SSO login with that address will take it from them. An admin can set it for them to keep it", res.StampedSelfAdmins)
+	if err := p.classifySelfAdminsLocked(&res); err != nil {
+		authLog.Warn("verified email: could not check whether the self-set admin addresses are verified elsewhere: %v", err)
+	}
+	if settable := slices.DeleteFunc(slices.Clone(res.StampedSelfAdmins), func(id string) bool {
+		return slices.Contains(res.SelfAdminsVerifiedElsewhere, id)
+	}); len(settable) > 0 {
+		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves; an SSO login with that address will take it from them. An admin can set it for them on the Users page to keep it", settable)
+	}
+	if len(res.SelfAdminsVerifiedElsewhere) > 0 {
+		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves that another account already has verified; SSO with that address reaches the other account. Setting it for them will be refused: clear the address from the duplicate account, or merge the two accounts", res.SelfAdminsVerifiedElsewhere)
 	}
 	authLog.Info("verified-email cache reconciled: %d kept, %d added, %d dropped, %d conflicted",
 		res.Kept, res.Added, res.Dropped, res.Conflict)
 	return res, nil
+}
+
+// classifySelfAdminsLocked fills res.SelfAdminsVerifiedElsewhere: the admins
+// stamped "self" whose address another account holds proven. Caller holds
+// inviteMu.
+func (p *PebbleStore) classifySelfAdminsLocked(res *ReconcileResult) error {
+	for _, id := range res.StampedSelfAdmins {
+		u, err := p.GetUserByID(id)
+		if err != nil {
+			return err
+		}
+		if u == nil {
+			continue
+		}
+		elsewhere, err := p.provenHolderOtherLocked(util.NormalizeEmail(u.Email), id)
+		if err != nil {
+			return err
+		}
+		if elsewhere {
+			res.SelfAdminsVerifiedElsewhere = append(res.SelfAdminsVerifiedElsewhere, id)
+		}
+	}
+	return nil
 }
 
 // stampLegacyEmailSourcesLocked gives every decodable row that has an email
@@ -243,19 +281,19 @@ func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error 
 //     both spellings are checked;
 //  4. anything else was typed in through the profile: "self".
 func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error) {
-	lower := strings.ToLower(strings.TrimSpace(u.Email))
+	lower := util.NormalizeEmail(u.Email)
 	ids, err := p.GetOAuthIdentitiesForUser(u.ID)
 	if err != nil {
 		return "", err
 	}
 	for _, id := range ids {
-		if strings.EqualFold(strings.TrimSpace(id.Email), lower) {
+		if util.NormalizeEmail(id.Email) == lower {
 			return EmailSourceIdP, nil
 		}
 	}
 	for i := range invites {
 		inv := &invites[i]
-		if inv.UsedAt == nil || !strings.EqualFold(strings.TrimSpace(inv.Email), lower) {
+		if inv.UsedAt == nil || util.NormalizeEmail(inv.Email) != lower {
 			continue
 		}
 		created := inv.AcceptedUserID == u.ID ||
@@ -277,7 +315,7 @@ func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error
 		}
 		return EmailSourceInviteLink, nil
 	}
-	for _, spelling := range []string{lower, strings.ToLower(u.Email)} {
+	for _, spelling := range []string{lower, strings.ToLower(strings.TrimSpace(u.Email)), strings.ToLower(u.Email)} {
 		v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + spelling))
 		if err == pebble.ErrNotFound {
 			continue
@@ -311,7 +349,7 @@ func (p *PebbleStore) rewriteVerifiedEmailCacheLocked(res *ReconcileResult) erro
 	conflicted := map[string]bool{}
 	for i := range users {
 		u := &users[i]
-		lower := strings.ToLower(strings.TrimSpace(u.Email))
+		lower := util.NormalizeEmail(u.Email)
 		if lower == "" {
 			continue
 		}

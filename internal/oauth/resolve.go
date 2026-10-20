@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package oauth
 
@@ -12,18 +12,13 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Sentinel errors so callers can map to the right HTTP status (both → 403, never 500).
 var (
 	ErrEmailNotVerified = errors.New("oauth: identity email is not verified")
 	ErrEmailNotAllowed  = errors.New("oauth: email is not on the allowlist")
-	// ErrEmailHeldUnverified: an existing account has this address as a
-	// self-set, unverified email and the store cannot take it back
-	// (no database.UnverifiedEmailDisplacer). The login is not linked to that
-	// account. It wraps ErrEmailNotAllowed so every caller's existing deny
-	// path (403, never 500) applies.
-	ErrEmailHeldUnverified = fmt.Errorf("%w: an existing account has this email unverified, so the login is not linked to it", ErrEmailNotAllowed)
 	// ErrEmailConflict: another account has this address as its VERIFIED
 	// email, yet the login did not link to it (a concurrent change). Denied,
 	// through the same ErrEmailNotAllowed path.
@@ -51,16 +46,20 @@ type UserStore interface {
 //  3. Resolve by (provider, subject) → existing linked user. When the IdP's
 //     verified email is that user's current email, it is recorded as verified
 //     (database.VerifiedEmailMarker, best-effort).
-//  4. Else resolve by an account's VERIFIED email (GetUserByVerifiedEmail) →
-//     auto-link this identity to that user. A self-set profile email is never
-//     matched: it would let anyone capture another person's first SSO login.
+//  4. Else resolve by an account's VERIFIED email → auto-link this identity
+//     to that user. A self-set profile email is never matched: it would let
+//     anyone capture another person's first SSO login. With a
+//     database.VerifiedEmailIdentityLinker the lookup and the link are one
+//     locked store operation, so the holder cannot change between them.
 //  5. Else auto-create a user (DefaultRole) + link the identity. If accounts
 //     already hold the address UNVERIFIED, the verified login wins: in one
 //     batch the address is cleared from them (they keep their accounts) and
 //     the new user is created with it (database.UnverifiedEmailDisplacer).
 //     That is logged at Warn with the account ids and reported through
 //     Config.OnEmailDisplaced for the admin's audit log. If an account holds
-//     it VERIFIED, the login is denied (ErrEmailConflict).
+//     it VERIFIED, the login is denied (ErrEmailConflict). A store without
+//     the displacer creates the user next to the unverified copies, which
+//     stay unverified.
 //
 // A rejected identity never touches the user/identity store past the lookups.
 func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.User, error) {
@@ -82,7 +81,7 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 		if user == nil {
 			return nil, fmt.Errorf("oauth resolve: linked identity %s points to missing user %s", id.ID, id.UserID)
 		}
-		if strings.EqualFold(strings.TrimSpace(user.Email), strings.TrimSpace(claims.Email)) {
+		if util.SameEmail(user.Email, claims.Email) {
 			if m, ok := database.AsCapability[database.VerifiedEmailMarker](store); ok {
 				// Best-effort: the login itself is already decided. A failure
 				// only means the address stays unverified for now.
@@ -95,26 +94,17 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 	}
 
 	// (4) Link to an existing user whose email is verified and the same.
-	existing, err := store.GetUserByVerifiedEmail(claims.Email)
+	existing, err := c.linkToVerifiedEmailHolder(store, claims)
 	if err != nil {
-		return nil, fmt.Errorf("oauth resolve: lookup user by email: %w", err)
+		return nil, err
 	}
 	if existing != nil {
-		if _, err := store.CreateOAuthIdentity(&database.OAuthIdentity{
-			Provider: claims.Provider, Subject: claims.Subject, Email: claims.Email, UserID: existing.ID,
-		}); err != nil {
-			return nil, fmt.Errorf("oauth resolve: link identity: %w", err)
-		}
 		return existing, nil
 	}
 
 	// (5) Auto-create a new user + link the identity.
 	username := c.uniqueUsername(store, claims)
-	user, err := store.CreateUser(username, claims.Email, "oauth", "", []string{c.DefaultRole}, "active")
-	if errors.Is(err, database.ErrUserEmailTaken) {
-		// Step 4 found no verified holder, so the address is held unverified.
-		user, err = c.displaceUnverifiedHolders(store, username, claims)
-	}
+	user, err := c.createUserForLogin(store, username, claims)
 	if err != nil {
 		return nil, fmt.Errorf("oauth resolve: create user: %w", err)
 	}
@@ -181,12 +171,45 @@ func sanitizeUsername(s string) string {
 	return b.String()
 }
 
-// displaceUnverifiedHolders creates the login's user, taking its IdP-verified
-// address back from the accounts that only typed it in (see ResolveUser step 5).
-func (c *Config) displaceUnverifiedHolders(store UserStore, username string, claims IdentityClaims) (*database.User, error) {
+// linkToVerifiedEmailHolder is ResolveUser step 4: it links the identity to
+// the account holding its address proven and returns that account, or nil
+// when there is none.
+func (c *Config) linkToVerifiedEmailHolder(store UserStore, claims IdentityClaims) (*database.User, error) {
+	identity := &database.OAuthIdentity{Provider: claims.Provider, Subject: claims.Subject, Email: claims.Email}
+	if l, ok := database.AsCapability[database.VerifiedEmailIdentityLinker](store); ok {
+		user, err := l.LinkIdentityToVerifiedEmailHolder(identity, claims.Email)
+		if err != nil {
+			return nil, fmt.Errorf("oauth resolve: link identity by verified email: %w", err)
+		}
+		return user, nil
+	}
+	// A store without the locked link (a test double): look up, then link.
+	existing, err := store.GetUserByVerifiedEmail(claims.Email)
+	if err != nil {
+		return nil, fmt.Errorf("oauth resolve: lookup user by email: %w", err)
+	}
+	if existing == nil {
+		return nil, nil
+	}
+	identity.UserID = existing.ID
+	if _, err := store.CreateOAuthIdentity(identity); err != nil {
+		return nil, fmt.Errorf("oauth resolve: link identity: %w", err)
+	}
+	return existing, nil
+}
+
+// createUserForLogin creates the login's user (ResolveUser step 5), taking
+// its IdP-verified address back from accounts that only typed it in when the
+// store can (database.UnverifiedEmailDisplacer). An account holding the
+// address proven denies the login (ErrEmailConflict).
+func (c *Config) createUserForLogin(store UserStore, username string, claims IdentityClaims) (*database.User, error) {
 	d, ok := database.AsCapability[database.UnverifiedEmailDisplacer](store)
 	if !ok {
-		return nil, ErrEmailHeldUnverified
+		user, err := store.CreateUser(username, claims.Email, "oauth", "", []string{c.DefaultRole}, "active")
+		if errors.Is(err, database.ErrUserEmailTaken) {
+			return nil, ErrEmailConflict
+		}
+		return user, err
 	}
 	user, displaced, err := d.CreateUserDisplacingUnverifiedEmail(username, claims.Email, "oauth", "", []string{c.DefaultRole}, "active")
 	if errors.Is(err, database.ErrUserEmailTaken) {
@@ -194,6 +217,9 @@ func (c *Config) displaceUnverifiedHolders(store UserStore, username string, cla
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(displaced) == 0 {
+		return user, nil
 	}
 	resolveLog.Warn("oauth resolve: verified %s login took its email back from unverified account(s) %v; new account %s",
 		logger.SanitizeLogValue(claims.Provider), displaced, user.ID)
