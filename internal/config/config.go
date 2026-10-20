@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.167.0
+// version: 1.168.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-21
 
@@ -1665,9 +1665,8 @@ type Config struct {
 	// other LAN hosts) connect to this service FROM; list every connector.
 	// Only a request whose peer is one of them has its CF-Connecting-IP header
 	// believed on routes that carry no Access assertion (the public invite
-	// routes and bootstrap). Empty = none: tunnel requests then identify no
-	// visitor, so the invite per-client limit is skipped for them and bootstrap
-	// puts them all in one shared bucket.
+	// routes and bootstrap). An unlisted connector is keyed on its own
+	// address: one rate-limit bucket shared by every visitor it relays.
 	TunnelConnectorAddrs string `json:"-" mapstructure:"tunnel_connector_addrs"`
 
 	// Memory management

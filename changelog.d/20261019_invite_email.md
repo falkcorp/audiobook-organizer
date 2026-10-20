@@ -22,14 +22,16 @@ client, per token (keys are hashed), and global. The tunnel connectors run
 on other LAN hosts and reach the service from their own private addresses, so
 `CF-Connecting-IP` is believed only from a peer listed in the new
 `TUNNEL_CONNECTOR_ADDRS`, or from a local peer whose request carried a
-verified Cloudflare Access assertion. A peer with no Cloudflare markers (any
-`Cf-*` header or the `CF_Authorization` cookie) is a direct caller keyed on
-its own address; IPv6 clients share a bucket per /64. A peer that carries
-markers but is not a listed connector, or a connector with no usable header,
-identifies no client: the per-client layer is skipped rather than shared, so
-tunnel traffic from an unlisted connector gets only the per-token and global
-layers (logged once at start). With the setting unset, a connector request
-stripped of every Cloudflare header would count as a direct caller. The accept body is capped at 4 KiB (413
+verified Cloudflare Access assertion. Every other peer is keyed on its own
+address whatever headers it sends (IPv6 by /64), so forging `Cf-*` headers
+never takes a caller out of per-client limiting; an unlisted connector is
+therefore one bucket for everyone it relays. A listed connector, or a local
+peer, with no usable header identifies no client: the per-client layer is
+skipped rather than shared, and the per-token and global layers still apply.
+Bootstrap tells a direct LAN caller from tunnel traffic by the Cloudflare
+markers (any `Cf-*` header or the `CF_Authorization` cookie); with the
+setting unset, a connector request stripped of every one of them would count
+as a direct caller. The accept body is capped at 4 KiB (413
 above it) and parsed once for both the limiter and the handler. Invite tokens
 are redacted from request logs, trace span attributes (`url.path`) and error
 logs.
