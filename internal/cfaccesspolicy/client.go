@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/client.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c863e806-fb62-4ceb-9226-d971b7d4d048
 // last-edited: 2026-10-19
 
@@ -17,8 +17,9 @@
 // field (see writableFields) goes back exactly as read, with only the include
 // list changed. Server-managed fields (id, created_at, updated_at, app_count,
 // reusable, ...) are never sent. After the PUT the policy is re-read and the
-// include list verified; a mismatch is retried a bounded number of times
-// (the endpoint documents no ETag/If-Match). EnsureEmail only appends;
+// email's presence verified; a mismatch is re-planned from a fresh read and
+// retried a bounded number of times (the endpoint documents no ETag/If-Match),
+// and ends in ErrWriteUnverified if a PUT landed but was never confirmed. EnsureEmail only appends;
 // RemoveEmail drops only rules that are exactly {"email":{"email":<that
 // address>}} and leaves every other rule as it was.
 //
@@ -175,20 +176,20 @@ func writableBody(policy map[string]any) map[string]any {
 }
 
 // plan reads the policy and computes the change for e. When the policy needs
-// no change it returns a nil body and AlreadyPresent / NotPresent. want is the
-// include list the policy must contain after the PUT.
-func (c *Client) plan(ctx context.Context, e string, add bool) (body map[string]any, want []any, res Result, err error) {
+// no change it returns a nil body and AlreadyPresent / NotPresent.
+func (c *Client) plan(ctx context.Context, e string, add bool) (body map[string]any, res Result, err error) {
 	policy, err := c.do(ctx, http.MethodGet, nil)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("cfaccesspolicy: read policy: %w", err)
+		return nil, "", fmt.Errorf("cfaccesspolicy: read policy: %w", err)
 	}
 	include, err := includeList(policy)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, "", err
 	}
+	var want []any
 	if add {
 		if hasEmail(include, e) {
-			return nil, nil, AlreadyPresent, nil
+			return nil, AlreadyPresent, nil
 		}
 		want = append(append(make([]any, 0, len(include)+1), include...),
 			map[string]any{"email": map[string]any{"email": e}})
@@ -201,19 +202,19 @@ func (c *Client) plan(ctx context.Context, e string, add bool) (body map[string]
 			}
 		}
 		if len(want) == len(include) {
-			return nil, nil, NotPresent, nil
+			return nil, NotPresent, nil
 		}
 		if len(want) == 0 {
 			// Cloudflare refuses a policy with an empty include list, and an
 			// allow policy with no include would admit nobody anyway. Leave the
 			// last rule for the owner to remove by hand.
-			return nil, nil, "", errors.New("cfaccesspolicy: refusing to remove the policy's only include rule; remove it by hand")
+			return nil, "", errors.New("cfaccesspolicy: refusing to remove the policy's only include rule; remove it by hand")
 		}
 		res = Removed
 	}
 	body = writableBody(policy)
 	body["include"] = want
-	return body, want, res, nil
+	return body, res, nil
 }
 
 // PlanAdd performs the GET only and returns the JSON PUT body EnsureEmail
@@ -238,7 +239,7 @@ func (c *Client) planJSON(ctx context.Context, email string, add bool) ([]byte, 
 	defer c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	body, _, res, err := c.plan(ctx, e, add)
+	body, res, err := c.plan(ctx, e, add)
 	if err != nil || body == nil {
 		return nil, res, err
 	}
@@ -263,10 +264,25 @@ func (c *Client) RemoveEmail(ctx context.Context, email string) (Result, error) 
 	return c.apply(ctx, email, false)
 }
 
-// apply runs GET, PUT, then a verifying GET. The verify step checks the
-// include list holds exactly the intended rules (the email added/removed and
-// every other prior rule still present); a mismatch means a concurrent writer
-// raced the PUT, so the cycle is retried up to maxAttempts times.
+// ErrWriteUnverified means at least one PUT of this call succeeded (2xx) but
+// the include list was not confirmed afterwards (the verifying read failed or
+// kept disagreeing, or a later step failed): the write may have happened. The
+// Result returned with it is the one the write would have produced (Added or
+// Removed), so a caller that must be able to undo an add records it as added.
+var ErrWriteUnverified = errors.New("cfaccesspolicy: write may have happened but could not be verified")
+
+// apply runs GET, PUT, then a verifying GET, up to maxAttempts times.
+//
+// Verification checks only this email's presence (add) or absence (remove): our
+// PUT changes nothing else, so another writer editing unrelated include rules
+// must neither fail verification nor cause a retry that would put such a rule
+// back. Every retry re-plans from a fresh GET, never from a stale snapshot.
+//
+// Once one of our PUTs has landed, a later attempt that finds the email already
+// in the wanted state is OUR write showing through, so the result stays
+// Added/Removed (never AlreadyPresent/NotPresent: the caller records "we added
+// it" and a later revoke depends on that). If the write cannot be confirmed
+// the error wraps ErrWriteUnverified and is returned with that same result.
 func (c *Client) apply(ctx context.Context, email string, add bool) (Result, error) {
 	e, err := NormalizeEmail(email)
 	if err != nil {
@@ -278,61 +294,56 @@ func (c *Client) apply(ctx context.Context, email string, add bool) (Result, err
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
+	wrote := false
+	var wroteRes Result
+	// fail wraps err as ErrWriteUnverified once a PUT has landed.
+	fail := func(err error) (Result, error) {
+		if wrote {
+			return wroteRes, fmt.Errorf("%w: %w", ErrWriteUnverified, err)
+		}
+		return "", err
+	}
 	var lastProblem string
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		body, want, res, err := c.plan(ctx, e, add)
+		body, res, err := c.plan(ctx, e, add)
 		if err != nil {
-			return "", err
+			return fail(err)
 		}
 		if body == nil {
+			if wrote {
+				return wroteRes, nil
+			}
 			return res, nil
 		}
 		if _, err := c.do(ctx, http.MethodPut, body); err != nil {
-			return "", fmt.Errorf("cfaccesspolicy: save policy: %w", err)
+			return fail(fmt.Errorf("cfaccesspolicy: save policy: %w", err))
 		}
+		wrote, wroteRes = true, res
 		after, err := c.do(ctx, http.MethodGet, nil)
 		if err != nil {
-			return "", fmt.Errorf("cfaccesspolicy: verify policy: %w", err)
+			return fail(fmt.Errorf("cfaccesspolicy: verify policy: %w", err))
 		}
 		inc, err := includeList(after)
 		if err != nil {
-			return "", err
+			return fail(err)
 		}
-		if lastProblem = verifyInclude(inc, want, e, add); lastProblem == "" {
-			return res, nil
+		if add == hasEmail(inc, e) {
+			return wroteRes, nil
+		}
+		if add {
+			lastProblem = "the email is not in the include list"
+		} else {
+			lastProblem = "the email is still in the include list"
 		}
 		if attempt < maxAttempts {
 			select {
 			case <-ctx.Done():
-				return "", fmt.Errorf("cfaccesspolicy: verify policy: %w", ctx.Err())
+				return fail(fmt.Errorf("cfaccesspolicy: verify policy: %w", ctx.Err()))
 			case <-time.After(time.Duration(attempt) * c.retryDelay):
 			}
 		}
 	}
-	return "", fmt.Errorf("cfaccesspolicy: policy not as intended after %d attempts: %s", maxAttempts, lastProblem)
-}
-
-// verifyInclude returns "" when got holds the target email state and every
-// rule in want, else a short description of the first mismatch.
-func verifyInclude(got, want []any, email string, add bool) string {
-	if add != hasEmail(got, email) {
-		if add {
-			return "the email is not in the include list"
-		}
-		return "the email is still in the include list"
-	}
-	have := make(map[string]bool, len(got))
-	for _, r := range got {
-		b, _ := json.Marshal(r)
-		have[string(b)] = true
-	}
-	for _, r := range want {
-		b, _ := json.Marshal(r)
-		if !have[string(b)] {
-			return "an include rule present before the update is missing"
-		}
-	}
-	return ""
+	return fail(fmt.Errorf("cfaccesspolicy: policy not as intended after %d attempts: %s", maxAttempts, lastProblem))
 }
 
 // isEmailRule reports whether rule is exactly {"email":{"email":email}}.

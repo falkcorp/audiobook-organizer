@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
 // last-edited: 2026-10-19
 
@@ -243,6 +243,16 @@ func (s *Server) syncGuestPolicy(parent context.Context, client guestPolicyEnsur
 	ctx, cancel := context.WithTimeout(parent, guestPolicySyncTimeout)
 	defer cancel()
 	res, err := client.EnsureEmail(ctx, email)
+	// ErrWriteUnverified: a PUT landed but was never confirmed. The address may
+	// be in the policy, so it is treated as ADDED (CFAdded is set below) and a
+	// later revoke still removes it; the admin is told to check.
+	unverified := errors.Is(err, cfaccesspolicy.ErrWriteUnverified)
+	note := ""
+	if unverified {
+		inviteAccessLog.Warn("invite accept: the Cloudflare guest policy update was sent but could not be confirmed: %v", logger.SanitizeLogValue(err.Error()))
+		note = "added, but Cloudflare's answer could not confirm it; check the guest policy (revoking this user will remove it)"
+		err = nil
+	}
 	switch {
 	case err != nil:
 		detail := err.Error()
@@ -269,7 +279,7 @@ func (s *Server) syncGuestPolicy(parent context.Context, client guestPolicyEnsur
 	}
 	if still {
 		inviteAccessLog.Info("invite accept: invitee added to the Cloudflare guest policy")
-		record(database.InviteGuestPolicyAdded, "")
+		record(database.InviteGuestPolicyAdded, note)
 		return
 	}
 	// The grant was revoked while Cloudflare was answering. The revoke saw
@@ -338,6 +348,10 @@ func (s *Server) revokeGuestAccess(userID, email, reason string) {
 		ctx, cancel := context.WithTimeout(parent, guestPolicySyncTimeout)
 		defer cancel()
 		res, err := client.RemoveEmail(ctx, email)
+		if errors.Is(err, cfaccesspolicy.ErrWriteUnverified) {
+			inviteAccessLog.Warn("guest access revoke (%s): the removal was sent but could not be confirmed, the email may still be in the Cloudflare guest policy; check it by hand: %v", reason, logger.SanitizeLogValue(err.Error()))
+			return
+		}
 		if err != nil {
 			inviteAccessLog.Warn("guest access revoke (%s): removing the email from the Cloudflare guest policy failed, remove it by hand: %v", reason, logger.SanitizeLogValue(err.Error()))
 			return
