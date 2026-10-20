@@ -1,5 +1,5 @@
 // file: internal/database/invite_delivery_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2a8c5e71-4b9d-4f03-a6e2-7d1c9b3f5e86
 // last-edited: 2026-10-19
 
@@ -137,14 +137,14 @@ func TestConsumeInvite_NonAdminCreatorGetsNoGrant(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if u.Email != "guest@example.com" {
-				t.Fatalf("a delivered email is still the user's email: %q", u.Email)
+			if u.Email != "" {
+				t.Fatalf("a non-admin creator's invite must not bind the email: %q", u.Email)
 			}
 			if g, _ := s.GetInviteEmailGrant("guest@example.com"); g != nil {
 				t.Fatal("a non-admin creator's invite must not grant SSO")
 			}
-			if inv, _ := s.GetInvite("tok"); inv.SSOGrant != InviteSSOCreatorNotAdmin {
-				t.Fatalf("SSOGrant = %q", inv.SSOGrant)
+			if inv, _ := s.GetInvite("tok"); inv.SSOGrant != InviteSSOCreatorNotAdmin || inv.EmailBinding != InviteEmailCreatorNotAdmin {
+				t.Fatalf("SSOGrant/EmailBinding = %q/%q", inv.SSOGrant, inv.EmailBinding)
 			}
 		})
 	}
@@ -211,14 +211,15 @@ func TestConsumeInvite_NoEmailWritesNoGrant(t *testing.T) {
 
 func TestInvite_EmailOwnedByExistingUserIsRefused(t *testing.T) {
 	s := newInviteTestStore(t)
-	if _, err := s.CreateUser("owner", "taken@example.com", "bcrypt", "h", []string{"admin"}, "active"); err != nil {
+	owner, err := s.CreateUser("owner", "taken@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateInvite(&Invite{Token: "t", Username: "g", Email: "Taken@example.com", RoleID: "viewer"}); !errors.Is(err, ErrInviteEmailTaken) {
 		t.Fatalf("CreateInvite err = %v, want ErrInviteEmailTaken", err)
 	}
 	// An invite created before the email was taken must not repoint the index.
-	deliveredInvite(t, s, "", "t2", "g2", "later@example.com")
+	deliveredInvite(t, s, owner.ID, "t2", "g2", "later@example.com")
 	owner2, err := s.CreateUser("second", "later@example.com", "bcrypt", "h", []string{"viewer"}, "active")
 	if err != nil {
 		t.Fatal(err)

@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.119.0
+// version: 2.120.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-19
 
@@ -739,20 +739,23 @@ type User struct {
 	// reused for this: it is 1 on every row and no writer moves it.
 	CredentialEpoch int64 `json:"credential_epoch,omitempty"`
 	// EmailSource records how Email got onto the account (EmailSource*
-	// constants). It is what lets the operator's trusted list (owner email,
-	// OAUTH_ALLOWED_EMAILS) vouch for an address without vouching for someone
-	// who typed it into their own profile. Only the store sets it; UpdateUser
-	// ignores a caller's value. "" is a row written before 2026-10-19.
+	// constants), and so whether the address is verified: setup, admin,
+	// invite and idp are; self and invite_link are not (see emailProvenFor).
+	// Only the store sets it; UpdateUser ignores a caller's value. "" is a row
+	// written by a build that did not know the field: the store stamps it at
+	// the next open (ReconcileVerifiedEmails) and treats it as unverified
+	// until then.
 	EmailSource string `json:"email_source,omitempty"`
 }
 
 // User.EmailSource values.
 const (
-	EmailSourceSetup  = "setup"  // first-run setup, bootstrap, the system user (CreateUser)
-	EmailSourceAdmin  = "admin"  // set by an admin (no such path writes it today)
-	EmailSourceInvite = "invite" // bound by accepting an invitation emailed to it
-	EmailSourceIdP    = "idp"    // verified by an identity provider at login
-	EmailSourceSelf   = "self"   // typed in through self-service (UpdateUser)
+	EmailSourceSetup      = "setup"       // first-run setup, bootstrap, the system user (CreateUser)
+	EmailSourceAdmin      = "admin"       // set by an admin for the user (SetUserEmailAsAdmin)
+	EmailSourceInvite     = "invite"      // bound by accepting an invitation emailed to it by an admin
+	EmailSourceIdP        = "idp"         // verified by an identity provider at login
+	EmailSourceSelf       = "self"        // typed in through self-service (UpdateUser); unverified
+	EmailSourceInviteLink = "invite_link" // bound by an older build from a copied invite link; unverified
 )
 
 // BookVersion represents one version of a book's content (spec 3.1
@@ -862,8 +865,12 @@ type Invite struct {
 	EmailSentTo string     `json:"email_sent_to,omitempty"`
 	// AcceptedUserID is the user the accept created.
 	AcceptedUserID string `json:"accepted_user_id,omitempty"`
+	// DisplacedUserIDs are the accounts that had typed the bound address into
+	// their profile and lost it to this accept (they keep their accounts).
+	DisplacedUserIDs []string `json:"displaced_user_ids,omitempty"`
 	// EmailBinding and SSOGrant record what accept did with Email, for the
-	// admin: EmailBinding is InviteEmailBound or InviteEmailNotEmailed;
+	// admin: EmailBinding is InviteEmailBound, InviteEmailNotEmailed or
+	// InviteEmailCreatorNotAdmin;
 	// SSOGrant is InviteSSOGranted or InviteSSOCreatorNotAdmin. Empty when the
 	// invite had no email.
 	EmailBinding string `json:"email_binding,omitempty"`

@@ -1,5 +1,5 @@
 // file: internal/oauth/resolve_verified_email_test.go
-// version: 1.3.0
+// version: 2.0.0
 // guid: b7d1909a-d742-41fb-b8cf-25bdae5ca124
 // last-edited: 2026-10-19
 
@@ -89,31 +89,32 @@ func TestResolveUser_UnverifiedHolderWithoutDisplacerIsDenied(t *testing.T) {
 }
 
 // Someone who already signs in through SSO resolves by their (provider,
-// subject) link, so the provenance-only rebuild, which drops their
-// unprovable email key, does not lock them out.
-func TestResolveUser_SSOLinkedUserStillSignsInAfterRebuild(t *testing.T) {
+// subject) link, so an unverified current email (here typed into the
+// profile) does not lock them out; the login then verifies it.
+func TestResolveUser_SSOLinkedUserWithUnverifiedEmailStillSignsIn(t *testing.T) {
 	s := newResolvePebble(t)
-	owner, err := s.CreateUser("owner", "owner@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	owner, err := s.CreateUser("owner", "owner.old@example.com", "bcrypt", "h", []string{"admin"}, "active")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Linked long ago, when the IdP reported a different address.
+	// Linked long ago, when the IdP reported the old address.
 	if _, err := s.CreateOAuthIdentity(&database.OAuthIdentity{Provider: ProviderGoogle, Subject: "g-owner", Email: "owner.old@example.com", UserID: owner.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RerunVerifiedEmailBackfillForTest(nil); err != nil {
+	owner.Email = "owner@example.com"
+	if err := s.UpdateUser(owner); err != nil {
 		t.Fatal(err)
 	}
 	if v, _ := s.GetUserByVerifiedEmail("owner@example.com"); v != nil {
-		t.Fatalf("precondition: the rebuild must have dropped the unprovable key: %+v", v)
+		t.Fatalf("precondition: a profile-typed address is unverified: %+v", v)
 	}
 	cfg := New(Config{AllowedEmails: []string{"owner@example.com"}, DefaultRole: "viewer"})
 	user, err := cfg.ResolveUser(s, verifiedClaims("owner@example.com", "g-owner"))
 	if err != nil || user == nil || user.ID != owner.ID {
 		t.Fatalf("ResolveUser = %+v, %v; want the linked account", user, err)
 	}
-	if v, _ := s.GetUserByVerifiedEmail("owner@example.com"); v == nil || v.ID != owner.ID {
-		t.Fatalf("the login re-verifies the matching current email: %+v", v)
+	if v, _ := s.GetUserByVerifiedEmail("owner@example.com"); v == nil || v.ID != owner.ID || v.EmailSource != database.EmailSourceIdP {
+		t.Fatalf("the login verifies the matching current email: %+v", v)
 	}
 }
 
@@ -190,19 +191,17 @@ func TestResolveUser_LinkedIdentityVerifiesMatchingEmail(t *testing.T) {
 	}
 }
 
-// The owner decision of 2026-10-19: the operator's trusted list proves an
-// address. An owner-email admin created at setup, never linked to SSO, has
-// that first SSO login linked to the admin account, not displaced from it.
+// An owner-email admin created at setup, never linked to SSO, has that first
+// SSO login linked to the admin account, not displaced from it: CreateUser
+// records the address as set up (verified). A row an older build wrote is
+// stamped the same way at store open, from the key CreateUser wrote.
 func TestResolveUser_OwnerEmailAdminFirstSSOLinksAndIsNotDisplaced(t *testing.T) {
 	s := newResolvePebble(t)
 	admin, err := s.CreateUser("admin", "owner@example.com", "bcrypt", "h", []string{"admin"}, "active")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Upgrade: the provenance rebuild with no list would drop this key; the
-	// owner email on the operator list keeps it.
-	s.SetOperatorTrustedEmails(func() []string { return []string{"Owner@example.com"} })
-	if err := s.EnsureVerifiedEmailIndex(); err != nil {
+	if _, err := s.ReconcileVerifiedEmails(); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := s.CountUsers()
@@ -221,25 +220,9 @@ func TestResolveUser_OwnerEmailAdminFirstSSOLinksAndIsNotDisplaced(t *testing.T)
 	}
 }
 
-// An account whose address the operator lists, and which did not type it in
-// itself (here: set at setup), is kept: its SSO login links to it.
-func TestResolveUser_AllowListedHolderIsKept(t *testing.T) {
-	s := newResolvePebble(t)
-	u, err := s.CreateUser("friend", "friend@example.com", "bcrypt", "h", []string{"viewer"}, "active")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.SetOperatorTrustedEmails(func() []string { return []string{"friend@example.com"} })
-	cfg := New(Config{AllowedEmails: []string{"friend@example.com"}, DefaultRole: "viewer"})
-	user, err := cfg.ResolveUser(s, verifiedClaims("friend@example.com", "g-friend"))
-	if err != nil || user == nil || user.ID != u.ID {
-		t.Fatalf("ResolveUser = %+v, %v; want the allow-listed holder", user, err)
-	}
-}
-
-// Someone types a listed guest's address into their own profile before the
-// guest ever signs in. The list does not vouch for a self-set address, so the
-// guest's real IdP login displaces them and gets its own account.
+// B1: being on OAUTH_ALLOWED_EMAILS vouches for no one. Someone who typed a
+// listed guest's address into their own profile before the guest ever signed
+// in is displaced by the guest's real IdP login, which gets its own account.
 func TestResolveUser_SelfSetListedAddressIsDisplacedByTheRealIdPLogin(t *testing.T) {
 	s := newResolvePebble(t)
 	squatter, err := s.CreateUser("squatter", "squatter@example.com", "bcrypt", "h", []string{"viewer"}, "active")
@@ -250,7 +233,6 @@ func TestResolveUser_SelfSetListedAddressIsDisplacedByTheRealIdPLogin(t *testing
 	if err := s.UpdateUser(squatter); err != nil {
 		t.Fatal(err)
 	}
-	s.SetOperatorTrustedEmails(func() []string { return []string{"guest@example.com"} })
 	if v, _ := s.GetUserByVerifiedEmail("guest@example.com"); v != nil {
 		t.Fatalf("a self-set listed address must not be verified: %+v", v)
 	}
