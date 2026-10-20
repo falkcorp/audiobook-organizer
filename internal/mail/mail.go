@@ -1,5 +1,5 @@
 // file: internal/mail/mail.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
 // last-edited: 2026-10-19
 
@@ -12,11 +12,15 @@
 //
 // Transport rules (owner decision 2026-10-19, prod relays through a local
 // postfix on 127.0.0.1:25 with no AUTH):
-//   - Port 465 is implicit TLS. Any other port starts in plain text.
+//   - A loopback host (127.0.0.0/8, ::1, "localhost") may be spoken to in plain
+//     text: that connection never leaves the machine.
+//   - Any other host REQUIRES TLS: implicit TLS on port 465, or a successful
+//     STARTTLS. If such a server does not offer STARTTLS the send is refused
+//     before MAIL FROM, and it never falls back to plain text. Certificates are
+//     always verified.
 //   - STARTTLS is used whenever the server offers it, EXCEPT to a loopback host
-//     with no username configured: that connection never leaves the machine,
-//     and a local postfix usually offers STARTTLS with a self-signed
-//     certificate that would fail verification and stop all mail.
+//     with no username configured: a local postfix usually offers STARTTLS with
+//     a self-signed certificate that would fail verification and stop all mail.
 //   - AUTH PLAIN is sent only over TLS or to a loopback host (smtp.PlainAuth
 //     enforces this), and only when a username is configured.
 //   - Every connection has one deadline (Timeout, default 15s) and is closed
@@ -86,6 +90,9 @@ type SMTPSender struct {
 	// which is also the TLS server name and PlainAuth's loopback check.
 	dialAddr    string
 	implicitTLS bool
+	// treatAsRemote forces the require-TLS rule for a Host that is loopback.
+	// Unexported test seam: tests can only listen on 127.0.0.1.
+	treatAsRemote bool
 }
 
 // NewSMTPSender validates cfg and returns a sender.
@@ -197,10 +204,16 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	}
 
 	if !implicitTLS {
-		if ok, _ := c.Extension("STARTTLS"); ok && s.wantStartTLS() {
+		offered, _ := c.Extension("STARTTLS")
+		switch {
+		case offered && s.wantStartTLS():
 			if err := c.StartTLS(tlsCfg); err != nil {
 				return s.ctxErr(ctx, fmt.Errorf("mail: STARTTLS: %w", err))
 			}
+		case s.requiresTLS():
+			// Refuse before AUTH, MAIL FROM or any message data; never
+			// fall back to plain text for a host off this machine.
+			return fmt.Errorf("mail: %s does not offer STARTTLS and is not a loopback host: refusing to send without TLS (use port 465 or a relay that supports STARTTLS)", s.cfg.Host)
 		}
 	}
 
@@ -237,9 +250,14 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	return nil
 }
 
+// requiresTLS: every non-loopback host must be reached over TLS.
+func (s *SMTPSender) requiresTLS() bool {
+	return s.treatAsRemote || !isLoopbackHost(s.cfg.Host)
+}
+
 // wantStartTLS: STARTTLS when offered, except to loopback with no username.
 func (s *SMTPSender) wantStartTLS() bool {
-	return s.cfg.Username != "" || !isLoopbackHost(s.cfg.Host)
+	return s.cfg.Username != "" || s.requiresTLS()
 }
 
 func (s *SMTPSender) tlsConfig() *tls.Config {
