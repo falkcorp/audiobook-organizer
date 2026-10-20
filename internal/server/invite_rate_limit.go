@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
@@ -30,13 +30,17 @@ import (
 // headers (SetTrustedProxies(nil), see NewServer), so c.ClientIP() is the
 // tunnel's local address for every request: a limiter keyed on it alone is ONE
 // bucket shared by everyone, and a single caller could exhaust it for every
-// guest. The layers therefore do not rely on the client address:
+// guest. The invite routes also bypass Cloudflare Access (a guest accepts
+// before being allowed in), so there is no Access assertion to lean on. The
+// layers therefore do not rely on c.ClientIP():
 //
 //  1. per token: a token's lookups and accept attempts, from anywhere, share
 //     one small bucket (keyed by a hash of the token, never the raw token).
-//  2. per client: keyed by CF-Connecting-IP when, and only when, the request
-//     provably came through Cloudflare (see inviteClientKey); otherwise by
-//     c.ClientIP().
+//  2. per client: keyed by trustedClientIP, i.e. CF-Connecting-IP when the
+//     request arrived through the local tunnel connector, otherwise the
+//     peer's own address. A request with no attributable client address (a
+//     local peer that sent no usable CF-Connecting-IP) skips this layer rather
+//     than joining a bucket shared by everyone; layers 1 and 3 still apply.
 //  3. global: a generous ceiling across every token and client, so
 //     enumeration spread over many tokens or many clients is still bounded.
 //
@@ -160,30 +164,47 @@ func inviteTokenKey(token string) string {
 	return "invite-token:" + hex.EncodeToString(sum[:16])
 }
 
-// inviteClientKey returns the per-client bucket key for the request.
+// trustedClientIP returns the address a per-client limiter should key the
+// request on, and whether that address identifies the client.
 //
-// CF-Connecting-IP is set by Cloudflare's edge and is trustworthy only on a
-// request that Cloudflare handled, so it is believed only when BOTH hold:
+// When the peer (RemoteAddr) is this host, the request came in through the
+// tunnel connector (cloudflared runs on the same host and dials the service
+// locally), and a direct non-local caller cannot take this path. Cloudflare's
+// edge overwrites CF-Connecting-IP on every request it proxies, so a value
+// arriving through the local connector was set by Cloudflare and names the real
+// visitor. It is believed even without a Cloudflare Access assertion, which
+// matters because the public invite routes bypass Access and never carry one.
+// The header is parsed with net.ParseIP and re-rendered with String() so that
+// equivalent spellings share one key; an unparseable value counts as absent.
 //
-//   - the peer is this host (RemoteAddr is loopback or one of this host's own
-//     addresses), i.e. the request came in through the tunnel connector and
-//     not straight from a remote caller; and
-//   - the request carried a Cf-Access-Jwt-Assertion that CloudflareAccessAuth
-//     verified (human login or service token), proving it passed Access.
+// Every other request is keyed on c.ClientIP(), which is the peer's own address
+// (the router trusts no proxy headers), so a spoofed CF-Connecting-IP from a
+// non-local caller is ignored.
 //
-// Anything else, including a spoofed CF-Connecting-IP, falls back to
-// c.ClientIP() (the tunnel address, so effectively one shared bucket). The
-// public invite routes may sit under a Cloudflare Access bypass application
-// that attaches no assertion; for those requests this layer degrades to
-// c.ClientIP() by design, and the per-token and global layers carry the
-// protection.
-func (l *inviteRateLimits) inviteClientKey(c *gin.Context) string {
-	if servermiddleware.CFAccessVerified(c) && l.isLocalPeer(c.Request.RemoteAddr) {
-		if ip := net.ParseIP(strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))); ip != nil {
-			return "invite-client:" + ip.String()
+// ok is false when the only address available is a local one (a local peer sent
+// no usable CF-Connecting-IP): every such request would share the tunnel's
+// address, so it identifies no one. ip is still returned, for logging, and
+// callers decide what a shared address means for them (the invite limiter skips
+// its per-client layer; the bootstrap limiter uses a fixed shared key).
+func trustedClientIP(c *gin.Context, isLocalPeer func(remoteAddr string) bool) (ip string, ok bool) {
+	if isLocalPeer(c.Request.RemoteAddr) {
+		if parsed := net.ParseIP(strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))); parsed != nil {
+			return parsed.String(), true
 		}
 	}
-	return "invite-client:" + c.ClientIP()
+	ip = c.ClientIP()
+	return ip, !isLocalPeer(ip)
+}
+
+// inviteClientKey returns the per-client bucket key for the request, and false
+// when the request has no attributable client address (see trustedClientIP), in
+// which case the per-client layer is skipped for it.
+func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (string, bool) {
+	ip, ok := trustedClientIP(c, l.isLocalPeer)
+	if !ok {
+		return "", false
+	}
+	return "invite-client:" + ip, true
 }
 
 // remoteAddrIsLocal reports whether addr ("host:port") is a loopback address or
@@ -219,11 +240,15 @@ func remoteAddrIsLocal(addr string) bool {
 //
 // Order: client, then token, then global. A caller that is already limited
 // never spends a token or global slot, so one noisy client or one hammered
-// token cannot drain the shared ceiling. Every layer refuses with the same
+// token cannot drain the shared ceiling. A request with no attributable client
+// address skips the client layer (see inviteClientKey). Every layer refuses with the same
 // status and body, so a caller cannot tell which layer tripped.
 func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, ok bool)) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ok := l.perClient.AllowKey(l.inviteClientKey(c))
+		ok := true
+		if key, attributed := l.inviteClientKey(c); attributed {
+			ok = l.perClient.AllowKey(key)
+		}
 		if ok {
 			token, proceed := tokenOf(c)
 			if !proceed {
