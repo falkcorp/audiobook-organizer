@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/client.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c863e806-fb62-4ceb-9226-d971b7d4d048
 // last-edited: 2026-10-19
 
@@ -12,10 +12,13 @@
 // The only requests it makes are GET and PUT on
 // /accounts/{account}/access/policies/{policy}.
 //
-// The PUT replaces the whole policy, so the GET result is round-tripped
-// losslessly as a generic JSON object (numbers kept as json.Number): every
-// field, including ones this package does not know about, goes back exactly
-// as read, with only the include list changed. EnsureEmail only appends;
+// The PUT replaces the whole policy, so the GET result is read as a generic
+// JSON object (numbers kept as json.Number) and every documented writable
+// field (see writableFields) goes back exactly as read, with only the include
+// list changed. Server-managed fields (id, created_at, updated_at, app_count,
+// reusable, ...) are never sent. After the PUT the policy is re-read and the
+// include list verified; a mismatch is retried a bounded number of times
+// (the endpoint documents no ETag/If-Match). EnsureEmail only appends;
 // RemoveEmail drops only rules that are exactly {"email":{"email":<that
 // address>}} and leaves every other rule as it was.
 //
@@ -88,6 +91,8 @@ type Client struct {
 	// mu serializes read-modify-write cycles so two accepts in this process
 	// cannot both read the old list and lose one email on the second PUT.
 	mu sync.Mutex
+	// retryDelay scales the pause between verify retries (attempt * retryDelay).
+	retryDelay time.Duration
 }
 
 // New validates cfg and returns a Client.
@@ -116,6 +121,7 @@ func New(cfg Config) (*Client, error) {
 	return &Client{
 		accountID: strings.ToLower(cfg.AccountID), policyID: strings.ToLower(cfg.PolicyID),
 		token: cfg.APIToken, baseURL: base, timeout: timeout, http: hc,
+		retryDelay: 250 * time.Millisecond,
 	}, nil
 }
 
@@ -136,47 +142,132 @@ func NormalizeEmail(email string) (string, error) {
 	return e, nil
 }
 
+// writableFields is the explicit allowlist of reusable Access policy fields
+// accepted by the update (PUT) call, copied verbatim from the GET. Anything
+// else in the GET result is server-managed or unknown and is dropped: id,
+// account_id, created_at, updated_at, app_count, reusable, version and any
+// field Cloudflare adds later. Choice: an unknown field is dropped rather than
+// echoed, because echoing a read-only field can make the PUT fail or be
+// silently ignored; a newly documented writable field must be added here.
+// Source: https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/policies/methods/update/
+var writableFields = []string{
+	"name", "decision", "include", "exclude", "require",
+	"session_duration", "approval_groups", "approval_required",
+	"isolation_required", "purpose_justification_prompt",
+	"purpose_justification_required", "connection_rules", "mfa_config",
+}
+
+// maxAttempts bounds the read-modify-write-verify cycle. The endpoint documents
+// no ETag/If-Match, so a concurrent writer (another process or the dashboard)
+// is detected by re-reading after the PUT, and the cycle is retried.
+const maxAttempts = 3
+
+// writableBody returns the PUT body for policy: only writableFields present in
+// the GET result, values untouched.
+func writableBody(policy map[string]any) map[string]any {
+	out := make(map[string]any, len(writableFields))
+	for _, k := range writableFields {
+		if v, ok := policy[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// plan reads the policy and computes the change for e. When the policy needs
+// no change it returns a nil body and AlreadyPresent / NotPresent. want is the
+// include list the policy must contain after the PUT.
+func (c *Client) plan(ctx context.Context, e string, add bool) (body map[string]any, want []any, res Result, err error) {
+	policy, err := c.do(ctx, http.MethodGet, nil)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("cfaccesspolicy: read policy: %w", err)
+	}
+	include, err := includeList(policy)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if add {
+		if hasEmail(include, e) {
+			return nil, nil, AlreadyPresent, nil
+		}
+		want = append(append(make([]any, 0, len(include)+1), include...),
+			map[string]any{"email": map[string]any{"email": e}})
+		res = Added
+	} else {
+		want = make([]any, 0, len(include))
+		for _, rule := range include {
+			if !isEmailRule(rule, e) {
+				want = append(want, rule)
+			}
+		}
+		if len(want) == len(include) {
+			return nil, nil, NotPresent, nil
+		}
+		if len(want) == 0 {
+			// Cloudflare refuses a policy with an empty include list, and an
+			// allow policy with no include would admit nobody anyway. Leave the
+			// last rule for the owner to remove by hand.
+			return nil, nil, "", errors.New("cfaccesspolicy: refusing to remove the policy's only include rule; remove it by hand")
+		}
+		res = Removed
+	}
+	body = writableBody(policy)
+	body["include"] = want
+	return body, want, res, nil
+}
+
+// PlanAdd performs the GET only and returns the JSON PUT body EnsureEmail
+// would send for email, without sending it. The body is nil (and the Result
+// AlreadyPresent) when nothing would be written. Used to inspect the request
+// against a scratch policy before enabling the sync.
+func (c *Client) PlanAdd(ctx context.Context, email string) ([]byte, Result, error) {
+	return c.planJSON(ctx, email, true)
+}
+
+// PlanRemove is PlanAdd for RemoveEmail (Result NotPresent when a no-op).
+func (c *Client) PlanRemove(ctx context.Context, email string) ([]byte, Result, error) {
+	return c.planJSON(ctx, email, false)
+}
+
+func (c *Client) planJSON(ctx context.Context, email string, add bool) ([]byte, Result, error) {
+	e, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	body, _, res, err := c.plan(ctx, e, add)
+	if err != nil || body == nil {
+		return nil, res, err
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, "", err
+	}
+	return b, res, nil
+}
+
 // EnsureEmail makes email an include rule of the configured policy. It is
 // idempotent: an email already present (compared case-insensitively) writes
 // nothing and returns AlreadyPresent.
 func (c *Client) EnsureEmail(ctx context.Context, email string) (Result, error) {
-	e, err := NormalizeEmail(email)
-	if err != nil {
-		return "", err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	policy, err := c.do(ctx, http.MethodGet, nil)
-	if err != nil {
-		return "", fmt.Errorf("cfaccesspolicy: read policy: %w", err)
-	}
-	include, err := includeList(policy)
-	if err != nil {
-		return "", err
-	}
-	if hasEmail(include, e) {
-		return AlreadyPresent, nil
-	}
-	policy["include"] = append(include, map[string]any{"email": map[string]any{"email": e}})
-	saved, err := c.do(ctx, http.MethodPut, policy)
-	if err != nil {
-		return "", fmt.Errorf("cfaccesspolicy: save policy: %w", err)
-	}
-	// Confirm from what Cloudflare stored, not from what was sent.
-	if inc, err := includeList(saved); err == nil && !hasEmail(inc, e) {
-		return "", errors.New("cfaccesspolicy: policy saved but the email is not in its include list")
-	}
-	return Added, nil
+	return c.apply(ctx, email, true)
 }
 
 // RemoveEmail drops email's include rule from the configured policy. It is
 // idempotent: an email that is not there writes nothing and returns
 // NotPresent. Only plain email rules for exactly that address are removed.
 func (c *Client) RemoveEmail(ctx context.Context, email string) (Result, error) {
+	return c.apply(ctx, email, false)
+}
+
+// apply runs GET, PUT, then a verifying GET. The verify step checks the
+// include list holds exactly the intended rules (the email added/removed and
+// every other prior rule still present); a mismatch means a concurrent writer
+// raced the PUT, so the cycle is retried up to maxAttempts times.
+func (c *Client) apply(ctx context.Context, email string, add bool) (Result, error) {
 	e, err := NormalizeEmail(email)
 	if err != nil {
 		return "", err
@@ -187,39 +278,61 @@ func (c *Client) RemoveEmail(ctx context.Context, email string) (Result, error) 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	policy, err := c.do(ctx, http.MethodGet, nil)
-	if err != nil {
-		return "", fmt.Errorf("cfaccesspolicy: read policy: %w", err)
-	}
-	include, err := includeList(policy)
-	if err != nil {
-		return "", err
-	}
-	kept := make([]any, 0, len(include))
-	for _, rule := range include {
-		if isEmailRule(rule, e) {
-			continue
+	var lastProblem string
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		body, want, res, err := c.plan(ctx, e, add)
+		if err != nil {
+			return "", err
 		}
-		kept = append(kept, rule)
+		if body == nil {
+			return res, nil
+		}
+		if _, err := c.do(ctx, http.MethodPut, body); err != nil {
+			return "", fmt.Errorf("cfaccesspolicy: save policy: %w", err)
+		}
+		after, err := c.do(ctx, http.MethodGet, nil)
+		if err != nil {
+			return "", fmt.Errorf("cfaccesspolicy: verify policy: %w", err)
+		}
+		inc, err := includeList(after)
+		if err != nil {
+			return "", err
+		}
+		if lastProblem = verifyInclude(inc, want, e, add); lastProblem == "" {
+			return res, nil
+		}
+		if attempt < maxAttempts {
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("cfaccesspolicy: verify policy: %w", ctx.Err())
+			case <-time.After(time.Duration(attempt) * c.retryDelay):
+			}
+		}
 	}
-	if len(kept) == len(include) {
-		return NotPresent, nil
+	return "", fmt.Errorf("cfaccesspolicy: policy not as intended after %d attempts: %s", maxAttempts, lastProblem)
+}
+
+// verifyInclude returns "" when got holds the target email state and every
+// rule in want, else a short description of the first mismatch.
+func verifyInclude(got, want []any, email string, add bool) string {
+	if add != hasEmail(got, email) {
+		if add {
+			return "the email is not in the include list"
+		}
+		return "the email is still in the include list"
 	}
-	if len(kept) == 0 {
-		// Cloudflare refuses a policy with an empty include list, and an
-		// allow policy with no include would admit nobody anyway. Leave the
-		// last rule for the owner to remove by hand.
-		return "", errors.New("cfaccesspolicy: refusing to remove the policy's only include rule; remove it by hand")
+	have := make(map[string]bool, len(got))
+	for _, r := range got {
+		b, _ := json.Marshal(r)
+		have[string(b)] = true
 	}
-	policy["include"] = kept
-	saved, err := c.do(ctx, http.MethodPut, policy)
-	if err != nil {
-		return "", fmt.Errorf("cfaccesspolicy: save policy: %w", err)
+	for _, r := range want {
+		b, _ := json.Marshal(r)
+		if !have[string(b)] {
+			return "an include rule present before the update is missing"
+		}
 	}
-	if inc, err := includeList(saved); err == nil && hasEmail(inc, e) {
-		return "", errors.New("cfaccesspolicy: policy saved but the email is still in its include list")
-	}
-	return Removed, nil
+	return ""
 }
 
 // isEmailRule reports whether rule is exactly {"email":{"email":email}}.
