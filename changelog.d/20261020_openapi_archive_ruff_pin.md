@@ -1,0 +1,3 @@
+`docs/archive/openapi.yaml` is deleted (owner approved 2026-10-20). Nothing read it: the repo has no OpenAPI spec, and the contract is the Go DTOs plus `web/src/types/generated/`. It was the last OpenAPI file in the repo, so `FIX_OPENAPI=true` is dropped from `super-linter-pr.env`; it had been kept only because this file still existed.
+
+The Python lint step in `.github/workflows/scripts/ci_workflow.py` no longer runs `pip install --upgrade` for black and ruff. It installs exact pinned versions (black 26.10.0, ruff 0.17.0) and reinstalls them when the tool on PATH reports a different version, so CI formats against the same ruff the repo is formatted with.
