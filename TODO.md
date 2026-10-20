@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.0 -->
+<!-- version: 10.78.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-19 -->
+<!-- last-edited: 2026-10-20 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,30 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **ADMIN-COMPROMISED-ACCOUNT-RESET** Admin "compromised account" reset
+      should invalidate the old password. Owner decision. Today the admin
+      reset link (`POST /users/:id/reset-password`, `handleResetPassword`)
+      signs the user out of every ABS client (credential-epoch bump, #4081) and
+      issues a one-time login link, but the old password keeps working until
+      the user picks a new one, so an attacker who has it can still sign in.
+      Options: (a) a separate "compromised" action that also replaces the
+      password hash with an unusable value in the same `SetUserPassword`
+      write, (b) make the existing reset do that, or (c) keep the current
+      behaviour and label it as a convenience reset in the UI. Web sessions
+      have the same gap (see WEB-SESSIONS-SURVIVE-PASSWORD-CHANGE).
+
+- [ ] **WEB-SESSIONS-SURVIVE-PASSWORD-CHANGE** Changing a password, an admin
+      password reset (direct or via reset link) and deactivating a user do not
+      end the user's web-UI sessions. #4081 ended ABS (mobile) sessions on all
+      four paths by bumping `User.CredentialEpoch` in the same write as the
+      change and checking each session's stamp on every use; the web session
+      store has the same gap and was left alone on purpose. Fix properly: stamp
+      web sessions with the epoch too and refuse a mismatch in the session
+      middleware (keeping the caller's own session on a self-service change is
+      a product call: re-stamp it in the same request), then revoke as cleanup,
+      and cover each path with a test that a pre-existing web session stops
+      authenticating, including one created mid-change.
 
 - [ ] **LIBRARY-READ-STATUS-ALTERNATION-EMPTY** The Library list's `filters=` JSON
       route answers `200` with `count: 0` for a read_status value written as an
