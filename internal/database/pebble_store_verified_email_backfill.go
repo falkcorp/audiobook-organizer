@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-19
 
@@ -221,15 +221,25 @@ func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error 
 //  1. a linked identity of the user recorded with the address: an identity
 //     provider verified it, so "idp";
 //  2. a used invite that created this account (AcceptedUserID, or on rows
-//     from before that field the same username and email): "invite" if that
-//     accept bound a delivered address (EmailBinding "bound"), otherwise
-//     "invite_link" -- older builds bound whatever address the invite named,
-//     though the link may have been copied and forwarded, which proves
-//     nothing about the inbox;
-//  3. the idx:user:email key for the address names this user: before this
-//     feature only CreateUser (setup, bootstrap, the system user) and
-//     ConsumeInvite (handled by 2) wrote it, and a profile change never did,
-//     so "setup". Older builds lowercased the address without trimming it, so
+//     from before that field the same username and email): "invite" only
+//     when that accept bound a delivered address (EmailBinding "bound") on
+//     the admin path (SSOGrant "granted", or the invite's creator holds the
+//     admin role now), the same rule ConsumeInvite applies today; otherwise
+//     "invite_link", which proves nothing about the inbox (a copied link can
+//     be forwarded, and a non-admin creator could accept it themselves);
+//  3. the idx:user:email key for the address names this user: "setup". This
+//     trusts a bare key, which holds for every key a released build wrote.
+//     On origin/main (670c8d7c5) CreateUser is the only writer that fires:
+//     its callers are first-run setup (internal/server/handlers/auth.go:360),
+//     bootstrap (internal/server/bootstrap.go:445), the system user
+//     (internal/auth/seed.go:150) and IdP auto-create
+//     (internal/oauth/resolve.go:81, an IdP-verified address). Main's
+//     ConsumeInvite also writes it for Invite.Email
+//     (pebble_store_auth.go:869), but main's only CreateInvite caller
+//     (internal/server/handlers/user.go:95) never sets Email, so that write
+//     never fires; UpdateUser never wrote the key. States only this branch
+//     can produce (say, a used invite deleted after a bound accept) never
+//     shipped. Older builds lowercased the address without trimming it, so
 //     both spellings are checked;
 //  4. anything else was typed in through the profile: "self".
 func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error) {
@@ -254,7 +264,16 @@ func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error
 			continue
 		}
 		if inv.EmailBinding == InviteEmailBound {
-			return EmailSourceInvite, nil
+			if inv.SSOGrant == InviteSSOGranted {
+				return EmailSourceInvite, nil
+			}
+			creator, err := p.GetUserByID(inv.CreatedByUserID)
+			if err != nil {
+				return "", err
+			}
+			if inviteCreatorMayGrant(creator) {
+				return EmailSourceInvite, nil
+			}
 		}
 		return EmailSourceInviteLink, nil
 	}

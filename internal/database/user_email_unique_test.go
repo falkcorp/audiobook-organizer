@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-19
 
@@ -8,6 +8,7 @@ package database
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -186,7 +187,7 @@ func TestReconcileVerifiedEmails_StampsLegacyRows(t *testing.T) {
 	// Accepted from a delivered invite, then rewritten by a rollback build.
 	bound := mustUser(t, s, "bound", "viewer", "active")
 	setRawUserEmailSource(t, s, bound, "bound@example.com", "")
-	putUsedInvite(t, s, Invite{Token: "bound-tok", Username: "bound", Email: "bound@example.com", RoleID: "viewer", AcceptedUserID: bound.ID, EmailBinding: InviteEmailBound})
+	putUsedInvite(t, s, Invite{Token: "bound-tok", Username: "bound", Email: "bound@example.com", RoleID: "viewer", AcceptedUserID: bound.ID, EmailBinding: InviteEmailBound, SSOGrant: InviteSSOGranted})
 	// Linked to an identity provider with this address.
 	linked := mustUser(t, s, "linked", "viewer", "active")
 	setRawUserEmailSource(t, s, linked, "linked@example.com", "")
@@ -250,6 +251,62 @@ func TestReconcileVerifiedEmails_StampsLegacyRows(t *testing.T) {
 	}
 	if got, _ := s.GetUserByID(setup.ID); got.EmailSource != EmailSourceSetup {
 		t.Fatalf("restamped source = %q, want setup", got.EmailSource)
+	}
+}
+
+// A legacy bound invite counts as "invite" only on the admin path: granted
+// SSO, or a creator who is an admin now. Otherwise it proved nothing.
+func TestReconcileVerifiedEmails_BoundInviteNeedsTheAdminPath(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "boss", "admin", "active")
+	editor := mustUser(t, s, "editor1", "editor", "active")
+	cases := []struct {
+		name, creator, grant, want string
+	}{
+		{"granted", editor.ID, InviteSSOGranted, EmailSourceInvite},
+		{"creator is an admin now", admin.ID, "", EmailSourceInvite},
+		{"non-admin creator, no grant", editor.ID, InviteSSOCreatorNotAdmin, EmailSourceInviteLink},
+		{"unknown creator", "01GONECREATOR", "", EmailSourceInviteLink},
+	}
+	for i, tc := range cases {
+		u := mustUser(t, s, fmt.Sprintf("guest%d", i), "viewer", "active")
+		addr := fmt.Sprintf("guest%d@example.com", i)
+		setRawUserEmailSource(t, s, u, addr, "")
+		putUsedInvite(t, s, Invite{Token: fmt.Sprintf("tok%d", i), Username: u.Username, Email: addr, RoleID: "viewer",
+			CreatedByUserID: tc.creator, AcceptedUserID: u.ID, EmailBinding: InviteEmailBound, SSOGrant: tc.grant})
+		cases[i].name = u.ID + " " + tc.name
+		defer func(id, want, name string) {
+			if got, _ := s.GetUserByID(id); got.EmailSource != want {
+				t.Errorf("%s: source %q, want %q", name, got.EmailSource, want)
+			}
+		}(u.ID, tc.want, tc.name)
+	}
+	if _, err := s.ReconcileVerifiedEmails(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The released build's only key writer is CreateUser, so a key from it
+// stamps "setup": an older build's setup or bootstrap admin keeps its
+// address verified across the upgrade.
+func TestReconcileVerifiedEmails_KeyFromCreateUserIsSetup(t *testing.T) {
+	s := newInviteTestStore(t)
+	u, err := s.CreateUser("admin", "admin@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, u, u.Email, "") // as the older build left it
+	if keyFor(t, s, "admin@example.com") != u.ID {
+		t.Fatal("precondition: CreateUser wrote the key")
+	}
+	if _, err := s.ReconcileVerifiedEmails(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetUserByID(u.ID); got.EmailSource != EmailSourceSetup {
+		t.Fatalf("source %q, want setup", got.EmailSource)
+	}
+	if v, _ := s.GetUserByVerifiedEmail("admin@example.com"); v == nil || v.ID != u.ID {
+		t.Fatalf("still verified after the upgrade: %+v", v)
 	}
 }
 
