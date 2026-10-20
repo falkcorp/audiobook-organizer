@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
 // last-edited: 2026-10-20
 
@@ -277,6 +277,10 @@ func hashBootstrapToken(raw string) string {
 const (
 	bootstrapMaxAttempts    = 5
 	bootstrapWindowDuration = time.Hour
+
+	// bootstrapUnattributedKey is the shared bucket for requests with no
+	// attributable client address (see handleBootstrap).
+	bootstrapUnattributedKey = "local-unattributed"
 )
 
 type bootstrapAttempt struct {
@@ -324,13 +328,26 @@ type bootstrapRequest struct {
 // handleBootstrap exchanges a one-time bootstrap token for a full-privilege API key.
 // Wired to a public (unauthenticated) route.
 func (s *Server) handleBootstrap(c *gin.Context) {
-	ip := strings.TrimSpace(c.ClientIP())
+	// Behind the Cloudflare tunnel c.ClientIP() is the tunnel's address for
+	// everyone, which would put every caller in one 5-per-hour bucket and let
+	// one attacker lock the owner out of recovery. trustedClientIP recovers the
+	// real visitor from CF-Connecting-IP when the request came through the local
+	// connector. When it cannot (a local peer with no usable header) the
+	// endpoint is NOT left unlimited, because it is high-value: all such
+	// requests share one fixed key, so unattributable traffic is still
+	// bounded. ip keeps the attributed (or local) address for logging.
+	ip, attributed := trustedClientIP(c, remoteAddrIsLocal)
+	ip = strings.TrimSpace(ip)
+	rateKey := ip
+	if !attributed {
+		rateKey = bootstrapUnattributedKey
+	}
 
-	if bootstrapIsRateLimited(ip) {
+	if bootstrapIsRateLimited(rateKey) {
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many bootstrap attempts — try again later", "TOO_MANY_REQUESTS")
 		return
 	}
-	bootstrapRecordAttempt(ip)
+	bootstrapRecordAttempt(rateKey)
 
 	var req bootstrapRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
