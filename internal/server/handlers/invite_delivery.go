@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-10-20
 
@@ -395,10 +395,13 @@ func (h *UserHandler) ResendInvite(c *gin.Context) {
 // ── Public lookup ──────────────────────────────────────────────────────────
 
 // PublicInvite handles GET /api/v1/auth/invite/:token (public, rate-limited at
-// the route). It answers only for a valid, unexpired, unused token, and then
-// with only the username, the expiry and, when configured, the guest header
-// pair. Missing, used and expired all get the same 404, so the endpoint says
-// nothing about tokens that are not live.
+// the route). It answers only for a token accept would take, and then with
+// only the username, the expiry and, when configured, the guest header pair.
+// Every case accept refuses (missing, used, expired, the username taken since,
+// the invited address held verified by another account) gets the same 404:
+// the store runs accept's own checks (InviteAcceptChecker), so a link holder
+// cannot learn from a 200 here followed by a refused accept that a username or
+// an address has an account.
 func (h *UserHandler) PublicInvite(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("Referrer-Policy", "no-referrer")
@@ -418,6 +421,15 @@ func (h *UserHandler) PublicInvite(c *gin.Context) {
 	if inv == nil || inv.UsedAt != nil || h.delivery.now().After(inv.ExpiresAt) {
 		notFound()
 		return
+	}
+	if h.acceptChecker != nil {
+		if err := h.acceptChecker.CheckInviteAcceptable(token); database.IsInviteRefusal(err) {
+			notFound()
+			return
+		} else if err != nil {
+			httputil.InternalError(c, "failed to check invite", err)
+			return
+		}
 	}
 	resp := gin.H{"username": inv.Username, "expires_at": inv.ExpiresAt}
 	if g, ok := h.delivery.headers(); ok {

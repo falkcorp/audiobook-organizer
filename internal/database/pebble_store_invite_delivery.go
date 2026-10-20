@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_invite_delivery.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
 // last-edited: 2026-10-20
 
@@ -31,6 +31,21 @@ var (
 	ErrInviteExpired       = errors.New("invite expired")
 	ErrInviteUsernameTaken = errors.New("username taken since invite was created")
 )
+
+// IsInviteRefusal reports whether err is a refusal of the invite itself
+// (ConsumeInvite or CheckInviteAcceptable): missing, used, expired, the
+// username taken since, or the invited address held verified by another
+// account (or not checkable because a user row is unreadable). Anything else
+// is a storage failure. Public routes answer every refusal the same way, so a
+// caller holding a link learns nothing about which tokens, usernames or
+// addresses exist.
+func IsInviteRefusal(err error) bool {
+	return errors.Is(err, ErrInviteEmailTaken) ||
+		errors.Is(err, ErrInviteNotFound) ||
+		errors.Is(err, ErrInviteUsed) ||
+		errors.Is(err, ErrInviteExpired) ||
+		errors.Is(err, ErrInviteUsernameTaken)
+}
 
 // ErrInviteNotPending is returned by the invite-delivery writes for an invite
 // that is missing, used or expired.

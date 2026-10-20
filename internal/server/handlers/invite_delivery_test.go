@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-20
 
@@ -328,6 +328,52 @@ func TestPublicInvite_OnlyLiveTokensAndOnlyAllowedFields(t *testing.T) {
 			t.Fatalf("%s: %d %s, want the same 404 as missing", name, r.Code, r.Body.String())
 		}
 		assertNoGuestSecrets(t, r.Body.String())
+	}
+}
+
+// NIT5: the lookup answers 404 whenever accept would refuse, not only for
+// missing, used and expired tokens. A 200 here followed by a refused accept
+// would tell the link holder that the invited username or address already has
+// an account.
+func TestPublicInvite_NotFoundWhenAcceptWouldRefuse(t *testing.T) {
+	f := newInviteFixture(t)
+	missing, _ := f.do(t, http.MethodGet, "/auth/invite/"+strings.Repeat("0", 64), nil)
+	admin, err := f.store.CreateUser("boss", "boss@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An admin emailed an invite to an address another account holds verified.
+	taken := strings.Repeat("a", 64)
+	if _, err := f.store.CreateInvite(&database.Invite{Token: taken, Username: "newcomer", Email: "held@example.com",
+		RoleID: "viewer", CreatedByUserID: admin.ID, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.MarkInviteEmailSent(taken, "held@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := f.do(t, http.MethodGet, "/auth/invite/"+taken, nil); w.Code != http.StatusOK {
+		t.Fatalf("before the address is held: %d, want 200", w.Code)
+	}
+	if _, err := f.store.CreateUser("holder", "held@example.com", "bcrypt", "h", []string{"viewer"}, "active"); err != nil {
+		t.Fatal(err)
+	}
+	// Someone took the invited username since the invite was made.
+	dup := strings.Repeat("b", 64)
+	if _, err := f.store.CreateInvite(&database.Invite{Token: dup, Username: "squat", RoleID: "viewer", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.CreateUser("squat", "", "bcrypt", "h", []string{"viewer"}, "active"); err != nil {
+		t.Fatal(err)
+	}
+	for name, tok := range map[string]string{"address held verified": taken, "username taken": dup} {
+		w, _ := f.do(t, http.MethodGet, "/auth/invite/"+tok, nil)
+		if w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Fatalf("%s: %d %s, want the same 404 as a missing token", name, w.Code, w.Body.String())
+		}
+		assertNoGuestSecrets(t, w.Body.String())
+		if _, err := f.store.ConsumeInvite(tok, "bcrypt", "h"); !database.IsInviteRefusal(err) {
+			t.Fatalf("%s: accept = %v, want a refusal (the lookup and accept must agree)", name, err)
+		}
 	}
 }
 
