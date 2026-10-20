@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-20 -->
 
@@ -33,8 +33,11 @@ Branch `feat/invite-email`, PR #4090. No separate spec.
   were actually verified. While building this feature, a version of the code
   let anyone type another person's address into their own profile and capture
   that person's first single sign-on; that version never reached production.
-- **No account can share an email with another.** Email addresses are now
-  unique, ignoring capitalization, and an administrator can now set or clear
+- **Only one account can hold an address as verified.** Two accounts may
+  both type the same address into their profiles, but only one account can
+  have it verified, and only a verified address links a Google or GitHub
+  sign-in. Look-alike spellings (for example a special Unicode "K" in place of
+  "k") count as the same address. An administrator can now set or clear
   another person's email from the Users page.
 - **Secrets stay on the server.** The mail password and the Cloudflare key
   are set only in the server's environment, are never shown in the settings
@@ -45,12 +48,14 @@ Branch `feat/invite-email`, PR #4090. No separate spec.
   live link, because the guest's app needs it.
 - **An emergency-access gap was closed.** The one-time recovery token used to
   regain access to a locked-out server was checked only after the server had
-  looked for, and if needed created, an administrator account. When no active
-  administrator existed, anyone who could reach the server could make it
-  create one, without ever receiving its password or a key; the real recovery
-  then reused that account and could not show its password. Nothing is
-  created now without the correct token, and the generated administrator
-  password is far stronger.
+  looked for, and if needed created, an administrator account. In the
+  released version that could only happen when the server had no
+  administrator account at all (locked ones counted), and the server's own
+  start-up step normally created one first, so in practice the window was
+  small. Nobody who triggered it received the account's password or a key.
+  Nothing is created now without the correct token, the generated
+  administrator password is far stronger, and the start-up step no longer
+  creates an administrator nobody has the password for.
 
 ## Emailed invitations and the sign-up page
 
@@ -108,19 +113,24 @@ time they signed in with Google or GitHub.
 **The fix.** Only verified addresses are used for linking: ones bound by an
 emailed invite from an administrator, confirmed by Google or GitHub, set by an
 administrator, or set during first-run setup. Each account now remembers where
-its email came from, and the server checks that against the accounts
-themselves at the moment of each sign-in, not against a saved list that could
-go stale. Accounts from before this update are labelled once, from the records
+its email came from, and only that counts: an address typed into a profile is
+never verified, whatever else the account has. The server checks this against
+the accounts themselves at the moment of each sign-in, not against a saved
+list that could go stale. The profile page accepts any address and simply
+records it as unverified, so it cannot be used to find out which addresses
+belong to someone. Accounts from before this update are labelled once, from the records
 the server has: an address confirmed by Google or GitHub, one bound by an
 invite an administrator sent, or one set when the account was created counts
-as verified; anything else counts as typed in by the person. An address
-someone squatted before this update is therefore not grandfathered in.
+as verified; anything else counts as typed in by the person. If two old
+accounts would both count as verified for one address, only the one with the
+strongest record keeps it, and the server logs the others. An address someone
+squatted before this update is therefore not grandfathered in.
 
 When a Google- or GitHub-verified sign-in, or the acceptance of an invite an
 administrator emailed, finds its address typed into other accounts' profiles,
 the verified person wins: those accounts keep working but lose the address,
-and an entry naming them goes into the admin's audit log. An account with any
-proof of its address is never displaced. People who already sign in with
+and an entry naming them goes into the admin's audit log. An account that has
+the address verified is never displaced. People who already sign in with
 Google or GitHub are found through their existing sign-in link, not their
 email, so they are not affected.
 
@@ -128,4 +138,14 @@ email, so they are not affected.
 was last changed through their profile page, it is labelled as typed in, and
 the first Google or GitHub sign-in with that address would move it to a new
 account. The server logs the ids of any such administrator accounts at
-startup; setting the address for them from the Users page keeps it theirs.
+startup. If no other account has that address verified, setting it for them
+from the Users page keeps it theirs. If another account already has it
+verified, the server refuses to verify it a second time and the log says so:
+the duplicate account has to be cleared or merged into the right one (an
+account-merge tool is being built for this).
+
+**A second thing to set.** The invite pages limit how often one visitor can
+try a link. Behind the Cloudflare tunnel, the server can only tell visitors
+apart when `TUNNEL_CONNECTOR_ADDRS` names the address the tunnel connects
+from. Until it is set, that per-visitor limit is off for tunnel traffic; the
+per-link and overall limits still apply.
