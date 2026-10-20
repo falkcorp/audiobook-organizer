@@ -117,6 +117,13 @@ func (r *IPRateLimiter) newLimiter() *rate.Limiter {
 // Cost is O(1): one map lookup and one list move/insert under r.mu. It
 // never iterates r.entries.
 func (r *IPRateLimiter) limiterForIP(ip string) *rate.Limiter {
+	l, _ := r.limiterForKey(ip)
+	return l
+}
+
+// limiterForKey is limiterForIP that also reports whether this call created
+// the key's entry.
+func (r *IPRateLimiter) limiterForKey(ip string) (*rate.Limiter, bool) {
 	now := r.now()
 
 	r.mu.Lock()
@@ -134,7 +141,7 @@ func (r *IPRateLimiter) limiterForIP(ip string) *rate.Limiter {
 		}
 		entry.lastSeen = now
 		r.lru.MoveToFront(el)
-		return entry.limiter
+		return entry.limiter, false
 	}
 
 	// Bound the map: evict the least-recently-seen entry before inserting.
@@ -146,7 +153,7 @@ func (r *IPRateLimiter) limiterForIP(ip string) *rate.Limiter {
 
 	entry := &limiterEntry{ip: ip, limiter: r.newLimiter(), lastSeen: now}
 	r.entries[ip] = r.lru.PushFront(entry)
-	return entry.limiter
+	return entry.limiter, true
 }
 
 // removeLocked drops el from both the LRU and the map. r.mu must be held.
@@ -224,28 +231,103 @@ func (r *IPRateLimiter) AllowKey(key string) bool {
 	return r.limiterForIP(key).Allow()
 }
 
-// WouldAllowKey reports whether AllowKey(key) would succeed right now, without
-// taking a token and without creating an entry for an unseen key (an unseen or
-// idle key would get a full bucket, so it reports true). Callers that stack
-// several limiters use it to refuse a request before any of them spends a
-// token or tracks a new key. It is a snapshot: a concurrent request can take
-// the last token before the caller's AllowKey.
-func (r *IPRateLimiter) WouldAllowKey(key string) bool {
+// KeyReservation is one token ReserveKey took from a key's bucket. Cancel
+// gives it back; a zero KeyReservation is a no-op.
+type KeyReservation struct {
+	lim     *IPRateLimiter
+	key     string
+	bucket  *rate.Limiter
+	res     *rate.Reservation
+	at      time.Time // when the token was reserved
+	created bool      // ReserveKey created the key's entry
+}
+
+// ReserveKey takes one token from key's bucket if one is available right now,
+// atomically under the bucket's own lock, so concurrent callers can never
+// take more tokens than the bucket holds. ok is false, and nothing is held,
+// when the bucket is empty. Callers that stack several limiters reserve from
+// each in turn and Cancel the ones already taken when a later one refuses
+// (ReserveKeys), so a refused request spends nothing.
+func (r *IPRateLimiter) ReserveKey(key string) (KeyReservation, bool) {
 	if key == "" {
 		key = "unknown"
 	}
-	now := r.now()
+	bucket, created := r.limiterForKey(key)
+	now := time.Now()
+	res := bucket.ReserveN(now, 1)
+	if !res.OK() {
+		r.dropIfUntouched(key, bucket, created)
+		return KeyReservation{}, false
+	}
+	if res.DelayFrom(now) > 0 {
+		res.CancelAt(now)
+		r.dropIfUntouched(key, bucket, created)
+		return KeyReservation{}, false
+	}
+	return KeyReservation{lim: r, key: key, bucket: bucket, res: res, at: now, created: created}, true
+}
+
+// Cancel returns the reserved token. When the reservation created the key's
+// entry and nobody else has spent from it since, the entry is dropped again,
+// so a refused request leaves no new key behind.
+func (k KeyReservation) Cancel() {
+	if k.res == nil {
+		return
+	}
+	// CancelAt the reservation's own time: rate.Reservation.Cancel (now)
+	// restores nothing for a token that was available at once, because its
+	// time to act has already passed. At its own time the full token comes
+	// back, less whatever later reservations on the bucket took meanwhile.
+	k.res.CancelAt(k.at)
+	k.lim.dropIfUntouched(k.key, k.bucket, k.created)
+}
+
+// dropIfUntouched removes key's entry when it was created for a reservation
+// that did not go ahead and its bucket is still full (no other request spent
+// from it in between), which is exactly the state an unseen key would get.
+func (r *IPRateLimiter) dropIfUntouched(key string, bucket *rate.Limiter, created bool) {
+	if !created {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	el, ok := r.entries[key]
-	if !ok {
-		return true
+	if !ok || el.Value.(*limiterEntry).limiter != bucket {
+		return
 	}
-	entry := el.Value.(*limiterEntry)
-	if now.Sub(entry.lastSeen) > r.idleTTL {
-		return true
+	if bucket.Tokens() >= float64(r.burst)-1e-9 {
+		r.removeLocked(el)
 	}
-	return entry.limiter.Tokens() >= 1
+}
+
+// KeyStep is one limiter and key for ReserveKeys.
+type KeyStep struct {
+	Limiter *IPRateLimiter
+	Key     string
+}
+
+// ReserveKeys reserves one token from every step, in order. When a step's
+// bucket is empty it cancels every reservation already taken and returns
+// false: the request spends nothing anywhere. On success the tokens stay
+// spent.
+func ReserveKeys(steps ...KeyStep) bool {
+	taken := make([]KeyReservation, 0, len(steps))
+	for _, st := range steps {
+		res, ok := st.Limiter.ReserveKey(st.Key)
+		if !ok {
+			CancelReservations(taken)
+			return false
+		}
+		taken = append(taken, res)
+	}
+	return true
+}
+
+// CancelReservations cancels each reservation, last taken first.
+func CancelReservations(rs []KeyReservation) {
+	for i := len(rs) - 1; i >= 0; i-- {
+		rs[i].Cancel()
+	}
 }
 
 // Middleware returns a Gin middleware that enforces the configured limit.
