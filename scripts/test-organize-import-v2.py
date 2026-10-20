@@ -2,6 +2,7 @@
 # file: scripts/test-organize-import-v2.py
 # version: 2.0.1
 # guid: c1d2e3f4-a5b6-7c8d-9e0f-1a2b3c4d5e6f
+# last-edited: 2026-10-20
 
 """
 Test script to validate audiobook organizer scanning and renaming logic (Version 2).

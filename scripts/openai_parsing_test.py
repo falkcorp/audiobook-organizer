@@ -2,6 +2,7 @@
 # file: scripts/openai_parsing_test.py
 # version: 1.1.4
 # guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
+# last-edited: 2026-10-20
 
 """
 OpenAI Audiobook Filename Parsing Test Script
