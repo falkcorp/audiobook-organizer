@@ -1,13 +1,16 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.11.0
+// version: 1.13.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
 package server
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -15,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -958,5 +962,68 @@ func TestInviteRateLimit_LANDevicesInOneSlash64EachGetTheirBurst(t *testing.T) {
 		if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+1 {
 			t.Fatalf("device %d: allowed %d (limited=%v), want its own burst of %d", d, allowed, limited, inviteAuthRateBurst)
 		}
+	}
+}
+
+// NIT5: a body trickled slower than inviteAcceptBodyReadTimeout is answered
+// 408 instead of holding the connection, and the deadline is cleared after
+// the read, so a later request on the same keep-alive connection, sent after
+// the timeout has passed, is unaffected.
+func TestInviteRateLimit_SlowBodyTimesOut(t *testing.T) {
+	saved := inviteAcceptBodyReadTimeout
+	inviteAcceptBodyReadTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { inviteAcceptBodyReadTimeout = saved })
+	h := newInviteLimitHarness(t, false)
+	srv := httptest.NewServer(h.engine)
+	t.Cleanup(srv.Close)
+	addr := strings.TrimPrefix(srv.URL, "http://")
+
+	readStatus := func(conn net.Conn, br *bufio.Reader) int {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("reading the response: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// Slow: headers promise 100 bytes, a few arrive, then nothing.
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST /accept HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"tok")
+	start := time.Now()
+	if code := readStatus(conn, bufio.NewReader(conn)); code != http.StatusRequestTimeout {
+		t.Fatalf("trickled body: %d, want 408", code)
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("the 408 took %v; the read deadline did not apply", el)
+	}
+
+	// Keep-alive: a full body, then a pause longer than the timeout, then
+	// another full body on the same connection.
+	conn2, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.Close()
+	br := bufio.NewReader(conn2)
+	body := `{"token":"` + inviteTestToken(1) + `","password":"x"}`
+	send := func() {
+		fmt.Fprintf(conn2, "POST /accept HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+	}
+	send()
+	if code := readStatus(conn2, br); code != http.StatusOK {
+		t.Fatalf("first request: %d, want 200", code)
+	}
+	time.Sleep(2 * inviteAcceptBodyReadTimeout)
+	send()
+	if code := readStatus(conn2, br); code != http.StatusOK {
+		t.Fatalf("second request after the timeout elapsed: %d, want 200 (deadline was left set)", code)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -11,9 +11,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -100,6 +103,14 @@ const (
 // so the limiter always reads the whole body the handler will use.
 const inviteAcceptBodyLimit = 4 << 10
 
+// inviteAcceptBodyReadTimeout bounds how long readAcceptInviteBody waits for
+// the accept body. The body is read before any limiter runs (the limiter
+// needs the token), and the server sets no body read timeout (uploads), so
+// without this a caller could hold a connection and a goroutine open by
+// trickling the 4 KiB body a byte at a time. A real body is one small JSON
+// object sent at once. A variable so tests can shorten it.
+var inviteAcceptBodyReadTimeout = 5 * time.Second
+
 // inviteFallbackTokenKey is the one per-token bucket shared by every request
 // whose token is empty or whose body does not parse, so a malformed body
 // cannot skip the per-token layer.
@@ -122,6 +133,7 @@ type parsedAcceptInvite struct {
 	parsed   bool // the body was one valid JSON object
 	empty    bool // there was no body
 	tooLarge bool // over inviteAcceptBodyLimit
+	timedOut bool // not received within inviteAcceptBodyReadTimeout
 }
 
 // readAcceptInviteBody reads and parses the accept-invite body once per
@@ -137,10 +149,14 @@ func readAcceptInviteBody(c *gin.Context) parsedAcceptInvite {
 	if c.Request.Body == nil {
 		p.empty = true
 	} else {
+		restore := setBodyReadDeadline(c, inviteAcceptBodyReadTimeout)
 		buf, err := io.ReadAll(io.LimitReader(c.Request.Body, inviteAcceptBodyLimit+1))
+		restore()
 		switch {
 		case len(buf) > inviteAcceptBodyLimit:
 			p.tooLarge = true
+		case errors.Is(err, os.ErrDeadlineExceeded):
+			p.timedOut = true
 		case err == nil && len(bytes.TrimSpace(buf)) == 0:
 			p.empty = true
 		case err == nil:
@@ -151,6 +167,24 @@ func readAcceptInviteBody(c *gin.Context) parsedAcceptInvite {
 	}
 	c.Set(acceptInviteRequestKey, p)
 	return p
+}
+
+// setBodyReadDeadline sets a read deadline d from now on the request's
+// connection and returns the function that clears it again. The server has no
+// ReadTimeout, so the connection's read deadline is zero while a handler
+// runs; clearing restores exactly that, and the next request on a keep-alive
+// connection is unaffected. A writer that cannot set deadlines
+// (http.ErrNotSupported: HTTP/2 streams without support, test recorders)
+// leaves the read unbounded in time, as before; the 4 KiB cap still applies.
+func setBodyReadDeadline(c *gin.Context, d time.Duration) (restore func()) {
+	rc := http.NewResponseController(c.Writer)
+	if err := rc.SetReadDeadline(time.Now().Add(d)); err != nil {
+		if !errors.Is(err, http.ErrNotSupported) {
+			inviteLimitLog.Debug("accept-invite: could not set a body read deadline: %v", err)
+		}
+		return func() {}
+	}
+	return func() { _ = rc.SetReadDeadline(time.Time{}) }
 }
 
 // inviteGlobalKey is the single bucket of the global layer.
@@ -260,8 +294,9 @@ func remoteAddrIsLocal(addr string) bool {
 //
 // Order, settled once:
 //  1. tokenOf runs FIRST, before any bucket is touched. Reading the body is
-//     bounded (inviteAcceptBodyLimit, 4 KiB), and doing it first means a
-//     request tokenOf rejects never reaches a limiter at all.
+//     bounded in size (inviteAcceptBodyLimit, 4 KiB) and in time
+//     (inviteAcceptBodyReadTimeout), and doing it first means a request
+//     tokenOf rejects never reaches a limiter at all.
 //  2. The client, token and global layers are then reserved together
 //     (ReserveKeys). Each reservation is atomic (IPRateLimiter.ReserveKey),
 //     and when any layer refuses, every reservation already taken is
@@ -322,12 +357,18 @@ func inviteTokenFromParam(c *gin.Context) (string, bool) { return c.Param("token
 
 // inviteTokenFromBody reads the token of POST /auth/accept-invite through
 // readAcceptInviteBody, which stashes the parsed body for handleAcceptInvite.
-// A body over inviteAcceptBodyLimit is answered 413 here. A missing or
-// malformed body yields "" (the fallback bucket; the handler answers it).
+// A body over inviteAcceptBodyLimit is answered 413 here, and one not received
+// within inviteAcceptBodyReadTimeout 408. A missing or malformed body yields
+// "" (the fallback bucket; the handler answers it).
 func inviteTokenFromBody(c *gin.Context) (string, bool) {
 	p := readAcceptInviteBody(c)
 	if p.tooLarge {
 		httputil.RespondWithError(c, http.StatusRequestEntityTooLarge, "request body too large", "PAYLOAD_TOO_LARGE")
+		return "", false
+	}
+	if p.timedOut {
+		c.Header("Connection", "close")
+		httputil.RespondWithError(c, http.StatusRequestTimeout, "request body not received in time", "REQUEST_TIMEOUT")
 		return "", false
 	}
 	if !p.parsed {
