@@ -99,7 +99,11 @@ cache that the lookup corrects. Addresses are compared after Unicode NFKC
 normalization and lowercasing everywhere (keys, uniqueness, the OAuth
 allowlist, guest-access revocation, the Cloudflare policy list), so a
 compatibility spelling such as a Kelvin sign (U+212A) for `k` is the same
-address.
+address. NFKC is wider than case folding: fullwidth letters, ligatures (`ﬁ`
+as `fi`), superscripts and circled digits also fold to their plain forms, so
+two addresses a mail server might deliver separately can count as one here
+(the first to be verified blocks the other on a second account). That is
+intended: look-alike spellings must never be two identities.
 
 At every start the store stamps a source on rows written before this field,
 the best one the row's history supports (the creation key outranks an
