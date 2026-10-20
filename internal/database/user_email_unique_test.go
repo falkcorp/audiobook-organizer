@@ -491,6 +491,49 @@ func TestMarkUserEmailVerified_FastPathTakesNoLock(t *testing.T) {
 	}
 }
 
+// NIT3: an account that typed in an address another account holds proven is
+// checked on every Cloudflare Access request. That no-op is decided from the
+// cache key and the holder's own row, without inviteMu, userWriteMu or a scan
+// of every user.
+func TestMarkUserEmailVerified_ProvenElsewhereTakesNoLock(t *testing.T) {
+	s := newInviteTestStore(t)
+	holder := mustUser(t, s, "holder", "viewer", "active") // setup: proven
+	typist := mustUser(t, s, "typist", "viewer", "active")
+	setRawUserEmailSource(t, s, typist, holder.Email, EmailSourceSelf)
+	locked := 0
+	markEmailVerifiedLockedHook = func() { locked++ }
+	t.Cleanup(func() { markEmailVerifiedLockedHook = nil })
+
+	s.inviteMu.Lock()
+	done := make(chan bool, 1)
+	go func() {
+		ok, _ := s.MarkUserEmailVerified(typist.ID, holder.Email)
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		s.inviteMu.Unlock()
+		if ok {
+			t.Fatal("another account's proven address must not be marked")
+		}
+	case <-time.After(2 * time.Second):
+		s.inviteMu.Unlock()
+		t.Fatal("the mark waited for inviteMu although another account holds the address proven")
+	}
+	if locked != 0 {
+		t.Fatalf("locked path ran %d time(s); want the fast path", locked)
+	}
+	// A stale key (its holder no longer has the address) is only a hint: the
+	// locked path decides, and the typist's address is then verified.
+	setRawUserEmailSource(t, s, holder, "moved@example.com", EmailSourceSetup)
+	if ok, err := s.MarkUserEmailVerified(typist.ID, typist.Email); err != nil || !ok {
+		t.Fatalf("mark after the holder moved = %v, %v; want verified", ok, err)
+	}
+	if locked != 1 {
+		t.Fatalf("locked path ran %d time(s); want 1", locked)
+	}
+}
+
 // The admin action sets a verified address (source admin) and moves the key;
 // clearing removes both; another account's address is refused.
 func TestSetUserEmailAsAdmin(t *testing.T) {
