@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.38.1
+// version: 1.38.2
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package undo
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -864,12 +865,7 @@ func CountsTowardRevert(c *database.OperationChange) bool {
 // operation without one, and the Repairs fragment fixer offers "revert" on
 // a held row only for operations this holds for, so the two cannot drift.
 func OperationRevertible(changes []*database.OperationChange) bool {
-	for _, c := range changes {
-		if CountsTowardRevert(c) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(changes, CountsTowardRevert)
 }
 
 // Prefixes of a ChangeTypeBookPrimaryHandoff row's OldValue, naming the

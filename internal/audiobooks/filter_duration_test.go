@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a3d6e14-2c7b-4f58-8e01-6b4f2d9c7a35
-// last-edited: 2026-10-09
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -220,7 +220,7 @@ func syntheticLibrary(n int) ([]database.Book, coreFiles) {
 			files = append(files, database.BookFileCore{BookID: id})
 		default:
 			b.Duration = intp(8 * 1800)
-			for j := 0; j < 8; j++ {
+			for range 8 {
 				files = append(files, database.BookFileCore{BookID: id, Duration: 1800})
 			}
 		}

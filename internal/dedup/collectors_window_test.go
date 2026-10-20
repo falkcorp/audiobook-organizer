@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_window_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d6f9a43-b8e1-4c07-9f52-1a3e7b0c5d96
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -44,7 +44,7 @@ func (e *windowEnv) book(t *testing.T, files int) (string, []string) {
 	b, err := e.s.CreateBook(&database.Book{Title: "Title " + strings.Repeat("0", 3) + string(rune('0'+e.n%10)), FilePath: "/lib/w/" + string(rune('a'+e.n))})
 	require.NoError(t, err)
 	var ids []string
-	for i := 0; i < files; i++ {
+	for i := range files {
 		f := &database.BookFile{BookID: b.ID, FilePath: "/lib/w/" + string(rune('a'+e.n)) + "/" + string(rune('0'+i)) + ".m4b", Format: "m4b"}
 		require.NoError(t, e.s.CreateBookFile(f))
 		ids = append(ids, f.ID)
@@ -59,7 +59,7 @@ func walk(seed uint64, n int) []uint32 {
 	out[0] = rng.Uint32()
 	for i := 1; i < n; i++ {
 		var mask uint32
-		for bit := 0; bit < 32; bit++ {
+		for bit := range 32 {
 			if rng.Float64() < 0.15 {
 				mask |= 1 << bit
 			}

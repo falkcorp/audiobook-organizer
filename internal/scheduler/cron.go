@@ -1,7 +1,7 @@
 // file: internal/scheduler/cron.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c2f9a14-5be3-4d68-9a07-e1b4c3d85f26
-// last-edited: 2026-10-17
+// last-edited: 2026-10-20
 
 package scheduler
 
@@ -124,7 +124,7 @@ func (c CronSpec) next(after time.Time, loc *time.Location, probe *int) (time.Ti
 			if !has(c.hour, h) {
 				continue
 			}
-			for m := 0; m < 60; m++ {
+			for m := range 60 {
 				if !has(c.minute, m) {
 					continue
 				}

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/metrics_otel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4d7c1e92-a3b8-4f06-8c5d-9e2f0b61a7d3
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package registry_test
 
@@ -502,7 +502,7 @@ func TestOpsMetrics_ProgressAge(t *testing.T) {
 // times leaves no callback behind.
 func TestShutdownUnregistersInflightCallback(t *testing.T) {
 	before := opsmetrics.ActiveInflightCallbacks()
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		g := newOtelRig(t)
 		g.reg.Start(context.Background())
 		if got := opsmetrics.ActiveInflightCallbacks(); got != before+1 {

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -85,9 +86,7 @@ func (svc *AudiobookService) loadMetadataState(bookID string) (map[string]metada
 // copyMetadataState copies a state map (entries are values).
 func copyMetadataState(state map[string]metadataFieldState) map[string]metadataFieldState {
 	out := make(map[string]metadataFieldState, len(state))
-	for k, v := range state {
-		out[k] = v
-	}
+	maps.Copy(out, state)
 	return out
 }
 

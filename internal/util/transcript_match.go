@@ -1,12 +1,13 @@
 // file: internal/util/transcript_match.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package util
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -521,7 +522,7 @@ func initialLetters(t string, allowUpperRun bool) (string, bool) {
 func splitAuthors(s string) []string {
 	s = strings.NewReplacer("&", ",", ";", ",").Replace(s)
 	var out []string
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		for _, name := range splitOnAnd(part) {
 			if name = strings.TrimSpace(name); name != "" {
 				out = append(out, name)
@@ -555,8 +556,7 @@ func nameLike(t string) bool {
 func splitName(name string) (surname, given string) {
 	toks := matchTokens(name)
 	si := -1
-	for i := len(toks) - 1; i >= 0; i-- {
-		t := toks[i]
+	for i, t := range slices.Backward(toks) {
 		if nameSuffixes[t] || len([]rune(t)) < 2 || !nameLike(t) {
 			continue
 		}

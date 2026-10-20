@@ -1,7 +1,7 @@
 // file: internal/scanner/folder_evidence_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 477ad146-9156-4328-bc92-4bad0d35ece0
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -53,11 +53,11 @@ func TestFolderNameEvidence_ConcurrentCallersAndReload(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			for j := 0; j < 40; j++ {
+			for j := range 40 {
 				if j%10 == 0 && i%4 == 0 {
 					// Expire the snapshot mid-run so callers race a reload.
 					c := &folderEvidenceCache
@@ -141,7 +141,7 @@ func TestFolderNameEvidence_FirstLoadIsShared(t *testing.T) {
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

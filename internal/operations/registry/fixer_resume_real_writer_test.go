@@ -1,7 +1,7 @@
 // file: internal/operations/registry/fixer_resume_real_writer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 53c15d37-1fc7-4e53-ac78-538932952997
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package registry
 
@@ -123,7 +123,9 @@ func runRealResume(t *testing.T, rows map[string]realRow, blockRow string,
 	block := true
 	blocked := make(chan struct{})
 	def := ops.Fixer("test.fixer", ops.FixerSpec[ops.NoParams, string]{
-		Common:     ops.Common{Title: "f", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Title:      "f",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermSettingsManage,
 		Candidates: func(*ops.RC, ops.NoParams) (ops.Source[string], error) { return ops.Source[string]{}, nil },
 		Load: func(_ *ops.RC, _ ops.NoParams, id string) (string, bool, error) {
 			_, ok := rows[id]

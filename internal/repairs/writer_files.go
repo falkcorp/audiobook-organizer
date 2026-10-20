@@ -1,13 +1,14 @@
 // file: internal/repairs/writer_files.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package repairs
 
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -324,11 +325,11 @@ func (w *Writer) JournalSteps(steps []BookStep, write func() (done []bool, err e
 	rows := make([]journaledRow, 0, len(steps))
 	voidUndone := func(done []bool, cause error) error {
 		errs := []error{cause}
-		for i := len(rows) - 1; i >= 0; i-- {
+		for i, row := range slices.Backward(rows) {
 			if i < len(done) && done[i] {
 				continue
 			}
-			if verr := w.voidRow(rows[i]); verr != nil {
+			if verr := w.voidRow(row); verr != nil {
 				errs = append(errs, verr)
 			}
 		}

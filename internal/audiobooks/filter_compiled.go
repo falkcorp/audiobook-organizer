@@ -1,12 +1,13 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package audiobooks
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -247,12 +248,7 @@ func CheckFilterSetSize(sets ...[]FieldFilter) error {
 // fieldFiltersCostly reports whether any filter is a pattern filter: a scan
 // over it takes a pattern slot and a budget.
 func fieldFiltersCostly(filters []FieldFilter) bool {
-	for _, f := range filters {
-		if isPatternFilter(f) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(filters, isPatternFilter)
 }
 
 // mustCompileForPredicate compiles filters for a predicate. The entry points

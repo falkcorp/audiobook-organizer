@@ -1,13 +1,14 @@
 // file: internal/organizer/library_copy.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f3144b62-7dfb-4ee1-95d2-ea314e1fde3c
-// last-edited: 2026-09-30
+// last-edited: 2026-10-20
 
 package organizer
 
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -83,10 +84,8 @@ func IsLibraryCopyOf(original, candidate *database.Book) bool {
 		if h == nil || *h == "" {
 			continue
 		}
-		for _, id := range ids {
-			if *h == id {
-				return true
-			}
+		if slices.Contains(ids, *h) {
+			return true
 		}
 	}
 	return false

@@ -1,7 +1,7 @@
 // file: internal/versionprimary/lock_groups_sentinel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6f2b8d14-3a9c-4e57-b0d2-8c1e7a5f3b96
-// last-edited: 2026-10-02
+// last-edited: 2026-10-20
 
 package versionprimary
 
@@ -21,7 +21,7 @@ import (
 // collidingGroup returns a group id other than g that hashes onto g's stripe.
 func collidingGroup(t *testing.T, g string) string {
 	t.Helper()
-	for i := 0; i < 100000; i++ {
+	for i := range 100000 {
 		if c := fmt.Sprintf("collide-%d", i); c != g && groupStripe(c) == groupStripe(g) {
 			return c
 		}
@@ -54,7 +54,7 @@ func TestGroupStripe_EmptyIsLastSentinel(t *testing.T) {
 			t.Fatalf("groupStripe(%q) = %d, want the sentinel %d", g, got, noGroupStripe)
 		}
 	}
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		g := fmt.Sprintf("vg-%d", i)
 		if s := groupStripe(g); s < 0 || s >= noGroupStripe {
 			t.Fatalf("groupStripe(%q) = %d, want a hashed stripe below the sentinel %d", g, s, noGroupStripe)
@@ -147,12 +147,12 @@ func TestLockGroups_NoDeadlockAcrossOverlappingGroups(t *testing.T) {
 	store := &flippingStore{groups: pool}
 
 	var wg sync.WaitGroup
-	for w := 0; w < 16; w++ {
+	for w := range 16 {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(int64(w)))
-			for i := 0; i < 300; i++ {
+			for i := range 300 {
 				gids := make([]string, 1+r.Intn(4))
 				for j := range gids {
 					gids[j] = pool[r.Intn(len(pool))]

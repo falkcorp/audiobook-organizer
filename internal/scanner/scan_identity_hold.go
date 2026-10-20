@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_identity_hold.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: acb6d67e-dc3f-4d2f-adcb-ee17eacb8ca4
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 //
 // Keeps a rescan from rewriting an existing book's identity, whatever the
 // scanned value came from, and records what it would have written.
@@ -10,6 +10,7 @@ package scanner
 
 import (
 	"encoding/json"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -242,9 +243,7 @@ func identityMergeLocks(locked map[string]bool, cur *database.Book, g identityGu
 		held[database.FieldKeySeriesPosition] = true
 	}
 	out := make(map[string]bool, len(locked)+len(held))
-	for k, v := range locked {
-		out[k] = v
-	}
+	maps.Copy(out, locked)
 	for k := range held {
 		out[k] = true
 	}

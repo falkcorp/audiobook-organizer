@@ -1,7 +1,7 @@
 // file: internal/scheduler/v3_schedule_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5a90d3e7-2c18-4b64-8e0f-71b6c4a9d235
-// last-edited: 2026-10-17
+// last-edited: 2026-10-20
 
 package scheduler
 
@@ -101,8 +101,12 @@ func (r *v3Rig) register(t *testing.T, defs ...ops.Definition) {
 
 func schedDef(id string, e ops.Effects, s *ops.Schedule) ops.Definition {
 	return ops.Task(id, ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: id, Help: "synthetic", Effects: e, Permission: auth.PermSettingsManage, Schedule: s},
-		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil }})
+		Title:      id,
+		Help:       "synthetic",
+		Effects:    e,
+		Permission: auth.PermSettingsManage,
+		Schedule:   s,
+		Run:        func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil }})
 }
 
 func readDef(id string, s *ops.Schedule) ops.Definition {
@@ -241,7 +245,7 @@ func TestDisabledScheduleNeverFires(t *testing.T) {
 		opsregistry.FromV2(opsregistry.OperationDef{ID: "synthetic.undriven", DisplayName: "u"}),
 		opsregistry.FromV2(opsregistry.OperationDef{ID: "maintenance.file-integrity-check", DisplayName: "f"}),
 		opsregistry.FromV2(opsregistry.OperationDef{ID: "synthetic.manual", DisplayName: "m"}))
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		r.poll(r.now.Add(24 * time.Hour))
 	}
 	if len(r.calls) != 0 {
@@ -636,8 +640,8 @@ func TestEveryEnqueueTargetInTasksIsInTaskV2DefIDs(t *testing.T) {
 	// EnqueueOp call can be tied to the TaskDefinition{Name: ...} it sits in.
 	var stack []*ast.CompositeLit
 	enclosingName := func() string {
-		for i := len(stack) - 1; i >= 0; i-- {
-			for _, el := range stack[i].Elts {
+		for _, s := range slices.Backward(stack) {
+			for _, el := range s.Elts {
 				kv, ok := el.(*ast.KeyValueExpr)
 				if !ok {
 					continue

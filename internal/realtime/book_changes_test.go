@@ -1,7 +1,7 @@
 // file: internal/realtime/book_changes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c5a9e32-6b17-4d84-a3f9-7e1d2b8c4f65
-// last-edited: 2026-09-27
+// last-edited: 2026-10-20
 
 package realtime
 
@@ -22,7 +22,7 @@ func newTestCoalescer() (*BookChangeCoalescer, *[]*Event, *int) {
 
 func TestBookChangeCoalescer_DedupesAndArmsOncePerWindow(t *testing.T) {
 	c, got, armed := newTestCoalescer()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		c.Add("updated", "b1")
 	}
 	c.Add("updated", "b2")
@@ -60,7 +60,7 @@ func TestBookChangeCoalescer_DedupesAndArmsOncePerWindow(t *testing.T) {
 func TestBookChangeCoalescer_SplitsLargeBatches(t *testing.T) {
 	c, got, _ := newTestCoalescer()
 	n := BooksChangedMaxIDs*2 + 7
-	for i := 0; i < n; i++ {
+	for i := range n {
 		c.Add("updated", fmt.Sprintf("b%05d", i))
 	}
 	c.Flush()

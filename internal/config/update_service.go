@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.32.0
+// version: 3.32.1
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package config
 
@@ -844,11 +844,8 @@ const ProtectedSettingsRefusedMessage = auth.CredentialChangeRefusedMessage
 func intersectSorted(a, b []string) []string {
 	var out []string
 	for _, x := range a {
-		for _, y := range b {
-			if x == y {
-				out = append(out, x)
-				break
-			}
+		if slices.Contains(b, x) {
+			out = append(out, x)
 		}
 	}
 	return out

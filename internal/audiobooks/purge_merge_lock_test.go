@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_merge_lock_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e44858b2-5180-4f51-9842-e61721722f2f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -189,7 +189,7 @@ func TestPurgeNow_BookRestoredMeanwhileIsNotInTrash(t *testing.T) {
 func TestPurge_StatelessHoldsAreNotCounted(t *testing.T) {
 	_, store, _ := setupPurgeBoundary(t)
 	const n = 25
-	for i := 0; i < n; i++ {
+	for i := range n {
 		softDeleted(t, store, fmt.Sprintf("doomed-%02d", i), "")
 	}
 	before := merge.MergeLockAcquisitions()
@@ -197,7 +197,7 @@ func TestPurge_StatelessHoldsAreNotCounted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, n, res.Purged, "result %+v", res)
 	require.Zero(t, merge.MergeLockAcquisitions()-before, "a stateless purge adds no counted hold")
-	for i := 0; i < n; i++ {
+	for i := range n {
 		require.True(t, bookGone(t, store, fmt.Sprintf("doomed-%02d", i)))
 	}
 }

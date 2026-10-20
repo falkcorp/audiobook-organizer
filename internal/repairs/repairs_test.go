@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -354,7 +354,7 @@ func TestPathResolver_SymlinksIntoITunes(t *testing.T) {
 		return len(res.dirs)
 	}
 	var first int
-	for pass := 0; pass < 2; pass++ {
+	for pass := range 2 {
 		for _, p := range []string{
 			filepath.Join(lib, "Link", "a.m4b"),
 			filepath.Join(lib, "Link", "gone.m4b"), // missing, folder is a link
@@ -1033,7 +1033,7 @@ func (s *blockingStandDown) AcquireScanStandDown(ctx context.Context, holder, re
 // A scan that takes long to park is waited out in ONE attempt (no per-attempt
 // timeout re-queueing it), with liveness stamped while the attempt blocks.
 func TestAcquireStandDownWaiting_OneLongAttemptKeepsTheOpAlive(t *testing.T) {
-	sd := &blockingStandDown{fakeStandDown: fakeStandDown{renewsLeft: -1, scanRunning: true}, park: make(chan struct{})}
+	sd := &blockingStandDown{renewsLeft: -1, scanRunning: true, park: make(chan struct{})}
 	rep := &touchReporter{}
 	done := make(chan error, 1)
 	go func() {
@@ -1079,7 +1079,7 @@ func TestRunApply_PartialIsNotReportedAsUnchanged(t *testing.T) {
 
 func TestRunApply_LeaseLapseAbortsRemainingRows(t *testing.T) {
 	s := newMemStore()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		s.add(fmt.Sprintf("r%d", i), fmt.Sprintf(" T%d ", i), fmt.Sprintf("/lib/A/T%d/t.m4b", i), nil)
 	}
 	f := &trimFixer{s: s}
@@ -1097,7 +1097,7 @@ func TestRunApply_LeaseLapseAbortsRemainingRows(t *testing.T) {
 	require.Equal(t, 1, res.ByOutcome[OutcomeApplied], "one row renewed, passed the validity check and wrote")
 	require.Equal(t, 4, res.ByOutcome[OutcomeAborted])
 	written := 0
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if s.title(fmt.Sprintf("r%d", i)) == fmt.Sprintf("T%d", i) {
 			written++
 		}

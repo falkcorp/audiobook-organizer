@@ -1,7 +1,7 @@
 // file: internal/applygate/partial_upper_bound_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b4e1d27-5c93-4a60-b7f2-0d6a9e3c1f58
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -127,7 +127,7 @@ func TestCheckEvidenceInBatch_PartialUpperBound(t *testing.T) {
 
 func coverArtIntroRows() []database.BookFile {
 	files := []database.BookFile{{ID: "intro", BookID: "b", FileSize: 25*8000 + 500_000, Duration: 25}}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("ch%02d", i), BookID: "b", FileSize: 1800*8000 + 500_000})
 	}
 	return files
@@ -138,7 +138,7 @@ func mixedEncodeRows() []database.BookFile {
 		{ID: "p0", BookID: "b", FileSize: 1800 * 16000, Duration: 1800},
 		{ID: "p1", BookID: "b", FileSize: 1800 * 16000, Duration: 1800},
 	}
-	for i := 0; i < 18; i++ {
+	for i := range 18 {
 		files = append(files, database.BookFile{ID: fmt.Sprintf("q%02d", i), BookID: "b", FileSize: 1800 * 4000})
 	}
 	return files

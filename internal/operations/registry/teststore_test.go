@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.22.0
+// version: 2.22.1
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package registry_test
 
@@ -10,6 +10,7 @@ package registry_test
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -390,13 +391,7 @@ func (f *fakeStore) DeleteOperationV2(id string, allowedStatuses []string) (stri
 	if !ok {
 		return "", false, nil
 	}
-	allowed := false
-	for _, s := range allowedStatuses {
-		if s == op.Status {
-			allowed = true
-			break
-		}
-	}
+	allowed := slices.Contains(allowedStatuses, op.Status)
 	if !allowed {
 		return op.Status, false, nil
 	}

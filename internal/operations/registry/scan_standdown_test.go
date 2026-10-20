@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b4e7c9a1-2d63-4f85-9c07-1a6e8d2f5b3c
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package registry_test
 
@@ -202,7 +202,7 @@ func TestScanStandDown_RenewExtendsLeaseAndFailsAfterRelease(t *testing.T) {
 	}
 	// Renew three times, each after most of a lease; 210ms in total is past
 	// the original expiry, so staying valid proves renewal extends the lease.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		advance(70 * time.Millisecond)
 		if !r.RenewScanStandDown("holder-1") {
 			t.Fatalf("renew %d returned false while still held", i)

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_examples_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 483e4659-2825-4023-a407-0e33318d6b94
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package registry
 
@@ -47,13 +47,11 @@ func (f fakePaths) GetAllImportPaths(context.Context) ([]string, error) { return
 
 func sizeRefresh(deps sizeDeps, enabled func() bool) ops.Definition {
 	return ops.Task("library.size-refresh", ops.TaskSpec[ops.NoParams, sizeResult]{
-		Common: ops.Common{
-			Title:      "Library size refresh",
-			Help:       "Walks the library and import trees to refresh the on-disk size cache.",
-			Effects:    ops.ReadOnly(ops.ResFiles),
-			Permission: auth.PermLibraryView,
-			Schedule:   ops.InMaintenanceWindow(30).When(enabled),
-		},
+		Title:      "Library size refresh",
+		Help:       "Walks the library and import trees to refresh the on-disk size cache.",
+		Effects:    ops.ReadOnly(ops.ResFiles),
+		Permission: auth.PermLibraryView,
+		Schedule:   ops.InMaintenanceWindow(30).When(enabled),
 		Run: func(rc *ops.RC, _ ops.NoParams) (sizeResult, error) {
 			folders, err := deps.Paths.GetAllImportPaths(rc.Context())
 			if err != nil {
@@ -101,13 +99,11 @@ func (f fakeFiles) ListBookFiles(context.Context) ([]database.BookFile, error) {
 
 func lshBackfill(deps lshDeps, indexed func(fileID string) bool) ops.Definition {
 	return ops.Batch("acoustid.lsh-backfill", ops.BatchSpec[ops.NoParams, database.BookFile, lshResult]{
-		Common: ops.Common{
-			Title:      "Backfill LSH fingerprint index",
-			Help:       "Re-saves book files that have a whole-file fingerprint but no LSH index entry. Idempotent.",
-			Effects:    ops.Writes(ops.ResBookFiles, ops.ResIndexes),
-			Exclusive:  "acoustid.fingerprint",
-			Permission: auth.PermSettingsManage,
-		},
+		Title:      "Backfill LSH fingerprint index",
+		Help:       "Re-saves book files that have a whole-file fingerprint but no LSH index entry. Idempotent.",
+		Effects:    ops.Writes(ops.ResBookFiles, ops.ResIndexes),
+		Exclusive:  "acoustid.fingerprint",
+		Permission: auth.PermSettingsManage,
 		Source: func(rc *ops.RC, _ ops.NoParams) (ops.Source[database.BookFile], error) {
 			files, err := deps.Files.ListBookFiles(rc.Context())
 			return ops.Source[database.BookFile]{
@@ -209,12 +205,10 @@ type ordinalDeps struct {
 
 func letterLOrdinals(deps ordinalDeps) ops.Definition {
 	return ops.Fixer("maintenance.normalize-letter-l-ordinals", ops.FixerSpec[ops.NoParams, database.BookCore]{
-		Common: ops.Common{
-			Title:      `Letter-l ordinals ("l Volume" -> "1 Volume")`,
-			Help:       "Rewrites a leading letter-l ordinal to digits.",
-			Effects:    ops.Writes(ops.ResBooks, ops.ResFieldStates),
-			Permission: auth.PermSettingsManage,
-		},
+		Title:      `Letter-l ordinals ("l Volume" -> "1 Volume")`,
+		Help:       "Rewrites a leading letter-l ordinal to digits.",
+		Effects:    ops.Writes(ops.ResBooks, ops.ResFieldStates),
+		Permission: auth.PermSettingsManage,
 		Candidates: func(rc *ops.RC, _ ops.NoParams) (ops.Source[database.BookCore], error) {
 			all, err := deps.Books.GetAllBooksCore(0, 0)
 			var out []database.BookCore

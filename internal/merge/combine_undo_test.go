@@ -1,12 +1,13 @@
 // file: internal/merge/combine_undo_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c6e2f94-7b1d-4a58-9e3c-5d8a1f27b640
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package merge
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"testing"
@@ -77,9 +78,7 @@ func withCreatedRows(t *testing.T, ms *Service, journalID string, pre map[string
 	j, err := ms.GetCombineJournal(journalID)
 	require.NoError(t, err)
 	out := map[string]fileView{}
-	for id, v := range pre {
-		out[id] = v
-	}
+	maps.Copy(out, pre)
 	add := func(moves []CombineFileMove) {
 		for _, fm := range moves {
 			if fm.Created {

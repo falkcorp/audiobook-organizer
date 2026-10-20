@@ -1,7 +1,7 @@
 // file: internal/applygate/runtime_canonical_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: ab7beb30-e82f-4592-8e09-9527424f2aed
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -160,7 +160,7 @@ func sweepShapes() []sweepShape {
 				OriginalFilename: fmt.Sprintf("%02d.mp3", i), FileSize: int64(d*1_000_000 + i), Duration: 1800, Missing: d == 2})
 		}
 	}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		cbr = append(cbr, database.BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/Part %02d.mp3", i),
 			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: 1800, Missing: i >= 10})
 		oneMissing = append(oneMissing, database.BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/%02d.mp3", i),

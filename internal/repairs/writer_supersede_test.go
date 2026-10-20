@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_supersede_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bef3b82c-20e5-47e0-842a-047e9b961426
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -36,7 +36,7 @@ func (j *reverterJournal) MarkOperationChangesReverted(op string, ids []string) 
 // journal without the capability are refused with nothing marked.
 func TestWriterSupersedeChanges(t *testing.T) {
 	t.Parallel()
-	j := &reverterJournal{creditFake: creditFake{credits: map[string][]database.BookAuthor{}}, marked: map[string][]string{}}
+	j := &reverterJournal{credits: map[string][]database.BookAuthor{}, marked: map[string][]string{}}
 	w := NewWriter(newMemStore(), newMemStore(), "fx", "bulk_update", "rp-").WithJournal(nil, j, "op-2")
 
 	require.NoError(t, w.SupersedeChanges("op-1", []string{"a", "b"}))

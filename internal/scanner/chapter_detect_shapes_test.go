@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_detect_shapes_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8d2b6c1e-47a9-4b35-a0f2-6e1c9d3b7a52
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -382,7 +382,7 @@ func TestDetectChapterGroups_SubsetReproducesGroup(t *testing.T) {
 // Detection over many folders is deterministic whatever order rows arrive in.
 func TestDetectChapterGroups_DeterministicAcrossFolders(t *testing.T) {
 	var books []database.BookCore
-	for f := 0; f < 50; f++ {
+	for f := range 50 {
 		dir := fmt.Sprintf("/lib/A/Book%02d", f)
 		books = append(books, shEv(shRun(fmt.Sprintf("f%02d-", f), dir, 1, 5,
 			func(i int) string { return fmt.Sprint(i) },

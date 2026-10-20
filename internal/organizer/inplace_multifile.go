@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_multifile.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0f7d52-6a2e-4b8e-9d3c-1b7e5a0c9e41
-// last-edited: 2026-09-28
+// last-edited: 2026-10-20
 
 package organizer
 
@@ -408,8 +408,8 @@ func lockInPlaceDestinations(targets ...string) func() {
 		inPlaceDestLocks[i].Lock()
 	}
 	return func() {
-		for j := len(idx) - 1; j >= 0; j-- {
-			inPlaceDestLocks[idx[j]].Unlock()
+		for _, i := range slices.Backward(idx) {
+			inPlaceDestLocks[i].Unlock()
 		}
 	}
 }
@@ -419,10 +419,10 @@ func lockInPlaceDestinations(targets ...string) func() {
 func putBack(moved []*pathMove) ([]*pathMove, error) {
 	var failed []*pathMove
 	var errs []error
-	for i := len(moved) - 1; i >= 0; i-- {
-		if err := multiFileMove(moved[i].To, moved[i].From); err != nil {
-			failed = append(failed, moved[i])
-			errs = append(errs, fmt.Errorf("%s -> %s: %w", moved[i].To, moved[i].From, err))
+	for _, m := range slices.Backward(moved) {
+		if err := multiFileMove(m.To, m.From); err != nil {
+			failed = append(failed, m)
+			errs = append(errs, fmt.Errorf("%s -> %s: %w", m.To, m.From, err))
 		}
 	}
 	return failed, errors.Join(errs...)

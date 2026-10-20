@@ -1,11 +1,12 @@
 // file: internal/audiobooks/runtime_index.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b9f4c61-8e3a-4a7d-9c05-5d1e7f3a6b28
-// last-edited: 2026-09-27
+// last-edited: 2026-10-20
 
 package audiobooks
 
 import (
+	"maps"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -145,7 +146,7 @@ func buildRuntimeEntries(rows []runtimeRow) map[string]runtimeEntry {
 	chunk := (len(ids) + workers - 1) / workers
 	parts := make([]map[string]runtimeEntry, workers)
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		lo := w * chunk
 		if lo >= len(ids) {
 			break
@@ -177,9 +178,7 @@ func buildRuntimeEntries(rows []runtimeRow) map[string]runtimeEntry {
 	wg.Wait()
 	out := make(map[string]runtimeEntry, len(ids))
 	for _, m := range parts {
-		for k, v := range m {
-			out[k] = v
-		}
+		maps.Copy(out, m)
 	}
 	return out
 }

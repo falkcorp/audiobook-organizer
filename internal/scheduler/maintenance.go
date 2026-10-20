@@ -1,13 +1,15 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package scheduler
 
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -247,9 +249,7 @@ func legacyTaskNameForDef(defID string) string { return legacyTaskNames[defID] }
 // declares a cron Schedule has a scheduler task that really enqueues it.
 func TaskV2DefIDs() map[string]string {
 	out := make(map[string]string, len(taskV2DefIDs))
-	for k, v := range taskV2DefIDs {
-		out[k] = v
-	}
+	maps.Copy(out, taskV2DefIDs)
 	return out
 }
 
@@ -275,12 +275,7 @@ func (ts *TaskScheduler) isTaskRunning(name string) bool {
 	if ts.hasActiveV2Op(defID) {
 		return true
 	}
-	for _, sib := range taskConcurrencySiblings[name] {
-		if ts.hasActiveV2Op(sib) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(taskConcurrencySiblings[name], ts.hasActiveV2Op)
 }
 
 // MaintenanceWindowOpParams carries parameters to the maintenance.window operation.

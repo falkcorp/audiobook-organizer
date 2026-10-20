@@ -1,7 +1,7 @@
 // file: internal/organizer/collision.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 // Pre-flight collision resolution for RenameFiles.
 //
@@ -53,6 +53,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -230,8 +231,7 @@ func (j *collisionJournal) rollback(result *RenameFilesResult) {
 	if j == nil {
 		return
 	}
-	for i := len(j.rows) - 1; i >= 0; i-- {
-		r := j.rows[i]
+	for _, r := range slices.Backward(j.rows) {
 		if j.store == nil || r.prior == nil {
 			continue
 		}
@@ -252,8 +252,7 @@ func (j *collisionJournal) rollback(result *RenameFilesResult) {
 				"collision rollback: could not restore book_file %s to %s: %v", r.fileID, r.prior.FilePath, err))
 		}
 	}
-	for i := len(j.moves) - 1; i >= 0; i-- {
-		m := j.moves[i]
+	for _, m := range slices.Backward(j.moves) {
 		// moveExclusive, not os.Rename: the original name was vacated moments
 		// ago and a concurrent worker can have landed its own file there.
 		// Refusing leaves the file in quarantine (reported); replacing would

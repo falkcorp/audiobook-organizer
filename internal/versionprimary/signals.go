@@ -1,7 +1,7 @@
 // file: internal/versionprimary/signals.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ac90734f-6d4e-405b-8edc-18da688f272b
-// last-edited: 2026-09-24
+// last-edited: 2026-10-20
 
 package versionprimary
 
@@ -113,7 +113,7 @@ func (l Loader) Load(ctx context.Context, b *database.Book, live bool) (Signals,
 		if !under {
 			s.AllUnderRoot = false
 		} else {
-			for _, seg := range strings.Split(filepath.ToSlash(rest), "/") {
+			for seg := range strings.SplitSeq(filepath.ToSlash(rest), "/") {
 				if strings.EqualFold(seg, unknownAuthorDir) {
 					s.UnknownAuthorPath = true
 				}

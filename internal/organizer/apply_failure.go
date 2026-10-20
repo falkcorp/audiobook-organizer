@@ -1,7 +1,7 @@
 // file: internal/organizer/apply_failure.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8a2d64f1-0c53-4b97-91ae-63f7c0d5b284
-// last-edited: 2026-09-13
+// last-edited: 2026-10-20
 
 // Durable per-book failure records for the metadata apply pipeline's rename
 // phase.
@@ -46,6 +46,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -189,13 +190,7 @@ func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTa
 	}
 
 	if len(plannedTargets) > 0 {
-		stillPlanned := false
-		for _, t := range plannedTargets {
-			if t == rec.TargetPath {
-				stillPlanned = true
-				break
-			}
-		}
+		stillPlanned := slices.Contains(plannedTargets, rec.TargetPath)
 		if !stillPlanned {
 			slog.Info("durable skip cleared — the book no longer targets the blocked path",
 				"book_id", logger.SanitizeLogValue(bookID), "blocked_target", logger.SanitizeLogValue(rec.TargetPath))

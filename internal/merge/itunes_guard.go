@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-10-08
+// last-edited: 2026-10-20
 
 package merge
 
@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -309,8 +310,8 @@ func resolveExistingPrefixDepth(p string, depth int) (string, error) {
 	for {
 		r, err := filepath.EvalSymlinks(cur)
 		if err == nil {
-			for i := len(tail) - 1; i >= 0; i-- {
-				r = filepath.Join(r, tail[i])
+			for _, t := range slices.Backward(tail) {
+				r = filepath.Join(r, t)
 			}
 			return r, nil
 		}
@@ -343,8 +344,8 @@ func resolveExistingPrefixDepth(p string, depth int) (string, error) {
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
-			for i := len(tail) - 1; i >= 0; i-- {
-				cur = filepath.Join(cur, tail[i])
+			for _, t := range slices.Backward(tail) {
+				cur = filepath.Join(cur, t)
 			}
 			return cur, nil
 		}

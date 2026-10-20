@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.79.2
+// version: 1.79.3
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -248,8 +248,8 @@ func (rs *RevertService) lockPaths(paths ...string) func() {
 		releases = append(releases, rs.LockPath(k))
 	}
 	return func() {
-		for i := len(releases) - 1; i >= 0; i-- {
-			releases[i]()
+		for _, release := range slices.Backward(releases) {
+			release()
 		}
 	}
 }

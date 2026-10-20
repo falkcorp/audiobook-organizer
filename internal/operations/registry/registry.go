@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.56.2
+// version: 3.56.3
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package registry
 
@@ -1476,7 +1476,7 @@ const cancelRowAttempts = 4
 func (r *Registry) cancelByRow(opID string, in cancelIntent) error {
 	r.retryMu.Lock()
 	defer r.retryMu.Unlock()
-	for attempt := 0; attempt < cancelRowAttempts; attempt++ {
+	for range cancelRowAttempts {
 		row, gerr := r.store.GetOperationV2(opID)
 		if gerr != nil || row == nil || row.ID == "" {
 			if in.live != nil {

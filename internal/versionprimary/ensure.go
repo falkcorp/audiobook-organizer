@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package versionprimary
 
@@ -232,8 +232,8 @@ func LockGroups(gids ...string) (unlock func()) {
 		groupLocks[i].Lock()
 	}
 	return func() {
-		for j := len(idx) - 1; j >= 0; j-- {
-			groupLocks[idx[j]].Unlock()
+		for _, i := range slices.Backward(idx) {
+			groupLocks[i].Unlock()
 		}
 	}
 }
@@ -284,7 +284,7 @@ func LockBookGroups(store BookReader, ids []string, extra ...string) (unlock fun
 		}
 		return m, nil
 	}
-	for attempt := 0; attempt < 5; attempt++ {
+	for range 5 {
 		before, err := read()
 		if err != nil {
 			return nil, nil, err

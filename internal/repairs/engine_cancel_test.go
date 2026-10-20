@@ -1,7 +1,7 @@
 // file: internal/repairs/engine_cancel_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e2567da4-edf5-4121-ae72-9a5d4d295154
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -311,8 +311,8 @@ func TestApply_FencedWritesNeverRenewTheLease(t *testing.T) {
 			s := newMemStore()
 			s.add("shared", "Shared", "/lib/A/shared/x.m4b", nil)
 			s.add("br00", "br00", "/lib/A/br00/x.m4b", nil)
-			sd := &renewCountingStandDown{fakeStandDown: fakeStandDown{renewsLeft: -1}}
-			f := &retryingFixer{partitionFixer: partitionFixer{n: 1}, sd: sd}
+			sd := &renewCountingStandDown{renewsLeft: -1}
+			f := &retryingFixer{n: 1, sd: sd}
 			if tc.leaseLost {
 				f.onFence = func() {
 					sd.mu.Lock()

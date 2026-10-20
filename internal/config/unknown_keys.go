@@ -1,7 +1,7 @@
 // file: internal/config/unknown_keys.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6a4394fd-1b48-48cc-9b88-0642eff0623f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package config
 
@@ -10,6 +10,7 @@ import (
 	"encoding"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -105,9 +106,7 @@ func jsonFieldTypes(t reflect.Type) map[string]reflect.Type {
 				et = et.Elem()
 			}
 			if et.Kind() == reflect.Struct {
-				for k, v := range jsonFieldTypes(et) {
-					promoted[k] = v
-				}
+				maps.Copy(promoted, jsonFieldTypes(et))
 				continue
 			}
 		}

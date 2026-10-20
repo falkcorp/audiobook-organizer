@@ -1,7 +1,7 @@
 // file: internal/dedup/llm_review_hooks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c4e2a17-5b93-4d06-9e1f-a3d7c0b64f52
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -29,7 +29,7 @@ func llmReviewEngine(t *testing.T, n int) *Engine {
 	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
 		return &database.Book{ID: id, Title: "Title " + id}, nil
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// 0.81 .. 0.91, all inside [LLMBookLow, LLMBookHigh].
 		sim := 0.81 + 0.10*float64(i)/float64(n)
 		seedCandidate(t, es, "book", fmt.Sprintf("A%04d", i), fmt.Sprintf("B%04d", i), sim)
@@ -174,7 +174,7 @@ func TestListAmbiguousCandidates_CapKeepsMostSimilarNotLowestID(t *testing.T) {
 	const n, capN = 12, 5
 	engine, _, es := setupTestEngine(t)
 	engine.listCap = capN
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// IDs ascend with similarity: 0.81 .. 0.92 stays inside the window.
 		seedCandidate(t, es, "book", fmt.Sprintf("A%02d", i), fmt.Sprintf("B%02d", i), 0.81+0.01*float64(i))
 	}
@@ -206,7 +206,7 @@ func TestListAmbiguousCandidates_ManualRowDoesNotUseCapSlot(t *testing.T) {
 	if _, err := es.EnqueueManualCandidate("book", "M_A", "M_B", ""); err != nil {
 		t.Fatalf("EnqueueManualCandidate: %v", err)
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedCandidate(t, es, "book", fmt.Sprintf("A%d", i), fmt.Sprintf("B%d", i), 0.81+0.01*float64(i))
 	}
 

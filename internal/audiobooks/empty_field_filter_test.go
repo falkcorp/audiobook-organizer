@@ -1,7 +1,7 @@
 // file: internal/audiobooks/empty_field_filter_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4e8b1a37-9d52-4c06-b3f8-27a1d0e5c964
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -140,8 +140,10 @@ func TestMatchesCompiledFiltersFailsClosedOnEmptyValue(t *testing.T) {
 	book := emptyFilterTestBook("Skills for Life")
 	for _, negated := range []bool{false, true} {
 		cf := compiledFilter{
-			FieldFilter: FieldFilter{Field: "title", Value: "", Negated: negated},
-			text:        tm,
+			Field:   "title",
+			Value:   "",
+			Negated: negated,
+			text:    tm,
 		}
 		if matchesCompiledFilters(&book, []compiledFilter{cf}, nil, nil) {
 			t.Errorf("negated=%v: a compiled filter with an empty Value matched; it must fail closed", negated)

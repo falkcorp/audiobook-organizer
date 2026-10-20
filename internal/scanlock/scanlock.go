@@ -1,7 +1,7 @@
 // file: internal/scanlock/scanlock.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 515417c0-cdec-4e8d-bf38-99b598b4115d
-// last-edited: 2026-09-30
+// last-edited: 2026-10-20
 
 // Package scanlock is the per-BOOK lock that lets a library scan and a
 // metadata apply run at the same time without either one reverting the other.
@@ -334,9 +334,9 @@ func (h *Hold) dropShare() {
 }
 
 func (h *Hold) releaseAll() {
-	for i := len(h.keys) - 1; i >= 0; i-- {
+	for i, v := range slices.Backward(h.keys) {
 		<-h.entries[i].ch
-		h.t.unref(h.keys[i], h.entries[i], "-")
+		h.t.unref(v, h.entries[i], "-")
 	}
 	h.keys, h.entries = nil, nil
 }

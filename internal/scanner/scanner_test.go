@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5c1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-06
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -343,7 +343,7 @@ func TestScanDirectoryParallelCancellation(t *testing.T) {
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
 
 	root := t.TempDir()
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		sub := filepath.Join(root, fmt.Sprintf("book-%02d", i))
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", sub, err)

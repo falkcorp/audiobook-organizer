@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package registry
 
@@ -591,7 +591,9 @@ func fixerResumeCase(t *testing.T, blockAt int, foreign []int) {
 	blocked := make(chan struct{})
 	w := &memTitles{titles: titles}
 	def := ops.Fixer("test.fixer", ops.FixerSpec[ops.NoParams, string]{
-		Common:     ops.Common{Title: "f", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Title:      "f",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermSettingsManage,
 		Candidates: func(*ops.RC, ops.NoParams) (ops.Source[string], error) { return ops.Source[string]{}, nil },
 		Load: func(_ *ops.RC, _ ops.NoParams, id string) (string, bool, error) {
 			w.mu.Lock()
@@ -774,7 +776,9 @@ func TestFixerAppliedSortedByRowID(t *testing.T) {
 	}
 	var afterApply []string
 	def := ops.Fixer("test.fixer", ops.FixerSpec[ops.NoParams, string]{
-		Common:     ops.Common{Title: "f", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Title:      "f",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermSettingsManage,
 		Candidates: func(*ops.RC, ops.NoParams) (ops.Source[string], error) { return ops.Source[string]{}, nil },
 		Load: func(_ *ops.RC, _ ops.NoParams, id string) (string, bool, error) {
 			mu.Lock()
