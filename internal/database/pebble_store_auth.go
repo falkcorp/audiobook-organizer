@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -109,6 +109,11 @@ func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash
 		PasswordHashAlgo: passwordHashAlgo, PasswordHash: passwordHash,
 		Roles: roles, Status: status, CreatedAt: now, UpdatedAt: now, Version: 1,
 	}
+	if lowerEmail != "" {
+		// Setup, bootstrap and the system user. An IdP auto-create upgrades
+		// this to EmailSourceIdP through MarkUserEmailVerified right after.
+		user.EmailSource = EmailSourceSetup
+	}
 	data, _ := json.Marshal(user)
 	b := p.db.NewBatch()
 	if err := b.Set([]byte("u:"+id), data, nil); err != nil {
@@ -210,6 +215,7 @@ func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passw
 	var displaced []string
 	for _, u := range holders {
 		u.Email = ""
+		u.EmailSource = ""
 		u.UpdatedAt = now
 		data, err := json.Marshal(u)
 		if err != nil {
@@ -228,6 +234,7 @@ func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passw
 		ID: id, Username: username, Email: email,
 		PasswordHashAlgo: passwordHashAlgo, PasswordHash: passwordHash,
 		Roles: roles, Status: status, CreatedAt: now, UpdatedAt: now, Version: 1,
+		EmailSource: EmailSourceIdP,
 	}
 	data, err := json.Marshal(user)
 	if err != nil {
@@ -308,8 +315,9 @@ func (p *PebbleStore) GetUserByVerifiedEmail(email string) (*User, error) {
 // current email. Not on Store; resolve it with AsCapability.
 type VerifiedEmailMarker interface {
 	// MarkUserEmailVerified records email as verified for userID when it is
-	// the user's current email and no other user's verified email. Anything
-	// else is a no-op (false, nil): it never takes an address from someone.
+	// the user's current email and no other user's verified email, and sets
+	// the user's EmailSource to EmailSourceIdP. Anything else is a no-op
+	// (false, nil): it never takes an address from someone.
 	MarkUserEmailVerified(userID, email string) (bool, error)
 }
 
@@ -319,6 +327,8 @@ var _ VerifiedEmailMarker = (*PebbleStore)(nil)
 func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
+	userWriteMu.Lock() // the row's EmailSource is rewritten
+	defer userWriteMu.Unlock()
 	lower := strings.ToLower(strings.TrimSpace(email))
 	if lower == "" {
 		return false, nil
@@ -328,13 +338,13 @@ func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) 
 		return false, err
 	}
 	key := []byte(userEmailIndexPrefix + lower)
+	keyed := false
 	if v, closer, err := p.db.Get(key); err == nil {
 		holder := string(v)
 		closer.Close()
 		if holder == userID {
-			return false, nil // already verified
-		}
-		if other, err := p.GetUserByID(holder); err != nil {
+			keyed = true
+		} else if other, err := p.GetUserByID(holder); err != nil {
 			return false, err
 		} else if other != nil && strings.EqualFold(strings.TrimSpace(other.Email), lower) {
 			return false, nil // someone else's verified address
@@ -342,7 +352,28 @@ func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) 
 	} else if err != pebble.ErrNotFound {
 		return false, err
 	}
-	if err := p.db.Set(key, []byte(userID), pebble.Sync); err != nil {
+	if keyed && u.EmailSource == EmailSourceIdP {
+		return false, nil // already verified by an identity provider
+	}
+	b := p.db.NewBatch()
+	defer b.Close()
+	if !keyed {
+		if err := b.Set(key, []byte(userID), nil); err != nil {
+			return false, err
+		}
+	}
+	if u.EmailSource != EmailSourceIdP {
+		u.EmailSource = EmailSourceIdP
+		u.UpdatedAt = time.Now()
+		data, err := json.Marshal(u)
+		if err != nil {
+			return false, err
+		}
+		if err := b.Set([]byte("u:"+userID), data, nil); err != nil {
+			return false, err
+		}
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -399,7 +430,9 @@ var ErrUserEmailTaken = errors.New("database: another account already uses that 
 // never writes the verified-email key, and it drops the key for the address the
 // user gave up, in the same batch as the row, when that key points here. (A
 // self-set address that was verified would let anyone take over another
-// person's first SSO login by typing their address into a profile.)
+// person's first SSO login by typing their address into a profile.) The
+// store owns User.EmailSource: an email change sets it to EmailSourceSelf,
+// and otherwise the stored value is kept whatever the caller sent.
 //
 // inviteMu is taken first (lock order inviteMu, then userWriteMu): it guards
 // every email uniqueness check-then-write, so none of CreateUser, CreateInvite
@@ -429,6 +462,15 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 			return err
 		} else if taken {
 			return ErrUserEmailTaken
+		}
+	}
+	// EmailSource is the store's to set: a self-service change makes it
+	// "self", anything else keeps what is stored, whatever the caller sent.
+	user.EmailSource = stored.EmailSource
+	if newEmail != oldEmail {
+		user.EmailSource = ""
+		if newEmail != "" {
+			user.EmailSource = EmailSourceSelf
 		}
 	}
 	runUserWriteAfterReadHook()
@@ -1185,6 +1227,9 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		PasswordHashAlgo: passwordHashAlgo, PasswordHash: passwordHash,
 		Roles: []string{inv.RoleID}, Status: "active",
 		CreatedAt: now, UpdatedAt: now, Version: 1,
+	}
+	if lowerEmail != "" {
+		user.EmailSource = EmailSourceInvite
 	}
 	inv.UsedAt = &now
 	inv.AcceptedUserID = id

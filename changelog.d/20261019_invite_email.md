@@ -44,21 +44,30 @@ email removes the grant and, when the sync added it, the policy entry.
 
 An SSO login is now linked to an existing account by email only when that
 address is verified: bound by an emailed invite, confirmed by an identity
-provider, or set by first-run setup or bootstrap from now on. A self-set
-profile email never matches. When an identity-provider-verified login finds its
-address held unverified by other accounts, the verified login wins: in one
-write the address is cleared from those accounts (they keep their accounts) and
-a new account is created for the login; this is logged and recorded as an
-`auth_email_displaced` audit activity entry with the account ids. A holder
-with any proof is never displaced, and an unreadable user row refuses the
+provider, or set by first-run setup or bootstrap from now on. A self-set profile
+email never matches. When an identity-provider-verified login finds its address
+held unverified by other accounts, the verified login wins: in one write the
+address is cleared from those accounts (they keep their accounts) and a new
+account is created for the login; this is logged and recorded as an
+`auth_email_displaced` audit activity entry with the account ids. A holder with
+any proof is never displaced, and an unreadable user row refuses the
 displacement. At startup the verified-email index is rebuilt once
 (`system:backfill:user_verified_email_v3`) from proof only: an accepted-invite
 grant, a linked identity recorded with that email, or the operator's own list
 (the owner email and `OAUTH_ALLOWED_EMAILS`) for the one active holder of a
-listed address. Every other key is dropped. Two holders of a listed address is
-a conflict and gets no key. When the operator list changes, the added and
-removed addresses are re-applied before the next lookup, so a removed address
-stops counting at once. People who already sign in through SSO resolve by
-their identity link and are unaffected.
+listed address that did not type the address in itself. Every other key is
+dropped. Each user now records where its email came from (`email_source`:
+`setup`, `invite`, `idp`, `self`, `admin` (reserved; nothing writes it yet), or
+empty for rows written before this field); the store sets it on every write path
+and ignores a caller's value. The operator list never vouches for a `self`
+address, so someone who typed a listed guest's address into their own profile is
+displaced by that guest's first verified login. A legacy row with no source is
+accepted for a listed address and logged with the user id. Two holders of a
+listed address is a conflict and gets no key. When the operator list changes,
+the added and removed addresses are re-applied before the next lookup by the
+same rules as the rebuild (a second proven holder, or a key already naming
+another account, is a conflict and nothing is written), so a removed address
+stops counting at once. People who already sign in through SSO resolve by their
+identity link and are unaffected.
 User emails are now unique case-insensitively; PATCH /auth/me answers 409 for
 an address another account has.

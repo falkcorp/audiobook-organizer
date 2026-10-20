@@ -1,5 +1,5 @@
 // file: internal/oauth/resolve_verified_email_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b7d1909a-d742-41fb-b8cf-25bdae5ca124
 // last-edited: 2026-10-19
 
@@ -221,16 +221,12 @@ func TestResolveUser_OwnerEmailAdminFirstSSOLinksAndIsNotDisplaced(t *testing.T)
 	}
 }
 
-// A user holding an address that is on OAUTH_ALLOWED_EMAILS is kept: their
-// SSO login links to them even though they typed the address in themselves.
+// An account whose address the operator lists, and which did not type it in
+// itself (here: set at setup), is kept: its SSO login links to it.
 func TestResolveUser_AllowListedHolderIsKept(t *testing.T) {
 	s := newResolvePebble(t)
-	u, err := s.CreateUser("friend", "friend.old@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	u, err := s.CreateUser("friend", "friend@example.com", "bcrypt", "h", []string{"viewer"}, "active")
 	if err != nil {
-		t.Fatal(err)
-	}
-	u.Email = "friend@example.com"
-	if err := s.UpdateUser(u); err != nil {
 		t.Fatal(err)
 	}
 	s.SetOperatorTrustedEmails(func() []string { return []string{"friend@example.com"} })
@@ -238,5 +234,40 @@ func TestResolveUser_AllowListedHolderIsKept(t *testing.T) {
 	user, err := cfg.ResolveUser(s, verifiedClaims("friend@example.com", "g-friend"))
 	if err != nil || user == nil || user.ID != u.ID {
 		t.Fatalf("ResolveUser = %+v, %v; want the allow-listed holder", user, err)
+	}
+}
+
+// Someone types a listed guest's address into their own profile before the
+// guest ever signs in. The list does not vouch for a self-set address, so the
+// guest's real IdP login displaces them and gets its own account.
+func TestResolveUser_SelfSetListedAddressIsDisplacedByTheRealIdPLogin(t *testing.T) {
+	s := newResolvePebble(t)
+	squatter, err := s.CreateUser("squatter", "squatter@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	squatter.Email = "guest@example.com"
+	if err := s.UpdateUser(squatter); err != nil {
+		t.Fatal(err)
+	}
+	s.SetOperatorTrustedEmails(func() []string { return []string{"guest@example.com"} })
+	if v, _ := s.GetUserByVerifiedEmail("guest@example.com"); v != nil {
+		t.Fatalf("a self-set listed address must not be verified: %+v", v)
+	}
+	var displaced []string
+	cfg := New(Config{AllowedEmails: []string{"guest@example.com"}, DefaultRole: "viewer",
+		OnEmailDisplaced: func(_ string, ids []string, _ string) { displaced = ids }})
+	user, err := cfg.ResolveUser(s, verifiedClaims("guest@example.com", "g-guest"))
+	if err != nil || user == nil || user.ID == squatter.ID {
+		t.Fatalf("ResolveUser = %+v, %v; want a new account, never the squatter", user, err)
+	}
+	if len(displaced) != 1 || displaced[0] != squatter.ID {
+		t.Fatalf("displaced = %v, want the squatter", displaced)
+	}
+	if got, _ := s.GetUserByID(squatter.ID); got.Email != "" {
+		t.Fatalf("the squatter must lose the address: %q", got.Email)
+	}
+	if v, _ := s.GetUserByVerifiedEmail("guest@example.com"); v == nil || v.ID != user.ID || v.EmailSource != database.EmailSourceIdP {
+		t.Fatalf("the guest's account must hold it verified, source idp: %+v", v)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-19
 
@@ -128,7 +128,7 @@ func (p *PebbleStore) EnsureVerifiedEmailIndex() error {
 // of how it was proven (emailProvenFor): an accepted-invite SSO grant naming
 // that user, a linked OAuth identity of that user recorded with that email,
 // or the address being on the operator's trusted list while that user is the
-// active holder. Every other key is dropped, including keys CreateUser wrote
+// active holder and did not set the address themselves. Every other key is dropped, including keys CreateUser wrote
 // at setup or bootstrap for addresses the operator does not list: no
 // provenance is stored for those, and a key that merely matches the current
 // email proves nothing, since before this build anyone could have squatted an
@@ -234,9 +234,11 @@ func (p *PebbleStore) rebuildVerifiedEmailIndexLocked(operator []string) (Verifi
 //   - A removed address keeps its key only if its holder still has other
 //     provenance; otherwise the key is dropped, so trust does not outlive the
 //     list entry that gave it.
-//   - An added address gets a key for its one active holder. Two or more
-//     holders (or any unreadable user row) is a conflict: no key, logged
-//     without the address.
+//   - An added address gets a key for its one holder that the list proves
+//     (active, not self-set; see emailProvenFor). More than one proven
+//     holder, any other holder with proof of its own, a key already naming
+//     another account, or any unreadable user row is a conflict: nothing is
+//     written or overwritten, and a Warn is logged without the address.
 func (p *PebbleStore) reapplyOperatorEmailsLocked(old, current []string) (VerifiedEmailBackfillResult, error) {
 	var res VerifiedEmailBackfillResult
 	oldSet, curSet := operatorSet(old), operatorSet(current)
@@ -283,31 +285,66 @@ func (p *PebbleStore) reapplyOperatorEmailsLocked(old, current []string) (Verifi
 		if oldSet[addr] {
 			continue
 		}
+		if len(badKeys) > 0 {
+			authLog.Warn("verified-email index: an operator-listed address was not applied: %d user row(s) unreadable", len(badKeys))
+			res.Conflict++
+			continue
+		}
+		// The same rules as the full rebuild: the list proves the address for
+		// its one active, not-self-set holder; any other holder with proof of
+		// its own, or a key already naming someone else, is a conflict.
 		var holders []*User
 		for i := range users {
 			if strings.EqualFold(strings.TrimSpace(users[i].Email), addr) {
 				holders = append(holders, &users[i])
 			}
 		}
-		var active []*User
+		var eligible []*User
 		for _, h := range holders {
-			if h.Status == "active" {
-				active = append(active, h)
-			}
-		}
-		switch {
-		case len(active) > 1 || (len(active) == 1 && len(badKeys) > 0):
-			authLog.Warn("verified-email index: an operator-listed address has more than one holder (or unreadable user rows); left unverified")
-			if err := b.Delete([]byte(userEmailIndexPrefix+addr), nil); err != nil {
+			ok, err := p.emailProvenFor(h, addr, curSet)
+			if err != nil {
 				return res, err
 			}
+			if ok {
+				eligible = append(eligible, h)
+			}
+		}
+		if len(eligible) == 0 {
+			continue
+		}
+		conflict := len(eligible) > 1
+		chosen := eligible[0]
+		for _, h := range holders {
+			if conflict || h.ID == chosen.ID {
+				continue
+			}
+			ok, err := p.emailProvenFor(h, addr, nil)
+			if err != nil {
+				return res, err
+			}
+			conflict = ok
+		}
+		if !conflict {
+			if v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + addr)); err == nil {
+				conflict = string(v) != chosen.ID
+				closer.Close()
+				if !conflict {
+					res.Kept++
+					continue
+				}
+			} else if err != pebble.ErrNotFound {
+				return res, err
+			}
+		}
+		if conflict {
+			authLog.Warn("verified-email index: an operator-listed address has more than one proven holder, or is already verified for another account; left as it was")
 			res.Conflict++
-		case len(active) == 1:
-			if err := b.Set([]byte(userEmailIndexPrefix+addr), []byte(active[0].ID), nil); err != nil {
-				return res, err
-			}
-			res.Added++
+			continue
 		}
+		if err := b.Set([]byte(userEmailIndexPrefix+addr), []byte(chosen.ID), nil); err != nil {
+			return res, err
+		}
+		res.Added++
 	}
 	if err := b.Set([]byte(verifiedEmailIndexKey), []byte(strings.Join(current, "\n")), nil); err != nil {
 		return res, err
@@ -323,10 +360,19 @@ func (p *PebbleStore) reapplyOperatorEmailsLocked(old, current []string) (Verifi
 // emailProvenFor reports whether the store holds a record proving lower is
 // u's address: an invite grant naming u, a linked OAuth identity of u
 // recorded with that email, or lower being on operator (the operator's
-// trusted list) while u is active. operator may be nil. It does not check
-// for other holders; callers treat two proven holders as a conflict.
+// trusted list) while u is active and did not type the address in
+// themselves (EmailSource is not "self"). A row written before EmailSource
+// existed ("") is accepted for the operator list: before this build no
+// self-service path wrote the verified-email index, so the operator listing
+// an address a legacy account holds is the operator vouching for that
+// account. Each such acceptance is logged with the user id. operator may be
+// nil. It does not check for other holders; callers treat two proven holders
+// as a conflict.
 func (p *PebbleStore) emailProvenFor(u *User, lower string, operator map[string]bool) (bool, error) {
-	if operator[lower] && u.Status == "active" {
+	if operator[lower] && u.Status == "active" && u.EmailSource != EmailSourceSelf {
+		if u.EmailSource == "" {
+			authLog.Info("verified-email: operator list accepted for a legacy account with no email source (user %s)", u.ID)
+		}
 		return true, nil
 	}
 	g, err := p.GetInviteEmailGrant(lower)

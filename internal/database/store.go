@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.118.0
+// version: 2.119.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-19
 
@@ -738,7 +738,22 @@ type User struct {
 	// stamp on a session, so nothing is signed out on deploy. Version is not
 	// reused for this: it is 1 on every row and no writer moves it.
 	CredentialEpoch int64 `json:"credential_epoch,omitempty"`
+	// EmailSource records how Email got onto the account (EmailSource*
+	// constants). It is what lets the operator's trusted list (owner email,
+	// OAUTH_ALLOWED_EMAILS) vouch for an address without vouching for someone
+	// who typed it into their own profile. Only the store sets it; UpdateUser
+	// ignores a caller's value. "" is a row written before 2026-10-19.
+	EmailSource string `json:"email_source,omitempty"`
 }
+
+// User.EmailSource values.
+const (
+	EmailSourceSetup  = "setup"  // first-run setup, bootstrap, the system user (CreateUser)
+	EmailSourceAdmin  = "admin"  // set by an admin (no such path writes it today)
+	EmailSourceInvite = "invite" // bound by accepting an invitation emailed to it
+	EmailSourceIdP    = "idp"    // verified by an identity provider at login
+	EmailSourceSelf   = "self"   // typed in through self-service (UpdateUser)
+)
 
 // BookVersion represents one version of a book's content (spec 3.1
 // library centralization). Every book has at least one version with
