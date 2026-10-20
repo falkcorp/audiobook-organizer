@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_log_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 52dae0d7-3e3f-4a00-ae07-42d80b9fe194
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package server
 
@@ -71,7 +71,7 @@ func TestBatchApplyOutcome_RefusedLineCarriesReasonGateAndError(t *testing.T) {
 func TestBatchApplyLabel_Cadence(t *testing.T) {
 	builds := 0
 	l := newBatchApplyLabel(func() string { builds++; return "x" })
-	for n := int64(0); n < 3*batchApplyLabelEvery; n++ {
+	for n := range int64(3 * batchApplyLabelEvery) {
 		l.get(n)
 	}
 	if builds != 3 {

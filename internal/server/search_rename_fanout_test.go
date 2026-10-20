@@ -1,7 +1,7 @@
 // file: internal/server/search_rename_fanout_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8603d299-d62c-4c75-ac8c-71c03c01de5c
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package server
 
@@ -42,7 +42,7 @@ func TestServerChangeObserver_RenameFanOutIsBounded(t *testing.T) {
 
 	returned := make(chan struct{})
 	go func() {
-		for i := 0; i < renames; i++ {
+		for i := range renames {
 			o.fanOut(load, "author", i)
 		}
 		// A second rename of an author whose fan-out is still queued adds no

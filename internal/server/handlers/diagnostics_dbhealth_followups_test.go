@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_dbhealth_followups_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: de17f8c2-593a-4eea-9ce9-4dac637b04e8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -30,7 +30,7 @@ import (
 func TestGetDBHealth_EmbeddingsFromCensus(t *testing.T) {
 	p := newCensusHandlerStore(t)
 	pad := []byte(strings.Repeat("x", 24<<10))
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		require.NoError(t, p.SetRaw(fmt.Sprintf("emb:v:book:%d", i), pad))
 	}
 	// The embedding store sits on its OWN empty DB, so a walk through it would
@@ -202,7 +202,7 @@ func TestCountExpiredMetadataFetches_ChecksBetweenPages(t *testing.T) {
 // still matches context.DeadlineExceeded.
 func TestExpiredCounter_TimeoutReportsPagesWalked(t *testing.T) {
 	spy := &walkSpyStore{forever: true}
-	ec := expiredCounter{deepWalker: deepWalker[int64]{timeout: 50 * time.Millisecond}}
+	ec := expiredCounter{timeout: 50 * time.Millisecond}
 	res, err := ec.count(context.Background(), spy, 30)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Contains(t, err.Error(), "timed out after 50ms, ")

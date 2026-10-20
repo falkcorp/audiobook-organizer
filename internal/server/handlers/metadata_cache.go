@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.46.0
+// version: 1.46.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -622,7 +622,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	var wantIDs map[string]bool
 	if raw := strings.TrimSpace(c.Query("ids")); raw != "" {
 		wantIDs = map[string]bool{}
-		for _, id := range strings.Split(raw, ",") {
+		for id := range strings.SplitSeq(raw, ",") {
 			if id = strings.TrimSpace(id); id != "" {
 				wantIDs[id] = true
 			}
@@ -1070,7 +1070,7 @@ func buildReviewableRows(set *reviewOverlay, now time.Time, withUnreviewable boo
 		perRank[reviewStatusRank(statuses[i])]++
 	}
 	order := make([]int32, 0, n)
-	for rank := 0; rank < 3; rank++ {
+	for rank := range 3 {
 		if perRank[rank] == 0 {
 			continue
 		}

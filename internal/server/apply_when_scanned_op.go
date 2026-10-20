@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package server
 
@@ -91,7 +91,7 @@ func (s *Server) EnqueueOrganizeWhenScanned(ctx context.Context, bookID string) 
 	}
 	live := false
 	return s.opRegistry.EnqueueOp(ctx, organizeWhenScannedOpID, applyWhenScannedParams{
-		QueuedApply: metadatahandler.QueuedApply{Kind: metadatahandler.QueuedOrganize, BookID: bookID}, DryRun: &live})
+		Kind: metadatahandler.QueuedOrganize, BookID: bookID, DryRun: &live})
 }
 
 // EnqueueApplyWhenScanned implements metadatahandler.QueuedApplyEnqueuer.

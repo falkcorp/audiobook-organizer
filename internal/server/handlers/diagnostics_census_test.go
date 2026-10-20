@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_census_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 90aa916c-0432-4200-8e35-00b08069563b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -68,7 +68,7 @@ func TestGetDBCensus_ReturnsFamilies(t *testing.T) {
 
 func TestGetDBCensus_IncludesTheLastExactCensus(t *testing.T) {
 	p := newCensusHandlerStore(t)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		require.NoError(t, p.SetRaw(fmt.Sprintf("book_ver:BOOKX:%020d", i), []byte("{}")))
 	}
 	payload := callDBCensus(t, p, "fresh=true")

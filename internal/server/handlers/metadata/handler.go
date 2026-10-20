@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.45.2
+// version: 1.45.3
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -47,6 +47,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -671,9 +672,7 @@ func (h *Handler) respondCandidates(c *gin.Context, id string, respH gin.H, entr
 		book = b
 	}
 	out := make(gin.H, len(respH))
-	for k, v := range respH {
-		out[k] = v
-	}
+	maps.Copy(out, respH)
 	// The dialog reads this list; order it by the ranking score. results is a
 	// copy, so the cache row, the 60-second listCache and every other reader
 	// keep the stored order. The owner's rejections mark candidates the apply

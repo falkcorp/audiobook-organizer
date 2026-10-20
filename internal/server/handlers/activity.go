@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -427,8 +427,8 @@ func (h *ActivityHandler) operationActivity(ctx context.Context, opID string, li
 	}
 	// Query returns entries newest-first; reverse for ASC chronological order.
 	out := make([]operationActivityEntry, 0, len(entries))
-	for i := len(entries) - 1; i >= 0; i-- {
-		out = append(out, activityEntryToOperationEntry(entries[i]))
+	for _, entrie := range slices.Backward(entries) {
+		out = append(out, activityEntryToOperationEntry(entrie))
 	}
 	return out, total, nil
 }

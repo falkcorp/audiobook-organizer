@@ -1,7 +1,7 @@
 // file: internal/server/absauth/password_concurrency_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c2f94d1-7e03-4a58-b9d6-1a4e8f307c25
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package absauth
 
@@ -44,7 +44,7 @@ func TestArgon2idConcurrencyIsCapped(t *testing.T) {
 
 	const workers = 8 * limit
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

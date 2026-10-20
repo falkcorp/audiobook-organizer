@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_scan_lock.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b7e4c91-5d08-4f3a-b6e2-9a14c7d3f058
-// last-edited: 2026-09-30
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -111,7 +111,7 @@ func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *dat
 // without resolving again, so it writes exactly the copy it holds. It is nil
 // only when the book does not exist (or there is no store).
 func (h *OrganizeHandler) lockOrganizeSet(id string, lock func([]string) (*scanlock.Hold, error)) (*scanlock.Hold, *database.Book, error) {
-	for try := 0; try < organizeLockTries; try++ {
+	for range organizeLockTries {
 		want, _, err := h.organizeLockSet(id)
 		if err != nil {
 			return nil, nil, err

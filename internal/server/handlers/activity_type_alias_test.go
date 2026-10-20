@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_type_alias_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c7e9b53-8a14-4f6d-b3e0-5d91a7c4e826
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package handlers_test
 
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -46,10 +47,8 @@ func (f *fakeOpDefs) Def(id string) (opsregistry.OperationDef, bool) {
 		if d.ID == id {
 			return d, true
 		}
-		for _, old := range d.FormerIDs {
-			if old == id {
-				return d, true
-			}
+		if slices.Contains(d.FormerIDs, id) {
+			return d, true
 		}
 	}
 	return opsregistry.OperationDef{}, false

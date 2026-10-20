@@ -1,7 +1,7 @@
 // file: internal/server/collection_owner_backfill_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 91a4c7e2-5d38-4b6f-8c10-e3f7a2d9b564
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package server
 
@@ -333,7 +333,7 @@ func TestBackfillCollectionOwners_PerUserOrphansListedWithoutAdmin(t *testing.T)
 // The listing is capped so one install with many cannot write an unbounded line.
 func TestUnownedPerUserWarning_CapsTheList(t *testing.T) {
 	var cols []database.Collection
-	for i := 0; i < maxListedUnowned+7; i++ {
+	for i := range maxListedUnowned + 7 {
 		cols = append(cols, database.Collection{ID: fmt.Sprintf("id%03d", i), Name: "n"})
 	}
 	w := unownedPerUserWarning(cols)

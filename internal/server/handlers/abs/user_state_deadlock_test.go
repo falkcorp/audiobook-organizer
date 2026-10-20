@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/user_state_deadlock_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 0630076b-d80b-4cf5-b741-2fcc6a0bf393
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package abs_test
 
@@ -171,7 +171,7 @@ func TestUserStateLock_ProgressAllWritersNoDeadlock(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < rounds; i++ {
+			for i := range rounds {
 				if err := f(i); err != nil {
 					errs <- fmt.Errorf("%s: %w", name, err)
 					return

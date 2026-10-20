@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_drain_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b1e8d3c-7a2f-4e90-b6c4-9d0a2f7e1b38
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 //
 // Drain, restart and live-write tests for the batched search reconciler
 // (the 2026-09-25 wedge: a 100k dirty set that never drained and a live
@@ -99,7 +99,7 @@ func TestReconciler_DrainsLargeBacklogInBatchesAcrossRestart(t *testing.T) {
 
 	srv2 := newTestServer(t, store2)
 	srv2.setSearchIndex(idx2)
-	for pass := 0; pass < 10; pass++ {
+	for range 10 {
 		if _, rem := srv2.reconcileOnce(); rem == 0 {
 			break
 		}

@@ -1,7 +1,7 @@
 // file: internal/server/server_library_clone_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d2e4b17-6a3c-4f59-b0e8-5c1a9d7f2e64
-// last-edited: 2026-10-09
+// last-edited: 2026-10-20
 
 package server
 
@@ -64,7 +64,7 @@ func cloneFixture(t *testing.T, nFiles int) (*Server, *database.PebbleStore, *da
 	book, err := store.CreateBook(&database.Book{FilePath: srcDir, Title: "Clone Title",
 		AuthorID: &author.ID, LibraryState: &st})
 	require.NoError(t, err)
-	for i := 0; i < nFiles; i++ {
+	for i := range nFiles {
 		p := filepath.Join(srcDir, fmt.Sprintf("%02d - part.m4b", i+1))
 		require.NoError(t, os.WriteFile(p, []byte(fmt.Sprintf("audio-%d", i)), 0o644))
 		require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: p,

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_integration_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345ef0
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -49,10 +50,8 @@ func useOnlyAudible(t *testing.T, baseURL string) {
 // audibleAnswersTitle is a MockAudibleServer answer: p for any of titles.
 func audibleAnswersTitle(p testutil.AudibleTestProduct, titles ...string) func(string) []testutil.AudibleTestProduct {
 	return func(title string) []testutil.AudibleTestProduct {
-		for _, want := range titles {
-			if title == want {
-				return []testutil.AudibleTestProduct{p}
-			}
+		if slices.Contains(titles, title) {
+			return []testutil.AudibleTestProduct{p}
 		}
 		return nil
 	}

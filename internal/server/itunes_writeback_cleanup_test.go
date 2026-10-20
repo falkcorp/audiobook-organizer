@@ -1,7 +1,7 @@
 // file: internal/server/itunes_writeback_cleanup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c7579b1-af5d-495e-93cf-b375de7d2837
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package server
 
@@ -23,7 +23,7 @@ func TestPurgeLegacyITunesWriteBackKeys(t *testing.T) {
 
 	var legacy []string
 	// More than one page under the queue prefix.
-	for i := 0; i < legacyITunesWriteBackPageSize+7; i++ {
+	for i := range legacyITunesWriteBackPageSize + 7 {
 		legacy = append(legacy, fmt.Sprintf("itunes_writeback:q:book:%04d", i))
 	}
 	legacy = append(legacy,

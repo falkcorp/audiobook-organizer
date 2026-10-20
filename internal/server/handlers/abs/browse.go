@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.36.2
+// version: 1.36.3
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package abs
 
@@ -1948,7 +1948,7 @@ func (h *Handler) AuthorDetail(c *gin.Context) {
 	}
 
 	includeItems, includeSeries := false, false
-	for _, part := range strings.Split(c.Query("include"), ",") {
+	for part := range strings.SplitSeq(c.Query("include"), ",") {
 		switch strings.TrimSpace(strings.ToLower(part)) {
 		case "items":
 			includeItems = true

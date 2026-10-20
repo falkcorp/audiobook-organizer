@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -357,8 +357,8 @@ type versionFlagWrite struct {
 // not restore.
 func (h *VersionsHandler) undoLinkWrites(targetGroup string, written []versionFlagWrite) []string {
 	var stuck []string
-	for i := len(written) - 1; i >= 0; i-- {
-		w := written[i]
+	for _, w := range slices.Backward(written) {
+
 		if _, err := h.modifyBook(w.id, func(cur *database.Book) error {
 			if versionGroupOf(cur) != targetGroup {
 				return fmt.Errorf("book %s left version group %s after the link wrote it", cur.ID, targetGroup)
@@ -663,14 +663,14 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 		// 3. Undo, newest write first, restoring each flag exactly (nil stays
 		// nil).
 		var stuck []string
-		for i := len(demoted) - 1; i >= 0; i-- {
-			prev := demoted[i].prevFlag
-			if _, uErr := h.modifyBook(demoted[i].id, func(cur *database.Book) error {
+		for _, d := range slices.Backward(demoted) {
+			prev := d.prevFlag
+			if _, uErr := h.modifyBook(d.id, func(cur *database.Book) error {
 				cur.IsPrimaryVersion = cloneBoolPtr(prev)
 				return nil
 			}); uErr != nil {
-				versionsLog.Error("set-primary %s: undoing the demote of %s failed: %v", logger.SanitizeLogValue(id), demoted[i].id, uErr)
-				stuck = append(stuck, demoted[i].id)
+				versionsLog.Error("set-primary %s: undoing the demote of %s failed: %v", logger.SanitizeLogValue(id), d.id, uErr)
+				stuck = append(stuck, d.id)
 			}
 		}
 		if promoted {

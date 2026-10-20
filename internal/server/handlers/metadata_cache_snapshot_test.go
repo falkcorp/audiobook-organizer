@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -50,7 +50,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 		// The build count travels as the orphan count, so a test can tell
 		// which build a published snapshot came from.
 		snap := &reviewSnapshot{builtAt: h.now(), cacheGen: gen, orphanIDs: map[string]struct{}{}}
-		for i := int64(0); i < n; i++ {
+		for i := range n {
 			snap.orphanIDs[fmt.Sprint(i)] = struct{}{}
 		}
 		return snap, nil
@@ -98,7 +98,7 @@ func TestReviewSnapshotCache_RebuildsOnlyWhenTheCacheWasWritten(t *testing.T) {
 
 	// Paging an unchanged cache rebuilds nothing, however long it goes on
 	// (short of the safety-net age).
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		h.advance(time.Minute)
 		require.Same(t, first, h.get(t))
 	}
@@ -151,7 +151,7 @@ func TestReviewSnapshotCache_ColdRequestsJoinOneBuild(t *testing.T) {
 	h.gate = make(chan struct{})
 	const n = 16
 	got := make(chan *reviewSnapshot, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		go func() {
 			s, err := h.c.get(context.Background())
 			if err != nil {
@@ -164,7 +164,7 @@ func TestReviewSnapshotCache_ColdRequestsJoinOneBuild(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	close(h.gate)
 	var first *reviewSnapshot
-	for i := 0; i < n; i++ {
+	for range n {
 		s := <-got
 		require.NotNil(t, s)
 		if first == nil {
@@ -225,7 +225,7 @@ func TestReviewSnapshotCache_MinIntervalBetweenRebuilds(t *testing.T) {
 	h.gen.Add(1)
 	h.get(t)
 	h.waitBuilds(t, 2)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		h.gen.Add(1)
 		h.advance(time.Second)
 		h.get(t)
@@ -268,11 +268,11 @@ func TestReviewSnapshotCache_ConcurrentGetInvalidateRebuild(t *testing.T) {
 	h.c.idleMark = time.Millisecond
 	h.c.now = time.Now
 	var wg sync.WaitGroup
-	for w := 0; w < 8; w++ {
+	for w := range 8 {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				switch (w + i) % 4 {
 				case 0:
 					h.c.invalidate()
@@ -323,7 +323,7 @@ func (f overlayFake) GetBookByID(id string) (*database.Book, error) {
 func overlaySnap(ids ...string) *reviewSnapshot {
 	s := &reviewSnapshot{books: map[string]*database.Book{}, orphanIDs: map[string]struct{}{}}
 	for _, id := range ids {
-		s.rows = append(s.rows, snapshotRow{loadedCacheRow: loadedCacheRow{sum: metafetch.MetadataCacheSummary{BookID: id}}})
+		s.rows = append(s.rows, snapshotRow{sum: metafetch.MetadataCacheSummary{BookID: id}})
 		s.books[id] = &database.Book{ID: id, Title: "snapshot"}
 	}
 	return s
@@ -372,7 +372,7 @@ func TestOverlay_EveryReadFailingIsAnError(t *testing.T) {
 
 func TestOverlay_IDsReadOnlyTheAskedBooks(t *testing.T) {
 	var asked []string
-	f := overlayFakeRecording{overlayFake: overlayFake{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}}, asked: &asked}
+	f := overlayFakeRecording{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}, asked: &asked}
 	out, err := overlayLiveBooks(overlaySnap("a", "b", "c"), f, map[string]bool{"b": true}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"b"}, asked)
@@ -395,7 +395,7 @@ func (f overlayFakeRecording) GetBooksByIDs(ids []string) ([]database.Book, erro
 func TestOverlay_ReadsOnlyTheChangedBooks(t *testing.T) {
 	var asked []string
 	live := map[string]*database.Book{"a": {ID: "a", Title: "live"}, "b": {ID: "b", Title: "live"}, "c": {ID: "c", Title: "live"}}
-	f := overlayFakeRecording{overlayFake: overlayFake{books: live}, asked: &asked}
+	f := overlayFakeRecording{books: live, asked: &asked}
 	out, err := overlayLiveBooks(overlaySnap("a", "b", "c"), f, nil, changedIDs("b", "not-a-row"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"b"}, asked, "only the changed row's book is read")
@@ -438,7 +438,7 @@ func TestOverlay_UnlistableChangeReadsEveryBookAndAsksForARebuild(t *testing.T) 
 	} {
 		t.Run(name, func(t *testing.T) {
 			var asked []string
-			f := overlayFakeRecording{overlayFake: overlayFake{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}}, asked: &asked}
+			f := overlayFakeRecording{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}, asked: &asked}
 			out, err := overlayLiveBooks(overlaySnap("a", "b"), f, nil, log)
 			require.NoError(t, err)
 			require.Equal(t, []string{"a", "b"}, asked)
@@ -477,7 +477,7 @@ func TestOverlay_TooManyChangedRowsAsksForARebuild(t *testing.T) {
 	}
 	scan[0] = "b"
 	var asked []string
-	fr := overlayFakeRecording{overlayFake: overlayFake{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}}, asked: &asked}
+	fr := overlayFakeRecording{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}, asked: &asked}
 	out, err = overlayLiveBooks(overlaySnap("a", "b"), fr, nil, changedIDs(scan...))
 	require.NoError(t, err)
 	require.False(t, out.rebuild, "a scan's book writes are not this snapshot's rows")
@@ -500,7 +500,7 @@ func TestOverlay_FailedBookReadAsksForARebuild(t *testing.T) {
 // asked rows that changed.
 func TestOverlay_IDsReadOnlyTheAskedChangedBooks(t *testing.T) {
 	var asked []string
-	f := overlayFakeRecording{overlayFake: overlayFake{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}, "c": {ID: "c"}}}, asked: &asked}
+	f := overlayFakeRecording{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}, "c": {ID: "c"}}, asked: &asked}
 	out, err := overlayLiveBooks(overlaySnap("a", "b", "c"), f, map[string]bool{"b": true, "c": true}, changedIDs("a", "b"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"b"}, asked)

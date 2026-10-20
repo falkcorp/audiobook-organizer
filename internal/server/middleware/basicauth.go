@@ -1,7 +1,7 @@
 // file: internal/server/middleware/basicauth.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-12
+// last-edited: 2026-10-20
 
 package middleware
 
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -114,10 +115,5 @@ func routeEnforcesABSAuth(c *gin.Context) bool {
 	if c.FullPath() == "" {
 		return false
 	}
-	for _, name := range c.HandlerNames() {
-		if name == absRequireAuthHandlerName {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.HandlerNames(), absRequireAuthHandlerName)
 }

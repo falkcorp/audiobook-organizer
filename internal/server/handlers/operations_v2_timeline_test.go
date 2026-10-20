@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_timeline_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7f3c1a94-2e6b-4d58-9a71-c0d4e8b52f36
-// last-edited: 2026-09-28
+// last-edited: 2026-10-20
 
 // Behaviour tests for GET /api/v1/operations/timeline's def_id and limit
 // parameters, and for the scope fields the response reports about itself.
@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -71,10 +72,8 @@ func expectRegisteredDefs(registry *handlersmocks.MockOperationsRegistry, defs [
 			if d.ID == id {
 				return d, true
 			}
-			for _, old := range d.FormerIDs {
-				if old == id {
-					return d, true
-				}
+			if slices.Contains(d.FormerIDs, id) {
+				return d, true
 			}
 		}
 		return opsregistry.OperationDef{}, false

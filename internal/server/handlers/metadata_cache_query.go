@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -336,7 +336,7 @@ func idList(raw string) []string {
 		return nil
 	}
 	var out []string
-	for _, id := range strings.Split(raw, ",") {
+	for id := range strings.SplitSeq(raw, ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			out = append(out, id)
 		}

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collapse_series_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c7e3a915-4b2d-4e08-9f61-2d85b0a7c4e3
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package abs_test
 
@@ -205,7 +205,7 @@ func TestCollapseSeries_TitleSortListsEachSeriesOnceUnderItsName(t *testing.T) {
 func TestCollapseSeries_PagesTheCollapsedList(t *testing.T) {
 	f := newCollapseFixture(t)
 	var pages []string
-	for page := 0; page < 4; page++ {
+	for page := range 4 {
 		got, total := f.items(t, "limit=1&sort=media.metadata.title&collapseseries=1&page="+string(rune('0'+page)))
 		if total != 4 {
 			t.Fatalf("page %d: total = %d, want 4 on every page", page, total)

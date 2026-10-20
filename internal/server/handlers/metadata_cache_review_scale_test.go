@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -49,7 +49,7 @@ func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service
 	breakdown := seedScoreBreakdown()
 	now := time.Now()
 	statuses := []string{"", "", "", "", "no_match", "matched", "audio_confirmed"}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		title := fmt.Sprintf("Book Title %d", i)
 		path := fmt.Sprintf("/lib/Author %d/Book %d", i%997, i)
 		if i%10 == 0 {
@@ -84,7 +84,7 @@ func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service
 		case i%41 == 0:
 			entry.Candidates = []json.RawMessage{json.RawMessage(`"not an object"`)}
 		default:
-			for k := 0; k < 10; k++ {
+			for k := range 10 {
 				raw, merr := json.Marshal(map[string]any{
 					"title": fmt.Sprintf("%s %d", title, k), "author": "Some Author",
 					"source": []string{"audible", "google_books", "open_library"}[k%3],

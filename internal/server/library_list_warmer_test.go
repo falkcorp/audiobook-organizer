@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b0c8f4e-2d7a-4c1e-9a63-7e1f0b3d8a52
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package server
 
@@ -29,7 +29,7 @@ import (
 func trickleTestBacklog(n int) []qry {
 	primary := true
 	out := make([]qry, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, qry{
 			name:   "title-asc-primary",
 			limit:  20,

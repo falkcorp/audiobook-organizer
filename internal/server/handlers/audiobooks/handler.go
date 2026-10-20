@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.36.1
+// version: 1.36.2
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -49,6 +49,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"os"
 	"sort"
@@ -182,7 +183,7 @@ func wantsStaleSearch(c *gin.Context) bool {
 // hasPreference reports whether any Prefer header carries token.
 func hasPreference(c *gin.Context, token string) bool {
 	for _, v := range c.Request.Header.Values("Prefer") {
-		for _, part := range strings.Split(v, ",") {
+		for part := range strings.SplitSeq(v, ",") {
 			if strings.EqualFold(strings.TrimSpace(part), token) {
 				return true
 			}
@@ -555,7 +556,7 @@ func (h *Handler) parseListRequest(c *gin.Context) (listRequest, bool) {
 	// into an unbounded fan-out.
 	if raw := strings.TrimSpace(c.Query("ids")); raw != "" {
 		var ids []string
-		for _, id := range strings.Split(raw, ",") {
+		for id := range strings.SplitSeq(raw, ",") {
 			if id = strings.TrimSpace(id); id != "" {
 				ids = append(ids, id)
 			}
@@ -1235,9 +1236,7 @@ func (h *Handler) AudiobookFacets(c *gin.Context) {
 	}
 	// Copy: base is the shared cached map and must not grow per-request keys.
 	resp := make(gin.H, len(base)+2)
-	for k, v := range base {
-		resp[k] = v
-	}
+	maps.Copy(resp, base)
 	resp["scoped_tags"] = facets.Tags
 	resp["scoped_total"] = facets.Total
 	httputil.RespondWithOK(c, resp)
