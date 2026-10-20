@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-20
 
@@ -962,5 +962,96 @@ func TestReconcile_StampingDemotesDuplicateProof(t *testing.T) {
 	}
 	if u, _ := s.GetUserByVerifiedEmail("both@example.com"); u == nil || u.ID != keyed.ID {
 		t.Fatalf("both@ lookup = %+v; want the setup-keyed account", u)
+	}
+}
+
+// A legacy row is stamped with the BEST source it qualifies for. The owner's
+// first account has the setup key and later linked an identity with the same
+// address; a second account only linked an identity. Stopping at the first
+// match stamped both "idp", a tie that demoted both, so the owner lost the
+// address on every account. The setup key outranks the identity.
+func TestReconcile_KeyAndIdentityOutranksIdentityOnly(t *testing.T) {
+	s := newInviteTestStore(t)
+	first, err := s.CreateUser("owner", "owner@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "g-owner", Email: "owner@example.com", UserID: first.ID}); err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, first, "owner@example.com", "") // legacy: key and identity
+	second := mustUser(t, s, "owner-sso", "viewer", "active")
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-owner", Email: "owner@example.com", UserID: second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, second, "owner@example.com", "") // legacy: identity only
+
+	res, err := s.ReconcileVerifiedEmails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{first.ID: EmailSourceSetup, second.ID: EmailSourceSelf} {
+		if got, _ := s.GetUserByID(id); got.EmailSource != want {
+			t.Fatalf("user %s stamped %q, want %q", id, got.EmailSource, want)
+		}
+	}
+	if len(res.DowngradedDuplicates) != 1 || res.DowngradedDuplicates[0] != second.ID {
+		t.Fatalf("DowngradedDuplicates = %v, want only the identity-only account", res.DowngradedDuplicates)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("owner@example.com"); u == nil || u.ID != first.ID {
+		t.Fatalf("verified lookup = %+v; want the account with the setup key", u)
+	}
+}
+
+// Two legacy rows tie for the best source. The tie goes to the row the
+// pre-existing idx:user:email key names, the account main's SSO lookup
+// returned, so the owner keeps the same account as before the update. With
+// no key naming either, both are demoted.
+func TestReconcile_TieGoesToTheRowTheKeyNames(t *testing.T) {
+	s := newInviteTestStore(t)
+	// Accepted from a copied link on an older build, which wrote the key for
+	// the invite's address; then linked an identity with it: "idp" (the key
+	// is the accept's write, not CreateUser's, so it is not "setup").
+	keyed := mustUser(t, s, "keyed", "viewer", "active")
+	setRawUserEmailSource(t, s, keyed, "tie@example.com", "")
+	if err := s.db.Set([]byte(userEmailIndexPrefix+"tie@example.com"), []byte(keyed.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	putUsedInvite(t, s, Invite{Token: "tie-link", Username: "keyed", Email: "tie@example.com", RoleID: "viewer", AcceptedUserID: keyed.ID})
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "g-keyed", Email: "tie@example.com", UserID: keyed.ID}); err != nil {
+		t.Fatal(err)
+	}
+	other := mustUser(t, s, "other", "viewer", "active")
+	setRawUserEmailSource(t, s, other, "tie@example.com", "")
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-other", Email: "tie@example.com", UserID: other.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// A second address where nothing breaks the tie.
+	a := mustUser(t, s, "a", "viewer", "active")
+	setRawUserEmailSource(t, s, a, "nokey@example.com", "")
+	b := mustUser(t, s, "b", "viewer", "active")
+	setRawUserEmailSource(t, s, b, "nokey@example.com", "")
+	for _, u := range []*User{a, b} {
+		if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "g-" + u.Username, Email: "nokey@example.com", UserID: u.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := s.ReconcileVerifiedEmails(); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{
+		keyed.ID: EmailSourceIdP, other.ID: EmailSourceSelf,
+		a.ID: EmailSourceSelf, b.ID: EmailSourceSelf,
+	} {
+		if got, _ := s.GetUserByID(id); got.EmailSource != want {
+			t.Fatalf("user %s stamped %q, want %q", got.Username, got.EmailSource, want)
+		}
+	}
+	if u, _ := s.GetUserByVerifiedEmail("tie@example.com"); u == nil || u.ID != keyed.ID {
+		t.Fatalf("tie@ lookup = %+v; want the account the key named", u)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("nokey@example.com"); u != nil {
+		t.Fatalf("nokey@ lookup = %+v; want nobody (an unbroken tie demotes both)", u)
 	}
 }

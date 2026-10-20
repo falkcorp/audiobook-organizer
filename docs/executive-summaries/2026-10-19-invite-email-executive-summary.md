@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-20 -->
 
@@ -121,9 +121,12 @@ records it as unverified, so it cannot be used to find out which addresses
 belong to someone. Accounts from before this update are labelled once, from the records
 the server has: an address confirmed by Google or GitHub, one bound by an
 invite an administrator sent, or one set when the account was created counts
-as verified; anything else counts as typed in by the person. If two old
+as verified; anything else counts as typed in by the person. Each old
+account is judged by the strongest record it has, so an account created with
+the address that later also signed in with Google keeps it. If two old
 accounts would both count as verified for one address, only the one with the
-strongest record keeps it, and the server logs the others. An address someone
+strongest record keeps it; when they are equally strong, the one sign-on
+reached before the update keeps it, and the server logs the others. An address someone
 squatted before this update is therefore not grandfathered in.
 
 When a Google- or GitHub-verified sign-in, or the acceptance of an invite an
@@ -138,11 +141,10 @@ email, so they are not affected.
 was last changed through their profile page, it is labelled as typed in, and
 the first Google or GitHub sign-in with that address would move it to a new
 account. The server logs the ids of any such administrator accounts at
-startup. If no other account has that address verified, setting it for them
-from the Users page keeps it theirs. If another account already has it
-verified, the server refuses to verify it a second time and the log says so:
-the duplicate account has to be cleared or merged into the right one (an
-account-merge tool is being built for this).
+startup. Do not fix this by setting the address for them on the Users page:
+that makes the account the verified holder, which is wrong when the same
+person already signs in through another account. Leave it, or merge the two
+accounts with the account-merge tool once it is available.
 
 **A second thing to set.** The invite pages limit how often one visitor can
 try a link. Behind the Cloudflare tunnel, the server can only tell visitors

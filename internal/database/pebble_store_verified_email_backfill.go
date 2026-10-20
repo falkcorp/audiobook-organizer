@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-20
 
@@ -164,7 +164,7 @@ func (p *PebbleStore) ReconcileVerifiedEmails() (ReconcileResult, error) {
 	if settable := slices.DeleteFunc(slices.Clone(res.StampedSelfAdmins), func(id string) bool {
 		return slices.Contains(res.SelfAdminsVerifiedElsewhere, id)
 	}); len(settable) > 0 {
-		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves; an SSO login with that address will take it from them. An admin can set it for them on the Users page to keep it", settable)
+		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves, so it is not verified; an SSO login with that address reaches or creates a different account and takes the address from them. Do not set the address for them on the Users page: that makes this account its verified holder, which is wrong if the address signs in another account through SSO. Leave it, or merge the accounts with the account-merge tool", settable)
 	}
 	if len(res.SelfAdminsVerifiedElsewhere) > 0 {
 		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves that another account already has verified; SSO with that address reaches the other account. Setting it for them will be refused: clear the address from the duplicate account, or merge the two accounts", res.SelfAdminsVerifiedElsewhere)
@@ -219,14 +219,24 @@ func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error 
 		return err
 	}
 	sources := make(map[string]string, len(legacy))
+	keyHolders := map[string]string{} // address -> the id its pre-existing key names
 	for _, u := range legacy {
 		source, err := p.stampEmailSource(u, invites)
 		if err != nil {
 			return err
 		}
 		sources[u.ID] = source
+		lower := util.NormalizeEmail(u.Email)
+		if _, seen := keyHolders[lower]; seen {
+			continue
+		}
+		holder, err := p.emailKeyHolder(lower)
+		if err != nil {
+			return err
+		}
+		keyHolders[lower] = holder
 	}
-	res.DowngradedDuplicates = demoteDuplicateProofs(users, sources)
+	res.DowngradedDuplicates = demoteDuplicateProofs(users, sources, keyHolders)
 	b := p.db.NewBatch()
 	defer b.Close()
 	for _, u := range legacy {
@@ -247,21 +257,31 @@ func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error 
 	return b.Commit(pebble.Sync)
 }
 
-// stampRank orders the trusted sources stamping can give a legacy row by how
-// directly they prove the address: the setup key (CreateUser) is unique per
-// address and written at creation, an admin-sent invite proves the inbox at
-// accept time, a recorded identity proves it at link time only.
-var stampRank = map[string]int{EmailSourceSetup: 3, EmailSourceInvite: 2, EmailSourceIdP: 1}
+// stampRank orders the sources stamping can give a legacy row by how directly
+// they prove the address: the setup key (CreateUser) is unique per address and
+// written at creation, an admin-sent invite proves the inbox at accept time, a
+// recorded identity proves it at link time only. invite_link and self prove
+// nothing and rank below every trusted source.
+var stampRank = map[string]int{
+	EmailSourceSetup: 4, EmailSourceInvite: 3, EmailSourceIdP: 2,
+	EmailSourceInviteLink: 1, EmailSourceSelf: 0,
+}
 
 // demoteDuplicateProofs keeps stamping from making a second proven holder.
-// sources maps each legacy row's id to the source stampEmailSource chose; for
-// every address that would end up proven for more than one account, legacy
-// candidates are demoted to "self" in place: all of them when a row that is
-// not legacy already holds the address proven (that row was proven by a
-// write path, which outranks history), otherwise all but a single
-// highest-ranked candidate (stampRank), or all of them on a tie. It returns
-// the demoted ids.
-func demoteDuplicateProofs(users []User, sources map[string]string) []string {
+// sources maps each legacy row's id to the source stampEmailSource chose, and
+// keyHolders maps an address to the id its pre-existing idx:user:email key
+// names (what main's SSO lookup returned for it), "" for none. For every
+// address that would end up proven for more than one account, legacy
+// candidates are demoted to "self" in place:
+//   - all of them when a row that is not legacy already holds the address
+//     proven (that row was proven by a write path, which outranks history);
+//   - otherwise all but the single highest-ranked candidate (stampRank);
+//   - on a tie for the highest rank, all but the tied candidate the key names,
+//     so the account keeps the address it had on main; all of them when the
+//     key names none of the tied candidates.
+//
+// It returns the demoted ids.
+func demoteDuplicateProofs(users []User, sources, keyHolders map[string]string) []string {
 	type cand struct {
 		id   string
 		rank int
@@ -297,17 +317,28 @@ func demoteDuplicateProofs(users []User, sources map[string]string) []string {
 		if len(cs) < 2 {
 			continue
 		}
-		best, tie := cs[0], false
+		top := cs[0].rank
 		for _, c := range cs[1:] {
-			switch {
-			case c.rank > best.rank:
-				best, tie = c, false
-			case c.rank == best.rank:
-				tie = true
+			top = max(top, c.rank)
+		}
+		var tied []cand
+		for _, c := range cs {
+			if c.rank == top {
+				tied = append(tied, c)
+			}
+		}
+		keep := ""
+		if len(tied) == 1 {
+			keep = tied[0].id
+		} else if holder := keyHolders[lower]; holder != "" {
+			for _, c := range tied {
+				if c.id == holder {
+					keep = holder
+				}
 			}
 		}
 		for _, c := range cs {
-			if tie || c.id != best.id {
+			if c.id != keep {
 				demote(c)
 			}
 		}
@@ -316,43 +347,64 @@ func demoteDuplicateProofs(users []User, sources map[string]string) []string {
 	return demoted
 }
 
+// emailKeyHolder returns the id the idx:user:email key for lower names, ""
+// when there is none. Caller holds inviteMu.
+func (p *PebbleStore) emailKeyHolder(lower string) (string, error) {
+	if lower == "" {
+		return "", nil
+	}
+	v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + lower))
+	if err == pebble.ErrNotFound {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	id := string(v)
+	closer.Close()
+	return id, nil
+}
+
 // stampEmailSource decides a legacy row's EmailSource from what older builds
-// left behind, first match wins:
-//  1. a linked identity of the user recorded with the address: an identity
-//     provider verified it, so "idp";
-//  2. a used invite that created this account (AcceptedUserID, or on rows
-//     from before that field the same username and email): "invite" only
+// left behind. Every rule is checked and the row gets the BEST source it
+// qualifies for (stampRank): a row that has both the setup key and a recorded
+// identity is "setup", not "idp". Stopping at the first match ranked such a
+// row as low as an identity-only row, so two accounts of one person could tie
+// and both lose the address.
+//   - a used invite that created this account (AcceptedUserID, or on rows
+//     from before that field the same username and email) gives "invite" only
 //     when that accept bound a delivered address (EmailBinding "bound") on
 //     the admin path (SSOGrant "granted", or the invite's creator holds the
 //     admin role now), the same rule ConsumeInvite applies today; otherwise
 //     "invite_link", which proves nothing about the inbox (a copied link can
-//     be forwarded, and a non-admin creator could accept it themselves);
-//  3. the idx:user:email key for the address names this user: "setup". This
-//     trusts a bare key, which holds for every key a released build wrote.
-//     On origin/main (670c8d7c5) CreateUser is the only writer that fires:
-//     its callers are first-run setup (internal/server/handlers/auth.go:360),
-//     bootstrap (internal/server/bootstrap.go:445), the system user
+//     be forwarded, and a non-admin creator could accept it themselves).
+//     Older accepts also wrote the idx:user:email key for the invite's
+//     address, so when such an invite exists the key is that accept's write,
+//     not CreateUser's, and does not count as "setup";
+//   - otherwise, the idx:user:email key for the address names this user:
+//     "setup". This trusts a bare key, which holds for every key a released
+//     build wrote. On origin/main (670c8d7c5) CreateUser is the only writer
+//     that fires: its callers are first-run setup
+//     (internal/server/handlers/auth.go:360), bootstrap
+//     (internal/server/bootstrap.go:445), the system user
 //     (internal/auth/seed.go:150) and IdP auto-create
 //     (internal/oauth/resolve.go:81, an IdP-verified address). Main's
 //     ConsumeInvite also writes it for Invite.Email
 //     (pebble_store_auth.go:869), but main's only CreateInvite caller
 //     (internal/server/handlers/user.go:95) never sets Email, so that write
-//     never fires; UpdateUser never wrote the key. States only this branch
-//     can produce (say, a used invite deleted after a bound accept) never
-//     shipped. Older builds lowercased the address without trimming it, so
-//     both spellings are checked;
-//  4. anything else was typed in through the profile: "self".
+//     never fires; UpdateUser never wrote the key. Older builds lowercased
+//     the address without trimming it, so both spellings are checked;
+//   - a linked identity of the user recorded with the address: an identity
+//     provider verified it, so "idp";
+//   - anything else was typed in through the profile: "self".
 func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error) {
 	lower := util.NormalizeEmail(u.Email)
-	ids, err := p.GetOAuthIdentitiesForUser(u.ID)
-	if err != nil {
-		return "", err
-	}
-	for _, id := range ids {
-		if util.NormalizeEmail(id.Email) == lower {
-			return EmailSourceIdP, nil
+	best := EmailSourceSelf
+	consider := func(source string) {
+		if stampRank[source] > stampRank[best] {
+			best = source
 		}
 	}
+	invited := false
 	for i := range invites {
 		inv := &invites[i]
 		if inv.UsedAt == nil || util.NormalizeEmail(inv.Email) != lower {
@@ -363,34 +415,48 @@ func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error
 		if !created {
 			continue
 		}
+		invited = true
+		source := EmailSourceInviteLink
 		if inv.EmailBinding == InviteEmailBound {
 			if inv.SSOGrant == InviteSSOGranted {
-				return EmailSourceInvite, nil
+				source = EmailSourceInvite
+			} else {
+				creator, err := p.GetUserByID(inv.CreatedByUserID)
+				if err != nil {
+					return "", err
+				}
+				if inviteCreatorMayGrant(creator) {
+					source = EmailSourceInvite
+				}
 			}
-			creator, err := p.GetUserByID(inv.CreatedByUserID)
-			if err != nil {
+		}
+		consider(source)
+	}
+	if !invited {
+		for _, spelling := range []string{lower, strings.ToLower(strings.TrimSpace(u.Email)), strings.ToLower(u.Email)} {
+			v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + spelling))
+			if err == pebble.ErrNotFound {
+				continue
+			} else if err != nil {
 				return "", err
 			}
-			if inviteCreatorMayGrant(creator) {
-				return EmailSourceInvite, nil
+			pointsHere := string(v) == u.ID
+			closer.Close()
+			if pointsHere {
+				return EmailSourceSetup, nil // the top rank: nothing can beat it
 			}
 		}
-		return EmailSourceInviteLink, nil
 	}
-	for _, spelling := range []string{lower, strings.ToLower(strings.TrimSpace(u.Email)), strings.ToLower(u.Email)} {
-		v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + spelling))
-		if err == pebble.ErrNotFound {
-			continue
-		} else if err != nil {
-			return "", err
-		}
-		pointsHere := string(v) == u.ID
-		closer.Close()
-		if pointsHere {
-			return EmailSourceSetup, nil
+	ids, err := p.GetOAuthIdentitiesForUser(u.ID)
+	if err != nil {
+		return "", err
+	}
+	for _, id := range ids {
+		if util.NormalizeEmail(id.Email) == lower {
+			consider(EmailSourceIdP)
 		}
 	}
-	return EmailSourceSelf, nil
+	return best, nil
 }
 
 // rewriteVerifiedEmailCacheLocked rewrites every idx:user:email key from
