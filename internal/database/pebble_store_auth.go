@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-20
 
@@ -1336,18 +1336,18 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		return nil, err
 	}
 	if inv == nil {
-		return nil, fmt.Errorf("invite not found")
+		return nil, ErrInviteNotFound
 	}
 	if inv.UsedAt != nil {
-		return nil, fmt.Errorf("invite already used")
+		return nil, ErrInviteUsed
 	}
 	if time.Now().After(inv.ExpiresAt) {
-		return nil, fmt.Errorf("invite expired")
+		return nil, ErrInviteExpired
 	}
 	lowerUser := strings.ToLower(inv.Username)
 	if _, closer, err := p.db.Get([]byte("idx:user:username:" + lowerUser)); err == nil {
 		closer.Close()
-		return nil, fmt.Errorf("username %q taken since invite was created", inv.Username)
+		return nil, fmt.Errorf("%w: %q", ErrInviteUsernameTaken, inv.Username)
 	}
 	inviteEmail := util.NormalizeEmail(inv.Email)
 	lowerEmail := "" // the email bound to the new account, if any

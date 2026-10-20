@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Rescued from user_handlers.go during Phase 2 handler extraction.
 // handleAcceptInvite remains a *Server method because it bridges auth
@@ -16,10 +16,23 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
 )
+
+// acceptInviteInvalidMessage is the one answer to every refused token.
+const acceptInviteInvalidMessage = "this invitation link is not valid; ask the person who invited you for a new one"
+
+// isInviteRefusal reports whether ConsumeInvite refused the invite itself
+// (a client-side problem) rather than failing on storage.
+func isInviteRefusal(err error) bool {
+	return errors.Is(err, database.ErrInviteNotFound) ||
+		errors.Is(err, database.ErrInviteUsed) ||
+		errors.Is(err, database.ErrInviteExpired) ||
+		errors.Is(err, database.ErrInviteUsernameTaken)
+}
 
 // handleAcceptInvite accepts an invite token and creates a new user session.
 // POST /api/v1/auth/accept-invite
@@ -71,7 +84,16 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 			httputil.RespondWithConflict(c, "this invitation's email address already belongs to an account; ask the person who invited you for a new invitation")
 			return
 		}
-		httputil.RespondWithBadRequest(c, err.Error())
+		if isInviteRefusal(err) {
+			// Missing, used, expired and similar refusals share one answer:
+			// the route is public, so distinct messages would tell a caller
+			// which tokens exist. The detail stays here, never the token.
+			inviteAccessLog.Warn("invite accept refused: %s (client %s)",
+				logger.SanitizeLogValue(err.Error()), logger.SanitizeLogValue(c.ClientIP()))
+			httputil.RespondWithBadRequest(c, acceptInviteInvalidMessage)
+			return
+		}
+		httputil.InternalError(c, "consume invite", err)
 		return
 	}
 	s.recordAcceptDisplacement(req.Token, user.ID)

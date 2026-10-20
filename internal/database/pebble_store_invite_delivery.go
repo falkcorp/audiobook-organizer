@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_invite_delivery.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
 // last-edited: 2026-10-20
 
@@ -20,6 +20,17 @@ import (
 // ErrInviteEmailTaken is returned when another account already holds an
 // invite's email proven: accepting the invite could never bind it.
 var ErrInviteEmailTaken = errors.New("another account already has that email address verified")
+
+// ConsumeInvite's client-side refusals. Each wraps with %w so the accept
+// handler can answer all of them with one generic response (distinct answers
+// would tell an unauthenticated caller which tokens exist) while the detail
+// stays in the server log.
+var (
+	ErrInviteNotFound      = errors.New("invite not found")
+	ErrInviteUsed          = errors.New("invite already used")
+	ErrInviteExpired       = errors.New("invite expired")
+	ErrInviteUsernameTaken = errors.New("username taken since invite was created")
+)
 
 // ErrInviteNotPending is returned by the invite-delivery writes for an invite
 // that is missing, used or expired.
