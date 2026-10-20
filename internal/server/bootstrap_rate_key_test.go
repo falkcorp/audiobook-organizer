@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -201,18 +201,18 @@ func bootstrapLimiterSize(l *bootstrapLimiter) int {
 func TestBootstrapLimiter_PerKeyWindow(t *testing.T) {
 	l, now := testBootstrapLimiter(100, 1000)
 	for i := range bootstrapMaxAttempts {
-		if !l.allow("k", false) {
+		if !l.allow("k", "", false) {
 			t.Fatalf("attempt %d refused early", i)
 		}
 	}
-	if l.allow("k", false) {
+	if l.allow("k", "", false) {
 		t.Fatal("attempt past the per-key cap admitted")
 	}
-	if !l.allow("other", false) {
+	if !l.allow("other", "", false) {
 		t.Fatal("another key was refused")
 	}
 	*now = now.Add(bootstrapWindowDuration + time.Second)
-	if !l.allow("k", false) {
+	if !l.allow("k", "", false) {
 		t.Fatal("the key's window ended but it is still refused")
 	}
 }
@@ -222,15 +222,15 @@ func TestBootstrapLimiter_PerKeyWindow(t *testing.T) {
 func TestBootstrapLimiter_SweepsExpiredEntries(t *testing.T) {
 	l, now := testBootstrapLimiter(1000, 1000)
 	for i := range 50 {
-		l.allow(fmt.Sprintf("k%d", i), false)
+		l.allow(fmt.Sprintf("k%d", i), "", false)
 	}
 	if bootstrapLimiterSize(l) != 50 {
 		t.Fatalf("size = %d, want 50", bootstrapLimiterSize(l))
 	}
 	*now = now.Add(bootstrapWindowDuration/2 + time.Second)
-	l.allow("late", false) // a younger window that must survive the sweep below
+	l.allow("late", "", false) // a younger window that must survive the sweep below
 	*now = now.Add(bootstrapWindowDuration/2 + time.Second)
-	l.allow("trigger", false)
+	l.allow("trigger", "", false)
 	if bootstrapLimiterSize(l) != 2 {
 		t.Fatalf("size after the first 50 windows ended = %d, want 2 (late, trigger)", bootstrapLimiterSize(l))
 	}
@@ -243,7 +243,7 @@ func TestBootstrapLimiter_HardCapEvictsOldest(t *testing.T) {
 	l, now := testBootstrapLimiter(maxKeys, 1_000_000)
 	for i := range 10 * maxKeys {
 		*now = now.Add(time.Second)
-		l.allow(fmt.Sprintf("k%d", i), false)
+		l.allow(fmt.Sprintf("k%d", i), "", false)
 		if bootstrapLimiterSize(l) > maxKeys {
 			t.Fatalf("size = %d after %d keys, cap is %d", bootstrapLimiterSize(l), i+1, maxKeys)
 		}
@@ -266,30 +266,30 @@ func TestBootstrapLimiter_GlobalCeiling(t *testing.T) {
 	const globalMax = 12
 	l, now := testBootstrapLimiter(1000, globalMax)
 	for i := range globalMax {
-		if !l.allow(fmt.Sprintf("k%d", i), false) {
+		if !l.allow(fmt.Sprintf("k%d", i), "", false) {
 			t.Fatalf("distinct key %d refused under the ceiling", i)
 		}
 	}
-	if l.allow("fresh", false) {
+	if l.allow("fresh", "", false) {
 		t.Fatal("a fresh key was admitted past the global ceiling")
 	}
 	if bootstrapLimiterSize(l) != globalMax {
 		t.Fatalf("a refused attempt created an entry: size = %d, want %d", bootstrapLimiterSize(l), globalMax)
 	}
 	*now = now.Add(bootstrapWindowDuration + time.Second)
-	if !l.allow("fresh", false) {
+	if !l.allow("fresh", "", false) {
 		t.Fatal("the window ended but the global ceiling still refuses")
 	}
 
 	// A key refused by its OWN cap does not spend the global budget.
 	l, _ = testBootstrapLimiter(1000, bootstrapMaxAttempts+1)
 	for range bootstrapMaxAttempts {
-		l.allow("k", false)
+		l.allow("k", "", false)
 	}
 	for range 50 {
-		l.allow("k", false) // refused per key
+		l.allow("k", "", false) // refused per key
 	}
-	if !l.allow("other", false) {
+	if !l.allow("other", "", false) {
 		t.Fatal("per-key refusals spent the global budget")
 	}
 }
@@ -300,29 +300,29 @@ func TestBootstrapLimiter_ExemptSkipsGlobalCeiling(t *testing.T) {
 	const globalMax = 3
 	l, _ := testBootstrapLimiter(1000, globalMax)
 	for i := range globalMax {
-		if !l.allow(fmt.Sprintf("tunnel%d", i), false) {
+		if !l.allow(fmt.Sprintf("tunnel%d", i), "", false) {
 			t.Fatalf("tunnel key %d refused under the ceiling", i)
 		}
 	}
-	if l.allow("tunnel-extra", false) {
+	if l.allow("tunnel-extra", "", false) {
 		t.Fatal("a tunnel key was admitted past the global ceiling")
 	}
 	for i := range bootstrapMaxAttempts {
-		if !l.allow("lan", true) {
+		if !l.allow("lan", "", true) {
 			t.Fatalf("exempt attempt %d refused by the global ceiling", i)
 		}
 	}
-	if l.allow("lan", true) {
+	if l.allow("lan", "", true) {
 		t.Fatal("an exempt key escaped its own per-key cap")
 	}
 	// Exempt attempts did not spend the global budget: a fresh window's worth
 	// is still exactly globalMax once the tunnel window ends.
 	l2, _ := testBootstrapLimiter(1000, globalMax)
 	for range 50 {
-		l2.allow("lan", true)
+		l2.allow("lan", "", true)
 	}
 	for i := range globalMax {
-		if !l2.allow(fmt.Sprintf("tunnel%d", i), false) {
+		if !l2.allow(fmt.Sprintf("tunnel%d", i), "", false) {
 			t.Fatalf("exempt attempts spent the global budget: tunnel key %d refused", i)
 		}
 	}
@@ -464,7 +464,7 @@ func bootstrapKeyFor(t *testing.T, connectorsCSV, remote string, hdr map[string]
 	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	key, _, exempt := bootstrapClientKey(c, connectors, func(string) bool { return false })
+	key, _, _, exempt := bootstrapClientKey(c, connectors, func(string) bool { return false })
 	return key, exempt
 }
 
@@ -502,5 +502,60 @@ func TestBootstrapClientKey_PiConnectors(t *testing.T) {
 				t.Fatalf("bootstrapClientKey = (%q, exempt %v), want (%q, exempt %v)", key, exempt, tt.wantKey, tt.wantExempt)
 			}
 		})
+	}
+}
+
+// bootstrapAttemptFrom runs one direct (no Cloudflare markers, no connectors)
+// bootstrap attempt from remote through bootstrapClientKey and l.
+func bootstrapAttemptFrom(l *bootstrapLimiter, remote string) bool {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/bootstrap", nil)
+	req.RemoteAddr = remote
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	key, lanKey, _, exempt := bootstrapClientKey(c, nil, func(string) bool { return false })
+	return l.allow(key, lanKey, exempt)
+}
+
+// LAN /64 aggregate (review MEDIUM): a direct LAN host rotating through 50
+// addresses of its /64 gets a fresh per-address window each time, and is
+// exempt from the global ceiling, but every address shares the /64's
+// aggregate window, which caps it.
+func TestBootstrapLimiter_LANSlash64RotationIsCappedByTheAggregate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	admitted := 0
+	for i := range 50 {
+		for range 2 {
+			if bootstrapAttemptFrom(l, fmt.Sprintf("[fd12:3456:789a:1::%x]:4000", i+1)) {
+				admitted++
+			}
+		}
+	}
+	if want := bootstrapLANPrefixFactor * bootstrapMaxAttempts; admitted != want {
+		t.Fatalf("one LAN /64 rotating 50 addresses: %d attempts admitted, want the aggregate %d", admitted, want)
+	}
+	if !bootstrapAttemptFrom(l, "[fd12:3456:789a:2::1]:4000") {
+		t.Fatal("a device in another LAN /64 was refused: the aggregate must be per /64")
+	}
+	if !bootstrapAttemptFrom(l, "10.0.0.50:4000") {
+		t.Fatal("an IPv4 LAN device was refused: IPv4 is unaffected")
+	}
+}
+
+// Two distinct LAN devices in one /64 each get their own per-address window,
+// within the shared aggregate.
+func TestBootstrapLimiter_LANDevicesInOneSlash64EachGetTheirWindow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	for _, peer := range []string{"[fd12:3456:789a:1::a]:4000", "[fd12:3456:789a:1::b]:4000"} {
+		n := 0
+		for range bootstrapMaxAttempts + 3 {
+			if bootstrapAttemptFrom(l, peer) {
+				n++
+			}
+		}
+		if n != bootstrapMaxAttempts {
+			t.Fatalf("%s: %d attempts admitted, want its own %d", peer, n, bootstrapMaxAttempts)
+		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -42,7 +42,9 @@ import (
 //     be believed (the peer is a configured tunnel connector, or the request
 //     carries a verified Access assertion and the peer is this host),
 //     otherwise the peer's own address; public IPv6 clients are grouped by
-//     /64, LAN IPv6 peers keep their full address (clientPrefixKey); sending Cf-* headers does not change a non-connector
+//     /64, LAN IPv6 peers keep their full address (clientPrefixKey) and every
+//     address of a LAN /64 also shares an aggregate bucket at four times the
+//     per-client budget (lanIPv6Prefix), reserved with the per-client one; sending Cf-* headers does not change a non-connector
 //     peer's key. A request whose client cannot be established (a configured
 //     connector or a local peer with no trusted header) SKIPS this layer: a
 //     key taken from an unproven header would let a caller pick its own
@@ -78,6 +80,14 @@ const (
 	// once; a handful of password retries is the realistic worst case.
 	inviteTokenRatePerMinute = 6
 	inviteTokenRateBurst     = 8
+
+	// Per LAN /64 (part of layer 2): a LAN IPv6 peer is keyed on its full
+	// address, so every address of one /64 also shares this aggregate,
+	// four times the per-client budget, so one LAN host rotating through its
+	// /64 is capped here before it reaches the global layer, while a few
+	// distinct LAN devices each keep their own per-client bucket.
+	inviteLANPrefixRatePerMinute = 4 * inviteAuthRatePerMinute
+	inviteLANPrefixRateBurst     = 4 * inviteAuthRateBurst
 
 	// Global (layer 3), across all tokens and clients.
 	inviteGlobalRatePerMinute = 300
@@ -150,7 +160,10 @@ const inviteGlobalKey = "invite:global"
 type inviteRateLimits struct {
 	perToken  *servermiddleware.IPRateLimiter
 	perClient *servermiddleware.IPRateLimiter
-	global    *servermiddleware.IPRateLimiter
+	// perLANPrefix is the aggregate per LAN IPv6 /64 (lanIPv6Prefix),
+	// reserved together with perClient.
+	perLANPrefix *servermiddleware.IPRateLimiter
+	global       *servermiddleware.IPRateLimiter
 	// isLocalPeer reports whether an address is this host. Injectable for tests.
 	isLocalPeer func(remoteAddr string) bool
 	// connectors are the configured tunnel connector addresses (see
@@ -163,17 +176,19 @@ var inviteLimitLog = logger.New("server.invite-rate-limit")
 // newInviteRateLimits builds the limiters and starts their idle sweepers on ctx.
 func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 	l := &inviteRateLimits{
-		perToken:    servermiddleware.NewIPRateLimiter(inviteTokenRatePerMinute, inviteTokenRateBurst),
-		perClient:   servermiddleware.NewIPRateLimiter(inviteAuthRatePerMinute, inviteAuthRateBurst),
-		global:      servermiddleware.NewIPRateLimiter(inviteGlobalRatePerMinute, inviteGlobalRateBurst),
-		isLocalPeer: remoteAddrIsLocal,
-		connectors:  tunnelConnectorPeers(),
+		perToken:     servermiddleware.NewIPRateLimiter(inviteTokenRatePerMinute, inviteTokenRateBurst),
+		perClient:    servermiddleware.NewIPRateLimiter(inviteAuthRatePerMinute, inviteAuthRateBurst),
+		perLANPrefix: servermiddleware.NewIPRateLimiter(inviteLANPrefixRatePerMinute, inviteLANPrefixRateBurst),
+		global:       servermiddleware.NewIPRateLimiter(inviteGlobalRatePerMinute, inviteGlobalRateBurst),
+		isLocalPeer:  remoteAddrIsLocal,
+		connectors:   tunnelConnectorPeers(),
 	}
 	if len(l.connectors) == 0 {
 		inviteLimitLog.Info("TUNNEL_CONNECTOR_ADDRS is not set: no tunnel visitor address can be established, so each tunnel connector gets one invite per-client bucket shared by every visitor it relays; the per-token and global limits still apply")
 	}
 	l.perToken.Start(ctx)
 	l.perClient.Start(ctx)
+	l.perLANPrefix.Start(ctx)
 	l.global.Start(ctx)
 	return l
 }
@@ -195,17 +210,21 @@ func inviteTokenKey(token string) string {
 // derived from an unproven header. Public IPv6 clients share one bucket per
 // /64 (clientPrefixKey), as the bootstrap limiter keys them, so one host cannot
 // rotate through its /64 for fresh buckets; a LAN IPv6 peer (ULA, link-local)
-// keeps its full address, so LAN devices sharing a /64 do not share a bucket.
-func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (string, bool) {
+// keeps its full address, so LAN devices sharing a /64 do not share a bucket,
+// and lanKey is then its /64's aggregate bucket (perLANPrefix), "" otherwise.
+func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (key, lanKey string, ok bool) {
 	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	key, ok := clientPrefixKey(ip)
+	k, ok := clientPrefixKey(ip)
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	return "invite-client:" + key, true
+	if prefix, lan := lanIPv6Prefix(ip); lan {
+		lanKey = "invite-lan64:" + prefix
+	}
+	return "invite-client:" + k, lanKey, true
 }
 
 // remoteAddrIsLocal reports whether addr ("host:port") is a loopback address or
@@ -276,9 +295,12 @@ func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, 
 		if tokenKey == "" {
 			tokenKey = inviteFallbackTokenKey
 		}
-		steps := make([]servermiddleware.KeyStep, 0, 3)
-		if key, attributed := l.inviteClientKey(c); attributed {
+		steps := make([]servermiddleware.KeyStep, 0, 4)
+		if key, lanKey, attributed := l.inviteClientKey(c); attributed {
 			steps = append(steps, servermiddleware.KeyStep{Limiter: l.perClient, Key: key})
+			if lanKey != "" {
+				steps = append(steps, servermiddleware.KeyStep{Limiter: l.perLANPrefix, Key: lanKey})
+			}
 		}
 		steps = append(steps,
 			servermiddleware.KeyStep{Limiter: l.perToken, Key: tokenKey},
