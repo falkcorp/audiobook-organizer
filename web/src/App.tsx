@@ -1,10 +1,10 @@
 // file: web/src/App.tsx
-// version: 1.31.0
+// version: 1.32.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-19
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Box, Backdrop, CircularProgress, Typography, Stack } from '@mui/material';
 import { MainLayout } from './components/layout/MainLayout';
 import { WelcomeWizard } from './components/wizard/WelcomeWizard';
@@ -12,6 +12,7 @@ import { KeyboardShortcutsDialog } from './components/KeyboardShortcutsDialog';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
+import { AcceptInvite } from './pages/AcceptInvite';
 import { NotFound } from './pages/NotFound';
 import { ABS_REDIRECTS } from './utils/absRedirects';
 import { eventSourceManager } from './services/eventSourceManager';
@@ -60,6 +61,7 @@ const ReviewWorkspace = lazy(() =>
 
 function App() {
   const auth = useAuth();
+  const location = useLocation();
   const [showWizard, setShowWizard] = useState(false);
   const [wizardCheckComplete, setWizardCheckComplete] = useState(false);
   const [serverShutdown, setServerShutdown] = useState(false);
@@ -192,6 +194,18 @@ function App() {
     // Force a full reload so dashboard fetches fresh data after setup
     window.location.reload();
   };
+
+  // The invitation page is public and stands alone: an invitee has no session
+  // yet, and a signed-in user opening someone's link should see the same page,
+  // not the app shell. It must render before the auth/wizard gates below.
+  if (location.pathname.startsWith('/invite/')) {
+    return (
+      <Routes>
+        <Route path="/invite/:token" element={<AcceptInvite />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    );
+  }
 
   if (!auth.initialized || !wizardCheckComplete) {
     return null;
