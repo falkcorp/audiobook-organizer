@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -59,10 +59,12 @@ import (
 // Tuning constraint: the number of new keys a limiter can be made to track
 // within its idle TTL (15 minutes) must stay below its tracked-entry cap
 // (10,000), or a flood of distinct keys could evict a victim's bucket and hand
-// it a fresh burst. A request the middleware refuses leaves no new key behind
-// (a reservation that created an entry drops it again on cancel), so every
-// new per-client or per-token entry that survives belongs to a request the
-// global layer admitted: each of those limiters gains at most
+// it a fresh burst (eviction only ever refreshes a bucket; see
+// IPRateLimiter.insertLocked). A request the middleware refuses inserts no
+// key anywhere (an unseen key's entry is created only when the request is
+// admitted, ReserveKey/Commit), so every new per-client or per-token entry
+// belongs to a request the global layer admitted: each of those limiters
+// gains at most
 // inviteGlobalRateBurst + 15 * inviteGlobalRatePerMinute = 4,600 keys per
 // idle TTL, and the global limiter has one key. That is why the global
 // ceiling is not larger.
@@ -236,40 +238,36 @@ func remoteAddrIsLocal(addr string) bool {
 // unparseable) uses the shared fallback bucket. ok=false means tokenOf has
 // already answered the request (413) and the chain stops.
 //
-// The layers are reserved in order, client, then token, then global, each
-// reservation atomic under its bucket's lock (IPRateLimiter.ReserveKey). When
-// a layer refuses, every reservation already taken is cancelled, so a refused
-// request spends nothing anywhere and leaves no new key behind. Two
-// consequences:
-//   - a client can never spend more global slots than it holds client tokens,
-//     even with many concurrent requests: each must hold one of the client's
-//     tokens before it reaches the global layer, so one host cannot drain the
-//     shared ceiling (a peek-then-spend order let concurrent requests from one
-//     client all pass the peek);
-//   - a caller that is already limited never spends a token or global slot.
+// Order, settled once:
+//  1. tokenOf runs FIRST, before any bucket is touched. Reading the body is
+//     bounded (inviteAcceptBodyLimit, 4 KiB), and doing it first means a
+//     request tokenOf rejects never reaches a limiter at all.
+//  2. The client, token and global layers are then reserved together
+//     (ReserveKeys). Each reservation is atomic (IPRateLimiter.ReserveKey),
+//     and when any layer refuses, every reservation already taken is
+//     cancelled: a refused request spends nothing anywhere.
+//  3. Only once all three admit is the set committed. A per-client or
+//     per-token key the limiter has never seen is NOT inserted until then;
+//     an unseen key is always allowed at full burst, so ReserveKey records a
+//     pending admission instead of an entry. A refused request therefore
+//     inserts nothing, and each admitted request can create at most one new
+//     key per layer while taking one global slot.
+//
+// Consequences: a client can never spend more global slots than it holds
+// client tokens, even with many concurrent requests, because each must hold
+// one of the client's tokens (pending admissions count against the burst)
+// before the global layer is asked, so one host cannot drain the shared
+// ceiling; a caller that is already limited never spends a token or global
+// slot; and a flood of refused requests cannot grow or churn the per-key
+// tables, so it cannot evict anyone's bucket.
 //
 // A request with no trusted client address skips the client layer (see
 // inviteClientKey). Every layer refuses with the same status and body, so a
 // caller cannot tell which layer tripped.
 func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, ok bool)) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var held []servermiddleware.KeyReservation
-		refuse := func() {
-			servermiddleware.CancelReservations(held)
-			httputil.RespondWithError(c, http.StatusTooManyRequests, "rate limit exceeded", "TOO_MANY_REQUESTS")
-			c.Abort()
-		}
-		if key, attributed := l.inviteClientKey(c); attributed {
-			res, ok := l.perClient.ReserveKey(key)
-			if !ok {
-				refuse()
-				return
-			}
-			held = append(held, res)
-		}
 		token, proceed := tokenOf(c)
 		if !proceed {
-			servermiddleware.CancelReservations(held)
 			c.Abort()
 			return
 		}
@@ -277,16 +275,21 @@ func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, 
 		if tokenKey == "" {
 			tokenKey = inviteFallbackTokenKey
 		}
-		res, ok := l.perToken.ReserveKey(tokenKey)
+		steps := make([]servermiddleware.KeyStep, 0, 3)
+		if key, attributed := l.inviteClientKey(c); attributed {
+			steps = append(steps, servermiddleware.KeyStep{Limiter: l.perClient, Key: key})
+		}
+		steps = append(steps,
+			servermiddleware.KeyStep{Limiter: l.perToken, Key: tokenKey},
+			servermiddleware.KeyStep{Limiter: l.global, Key: inviteGlobalKey},
+		)
+		held, ok := servermiddleware.ReserveKeys(steps...)
 		if !ok {
-			refuse()
+			httputil.RespondWithError(c, http.StatusTooManyRequests, "rate limit exceeded", "TOO_MANY_REQUESTS")
+			c.Abort()
 			return
 		}
-		held = append(held, res)
-		if _, ok := l.global.ReserveKey(inviteGlobalKey); !ok {
-			refuse()
-			return
-		}
+		servermiddleware.CommitReservations(held)
 		c.Next()
 	}
 }
