@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-19
 
@@ -63,10 +63,64 @@ const (
 	inviteGlobalRateBurst     = 100
 )
 
-// inviteBodyPeekLimit caps how much of an accept-invite body the limiter reads
-// to find the token. The real body is {"token": <=128 chars, "password": ...};
-// the router's body-limit middleware has already bounded the whole request.
-const inviteBodyPeekLimit = 16 << 10
+// inviteAcceptBodyLimit caps an accept-invite body. The real body is
+// {"token": 64 hex chars, "password": ...}, so 4 KiB leaves room for any
+// sane password; a larger body is refused with 413 before the handler runs,
+// so the limiter always reads the whole body the handler will use.
+const inviteAcceptBodyLimit = 4 << 10
+
+// inviteFallbackTokenKey is the one per-token bucket shared by every request
+// whose token is empty or whose body does not parse, so a malformed body
+// cannot skip the per-token layer.
+const inviteFallbackTokenKey = "invite-token:unparsed"
+
+// acceptInviteRequestKey is the gin context key under which the accept-invite
+// limiter stashes the request it parsed; handleAcceptInvite uses exactly that
+// request instead of parsing the body again.
+const acceptInviteRequestKey = "invite.acceptRequest"
+
+// acceptInviteRequest is the parsed accept-invite body.
+type acceptInviteRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+// parsedAcceptInvite is what readAcceptInviteBody found.
+type parsedAcceptInvite struct {
+	req      acceptInviteRequest
+	parsed   bool // the body was one valid JSON object
+	empty    bool // there was no body
+	tooLarge bool // over inviteAcceptBodyLimit
+}
+
+// readAcceptInviteBody reads and parses the accept-invite body once per
+// request and stashes the result on c; later calls return the stash. Both the
+// limiter and handleAcceptInvite call it, so they act on the same bytes.
+func readAcceptInviteBody(c *gin.Context) parsedAcceptInvite {
+	if v, ok := c.Get(acceptInviteRequestKey); ok {
+		if p, ok := v.(parsedAcceptInvite); ok {
+			return p
+		}
+	}
+	var p parsedAcceptInvite
+	if c.Request.Body == nil {
+		p.empty = true
+	} else {
+		buf, err := io.ReadAll(io.LimitReader(c.Request.Body, inviteAcceptBodyLimit+1))
+		switch {
+		case len(buf) > inviteAcceptBodyLimit:
+			p.tooLarge = true
+		case err == nil && len(bytes.TrimSpace(buf)) == 0:
+			p.empty = true
+		case err == nil:
+			p.parsed = json.Unmarshal(buf, &p.req) == nil
+		}
+		// The handler reads the stash, never the body; leave it empty.
+		c.Request.Body = io.NopCloser(bytes.NewReader(nil))
+	}
+	c.Set(acceptInviteRequestKey, p)
+	return p
+}
 
 // inviteGlobalKey is the single bucket of the global layer.
 const inviteGlobalKey = "invite:global"
@@ -159,19 +213,28 @@ func remoteAddrIsLocal(addr string) bool {
 }
 
 // middleware returns the Gin middleware enforcing all three layers.
-// tokenOf extracts the invite token from the request; it may return "".
+// tokenOf extracts the invite token from the request; "" (missing or
+// unparseable) uses the shared fallback bucket. ok=false means tokenOf has
+// already answered the request (413) and the chain stops.
 //
 // Order: client, then token, then global. A caller that is already limited
 // never spends a token or global slot, so one noisy client or one hammered
 // token cannot drain the shared ceiling. Every layer refuses with the same
 // status and body, so a caller cannot tell which layer tripped.
-func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) string) gin.HandlerFunc {
+func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, ok bool)) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ok := l.perClient.AllowKey(l.inviteClientKey(c))
 		if ok {
-			if key := inviteTokenKey(tokenOf(c)); key != "" {
-				ok = l.perToken.AllowKey(key)
+			token, proceed := tokenOf(c)
+			if !proceed {
+				c.Abort()
+				return
 			}
+			key := inviteTokenKey(token)
+			if key == "" {
+				key = inviteFallbackTokenKey
+			}
+			ok = l.perToken.AllowKey(key)
 		}
 		if ok {
 			ok = l.global.AllowKey(inviteGlobalKey)
@@ -186,26 +249,20 @@ func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) string) gin.Han
 }
 
 // inviteTokenFromParam reads the token of GET /auth/invite/:token.
-func inviteTokenFromParam(c *gin.Context) string { return c.Param("token") }
+func inviteTokenFromParam(c *gin.Context) (string, bool) { return c.Param("token"), true }
 
-// inviteTokenFromBody reads the token of POST /auth/accept-invite from the JSON
-// body without consuming it: the bytes read are put back in front of the rest
-// of the body, so handleAcceptInvite parses it exactly as before. A missing,
-// oversized or malformed body yields "" (the handler answers it).
-func inviteTokenFromBody(c *gin.Context) string {
-	if c.Request.Body == nil {
-		return ""
+// inviteTokenFromBody reads the token of POST /auth/accept-invite through
+// readAcceptInviteBody, which stashes the parsed body for handleAcceptInvite.
+// A body over inviteAcceptBodyLimit is answered 413 here. A missing or
+// malformed body yields "" (the fallback bucket; the handler answers it).
+func inviteTokenFromBody(c *gin.Context) (string, bool) {
+	p := readAcceptInviteBody(c)
+	if p.tooLarge {
+		httputil.RespondWithError(c, http.StatusRequestEntityTooLarge, "request body too large", "PAYLOAD_TOO_LARGE")
+		return "", false
 	}
-	buf, _ := io.ReadAll(io.LimitReader(c.Request.Body, inviteBodyPeekLimit))
-	c.Request.Body = struct {
-		io.Reader
-		io.Closer
-	}{io.MultiReader(bytes.NewReader(buf), c.Request.Body), c.Request.Body}
-	var req struct {
-		Token string `json:"token"`
+	if !p.parsed {
+		return "", true
 	}
-	if json.Unmarshal(buf, &req) != nil {
-		return ""
-	}
-	return req.Token
+	return p.req.Token, true
 }

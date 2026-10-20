@@ -1,5 +1,5 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 // last-edited: 2026-10-19
 
@@ -11,8 +11,7 @@ package server
 
 import (
 	"errors"
-	"io"
-	"strings"
+	"net/http"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -34,22 +33,25 @@ import (
 // guest policy in the background when that sync is configured. Every outcome
 // is recorded on the invite for the admin and never affects this request.
 func (s *Server) handleAcceptInvite(c *gin.Context) {
-	var req struct {
-		Token    string `json:"token" binding:"required"`
-		Password string `json:"password" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		// Map EOF/empty-body errors to a clear message.
-		// HTTP/2 streaming bodies and empty POSTs produce io.EOF or
-		// io.ErrUnexpectedEOF. Never echo the raw "EOF" string to the client.
-		errMsg := err.Error()
-		if err == io.EOF || err == io.ErrUnexpectedEOF || strings.Contains(errMsg, "EOF") {
-			httputil.RespondWithBadRequest(c, "request body required: token, password")
-			return
-		}
-		httputil.RespondWithBadRequest(c, errMsg)
+	// The rate limiter on this route parsed the body and checked its token;
+	// readAcceptInviteBody returns that same parse, so the token consumed
+	// here is exactly the one the limiter counted.
+	p := readAcceptInviteBody(c)
+	switch {
+	case p.tooLarge:
+		httputil.RespondWithError(c, http.StatusRequestEntityTooLarge, "request body too large", "PAYLOAD_TOO_LARGE")
+		return
+	case p.empty:
+		httputil.RespondWithBadRequest(c, "request body required: token, password")
+		return
+	case !p.parsed:
+		httputil.RespondWithBadRequest(c, "request body must be a JSON object with token and password")
+		return
+	case p.req.Token == "" || p.req.Password == "":
+		httputil.RespondWithBadRequest(c, "request body required: token, password")
 		return
 	}
+	req := p.req
 	if len(req.Password) < 8 {
 		httputil.RespondWithBadRequest(c, "password must be at least 8 characters")
 		return
