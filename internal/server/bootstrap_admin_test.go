@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_admin_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b2a193f-fbf5-4b5e-8135-6f8d8fc03b4b
 // last-edited: 2026-10-20
 
@@ -245,12 +245,31 @@ func TestRedeemBootstrapToken_Steps(t *testing.T) {
 			t.Fatalf("retry: valid=%v err=%v", valid, err)
 		}
 	})
-	t.Run("a token that cannot be deleted is an error", func(t *testing.T) {
+	t.Run("a token that cannot be deleted is an error and creates nothing", func(t *testing.T) {
 		st := failingDeleteStore{newFakeSettingsStore()}
 		seedBootstrapToken(st, "abbs_live")
-		_, err := RedeemBootstrapToken(st, t.TempDir(), "abbs_live", nil)
+		ran := false
+		_, err := RedeemBootstrapToken(st, t.TempDir(), "abbs_live", func() error { ran = true; return nil })
 		if !errors.Is(err, errBootstrapTokenNotBurned) {
 			t.Fatalf("err = %v, want errBootstrapTokenNotBurned", err)
+		}
+		if ran {
+			t.Fatal("onValid ran although the token could not be spent")
+		}
+	})
+	t.Run("onValid runs with the token already spent", func(t *testing.T) {
+		st := newFakeSettingsStore()
+		seedBootstrapToken(st, "abbs_live")
+		spent := false
+		if _, err := RedeemBootstrapToken(st, t.TempDir(), "abbs_live", func() error {
+			_, err := st.GetSetting(bootstrapTokenKey)
+			spent = err != nil
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if !spent {
+			t.Fatal("onValid ran while the token hash was still stored")
 		}
 	})
 	t.Run("an expired token is cleared", func(t *testing.T) {
@@ -386,4 +405,72 @@ func TestInitStartupReadOnlyKey_NeverCreatesAnAdmin(t *testing.T) {
 			t.Fatalf("%d users, want only the owner", n)
 		}
 	})
+}
+
+// bootstrapFaultStore fails the token delete or the API key write on demand.
+type bootstrapFaultStore struct {
+	*database.PebbleStore
+	failTokenDelete bool
+	failKeyCreate   bool
+}
+
+func (f *bootstrapFaultStore) DeleteSetting(key string) error {
+	if f.failTokenDelete && key == bootstrapTokenKey {
+		return errors.New("disk full")
+	}
+	return f.PebbleStore.DeleteSetting(key)
+}
+
+func (f *bootstrapFaultStore) CreateAPIKey(k *database.APIKey) (*database.APIKey, error) {
+	if f.failKeyCreate {
+		return nil, errors.New("disk full")
+	}
+	return f.PebbleStore.CreateAPIKey(k)
+}
+
+// NIT6: the token is spent before the admin is created. When it cannot be
+// spent, nothing is created, so no generated password can be lost to a
+// request that answers 500 after making an admin.
+func TestHandleBootstrap_UnspendableTokenCreatesNothing(t *testing.T) {
+	sandboxBootstrapStateDir(t)
+	s := newBootstrapAdminStore(t)
+	seedBootstrapToken(s, "abbs_live")
+	srv := &Server{store: &bootstrapFaultStore{PebbleStore: s, failTokenDelete: true}}
+	w := postBootstrap(t, srv, map[string]string{"token": "abbs_live"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500; body %s", w.Code, w.Body.String())
+	}
+	if n := countUsers(t, s); n != 0 {
+		t.Fatalf("%d user(s) created although the token could not be spent", n)
+	}
+	if strings.Contains(w.Body.String(), "generated_password") {
+		t.Fatalf("a password was generated for nothing: %s", w.Body.String())
+	}
+}
+
+// When the admin is created but its key cannot be written, the generated
+// password is in the error response: the token is spent and the password is
+// shown nowhere else.
+func TestHandleBootstrap_KeyFailureStillReturnsThePassword(t *testing.T) {
+	sandboxBootstrapStateDir(t)
+	s := newBootstrapAdminStore(t)
+	seedBootstrapToken(s, "abbs_live")
+	srv := &Server{store: &bootstrapFaultStore{PebbleStore: s, failKeyCreate: true}}
+	w := postBootstrap(t, srv, map[string]string{"token": "abbs_live"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500; body %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Username          string `json:"username"`
+		GeneratedPassword string `json:"generated_password"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Username != "admin" || body.GeneratedPassword == "" {
+		t.Fatalf("got %+v; want the new admin's name and password", body)
+	}
+	if n := countUsers(t, s); n != 1 {
+		t.Fatalf("%d users, want the one admin", n)
+	}
 }
