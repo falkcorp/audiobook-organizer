@@ -1,6 +1,7 @@
 # file: .pre-commit-config.yaml
-# version: 2.6.0
+# version: 2.6.1
 # guid: f8e7d6c5-b4a3-9281-7069-5a4b3c2d1e0f
+# last-edited: 2026-10-20
 
 # Pre-commit hooks configuration for comprehensive code quality checks
 # This configuration uses official pre-commit.com hooks and integrates with
@@ -180,8 +181,8 @@ repos:
 
   # Python formatting and linting - using Ruff only (replaces black + isort)
   # Ruff is faster and handles both formatting and import sorting
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.14.3
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.0
     hooks:
       - id: ruff-check
         args: [--config=ruff.toml, --fix]
