@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.test.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 26b39541-b8d3-4fc8-b131-190f15f5a5ab
 // last-edited: 2026-10-19
 
@@ -144,6 +144,28 @@ describe('Users', () => {
       expect(listCalls).toHaveLength(2);
     });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('says why invitation email is unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/users/invites'))
+          return envelope({
+            invites: [],
+            count: 0,
+            mail_configured: false,
+            mail_unavailable_reason: "the server's public address is not set (PUBLIC_BASE_URL)",
+          });
+        return envelope({ users: [activeUser], count: 1 });
+      })
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<Users />);
+    await screen.findByText('test-user');
+    await user.click(screen.getByRole('button', { name: /create invite/i }));
+    expect(await screen.findByText(/PUBLIC_BASE_URL/)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox')).toBeDisabled();
   });
 
   describe('set email', () => {

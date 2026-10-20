@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-10-19
 
@@ -23,6 +23,7 @@ import (
 	htmltemplate "html/template"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"strings"
 	"sync"
 	texttemplate "text/template"
@@ -75,6 +76,26 @@ func (d *InviteDelivery) baseURL() string {
 		return ""
 	}
 	return strings.TrimRight(d.BaseURL(), "/")
+}
+
+// Why an invitation email cannot go out; sendBlocked returns one of these.
+const (
+	mailNotConfiguredReason = "email is not configured on this server (SMTP_HOST and SMTP_FROM); copy the link instead"
+	publicURLMissingReason  = "the server's public address is not set (PUBLIC_BASE_URL or EXTERNAL_URL), so an emailed link would not open; copy the link instead"
+)
+
+// sendBlocked returns why an invitation email cannot be sent right now, or
+// "" when it can: mail must be configured, and the link base must be an
+// absolute http(s) URL, since a relative link in an email opens nothing.
+func (d *InviteDelivery) sendBlocked() string {
+	if d.sender() == nil {
+		return mailNotConfiguredReason
+	}
+	u, err := url.Parse(d.baseURL())
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return publicURLMissingReason
+	}
+	return ""
 }
 
 func (d *InviteDelivery) headers() (GuestHeaders, bool) {
@@ -300,10 +321,10 @@ func currentUserID(c *gin.Context) string {
 // send. It returns a message safe to show an admin: never the body, never the
 // header pair.
 func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite) (sentAt *time.Time, errMsg string) {
-	sender := h.delivery.sender()
-	if sender == nil {
-		return nil, "email is not configured on this server (SMTP_HOST and SMTP_FROM); copy the link instead"
+	if why := h.delivery.sendBlocked(); why != "" {
+		return nil, why
 	}
+	sender := h.delivery.sender()
 	if inv.Email == "" {
 		return nil, "this invitation has no email address"
 	}
@@ -349,8 +370,13 @@ func (h *UserHandler) ResendInvite(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "this invitation has no email address; delete it and create a new one with an email")
 		return
 	}
-	if h.delivery.sender() == nil {
+	switch h.delivery.sendBlocked() {
+	case "":
+	case mailNotConfiguredReason:
 		httputil.RespondWithError(c, http.StatusServiceUnavailable, "email is not configured on this server", "MAIL_NOT_CONFIGURED")
+		return
+	default:
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, publicURLMissingReason, "PUBLIC_URL_NOT_CONFIGURED")
 		return
 	}
 	if why := h.sendLimiter.allow(token, currentUserID(c)); why != "" {

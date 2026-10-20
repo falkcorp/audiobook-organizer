@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -159,8 +159,8 @@ func (h *UserHandler) CreateInvite(c *gin.Context) {
 		"email_sent": false,
 	}
 	if req.SendEmail {
-		if h.delivery.sender() == nil {
-			resp["email_error"] = "email is not configured on this server (SMTP_HOST and SMTP_FROM); copy the link instead"
+		if blocked := h.delivery.sendBlocked(); blocked != "" {
+			resp["email_error"] = blocked
 		} else if why := h.sendLimiter.allow(token, currentUserID(c)); why != "" {
 			resp["email_error"] = why
 		} else if sentAt, errMsg := h.sendInviteEmail(c.Request.Context(), created); errMsg != "" {
@@ -188,8 +188,11 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 		"invites": invites, "count": len(invites),
 		// Accepted invites from the last 30 days with their Cloudflare
 		// guest-policy outcome, so a failed sync can be done by hand.
-		"accepted":                     h.acceptedInvites(),
-		"mail_configured":              h.delivery.sender() != nil,
+		"accepted": h.acceptedInvites(),
+		// mail_configured: an invitation email can go out (mail set up and
+		// an absolute link base); mail_unavailable_reason says why not.
+		"mail_configured":              h.delivery.sendBlocked() == "",
+		"mail_unavailable_reason":      h.delivery.sendBlocked(),
 		"guest_headers_configured":     headersOK,
 		"guest_policy_sync_configured": h.delivery.policySync(),
 	})
