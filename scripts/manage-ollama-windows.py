@@ -1,7 +1,7 @@
 # file: scripts/manage-ollama-windows.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: c4d6e8f0-a2b4-4c6d-8e0f-2a4b6c8d0e2f
-# last-edited: 2026-07-03
+# last-edited: 2026-10-20
 #
 # /// script
 # requires-python = ">=3.11"
@@ -239,7 +239,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Manage Ollama on the Windows GPU machine over ssh windows-gpu"
     )
-    parser.add_argument("--status", action="store_true", help="Probe /api/tags, report loaded models")
+    parser.add_argument(
+        "--status", action="store_true", help="Probe /api/tags, report loaded models"
+    )
     parser.add_argument(
         "--setup",
         action="store_true",

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/setup-prometheus-auth.py
-# version: 1.1.1
+# version: 1.1.2
 # guid: 4d90a2f6-13bc-4e58-9071-8c25e6b3f0a7
-# last-edited: 2026-08-22
+# last-edited: 2026-10-20
 
 """Point Prometheus at audiobook-organizer's now-authenticated /metrics.
 
@@ -130,8 +130,7 @@ def probe_metrics(token: str) -> int:
     except urllib.error.HTTPError as e:
         return e.code
     except Exception as e:  # noqa: BLE001 - any transport failure is fatal here
-        die(f"could not reach {METRICS_URL}: {e}\n"
-            "  Is audiobook-organizer running on this host?")
+        die(f"could not reach {METRICS_URL}: {e}\n  Is audiobook-organizer running on this host?")
         return 0
 
 
@@ -172,7 +171,11 @@ def find_promtool() -> tuple[str | None, str]:
     Returns (path_or_None, note_to_log).
     """
     seen: list[str] = []
-    for directory in os.environ.get("PATH", "").split(os.pathsep) + ["/usr/bin", "/bin", "/usr/local/bin"]:
+    for directory in os.environ.get("PATH", "").split(os.pathsep) + [
+        "/usr/bin",
+        "/bin",
+        "/usr/local/bin",
+    ]:
         if not directory:
             continue
         candidate = os.path.join(directory, "promtool")
@@ -199,8 +202,10 @@ def find_promtool() -> tuple[str | None, str]:
     best = max(seen, key=sort_key)
     note = f"promtool: using {best} (v{versions[best] or '?'})"
     if server:
-        note += (f" — no exact match for Prometheus v{server}; "
-                 "an older validator can reject a valid config")
+        note += (
+            f" — no exact match for Prometheus v{server}; "
+            "an older validator can reject a valid config"
+        )
     return best, note
 
 
@@ -277,7 +282,8 @@ def main() -> None:
                 info(promtool_note)
             check = subprocess.run(
                 [promtool, "check", "config", str(PROM_CONFIG)],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             if check.returncode != 0:
                 shutil.copy2(backup, PROM_CONFIG)
@@ -288,10 +294,12 @@ def main() -> None:
                     SHARED_SD_FILE.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(DISABLED_SD_FILE), str(SHARED_SD_FILE))
                     restored += f"; {SHARED_SD_FILE.name} put back in the shared file_sd job"
-                die(f"promtool ({promtool}) rejected the new config — ROLLED BACK ({restored}):\n"
+                die(
+                    f"promtool ({promtool}) rejected the new config — ROLLED BACK ({restored}):\n"
                     f"{check.stdout}\n{check.stderr}\n"
                     "If this mentions 'field authorization not found', the validator is\n"
-                    "older than the running Prometheus — see find_promtool().")
+                    "older than the running Prometheus — see find_promtool()."
+                )
             info(f"promtool: config valid ({promtool})")
         else:
             info("promtool not found — skipping validation (reload will catch errors)")

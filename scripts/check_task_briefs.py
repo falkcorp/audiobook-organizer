@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/check_task_briefs.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 93f31e1f-3605-4f23-902b-2b8cf08b8c2d
-# last-edited: 2026-10-10
+# last-edited: 2026-10-20
 
 """Check and regenerate the dependency graph of the holistic-roadmap task briefs.
 
@@ -29,7 +29,9 @@ import os
 import re
 import sys
 
-TASKS = os.path.join(os.path.dirname(__file__), "..", "docs", "proposals", "2026-10-holistic", "tasks")
+TASKS = os.path.join(
+    os.path.dirname(__file__), "..", "docs", "proposals", "2026-10-holistic", "tasks"
+)
 WAVE_ORDER = {"0": 0, "1": 1, "2": 2, "F": 3, "3": 4, "4": 5}
 # The list ends at the first ". "; a cell that is only the list ("**Merge first:** none.")
 # ends at the period itself, so accept end-of-string there too.
@@ -101,7 +103,9 @@ def verify(briefs: dict[str, dict]) -> int:
     for bid, b in briefs.items():
         hdr = b["header"]
         if not hdr:
-            report(f"{bid}: header is not four closed '<!-- file/version/guid/last-edited -->' lines")
+            report(
+                f"{bid}: header is not four closed '<!-- file/version/guid/last-edited -->' lines"
+            )
         elif not b["path"].replace(os.sep, "/").endswith(hdr.group(1)):
             report(f"{bid}: header file: {hdr.group(1)} does not match the brief's path")
         if not b["merge_first_ok"]:
@@ -120,7 +124,9 @@ def verify(briefs: dict[str, dict]) -> int:
                 report(f"{x}: Blocks is stale (missing {bid}); run --regen-blocks")
         for x in b["blocks"]:
             if x not in briefs or bid not in briefs[x]["merge_first"]:
-                report(f"{bid}: Blocks names {x} but {x} does not list {bid} in Merge first; run --regen-blocks")
+                report(
+                    f"{bid}: Blocks names {x} but {x} does not list {bid} in Merge first; run --regen-blocks"
+                )
     color = dict.fromkeys(briefs, 0)
 
     def dfs(u: str, stack: list[str]) -> None:
@@ -148,13 +154,17 @@ def bump_header(text: str, today: str) -> str:
         text,
         count=1,
     )
-    return re.sub(r"<!-- last-edited: \d{4}-\d{2}-\d{2} -->", f"<!-- last-edited: {today} -->", text, count=1)
+    return re.sub(
+        r"<!-- last-edited: \d{4}-\d{2}-\d{2} -->", f"<!-- last-edited: {today} -->", text, count=1
+    )
 
 
 def replace_row(text: str, name: str, cell: str) -> tuple[str, int]:
     """Replace one header-table row; the replacement is passed through a function so no escapes are processed."""
     row = f"| {name} | {cell} |"
-    return re.subn(rf"^\| {re.escape(name)} \| .*? \|$", lambda _m, row=row: row, text, count=1, flags=re.M)
+    return re.subn(
+        rf"^\| {re.escape(name)} \| .*? \|$", lambda _m, row=row: row, text, count=1, flags=re.M
+    )
 
 
 def regen_blocks(briefs: dict[str, dict]) -> int:
@@ -197,7 +207,9 @@ def regen_index(briefs: dict[str, dict], root: str) -> int:
     waves = {w: sum(1 for _, b in rows if b["wave"] == w) for w in WAVE_ORDER}
     counts = f"| Count | Value |\n|---|---|\n| Briefs | {len(rows)} |\n| Sonnet / Opus | {sonnet} / {opus} |\n"
     counts += "".join(f"| Wave {w} | {waves[w]} |\n" for w in WAVE_ORDER if waves[w])
-    src, c1 = re.subn(r"\| Count \| Value \|\n\|---\|---\|\n(?:\|.*\|\n)+", lambda _m: counts, old, count=1)
+    src, c1 = re.subn(
+        r"\| Count \| Value \|\n\|---\|---\|\n(?:\|.*\|\n)+", lambda _m: counts, old, count=1
+    )
     table = "| Brief | Title | Wave | Model | Size | Merge first |\n|---|---|---|---|---|---|\n"
     for bid, b in rows:
         merge_first = ", ".join(b["merge_first"]) if b["merge_first"] else "none"
@@ -223,7 +235,12 @@ def regen_index(briefs: dict[str, dict], root: str) -> int:
             count=1,
         )
         today = datetime.date.today().isoformat()
-        src = re.sub(r"<!-- last-edited: \d{4}-\d{2}-\d{2} -->", f"<!-- last-edited: {today} -->", src, count=1)
+        src = re.sub(
+            r"<!-- last-edited: \d{4}-\d{2}-\d{2} -->",
+            f"<!-- last-edited: {today} -->",
+            src,
+            count=1,
+        )
         write(readme, src)
     live = {w: n for w, n in waves.items() if n}
     suffix = "" if src != old else " (unchanged)"
@@ -232,8 +249,12 @@ def regen_index(briefs: dict[str, dict], root: str) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tasks", default=os.path.normpath(TASKS), help="tasks directory (default: the repo's)")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--tasks", default=os.path.normpath(TASKS), help="tasks directory (default: the repo's)"
+    )
     ap.add_argument("--regen-blocks", action="store_true")
     ap.add_argument("--index", action="store_true")
     args = ap.parse_args()

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
-# last-edited: 2026-10-12
+# last-edited: 2026-10-20
 
 """Storage-format guard for `make rollback`.
 
@@ -134,8 +134,16 @@ def restore_steps(db, bin_path, store, checkpoint):
     return lines
 
 
-def decide(db, bin_path, prev_text, sidecar_text, checkpoint_text, ignore_format,
-           current_text="", errs=None):
+def decide(
+    db,
+    bin_path,
+    prev_text,
+    sidecar_text,
+    checkpoint_text,
+    ignore_format,
+    current_text="",
+    errs=None,
+):
     """Return (exit_code, output_lines). errs maps prev/current/sidecar/checkpoint to stderr text."""
     errs = errs or {}
     checkpoint = (checkpoint_text or "").strip()
@@ -187,16 +195,22 @@ def decide(db, bin_path, prev_text, sidecar_text, checkpoint_text, ignore_format
             f"{store}. A binary swap cannot go back past a format change; nothing was swapped."
         ]
         if _int_or_none(prev_text) is None:
-            lines.append(f"(previous binary's --print-storage-format gave no format; read as 1. "
-                         f"stderr: {_cause(errs.get('prev'))})")
+            lines.append(
+                f"(previous binary's --print-storage-format gave no format; read as 1. "
+                f"stderr: {_cause(errs.get('prev'))})"
+            )
         if ignore_format:
             lines.append("ROLLBACK_IGNORE_FORMAT=1 does not override a format change.")
         if not checkpoint and (errs.get("checkpoint") or "").strip():
-            lines.append(f"reading {db}.migration-checkpoint failed: {_cause(errs.get('checkpoint'))}")
+            lines.append(
+                f"reading {db}.migration-checkpoint failed: {_cause(errs.get('checkpoint'))}"
+            )
         lines.extend(restore_steps(db, bin_path, store, checkpoint))
         return 1, lines
 
-    return 0, [f"storage format guard: store format {store}, previous binary supports {prev}; swap allowed."]
+    return 0, [
+        f"storage format guard: store format {store}, previous binary supports {prev}; swap allowed."
+    ]
 
 
 def main(argv=None):
@@ -208,7 +222,9 @@ def main(argv=None):
     parser.add_argument("--checkpoint", default="", help="content of <db>.migration-checkpoint")
     parser.add_argument("--current", default="", help="stdout of <bin> --print-storage-format")
     for name in ("prev", "current", "sidecar", "checkpoint"):
-        parser.add_argument(f"--{name}-err", default="", help=f"stderr of the ssh command behind --{name}")
+        parser.add_argument(
+            f"--{name}-err", default="", help=f"stderr of the ssh command behind --{name}"
+        )
     args = parser.parse_args(argv)
 
     ignore = os.environ.get("ROLLBACK_IGNORE_FORMAT", "").strip() == "1"
@@ -218,8 +234,16 @@ def main(argv=None):
         "sidecar": args.sidecar_err,
         "checkpoint": args.checkpoint_err,
     }
-    code, lines = decide(args.db.strip(), args.bin.strip(), args.prev, args.sidecar, args.checkpoint,
-                         ignore, current_text=args.current, errs=errs)
+    code, lines = decide(
+        args.db.strip(),
+        args.bin.strip(),
+        args.prev,
+        args.sidecar,
+        args.checkpoint,
+        ignore,
+        current_text=args.current,
+        errs=errs,
+    )
     stream = sys.stdout if code == 0 else sys.stderr
     for line in lines:
         print(line, file=stream)

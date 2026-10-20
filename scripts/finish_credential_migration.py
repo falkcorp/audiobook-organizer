@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/finish_credential_migration.py
-# version: 2.0.1
+# version: 2.0.2
 # guid: 5c8b2e14-9a37-4d06-b8f1-2e74a95c30d8
-# last-edited: 2026-09-09
+# last-edited: 2026-10-20
 
 """Finish the 2026-09-09 credential relocation on a deployed host.
 
@@ -187,8 +187,7 @@ def probe(path: Path) -> Probe:
         return Probe(
             Presence.UNKNOWN,
             path,
-            f"permission denied ({os.strerror(exc.errno or errno.EACCES)}) -- "
-            f"re-run as root",
+            f"permission denied ({os.strerror(exc.errno or errno.EACCES)}) -- re-run as root",
         )
     except OSError as exc:
         return Probe(Presence.UNKNOWN, path, f"stat failed: {exc}")
@@ -625,7 +624,11 @@ def report_readonly_key() -> None:
 
 def emit_json(plan: Plan) -> None:
     def d(pr: Probe | None) -> dict | None:
-        return None if pr is None else {"path": str(pr.path), "presence": pr.presence.value, "reason": pr.reason}
+        return (
+            None
+            if pr is None
+            else {"path": str(pr.path), "presence": pr.presence.value, "reason": pr.reason}
+        )
 
     print(
         json.dumps(
@@ -633,7 +636,9 @@ def emit_json(plan: Plan) -> None:
                 "db_path": str(plan.db_path) if plan.db_path else None,
                 "invocation": plan.journal.invocation,
                 "binary_has_marker": plan.binary_has_marker,
-                "observed_state_dir": str(plan.observed_state_dir) if plan.observed_state_dir else None,
+                "observed_state_dir": str(plan.observed_state_dir)
+                if plan.observed_state_dir
+                else None,
                 "live_token": d(plan.live_token),
                 "stale_tokens": [str(p.path) for p in plan.stale_tokens],
                 "key_src": d(plan.key_src),
@@ -656,7 +661,9 @@ def main() -> int:
     mode.add_argument(
         "--check-only", action="store_true", help="report state and exit (the default behaviour)"
     )
-    ap.add_argument("--binary", type=Path, default=BINARY, help=f"deployed executable (default {BINARY})")
+    ap.add_argument(
+        "--binary", type=Path, default=BINARY, help=f"deployed executable (default {BINARY})"
+    )
     ap.add_argument(
         "--remove-legacy-key",
         action="store_true",
@@ -673,7 +680,10 @@ def main() -> int:
     args = ap.parse_args()
 
     if not sys.platform.startswith("linux"):
-        print(f"this script targets the Linux service host; running on {sys.platform}", file=sys.stderr)
+        print(
+            f"this script targets the Linux service host; running on {sys.platform}",
+            file=sys.stderr,
+        )
         return 2
     if args.apply and os.geteuid() != 0:
         print(

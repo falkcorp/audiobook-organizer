@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/trim_go_cache.py
-# version: 1.2.1
+# version: 1.2.2
 # guid: 5f2d8c41-9a73-4e0b-b6d1-3c7e9f2a0d84
-# last-edited: 2026-09-29
+# last-edited: 2026-10-20
 """Cap a shared GOCACHE at a size, deleting the least recently used files.
 
 Each Woodpecker local-backend agent (llm1) shares one GOCACHE across its
@@ -31,11 +31,15 @@ GIB = 1024**3
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Cap a shared GOCACHE at a size, deleting the least recently used files.")
+    ap = argparse.ArgumentParser(
+        description="Cap a shared GOCACHE at a size, deleting the least recently used files."
+    )
     ap.add_argument("dir")
     ap.add_argument("--max-gb", type=float, default=40.0, help="trim only above this size (GiB)")
     ap.add_argument("--target-gb", type=float, default=30.0, help="trim down to this size (GiB)")
-    ap.add_argument("--min-age-minutes", type=float, default=120.0, help="never delete files newer than this")
+    ap.add_argument(
+        "--min-age-minutes", type=float, default=120.0, help="never delete files newer than this"
+    )
     args = ap.parse_args()
 
     if not os.path.isdir(args.dir):

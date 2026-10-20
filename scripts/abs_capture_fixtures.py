@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/abs_capture_fixtures.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 2a9c6e04-8d71-4f36-b920-5e83c1740af6
-# last-edited: 2026-09-11
+# last-edited: 2026-10-20
 """Capture golden API fixtures from the reference Audiobookshelf oracle.
 
 The published ABS API docs are stale, so the running server is the only
@@ -128,9 +128,7 @@ def write_fixture(method: str, path: str, body, resp) -> None:
         },
         "response": {
             "status": resp.status_code,
-            "headers": {
-                k.lower(): v for k, v in resp.headers.items() if k.lower() in KEPT_HEADERS
-            },
+            "headers": {k.lower(): v for k, v in resp.headers.items() if k.lower() in KEPT_HEADERS},
             "body": redact(parsed),
         },
     }
@@ -213,9 +211,7 @@ def main() -> int | str:
             path = f"/api/libraries/{lib_id}/{suffix}"
             write_fixture("GET", path, None, sess.get(f"{base}{path}", timeout=60))
         if item_id is None:
-            items = sess.get(
-                f"{base}/api/libraries/{lib_id}/items?limit=10&page=0", timeout=60
-            )
+            items = sess.get(f"{base}/api/libraries/{lib_id}/items?limit=10&page=0", timeout=60)
             for result in items.json().get("results", []):
                 # Prefer the multi-file book: it exercises the cumulative
                 # startOffset timeline, the harder of the two shapes.
@@ -248,9 +244,7 @@ def main() -> int | str:
                 "POST",
                 f"/api/session/{session_id}/sync",
                 sync_body,
-                sess.post(
-                    f"{base}/api/session/{session_id}/sync", json=sync_body, timeout=30
-                ),
+                sess.post(f"{base}/api/session/{session_id}/sync", json=sync_body, timeout=30),
             )
             write_fixture(
                 "POST",

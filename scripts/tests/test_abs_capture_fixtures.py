@@ -1,7 +1,7 @@
 # file: scripts/tests/test_abs_capture_fixtures.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 9c766f9e-15e7-40d9-88b0-3c823780f6f5
-# last-edited: 2026-09-11
+# last-edited: 2026-10-20
 """Tests for the request-header capture in scripts/abs_capture_fixtures.py (TASK-009).
 
 Fixtures are committed to a public repo. After login the harness's session carries
@@ -141,14 +141,10 @@ class RequestHeaderCaptureTest(unittest.TestCase):
             kept = self.mod.kept_request_headers(
                 {"Authorization": f"Bearer {ACCESS_TOKEN}", "Cookie": COOKIE_VALUE}
             )
-        self.assertEqual(
-            kept, {"authorization": self.mod.REDACTED, "cookie": self.mod.REDACTED}
-        )
+        self.assertEqual(kept, {"authorization": self.mod.REDACTED, "cookie": self.mod.REDACTED})
 
     def test_allowlist_never_names_a_credential_header(self):
-        self.assertFalse(
-            set(self.mod.REQUEST_HEADERS_TO_KEEP) & self.mod.CREDENTIAL_HEADERS
-        )
+        self.assertFalse(set(self.mod.REQUEST_HEADERS_TO_KEEP) & self.mod.CREDENTIAL_HEADERS)
 
     def test_empty_or_missing_headers_still_write_a_fixture(self):
         self.assertEqual(self.mod.kept_request_headers({}), {})

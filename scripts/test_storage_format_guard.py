@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_storage_format_guard.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 75f5cdf5-6d94-4c67-a679-062b1e13e414
-# last-edited: 2026-10-12
+# last-edited: 2026-10-20
 
 """Unit tests for scripts/storage_format_guard.py, the `make rollback` guard.
 
@@ -38,10 +38,22 @@ def run_guard(prev, sidecar, checkpoint, ignore=False, current="1", sidecar_err=
     # The `--flag=value` form the Makefile uses, so a value starting with "-"
     # (an old binary's usage text) cannot be read as a flag.
     proc = subprocess.run(
-        [sys.executable, str(_SCRIPT), f"--db={DB}", f"--bin={BIN}",
-         f"--prev={prev}", f"--sidecar={sidecar}", f"--checkpoint={checkpoint}",
-         f"--current={current}", f"--sidecar-err={sidecar_err}", f"--current-err={current_err}"],
-        capture_output=True, text=True, env=env, check=False,
+        [
+            sys.executable,
+            str(_SCRIPT),
+            f"--db={DB}",
+            f"--bin={BIN}",
+            f"--prev={prev}",
+            f"--sidecar={sidecar}",
+            f"--checkpoint={checkpoint}",
+            f"--current={current}",
+            f"--sidecar-err={sidecar_err}",
+            f"--current-err={current_err}",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -71,7 +83,9 @@ class StorageFormatGuardTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn(
             "REFUSING: the previous binary supports storage format 1, the store is at 2. "
-            "A binary swap cannot go back past a format change; nothing was swapped.", out)
+            "A binary swap cannot go back past a format change; nothing was swapped.",
+            out,
+        )
         self.assertIn("sudo systemctl stop audiobook-organizer.service", out)
         self.assertIn(f"checkpoint_dir: {ckpt}", out)
         self.assertIn(f"sudo cp -a {ckpt}/db {DB}", out)
@@ -82,10 +96,14 @@ class StorageFormatGuardTest(unittest.TestCase):
         self.assertIn(
             f"note: nothing saves {BIN}.pre-format-2 automatically yet (scripts/deploy-cutover.sh "
             "is planned, TASK-A9); copy it by hand before a format-changing deploy. "
-            "If it is absent, build the release that matches format 2 and install that binary", out)
+            "If it is absent, build the release that matches format 2 and install that binary",
+            out,
+        )
         # The binary is matched to the unit type before it is started, or a
         # pre-readiness binary restart-loops under Type=notify.
-        self.assertIn(f"5. from your workstation: bash scripts/deploy-match-unit-type.sh <host> {BIN}", out)
+        self.assertIn(
+            f"5. from your workstation: bash scripts/deploy-match-unit-type.sh <host> {BIN}", out
+        )
         self.assertIn("6. sudo systemctl start audiobook-organizer.service", out)
         self.assertIn("docs/system/runbooks.md#storage-format-restore", out)
 
@@ -95,14 +113,18 @@ class StorageFormatGuardTest(unittest.TestCase):
         self.assertIn("REFUSING: the previous binary supports storage format 1", out)
         self.assertIn(
             f"checkpoint_dir: none recorded in {DB}.migration-checkpoint. "
-            "Do not pick the newest .migration-backups/ entry; read the storage_migration report.", out)
+            "Do not pick the newest .migration-backups/ entry; read the storage_migration report.",
+            out,
+        )
 
     def test_case6_sidecar_unreadable_refused(self):
         code, out = run_guard("1", "", "")
         self.assertEqual(code, 1, out)
         self.assertIn(
             f"REFUSING: cannot read the store's storage format from {DB}.storage-format. "
-            "Set ROLLBACK_IGNORE_FORMAT=1 only if you have verified the store is at format 1.", out)
+            "Set ROLLBACK_IGNORE_FORMAT=1 only if you have verified the store is at format 1.",
+            out,
+        )
 
     def test_case7_sidecar_unreadable_ignore_flag_warns(self):
         code, out = run_guard("1", "garbage", "", ignore=True)
@@ -140,21 +162,39 @@ class StorageFormatGuardTest(unittest.TestCase):
         self.assertIn("swap allowed", out)
 
     def test_ignore_flag_refuses_crashing_current_binary(self):
-        code, out = run_guard("1", "", "", ignore=True, current="",
-                              current_err="panic: runtime error: invalid memory address")
+        code, out = run_guard(
+            "1",
+            "",
+            "",
+            ignore=True,
+            current="",
+            current_err="panic: runtime error: invalid memory address",
+        )
         self.assertEqual(code, 1, out)
         self.assertIn("gave no answer", out)
         self.assertIn("panic: runtime error", out)
 
     def test_ignore_flag_refuses_ssh_failure_for_current(self):
-        code, out = run_guard("1", "", "", ignore=True, current="",
-                              current_err="ssh: connect to host test-host port 22: Connection refused")
+        code, out = run_guard(
+            "1",
+            "",
+            "",
+            ignore=True,
+            current="",
+            current_err="ssh: connect to host test-host port 22: Connection refused",
+        )
         self.assertEqual(code, 1, out)
         self.assertIn("Connection refused", out)
 
     def test_ignore_flag_old_build_current_reads_as_1(self):
-        code, out = run_guard("1", "", "", ignore=True, current="",
-                              current_err="Error: unknown flag: --print-storage-format\nUsage:\n  audiobook-organizer [command]")
+        code, out = run_guard(
+            "1",
+            "",
+            "",
+            ignore=True,
+            current="",
+            current_err="Error: unknown flag: --print-storage-format\nUsage:\n  audiobook-organizer [command]",
+        )
         self.assertEqual(code, 0, out)
         self.assertIn("predates --print-storage-format", out)
 

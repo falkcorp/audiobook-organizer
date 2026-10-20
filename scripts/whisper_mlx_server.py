@@ -1,7 +1,7 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.4.0
+# version: 1.4.1
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
-# last-edited: 2026-09-19
+# last-edited: 2026-10-20
 #
 # /// script
 # requires-python = ">=3.11"
@@ -65,7 +65,7 @@ try:
     from fastapi import FastAPI, File, UploadFile
 except ImportError as e:  # pragma: no cover - dependency probe
     print(f"Missing dependency: {e}")
-    print('Install with: uv run scripts/whisper_mlx_server.py')
+    print("Install with: uv run scripts/whisper_mlx_server.py")
     sys.exit(1)
 
 DEFAULT_MODEL = "mlx-community/whisper-small.en-mlx"
@@ -100,6 +100,7 @@ DECODE_FINGERPRINT = hashlib.sha256(
 # unusable. The Go client's batch path already sends files in one request and
 # expects sequential server-side processing, so this costs no throughput.
 _inference_lock = threading.Lock()
+
 
 def _require_ffmpeg() -> str:
     """Refuse to start without ffmpeg. Returns its resolved path.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/setup_mac_ai_worker.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 3b8e6d21-7f4a-4c19-9e52-0a6d4f8c1b73
-# last-edited: 2026-09-13
+# last-edited: 2026-10-20
 """Set up an Apple Silicon Mac as an AI worker for audiobook-organizer.
 
 It installs and configures three things:
@@ -115,14 +115,22 @@ def tunnel_plist(prod: str, forwards: list[str], home: Path) -> dict:
     # ControlMaster=no / ControlPath=none: the tunnel must own its connection,
     # or it rides an interactive session's master and dies with it.
     args = [
-        "/usr/bin/ssh", "-N",
-        "-o", "ControlMaster=no",
-        "-o", "ControlPath=none",
-        "-o", "ExitOnForwardFailure=yes",
-        "-o", "ServerAliveInterval=30",
-        "-o", "ServerAliveCountMax=3",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
+        "/usr/bin/ssh",
+        "-N",
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
     ]
     for f in forwards:
         args += ["-R", f]
@@ -156,8 +164,13 @@ def ensure_env_line(text: str, line: str) -> tuple[str, bool]:
 def prod_endpoint_entries(plan: PortPlan, label: str) -> list[dict]:
     """WHISPER_ENDPOINTS entries for the server's systemd drop-in."""
     return [
-        {"url": f"http://127.0.0.1:{p}", "priority": 50, "concurrency": 1,
-         "require_gpu": True, "capabilities": ["local", "mac", label]}
+        {
+            "url": f"http://127.0.0.1:{p}",
+            "priority": 50,
+            "concurrency": 1,
+            "require_gpu": True,
+            "capabilities": ["local", "mac", label],
+        }
         for p in plan.whisper_remote
     ]
 
@@ -231,16 +244,29 @@ def apply(args: argparse.Namespace, plan: PortPlan) -> int:
         print("\n[3/5] Whisper workers")
         for port in plan.whisper_local:
             path = agents / f"{whisper_label(port)}.plist"
-            path.write_bytes(plistlib.dumps(whisper_plist(port, args.repo, home, args.whisper_model)))
+            path.write_bytes(
+                plistlib.dumps(whisper_plist(port, args.repo, home, args.whisper_model))
+            )
             launchd_reload(path, whisper_label(port))
         for port in plan.whisper_local:
             # First start downloads the model (~500 MB).
             ok = wait_for(f"http://127.0.0.1:{port}/health", 300)
-            print(f"  whisper :{port} {'ok' if ok else 'NOT HEALTHY (see ~/Library/Logs/whisper-mlx-%d.err)' % port}")
+            print(
+                f"  whisper :{port} {'ok' if ok else 'NOT HEALTHY (see ~/Library/Logs/whisper-mlx-%d.err)' % port}"
+            )
 
     print("\n[4/5] SSH key to the server")
-    if run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", args.prod, "true"], check=False).returncode != 0:
-        print(f"ERROR: passwordless ssh to {args.prod} failed. Run: ssh-copy-id {args.prod}", file=sys.stderr)
+    if (
+        run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", args.prod, "true"],
+            check=False,
+        ).returncode
+        != 0
+    ):
+        print(
+            f"ERROR: passwordless ssh to {args.prod} failed. Run: ssh-copy-id {args.prod}",
+            file=sys.stderr,
+        )
         return 1
 
     print("\n[5/5] Reverse tunnel")
@@ -250,7 +276,9 @@ def apply(args: argparse.Namespace, plan: PortPlan) -> int:
     launchd_reload(tpath, TUNNEL_LABEL)
     time.sleep(5)
     alive = run(["pgrep", "-f", "ssh -N -o ControlMaster=no"], check=False).returncode == 0
-    print(f"  tunnel process {'running' if alive else 'NOT RUNNING (see ~/Library/Logs/ai-tunnel.log)'}")
+    print(
+        f"  tunnel process {'running' if alive else 'NOT RUNNING (see ~/Library/Logs/ai-tunnel.log)'}"
+    )
     return 0 if alive else 1
 
 
@@ -258,7 +286,9 @@ def print_plan(args: argparse.Namespace, plan: PortPlan) -> None:
     print(f"Mac AI worker, host index {plan.host_index}, server {args.prod}")
     print(f"  repo:            {args.repo}")
     if not args.skip_ollama:
-        print(f"  ollama:          Mac 127.0.0.1:{OLLAMA_LOCAL_PORT} -> server 127.0.0.1:{plan.ollama_remote}")
+        print(
+            f"  ollama:          Mac 127.0.0.1:{OLLAMA_LOCAL_PORT} -> server 127.0.0.1:{plan.ollama_remote}"
+        )
         print(f"  models:          {', '.join(args.models)} (keep-alive 30m)")
     if not args.skip_whisper:
         for l, r in zip(plan.whisper_local, plan.whisper_remote):
@@ -278,9 +308,15 @@ def print_plan(args: argparse.Namespace, plan: PortPlan) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--host-index", type=int, required=True,
-                    help="1, 2, ... for each new Mac; 0 is the original Mac's port block")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--host-index",
+        type=int,
+        required=True,
+        help="1, 2, ... for each new Mac; 0 is the original Mac's port block",
+    )
     ap.add_argument("--prod", required=True, help="ssh target for the server, user@host")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent)
@@ -288,13 +324,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--whisper-model", default=DEFAULT_WHISPER_MODEL)
     ap.add_argument("--skip-ollama", action="store_true")
     ap.add_argument("--skip-whisper", action="store_true")
-    ap.add_argument("--allow-index-0", action="store_true",
-                    help="reuse the original Mac's server ports (only when replacing that Mac)")
-    ap.add_argument("--apply", action="store_true", help="make changes (default: print the plan only)")
+    ap.add_argument(
+        "--allow-index-0",
+        action="store_true",
+        help="reuse the original Mac's server ports (only when replacing that Mac)",
+    )
+    ap.add_argument(
+        "--apply", action="store_true", help="make changes (default: print the plan only)"
+    )
     args = ap.parse_args(argv)
 
     if args.host_index == 0 and not args.allow_index_0:
-        ap.error("index 0 is the original Mac's port block; pass --allow-index-0 only when replacing it")
+        ap.error(
+            "index 0 is the original Mac's port block; pass --allow-index-0 only when replacing it"
+        )
     plan = plan_ports(args.host_index, args.workers)
     print_plan(args, plan)
     if not args.apply:

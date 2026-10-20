@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/dedup_bench_submit.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 3b9e1c5a-7d2f-4e8b-a6c1-9f4d0e2b8a53
-# last-edited: 2026-07-17
+# last-edited: 2026-10-20
 """Submit dedup benchmark batch jobs to OpenAI.
 
 Fetches author data from a remote server, builds test configurations,
@@ -289,9 +289,7 @@ def submit_batch(
     # Check batch queue limit
     limit = BATCH_LIMITS.get(model, 100_000)
     if total_tokens > limit:
-        print(
-            f"  SKIP: estimated {total_tokens} tokens > batch limit {limit} for {model}"
-        )
+        print(f"  SKIP: estimated {total_tokens} tokens > batch limit {limit} for {model}")
         return None
 
     # Save JSONL locally
@@ -360,20 +358,12 @@ def main():
         default=os.environ.get("ABK_API_URL"),
         help="Server URL (e.g., https://<server>:8484); defaults to $ABK_API_URL",
     )
-    parser.add_argument(
-        "--output", default="testdata/dedup-bench", help="Output directory"
-    )
-    parser.add_argument(
-        "--models", nargs="+", default=DEFAULT_MODELS, help="Models to test"
-    )
+    parser.add_argument("--output", default="testdata/dedup-bench", help="Output directory")
+    parser.add_argument("--models", nargs="+", default=DEFAULT_MODELS, help="Models to test")
     parser.add_argument("--mode", default="both", choices=["groups", "full", "both"])
-    parser.add_argument(
-        "--chunk-size", type=int, default=500, help="Max authors per chunk"
-    )
+    parser.add_argument("--chunk-size", type=int, default=500, help="Max authors per chunk")
     parser.add_argument("--dry-run", action="store_true", help="Extract data only")
-    parser.add_argument(
-        "--groups-json", help="Path to pre-computed groups.json (from Go binary)"
-    )
+    parser.add_argument("--groups-json", help="Path to pre-computed groups.json (from Go binary)")
     args = parser.parse_args()
 
     if not args.server:
@@ -416,9 +406,7 @@ def main():
                 gf = d / "groups.json"
                 if gf.exists():
                     groups_input = json.loads(gf.read_text())
-                    (run_dir / "groups.json").write_text(
-                        json.dumps(groups_input, indent=2)
-                    )
+                    (run_dir / "groups.json").write_text(json.dumps(groups_input, indent=2))
                     print(f"Loaded {len(groups_input)} groups from {gf}")
                     break
 
@@ -471,9 +459,7 @@ def main():
                     for ci, chunk in enumerate(chunks):
                         chunk_dir = run_dir / "runs" / f"{dir_name}_chunk{ci}"
                         user_data = json.dumps(chunk)
-                        user_prompt = (
-                            f"Find duplicate authors in this list:\n\n{user_data}"
-                        )
+                        user_prompt = f"Find duplicate authors in this list:\n\n{user_data}"
                         cid = f"{model}_baseline_t0.0_{mode_name}_chunk{ci}"
 
                         print(
@@ -539,9 +525,7 @@ def main():
 
                 if mode_name == "groups":
                     user_data = json.dumps(groups_input)
-                    user_prompt = (
-                        f"Review these duplicate author groups:\n\n{user_data}"
-                    )
+                    user_prompt = f"Review these duplicate author groups:\n\n{user_data}"
                     max_tokens = 32000
                 else:
                     chunks = chunk_list(full_input, args.chunk_size)
@@ -549,9 +533,7 @@ def main():
                         for ci, chunk in enumerate(chunks):
                             chunk_dir = run_dir / "runs" / f"{dir_name}_chunk{ci}"
                             user_data = json.dumps(chunk)
-                            user_prompt = (
-                                f"Find duplicate authors in this list:\n\n{user_data}"
-                            )
+                            user_prompt = f"Find duplicate authors in this list:\n\n{user_data}"
                             cid = f"{model}_{variant}_t0.0_{mode_name}_chunk{ci}"
                             print(
                                 f"[{job_num}] {model} {variant} {mode_name} chunk {ci}/{len(chunks)}",
@@ -576,9 +558,7 @@ def main():
                         continue
                     else:
                         user_data = json.dumps(full_input)
-                        user_prompt = (
-                            f"Find duplicate authors in this list:\n\n{user_data}"
-                        )
+                        user_prompt = f"Find duplicate authors in this list:\n\n{user_data}"
                         max_tokens = 16000
 
                 cid = f"{model}_{variant}_t0.0_{mode_name}"
@@ -617,9 +597,7 @@ def main():
 
                 if mode_name == "groups":
                     user_data = json.dumps(groups_input)
-                    user_prompt = (
-                        f"Review these duplicate author groups:\n\n{user_data}"
-                    )
+                    user_prompt = f"Review these duplicate author groups:\n\n{user_data}"
                     max_tokens = 32000
                 else:
                     chunks = chunk_list(full_input, args.chunk_size)
@@ -627,9 +605,7 @@ def main():
                         for ci, chunk in enumerate(chunks):
                             chunk_dir = run_dir / "runs" / f"{dir_name}_chunk{ci}"
                             user_data = json.dumps(chunk)
-                            user_prompt = (
-                                f"Find duplicate authors in this list:\n\n{user_data}"
-                            )
+                            user_prompt = f"Find duplicate authors in this list:\n\n{user_data}"
                             cid = f"gpt-4.1-mini_baseline_t{temp}_{mode_name}_chunk{ci}"
                             print(
                                 f"[{job_num}] gpt-4.1-mini baseline t={temp} {mode_name} chunk {ci}/{len(chunks)}",
@@ -654,15 +630,11 @@ def main():
                         continue
                     else:
                         user_data = json.dumps(full_input)
-                        user_prompt = (
-                            f"Find duplicate authors in this list:\n\n{user_data}"
-                        )
+                        user_prompt = f"Find duplicate authors in this list:\n\n{user_data}"
                         max_tokens = 16000
 
                 cid = f"gpt-4.1-mini_baseline_t{temp}_{mode_name}"
-                print(
-                    f"[{job_num}] gpt-4.1-mini baseline t={temp} {mode_name}", end=" "
-                )
+                print(f"[{job_num}] gpt-4.1-mini baseline t={temp} {mode_name}", end=" ")
                 job = submit_batch(
                     client,
                     "gpt-4.1-mini",

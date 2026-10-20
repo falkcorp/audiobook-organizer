@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/series_dedup.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-07-18
+# last-edited: 2026-10-20
 #
 # Series deduplication script for audiobook-organizer.
 # Fetches all series, analyzes duplicates, and applies fixes via the API.
@@ -27,8 +27,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _ABK_API_URL = os.environ.get("ABK_API_URL")
 if not _ABK_API_URL:
     sys.stderr.write(
-        "ERROR: ABK_API_URL environment variable is required "
-        "(e.g. https://<server>:8484)\n"
+        "ERROR: ABK_API_URL environment variable is required (e.g. https://<server>:8484)\n"
     )
     sys.exit(1)
 BASE_URL = f"{_ABK_API_URL.rstrip('/')}/api/v1"
@@ -86,9 +85,7 @@ def jaro_similarity(s1: str, s2: str) -> float:
             transpositions += 1
         k += 1
 
-    return (
-        matches / len1 + matches / len2 + (matches - transpositions / 2) / matches
-    ) / 3
+    return (matches / len1 + matches / len2 + (matches - transpositions / 2) / matches) / 3
 
 
 def jaro_winkler_similarity(s1: str, s2: str, p: float = 0.1) -> float:
@@ -224,9 +221,7 @@ def analyze_duplicates(series_list: list[dict], book_counts: dict[int, int]):
             continue
         exact_dup_count += 1
         # Pick the one with most books as canonical
-        group_sorted = sorted(
-            group, key=lambda x: book_counts.get(x["id"], 0), reverse=True
-        )
+        group_sorted = sorted(group, key=lambda x: book_counts.get(x["id"], 0), reverse=True)
         canonical = group_sorted[0]
         dupes = group_sorted[1:]
         print(
@@ -264,9 +259,7 @@ def analyze_duplicates(series_list: list[dict], book_counts: dict[int, int]):
         if len(unprocessed) < 1:
             continue
         # Find canonical (prefer already-processed one with most books, or pick best)
-        group_sorted = sorted(
-            group, key=lambda x: book_counts.get(x["id"], 0), reverse=True
-        )
+        group_sorted = sorted(group, key=lambda x: book_counts.get(x["id"], 0), reverse=True)
         canonical = group_sorted[0]
         dupes = [d for d in group_sorted[1:] if d["id"] not in processed_ids]
         if not dupes:
@@ -352,9 +345,7 @@ def analyze_duplicates(series_list: list[dict], book_counts: dict[int, int]):
 
         if len(group) > 1:
             fuzzy_checked.add(s1["id"])
-            group_sorted = sorted(
-                group, key=lambda x: book_counts.get(x["id"], 0), reverse=True
-            )
+            group_sorted = sorted(group, key=lambda x: book_counts.get(x["id"], 0), reverse=True)
             canonical = group_sorted[0]
             dupes = group_sorted[1:]
             cn = canonical["name"].strip().lower()
@@ -505,9 +496,7 @@ def apply_fixes(actions: list[dict], dry_run: bool = False):
     for i, action in enumerate(delete_actions):
         sid = action["series_id"]
         if i < 20 or i == len(delete_actions) - 1:
-            print(
-                f"  DELETE: series {sid} ('{action['series_name']}') - {action['reason']}"
-            )
+            print(f"  DELETE: series {sid} ('{action['series_name']}') - {action['reason']}")
         elif i == 20:
             print(f"  ... ({len(delete_actions) - 20} more deletes)")
 
@@ -532,9 +521,7 @@ def apply_fixes(actions: list[dict], dry_run: bool = False):
         else:
             delete_count += 1
 
-    print(
-        f"\n{prefix}Summary: {merge_count} merges, {delete_count} deletes, {error_count} errors"
-    )
+    print(f"\n{prefix}Summary: {merge_count} merges, {delete_count} deletes, {error_count} errors")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

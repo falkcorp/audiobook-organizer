@@ -1,9 +1,9 @@
 # Unified GitHub Project Manager
 
 <!-- file: scripts/README-unified-project-manager.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 5c6d7e8f-9a0b-1234-5678-9abcdef01234 -->
-<!-- last-edited: 2026-01-19 -->
+<!-- last-edited: 2026-10-20 -->
 
 A comprehensive Python script that manages GitHub Projects across all
 repositories in the organization. This script consolidates and replaces all
@@ -134,7 +134,7 @@ Specific issues are automatically assigned:
 {
     "gcommon Refactor": [
         "subtitle-manager:1255",  # gcommon integration
-        "subtitle-manager:891",   # protobuf migration
+        "subtitle-manager:891",  # protobuf migration
     ],
     "Metadata Editor": [
         "subtitle-manager:1135",  # metadata interface

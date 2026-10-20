@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/dedup_bench_crossval.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 8b1e4d6f-2a9c-4e7b-b3d5-1f6a8c0e4b72
-# last-edited: 2026-07-18
+# last-edited: 2026-10-20
 """Cross-validation: send one model's output to another for a second opinion.
 
 Submits batch jobs where model B reviews model A's suggestions, optionally
@@ -209,9 +209,7 @@ def submit_batch_job(client, model, system_prompt, user_prompt, custom_id, out_d
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Cross-validate model A's output with model B"
-    )
+    parser = argparse.ArgumentParser(description="Cross-validate model A's output with model B")
     parser.add_argument("--server", required=True, help="Server URL for book data")
     parser.add_argument(
         "--results-a",
@@ -239,9 +237,7 @@ def main():
         choices=["no-data", "with-data", "both"],
         help="Run without data, with data, or both",
     )
-    parser.add_argument(
-        "--output", default="testdata/dedup-bench", help="Output base directory"
-    )
+    parser.add_argument("--output", default="testdata/dedup-bench", help="Output base directory")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -255,9 +251,7 @@ def main():
     if results_path.is_file():
         suggestions_a = load_suggestions_from_jsonl(str(results_path))
     elif args.chunk_pattern:
-        suggestions_a = load_suggestions_from_chunks(
-            str(results_path), args.chunk_pattern
-        )
+        suggestions_a = load_suggestions_from_chunks(str(results_path), args.chunk_pattern)
     else:
         # Try to find chunk dirs automatically
         if results_path.is_dir():
@@ -324,8 +318,7 @@ def main():
                 for v in group.get("variants", []):
                     if v.get("id") and v["id"] in books_by_author:
                         ev[v.get("name", "")] = [
-                            t["title"]
-                            + (f" ({t['series']})" if t.get("series") else "")
+                            t["title"] + (f" ({t['series']})" if t.get("series") else "")
                             for t in books_by_author[v["id"]][:10]
                         ]
                 if ev:
@@ -379,9 +372,7 @@ def main():
         else:  # with-data
             system = REVIEW_PROMPT_WITH_DATA.format(model_a=args.model_a)
             input_text = (
-                json.dumps(input_data, indent=2)
-                if input_data
-                else "(original data not available)"
+                json.dumps(input_data, indent=2) if input_data else "(original data not available)"
             )
             user_parts = [
                 f"## Original input data ({args.mode_a} mode)\n\n{input_text}",
@@ -395,15 +386,11 @@ def main():
             user_prompt = "\n".join(user_parts)
 
         est_tokens = len(user_prompt) // 4
-        print(
-            f"\n[{variant}] {args.model_b} reviewing {args.model_a}: ~{est_tokens} input tokens"
-        )
+        print(f"\n[{variant}] {args.model_b} reviewing {args.model_a}: ~{est_tokens} input tokens")
 
         if args.dry_run:
             out.mkdir(parents=True, exist_ok=True)
-            (out / "user_prompt_preview.txt").write_text(
-                user_prompt[:5000] + "\n...(truncated)"
-            )
+            (out / "user_prompt_preview.txt").write_text(user_prompt[:5000] + "\n...(truncated)")
             print(f"  Dry run — saved preview to {out}")
             continue
 

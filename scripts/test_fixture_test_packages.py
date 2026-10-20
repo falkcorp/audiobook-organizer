@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_fixture_test_packages.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 3c6e9a41-7f2d-4b85-9e10-d4a8b25c7f93
-# last-edited: 2026-10-05
+# last-edited: 2026-10-20
 
 """Tests for scripts/ci/fixture_test_packages.py, the package selector behind
 `make test-fixtures` and ci.yml's fixture-tests job.
@@ -67,7 +67,9 @@ def _pkg(
         "Dir": path,
         "GoFiles": ["short.go"] if short_in_go else ["plain.go"],
         "Imports": list(imports),
-        "TestGoFiles": (["short_test.go"] if short_in_test else ["plain_test.go"]) if has_tests else [],
+        "TestGoFiles": (["short_test.go"] if short_in_test else ["plain_test.go"])
+        if has_tests
+        else [],
         "TestImports": list(test_imports),
         "XTestGoFiles": ["plain_x_test.go"] if has_xtests else [],
         "XTestImports": list(xtest_imports),

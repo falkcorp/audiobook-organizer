@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/tests/test_finish_credential_migration.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 7a41f9c3-6b28-4e15-93d7-c05a8ef21b46
-# last-edited: 2026-09-09
+# last-edited: 2026-10-20
 
 """Tests for scripts/finish_credential_migration.py.
 
@@ -96,9 +96,7 @@ class ProbeTests(unittest.TestCase):
                     stdlib = target.exists()
                 except PermissionError:
                     stdlib = "raised"
-                self.assertIn(
-                    stdlib, (False, "raised"), "Path.exists() should not be usable here"
-                )
+                self.assertIn(stdlib, (False, "raised"), "Path.exists() should not be usable here")
 
                 pr = fcm.probe(target)
                 self.assertIs(pr.presence, fcm.Presence.UNKNOWN)

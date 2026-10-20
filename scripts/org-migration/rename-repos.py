@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
+# file: scripts/org-migration/rename-repos.py
+# version: 1.0.1
+# guid: 386495ae-52d1-4a7a-935a-f6673b75c538
+# last-edited: 2026-10-20
+
 """
 Phase 2: Rename all in-scope repos within jdfalk personal account.
 Renames happen BEFORE org transfer so redirects are in place.
 GitHub creates automatic redirects for each rename.
 """
+
 import subprocess
 import sys
 import time
@@ -59,11 +65,16 @@ def rename_repo(old_name, new_name):
         print(f"  DRY   {old_name} → {new_name}")
         return True
 
-    stdout, stderr, rc = gh([
-        "api", "-X", "PATCH",
-        f"/repos/jdfalk/{old_name}",
-        "-f", f"name={new_name}",
-    ])
+    stdout, stderr, rc = gh(
+        [
+            "api",
+            "-X",
+            "PATCH",
+            f"/repos/jdfalk/{old_name}",
+            "-f",
+            f"name={new_name}",
+        ]
+    )
     if rc == 0:
         print(f"  OK    {old_name} → {new_name}")
         return True

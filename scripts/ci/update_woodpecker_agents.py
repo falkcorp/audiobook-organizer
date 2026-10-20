@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/update_woodpecker_agents.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 2de0d1a6-b52b-44d0-b941-2e05d9911c94
-# last-edited: 2026-10-10
+# last-edited: 2026-10-20
 """Upgrade the native woodpecker-agent binaries to the server's version.
 
 U1 and llm1 run the agent as a plain binary with the local backend (U1 under
@@ -66,8 +66,16 @@ class Host:
 
 
 HOSTS = {
-    "u1": Host("u1", "u1-root", "linux_amd64", "/tank/ci/woodpecker/bin/woodpecker-agent", "systemd"),
-    "llm1": Host("llm1", "llm1.local", "darwin_arm64", "ci/woodpecker/bin/woodpecker-agent", "launchd-keepalive"),
+    "u1": Host(
+        "u1", "u1-root", "linux_amd64", "/tank/ci/woodpecker/bin/woodpecker-agent", "systemd"
+    ),
+    "llm1": Host(
+        "llm1",
+        "llm1.local",
+        "darwin_arm64",
+        "ci/woodpecker/bin/woodpecker-agent",
+        "launchd-keepalive",
+    ),
 }
 
 
@@ -95,7 +103,9 @@ def load_config() -> tuple[str, str]:
                         token = v
                 break
     if not (url and token):
-        sys.exit(f"update-woodpecker-agents: set WOODPECKER_URL and WOODPECKER_TOKEN, or create {CRED_REL}")
+        sys.exit(
+            f"update-woodpecker-agents: set WOODPECKER_URL and WOODPECKER_TOKEN, or create {CRED_REL}"
+        )
     return url.rstrip("/"), token
 
 
@@ -110,9 +120,13 @@ class API:
         if body is not None:
             headers += "Content-Type: application/json\n"
             cmd += ["--data-binary", json.dumps(body)]
-        r = subprocess.run(cmd + [self.url + "/api" + path], input=headers, capture_output=True, text=True)
+        r = subprocess.run(
+            cmd + [self.url + "/api" + path], input=headers, capture_output=True, text=True
+        )
         if r.returncode != 0:
-            raise RuntimeError(f"{method} {path}: curl rc={r.returncode}: {(r.stdout + r.stderr)[:300]}")
+            raise RuntimeError(
+                f"{method} {path}: curl rc={r.returncode}: {(r.stdout + r.stderr)[:300]}"
+            )
         return json.loads(r.stdout) if r.stdout.strip() else None
 
     def agent(self, name: str) -> dict:
@@ -129,10 +143,15 @@ class API:
 
 
 def ssh(host: Host, script: str, check: bool = True) -> str:
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host.ssh, script],
-                       capture_output=True, text=True)
+    r = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host.ssh, script],
+        capture_output=True,
+        text=True,
+    )
     if check and r.returncode != 0:
-        raise RuntimeError(f"ssh {host.ssh}: rc={r.returncode}: {(r.stdout + r.stderr).strip()[:400]}")
+        raise RuntimeError(
+            f"ssh {host.ssh}: rc={r.returncode}: {(r.stdout + r.stderr).strip()[:400]}"
+        )
     return r.stdout.strip()
 
 
@@ -140,12 +159,20 @@ def fetch_binary(version: str, platform: str, workdir: Path) -> Path:
     """Download the release tarball, check it against checksums.txt, extract the agent."""
     asset = f"woodpecker-agent_{platform}.tar.gz"
     tarball, sums = workdir / asset, workdir / f"checksums-{version}.txt"
-    for url, dest in ((RELEASE_URL.format(version=version, asset=asset), tarball),
-                      (RELEASE_URL.format(version=version, asset="checksums.txt"), sums)):
+    for url, dest in (
+        (RELEASE_URL.format(version=version, asset=asset), tarball),
+        (RELEASE_URL.format(version=version, asset="checksums.txt"), sums),
+    ):
         if not dest.exists():
             subprocess.run(["curl", "-fsSL", "--max-time", "300", "-o", str(dest), url], check=True)
-    want = next((ln.split()[0] for ln in sums.read_text().splitlines()
-                 if ln.split() and ln.split()[-1] == asset), None)
+    want = next(
+        (
+            ln.split()[0]
+            for ln in sums.read_text().splitlines()
+            if ln.split() and ln.split()[-1] == asset
+        ),
+        None,
+    )
     got = hashlib.sha256(tarball.read_bytes()).hexdigest()
     if want != got:
         raise RuntimeError(f"{asset}: sha256 {got} does not match checksums.txt ({want})")
@@ -166,7 +193,9 @@ def wait_idle(api: API, agent_id: int, timeout: int) -> None:
         if not tasks:
             return
         if time.time() > deadline:
-            raise RuntimeError(f"still running {len(tasks)} task(s) after {timeout}s; not restarting")
+            raise RuntimeError(
+                f"still running {len(tasks)} task(s) after {timeout}s; not restarting"
+            )
         log(f"  waiting: {len(tasks)} task(s) running")
         time.sleep(15)
 
@@ -197,9 +226,11 @@ def upgrade(api: API, host: Host, version: str, workdir: Path, args: argparse.Na
     agent = api.agent(host.agent)
     if agent.get("version") == version and not args.force:
         return f"already {version}"
-    binary = ssh(host, f'cd && realpath {shlex.quote(host.binary)}')
+    binary = ssh(host, f"cd && realpath {shlex.quote(host.binary)}")
     current = ssh(host, f"{shlex.quote(binary)} --version").split()[-1]
-    log(f"{host.agent}: server says {agent.get('version')}, binary says {current}, target {version}")
+    log(
+        f"{host.agent}: server says {agent.get('version')}, binary says {current}, target {version}"
+    )
     if args.dry_run:
         return f"dry run: would replace {current} with {version}"
 
@@ -207,7 +238,9 @@ def upgrade(api: API, host: Host, version: str, workdir: Path, args: argparse.Na
     b = shlex.quote(binary)
     backup = shlex.quote(f"{binary}.{current}")
     staged = shlex.quote(binary + ".new")
-    subprocess.run(["scp", "-q", "-o", "BatchMode=yes", str(new), f"{host.ssh}:{binary}.new"], check=True)
+    subprocess.run(
+        ["scp", "-q", "-o", "BatchMode=yes", str(new), f"{host.ssh}:{binary}.new"], check=True
+    )
     got = ssh(host, f"{staged} --version").split()[-1]
     if got != version:
         raise RuntimeError(f"staged binary reports {got}, expected {version}")
@@ -217,36 +250,66 @@ def upgrade(api: API, host: Host, version: str, workdir: Path, args: argparse.Na
         wait_idle(api, agent["id"], args.idle_timeout)
         # Keep the old binary for rollback, then swap with a rename (same
         # directory, so atomic). The copy takes the old file's owner and mode.
-        ssh(host, f"set -e; cp -p {b} {backup}; cp -p {b} {b}.tmp; cat {staged} > {b}.tmp; "
-                  f"chmod 755 {b}.tmp; mv -f {b}.tmp {b}; rm -f {staged}")
+        ssh(
+            host,
+            f"set -e; cp -p {b} {backup}; cp -p {b} {b}.tmp; cat {staged} > {b}.tmp; "
+            f"chmod 755 {b}.tmp; mv -f {b}.tmp {b}; rm -f {staged}",
+        )
         since = time.time() - 1
         restart(host, binary)
         if wait_reconnected(api, host.agent, version, since, args.verify_timeout):
             return f"upgraded {current} -> {version}"
-        log(f"{host.agent}: no check-in on {version} within {args.verify_timeout}s; rolling back to {current}")
+        log(
+            f"{host.agent}: no check-in on {version} within {args.verify_timeout}s; rolling back to {current}"
+        )
         ssh(host, f"set -e; cp -p {backup} {b}.tmp; mv -f {b}.tmp {b}")
         since = time.time() - 1
         restart(host, binary)
         back = wait_reconnected(api, host.agent, current, since, args.verify_timeout)
-        hint = (" On macOS this is usually Local Network privacy: allow woodpecker-agent under System Settings"
-                " -> Privacy & Security -> Local Network, then rerun.") if host.platform.startswith("darwin") else ""
-        raise RuntimeError(f"new binary never checked in; rolled back to {current} "
-                           f"({'reconnected' if back else 'ALSO NOT RECONNECTED'}).{hint}")
+        hint = (
+            (
+                " On macOS this is usually Local Network privacy: allow woodpecker-agent under System Settings"
+                " -> Privacy & Security -> Local Network, then rerun."
+            )
+            if host.platform.startswith("darwin")
+            else ""
+        )
+        raise RuntimeError(
+            f"new binary never checked in; rolled back to {current} "
+            f"({'reconnected' if back else 'ALSO NOT RECONNECTED'}).{hint}"
+        )
     finally:
         try:
             api.set_paused(api.agent(host.agent), False)
         except RuntimeError as e:
-            log(f"{host.agent}: COULD NOT UNPAUSE, it gets no work until no_schedule is cleared: {e}")
+            log(
+                f"{host.agent}: COULD NOT UNPAUSE, it gets no work until no_schedule is cleared: {e}"
+            )
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Upgrade the native woodpecker-agent binaries to the server's version.")
-    ap.add_argument("hosts", nargs="*", default=list(HOSTS), help=f"agents to upgrade (default: {' '.join(HOSTS)})")
+    ap = argparse.ArgumentParser(
+        description="Upgrade the native woodpecker-agent binaries to the server's version."
+    )
+    ap.add_argument(
+        "hosts",
+        nargs="*",
+        default=list(HOSTS),
+        help=f"agents to upgrade (default: {' '.join(HOSTS)})",
+    )
     ap.add_argument("--version", help="target version (default: the server's own version)")
     ap.add_argument("--dry-run", action="store_true", help="report versions, change nothing")
-    ap.add_argument("--force", action="store_true", help="reinstall even if the server reports the target version")
-    ap.add_argument("--idle-timeout", type=int, default=3600, help="seconds to wait for running tasks to finish")
-    ap.add_argument("--verify-timeout", type=int, default=120, help="seconds to wait for the agent to check in")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="reinstall even if the server reports the target version",
+    )
+    ap.add_argument(
+        "--idle-timeout", type=int, default=3600, help="seconds to wait for running tasks to finish"
+    )
+    ap.add_argument(
+        "--verify-timeout", type=int, default=120, help="seconds to wait for the agent to check in"
+    )
     args = ap.parse_args()
 
     unknown = [h for h in args.hosts if h not in HOSTS]

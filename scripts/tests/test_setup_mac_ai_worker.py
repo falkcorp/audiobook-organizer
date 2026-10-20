@@ -1,7 +1,7 @@
 # file: scripts/tests/test_setup_mac_ai_worker.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 8d4f2a6c-1e9b-4b7d-a3c5-6f0e2d9b4a18
-# last-edited: 2026-09-13
+# last-edited: 2026-10-20
 """Tests for scripts/setup_mac_ai_worker.py (pure functions only, no side effects).
 
 stdlib unittest only: the Repo Guards job runs these without pytest installed.
@@ -59,7 +59,12 @@ class PortPlanTest(unittest.TestCase):
 class PlistTest(unittest.TestCase):
     def test_tunnel_owns_connection_and_fails_on_taken_port(self):
         args = m.tunnel_plist("u@h", ["1:127.0.0.1:2"], Path("/Users/x"))["ProgramArguments"]
-        for opt in ("ControlMaster=no", "ControlPath=none", "ExitOnForwardFailure=yes", "BatchMode=yes"):
+        for opt in (
+            "ControlMaster=no",
+            "ControlPath=none",
+            "ExitOnForwardFailure=yes",
+            "BatchMode=yes",
+        ):
             self.assertIn(opt, args)
         self.assertEqual(args[-1], "u@h")
         self.assertEqual(args[args.index("-R") + 1], "1:127.0.0.1:2")
@@ -85,13 +90,17 @@ class EnvFileTest(unittest.TestCase):
         ]
         for before, after, changed in cases:
             with self.subTest(before=before):
-                self.assertEqual(m.ensure_env_line(before, "OLLAMA_KEEP_ALIVE=30m"), (after, changed))
+                self.assertEqual(
+                    m.ensure_env_line(before, "OLLAMA_KEEP_ALIVE=30m"), (after, changed)
+                )
 
 
 class CliTest(unittest.TestCase):
     def test_endpoint_entries_use_remote_ports(self):
         e = m.prod_endpoint_entries(m.plan_ports(2, 2), "mac2")
-        self.assertEqual([x["url"] for x in e], ["http://127.0.0.1:19864", "http://127.0.0.1:19865"])
+        self.assertEqual(
+            [x["url"] for x in e], ["http://127.0.0.1:19864", "http://127.0.0.1:19865"]
+        )
         self.assertTrue(all(x["require_gpu"] and "mac2" in x["capabilities"] for x in e))
 
     def test_dry_run_changes_nothing(self):

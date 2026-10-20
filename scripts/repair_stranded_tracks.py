@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/repair_stranded_tracks.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 4d7a1e93-58c6-4b02-a71f-6c3e90b8d245
-# last-edited: 2026-08-16
+# last-edited: 2026-10-20
 
 """Recover audio stranded inside directories the path-construction bug created.
 
@@ -106,7 +106,9 @@ def audio_md5(path: str) -> str | None:
     try:
         out = subprocess.run(
             ["ffmpeg", "-v", "error", "-i", path, "-map", "0:a", "-f", "md5", "-"],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True,
+            text=True,
+            timeout=600,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -207,14 +209,34 @@ def plan(root: str) -> tuple[list[Action], list[Action], list[Action]]:
             src = os.path.join(d, fname)
             fm = FILE_RE.match(fname)
             if not fm:
-                skipped.append(Action(src, "", book, title, track, 0,
-                                      "skipped", "filename does not match the bug's shape"))
+                skipped.append(
+                    Action(
+                        src,
+                        "",
+                        book,
+                        title,
+                        track,
+                        0,
+                        "skipped",
+                        "filename does not match the bug's shape",
+                    )
+                )
                 continue
             total, ext = int(fm.group("total")), fm.group("ext")
 
             if ext.lower() not in AUDIO_EXTS:
-                skipped.append(Action(src, "", book, title, track, total,
-                                      "skipped", f"extension {ext!r} is not audio"))
+                skipped.append(
+                    Action(
+                        src,
+                        "",
+                        book,
+                        title,
+                        track,
+                        total,
+                        "skipped",
+                        f"extension {ext!r} is not audio",
+                    )
+                )
                 continue
 
             # Match file_naming_pattern exactly -- "{title} - {track:02d}".
@@ -247,20 +269,26 @@ def resolve_conflict(act: Action) -> Action:
 
     if s_size == d_size and sha256(act.src) == sha256(act.dst):
         act.status = "duplicate-identical"
-        act.detail = ("byte-identical to the file already in place; the stranded copy is "
-                      "redundant. NOT deleted -- deletion needs explicit sign-off.")
+        act.detail = (
+            "byte-identical to the file already in place; the stranded copy is "
+            "redundant. NOT deleted -- deletion needs explicit sign-off."
+        )
         return act
 
     src_a, dst_a = audio_md5(act.src), audio_md5(act.dst)
     if src_a and dst_a and src_a == dst_a:
         act.status = "duplicate-same-audio"
-        act.detail = ("decoded audio is identical; the files differ only in container "
-                      "metadata (embedded artwork or rewritten tags). NOT deleted.")
+        act.detail = (
+            "decoded audio is identical; the files differ only in container "
+            "metadata (embedded artwork or rewritten tags). NOT deleted."
+        )
         return act
 
     act.status = "conflict-different"
-    act.detail = (f"different content: sizes {s_size} vs {d_size}; "
-                  f"audio md5 {src_a} vs {dst_a}. Left untouched for review.")
+    act.detail = (
+        f"different content: sizes {s_size} vs {d_size}; "
+        f"audio md5 {src_a} vs {dst_a}. Left untouched for review."
+    )
     return act
 
 
@@ -317,20 +345,23 @@ def apply_actions(planned: list[Action], report: Report) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("root", help="library root to scan")
-    ap.add_argument("--apply", action="store_true",
-                    help="actually move files (default is a dry run)")
+    ap.add_argument(
+        "--apply", action="store_true", help="actually move files (default is a dry run)"
+    )
     ap.add_argument("--report", default="/tmp/repair-stranded-report.json")
-    ap.add_argument("--jobs", type=int, default=8,
-                    help="parallel workers for hashing conflicts")
+    ap.add_argument("--jobs", type=int, default=8, help="parallel workers for hashing conflicts")
     args = ap.parse_args()
 
     print(f"scanning {args.root} ...", flush=True)
     planned, conflicts, skipped = plan(args.root)
-    print(f"  {len(planned)} recoverable, {len(conflicts)} conflicts, {len(skipped)} skipped",
-          flush=True)
+    print(
+        f"  {len(planned)} recoverable, {len(conflicts)} conflicts, {len(skipped)} skipped",
+        flush=True,
+    )
 
     if conflicts:
         print(f"  hashing {len(conflicts)} conflicts ...", flush=True)
@@ -345,8 +376,9 @@ def main() -> int:
         apply_actions(planned, report)
 
     by_status = collections.Counter(
-        a.status for a in report.planned + report.conflicts + report.skipped
-        + report.done + report.failed)
+        a.status
+        for a in report.planned + report.conflicts + report.skipped + report.done + report.failed
+    )
 
     print("\n=== summary ===")
     for status, n in sorted(by_status.items()):
@@ -356,8 +388,7 @@ def main() -> int:
         print(f"  {'bytes recovered':24} {total_bytes / (1 << 30):.1f} GiB")
 
     with open(args.report, "w") as fh:
-        json.dump({k: [asdict(a) for a in v] for k, v in vars(report).items()},
-                  fh, indent=2)
+        json.dump({k: [asdict(a) for a in v] for k, v in vars(report).items()}, fh, indent=2)
     print(f"\nfull report: {args.report}")
 
     if not args.apply:

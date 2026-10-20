@@ -1,7 +1,7 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.4.0
+# version: 1.4.1
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
-# last-edited: 2026-09-19
+# last-edited: 2026-10-20
 #
 # Contract tests for scripts/whisper_mlx_server.py.
 #
@@ -98,6 +98,7 @@ def test_health_reports_decode_fingerprint(srv):
     assert isinstance(fp, str) and len(fp) == 16
     import hashlib
     import json
+
     changed = dict(mod.DECODE_SETTINGS, language="de")
     other = hashlib.sha256(json.dumps(changed, sort_keys=True).encode()).hexdigest()[:16]
     assert other != fp
@@ -210,9 +211,9 @@ def test_every_result_carries_exactly_text_and_error(srv):
     single = client.post("/transcribe", files={"file": ("b", b"1", "audio/wav")}).json()
     assert set(single.keys()) == {"text", "error"}
 
-    batch = client.post(
-        "/transcribe-batch", files=[("files", ("b", b"1", "audio/wav"))]
-    ).json()["results"]["b"]
+    batch = client.post("/transcribe-batch", files=[("files", ("b", b"1", "audio/wav"))]).json()[
+        "results"
+    ]["b"]
     assert set(batch.keys()) == {"text", "error"}
 
 
@@ -240,7 +241,9 @@ class FfmpegPreflightTest(unittest.TestCase):
 
         mod = _load_module()
         real_which = _shutil.which
-        _shutil.which = lambda name, *a, **k: None if name == "ffmpeg" else real_which(name, *a, **k)
+        _shutil.which = lambda name, *a, **k: (
+            None if name == "ffmpeg" else real_which(name, *a, **k)
+        )
         try:
             with self.assertRaises(SystemExit) as ctx:
                 mod._require_ffmpeg()

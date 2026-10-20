@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# file: scripts/issue_manager.py
+# version: 1.0.1
+# guid: eff97164-e8dd-4ff0-b737-5e32aebc2117
+# last-edited: 2026-10-20
+
 """
 # file: scripts/issue_manager.py
 Unified GitHub issue management script.
@@ -47,9 +52,7 @@ except ImportError:
         print("✓ Successfully installed and imported 'requests' module")
     except subprocess.CalledProcessError as e:
         print(f"Failed to install 'requests' module: {e}", file=sys.stderr)
-        print(
-            "Please install it manually: pip install --user requests", file=sys.stderr
-        )
+        print("Please install it manually: pip install --user requests", file=sys.stderr)
         sys.exit(1)
 
 # Configuration constants
@@ -59,7 +62,9 @@ COPILOT_LABEL = "copilot-review"
 CODEQL_LABEL = "security"
 DUPLICATE_CHECK_LABEL = "duplicate-check"
 
-AUTO_CLOSE_ON_FILE_CHANGE = False  # Set to True to automatically close CodeQL issues when their files are modified
+AUTO_CLOSE_ON_FILE_CHANGE = (
+    False  # Set to True to automatically close CodeQL issues when their files are modified
+)
 
 
 def normalize_json_string(text: str) -> str:
@@ -201,9 +206,7 @@ class OperationSummary:
 
     def add_duplicate_closed(self, issue_number: int, title: str, url: str):
         """Record a duplicate issue closure."""
-        self.duplicates_closed.append(
-            {"number": issue_number, "title": title, "url": url}
-        )
+        self.duplicates_closed.append({"number": issue_number, "title": title, "url": url})
 
     def add_alert_processed(
         self, alert_id: str, title: str, issue_number: int = None, issue_url: str = None
@@ -416,9 +419,7 @@ class OperationSummary:
                 key = (c["issue_number"], c["url"])
                 if key not in seen:
                     seen.add(key)
-                    rows.append(
-                        [f"#{c['issue_number']}", f"[Comment Link]({c['url']})"]
-                    )
+                    rows.append([f"#{c['issue_number']}", f"[Comment Link]({c['url']})"])
             lines.append(table(["Issue", "Comment"], rows))
             lines.append("")
 
@@ -434,9 +435,7 @@ class OperationSummary:
 
         # Alerts Processed
         if self.alerts_processed:
-            lines.append(
-                f"### 🔒 CodeQL Alerts Processed ({len(self.alerts_processed)})"
-            )
+            lines.append(f"### 🔒 CodeQL Alerts Processed ({len(self.alerts_processed)})")
             rows = []
             for a in {a["alert_id"]: a for a in self.alerts_processed}.values():
                 if a.get("issue_number"):
@@ -550,9 +549,7 @@ class GitHubAPI:
                 print(f"Created issue #{issue['number']}: {title}")
                 return issue
             else:
-                print(
-                    f"Failed to create issue: {response.status_code}", file=sys.stderr
-                )
+                print(f"Failed to create issue: {response.status_code}", file=sys.stderr)
                 print(response.text, file=sys.stderr)
                 return None
         except requests.RequestException as e:
@@ -563,9 +560,7 @@ class GitHubAPI:
         """Update an existing GitHub issue."""
         url = f"https://api.github.com/repos/{self.repo}/issues/{issue_number}"
         try:
-            response = requests.patch(
-                url, headers=self.headers, json=kwargs, timeout=10
-            )
+            response = requests.patch(url, headers=self.headers, json=kwargs, timeout=10)
             if response.status_code == 200:
                 print(f"Updated issue #{issue_number}")
                 return True
@@ -582,17 +577,13 @@ class GitHubAPI:
 
     def close_issue(self, issue_number: int, state_reason: str = "completed") -> bool:
         """Close an issue."""
-        return self.update_issue(
-            issue_number, state="closed", state_reason=state_reason
-        )
+        return self.update_issue(issue_number, state="closed", state_reason=state_reason)
 
     def add_comment(self, issue_number: int, body: str) -> bool:
         """Add a comment to an issue."""
         url = f"https://api.github.com/repos/{self.repo}/issues/{issue_number}/comments"
         try:
-            response = requests.post(
-                url, headers=self.headers, json={"body": body}, timeout=10
-            )
+            response = requests.post(url, headers=self.headers, json={"body": body}, timeout=10)
             if response.status_code == 201:
                 print(f"Added comment to issue #{issue_number}")
                 return True
@@ -615,9 +606,7 @@ class GitHubAPI:
         url = "https://api.github.com/search/issues"
         params = {"q": f"repo:{self.repo} {query}"}
         try:
-            response = requests.get(
-                url, headers=self.headers, params=params, timeout=10
-            )
+            response = requests.get(url, headers=self.headers, params=params, timeout=10)
             if response.status_code == 403:
                 # Search API forbidden, fall back to listing all issues and filtering
                 print(
@@ -667,9 +656,7 @@ class GitHubAPI:
             params = {"state": state, "per_page": per_page, "page": page}
 
             try:
-                response = requests.get(
-                    url, headers=self.headers, params=params, timeout=10
-                )
+                response = requests.get(url, headers=self.headers, params=params, timeout=10)
                 response.raise_for_status()
 
                 issues = response.json()
@@ -741,9 +728,7 @@ class GitHubAPI:
             params = {"state": state, "per_page": per_page, "page": page}
 
             try:
-                response = requests.get(
-                    url, headers=self.headers, params=params, timeout=10
-                )
+                response = requests.get(url, headers=self.headers, params=params, timeout=10)
                 response.raise_for_status()
 
                 alerts = response.json()
@@ -790,9 +775,7 @@ class IssueUpdateProcessor:
         self.duplicate_prevention_method = os.getenv(
             "DUPLICATE_PREVENTION_METHOD", "guid_and_title"
         )
-        self.max_duplicate_check_issues = int(
-            os.getenv("MAX_DUPLICATE_CHECK_ISSUES", "1000")
-        )
+        self.max_duplicate_check_issues = int(os.getenv("MAX_DUPLICATE_CHECK_ISSUES", "1000"))
 
     def process_updates(
         self,
@@ -828,9 +811,7 @@ class IssueUpdateProcessor:
             print(f"📄 Legacy file {updates_file} already processed, skipping")
 
         # Load distributed files from directory (only unprocessed files)
-        distributed_updates, update_files = self._load_distributed_files(
-            updates_directory
-        )
+        distributed_updates, update_files = self._load_distributed_files(updates_directory)
         if distributed_updates:
             all_updates.extend(distributed_updates)
             processed_files.extend(update_files)
@@ -854,9 +835,7 @@ class IssueUpdateProcessor:
             action = update.get("action", "unknown")
             source = update.get("_source_file", "unknown")
             guid = update.get("guid", "no-guid")
-            print(
-                f"\n📋 Update {i}/{len(ordered_updates)}: {action} (from {source}, guid: {guid})"
-            )
+            print(f"\n📋 Update {i}/{len(ordered_updates)}: {action} (from {source}, guid: {guid})")
 
             result = self._process_single_update(update)
             if result:
@@ -872,9 +851,7 @@ class IssueUpdateProcessor:
                 self._fill_numbers_in_file(file_path)
             self._archive_processed_files(processed_files, updates_directory)
         elif self.dry_run and processed_files:
-            print(
-                f"[DRY RUN] Would move {len(processed_files)} files to processed/ directory"
-            )
+            print(f"[DRY RUN] Would move {len(processed_files)} files to processed/ directory")
 
         # Mark legacy file as processed if we processed it successfully (skip in dry-run)
         if not self.dry_run and not legacy_already_processed and success_count > 0:
@@ -1050,9 +1027,7 @@ class IssueUpdateProcessor:
 
         return updates, processed_files
 
-    def _archive_processed_files(
-        self, processed_files: list[str], updates_directory: str
-    ) -> None:
+    def _archive_processed_files(self, processed_files: list[str], updates_directory: str) -> None:
         """Move processed files to a 'processed' subdirectory."""
         if not processed_files:
             return
@@ -1075,9 +1050,7 @@ class IssueUpdateProcessor:
 
                         timestamp = int(time.time())
                         name, ext = os.path.splitext(filename)
-                        destination = os.path.join(
-                            processed_dir, f"{name}_{timestamp}{ext}"
-                        )
+                        destination = os.path.join(processed_dir, f"{name}_{timestamp}{ext}")
 
                     os.rename(file_path, destination)
                     print(f"📦 Moved {filename} to processed/")
@@ -1159,9 +1132,7 @@ class IssueUpdateProcessor:
 
             for issue in all_issues:
                 if guid_marker in issue.get("body", ""):
-                    print(
-                        f"🔍 Found existing issue #{issue['number']} with GUID: {guid}"
-                    )
+                    print(f"🔍 Found existing issue #{issue['number']} with GUID: {guid}")
                     return issue
 
             return None
@@ -1183,9 +1154,7 @@ class IssueUpdateProcessor:
             # Check if the guid field contains a UUID format
             import re
 
-            uuid_pattern = (
-                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-            )
+            uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
             if re.match(uuid_pattern, primary_guid, re.IGNORECASE):
                 # It's already a UUID, keep as primary
                 pass
@@ -1237,18 +1206,12 @@ class IssueUpdateProcessor:
 
         # Check for duplicate operations using either GUID
         guid_to_check = primary_guid or legacy_guid
-        if guid_to_check and self._is_duplicate_operation(
-            action, guid_to_check, update
-        ):
-            self.summary.add_warning(
-                f"Duplicate operation for GUID {guid_to_check} skipped."
-            )
+        if guid_to_check and self._is_duplicate_operation(action, guid_to_check, update):
+            self.summary.add_warning(f"Duplicate operation for GUID {guid_to_check} skipped.")
             # Mark this file as already processed since it's a duplicate
             source_file = update.get("_source_file")
             if source_file:
-                self._mark_file_as_processed(
-                    source_file, f"Duplicate GUID: {guid_to_check}"
-                )
+                self._mark_file_as_processed(source_file, f"Duplicate GUID: {guid_to_check}")
             return False
 
         try:
@@ -1261,9 +1224,7 @@ class IssueUpdateProcessor:
                 # Defensive: check for valid issue number
                 issue_number = update.get("number")
                 if not issue_number or issue_number == 0:
-                    self.summary.add_error(
-                        f"No issue number found for comment: {update}"
-                    )
+                    self.summary.add_error(f"No issue number found for comment: {update}")
                     return False
                 return self._add_comment(update)
             elif action == "close":
@@ -1275,9 +1236,7 @@ class IssueUpdateProcessor:
                 # Mark this file as malformed for unknown action
                 source_file = update.get("_source_file")
                 if source_file:
-                    self._mark_file_as_malformed(
-                        source_file, f"Unknown action: {action}"
-                    )
+                    self._mark_file_as_malformed(source_file, f"Unknown action: {action}")
                 return False
         except Exception as e:
             self.summary.add_error(f"Error processing {action} action: {e}")
@@ -1337,9 +1296,7 @@ class IssueUpdateProcessor:
         except OSError as e:
             print(f"⚠️  Error moving file to malformed: {e}", file=sys.stderr)
 
-    def _is_duplicate_operation(
-        self, action: str, guid: str, update: dict[str, Any]
-    ) -> bool:
+    def _is_duplicate_operation(self, action: str, guid: str, update: dict[str, Any]) -> bool:
         """Check if an operation with the same GUID was already performed."""
         # Check for duplicates even in dry-run mode to provide accurate feedback
 
@@ -1358,16 +1315,10 @@ class IssueUpdateProcessor:
         # For update, close, delete - assume no duplicates for now
         return False
 
-    def _comment_guid_exists(
-        self, issue_number: int, guid: str, repo: str = None
-    ) -> bool:
+    def _comment_guid_exists(self, issue_number: int, guid: str, repo: str = None) -> bool:
         """Check if a comment with the given GUID already exists on the issue."""
         try:
-            api = (
-                self.api
-                if not repo or repo == self.api.repo
-                else GitHubAPI(self.api.token, repo)
-            )
+            api = self.api if not repo or repo == self.api.repo else GitHubAPI(self.api.token, repo)
             url = f"https://api.github.com/repos/{api.repo}/issues/{issue_number}/comments"
             response = requests.get(url, headers=api.headers, timeout=10)
 
@@ -1416,11 +1367,7 @@ class IssueUpdateProcessor:
             return True
 
         try:
-            api = (
-                self.api
-                if not repo or repo == self.api.repo
-                else GitHubAPI(self.api.token, repo)
-            )
+            api = self.api if not repo or repo == self.api.repo else GitHubAPI(self.api.token, repo)
             # Search for existing issues with either GUID
             all_issues = api.get_all_issues(state="all")
 
@@ -1480,11 +1427,7 @@ class IssueUpdateProcessor:
             return True
 
         try:
-            api = (
-                self.api
-                if not repo or repo == self.api.repo
-                else GitHubAPI(self.api.token, repo)
-            )
+            api = self.api if not repo or repo == self.api.repo else GitHubAPI(self.api.token, repo)
             # Search for existing issues with either GUID
             all_issues = api.get_all_issues(state="all")
 
@@ -1524,17 +1467,11 @@ class IssueUpdateProcessor:
             print(f"⚠️  Could not verify GUID uniqueness: {e}")
             return True
 
-    def _create_guid_exists(
-        self, guid: str, update: dict[str, Any], repo: str = None
-    ) -> bool:
+    def _create_guid_exists(self, guid: str, update: dict[str, Any], repo: str = None) -> bool:
         """Check if an issue with the given GUID was already created."""
         title = unescape_json_string(update.get("title", ""))
         try:
-            api = (
-                self.api
-                if not repo or repo == self.repo
-                else GitHubAPI(self.api.token, repo)
-            )
+            api = self.api if not repo or repo == self.repo else GitHubAPI(self.api.token, repo)
             # Search for existing issues with similar title
             existing = api.search_issues(f'is:issue in:title "{title}"')
 
@@ -1568,9 +1505,7 @@ class IssueUpdateProcessor:
             for issue in existing_issues[: self.max_duplicate_check_issues]:
                 existing_title = issue.get("title", "").lower().strip()
                 if existing_title == title_lower:
-                    print(
-                        f"🔍 Found duplicate title in issue #{issue['number']}: {issue['title']}"
-                    )
+                    print(f"🔍 Found duplicate title in issue #{issue['number']}: {issue['title']}")
                     return True
 
             return False
@@ -1632,9 +1567,7 @@ class IssueUpdateProcessor:
         issue = api.create_issue(title, body, labels)
 
         if issue:
-            self.summary.add_issue_created(
-                issue["number"], issue["title"], issue["html_url"]
-            )
+            self.summary.add_issue_created(issue["number"], issue["title"], issue["html_url"])
             if guid:
                 self.guid_issue_map[guid] = (repo, issue["number"])
             if legacy_guid:
@@ -1642,11 +1575,7 @@ class IssueUpdateProcessor:
             if parent_issue:
                 # Add a comment to parent issue referencing this sub-issue
                 parent_comment = f"Created sub-issue #{issue['number']}: {issue['html_url']}\n\n<!-- guid:{guid_to_embed} -->"
-                parent_api = (
-                    self.api
-                    if repo == self.api.repo
-                    else GitHubAPI(self.api.token, repo)
-                )
+                parent_api = self.api if repo == self.api.repo else GitHubAPI(self.api.token, repo)
                 parent_api.add_comment(parent_issue, parent_comment)
             return True
         else:
@@ -1688,11 +1617,7 @@ class IssueUpdateProcessor:
             self.summary.add_success(f"[DRY RUN] Would update issue #{issue_number}")
             return True
 
-        api = (
-            self.api
-            if not repo or repo == self.api.repo
-            else GitHubAPI(self.api.token, repo)
-        )
+        api = self.api if not repo or repo == self.api.repo else GitHubAPI(self.api.token, repo)
         try:
             success = api.update_issue(issue_number, **update_data)
             if success:
@@ -1737,16 +1662,10 @@ class IssueUpdateProcessor:
             print(f"[DRY RUN] Would add comment to issue #{issue_number} in {repo}")
             print(f"[DRY RUN] Comment body length: {len(body)} characters")
             print(f"[DRY RUN] GUID: {guid_to_embed}")
-            self.summary.add_success(
-                f"[DRY RUN] Would add comment to issue #{issue_number}"
-            )
+            self.summary.add_success(f"[DRY RUN] Would add comment to issue #{issue_number}")
             return True
 
-        api = (
-            self.api
-            if not repo or repo == self.api.repo
-            else GitHubAPI(self.api.token, repo)
-        )
+        api = self.api if not repo or repo == self.api.repo else GitHubAPI(self.api.token, repo)
         try:
             comment = api.add_comment(issue_number, body)
             if comment:
@@ -1757,15 +1676,11 @@ class IssueUpdateProcessor:
                 self.summary.add_comment(issue_number, comment_url)
                 return True
             else:
-                self.summary.add_error(
-                    f"Failed to add comment to issue #{issue_number}"
-                )
+                self.summary.add_error(f"Failed to add comment to issue #{issue_number}")
                 return False
         except Exception as e:
             print(f"❌ Error adding comment to issue #{issue_number}: {e}")
-            self.summary.add_error(
-                f"Error adding comment to issue #{issue_number}: {e}"
-            )
+            self.summary.add_error(f"Error adding comment to issue #{issue_number}: {e}")
             return False
 
     def _close_issue(self, update: dict[str, Any]) -> bool:
@@ -1784,11 +1699,7 @@ class IssueUpdateProcessor:
             self.summary.add_success(f"[DRY RUN] Would close issue #{issue_number}")
             return True
 
-        api = (
-            self.api
-            if not repo or repo == self.repo
-            else GitHubAPI(self.api.token, repo)
-        )
+        api = self.api if not repo or repo == self.repo else GitHubAPI(self.api.token, repo)
         try:
             # Get issue details before closing
             issue_data = api.get_issue(issue_number)
@@ -1911,17 +1822,13 @@ class IssueUpdateProcessor:
             # Construct the permalink directly since we know the issue number
             permalink = f"https://github.com/{repo}/issues/{issue_number}"
             action["permalink"] = permalink
-            print(
-                f"🔗 Added constructed permalink for issue #{issue_number}: {permalink}"
-            )
+            print(f"🔗 Added constructed permalink for issue #{issue_number}: {permalink}")
             return True
 
         print(f"⚠️  Could not find issue for GUID {guid}")
         return False
 
-    def _find_permalinks_for_updates(
-        self, updates: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _find_permalinks_for_updates(self, updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Find permalinks for a list of updates by searching for matching issues.
 
@@ -1998,11 +1905,7 @@ class IssueUpdateProcessor:
             return None
 
         try:
-            api = (
-                self.api
-                if not repo or repo == self.repo
-                else GitHubAPI(self.api.token, repo)
-            )
+            api = self.api if not repo or repo == self.repo else GitHubAPI(self.api.token, repo)
             # Search all issues for the GUID marker
             all_issues = api.get_all_issues(state="all")
             guid_marker = f"<!-- guid:{guid} -->"
@@ -2086,9 +1989,7 @@ class IssueUpdateProcessor:
 
         if self.dry_run:
             print(f"[DRY RUN] Would delete issue #{issue_number} in {repo}")
-            print(
-                "[DRY RUN] Note: Requires admin permissions, would fallback to close if needed"
-            )
+            print("[DRY RUN] Note: Requires admin permissions, would fallback to close if needed")
             self.summary.add_success(f"[DRY RUN] Would delete issue #{issue_number}")
             return True
 
@@ -2177,16 +2078,14 @@ class IssueUpdateProcessor:
                     return False
 
                 # Check if the mutation was successful
-                if (
-                    "data" in result
-                    and result["data"]
-                    and "deleteIssue" in result["data"]
-                ):
+                if "data" in result and result["data"] and "deleteIssue" in result["data"]:
                     print(f"✅ Successfully deleted issue #{issue_number}: {title}")
                     self.summary.add_issue_deleted(issue_number, title)
                     return True
                 else:
-                    error_msg = f"Unexpected GraphQL response deleting issue #{issue_number}: {result}"
+                    error_msg = (
+                        f"Unexpected GraphQL response deleting issue #{issue_number}: {result}"
+                    )
                     print(error_msg, file=sys.stderr)
                     self.summary.add_error(error_msg)
                     return False
@@ -2231,9 +2130,7 @@ class IssueUpdateProcessor:
         try:
             if api.close_issue(issue_number, "not_planned"):
                 issue_url = f"https://github.com/{repo}/issues/{issue_number}"
-                print(
-                    f"✅ Successfully closed issue #{issue_number} as fallback: {title}"
-                )
+                print(f"✅ Successfully closed issue #{issue_number} as fallback: {title}")
                 # Add to summary as closed rather than deleted
                 self.summary.add_issue_closed(issue_number, title, issue_url)
                 return True
@@ -2370,18 +2267,14 @@ class CopilotTicketManager:
             issue = existing[0]
             print(f"Updating existing Copilot issue #{issue['number']}")
             # Implementation would parse existing body and update it
-            self.summary.add_issue_updated(
-                issue["number"], issue["title"], issue["html_url"]
-            )
+            self.summary.add_issue_updated(issue["number"], issue["title"], issue["html_url"])
         else:
             # Create new issue
             title = f"Copilot Review: {key[:50]}..."
             body = self._build_ticket_body(comment, [line_info])
             result = self.api.create_issue(title, body, [COPILOT_LABEL])
             if result:
-                self.summary.add_issue_created(
-                    result["number"], title, result["html_url"]
-                )
+                self.summary.add_issue_created(result["number"], title, result["html_url"])
             else:
                 self.summary.add_error(f"Failed to create Copilot ticket: {title}")
 
@@ -2390,27 +2283,20 @@ class CopilotTicketManager:
         comment_id = comment["id"]
         search_key = f"id:{comment_id}"
 
-        issues = self.api.search_issues(
-            f"label:{COPILOT_LABEL} state:open {search_key}"
-        )
+        issues = self.api.search_issues(f"label:{COPILOT_LABEL} state:open {search_key}")
         if not issues:
             print(f"No issue found for deleted comment {comment_id}")
             return
 
         issue = issues[0]
         # Implementation would update or close the issue based on remaining comments
-        print(
-            f"Handling deletion of comment {comment_id} from issue #{issue['number']}"
-        )
+        print(f"Handling deletion of comment {comment_id} from issue #{issue['number']}")
 
-    def _build_ticket_body(
-        self, comment: dict[str, Any], lines: list[dict[str, Any]]
-    ) -> str:
+    def _build_ticket_body(self, comment: dict[str, Any], lines: list[dict[str, Any]]) -> str:
         """Build the issue body from comment text and metadata."""
         snippet = comment["body"]
         bullet_lines = [
-            f"- id:{item['id']} [{item['path']}#L{item['line']}]({item['url']})"
-            for item in lines
+            f"- id:{item['id']} [{item['path']}#L{item['line']}]({item['url']})" for item in lines
         ]
         data = {"comments": lines}
         json_block = escape_for_json_output(data)
@@ -2434,9 +2320,7 @@ class DuplicateIssueManager:
         self.enable_duplicate_closure = (
             os.getenv("ENABLE_DUPLICATE_CLOSURE", "true").lower() == "true"
         )
-        self.max_duplicate_check_issues = int(
-            os.getenv("MAX_DUPLICATE_CHECK_ISSUES", "1000")
-        )
+        self.max_duplicate_check_issues = int(os.getenv("MAX_DUPLICATE_CHECK_ISSUES", "1000"))
 
     def close_duplicates(self, dry_run: bool = False) -> int:
         """
@@ -2501,9 +2385,7 @@ class DuplicateIssueManager:
 
         return closed_count
 
-    def _group_by_title(
-        self, issues: list[dict[str, Any]]
-    ) -> dict[str, list[dict[str, Any]]]:
+    def _group_by_title(self, issues: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         """Group issues by their title."""
         title_groups = defaultdict(list)
 
@@ -2525,9 +2407,7 @@ class DuplicateIssueManager:
 
         closed_count = 0
         for duplicate in duplicates:
-            print(
-                f"Closing issue #{duplicate['number']} as duplicate of #{canonical['number']}"
-            )
+            print(f"Closing issue #{duplicate['number']} as duplicate of #{canonical['number']}")
 
             if self.api.close_issue(duplicate["number"]):
                 # Add duplicate comment
@@ -2657,9 +2537,7 @@ class CodeQLAlertManager:
         try:
             issue = self.api.create_issue(title, body, labels)
             if issue:
-                print(
-                    f"✅ Created issue #{issue['number']} for CodeQL alert #{alert_id}"
-                )
+                print(f"✅ Created issue #{issue['number']} for CodeQL alert #{alert_id}")
                 self.summary.add_alert_processed(
                     alert_id, title, issue["number"], issue["html_url"]
                 )
@@ -2764,9 +2642,7 @@ Environment Variables:
         action="store_true",
         help="Show what would be done without executing",
     )
-    update_parser.add_argument(
-        "--verbose", action="store_true", help="Enable verbose output"
-    )
+    update_parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     update_parser.add_argument(
         "--directory",
         default=".github/issue-updates",

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/dedup_bench_pass2.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 3d7f9a1c-5e2b-4c8d-9a6f-0b3e5d7c1a94
-# last-edited: 2026-07-18
+# last-edited: 2026-10-20
 """Second-pass enrichment for uncertain dedup suggestions.
 
 Takes medium/low confidence results from a first-pass groups run,
@@ -95,31 +95,19 @@ def fetch_books_for_authors(server_url: str, author_ids: list) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Second-pass enrichment for uncertain suggestions"
-    )
+    parser = argparse.ArgumentParser(description="Second-pass enrichment for uncertain suggestions")
     parser.add_argument("--server", required=True, help="Server URL")
-    parser.add_argument(
-        "--results", required=True, help="Path to first-pass batch_output.jsonl"
-    )
-    parser.add_argument(
-        "--groups", required=True, help="Path to groups.json from first pass"
-    )
-    parser.add_argument(
-        "--model", default="gpt-5.1", help="Model to use for second pass"
-    )
+    parser.add_argument("--results", required=True, help="Path to first-pass batch_output.jsonl")
+    parser.add_argument("--groups", required=True, help="Path to groups.json from first pass")
+    parser.add_argument("--model", default="gpt-5.1", help="Model to use for second pass")
     parser.add_argument(
         "--threshold",
         default="medium",
         choices=["medium", "low"],
         help="Include suggestions at this confidence and below (default: medium = medium+low)",
     )
-    parser.add_argument(
-        "--output", default="testdata/dedup-bench", help="Output base directory"
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Build prompts but don't submit"
-    )
+    parser.add_argument("--output", default="testdata/dedup-bench", help="Output base directory")
+    parser.add_argument("--dry-run", action="store_true", help="Build prompts but don't submit")
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -188,8 +176,7 @@ def main():
             aid = canonical["id"]
             titles = books_by_author.get(aid, [])
             evidence[canonical.get("name", f"ID {aid}")] = [
-                t["title"] + (f" ({t['series']})" if t.get("series") else "")
-                for t in titles[:10]
+                t["title"] + (f" ({t['series']})" if t.get("series") else "") for t in titles[:10]
             ]
         for v in variants:
             if v.get("id"):
@@ -208,9 +195,7 @@ def main():
                         "name": canonical.get("name", ""),
                         "id": canonical.get("id"),
                     },
-                    "variants": [
-                        {"name": v.get("name", ""), "id": v.get("id")} for v in variants
-                    ],
+                    "variants": [{"name": v.get("name", ""), "id": v.get("id")} for v in variants],
                 },
                 "previous_suggestion": {
                     "action": s.get("action"),
@@ -224,9 +209,7 @@ def main():
 
     # Build the batch request
     user_content = json.dumps(enriched_items, indent=2)
-    print(
-        f"\nEnriched payload: {len(enriched_items)} items, ~{len(user_content) // 4} tokens"
-    )
+    print(f"\nEnriched payload: {len(enriched_items)} items, ~{len(user_content) // 4} tokens")
 
     # Create run directory
     ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
