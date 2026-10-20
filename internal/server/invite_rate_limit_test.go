@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -284,24 +284,42 @@ func TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader(t *testing.T) {
 	}
 }
 
-// TestInviteRateLimit_ClientKey_UntrustedLocalSharesOneBucket: a header from a
-// local peer is NOT believed unless the request also carries a verified Access
-// assertion (or the peer is the configured connector). Anything that can reach
-// the loopback listener could have chosen it, so every such request shares the
-// one untrusted-local bucket: rotating the header buys no fresh buckets.
-func TestInviteRateLimit_ClientKey_UntrustedLocalSharesOneBucket(t *testing.T) {
+// TestInviteRateLimit_ClientKey_UntrustedLocalSkipsClientLayer: with no
+// connector configured (production today) a header from a local peer without a
+// verified Access assertion is not believed, and the request has no trusted
+// client address. The per-client layer is SKIPPED for it, not shared: a flood
+// from that population must not block a second token beyond the per-token and
+// global limits.
+func TestInviteRateLimit_ClientKey_UntrustedLocalSkipsClientLayer(t *testing.T) {
 	h := newInviteLimitHarness(t, true)
-	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-		return h.get(inviteTestToken(i), "192.0.2.1", spoofed(i))
+	// Hammer ONE token past its own burst: only the per-token layer may refuse.
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteTokenRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(1), "192.0.2.1", spoofed(i))
 	})
-	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
-		t.Fatalf("a local peer's unverified header got fresh buckets: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+	if !limited || allowed < inviteTokenRateBurst || allowed > inviteTokenRateBurst+2 {
+		t.Fatalf("token flood: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteTokenRateBurst)
 	}
-	// Garbage and absent headers land in the same bucket.
-	for name, hdr := range map[string]map[string]string{"none": nil, "garbage": {"CF-Connecting-IP": "evil"}} {
-		if w := h.get(inviteTestToken(700), "192.0.2.1", hdr); w.Code != http.StatusTooManyRequests {
-			t.Fatalf("%s header while the shared bucket is spent: %d, want 429", name, w.Code)
+	// A second token from the same untrusted population is not blocked.
+	if w := h.get(inviteTestToken(2), "192.0.2.1", spoofed(1)); w.Code != http.StatusOK {
+		t.Fatalf("a second token after the flood: %d, want 200", w.Code)
+	}
+	// Nor is a run of distinct tokens well past the per-client burst (the
+	// global ceiling is the only bound left, and it is far above this).
+	for i := range inviteAuthRateBurst + 20 {
+		hdr := spoofed(i)
+		if i%3 == 0 {
+			hdr = nil
 		}
+		if w := h.get(inviteTestToken(100+i), "192.0.2.1", hdr); w.Code != http.StatusOK {
+			t.Fatalf("distinct token %d: %d, want 200 (client layer skipped)", i, w.Code)
+		}
+	}
+	// A client that CAN be established is still limited on its own.
+	one := map[string]string{"CF-Connecting-IP": "203.0.113.77", "X-Test-Verified": "1"}
+	if _, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(500+i), "192.0.2.1", one)
+	}); !limited {
+		t.Fatal("a verified client was never limited")
 	}
 }
 
@@ -356,22 +374,23 @@ func TestInviteRateLimit_ClientKey_ConfiguredConnectorClientsAreIndependent(t *t
 	}
 }
 
-// TestInviteRateLimit_ClientKey_ConnectorWithoutHeaderIsShared: the configured
-// connector sending no usable header identifies no client, so those requests
-// share the one untrusted-local bucket (and do not touch attributed clients).
-func TestInviteRateLimit_ClientKey_ConnectorWithoutHeaderIsShared(t *testing.T) {
+// TestInviteRateLimit_ClientKey_ConnectorWithoutHeaderSkipsClientLayer: the
+// configured connector sending no usable header identifies no client, so the
+// per-client layer is skipped for those requests (and attributed visitors are
+// unaffected).
+func TestInviteRateLimit_ClientKey_ConnectorWithoutHeaderSkipsClientLayer(t *testing.T) {
 	h := newInviteLimitHarness(t, false).withConnector()
-	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-		return h.get(inviteTestToken(i), connectorPeer, map[string]string{"CF-Connecting-IP": fmt.Sprintf("not-an-ip-%d", i)})
-	})
-	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
-		t.Fatalf("connector requests without a usable header: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
-	}
-	if w := h.get(inviteTestToken(800), connectorPeer, nil); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("no header while the shared bucket is spent: %d, want 429", w.Code)
+	for i := range inviteAuthRateBurst + 20 {
+		hdr := map[string]string{"CF-Connecting-IP": fmt.Sprintf("not-an-ip-%d", i)}
+		if i%2 == 0 {
+			hdr = nil
+		}
+		if w := h.get(inviteTestToken(i), connectorPeer, hdr); w.Code != http.StatusOK {
+			t.Fatalf("connector request %d without a usable header: %d, want 200 (client layer skipped)", i, w.Code)
+		}
 	}
 	if w := h.get(inviteTestToken(801), connectorPeer, map[string]string{"CF-Connecting-IP": "198.51.100.61"}); w.Code != http.StatusOK {
-		t.Fatalf("an attributed visitor while the shared bucket is spent: %d, want 200", w.Code)
+		t.Fatalf("an attributed visitor: %d, want 200", w.Code)
 	}
 }
 

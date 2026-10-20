@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
 // last-edited: 2026-10-20
 
@@ -293,10 +293,20 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// left unlimited, because it is high-value: all such requests share the one
 	// untrusted-local key, never a key taken from an unproven header. ip keeps
 	// the attributed (or local) address for logging.
-	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: remoteAddrIsLocal, connectors: tunnelConnectorPeers()})
+	//
+	// A direct LAN peer (the owner running recovery against the service port)
+	// is not tunnel traffic: it is keyed on its own address and exempt from the
+	// global ceiling, so internet traffic cannot lock it out
+	// (see bootstrapDirectLANPeer).
+	connectors := tunnelConnectorPeers()
+	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: remoteAddrIsLocal, connectors: connectors})
+	direct := bootstrapDirectLANPeer(c, connectors)
+	if direct {
+		ip, attributed = c.ClientIP(), true
+	}
 	ip = strings.TrimSpace(ip)
 
-	if !bootstrapLimits.allow(bootstrapRateKey(ip, attributed)) {
+	if !bootstrapLimits.allow(bootstrapRateKey(ip, attributed), direct) {
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many bootstrap attempts — try again later", "TOO_MANY_REQUESTS")
 		return
 	}

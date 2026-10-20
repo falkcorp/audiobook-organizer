@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -17,9 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// untrustedLocalClientKey is the ONE rate-limit identity of every request whose
-// real client address cannot be established (see trustedClientIP). Callers
-// derive their bucket key from it and never from the request's own headers.
+// untrustedLocalClientKey is the ONE rate-limit identity the bootstrap limiter
+// gives every request whose real client address cannot be established (see
+// trustedClientIP); it is never derived from the request's own headers. The
+// invite limiter skips its per-client layer for such a request instead, because
+// one shared bucket would let a single caller lock out every guest.
 const untrustedLocalClientKey = "untrusted-local"
 
 // connectorPeers is the set of addresses the Cloudflare tunnel connector
@@ -127,9 +129,9 @@ type clientTrust struct {
 //
 // ok is false when the only address available is shared: the peer is a
 // configured connector or this host and no trusted header names the visitor.
-// ip is still returned, for logging. Callers must then use
-// untrustedLocalClientKey as the identity, never anything derived from the
-// header.
+// ip is still returned, for logging. Callers must never derive an identity from
+// the header then: the invite limiter skips its per-client layer, and the
+// bootstrap limiter uses the fixed untrustedLocalClientKey.
 func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 	peer := c.Request.RemoteAddr
 	isConnector := t.connectors.contains(peer)
