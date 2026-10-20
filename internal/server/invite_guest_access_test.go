@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-19
 
@@ -23,12 +23,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
-// fakeGuestPolicy records EnsureEmail calls.
+// fakeGuestPolicy records EnsureEmail and RemoveEmail calls.
 type fakeGuestPolicy struct {
-	mu     sync.Mutex
-	emails []string
-	res    cfaccesspolicy.Result
-	err    error
+	mu      sync.Mutex
+	emails  []string
+	removed []string
+	res     cfaccesspolicy.Result
+	err     error
+}
+
+func (f *fakeGuestPolicy) RemoveEmail(_ context.Context, email string) (cfaccesspolicy.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, email)
+	return cfaccesspolicy.Removed, nil
 }
 
 func (f *fakeGuestPolicy) EnsureEmail(_ context.Context, email string) (cfaccesspolicy.Result, error) {
@@ -48,10 +56,27 @@ func acceptInvite(t *testing.T, srv *Server, token string) *httptest.ResponseRec
 	return w
 }
 
-func createEmailInvite(t *testing.T, store database.Store, token, username, email string) {
+// createEmailInvite creates an invite by a fresh user with creatorRole and,
+// when emailed, records it as delivered to its address.
+func createEmailInvite(t *testing.T, store database.Store, creatorRole string, emailed bool, token, username, email string) {
 	t.Helper()
-	if _, err := store.CreateInvite(&database.Invite{Token: token, Username: username, Email: email, RoleID: "viewer", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+	creator, err := store.CreateUser("creator-"+token[:6], "creator-"+token[:6]+"@admins.example.com", "bcrypt", "h", []string{creatorRole}, "active")
+	if err != nil {
 		t.Fatal(err)
+	}
+	inv, err := store.CreateInvite(&database.Invite{Token: token, Username: username, Email: email, RoleID: "viewer",
+		CreatedByUserID: creator.ID, ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emailed {
+		ds, ok := database.AsCapability[database.InviteDeliveryStore](store)
+		if !ok {
+			t.Fatal("store lacks InviteDeliveryStore")
+		}
+		if _, err := ds.MarkInviteEmailSent(token, inv.Email, time.Now()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -60,7 +85,7 @@ func TestAcceptInvite_SetsEmailGrantsSSOAndSyncsGuestPolicy(t *testing.T) {
 	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added}
 	srv.guestPolicyOverride = fake
 	token := strings.Repeat("a", 64)
-	createEmailInvite(t, store, token, "guest", "Guest@Example.com")
+	createEmailInvite(t, store, "admin", true, token, "guest", "Guest@Example.com")
 
 	w := acceptInvite(t, srv, token)
 	if w.Code != http.StatusCreated {
@@ -101,16 +126,147 @@ func TestAcceptInvite_SetsEmailGrantsSSOAndSyncsGuestPolicy(t *testing.T) {
 		t.Fatal("a refused accept must not sync")
 	}
 
-	// Deactivation ends the SSO grant.
-	if creds, ok := database.AsCapability[database.UserCredentialWriter](store); ok {
-		if _, err := creds.SetUserStatus(u.ID, "locked"); err != nil {
-			t.Fatal(err)
-		}
-		if allowed("guest@example.com") {
-			t.Fatal("a locked user's grant must not admit SSO")
-		}
-	} else {
-		t.Fatal("store lacks UserCredentialWriter")
+	gs, _ := database.AsCapability[database.InviteEmailGrantStore](store)
+	if g, _ := gs.GetInviteEmailGrant("guest@example.com"); g == nil || !g.CFAdded {
+		t.Fatalf("grant must record that the sync added the email: %+v", g)
+	}
+
+	// Deactivation through the real route ends the SSO grant and removes the
+	// email the sync added from the Cloudflare policy.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+u.ID+"/deactivate", nil)
+	dw := httptest.NewRecorder()
+	srv.router.ServeHTTP(dw, req)
+	if dw.Code != http.StatusOK {
+		t.Fatalf("deactivate: %d %s", dw.Code, dw.Body.String())
+	}
+	srv.bgWG.Wait()
+	if allowed("guest@example.com") {
+		t.Fatal("a deactivated user's grant must not admit SSO")
+	}
+	if g, _ := gs.GetInviteEmailGrant("guest@example.com"); g != nil {
+		t.Fatal("deactivation must delete the grant")
+	}
+	if len(fake.removed) != 1 || fake.removed[0] != "guest@example.com" {
+		t.Fatalf("Cloudflare removals = %v", fake.removed)
+	}
+	// Idempotent: a second revoke finds nothing to do.
+	srv.revokeGuestAccess(u.ID, "guest@example.com", "test")
+	srv.bgWG.Wait()
+	if len(fake.removed) != 1 {
+		t.Fatal("a second revoke must not call Cloudflare again")
+	}
+}
+
+func TestAcceptInvite_NonAdminCreatorGetsNoGrantOrCloudflare(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("1", 64)
+	createEmailInvite(t, store, "editor", true, token, "guest", "guest@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d %s", w.Code, w.Body.String())
+	}
+	srv.bgWG.Wait()
+	if inviteGrantAllowed(store)("guest@example.com") {
+		t.Fatal("an editor's invite must not grant SSO")
+	}
+	if len(fake.emails) != 0 {
+		t.Fatal("an editor's invite must not touch Cloudflare")
+	}
+	inv, _ := store.GetInvite(token)
+	if inv.SSOGrant != database.InviteSSOCreatorNotAdmin || inv.GuestPolicyStatus != database.InviteGuestPolicySkipped || !strings.Contains(inv.GuestPolicyDetail, "admin") {
+		t.Fatalf("admin must see why: %+v", inv)
+	}
+}
+
+func TestAcceptInvite_ManualLinkBindsNoEmail(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("2", 64)
+	createEmailInvite(t, store, "admin", false, token, "guest", "guest@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d %s", w.Code, w.Body.String())
+	}
+	srv.bgWG.Wait()
+	u, _ := store.GetUserByUsername("guest")
+	if u == nil || u.Email != "" {
+		t.Fatalf("a never-emailed invite must not bind the email: %+v", u)
+	}
+	if inviteGrantAllowed(store)("guest@example.com") || len(fake.emails) != 0 {
+		t.Fatal("a never-emailed invite must not grant SSO or touch Cloudflare")
+	}
+	inv, _ := store.GetInvite(token)
+	if inv.EmailBinding != database.InviteEmailNotEmailed || inv.GuestPolicyStatus != database.InviteGuestPolicySkipped {
+		t.Fatalf("admin must see why: %+v", inv)
+	}
+}
+
+func TestRevokeGuestAccess_KeepsSharedOwnerAndAllowlistedEmails(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, store database.Store)
+	}{
+		{"another active user holds it", func(t *testing.T, store database.Store) {
+			u, err := store.CreateUser("twin", "twin-placeholder@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+			if err != nil {
+				t.Fatal(err)
+			}
+			u.Email = "guest@example.com"
+			if err := store.UpdateUser(u); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"owner email", func(t *testing.T, _ database.Store) {
+			config.Mutate(func(c *config.Config) { c.OwnerEmail = "Guest@example.com" })
+		}},
+		{"operator allowlist", func(t *testing.T, _ database.Store) {
+			config.Mutate(func(c *config.Config) { c.OAuthAllowedEmails = "a@example.com, guest@example.com" })
+		}},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, store := setupUserHandlerServer(t)
+			saved := config.Snapshot()
+			t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
+			fake := &fakeGuestPolicy{res: cfaccesspolicy.Added}
+			srv.guestPolicyOverride = fake
+			token := strings.Repeat(string(rune('3'+i)), 64)
+			createEmailInvite(t, store, "admin", true, token, "guest", "guest@example.com")
+			if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+				t.Fatalf("accept: %d", w.Code)
+			}
+			srv.bgWG.Wait()
+			u, _ := store.GetUserByUsername("guest")
+			tc.setup(t, store)
+			srv.revokeGuestAccess(u.ID, "guest@example.com", "email changed")
+			srv.bgWG.Wait()
+			gs, _ := database.AsCapability[database.InviteEmailGrantStore](store)
+			if g, _ := gs.GetInviteEmailGrant("guest@example.com"); g != nil {
+				t.Fatal("the user's own grant must still be deleted")
+			}
+			if len(fake.removed) != 0 {
+				t.Fatalf("Cloudflare entry removed although %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestRevokeGuestAccess_NeverRemovesAnEmailTheSyncDidNotAdd(t *testing.T) {
+	srv, store := setupUserHandlerServer(t)
+	fake := &fakeGuestPolicy{res: cfaccesspolicy.AlreadyPresent}
+	srv.guestPolicyOverride = fake
+	token := strings.Repeat("9", 64)
+	createEmailInvite(t, store, "admin", true, token, "guest", "guest@example.com")
+	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
+		t.Fatalf("accept: %d", w.Code)
+	}
+	srv.bgWG.Wait()
+	u, _ := store.GetUserByUsername("guest")
+	srv.revokeGuestAccess(u.ID, "guest@example.com", "user deactivated")
+	srv.bgWG.Wait()
+	if len(fake.removed) != 0 {
+		t.Fatal("an email that was already in the policy was put there by hand and must stay")
 	}
 }
 
@@ -118,7 +274,7 @@ func TestAcceptInvite_GuestPolicyFailureNeverFailsAccept(t *testing.T) {
 	srv, store := setupUserHandlerServer(t)
 	srv.guestPolicyOverride = &fakeGuestPolicy{err: errors.New("cfaccesspolicy: save policy: HTTP 403: 10000 Authentication error")}
 	token := strings.Repeat("b", 64)
-	createEmailInvite(t, store, token, "guest2", "guest2@example.com")
+	createEmailInvite(t, store, "admin", true, token, "guest2", "guest2@example.com")
 	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
 		t.Fatalf("accept must succeed when Cloudflare fails: %d %s", w.Code, w.Body.String())
 	}
@@ -135,7 +291,7 @@ func TestAcceptInvite_GuestPolicyUnconfiguredIsRecorded(t *testing.T) {
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
 	config.Mutate(func(c *config.Config) { c.CFAccountID, c.CFGuestsPolicyID, c.CFPolicyAPIToken = "", "", "" })
 	token := strings.Repeat("c", 64)
-	createEmailInvite(t, store, token, "guest3", "guest3@example.com")
+	createEmailInvite(t, store, "admin", true, token, "guest3", "guest3@example.com")
 	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
 		t.Fatalf("accept: %d", w.Code)
 	}
@@ -151,7 +307,7 @@ func TestAcceptInvite_NoEmailSkipsGuestPolicy(t *testing.T) {
 	fake := &fakeGuestPolicy{res: cfaccesspolicy.Added}
 	srv.guestPolicyOverride = fake
 	token := strings.Repeat("d", 64)
-	createEmailInvite(t, store, token, "plain", "")
+	createEmailInvite(t, store, "admin", false, token, "plain", "")
 	if w := acceptInvite(t, srv, token); w.Code != http.StatusCreated {
 		t.Fatalf("accept: %d", w.Code)
 	}

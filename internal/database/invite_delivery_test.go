@@ -1,5 +1,5 @@
 // file: internal/database/invite_delivery_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a8c5e71-4b9d-4f03-a6e2-7d1c9b3f5e86
 // last-edited: 2026-10-19
 
@@ -25,18 +25,46 @@ func newInviteTestStore(t *testing.T) *PebbleStore {
 
 func mustInvite(t *testing.T, s *PebbleStore, token, username, email string) *Invite {
 	t.Helper()
-	inv, err := s.CreateInvite(&Invite{Token: token, Username: username, Email: email, RoleID: "viewer", ExpiresAt: time.Now().Add(time.Hour)})
+	return mustInviteBy(t, s, "", token, username, email)
+}
+
+func mustInviteBy(t *testing.T, s *PebbleStore, creatorID, token, username, email string) *Invite {
+	t.Helper()
+	inv, err := s.CreateInvite(&Invite{Token: token, Username: username, Email: email, RoleID: "viewer",
+		CreatedByUserID: creatorID, ExpiresAt: time.Now().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return inv
 }
 
+func mustUser(t *testing.T, s *PebbleStore, username, role, status string) *User {
+	t.Helper()
+	u, err := s.CreateUser(username, username+"@admins.example.com", "bcrypt", "h", []string{role}, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// deliveredInvite creates an invite by creatorID and marks it emailed to email.
+func deliveredInvite(t *testing.T, s *PebbleStore, creatorID, token, username, email string) {
+	t.Helper()
+	inv := mustInviteBy(t, s, creatorID, token, username, email)
+	if _, err := s.MarkInviteEmailSent(token, inv.Email, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConsumeInvite_EmailGrantAndUserEmail(t *testing.T) {
 	s := newInviteTestStore(t)
-	inv := mustInvite(t, s, "tok1", "guest", "  Guest@Example.COM ")
+	admin := mustUser(t, s, "boss", "admin", "active")
+	inv := mustInviteBy(t, s, admin.ID, "tok1", "guest", "  Guest@Example.COM ")
 	if inv.Email != "guest@example.com" {
 		t.Fatalf("invite email not normalized: %q", inv.Email)
+	}
+	if _, err := s.MarkInviteEmailSent("tok1", "Guest@example.com", time.Now()); err != nil {
+		t.Fatal(err)
 	}
 	u, err := s.ConsumeInvite("tok1", "bcrypt", "hash")
 	if err != nil {
@@ -48,15 +76,120 @@ func TestConsumeInvite_EmailGrantAndUserEmail(t *testing.T) {
 	if byEmail, _ := s.GetUserByEmail("guest@example.com"); byEmail == nil || byEmail.ID != u.ID {
 		t.Fatal("email index does not point at the new user")
 	}
-	if id, err := s.InviteEmailGrantUserID("GUEST@example.com"); err != nil || id != u.ID {
-		t.Fatalf("grant user id = %q (%v), want %q", id, err, u.ID)
+	if g, err := s.GetInviteEmailGrant("GUEST@example.com"); err != nil || g == nil || g.UserID != u.ID || g.CFAdded {
+		t.Fatalf("grant = %+v (%v), want one for %q", g, err, u.ID)
 	}
 	got, _ := s.GetInvite("tok1")
-	if got.UsedAt == nil || got.AcceptedUserID != u.ID {
-		t.Fatalf("invite not marked used by the new user: %+v", got)
+	if got.UsedAt == nil || got.AcceptedUserID != u.ID || got.EmailBinding != InviteEmailBound || got.SSOGrant != InviteSSOGranted {
+		t.Fatalf("invite outcome not recorded: %+v", got)
 	}
-	if id, _ := s.InviteEmailGrantUserID("other@example.com"); id != "" {
+	if g, _ := s.GetInviteEmailGrant("other@example.com"); g != nil {
 		t.Fatal("grant for an email nobody was invited with")
+	}
+}
+
+// A link the admin copied by hand proves nothing about the address.
+func TestConsumeInvite_ManualLinkBindsNoEmail(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "boss", "admin", "active")
+	mustInviteBy(t, s, admin.ID, "tok", "guest", "guest@example.com")
+	u, err := s.ConsumeInvite("tok", "bcrypt", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Email != "" {
+		t.Fatalf("user email = %q, want none for a never-emailed invite", u.Email)
+	}
+	if byEmail, _ := s.GetUserByEmail("guest@example.com"); byEmail != nil {
+		t.Fatal("email index written for an unproven address")
+	}
+	if g, _ := s.GetInviteEmailGrant("guest@example.com"); g != nil {
+		t.Fatal("SSO grant written for an unproven address")
+	}
+	if inv, _ := s.GetInvite("tok"); inv.EmailBinding != InviteEmailNotEmailed || inv.SSOGrant != "" {
+		t.Fatalf("outcome = %+v", inv)
+	}
+}
+
+func TestConsumeInvite_SentToOtherAddressBindsNoEmail(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "boss", "admin", "active")
+	mustInviteBy(t, s, admin.ID, "tok", "guest", "guest@example.com")
+	if _, err := s.MarkInviteEmailSent("tok", "someone-else@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.ConsumeInvite("tok", "bcrypt", "h")
+	if err != nil || u.Email != "" {
+		t.Fatalf("user email = %q (%v), want none", u.Email, err)
+	}
+}
+
+func TestConsumeInvite_NonAdminCreatorGetsNoGrant(t *testing.T) {
+	for _, tc := range []struct{ name, role, status string }{
+		{"editor creator", "editor", "active"},
+		{"locked admin creator", "admin", "locked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newInviteTestStore(t)
+			creator := mustUser(t, s, "creator", tc.role, tc.status)
+			deliveredInvite(t, s, creator.ID, "tok", "guest", "guest@example.com")
+			u, err := s.ConsumeInvite("tok", "bcrypt", "h")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if u.Email != "guest@example.com" {
+				t.Fatalf("a delivered email is still the user's email: %q", u.Email)
+			}
+			if g, _ := s.GetInviteEmailGrant("guest@example.com"); g != nil {
+				t.Fatal("a non-admin creator's invite must not grant SSO")
+			}
+			if inv, _ := s.GetInvite("tok"); inv.SSOGrant != InviteSSOCreatorNotAdmin {
+				t.Fatalf("SSOGrant = %q", inv.SSOGrant)
+			}
+		})
+	}
+	s := newInviteTestStore(t)
+	deliveredInvite(t, s, "", "tok", "guest", "guest@example.com") // no recorded creator
+	if _, err := s.ConsumeInvite("tok", "bcrypt", "h"); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetInviteEmailGrant("guest@example.com"); g != nil {
+		t.Fatal("an invite with no recorded creator must not grant SSO")
+	}
+}
+
+func TestInviteEmailGrant_CFAddedAndDeleteOnlyForItsUser(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "boss", "admin", "active")
+	deliveredInvite(t, s, admin.ID, "tok", "guest", "guest@example.com")
+	u, err := s.ConsumeInvite("tok", "bcrypt", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetInviteEmailGrantCFAdded("guest@example.com", "someone-else"); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetInviteEmailGrant("guest@example.com"); g.CFAdded {
+		t.Fatal("CFAdded set for a different user id")
+	}
+	if err := s.SetInviteEmailGrantCFAdded("guest@example.com", u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetInviteEmailGrant("guest@example.com"); !g.CFAdded {
+		t.Fatal("CFAdded not recorded")
+	}
+	if g, err := s.DeleteInviteEmailGrant("guest@example.com", "someone-else"); err != nil || g != nil {
+		t.Fatalf("delete for another user removed the grant: %+v %v", g, err)
+	}
+	g, err := s.DeleteInviteEmailGrant("GUEST@example.com", u.ID)
+	if err != nil || g == nil || !g.CFAdded {
+		t.Fatalf("delete returned %+v %v", g, err)
+	}
+	if g, _ := s.GetInviteEmailGrant("guest@example.com"); g != nil {
+		t.Fatal("grant still present after delete")
+	}
+	if g, err := s.DeleteInviteEmailGrant("guest@example.com", u.ID); err != nil || g != nil {
+		t.Fatal("second delete must be a no-op")
 	}
 }
 
@@ -81,7 +214,7 @@ func TestInvite_EmailOwnedByExistingUserIsRefused(t *testing.T) {
 		t.Fatalf("CreateInvite err = %v, want ErrInviteEmailTaken", err)
 	}
 	// An invite created before the email was taken must not repoint the index.
-	mustInvite(t, s, "t2", "g2", "later@example.com")
+	deliveredInvite(t, s, "", "t2", "g2", "later@example.com")
 	owner2, err := s.CreateUser("second", "later@example.com", "bcrypt", "h", []string{"viewer"}, "active")
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +232,7 @@ func TestInvite_EmailOwnedByExistingUserIsRefused(t *testing.T) {
 
 func TestConsumeInvite_ConcurrentAcceptsAreSingleUse(t *testing.T) {
 	s := newInviteTestStore(t)
-	mustInvite(t, s, "tok", "racer", "racer@example.com")
+	deliveredInvite(t, s, "", "tok", "racer", "racer@example.com")
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	wins := 0
@@ -124,15 +257,15 @@ func TestMarkInviteEmailSent_RefusesConsumedInvite(t *testing.T) {
 	s := newInviteTestStore(t)
 	mustInvite(t, s, "tok", "guest", "guest@example.com")
 	at := time.Now()
-	inv, err := s.MarkInviteEmailSent("tok", at)
-	if err != nil || inv.EmailSentAt == nil || !inv.EmailSentAt.Equal(at) {
+	inv, err := s.MarkInviteEmailSent("tok", "Guest@example.com", at)
+	if err != nil || inv.EmailSentAt == nil || !inv.EmailSentAt.Equal(at) || inv.EmailSentTo != "guest@example.com" {
 		t.Fatalf("mark sent: %+v %v", inv, err)
 	}
 	if _, err := s.ConsumeInvite("tok", "bcrypt", "h"); err != nil {
 		t.Fatal(err)
 	}
 	// A resend that finishes after the accept must not resurrect the invite.
-	if _, err := s.MarkInviteEmailSent("tok", time.Now()); !errors.Is(err, ErrInviteNotPending) {
+	if _, err := s.MarkInviteEmailSent("tok", "guest@example.com", time.Now()); !errors.Is(err, ErrInviteNotPending) {
 		t.Fatalf("err = %v, want ErrInviteNotPending", err)
 	}
 	got, _ := s.GetInvite("tok")
@@ -142,7 +275,7 @@ func TestMarkInviteEmailSent_RefusesConsumedInvite(t *testing.T) {
 	if active, _ := s.ListActiveInvites(); len(active) != 0 {
 		t.Fatalf("consumed invite listed as active: %+v", active)
 	}
-	if _, err := s.MarkInviteEmailSent("missing", time.Now()); !errors.Is(err, ErrInviteNotPending) {
+	if _, err := s.MarkInviteEmailSent("missing", "x@example.com", time.Now()); !errors.Is(err, ErrInviteNotPending) {
 		t.Fatalf("missing invite: err = %v", err)
 	}
 }

@@ -40,6 +40,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// Built before the auth routes: the public invite lookup is one of them.
 	userH := handlers.NewUserHandler(s.storeForWiring())
 	userH.SetInviteDelivery(s.inviteDelivery())
+	userH.SetGuestAccessRevoker(s.revokeGuestAccess)
+	authH.SetGuestAccessRevoker(s.revokeGuestAccess)
 
 	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH, userH)
 

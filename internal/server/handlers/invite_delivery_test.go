@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-19
 
@@ -20,7 +20,9 @@ import (
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/mock"
 )
 
 const (
@@ -351,7 +353,7 @@ func TestListInvites_StatusFlagsAndAcceptedWithoutTokens(t *testing.T) {
 		t.Fatalf("accepted = %v", list["accepted"])
 	}
 	a := acc[0].(map[string]any)
-	if a["guest_policy_status"] != "failed" || a["email"] != "acc@example.com" {
+	if a["guest_policy_status"] != "failed" || a["email"] != "acc@example.com" || a["email_binding"] != "not_emailed" {
 		t.Fatalf("accepted row = %v", a)
 	}
 	if strings.Contains(w.Body.String(), `"accepted":[{"token"`) || a["token"] != nil {
@@ -370,5 +372,49 @@ func TestInviteEmail_HTMLEscapesValues(t *testing.T) {
 	html := f.rec.Sent()[0].HTML
 	if strings.Contains(html, "<script>") || !strings.Contains(html, "&lt;script&gt;") {
 		t.Fatal("username was not HTML-escaped in the email")
+	}
+}
+
+func TestUpdateMe_EmailChangeRevokesGuestAccessForOldEmail(t *testing.T) {
+	mockStore := handlersmocks.NewMockAuthStore(t)
+	mockStore.EXPECT().UpdateUser(mock.Anything).Return(nil)
+	h := handlers.NewAuthHandler(mockStore, true)
+	var calls []string
+	h.SetGuestAccessRevoker(func(userID, email, reason string) { calls = append(calls, userID+"|"+email+"|"+reason) })
+
+	c, w := newAuthCtx(http.MethodPatch, "/api/v1/auth/me", map[string]any{"email": "new@example.com"})
+	setAuthUser(c, &database.User{ID: "u1", Status: "active", Email: "old@example.com"})
+	h.UpdateMe(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	if len(calls) != 1 || calls[0] != "u1|old@example.com|email changed" {
+		t.Fatalf("revoker calls = %v", calls)
+	}
+
+	// Same address, different case: not a change, nothing revoked.
+	calls = nil
+	c, _ = newAuthCtx(http.MethodPatch, "/api/v1/auth/me", map[string]any{"email": "NEW@example.com"})
+	setAuthUser(c, &database.User{ID: "u1", Status: "active", Email: "new@example.com"})
+	h.UpdateMe(c)
+	if len(calls) != 0 {
+		t.Fatalf("revoked on a case-only change: %v", calls)
+	}
+}
+
+func TestDeactivateUser_RevokesGuestAccess(t *testing.T) {
+	f := newInviteFixture(t)
+	u, err := f.store.CreateUser("guest", "guest@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	f.h.SetGuestAccessRevoker(func(userID, email, reason string) { calls = append(calls, userID+"|"+email+"|"+reason) })
+	f.router.POST("/users/:id/deactivate", f.h.DeactivateUser)
+	if w, _ := f.do(t, http.MethodPost, "/users/"+u.ID+"/deactivate", nil); w.Code != http.StatusOK {
+		t.Fatalf("deactivate: %d %s", w.Code, w.Body.String())
+	}
+	if len(calls) != 1 || calls[0] != u.ID+"|guest@example.com|user deactivated" {
+		t.Fatalf("revoker calls = %v", calls)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/client_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7e2d5a-91c4-4f38-8a6d-e3f15c2b9a70
 // last-edited: 2026-10-19
 
@@ -247,5 +247,50 @@ func TestNormalizeEmail(t *testing.T) {
 		if _, err := NormalizeEmail(bad); err == nil {
 			t.Fatalf("%q accepted", bad)
 		}
+	}
+}
+
+func TestRemoveEmail_DropsOnlyThatRuleAndPreservesTheRest(t *testing.T) {
+	f := &fakeCF{policy: newPolicy()}
+	f.policy["include"] = append(f.policy["include"].([]any), map[string]any{"email": map[string]any{"email": "guest@example.com"}})
+	c := newClient(t, f)
+	res, err := c.RemoveEmail(context.Background(), "Guest@Example.com")
+	if err != nil || res != Removed {
+		t.Fatalf("res=%q err=%v", res, err)
+	}
+	inc := f.putBody["include"].([]any)
+	if len(inc) != 2 || hasEmail(inc, "guest@example.com") || !hasEmail(inc, "existing@example.com") {
+		t.Fatalf("include after remove = %v", inc)
+	}
+	for k, v := range newPolicy() {
+		if k == "include" {
+			continue
+		}
+		got, _ := json.Marshal(f.putBody[k])
+		want, _ := json.Marshal(v)
+		if string(got) != string(want) {
+			t.Fatalf("field %s changed: %s vs %s", k, got, want)
+		}
+	}
+	// Idempotent.
+	f.methods = nil
+	if res, err := c.RemoveEmail(context.Background(), "guest@example.com"); err != nil || res != NotPresent {
+		t.Fatalf("second remove: %q %v", res, err)
+	}
+	if strings.Join(f.methods, ",") != "GET" {
+		t.Fatalf("a no-op remove must not PUT: %v", f.methods)
+	}
+}
+
+func TestRemoveEmail_RefusesToEmptyThePolicy(t *testing.T) {
+	p := newPolicy()
+	p["include"] = []any{map[string]any{"email": map[string]any{"email": "only@example.com"}}}
+	f := &fakeCF{policy: p}
+	c := newClient(t, f)
+	if _, err := c.RemoveEmail(context.Background(), "only@example.com"); err == nil {
+		t.Fatal("removing the only include rule must be refused")
+	}
+	if strings.Contains(strings.Join(f.methods, ","), "PUT") {
+		t.Fatal("refused remove wrote the policy")
 	}
 }
