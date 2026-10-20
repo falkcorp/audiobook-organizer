@@ -1,5 +1,5 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-19
 
@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,21 +22,19 @@ func (s *Server) wireAuthRoutes(
 	oauthH *handlers.OAuthHandler,
 	userH *handlers.UserHandler,
 ) {
-	// The two public invite endpoints share one limiter (see
-	// inviteAuthRatePerMinute): the lookup returns the guest header pair for a
-	// live token, and accept answers differently for missing, used and
-	// expired tokens, so both are bounded the same way.
-	inviteLimiter := servermiddleware.NewIPRateLimiter(inviteAuthRatePerMinute, inviteAuthRateBurst)
-	inviteLimiter.Start(s.bgCtx)
-	inviteRate := inviteLimiter.Middleware()
+	// The two public invite endpoints are bounded per token, per client and
+	// globally (see inviteRateLimits): the lookup returns the guest header
+	// pair for a live token, and accept answers differently for missing, used
+	// and expired tokens.
+	inviteLimits := newInviteRateLimits(s.bgCtx)
 
 	authGroup := api.Group("/auth")
 	{
 		authGroup.GET("/status", authH.GetStatus)
 		authGroup.POST("/setup", authH.SetupInitialAdmin)
 		authGroup.POST("/login", authH.Login)
-		authGroup.POST("/accept-invite", inviteRate, s.handleAcceptInvite)
-		authGroup.GET("/invite/:token", inviteRate, userH.PublicInvite)
+		authGroup.POST("/accept-invite", inviteLimits.middleware(inviteTokenFromBody), s.handleAcceptInvite)
+		authGroup.GET("/invite/:token", inviteLimits.middleware(inviteTokenFromParam), userH.PublicInvite)
 		authGroup.POST("/bootstrap", s.handleBootstrap)
 		// OAuth2 / OIDC SSO — public: /start redirects to the IdP, /callback completes
 		// the handshake and starts a session. Both are no-ops for unconfigured providers.
