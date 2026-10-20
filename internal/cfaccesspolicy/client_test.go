@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/client_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b7e2d5a-91c4-4f38-8a6d-e3f15c2b9a70
 // last-edited: 2026-10-19
 
@@ -32,6 +32,11 @@ type fakeCF struct {
 	putBody  map[string]any
 	failPut  bool
 	authSeen []string
+	// clobbers: after each of the next N PUTs, rewrite the stored policy via
+	// clobber, simulating a concurrent writer that wins the race.
+	clobbers int
+	clobber  func(policy map[string]any)
+	putCount int
 }
 
 func (f *fakeCF) handler(t *testing.T) http.Handler {
@@ -60,7 +65,12 @@ func (f *fakeCF) handler(t *testing.T) http.Handler {
 				t.Errorf("PUT body: %v", err)
 			}
 			f.putBody = body
+			f.putCount++
 			f.policy = body
+			if f.clobbers > 0 && f.clobber != nil {
+				f.clobbers--
+				f.clobber(f.policy)
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "errors": []any{}, "result": body})
 		default:
 			t.Errorf("unexpected method %s", r.Method)
@@ -72,6 +82,10 @@ func (f *fakeCF) handler(t *testing.T) http.Handler {
 func newPolicy() map[string]any {
 	return map[string]any{
 		"id":               testPolicy,
+		"created_at":       "2026-01-01T00:00:00Z",
+		"updated_at":       "2026-02-01T00:00:00Z",
+		"app_count":        json.Number("3"),
+		"reusable":         true,
 		"name":             "audiobook-guests",
 		"decision":         "allow",
 		"session_duration": "24h",
@@ -94,6 +108,7 @@ func newClient(t *testing.T, f *fakeCF) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.retryDelay = 0
 	return c
 }
 
@@ -116,13 +131,13 @@ func TestEnsureEmail_AppendsAndPreservesEverything(t *testing.T) {
 			t.Fatalf("request %d Authorization = %q", i, f.authSeen[i])
 		}
 	}
-	if strings.Join(f.methods, ",") != "GET,PUT" {
+	if strings.Join(f.methods, ",") != "GET,PUT,GET" {
 		t.Fatalf("methods = %v", f.methods)
 	}
-	// Every original field round-trips unchanged; include only grows.
+	// Every writable field round-trips unchanged; include only grows.
 	orig := newPolicy()
 	for k, v := range orig {
-		if k == "include" {
+		if k == "include" || !isWritable(k) {
 			continue
 		}
 		gotJSON, _ := json.Marshal(f.putBody[k])
@@ -263,7 +278,7 @@ func TestRemoveEmail_DropsOnlyThatRuleAndPreservesTheRest(t *testing.T) {
 		t.Fatalf("include after remove = %v", inc)
 	}
 	for k, v := range newPolicy() {
-		if k == "include" {
+		if k == "include" || !isWritable(k) {
 			continue
 		}
 		got, _ := json.Marshal(f.putBody[k])
@@ -292,5 +307,133 @@ func TestRemoveEmail_RefusesToEmptyThePolicy(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(f.methods, ","), "PUT") {
 		t.Fatal("refused remove wrote the policy")
+	}
+}
+
+func isWritable(k string) bool {
+	for _, w := range writableFields {
+		if w == k {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPut_OmitsServerManagedAndUnknownFields(t *testing.T) {
+	f := &fakeCF{policy: newPolicy()}
+	c := newClient(t, f)
+	if _, err := c.EnsureEmail(context.Background(), "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"id", "created_at", "updated_at", "app_count", "reusable", "some_future_field"} {
+		if _, ok := f.putBody[k]; ok {
+			t.Errorf("PUT body carries non-writable field %q", k)
+		}
+	}
+	// Every writable field the policy had is sent, nothing else.
+	for k := range f.putBody {
+		if !isWritable(k) {
+			t.Errorf("PUT body has field %q outside the allowlist", k)
+		}
+	}
+	for _, k := range []string{"name", "decision", "session_duration", "include", "exclude", "require", "approval_groups"} {
+		if _, ok := f.putBody[k]; !ok {
+			t.Errorf("writable field %q was lost", k)
+		}
+	}
+}
+
+func TestVerify_RetriesAfterConcurrentWriterThenSucceeds(t *testing.T) {
+	f := &fakeCF{policy: newPolicy(), clobbers: 1}
+	// A concurrent writer reverts our add right after the first PUT.
+	f.clobber = func(p map[string]any) {
+		inc := p["include"].([]any)
+		p["include"] = inc[:len(inc)-1]
+	}
+	c := newClient(t, f)
+	res, err := c.EnsureEmail(context.Background(), "new@example.com")
+	if err != nil || res != Added {
+		t.Fatalf("res=%q err=%v", res, err)
+	}
+	if f.putCount != 2 {
+		t.Fatalf("putCount=%d, want 2 (one retry)", f.putCount)
+	}
+}
+
+func TestVerify_PersistentMismatchErrorsAfterBoundedRetries(t *testing.T) {
+	f := &fakeCF{policy: newPolicy(), clobbers: 100}
+	f.clobber = func(p map[string]any) { // a competing writer keeps reverting our add
+		inc := p["include"].([]any)
+		p["include"] = inc[:len(inc)-1]
+	}
+	c := newClient(t, f)
+	_, err := c.EnsureEmail(context.Background(), "new@example.com")
+	if err == nil {
+		t.Fatal("persistent verify mismatch must be an error")
+	}
+	if f.putCount != maxAttempts {
+		t.Fatalf("putCount=%d, want %d", f.putCount, maxAttempts)
+	}
+	if strings.Contains(err.Error(), testToken) {
+		t.Fatal("error contains the API token")
+	}
+}
+
+func TestVerify_RemoveDetectsEmailStillPresent(t *testing.T) {
+	f := &fakeCF{policy: newPolicy(), clobbers: 100}
+	f.policy["include"] = append(f.policy["include"].([]any), map[string]any{"email": map[string]any{"email": "guest@example.com"}})
+	f.clobber = func(p map[string]any) { // concurrent writer re-adds it
+		p["include"] = append(p["include"].([]any), map[string]any{"email": map[string]any{"email": "guest@example.com"}})
+	}
+	c := newClient(t, f)
+	if _, err := c.RemoveEmail(context.Background(), "guest@example.com"); err == nil {
+		t.Fatal("remove that did not stick must be an error")
+	}
+}
+
+func TestPlan_ReturnsBodyAndSendsNoPut(t *testing.T) {
+	f := &fakeCF{policy: newPolicy()}
+	c := newClient(t, f)
+	b, res, err := c.PlanAdd(context.Background(), "New@Example.com")
+	if err != nil || res != Added {
+		t.Fatalf("res=%q err=%v", res, err)
+	}
+	if strings.Join(f.methods, ",") != "GET" {
+		t.Fatalf("dry run must only GET: %v", f.methods)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(b, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["id"]; ok {
+		t.Fatal("plan body carries id")
+	}
+	if inc := body["include"].([]any); len(inc) != 3 || !hasEmail(inc, "new@example.com") {
+		t.Fatalf("include = %v", inc)
+	}
+	if b, res, err := c.PlanAdd(context.Background(), "existing@example.com"); err != nil || res != AlreadyPresent || b != nil {
+		t.Fatalf("no-op plan: %v %q %v", b, res, err)
+	}
+	b, res, err = c.PlanRemove(context.Background(), "existing@example.com")
+	if err != nil || res != Removed || strings.Contains(string(b), "existing@example.com") {
+		t.Fatalf("remove plan: %s %q %v", b, res, err)
+	}
+	for _, m := range f.methods {
+		if m != http.MethodGet {
+			t.Fatalf("plan sent %s", m)
+		}
+	}
+}
+
+func TestPlan_ErrorNeverContainsToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":10000,"message":"bad token ` + testToken + `"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := New(Config{AccountID: testAccount, PolicyID: testPolicy, APIToken: testToken, BaseURL: srv.URL})
+	_, _, err := c.PlanAdd(context.Background(), "x@example.com")
+	if err == nil || strings.Contains(err.Error(), testToken) {
+		t.Fatalf("err = %v", err)
 	}
 }
