@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/gen_pipeline_bot_tasks.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 2e2a3779-57b4-4f8c-8c09-7b94bb1a03a2
 # last-edited: 2026-10-20
 
@@ -11,7 +11,6 @@ Run from repo root: python3 scripts/gen_pipeline_bot_tasks.py
 
 from __future__ import annotations
 
-import datetime
 import os
 import uuid
 

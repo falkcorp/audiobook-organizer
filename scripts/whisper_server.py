@@ -50,8 +50,8 @@
 import hashlib
 import io
 import json
-import sys
 import logging
+import sys
 from typing import List
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -59,8 +59,8 @@ log = logging.getLogger("whisper_server")
 
 try:
     import faster_whisper
-    from fastapi import FastAPI, File, UploadFile
     import uvicorn
+    from fastapi import FastAPI, File, UploadFile
 except ImportError as e:
     print(f"Missing dependency: {e}")
     print('Install with: pip install "faster-whisper>=1.0.0" fastapi "uvicorn[standard]"')

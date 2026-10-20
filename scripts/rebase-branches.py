@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/rebase-branches.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 6155668c-d973-4826-aef8-773a851a4896
 # last-edited: 2026-10-20
 
@@ -11,7 +11,6 @@ Aborts on conflicts and marks branches for manual review.
 
 import subprocess
 import sys
-from pathlib import Path
 
 
 def run(cmd, capture=False):
@@ -23,7 +22,7 @@ def run(cmd, capture=False):
         else:
             subprocess.run(cmd, shell=True, check=True)
             return None
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         if capture:
             return None
         raise
@@ -78,7 +77,7 @@ def main():
 
         # Try rebase
         try:
-            run(f"git rebase origin/main")
+            run("git rebase origin/main")
             print("✓")
             succeeded.append(branch)
         except subprocess.CalledProcessError:
@@ -109,7 +108,7 @@ def main():
     print(f"Failed (conflicts/errors): {len(failed_branches)}")
 
     if failed_branches:
-        print(f"\nBranches to review manually:")
+        print("\nBranches to review manually:")
         for branch in failed_branches:
             print(f"  • {branch}")
 

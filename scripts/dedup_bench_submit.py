@@ -37,7 +37,6 @@ if env_path.exists():
 
 from openai import OpenAI
 
-
 # ── Rate limits from the audiobook-organizer project ──
 # Batch queue limits (TPD = tokens per day in batch queue)
 BATCH_LIMITS = {
@@ -438,7 +437,7 @@ def main():
                 continue
 
             if mode_name == "groups" and groups_input is None:
-                print(f"Skipping groups mode — no groups.json available")
+                print("Skipping groups mode — no groups.json available")
                 continue
 
             job_num += 1

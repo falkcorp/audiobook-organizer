@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_check_memory_leaks.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 8f3a1c26-5d94-4e7b-a2c8-91b0d6e4f752
-# last-edited: 2026-08-14
+# last-edited: 2026-10-20
 
 """Regression tests for check-memory-leaks.py's listener pairing (LEAKSCAN-SCOPE).
 
@@ -10,7 +10,6 @@ Run with:  python3 scripts/test_check_memory_leaks.py
 """
 
 import importlib.util
-
 import unittest
 from pathlib import Path
 

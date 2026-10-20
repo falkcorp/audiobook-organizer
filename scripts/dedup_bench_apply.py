@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import time
+
 import urllib3
 
 # Suppress InsecureRequestWarning for self-signed certs
@@ -175,7 +176,7 @@ def apply_g51_groups(agreed, groups, server, dry_run, id_to_name=None):
             if canonical_name and canonical_name != group["canonical"]["name"]:
                 ok = apply_rename(server, canonical_id, canonical_name, dry_run)
             else:
-                print(f"           (no action needed — already separate)")
+                print("           (no action needed — already separate)")
                 ok = True
 
         elif action == "alias":
@@ -261,7 +262,7 @@ def apply_o4_full(agreed, server, dry_run):
                     names = [a["name"] for a in roles["authors"] if "name" in a]
                 ok = apply_split(server, author_ids[0], names, dry_run)
             else:
-                print(f"           no author_ids for split")
+                print("           no author_ids for split")
                 stats["skip"] += 1
                 continue
 
@@ -411,7 +412,7 @@ def apply_missed_items(items, server, dry_run):
     time.sleep(0.1)
 
     # --- 7. Michael-Scott Earle: skip (medium confidence) ---
-    print(f"  [SKIP        ] Michael-Scott Earle: medium confidence, needs manual review")
+    print("  [SKIP        ] Michael-Scott Earle: medium confidence, needs manual review")
     stats["skip"] += 1
 
     return stats
@@ -526,9 +527,9 @@ def main():
         print(f"\n⚠️  {total_fail} operations failed. Check output above for details.")
         sys.exit(1)
     elif args.dry_run:
-        print(f"\nDry run complete. Re-run without --dry-run to apply changes.")
+        print("\nDry run complete. Re-run without --dry-run to apply changes.")
     else:
-        print(f"\nAll operations applied successfully.")
+        print("\nAll operations applied successfully.")
 
 
 if __name__ == "__main__":

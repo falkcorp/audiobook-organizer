@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/assemble_todo.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: af7ef324-6c69-411e-b1a9-98c9ba2b31e3
-# last-edited: 2026-08-10
+# last-edited: 2026-10-20
 
 """Assemble TODO.md from per-task fragment files in todo.d/.
 
@@ -37,10 +37,10 @@ from __future__ import annotations
 import argparse
 import configparser
 import datetime
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 CONFIG_FILE = Path("todo.d/todo.ini")
 

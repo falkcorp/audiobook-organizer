@@ -34,8 +34,8 @@ import base64
 import getpass
 import os
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
 
 try:
     import winrm

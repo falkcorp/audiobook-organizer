@@ -51,7 +51,7 @@ import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 
 TMP_SUFFIX = ".tmp-rename"
 

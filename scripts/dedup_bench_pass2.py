@@ -24,7 +24,6 @@ import json
 import os
 import ssl
 import sys
-import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -233,7 +232,7 @@ def main():
 
     if args.dry_run:
         print(f"Dry run — enriched data saved to {run_dir}")
-        print(f"\nSample enriched item:")
+        print("\nSample enriched item:")
         print(json.dumps(enriched_items[0], indent=2))
         return
 
@@ -274,7 +273,7 @@ def main():
 
     client = OpenAI(api_key=api_key)
 
-    print(f"Uploading and submitting batch job...")
+    print("Uploading and submitting batch job...")
     file = client.files.create(file=req_line.encode(), purpose="batch")
     batch = client.batches.create(
         input_file_id=file.id,

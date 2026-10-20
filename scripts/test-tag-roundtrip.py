@@ -21,10 +21,10 @@ This script:
 import argparse
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.request
-import ssl
 
 
 def api(host, method, path, data=None):
@@ -115,7 +115,7 @@ def main():
     if missing_in_file:
         print(f"\n  Fields in DB but missing from file: {', '.join(missing_in_file)}")
     else:
-        print(f"\n  All DB fields present in file tags")
+        print("\n  All DB fields present in file tags")
 
     # Step 2: Trigger write-back
     print("\n2. Triggering write-back...")

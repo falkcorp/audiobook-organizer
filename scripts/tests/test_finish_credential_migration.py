@@ -185,9 +185,8 @@ class MoveKeyTests(unittest.TestCase):
             calls["n"] += 1
             return "corrupted" if calls["n"] == 2 else real(path)
 
-        with mock.patch.object(fcm, "sha256", flaky):
-            with self.assertRaises(fcm.Refused) as cm:
-                self._move()
+        with mock.patch.object(fcm, "sha256", flaky), self.assertRaises(fcm.Refused) as cm:
+            self._move()
         self.assertIn("digest mismatch", str(cm.exception))
         self.assertEqual(self.src.read_bytes(), KEY)
         self.assertFalse(self.dst.exists())

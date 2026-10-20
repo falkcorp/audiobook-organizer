@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/update-remotes.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: f361303b-7845-48b0-96d4-1348d770c811
 # last-edited: 2026-10-20
 
@@ -8,7 +8,6 @@
 
 import os
 import subprocess
-import sys
 
 BASE = os.path.expanduser("~/repos/github.com/jdfalk")
 FALKCORP_DIR = os.path.expanduser("~/repos/github.com/falkcorp")
