@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-19
 
@@ -8,7 +8,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,8 +47,9 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	})
 	r.GET("/invite/:token", limits.middleware(inviteTokenFromParam), func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 	r.POST("/accept", limits.middleware(inviteTokenFromBody), func(c *gin.Context) {
-		b, _ := io.ReadAll(c.Request.Body)
-		c.String(http.StatusOK, "%d", len(b))
+		// What handleAcceptInvite would act on: the limiter's stashed parse.
+		p := readAcceptInviteBody(c)
+		c.String(http.StatusOK, "parsed=%v token=%s", p.parsed, p.req.Token)
 	})
 	return &inviteLimitHarness{t: t, engine: r, limits: limits}
 }
@@ -141,29 +141,82 @@ func TestInviteRateLimit_PerToken_PostBody(t *testing.T) {
 	}
 }
 
-// TestInviteRateLimit_PostBodyReachesHandlerIntact proves peeking the token
-// does not consume or truncate the body the real handler parses.
-func TestInviteRateLimit_PostBodyReachesHandlerIntact(t *testing.T) {
+// TestInviteRateLimit_HandlerSeesTheCountedToken proves the handler acts on
+// the parse the limiter counted, including bodies built to make two parsers
+// disagree.
+func TestInviteRateLimit_HandlerSeesTheCountedToken(t *testing.T) {
+	tok := inviteTestToken(3)
 	tests := []struct {
-		name string
-		body string
+		name, body, want string
 	}{
-		{"normal", `{"token":"` + inviteTestToken(3) + `","password":"correct-horse-1"}`},
-		{"larger than the peek window", `{"token":"` + inviteTestToken(3) + `","password":"` + strings.Repeat("p", inviteBodyPeekLimit*2) + `"}`},
-		{"malformed", `{"token":`},
-		{"empty", ""},
+		{"normal", `{"token":"` + tok + `","password":"correct-horse-1"}`, "parsed=true token=" + tok},
+		{"duplicate token keys: the last one, for both", `{"token":"` + inviteTestToken(4) + `","token":"` + tok + `","password":"x"}`, "parsed=true token=" + tok},
+		{"malformed", `{"token":`, "parsed=false token="},
+		{"trailing data after the object", `{"token":"` + tok + `","password":"x"} {"token":"other"}`, "parsed=false token="},
+		{"empty", "", "parsed=false token="},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newInviteLimitHarness(t, false)
 			w := h.post(tt.body, peerIP(1))
-			if w.Code != http.StatusOK {
-				t.Fatalf("status %d", w.Code)
-			}
-			if got, want := w.Body.String(), fmt.Sprint(len(tt.body)); got != want {
-				t.Fatalf("handler read %s bytes, want %s", got, want)
+			if w.Code != http.StatusOK || w.Body.String() != tt.want {
+				t.Fatalf("got %d %q, want 200 %q", w.Code, w.Body.String(), tt.want)
 			}
 		})
+	}
+}
+
+// An exhausted token stays exhausted however the body is padded: a duplicate
+// key naming it last is counted against it.
+func TestInviteRateLimit_DuplicateKeyCountsTheTokenUsed(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	victim := inviteTestToken(5)
+	countAllowedUntilLimited(t, inviteTokenRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(victim, peerIP(i), nil)
+	})
+	body := `{"token":"` + inviteTestToken(6) + `","token":"` + victim + `","password":"x"}`
+	if w := h.post(body, "198.51.100.60"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("padded body for an exhausted token: %d, want 429", w.Code)
+	}
+}
+
+// A body over the cap is refused with 413 before the handler, including one
+// padded with whitespace to push the token past a peek window.
+func TestInviteRateLimit_OversizeBodyIs413(t *testing.T) {
+	tok := inviteTestToken(7)
+	for name, body := range map[string]string{
+		"long password":      `{"token":"` + tok + `","password":"` + strings.Repeat("p", inviteAcceptBodyLimit) + `"}`,
+		"whitespace padding": strings.Repeat(" ", inviteAcceptBodyLimit) + `{"token":"` + tok + `","password":"x"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newInviteLimitHarness(t, false)
+			w := h.post(body, peerIP(2))
+			if w.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status %d (%s), want 413", w.Code, w.Body.String())
+			}
+		})
+	}
+	// Exactly at the cap is accepted.
+	h := newInviteLimitHarness(t, false)
+	base := `{"token":"` + tok + `","password":""}`
+	body := `{"token":"` + tok + `","password":"` + strings.Repeat("p", inviteAcceptBodyLimit-len(base)) + `"}`
+	if w := h.post(body, peerIP(3)); w.Code != http.StatusOK {
+		t.Fatalf("a body of exactly %d bytes: %d", len(body), w.Code)
+	}
+}
+
+// Unparseable bodies share one per-token bucket, so they cannot skip the
+// token layer; valid tokens are unaffected.
+func TestInviteRateLimit_UnparseableBodiesShareAFallbackBucket(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteTokenRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.post(fmt.Sprintf(`{"token":%d`, i), peerIP(i)) // malformed, varied
+	})
+	if !limited || allowed > inviteTokenRateBurst+2 {
+		t.Fatalf("malformed bodies allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteTokenRateBurst)
+	}
+	if w := h.post(`{"token":"`+inviteTestToken(8)+`","password":"x"}`, "198.51.100.61"); w.Code != http.StatusOK {
+		t.Fatalf("a valid token while the fallback bucket is exhausted: %d", w.Code)
 	}
 }
 
