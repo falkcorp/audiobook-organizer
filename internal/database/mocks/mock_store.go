@@ -20733,68 +20733,6 @@ func (_c *MockStore_GetUserBookState_Call) RunAndReturn(run func(userID string, 
 	return _c
 }
 
-// GetUserByEmail provides a mock function for the type MockStore
-func (_mock *MockStore) GetUserByEmail(email string) (*database.User, error) {
-	ret := _mock.Called(email)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetUserByEmail")
-	}
-
-	var r0 *database.User
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.User, error)); ok {
-		return returnFunc(email)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.User); ok {
-		r0 = returnFunc(email)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.User)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(email)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockStore_GetUserByEmail_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetUserByEmail'
-type MockStore_GetUserByEmail_Call struct {
-	*mock.Call
-}
-
-// GetUserByEmail is a helper method to define mock.On call
-//   - email string
-func (_e *MockStore_Expecter) GetUserByEmail(email any) *MockStore_GetUserByEmail_Call {
-	return &MockStore_GetUserByEmail_Call{Call: _e.mock.On("GetUserByEmail", email)}
-}
-
-func (_c *MockStore_GetUserByEmail_Call) Run(run func(email string)) *MockStore_GetUserByEmail_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_GetUserByEmail_Call) Return(user *database.User, err error) *MockStore_GetUserByEmail_Call {
-	_c.Call.Return(user, err)
-	return _c
-}
-
-func (_c *MockStore_GetUserByEmail_Call) RunAndReturn(run func(email string) (*database.User, error)) *MockStore_GetUserByEmail_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetUserByID provides a mock function for the type MockStore
 func (_mock *MockStore) GetUserByID(id string) (*database.User, error) {
 	ret := _mock.Called(id)
@@ -20915,6 +20853,68 @@ func (_c *MockStore_GetUserByUsername_Call) Return(user *database.User, err erro
 }
 
 func (_c *MockStore_GetUserByUsername_Call) RunAndReturn(run func(username string) (*database.User, error)) *MockStore_GetUserByUsername_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetUserByVerifiedEmail provides a mock function for the type MockStore
+func (_mock *MockStore) GetUserByVerifiedEmail(email string) (*database.User, error) {
+	ret := _mock.Called(email)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetUserByVerifiedEmail")
+	}
+
+	var r0 *database.User
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*database.User, error)); ok {
+		return returnFunc(email)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *database.User); ok {
+		r0 = returnFunc(email)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.User)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(email)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetUserByVerifiedEmail_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetUserByVerifiedEmail'
+type MockStore_GetUserByVerifiedEmail_Call struct {
+	*mock.Call
+}
+
+// GetUserByVerifiedEmail is a helper method to define mock.On call
+//   - email string
+func (_e *MockStore_Expecter) GetUserByVerifiedEmail(email any) *MockStore_GetUserByVerifiedEmail_Call {
+	return &MockStore_GetUserByVerifiedEmail_Call{Call: _e.mock.On("GetUserByVerifiedEmail", email)}
+}
+
+func (_c *MockStore_GetUserByVerifiedEmail_Call) Run(run func(email string)) *MockStore_GetUserByVerifiedEmail_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetUserByVerifiedEmail_Call) Return(user *database.User, err error) *MockStore_GetUserByVerifiedEmail_Call {
+	_c.Call.Return(user, err)
+	return _c
+}
+
+func (_c *MockStore_GetUserByVerifiedEmail_Call) RunAndReturn(run func(email string) (*database.User, error)) *MockStore_GetUserByVerifiedEmail_Call {
 	_c.Call.Return(run)
 	return _c
 }

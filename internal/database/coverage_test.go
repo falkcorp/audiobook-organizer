@@ -336,8 +336,8 @@ func TestMockStore_AllMethods(t *testing.T) {
 	if user, err := mock.GetUserByUsername("username"); err != nil || user != nil {
 		t.Errorf("GetUserByUsername() = %v, %v; want nil, nil", user, err)
 	}
-	if user, err := mock.GetUserByEmail("email"); err != nil || user != nil {
-		t.Errorf("GetUserByEmail() = %v, %v; want nil, nil", user, err)
+	if user, err := mock.GetUserByVerifiedEmail("email"); err != nil || user != nil {
+		t.Errorf("GetUserByVerifiedEmail() = %v, %v; want nil, nil", user, err)
 	}
 	if err := mock.UpdateUser(&User{}); err != nil {
 		t.Errorf("UpdateUser() returned error: %v", err)

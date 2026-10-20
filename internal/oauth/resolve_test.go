@@ -1,6 +1,7 @@
 // file: internal/oauth/resolve_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c9e1b73-6a20-4d58-8f16-2b5a7c0e9d38
+// last-edited: 2026-10-19
 
 package oauth
 
@@ -16,7 +17,7 @@ import (
 func newResolverStore() *database.MockStore {
 	return &database.MockStore{
 		GetOAuthIdentityByProviderSubjectFunc: func(string, string) (*database.OAuthIdentity, error) { return nil, nil },
-		GetUserByEmailFunc:                    func(string) (*database.User, error) { return nil, nil },
+		GetUserByVerifiedEmailFunc:            func(string) (*database.User, error) { return nil, nil },
 		GetUserByUsernameFunc:                 func(string) (*database.User, error) { return nil, nil },
 		GetUserByIDFunc:                       func(string) (*database.User, error) { return nil, nil },
 	}
@@ -85,7 +86,7 @@ func TestResolveUser_ExistingIdentity(t *testing.T) {
 func TestResolveUser_LinksToExistingUserByEmail(t *testing.T) {
 	linked := false
 	store := newResolverStore()
-	store.GetUserByEmailFunc = func(string) (*database.User, error) {
+	store.GetUserByVerifiedEmailFunc = func(string) (*database.User, error) {
 		return &database.User{ID: "u7", Email: "owner@example.com"}, nil
 	}
 	store.CreateOAuthIdentityFunc = func(oi *database.OAuthIdentity) (*database.OAuthIdentity, error) {

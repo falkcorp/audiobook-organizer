@@ -1,5 +1,5 @@
 // file: internal/database/store_extra_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 68b2b2f9-2b8f-4f7f-9d8f-26e6306a3c8e
 // last-edited: 2026-10-19
 
@@ -55,9 +55,9 @@ func TestPebbleExtendedFeatures(t *testing.T) {
 	if err != nil || fetched == nil || fetched.Email != "test@example.com" {
 		t.Fatalf("GetUserByUsername failed: err=%v user=%+v", err, fetched)
 	}
-	fetched, err = sqliteStore.GetUserByEmail("test@example.com")
+	fetched, err = sqliteStore.GetUserByVerifiedEmail("test@example.com")
 	if err != nil || fetched == nil || fetched.ID != user.ID {
-		t.Fatalf("GetUserByEmail failed: err=%v user=%+v", err, fetched)
+		t.Fatalf("GetUserByVerifiedEmail failed: err=%v user=%+v", err, fetched)
 	}
 
 	// Missing user returns nil, nil
@@ -495,8 +495,8 @@ func exercisePebbleAdvanced(t *testing.T, store *PebbleStore) {
 	if _, err := store.GetUserByUsername(user.Username); err != nil {
 		t.Fatalf("GetUserByUsername failed: %v", err)
 	}
-	if _, err := store.GetUserByEmail(user.Email); err != nil {
-		t.Fatalf("GetUserByEmail failed: %v", err)
+	if _, err := store.GetUserByVerifiedEmail(user.Email); err != nil {
+		t.Fatalf("GetUserByVerifiedEmail failed: %v", err)
 	}
 	// UpdateUser writes ordinary fields; Status goes through SetUserStatus.
 	user.Roles = []string{"viewer"}

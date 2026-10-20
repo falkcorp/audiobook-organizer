@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -35,23 +35,68 @@ type StrictUserLister interface {
 }
 
 // Users & Auth
+
+// The email keys.
+//
+// idx:user:email:<lowercase email> -> user id is the VERIFIED-email index: the
+// addresses an SSO login may be auto-linked to by email (oauth.ResolveUser,
+// through GetUserByVerifiedEmail). Only trusted paths write it: CreateUser
+// (first-run setup, bootstrap, the seeded system user, and an IdP login whose
+// email the IdP verified -- CreateUser has no other callers, and a new caller
+// must be one of those kinds), ConsumeInvite for an address the invitation was
+// emailed to, and MarkUserEmailVerified for an IdP login whose verified email
+// equals the account's. A self-service email change (UpdateUser) never writes
+// it; it only drops the key for the address the user gave up.
+//
+// The verified set keeps this key, rather than moving to a new prefix, so a
+// rollback to an older build, whose ResolveUser reads this key, still sees only
+// trusted addresses.
+//
+// Email uniqueness is not this index: User.Email is unique among all users,
+// compared case-insensitively by scanning the rows (emailHeldByOther), because
+// a self-set address has no key.
+const userEmailIndexPrefix = "idx:user:email:"
+
+// emailHeldByOther reports whether any user other than exceptID has lower
+// (already lowercased and trimmed) as its current email. User counts are
+// small, so this scans the rows instead of trusting an index.
+func (p *PebbleStore) emailHeldByOther(lower, exceptID string) (bool, error) {
+	if lower == "" {
+		return false, nil
+	}
+	users, _, err := p.listUsers()
+	if err != nil {
+		return false, err
+	}
+	for _, u := range users {
+		if u.ID != exceptID && strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// CreateUser creates a user and records its email as verified (see the email
+// keys above), so it is for trusted callers only. An email another user
+// already has is refused with an error wrapping ErrUserEmailTaken.
 func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error) {
-	// inviteMu guards every check-then-write of the email index (see
-	// UpdateUser), so a concurrent UpdateUser or ConsumeInvite cannot claim
-	// the same address between the check below and the batch.
+	// inviteMu guards every email uniqueness check-then-write (CreateUser,
+	// UpdateUser, CreateInvite, ConsumeInvite), so none of them can claim an
+	// address between another's check and its write.
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
 	lowerUser := strings.ToLower(username)
-	lowerEmail := strings.ToLower(email)
+	lowerEmail := strings.ToLower(strings.TrimSpace(email))
 
 	// uniqueness checks
 	if _, closer, err := p.db.Get([]byte("idx:user:username:" + lowerUser)); err == nil {
 		closer.Close()
 		return nil, fmt.Errorf("username already exists")
 	}
-	if _, closer, err := p.db.Get([]byte("idx:user:email:" + lowerEmail)); err == nil {
-		closer.Close()
-		return nil, fmt.Errorf("email already exists")
+	if taken, err := p.emailHeldByOther(lowerEmail, ""); err != nil {
+		return nil, err
+	} else if taken {
+		return nil, fmt.Errorf("email already exists: %w", ErrUserEmailTaken)
 	}
 
 	id, err := newULID()
@@ -74,9 +119,11 @@ func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash
 		b.Close()
 		return nil, err
 	}
-	if err := b.Set([]byte("idx:user:email:"+lowerEmail), []byte(id), nil); err != nil {
-		b.Close()
-		return nil, err
+	if lowerEmail != "" {
+		if err := b.Set([]byte(userEmailIndexPrefix+lowerEmail), []byte(id), nil); err != nil {
+			b.Close()
+			return nil, err
+		}
 	}
 	if err := b.Commit(pebble.Sync); err != nil {
 		return nil, err
@@ -117,8 +164,66 @@ func (p *PebbleStore) GetUserByUsername(username string) (*User, error) {
 	return p.getUserByIndex("idx:user:username:" + strings.ToLower(username))
 }
 
-func (p *PebbleStore) GetUserByEmail(email string) (*User, error) {
-	return p.getUserByIndex("idx:user:email:" + strings.ToLower(email))
+// GetUserByVerifiedEmail returns the user whose VERIFIED email is email (see
+// the email keys above), or nil. A self-set address is never found here. The
+// user must also still have that address, so a stale key finds nothing.
+func (p *PebbleStore) GetUserByVerifiedEmail(email string) (*User, error) {
+	lower := strings.ToLower(strings.TrimSpace(email))
+	if lower == "" {
+		return nil, nil
+	}
+	u, err := p.getUserByIndex(userEmailIndexPrefix + lower)
+	if err != nil || u == nil {
+		return nil, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+		return nil, nil
+	}
+	return u, nil
+}
+
+// VerifiedEmailMarker records that an identity provider verified a user's
+// current email. Not on Store; resolve it with AsCapability.
+type VerifiedEmailMarker interface {
+	// MarkUserEmailVerified records email as verified for userID when it is
+	// the user's current email and no other user's verified email. Anything
+	// else is a no-op (false, nil): it never takes an address from someone.
+	MarkUserEmailVerified(userID, email string) (bool, error)
+}
+
+var _ VerifiedEmailMarker = (*PebbleStore)(nil)
+
+// MarkUserEmailVerified implements VerifiedEmailMarker.
+func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
+	lower := strings.ToLower(strings.TrimSpace(email))
+	if lower == "" {
+		return false, nil
+	}
+	u, err := p.GetUserByID(userID)
+	if err != nil || u == nil || !strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+		return false, err
+	}
+	key := []byte(userEmailIndexPrefix + lower)
+	if v, closer, err := p.db.Get(key); err == nil {
+		holder := string(v)
+		closer.Close()
+		if holder == userID {
+			return false, nil // already verified
+		}
+		if other, err := p.GetUserByID(holder); err != nil {
+			return false, err
+		} else if other != nil && strings.EqualFold(strings.TrimSpace(other.Email), lower) {
+			return false, nil // someone else's verified address
+		}
+	} else if err != pebble.ErrNotFound {
+		return false, err
+	}
+	if err := p.db.Set(key, []byte(userID), pebble.Sync); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // userWriteMu serializes every rewrite of an existing user row (UpdateUser and
@@ -167,15 +272,16 @@ var ErrUserEmailTaken = errors.New("database: another account already uses that 
 // id is ErrUserNotFound.
 //
 // An email change is refused (ErrUserEmailTaken) when any other user's current
-// email matches the new one case-insensitively, and otherwise moves the email
-// index in the same batch as the row: the new key is pointed at this user and
-// the old key is dropped if it still points here. The check scans every user
-// row rather than trusting the index, because UpdateUser did not maintain the
-// index before 2026-10-19 and rows changed earlier are not indexed under their
-// current email. inviteMu is taken first (lock order inviteMu, then
-// userWriteMu) because CreateInvite, ConsumeInvite and CreateUser check and
-// write the email index under it, so none of them can claim the address
-// between this check and this write.
+// email matches the new one case-insensitively. A change never makes the new
+// address verified: UpdateUser is the self-service path (PATCH /auth/me), so it
+// never writes the verified-email key, and it drops the key for the address the
+// user gave up, in the same batch as the row, when that key points here. (A
+// self-set address that was verified would let anyone take over another
+// person's first SSO login by typing their address into a profile.)
+//
+// inviteMu is taken first (lock order inviteMu, then userWriteMu): it guards
+// every email uniqueness check-then-write, so none of CreateUser, CreateInvite
+// or ConsumeInvite can claim the address between this check and this write.
 func (p *PebbleStore) UpdateUser(user *User) error {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
@@ -196,15 +302,11 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 	}
 	oldEmail := strings.ToLower(strings.TrimSpace(stored.Email))
 	newEmail := strings.ToLower(strings.TrimSpace(user.Email))
-	if newEmail != oldEmail && newEmail != "" {
-		users, _, err := p.listUsers()
-		if err != nil {
+	if newEmail != oldEmail {
+		if taken, err := p.emailHeldByOther(newEmail, user.ID); err != nil {
 			return err
-		}
-		for _, other := range users {
-			if other.ID != user.ID && strings.EqualFold(strings.TrimSpace(other.Email), newEmail) {
-				return ErrUserEmailTaken
-			}
+		} else if taken {
+			return ErrUserEmailTaken
 		}
 	}
 	runUserWriteAfterReadHook()
@@ -218,20 +320,17 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 	if err := b.Set([]byte("u:"+user.ID), data, nil); err != nil {
 		return err
 	}
-	if newEmail != "" {
-		if err := b.Set([]byte("idx:user:email:"+newEmail), []byte(user.ID), nil); err != nil {
-			return err
-		}
-	}
 	if oldEmail != "" {
-		if v, closer, err := p.db.Get([]byte("idx:user:email:" + oldEmail)); err == nil {
+		if v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + oldEmail)); err == nil {
 			pointsHere := string(v) == user.ID
 			closer.Close()
 			if pointsHere {
-				if err := b.Delete([]byte("idx:user:email:"+oldEmail), nil); err != nil {
+				if err := b.Delete([]byte(userEmailIndexPrefix+oldEmail), nil); err != nil {
 					return err
 				}
 			}
+		} else if err != pebble.ErrNotFound {
+			return err
 		}
 	}
 	return b.Commit(pebble.Sync)
@@ -768,8 +867,8 @@ func (p *PebbleStore) TouchAPIKeyLastUsed(id string, at time.Time, ip string) er
 }
 
 // CreateInvite stores a new invite. An invite with an email is refused when a
-// user already owns that email: accepting it would repoint idx:user:email at
-// the new account, and an SSO login would then resolve to the wrong user.
+// user already has that email (ErrInviteEmailTaken): emails are unique, and
+// accepting it would give a second account the same address.
 func (p *PebbleStore) CreateInvite(invite *Invite) (*Invite, error) {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
@@ -789,11 +888,10 @@ func (p *PebbleStore) CreateInvite(invite *Invite) (*Invite, error) {
 		invite.ExpiresAt = invite.CreatedAt.Add(7 * 24 * time.Hour)
 	}
 	invite.Email = strings.ToLower(strings.TrimSpace(invite.Email))
-	if invite.Email != "" {
-		if _, closer, err := p.db.Get([]byte("idx:user:email:" + invite.Email)); err == nil {
-			closer.Close()
-			return nil, ErrInviteEmailTaken
-		}
+	if taken, err := p.emailHeldByOther(invite.Email, ""); err != nil {
+		return nil, err
+	} else if taken {
+		return nil, ErrInviteEmailTaken
 	}
 	lower := strings.ToLower(invite.Username)
 	if v, closer, err := p.db.Get([]byte("idx:invite:username:" + lower)); err == nil {
@@ -892,8 +990,8 @@ func (p *PebbleStore) DeleteInvite(token string) error {
 // pass the used check.
 //
 // What happens to the invite's email (all in the same batch):
-//   - It is bound to the new account (user.Email plus the email index; refused
-//     if another user owns it) only when the invitation was emailed to exactly
+//   - It is bound to the new account (user.Email plus the verified-email
+//     key; refused if another user has it) only when the invitation was emailed to exactly
 //     that address (inviteEmailDelivered). Otherwise the account is created
 //     with no email and EmailBinding records why; an admin can set it later.
 //   - A bound email also gets an SSO grant (InviteEmailGrantStore) only when
@@ -929,8 +1027,9 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 	case !inviteEmailDelivered(inv):
 		inv.EmailBinding = InviteEmailNotEmailed
 	default:
-		if _, closer, err := p.db.Get([]byte("idx:user:email:" + inviteEmail)); err == nil {
-			closer.Close()
+		if taken, err := p.emailHeldByOther(inviteEmail, ""); err != nil {
+			return nil, err
+		} else if taken {
 			return nil, ErrInviteEmailTaken
 		}
 		lowerEmail = inviteEmail
@@ -987,7 +1086,9 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		return nil, err
 	}
 	if lowerEmail != "" {
-		if err := b.Set([]byte("idx:user:email:"+lowerEmail), []byte(id), nil); err != nil {
+		// Delivered to this address, so holding the token proves control of
+		// it: recorded as verified (see the email keys).
+		if err := b.Set([]byte(userEmailIndexPrefix+lowerEmail), []byte(id), nil); err != nil {
 			b.Close()
 			return nil, err
 		}
