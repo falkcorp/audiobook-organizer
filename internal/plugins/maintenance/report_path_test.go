@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/report_path_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b7314ebb-e6db-49d3-af82-37738df6214a
-// last-edited: 2026-09-20
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -53,7 +53,7 @@ func TestMetadataCacheReap_DefaultReportLandsUnderRoot(t *testing.T) {
 	var deleted []string
 	store := reapMockStore([]string{"b1", "b2"}, map[string]bool{"b1": true}, &deleted)
 	root := t.TempDir()
-	p := New(rootDirDeps{fakeDeps: fakeDeps{store: store}, root: root})
+	p := New(rootDirDeps{store: store, root: root})
 
 	require.NoError(t, p.runMetadataCacheReap(context.Background(), nil, &fakeReporter{}))
 
@@ -71,7 +71,7 @@ func TestMetadataCacheReap_DefaultReportLandsUnderRoot(t *testing.T) {
 func TestMetadataCacheReap_NoRootAndNoReportPathRefusesBeforeWork(t *testing.T) {
 	var deleted []string
 	store := reapMockStore([]string{"b1", "b2"}, map[string]bool{"b1": true}, &deleted)
-	p := New(rootDirDeps{fakeDeps: fakeDeps{store: store}, root: ""})
+	p := New(rootDirDeps{store: store, root: ""})
 
 	err := p.runMetadataCacheReap(context.Background(), []byte(`{"apply":true}`), &fakeReporter{})
 	require.Error(t, err)

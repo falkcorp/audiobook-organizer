@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -267,7 +267,7 @@ func TestVGPrimaryFixer_PlanMatchesTheOpDryRun(t *testing.T) {
 		require.Equal(t, op.winner, r.Proposed["primary"], "group %s", r.RowID)
 		require.Equal(t, op.demoted, strings.ReplaceAll(r.Proposed["demote"], ", ", ","), "group %s", r.RowID)
 		var fillFields []string
-		for _, kv := range strings.Split(op.fills, ";") {
+		for kv := range strings.SplitSeq(op.fills, ";") {
 			if kv != "" {
 				fillFields = append(fillFields, strings.SplitN(kv, "=", 2)[0])
 			}
@@ -351,7 +351,7 @@ func newRepairsFixture(t *testing.T, scan *scriptedScan) (*vgRepairFixture, *Plu
 	f.seed(t)
 	withRoot(t, f.root)
 	ops := &planOps{rows: map[string]*database.OperationV2Row{}}
-	p := f.plugin(scanDeps{fakeDeps: fakeDeps{store: f.s}, scan: scan, ops: ops})
+	p := f.plugin(scanDeps{store: f.s, scan: scan, ops: ops})
 	fx := p.Repairs()
 	vf, _ := fx.Get(vgPrimaryFixerID)
 	vf.(*vgPrimaryFixer).probe = f.probe
@@ -483,7 +483,7 @@ func TestVGPrimaryRepair_ApplyPausesARunningScanInsteadOfRefusing(t *testing.T) 
 	f := newVGRepairFixture(t)
 	f.seed(t)
 	scan := &scriptedScan{renewsLeft: -1, running: true, failAcquires: 2}
-	p := f.plugin(scanDeps{fakeDeps: fakeDeps{store: f.s}, scan: scan})
+	p := f.plugin(scanDeps{store: f.s, scan: scan})
 	rep, err := p.versionGroupPrimaryRepair(context.Background(), vgPrimaryRepairParams{
 		Apply: true, GroupIDs: []string{"vg-double"},
 	}, f.root, f.probe, &opIDReporter{id: "op-vgpr"})
@@ -498,7 +498,7 @@ func TestVGPrimaryRepair_LeaseLapseAborts(t *testing.T) {
 	f := newVGRepairFixture(t)
 	f.seed(t)
 	scan := &scriptedScan{renewsLeft: 0}
-	p := f.plugin(scanDeps{fakeDeps: fakeDeps{store: f.s}, scan: scan})
+	p := f.plugin(scanDeps{store: f.s, scan: scan})
 	rep, err := p.versionGroupPrimaryRepair(context.Background(), vgPrimaryRepairParams{
 		Apply: true, GroupIDs: []string{"vg-double"},
 	}, f.root, f.probe, &opIDReporter{id: "op-vgpr"})

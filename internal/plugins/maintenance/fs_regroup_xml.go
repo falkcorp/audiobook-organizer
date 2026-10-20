@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.19.2
+// version: 2.19.3
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -331,10 +331,8 @@ func fsRegroupProtectedPath(p string) bool {
 		root = strings.TrimSuffix(strings.ReplaceAll(root, "\\", "/"), "/")
 		return root != "" && (clean == root || strings.HasPrefix(clean, root+"/"))
 	}
-	for _, pp := range config.AppConfig.ProtectedPaths {
-		if under(pp) {
-			return true
-		}
+	if slices.ContainsFunc(config.AppConfig.ProtectedPaths, under) {
+		return true
 	}
 	for _, lib := range []string{config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath} {
 		if lib != "" && under(filepath.Dir(lib)) {
@@ -535,11 +533,9 @@ func classifyShatteredTarget(t itunesservice.FSRegroupTarget, idx *fsFileIndex) 
 		return g
 	}
 	for _, m := range t.Members {
-		for _, p := range memberPaths(m, idx) {
-			if fsRegroupProtectedPath(p) {
-				g.Category, g.Reason = fsCatProtected, "a member path is under the iTunes tree or a protected path"
-				return g
-			}
+		if slices.ContainsFunc(memberPaths(m, idx), fsRegroupProtectedPath) {
+			g.Category, g.Reason = fsCatProtected, "a member path is under the iTunes tree or a protected path"
+			return g
 		}
 	}
 	if t.SurvivorID == "" {

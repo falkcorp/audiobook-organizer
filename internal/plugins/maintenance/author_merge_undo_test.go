@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -657,7 +657,7 @@ func TestAuthorConjunctionRepair_ARenameOntoAHeldNameIsSkipped(t *testing.T) {
 	st := newRelinkTrashedStore(t)
 	solo := mustAuthorNamed(t, st, "& Probe Held")
 	other := mustAuthorNamed(t, st, "Probe Held")
-	rep := &progressRecorder{opIDReporter: opIDReporter{id: "op-rr8"}}
+	rep := &progressRecorder{id: "op-rr8"}
 	p := New(&fakeDeps{store: twinBlindStore{st}})
 	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), rep))
 
@@ -698,7 +698,7 @@ func (h *handEditStore) GetAuthorByName(string) (*database.Author, error) {
 func TestAuthorConjunctionRepair_ARenameOfAHandEditedRowIsRefused(t *testing.T) {
 	st := newRelinkTrashedStore(t)
 	solo := mustAuthorNamed(t, st, "& Probe Hand")
-	rep := &progressRecorder{opIDReporter: opIDReporter{id: "op-rr9"}}
+	rep := &progressRecorder{id: "op-rr9"}
 	p := New(&fakeDeps{store: &handEditStore{PebbleStore: st, authorID: solo.ID}})
 	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), rep))
 

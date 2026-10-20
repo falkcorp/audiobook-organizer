@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0d4c7f61-2b58-4a39-9c6e-51f0a7d3b284
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 
@@ -54,7 +55,7 @@ func (f *pathLinkFixture) book(id, path string, authorID *int) {
 // filler adds n books already carrying authorID, so the author row's book_count
 // (live books whose scalar names it) clears the suspect-thin-row bar.
 func (f *pathLinkFixture) filler(authorID, n int) {
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("fill-%d-%d", authorID, i)
 		aid := authorID
 		f.book(id, "/mnt/bigdata/books/audiobook-organizer/Filler/"+id+"/x.m4b", &aid)
@@ -86,9 +87,7 @@ func (f *pathLinkFixture) store(t *testing.T) *database.MockStore {
 					out[*b.AuthorID]++
 				}
 			}
-			for id, n := range f.ownCounts {
-				out[id] = n
-			}
+			maps.Copy(out, f.ownCounts)
 			return out, nil
 		},
 		GetAllBooksCoreCompleteFunc: func(limit, offset int) ([]database.BookCore, error) {
@@ -309,7 +308,7 @@ func TestAuthorPathLink_ApplyLinksAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAuthor: %v", err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &a.ID)
 	}
 	pathLinkCreateBook(t, s, "link-me", "/mnt/bigdata/books/audiobook-organizer/Charles Dickens/Bleak House/x.m4b", nil)
@@ -337,7 +336,7 @@ func TestAuthorPathLink_ApplyLinksAndRecords(t *testing.T) {
 func TestAuthorPathLink_ExplicitBookIDs(t *testing.T) {
 	s := pathLinkPebble(t)
 	a, _ := s.CreateAuthor("Charles Dickens")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &a.ID)
 	}
 	pathLinkCreateBook(t, s, "chosen", "/mnt/bigdata/books/audiobook-organizer/Charles Dickens/Bleak House/x.m4b", nil)
@@ -362,7 +361,7 @@ func TestAuthorPathLink_ExistingAuthorIDUntouched(t *testing.T) {
 	s := pathLinkPebble(t)
 	dickens, _ := s.CreateAuthor("Charles Dickens")
 	jane, _ := s.CreateAuthor("Jane Doe")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &dickens.ID)
 	}
 	pathLinkCreateBook(t, s, "owned", "/mnt/bigdata/books/audiobook-organizer/Charles Dickens/Bleak House/x.m4b", &jane.ID)
@@ -399,7 +398,7 @@ func (s *staleNameStore) GetAuthorByName(name string) (*database.Author, error) 
 // pool at the same time, with every name lookup lying about the row's absence.
 func TestAuthorPathLink_CreateIsIdempotentUnderRace(t *testing.T) {
 	s := pathLinkPebble(t)
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		pathLinkCreateBook(t, s, fmt.Sprintf("newrow%d", i),
 			fmt.Sprintf("/mnt/bigdata/books/abooks/imported/Ursula Le Guin/Book %d/x.m4b", i), nil)
 	}
@@ -428,7 +427,7 @@ func TestAuthorPathLink_CreateIsIdempotentUnderRace(t *testing.T) {
 	}
 	// Every book ends on the ONE row, not on an unreachable duplicate.
 	want := res.CreatedAuthors[0].AuthorID
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		b, _ := s.GetBookByID(fmt.Sprintf("newrow%d", i))
 		if b == nil || b.AuthorID == nil || *b.AuthorID != want {
 			t.Fatalf("book newrow%d scalar = %+v, want %d", i, b, want)
@@ -486,7 +485,7 @@ func TestAuthorPathLink_ResumesHalfWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAuthor: %v", err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &a.ID)
 	}
 	pathLinkCreateBook(t, s, "half", "/mnt/bigdata/books/audiobook-organizer/Charles Dickens/Bleak House/x.m4b", nil)
@@ -525,7 +524,7 @@ func TestAuthorPathLink_ForeignCreditLeftAlone(t *testing.T) {
 	s := pathLinkPebble(t)
 	dickens, _ := s.CreateAuthor("Charles Dickens")
 	other, _ := s.CreateAuthor("Jane Doe")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &dickens.ID)
 	}
 	pathLinkCreateBook(t, s, "credited", "/mnt/bigdata/books/audiobook-organizer/Charles Dickens/Bleak House/x.m4b", nil)
@@ -586,7 +585,7 @@ func TestAuthorPathLink_TitleFragmentTargetRefused(t *testing.T) {
 // 🔴 The dry run names the rows an apply would create, once per distinct name.
 func TestAuthorPathLink_DryRunReportsWouldMint(t *testing.T) {
 	f := &pathLinkFixture{}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		f.book(fmt.Sprintf("new%d", i), fmt.Sprintf("/mnt/bigdata/books/abooks/imported/Ursula Le Guin/Book %d/x.m4b", i), nil)
 	}
 	res := runPathLink(t, New(&fakeDeps{store: f.store(t)}), `{"dry_run":true}`)

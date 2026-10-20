@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -173,7 +173,7 @@ func (f *fragFixture) doHeldAction(t *testing.T, row repairs.Row, act string) st
 	switch {
 	case actReRevert.MatchString(act):
 		var errs []string
-		for _, op := range strings.Split(actReRevert.FindStringSubmatch(act)[1], ", ") {
+		for op := range strings.SplitSeq(actReRevert.FindStringSubmatch(act)[1], ", ") {
 			if _, err := audiobooks.NewRevertService(f.s).RevertOperation(op); err != nil {
 				errs = append(errs, op+": "+err.Error())
 			}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -253,10 +254,8 @@ func relinkAwareBooks(
 // writtenIDs adapts a fixture that records only the IDs of books it updated.
 func writtenIDs(ids func() []string) func(string) (*int, bool) {
 	return func(bookID string) (*int, bool) {
-		for _, id := range ids() {
-			if id == bookID {
-				return nil, true
-			}
+		if slices.Contains(ids(), bookID) {
+			return nil, true
 		}
 		return nil, false
 	}

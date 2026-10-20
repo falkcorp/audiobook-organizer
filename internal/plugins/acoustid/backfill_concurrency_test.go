@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_concurrency_test.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 4b1c7e92-6d05-4a38-9f71-2c8ab6d34e50
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package acoustid
 
@@ -90,12 +90,12 @@ func (fx *pagedFixture) deleteBook(id string) {
 
 func newPagedFixture(nBooks, filesPerBook int, file func(bookID string, j int) database.BookFile) *pagedFixture {
 	fx := &pagedFixture{files: map[string][]database.BookFile{}, visits: map[string]int{}}
-	for i := 0; i < nBooks; i++ {
+	for i := range nBooks {
 		id := fmt.Sprintf("book-%05d", i)
 		sig := "signature-present"
 		sigV := fingerprint.BookSignatureVersion // current-era: no rebuild needed
 		fx.books = append(fx.books, database.Book{ID: id, BookSigV1: &sig, BookSigVersion: &sigV})
-		for j := 0; j < filesPerBook; j++ {
+		for j := range filesPerBook {
 			fx.files[id] = append(fx.files[id], file(id, j))
 		}
 	}

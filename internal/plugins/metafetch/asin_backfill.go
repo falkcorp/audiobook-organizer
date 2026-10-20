@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -54,6 +54,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -427,21 +429,13 @@ type asinBackfillResult struct {
 func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResult {
 	t.mu.Lock()
 	rejects := make(map[string]int, len(t.rejects))
-	for k, v := range t.rejects {
-		rejects[k] = v
-	}
+	maps.Copy(rejects, t.rejects)
 	evidence := make(map[string]int, len(t.evidence))
-	for k, v := range t.evidence {
-		evidence[k] = v
-	}
+	maps.Copy(evidence, t.evidence)
 	suspect := make(map[string]int, len(t.suspectReasons))
-	for k, v := range t.suspectReasons {
-		suspect[k] = v
-	}
+	maps.Copy(suspect, t.suspectReasons)
 	unverified := make(map[string]int, len(t.unverifiedReasons))
-	for k, v := range t.unverifiedReasons {
-		unverified[k] = v
-	}
+	maps.Copy(unverified, t.unverifiedReasons)
 	proposals := append([]asinProposal(nil), t.proposals...)
 	dropped := t.proposalsDropped
 	t.mu.Unlock()
@@ -758,13 +752,11 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 	}
 	t.consecutive.Store(0)
 
-	for _, c := range cands {
-		if candidateManualOnly(c) {
-			// Audible answering with a Doctor Who / Big Finish / Torchwood
-			// product means this book is one, whatever its own row says.
-			t.skippedManualOnly.Add(1)
-			return nil
-		}
+	if slices.ContainsFunc(cands, candidateManualOnly) {
+		// Audible answering with a Doctor Who / Big Finish / Torchwood
+		// product means this book is one, whatever its own row says.
+		t.skippedManualOnly.Add(1)
+		return nil
 	}
 
 	d := decideASIN(facts, cands)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
-// last-edited: 2026-09-28
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -241,7 +241,7 @@ func splitCreditNames(s string) []string {
 	out := []string{s}
 	parts := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || r == '&' || r == '/' })
 	for _, p := range parts {
-		for _, q := range strings.Split(p, " and ") {
+		for q := range strings.SplitSeq(p, " and ") {
 			if q = strings.TrimSpace(q); q != "" {
 				out = append(out, q)
 			}

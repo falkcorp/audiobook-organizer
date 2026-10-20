@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review8_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2dc36c12-0ba5-4ca9-90b1-ea5c5c5b27c9
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -251,9 +252,7 @@ func (f *fragFixture) forgeRecord(t *testing.T, r repairs.Row, op, survivor stri
 	raw, err := json.Marshal(st)
 	require.NoError(t, err)
 	proposed := map[string]string{}
-	for k, v := range r.Proposed {
-		proposed[k] = v
-	}
+	maps.Copy(proposed, r.Proposed)
 	proposed["survivor"] = survivor
 	rec, err := json.Marshal(fragPlanRecord{RowID: r.RowID, Fingerprint: r.Fingerprint, Dir: plan.Dir, Key: plan.Key,
 		Survivor: survivor, BookIDs: r.BookIDs, Proposed: proposed, PlannedAt: at, State: raw})

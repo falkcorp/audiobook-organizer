@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_title_revert_fixer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 63020fe7-ecfe-4a9a-8450-fccba4c32c64
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -126,7 +126,7 @@ func newSTRLibrary(t *testing.T) *strLibrary {
 	// After the scan: many later writes on one book (the snapshot at the
 	// scan's start must not be cut off by a limit), an owner's edit on
 	// another, a merge on a third.
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		touch(l.reverted, "later write "+itoa(i))
 	}
 	setTitle(l.changed, "Owner Edited Title")
@@ -284,7 +284,7 @@ func TestScanTitleRevert_ScanWrotePassesOverOtherFieldWrites(t *testing.T) {
 // adds a snapshot but does not refuse the row: its title never moved.
 func TestScanTitleRevert_UnrelatedWriteAfterPlanStillApplies(t *testing.T) {
 	l := newSTRLibrary(t)
-	f := newScanTitleRevertFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+	f := newScanTitleRevertFixer(&Plugin{deps: &ansEnqueueDeps{store: l.st}})
 	res := l.plan(t, f, l.lastWrite, l.reverted)
 	for _, id := range []string{l.lastWrite, l.reverted} {
 		asin := "B0SYNTH" + id[len(id)-3:]
@@ -306,7 +306,7 @@ func TestScanTitleRevert_UnrelatedWriteAfterPlanStillApplies(t *testing.T) {
 // row shows when its title changed.
 func TestScanTitleRevert_UntilBoundsTheTitleWrite(t *testing.T) {
 	l := newSTRLibrary(t)
-	f := newScanTitleRevertFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+	f := newScanTitleRevertFixer(&Plugin{deps: &ansEnqueueDeps{store: l.st}})
 	ids := []string{l.reverted, l.lastWrite, l.otherFieldFirst, l.lateChange}
 
 	// Without until the late change looks like the scan's.
@@ -402,7 +402,7 @@ func TestScanTitleRevert_ParamsRequired(t *testing.T) {
 // revert puts the scan's title back.
 func TestScanTitleRevert_ApplyTitleOnlyJournalsFetchesAndReverts(t *testing.T) {
 	l := newSTRLibrary(t)
-	deps := &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &ansEnqueueDeps{store: l.st}
 	f := newScanTitleRevertFixer(&Plugin{deps: deps})
 	res := l.plan(t, f, l.all()...)
 
@@ -471,7 +471,7 @@ func TestScanTitleRevert_ApplyTitleOnlyJournalsFetchesAndReverts(t *testing.T) {
 // "Undo last apply" restores the title from the history row.
 func TestScanTitleRevert_UndoLastApply(t *testing.T) {
 	l := newSTRLibrary(t)
-	f := newScanTitleRevertFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+	f := newScanTitleRevertFixer(&Plugin{deps: &ansEnqueueDeps{store: l.st}})
 	res := l.plan(t, f, l.lastWrite)
 	w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, "op-undo")
 	out, err := repairs.RunApply(context.Background(), f, res, "plan-1", []string{l.lastWrite}, false,
@@ -492,7 +492,7 @@ func TestScanTitleRevert_UndoLastApply(t *testing.T) {
 // is written, journaled or fetched. A dry run writes nothing either.
 func TestScanTitleRevert_ChangedSincePlan(t *testing.T) {
 	l := newSTRLibrary(t)
-	deps := &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &ansEnqueueDeps{store: l.st}
 	f := newScanTitleRevertFixer(&Plugin{deps: deps})
 	res := l.plan(t, f, l.reverted, l.lastWrite)
 

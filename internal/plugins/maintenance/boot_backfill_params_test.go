@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/boot_backfill_params_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8c1e4d27-5b3a-4f69-9e02-7a6d3b8f1c45
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -345,7 +345,7 @@ func TestBootOps_NoOpRunLogsNoUntaggedInfoLine(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rep := &p6AttrReporter{}
 			deps := &p6BootDeps{skipped: true}
-			deps.store = opChangeFakeStore{fakeOpChangeRebuilder: fakeOpChangeRebuilder{ensure: trustedNoOpEnsure}}
+			deps.store = opChangeFakeStore{ensure: trustedNoOpEnsure}
 			if err := run(New(deps), rep); err != nil {
 				t.Fatal(err)
 			}

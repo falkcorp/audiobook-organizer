@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_window_containment_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f3c6a20-5d1e-4b97-a2c4-0e9b7d1f5a63
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -32,7 +32,7 @@ func containWalk(seed uint64, n int) []uint32 {
 	out[0] = rng.Uint32()
 	for i := 1; i < n; i++ {
 		var mask uint32
-		for bit := 0; bit < 32; bit++ {
+		for bit := range 32 {
 			if rng.Float64() < 0.15 {
 				mask |= 1 << bit
 			}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup_backup_retention_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3b8d6e41-0c97-4a52-b1f6-92e7a5c04d18
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -82,7 +82,7 @@ func TestRunCleanupOldBackups_RetentionSource(t *testing.T) {
 			outsideBackup := filepath.Join(outside, "a.m4b"+bakSuffix(400))
 			touchAged(t, outsideBackup, 400)
 
-			p := New(retentionDeps{rootDirDeps: rootDirDeps{root: root}, days: tc.days})
+			p := New(retentionDeps{root: root, days: tc.days})
 			require.NoError(t, p.runCleanupOldBackups(context.Background(), nil, &fakeReporter{}))
 
 			for age, path := range files {
@@ -137,7 +137,7 @@ func TestCleanupOldBackups_RequeueIsIdempotent(t *testing.T) {
 	keep := filepath.Join(root, "A", "b0", "x.m4b")
 	touchAged(t, keep, 400)
 
-	p := New(retentionDeps{rootDirDeps: rootDirDeps{root: root}, days: 30})
+	p := New(retentionDeps{root: root, days: 30})
 	sweep := func(ctx context.Context) error {
 		return p.runCleanupOldBackups(ctx, nil, &fakeReporter{})
 	}
@@ -191,7 +191,7 @@ func TestRunCleanupOldBackups_FailedRemoveIsLoggedNotCounted(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
 
 	rep := &fakeReporter{}
-	p := New(retentionDeps{rootDirDeps: rootDirDeps{root: root}, days: 30})
+	p := New(retentionDeps{root: root, days: 30})
 	require.NoError(t, p.runCleanupOldBackups(context.Background(), nil, rep))
 
 	require.FileExists(t, locked, "a remove the OS refused leaves the file in place")

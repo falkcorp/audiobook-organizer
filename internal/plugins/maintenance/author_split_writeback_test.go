@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/author_split_writeback_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 4b7e1d92-8c6a-4f3b-9a02-1e5c7d8f0a3b
-// last-edited: 2026-09-25
+// last-edited: 2026-10-20
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -89,9 +90,9 @@ func TestAuthorSplit_WritesFreshAuthorNotStaleOrNil(t *testing.T) {
 	}
 	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, junction,
 		func(bookID string) (*int, bool) {
-			for i := len(written) - 1; i >= 0; i-- {
-				if written[i].ID == bookID {
-					return written[i].AuthorID, true
+			for _, w := range slices.Backward(written) {
+				if w.ID == bookID {
+					return w.AuthorID, true
 				}
 			}
 			return nil, false

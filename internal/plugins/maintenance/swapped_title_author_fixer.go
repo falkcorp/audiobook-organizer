@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -1105,7 +1105,7 @@ pathLoop:
 			continue
 		}
 		for _, p := range paths {
-			for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+			for seg := range strings.SplitSeq(filepath.ToSlash(p), "/") {
 				if strings.Contains(junkLettersKey(seg), k) {
 					out = append(out, swapCorr{swapCorrPath, fmt.Sprintf("the provider author %q is in the file path %s", n, p)})
 					break pathLoop

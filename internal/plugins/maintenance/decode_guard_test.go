@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/decode_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d7a2e91-b3f0-4c58-8e16-a9c5d02f7b34
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -55,7 +55,7 @@ func TestDecodeOps_RefuseWithoutServerDecode(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s.Close() })
-			deps := &storeSpyDeps{fakeDeps: fakeDeps{store: s}}
+			deps := &storeSpyDeps{store: s}
 			err = tc.run(New(deps))
 			if !errors.Is(err, serverdecode.ErrRefused) {
 				t.Fatalf("err = %v, want ErrRefused", err)

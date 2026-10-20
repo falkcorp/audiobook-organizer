@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_journal_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0b42d884-b844-4201-ba60-046bfb995928
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,9 +115,7 @@ func (fw *fakeWhisper) snapshot() (map[string]int, int) {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	out := make(map[string]int, len(fw.perClip))
-	for k, v := range fw.perClip {
-		out[k] = v
-	}
+	maps.Copy(out, fw.perClip)
 	return out, fw.requests
 }
 

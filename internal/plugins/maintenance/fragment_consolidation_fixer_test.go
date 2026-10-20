@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.31.2
+// version: 1.31.3
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -1171,7 +1171,7 @@ func TestFragmentFixer_JournalDedupesOnResume(t *testing.T) {
 	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		w := f.fragWriter(t, "op-x")
 		require.NoError(t, w.Journal(f.ids["fragF"], undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", f.ids["parent"]))
 	}
@@ -3964,7 +3964,7 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 			&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
 		require.NoError(t, err)
 	}
-	for i := 0; i < noise; i++ {
+	for i := range noise {
 		require.NoError(t, s.CreateOperationChange(&database.OperationChange{
 			ID: fmt.Sprintf("n%09d", i), OperationID: fmt.Sprintf("op-noise-%d", i%50), BookID: fmt.Sprintf("noise-%d", i%5000),
 			ChangeType: "metadata_update", FieldName: "title", OldValue: "a", NewValue: "b",
@@ -4001,7 +4001,7 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	require.NoError(t, err)
 	oneIndexed := time.Since(start)
 	start = time.Now()
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		_, err := s.GetBookChanges(fmt.Sprintf("noise-%d", i))
 		require.NoError(t, err)
 	}

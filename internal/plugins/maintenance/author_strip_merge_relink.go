@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 
@@ -411,11 +412,9 @@ func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, 
 	for i := range files {
 		paths = append(paths, files[i].FilePath)
 	}
-	for _, p := range paths {
-		if pathutil.UnderFrozenITunesTree(p) {
-			r.Outcome = titleRelinkOutcomeITunes
-			return r
-		}
+	if slices.ContainsFunc(paths, pathutil.UnderFrozenITunesTree) {
+		r.Outcome = titleRelinkOutcomeITunes
+		return r
 	}
 	// The whole-book owner-manual check (owner decision 2026-10-05): the row
 	// and every file path as before, plus the series row, the author

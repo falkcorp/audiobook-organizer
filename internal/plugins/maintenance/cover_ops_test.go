@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1c8f4a27-9e3b-4d60-b5a2-7d0e6f3c9b18
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -63,7 +63,7 @@ func coverOpFixture(t *testing.T) (*database.PebbleStore, rootDirDeps, []string)
 		}
 		ids = append(ids, b.ID)
 	}
-	return st, rootDirDeps{fakeDeps: fakeDeps{store: st}, root: root}, ids
+	return st, rootDirDeps{store: st, root: root}, ids
 }
 
 func TestFolderCoverBackfillPreviewWritesNothing(t *testing.T) {

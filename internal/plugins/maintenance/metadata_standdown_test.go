@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_standdown_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f1d3b82-9a4e-4c57-8e20-d3a5b7c91f46
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -39,7 +39,7 @@ func (d *metadataScanDeps) RenewScanStandDown(string) bool { return true }
 func TestMetadataRefresh_RefusesWhileScanHoldsTheLibrary(t *testing.T) {
 	var bodyCtx context.Context
 	d := &metadataScanDeps{
-		fakeDeps:   fakeDeps{refreshCtx: &bodyCtx},
+		refreshCtx: &bodyCtx,
 		acquireErr: errors.New("scan did not park within 5m0s"),
 	}
 	p := New(d)

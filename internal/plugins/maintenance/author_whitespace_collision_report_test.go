@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_whitespace_collision_report_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 153134ba-aa4f-4a82-ae54-9e54490af6c5
-// last-edited: 2026-09-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -99,7 +99,7 @@ func TestAuthorWhitespaceCollision_GroupsAndKinds(t *testing.T) {
 
 func TestAuthorWhitespaceCollision_SampleLimitPerKind(t *testing.T) {
 	var authors []database.Author
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		base := string(rune('a'+i)) + " name"
 		authors = append(authors,
 			database.Author{ID: i*10 + 1, Name: base},

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -156,7 +156,7 @@ func TestActivityFilterIndexBackfill_ResumesAfterCancelAndGatesPlanner(t *testin
 
 	// Every row is reachable through the index now: 160 rows over 3 sources.
 	total := 0
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		n, partial := countSource(t, s, fmt.Sprintf("src%d", i))
 		assert.False(t, partial)
 		total += n

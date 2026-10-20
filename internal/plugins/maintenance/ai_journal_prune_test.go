@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ai_journal_prune_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 27ded651-bee8-45c3-a464-9159918a1f1f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -48,7 +48,7 @@ func seedJournal(t *testing.T) *database.PebbleStore {
 
 func TestPruneAIJournal_UsesConfiguredRetention(t *testing.T) {
 	s := seedJournal(t)
-	p := New(journalPruneDeps{fakeDeps: fakeDeps{store: s}, days: 30})
+	p := New(journalPruneDeps{store: s, days: 30})
 	rep := &resultReporter{}
 	if err := p.runPruneAIJournal(context.Background(), nil, rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -72,7 +72,7 @@ func TestPruneAIJournal_UsesConfiguredRetention(t *testing.T) {
 
 func TestPruneAIJournal_ZeroRetentionKeepsForever(t *testing.T) {
 	s := seedJournal(t)
-	p := New(journalPruneDeps{fakeDeps: fakeDeps{store: s}, days: 0})
+	p := New(journalPruneDeps{store: s, days: 0})
 	rep := &resultReporter{}
 	if err := p.runPruneAIJournal(context.Background(), nil, rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -87,7 +87,7 @@ func TestPruneAIJournal_ZeroRetentionKeepsForever(t *testing.T) {
 
 func TestPruneAIJournal_ParamOverridesConfig(t *testing.T) {
 	s := seedJournal(t)
-	p := New(journalPruneDeps{fakeDeps: fakeDeps{store: s}, days: 0})
+	p := New(journalPruneDeps{store: s, days: 0})
 	rep := &resultReporter{}
 	if err := p.runPruneAIJournal(context.Background(), json.RawMessage(`{"retention_days":7}`), rep); err != nil {
 		t.Fatalf("run: %v", err)
@@ -102,7 +102,7 @@ func TestPruneAIJournal_ParamOverridesConfig(t *testing.T) {
 
 func TestPruneAIJournal_CancelledContext(t *testing.T) {
 	s := seedJournal(t)
-	p := New(journalPruneDeps{fakeDeps: fakeDeps{store: s}, days: 30})
+	p := New(journalPruneDeps{store: s, days: 30})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := p.runPruneAIJournal(ctx, nil, &resultReporter{}); err == nil {

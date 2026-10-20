@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
-// last-edited: 2026-10-09
+// last-edited: 2026-10-20
 
 // Folder chapter sets: the fragment-consolidation fixer's rule for a folder
 // of numbered chapter files that share one name, that no parent book owns,
@@ -295,8 +295,8 @@ func fragSetTitle(stem string, sh fragNameShape, varying []int, authors, people 
 	if fragDupSuffixRe.MatchString(s[last[1]:]) {
 		s = s[:last[1]]
 	}
-	for i := len(varying) - 1; i >= 0; i-- {
-		run := sh.runs[varying[i]]
+	for _, v := range slices.Backward(varying) {
+		run := sh.runs[v]
 		start := run[0]
 		if m := fragChapterWordTailRe.FindStringSubmatchIndex(s[:start]); m != nil {
 			start = m[2]

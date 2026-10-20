@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_apply_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e8a1c73-b5d2-49f6-8a0e-d37c9f12b6a5
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -74,7 +74,7 @@ func (d *splitDeps) snapshot() (acquires []string, releases, invalidations int) 
 }
 
 func newSplitDeps(store database.Store) *splitDeps {
-	return &splitDeps{fakeDeps: fakeDeps{store: store}}
+	return &splitDeps{store: store}
 }
 
 func runSplit(t *testing.T, d *splitDeps, body string) (*opIDReporter, error) {

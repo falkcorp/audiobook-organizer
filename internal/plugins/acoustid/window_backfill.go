@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package acoustid
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -463,9 +464,7 @@ func (t *windowTally) deferredByReason() map[string]int {
 	t.deferMu.Lock()
 	defer t.deferMu.Unlock()
 	out := make(map[string]int, len(t.deferredBy))
-	for k, v := range t.deferredBy {
-		out[k] = v
-	}
+	maps.Copy(out, t.deferredBy)
 	return out
 }
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-10-03
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1146,7 +1147,7 @@ var fileLabelWords = map[string]bool{
 func workOfTitle(tk string) string {
 	var keep []string
 	named := false
-	for _, w := range strings.Fields(tk) {
+	for w := range strings.FieldsSeq(tk) {
 		if fileLabelWords[w] || strings.IndexFunc(w, func(r rune) bool { return !unicode.IsDigit(r) }) < 0 {
 			continue
 		}
@@ -1376,10 +1377,8 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	junkNorm := authorjunk.Normalize(a.Name)
 	refuse := func(src, name, code, why string) {
 		key := fmt.Sprintf("%q [%s] %s", name, src, code)
-		for _, r := range d.RefusedKeys {
-			if r == key {
-				return
-			}
+		if slices.Contains(d.RefusedKeys, key) {
+			return
 		}
 		d.RefusedKeys = append(d.RefusedKeys, key)
 		d.Refused = append(d.Refused, fmt.Sprintf("%q [%s]: %s", name, src, why))

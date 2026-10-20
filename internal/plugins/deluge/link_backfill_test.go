@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 5df77016-851d-46b8-b842-bfe9014b4e37
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package deluge
 
@@ -161,9 +161,7 @@ type tfile struct {
 func (f *linkFixture) torrent(t *testing.T, n int, savePath string, files ...tfile) delugeclient.TorrentDetail {
 	t.Helper()
 	d := delugeclient.TorrentDetail{
-		TorrentStatus: delugeclient.TorrentStatus{
-			Hash: linkTorrentID(n), Name: "Example Book", SavePath: savePath, Label: linkTestLabel,
-		},
+		Hash: linkTorrentID(n), Name: "Example Book", SavePath: savePath, Label: linkTestLabel,
 	}
 	for i, tf := range files {
 		p := filepath.Join(savePath, tf.rel)

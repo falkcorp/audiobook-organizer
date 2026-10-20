@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_attribution_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 02ce91e2-c227-4b3c-b13d-45a89faf23c9
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -47,7 +47,7 @@ func (f *fragFixture) moveAndRetire(t *testing.T, w *repairs.Writer, fixerID, su
 	for i := range others {
 		require.NoError(t, w.MoveBookFiles([]string{otherRows[i]}, others[i], survivor))
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fixerID, others[i], survivor, &merge.SliceMapping{Mappable: true})
 		require.NoError(t, err)
 	}

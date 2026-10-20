@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/temp_cleanup_import_paths_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 5b8e2f4a-7c19-4d63-a0e5-91f3c6d28b47
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -53,7 +53,7 @@ func newTranscodeTempFixture(t *testing.T) transcodeTempFixture {
 	withPluginAppDirs(t, a, true)
 
 	f := transcodeTempFixture{
-		deps:    &countingDeps{rootDirDeps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}},
+		deps:    &countingDeps{store: store, root: t.TempDir()},
 		missing: missing,
 		staleA:  filepath.Join(a, "Author", "one-transcode.tmp.m4b"),
 		freshA:  filepath.Join(a, "Author", "two-transcode.tmp.m4b"),
@@ -118,7 +118,7 @@ func TestTranscodeTempCleanup_ContradictoryModeFails(t *testing.T) {
 // TestTempFileCleanup_LibrarySweepUnchanged: the existing op still runs only the
 // library-root sweep.
 func TestTempFileCleanup_LibrarySweepUnchanged(t *testing.T) {
-	deps := &countingDeps{rootDirDeps: rootDirDeps{root: t.TempDir()}}
+	deps := &countingDeps{root: t.TempDir()}
 	require.NoError(t, New(deps).runTempFileCleanup(context.Background(), nil, &fakeReporter{}))
 	require.Equal(t, 1, deps.sweeps)
 	require.Equal(t, deps.root, deps.sweptRoot)

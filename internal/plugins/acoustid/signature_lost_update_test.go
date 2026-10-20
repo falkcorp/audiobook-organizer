@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/signature_lost_update_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d4ae5494-c39a-4c29-8456-9a40033177cc
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package acoustid
 
@@ -83,7 +83,7 @@ func (s *sigLostUpdateStore) stored() *database.Book {
 // fingerprint.SynthesizePartialBookSignature reads.
 func lostUpdateSegment(rng *rand.Rand, words int) string {
 	buf := make([]byte, words*4)
-	for i := 0; i < words; i++ {
+	for i := range words {
 		binary.LittleEndian.PutUint32(buf[i*4:], rng.Uint32())
 	}
 	return fingerprint.EncodeWholeFingerprint(buf)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -147,7 +147,7 @@ func TestFragmentFixer_DemoteOnlyFirstOpRevertsToOnePrimaryInEitherOrder(t *test
 	t.Parallel()
 	total := handOffProbeRenewals(t)
 	ran := 0
-	for k := 0; k < total; k++ {
+	for k := range total {
 		for _, order := range [][]string{{"op-apply", "op-retry"}, {"op-retry", "op-apply"}} {
 			f := newFragFixture(t)
 			f.seed(t)
