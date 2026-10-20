@@ -1,7 +1,7 @@
 // file: internal/httputil/respond.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-12
+// last-edited: 2026-10-19
 
 // Package httputil provides shared HTTP response helpers for all packages
 // that handle gin HTTP requests (server, middleware, itunes/service, etc).
@@ -144,8 +144,10 @@ func RespondWithList(c *gin.Context, items any, count int, limit int, offset int
 func logErrorWithContext(c *gin.Context, statusCode int, message string) {
 	method := c.Request.Method
 	// Path and message derive from the request; escape CR/LF so a crafted
-	// URL cannot forge log records (CA12).
-	path := logging.Sanitize(c.Request.URL.Path)
+	// URL cannot forge log records (CA12). The path is also redacted: an invite
+	// token is a bearer secret that lives in the path, and a lookup of a used or
+	// expired token answers with an error that lands here.
+	path := logging.Sanitize(logging.RedactInvitePath(c.Request.URL.Path))
 	message = logging.Sanitize(message)
 	clientIP := c.ClientIP()
 	if statusCode >= 500 {

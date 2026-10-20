@@ -652,10 +652,11 @@ func NewServer(store database.Store) *Server {
 	// incremental delivery, so events arrive only when the buffer flushes.
 	router.Use(compressionMiddleware())
 	// OpenTelemetry instrumentation: create per-handler spans and record metrics.
-	// otelgin v0.71 records url.path only (no url.query / url.full /
+	// otelgin v0.72 records url.path only (no url.query / url.full /
 	// http.target), so query-string credentials never reach a span;
-	// TestOtelginSpansCarryNoQueryCredentials pins that across upgrades.
-	router.Use(otelgin.Middleware("audiobook-organizer"))
+	// TestOtelginSpansCarryNoQueryCredentials pins that across upgrades. url.path
+	// is the RAW path though, which carries invite tokens: see tracingMiddleware.
+	router.Use(tracingMiddleware()...)
 
 	// Register metrics (idempotent)
 	metrics.Register()
@@ -1589,4 +1590,12 @@ func registerAll(s *Server, reg *opsregistry.Registry) []error {
 // port wave adds the fields its bundles use, taken from s.store here.
 func (s *Server) catalogDeps() opscatalog.Deps {
 	return opscatalog.Deps{}
+}
+
+// tracingMiddleware is the otelgin tracer with invite tokens kept out of the
+// recorded url.path (see servermiddleware.TraceWithRedactedInvitePath). It
+// returns a chain to install with router.Use(tracingMiddleware()...). opts are
+// otelgin options; production passes none, tests pass a tracer provider.
+func tracingMiddleware(opts ...otelgin.Option) []gin.HandlerFunc {
+	return servermiddleware.TraceWithRedactedInvitePath(otelgin.Middleware("audiobook-organizer", opts...))
 }

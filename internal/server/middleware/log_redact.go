@@ -1,7 +1,7 @@
 // file: internal/server/middleware/log_redact.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f83a7613-f71d-4a0c-ae37-7f7f3ccf8929
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package middleware
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/gin-gonic/gin"
 )
 
@@ -62,8 +63,16 @@ func RedactQueryCredentials(pathWithQuery string) string {
 	return path + "?" + strings.Join(parts, "&")
 }
 
+// RedactLogPath is the one redaction every logged request path goes through:
+// credential query values (RedactQueryCredentials) and the invite token path
+// segment (logging.RedactInvitePath). Invite tokens are bearer secrets that
+// live in the PATH, so the query-only redaction above cannot see them.
+func RedactLogPath(pathWithQuery string) string {
+	return RedactQueryCredentials(logging.RedactInvitePath(pathWithQuery))
+}
+
 // RedactingLogFormatter is gin's default request-log format with credential
-// query values redacted. Use it as gin.LoggerConfig.Formatter.
+// query values and invite tokens redacted. Use it as gin.LoggerConfig.Formatter.
 func RedactingLogFormatter(param gin.LogFormatterParams) string {
 	var statusColor, methodColor, resetColor string
 	if param.IsOutputColor() {
@@ -80,7 +89,7 @@ func RedactingLogFormatter(param gin.LogFormatterParams) string {
 		param.Latency,
 		param.ClientIP,
 		methodColor, param.Method, resetColor,
-		RedactQueryCredentials(param.Path),
+		RedactLogPath(param.Path),
 		param.ErrorMessage,
 	)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.55.2
+// version: 4.57.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-20
 
@@ -2151,20 +2151,24 @@ func pruneExpiredSessions(ops expiredSessionPruner, sessionLog *logger.StandardL
 
 // newHTTPSRedirectHandler answers plain-HTTP requests with a 301 to HTTPS.
 //
-// The debug log line goes through RedactQueryCredentials: the redirected URL
-// keeps its query string, and ABS clients put their bearer credential in
-// ?token=, so logging r.URL.String() verbatim wrote it to the journal.
+// The debug log line goes through RedactLogPath (credential query values and
+// invite-token path segments): the redirected URL keeps its query string, and
+// ABS clients put their bearer credential in ?token=, so logging r.URL.String()
+// verbatim wrote it to the journal. RedactLogPath only recognises a request
+// path, so the target is redacted as base + redacted request URI, never as a
+// whole "https://host/..." URL.
 func newHTTPSRedirectHandler(cfgHost, httpsPort string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		target := "https://" + r.Host
+		base := "https://" + r.Host
 		if httpsPort != "443" {
-			target = fmt.Sprintf("https://%s:%s", cfgHost, httpsPort)
+			base = fmt.Sprintf("https://%s:%s", cfgHost, httpsPort)
 		}
-		target += r.URL.RequestURI()
+		target := base + r.URL.RequestURI()
+		loggedURI := servermiddleware.RedactLogPath(r.URL.RequestURI())
 
 		slog.Debug("HTTP->HTTPS redirect",
-			"url", logger.SanitizeLogValue(servermiddleware.RedactQueryCredentials(r.URL.RequestURI())),
-			"target", logger.SanitizeLogValue(servermiddleware.RedactQueryCredentials(target)))
+			"url", logger.SanitizeLogValue(loggedURI),
+			"target", logger.SanitizeLogValue(base+loggedURI))
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	}
 }
