@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -56,11 +56,14 @@ import (
 //
 // Real use is one page load and one accept per guest.
 //
-// Tuning constraint: the idle TTL of a limiter (15 minutes) times its request
-// rate must stay below the limiter's tracked-entry cap (10,000), or a flood of
-// distinct keys could evict a victim's bucket and hand it a fresh burst. The
-// global ceiling below admits at most inviteGlobalRatePerMinute new keys a
-// minute (4,500 per idle TTL), which is why it is not larger.
+// Tuning constraint: the number of new keys a limiter can be made to track
+// within its idle TTL (15 minutes) must stay below its tracked-entry cap
+// (10,000), or a flood of distinct keys could evict a victim's bucket and hand
+// it a fresh burst. The middleware creates per-client and per-token entries
+// only for requests the global layer has already admitted, so each of those
+// limiters gains at most inviteGlobalRateBurst + 15 *
+// inviteGlobalRatePerMinute = 4,600 keys per idle TTL, and the global limiter
+// has one key. That is why the global ceiling is not larger.
 const (
 	// Per client (layer 2). Name kept from the single shared limiter this
 	// replaced.
@@ -231,31 +234,47 @@ func remoteAddrIsLocal(addr string) bool {
 // unparseable) uses the shared fallback bucket. ok=false means tokenOf has
 // already answered the request (413) and the chain stops.
 //
-// Order: client, then token, then global. A caller that is already limited
-// never spends a token or global slot, so one noisy client or one hammered
-// token cannot drain the shared ceiling. A request with no trusted client
-// address skips the client layer (see inviteClientKey). Every layer refuses
-// with the same status and body, so a caller cannot tell which layer tripped.
+// Order:
+//  1. the client and token layers are checked WITHOUT spending or tracking
+//     anything (WouldAllowKey): a caller that is already limited is refused
+//     here, so it never spends a global slot and one noisy client or one
+//     hammered token cannot drain the shared ceiling;
+//  2. the global layer spends its slot; a refusal here creates nothing;
+//  3. only then do the client and token layers spend their tokens, creating
+//     an entry for a key seen for the first time.
+//
+// So every new per-client or per-token entry belongs to a request the global
+// layer admitted, which bounds key churn (see the tuning constraint above). A
+// concurrent request can take a bucket's last token between steps 1 and 3;
+// the request is then refused after spending a global slot, which is bounded
+// by the global layer itself. A request with no trusted client address skips
+// the client layer (see inviteClientKey). Every layer refuses with the same
+// status and body, so a caller cannot tell which layer tripped.
 func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, ok bool)) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ok := true
-		if key, attributed := l.inviteClientKey(c); attributed {
-			ok = l.perClient.AllowKey(key)
-		}
+		clientKey, attributed := l.inviteClientKey(c)
+		ok := !attributed || l.perClient.WouldAllowKey(clientKey)
+		var tokenKey string
 		if ok {
 			token, proceed := tokenOf(c)
 			if !proceed {
 				c.Abort()
 				return
 			}
-			key := inviteTokenKey(token)
-			if key == "" {
-				key = inviteFallbackTokenKey
+			tokenKey = inviteTokenKey(token)
+			if tokenKey == "" {
+				tokenKey = inviteFallbackTokenKey
 			}
-			ok = l.perToken.AllowKey(key)
+			ok = l.perToken.WouldAllowKey(tokenKey)
 		}
 		if ok {
 			ok = l.global.AllowKey(inviteGlobalKey)
+		}
+		if ok && attributed {
+			ok = l.perClient.AllowKey(clientKey)
+		}
+		if ok {
+			ok = l.perToken.AllowKey(tokenKey)
 		}
 		if !ok {
 			httputil.RespondWithError(c, http.StatusTooManyRequests, "rate limit exceeded", "TOO_MANY_REQUESTS")

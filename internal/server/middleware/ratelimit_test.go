@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package middleware
 
@@ -307,4 +307,29 @@ func (r *IPRateLimiter) Len() int {
 // it to prove the request path never sweeps and that the background sweeper ran.
 func (r *IPRateLimiter) SweepCount() int64 {
 	return r.sweeps.Load()
+}
+
+// WouldAllowKey answers without taking a token and without tracking an unseen
+// key, so a caller stacking limiters can refuse before any of them changes.
+func TestIPRateLimiter_WouldAllowKeyTakesNothing(t *testing.T) {
+	r := NewIPRateLimiter(1, 2)
+	if !r.WouldAllowKey("fresh") {
+		t.Fatal("an unseen key must be allowed")
+	}
+	if n := len(r.entries); n != 0 {
+		t.Fatalf("WouldAllowKey tracked %d entries, want 0", n)
+	}
+	for range 2 {
+		if !r.WouldAllowKey("k") || !r.AllowKey("k") {
+			t.Fatal("a key inside its burst must be allowed")
+		}
+	}
+	for range 3 {
+		if r.WouldAllowKey("k") {
+			t.Fatal("an exhausted key reported allowed")
+		}
+	}
+	if r.AllowKey("k") {
+		t.Fatal("WouldAllowKey must not have refilled the bucket")
+	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -729,5 +729,40 @@ func TestHasCloudflareMarkers(t *testing.T) {
 				t.Fatalf("hasCloudflareMarkers = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// NIT2: a request the global layer refuses creates no per-client or per-token
+// bucket, so key churn is bounded by the global ceiling; and a client that is
+// already limited does not spend a global slot.
+func TestInviteRateLimit_GlobalIsCheckedBeforeAnyBucketIsCreated(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	// A limited client: its refused requests leave the global budget alone.
+	if _, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), "198.51.100.5", nil)
+	}); !limited {
+		t.Fatal("the client was never limited")
+	}
+	for i := range 200 {
+		h.get(inviteTestToken(100+i), "198.51.100.5", nil)
+	}
+	if w := h.get(inviteTestToken(999), "198.51.100.6", nil); w.Code != http.StatusOK {
+		t.Fatalf("a fresh client after 200 refused requests from a limited one: %d, want 200 (global untouched)", w.Code)
+	}
+	// Spend the global budget with distinct clients and tokens.
+	if _, limited, _ := countAllowedUntilLimited(t, inviteGlobalRateBurst+30, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(2000+i), fmt.Sprintf("198.51.101.%d", i%254+1), nil)
+	}); !limited {
+		t.Fatal("global ceiling never tripped")
+	}
+	// Past the ceiling, a client's refused requests spend nothing of its own:
+	// more requests than its burst still leave its bucket full.
+	for i := range inviteAuthRateBurst + 5 {
+		if w := h.get(inviteTestToken(5000+i), "198.51.102.1", nil); w.Code != http.StatusTooManyRequests {
+			t.Fatalf("request %d past the global ceiling: %d, want 429", i, w.Code)
+		}
+	}
+	if !h.limits.perClient.WouldAllowKey("invite-client:198.51.102.1") {
+		t.Fatal("requests the global layer refused spent the client's own bucket")
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package middleware
 
@@ -222,6 +222,30 @@ func (r *IPRateLimiter) AllowKey(key string) bool {
 		key = "unknown"
 	}
 	return r.limiterForIP(key).Allow()
+}
+
+// WouldAllowKey reports whether AllowKey(key) would succeed right now, without
+// taking a token and without creating an entry for an unseen key (an unseen or
+// idle key would get a full bucket, so it reports true). Callers that stack
+// several limiters use it to refuse a request before any of them spends a
+// token or tracks a new key. It is a snapshot: a concurrent request can take
+// the last token before the caller's AllowKey.
+func (r *IPRateLimiter) WouldAllowKey(key string) bool {
+	if key == "" {
+		key = "unknown"
+	}
+	now := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	el, ok := r.entries[key]
+	if !ok {
+		return true
+	}
+	entry := el.Value.(*limiterEntry)
+	if now.Sub(entry.lastSeen) > r.idleTTL {
+		return true
+	}
+	return entry.limiter.Tokens() >= 1
 }
 
 // Middleware returns a Gin middleware that enforces the configured limit.
