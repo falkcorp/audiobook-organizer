@@ -1,5 +1,5 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
 // last-edited: 2026-10-20
 
@@ -457,4 +457,27 @@ func TestReserveKeys_RefusalEvictsNobody(t *testing.T) {
 	}
 	assert.False(t, a.AllowKey("victim"), "refused requests evicted the victim, refreshing its empty bucket")
 	assert.Equal(t, 2, a.Len())
+}
+
+// A step that panics midway (here a nil limiter) does not leak the
+// reservations already taken: they are cancelled before the panic continues.
+func TestReserveKeys_PanicCancelsPartialReservations(t *testing.T) {
+	a := NewIPRateLimiter(1, 1)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected the nil limiter to panic")
+			}
+		}()
+		ReserveKeys(KeyStep{a, "x"}, KeyStep{nil, "y"})
+	}()
+	a.mu.Lock()
+	pending := len(a.pending)
+	a.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("a panic leaked %d pending admission(s)", pending)
+	}
+	if _, ok := a.ReserveKey("x"); !ok {
+		t.Fatal("x's only token was not given back after the panic")
+	}
 }
