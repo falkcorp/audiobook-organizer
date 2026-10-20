@@ -72,7 +72,7 @@ class APITester:
             # Try to parse JSON response
             try:
                 response_json = response.json()
-            except:
+            except ValueError:  # requests' JSONDecodeError subclasses ValueError
                 response_json = {"raw": response.text[:200]}
 
             success = response.status_code == expected_status

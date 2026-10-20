@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# file: scripts/dedup_bench_check.py
+# version: 1.0.2
+# guid: 72693f85-ecfb-4c5e-ab92-b5b4879721b2
+# last-edited: 2026-10-20
+
 """Check status of dedup benchmark batch jobs and download results.
 
 Usage:
@@ -12,6 +17,8 @@ import os
 import sys
 from pathlib import Path
 
+from openai import OpenAI
+
 # Load .env from scripts/ directory
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
@@ -20,8 +27,6 @@ if env_path.exists():
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
-
-from openai import OpenAI
 
 
 def check_batches(run_dir: str, api_key: str, label: str):

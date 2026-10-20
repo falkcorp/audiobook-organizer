@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/bump-release-sha.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: 2465b808-74b7-45c8-9200-80854db55a3f
 # last-edited: 2026-10-20
 
@@ -56,7 +56,6 @@ def update_repo(repo):
     # Fetch current file
     file_info = gh_json("api", f"/repos/{full}/contents/{WORKFLOW_PATH}")
     content = base64.b64decode(file_info["content"]).decode()
-    sha_blob = file_info["sha"]
 
     if OLD_SHA not in content:
         print("  SKIP — old SHA not found")

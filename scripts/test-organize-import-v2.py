@@ -20,6 +20,7 @@ Improvements over V1:
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -101,15 +102,11 @@ class SeriesPatternMatcher:
                 position = 0
 
                 if method in ["numbered_series", "book_numbered", "hash_numbered"]:
-                    try:
+                    with contextlib.suppress(ValueError, IndexError):
                         position = int(match.group(2))
-                    except (ValueError, IndexError):
-                        pass
                 elif method == "volume_numbered" and len(match.groups()) >= 3:
-                    try:
+                    with contextlib.suppress(ValueError, IndexError):
                         position = int(match.group(3))
-                    except (ValueError, IndexError):
-                        pass
 
                 return series, position, f"pattern:{method}"
 
@@ -455,7 +452,7 @@ class BookGrouper:
 
         # Process groups with multiple versions
         duplicate_group_counter = 0
-        for book_id, book_group in books_by_id.items():
+        for book_group in books_by_id.values():
             if len(book_group) > 1:
                 # Assign duplicate group ID
                 duplicate_group_counter += 1

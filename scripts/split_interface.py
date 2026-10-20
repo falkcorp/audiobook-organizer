@@ -31,7 +31,9 @@ import re
 def split(path, target, groups):
     p = pathlib.Path(path)
     lines = p.read_text().splitlines()
-    start = next(i for i, l in enumerate(lines) if l.startswith(f"type {target} interface {{"))
+    start = next(
+        i for i, line in enumerate(lines) if line.startswith(f"type {target} interface {{")
+    )
     end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
     hc = start
     while hc > 0 and lines[hc - 1].startswith("//"):
@@ -39,11 +41,11 @@ def split(path, target, groups):
     doc, body = lines[hc:start], lines[start + 1 : end]
     units, embeds, pending, i = {}, [], [], 0
     while i < len(body):
-        l = body[i]
-        m = re.match(r"^\t([A-Za-z0-9_]+)\(", l)
+        line = body[i]
+        m = re.match(r"^\t([A-Za-z0-9_]+)\(", line)
         if m:
-            chunk = pending + [l]
-            depth = l.count("(") - l.count(")")
+            chunk = pending + [line]
+            depth = line.count("(") - line.count(")")
             i += 1
             while depth > 0 and i < len(body):
                 chunk.append(body[i])
@@ -53,19 +55,19 @@ def split(path, target, groups):
             pending = []
             continue
         e = re.match(
-            r"^\t([A-Za-z_][A-Za-z0-9_.]*)\s*(//.*)?$", l
+            r"^\t([A-Za-z_][A-Za-z0-9_.]*)\s*(//.*)?$", line
         )  # embedded interface (may carry a trailing comment)
         if e:
-            embeds.append("\n".join(pending + [l]))
+            embeds.append("\n".join(pending + [line]))
             pending = []
             i += 1
             continue
-        if l.strip().startswith("//"):
-            pending.append(l)
-        elif l.strip() == "":
+        if line.strip().startswith("//"):
+            pending.append(line)
+        elif line.strip() == "":
             pending = []
         else:
-            pending.append(l)
+            pending.append(line)
         i += 1
     named = [m for _, _, ms in groups for m in ms]
     assert sorted(named) == sorted(units), (

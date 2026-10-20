@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/issue_manager.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: eff97164-e8dd-4ff0-b737-5e32aebc2117
 # last-edited: 2026-10-20
 
@@ -1329,11 +1329,7 @@ class IssueUpdateProcessor:
 
             # Check for GUID in HTML comments
             guid_marker = f"<!-- guid:{guid} -->"
-            for comment in comments:
-                if guid_marker in comment.get("body", ""):
-                    return True
-
-            return False
+            return any(guid_marker in comment.get("body", "") for comment in comments)
 
         except Exception as e:
             print(f"⚠️  Error checking for duplicate comment GUID: {e}")
@@ -1476,11 +1472,7 @@ class IssueUpdateProcessor:
             existing = api.search_issues(f'is:issue in:title "{title}"')
 
             guid_marker = f"<!-- guid:{guid} -->"
-            for issue in existing:
-                if guid_marker in issue.get("body", ""):
-                    return True
-
-            return False
+            return any(guid_marker in issue.get("body", "") for issue in existing)
 
         except Exception:
             return False
@@ -1538,19 +1530,23 @@ class IssueUpdateProcessor:
 
         # Enhanced duplicate prevention
         if self.enable_duplicate_prevention:
-            if self.duplicate_prevention_method in ["guid_and_title", "guid_only"]:
-                # Check for duplicate by GUID
-                if not self._check_guid_uniqueness(
-                    guid, legacy_guid, "create", {"title": title}, repo=repo
-                ):
-                    print(f"🚫 Duplicate GUID detected for issue: {title}")
-                    return False
+            # Check for duplicate by GUID
+            if self.duplicate_prevention_method in [
+                "guid_and_title",
+                "guid_only",
+            ] and not self._check_guid_uniqueness(
+                guid, legacy_guid, "create", {"title": title}, repo=repo
+            ):
+                print(f"🚫 Duplicate GUID detected for issue: {title}")
+                return False
 
-            if self.duplicate_prevention_method in ["guid_and_title", "title_only"]:
-                # Check for duplicate by title
-                if self._check_duplicate_by_title(title, api):
-                    print(f"🚫 Duplicate title detected for issue: {title}")
-                    return False
+            # Check for duplicate by title
+            if self.duplicate_prevention_method in [
+                "guid_and_title",
+                "title_only",
+            ] and self._check_duplicate_by_title(title, api):
+                print(f"🚫 Duplicate title detected for issue: {title}")
+                return False
 
         guid_to_embed = guid or legacy_guid
         if guid_to_embed:
@@ -1772,10 +1768,13 @@ class IssueUpdateProcessor:
                                 if self._update_action_permalink(action):
                                     file_modified = True
                                     updated_count += 1
-                        elif isinstance(file_data, dict) and "action" in file_data:
-                            if self._update_action_permalink(file_data):
-                                file_modified = True
-                                updated_count += 1
+                        elif (
+                            isinstance(file_data, dict)
+                            and "action" in file_data
+                            and self._update_action_permalink(file_data)
+                        ):
+                            file_modified = True
+                            updated_count += 1
 
                         # Write back the file if it was modified
                         if file_modified:

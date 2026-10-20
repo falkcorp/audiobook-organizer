@@ -11,6 +11,7 @@
 # (e.g. https://<server>:8484) — there is no internal-network default.
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -142,18 +143,14 @@ def is_junk_series(name: str) -> bool:
     if len(trimmed) <= 1:
         return True
     # Pure punctuation
-    if re.match(r"^[^a-zA-Z0-9]+$", trimmed):
-        return True
-    return False
+    return bool(re.match(r"^[^a-zA-Z0-9]+$", trimmed))
 
 
 def looks_like_author_name(name: str) -> bool:
     """Heuristic: detect series names that look like author names."""
     trimmed = name.strip()
     # "Last, First" pattern
-    if re.match(r"^[A-Z][a-z]+,\s*[A-Z][a-z]+", trimmed):
-        return True
-    return False
+    return bool(re.match(r"^[A-Z][a-z]+,\s*[A-Z][a-z]+", trimmed))
 
 
 # ── Book count fetching ───────────────────────────────────────────────────────
@@ -251,7 +248,7 @@ def analyze_duplicates(series_list: list[dict], book_counts: dict[int, int]):
         ci_groups[s["name"].strip().lower()].append(s)
 
     ci_dup_count = 0
-    for key, group in sorted(ci_groups.items()):
+    for _key, group in sorted(ci_groups.items()):
         if len(group) < 2:
             continue
         # Check if there are unprocessed members
@@ -297,7 +294,7 @@ def analyze_duplicates(series_list: list[dict], book_counts: dict[int, int]):
     # For large sets, only compare series that share at least a 3-char prefix
     # to avoid O(n^2) with 16k entries
     prefix_buckets = defaultdict(list)
-    for idx, (s, norm) in enumerate(remaining_norm):
+    for idx, (_s, norm) in enumerate(remaining_norm):
         if len(norm) >= 3:
             prefix_buckets[norm[:3]].append(idx)
         # Also bucket by first 4 chars for longer names
@@ -307,7 +304,7 @@ def analyze_duplicates(series_list: list[dict], book_counts: dict[int, int]):
     # Additionally, group by similar-length names (within 3 chars diff)
     # and same first letter
     first_char_buckets = defaultdict(list)
-    for idx, (s, norm) in enumerate(remaining_norm):
+    for idx, (_s, norm) in enumerate(remaining_norm):
         if norm:
             first_char_buckets[norm[0]].append(idx)
 
@@ -481,10 +478,8 @@ def apply_fixes(actions: list[dict], dry_run: bool = False):
             except requests.exceptions.HTTPError as e:
                 print(f"    -> ERROR: {e}")
                 if hasattr(e, "response") and e.response is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         print(f"       Detail: {e.response.json()}")
-                    except Exception:
-                        pass
                 error_count += 1
             except Exception as e:
                 print(f"    -> ERROR: {e}")

@@ -30,6 +30,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+from openai import OpenAI
+
 # Load .env from scripts/ directory
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
@@ -38,8 +40,6 @@ if env_path.exists():
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
-
-from openai import OpenAI
 
 # Max completion tokens per model
 MAX_COMPLETION_TOKENS = {

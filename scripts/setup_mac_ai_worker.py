@@ -68,7 +68,7 @@ class PortPlan:
 
     def forwards(self, include_ollama: bool) -> list[str]:
         """Return the -R specs, remote:127.0.0.1:local."""
-        out = [f"{r}:127.0.0.1:{l}" for r, l in zip(self.whisper_remote, self.whisper_local)]
+        out = [f"{r}:127.0.0.1:{port}" for r, port in zip(self.whisper_remote, self.whisper_local)]
         if include_ollama:
             out.append(f"{self.ollama_remote}:127.0.0.1:{OLLAMA_LOCAL_PORT}")
         return out
@@ -158,7 +158,7 @@ def ensure_env_line(text: str, line: str) -> tuple[str, bool]:
             lines[i] = line
             return "\n".join(lines) + "\n", True
     lines.append(line)
-    return "\n".join(l for l in lines if l or len(lines) == 1).strip("\n") + "\n", True
+    return "\n".join(entry for entry in lines if entry or len(lines) == 1).strip("\n") + "\n", True
 
 
 def prod_endpoint_entries(plan: PortPlan, label: str) -> list[dict]:
@@ -251,9 +251,8 @@ def apply(args: argparse.Namespace, plan: PortPlan) -> int:
         for port in plan.whisper_local:
             # First start downloads the model (~500 MB).
             ok = wait_for(f"http://127.0.0.1:{port}/health", 300)
-            print(
-                f"  whisper :{port} {'ok' if ok else 'NOT HEALTHY (see ~/Library/Logs/whisper-mlx-%d.err)' % port}"
-            )
+            status = "ok" if ok else f"NOT HEALTHY (see ~/Library/Logs/whisper-mlx-{port}.err)"
+            print(f"  whisper :{port} {status}")
 
     print("\n[4/5] SSH key to the server")
     if (
@@ -291,8 +290,10 @@ def print_plan(args: argparse.Namespace, plan: PortPlan) -> None:
         )
         print(f"  models:          {', '.join(args.models)} (keep-alive 30m)")
     if not args.skip_whisper:
-        for l, r in zip(plan.whisper_local, plan.whisper_remote):
-            print(f"  whisper:         Mac 127.0.0.1:{l} -> server 127.0.0.1:{r}")
+        for local_port, remote_port in zip(plan.whisper_local, plan.whisper_remote):
+            print(
+                f"  whisper:         Mac 127.0.0.1:{local_port} -> server 127.0.0.1:{remote_port}"
+            )
     print(f"  tunnel agent:    {TUNNEL_LABEL}")
     if not args.skip_whisper:
         entries = prod_endpoint_entries(plan, f"mac{plan.host_index}")

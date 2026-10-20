@@ -6,18 +6,18 @@ import time
 
 import pytest
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.support.ui import WebDriverWait
 
 
 def wait_for_text(driver, text, timeout=10):
     WebDriverWait(driver, timeout).until(
-        EC.presence_of_element_located((By.XPATH, f"//*[contains(., '{text}')]"))
+        ec.presence_of_element_located((By.XPATH, f"//*[contains(., '{text}')]"))
     )
 
 
 def click_first(driver, locator):
-    WebDriverWait(driver, 10).until(EC.element_to_be_clickable(locator)).click()
+    WebDriverWait(driver, 10).until(ec.element_to_be_clickable(locator)).click()
 
 
 @pytest.mark.e2e
@@ -27,7 +27,7 @@ def test_settings_retention_controls(driver, base_url):
 
     # Auto purge days input
     days_input = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located(
+        ec.presence_of_element_located(
             (By.XPATH, "//label[contains(., 'Auto-Purge After')]/following::input[1]")
         )
     )

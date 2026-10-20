@@ -126,7 +126,7 @@ LEGACY_KEY_NEEDLE = "expected_at="
 MIGRATED_PREFIX = KEY_NAME + ".migrated-"
 
 
-class Refused(Exception):
+class RefusedError(Exception):
     """A precondition failed. Nothing was changed."""
 
 
@@ -240,7 +240,7 @@ def run(cmd: list[str], *, check: bool = True) -> tuple[int, str, str]:
     out = proc.stdout.decode("utf-8", errors="replace")
     err = proc.stderr.decode("utf-8", errors="replace")
     if check and proc.returncode != 0:
-        raise Refused(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{err.strip()}")
+        raise RefusedError(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{err.strip()}")
     return proc.returncode, out, err
 
 
@@ -345,9 +345,9 @@ def binary_has_marker(binary: Path) -> bool:
     """
     p = probe(binary)
     if p.unknown:
-        raise Refused(f"cannot read the deployed binary -- {p.describe()}")
+        raise RefusedError(f"cannot read the deployed binary -- {p.describe()}")
     if p.absent:
-        raise Refused(f"binary not found at {binary}; pass --binary if it lives elsewhere")
+        raise RefusedError(f"binary not found at {binary}; pass --binary if it lives elsewhere")
     with binary.open("rb") as fh:
         # Read in chunks with an overlap so the marker cannot straddle a boundary.
         overlap = len(CAPABILITY_MARKER)
@@ -546,7 +546,7 @@ def move_key(src: Path, dst: Path, owner: str, *, apply: bool) -> None:
     try:
         ent = pwd.getpwnam(owner)
     except KeyError:
-        raise Refused(
+        raise RefusedError(
             f"service user {owner!r} does not exist; refusing to leave a key with wrong ownership"
         )
 
@@ -555,13 +555,13 @@ def move_key(src: Path, dst: Path, owner: str, *, apply: bool) -> None:
     shutil.copyfile(src, tmp)
     if sha256(tmp) != before:
         tmp.unlink(missing_ok=True)
-        raise Refused("copy digest mismatch; source left untouched")
+        raise RefusedError("copy digest mismatch; source left untouched")
 
     os.chmod(tmp, 0o600)
     os.chown(tmp, ent.pw_uid, ent.pw_gid)
     os.replace(tmp, dst)
     if sha256(dst) != before:
-        raise Refused(f"post-move digest mismatch at {dst}; source NOT touched")
+        raise RefusedError(f"post-move digest mismatch at {dst}; source NOT touched")
     print(f"    installed and verified -> {dst}")
 
     src.rename(aside)
@@ -695,7 +695,7 @@ def main() -> int:
 
     try:
         plan = build_plan(args.binary)
-    except Refused as exc:
+    except RefusedError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 1
 
@@ -744,7 +744,7 @@ def main() -> int:
             assert plan.key_src is not None and plan.key_dst is not None
             try:
                 move_key(plan.key_src.path, plan.key_dst.path, service_user(), apply=args.apply)
-            except Refused as exc:
+            except RefusedError as exc:
                 print(f"  REFUSED: {exc}", file=sys.stderr)
                 return 1
         elif args.apply:
@@ -753,7 +753,7 @@ def main() -> int:
         assert plan.key_src is not None and plan.key_dst is not None
         try:
             move_key(plan.key_src.path, plan.key_dst.path, service_user(), apply=args.apply)
-        except Refused as exc:
+        except RefusedError as exc:
             print(f"  REFUSED: {exc}", file=sys.stderr)
             return 1
 

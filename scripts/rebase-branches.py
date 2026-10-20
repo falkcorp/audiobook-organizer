@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/rebase-branches.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: 6155668c-d973-4826-aef8-773a851a4896
 # last-edited: 2026-10-20
 
@@ -9,6 +9,7 @@ Rebase all local branches onto origin/main.
 Aborts on conflicts and marks branches for manual review.
 """
 
+import contextlib
 import subprocess
 import sys
 
@@ -46,7 +47,7 @@ def main():
     # Get current branch to restore later
     try:
         current_branch = run("git rev-parse --abbrev-ref HEAD", capture=True)
-    except:
+    except subprocess.CalledProcessError:
         print("Error: not in a git repository")
         sys.exit(1)
 
@@ -93,10 +94,8 @@ def main():
                 failed_branches.append(branch)
 
     # Restore original branch
-    try:
+    with contextlib.suppress(subprocess.CalledProcessError):
         run(f"git checkout {current_branch}")
-    except:
-        pass
 
     # Restore stashed changes
     print("\nRestoring stashed changes...")
