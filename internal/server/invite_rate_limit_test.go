@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -1025,5 +1025,23 @@ func TestInviteRateLimit_SlowBodyTimesOut(t *testing.T) {
 	send()
 	if code := readStatus(conn2, br); code != http.StatusOK {
 		t.Fatalf("second request after the timeout elapsed: %d, want 200 (deadline was left set)", code)
+	}
+}
+
+// Review MEDIUM: the invite LAN /64 aggregate is for direct peers only. A
+// flood from unlisted connectors on LAN addresses rotating through the
+// owner's /64 (Cloudflare headers, so not direct) never spends it, so a
+// direct device in that /64 still gets its burst.
+func TestInviteRateLimit_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	h.limits.global = servermiddleware.NewIPRateLimiter(1, 1000)
+	for i := range 100 {
+		h.get(inviteTestToken(i), fmt.Sprintf("[fd12:3456:789a:1::%x]", 0x100+i), cfHeaders("203.0.113.9"))
+	}
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(500+i), "[fd12:3456:789a:1::1]", nil)
+	})
+	if !limited || allowed < inviteAuthRateBurst {
+		t.Fatalf("a direct device after the tunnel flood: %d admitted (limited=%v), want its burst of %d", allowed, limited, inviteAuthRateBurst)
 	}
 }

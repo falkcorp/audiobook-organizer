@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -439,8 +439,8 @@ func TestBootstrapDirectLANPeer(t *testing.T) {
 			}
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = req
-			if got := bootstrapDirectLANPeer(c, connectors); got != tt.want {
-				t.Fatalf("bootstrapDirectLANPeer = %v, want %v", got, tt.want)
+			if got := directLANPeer(c, connectors); got != tt.want {
+				t.Fatalf("directLANPeer = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -508,11 +508,20 @@ func TestBootstrapClientKey_PiConnectors(t *testing.T) {
 // bootstrapAttemptFrom runs one direct (no Cloudflare markers, no connectors)
 // bootstrap attempt from remote through bootstrapClientKey and l.
 func bootstrapAttemptFrom(l *bootstrapLimiter, remote string) bool {
+	return bootstrapAttemptVia(l, remote, nil, nil)
+}
+
+// bootstrapAttemptVia is bootstrapAttemptFrom with configured connectors and
+// request headers.
+func bootstrapAttemptVia(l *bootstrapLimiter, remote string, connectors connectorPeers, hdr map[string]string) bool {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/bootstrap", nil)
 	req.RemoteAddr = remote
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	key, lanKey, _, exempt := bootstrapClientKey(c, nil, func(string) bool { return false })
+	key, lanKey, _, exempt := bootstrapClientKey(c, connectors, func(string) bool { return false })
 	return l.allow(key, lanKey, exempt)
 }
 
@@ -557,5 +566,37 @@ func TestBootstrapLimiter_LANDevicesInOneSlash64EachGetTheirWindow(t *testing.T)
 		if n != bootstrapMaxAttempts {
 			t.Fatalf("%s: %d attempts admitted, want its own %d", peer, n, bootstrapMaxAttempts)
 		}
+	}
+}
+
+// Review MEDIUM: the direct-lan64 aggregate is for direct peers only. A
+// tunnel flood from connectors on LAN addresses in the owner's /64 (a listed
+// one relaying visitors, and unlisted ones rotating addresses with Cloudflare
+// headers) never touches it, so the owner's direct recovery from that /64
+// still gets its full window afterwards.
+func TestBootstrapLimiter_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	listed, _ := parseConnectorPeers("fd12:3456:789a:1::11")
+	for i := range 60 {
+		bootstrapAttemptVia(l, "[fd12:3456:789a:1::11]:4000", listed,
+			map[string]string{"CF-Connecting-IP": fmt.Sprintf("203.0.113.%d", i%250+1), "Cf-Ray": "x"})
+		bootstrapAttemptVia(l, fmt.Sprintf("[fd12:3456:789a:1::%x]:4000", 0x100+i), listed,
+			map[string]string{"Cf-Ray": "x"}) // unlisted connector, rotating
+	}
+	l.mu.Lock()
+	spent := l.countLocked("direct-lan64:fd12:3456:789a:1::/64")
+	l.mu.Unlock()
+	if spent != 0 {
+		t.Fatalf("the tunnel flood spent %d of the direct-lan64 aggregate, want 0", spent)
+	}
+	n := 0
+	for range bootstrapMaxAttempts + 2 {
+		if bootstrapAttemptFrom(l, "[fd12:3456:789a:1::1]:4000") {
+			n++
+		}
+	}
+	if n != bootstrapMaxAttempts {
+		t.Fatalf("the owner's direct peer after the flood: %d attempts admitted, want %d", n, bootstrapMaxAttempts)
 	}
 }

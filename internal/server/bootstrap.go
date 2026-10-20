@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
 // last-edited: 2026-10-20
 
@@ -316,7 +316,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// A direct LAN peer (the owner running recovery against the service port)
 	// is not tunnel traffic: it is keyed on its own address and exempt from the
 	// global ceiling, so internet traffic cannot lock it out
-	// (see bootstrapClientKey and bootstrapDirectLANPeer).
+	// (see bootstrapClientKey and directLANPeer).
 	limitKey, lanKey, ip, direct := bootstrapClientKey(c, tunnelConnectorPeers(), remoteAddrIsLocal)
 
 	if !bootstrapLimits.allow(limitKey, lanKey, direct) {

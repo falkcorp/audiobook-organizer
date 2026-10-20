@@ -24,9 +24,11 @@ on other LAN hosts and reach the service from their own private addresses, so
 `TUNNEL_CONNECTOR_ADDRS`, or from a local peer whose request carried a
 verified Cloudflare Access assertion. Every other peer is keyed on its own
 address whatever headers it sends (public IPv6 by /64; a LAN IPv6 peer by
-its full address, since LAN devices share one /64, plus an aggregate bucket
-per LAN /64 at four times the per-client budget, so one host rotating
-through its /64 is still capped), so forging `Cf-*` headers
+its full address, since LAN devices share one /64; a direct LAN peer, one
+that is not a connector and sends no Cloudflare markers, also shares an
+aggregate bucket per /64 at four times the per-client budget, so one host
+rotating through its /64 is still capped, and tunnel traffic never touches
+that aggregate), so forging `Cf-*` headers
 never takes a caller out of per-client limiting; an unlisted connector is
 therefore one bucket for everyone it relays, and a private peer that sends
 Cloudflare headers without being listed is logged once per address at
@@ -191,9 +193,11 @@ connector with no `CF-Connecting-IP`), drops ended windows, caps
 tracked addresses at 10,000 and allows at most 100 attempts an hour across
 all callers; a direct LAN or loopback caller with no Cloudflare markers keeps
 its own 5-an-hour bucket outside that ceiling, keyed on its full address (LAN
-devices on IPv6 share one /64); every address of a LAN IPv6 /64 also shares
-one aggregate window of 20 an hour, which is what caps a LAN host rotating
-through its /64, since direct callers skip the global ceiling.
+devices on IPv6 share one /64); every address of a direct LAN IPv6 /64 also
+shares one aggregate window of 20 attempts an hour, which is what caps a LAN host
+rotating through its /64, since direct callers skip the global ceiling.
+Tunnel traffic, including connectors on LAN addresses in the same /64, never
+counts against that window, so it cannot lock out the owner's recovery.
 
 #### The startup read-only key no longer creates an admin
 
