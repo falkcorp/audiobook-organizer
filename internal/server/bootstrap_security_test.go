@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap_security_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 2b9d4e6a-1c3f-4a8b-bd72-5e0a9c4f1d36
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package server
 
@@ -47,14 +47,21 @@ func (f *fakeSettingsStore) DeleteSetting(key string) error {
 	return nil
 }
 
+// seedBootstrapToken stores raw as the live bootstrap token, with the expiry
+// InitBootstrapToken would write.
+func seedBootstrapToken(s SettingsReadWriter, raw string) {
+	_ = s.SetSetting(bootstrapTokenKey, hashBootstrapToken(raw), "string", false)
+	_ = s.SetSetting(bootstrapExpiresKey, fmt.Sprintf("%d", time.Now().Add(bootstrapTokenTTL).Unix()), "string", false)
+}
+
 // HIGH-4a: once the one-time token is consumed (key deleted), GetSetting returns
-// ErrSettingNotFound. ConsumeBootstrapToken must treat that as an invalid token
+// ErrSettingNotFound. RedeemBootstrapToken must treat that as an invalid token
 // — (false, nil) — so the handler returns 401, not 500.
-func TestConsumeBootstrapToken_ConsumedTokenIsUnauthorizedNotError(t *testing.T) {
+func TestRedeemBootstrapToken_ConsumedTokenIsUnauthorizedNotError(t *testing.T) {
 	store := newFakeSettingsStore() // empty — token key absent (already consumed)
 	dataDir := t.TempDir()
 
-	valid, err := ConsumeBootstrapToken(store, dataDir, "abbs_anything")
+	valid, err := RedeemBootstrapToken(store, dataDir, "abbs_anything", nil)
 	if err != nil {
 		t.Fatalf("expected nil error for a consumed token, got: %v", err)
 	}
@@ -64,12 +71,12 @@ func TestConsumeBootstrapToken_ConsumedTokenIsUnauthorizedNotError(t *testing.T)
 }
 
 // A wrong token (key present, hash mismatch) is also (false, nil), not an error.
-func TestConsumeBootstrapToken_WrongTokenIsUnauthorized(t *testing.T) {
+func TestRedeemBootstrapToken_WrongTokenIsUnauthorized(t *testing.T) {
 	store := newFakeSettingsStore()
-	_ = store.SetSetting(bootstrapTokenKey, hashBootstrapToken("abbs_correct"), "string", false)
+	seedBootstrapToken(store, "abbs_correct")
 	dataDir := t.TempDir()
 
-	valid, err := ConsumeBootstrapToken(store, dataDir, "abbs_wrong")
+	valid, err := RedeemBootstrapToken(store, dataDir, "abbs_wrong", nil)
 	if err != nil {
 		t.Fatalf("expected nil error for a wrong token, got: %v", err)
 	}
@@ -79,12 +86,12 @@ func TestConsumeBootstrapToken_WrongTokenIsUnauthorized(t *testing.T) {
 }
 
 // The happy path still works: a matching token consumes successfully.
-func TestConsumeBootstrapToken_CorrectTokenConsumes(t *testing.T) {
+func TestRedeemBootstrapToken_CorrectTokenConsumes(t *testing.T) {
 	store := newFakeSettingsStore()
-	_ = store.SetSetting(bootstrapTokenKey, hashBootstrapToken("abbs_correct"), "string", false)
+	seedBootstrapToken(store, "abbs_correct")
 	dataDir := t.TempDir()
 
-	valid, err := ConsumeBootstrapToken(store, dataDir, "abbs_correct")
+	valid, err := RedeemBootstrapToken(store, dataDir, "abbs_correct", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +114,7 @@ func TestHandleBootstrap_IssuesExpiringKey(t *testing.T) {
 	config.AppConfig.BootstrapKeyTTL = ""    // unset: the 8h default
 	config.AppConfig.BootstrapKeyTTLDays = 0 // no legacy days value either
 	config.AppConfig.DatabasePath = t.TempDir() + "/db"
-	// Sandbox the credential directory. handleBootstrap -> ConsumeBootstrapToken
+	// Sandbox the credential directory. handleBootstrap -> RedeemBootstrapToken
 	// calls os.Remove(BootstrapTokenPath(dataDir)) and DISCARDS the error, so
 	// without this the test silently tries to delete
 	// /var/lib/audiobook-organizer/.bootstrap-token on whatever machine runs it
@@ -119,7 +126,7 @@ func TestHandleBootstrap_IssuesExpiringKey(t *testing.T) {
 	t.Setenv(config.SecureStateDirEnv, t.TempDir())
 
 	settings := newFakeSettingsStore()
-	_ = settings.SetSetting(bootstrapTokenKey, hashBootstrapToken("abbs_correct"), "string", false)
+	seedBootstrapToken(settings, "abbs_correct")
 
 	adminUser := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}, Status: "active"}
 	adminRole := &database.Role{ID: "admin", Name: "admin", Permissions: []string{string(auth.PermUsersManage)}}
@@ -199,7 +206,7 @@ func TestHandleBootstrap_LegacyDaysCappedAt24h(t *testing.T) {
 	t.Setenv(config.SecureStateDirEnv, t.TempDir())
 
 	settings := newFakeSettingsStore()
-	_ = settings.SetSetting(bootstrapTokenKey, hashBootstrapToken("abbs_legacy"), "string", false)
+	seedBootstrapToken(settings, "abbs_legacy")
 	adminUser := &database.User{ID: "admin-1", Username: "admin", Roles: []string{"admin"}, Status: "active"}
 	adminRole := &database.Role{ID: "admin", Name: "admin", Permissions: []string{string(auth.PermUsersManage)}}
 	var createdKey *database.APIKey

@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap_state_dir_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b03d92e-8f47-4a15-bc60-2e98a5317d4f
-// last-edited: 2026-09-09
+// last-edited: 2026-10-20
 
 package server
 
@@ -62,12 +62,12 @@ func TestBootstrapToken_WriteAndConsumeResolveTheSameDirectory(t *testing.T) {
 	}
 
 	// The consume side must find that exact token and remove that exact file.
-	valid, err := ConsumeBootstrapToken(settings, config.SecureStateDir(), token)
+	valid, err := RedeemBootstrapToken(settings, config.SecureStateDir(), token, nil)
 	if err != nil {
-		t.Fatalf("ConsumeBootstrapToken: %v", err)
+		t.Fatalf("RedeemBootstrapToken: %v", err)
 	}
 	if !valid {
-		t.Fatal("the token written by InitBootstrapToken was rejected by ConsumeBootstrapToken — " +
+		t.Fatal("the token written by InitBootstrapToken was rejected by RedeemBootstrapToken — " +
 			"the two sides are resolving different directories")
 	}
 	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
