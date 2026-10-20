@@ -1,7 +1,7 @@
 // file: internal/config/invite_config.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package config
 
@@ -20,8 +20,13 @@ import (
 //     SMTP password, the guest service token's client secret and the Cloudflare
 //     policy API token), and the others are deliberately hidden too: the guest
 //     service token's client id is half of a credential, and the SMTP username
-//     is usually a person's mailbox. Admins see only whether each feature is
-//     configured (InviteMailConfigured and friends), never the values.
+//     is usually a person's mailbox. Settings screens and admin API responses
+//     report only whether each feature is configured (InviteMailConfigured
+//     and friends), never the values. The guest client id and secret are the
+//     exception by design: they are what a guest needs, so the invitation
+//     email carries them and the public accept page returns them for a live,
+//     unused token, and anyone holding a live invite link, including the
+//     admin who created it, can read them there.
 //   - The config blob never stores one, so a value can only come from the
 //     operator's environment and a database dump carries none of them.
 //   - PUT /api/v1/config refuses a payload naming any of them, with the same
