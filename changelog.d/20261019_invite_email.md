@@ -159,7 +159,8 @@ for callers whose address cannot be established (including a listed
 connector with no `CF-Connecting-IP`), drops ended windows, caps
 tracked addresses at 10,000 and allows at most 100 attempts an hour across
 all callers; a direct LAN or loopback caller with no Cloudflare markers keeps
-its own 5-an-hour bucket outside that ceiling.
+its own 5-an-hour bucket outside that ceiling, keyed on its full address (LAN
+devices on IPv6 share one /64).
 
 #### The startup read-only key no longer creates an admin
 

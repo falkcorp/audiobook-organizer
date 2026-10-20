@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -486,8 +486,13 @@ func TestBootstrapClientKey_PiConnectors(t *testing.T) {
 		{"unset: a Pi carrying markers is untrusted-local, not exempt", "", "10.0.0.11:4000", tunnel, untrustedLocalClientKey, false},
 		// NIT1: documented, not prevented: with the setting unset, a Pi request
 		// stripped of every Cloudflare header looks like a direct LAN caller.
-		{"unset: a Pi with every Cloudflare header stripped counts as direct", "", "10.0.0.11:4000", nil, "10.0.0.11", true},
-		{"a direct LAN caller keeps its own exempt bucket", pis, "10.0.0.50:4000", nil, "10.0.0.50", true},
+		{"unset: a Pi with every Cloudflare header stripped counts as direct", "", "10.0.0.11:4000", nil, "direct:10.0.0.11", true},
+		{"a direct LAN caller keeps its own exempt bucket", pis, "10.0.0.50:4000", nil, "direct:10.0.0.50", true},
+		// NIT7: on an IPv6 ULA LAN every device shares one /64, so a direct
+		// peer is keyed on its full address.
+		{"a direct ULA caller is keyed on its full address", pis, "[fd12:3456:789a:1::50]:4000", nil, "direct:fd12:3456:789a:1::50", true},
+		{"another ULA caller in the same /64 has its own bucket", pis, "[fd12:3456:789a:1::51]:4000", nil, "direct:fd12:3456:789a:1::51", true},
+		{"a v4-mapped direct caller is keyed on its IPv4 address", pis, "[::ffff:10.0.0.50]:4000", nil, "direct:10.0.0.50", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
