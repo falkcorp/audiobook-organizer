@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000007
-// last-edited: 2026-10-14
+// last-edited: 2026-10-19
 
 package database
 
@@ -697,7 +697,7 @@ func countFallbackCounter(t *testing.T, p *PebbleStore) func() string {
 	return func() string {
 		rec := httptest.NewRecorder()
 		promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
-		for _, l := range strings.Split(rec.Body.String(), "\n") {
+		for l := range strings.SplitSeq(rec.Body.String(), "\n") {
 			if strings.HasPrefix(l, "audiobook_organizer_memdb_fallback_reads_total{") &&
 				strings.Contains(l, `site="CountPrimaryBooks"`) && strings.Contains(l, `outcome="fallback"`) {
 				return l

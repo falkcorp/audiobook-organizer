@@ -1,7 +1,7 @@
 // file: internal/database/memdb_metrics_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c27e5a90-4d13-4b68-8f0e-9a1b6d3c5e74
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -85,7 +85,7 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 		return rec.Body.String()
 	}
 	line := func(site, outcome string) string {
-		for _, l := range strings.Split(scrape(), "\n") {
+		for l := range strings.SplitSeq(scrape(), "\n") {
 			if strings.HasPrefix(l, "audiobook_organizer_memdb_fallback_reads_total{") && strings.Contains(l, `site="`+site+`"`) &&
 				strings.Contains(l, `outcome="`+outcome+`"`) {
 				return l

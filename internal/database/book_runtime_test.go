@@ -1,7 +1,7 @@
 // file: internal/database/book_runtime_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 295552ed-1de2-49e3-9bf6-7cb94a4ad6eb
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package database
 
@@ -39,7 +39,7 @@ func TestComputeBookRuntime(t *testing.T) {
 	sizeOnly[0].FileSize, sizeOnly[1].FileSize = 500_000_000, 500_000_000
 	// Reviewer probe: a 45 s intro on disk, 20 × 30 min chapters missing.
 	introAndMissing := rows(45)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		introAndMissing = append(introAndMissing, BookFile{ID: "m", FilePath: "/old/" + string(rune('a'+i)) + ".mp3", Duration: 1800, Missing: true})
 	}
 	renamedRepoint := []BookFile{
@@ -150,7 +150,7 @@ func TestRecomputeBookAggregates_MissingChapterNeverLowersDuration(t *testing.T)
 		t.Fatal(err)
 	}
 	var files []*BookFile
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		files = append(files, &BookFile{
 			ID: fmt.Sprintf("f%02d", i), BookID: b.ID,
 			FilePath: fmt.Sprintf("/lib/Chaptered/%02d.mp3", i),
@@ -196,7 +196,7 @@ func discs() []BookFile {
 // the second ten missing.
 func equalSizeParts() []BookFile {
 	var out []BookFile
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		out = append(out, BookFile{ID: fmt.Sprint(i), FilePath: fmt.Sprintf("/lib/x/Part %02d.mp3", i),
 			OriginalFilename: fmt.Sprintf("Part %02d.mp3", i), FileSize: 28_800_000, Duration: 1800, Missing: i >= 10})
 	}
@@ -314,7 +314,7 @@ func TestBookRuntimeEstimateThroughTheStore(t *testing.T) {
 // measured bytes-per-second (28000) is 3.5x the book's real one.
 func coverArtIntroBook() []BookFile {
 	files := []BookFile{{ID: "intro", FileSize: 25*8000 + 500_000, Duration: 25}}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		files = append(files, BookFile{ID: fmt.Sprintf("ch%02d", i), FileSize: 1800*8000 + 500_000})
 	}
 	return files
@@ -327,7 +327,7 @@ func mixedEncodeBook() []BookFile {
 		{ID: "p0", FileSize: 1800 * 16000, Duration: 1800},
 		{ID: "p1", FileSize: 1800 * 16000, Duration: 1800},
 	}
-	for i := 0; i < 18; i++ {
+	for i := range 18 {
 		files = append(files, BookFile{ID: fmt.Sprintf("q%02d", i), FileSize: 1800 * 4000})
 	}
 	return files

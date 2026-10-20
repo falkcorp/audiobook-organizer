@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-10-19
 
@@ -325,7 +325,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 		})
 	})
 
-	for w := 0; w < workers; w++ {
+	for range workers {
 		g.Go(func() error {
 			batch := p.db.NewBatch()
 			defer func() { batch.Close() }()

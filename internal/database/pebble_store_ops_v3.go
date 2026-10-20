@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: e48755db-c26d-42a2-a232-49daf9732335
-// last-edited: 2026-10-17
+// last-edited: 2026-10-19
 
 // pebble_store_ops_v3 implements OpsV3Store for PebbleDB. Key schema (all
 // prefixed with "opv3:"; state-and-persistence.md section 2):
@@ -63,6 +63,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1151,13 +1152,7 @@ func (p *PebbleStore) DeleteRunV3(id string, allowed []state.V3) (deleted bool, 
 	if err != nil || cur == nil {
 		return false, err
 	}
-	ok := false
-	for _, s := range allowed {
-		if s == cur.State {
-			ok = true
-			break
-		}
-	}
+	ok := slices.Contains(allowed, cur.State)
 	if !ok {
 		return false, nil
 	}

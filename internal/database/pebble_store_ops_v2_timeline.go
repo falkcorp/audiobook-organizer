@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_timeline.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: f45601a9-ba63-4626-ad91-75720525f1be
 // last-edited: 2026-10-19
 
@@ -45,6 +45,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"runtime"
 	"sort"
@@ -716,7 +717,7 @@ func runOpsV2TimelinePool(ctx context.Context, snap *GatedSnapshot, workers int,
 		}
 		return iterErr
 	})
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		g.Go(func() (err error) {
 			defer recoverPebbleClosed("runOpsV2TimelinePool worker", &err)
 			for item := range ch {
@@ -760,9 +761,7 @@ func (p *PebbleStore) detectOpsV2TimelineDrift(ctx context.Context) (rows int, c
 	}
 	desired := perWorker[0]
 	for _, m := range perWorker[1:] {
-		for id, k := range m {
-			desired[id] = k
-		}
+		maps.Copy(desired, m)
 	}
 	rows = len(desired)
 

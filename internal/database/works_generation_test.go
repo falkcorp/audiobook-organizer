@@ -1,7 +1,7 @@
 // file: internal/database/works_generation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9c4a7e25-1f6b-4d83-b0e2-5a8d3c61f794
-// last-edited: 2026-10-12
+// last-edited: 2026-10-19
 
 package database
 
@@ -77,7 +77,7 @@ func TestForEachWork_StopsOnCanceledContext(t *testing.T) {
 	// Seed raw rows in one unsynced batch: 3,072 synced CreateWork calls took
 	// ~46s, and only the row count matters here.
 	batch := p.db.NewBatch()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		w := Work{ID: fmt.Sprintf("w%06d", i), Title: fmt.Sprintf("work %d", i)}
 		data, err := json.Marshal(w)
 		if err != nil {

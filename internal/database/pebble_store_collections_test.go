@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_collections_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7a6f1e4c-92b8-4d13-9a5e-3c8f0d6e1b27
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -360,7 +360,7 @@ func TestCollectionMembership_ConcurrentAddsLoseNothing(t *testing.T) {
 	const n = 64
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -383,7 +383,7 @@ func TestCollectionMembership_ConcurrentAddsLoseNothing(t *testing.T) {
 	for _, b := range stored.BookIDs {
 		have[b] = true
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if !have[fmt.Sprintf("b%d", i)] {
 			t.Errorf("b%d missing", i)
 		}
@@ -418,7 +418,7 @@ func TestCollectionMembership_ConcurrentUpdateStillConflicts(t *testing.T) {
 	// time, retrying on conflict) racing adds must keep every add.
 	const n = 32
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(2)
 		go func(i int) {
 			defer wg.Done()

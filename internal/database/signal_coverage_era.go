@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage_era.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: be27cd9f-64d3-43d8-86f2-ebe054adf7f5
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"runtime"
 	"strings"
 
@@ -148,9 +149,7 @@ func (p *PebbleStore) CountBookSignatureEras(ctx context.Context, workers int) (
 	}
 	sidecars := make(map[string]sigEra)
 	for _, m := range sideParts {
-		for id, e := range m {
-			sidecars[id] = e
-		}
+		maps.Copy(sidecars, m)
 	}
 
 	// Pass 2: live book rows; the sidecar map is read-only from here on.

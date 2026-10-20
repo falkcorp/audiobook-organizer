@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -374,8 +375,8 @@ func (s *PebbleStore) lockWindowRefs(refs ...FingerprintWindowRef) func() {
 		s.fpwinLocks[i].Lock()
 	}
 	return func() {
-		for j := len(idx) - 1; j >= 0; j-- {
-			s.fpwinLocks[idx[j]].Unlock()
+		for _, i := range slices.Backward(idx) {
+			s.fpwinLocks[i].Unlock()
 		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/database/signal_coverage.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
 // last-edited: 2026-10-19
 
@@ -308,7 +308,7 @@ func CountBookFileSignals(ctx context.Context, n int, at func(i int) *BookFile, 
 	var g errgroup.Group
 	g.SetLimit(workers)
 	per := (n + shards - 1) / shards
-	for s := 0; s < shards; s++ {
+	for s := range shards {
 		lo, hi := s*per, min((s+1)*per, n)
 		acc := &accs[s]
 		g.Go(func() error {
@@ -471,7 +471,7 @@ func (p *PebbleStore) deepBookFileSignalCoverage(ctx context.Context, workers in
 	accs := make([]signalAcc, workers)
 
 	g, gctx := errgroup.WithContext(ctx)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		acc := &accs[w]
 		g.Go(func() error {
 			for batch := range batches {

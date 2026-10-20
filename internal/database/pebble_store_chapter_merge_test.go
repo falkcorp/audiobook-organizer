@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_chapter_merge_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b8f5d21-7c4e-4a96-8e0b-2d6f1a9c7e53
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package database
 
@@ -39,7 +39,7 @@ func TestChapterMergeReparent_FileRowIsNeverAbsentFromBothBooks(t *testing.T) {
 	for i := 1; i <= sources; i++ {
 		src := createTestBook(t, store, fmt.Sprintf("Chapter %02d", i), fmt.Sprintf("/lib/Book/%02d - Book.mp3", i), nil, nil)
 		srcIDs = append(srcIDs, src)
-		for j := 0; j < filesPer; j++ {
+		for j := range filesPer {
 			f := &BookFile{BookID: src, FilePath: fmt.Sprintf("/lib/Book/%02d-%d - Book.mp3", i, j), Format: "mp3"}
 			require.NoError(t, store.CreateBookFile(f))
 			want[f.ID] = true

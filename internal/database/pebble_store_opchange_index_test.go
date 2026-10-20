@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package database
 
@@ -319,7 +319,7 @@ func TestOpchangeIndex_BackfillResumesAfterCut(t *testing.T) {
 	t.Cleanup(func() { opChangeByBookBackfillChunk = oldChunk; opChangeByBookBackfillAfterChunk = nil })
 
 	const rows = 10
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		rawPutOpChange(t, p, &OperationChange{
 			ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: fmt.Sprintf("b%d", i%3),
 		})
@@ -483,7 +483,7 @@ func TestOpchangeIndex_PropertyMatchesScan(t *testing.T) {
 			op := func() string { return fmt.Sprintf("op%d", rng.Intn(6)) }
 
 			// Pre-index history.
-			for i := 0; i < 40; i++ {
+			for i := range 40 {
 				r := ref{op(), fmt.Sprintf("raw%03d", i)}
 				rawPutOpChange(t, p, &OperationChange{ID: r.id, OperationID: r.op, BookID: pick(), NewValue: "raw"})
 				all = append(all, r)
@@ -491,7 +491,7 @@ func TestOpchangeIndex_PropertyMatchesScan(t *testing.T) {
 			mustTrustOpChange(t, p)
 
 			var cut time.Time
-			for step := 0; step < 200; step++ {
+			for step := range 200 {
 				switch k := rng.Intn(10); {
 				case k < 5 || len(all) == 0: // create
 					c := &OperationChange{OperationID: op(), BookID: pick(), NewValue: fmt.Sprint(step)}
@@ -544,7 +544,7 @@ func TestOpchangeIndex_BackfillRacesLiveWrites(t *testing.T) {
 	opChangeByBookBackfillChunk = 7
 	t.Cleanup(func() { opChangeByBookBackfillChunk = oldChunk })
 	books := []string{"b1", "b2", "b3", "b4"}
-	for i := 0; i < 600; i++ {
+	for i := range 600 {
 		rawPutOpChange(t, p, &OperationChange{
 			ID: fmt.Sprintf("r%04d", i), OperationID: fmt.Sprintf("op%d", i%9), BookID: books[i%4],
 			CreatedAt: time.Now().Add(-time.Hour),
@@ -552,7 +552,7 @@ func TestOpchangeIndex_BackfillRacesLiveWrites(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
-	for w := 0; w < 4; w++ {
+	for w := range 4 {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
@@ -607,7 +607,7 @@ func seedOpChangeJournal(b testing.TB, p *PebbleStore, rows, books int) {
 	b.Helper()
 	batch := p.db.NewBatch()
 	now := time.Now()
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		c := &OperationChange{
 			ID:          fmt.Sprintf("%026d", i),
 			OperationID: fmt.Sprintf("op%05d", i/50),
@@ -766,7 +766,7 @@ func TestOpchangeIndex_Verify(t *testing.T) {
 func TestOpchangeIndex_PruneLeavesNoOrphans(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	mustTrustOpChange(t, p)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if err := p.CreateOperationChange(&OperationChange{
 			OperationID: fmt.Sprintf("op%d", i%5), BookID: fmt.Sprintf("b%d", i%7),
 		}); err != nil {
@@ -977,7 +977,7 @@ func TestOpchangeIndex_PruneChunksLeaveNoOrphans(t *testing.T) {
 	t.Cleanup(func() { opChangePruneChunk = oldChunk })
 	mustTrustOpChange(t, p)
 	const rows = 23 // > 5 chunks, last one partial
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		if err := p.CreateOperationChange(&OperationChange{
 			OperationID: fmt.Sprintf("op%d", i%3), BookID: fmt.Sprintf("b%d", i%5),
 		}); err != nil {
@@ -1160,7 +1160,7 @@ func TestOpchangeIndex_RebuildProgressPerChunk(t *testing.T) {
 	oldChunk := opChangeByBookBackfillChunk
 	opChangeByBookBackfillChunk = 3
 	t.Cleanup(func() { opChangeByBookBackfillChunk = oldChunk })
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rawPutOpChange(t, p, &OperationChange{ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: "b1"})
 	}
 	var calls []int
@@ -1204,7 +1204,7 @@ func TestOpchangeIndex_FailedRebuildLeavesUntrusted(t *testing.T) {
 	oldChunk := opChangeByBookBackfillChunk
 	opChangeByBookBackfillChunk = 2
 	t.Cleanup(func() { opChangeByBookBackfillChunk = oldChunk; opChangeByBookBackfillAfterChunk = nil })
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
 			t.Fatal(err)
 		}
@@ -1330,7 +1330,7 @@ func TestOpchangeIndex_EnsureCancelMidStep(t *testing.T) {
 
 	seed := func(t *testing.T, p *PebbleStore, raw bool) {
 		t.Helper()
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			c := &OperationChange{ID: fmt.Sprintf("c%d", i), OperationID: "op1", BookID: "b1"}
 			if raw {
 				rawPutOpChange(t, p, c)

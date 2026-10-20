@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
-// last-edited: 2026-10-05
+// last-edited: 2026-10-19
 
 // Tests for the sync_item:/sync_item:book: keyspace (durable ABS libraryItemId
 // identity). Covers: mint-on-first-encounter idempotency, distinct IDs per book,
@@ -428,7 +428,7 @@ func TestSyncID_ListSyncAliases_ChapterConsolidationScale(t *testing.T) {
 		t.Fatalf("MintOrGetSyncID winner: %v", err)
 	}
 	const losers = 300
-	for i := 0; i < losers; i++ {
+	for i := range losers {
 		id := fmt.Sprintf("book-chapter-%03d", i)
 		if _, err := store.MintOrGetSyncID(id); err != nil {
 			t.Fatalf("MintOrGetSyncID %s: %v", id, err)
@@ -458,7 +458,7 @@ func TestSyncID_ListSyncAliases_CapStillBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintOrGetSyncID winner: %v", err)
 	}
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		id := fmt.Sprintf("book-loser-%d", i)
 		if _, err := store.MintOrGetSyncID(id); err != nil {
 			t.Fatalf("MintOrGetSyncID %s: %v", id, err)

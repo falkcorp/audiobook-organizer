@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.20.0
-// last-edited: 2026-10-14
+// version: 2.20.1
+// last-edited: 2026-10-19
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -681,13 +682,7 @@ func (s *AIScanStore) TransitionPhase(scanID int, phaseType string, from []strin
 	if err != nil || phase == nil {
 		return false, err
 	}
-	allowed := false
-	for _, f := range from {
-		if phase.Status == f {
-			allowed = true
-			break
-		}
-	}
+	allowed := slices.Contains(from, phase.Status)
 	if !allowed {
 		return false, nil
 	}

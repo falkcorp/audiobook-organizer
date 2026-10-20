@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d2a8f41-3b07-4c95-a1e6-9f5c0b7d3e28
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -175,7 +175,7 @@ func TestUpdateBook_Retitle1000KeepsAllRowsStale(t *testing.T) {
 	s := newKeepCacheStore(t)
 	const n = 1000
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b, err := s.CreateBook(&Book{Title: fmt.Sprintf("Title %06d", i), FilePath: fmt.Sprintf("/lib/s/%06d.m4b", i), Format: "m4b"})
 		require.NoError(t, err)
 		seedFingerprintedRow(t, s, b.ID, fmt.Sprintf("fp-%06d", i))

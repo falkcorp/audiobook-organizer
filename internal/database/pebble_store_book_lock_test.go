@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b1e4d27-5c93-4f0a-a6d2-7e39c1f5b084
-// last-edited: 2026-10-04
+// last-edited: 2026-10-19
 
 package database
 
@@ -73,7 +73,7 @@ func TestModifyBook_ConcurrentWritersLoseNothing(t *testing.T) {
 			wg.Add(1)
 			go func(g int) {
 				defer wg.Done()
-				for i := 0; i < iters; i++ {
+				for i := range iters {
 					v := fmt.Sprintf("g%d-%d", g, i)
 					if _, err := s.ModifyBook(b.ID, func(row *Book) error {
 						setters[g](row, v)
@@ -268,7 +268,7 @@ func TestModifyBook_SkipAndMissing(t *testing.T) {
 func sameStripePair(t *testing.T, s *PebbleStore) (string, string) {
 	t.Helper()
 	seen := map[int]string{}
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		b, err := s.CreateBook(&Book{Title: fmt.Sprintf("s%d", i), FilePath: fmt.Sprintf("/lock/stripe/%d", i)})
 		if err != nil {
 			t.Fatal(err)
@@ -298,11 +298,11 @@ func TestBookLock_SameStripeDifferentBooksDoNotDeadlock(t *testing.T) {
 	withDeadline(t, 60*time.Second, "same-stripe writers", func() {
 		var wg sync.WaitGroup
 		for _, id := range []string{id1, id2} {
-			for w := 0; w < 3; w++ {
+			for w := range 3 {
 				wg.Add(1)
 				go func(id string, w int) {
 					defer wg.Done()
-					for i := 0; i < 20; i++ {
+					for i := range 20 {
 						var err error
 						switch w {
 						case 0:
@@ -355,7 +355,7 @@ func TestBookLock_MoveBookFilesSameStripeDoesNotDeadlock(t *testing.T) {
 			wg.Add(1)
 			go func(id string) {
 				defer wg.Done()
-				for i := 0; i < 20; i++ {
+				for i := range 20 {
 					notes := fmt.Sprintf("n%d", i)
 					if err := s.UpdateBookRating(id, UpdateBookRatingRequest{Notes: &notes}); err != nil {
 						t.Error(err)
@@ -443,7 +443,7 @@ func TestBookLock_AuthorDeleteRepointSameStripeDoesNotDeadlock(t *testing.T) {
 			wg.Add(1)
 			go func(id string) {
 				defer wg.Done()
-				for i := 0; i < 20; i++ {
+				for i := range 20 {
 					notes := fmt.Sprintf("n%d", i)
 					if err := s.UpdateBookRating(id, UpdateBookRatingRequest{Notes: &notes}); err != nil {
 						t.Error(err)

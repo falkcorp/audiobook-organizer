@@ -1,7 +1,7 @@
 // file: internal/database/ai_scan_store_health_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 32eddfe1-cb1f-4009-9b7c-a3e3c626c050
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -18,7 +18,7 @@ func TestAIScanHealthStats_SharedReportsPrefixEstimate(t *testing.T) {
 	p := newCensusRawStore(t)
 	b := p.db.NewBatch()
 	pad := make([]byte, 200)
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("book:%06d", i)), pad, nil))
 	}
 	require.NoError(t, b.Commit(pebble.Sync))

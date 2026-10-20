@@ -1,5 +1,5 @@
 // file: internal/database/census_exact_save_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ded5da72-74be-465a-8eb6-585c351ab894
 // last-edited: 2026-10-19
 
@@ -23,7 +23,7 @@ func writeRandomCensusKeys(t *testing.T, p *PebbleStore, n int, key func(i int) 
 	t.Helper()
 	rng := rand.New(rand.NewSource(7))
 	b := p.db.NewBatch()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		v := make([]byte, 200)
 		_, _ = rng.Read(v)
 		require.NoError(t, b.Set([]byte(key(i)), v, nil))

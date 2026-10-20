@@ -1,7 +1,7 @@
 // file: internal/database/candidate_feedback_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 93b2cfa7-7495-466b-a970-4131e54d66e4
-// last-edited: 2026-10-07
+// last-edited: 2026-10-19
 
 package database
 
@@ -112,7 +112,7 @@ func TestCandidateFeedback_EachPagesAndFiltersByBook(t *testing.T) {
 	s := newFeedbackStore(t)
 	now := time.Now()
 	// More than one page, across two books.
-	for i := 0; i < candidateFeedbackPage+3; i++ {
+	for i := range candidateFeedbackPage + 3 {
 		fb := sampleFeedback("bookA", CandidateFeedbackNegative)
 		fb.Candidate.SourceHash = ""
 		fb.Candidate.Title = "T" + string(rune('a'+i%26)) + time.Duration(i).String()

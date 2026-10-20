@@ -1,5 +1,5 @@
 // file: internal/database/user_state_lock_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: dc3f20c5-76f7-46d2-af45-723d3651b19d
 // last-edited: 2026-10-19
 
@@ -89,11 +89,11 @@ func TestUserStateLockPair_OppositeOrdersNoDeadlock(t *testing.T) {
 	a, _, c := collidingBooks(t, "u")
 	var wg sync.WaitGroup
 	counter := 0 // guarded by the stripes: every goroutine holds a's stripe
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		wg.Add(4)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 200; j++ {
+			for range 200 {
 				u := LockUserBookStatePair("u", a, c)
 				counter++
 				u()
@@ -101,7 +101,7 @@ func TestUserStateLockPair_OppositeOrdersNoDeadlock(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 200; j++ {
+			for range 200 {
 				u := LockUserBookStatePair("u", c, a)
 				counter++
 				u()
@@ -109,7 +109,7 @@ func TestUserStateLockPair_OppositeOrdersNoDeadlock(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 200; j++ {
+			for range 200 {
 				u := LockUserBookState("u", a)
 				counter++
 				u()
@@ -117,7 +117,7 @@ func TestUserStateLockPair_OppositeOrdersNoDeadlock(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 200; j++ {
+			for range 200 {
 				LockUserBookState("u", c)()
 			}
 		}()

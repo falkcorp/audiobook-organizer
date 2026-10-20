@@ -1,7 +1,7 @@
 // file: internal/database/bookfiles_for_ids_fallback_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 8c2f6d14-7a39-4e05-b1d8-3e9a5c07f2b6
-// last-edited: 2026-10-10
+// last-edited: 2026-10-19
 
 package database
 
@@ -27,7 +27,7 @@ func TestGetBookFilesForIDsCore_PebbleFallbackPerBookMatchesFullScan(t *testing.
 
 	withFiles, err := store.CreateBook(&Book{Title: "Two Files", FilePath: "/lib/a", Format: "mp3"})
 	require.NoError(t, err)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		require.NoError(t, store.CreateBookFile(&BookFile{
 			ID: fmt.Sprintf("fa-%d", i), BookID: withFiles.ID, FilePath: fmt.Sprintf("/lib/a/%d.mp3", i), TrackNumber: 2 - i,
 		}))

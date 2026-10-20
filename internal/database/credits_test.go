@@ -1,7 +1,7 @@
 // file: internal/database/credits_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a5a7e839-5ad1-49ad-8401-9428121f66e7
-// last-edited: 2026-10-13
+// last-edited: 2026-10-19
 
 package database
 
@@ -89,7 +89,7 @@ func TestNormalizeBookAuthors_ProdShapeKeepsStoredOrder(t *testing.T) {
 		{AuthorID: ab, Role: "author", Position: 1},
 	}
 	orig := append([]BookAuthor(nil), in...)
-	for run := 0; run < 50; run++ {
+	for run := range 50 {
 		got := NormalizeBookAuthors(in, nil)
 		if ids := creditAuthorIDs(got); !reflect.DeepEqual(ids, []int{a, b, ab}) {
 			t.Fatalf("run %d: order = %v, want [A B A+B]", run, ids)
@@ -443,7 +443,7 @@ func TestModifyBookNarrators_NoLostUpdates(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -697,13 +697,13 @@ func TestModifyBookCredits_ConcurrentWithModifyBookAuthors(t *testing.T) {
 	b := mustCreditsBook(t, s, "/tmp/credits-modify-race.m4b")
 	const each = 8
 	var viaCredits, viaAuthors []int
-	for i := 0; i < each; i++ {
+	for i := range each {
 		viaCredits = append(viaCredits, mustCreditAuthor(t, s, fmt.Sprintf("Credits Writer %02d", i)).ID)
 		viaAuthors = append(viaAuthors, mustCreditAuthor(t, s, fmt.Sprintf("Authors Writer %02d", i)).ID)
 	}
 	var wg sync.WaitGroup
 	errs := make(chan error, 2*each)
-	for i := 0; i < each; i++ {
+	for i := range each {
 		wg.Add(2)
 		go func(id int) {
 			defer wg.Done()
@@ -761,7 +761,7 @@ func TestGetBookCredits(t *testing.T) {
 		{BookID: legacy.ID, NarratorID: n1.ID, Position: 1},
 	})
 
-	for run := 0; run < 20; run++ {
+	for run := range 20 {
 		got, err := s.GetBookCredits(context.Background(), []string{legacy.ID, empty.ID, legacy.ID, "01NOSUCHBOOK0000000000000"})
 		if err != nil {
 			t.Fatal(err)

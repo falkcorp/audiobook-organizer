@@ -1,7 +1,7 @@
 // file: internal/database/extid_stale_reverse_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4c183811-eda8-4a4f-b762-58bae6229260
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
@@ -62,7 +62,7 @@ func TestCreateExternalIDMapping_OwnerChangeDropsOldReverseKey(t *testing.T) {
 // Re-creating under the SAME owner must keep that owner's reverse key.
 func TestCreateExternalIDMapping_SameOwnerKeepsReverseKey(t *testing.T) {
 	s := newExtIDTestStore(t)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := s.CreateExternalIDMapping(&ExternalIDMapping{Source: "itunes", ExternalID: "PID1", BookID: "bookA"}); err != nil {
 			t.Fatalf("CreateExternalIDMapping: %v", err)
 		}
