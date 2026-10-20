@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -135,9 +135,8 @@ func TestHandleBootstrap_ConnectorWithoutHeaderSharesTheUntrustedBucket(t *testi
 }
 
 // TestHandleBootstrap_NonLocalPeerKeyedOnOwnAddress: a direct caller cannot
-// dodge the limiter by cycling a spoofed CF-Connecting-IP: the header is a
-// Cloudflare marker from a peer that is not a configured connector, so every
-// such attempt lands in the one shared untrusted-local bucket.
+// dodge the limiter by cycling a spoofed CF-Connecting-IP: a peer that is not
+// a configured connector is keyed on its own address whatever it sends.
 func TestHandleBootstrap_NonLocalPeerKeyedOnOwnAddress(t *testing.T) {
 	resetBootstrapRate(t)
 	setTunnelConnectors(t, bootstrapTestConnector)
@@ -483,7 +482,8 @@ func TestBootstrapClientKey_PiConnectors(t *testing.T) {
 		{"set: a visitor through a Pi is keyed on the visitor", pis, "10.0.0.12:4000", tunnel, "203.0.113.5", false},
 		{"set: a Pi with no CF-Connecting-IP is untrusted-local, not exempt", pis, "10.0.0.13:4000", map[string]string{"Cf-Ray": "x"}, untrustedLocalClientKey, false},
 		{"set: a Pi with no headers at all is untrusted-local, not exempt", pis, "10.0.0.11:4000", nil, untrustedLocalClientKey, false},
-		{"unset: a Pi carrying markers is untrusted-local, not exempt", "", "10.0.0.11:4000", tunnel, untrustedLocalClientKey, false},
+		{"unset: a Pi carrying markers is keyed on its own address, not exempt", "", "10.0.0.11:4000", tunnel, "10.0.0.11", false},
+		{"a public peer with forged Cloudflare headers is keyed on its own address", pis, "198.51.100.9:4000", tunnel, "198.51.100.9", false},
 		// NIT1: documented, not prevented: with the setting unset, a Pi request
 		// stripped of every Cloudflare header looks like a direct LAN caller.
 		{"unset: a Pi with every Cloudflare header stripped counts as direct", "", "10.0.0.11:4000", nil, "direct:10.0.0.11", true},

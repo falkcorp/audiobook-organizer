@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -42,15 +42,15 @@ import (
 //     be believed (the peer is a configured tunnel connector, or the request
 //     carries a verified Access assertion and the peer is this host),
 //     otherwise the peer's own address; IPv6 clients are grouped by /64
-//     (clientPrefixKey). A request whose client cannot be established SKIPS
-//     this layer: a connector or local peer with no trusted header, or a peer
-//     that is not a configured connector but carries Cloudflare markers
-//     (tunnel traffic from an unlisted connector). A key taken from an
-//     unproven header would let a caller pick its own bucket, and one shared
-//     bucket would let one abuser lock out every guest. Layers 1 and 3 still
-//     apply to it. TUNNEL_CONNECTOR_ADDRS must therefore list every connector
-//     for this layer to apply to tunnel traffic; with it unset the layer is
-//     off for the tunnel (logged once at start-up).
+//     (clientPrefixKey); sending Cf-* headers does not change a non-connector
+//     peer's key. A request whose client cannot be established (a configured
+//     connector or a local peer with no trusted header) SKIPS this layer: a
+//     key taken from an unproven header would let a caller pick its own
+//     bucket, and one shared bucket would let one abuser lock out every
+//     guest. Layers 1 and 3 still apply to it. TUNNEL_CONNECTOR_ADDRS must
+//     list every connector: an unlisted connector is keyed on its own
+//     address, one bucket shared by everyone it relays (logged once at
+//     start-up when the setting is empty).
 //  3. global: a generous ceiling across every token and client, so
 //     enumeration spread over many tokens or many clients is still bounded.
 //
@@ -166,7 +166,7 @@ func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 		connectors:  tunnelConnectorPeers(),
 	}
 	if len(l.connectors) == 0 {
-		inviteLimitLog.Info("invite per-client rate limit is off for tunnel traffic: TUNNEL_CONNECTOR_ADDRS does not list the tunnel connectors, so no visitor address can be established; the per-token and global limits still apply")
+		inviteLimitLog.Info("TUNNEL_CONNECTOR_ADDRS is not set: no tunnel visitor address can be established, so each tunnel connector gets one invite per-client bucket shared by every visitor it relays; the per-token and global limits still apply")
 	}
 	l.perToken.Start(ctx)
 	l.perClient.Start(ctx)
