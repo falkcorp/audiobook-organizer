@@ -1,13 +1,15 @@
 // file: internal/server/metadata_state_seed_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 36b14a56-0231-47fa-8b33-ff883f53c7fb
 // last-edited: 2026-10-20
 
 package server
 
-import "maps"
+import (
+	"maps"
 
-import "github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+)
 
 // saveMetadataState replaces a book's whole field state, for seeding tests.
 // Production code changes state through metafetch.WithStateSnapshot.
