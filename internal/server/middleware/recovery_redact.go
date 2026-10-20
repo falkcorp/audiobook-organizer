@@ -1,7 +1,7 @@
 // file: internal/server/middleware/recovery_redact.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7ec1e8a2-beb7-4e4c-a883-d7bab38999f7
-// last-edited: 2026-09-19
+// last-edited: 2026-10-19
 
 package middleware
 
@@ -31,7 +31,8 @@ var recoveryLog = logger.New("http")
 // Behaviour otherwise mirrors gin: a broken connection is recorded on the
 // context and aborted without a status (the client is gone); any other panic
 // is logged with a stack and answered 500. The logged request line goes
-// through RedactQueryCredentials and credential-bearing headers are masked.
+// through RedactLogPath (credential query values and invite-token path
+// segments) and credential-bearing headers are masked.
 func RedactingRecovery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
@@ -69,7 +70,8 @@ var credentialHeaders = []string{"Authorization", "Cookie", "Proxy-Authorization
 	"Cf-Access-Jwt-Assertion", "Cf-Access-Client-Secret", "X-Api-Key"}
 
 // RedactedRequestSummary renders "METHOD /path?query HTTP/x | headers" with
-// credential query values and credential headers masked, for crash and error
+// credential query values, invite tokens in the path and credential headers
+// masked, for crash and error
 // logs.
 func RedactedRequestSummary(r *http.Request) string {
 	if r == nil {
@@ -78,7 +80,7 @@ func RedactedRequestSummary(r *http.Request) string {
 	var b strings.Builder
 	b.WriteString(r.Method)
 	b.WriteByte(' ')
-	b.WriteString(RedactQueryCredentials(r.URL.RequestURI()))
+	b.WriteString(RedactLogPath(r.URL.RequestURI()))
 	b.WriteByte(' ')
 	b.WriteString(r.Proto)
 	for name, vals := range r.Header {

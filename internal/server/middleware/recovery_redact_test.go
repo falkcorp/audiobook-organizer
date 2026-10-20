@@ -1,7 +1,7 @@
 // file: internal/server/middleware/recovery_redact_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fac23317-790b-49a1-b9f3-81b598014604
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 
 package middleware
 
@@ -65,5 +65,37 @@ func TestRedactingRecovery_LogsNoQueryCredential(t *testing.T) {
 				t.Fatalf("recovery log lost the request line: %s", out)
 			}
 		})
+	}
+}
+
+// The recovery dump prints the request line; an invite token in the path must be
+// masked there too, on the broken-pipe and the panic path.
+func TestRedactingRecovery_LogsNoInviteToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const tok = "recovery-invite-token-example"
+	routes := []struct {
+		method, route, target, wantLine string
+	}{
+		{http.MethodGet, "/api/v1/auth/invite/:token", "/api/v1/auth/invite/" + tok, "/api/v1/auth/invite/[REDACTED] "},
+		{http.MethodDelete, "/api/v1/users/invites/:token", "/api/v1/users/invites/" + tok, "/api/v1/users/invites/[REDACTED] "},
+		{http.MethodPost, "/api/v1/users/invites/:token/resend", "/api/v1/users/invites/" + tok + "/resend", "/api/v1/users/invites/[REDACTED]/resend "},
+	}
+	for _, rt := range routes {
+		for name, panicWith := range map[string]any{"panic": "boom", "broken pipe": syscall.EPIPE} {
+			t.Run(rt.method+" "+rt.route+" "+name, func(t *testing.T) {
+				buf := captureSlog(t)
+				r := gin.New()
+				r.Use(RedactingRecovery())
+				r.Handle(rt.method, rt.route, func(c *gin.Context) { panic(panicWith) })
+				r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(rt.method, rt.target, nil))
+				out := buf.String()
+				if strings.Contains(out, tok) {
+					t.Fatalf("recovery log leaked the invite token: %s", out)
+				}
+				if !strings.Contains(out, rt.wantLine) {
+					t.Fatalf("recovery log lost the readable path %q: %s", rt.wantLine, out)
+				}
+			})
+		}
 	}
 }

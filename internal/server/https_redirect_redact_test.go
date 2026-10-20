@@ -1,7 +1,7 @@
 // file: internal/server/https_redirect_redact_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 493e9f52-1cdc-41c5-be6b-6a0d5ce98bc8
-// last-edited: 2026-10-06
+// last-edited: 2026-10-19
 
 package server
 
@@ -33,5 +33,28 @@ func TestHTTPSRedirectHandler_LogsNoQueryCredential(t *testing.T) {
 	}
 	if out := buf.String(); strings.Contains(out, "redirect-secret") || !strings.Contains(out, "REDACTED") {
 		t.Fatalf("redirect log leaked or lost the credential marker: %s", out)
+	}
+}
+
+// The invite token lives in the path, so the query-only redaction missed it: the
+// debug line must mask it in both the url and the target, while the redirect
+// itself keeps the real path.
+func TestHTTPSRedirectHandler_LogsNoInviteToken(t *testing.T) {
+	buf := logtest.Capture(t, slog.LevelDebug)
+
+	const tok = "redirect-invite-token-example"
+	w := httptest.NewRecorder()
+	newHTTPSRedirectHandler("192.0.2.10", "8484").ServeHTTP(w,
+		httptest.NewRequest(http.MethodGet, "http://192.0.2.10/invite/"+tok, nil))
+
+	if loc := w.Header().Get("Location"); loc != "https://192.0.2.10:8484/invite/"+tok {
+		t.Fatalf("the redirect must keep the real path: %q", loc)
+	}
+	out := buf.String()
+	if strings.Contains(out, tok) {
+		t.Fatalf("redirect log leaked the invite token: %s", out)
+	}
+	if !strings.Contains(out, "https://192.0.2.10:8484/invite/[REDACTED]") {
+		t.Fatalf("redirect log lost the readable target: %s", out)
 	}
 }
