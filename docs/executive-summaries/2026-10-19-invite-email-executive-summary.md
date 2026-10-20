@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -93,9 +93,15 @@ through this work, profile email changes started feeding that lookup.
 their own profile and then received that person's account access the first
 time they signed in with Google or GitHub.
 
-**The fix.** Only verified addresses are used for linking: ones set during
-setup, by an emailed invite, or confirmed by Google or GitHub. A login whose
-address an account holds unverified is refused rather than linked. A one-time
-repair at startup keeps every address that links today working. The trusted
-list stays where older versions of the server look for it, so rolling back
-cannot reopen the hole.
+**The fix.** Only verified addresses are used for linking: ones bound by an
+emailed invite, confirmed by Google or GitHub, or set during first-run setup
+from now on. When a Google- or GitHub-verified login finds its address typed
+into other accounts' profiles, the verified person wins: those accounts keep
+working but lose the address, a new account is created for the login, and an
+entry naming the affected accounts goes into the admin's audit log. A one-time
+rebuild at startup keeps only addresses with a record of how they were proven
+and drops the rest, so an address someone squatted before this update is not
+grandfathered in. People who already sign in with Google or GitHub are found
+through their existing sign-in link, not their email, so they are not affected.
+The trusted list stays where older versions of the server look for it, so
+rolling back cannot reopen the hole.
