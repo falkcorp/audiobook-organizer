@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-20 -->
 
@@ -148,8 +148,10 @@ the first Google or GitHub sign-in with that address would move it to a new
 account. The server logs the ids of any such administrator accounts at
 startup. Do not fix this by setting the address for them on the Users page:
 that makes the account the verified holder, which is wrong when the same
-person already signs in through another account. Leave it, or merge the two
-accounts with the account-merge tool once it is available.
+person already signs in through another account. Leave it as it is. If the
+log says another account already has the same address verified, it names
+both accounts and which one is the verified holder: do not clear that
+holder's email, and leave both accounts alone until they can be merged.
 
 **A second setting, set by this deploy.** The invite pages limit how often
 one visitor can try a link. The Cloudflare tunnel reaches the server through
