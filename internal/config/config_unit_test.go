@@ -1,5 +1,6 @@
 // file: internal/config/config_unit_test.go
 // version: 1.20.1
+// guid: c50805f7-8e88-4a02-a03a-2e48863e2619
 // last-edited: 2026-10-19
 
 package config

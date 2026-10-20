@@ -397,18 +397,7 @@ func ThrottleSummary(ids []string) string {
 			parts = append(parts, id+" ("+string(t.Reason)+", "+t.Remaining(now).Round(time.Minute).String()+" left)")
 		}
 	}
-	return joinComma(parts)
-}
-
-func joinComma(parts []string) string {
-	var out strings.Builder
-	for i, p := range parts {
-		if i > 0 {
-			out.WriteString(", ")
-		}
-		out.WriteString(p)
-	}
-	return out.String()
+	return strings.Join(parts, ", ")
 }
 
 // ResetThrottlesForTesting clears every hold from the process-global registry.
