@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_grace_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6f2d9a41-83c5-4b7e-a0d6-19e4c7b35f82
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package registry_test
 
@@ -84,7 +84,7 @@ func TestScanStandDown_BurstDoesNotPayScanStartupPerCycle(t *testing.T) {
 	waitFor(t, "scan past its startup", 10*time.Second, func() bool { return readyRuns.Load() == 1 })
 
 	begin := time.Now()
-	for i := 0; i < cycles; i++ {
+	for i := range cycles {
 		release, err := r.AcquireScanStandDown(ctx, "apply-"+string(rune('a'+i)), "apply")
 		if err != nil {
 			t.Fatalf("cycle %d: AcquireScanStandDown: %v", i, err)

@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_giveup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a4d2e7b-1c58-4b36-8f0e-5b7c3a9d1e62
-// last-edited: 2026-09-13
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -49,7 +49,7 @@ func runPoisonedPhase(t *testing.T, paths []string, poison string) (AIPhaseSumma
 		books[i] = Book{FilePath: p}
 		cands[i] = i
 	}
-	p := &countingPoisonParser{poisonParser: poisonParser{poison: poison}, callsWith: map[string]int{}}
+	p := &countingPoisonParser{poison: poison, callsWith: map[string]int{}}
 	s := runAIBatchPhase(context.Background(), p, books, cands, logger.New("test"), noopSave)
 	return s, p, books
 }

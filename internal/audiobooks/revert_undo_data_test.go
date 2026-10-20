@@ -1,12 +1,13 @@
 // file: internal/audiobooks/revert_undo_data_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 9a4c2e71-5d3b-4f80-b1e6-7c0d8f2a5b39
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package audiobooks
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -147,9 +148,7 @@ type fakeTagFile struct {
 func (f *fakeTagFile) wire(rs *RevertService, path string) {
 	rs.ReadTags = func(string) (map[string]string, error) {
 		out := map[string]string{"title": "", "artist": ""}
-		for k, v := range f.tags {
-			out[k] = v
-		}
+		maps.Copy(out, f.tags)
 		return out, nil
 	}
 	rs.WriteTags = func(_ string, tags map[string]any) error {

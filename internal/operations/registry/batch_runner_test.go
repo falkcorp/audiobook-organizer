@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 398171ae-de60-4dbe-9766-d9819c610ace
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package registry
 
@@ -209,8 +209,11 @@ func openJob(t *testing.T, items []int, o batchOpts, item func(*ops.ItemRC, int)
 		src.Items = items
 	}
 	def := ops.Batch("test.batch", ops.BatchSpec[ops.NoParams, int, ops.NoResult]{
-		Common: ops.Common{Title: "t", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView, Resume: o.resume},
-		Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) { return src, nil },
+		Title:      "t",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
+		Resume:     o.resume,
+		Source:     func(*ops.RC, ops.NoParams) (ops.Source[int], error) { return src, nil },
 		Item: func(rc *ops.ItemRC, _ ops.NoParams, i int) error {
 			return item(rc, i)
 		},
@@ -657,7 +660,10 @@ func TestUnordered_RestartsFromZero_And_RefusesContinue(t *testing.T) {
 
 	cont := ops.ResumeContinue
 	def := ops.Batch("u", ops.BatchSpec[ops.NoParams, int, ops.NoResult]{
-		Common: ops.Common{Title: "u", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView, Resume: &cont},
+		Title:      "u",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
+		Resume:     &cont,
 		Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) {
 			return ops.Source[int]{Items: items, Key: itemKey, Order: ops.Unordered}, nil
 		},
@@ -1043,7 +1049,9 @@ func TestDirtySetCompareAndDelete(t *testing.T) {
 	}
 	var ran atomic.Int64
 	def := ops.Batch("d", ops.BatchSpec[ops.NoParams, string, ops.NoResult]{
-		Common: ops.Common{Title: "d", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
+		Title:      "d",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
 		Source: func(*ops.RC, ops.NoParams) (ops.Source[string], error) {
 			return ops.DirtySet(prefix, func(_ context.Context, ids []string) ([]string, error) { return ids, nil }), nil
 		},
@@ -1090,7 +1098,9 @@ func TestDirtySetPreviewKeepsEntries(t *testing.T) {
 	}
 	var ran atomic.Int64
 	def := ops.Batch("d", ops.BatchSpec[ops.NoParams, string, ops.NoResult]{
-		Common: ops.Common{Title: "d", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermLibraryEditMetadata},
+		Title:      "d",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermLibraryEditMetadata,
 		Source: func(*ops.RC, ops.NoParams) (ops.Source[string], error) {
 			return ops.DirtySet(prefix, func(_ context.Context, ids []string) ([]string, error) { return ids, nil }), nil
 		},

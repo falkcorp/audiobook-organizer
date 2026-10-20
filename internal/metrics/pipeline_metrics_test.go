@@ -1,7 +1,7 @@
 // file: internal/metrics/pipeline_metrics_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2b18e9de-8f9d-46b8-91f8-94c25c4bcd6b
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package metrics
 
@@ -145,7 +145,7 @@ func TestOperationDurationBuckets_ReachADay(t *testing.T) {
 
 func excerpt(body, needle string) string {
 	var out []string
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if strings.Contains(line, needle) {
 			out = append(out, line)
 		}

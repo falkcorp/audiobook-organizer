@@ -1,12 +1,13 @@
 // file: internal/applygate/booknum.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9d4f2c83-6a1e-4b57-8c09-e3b7a5d16f42
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package applygate
 
 import (
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -206,12 +207,7 @@ func sortedKeys(m map[string]bool) []string {
 }
 
 func contains(xs []string, x string) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(xs, x)
 }
 
 func quote(s string) string { return "\"" + s + "\"" }

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-03
+// last-edited: 2026-10-20
 
 package jobs_test
 
@@ -162,7 +162,7 @@ func TestBackfillFileHashesJob_ParallelHashesAll(t *testing.T) {
 	dir := t.TempDir()
 	files := make([]database.BookFileCore, n)
 	want := make(map[string]string, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		content := []byte(fmt.Sprintf("audio payload number %d — distinct bytes", i))
 		p := filepath.Join(dir, fmt.Sprintf("audio%02d.m4b", i))
 		require.NoError(t, os.WriteFile(p, content, 0o644))

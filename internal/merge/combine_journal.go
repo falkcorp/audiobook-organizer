@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.31.2
+// version: 1.31.3
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package merge
 
@@ -2323,8 +2323,7 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	// 3. External IDs, sync redirect, progress — per absorbed book, newest
 	//    first, because each FollowMerge saw the survivor as the previous one
 	//    left it.
-	for i := len(j.Absorbed) - 1; i >= 0; i-- {
-		a := j.Absorbed[i]
+	for _, a := range slices.Backward(j.Absorbed) {
 		for _, x := range a.ExternalIDs {
 			if err := ms.db.ReassignExternalID(x.Source, x.ExternalID, a.BookID); err != nil {
 				return res, fmt.Errorf("move %s id %s back to %s: %w", x.Source, x.ExternalID, a.BookID, err)

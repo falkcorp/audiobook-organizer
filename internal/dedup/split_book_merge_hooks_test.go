@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_hooks_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c7e2f4a-9b13-4d58-a6e1-3f82d5b7c904
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -36,7 +36,7 @@ func hookCluster(t *testing.T, store database.Store, n int) (keep string, srcs [
 		return id
 	}
 	keep = mk("Keep 01", 1)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		srcs = append(srcs, mk("Keep part", i+2))
 	}
 	return keep, srcs, files

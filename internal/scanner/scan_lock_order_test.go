@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_lock_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f2c8e71-0a4d-4b36-8d9e-c3a17b6f2e05
-// last-edited: 2026-09-30
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -39,7 +39,7 @@ func TestScannerCannotReachTheL1Lockers(t *testing.T) {
 		"/internal/organizer",
 		"/internal/audiobooks",
 	}
-	for _, dep := range strings.Fields(string(out)) {
+	for dep := range strings.FieldsSeq(string(out)) {
 		for _, f := range forbidden {
 			if strings.HasSuffix(dep, f) || strings.Contains(dep, f+"/") {
 				t.Errorf("the scanner depends on %s, which can hold an L1 (writeBackPathLocks) locker; R3 says the scanner never takes L1", dep)

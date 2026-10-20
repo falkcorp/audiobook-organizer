@@ -1,7 +1,7 @@
 // file: internal/logger/logtest/logtest.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: db0bc5ed-6765-4330-b2c4-7fd8faffd328
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 // Package logtest captures slog output in tests.
 //
@@ -67,7 +67,7 @@ func (b *Buffer) Reset() {
 // Lines returns the captured lines that contain substr.
 func (b *Buffer) Lines(substr string) []string {
 	var out []string
-	for _, l := range strings.Split(b.String(), "\n") {
+	for l := range strings.SplitSeq(b.String(), "\n") {
 		if strings.Contains(l, substr) {
 			out = append(out, l)
 		}

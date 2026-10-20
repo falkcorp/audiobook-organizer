@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
-// last-edited: 2026-10-17
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -99,7 +99,7 @@ func TestDurationMatch_MultiFileComparedAtFullRuntime(t *testing.T) {
 // its 20 × 30 min chapters are rows flagged missing with no present copy.
 func introAndMissingChapters(bookID string) []database.BookFile {
 	files := []database.BookFile{{ID: bookID + "-intro", BookID: bookID, FilePath: "/lib/x/00 intro.mp3", Duration: 45}}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		files = append(files, database.BookFile{
 			ID: fmt.Sprintf("%s-m%02d", bookID, i), BookID: bookID,
 			FilePath: fmt.Sprintf("/old/x/%02d.mp3", i+1), Duration: 1800, Missing: true,
@@ -168,7 +168,7 @@ func TestDurationMatch_NoFileReadForTitleMismatches(t *testing.T) {
 	d := 36000
 	book := &database.Book{ID: "A", Title: "Foundation", AuthorID: &authorID, Duration: &d}
 	cores := []database.BookCore{book.Core()}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		o := &database.Book{ID: fmt.Sprintf("O%d", i), Title: fmt.Sprintf("Entirely Different Story %c", 'A'+i), AuthorID: &authorID, Duration: &d}
 		cores = append(cores, o.Core())
 	}
@@ -197,7 +197,7 @@ func TestBookRuntimeMemo_ReadsOncePerUpdatedAt(t *testing.T) {
 	memo := newBookRuntimeMemo()
 	t0 := time.Unix(1_700_000_000, 0)
 	book := &database.Book{ID: "A", UpdatedAt: &t0}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if rt, rows, ok := runtimeAndRows(store, memo, book); !ok || rows != 2 || rt.Seconds != 1200 {
 			t.Fatalf("runtime = %+v rows=%d ok=%v", rt, rows, ok)
 		}

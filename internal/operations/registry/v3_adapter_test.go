@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_adapter_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3ffc035f-1ee4-4409-afce-613375ef8fcd
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package registry
 
@@ -124,7 +124,9 @@ func TestNativeDefRunsOnRegistry(t *testing.T) {
 		Skipped int64 `json:"skipped"`
 	}
 	def := ops.Batch("test.native-batch", ops.BatchSpec[ops.NoParams, int, res]{
-		Common: ops.Common{Title: "native", Effects: ops.ReadOnly(ops.ResBooks), Permission: auth.PermLibraryView},
+		Title:      "native",
+		Effects:    ops.ReadOnly(ops.ResBooks),
+		Permission: auth.PermLibraryView,
 		Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) {
 			return ops.Source[int]{Items: seq(700), Key: itemKey}, nil
 		},
@@ -178,8 +180,9 @@ func TestNativeDefRunsOnRegistry(t *testing.T) {
 func TestRegisterRefusesAnInvalidNativeDef(t *testing.T) {
 	r := startV3Registry(t, newPebbleV3(t), Options{})
 	def := ops.Task("test.no-perm", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "x", Effects: ops.Writes(ops.ResBooks)},
-		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
+		Title:   "x",
+		Effects: ops.Writes(ops.ResBooks),
+		Run:     func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
 	})
 	var ce *ops.CatalogError
 	if err := Register(r, "test", def); !errors.As(err, &ce) || ce.Refusal != ops.RefuseNoPermission {
@@ -213,7 +216,10 @@ func TestScanKeySingleExecutor(t *testing.T) {
 		t.Fatal(err)
 	}
 	v3 := ops.Task("test.v3-scan", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "v3", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView, Exclusive: key},
+		Title:      "v3",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
+		Exclusive:  key,
 		Run: func(*ops.RC, ops.NoParams) (ops.NoResult, error) {
 			if v2Running.Load() {
 				overlap.Store(true)
@@ -276,7 +282,9 @@ func TestReadinessWaitDoesNotTimeOut(t *testing.T) {
 		LivenessNow: func() time.Time { return time.Unix(0, clock.Load()) }})
 	var started atomic.Bool
 	waits := ops.Task("test.waits", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "waits", Effects: ops.ReadOnly(ops.ResBooks), Permission: auth.PermLibraryView},
+		Title:      "waits",
+		Effects:    ops.ReadOnly(ops.ResBooks),
+		Permission: auth.PermLibraryView,
 		Run: func(rc *ops.RC, _ ops.NoParams) (ops.NoResult, error) {
 			started.Store(true)
 			// Several watchdog cycles of silence: a wait that had counted
@@ -286,8 +294,10 @@ func TestReadinessWaitDoesNotTimeOut(t *testing.T) {
 		},
 	})
 	housekeeping := ops.Task("test.no-wait", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "no wait", Effects: ops.ReadOnly().NeedsReady(ops.ReadyNone), Permission: auth.PermLibraryView},
-		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
+		Title:      "no wait",
+		Effects:    ops.ReadOnly().NeedsReady(ops.ReadyNone),
+		Permission: auth.PermLibraryView,
+		Run:        func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
 	})
 	for _, d := range []ops.Definition{waits, housekeeping} {
 		if err := Register(r, "test", d); err != nil {
@@ -331,16 +341,21 @@ func TestPipelineOnRegistry(t *testing.T) {
 	r := startV3Registry(t, store, Options{})
 	type count struct{ N int }
 	first := ops.Task("test.p-first", ops.TaskSpec[ops.NoParams, count]{
-		Common: ops.Common{Title: "first", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
-		Run:    func(*ops.RC, ops.NoParams) (count, error) { return count{N: 4}, nil },
+		Title:      "first",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
+		Run:        func(*ops.RC, ops.NoParams) (count, error) { return count{N: 4}, nil },
 	})
 	var gotN atomic.Int64
 	second := ops.Task("test.p-second", ops.TaskSpec[count, ops.NoResult]{
-		Common: ops.Common{Title: "second", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
-		Run:    func(_ *ops.RC, p count) (ops.NoResult, error) { gotN.Store(int64(p.N)); return ops.NoResult{}, nil },
+		Title:      "second",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
+		Run:        func(_ *ops.RC, p count) (ops.NoResult, error) { gotN.Store(int64(p.N)); return ops.NoResult{}, nil },
 	})
 	pipe := ops.Pipeline("test.pipe", ops.PipelineSpec[ops.NoParams]{
-		Common: ops.Common{Title: "pipe", Permission: auth.PermLibraryView},
+		Title:      "pipe",
+		Permission: auth.PermLibraryView,
 		Stages: []ops.Stage[ops.NoParams]{
 			{Name: "first", Def: first},
 			{Name: "second", Def: second, After: []string{"first"}, Params: func(_ ops.NoParams, res ops.Results) (any, error) {
@@ -382,7 +397,9 @@ func TestBatchResumesThroughTheExecutor(t *testing.T) {
 	const size = 10
 	mkDef := func(ran *counts, block bool) ops.Definition {
 		return ops.Batch("test.resumable", ops.BatchSpec[ops.NoParams, int, ops.NoResult]{
-			Common: ops.Common{Title: "resumable", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
+			Title:      "resumable",
+			Effects:    ops.ReadOnly(),
+			Permission: auth.PermLibraryView,
 			Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) {
 				return ops.Source[int]{Items: seq(4 * size), Key: itemKey}, nil
 			},
@@ -480,7 +497,9 @@ func TestBatchResumesAfterACrash(t *testing.T) {
 	const size = 10
 	mkDef := func(ran *counts) ops.Definition {
 		return ops.Batch("test.crashy", ops.BatchSpec[ops.NoParams, int, ops.NoResult]{
-			Common: ops.Common{Title: "crashy", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
+			Title:      "crashy",
+			Effects:    ops.ReadOnly(),
+			Permission: auth.PermLibraryView,
 			Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) {
 				return ops.Source[int]{Items: seq(4 * size), Key: itemKey}, nil
 			},
@@ -581,7 +600,9 @@ func TestLeaseLossThroughWriterFailsRun(t *testing.T) {
 	var once sync.Once
 	var written atomic.Int64
 	def := ops.Batch("test.lease-loss", ops.BatchSpec[ops.NoParams, string, ops.NoResult]{
-		Common: ops.Common{Title: "lease", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
+		Title:      "lease",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermSettingsManage,
 		Source: func(*ops.RC, ops.NoParams) (ops.Source[string], error) {
 			return ops.Source[string]{Items: ids, Key: func(s string) string { return s }}, nil
 		},
@@ -637,8 +658,10 @@ func TestLiveWriterNeedsIntentsAndJournal(t *testing.T) {
 	r := startV3Registry(t, store, Options{})
 	var ran atomic.Int32
 	def := ops.Task("test.writes", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "w", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
-		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { ran.Add(1); return ops.NoResult{}, nil },
+		Title:      "w",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermSettingsManage,
+		Run:        func(*ops.RC, ops.NoParams) (ops.NoResult, error) { ran.Add(1); return ops.NoResult{}, nil },
 	})
 	if err := Register(r, "test", def); err != nil {
 		t.Fatal(err)
@@ -669,8 +692,11 @@ func TestRegisterFailureLeavesNoNativeEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	clash := ops.Task("test.native", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "n", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView, FormerIDs: []string{"test.v2"}},
-		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
+		Title:      "n",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
+		FormerIDs:  []string{"test.v2"},
+		Run:        func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
 	})
 	if err := Register(r, "test", clash); err == nil {
 		t.Fatal("a former id naming a registered def was accepted")
@@ -682,8 +708,10 @@ func TestRegisterFailureLeavesNoNativeEntry(t *testing.T) {
 		t.Fatal("a refused registration left a native catalog entry")
 	}
 	good := ops.Task("test.good", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "g", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView},
-		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
+		Title:      "g",
+		Effects:    ops.ReadOnly(),
+		Permission: auth.PermLibraryView,
+		Run:        func(*ops.RC, ops.NoParams) (ops.NoResult, error) { return ops.NoResult{}, nil },
 	})
 	if err := Register(r, "test", good); err != nil {
 		t.Fatal(err)
@@ -722,8 +750,10 @@ func TestLiveWriterNeedsHistory(t *testing.T) {
 	r := startV3Registry(t, store, Options{})
 	var ran atomic.Int32
 	def := ops.Task("test.writes", ops.TaskSpec[ops.NoParams, ops.NoResult]{
-		Common: ops.Common{Title: "w", Effects: ops.Writes(ops.ResBooks), Permission: auth.PermSettingsManage},
-		Run:    func(*ops.RC, ops.NoParams) (ops.NoResult, error) { ran.Add(1); return ops.NoResult{}, nil },
+		Title:      "w",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermSettingsManage,
+		Run:        func(*ops.RC, ops.NoParams) (ops.NoResult, error) { ran.Add(1); return ops.NoResult{}, nil },
 	})
 	if err := Register(r, "test", def); err != nil {
 		t.Fatal(err)
@@ -755,7 +785,10 @@ func TestStopDecidesFinishLikeTheRegistry(t *testing.T) {
 	cont := ops.ResumeContinue
 	mkDef := func(p *probe) ops.Definition {
 		return ops.Batch("test.stopper", ops.BatchSpec[ops.NoParams, int, ops.NoResult]{
-			Common: ops.Common{Title: "stopper", Effects: ops.ReadOnly(), Permission: auth.PermLibraryView, Resume: &cont},
+			Title:      "stopper",
+			Effects:    ops.ReadOnly(),
+			Permission: auth.PermLibraryView,
+			Resume:     &cont,
 			Source: func(*ops.RC, ops.NoParams) (ops.Source[int], error) {
 				return ops.Source[int]{Items: seq(n), Key: itemKey}, nil
 			},

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.10.0
+// version: 3.10.1
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-10-17
+// last-edited: 2026-10-20
 
 package jobs
 
@@ -877,7 +877,7 @@ const ddRetireMergedDupAttempts = 2
 // writer retired or deleted meanwhile needs nothing more.
 func ddRetireMergedDup(store ddMergeStore, sim *ddSim, keeper, dup *database.Book) (string, error) {
 	var lastErr error
-	for attempt := 0; attempt < ddRetireMergedDupAttempts; attempt++ {
+	for range ddRetireMergedDupAttempts {
 		fresh, err := store.GetBookByID(dup.ID)
 		if err != nil {
 			lastErr = fmt.Errorf("re-read dup %s: %w", dup.ID, err)

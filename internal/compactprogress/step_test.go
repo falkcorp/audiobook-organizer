@@ -1,7 +1,7 @@
 // file: internal/compactprogress/step_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f8a1c6e-2d7b-4c90-a5e4-9b1f0d7c2a83
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package compactprogress
 
@@ -283,13 +283,13 @@ func TestCollectCompactionStats_RealPebble(t *testing.T) {
 	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		require.NoError(t, db.Set([]byte{byte(i >> 8), byte(i)}, make([]byte, 512), pebble.NoSync))
 	}
 	// Two overlapping L0 tables, so the compaction must merge (rewrite)
 	// rather than move a lone file down by metadata alone.
 	require.NoError(t, db.Flush())
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		require.NoError(t, db.Delete([]byte{byte(i >> 8), byte(i)}, pebble.NoSync))
 	}
 	require.NoError(t, db.Flush())

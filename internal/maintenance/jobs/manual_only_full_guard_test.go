@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/manual_only_full_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f3165568-40ba-4911-bf92-4619f0de4387
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package jobs
 
@@ -254,7 +254,7 @@ func TestMergeChapterGroups_PreviewChecksTheFingerprintedFiles(t *testing.T) {
 func TestMergeChapterGroups_PreviewPoolKeepsOrderAndCounts(t *testing.T) {
 	s := ddRealStore(t)
 	const n = 12
-	for i := 0; i < n; i++ {
+	for i := range n {
 		books := chSeedGroup(t, s, "/lib/Author "+string(rune('A'+i))+"/Story", "Story", 3, 300)
 		if i == 4 {
 			mgTagBigFinish(t, s, books[1].ID)

@@ -1,7 +1,7 @@
 // file: internal/config/ai_endpoints.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f0b6c2e-8a41-4d7e-9b15-6e2c7a9d4f10
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package config
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -137,9 +138,7 @@ func cloneStringMap(m map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 

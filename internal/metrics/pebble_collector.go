@@ -1,7 +1,7 @@
 // file: internal/metrics/pebble_collector.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7dc3409f-5419-47d8-8770-916f33b019ae
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package metrics
 
@@ -236,7 +236,7 @@ func emitPebbleSample(ch chan<- prometheus.Metric, store string, s PebbleSample)
 	one(pdWALFiles, s.WALFiles)
 	one(pdDiskUsage, s.DiskUsageBytes)
 
-	for i := 0; i < pebbleLevels; i++ {
+	for i := range pebbleLevels {
 		lvl := strconv.Itoa(i)
 		perLevel := func(d pebbleDesc, v float64) {
 			ch <- prometheus.MustNewConstMetric(d.desc, d.typ, v, store, lvl)

@@ -1,7 +1,7 @@
 // file: internal/organizer/folder_scope.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8a51c7-2b94-4d06-a7f3-9c1d60e4b825
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package organizer
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -64,10 +65,8 @@ func newFolderScope(p *string) (*folderScope, error) {
 	if !filepath.IsAbs(raw) {
 		return nil, fmt.Errorf("%w: %q is not an absolute path", ErrInvalidFolderScope, raw)
 	}
-	for _, elem := range strings.Split(filepath.ToSlash(raw), "/") {
-		if elem == ".." {
-			return nil, fmt.Errorf("%w: %q contains a \"..\" element", ErrInvalidFolderScope, raw)
-		}
+	if slices.Contains(strings.Split(filepath.ToSlash(raw), "/"), "..") {
+		return nil, fmt.Errorf("%w: %q contains a \"..\" element", ErrInvalidFolderScope, raw)
 	}
 	return &folderScope{root: filepath.Clean(raw)}, nil
 }

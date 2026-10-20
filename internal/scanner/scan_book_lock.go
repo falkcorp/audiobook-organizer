@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -250,9 +251,7 @@ func mergeScannedKeepingForeignEdits(cur, scanned *database.Book, locked map[str
 		return 0
 	}
 	eff := make(map[string]bool, len(locked)+8)
-	for k, v := range locked {
-		eff[k] = v
-	}
+	maps.Copy(eff, locked)
 	kept := 0
 	mark := func(changed bool, key string) {
 		if changed && !eff[key] {
@@ -453,7 +452,7 @@ const (
 // what the main pass last wrote (rememberRow), and a row another writer
 // changed since then must keep that change. Rows with no snapshot yet get one.
 func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, freshSnaps bool) (_ *scanlock.Hold, _ scanLockOutcome, readErr error) {
-	for try := 0; try < scanLockResolveTries; try++ {
+	for range scanLockResolveTries {
 		ids, _, rerr := resolveScanLockSet(b)
 		if rerr != nil {
 			return nil, scanLockUnreadable, rerr
@@ -517,7 +516,7 @@ func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, fresh
 // does not hold. saved is false when the book's files vanished; err is
 // non-nil for a real save failure or the bounded wait expiring.
 func saveBookUnderScanLock(ctx context.Context, book *Book, save func(context.Context, *Book) error) (saved bool, err error) {
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		wctx, cancel := context.WithTimeout(ctx, scanLockWait)
 		hold, outcome, readErr := acquireScanBookLock(ctx, wctx, book, 1, false)
 		cancel()
@@ -566,10 +565,5 @@ func filesVanished(b *Book) bool {
 	if gone(b.FilePath) {
 		return true
 	}
-	for _, s := range b.SegmentFiles {
-		if gone(s) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(b.SegmentFiles, gone)
 }

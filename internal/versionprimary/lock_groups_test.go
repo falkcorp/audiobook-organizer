@@ -1,7 +1,7 @@
 // file: internal/versionprimary/lock_groups_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9d4a2c71-5e8f-4b36-a1d0-7f3e6b2c9a48
-// last-edited: 2026-10-02
+// last-edited: 2026-10-20
 
 package versionprimary
 
@@ -91,7 +91,7 @@ func TestLockBookGroups_RereadsAfterAMoveAndKeepsTheRawID(t *testing.T) {
 // and no stripe is left locked.
 func TestLockBookGroups_GivesUpWithErrMembershipChanged(t *testing.T) {
 	seq := make([]string, 0, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		seq = append(seq, fmt.Sprintf("g-%d", i))
 	}
 	r := &seqReader{seq: seq}

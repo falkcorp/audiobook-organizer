@@ -1,7 +1,7 @@
 // file: internal/config/unread_settings_removed_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d0f7a3e-2b84-4c19-9e6a-71c3b8d4f052
-// last-edited: 2026-10-17
+// last-edited: 2026-10-20
 
 package config
 
@@ -115,7 +115,7 @@ func TestSaveConfigToFile_ScrubsRemovedUnreadSettings(t *testing.T) {
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		for _, k := range unreadSettingKeys {
 			assert.False(t, strings.HasPrefix(line, k+":"), "retired key %s survived the save: %q", k, line)
 		}

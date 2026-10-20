@@ -1,12 +1,13 @@
 // file: internal/operations/registry/aliases.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8b1f47-6c2a-4d95-a0e3-7b5f9c2d8e14
-// last-edited: 2026-09-25
+// last-edited: 2026-10-20
 
 package registry
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
@@ -106,9 +107,7 @@ func (r *Registry) CanonicalDefID(id string) string {
 func (r *Registry) Aliases() map[string]string {
 	src := r.aliasMap()
 	out := make(map[string]string, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
+	maps.Copy(out, src)
 	return out
 }
 
@@ -212,9 +211,7 @@ func (r *Registry) publishAliasesLocked(def OperationDef) {
 	}
 	current := r.aliasMap()
 	next := make(aliasTable, len(current)+len(def.FormerIDs))
-	for k, v := range current {
-		next[k] = v
-	}
+	maps.Copy(next, current)
 	for _, old := range def.FormerIDs {
 		next[old] = def.ID
 	}

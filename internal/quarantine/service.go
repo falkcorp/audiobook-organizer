@@ -1,7 +1,7 @@
 // file: internal/quarantine/service.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package quarantine
 
@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -826,8 +827,7 @@ func (qs *QuarantineService) logNotes(rl *relocation, op, bookID string) {
 // row's CURRENT path, and a rolled-back row is back at the entry's OldPath,
 // so it can never match.
 func (qs *QuarantineService) rollback(rl *relocation, op string) {
-	for i := len(rl.moves) - 1; i >= 0; i-- {
-		m := rl.moves[i]
+	for _, m := range slices.Backward(rl.moves) {
 		if err := os.Rename(m.to, m.from); err != nil {
 			slog.Error(op+" DB update failed and file rollback failed",
 				"from", logger.SanitizeLogValue(m.to),

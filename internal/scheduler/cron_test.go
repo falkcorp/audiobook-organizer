@@ -1,7 +1,7 @@
 // file: internal/scheduler/cron_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0e5d8b73-41a9-4f2c-8d16-a93c7b5e2f40
-// last-edited: 2026-10-17
+// last-edited: 2026-10-20
 
 package scheduler
 
@@ -151,7 +151,7 @@ func TestPrevAgreesWithNext(t *testing.T) {
 	loc := mustLoc(t, "America/New_York")
 	exprs := []string{"*/15 * * * *", "0 2 * * 0", "30 2 * * *", "0 0 1,15 * *", "0 9-17/2 * * 1-5", "0 12 15 * 1"}
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		spec, _ := ParseCron(exprs[i%len(exprs)])
 		at := base.Add(time.Duration(rng.Int63n(int64(2 * 365 * 24 * time.Hour))))
 		p, ok := spec.Prev(at, loc)

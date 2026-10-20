@@ -1,13 +1,14 @@
 // file: internal/scanner/folder_parse_existing.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: cc77dad2-5d35-4407-8724-35eb66226c45
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 //
 // Keeps the folder parse from rewriting existing books on a rescan.
 
 package scanner
 
 import (
+	"maps"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -155,9 +156,7 @@ func folderDerivedLocks(locked map[string]bool, book *Book) map[string]bool {
 		return locked
 	}
 	out := make(map[string]bool, len(locked)+len(hold))
-	for k, v := range locked {
-		out[k] = v
-	}
+	maps.Copy(out, locked)
 	for k := range hold {
 		out[k] = true
 	}

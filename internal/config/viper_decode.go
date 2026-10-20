@@ -1,7 +1,7 @@
 // file: internal/config/viper_decode.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b431724a-2f0b-413b-8704-45a5807bee77
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package config
 
@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -338,11 +339,7 @@ func containsMap(v any) bool {
 	case map[string]any, map[any]any:
 		return true
 	case []any:
-		for _, e := range t {
-			if containsMap(e) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(t, containsMap)
 	}
 	return false
 }

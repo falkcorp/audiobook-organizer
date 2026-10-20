@@ -1,7 +1,7 @@
 // file: internal/config/viper_decode_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d063ec75-bbf1-4354-9e52-32ede9ef23ec
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 // The list and map settings InitConfig decodes with viperDecodeJSON and
 // viperPathList, through each source an operator can use: the environment
@@ -243,7 +243,7 @@ func TestLowerMapKeys_LowerCaseSpellingWinsAFold(t *testing.T) {
 // is iterated in. Go randomises that order, so repeat enough to catch a
 // regression to last-writer-wins.
 func TestLowerMapKeys_CollisionWithoutLowerCaseKeyIsDeterministic(t *testing.T) {
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		got := lowerMapKeys(map[string]int{"Exact_File": 1, "EXACT_FILE": 2, "exact_File": 3, "Other": 4})
 		if want := map[string]int{"exact_file": 2, "other": 4}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("iteration %d: lowerMapKeys = %v, want %v", i, got, want)

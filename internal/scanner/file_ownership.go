@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -400,10 +400,8 @@ func appendScannedFilesToOwner(ctx context.Context, ownerID string, files []stri
 	if err != nil {
 		return 0, fmt.Errorf("book_files of %s: %w", ownerID, err)
 	}
-	for _, f := range files {
-		if pathutil.UnderFrozenITunesTree(f) {
-			return 0, errAppendFrozenITunes
-		}
+	if slices.ContainsFunc(files, pathutil.UnderFrozenITunesTree) {
+		return 0, errAppendFrozenITunes
 	}
 	for _, r := range existing {
 		if pathutil.UnderFrozenITunesTree(r.FilePath) {

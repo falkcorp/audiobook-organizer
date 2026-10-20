@@ -1,7 +1,7 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package registry_test
 
@@ -566,7 +566,7 @@ func (b *lockedBuffer) lines(substr string) []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var out []string
-	for _, l := range strings.Split(b.buf.String(), "\n") {
+	for l := range strings.SplitSeq(b.buf.String(), "\n") {
 		if strings.Contains(l, substr) {
 			out = append(out, l)
 		}

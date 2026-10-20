@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package merge
 
@@ -281,7 +281,7 @@ func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateF
 	// Fixed bound: the refollow appends to j.StateFollows, and those new
 	// entries are not this undo's to reverse.
 	n := len(j.StateFollows)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		f := j.StateFollows[i]
 		if f.Undone || !pick(i, f) {
 			continue

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_regressions_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d9b7f41-6e05-4c38-a1f2-8b3c5e9d0a74
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -722,10 +722,10 @@ func TestRevert_SplitMergeStoppedPartWay_EveryCrashPoint(t *testing.T) {
 	// nothing that is not a piece of that copy.
 	copyPieces := func(got string) bool {
 		allowed := map[string]bool{"none": true}
-		for _, tok := range strings.Fields(mergedK) {
+		for tok := range strings.FieldsSeq(mergedK) {
 			allowed[tok] = true
 		}
-		for _, tok := range strings.Fields(got) {
+		for tok := range strings.FieldsSeq(got) {
 			if !allowed[tok] {
 				return false
 			}

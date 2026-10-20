@@ -1,7 +1,7 @@
 // file: internal/metrics/pebble_collector_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8944f3d7-bd99-440c-990c-923b3b696d06
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package metrics
 
@@ -18,7 +18,7 @@ func fixedSample() PebbleSample {
 		FilterHits: 5, FilterMisses: 6, ReadAmp: 7, L0Files: 8, L0Sublevels: 9, Compactions: 10,
 		CompactionDebtBytes: 11, CompactionsInProgress: 12, CompactionInProgressBytes: 13,
 		MemTableBytes: 14, MemTables: 15, WALBytes: 16, WALPhysicalBytes: 17, WALFiles: 18, DiskUsageBytes: 19}
-	for i := 0; i < pebbleLevels; i++ {
+	for i := range pebbleLevels {
 		s.LevelBytes[i], s.LevelFiles[i], s.LevelBytesIn[i] = float64(i+1), float64(i+2), float64(i+3)
 		s.LevelBytesFlushed[i], s.LevelBytesCompacted[i], s.LevelWriteAmp[i] = float64(i+4), float64(i+5), float64(i+6)
 	}
@@ -118,7 +118,7 @@ func TestPebbleCollector_EmitsAllSeriesPerStore(t *testing.T) {
 	for _, m := range f.GetMetric() {
 		seen[labelOf(m, "level")] = m.GetCounter().GetValue()
 	}
-	for i := 0; i < pebbleLevels; i++ {
+	for i := range pebbleLevels {
 		if got, ok := seen[strconv.Itoa(i)]; !ok || got != float64(i+5) {
 			t.Errorf("level %d compacted = %v (present=%v), want %d", i, got, ok, i+5)
 		}

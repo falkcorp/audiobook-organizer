@@ -1,7 +1,7 @@
 // file: internal/repairs/wire_null_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4e1d62-3b85-4c07-8d19-f26c0e7a5b43
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -38,7 +38,7 @@ func marshalMap(t *testing.T, v any) map[string]json.RawMessage {
 
 func TestRunPlan_NilBookIDsAndNoRowsMarshalAsEmptyArrays(t *testing.T) {
 	s := newMemStore()
-	f := &noBookIDsFixer{trimFixer: trimFixer{s: s}, rows: []Row{{RowID: "r1", Title: "t", Reason: "x",
+	f := &noBookIDsFixer{s: s, rows: []Row{{RowID: "r1", Title: "t", Reason: "x",
 		Risk: RiskLow, Fingerprint: "fp"}}}
 	res := planFor(t, s, f)
 	var rows []map[string]json.RawMessage

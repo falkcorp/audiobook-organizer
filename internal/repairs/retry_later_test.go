@@ -1,7 +1,7 @@
 // file: internal/repairs/retry_later_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c1d8e27-9a43-4b6f-8e12-7f0a3c9d4b61
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -75,7 +75,7 @@ func TestRunApply_RetryLaterReplanIsRetriedOnResume(t *testing.T) {
 
 	s := newMemStore()
 	seed(s)
-	f := &holdFixer{trimFixer: trimFixer{s: s}}
+	f := &holdFixer{s: s}
 	plan := planFor(t, s, f)
 	f.set(&f.hold, "b1", true)
 
@@ -116,7 +116,7 @@ func TestRunApply_RetryLaterReplanIsRetriedOnResume(t *testing.T) {
 func TestRunApply_RetryLaterWithoutSkipIsFingerprintChecked(t *testing.T) {
 	s := newMemStore()
 	seed(s)
-	f := &holdFixer{trimFixer: trimFixer{s: s}}
+	f := &holdFixer{s: s}
 	plan := planFor(t, s, f)
 	f.set(&f.hold, "b1", true)
 	f.set(&f.noSkip, "b1", true)
@@ -135,7 +135,7 @@ func TestRunApply_RetryLaterWithoutSkipIsFingerprintChecked(t *testing.T) {
 func TestRunApply_RetryLaterWithChangedInputsIsChangedSincePlan(t *testing.T) {
 	s := newMemStore()
 	seed(s)
-	f := &holdFixer{trimFixer: trimFixer{s: s}}
+	f := &holdFixer{s: s}
 	plan := planFor(t, s, f)
 	f.set(&f.hold, "b1", true)
 	f.set(&f.shiftRetry, "b1", true)
@@ -155,7 +155,7 @@ func TestRunApply_RetryLaterWithChangedInputsIsChangedSincePlan(t *testing.T) {
 func TestRunApply_EmptyRetryFingerprintNeverMatchesEmptyPlanned(t *testing.T) {
 	s := newMemStore()
 	seed(s)
-	f := &holdFixer{trimFixer: trimFixer{s: s}}
+	f := &holdFixer{s: s}
 	plan := planFor(t, s, f)
 	for i := range plan.Rows {
 		if plan.Rows[i].RowID == "b1" {

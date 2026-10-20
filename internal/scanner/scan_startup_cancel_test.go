@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_startup_cancel_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2b8e6c14-5d97-4f30-9a1e-c7f04d82b6a3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -101,7 +101,7 @@ func TestWorksLookupCache_ReusedAcrossScanRestarts(t *testing.T) {
 	ss := NewScanService(s)
 
 	begin := time.Now()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := ss.PerformScan(context.Background(), &ScanRequest{}, nil); err != nil {
 			t.Fatalf("scan %d: %v", i, err)
 		}

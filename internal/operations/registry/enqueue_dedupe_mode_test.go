@@ -1,7 +1,7 @@
 // file: internal/operations/registry/enqueue_dedupe_mode_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: bf374303-0b13-466b-b0d6-f5efc8453cff
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package registry_test
 
@@ -240,7 +240,7 @@ func TestEnqueueDedupe_IdenticalBodiesAlwaysFold(t *testing.T) {
 	} {
 		r, store := newTestRegistry(t)
 		def := registerCronPreviewDef(t, r, "test.identical-"+string(rune('a'+i)))
-		for n := 0; n < 5; n++ {
+		for range 5 {
 			if _, err := r.EnqueueOp(context.Background(), def.ID, json.RawMessage(body)); err != nil {
 				t.Fatal(err)
 			}
