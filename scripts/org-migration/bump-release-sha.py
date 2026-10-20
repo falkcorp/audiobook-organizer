@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/bump-release-sha.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 2465b808-74b7-45c8-9200-80854db55a3f
 # last-edited: 2026-10-20
 
@@ -9,7 +9,6 @@
 import base64
 import json
 import subprocess
-import sys
 import time
 
 OLD_SHA = "483f3afeb0064ccbe6ad565044042ba6faee1f96"
@@ -60,7 +59,7 @@ def update_repo(repo):
     sha_blob = file_info["sha"]
 
     if OLD_SHA not in content:
-        print(f"  SKIP — old SHA not found")
+        print("  SKIP — old SHA not found")
         return
 
     new_content = content.replace(f"@{OLD_SHA}", f"@{NEW_SHA} # {NEW_TAG}")

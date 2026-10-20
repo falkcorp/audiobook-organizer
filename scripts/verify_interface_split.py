@@ -17,7 +17,11 @@
 # Counting only `Name(` lines is NOT sufficient: that is what let a dropped
 # `database.SettingsStore` embed through. Mutation-tested -- deleting an embed
 # makes this exit 1 with `LOST: database.SettingsStore`.
-import re, subprocess, sys, pathlib, os
+import os
+import pathlib
+import re
+import subprocess
+import sys
 
 REV = os.environ.get("BASE_REV", "HEAD")
 

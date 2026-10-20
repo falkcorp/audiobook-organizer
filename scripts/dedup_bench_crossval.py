@@ -364,7 +364,7 @@ def main():
             ]
             if book_evidence:
                 user_parts.append(
-                    f"\n\n## Book title evidence for uncertain suggestions (medium/low confidence)\n\n"
+                    "\n\n## Book title evidence for uncertain suggestions (medium/low confidence)\n\n"
                     + json.dumps(book_evidence, indent=2)
                 )
             user_prompt = "\n".join(user_parts)
@@ -380,7 +380,7 @@ def main():
             ]
             if book_evidence:
                 user_parts.append(
-                    f"\n\n## Book title evidence for uncertain suggestions\n\n"
+                    "\n\n## Book title evidence for uncertain suggestions\n\n"
                     + json.dumps(book_evidence, indent=2)
                 )
             user_prompt = "\n".join(user_parts)

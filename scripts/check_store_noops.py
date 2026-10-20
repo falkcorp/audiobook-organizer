@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/check_store_noops.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: d8be29f8-1681-4bfd-b6a0-9637cc3e03d6
 # last-edited: 2026-10-20
 
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pathlib
 import re
-import sys
 
 CANDIDATES = [
     "internal/server/ai_scan_pipeline.go",

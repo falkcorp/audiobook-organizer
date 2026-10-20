@@ -24,7 +24,8 @@
 #     only reason it was caught is that a caller happened to need the embedded
 #     type. Always verify with scripts/verify_interface_split.py, which compares
 #     embeds as well as methods.
-import re, pathlib
+import pathlib
+import re
 
 
 def split(path, target, groups):

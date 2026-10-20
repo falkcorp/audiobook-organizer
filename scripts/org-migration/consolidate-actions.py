@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/consolidate-actions.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 7444eba2-0f96-4642-806c-e56f0a50d0e9
 # last-edited: 2026-10-20
 
@@ -12,8 +12,6 @@ callers no longer depend on a cross-repo uses: chain.
 
 import os
 import subprocess
-import sys
-import textwrap
 
 HOME = os.path.expanduser("~")
 BASE = f"{HOME}/repos/github.com/jdfalk"
@@ -1088,12 +1086,12 @@ def main():
         # Check if there's anything to commit
         status = run(["git", "status", "--short"], cwd=repo_dir)
         if not status:
-            print(f"  SKIP commit (no changes)")
+            print("  SKIP commit (no changes)")
             continue
 
         commit_with_retry(
             repo_dir,
-            f"feat: consolidate action — inline full implementation, remove cross-repo uses chain",
+            "feat: consolidate action — inline full implementation, remove cross-repo uses chain",
         )
 
         # Push
@@ -1106,7 +1104,7 @@ def main():
         if result.returncode != 0:
             print(f"  Push stderr: {result.stderr}")
             raise RuntimeError("Push failed")
-        print(f"  Pushed chore/falkcorp-migration")
+        print("  Pushed chore/falkcorp-migration")
 
     print("\n\nAll 5 actions consolidated and pushed.")
     print("PRs updated automatically (existing chore/falkcorp-migration PRs).")

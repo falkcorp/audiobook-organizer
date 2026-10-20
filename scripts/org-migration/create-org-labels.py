@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/create-org-labels.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: fc5b0ad9-d1f2-4846-acc0-11dbe893f435
 # last-edited: 2026-10-20
 
@@ -21,7 +21,6 @@ Exit codes: 0 = success, 1 = partial failure (see stderr).
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time

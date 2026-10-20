@@ -16,10 +16,10 @@ import os
 import re
 import sys
 import time
-import urllib3
 from collections import defaultdict
 
 import requests
+import urllib3
 
 # Suppress InsecureRequestWarning for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -581,7 +581,7 @@ def main():
     merge_actions = [a for a in actions if a["action"] == "merge"]
     delete_actions = [a for a in actions if a["action"] == "delete"]
     print(f"\n{'=' * 60}")
-    print(f"ANALYSIS SUMMARY")
+    print("ANALYSIS SUMMARY")
     print(f"{'=' * 60}")
     print(f"  Total series: {len(series_list)}")
     print(f"  Series with books: {len(book_counts)}")

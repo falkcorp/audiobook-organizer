@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/strip_movement_atoms.py
-# version: 1.0.0
+# version: 1.0.1
 #
 # Removes shwm (Show Work & Movement), ©mvi (Movement Number), and ©mvn
 # (Movement Name) atoms from M4B/M4A audiobook files.
@@ -12,9 +12,8 @@
 # Usage:
 #   python3 scripts/strip_movement_atoms.py /path/to/audiobooks [--dry-run]
 
-import sys
-import os
 import argparse
+import sys
 from pathlib import Path
 
 try:

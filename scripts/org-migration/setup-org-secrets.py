@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/setup-org-secrets.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: a3c7a814-5d73-4440-b5ca-d34db011d85d
 # last-edited: 2026-10-20
 
@@ -15,7 +15,6 @@ Run with:
 
 import os
 import subprocess
-import sys
 
 ORG = "falkcorp"
 

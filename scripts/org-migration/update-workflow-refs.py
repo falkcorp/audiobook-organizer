@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/org-migration/update-workflow-refs.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 508d12b1-30df-41a5-ae8b-b03dca681dbe
 # last-edited: 2026-10-20
 
@@ -11,10 +11,10 @@ Opens a PR in each repo that has changes.
 Run from any directory. Requires gh CLI and git.
 """
 
+import glob
 import os
 import subprocess
 import sys
-import glob
 import time
 
 BRANCH = "chore/falkcorp-migration"
@@ -139,7 +139,7 @@ def process_repo(repo_name, repo_dir):
         if not os.path.isfile(fpath):
             continue
         try:
-            with open(fpath, "r", encoding="utf-8") as f:
+            with open(fpath, encoding="utf-8") as f:
                 original = f.read()
         except (UnicodeDecodeError, PermissionError):
             continue
