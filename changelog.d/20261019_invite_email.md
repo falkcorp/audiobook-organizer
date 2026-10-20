@@ -136,9 +136,12 @@ rank, the row the existing email index entry names keeps it (the account an
 SSO login reached before this update); with no entry naming one of them, all
 tied rows are demoted. Those ids are logged. Admin accounts stamped `self` are
 logged by id at warning level: an SSO login with that address will take it
-from them. The log says to leave it or merge the accounts with the
-account-merge tool, not to set the address for them, which would make that
-account the verified holder.
+from them. The log says to leave the account as it is, not to set the address
+for them, which would make that account the verified holder. When another
+account already holds the same address verified, one warning per pair names
+both ids, says which one is the verified holder (SSO signs in there), and
+says not to clear the holder's email and to leave both until they are
+merged.
 
 When an identity-provider-verified login, or the acceptance of an invite an
 admin emailed, finds its address held unproven by other accounts, the verified

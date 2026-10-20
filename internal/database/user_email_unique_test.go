@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.5.1
+// version: 2.6.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-20
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -1085,5 +1086,25 @@ func TestReconcile_TieGoesToTheRowTheKeyNames(t *testing.T) {
 	}
 	if u, _ := s.GetUserByVerifiedEmail("nokey@example.com"); u != nil {
 		t.Fatalf("nokey@ lookup = %+v; want nobody (an unbroken tie demotes both)", u)
+	}
+}
+
+// A self-set admin whose address another account holds verified is reported
+// with that holder's id, so the boot warning can name both accounts and say
+// which one must not be cleared.
+func TestReconcile_SelfAdminConflictNamesTheVerifiedHolder(t *testing.T) {
+	s := newInviteTestStore(t)
+	holder := mustUser(t, s, "ssoholder", "viewer", "active")
+	setRawUserEmailSource(t, s, holder, "shared@example.com", EmailSourceIdP)
+	admin := mustUser(t, s, "selfadmin", "admin", "active")
+	setRawUserEmailSource(t, s, admin, "shared@example.com", "")
+
+	res, err := s.ReconcileVerifiedEmails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []SelfAdminConflict{{AdminID: admin.ID, HolderID: holder.ID}}
+	if !slices.Equal(res.SelfAdminsVerifiedElsewhere, want) {
+		t.Fatalf("SelfAdminsVerifiedElsewhere = %+v, want %+v", res.SelfAdminsVerifiedElsewhere, want)
 	}
 }

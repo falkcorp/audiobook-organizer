@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-20
 
@@ -76,12 +76,20 @@ const userEmailIndexPrefix = "idx:user:email:"
 // accounts' rows, so they refuse when any row is unreadable.) Caller holds
 // inviteMu.
 func (p *PebbleStore) provenHolderOtherLocked(lower, exceptID string) (bool, error) {
+	id, err := p.provenHolderOtherIDLocked(lower, exceptID)
+	return id != "", err
+}
+
+// provenHolderOtherIDLocked is provenHolderOtherLocked returning the id of
+// the first other user that holds lower proven, or "" for none. Caller holds
+// inviteMu.
+func (p *PebbleStore) provenHolderOtherIDLocked(lower, exceptID string) (string, error) {
 	if lower == "" {
-		return false, nil
+		return "", nil
 	}
 	users, badKeys, err := p.listUsers()
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if len(badKeys) > 0 {
 		authLog.Warn("verified-email uniqueness check: %d user row(s) unreadable and skipped", len(badKeys))
@@ -91,10 +99,10 @@ func (p *PebbleStore) provenHolderOtherLocked(lower, exceptID string) (bool, err
 			continue
 		}
 		if emailProven(&users[i], lower) {
-			return true, nil
+			return users[i].ID, nil
 		}
 	}
-	return false, nil
+	return "", nil
 }
 
 // emailHeldByAny reports whether any readable user row has lower (already

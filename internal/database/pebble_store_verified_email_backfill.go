@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-20
 
@@ -110,6 +110,13 @@ func (p *PebbleStore) syncVerifiedEmailKeyLocked(lower string, holder *User) err
 	return p.db.Set(key, []byte(holder.ID), pebble.Sync)
 }
 
+// SelfAdminConflict pairs an admin account stamped "self" with the other
+// account that holds the same address proven.
+type SelfAdminConflict struct {
+	AdminID  string // holds the address as typed in (not verified)
+	HolderID string // holds the address verified; SSO with it signs in here
+}
+
 // ReconcileResult counts what ReconcileVerifiedEmails changed.
 type ReconcileResult struct {
 	// Stamped counts rows that had an email and no EmailSource, by the
@@ -119,10 +126,10 @@ type ReconcileResult struct {
 	// an SSO login with that address takes it from them.
 	StampedSelfAdmins []string
 	// SelfAdminsVerifiedElsewhere is the subset of StampedSelfAdmins whose
-	// address another account already holds proven. Setting the address for
-	// them is refused (it would be proven twice); the duplicate account has
-	// to be cleared or merged instead.
-	SelfAdminsVerifiedElsewhere []string
+	// address another account already holds proven, each with that holder.
+	// Setting the address for the admin is refused (it would be proven
+	// twice); both accounts are left as they are until they are merged.
+	SelfAdminsVerifiedElsewhere []SelfAdminConflict
 	// DowngradedDuplicates lists legacy rows stamped "self" although their
 	// history pointed to a trusted source, because another account already
 	// held, or also qualified for, the address proven (demoteDuplicateProofs).
@@ -162,12 +169,12 @@ func (p *PebbleStore) ReconcileVerifiedEmails() (ReconcileResult, error) {
 		authLog.Warn("verified email: could not check whether the self-set admin addresses are verified elsewhere: %v", err)
 	}
 	if settable := slices.DeleteFunc(slices.Clone(res.StampedSelfAdmins), func(id string) bool {
-		return slices.Contains(res.SelfAdminsVerifiedElsewhere, id)
+		return slices.ContainsFunc(res.SelfAdminsVerifiedElsewhere, func(c SelfAdminConflict) bool { return c.AdminID == id })
 	}); len(settable) > 0 {
-		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves, so it is not verified; an SSO login with that address reaches or creates a different account and takes the address from them. Do not set the address for them on the Users page: that makes this account its verified holder, which is wrong if the address signs in another account through SSO. Leave it, or merge the accounts with the account-merge tool", settable)
+		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves, so it is not verified; an SSO login with that address reaches or creates a different account and takes the address from them. Do not set the address for them on the Users page: that makes this account its verified holder, which is wrong if the address signs in another account through SSO. Leave the account as it is; if a second account for the same person appears, leave both as they are until they are merged", settable)
 	}
-	if len(res.SelfAdminsVerifiedElsewhere) > 0 {
-		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves that another account already has verified; SSO with that address reaches the other account. Setting it for them will be refused: clear the address from the duplicate account, or merge the two accounts", res.SelfAdminsVerifiedElsewhere)
+	for _, c := range res.SelfAdminsVerifiedElsewhere {
+		authLog.Warn("verified email: admin account %s holds an email it set itself (not verified); account %s holds the same address verified, and SSO with that address signs in account %s. Do NOT clear the email of account %s (the verified holder), and do not set the address for account %s (it will be refused). Leave both accounts as they are until they are merged", c.AdminID, c.HolderID, c.HolderID, c.HolderID, c.AdminID)
 	}
 	authLog.Info("verified-email cache reconciled: %d kept, %d added, %d dropped, %d conflicted",
 		res.Kept, res.Added, res.Dropped, res.Conflict)
@@ -186,12 +193,12 @@ func (p *PebbleStore) classifySelfAdminsLocked(res *ReconcileResult) error {
 		if u == nil {
 			continue
 		}
-		elsewhere, err := p.provenHolderOtherLocked(util.NormalizeEmail(u.Email), id)
+		holder, err := p.provenHolderOtherIDLocked(util.NormalizeEmail(u.Email), id)
 		if err != nil {
 			return err
 		}
-		if elsewhere {
-			res.SelfAdminsVerifiedElsewhere = append(res.SelfAdminsVerifiedElsewhere, id)
+		if holder != "" {
+			res.SelfAdminsVerifiedElsewhere = append(res.SelfAdminsVerifiedElsewhere, SelfAdminConflict{AdminID: id, HolderID: holder})
 		}
 	}
 	return nil
