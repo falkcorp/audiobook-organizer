@@ -18,13 +18,18 @@ identical 400 (the detail is logged), and the lookup answers every one of
 those cases with one identical 404: both run the same store checks, so a link
 holder cannot learn from a working lookup and a refused accept that a username
 or an address has an account. Both routes share a limiter with three layers: per
-client, per token (keys are hashed), and global. `CF-Connecting-IP` is
-believed only from a peer listed in the new `TUNNEL_CONNECTOR_ADDRS`, or from
-a local peer whose request carried a verified Cloudflare Access assertion;
-a direct non-local peer is keyed on its own address. When no client address
-can be established the per-client layer is skipped rather than shared, so
-with `TUNNEL_CONNECTOR_ADDRS` unset tunnel traffic gets only the per-token and
-global layers (logged once at start). The accept body is capped at 4 KiB (413
+client, per token (keys are hashed), and global. The tunnel connectors run
+on other LAN hosts and reach the service from their own private addresses, so
+`CF-Connecting-IP` is believed only from a peer listed in the new
+`TUNNEL_CONNECTOR_ADDRS`, or from a local peer whose request carried a
+verified Cloudflare Access assertion. A peer with no Cloudflare markers (any
+`Cf-*` header or the `CF_Authorization` cookie) is a direct caller keyed on
+its own address; IPv6 clients share a bucket per /64. A peer that carries
+markers but is not a listed connector, or a connector with no usable header,
+identifies no client: the per-client layer is skipped rather than shared, so
+tunnel traffic from an unlisted connector gets only the per-token and global
+layers (logged once at start). With the setting unset, a connector request
+stripped of every Cloudflare header would count as a direct caller. The accept body is capped at 4 KiB (413
 above it) and parsed once for both the limiter and the handler. Invite tokens
 are redacted from request logs, trace span attributes (`url.path`) and error
 logs.
@@ -44,8 +49,8 @@ GET /config: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
 `SMTP_FROM`, `PUBLIC_BASE_URL`, `INVITE_CF_ACCESS_CLIENT_ID`,
 `INVITE_CF_ACCESS_CLIENT_SECRET`, `CF_ACCOUNT_ID`, `CF_GUESTS_POLICY_ID`,
 `CF_POLICY_API_TOKEN`, `TUNNEL_CONNECTOR_ADDRS` (comma-separated addresses the
-Cloudflare tunnel connector reaches this service from; set it to the
-connector's address to restore per-client limits on tunnel traffic).
+Cloudflare tunnel connectors reach this service from; list every connector,
+which this deploy does, so tunnel traffic gets per-visitor limits).
 
 #### Accepting an emailed invite sets the email, allows SSO, and can update one Cloudflare policy
 
@@ -150,7 +155,8 @@ first free name of `admin`, `admin-2`, and so on, with no email (the old fixed
 is now 28 base32 symbols from `crypto/rand` (140 bits); the old three-word
 passphrase had about 28 bits. The bootstrap attempt limiter keys on the same
 trusted client address as the invite limiter (IPv6 by /64), shares one bucket
-for callers whose address cannot be established, drops ended windows, caps
+for callers whose address cannot be established (including a listed
+connector with no `CF-Connecting-IP`), drops ended windows, caps
 tracked addresses at 10,000 and allows at most 100 attempts an hour across
 all callers; a direct LAN or loopback caller with no Cloudflare markers keeps
 its own 5-an-hour bucket outside that ceiling.

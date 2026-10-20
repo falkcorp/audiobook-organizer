@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
 // last-edited: 2026-10-20
 
@@ -303,29 +303,23 @@ type bootstrapRequest struct {
 // handleBootstrap exchanges a one-time bootstrap token for a full-privilege API key.
 // Wired to a public (unauthenticated) route.
 func (s *Server) handleBootstrap(c *gin.Context) {
-	// Behind the Cloudflare tunnel c.ClientIP() is the tunnel's address for
-	// everyone, which would put every caller in one bucket and let one attacker
-	// lock the owner out of recovery. trustedClientIP recovers the real visitor
-	// from CF-Connecting-IP only when that header can be believed (the peer is
-	// the configured tunnel connector, or the request carries a verified Access
-	// assertion and the peer is this host). When it cannot, the endpoint is NOT
-	// left unlimited, because it is high-value: all such requests share the one
-	// untrusted-local key, never a key taken from an unproven header. ip keeps
-	// the attributed (or local) address for logging.
+	// Behind the Cloudflare tunnel c.ClientIP() is a connector's address (the
+	// connectors are LAN hosts shared by every visitor), which would put every
+	// caller in one bucket and let one attacker lock the owner out of
+	// recovery. trustedClientIP recovers the real visitor from
+	// CF-Connecting-IP only when that header can be believed (the peer is a
+	// configured tunnel connector, or the request carries a verified Access
+	// assertion and the peer is this host). When it cannot, the endpoint is
+	// NOT left unlimited, because it is high-value: all such requests share the
+	// one untrusted-local key, never a key taken from an unproven header.
 	//
 	// A direct LAN peer (the owner running recovery against the service port)
 	// is not tunnel traffic: it is keyed on its own address and exempt from the
 	// global ceiling, so internet traffic cannot lock it out
-	// (see bootstrapDirectLANPeer).
-	connectors := tunnelConnectorPeers()
-	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: remoteAddrIsLocal, connectors: connectors})
-	direct := bootstrapDirectLANPeer(c, connectors)
-	if direct {
-		ip, attributed = c.ClientIP(), true
-	}
-	ip = strings.TrimSpace(ip)
+	// (see bootstrapClientKey and bootstrapDirectLANPeer).
+	limitKey, ip, direct := bootstrapClientKey(c, tunnelConnectorPeers(), remoteAddrIsLocal)
 
-	if !bootstrapLimits.allow(bootstrapRateKey(ip, attributed), direct) {
+	if !bootstrapLimits.allow(limitKey, direct) {
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many bootstrap attempts — try again later", "TOO_MANY_REQUESTS")
 		return
 	}

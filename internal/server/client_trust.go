@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -19,13 +19,15 @@ import (
 
 // untrustedLocalClientKey is the ONE rate-limit identity the bootstrap limiter
 // gives every request whose real client address cannot be established (see
-// trustedClientIP); it is never derived from the request's own headers. The
-// invite limiter skips its per-client layer for such a request instead, because
-// one shared bucket would let a single caller lock out every guest.
+// trustedClientIP): a connector or this host with no trusted header, or a peer
+// that carries Cloudflare markers but is not a configured connector. It is
+// never derived from the request's own headers. The invite limiter skips its
+// per-client layer for such a request instead, because one shared bucket would
+// let a single caller lock out every guest.
 const untrustedLocalClientKey = "untrusted-local"
 
-// connectorPeers is the set of addresses the Cloudflare tunnel connector
-// connects to this service from (config TUNNEL_CONNECTOR_ADDRS).
+// connectorPeers is the set of addresses the Cloudflare tunnel connectors
+// connect to this service from (config TUNNEL_CONNECTOR_ADDRS).
 type connectorPeers []netip.Addr
 
 // contains reports whether remoteAddr ("host:port" or a bare host) is one of
@@ -104,22 +106,57 @@ type clientTrust struct {
 	connectors connectorPeers
 }
 
+// hasCloudflareMarkers reports whether the request carries anything
+// Cloudflare's edge adds to the requests it proxies: any Cf-* header (which
+// covers CF-Connecting-IP, Cf-Ray and Cf-Access-*) or the CF_Authorization
+// cookie. Tunnel traffic always carries them, whichever host the connector
+// runs on, and the connector does not strip them.
+func hasCloudflareMarkers(c *gin.Context) bool {
+	for k := range c.Request.Header {
+		if strings.HasPrefix(strings.ToLower(k), "cf-") {
+			return true
+		}
+	}
+	_, err := c.Request.Cookie("CF_Authorization")
+	return err == nil
+}
+
+// clientPrefixKey is the rate-limit identity for a client address: the address
+// itself for IPv4 (and IPv4-mapped IPv6), its /64 for IPv6, so a caller who
+// owns a /64 cannot mint 2^64 buckets. ok is false when ip does not parse;
+// callers then treat the client as unattributed and never fall back to text
+// taken from the request.
+func clientPrefixKey(ip string) (key string, ok bool) {
+	a, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return "", false
+	}
+	a = a.WithZone("").Unmap()
+	if a.Is6() {
+		return netip.PrefixFrom(a, 64).Masked().String(), true
+	}
+	return a.String(), true
+}
+
 // trustedClientIP returns the address a per-client limiter should key the
 // request on, and whether that address identifies the client.
 //
-// CF-Connecting-IP is set by Cloudflare's edge, which overwrites it on every
-// request it proxies, but the service cannot see the edge: it sees only the
-// peer that delivered the request. Any local process, or anything that can reach
-// a loopback listener, can send the header with a value of its choosing, so
-// "the peer is local" does not prove Cloudflare set it. The header is therefore
-// believed only when one of these holds:
+// Production reaches the service through Cloudflare tunnel connectors
+// (cloudflared) that run on other hosts on the LAN and connect from their own
+// private addresses, so the peer the service sees is a connector, shared by
+// every visitor. CF-Connecting-IP is set by Cloudflare's edge, which overwrites
+// it on every request it proxies, but the service cannot see the edge: anyone
+// who can reach the service port can send the header with a value of its
+// choosing, so neither "the peer is local" nor "the peer is private" proves
+// Cloudflare set it. The header is therefore believed only when one of these
+// holds:
 //
-//   - the peer is an address the operator configured as the tunnel connector
+//   - the peer is an address the operator configured as a tunnel connector
 //     (TUNNEL_CONNECTOR_ADDRS), the explicit statement that this peer is
 //     cloudflared; or
 //   - the request carries a Cf-Access-Jwt-Assertion that CloudflareAccessAuth
-//     verified AND the peer is this host: the request provably passed Access
-//     at the edge and arrived through the local connector.
+//     verified AND the peer is this host (a connector on the same host): the
+//     request provably passed Access at the edge.
 //
 // The header is parsed with net.ParseIP and re-rendered with String() so that
 // equivalent spellings share one key; an unparseable value counts as absent.
@@ -127,11 +164,27 @@ type clientTrust struct {
 // Every other request is keyed on c.ClientIP(), the peer's own address (the
 // router trusts no proxy headers), so a spoofed header is ignored.
 //
-// ok is false when the only address available is shared: the peer is a
-// configured connector or this host and no trusted header names the visitor.
-// ip is still returned, for logging. Callers must never derive an identity from
-// the header then: the invite limiter skips its per-client layer, and the
-// bootstrap limiter uses the fixed untrustedLocalClientKey.
+// ok is false when the only address available is shared or unproven:
+//
+//   - the peer is a configured connector or this host and no trusted header
+//     names the visitor;
+//   - the peer is none of those but the request carries Cloudflare markers
+//     (hasCloudflareMarkers): it is tunnel traffic from a connector nobody
+//     configured (TUNNEL_CONNECTOR_ADDRS unset or incomplete), so its address
+//     is a connector's and every visitor shares it. A direct caller can also
+//     send a Cf-* header to land here; that only moves it to the unattributed
+//     population, which the per-token and global layers still bound.
+//
+// A peer with no markers at all is a direct caller and is keyed on its own
+// address. With TUNNEL_CONNECTOR_ADDRS unset, a connector request whose
+// Cloudflare headers were all stripped on the way would look exactly like
+// that and count as a direct peer; the edge adds them and cloudflared passes
+// them through, so this needs something in between rewriting requests.
+//
+// ip is still returned when ok is false, for logging. Callers must never
+// derive an identity from the header then: the invite limiter skips its
+// per-client layer, and the bootstrap limiter uses the fixed
+// untrustedLocalClientKey.
 func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 	peer := c.Request.RemoteAddr
 	isConnector := t.connectors.contains(peer)
@@ -141,5 +194,8 @@ func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 		}
 	}
 	ip = c.ClientIP()
-	return ip, !isConnector && !t.isLocalPeer(ip)
+	if isConnector || t.isLocalPeer(ip) || hasCloudflareMarkers(c) {
+		return ip, false
+	}
+	return ip, true
 }
