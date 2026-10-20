@@ -140,9 +140,11 @@ start when none existed; so the request path created an account only when no
 admin-role account existed and that startup step was off or had failed. The
 requester never received the account's password or a key. The token is now
 checked first (constant-time hash compare; a missing or unreadable stored
-expiry counts as expired), the admin is found or created only after that, and
-the token is spent last, all under one lock; a failed admin creation still
-leaves the token usable. Only an active admin is reused; a new one takes the
+expiry counts as expired), then spent, and only then is the admin found or
+created, all under one lock: a token that cannot be spent creates nothing,
+and a failed admin creation puts the token back so it stays usable. If the
+admin is created but its API key cannot be written, the generated password
+comes back in the error response instead of being lost. Only an active admin is reused; a new one takes the
 first free name of `admin`, `admin-2`, and so on, with no email (the old fixed
 `admin@localhost` collided with the uniqueness rule). Its generated password
 is now 28 base32 symbols from `crypto/rand` (140 bits); the old three-word

@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
 // last-edited: 2026-10-20
 
@@ -188,19 +188,23 @@ var errBootstrapTokenNotBurned = errors.New("bootstrap: token was valid but coul
 //     the stored expiry must exist, parse and lie in the future (a missing or
 //     unreadable expiry is an invalid token, not one that never expires), and
 //     the hashes must match under a constant-time compare;
-//  2. runs onValid, only for a valid token. If onValid fails, the token is
-//     NOT consumed and (true, err) is returned, so a failed admin creation
-//     does not burn the one-time token;
-//  3. consumes the token: deletes the hash (which must succeed, or
-//     errBootstrapTokenNotBurned is returned), then the expiry and the
-//     on-disk file (best effort; without the hash they are inert).
+//  2. spends the token BEFORE anything is created: deletes the hash, which
+//     must succeed, or errBootstrapTokenNotBurned is returned and onValid
+//     never runs. Deleting it after onValid lost the generated admin password
+//     whenever that delete failed: the request answered 500 with an admin
+//     already created, and a retry found that admin and returned no password;
+//  3. runs onValid, only for a valid, spent token. If onValid fails, the hash
+//     is written back and (true, err) is returned, so a failed admin creation
+//     does not burn the one-time token (if the write-back also fails, the
+//     token stays spent: a restart issues a new one);
+//  4. on success removes the expiry and the on-disk file (best effort;
+//     without the hash they are inert).
 //
-// The three steps hold one mutex, so two concurrent requests cannot both pass
-// step 1 for the same token, and nothing in onValid runs for an invalid token.
-// The store has no transaction spanning a user row and a setting, so the
-// atomicity is per process: a crash between steps 2 and 3 leaves the work of
-// onValid done and the token still valid until it expires (10 minutes), and a
-// retry with it finds the admin onValid created instead of making another.
+// The steps hold one mutex, so two concurrent requests cannot both pass step
+// 1 for the same token, and nothing in onValid runs for an invalid token. The
+// store has no transaction spanning a user row and a setting, so the
+// atomicity is per process: a crash after step 2 leaves the token spent,
+// whatever onValid had done, and a restart issues a new one.
 //
 // An invalid, missing, consumed or expired token is (false, nil): a 401, not a
 // 500 (pen-test finding HIGH-4a).
@@ -212,13 +216,17 @@ func RedeemBootstrapToken(store SettingsReadWriter, dataDir, plaintext string, o
 	if err != nil || !valid {
 		return false, err
 	}
-	if onValid != nil {
-		if err := onValid(); err != nil {
-			return true, err
-		}
-	}
 	if err := store.DeleteSetting(bootstrapTokenKey); err != nil {
 		return true, fmt.Errorf("%w: %w", errBootstrapTokenNotBurned, err)
+	}
+	if onValid != nil {
+		if err := onValid(); err != nil {
+			// The token matched, so its hash is the stored one: put it back.
+			if rerr := store.SetSetting(bootstrapTokenKey, hashBootstrapToken(plaintext), "string", false); rerr != nil {
+				return true, fmt.Errorf("%w (and the token could not be restored, so it is spent: %v)", err, rerr)
+			}
+			return true, err
+		}
 	}
 	_ = store.DeleteSetting(bootstrapExpiresKey)
 	_ = os.Remove(BootstrapTokenPath(dataDir))
@@ -349,9 +357,10 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// The token is validated first and nothing is created for an invalid one:
 	// until 2026-10-20 the admin was found or created before the token was
 	// checked, so any unauthenticated POST with a non-empty token could create
-	// an admin account. The admin step runs inside RedeemBootstrapToken, after
-	// validation and before consumption, so a creation failure still does not
-	// burn the one-time token.
+	// an admin account. The admin step runs inside RedeemBootstrapToken after
+	// the token is validated and spent (a creation failure puts it back), so a
+	// token that cannot be spent creates nothing and no generated password is
+	// ever lost to a failed spend.
 	var (
 		adminUser         *database.User
 		generatedPassword string
@@ -368,7 +377,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		if valid && adminUser == nil {
+		if valid && !errors.Is(err, errBootstrapTokenNotBurned) {
 			slog.Info("find/create admin error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
 			httputil.RespondWithInternalError(c, "failed to find or create admin user")
 			return
@@ -421,6 +430,17 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	created, err := store.CreateAPIKey(key)
 	if err != nil {
 		slog.Info("create api key error user ip err", "adminUser", adminUser.ID, "ip", logger.SanitizeLogValue(ip), "err", err)
+		if generatedPassword != "" {
+			// The admin exists and the token is spent; its password is shown
+			// nowhere else, so it goes back with the error rather than being
+			// lost (the admin can sign in with it and make a key).
+			httputil.RespondWithErrorFields(c, http.StatusInternalServerError, "failed to create API key", "INTERNAL_ERROR", map[string]any{
+				"username":           adminUser.Username,
+				"generated_password": generatedPassword,
+				"password_message":   "Admin account created, but no API key could be made. Sign in with this password, then change it.",
+			})
+			return
+		}
 		httputil.RespondWithInternalError(c, "failed to create API key")
 		return
 	}
