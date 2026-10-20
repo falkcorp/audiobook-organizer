@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -123,8 +123,14 @@ func hasCloudflareMarkers(c *gin.Context) bool {
 }
 
 // clientPrefixKey is the rate-limit identity for a client address: the address
-// itself for IPv4 (and IPv4-mapped IPv6), its /64 for IPv6, so a caller who
-// owns a /64 cannot mint 2^64 buckets. ok is false when ip does not parse;
+// itself for IPv4 (and IPv4-mapped IPv6), its /64 for a public IPv6 address, so
+// a caller who owns a /64 cannot mint 2^64 buckets. A LAN IPv6 address (ULA
+// fc00::/7, link-local, loopback) is keyed on its FULL address instead: every
+// machine on an IPv6 LAN shares one /64, so a /64 key would let one LAN device
+// spend every other device's budget (the bootstrap limiter keys direct LAN
+// peers the same way, bootstrapDirectKey). Such an address can only be a
+// direct peer: it is not routable from the internet, and Cloudflare's edge
+// never sets CF-Connecting-IP to one. ok is false when ip does not parse;
 // callers then treat the client as unattributed and never fall back to text
 // taken from the request.
 func clientPrefixKey(ip string) (key string, ok bool) {
@@ -133,7 +139,7 @@ func clientPrefixKey(ip string) (key string, ok bool) {
 		return "", false
 	}
 	a = a.WithZone("").Unmap()
-	if a.Is6() {
+	if a.Is6() && !a.IsPrivate() && !a.IsLinkLocalUnicast() && !a.IsLoopback() {
 		return netip.PrefixFrom(a, 64).Masked().String(), true
 	}
 	return a.String(), true

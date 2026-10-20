@@ -23,7 +23,8 @@ on other LAN hosts and reach the service from their own private addresses, so
 `CF-Connecting-IP` is believed only from a peer listed in the new
 `TUNNEL_CONNECTOR_ADDRS`, or from a local peer whose request carried a
 verified Cloudflare Access assertion. Every other peer is keyed on its own
-address whatever headers it sends (IPv6 by /64), so forging `Cf-*` headers
+address whatever headers it sends (public IPv6 by /64; a LAN IPv6 peer by
+its full address, since LAN devices share one /64), so forging `Cf-*` headers
 never takes a caller out of per-client limiting; an unlisted connector is
 therefore one bucket for everyone it relays. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
@@ -179,7 +180,7 @@ first free name of `admin`, `admin-2`, and so on, with no email (the old fixed
 `admin@localhost` collided with the uniqueness rule). Its generated password
 is now 28 base32 symbols from `crypto/rand` (140 bits); the old three-word
 passphrase had about 28 bits. The bootstrap attempt limiter keys on the same
-trusted client address as the invite limiter (IPv6 by /64), shares one bucket
+trusted client address as the invite limiter (public IPv6 by /64), shares one bucket
 for callers whose address cannot be established (including a listed
 connector with no `CF-Connecting-IP`), drops ended windows, caps
 tracked addresses at 10,000 and allows at most 100 attempts an hour across

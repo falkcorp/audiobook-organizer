@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -167,7 +167,8 @@ func TestBootstrapRateKey(t *testing.T) {
 		{"ipv6 host bits dropped", "2001:db8:1:2:aaaa:bbbb:cccc:dddd", true, "2001:db8:1:2::/64"},
 		{"ipv6 same /64, other host bits", "2001:db8:1:2::1", true, "2001:db8:1:2::/64"},
 		{"ipv6 other /64", "2001:db8:1:3::1", true, "2001:db8:1:3::/64"},
-		{"ipv6 zone dropped", "fe80::1%eth0", true, "fe80::/64"},
+		{"link-local ipv6: zone dropped, full address (LAN)", "fe80::1%eth0", true, "fe80::1"},
+		{"ULA ipv6: full address (LAN)", "fd12:3456:789a:1::5", true, "fd12:3456:789a:1::5"},
 		{"not attributed", "203.0.113.5", false, untrustedLocalClientKey},
 		{"unparseable", "not-an-ip", true, untrustedLocalClientKey},
 		{"empty", "", true, untrustedLocalClientKey},
