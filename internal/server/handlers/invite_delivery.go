@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-10-19
 
@@ -410,6 +410,9 @@ type acceptedInviteView struct {
 	GuestPolicyStatus string     `json:"guest_policy_status,omitempty"`
 	GuestPolicyDetail string     `json:"guest_policy_detail,omitempty"`
 	GuestPolicyAt     *time.Time `json:"guest_policy_at,omitempty"`
+	// DisplacedUserIDs are accounts that had typed this address into their
+	// profile and lost it to the accept.
+	DisplacedUserIDs []string `json:"displaced_user_ids,omitempty"`
 }
 
 // acceptedInviteWindow is how far back ListInvites reports accepted invites.
@@ -430,6 +433,7 @@ func (h *UserHandler) acceptedInvites() []acceptedInviteView {
 			Username: i.Username, Email: i.Email, AcceptedAt: i.UsedAt, AcceptedUserID: i.AcceptedUserID,
 			EmailBinding: i.EmailBinding, SSOGrant: i.SSOGrant,
 			GuestPolicyStatus: i.GuestPolicyStatus, GuestPolicyDetail: i.GuestPolicyDetail, GuestPolicyAt: i.GuestPolicyAt,
+			DisplacedUserIDs: i.DisplacedUserIDs,
 		})
 	}
 	return out

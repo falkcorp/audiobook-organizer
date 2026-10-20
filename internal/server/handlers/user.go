@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-19
 
@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -54,6 +55,9 @@ type UserHandler struct {
 	// revokeGuestAccess ends invite-granted SSO / Cloudflare access on
 	// deactivation; nil = nothing to revoke (SetGuestAccessRevoker).
 	revokeGuestAccess GuestAccessRevoker
+	// emailSetter sets another user's email as verified (SetUserEmail). nil
+	// when the store lacks the capability; SetUserEmail then refuses.
+	emailSetter database.AdminEmailSetter
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
@@ -61,6 +65,9 @@ func NewUserHandler(store UserStore) *UserHandler {
 	h := &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store), creds: ResolveUserCredentialWriter(store), sendLimiter: newInviteSendLimiter()}
 	if ds, ok := database.AsCapability[database.InviteDeliveryStore](store); ok {
 		h.deliveryStore = ds
+	}
+	if es, ok := database.AsCapability[database.AdminEmailSetter](store); ok {
+		h.emailSetter = es
 	}
 	return h
 }
@@ -277,6 +284,66 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 	RevokeAllABSSessions(h.absSessions, user.ID, "user-deactivated")
 	if h.revokeGuestAccess != nil {
 		h.revokeGuestAccess(user.ID, user.Email, "user deactivated")
+	}
+	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
+	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
+}
+
+// adminRole is the role whose holders may set another user's email as
+// verified: the role middleware.RequireAdmin requires, and the one an
+// invitation's creator needs for its accept to bind an address.
+const adminRole = "admin"
+
+// SetUserEmail handles PUT /api/v1/users/:id/email {"email": "..."}: an admin
+// sets or ("") clears another user's email. The address counts as verified
+// (EmailSource admin), so SSO sign-ins with it link to this account, which is
+// why the route's users.manage is not enough: the acting user must also hold
+// the admin role, who can already give any address access directly. An
+// address another account has is refused with 409 (the admin can clear it
+// there first). Any invite-granted SSO or Cloudflare access the old address
+// had is revoked, as on a self-service change.
+func (h *UserHandler) SetUserEmail(c *gin.Context) {
+	actor, ok := servermiddleware.CurrentUser(c)
+	if !ok || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) {
+		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")
+		return
+	}
+	if h.emailSetter == nil {
+		httputil.RespondWithInternalError(c, "setting emails is not supported by this store")
+		return
+	}
+	var req struct {
+		Email *string `json:"email"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Email == nil {
+		httputil.RespondWithBadRequest(c, `body must be {"email": "<address>"}, or "" to clear it`)
+		return
+	}
+	email, err := normalizeInviteEmail(*req.Email)
+	if err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+	id := c.Param("id")
+	previous, err := h.emailSetter.SetUserEmailAsAdmin(id, email)
+	switch {
+	case errors.Is(err, database.ErrUserNotFound):
+		httputil.RespondWithNotFound(c, "user", id)
+		return
+	case errors.Is(err, database.ErrUserEmailTaken):
+		httputil.RespondWithConflict(c, "another account already uses that email address; clear it there first")
+		return
+	case err != nil:
+		httputil.InternalError(c, "set user email", err)
+		return
+	}
+	if h.revokeGuestAccess != nil && previous != "" && !strings.EqualFold(strings.TrimSpace(previous), email) {
+		h.revokeGuestAccess(id, previous, "email changed by an admin")
+	}
+	user, err := h.store.GetUserByID(id)
+	if err != nil || user == nil {
+		httputil.InternalError(c, "get user", err)
+		return
 	}
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})

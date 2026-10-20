@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-19
 
@@ -42,6 +42,7 @@ import {
   VpnKey as ResetIcon,
   ContentCopy as CopyIcon,
   Email as EmailIcon,
+  AlternateEmail as SetEmailIcon,
 } from '@mui/icons-material';
 
 const API_BASE = '/api/v1';
@@ -91,6 +92,7 @@ export default function Users() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [error, setError] = useState('');
   const [copiedToken, setCopiedToken] = useState('');
+  const [emailUser, setEmailUser] = useState<User | null>(null);
 
   // Ref for token reset timeout
   const copiedTokenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -284,6 +286,17 @@ export default function Users() {
                     </Tooltip>
                   )}
                   {u.username !== '_system' && (
+                    <Tooltip title="Set email">
+                      <IconButton
+                        size="small"
+                        aria-label={`Set email for ${u.username}`}
+                        onClick={() => setEmailUser(u)}
+                      >
+                        <SetEmailIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                  {u.username !== '_system' && (
                     <Tooltip title="Reset Password">
                       <IconButton size="small" onClick={() => handleResetPassword(u.id)}>
                         <ResetIcon fontSize="small" />
@@ -417,7 +430,100 @@ export default function Users() {
         onClose={() => setInviteOpen(false)}
         onCreated={load}
       />
+      {emailUser && (
+        <SetEmailDialog
+          user={emailUser}
+          onClose={() => setEmailUser(null)}
+          onSaved={(message) => {
+            setEmailUser(null);
+            setNotice(message);
+            load();
+          }}
+        />
+      )}
     </Box>
+  );
+}
+
+/**
+ * Sets or clears another user's email. The server records an admin-set
+ * address as verified, so single sign-on with it reaches this account; it
+ * needs the admin role.
+ */
+function SetEmailDialog({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: User;
+  onClose: () => void;
+  onSaved: (message: string) => void;
+}) {
+  const [email, setEmail] = useState(user.email || '');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const save = async (value: string) => {
+    setError('');
+    setSaving(true);
+    try {
+      const resp = await apiFetch(`${API_BASE}/users/${user.id}/email`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: value }),
+      });
+      if (!resp.ok) {
+        setError(await responseErrorMessage(resp));
+        return;
+      }
+      onSaved(
+        value.trim()
+          ? `Email for ${user.username} set to ${value.trim().toLowerCase()}.`
+          : `Email for ${user.username} cleared.`
+      );
+    } catch (err) {
+      setError(describeRequestError(err, 'Failed to set email'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Set email for {user.username}</DialogTitle>
+      <DialogContent>
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+        <Typography variant="body2" sx={{ mb: 2 }}>
+          The address counts as verified: Google, GitHub or Cloudflare sign-in with it will open
+          this account. Only set an address you know belongs to this person.
+        </Typography>
+        <TextField
+          autoFocus
+          fullWidth
+          label="Email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button color="warning" disabled={saving || !user.email} onClick={() => save('')}>
+          Clear email
+        </Button>
+        <Button
+          variant="contained"
+          disabled={saving || email.trim() === ''}
+          onClick={() => save(email)}
+        >
+          Save
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

@@ -1,5 +1,5 @@
 // file: web/src/pages/usersInvites.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1f6b3d82-7c45-4e9a-b2d0-8a5e9c3f7b61
 // last-edited: 2026-10-19
 
@@ -10,12 +10,17 @@ export interface AcceptedInvite {
   username: string;
   email?: string;
   accepted_at: string;
-  /** "bound" or "not_emailed" (the email was never delivered, so not verified). */
+  /**
+   * "bound", "not_emailed" (the email was never delivered, so not verified) or
+   * "creator_not_admin" (emailed by someone without the admin role: not set).
+   */
   email_binding?: string;
   /** "granted" or "creator_not_admin". */
   sso_grant?: string;
   guest_policy_status?: string;
   guest_policy_detail?: string;
+  /** Accounts that had typed this address into their profile and lost it. */
+  displaced_user_ids?: string[];
 }
 
 /** The link an invitee opens; the page is served from this same origin. */
@@ -63,6 +68,13 @@ export function emailBindingLabel(a: AcceptedInvite): string {
   if (!a.email) return '—';
   if (a.email_binding === 'not_emailed') {
     return `${a.email} (not verified: the link was not emailed, so it was not set on the account)`;
+  }
+  if (a.email_binding === 'creator_not_admin') {
+    return `${a.email} (not set: the invitation came from someone without the admin role)`;
+  }
+  const n = a.displaced_user_ids?.length ?? 0;
+  if (n > 0) {
+    return `${a.email} (taken from ${n} account${n === 1 ? '' : 's'} that had typed it in without verifying it)`;
   }
   return a.email;
 }

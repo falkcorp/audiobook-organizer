@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-19
 
@@ -402,7 +402,10 @@ func TestUpdateMe_EmailChangeRevokesGuestAccessForOldEmail(t *testing.T) {
 	}
 }
 
-func TestUpdateMe_EmailTakenIsAConflictAndRevokesNothing(t *testing.T) {
+// S2: a refused change answers the same generic 400 as any unusable
+// address, so the profile form cannot be used to test which addresses have
+// accounts.
+func TestUpdateMe_EmailTakenIsGenericAndRevokesNothing(t *testing.T) {
 	mockStore := handlersmocks.NewMockAuthStore(t)
 	mockStore.EXPECT().UpdateUser(mock.Anything).Return(database.ErrUserEmailTaken)
 	h := handlers.NewAuthHandler(mockStore, true)
@@ -412,11 +415,13 @@ func TestUpdateMe_EmailTakenIsAConflictAndRevokesNothing(t *testing.T) {
 	c, w := newAuthCtx(http.MethodPatch, "/api/v1/auth/me", map[string]any{"email": "Taken@example.com"})
 	setAuthUser(c, &database.User{ID: "u1", Status: "active", Email: "old@example.com"})
 	h.UpdateMe(c)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("status %d, want 409", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "another account already uses that email address") {
-		t.Fatalf("body must say why: %s", w.Body.String())
+	for _, leak := range []string{"another account", "already", "exists", "taken", "Taken@example.com"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Fatalf("body reveals the address is registered (%q): %s", leak, w.Body.String())
+		}
 	}
 	if len(calls) != 0 {
 		t.Fatalf("a refused change must not revoke the old email's access: %v", calls)
@@ -437,5 +442,80 @@ func TestDeactivateUser_RevokesGuestAccess(t *testing.T) {
 	}
 	if len(calls) != 1 || calls[0] != u.ID+"|guest@example.com|user deactivated" {
 		t.Fatalf("revoker calls = %v", calls)
+	}
+}
+
+// S2: an admin sets or clears another user's email as verified; a user with
+// users.manage but without the admin role cannot; the old address's guest
+// access is revoked.
+func TestSetUserEmail(t *testing.T) {
+	f := newInviteFixture(t)
+	admin, err := f.store.CreateUser("boss", "boss@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	editor, err := f.store.CreateUser("ed", "ed@example.com", "bcrypt", "h", []string{"editor"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := f.store.CreateUser("member", "member.old@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	f.h.SetGuestAccessRevoker(func(userID, email, reason string) { calls = append(calls, userID+"|"+email+"|"+reason) })
+	actor := admin
+	f.router.PUT("/users/:id/email", func(c *gin.Context) { c.Set("auth_user", actor) }, f.h.SetUserEmail)
+	path := "/users/" + member.ID + "/email"
+
+	w, data := f.do(t, http.MethodPut, path, map[string]any{"email": " Member.New@Example.com "})
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin set: %d %s", w.Code, w.Body.String())
+	}
+	if u, _ := data["user"].(map[string]any); u["email"] != "member.new@example.com" {
+		t.Fatalf("response user = %v", data["user"])
+	}
+	got, _ := f.store.GetUserByID(member.ID)
+	if got.EmailSource != database.EmailSourceAdmin {
+		t.Fatalf("source = %q, want admin", got.EmailSource)
+	}
+	if v, _ := f.store.GetUserByVerifiedEmail("member.new@example.com"); v == nil || v.ID != member.ID {
+		t.Fatal("an admin-set address is verified")
+	}
+	if len(calls) != 1 || calls[0] != member.ID+"|member.old@example.com|email changed by an admin" {
+		t.Fatalf("revoker calls = %v", calls)
+	}
+
+	if w, _ := f.do(t, http.MethodPut, path, map[string]any{"email": "ed@example.com"}); w.Code != http.StatusConflict {
+		t.Fatalf("another account's address: %d, want 409", w.Code)
+	}
+	if w, _ := f.do(t, http.MethodPut, path, map[string]any{"email": "not an address"}); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad address: %d, want 400", w.Code)
+	}
+	if w, _ := f.do(t, http.MethodPut, path, map[string]any{}); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing email field: %d, want 400", w.Code)
+	}
+	if w, _ := f.do(t, http.MethodPut, "/users/01NOSUCHUSER/email", map[string]any{"email": "x@example.com"}); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown user: %d, want 404", w.Code)
+	}
+	if w, _ := f.do(t, http.MethodPut, path, map[string]any{"email": ""}); w.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", w.Code, w.Body.String())
+	}
+	if got, _ := f.store.GetUserByID(member.ID); got.Email != "" || got.EmailSource != "" {
+		t.Fatalf("cleared row = %+v", got)
+	}
+
+	actor = editor // has users.manage at the route, not the admin role
+	if w, _ := f.do(t, http.MethodPut, path, map[string]any{"email": "sneaky@example.com"}); w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin actor: %d, want 403", w.Code)
+	}
+	locked := *admin
+	locked.Status = "locked"
+	actor = &locked
+	if w, _ := f.do(t, http.MethodPut, path, map[string]any{"email": "sneaky@example.com"}); w.Code != http.StatusForbidden {
+		t.Fatalf("locked admin actor: %d, want 403", w.Code)
+	}
+	if got, _ := f.store.GetUserByID(member.ID); got.Email != "" {
+		t.Fatal("a refused set must write nothing")
 	}
 }
