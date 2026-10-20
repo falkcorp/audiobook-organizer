@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: cb551e14-7788-4c73-830d-3e0a46bfe67c
 // last-edited: 2026-10-19
 
@@ -48,7 +48,7 @@ func dropFilterIndexes(t testing.TB, s *PebbleActivityStore) {
 func seedBulk(t testing.TB, s *PebbleActivityStore, n int, base time.Time, step time.Duration, mk func(i int) ActivityEntry) {
 	t.Helper()
 	batch := make([]ActivityEntry, 0, 500)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		e := mk(i)
 		e.Timestamp = base.Add(time.Duration(i) * step)
 		batch = append(batch, e)
@@ -164,7 +164,7 @@ func TestFilterIndex_DifferentialAgainstUnboundedScan(t *testing.T) {
 	types := []string{"", "scan", "merge", "daily_digest"}
 	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	var batch []ActivityEntry
-	for i := 0; i < 3000; i++ {
+	for i := range 3000 {
 		// Coarse timestamps so ties across tiers are common.
 		ts := base.Add(time.Duration(rng.IntN(600)) * time.Second)
 		batch = append(batch, ActivityEntry{
@@ -183,7 +183,7 @@ func TestFilterIndex_DifferentialAgainstUnboundedScan(t *testing.T) {
 	// a map is expected, so the FULL decode fails. The reference path drops
 	// them from page and total alike; the planner must too, wherever they fall
 	// relative to the offset.
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		seedPoisonedRow(t, s, base.Add(time.Duration(rng.IntN(600))*time.Second),
 			actTiers[rng.IntN(len(actTiers)-1)], sources[rng.IntN(len(sources))], levels[rng.IntN(len(levels))])
 	}
@@ -456,7 +456,7 @@ func TestFilterIndex_RollbackGapIsDetectedAndReindexed(t *testing.T) {
 	require.NoError(t, s.MarkFilterIndexBackfillDone())
 
 	// Rolled back: the old build writes 30 rows, newer than anything above.
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		writeLegacyRow(t, s, now.Add(-time.Hour+time.Duration(i)*time.Second), "old-build")
 	}
 
@@ -608,7 +608,7 @@ func TestFilterIndex_ReconcileChecksFromTheMarkAtOpen(t *testing.T) {
 		return ActivityEntry{Tier: "change", Type: "t", Source: "new-build", Summary: "n"}
 	})
 	require.NoError(t, s.MarkFilterIndexBackfillDone())
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		writeLegacyRow(t, s, now.Add(-2*time.Hour+time.Duration(i)*time.Second), "old-build")
 	}
 
@@ -679,7 +679,7 @@ func TestFilterIndex_ReconcileReportsProgress(t *testing.T) {
 			return ActivityEntry{Tier: "change", Type: "t", Source: "new-build", Summary: "n"}
 		})
 		require.NoError(t, s.MarkFilterIndexBackfillDone())
-		for i := 0; i < 30; i++ {
+		for i := range 30 {
 			writeLegacyRow(t, s, now.Add(-time.Hour+time.Duration(i)*time.Second), "old-build")
 		}
 		booted := NewPebbleActivityStore(s.db)

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_metrics_export_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7f67b147-94c7-439f-8b61-2ea3da025abe
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -17,7 +17,7 @@ func TestPebbleSampleFromDB_RealStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		if err := p.db.Set([]byte(fmt.Sprintf("a1test:%06d", i)), []byte("value-value-value"), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +74,7 @@ func TestPebbleSampleFromDB_Nil(t *testing.T) {
 // and Close then reported "leaked snapshots"). Once Close has returned the
 // sample is not-ok. Run under -race.
 func TestPebbleSampleFromDB_ConcurrentClose(t *testing.T) {
-	for round := 0; round < 20; round++ {
+	for range 20 {
 		p, err := NewPebbleStoreInMemory(t.TempDir())
 		if err != nil {
 			t.Fatal(err)
@@ -82,7 +82,7 @@ func TestPebbleSampleFromDB_ConcurrentClose(t *testing.T) {
 		stop := make(chan struct{})
 		var wg sync.WaitGroup
 		panics := make(chan any, 4)
-		for g := 0; g < 3; g++ {
+		for range 3 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

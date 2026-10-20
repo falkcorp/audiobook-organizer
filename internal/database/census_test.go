@@ -1,7 +1,7 @@
 // file: internal/database/census_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: b6c66985-8717-4b85-b9df-85f7eb9291f3
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -54,7 +54,7 @@ func newCensusTestStore(t *testing.T, closeOnCleanup bool) *PebbleStore {
 func writeCensusKeys(t *testing.T, p *PebbleStore, n int, key func(i int) string) {
 	t.Helper()
 	b := p.db.NewBatch()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		require.NoError(t, b.Set([]byte(key(i)), []byte("v"), nil))
 	}
 	require.NoError(t, b.Commit(pebble.Sync))
@@ -182,7 +182,7 @@ func TestDBCensus_FlushesTheMemtableAtMostOncePerInterval(t *testing.T) {
 // flush on every census.
 func TestDBCensus_SmallMemtableIsNotFlushed(t *testing.T) {
 	p := newCensusRawStore(t)
-	for round := 0; round < 4; round++ {
+	for round := range 4 {
 		writeBigCatKeys(t, p, round*3000, 3000) // ~3 MB per memtable
 		require.NoError(t, p.db.Flush())
 	}
@@ -202,7 +202,7 @@ func TestDBCensus_SmallMemtableIsNotFlushed(t *testing.T) {
 func TestDBCensus_StraddlingTableIsEstimatedAndConserved(t *testing.T) {
 	p := newCensusRawStore(t)
 	b := p.db.NewBatch()
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("book_file:BK:%05d", i)), []byte("file-row"), nil))
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("fpidx:%05d", i)), []byte("lsh"), nil))
 	}
@@ -225,7 +225,7 @@ func TestDBCensus_StraddlingTableIsEstimatedAndConserved(t *testing.T) {
 func TestDBCensus_EmptyFamiliesInsideAStraddlingTableGetZero(t *testing.T) {
 	p := newCensusRawStore(t)
 	b := p.db.NewBatch()
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("book_file:BK:%05d", i)), []byte("file-row"), nil))
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("book_ver:BK:%020d", i)), []byte("snapshot"), nil))
 	}
@@ -258,14 +258,14 @@ func TestDBCensus_EmptyFamiliesInsideAStraddlingTableGetZero(t *testing.T) {
 func writeThenDeleteAuthors(t *testing.T, p *PebbleStore) {
 	t.Helper()
 	b := p.db.NewBatch()
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("book:author:%05d", i)), []byte("a"), nil))
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("book:hash:%05d", i)), []byte("h"), nil))
 	}
 	require.NoError(t, b.Commit(pebble.Sync))
 	require.NoError(t, p.db.Flush())
 	d := p.db.NewBatch()
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		require.NoError(t, d.Delete([]byte(fmt.Sprintf("book:author:%05d", i)), nil))
 	}
 	require.NoError(t, d.Commit(pebble.Sync))
@@ -323,7 +323,7 @@ func TestDBCensus_ProbeSeesTombstonesButNotEmptiness(t *testing.T) {
 func writeCatAndDedup(t *testing.T, p *PebbleStore) {
 	t.Helper()
 	b := p.db.NewBatch()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("cat:%05d", i)), []byte("catalog-entry"), nil))
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("dedup:r:%05d", i)), []byte("rec"), nil))
 	}
@@ -388,7 +388,7 @@ func TestDBCensus_DeleteRangePartialFamily(t *testing.T) {
 func TestRunExactCensus_CountsEveryFamilyAndStoresTheResult(t *testing.T) {
 	p := newCensusRawStore(t)
 	b := p.db.NewBatch()
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("book_file:BK:%05d", i)), []byte("file-row"), nil))
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("fpidx:%05d", i)), []byte("lsh"), nil))
 	}
@@ -562,7 +562,7 @@ func TestRunExactCensus_RespectsTheReadBudget(t *testing.T) {
 	p := newCensusRawStore(t)
 	val := make([]byte, 1024)
 	b := p.db.NewBatch()
-	for i := 0; i < 3000; i++ {
+	for i := range 3000 {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("cat:%05d", i)), val, nil))
 	}
 	require.NoError(t, b.Commit(pebble.Sync))
@@ -667,7 +667,7 @@ func TestDBCensus_ColdMemdbIsCachedBriefly(t *testing.T) {
 // N3: the package cache never holds more than censusCacheMaxStores stores.
 func TestCensusCache_IsBounded(t *testing.T) {
 	now := time.Now()
-	for i := 0; i < censusCacheMaxStores+5; i++ {
+	for i := range censusCacheMaxStores + 5 {
 		censusCachePut(new(GatedDB), &DBCensus{}, now.Add(time.Duration(i)*time.Second), censusCacheTTL)
 	}
 	censusCache.mu.Lock()

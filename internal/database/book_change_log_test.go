@@ -1,5 +1,5 @@
 // file: internal/database/book_change_log_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 0b1d4a52-6f0e-4c1a-9d37-5e8a2c7b1f63
 // last-edited: 2026-10-19
 
@@ -39,7 +39,7 @@ func TestIDChangeLog_ListsWhatChangedOrRefuses(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []string{"c"}, ids)
 
-	for i := 0; i < idChangeLogCap; i++ {
+	for range idChangeLogCap {
 		l.bump(&g, "x")
 	}
 	_, _, ok = l.since(&g, 4)

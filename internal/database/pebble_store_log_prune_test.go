@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_log_prune_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0e8b41d7-6c2a-4f93-a5d0-7b3c9e14f2a8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -36,7 +36,7 @@ var logPruneKinds = []logPruneKind{
 			t.Helper()
 			b := p.db.NewBatch()
 			defer b.Close()
-			for i := 0; i < n; i++ {
+			for i := range n {
 				// Distinct op ids so key order is NOT time order, the way real
 				// operationlog keys (operationlog:<opID>:<nanos>:<seq>) are.
 				key := fmt.Sprintf("operationlog:op%03d:%d:%s%d", (i*7)%13, at.UnixNano(), tag, i)
@@ -58,7 +58,7 @@ var logPruneKinds = []logPruneKind{
 			t.Helper()
 			b := p.db.NewBatch()
 			defer b.Close()
-			for i := 0; i < n; i++ {
+			for i := range n {
 				ts := at.Add(time.Duration(i) * time.Nanosecond)
 				key := fmt.Sprintf("syslog:%s:%s%d", ts.Format(time.RFC3339Nano), tag, i)
 				val := fmt.Sprintf(`{"source":"s","level":"info","message":"m","created_at":%q}`, ts.Format(time.RFC3339Nano))
@@ -286,7 +286,7 @@ func TestOpChangePrune_CancelStopsBetweenChunks(t *testing.T) {
 	mustTrustOpChange(t, p)
 	old := time.Now().Add(-48 * time.Hour)
 	const rows = 15
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		rawPutOpChange(t, p, &OperationChange{
 			ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: fmt.Sprintf("b%d", i%3), CreatedAt: old,
 		})
@@ -345,7 +345,7 @@ func TestPrune_ScanHeartbeatReportsWithNothingToDelete(t *testing.T) {
 		p := newOpChangeTestStore(t)
 		setPruneScanTick(t, 5)
 		mustTrustOpChange(t, p)
-		for i := 0; i < 12; i++ {
+		for i := range 12 {
 			rawPutOpChange(t, p, &OperationChange{ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: "b", CreatedAt: time.Now()})
 		}
 		var seen [][2]int
@@ -393,7 +393,7 @@ func TestPrune_CancelDuringScanStopsAtTheNextHeartbeat(t *testing.T) {
 		opChangePruneChunk = 1000
 		t.Cleanup(func() { opChangePruneChunk = old })
 		mustTrustOpChange(t, p)
-		for i := 0; i < 12; i++ {
+		for i := range 12 {
 			rawPutOpChange(t, p, &OperationChange{ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: "b", CreatedAt: time.Now().Add(-48 * time.Hour)})
 		}
 		ctx, cancel := context.WithCancel(context.Background())

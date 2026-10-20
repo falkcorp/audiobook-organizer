@@ -1,5 +1,5 @@
 // file: internal/database/census_exact_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 855ae87b-f3ac-4536-b212-083ff3eba047
 // last-edited: 2026-10-19
 
@@ -73,7 +73,7 @@ func historyFixture(seed int64, books int) (map[string]int64, [][]byte) {
 	rng := rand.New(rand.NewSource(seed))
 	counts := map[string]int64{}
 	var keys [][]byte
-	for b := 0; b < books; b++ {
+	for range books {
 		// Variable-length ids, including ids that are prefixes of others.
 		id := fmt.Sprintf("B%d", rng.Intn(books*3))
 		if _, dup := counts[id]; dup {
@@ -157,13 +157,13 @@ func growTombstoneFamily(t *testing.T, p *PebbleStore, n int) {
 	t.Helper()
 	val := make([]byte, 200)
 	b := p.db.NewBatch()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		require.NoError(t, b.Set([]byte(fmt.Sprintf("cat:%07d", i)), val, nil))
 	}
 	require.NoError(t, b.Commit(pebble.Sync))
 	require.NoError(t, p.db.Flush())
 	d := p.db.NewBatch()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		require.NoError(t, d.Delete([]byte(fmt.Sprintf("cat:%07d", i)), nil))
 	}
 	require.NoError(t, d.Commit(pebble.Sync))
@@ -292,7 +292,7 @@ func TestRunExactCensus_RefreshCountsShadowedVersionsExactly(t *testing.T) {
 	exactCensusIterRefresh, exactCensusCheckBytes = 0, 1
 	t.Cleanup(func() { exactCensusIterRefresh, exactCensusCheckBytes = oldRefresh, oldCheck })
 	p := newCensusRawStore(t)
-	for v := 0; v < 3; v++ { // three versions of every key, in three tables
+	for range 3 { // three versions of every key, in three tables
 		writeCensusKeys(t, p, 500, func(i int) string { return fmt.Sprintf("work:%05d", i) })
 		require.NoError(t, p.db.Flush())
 	}

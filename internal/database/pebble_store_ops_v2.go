@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.32.0
+// version: 3.32.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -851,13 +852,7 @@ func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (st
 	default:
 		status = row.Status
 		queueKey = opv2QueueKey(row.Priority, row.QueuedAt, id)
-		allowed := false
-		for _, s := range allowedStatuses {
-			if s == status {
-				allowed = true
-				break
-			}
-		}
+		allowed := slices.Contains(allowedStatuses, status)
 		if !allowed {
 			return status, false, nil
 		}

@@ -1,7 +1,7 @@
 // file: internal/database/user_state_lock.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -130,8 +130,8 @@ func LockUserBookStates(keys ...UserBookKey) (unlock func()) {
 		userStateLocks[i].Lock()
 	}
 	return func() {
-		for j := len(idx) - 1; j >= 0; j-- {
-			userStateLocks[idx[j]].Unlock()
+		for _, i := range slices.Backward(idx) {
+			userStateLocks[i].Unlock()
 		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/database/test_deadline_selftest_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a3232db7-10d7-425f-865c-cb905b10b5c3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-19
 
 package database
 
@@ -240,7 +240,7 @@ func TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers(t *testin
 func assertChildTempDirRemoved(t *testing.T, out, childTmp string) {
 	t.Helper()
 	var childDir string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if rest, ok := strings.CutPrefix(line, deadlineChildTempDirPrefix); ok {
 			childDir = strings.TrimSpace(rest)
 		}

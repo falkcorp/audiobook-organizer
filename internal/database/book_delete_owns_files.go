@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-10-19
 
@@ -143,8 +143,8 @@ func (p *PebbleStore) lockBookOwners(ids ...string) func() {
 		p.bookOwnerLocks[st].Lock()
 	}
 	return func() {
-		for i := len(stripes) - 1; i >= 0; i-- {
-			p.bookOwnerLocks[stripes[i]].Unlock()
+		for _, stripe := range slices.Backward(stripes) {
+			p.bookOwnerLocks[stripe].Unlock()
 		}
 	}
 }

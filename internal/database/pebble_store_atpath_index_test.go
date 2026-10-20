@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package database
 
@@ -209,7 +209,7 @@ func TestBookAtPathIndex_RandomOps(t *testing.T) {
 		}
 
 		steps := rapid.IntRange(1, 25).Draw(rt, "steps")
-		for i := 0; i < steps; i++ {
+		for range steps {
 			switch rapid.IntRange(0, 7).Draw(rt, "op") {
 			case 0: // create
 				b, err := s.CreateBook(&Book{Title: "b", FilePath: pathGen.Draw(rt, "path")})
@@ -298,7 +298,7 @@ func TestBookAtPathIndex_ConcurrentWriters(t *testing.T) {
 	mustBackfill(t, s)
 
 	var shared []string
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		b, err := s.CreateBook(&Book{Title: "c", FilePath: hostilePaths[i]})
 		if err != nil {
 			t.Fatal(err)
@@ -307,12 +307,12 @@ func TestBookAtPathIndex_ConcurrentWriters(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for w := 0; w < 8; w++ {
+	for w := range 8 {
 		wg.Add(1)
 		go func(seed int64) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(seed))
-			for i := 0; i < 40; i++ {
+			for range 40 {
 				switch r.Intn(4) {
 				case 0, 1:
 					id := shared[r.Intn(len(shared))]
@@ -395,7 +395,7 @@ func TestBackfill_BuildsIndexForPreIndexRows(t *testing.T) {
 func TestBackfill_InterruptedRunLeavesNoSentinelAndReaderFallsBack(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		if _, err := s.CreateBook(&Book{Title: "x", FilePath: "/p"}); err != nil {
 			t.Fatal(err)
 		}
@@ -449,7 +449,7 @@ func TestBackfill_ConcurrentMoveBetweenChunksKeepsCompleteness(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
 	var ids []string
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		b, err := s.CreateBook(&Book{Title: "x", FilePath: "/src"})
 		if err != nil {
 			t.Fatal(err)
@@ -494,7 +494,7 @@ func TestBackfill_WorkerPoolIndexesEveryRow(t *testing.T) {
 	for i := range paths {
 		paths[i] = fmt.Sprintf("/pool/%d", i)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if _, err := s.CreateBook(&Book{Title: fmt.Sprint(i), FilePath: paths[i%len(paths)]}); err != nil {
 			t.Fatal(err)
 		}
@@ -900,7 +900,7 @@ func TestBackfill_CancelUnblocksTheProducer(t *testing.T) {
 func TestBackfill_ReportsProgressPerChunk(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		if _, err := s.CreateBook(&Book{Title: "x", FilePath: "/p"}); err != nil {
 			t.Fatal(err)
 		}

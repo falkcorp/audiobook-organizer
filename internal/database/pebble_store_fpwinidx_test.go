@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwinidx_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0b7e3f19-8c2d-4a56-b1e4-7d9a2c6f3e81
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -30,10 +30,10 @@ func idxRaw(seed uint64) []byte {
 	const n = 969
 	out := make([]byte, 4*n)
 	f := rng.Uint32()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			var mask uint32
-			for bit := 0; bit < 32; bit++ {
+			for bit := range 32 {
 				if rng.Float64() < 0.15 {
 					mask |= 1 << bit
 				}

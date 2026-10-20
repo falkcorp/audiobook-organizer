@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache_pcache_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c8f6a17-9d43-4e0b-b71a-5e3d90c4a2f8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -123,7 +123,7 @@ func TestPCache_PointerUnionCapAndBust(t *testing.T) {
 	s := newPCacheTestStore(t)
 	t0 := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
 	ttl := PCacheTTL{Positive: time.Hour, Negative: time.Hour}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := PutPCache(s, fmt.Sprintf("pcache:q:audible:search_title:%d", i), PCacheEntry{Results: json.RawMessage(`[1]`)}, ttl, t0)
 		require.NoError(t, err)
 	}
@@ -163,7 +163,7 @@ func TestPCache_PointerUnionCapAndBust(t *testing.T) {
 
 	// The cap keeps the most recently recorded keys.
 	many := make([]string, 0, pcachePointerMaxPerProvider+5)
-	for i := 0; i < pcachePointerMaxPerProvider+5; i++ {
+	for i := range pcachePointerMaxPerProvider + 5 {
 		many = append(many, fmt.Sprintf("pcache:q:audible:search_title:k%03d", i))
 	}
 	require.NoError(t, RecordPCachePointer(s, "book-b", map[string][]string{"audible": many}, t0))

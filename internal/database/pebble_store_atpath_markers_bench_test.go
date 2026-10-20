@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers_bench_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c3d81f5a-6e24-4b97-a0f2-1d9e7b45c8a0
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package database
 
@@ -65,7 +65,7 @@ func after50kUpdatesStore(b *testing.B) *PebbleStore {
 		}
 		s.WaitForWarmup()
 		ids := make([]string, 0, after50kBooks)
-		for i := 0; i < after50kBooks; i++ {
+		for i := range after50kBooks {
 			bk, err := s.CreateBook(&Book{Title: fmt.Sprintf("t%d", i),
 				FilePath: fmt.Sprintf("/lib/d%d/b%d.m4b", i%after50kDirs, i)})
 			if err != nil {
@@ -78,7 +78,7 @@ func after50kUpdatesStore(b *testing.B) *PebbleStore {
 			after50kErr = err
 			return
 		}
-		for i := 0; i < after50kUpdates; i++ {
+		for i := range after50kUpdates {
 			id := ids[i%len(ids)]
 			bk, err := s.GetBookByID(id)
 			if err != nil {

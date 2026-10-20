@@ -1,5 +1,5 @@
 // file: internal/database/book_own_folder.go
-// version: 3.3.1
+// version: 3.3.2
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
 // last-edited: 2026-10-19
 
@@ -8,6 +8,7 @@ package database
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -325,10 +326,8 @@ func IsBookFileCopy(a, b BookFile) bool {
 		return false
 	}
 	for _, x := range bookFileNames(a) {
-		for _, y := range bookFileNames(b) {
-			if x == y {
-				return true
-			}
+		if slices.Contains(bookFileNames(b), x) {
+			return true
 		}
 	}
 	return false

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series_rename_if_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7c3e9b14-52d8-4a6f-9e01-b8d4f2a6c935
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
@@ -103,7 +103,7 @@ func TestRenameSeriesIf_Refusals(t *testing.T) {
 // the renamed series or the rename finds the name taken.
 func TestRenameSeriesIf_RaceWithCreateSeriesNeverDuplicates(t *testing.T) {
 	s := newRenameIfStore(t)
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		oldName, newName := fmt.Sprintf("Old %d", i), fmt.Sprintf("New %d", i)
 		ser, err := s.CreateSeries(newName, nil)
 		if err != nil {

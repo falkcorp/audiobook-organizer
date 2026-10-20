@@ -1,7 +1,7 @@
 // file: internal/database/dbtest/invariants.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b1d2f3a4-5c6e-7a8b-9c0d-invariantsdbt1
-// last-edited: 2026-09-12
+// last-edited: 2026-10-19
 
 // Package dbtest holds cross-package TEST-ONLY helpers for asserting
 // data-loss / store-consistency invariants against a real database.Store.
@@ -40,6 +40,7 @@
 package dbtest
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -223,12 +224,7 @@ func assertListingLive(tb testing.TB, store database.Store, label string, got []
 }
 
 func containsString(ids []string, id string) bool {
-	for _, s := range ids {
-		if s == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ids, id)
 }
 
 func containsID(books []database.Book, id string) bool {

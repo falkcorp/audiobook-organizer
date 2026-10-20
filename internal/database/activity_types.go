@@ -1,5 +1,5 @@
 // file: internal/database/activity_types.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-19
 
@@ -483,10 +483,5 @@ func entryHasOperation(e ActivityEntry, id string) bool {
 		return false
 	}
 	want := "op:" + id
-	for _, t := range e.Tags {
-		if t == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(e.Tags, want)
 }

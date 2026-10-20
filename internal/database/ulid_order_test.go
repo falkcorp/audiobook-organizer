@@ -1,7 +1,7 @@
 // file: internal/database/ulid_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 31364789-bcf5-4d20-bf45-120283862710
-// last-edited: 2026-10-03
+// last-edited: 2026-10-19
 
 package database
 
@@ -25,7 +25,7 @@ import (
 func TestNewULID_SortsInCreationOrder(t *testing.T) {
 	prev, err := newULID()
 	require.NoError(t, err)
-	for i := 0; i < 100000; i++ {
+	for i := range 100000 {
 		id, err := newULID()
 		require.NoError(t, err)
 		require.Greater(t, id, prev, "id %d does not sort after the one before it", i)
@@ -39,12 +39,12 @@ func TestNewULID_ConcurrentCallersStayOrderedAndUnique(t *testing.T) {
 	const workers, perWorker = 8, 5000
 	out := make([][]string, workers)
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ids := make([]string, 0, perWorker)
-			for i := 0; i < perWorker; i++ {
+			for range perWorker {
 				id, err := newULID()
 				if err != nil {
 					t.Errorf("newULID: %v", err)
@@ -163,7 +163,7 @@ func TestCreateSession_IDsAreNotLinkedToEachOther(t *testing.T) {
 	// from it, any two sessions in one millisecond would share their top
 	// entropy bits. Sandwich each session between two ordered ids instead of
 	// relying on two session writes landing in one millisecond.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		before, err := newULID()
 		require.NoError(t, err)
 		sess, err := store.CreateSession("user-1", "192.0.2.1", "test", time.Hour)

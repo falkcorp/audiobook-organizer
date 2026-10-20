@@ -1,7 +1,7 @@
 // file: internal/database/census.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: be43e3c6-39e4-4a3e-a43c-cd5651ff141c
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -288,9 +289,7 @@ func (c *DBCensus) clone() *DBCensus {
 		h := *c.History
 		h.Top = append([]BookHistoryCount(nil), c.History.Top...)
 		h.Buckets = make(map[string]int64, len(c.History.Buckets))
-		for k, v := range c.History.Buckets {
-			h.Buckets[k] = v
-		}
+		maps.Copy(h.Buckets, c.History.Buckets)
 		cp.History = &h
 	}
 	if c.LastExact != nil {

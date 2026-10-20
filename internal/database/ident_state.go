@@ -1,7 +1,7 @@
 // file: internal/database/ident_state.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
-// last-edited: 2026-10-16
+// last-edited: 2026-10-19
 
 package database
 
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -891,8 +892,8 @@ func (p *PebbleStore) lockIdentStripes(ids []string) func() {
 		p.metadataCacheLocks[i].Lock()
 	}
 	return func() {
-		for k := len(idx) - 1; k >= 0; k-- {
-			p.metadataCacheLocks[idx[k]].Unlock()
+		for _, i := range slices.Backward(idx) {
+			p.metadataCacheLocks[i].Unlock()
 		}
 	}
 }

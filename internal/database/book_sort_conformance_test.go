@@ -1,7 +1,7 @@
 // file: internal/database/book_sort_conformance_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a4d2e07-6b39-4c15-9e8f-1d07b3a5c264
-// last-edited: 2026-10-11
+// last-edited: 2026-10-19
 //
 // The real conformance test between the two ways a library page gets ordered.
 //
@@ -191,7 +191,7 @@ func TestCreatedAtIndexedMatchesUnindexedWithPredicate(t *testing.T) {
 	zero := time.Time{}
 
 	var books []Book
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		id := string(rune('a'+i%26)) + "-" + time.Duration(i).String()
 		b := Book{ID: id, Title: id}
 		switch {

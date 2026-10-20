@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index_restart_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c1e4a92-5d38-4b6f-a2e0-9f83d1c5b740
-// last-edited: 2026-10-15
+// last-edited: 2026-10-19
 
 package database
 
@@ -27,7 +27,7 @@ func rollbackFixture(t *testing.T, n int) (first *PebbleActivityStore, legacyFro
 	})
 	require.NoError(t, s.MarkFilterIndexBackfillDone())
 	legacyFrom = now.Add(-2 * time.Hour)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		writeLegacyRow(t, s, legacyFrom.Add(time.Duration(i)*time.Second), "old-build")
 	}
 	return NewPebbleActivityStore(s.db), legacyFrom
