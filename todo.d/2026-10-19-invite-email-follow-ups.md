@@ -7,12 +7,10 @@
       a browser before the policy sync adds them;
       (3) OAuth login and the Cloudflare Access middleware still do not refuse
       a deactivated user (pre-existing);
-      (4) confirm that `CF-Connecting-IP` reaches the origin in production:
-      without it the public invite limiter's per-client layer falls back to
-      the proxy's address and only the per-token and global layers separate
-      clients;
-      (5) with `write_startup_readonly_key` on (the default),
-      `InitStartupReadOnlyKey` calls `findOrCreateAdminUser` at every start,
-      so a fresh install gets an admin whose generated password is
-      thrown away, after which first-run setup (`CountUsers() == 0`) is
-      refused and bootstrap returns no password (pre-existing).
+      (4) set `TUNNEL_CONNECTOR_ADDRS` in production to the address the
+      Cloudflare tunnel connector reaches the service from: until then the
+      public invite limiter skips its per-client layer for tunnel traffic and
+      bootstrap callers share one bucket;
+      (5) `UserHandler.AcceptInvite` (internal/server/handlers/user.go) is not
+      routed (the route uses `Server.handleAcceptInvite`) and still echoes
+      store errors as a 400: delete it or route through the generic refusal.
