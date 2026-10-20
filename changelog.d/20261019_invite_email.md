@@ -43,9 +43,16 @@ email removes the grant and, when the sync added it, the policy entry.
 #### SSO auto-linking by email uses only verified addresses; emails are unique
 
 An SSO login is now linked to an existing account by email only when that
-address is verified: set by setup or bootstrap, bound by an emailed invite, or
-confirmed by an identity provider. A self-set profile email never matches, and
-a login whose address an account holds unverified is denied rather than linked
-or duplicated. A one-time repair at startup keeps every address that links
-today. User emails are now unique case-insensitively; PATCH /auth/me answers
-409 for an address another account has.
+address is verified: bound by an emailed invite, confirmed by an identity
+provider, or set by first-run setup or bootstrap from now on. A self-set
+profile email never matches. When an identity-provider-verified login finds its
+address held unverified by other accounts, the verified login wins: in one
+write the address is cleared from those accounts (they keep their accounts) and
+a new account is created for the login; this is logged and recorded as an
+`auth_email_displaced` audit activity entry with the account ids. A one-time
+rebuild at startup (`system:backfill:user_verified_email_v2_done`) keeps only
+addresses with a record of proof (an accepted-invite grant or a linked
+identity recorded with that email) and drops every other key; people who
+already sign in through SSO resolve by their identity link and are unaffected.
+User emails are now unique case-insensitively; PATCH /auth/me answers 409 for
+an address another account has.
