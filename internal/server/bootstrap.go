@@ -1,15 +1,15 @@
 // file: internal/server/bootstrap.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,18 +165,63 @@ func InitBootstrapToken(store SettingsReadWriter, dataDir string) error {
 	return nil
 }
 
-// ConsumeBootstrapToken validates plaintext against the stored hash, checks
-// the 10-minute expiry, then atomically deletes both settings and the on-disk
-// file. Returns (valid, error). Thread-safe.
-func ConsumeBootstrapToken(store SettingsReadWriter, dataDir, plaintext string) (bool, error) {
+// errBootstrapTokenNotBurned is returned when a valid token could not be
+// deleted after it was used: the caller must not hand out a credential for a
+// token that would still work a second time.
+var errBootstrapTokenNotBurned = errors.New("bootstrap: token was valid but could not be deleted")
+
+// RedeemBootstrapToken is the one place a bootstrap token is checked and spent.
+// Under bootstrapMu it:
+//
+//  1. validates plaintext without consuming it: the stored hash must exist,
+//     the stored expiry must exist, parse and lie in the future (a missing or
+//     unreadable expiry is an invalid token, not one that never expires), and
+//     the hashes must match under a constant-time compare;
+//  2. runs onValid, only for a valid token. If onValid fails, the token is
+//     NOT consumed and (true, err) is returned, so a failed admin creation
+//     does not burn the one-time token;
+//  3. consumes the token: deletes the hash (which must succeed, or
+//     errBootstrapTokenNotBurned is returned), then the expiry and the
+//     on-disk file (best effort; without the hash they are inert).
+//
+// The three steps hold one mutex, so two concurrent requests cannot both pass
+// step 1 for the same token, and nothing in onValid runs for an invalid token.
+// The store has no transaction spanning a user row and a setting, so the
+// atomicity is per process: a crash between steps 2 and 3 leaves the work of
+// onValid done and the token still valid until it expires (10 minutes), and a
+// retry with it finds the admin onValid created instead of making another.
+//
+// An invalid, missing, consumed or expired token is (false, nil): a 401, not a
+// 500 (pen-test finding HIGH-4a).
+func RedeemBootstrapToken(store SettingsReadWriter, dataDir, plaintext string, onValid func() error) (bool, error) {
 	bootstrapMu.Lock()
 	defer bootstrapMu.Unlock()
 
+	valid, err := checkBootstrapTokenLocked(store, dataDir, plaintext)
+	if err != nil || !valid {
+		return false, err
+	}
+	if onValid != nil {
+		if err := onValid(); err != nil {
+			return true, err
+		}
+	}
+	if err := store.DeleteSetting(bootstrapTokenKey); err != nil {
+		return true, fmt.Errorf("%w: %w", errBootstrapTokenNotBurned, err)
+	}
+	_ = store.DeleteSetting(bootstrapExpiresKey)
+	_ = os.Remove(BootstrapTokenPath(dataDir))
+	return true, nil
+}
+
+// checkBootstrapTokenLocked reports whether plaintext is the live bootstrap
+// token. It never consumes a valid token; it does clear an expired one. The
+// caller holds bootstrapMu.
+func checkBootstrapTokenLocked(store SettingsReadWriter, dataDir, plaintext string) (bool, error) {
 	setting, err := store.GetSetting(bootstrapTokenKey)
 	if err != nil {
 		// A consumed (deleted) token surfaces as ErrSettingNotFound — that's an
-		// invalid token, not a server fault, so the caller should return 401 not
-		// 500 (pen-test finding HIGH-4a).
+		// invalid token, not a server fault.
 		if errors.Is(err, database.ErrSettingNotFound) {
 			return false, nil
 		}
@@ -185,27 +231,29 @@ func ConsumeBootstrapToken(store SettingsReadWriter, dataDir, plaintext string) 
 		return false, nil
 	}
 
-	// Check expiry before doing any hash work.
-	if expSetting, err := store.GetSetting(bootstrapExpiresKey); err == nil && expSetting != nil {
-		var expUnix int64
-		fmt.Sscanf(expSetting.Value, "%d", &expUnix)
-		if expUnix > 0 && time.Now().Unix() > expUnix {
-			slog.Info("Token exchange attempted but token has expired (restart required to generate a new one)")
-			_ = store.DeleteSetting(bootstrapTokenKey)
-			_ = store.DeleteSetting(bootstrapExpiresKey)
-			_ = os.Remove(BootstrapTokenPath(dataDir))
-			return false, nil
-		}
+	// Expiry before any hash work. InitBootstrapToken always writes both
+	// settings, so a missing or unreadable expiry is treated as expired:
+	// reading it as "no expiry" would make the token live forever.
+	expSetting, err := store.GetSetting(bootstrapExpiresKey)
+	if err != nil && !errors.Is(err, database.ErrSettingNotFound) {
+		return false, fmt.Errorf("bootstrap: read token expiry: %w", err)
 	}
-
-	if hashBootstrapToken(plaintext) != setting.Value {
+	var expUnix int64
+	if expSetting != nil {
+		expUnix, _ = strconv.ParseInt(strings.TrimSpace(expSetting.Value), 10, 64)
+	}
+	if expUnix <= 0 || time.Now().Unix() > expUnix {
+		slog.Info("Token exchange attempted but token has expired or has no expiry (restart required to generate a new one)")
+		_ = store.DeleteSetting(bootstrapTokenKey)
+		_ = store.DeleteSetting(bootstrapExpiresKey)
+		_ = os.Remove(BootstrapTokenPath(dataDir))
 		return false, nil
 	}
 
-	_ = store.DeleteSetting(bootstrapTokenKey)
-	_ = store.DeleteSetting(bootstrapExpiresKey)
-	_ = os.Remove(BootstrapTokenPath(dataDir))
-
+	got := hashBootstrapToken(plaintext)
+	if subtle.ConstantTimeCompare([]byte(got), []byte(setting.Value)) != 1 {
+		return false, nil
+	}
 	return true, nil
 }
 
@@ -308,18 +356,34 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// file sitting right there.
 	dataDir := config.SecureStateDir()
 
-	// Find or create admin BEFORE consuming the token, so a creation failure
-	// doesn't burn the one-time token.
-	adminUser, generatedPassword, err := findOrCreateAdminUser(store)
-	if err != nil || adminUser == nil {
-		slog.Info("find/create admin error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
-		httputil.RespondWithInternalError(c, "failed to find or create admin user")
-		return
-	}
-
-	valid, err := ConsumeBootstrapToken(store, dataDir, req.Token)
+	// The token is validated first and nothing is created for an invalid one:
+	// until 2026-10-20 the admin was found or created before the token was
+	// checked, so any unauthenticated POST with a non-empty token could create
+	// an admin account. The admin step runs inside RedeemBootstrapToken, after
+	// validation and before consumption, so a creation failure still does not
+	// burn the one-time token.
+	var (
+		adminUser         *database.User
+		generatedPassword string
+	)
+	valid, err := RedeemBootstrapToken(store, dataDir, req.Token, func() error {
+		u, pw, err := findOrCreateAdminUser(store)
+		if err != nil {
+			return err
+		}
+		if u == nil {
+			return errors.New("no admin user found or created")
+		}
+		adminUser, generatedPassword = u, pw
+		return nil
+	})
 	if err != nil {
-		slog.Info("consume error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
+		if valid && adminUser == nil {
+			slog.Info("find/create admin error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
+			httputil.RespondWithInternalError(c, "failed to find or create admin user")
+			return
+		}
+		slog.Info("bootstrap token error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
 		httputil.RespondWithInternalError(c, "internal error")
 		return
 	}
@@ -441,7 +505,10 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	}
 
 	// No admin found — create one.
-	password := generateReadablePassword()
+	password, err := generateAdminPassword()
+	if err != nil {
+		return nil, "", fmt.Errorf("generate admin password: %w", err)
+	}
 	algo, hash, err := absauth.HashPassword(password)
 	if err != nil {
 		return nil, "", fmt.Errorf("hash password: %w", err)
@@ -470,28 +537,39 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	return u, password, nil
 }
 
-// passphraseWords is a small wordlist for readable password generation.
-var passphraseWords = []string{
-	"amber", "brave", "cedar", "dune", "ember", "flint", "grove", "haven",
-	"ivory", "jade", "kite", "lark", "maple", "nova", "opal", "pine",
-	"quest", "river", "stone", "tide", "ultra", "vale", "wolf", "xenon",
-	"yarn", "zinc", "atlas", "bolt", "crisp", "drift", "eagle", "forge",
-	"gleam", "hawk", "iron", "jest", "kelp", "lunar", "mist", "noble",
-	"orbit", "prism", "quill", "ridge", "swift", "thorn", "umber", "vivid",
-	"wren", "axiom", "brisk", "coral", "delta", "echo", "fable", "gust",
-	"halo", "inlet", "joust", "knoll", "ledge", "marsh", "night", "onyx",
-}
+// Generated admin passwords: adminPasswordGroups groups of
+// adminPasswordGroupLen symbols from adminPasswordAlphabet, joined by '-'.
+// The alphabet has 32 symbols (RFC 4648 base32), so each symbol carries
+// exactly 5 bits and the low 5 bits of a uniformly random byte select one
+// with no modulo bias (256 is a multiple of 32). 7 groups of 4 symbols give
+// 28 symbols = 140 bits from crypto/rand, above the 128-bit floor. The
+// previous three-word passphrase had about 28 bits (64^3 x 900) and its
+// trailing number was biased by "% 900" on one byte.
+const (
+	adminPasswordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+	adminPasswordGroups   = 7
+	adminPasswordGroupLen = 4
+	adminPasswordMinBits  = 128
+)
 
-func generateReadablePassword() string {
-	pickWord := func() string {
-		var b [8]byte
-		rand.Read(b[:])
-		idx := binary.BigEndian.Uint64(b[:]) % uint64(len(passphraseWords))
-		w := passphraseWords[idx]
-		return strings.ToUpper(w[:1]) + w[1:]
+// adminPasswordBits is the entropy of one generated password.
+const adminPasswordBits = adminPasswordGroups * adminPasswordGroupLen * 5
+
+// generateAdminPassword returns a new random admin password (see the
+// constants above). It fails only when crypto/rand does.
+func generateAdminPassword() (string, error) {
+	n := adminPasswordGroups * adminPasswordGroupLen
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
 	}
-	var numBuf [1]byte
-	rand.Read(numBuf[:])
-	num := int(numBuf[0])%900 + 100 // 100–999
-	return fmt.Sprintf("%s-%s-%s-%d", pickWord(), pickWord(), pickWord(), num)
+	var b strings.Builder
+	b.Grow(n + adminPasswordGroups - 1)
+	for i, v := range buf {
+		if i > 0 && i%adminPasswordGroupLen == 0 {
+			b.WriteByte('-')
+		}
+		b.WriteByte(adminPasswordAlphabet[v&31])
+	}
+	return b.String(), nil
 }
