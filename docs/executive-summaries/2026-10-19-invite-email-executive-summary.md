@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-19 -->
 
@@ -104,7 +104,12 @@ at startup keeps only addresses with a record of how they were proven, so an
 address someone squatted before this update is not grandfathered in. The
 owner's own email and the addresses on the operator's allow list count as
 proof for the one active account that holds them, so the owner's first single
-sign-on reaches the owner's account; taking an address off the list withdraws
+sign-on reaches the owner's account. Each account now remembers where its
+email came from (setup, an admin, an invite, Google or GitHub, or the person
+typing it in), and the allow list never vouches for an address someone typed
+into their own profile: if a person puts an invited guest's address on their
+own account before the guest signs in, the guest's real Google or GitHub
+sign-in takes the address back; taking an address off the list withdraws
 that trust right away, and two accounts holding one listed address get
 neither. People who already sign in with Google or GitHub are found
 through their existing sign-in link, not their email, so they are not affected.

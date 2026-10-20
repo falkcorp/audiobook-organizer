@@ -1,5 +1,5 @@
 // file: internal/oauth/resolve.go
-// version: 1.3.0
+// version: 1.4.1
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
 // last-edited: 2026-10-19
 
@@ -86,7 +86,9 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 			if m, ok := database.AsCapability[database.VerifiedEmailMarker](store); ok {
 				// Best-effort: the login itself is already decided. A failure
 				// only means the address stays unverified for now.
-				_, _ = m.MarkUserEmailVerified(user.ID, claims.Email)
+				if _, err := m.MarkUserEmailVerified(user.ID, claims.Email); err != nil {
+					resolveLog.Warn("oauth resolve: could not record the verified email for user %s: %v", user.ID, err)
+				}
 			}
 		}
 		return user, nil
@@ -115,6 +117,13 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 	}
 	if err != nil {
 		return nil, fmt.Errorf("oauth resolve: create user: %w", err)
+	}
+	if m, ok := database.AsCapability[database.VerifiedEmailMarker](store); ok {
+		// Records the address as IdP-verified (EmailSource "idp"); CreateUser
+		// alone marks it as set up. Best-effort, as in step 3.
+		if _, err := m.MarkUserEmailVerified(user.ID, claims.Email); err != nil {
+			resolveLog.Warn("oauth resolve: could not record the verified email for new user %s: %v", user.ID, err)
+		}
 	}
 	if _, err := store.CreateOAuthIdentity(&database.OAuthIdentity{
 		Provider: claims.Provider, Subject: claims.Subject, Email: claims.Email, UserID: user.ID,
