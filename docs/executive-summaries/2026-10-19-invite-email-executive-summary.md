@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
-<!-- last-edited: 2026-10-19 -->
+<!-- last-edited: 2026-10-20 -->
 
 # Inviting someone now sends them everything they need, by email
 
-Branch `feat/invite-email`, PR not yet opened. No separate spec.
+Branch `feat/invite-email`, PR #4090. No separate spec.
 
 ## Executive Summary
 
@@ -34,11 +34,20 @@ Branch `feat/invite-email`, PR not yet opened. No separate spec.
   let anyone type another person's address into their own profile and capture
   that person's first single sign-on; that version never reached production.
 - **No account can share an email with another.** Email addresses are now
-  unique, ignoring capitalization.
-- **Secrets stay on the server.** The mail password, the Cloudflare key and
-  the shared connection secret are set only in the server's environment, are
-  never shown in the settings screens or logs, and cannot be changed through
-  the web interface.
+  unique, ignoring capitalization, and an administrator can now set or clear
+  another person's email from the Users page.
+- **Secrets stay on the server.** The mail password and the Cloudflare key
+  are set only in the server's environment, are never shown in the settings
+  screens, admin responses or logs, and cannot be changed through the web
+  interface. The shared connection secret is set the same way and is likewise
+  never shown in settings, admin responses or logs, but it is sent on purpose
+  to the guest: it is in the invitation email and on the sign-up page for a
+  live link, because the guest's app needs it.
+- **An emergency-access gap was closed.** The one-time recovery token used to
+  regain access to a locked-out server was checked only after an
+  administrator account had already been created, so anyone who could reach
+  the server could create one. Nothing is created now without the correct
+  token, and the generated administrator password is far stronger.
 
 ## Emailed invitations and the sign-up page
 
@@ -94,24 +103,26 @@ their own profile and then received that person's account access the first
 time they signed in with Google or GitHub.
 
 **The fix.** Only verified addresses are used for linking: ones bound by an
-emailed invite, confirmed by Google or GitHub, or set during first-run setup
-from now on. When a Google- or GitHub-verified login finds its address typed
-into other accounts' profiles, the verified person wins: those accounts keep
-working but lose the address, a new account is created for the login, and an
-entry naming the affected accounts goes into the admin's audit log. An
-account with any proof of its address is never displaced. A one-time rebuild
-at startup keeps only addresses with a record of how they were proven, so an
-address someone squatted before this update is not grandfathered in. The
-owner's own email and the addresses on the operator's allow list count as
-proof for the one active account that holds them, so the owner's first single
-sign-on reaches the owner's account. Each account now remembers where its
-email came from (setup, an admin, an invite, Google or GitHub, or the person
-typing it in), and the allow list never vouches for an address someone typed
-into their own profile: if a person puts an invited guest's address on their
-own account before the guest signs in, the guest's real Google or GitHub
-sign-in takes the address back; taking an address off the list withdraws
-that trust right away, and two accounts holding one listed address get
-neither. People who already sign in with Google or GitHub are found
-through their existing sign-in link, not their email, so they are not affected.
-The trusted list stays where older versions of the server look for it, so
-rolling back cannot reopen the hole.
+emailed invite from an administrator, confirmed by Google or GitHub, set by an
+administrator, or set during first-run setup. Each account now remembers where
+its email came from, and the server checks that against the accounts
+themselves at the moment of each sign-in, not against a saved list that could
+go stale. Accounts from before this update are labelled once, from the records
+the server has: an address confirmed by Google or GitHub, one bound by an
+invite an administrator sent, or one set when the account was created counts
+as verified; anything else counts as typed in by the person. An address
+someone squatted before this update is therefore not grandfathered in.
+
+When a Google- or GitHub-verified sign-in, or the acceptance of an invite an
+administrator emailed, finds its address typed into other accounts' profiles,
+the verified person wins: those accounts keep working but lose the address,
+and an entry naming them goes into the admin's audit log. An account with any
+proof of its address is never displaced. People who already sign in with
+Google or GitHub are found through their existing sign-in link, not their
+email, so they are not affected.
+
+**One thing to check before deploying.** If an administrator's own address
+was last changed through their profile page, it is labelled as typed in, and
+the first Google or GitHub sign-in with that address would move it to a new
+account. The server logs the ids of any such administrator accounts at
+startup; setting the address for them from the Users page keeps it theirs.
