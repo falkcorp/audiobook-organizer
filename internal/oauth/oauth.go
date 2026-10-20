@@ -1,7 +1,7 @@
 // file: internal/oauth/oauth.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c2a9e14-6b38-4d05-8f71-3a0e5b9d2c46
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Package oauth implements OAuth2 / OIDC single sign-on (GitHub, Google) and
 // Cloudflare Access identity verification for the audiobook organizer. It is the
@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Provider names (stable — persisted on OAuthIdentity.Provider and used in routes).
@@ -73,7 +75,7 @@ type Config struct {
 func New(c Config) *Config {
 	allowed := make([]string, 0, len(c.AllowedEmails))
 	for _, e := range c.AllowedEmails {
-		e = strings.ToLower(strings.TrimSpace(e))
+		e = util.NormalizeEmail(e)
 		if e != "" {
 			allowed = append(allowed, e)
 		}
@@ -102,7 +104,7 @@ func ParseAllowedEmails(csv string) []string {
 // match against the allowlist, then ExtraAllowed when set. An empty allowlist with no
 // ExtraAllowed denies everyone (fail-closed).
 func (c *Config) IsEmailAllowed(email string) bool {
-	email = strings.ToLower(strings.TrimSpace(email))
+	email = util.NormalizeEmail(email)
 	if email == "" {
 		return false
 	}

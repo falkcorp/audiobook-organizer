@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Invitation delivery: the invite email, resend, and the public invite lookup
 // the accept page calls.
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
@@ -130,7 +131,7 @@ func normalizeInviteEmail(raw string) (string, error) {
 	if strings.ContainsAny(raw, "\r\n") {
 		return "", errors.New("email must be a single plain address")
 	}
-	e := strings.ToLower(strings.TrimSpace(raw))
+	e := util.NormalizeEmail(raw)
 	if e == "" {
 		return "", nil
 	}
