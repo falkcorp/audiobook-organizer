@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_admin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b2a193f-fbf5-4b5e-8135-6f8d8fc03b4b
 // last-edited: 2026-10-20
 
@@ -330,4 +330,60 @@ func TestGenerateAdminPassword(t *testing.T) {
 	if len(counts) != 32 || chi > 70 {
 		t.Fatalf("symbol distribution not uniform: %d symbols seen, chi-square %.1f", len(counts), chi)
 	}
+}
+
+// NIT3: the startup read-only key reuses an existing active admin and never
+// creates one. Creating one threw its generated password away and then made
+// first-run setup refuse, because an account existed.
+func TestInitStartupReadOnlyKey_NeverCreatesAnAdmin(t *testing.T) {
+	t.Run("fresh store: skipped, nothing created", func(t *testing.T) {
+		s := newBootstrapAdminStore(t)
+		dir := t.TempDir()
+		if err := InitStartupReadOnlyKey(s, dir); err != nil {
+			t.Fatal(err)
+		}
+		if n := countUsers(t, s); n != 0 {
+			t.Fatalf("%d user(s) created at startup", n)
+		}
+		if _, err := os.Stat(ReadOnlyKeyPath(dir)); !os.IsNotExist(err) {
+			t.Fatalf("a key file was written with no admin (stat err %v)", err)
+		}
+	})
+	t.Run("only a locked admin: skipped", func(t *testing.T) {
+		s := newBootstrapAdminStore(t)
+		u, err := s.CreateUser("owner", "owner@example.com", "bcrypt", "h", []string{"admin"}, "active")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.SetUserStatus(u.ID, "locked"); err != nil {
+			t.Fatal(err)
+		}
+		if err := InitStartupReadOnlyKey(s, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+		if n := countUsers(t, s); n != 1 {
+			t.Fatalf("%d users, want only the locked admin", n)
+		}
+	})
+	t.Run("active admin: key minted for it", func(t *testing.T) {
+		s := newBootstrapAdminStore(t)
+		owner, err := s.CreateUser("owner", "owner@example.com", "bcrypt", "h", []string{"admin"}, "active")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		if err := InitStartupReadOnlyKey(s, dir); err != nil {
+			t.Fatal(err)
+		}
+		keys, err := s.ListAPIKeysForUser(owner.ID)
+		if err != nil || len(keys) != 1 {
+			t.Fatalf("keys for the admin = %d, %v; want 1", len(keys), err)
+		}
+		if _, err := os.Stat(ReadOnlyKeyPath(dir)); err != nil {
+			t.Fatalf("key file: %v", err)
+		}
+		if n := countUsers(t, s); n != 1 {
+			t.Fatalf("%d users, want only the owner", n)
+		}
+	})
 }

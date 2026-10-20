@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
 // last-edited: 2026-10-20
 
@@ -40,6 +40,8 @@ const (
 	bootstrapTokenTTL   = 10 * time.Minute
 )
 
+var bootstrapLog = logger.New("server.bootstrap")
+
 // SettingsReadWriter is the minimal store surface needed by the bootstrap subsystem.
 type SettingsReadWriter interface {
 	GetSetting(key string) (*database.Setting, error)
@@ -66,9 +68,18 @@ func InitStartupReadOnlyKey(store startupKeyStore, dataDir string) error {
 		_ = store.DeleteSetting(readonlyKeyExpiresSetting)
 	}
 
-	adminUser, _, err := findOrCreateAdminUser(store)
-	if err != nil || adminUser == nil {
+	// Only an existing active admin: creating one here (as this did until
+	// 2026-10-20) made an account whose generated password was thrown away,
+	// after which first-run setup refused (an account existed) and bootstrap
+	// returned no password. A fresh install gets no startup key until first-run
+	// setup or bootstrap has made an admin; the next start mints it.
+	adminUser, err := findActiveAdminUser(store)
+	if err != nil {
 		return fmt.Errorf("startup readonly key: find admin user: %w", err)
+	}
+	if adminUser == nil {
+		bootstrapLog.Info("no active admin yet; the startup read-only key is skipped until one exists (first-run setup or bootstrap), and is minted at the next start")
+		return nil
 	}
 
 	raw, hash, err := database.GenerateAPIKeyToken()
@@ -462,25 +473,12 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	if err != nil {
 		return nil, "", err
 	}
+	if u := firstActiveAdmin(store, users); u != nil {
+		return u, "", nil
+	}
 	taken := make(map[string]bool, len(users))
 	for i := range users {
-		u := &users[i]
-		taken[strings.ToLower(u.Username)] = true
-		if u.Status != "active" {
-			continue
-		}
-		for _, roleName := range u.Roles {
-			role, err := store.GetRoleByName(roleName)
-			if err != nil || role == nil {
-				role, _ = store.GetRoleByID(roleName)
-			}
-			if role == nil {
-				continue
-			}
-			if slices.Contains(role.Permissions, auth.PermUsersManage) {
-				return u, "", nil
-			}
-		}
+		taken[strings.ToLower(users[i].Username)] = true
 	}
 
 	// No admin found — create one.
@@ -514,6 +512,37 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	}
 	slog.Info("No active admin found — created an admin user with a generated password", "username", username)
 	return u, password, nil
+}
+
+// findActiveAdminUser returns the first ACTIVE user with PermUsersManage, or
+// nil when there is none. It never creates one.
+func findActiveAdminUser(store adminLookupStore) (*database.User, error) {
+	users, err := store.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	return firstActiveAdmin(store, users), nil
+}
+
+// firstActiveAdmin returns the first active user in users holding a role with
+// PermUsersManage, or nil.
+func firstActiveAdmin(store adminLookupStore, users []database.User) *database.User {
+	for i := range users {
+		u := &users[i]
+		if u.Status != "active" {
+			continue
+		}
+		for _, roleName := range u.Roles {
+			role, err := store.GetRoleByName(roleName)
+			if err != nil || role == nil {
+				role, _ = store.GetRoleByID(roleName)
+			}
+			if role != nil && slices.Contains(role.Permissions, auth.PermUsersManage) {
+				return u
+			}
+		}
+	}
+	return nil
 }
 
 // Generated admin passwords: adminPasswordGroups groups of
