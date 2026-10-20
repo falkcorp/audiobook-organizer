@@ -1,7 +1,7 @@
 // file: internal/server/leaf_stores.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4d92a6f8-1b07-4e53-9c81-3a05d7e264b9
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package server
 
@@ -55,17 +55,23 @@ type authorAssignStore interface {
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
-// adminBootstrapStore: findOrCreateAdminUser.
-type adminBootstrapStore interface {
-	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
+// adminLookupStore: findActiveAdminUser and firstActiveAdmin.
+type adminLookupStore interface {
 	GetRoleByID(id string) (*database.Role, error)
 	GetRoleByName(name string) (*database.Role, error)
 	ListUsers() ([]database.User, error)
 }
 
-// startupKeyStore: InitStartupReadOnlyKey, which also creates the admin user.
+// adminBootstrapStore: findOrCreateAdminUser.
+type adminBootstrapStore interface {
+	adminLookupStore
+	CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*database.User, error)
+}
+
+// startupKeyStore: InitStartupReadOnlyKey. It finds an existing admin and
+// cannot create users.
 type startupKeyStore interface {
-	adminBootstrapStore
+	adminLookupStore
 
 	CreateAPIKey(key *database.APIKey) (*database.APIKey, error)
 	GetSetting(key string) (*database.Setting, error)
