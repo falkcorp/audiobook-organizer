@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -7,9 +7,13 @@ package server
 
 import (
 	"container/list"
+	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Bootstrap attempt limiter: a fixed window per client key plus a global
@@ -30,9 +34,13 @@ import (
 //     admitted attempts create entries, and the global ceiling is far below
 //     the key cap, so the cap is a backstop that normal operation never hits.
 //
-// The global ceiling is also a way for an attacker to lock the owner out: it
-// takes bootstrapGlobalMaxAttempts/bootstrapMaxAttempts distinct clients
-// (20) to spend it, and the owner can retry when the window ends.
+// The global ceiling is also a way for an attacker to lock someone out, so it
+// applies only to requests that came through the tunnel or a proxy
+// (bootstrapDirectLANPeer says which do not). The owner runs bootstrap
+// directly from the LAN, so unauthenticated internet traffic can spend the
+// global budget but cannot touch the owner's path, which keeps only its own
+// per-address bucket. It takes bootstrapGlobalMaxAttempts/bootstrapMaxAttempts
+// distinct tunnel clients (20) to spend the global budget.
 const (
 	bootstrapMaxAttempts    = 5
 	bootstrapWindowDuration = time.Hour
@@ -112,10 +120,48 @@ func (l *bootstrapLimiter) removeLocked(el *list.Element) {
 	l.order.Remove(el)
 }
 
+// bootstrapDirectLANPeer reports whether the request is a direct caller on this
+// network rather than tunnel or proxy traffic: the peer is a private
+// (RFC 1918 / ULA) or loopback address, is not a configured tunnel connector,
+// and the request carries none of the Cloudflare markers (any Cf-* header,
+// which covers CF-Connecting-IP, Cf-Access-* and Cf-Ray, or the CF_Authorization
+// cookie). Cloudflare's edge adds those to everything it proxies and a caller
+// cannot strip them, so tunnel traffic is never direct even though cloudflared
+// connects from a loopback or private address. A direct caller keeps only its
+// own per-address bucket and is exempt from the global ceiling.
+func bootstrapDirectLANPeer(c *gin.Context, connectors connectorPeers) bool {
+	peer := c.Request.RemoteAddr
+	if connectors.contains(peer) {
+		return false
+	}
+	host, _, err := net.SplitHostPort(peer)
+	if err != nil {
+		host = peer
+	}
+	a, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	if !a.IsLoopback() && !a.IsPrivate() {
+		return false
+	}
+	for k := range c.Request.Header {
+		if strings.HasPrefix(strings.ToLower(k), "cf-") {
+			return false
+		}
+	}
+	if _, err := c.Request.Cookie("CF_Authorization"); err == nil {
+		return false
+	}
+	return true
+}
+
 // allow records one attempt for key and reports whether it may proceed. A
 // refused attempt is not recorded anywhere, so it spends neither the key's nor
-// the global budget.
-func (l *bootstrapLimiter) allow(key string) bool {
+// the global budget. exemptFromGlobal (a direct LAN peer) skips the global
+// ceiling entirely: it is neither refused by it nor counted against it.
+func (l *bootstrapLimiter) allow(key string, exemptFromGlobal bool) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -125,14 +171,15 @@ func (l *bootstrapLimiter) allow(key string) bool {
 	if tracked && el.Value.(*bootstrapAttempt).count >= l.maxPerKey {
 		return false
 	}
-	if l.global.count == 0 || now.Sub(l.global.firstAt) > l.window {
-		l.global = bootstrapAttempt{firstAt: now}
+	if !exemptFromGlobal {
+		if l.global.count == 0 || now.Sub(l.global.firstAt) > l.window {
+			l.global = bootstrapAttempt{firstAt: now}
+		}
+		if l.global.count >= l.globalMax {
+			return false
+		}
+		l.global.count++
 	}
-	if l.global.count >= l.globalMax {
-		return false
-	}
-
-	l.global.count++
 	if tracked {
 		el.Value.(*bootstrapAttempt).count++
 		return true

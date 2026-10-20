@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -16,6 +16,7 @@ import (
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -38,12 +39,13 @@ import (
 //  2. per client: keyed by trustedClientIP, i.e. CF-Connecting-IP when it can
 //     be believed (the peer is the configured tunnel connector, or the
 //     request carries a verified Access assertion and the peer is this host),
-//     otherwise the peer's own address. Requests whose client cannot be
-//     established (a connector or local peer with no trusted header) share
-//     ONE untrusted-local bucket, never a key taken from an unproven header.
-//     The invite routes bypass Access, so production must set
-//     TUNNEL_CONNECTOR_ADDRS to the connector's address or every visitor
-//     shares that one bucket (layers 1 and 3 still apply).
+//     otherwise the peer's own address. A request whose client cannot be
+//     established (a connector or local peer with no trusted header) SKIPS
+//     this layer: a key taken from an unproven header would let a caller pick
+//     its own bucket, and one shared bucket would let one abuser lock out
+//     every guest. Layers 1 and 3 still apply to it. The invite routes bypass
+//     Access, so until TUNNEL_CONNECTOR_ADDRS names the tunnel connector this
+//     layer is effectively off for tunnel traffic (logged once at start-up).
 //  3. global: a generous ceiling across every token and client, so
 //     enumeration spread over many tokens or many clients is still bounded.
 //
@@ -144,6 +146,8 @@ type inviteRateLimits struct {
 	connectors connectorPeers
 }
 
+var inviteLimitLog = logger.New("server.invite-rate-limit")
+
 // newInviteRateLimits builds the limiters and starts their idle sweepers on ctx.
 func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 	l := &inviteRateLimits{
@@ -152,6 +156,9 @@ func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 		global:      servermiddleware.NewIPRateLimiter(inviteGlobalRatePerMinute, inviteGlobalRateBurst),
 		isLocalPeer: remoteAddrIsLocal,
 		connectors:  tunnelConnectorPeers(),
+	}
+	if len(l.connectors) == 0 {
+		inviteLimitLog.Info("invite per-client rate limit is off for tunnel traffic: TUNNEL_CONNECTOR_ADDRS is not set, so no client address can be established; the per-token and global limits still apply")
 	}
 	l.perToken.Start(ctx)
 	l.perClient.Start(ctx)
@@ -170,15 +177,16 @@ func inviteTokenKey(token string) string {
 	return "invite-token:" + hex.EncodeToString(sum[:16])
 }
 
-// inviteClientKey returns the per-client bucket key for the request. A request
-// whose client address is not established (see trustedClientIP) shares the ONE
-// untrusted-local bucket; its key is never derived from the request's headers.
-func (l *inviteRateLimits) inviteClientKey(c *gin.Context) string {
+// inviteClientKey returns the per-client bucket key for the request, and false
+// when no trusted client address can be established (see trustedClientIP), in
+// which case the per-client layer is skipped for the request. The key is never
+// derived from an unproven header.
+func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (string, bool) {
 	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
 	if !ok {
-		ip = untrustedLocalClientKey
+		return "", false
 	}
-	return "invite-client:" + ip
+	return "invite-client:" + ip, true
 }
 
 // remoteAddrIsLocal reports whether addr ("host:port") is a loopback address or
@@ -214,11 +222,15 @@ func remoteAddrIsLocal(addr string) bool {
 //
 // Order: client, then token, then global. A caller that is already limited
 // never spends a token or global slot, so one noisy client or one hammered
-// token cannot drain the shared ceiling. Every layer refuses with the same
-// status and body, so a caller cannot tell which layer tripped.
+// token cannot drain the shared ceiling. A request with no trusted client
+// address skips the client layer (see inviteClientKey). Every layer refuses
+// with the same status and body, so a caller cannot tell which layer tripped.
 func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, ok bool)) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ok := l.perClient.AllowKey(l.inviteClientKey(c))
+		ok := true
+		if key, attributed := l.inviteClientKey(c); attributed {
+			ok = l.perClient.AllowKey(key)
+		}
 		if ok {
 			token, proceed := tokenOf(c)
 			if !proceed {

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.103.0
+// version: 2.104.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-20
 
@@ -620,9 +620,10 @@ func NewServer(store database.Store) *Server {
 	// the request carries a verified Access assertion and the peer is this host.
 	// "The peer is local" alone proves nothing, because any local process can
 	// set the header. Otherwise it keys on the peer's own address, and a request
-	// whose client cannot be established shares one untrusted-local rate-limit
-	// bucket (invite routes bypass Access, so production must set
-	// TUNNEL_CONNECTOR_ADDRS). If a trusted reverse proxy with a fixed address
+	// whose client cannot be established skips the invite per-client limit
+	// (the bootstrap limiter keys it on one fixed shared key). Invite routes
+	// bypass Access, so production must set TUNNEL_CONNECTOR_ADDRS to get a
+	// per-client limit there. If a trusted reverse proxy with a fixed address
 	// is ever added, replace nil with its CIDR allowlist,
 	// e.g. router.SetTrustedProxies([]string{"192.0.2.0/24"}).
 	if err := router.SetTrustedProxies(nil); err != nil {
