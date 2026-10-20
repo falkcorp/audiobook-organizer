@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-19
 
@@ -38,6 +38,7 @@ type inviteFixture struct {
 	h      *handlers.UserHandler
 	mailOn bool
 	hdrOn  bool
+	base   string // the link base BaseURL returns
 }
 
 func newInviteFixture(t *testing.T) *inviteFixture {
@@ -48,7 +49,7 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	f := &inviteFixture{store: store, rec: &mailtest.Recorder{}, mailOn: true, hdrOn: true}
+	f := &inviteFixture{store: store, rec: &mailtest.Recorder{}, mailOn: true, hdrOn: true, base: testBase + "/"}
 	f.h = handlers.NewUserHandler(store)
 	f.h.SetInviteDelivery(&handlers.InviteDelivery{
 		Sender: func() imail.Sender {
@@ -57,7 +58,7 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 			}
 			return f.rec
 		},
-		BaseURL: func() string { return testBase + "/" },
+		BaseURL: func() string { return f.base },
 		GuestHeaders: func() (handlers.GuestHeaders, bool) {
 			return handlers.GuestHeaders{ClientID: testGuestID, ClientSecret: testGuestSecret}, f.hdrOn
 		},
@@ -517,5 +518,37 @@ func TestSetUserEmail(t *testing.T) {
 	}
 	if got, _ := f.store.GetUserByID(member.ID); got.Email != "" {
 		t.Fatal("a refused set must write nothing")
+	}
+}
+
+// Nit 2: with no absolute public address the server refuses to email an
+// invitation (the link would be relative and open nothing); the admin still
+// gets the link to copy, and is told why.
+func TestInviteEmail_RefusedWithoutAnAbsoluteBaseURL(t *testing.T) {
+	for _, base := range []string{"", "/", "audiobooks.example.com", "ftp://audiobooks.example.com"} {
+		t.Run(fmt.Sprintf("base=%q", base), func(t *testing.T) {
+			f := newInviteFixture(t)
+			f.base = base
+			w, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{
+				"username": "guest", "role_id": "viewer", "email": "guest@example.com", "send_email": true,
+			})
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create: %d %s", w.Code, w.Body.String())
+			}
+			if data["email_sent"] != false || !strings.Contains(fmt.Sprint(data["email_error"]), "PUBLIC_BASE_URL") {
+				t.Fatalf("create response = %v", data)
+			}
+			if len(f.rec.Sent()) != 0 {
+				t.Fatal("no email may go out with a relative link")
+			}
+			token, _ := data["token"].(string)
+			if w, _ := f.do(t, http.MethodPost, "/users/invites/"+token+"/resend", nil); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "PUBLIC_URL_NOT_CONFIGURED") {
+				t.Fatalf("resend: %d %s", w.Code, w.Body.String())
+			}
+			_, list := f.do(t, http.MethodGet, "/users/invites", nil)
+			if list["mail_configured"] != false || !strings.Contains(fmt.Sprint(list["mail_unavailable_reason"]), "PUBLIC_BASE_URL") {
+				t.Fatalf("list settings = %v / %v", list["mail_configured"], list["mail_unavailable_reason"])
+			}
+		})
 	}
 }

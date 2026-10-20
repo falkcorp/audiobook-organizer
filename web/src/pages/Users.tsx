@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-19
 
@@ -67,6 +67,8 @@ interface Invite {
 
 interface InviteSettings {
   mailConfigured: boolean;
+  /** Why an invitation email cannot go out, when it cannot. */
+  mailUnavailableReason: string;
   guestHeadersConfigured: boolean;
   guestPolicySyncConfigured: boolean;
 }
@@ -75,6 +77,7 @@ interface InvitesBody {
   invites?: Invite[];
   accepted?: AcceptedInvite[];
   mail_configured?: boolean;
+  mail_unavailable_reason?: string;
   guest_headers_configured?: boolean;
   guest_policy_sync_configured?: boolean;
 }
@@ -85,6 +88,7 @@ export default function Users() {
   const [accepted, setAccepted] = useState<AcceptedInvite[]>([]);
   const [settings, setSettings] = useState<InviteSettings>({
     mailConfigured: false,
+    mailUnavailableReason: '',
     guestHeadersConfigured: false,
     guestPolicySyncConfigured: false,
   });
@@ -112,6 +116,7 @@ export default function Users() {
       setAccepted(iBody.accepted || []);
       setSettings({
         mailConfigured: !!iBody.mail_configured,
+        mailUnavailableReason: iBody.mail_unavailable_reason || '',
         guestHeadersConfigured: !!iBody.guest_headers_configured,
         guestPolicySyncConfigured: !!iBody.guest_policy_sync_configured,
       });
@@ -427,6 +432,7 @@ export default function Users() {
       <CreateInviteDialog
         open={inviteOpen}
         mailConfigured={settings.mailConfigured}
+        mailUnavailableReason={settings.mailUnavailableReason}
         onClose={() => setInviteOpen(false)}
         onCreated={load}
       />
@@ -537,11 +543,13 @@ interface CreateInviteResult {
 function CreateInviteDialog({
   open,
   mailConfigured,
+  mailUnavailableReason,
   onClose,
   onCreated,
 }: {
   open: boolean;
   mailConfigured: boolean;
+  mailUnavailableReason?: string;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -670,7 +678,7 @@ function CreateInviteDialog({
               label={
                 mailConfigured
                   ? 'Send the invitation by email'
-                  : 'Send the invitation by email (email is not configured on this server)'
+                  : `Send the invitation by email (${mailUnavailableReason || 'email is not configured on this server'})`
               }
             />
             <TextField
