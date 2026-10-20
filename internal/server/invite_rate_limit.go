@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -46,8 +46,9 @@ import (
 //     carries a verified Access assertion and the peer is this host),
 //     otherwise the peer's own address; public IPv6 clients are grouped by
 //     /64, LAN IPv6 peers keep their full address (clientPrefixKey) and every
-//     address of a LAN /64 also shares an aggregate bucket at four times the
-//     per-client budget (lanIPv6Prefix), reserved with the per-client one; sending Cf-* headers does not change a non-connector
+//     address of a direct LAN /64 (directLANPeer: no connector, no Cloudflare
+//     markers) also shares an aggregate bucket at four times the per-client
+//     budget (lanIPv6Prefix), reserved with the per-client one; sending Cf-* headers does not change a non-connector
 //     peer's key. A request whose client cannot be established (a configured
 //     connector or a local peer with no trusted header) SKIPS this layer: a
 //     key taken from an unproven header would let a caller pick its own
@@ -84,11 +85,12 @@ const (
 	inviteTokenRatePerMinute = 6
 	inviteTokenRateBurst     = 8
 
-	// Per LAN /64 (part of layer 2): a LAN IPv6 peer is keyed on its full
-	// address, so every address of one /64 also shares this aggregate,
-	// four times the per-client budget, so one LAN host rotating through its
-	// /64 is capped here before it reaches the global layer, while a few
-	// distinct LAN devices each keep their own per-client bucket.
+	// Per direct LAN /64 (part of layer 2): a direct LAN IPv6 peer is keyed
+	// on its full address, so every address of its /64 also shares this
+	// aggregate (never given to tunnel traffic) at four times the per-client
+	// budget: one LAN host rotating through its /64 is capped here before it
+	// reaches the global layer, while a few distinct LAN devices each keep
+	// their own per-client bucket.
 	inviteLANPrefixRatePerMinute = 4 * inviteAuthRatePerMinute
 	inviteLANPrefixRateBurst     = 4 * inviteAuthRateBurst
 
@@ -245,7 +247,8 @@ func inviteTokenKey(token string) string {
 // /64 (clientPrefixKey), as the bootstrap limiter keys them, so one host cannot
 // rotate through its /64 for fresh buckets; a LAN IPv6 peer (ULA, link-local)
 // keeps its full address, so LAN devices sharing a /64 do not share a bucket,
-// and lanKey is then its /64's aggregate bucket (perLANPrefix), "" otherwise.
+// and for a DIRECT LAN IPv6 peer lanKey is its /64's aggregate bucket
+// (perLANPrefix); "" otherwise.
 func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (key, lanKey string, ok bool) {
 	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
 	if !ok {
@@ -255,8 +258,14 @@ func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (key, lanKey string, 
 	if !ok {
 		return "", "", false
 	}
-	if prefix, lan := lanIPv6Prefix(ip); lan {
-		lanKey = "invite-lan64:" + prefix
+	// The /64 aggregate is for direct LAN peers only (directLANPeer): never
+	// for a visitor attributed through a connector, nor for a connector's
+	// own address, so tunnel traffic cannot spend the aggregate of the LAN
+	// devices that share its /64. Tunnel traffic has the global layer.
+	if directLANPeer(c, l.connectors) {
+		if prefix, lan := lanIPv6Prefix(ip); lan {
+			lanKey = "invite-direct-lan64:" + prefix
+		}
 	}
 	return "invite-client:" + k, lanKey, true
 }

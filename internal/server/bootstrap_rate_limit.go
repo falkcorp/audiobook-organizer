@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -7,7 +7,6 @@ package server
 
 import (
 	"container/list"
-	"net"
 	"net/netip"
 	"strings"
 	"sync"
@@ -27,10 +26,11 @@ import (
 //     attacker who owns a /64 cannot mint 2^64 keys, and an unparseable or
 //     unattributed client uses one fixed key rather than attacker-chosen text;
 //     a direct LAN peer is keyed on its full address (bootstrapDirectKey),
-//     because LAN devices share one ULA /64, and every address of a LAN IPv6
-//     /64 also shares one aggregate window of bootstrapLANPrefixFactor times
-//     the per-key cap, so one LAN host cannot rotate through its /64 for
-//     fresh windows;
+//     because LAN devices share one ULA /64, and every address of a direct
+//     LAN IPv6 /64 also shares one aggregate window of
+//     bootstrapLANPrefixFactor times the per-key cap, so one LAN host cannot
+//     rotate through its /64 for fresh windows (tunnel traffic never touches
+//     that window; it has the global ceiling);
 //   - entries are kept in creation order, and every call first drops the ones
 //     whose window has ended, so the map holds only live windows;
 //   - the map is hard-capped at bootstrapMaxTrackedKeys, evicting the oldest;
@@ -41,7 +41,7 @@ import (
 //
 // The global ceiling is also a way for an attacker to lock someone out, so it
 // applies only to requests that came through the tunnel or a proxy
-// (bootstrapDirectLANPeer says which do not). The owner runs bootstrap
+// (directLANPeer says which do not). The owner runs bootstrap
 // directly from the LAN, so unauthenticated internet traffic can spend the
 // global budget but cannot touch the owner's path, which keeps only its own
 // per-address bucket. It takes bootstrapGlobalMaxAttempts/bootstrapMaxAttempts
@@ -54,10 +54,13 @@ const (
 	bootstrapWindowDuration = time.Hour
 
 	// bootstrapLANPrefixFactor sizes the aggregate window every address of a
-	// LAN IPv6 /64 shares (lanIPv6Prefix): a LAN IPv6 peer is keyed on its
-	// full address, so without it one LAN host could rotate through its /64
-	// for fresh per-address windows. Direct LAN peers are exempt from the
-	// global ceiling, so this aggregate is the only cap on that rotation.
+	// direct LAN IPv6 /64 shares (bootstrapDirectLANKey): a direct LAN peer
+	// is keyed on its full address, so without it one LAN host could rotate
+	// through its /64 for fresh per-address windows, and direct peers are
+	// exempt from the global ceiling, so this aggregate is the only cap on
+	// that rotation. The limiter counts every admitted attempt, not only
+	// failures (it runs before the token is checked), so the window is four
+	// times the per-key cap: room for several real devices on the LAN.
 	bootstrapLANPrefixFactor = 4
 
 	bootstrapGlobalMaxAttempts = 100
@@ -119,7 +122,7 @@ func bootstrapRateKey(ip string, attributed bool) string {
 // with a prefix of its own. Not the /64: on an IPv6 ULA network every machine
 // on the LAN shares one /64, so a /64 key would let one LAN device spend the
 // owner's attempts. The prefix keeps a direct bucket from ever being the same
-// key as a tunnel visitor's. bootstrapDirectLANPeer already parsed the address,
+// key as a tunnel visitor's. directLANPeer already parsed the address,
 // so an unparseable one cannot reach here; it falls back to the shared key.
 func bootstrapDirectKey(ip string) string {
 	a, err := netip.ParseAddr(ip)
@@ -130,31 +133,32 @@ func bootstrapDirectKey(ip string) string {
 }
 
 // bootstrapClientKey returns the bootstrap limiter key for the request, the
-// aggregate key of its LAN IPv6 /64 ("" when the keyed address is not a LAN
-// IPv6 address), the address to log, and whether the request is exempt from
-// the global ceiling (a direct LAN peer, bootstrapDirectLANPeer). Every other
+// aggregate key of its LAN IPv6 /64 (bootstrapDirectLANKey; "" unless the
+// request is a direct LAN IPv6 peer), the address to log, and whether the request is exempt from
+// the global ceiling (a direct LAN peer, directLANPeer). Every other
 // request is keyed through trustedClientIP: a visitor's own address when it
 // can be believed, otherwise the shared untrustedLocalClientKey. A connector
 // request with no usable CF-Connecting-IP is therefore untrusted-local and
 // NOT exempt.
 func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key, lanKey, logIP string, exempt bool) {
-	if bootstrapDirectLANPeer(c, connectors) {
+	if directLANPeer(c, connectors) {
 		ip := strings.TrimSpace(c.ClientIP())
-		return bootstrapDirectKey(ip), bootstrapLANKey(ip), ip, true
+		return bootstrapDirectKey(ip), bootstrapDirectLANKey(ip), ip, true
 	}
 	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
 	ip = strings.TrimSpace(ip)
-	key = bootstrapRateKey(ip, attributed)
-	if key != untrustedLocalClientKey {
-		lanKey = bootstrapLANKey(ip)
-	}
-	return key, lanKey, ip, false
+	return bootstrapRateKey(ip, attributed), "", ip, false
 }
 
-// bootstrapLANKey is the aggregate window key of ip's LAN IPv6 /64, or "".
-func bootstrapLANKey(ip string) string {
+// bootstrapDirectLANKey is the aggregate window key of a DIRECT LAN IPv6
+// peer's /64, or "" for any other address. It is given only to direct peers
+// (directLANPeer), under a prefix of its own: tunnel traffic, including an
+// unlisted connector on a LAN address in the same /64, never touches it, so
+// it cannot spend the window the owner's direct recovery depends on. Tunnel
+// traffic has the global ceiling instead.
+func bootstrapDirectLANKey(ip string) string {
 	if prefix, ok := lanIPv6Prefix(ip); ok {
-		return "lan64:" + prefix
+		return "direct-lan64:" + prefix
 	}
 	return ""
 }
@@ -175,45 +179,14 @@ func (l *bootstrapLimiter) removeLocked(el *list.Element) {
 	l.order.Remove(el)
 }
 
-// bootstrapDirectLANPeer reports whether the request is a direct caller on this
-// network rather than tunnel or proxy traffic: the peer is a private
-// (RFC 1918 / ULA) or loopback address, is not a configured tunnel connector,
-// and the request carries none of the Cloudflare markers
-// (hasCloudflareMarkers). Cloudflare's edge adds those to everything it
-// proxies and the connector passes them through, so tunnel traffic is never
-// direct even though the connectors reach this service from private LAN
-// addresses. A direct caller keeps only its own per-address bucket and is
-// exempt from the global ceiling. With TUNNEL_CONNECTOR_ADDRS unset, a
-// connector request stripped of every Cloudflare header on the way would
-// count as direct too (see trustedClientIP).
-func bootstrapDirectLANPeer(c *gin.Context, connectors connectorPeers) bool {
-	peer := c.Request.RemoteAddr
-	if connectors.contains(peer) {
-		return false
-	}
-	host, _, err := net.SplitHostPort(peer)
-	if err != nil {
-		host = peer
-	}
-	a, err := netip.ParseAddr(strings.TrimSpace(host))
-	if err != nil {
-		return false
-	}
-	a = a.Unmap()
-	if !a.IsLoopback() && !a.IsPrivate() {
-		return false
-	}
-	return !hasCloudflareMarkers(c)
-}
-
 // allow records one attempt for key (and for lanKey, the aggregate window of
 // a LAN IPv6 /64, when it is not "") and reports whether it may proceed. Both
 // windows must admit the attempt, and the check and the increments happen
 // under one lock, so they are atomic. A refused attempt is not recorded
 // anywhere, so it spends neither window nor the global budget.
 // exemptFromGlobal (a direct LAN peer) skips the global ceiling entirely: it
-// is neither refused by it nor counted against it; the LAN aggregate still
-// applies to it.
+// is neither refused by it nor counted against it; its direct LAN aggregate
+// still applies to it.
 func (l *bootstrapLimiter) allow(key, lanKey string, exemptFromGlobal bool) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()

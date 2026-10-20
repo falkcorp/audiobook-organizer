@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -109,7 +109,7 @@ type clientTrust struct {
 // Cloudflare's edge adds to the requests it proxies: any Cf-* header (which
 // covers CF-Connecting-IP, Cf-Ray and Cf-Access-*) or the CF_Authorization
 // cookie. Tunnel traffic always carries them, whichever host the connector
-// runs on, and the connector does not strip them. bootstrapDirectLANPeer uses
+// runs on, and the connector does not strip them. directLANPeer uses
 // it to tell a direct LAN caller from tunnel traffic; it never decides whose
 // address a request is keyed on, since anyone can send the headers.
 func hasCloudflareMarkers(c *gin.Context) bool {
@@ -128,9 +128,9 @@ func hasCloudflareMarkers(c *gin.Context) bool {
 // fc00::/7, link-local, loopback) is keyed on its FULL address instead: every
 // machine on an IPv6 LAN shares one /64, so a /64 key would let one LAN device
 // spend every other device's budget (the bootstrap limiter keys direct LAN
-// peers the same way, bootstrapDirectKey). Callers add an aggregate bucket
-// per LAN /64 (lanIPv6Prefix) so rotating addresses cannot mint unlimited
-// buckets. Such an address can only be a
+// peers the same way, bootstrapDirectKey). For a direct LAN peer callers add
+// an aggregate bucket per /64 (lanIPv6Prefix) so rotating addresses cannot
+// mint unlimited buckets. Such an address can only be a
 // direct peer: it is not routable from the internet, and Cloudflare's edge
 // never sets CF-Connecting-IP to one. ok is false when ip does not parse;
 // callers then treat the client as unattributed and never fall back to text
@@ -150,9 +150,11 @@ func clientPrefixKey(ip string) (key string, ok bool) {
 // lanIPv6Prefix returns the /64 of a LAN IPv6 address (ULA fc00::/7 or
 // link-local), and false for anything else (IPv4, public IPv6, loopback,
 // unparseable). clientPrefixKey keys such an address on its full address so
-// LAN devices sharing one /64 do not share a bucket; this /64 is the
-// aggregate bucket on top of that, so one LAN host rotating through
-// addresses in its /64 cannot mint unlimited per-address buckets.
+// LAN devices sharing one /64 do not share a bucket; for a DIRECT LAN peer
+// (directLANPeer) this /64 is the aggregate bucket on top of that, so one LAN
+// host rotating through addresses in its /64 cannot mint unlimited
+// per-address buckets. Tunnel traffic never gets it, so it cannot spend a
+// direct peer's aggregate.
 func lanIPv6Prefix(ip string) (string, bool) {
 	a, err := netip.ParseAddr(strings.TrimSpace(ip))
 	if err != nil {
@@ -163,6 +165,38 @@ func lanIPv6Prefix(ip string) (string, bool) {
 		return "", false
 	}
 	return netip.PrefixFrom(a, 64).Masked().String(), true
+}
+
+// directLANPeer reports whether the request is a direct caller on this
+// network rather than tunnel or proxy traffic: the peer is a private
+// (RFC 1918 / ULA) or loopback address, is not a configured tunnel connector,
+// and the request carries none of the Cloudflare markers
+// (hasCloudflareMarkers). Cloudflare's edge adds those to everything it
+// proxies and the connector passes them through, so tunnel traffic is never
+// direct even though the connectors reach this service from private LAN
+// addresses. The bootstrap limiter exempts a direct caller from its global
+// ceiling; both limiters give a direct LAN IPv6 caller the per-/64 aggregate
+// (lanIPv6Prefix), and only a direct caller. With TUNNEL_CONNECTOR_ADDRS unset, a
+// connector request stripped of every Cloudflare header on the way would
+// count as direct too (see trustedClientIP).
+func directLANPeer(c *gin.Context, connectors connectorPeers) bool {
+	peer := c.Request.RemoteAddr
+	if connectors.contains(peer) {
+		return false
+	}
+	host, _, err := net.SplitHostPort(peer)
+	if err != nil {
+		host = peer
+	}
+	a, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	if !a.IsLoopback() && !a.IsPrivate() {
+		return false
+	}
+	return !hasCloudflareMarkers(c)
 }
 
 // trustedClientIP returns the address a per-client limiter should key the
