@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-20
 
@@ -50,6 +50,7 @@ var inviteEnvOnlySettings = []struct {
 	{"cf_account_id", "CF_ACCOUNT_ID"},
 	{"cf_guests_policy_id", "CF_GUESTS_POLICY_ID"},
 	{"cf_policy_api_token", "CF_POLICY_API_TOKEN"},
+	{"tunnel_connector_addrs", "TUNNEL_CONNECTOR_ADDRS"},
 }
 
 // DefaultSMTPPort is used when SMTP_HOST is set and SMTP_PORT is not.
@@ -85,6 +86,7 @@ func applyInviteEnv(c *Config) {
 	c.CFAccountID = strings.TrimSpace(viper.GetString("cf_account_id"))
 	c.CFGuestsPolicyID = strings.TrimSpace(viper.GetString("cf_guests_policy_id"))
 	c.CFPolicyAPIToken = strings.TrimSpace(viper.GetString("cf_policy_api_token"))
+	c.TunnelConnectorAddrs = strings.TrimSpace(viper.GetString("tunnel_connector_addrs"))
 }
 
 // inviteEnvOnlyKeyInUpdate returns the refusal for a PUT /config payload that
@@ -104,6 +106,15 @@ func inviteEnvOnlyKeyInUpdate(payload map[string]any) (string, bool) {
 		return "", false
 	}
 	return EnvOnlySettingsRefusedMessage + ": " + strings.Join(hit, ", "), true
+}
+
+// TunnelConnectorAddrs returns tunnel_connector_addrs under the read lock: one
+// field, not a whole-struct Snapshot copy, because the public invite and
+// bootstrap routes read it on every request.
+func TunnelConnectorAddrs() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.TunnelConnectorAddrs
 }
 
 // InviteMailConfigured reports whether invitation email can be sent: a host and

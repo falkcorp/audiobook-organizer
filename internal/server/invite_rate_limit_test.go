@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,8 +26,10 @@ type inviteLimitHarness struct {
 }
 
 // newInviteLimitHarness builds one harness per case so no bucket is shared.
-// localPeer stands in for "the request came through the local tunnel connector"
-// (every peer address is reported local or none is).
+// localPeer makes every address count as this host (or none). A request
+// carrying the X-Test-Verified header stands in for one whose Access assertion
+// CloudflareAccessAuth verified. Tests that need a configured tunnel connector
+// set h.limits.connectors.
 func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -39,6 +42,11 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	if err := r.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
+	r.Use(func(c *gin.Context) {
+		if c.GetHeader("X-Test-Verified") != "" {
+			servermiddleware.MarkCFAccessVerified(c)
+		}
+	})
 	r.GET("/invite/:token", limits.middleware(inviteTokenFromParam), func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 	r.POST("/accept", limits.middleware(inviteTokenFromBody), func(c *gin.Context) {
 		// What handleAcceptInvite would act on: the limiter's stashed parse.
@@ -232,34 +240,105 @@ func TestInviteRateLimit_Global(t *testing.T) {
 	}
 }
 
-// TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader: a caller that is not
-// the local tunnel connector is keyed on its own address; a spoofed
-// CF-Connecting-IP (new value every request) buys no fresh buckets.
-func TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader(t *testing.T) {
-	h := newInviteLimitHarness(t, false)
-	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-		return h.get(inviteTestToken(i), "198.51.100.5", map[string]string{"CF-Connecting-IP": fmt.Sprintf("203.0.113.%d", i%254+1)})
-	})
-	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
-		t.Fatalf("spoofed CF-Connecting-IP got fresh buckets: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+// connectorPeer is the address the tests configure as the tunnel connector.
+const connectorPeer = "192.0.2.1"
+
+// withConnector configures connectorPeer as the tunnel connector.
+func (h *inviteLimitHarness) withConnector() *inviteLimitHarness {
+	peers, bad := parseConnectorPeers(connectorPeer)
+	if len(bad) != 0 {
+		h.t.Fatalf("bad connector %v", bad)
 	}
-	// Another direct peer has its own bucket, whatever header it sends.
-	if w := h.get(inviteTestToken(900), "198.51.100.6", map[string]string{"CF-Connecting-IP": "203.0.113.1"}); w.Code != http.StatusOK {
-		t.Fatalf("a second direct peer while the first is limited: %d, want 200", w.Code)
+	h.limits.connectors = peers
+	return h
+}
+
+// spoofed returns a header map whose CF-Connecting-IP differs on every call.
+func spoofed(i int, extra ...string) map[string]string {
+	m := map[string]string{"CF-Connecting-IP": fmt.Sprintf("203.0.113.%d", i%254+1)}
+	for _, k := range extra {
+		m[k] = "1"
+	}
+	return m
+}
+
+// TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader: a caller that is not
+// the configured connector and not this host is keyed on its own address, with
+// or without an Access assertion; a spoofed CF-Connecting-IP buys no fresh
+// buckets.
+func TestInviteRateLimit_ClientKey_NonLocalPeerIgnoresHeader(t *testing.T) {
+	for name, extra := range map[string][]string{"no assertion": nil, "verified assertion": {"X-Test-Verified"}} {
+		t.Run(name, func(t *testing.T) {
+			h := newInviteLimitHarness(t, false)
+			allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+				return h.get(inviteTestToken(i), "198.51.100.5", spoofed(i, extra...))
+			})
+			if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
+				t.Fatalf("spoofed CF-Connecting-IP got fresh buckets: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+			}
+			// Another direct peer has its own bucket, whatever header it sends.
+			if w := h.get(inviteTestToken(900), "198.51.100.6", map[string]string{"CF-Connecting-IP": "203.0.113.1"}); w.Code != http.StatusOK {
+				t.Fatalf("a second direct peer while the first is limited: %d, want 200", w.Code)
+			}
+		})
 	}
 }
 
-// TestInviteRateLimit_ClientKey_TunnelClientsAreIndependent is the regression
-// for the shared tunnel bucket: through the local connector with NO Access
-// assertion (the invite routes bypass Access), 11 garbage-token requests from
-// one visitor must not lock out a real guest at a different address.
-func TestInviteRateLimit_ClientKey_TunnelClientsAreIndependent(t *testing.T) {
+// TestInviteRateLimit_ClientKey_UntrustedLocalSharesOneBucket: a header from a
+// local peer is NOT believed unless the request also carries a verified Access
+// assertion (or the peer is the configured connector). Anything that can reach
+// the loopback listener could have chosen it, so every such request shares the
+// one untrusted-local bucket: rotating the header buys no fresh buckets.
+func TestInviteRateLimit_ClientKey_UntrustedLocalSharesOneBucket(t *testing.T) {
 	h := newInviteLimitHarness(t, true)
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), "192.0.2.1", spoofed(i))
+	})
+	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
+		t.Fatalf("a local peer's unverified header got fresh buckets: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+	}
+	// Garbage and absent headers land in the same bucket.
+	for name, hdr := range map[string]map[string]string{"none": nil, "garbage": {"CF-Connecting-IP": "evil"}} {
+		if w := h.get(inviteTestToken(700), "192.0.2.1", hdr); w.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s header while the shared bucket is spent: %d, want 429", name, w.Code)
+		}
+	}
+}
+
+// TestInviteRateLimit_ClientKey_VerifiedAccessLocalPeerIsPerIP: with a verified
+// Access assertion through a local peer the header is believed, so clients get
+// independent buckets.
+func TestInviteRateLimit_ClientKey_VerifiedAccessLocalPeerIsPerIP(t *testing.T) {
+	h := newInviteLimitHarness(t, true)
+	for i := range inviteAuthRateBurst + 10 {
+		if w := h.get(inviteTestToken(i), "192.0.2.1", spoofed(i, "X-Test-Verified")); w.Code != http.StatusOK {
+			t.Fatalf("distinct verified clients shared a bucket: request %d got %d", i, w.Code)
+		}
+	}
+	one := map[string]string{"CF-Connecting-IP": "203.0.113.200", "X-Test-Verified": "1"}
+	_, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(500+i), "192.0.2.1", one)
+	})
+	if !limited {
+		t.Fatal("a single verified client was never limited")
+	}
+	other := map[string]string{"CF-Connecting-IP": "203.0.113.201", "X-Test-Verified": "1"}
+	if w := h.get(inviteTestToken(900), "192.0.2.1", other); w.Code != http.StatusOK {
+		t.Fatalf("a second verified client while the first is limited: %d, want 200", w.Code)
+	}
+}
+
+// TestInviteRateLimit_ClientKey_ConfiguredConnectorClientsAreIndependent is the
+// regression for the shared tunnel bucket on routes that bypass Access: through
+// the configured connector with NO assertion, 11 garbage-token requests from
+// one visitor must not lock out a real guest at a different address.
+func TestInviteRateLimit_ClientKey_ConfiguredConnectorClientsAreIndependent(t *testing.T) {
+	h := newInviteLimitHarness(t, true).withConnector()
 	attacker := map[string]string{"CF-Connecting-IP": "203.0.113.50"}
 	guest := map[string]string{"CF-Connecting-IP": "198.51.100.60"}
 
 	for i := range inviteAuthRateBurst + 1 {
-		w := h.get(inviteTestToken(100+i), "192.0.2.1", attacker)
+		w := h.get(inviteTestToken(100+i), connectorPeer, attacker)
 		if i < inviteAuthRateBurst && w.Code != http.StatusOK {
 			t.Fatalf("attacker request %d: %d, want 200 (still inside its burst)", i, w.Code)
 		}
@@ -267,45 +346,32 @@ func TestInviteRateLimit_ClientKey_TunnelClientsAreIndependent(t *testing.T) {
 			t.Fatalf("attacker request %d: %d, want 429 (its own bucket is spent)", i, w.Code)
 		}
 	}
-	if w := h.get(inviteTestToken(1), "192.0.2.1", guest); w.Code != http.StatusOK {
+	if w := h.get(inviteTestToken(1), connectorPeer, guest); w.Code != http.StatusOK {
 		t.Fatalf("real guest after the attacker was limited: %d, want 200", w.Code)
 	}
 	// The same header spelled differently is the same client.
 	attackerV6 := map[string]string{"CF-Connecting-IP": " ::ffff:203.0.113.50 "}
-	if w := h.get(inviteTestToken(2), "192.0.2.1", attackerV6); w.Code != http.StatusTooManyRequests {
+	if w := h.get(inviteTestToken(2), connectorPeer, attackerV6); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("attacker via an equivalent spelling: %d, want 429", w.Code)
 	}
 }
 
-// TestInviteRateLimit_ClientKey_UnattributedSkipsClientLayer: a local peer with
-// no usable CF-Connecting-IP has no attributable client, so the per-client
-// layer is skipped instead of putting everyone in one shared bucket. The token
-// layer still applies.
-func TestInviteRateLimit_ClientKey_UnattributedSkipsClientLayer(t *testing.T) {
-	for name, hdr := range map[string]func(i int) map[string]string{
-		"no header": func(int) map[string]string { return nil },
-		"garbage header": func(i int) map[string]string {
-			return map[string]string{"CF-Connecting-IP": fmt.Sprintf("not-an-ip-%d", i)}
-		},
-		"empty header": func(int) map[string]string { return map[string]string{"CF-Connecting-IP": "  "} },
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := newInviteLimitHarness(t, true)
-			// Well past the per-client burst, a new token each time: nothing but
-			// a (wrongly) shared client bucket could refuse these.
-			for i := range inviteAuthRateBurst + 10 {
-				if w := h.get(inviteTestToken(i), "192.0.2.1", hdr(i)); w.Code != http.StatusOK {
-					t.Fatalf("unattributed request %d: %d, want 200 (client layer skipped)", i, w.Code)
-				}
-			}
-			// The per-token layer still bounds one token.
-			allowed, limited, _ := countAllowedUntilLimited(t, inviteTokenRateBurst+10, func(int) *httptest.ResponseRecorder {
-				return h.get(inviteTestToken(9000), "192.0.2.1", hdr(0))
-			})
-			if !limited || allowed > inviteTokenRateBurst+2 {
-				t.Fatalf("token layer did not apply to unattributed requests: allowed %d (limited=%v)", allowed, limited)
-			}
-		})
+// TestInviteRateLimit_ClientKey_ConnectorWithoutHeaderIsShared: the configured
+// connector sending no usable header identifies no client, so those requests
+// share the one untrusted-local bucket (and do not touch attributed clients).
+func TestInviteRateLimit_ClientKey_ConnectorWithoutHeaderIsShared(t *testing.T) {
+	h := newInviteLimitHarness(t, false).withConnector()
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), connectorPeer, map[string]string{"CF-Connecting-IP": fmt.Sprintf("not-an-ip-%d", i)})
+	})
+	if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+2 {
+		t.Fatalf("connector requests without a usable header: allowed %d (limited=%v), want about %d then 429", allowed, limited, inviteAuthRateBurst)
+	}
+	if w := h.get(inviteTestToken(800), connectorPeer, nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("no header while the shared bucket is spent: %d, want 429", w.Code)
+	}
+	if w := h.get(inviteTestToken(801), connectorPeer, map[string]string{"CF-Connecting-IP": "198.51.100.61"}); w.Code != http.StatusOK {
+		t.Fatalf("an attributed visitor while the shared bucket is spent: %d, want 200", w.Code)
 	}
 }
 
@@ -315,21 +381,29 @@ func TestTrustedClientIP(t *testing.T) {
 	local := func(addr string) bool {
 		return strings.HasPrefix(addr, "127.") || strings.HasPrefix(addr, "[::1]") || strings.HasPrefix(addr, "::1")
 	}
+	connectors, _ := parseConnectorPeers("198.51.100.20, 2001:db8::20")
 	tests := []struct {
-		name   string
-		remote string
-		header string
-		want   string
-		wantOK bool
+		name     string
+		remote   string
+		header   string
+		verified bool
+		want     string
+		wantOK   bool
 	}{
-		{"local peer, valid header", "127.0.0.1:5000", "203.0.113.9", "203.0.113.9", true},
-		{"local peer, header with spaces", "127.0.0.1:5000", " 203.0.113.9 ", "203.0.113.9", true},
-		{"local peer, ipv6 header normalised", "127.0.0.1:5000", "2001:DB8:0:0:0:0:0:1", "2001:db8::1", true},
-		{"local ipv6 peer, valid header", "[::1]:5000", "198.51.100.4", "198.51.100.4", true},
-		{"local peer, no header", "127.0.0.1:5000", "", "127.0.0.1", false},
-		{"local peer, garbage header", "127.0.0.1:5000", "evil", "127.0.0.1", false},
-		{"remote peer, spoofed header ignored", "198.51.100.7:5000", "203.0.113.9", "198.51.100.7", true},
-		{"remote peer, no header", "198.51.100.7:5000", "", "198.51.100.7", true},
+		{"connector, valid header", "198.51.100.20:5000", "203.0.113.9", false, "203.0.113.9", true},
+		{"connector, header with spaces", "198.51.100.20:5000", " 203.0.113.9 ", false, "203.0.113.9", true},
+		{"connector, ipv6 header normalised", "198.51.100.20:5000", "2001:DB8:0:0:0:0:0:1", false, "2001:db8::1", true},
+		{"ipv6 connector, valid header", "[2001:db8::20]:5000", "203.0.113.9", false, "203.0.113.9", true},
+		{"connector, no header", "198.51.100.20:5000", "", false, "198.51.100.20", false},
+		{"connector, garbage header", "198.51.100.20:5000", "evil", false, "198.51.100.20", false},
+		{"local peer, verified Access, valid header", "127.0.0.1:5000", "203.0.113.9", true, "203.0.113.9", true},
+		{"local peer, verified Access, no header", "127.0.0.1:5000", "", true, "127.0.0.1", false},
+		{"local peer, header but no Access", "127.0.0.1:5000", "203.0.113.9", false, "127.0.0.1", false},
+		{"local peer, garbage header, no Access", "127.0.0.1:5000", "evil", false, "127.0.0.1", false},
+		{"local ipv6 peer, header but no Access", "[::1]:5000", "198.51.100.4", false, "::1", false},
+		{"remote peer, spoofed header ignored", "198.51.100.7:5000", "203.0.113.9", false, "198.51.100.7", true},
+		{"remote peer, verified Access, spoofed header ignored", "198.51.100.7:5000", "203.0.113.9", true, "198.51.100.7", true},
+		{"remote peer, no header", "198.51.100.7:5000", "", false, "198.51.100.7", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -337,9 +411,17 @@ func TestTrustedClientIP(t *testing.T) {
 			if err := r.SetTrustedProxies(nil); err != nil {
 				t.Fatal(err)
 			}
+			r.Use(func(c *gin.Context) {
+				if tt.verified {
+					servermiddleware.MarkCFAccessVerified(c)
+				}
+			})
 			var gotIP string
 			var gotOK bool
-			r.GET("/x", func(c *gin.Context) { gotIP, gotOK = trustedClientIP(c, local); c.Status(http.StatusOK) })
+			r.GET("/x", func(c *gin.Context) {
+				gotIP, gotOK = trustedClientIP(c, clientTrust{isLocalPeer: local, connectors: connectors})
+				c.Status(http.StatusOK)
+			})
 			req := httptest.NewRequest(http.MethodGet, "/x", nil)
 			req.RemoteAddr = tt.remote
 			if tt.header != "" {
@@ -350,6 +432,24 @@ func TestTrustedClientIP(t *testing.T) {
 				t.Fatalf("trustedClientIP = (%q, %v), want (%q, %v)", gotIP, gotOK, tt.want, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestParseConnectorPeers(t *testing.T) {
+	peers, bad := parseConnectorPeers(" 192.0.2.5 ,, ::ffff:192.0.2.6, not-an-ip,2001:db8::5")
+	if len(peers) != 3 || len(bad) != 1 || bad[0] != "not-an-ip" {
+		t.Fatalf("peers=%v bad=%v", peers, bad)
+	}
+	for addr, want := range map[string]bool{
+		"192.0.2.5:80": true, "192.0.2.6:80": true, "[2001:db8::5]:80": true, "192.0.2.5": true,
+		"192.0.2.7:80": false, "not-an-address": false, "": false,
+	} {
+		if got := peers.contains(addr); got != want {
+			t.Fatalf("contains(%q) = %v, want %v", addr, got, want)
+		}
+	}
+	if (connectorPeers(nil)).contains("192.0.2.5:80") {
+		t.Fatal("no configured connector must trust no peer")
 	}
 }
 
