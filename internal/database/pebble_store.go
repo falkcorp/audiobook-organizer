@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.226.0
+// version: 1.227.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-19
 
@@ -210,7 +210,7 @@ type PebbleStore struct {
 	reviewClaim              reviewClaimInstance  // this handle's apply-claim instance id: a claim carrying another id was left by a previous process (review_claim.go)
 	nameIdx                  nameIndexLocks       // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
 	apiKeyMu                 sync.Mutex           // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
-	inviteMu                 sync.Mutex           // serializes every invite write (create, consume, delete, mark-sent, guest-policy record) so an accept is single-use and a resend cannot resurrect a consumed invite (pebble_store_auth.go, pebble_store_invite_delivery.go)
+	inviteMu                 sync.Mutex           // serializes every invite write (create, consume, delete, mark-sent, guest-policy record) so an accept is single-use and a resend cannot resurrect a consumed invite, and every check-then-write of idx:user:email (CreateUser, UpdateUser, ConsumeInvite) so an email stays unique; taken before userWriteMu (pebble_store_auth.go, pebble_store_invite_delivery.go)
 	fileProvMu               sync.Mutex           // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
 	fpwinLocks               bookLocks            // per-window-ref stripes: a window write and the delete cascade of the same file serialize, different files do not (pebble_store_fpwin.go)
 	bookFileIDScans          atomic.Int64         // count of scanForBookFileByID full scans; instrumentation so tests can prove a path never falls back to the O(N) walk

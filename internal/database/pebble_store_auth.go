@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -36,6 +36,11 @@ type StrictUserLister interface {
 
 // Users & Auth
 func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error) {
+	// inviteMu guards every check-then-write of the email index (see
+	// UpdateUser), so a concurrent UpdateUser or ConsumeInvite cannot claim
+	// the same address between the check below and the batch.
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
 	lowerUser := strings.ToLower(username)
 	lowerEmail := strings.ToLower(email)
 
@@ -151,12 +156,29 @@ var ErrUserStale = errors.New("database: user changed since it was read")
 // read before one of those ops landed (re-read and retry).
 var ErrUserProtectedField = errors.New("database: UpdateUser cannot change password, status or credential epoch")
 
+// ErrUserEmailTaken is returned by UpdateUser when another account already
+// has the new email (compared case-insensitively).
+var ErrUserEmailTaken = errors.New("database: another account already uses that email address")
+
 // UpdateUser rewrites a user row's ordinary fields (email, roles, ...). Under
 // userWriteMu it re-reads the stored row and refuses (ErrUserProtectedField) a
 // write whose password hash, algorithm, Status or CredentialEpoch differs from
 // it, so a whole-row write can never change, or revert, any of them. An unknown
 // id is ErrUserNotFound.
+//
+// An email change is refused (ErrUserEmailTaken) when any other user's current
+// email matches the new one case-insensitively, and otherwise moves the email
+// index in the same batch as the row: the new key is pointed at this user and
+// the old key is dropped if it still points here. The check scans every user
+// row rather than trusting the index, because UpdateUser did not maintain the
+// index before 2026-10-19 and rows changed earlier are not indexed under their
+// current email. inviteMu is taken first (lock order inviteMu, then
+// userWriteMu) because CreateInvite, ConsumeInvite and CreateUser check and
+// write the email index under it, so none of them can claim the address
+// between this check and this write.
 func (p *PebbleStore) UpdateUser(user *User) error {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
 	userWriteMu.Lock()
 	defer userWriteMu.Unlock()
 	stored, err := p.GetUserByID(user.ID)
@@ -172,10 +194,47 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 		user.Status != stored.Status || user.CredentialEpoch != stored.CredentialEpoch {
 		return fmt.Errorf("%w (user %s)", ErrUserProtectedField, user.ID)
 	}
+	oldEmail := strings.ToLower(strings.TrimSpace(stored.Email))
+	newEmail := strings.ToLower(strings.TrimSpace(user.Email))
+	if newEmail != oldEmail && newEmail != "" {
+		users, _, err := p.listUsers()
+		if err != nil {
+			return err
+		}
+		for _, other := range users {
+			if other.ID != user.ID && strings.EqualFold(strings.TrimSpace(other.Email), newEmail) {
+				return ErrUserEmailTaken
+			}
+		}
+	}
 	runUserWriteAfterReadHook()
 	user.UpdatedAt = time.Now()
 	data, _ := json.Marshal(user)
-	return p.db.Set([]byte("u:"+user.ID), data, pebble.Sync)
+	if newEmail == oldEmail {
+		return p.db.Set([]byte("u:"+user.ID), data, pebble.Sync)
+	}
+	b := p.db.NewBatch()
+	defer b.Close()
+	if err := b.Set([]byte("u:"+user.ID), data, nil); err != nil {
+		return err
+	}
+	if newEmail != "" {
+		if err := b.Set([]byte("idx:user:email:"+newEmail), []byte(user.ID), nil); err != nil {
+			return err
+		}
+	}
+	if oldEmail != "" {
+		if v, closer, err := p.db.Get([]byte("idx:user:email:" + oldEmail)); err == nil {
+			pointsHere := string(v) == user.ID
+			closer.Close()
+			if pointsHere {
+				if err := b.Delete([]byte("idx:user:email:"+oldEmail), nil); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return b.Commit(pebble.Sync)
 }
 
 // mutateUserCredentials re-reads userID under userWriteMu, applies fn to the
@@ -880,6 +939,13 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 		if err != nil {
 			return nil, err
 		}
+		// Trust assumption: the creator can read this invite's token (it is
+		// in the create response and the pending list), so they could accept
+		// it themselves and receive the grant for an address they do not
+		// control. That gives them nothing new only because the grant is
+		// limited to admins, who can already give any address access
+		// directly. If grants are ever opened to lower roles, the token must
+		// stop being shown for emailed invites, or be rotated on send.
 		if inviteCreatorMayGrant(creator) {
 			grantSSO = true
 			inv.SSOGrant = InviteSSOGranted
