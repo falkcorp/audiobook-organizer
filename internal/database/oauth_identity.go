@@ -1,7 +1,7 @@
 // file: internal/database/oauth_identity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b3e9c1a7-5f42-4d80-9c16-0a7e2b6d4f38
-// last-edited: 2026-07-26
+// last-edited: 2026-10-20
 
 package database
 
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // OAuthIdentity links an external identity-provider account (GitHub, Google, or a
@@ -34,16 +35,30 @@ func oauthSubjectKey(provider, subject string) string {
 // CreateOAuthIdentity persists a new linked identity with primary key
 // oauthid:<id> plus a (provider, subject) lookup index and a per-user index.
 func (p *PebbleStore) CreateOAuthIdentity(identity *OAuthIdentity) (*OAuthIdentity, error) {
+	b := p.db.NewBatch()
+	defer b.Close()
+	if err := stageOAuthIdentity(b, identity); err != nil {
+		return nil, err
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
+		return nil, err
+	}
+	return identity, nil
+}
+
+// stageOAuthIdentity validates identity, fills its ID and CreatedAt when
+// unset, and stages its three keys in b.
+func stageOAuthIdentity(b *GatedBatch, identity *OAuthIdentity) error {
 	if identity == nil {
-		return nil, fmt.Errorf("create oauth identity: nil identity")
+		return fmt.Errorf("create oauth identity: nil identity")
 	}
 	if identity.Provider == "" || identity.Subject == "" || identity.UserID == "" {
-		return nil, fmt.Errorf("create oauth identity: provider, subject, and user_id are required")
+		return fmt.Errorf("create oauth identity: provider, subject, and user_id are required")
 	}
 	if identity.ID == "" {
 		id, err := newULID()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		identity.ID = id
 	}
@@ -52,25 +67,60 @@ func (p *PebbleStore) CreateOAuthIdentity(identity *OAuthIdentity) (*OAuthIdenti
 	}
 	data, err := json.Marshal(identity)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	b := p.db.NewBatch()
 	if err := b.Set([]byte("oauthid:"+identity.ID), data, nil); err != nil {
-		b.Close()
-		return nil, err
+		return err
 	}
 	if err := b.Set([]byte(oauthSubjectKey(identity.Provider, identity.Subject)), []byte(identity.ID), nil); err != nil {
-		b.Close()
+		return err
+	}
+	return b.Set([]byte("idx:oauth:user:"+identity.UserID+":"+identity.ID), []byte("1"), nil)
+}
+
+// VerifiedEmailIdentityLinker links an SSO identity to the account that holds
+// its email proven, deciding and writing under one lock. Not on Store;
+// resolve it with AsCapability.
+type VerifiedEmailIdentityLinker interface {
+	// LinkIdentityToVerifiedEmailHolder finds the one account holding email
+	// proven (as GetUserByVerifiedEmail does) and, in the same locked
+	// section, creates identity linked to it (identity.UserID is set here).
+	// It returns that account, or (nil, nil) when no account holds the
+	// address proven, in which case nothing is written. Deciding and writing
+	// separately would let the holder change its email, or another account
+	// become a second proven holder, between the lookup and the link.
+	LinkIdentityToVerifiedEmailHolder(identity *OAuthIdentity, email string) (*User, error)
+}
+
+var _ VerifiedEmailIdentityLinker = (*PebbleStore)(nil)
+
+// LinkIdentityToVerifiedEmailHolder implements VerifiedEmailIdentityLinker.
+// It holds inviteMu, which every email writer takes, for the lookup and the
+// write.
+func (p *PebbleStore) LinkIdentityToVerifiedEmailHolder(identity *OAuthIdentity, email string) (*User, error) {
+	lower := util.NormalizeEmail(email)
+	if lower == "" || identity == nil {
+		return nil, nil
+	}
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
+	holder, err := p.verifiedHolderLocked(lower)
+	if err != nil || holder == nil {
 		return nil, err
 	}
-	if err := b.Set([]byte("idx:oauth:user:"+identity.UserID+":"+identity.ID), []byte("1"), nil); err != nil {
-		b.Close()
+	identity.UserID = holder.ID
+	b := p.db.NewBatch()
+	defer b.Close()
+	if err := stageOAuthIdentity(b, identity); err != nil {
 		return nil, err
 	}
 	if err := b.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
-	return identity, nil
+	if err := p.syncVerifiedEmailKeyLocked(lower, holder); err != nil {
+		authLog.Warn("verified-email cache: repairing a key failed: %v", err)
+	}
+	return holder, nil
 }
 
 // GetOAuthIdentityByProviderSubject resolves a linked identity by its provider and

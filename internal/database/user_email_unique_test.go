@@ -1,7 +1,7 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -16,21 +16,27 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-func TestUpdateUser_RefusesAnEmailAnotherUserHasAnyCase(t *testing.T) {
+// SF2: uniqueness is among proven holders only. A self-set copy of another
+// account's address is allowed (refusing it would tell any signed-in user
+// which addresses have accounts) and is simply unverified.
+func TestUpdateUser_AllowsAnotherUsersEmailUnverified(t *testing.T) {
 	s := newInviteTestStore(t)
-	mustUser(t, s, "alice", "viewer", "active")
+	alice := mustUser(t, s, "alice", "viewer", "active")
 	bob := mustUser(t, s, "bob", "viewer", "active")
 
 	bob.Email = "ALICE@Admins.Example.com"
-	if err := s.UpdateUser(bob); !errors.Is(err, ErrUserEmailTaken) {
-		t.Fatalf("UpdateUser to another user's email (other case) = %v, want ErrUserEmailTaken", err)
+	if err := s.UpdateUser(bob); err != nil {
+		t.Fatalf("UpdateUser to another user's email = %v, want nil", err)
 	}
 	stored, _ := s.GetUserByID(bob.ID)
-	if stored.Email != "bob@admins.example.com" {
-		t.Fatalf("a refused update must not write: email = %q", stored.Email)
+	if stored.EmailSource != EmailSourceSelf {
+		t.Fatalf("bob's copy has source %q, want self", stored.EmailSource)
 	}
-	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u == nil || u.Username != "alice" {
+	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u == nil || u.ID != alice.ID {
 		t.Fatalf("alice's verified email must still resolve to alice: %+v", u)
+	}
+	if keyFor(t, s, "alice@admins.example.com") != alice.ID {
+		t.Fatal("bob's self-set copy must not touch alice's key")
 	}
 }
 
@@ -74,15 +80,22 @@ func TestUpdateUser_EmailChangeIsNeverVerified(t *testing.T) {
 	}
 }
 
-func TestCreateUser_RefusesAnEmailSetThroughUpdateUser(t *testing.T) {
+func TestCreateUser_OnlyAProvenHolderBlocksTheAddress(t *testing.T) {
 	s := newInviteTestStore(t)
 	bob := mustUser(t, s, "bob", "viewer", "active")
 	bob.Email = "Taken@example.com"
 	if err := s.UpdateUser(bob); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateUser("newcomer", "taken@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
-		t.Fatalf("CreateUser with a self-set email of another user = %v, want ErrUserEmailTaken", err)
+	u, err := s.CreateUser("newcomer", "taken@example.com", "oauth", "", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatalf("CreateUser with an address another user only typed in = %v, want nil", err)
+	}
+	if got, _ := s.GetUserByVerifiedEmail("taken@example.com"); got == nil || got.ID != u.ID {
+		t.Fatalf("the new, proven holder must resolve: %+v", got)
+	}
+	if _, err := s.CreateUser("third", "TAKEN@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("CreateUser with an address another account holds proven = %v, want ErrUserEmailTaken", err)
 	}
 }
 
@@ -638,24 +651,19 @@ func TestCreateUserDisplacingUnverifiedEmail_RefusesWhenARowIsUnreadable(t *test
 	}
 }
 
-// Rows written by UpdateUser before it maintained the index are not indexed
-// under their current email; the uniqueness check must still see them.
-func TestUpdateUser_SeesAnUnindexedEmail(t *testing.T) {
+// The proven check scans the rows: a holder whose cache key is missing still
+// blocks an admin from making the address proven for someone else.
+func TestSetUserEmailAsAdmin_SeesAnUnindexedProvenHolder(t *testing.T) {
 	s := newInviteTestStore(t)
 	alice := mustUser(t, s, "alice", "viewer", "active")
 	bob := mustUser(t, s, "bob", "viewer", "active")
-	alice.Email = "legacy@example.com"
-	data, _ := json.Marshal(alice)
-	if err := s.db.Set([]byte("u:"+alice.ID), data, pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	bob.Email = "Legacy@Example.com"
-	if err := s.UpdateUser(bob); !errors.Is(err, ErrUserEmailTaken) {
-		t.Fatalf("UpdateUser to an unindexed email = %v, want ErrUserEmailTaken", err)
+	setRawUserEmailSource(t, s, alice, "legacy@example.com", EmailSourceSetup)
+	if _, err := s.SetUserEmailAsAdmin(bob.ID, "Legacy@Example.com"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("SetUserEmailAsAdmin to an unindexed proven address = %v, want ErrUserEmailTaken", err)
 	}
 }
 
-func TestUpdateUser_RacingClaimsOfOneEmailLetOneWin(t *testing.T) {
+func TestSetUserEmailAsAdmin_RacingClaimsOfOneEmailLetOneWin(t *testing.T) {
 	s := newInviteTestStore(t)
 	const n = 8
 	users := make([]*User, n)
@@ -668,8 +676,7 @@ func TestUpdateUser_RacingClaimsOfOneEmailLetOneWin(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			u.Email = "contested@example.com"
-			errs[i] = s.UpdateUser(u)
+			_, errs[i] = s.SetUserEmailAsAdmin(u.ID, "contested@example.com")
 		}()
 	}
 	wg.Wait()
@@ -683,7 +690,77 @@ func TestUpdateUser_RacingClaimsOfOneEmailLetOneWin(t *testing.T) {
 		}
 	}
 	if won != 1 {
-		t.Fatalf("%d updates claimed the same email, want exactly 1", won)
+		t.Fatalf("%d admin sets made the same email proven, want exactly 1", won)
+	}
+}
+
+// SF1: re-setting an address a user already holds is still checked: it would
+// make the address proven for this user while another account holds it
+// proven, and every later SSO login with it would be denied as a conflict.
+func TestSetUserEmailAsAdmin_UnchangedAddressStillChecked(t *testing.T) {
+	s := newInviteTestStore(t)
+	owner := mustUser(t, s, "owner", "admin", "active") // owner@admins.example.com, setup
+	dup := mustUser(t, s, "dup", "viewer", "active")
+	dup.Email = "owner@admins.example.com"
+	if err := s.UpdateUser(dup); err != nil { // self-set duplicate, legal
+		t.Fatal(err)
+	}
+	if _, err := s.SetUserEmailAsAdmin(dup.ID, "owner@admins.example.com"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("admin re-set of a duplicate's unchanged address = %v, want ErrUserEmailTaken", err)
+	}
+	if got, _ := s.GetUserByID(dup.ID); got.EmailSource != EmailSourceSelf {
+		t.Fatalf("a refused set must not write: source %q", got.EmailSource)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("owner@admins.example.com"); u == nil || u.ID != owner.ID {
+		t.Fatalf("the owner must still be the one verified holder: %+v", u)
+	}
+	// The owner re-setting its own address is fine.
+	if _, err := s.SetUserEmailAsAdmin(owner.ID, "owner@admins.example.com"); err != nil {
+		t.Fatalf("re-setting the proven holder's own address: %v", err)
+	}
+}
+
+// SF1: MarkUserEmailVerified checks the other holders' proof, not the cache
+// key, so two accounts cannot take turns pointing the key at themselves.
+func TestMarkUserEmailVerified_NoPingPongWithAnotherProvenHolder(t *testing.T) {
+	s := newInviteTestStore(t)
+	owner := mustUser(t, s, "owner", "admin", "active")
+	dup := mustUser(t, s, "dup", "viewer", "active")
+	dup.Email = "owner@admins.example.com"
+	if err := s.UpdateUser(dup); err != nil {
+		t.Fatal(err)
+	}
+	// A stale key naming dup (as a rollback build could leave it).
+	if err := s.db.Set([]byte(userEmailIndexPrefix+"owner@admins.example.com"), []byte(dup.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.MarkUserEmailVerified(dup.ID, "owner@admins.example.com"); err != nil || ok {
+		t.Fatalf("mark for the duplicate = %v, %v; want a no-op", ok, err)
+	}
+	if got, _ := s.GetUserByID(dup.ID); got.EmailSource == EmailSourceIdP {
+		t.Fatal("the duplicate must not become idp-verified")
+	}
+	if u, _ := s.GetUserByVerifiedEmail("owner@admins.example.com"); u == nil || u.ID != owner.ID {
+		t.Fatalf("lookup = %+v; want the owner", u)
+	}
+	if keyFor(t, s, "owner@admins.example.com") != owner.ID {
+		t.Fatal("the lookup must have pointed the key back at the owner")
+	}
+}
+
+// SF2: an account that only typed an address in does not block an invite to
+// it; one that holds it proven does.
+func TestCreateInvite_OnlyAProvenHolderBlocks(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "admin1", "admin", "active")
+	bob := mustUser(t, s, "bob", "viewer", "active")
+	bob.Email = "guest@example.com"
+	if err := s.UpdateUser(bob); err != nil {
+		t.Fatal(err)
+	}
+	mustInviteBy(t, s, admin.ID, "tok-ok", "guest", "guest@example.com")
+	if _, err := s.CreateInvite(&Invite{Token: "tok-no", Username: "guest2", RoleID: "viewer", Email: "Admin1@admins.example.com"}); !errors.Is(err, ErrInviteEmailTaken) {
+		t.Fatalf("invite to a proven address = %v, want ErrInviteEmailTaken", err)
 	}
 }
 
@@ -775,5 +852,33 @@ func TestConsumeInvite_NonAdminCreatorBindsNothing(t *testing.T) {
 	inv, _ := s.GetInvite("tok-editor")
 	if inv.EmailBinding != InviteEmailCreatorNotAdmin || inv.SSOGrant != InviteSSOCreatorNotAdmin {
 		t.Fatalf("binding/grant = %q/%q", inv.EmailBinding, inv.SSOGrant)
+	}
+}
+
+// NIT6: compatibility spellings are the same address everywhere. A Kelvin
+// sign (U+212A) renders as K and folds to k, so "Kate@" must find, and be
+// blocked by, the verified "kate@".
+func TestEmails_CompatibilityCharactersAreNormalized(t *testing.T) {
+	s := newInviteTestStore(t)
+	kate, err := s.CreateUser("kate", "kate@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := mustUser(t, s, "other", "viewer", "active")
+	if u, _ := s.GetUserByVerifiedEmail("Kate@example.com"); u == nil || u.ID != kate.ID {
+		t.Fatalf("Kelvin-sign lookup = %+v; want kate", u)
+	}
+	if _, err := s.SetUserEmailAsAdmin(other.ID, "Kate@example.com"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("admin set of the Kelvin spelling = %v, want ErrUserEmailTaken", err)
+	}
+	if _, err := s.CreateUser("kate2", "ｋate@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("CreateUser with the fullwidth spelling = %v, want ErrUserEmailTaken", err)
+	}
+	inv, err := s.CreateInvite(&Invite{Token: "tok-kelvin", Username: "g", RoleID: "viewer", Email: " Roſe@Example.com "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.Email != "rose@example.com" {
+		t.Fatalf("invite email stored as %q, want the normalized form", inv.Email)
 	}
 }

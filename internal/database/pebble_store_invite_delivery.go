@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_invite_delivery.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
-// ErrInviteEmailTaken is returned when an invite's email already belongs to a
-// user. Accepting it would repoint the email index at the new account.
-var ErrInviteEmailTaken = errors.New("a user with that email already exists")
+// ErrInviteEmailTaken is returned when another account already holds an
+// invite's email proven: accepting the invite could never bind it.
+var ErrInviteEmailTaken = errors.New("another account already has that email address verified")
 
 // ErrInviteNotPending is returned by the invite-delivery writes for an invite
 // that is missing, used or expired.
@@ -62,7 +63,7 @@ const inviteAdminRole = "admin"
 // the invite's address, so that holding the token proves control of it.
 func inviteEmailDelivered(inv *Invite) bool {
 	return inv.Email != "" && inv.EmailSentAt != nil &&
-		strings.EqualFold(strings.TrimSpace(inv.EmailSentTo), strings.TrimSpace(inv.Email))
+		util.SameEmail(inv.EmailSentTo, inv.Email)
 }
 
 // inviteCreatorMayGrant reports whether an invite's creator may give the
@@ -200,7 +201,7 @@ func (p *PebbleStore) ListAcceptedInvitesSince(since time.Time) ([]Invite, error
 
 // GetInviteEmailGrant implements InviteEmailGrantStore.
 func (p *PebbleStore) GetInviteEmailGrant(email string) (*InviteEmailGrant, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+	email = util.NormalizeEmail(email)
 	if email == "" {
 		return nil, nil
 	}
@@ -235,7 +236,7 @@ func (p *PebbleStore) SetInviteEmailGrantCFAdded(email, userID string) (bool, er
 	if err != nil {
 		return false, err
 	}
-	if err := p.db.Set([]byte(inviteEmailGrantPrefix+strings.ToLower(strings.TrimSpace(email))), data, pebble.Sync); err != nil {
+	if err := p.db.Set([]byte(inviteEmailGrantPrefix+util.NormalizeEmail(email)), data, pebble.Sync); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -249,7 +250,7 @@ func (p *PebbleStore) DeleteInviteEmailGrant(email, userID string) (*InviteEmail
 	if err != nil || g == nil || g.UserID != userID {
 		return nil, err
 	}
-	if err := p.db.Delete([]byte(inviteEmailGrantPrefix+strings.ToLower(strings.TrimSpace(email))), pebble.Sync); err != nil {
+	if err := p.db.Delete([]byte(inviteEmailGrantPrefix+util.NormalizeEmail(email)), pebble.Sync); err != nil {
 		return nil, err
 	}
 	return g, nil

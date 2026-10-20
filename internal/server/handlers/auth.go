@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.17.0
+// version: 2.17.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package handlers
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -502,14 +503,6 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 			httputil.RespondWithConflict(c, "the account changed while the profile was being saved; reload and try again")
 			return
 		}
-		if errors.Is(err, database.ErrUserEmailTaken) {
-			// Generic on purpose: saying the address is taken would let any
-			// signed-in user test which addresses have accounts. The detail
-			// stays in the server log, by user id only.
-			authHandlerLog.Info("profile email change refused for user %s: another account already uses the address", user.ID)
-			httputil.RespondWithBadRequest(c, "that email address can't be used; ask an admin if it should be yours")
-			return
-		}
 		if errors.Is(err, database.ErrUserNotFound) {
 			// Defensive: nothing deletes users today, but the store reports a
 			// missing row as ErrUserNotFound, and that is a 404, not a 500.
@@ -521,7 +514,7 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 	}
 	// The old address no longer belongs to this account, so neither does any
 	// SSO or Cloudflare access an accepted invite granted to it.
-	if h.revokeGuestAccess != nil && oldEmail != "" && !strings.EqualFold(strings.TrimSpace(oldEmail), email) {
+	if h.revokeGuestAccess != nil && oldEmail != "" && !util.SameEmail(oldEmail, email) {
 		h.revokeGuestAccess(user.ID, oldEmail, "email changed")
 	}
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})

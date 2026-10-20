@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -334,13 +335,13 @@ func (h *UserHandler) SetUserEmail(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "user", id)
 		return
 	case errors.Is(err, database.ErrUserEmailTaken):
-		httputil.RespondWithConflict(c, "another account already uses that email address; clear it there first")
+		httputil.RespondWithConflict(c, "another account already has that email address verified; clear it there or merge the two accounts first")
 		return
 	case err != nil:
 		httputil.InternalError(c, "set user email", err)
 		return
 	}
-	if h.revokeGuestAccess != nil && previous != "" && !strings.EqualFold(strings.TrimSpace(previous), email) {
+	if h.revokeGuestAccess != nil && previous != "" && !util.SameEmail(previous, email) {
 		h.revokeGuestAccess(id, previous, "email changed by an admin")
 	}
 	user, err := h.store.GetUserByID(id)
