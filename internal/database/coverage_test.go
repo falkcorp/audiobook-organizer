@@ -1,5 +1,5 @@
 // file: internal/database/coverage_test.go
-// version: 2.4.2
+// version: 2.4.3
 // guid: 3b82b22e-cd28-49b8-8b9c-e0a34b18e631
 // last-edited: 2026-10-19
 
