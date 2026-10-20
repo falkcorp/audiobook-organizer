@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-20 -->
 
@@ -44,10 +44,13 @@ Branch `feat/invite-email`, PR #4090. No separate spec.
   to the guest: it is in the invitation email and on the sign-up page for a
   live link, because the guest's app needs it.
 - **An emergency-access gap was closed.** The one-time recovery token used to
-  regain access to a locked-out server was checked only after an
-  administrator account had already been created, so anyone who could reach
-  the server could create one. Nothing is created now without the correct
-  token, and the generated administrator password is far stronger.
+  regain access to a locked-out server was checked only after the server had
+  looked for, and if needed created, an administrator account. When no active
+  administrator existed, anyone who could reach the server could make it
+  create one, without ever receiving its password or a key; the real recovery
+  then reused that account and could not show its password. Nothing is
+  created now without the correct token, and the generated administrator
+  password is far stronger.
 
 ## Emailed invitations and the sign-up page
 

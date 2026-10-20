@@ -1,7 +1,7 @@
 <!-- file: .claude/skills/server-bootstrap/references/bootstrap-api.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: b8a2de28-0304-4440-9d73-c79f227e1235 -->
-<!-- last-edited: 2026-10-07 -->
+<!-- last-edited: 2026-10-20 -->
 
 # Bootstrap API Reference
 
@@ -33,7 +33,7 @@ Exchanges a one-time bootstrap token for a full-privilege API key.
     "scopes": ["all"],
     "message": "Bootstrap token consumed. This key will not be shown again.",
     "expires_at": "2026-09-24T12:00:00Z",
-    "generated_password": "Word-Word-Word-123",
+    "generated_password": "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23",
     "password_message": "Admin account created. Change this password after logging in."
   }
 }
@@ -44,13 +44,16 @@ Exchanges a one-time bootstrap token for a full-privilege API key.
 - **data.api_key**: The actual API token to use in subsequent requests. Store securely. Only shown once.
 - **key_id**: Internal ID for the key.
 - **user_id**: Admin user ID.
-- **username**: Always "admin" for bootstrap-created users.
+- **username**: The existing active admin, or for a bootstrap-created admin the
+  first free name of "admin", "admin-2", ... (since 2026-10-20).
 - **scopes**: API scopes (always "all" for bootstrap).
 - **expires_at**: When the key stops working: 8 hours after issue by default
   (config `bootstrap_key_ttl`, a Go duration, capped at 24h; the deprecated
   `bootstrap_key_ttl_days` is honoured but capped at 24h with a warning).
   Before 2026-10-07 this defaulted to 30 days.
-- **generated_password**: (Only on first-time bootstrap) Temporary password for the admin user.
+- **generated_password**: (Only when bootstrap created the admin) Temporary password for
+  that user: 28 base32 symbols in groups of four (140 bits from crypto/rand) since
+  2026-10-20; before that, a word-word-word-number passphrase.
 
 ### Error Responses
 

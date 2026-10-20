@@ -99,8 +99,9 @@ addresses have accounts; the detail is logged by user id.
 #### Bootstrap token exchange creates nothing without a valid token
 
 `POST /api/v1/auth/bootstrap` found or created the admin account before it
-checked the token, so any request with a non-empty token could create an
-admin. The token is now checked first (constant-time hash compare; a missing
+checked the token, so when no active admin existed, any request with a
+non-empty token created one (the requester never received its password or a
+key), and the real recovery then reused that admin and returned no password. The token is now checked first (constant-time hash compare; a missing
 or unreadable stored expiry counts as expired), the admin is found or created
 only after that, and the token is spent last, all under one lock; a failed
 admin creation still leaves the token usable. Only an active admin is reused;
