@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -754,7 +756,42 @@ func TestInviteRateLimit_GlobalIsCheckedBeforeAnyBucketIsCreated(t *testing.T) {
 			t.Fatalf("request %d past the global ceiling: %d, want 429", i, w.Code)
 		}
 	}
-	if !h.limits.perClient.WouldAllowKey("invite-client:198.51.102.1") {
-		t.Fatal("requests the global layer refused spent the client's own bucket")
+	n := 0
+	for range inviteAuthRateBurst + 5 {
+		if h.limits.perClient.AllowKey("invite-client:198.51.102.1") {
+			n++
+		}
+	}
+	if n < inviteAuthRateBurst {
+		t.Fatalf("the client had %d tokens left, want its full burst of %d: requests the global layer refused spent its bucket", n, inviteAuthRateBurst)
+	}
+}
+
+// NIT2 (review): many concurrent requests from ONE client against a small
+// global ceiling spend at most the client's own burst of global slots, so
+// other clients are still admitted. A peek-then-spend order let every
+// concurrent request pass the client peek and drain the global layer.
+func TestInviteRateLimit_ConcurrentClientCannotDrainGlobal(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	h.limits.global = servermiddleware.NewIPRateLimiter(1, 3*inviteAuthRateBurst)
+	var admitted atomic.Int64
+	var wg sync.WaitGroup
+	for i := range 200 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if w := h.get(inviteTestToken(i), "198.51.100.5", nil); w.Code == http.StatusOK {
+				admitted.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := admitted.Load(); n > inviteAuthRateBurst+1 {
+		t.Fatalf("one client got %d requests through, want at most its burst of %d", n, inviteAuthRateBurst)
+	}
+	for i := range 5 {
+		if w := h.get(inviteTestToken(1000+i), fmt.Sprintf("198.51.100.%d", 50+i), nil); w.Code != http.StatusOK {
+			t.Fatalf("another client after the concurrent flood: %d, want 200 (global not drained)", w.Code)
+		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
 // last-edited: 2026-10-20
 
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -309,27 +310,58 @@ func (r *IPRateLimiter) SweepCount() int64 {
 	return r.sweeps.Load()
 }
 
-// WouldAllowKey answers without taking a token and without tracking an unseen
-// key, so a caller stacking limiters can refuse before any of them changes.
-func TestIPRateLimiter_WouldAllowKeyTakesNothing(t *testing.T) {
-	r := NewIPRateLimiter(1, 2)
-	if !r.WouldAllowKey("fresh") {
-		t.Fatal("an unseen key must be allowed")
+// ReserveKey takes tokens atomically: concurrent callers never get more than
+// the bucket holds.
+func TestIPRateLimiter_ReserveKeyIsAtomic(t *testing.T) {
+	r := NewIPRateLimiter(1, 5)
+	var got atomic.Int64
+	var wg sync.WaitGroup
+	for range 100 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, ok := r.ReserveKey("k"); ok {
+				got.Add(1)
+			}
+		}()
 	}
-	if n := len(r.entries); n != 0 {
-		t.Fatalf("WouldAllowKey tracked %d entries, want 0", n)
+	wg.Wait()
+	if n := got.Load(); n > 6 {
+		t.Fatalf("%d concurrent reservations succeeded on a burst of 5", n)
 	}
-	for range 2 {
-		if !r.WouldAllowKey("k") || !r.AllowKey("k") {
-			t.Fatal("a key inside its burst must be allowed")
+}
+
+// ReserveKeys gives back every token it took when a later step refuses, and
+// drops the entries it created for the refused request.
+func TestReserveKeys_RefusalCancelsEverything(t *testing.T) {
+	a := NewIPRateLimiter(1, 3)
+	b := NewIPRateLimiter(1, 1)
+	if !ReserveKeys(KeyStep{a, "x"}, KeyStep{b, "y"}) {
+		t.Fatal("first request must pass")
+	}
+	for range 5 {
+		if ReserveKeys(KeyStep{a, "x"}, KeyStep{b, "y"}) {
+			t.Fatal("b is empty; the request must be refused")
 		}
 	}
-	for range 3 {
-		if r.WouldAllowKey("k") {
-			t.Fatal("an exhausted key reported allowed")
+	// a's bucket lost only the admitted request's token.
+	n := 0
+	for range 5 {
+		if a.AllowKey("x") {
+			n++
 		}
 	}
-	if r.AllowKey("k") {
-		t.Fatal("WouldAllowKey must not have refilled the bucket")
+	if n != 2 {
+		t.Fatalf("a allowed %d more, want 2 (refused requests must have spent nothing)", n)
+	}
+	// A refused request leaves no new key behind.
+	if ReserveKeys(KeyStep{a, "fresh"}, KeyStep{b, "y"}) {
+		t.Fatal("b is still empty")
+	}
+	a.mu.Lock()
+	_, tracked := a.entries["fresh"]
+	a.mu.Unlock()
+	if tracked {
+		t.Fatal("a refused request left a new entry behind")
 	}
 }
