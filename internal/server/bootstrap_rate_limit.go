@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -27,7 +27,10 @@ import (
 //     attacker who owns a /64 cannot mint 2^64 keys, and an unparseable or
 //     unattributed client uses one fixed key rather than attacker-chosen text;
 //     a direct LAN peer is keyed on its full address (bootstrapDirectKey),
-//     because LAN devices share one ULA /64;
+//     because LAN devices share one ULA /64, and every address of a LAN IPv6
+//     /64 also shares one aggregate window of bootstrapLANPrefixFactor times
+//     the per-key cap, so one LAN host cannot rotate through its /64 for
+//     fresh windows;
 //   - entries are kept in creation order, and every call first drops the ones
 //     whose window has ended, so the map holds only live windows;
 //   - the map is hard-capped at bootstrapMaxTrackedKeys, evicting the oldest;
@@ -49,6 +52,13 @@ import (
 const (
 	bootstrapMaxAttempts    = 5
 	bootstrapWindowDuration = time.Hour
+
+	// bootstrapLANPrefixFactor sizes the aggregate window every address of a
+	// LAN IPv6 /64 shares (lanIPv6Prefix): a LAN IPv6 peer is keyed on its
+	// full address, so without it one LAN host could rotate through its /64
+	// for fresh per-address windows. Direct LAN peers are exempt from the
+	// global ceiling, so this aggregate is the only cap on that rotation.
+	bootstrapLANPrefixFactor = 4
 
 	bootstrapGlobalMaxAttempts = 100
 	bootstrapMaxTrackedKeys    = 10_000
@@ -120,19 +130,33 @@ func bootstrapDirectKey(ip string) string {
 }
 
 // bootstrapClientKey returns the bootstrap limiter key for the request, the
-// address to log, and whether the request is exempt from the global ceiling
-// (a direct LAN peer, bootstrapDirectLANPeer). Every other request is keyed
-// through trustedClientIP: a visitor's own address when it can be believed,
-// otherwise the shared untrustedLocalClientKey. A connector request with no
-// usable CF-Connecting-IP is therefore untrusted-local and NOT exempt.
-func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key, logIP string, exempt bool) {
+// aggregate key of its LAN IPv6 /64 ("" when the keyed address is not a LAN
+// IPv6 address), the address to log, and whether the request is exempt from
+// the global ceiling (a direct LAN peer, bootstrapDirectLANPeer). Every other
+// request is keyed through trustedClientIP: a visitor's own address when it
+// can be believed, otherwise the shared untrustedLocalClientKey. A connector
+// request with no usable CF-Connecting-IP is therefore untrusted-local and
+// NOT exempt.
+func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key, lanKey, logIP string, exempt bool) {
 	if bootstrapDirectLANPeer(c, connectors) {
 		ip := strings.TrimSpace(c.ClientIP())
-		return bootstrapDirectKey(ip), ip, true
+		return bootstrapDirectKey(ip), bootstrapLANKey(ip), ip, true
 	}
 	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
 	ip = strings.TrimSpace(ip)
-	return bootstrapRateKey(ip, attributed), ip, false
+	key = bootstrapRateKey(ip, attributed)
+	if key != untrustedLocalClientKey {
+		lanKey = bootstrapLANKey(ip)
+	}
+	return key, lanKey, ip, false
+}
+
+// bootstrapLANKey is the aggregate window key of ip's LAN IPv6 /64, or "".
+func bootstrapLANKey(ip string) string {
+	if prefix, ok := lanIPv6Prefix(ip); ok {
+		return "lan64:" + prefix
+	}
+	return ""
 }
 
 // sweepLocked drops every window that has ended. Entries are in creation
@@ -182,18 +206,24 @@ func bootstrapDirectLANPeer(c *gin.Context, connectors connectorPeers) bool {
 	return !hasCloudflareMarkers(c)
 }
 
-// allow records one attempt for key and reports whether it may proceed. A
-// refused attempt is not recorded anywhere, so it spends neither the key's nor
-// the global budget. exemptFromGlobal (a direct LAN peer) skips the global
-// ceiling entirely: it is neither refused by it nor counted against it.
-func (l *bootstrapLimiter) allow(key string, exemptFromGlobal bool) bool {
+// allow records one attempt for key (and for lanKey, the aggregate window of
+// a LAN IPv6 /64, when it is not "") and reports whether it may proceed. Both
+// windows must admit the attempt, and the check and the increments happen
+// under one lock, so they are atomic. A refused attempt is not recorded
+// anywhere, so it spends neither window nor the global budget.
+// exemptFromGlobal (a direct LAN peer) skips the global ceiling entirely: it
+// is neither refused by it nor counted against it; the LAN aggregate still
+// applies to it.
+func (l *bootstrapLimiter) allow(key, lanKey string, exemptFromGlobal bool) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 	l.sweepLocked(now)
 
-	el, tracked := l.entries[key]
-	if tracked && el.Value.(*bootstrapAttempt).count >= l.maxPerKey {
+	if l.countLocked(key) >= l.maxPerKey {
+		return false
+	}
+	if lanKey != "" && l.countLocked(lanKey) >= bootstrapLANPrefixFactor*l.maxPerKey {
 		return false
 	}
 	if !exemptFromGlobal {
@@ -205,13 +235,30 @@ func (l *bootstrapLimiter) allow(key string, exemptFromGlobal bool) bool {
 		}
 		l.global.count++
 	}
-	if tracked {
+	l.incrementLocked(key, now)
+	if lanKey != "" {
+		l.incrementLocked(lanKey, now)
+	}
+	return true
+}
+
+// countLocked is key's admitted attempts in its live window (0 for none).
+func (l *bootstrapLimiter) countLocked(key string) int {
+	if el, ok := l.entries[key]; ok {
+		return el.Value.(*bootstrapAttempt).count
+	}
+	return 0
+}
+
+// incrementLocked records one admitted attempt for key, opening its window
+// (and evicting the oldest window at the cap) when it has none.
+func (l *bootstrapLimiter) incrementLocked(key string, now time.Time) {
+	if el, ok := l.entries[key]; ok {
 		el.Value.(*bootstrapAttempt).count++
-		return true
+		return
 	}
 	for l.maxKeys > 0 && l.order.Len() >= l.maxKeys {
 		l.removeLocked(l.order.Front())
 	}
 	l.entries[key] = l.order.PushBack(&bootstrapAttempt{key: key, count: 1, firstAt: now})
-	return true
 }

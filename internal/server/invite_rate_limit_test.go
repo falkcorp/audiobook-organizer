@@ -638,7 +638,7 @@ func TestInviteRateLimit_PiConnectorsUnset_EachPiIsOneBucket(t *testing.T) {
 	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	if key, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:"+piConnectors[2] {
+	if key, _, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:"+piConnectors[2] {
 		t.Fatalf("inviteClientKey = %q, %v; want the unlisted Pi's own address", key, ok)
 	}
 }
@@ -675,7 +675,7 @@ func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 	req.Header.Set("CF-Connecting-IP", "198.51.100.7")
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	if key, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:198.51.100.7" {
+	if key, _, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:198.51.100.7" {
 		t.Fatalf("inviteClientKey = %q, %v; want the visitor's address", key, ok)
 	}
 }
@@ -915,5 +915,48 @@ func TestOnceSet_Bounded(t *testing.T) {
 	}
 	if o.len() != 2 {
 		t.Fatalf("set holds %d, want 2", o.len())
+	}
+}
+
+// LAN /64 aggregate (review MEDIUM): one LAN host rotating through 50
+// addresses of its /64 gets a fresh per-address bucket each time, but every
+// address also shares the /64's aggregate, which caps it well before the
+// global ceiling; other clients are still admitted.
+func TestInviteRateLimit_LANSlash64RotationIsCappedByTheAggregate(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	admitted := 0
+	for i := range 50 {
+		peer := fmt.Sprintf("[fd12:3456:789a:1::%x]", i+1)
+		for j := range 2 {
+			if w := h.get(inviteTestToken(i*2+j), peer, nil); w.Code == http.StatusOK {
+				admitted++
+			}
+		}
+	}
+	if admitted > inviteLANPrefixRateBurst+1 {
+		t.Fatalf("one LAN /64 rotating 50 addresses got %d requests through, want at most the aggregate burst of %d", admitted, inviteLANPrefixRateBurst)
+	}
+	if admitted < inviteLANPrefixRateBurst {
+		t.Fatalf("the /64 got only %d through, want the aggregate burst of %d", admitted, inviteLANPrefixRateBurst)
+	}
+	if w := h.get(inviteTestToken(900), "198.51.100.30", nil); w.Code != http.StatusOK {
+		t.Fatalf("another client after the rotation: %d, want 200 (global not drained)", w.Code)
+	}
+	if w := h.get(inviteTestToken(901), "[fd12:3456:789a:2::1]", nil); w.Code != http.StatusOK {
+		t.Fatalf("a device in another LAN /64: %d, want 200 (its own aggregate)", w.Code)
+	}
+}
+
+// Two distinct LAN devices in one /64 each get their own per-address burst,
+// within the shared aggregate.
+func TestInviteRateLimit_LANDevicesInOneSlash64EachGetTheirBurst(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	for d, peer := range []string{"[fd12:3456:789a:1::a]", "[fd12:3456:789a:1::b]"} {
+		allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+			return h.get(inviteTestToken(d*100+i), peer, nil)
+		})
+		if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+1 {
+			t.Fatalf("device %d: allowed %d (limited=%v), want its own burst of %d", d, allowed, limited, inviteAuthRateBurst)
+		}
 	}
 }
