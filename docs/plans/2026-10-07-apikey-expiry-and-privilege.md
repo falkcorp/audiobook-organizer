@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-10-07-apikey-expiry-and-privilege.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 67c7aa4f-72e2-4a9c-805a-92fff01c3308 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-20 -->
 
 # API keys: expiry, and no path from a key to a signed-in admin
 
@@ -67,8 +67,9 @@ invite creation (`role_id`), which is guarded.
 | Route | Why not |
 |---|---|
 | `POST /auth/setup`, `/auth/login`, `/auth/accept-invite`, `/auth/bootstrap`, OAuth start/callback, `GET /auth/temp-login` | Public, pre-authentication; no API key involved. The bootstrap exchange (token → key, creating the admin user when none exists) stays exactly as it is |
-| `GET /auth/me`, `GET /auth/sessions`, `GET /auth/api-keys[/:id]`, `GET /users`, `GET /users/invites` | Reads |
-| `POST /auth/logout`, `DELETE /auth/sessions/:id`, `DELETE /users/invites/:token`, `DELETE /auth/api-keys/:id` | Revocations only reduce access; automation may need them |
+| `GET /auth/me`, `GET /auth/sessions`, `GET /auth/api-keys[/:id]`, `GET /users` | Reads |
+| `GET /users/invites` | A read, but not a plain one: an invite token is a credential (it accepts the invite, and an emailed invite's token also carries the verified address, the SSO grant and the Cloudflare guest entry). The list therefore never returns a token to an API key or any other method that may not change credentials, and returns an emailed invite's token only to an active admin (added 2026-10-20, invite-email review). Every entry carries a non-secret `id` instead |
+| `POST /auth/logout`, `DELETE /auth/sessions/:id`, `DELETE /users/invites/:id`, `DELETE /auth/api-keys/:id` | Revocations only reduce access; automation may need them. Invite revoke and resend take the invite's `id`, not its token (2026-10-20) |
 | `POST /auth/api-keys` for the caller's own user | Allowed, but when the caller is an API key the new key may not outlive the calling key (decision D6) |
 | `POST /auth/api-keys/:id/rotate` on a key of the caller's own user | Allowed; the new key keeps the old key's lifetime (D5), clamped to the calling key's expiry when an API key asks (D6) |
 | `POST /backup/create`, `GET /backup/list`, `DELETE /backup/:filename` | Do not change who can sign in |

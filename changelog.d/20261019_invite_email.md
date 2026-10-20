@@ -54,6 +54,16 @@ GET /config: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
 Cloudflare tunnel connectors reach this service from; list every connector,
 which this deploy does, so tunnel traffic gets per-visitor limits).
 
+Invite tokens are credentials (holding one accepts the invite), so
+`GET /api/v1/users/invites` never returns a token to an API key or any other
+caller that may not change credentials, and returns the token of an invite
+that has an email address only to an active admin. Every pending invite now
+has a non-secret `id` (a domain-separated hash of the token, derived, so
+existing invites have one too), and revoke and resend moved to
+`DELETE /api/v1/users/invites/:id` and `POST /api/v1/users/invites/:id/resend`;
+the token routes are gone. The Users page shows "Hidden" where it gets no
+token. With auth disabled the list shows every token, as before.
+
 #### Accepting an emailed invite sets the email, allows SSO, and can update one Cloudflare policy
 
 When the invitation was emailed to its address, accepting it sets that address

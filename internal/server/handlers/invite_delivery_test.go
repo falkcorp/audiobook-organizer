@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-20
 
@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
@@ -67,7 +68,7 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 	r := gin.New()
 	r.POST("/users/invite", f.h.CreateInvite)
 	r.GET("/users/invites", f.h.ListInvites)
-	r.POST("/users/invites/:token/resend", f.h.ResendInvite)
+	r.POST("/users/invites/:id/resend", f.h.ResendInvite)
 	r.GET("/auth/invite/:token", f.h.PublicInvite)
 	f.router = r
 	return f
@@ -225,12 +226,12 @@ func TestResendInvite_RateLimitedPerInvite(t *testing.T) {
 	f := newInviteFixture(t)
 	_, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{"username": "g", "role_id": "viewer", "email": "g@example.com"})
 	token := fmt.Sprint(data["token"])
-	w, rd := f.do(t, http.MethodPost, "/users/invites/"+token+"/resend", nil)
+	w, rd := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(token)+"/resend", nil)
 	if w.Code != http.StatusOK || rd["email_sent"] != true {
 		t.Fatalf("first resend: %d %s", w.Code, w.Body.String())
 	}
 	assertNoGuestSecrets(t, w.Body.String())
-	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+token+"/resend", nil); w.Code != http.StatusTooManyRequests {
+	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(token)+"/resend", nil); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("second resend within a minute: %d, want 429", w.Code)
 	}
 	if n := len(f.rec.Sent()); n != 1 {
@@ -242,7 +243,7 @@ func TestCreateInviteSend_CountsTowardResendLimit(t *testing.T) {
 	f := newInviteFixture(t)
 	_, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{"username": "g", "role_id": "viewer", "email": "g@example.com", "send_email": true})
 	token := fmt.Sprint(data["token"])
-	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+token+"/resend", nil); w.Code != http.StatusTooManyRequests {
+	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(token)+"/resend", nil); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("resend right after the create-time send: %d, want 429", w.Code)
 	}
 }
@@ -254,7 +255,7 @@ func TestResendInvite_PerAdminCap(t *testing.T) {
 		_, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{
 			"username": fmt.Sprintf("g%d", i), "role_id": "viewer", "email": fmt.Sprintf("g%d@example.com", i),
 		})
-		w, _ := f.do(t, http.MethodPost, "/users/invites/"+fmt.Sprint(data["token"])+"/resend", nil)
+		w, _ := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(fmt.Sprint(data["token"]))+"/resend", nil)
 		lastCode = w.Code
 		if i < 10 && w.Code != http.StatusOK {
 			t.Fatalf("resend %d: %d", i, w.Code)
@@ -271,12 +272,12 @@ func TestResendInvite_Refusals(t *testing.T) {
 		t.Fatalf("missing invite: %d", w.Code)
 	}
 	_, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{"username": "noemail", "role_id": "viewer"})
-	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+fmt.Sprint(data["token"])+"/resend", nil); w.Code != http.StatusBadRequest {
+	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(fmt.Sprint(data["token"]))+"/resend", nil); w.Code != http.StatusBadRequest {
 		t.Fatalf("no-email invite: %d", w.Code)
 	}
 	_, data = f.do(t, http.MethodPost, "/users/invite", map[string]any{"username": "m", "role_id": "viewer", "email": "m@example.com"})
 	f.mailOn = false
-	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+fmt.Sprint(data["token"])+"/resend", nil); w.Code != http.StatusServiceUnavailable {
+	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(fmt.Sprint(data["token"]))+"/resend", nil); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("mail off: %d", w.Code)
 	}
 }
@@ -562,7 +563,7 @@ func TestInviteEmail_RefusedWithoutAnAbsoluteBaseURL(t *testing.T) {
 				t.Fatal("no email may go out with a relative link")
 			}
 			token, _ := data["token"].(string)
-			if w, _ := f.do(t, http.MethodPost, "/users/invites/"+token+"/resend", nil); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "PUBLIC_URL_NOT_CONFIGURED") {
+			if w, _ := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(token)+"/resend", nil); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "PUBLIC_URL_NOT_CONFIGURED") {
 				t.Fatalf("resend: %d %s", w.Code, w.Body.String())
 			}
 			_, list := f.do(t, http.MethodGet, "/users/invites", nil)
@@ -570,5 +571,127 @@ func TestInviteEmail_RefusedWithoutAnAbsoluteBaseURL(t *testing.T) {
 				t.Fatalf("list settings = %v / %v", list["mail_configured"], list["mail_unavailable_reason"])
 			}
 		})
+	}
+}
+
+// listAs serves GET /users/invites as a caller authenticated by method, acting
+// as actor (nil: none), and returns the invites it lists by username.
+func (f *inviteFixture) listAs(t *testing.T, method auth.Method, actor *database.User) map[string]map[string]any {
+	t.Helper()
+	r := gin.New()
+	r.GET("/users/invites", func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.WithMethod(c.Request.Context(), method))
+		if actor != nil {
+			c.Set("auth_user", actor)
+		}
+	}, f.h.ListInvites)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/users/invites", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Data struct {
+			Invites []map[string]any `json:"invites"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]map[string]any{}
+	for _, inv := range env.Data.Invites {
+		out[fmt.Sprint(inv["username"])] = inv
+	}
+	return out
+}
+
+// SF2: the invite list never hands a token to an API key, and an emailed
+// invite's token only to an active admin's own sign-in. Every entry carries
+// its non-secret ID, which the revoke and resend routes take.
+func TestListInvites_TokensOnlyWhereTheCallerMayHaveThem(t *testing.T) {
+	f := newInviteFixture(t)
+	admin, err := f.store.CreateUser("boss", "boss@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := f.store.CreateUser("mgr", "mgr@example.com", "bcrypt", "h", []string{"editor"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	emailed := strings.Repeat("c", 64)
+	plain := strings.Repeat("d", 64)
+	for _, inv := range []*database.Invite{
+		{Token: emailed, Username: "emailed", Email: "emailed@example.com", RoleID: "viewer", CreatedByUserID: admin.ID, ExpiresAt: time.Now().Add(time.Hour)},
+		{Token: plain, Username: "plain", RoleID: "viewer", CreatedByUserID: admin.ID, ExpiresAt: time.Now().Add(time.Hour)},
+	} {
+		if _, err := f.store.CreateInvite(inv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := func(name string, list map[string]map[string]any, user, token string) {
+		t.Helper()
+		inv := list[user]
+		if inv["id"] != database.InviteID(map[string]string{"emailed": emailed, "plain": plain}[user]) {
+			t.Fatalf("%s: %s has id %v", name, user, inv["id"])
+		}
+		if got, _ := inv["token"].(string); got != token {
+			t.Fatalf("%s: %s token = %q, want %q", name, user, got, token)
+		}
+	}
+	// An admin's API key: no tokens at all.
+	l := f.listAs(t, auth.MethodAPIKey, admin)
+	want("admin API key", l, "emailed", "")
+	want("admin API key", l, "plain", "")
+	// An ABS token or no recorded method: none either (allowlist).
+	l = f.listAs(t, auth.MethodABS, admin)
+	want("ABS", l, "emailed", "")
+	l = f.listAs(t, auth.MethodNone, admin)
+	want("no method", l, "plain", "")
+	// A non-admin session with users.manage: only the invite with no email.
+	l = f.listAs(t, auth.MethodSession, manager)
+	want("non-admin session", l, "emailed", "")
+	want("non-admin session", l, "plain", plain)
+	// An admin's session (or SSO sign-in): every token.
+	for _, m := range []auth.Method{auth.MethodSession, auth.MethodCFAccess} {
+		l = f.listAs(t, m, admin)
+		want(string(m), l, "emailed", emailed)
+		want(string(m), l, "plain", plain)
+	}
+	// A deactivated admin is no admin.
+	locked := *admin
+	locked.Status = "locked"
+	l = f.listAs(t, auth.MethodSession, &locked)
+	want("locked admin", l, "emailed", "")
+	// With auth off there is nobody to tell apart: tokens are listed.
+	f.h.SetAuthEnabled(false)
+	l = f.listAs(t, auth.MethodNone, nil)
+	want("auth off", l, "emailed", emailed)
+}
+
+// SF2: revoke and resend take the ID; a token in that place is not found.
+func TestDeleteInvite_ByIDNotToken(t *testing.T) {
+	f := newInviteFixture(t)
+	f.router.DELETE("/users/invites/:id", f.h.DeleteInvite)
+	_, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{"username": "g", "role_id": "viewer", "email": "g@example.com"})
+	token := fmt.Sprint(data["token"])
+	inv, _ := data["invite"].(map[string]any)
+	id := database.InviteID(token)
+	if inv["id"] != id {
+		t.Fatalf("create response invite id = %v, want %s", inv["id"], id)
+	}
+	if w, _ := f.do(t, http.MethodDelete, "/users/invites/"+token, nil); w.Code != http.StatusNotFound {
+		t.Fatalf("delete by token: %d, want 404", w.Code)
+	}
+	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+token+"/resend", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("resend by token: %d, want 404", w.Code)
+	}
+	if w, d := f.do(t, http.MethodDelete, "/users/invites/"+id, nil); w.Code != http.StatusOK || d["deleted"] != id {
+		t.Fatalf("delete by id: %d %v", w.Code, d)
+	}
+	if got, _ := f.store.GetInvite(token); got != nil {
+		t.Fatal("the invite is still there")
+	}
+	if w, _ := f.do(t, http.MethodDelete, "/users/invites/"+id, nil); w.Code != http.StatusNotFound {
+		t.Fatalf("delete again: %d, want 404", w.Code)
 	}
 }

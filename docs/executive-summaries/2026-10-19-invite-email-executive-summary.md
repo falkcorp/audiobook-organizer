@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-20 -->
 
@@ -39,6 +39,11 @@ Branch `feat/invite-email`, PR #4090. No separate spec.
   sign-in. Look-alike spellings (for example a special Unicode "K" in place of
   "k") count as the same address. An administrator can now set or clear
   another person's email from the Users page.
+- **Invite links are not handed to automation.** Holding an invite link is
+  enough to accept it, so the list of pending invites never shows the link to
+  an API key used by scripts, and shows the link of an emailed invite only to
+  an administrator signed in to the web page. Revoking or resending an invite
+  now uses a separate reference number that cannot be used to accept it.
 - **Secrets stay on the server.** The mail password and the Cloudflare key
   are set only in the server's environment, are never shown in the settings
   screens, admin responses or logs, and cannot be changed through the web

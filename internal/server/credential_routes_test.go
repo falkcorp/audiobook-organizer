@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -41,10 +41,10 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/auth/bootstrap":     "public; consumes a one-time bootstrap token",
 	"POST /api/v1/auth/accept-invite": "public; consumes a one-time invite token",
 	// Taking access away is not a credential change.
-	"POST /api/v1/auth/logout":            "ends the caller's own session",
-	"DELETE /api/v1/auth/sessions/:id":    "revokes one of the caller's own sessions",
-	"DELETE /api/v1/auth/api-keys/:id":    "revokes a key",
-	"DELETE /api/v1/users/invites/:token": "revokes an invite",
+	"POST /api/v1/auth/logout":         "ends the caller's own session",
+	"DELETE /api/v1/auth/sessions/:id": "revokes one of the caller's own sessions",
+	"DELETE /api/v1/auth/api-keys/:id": "revokes a key",
+	"DELETE /api/v1/users/invites/:id": "revokes an invite",
 	// Settings changed field by field: PUT /config refuses protected fields
 	// (config.ChangedProtectedFields) for a non-interactive caller inside
 	// UpdateService, on the decoded config.

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-20
 
@@ -63,11 +63,19 @@ type UserHandler struct {
 	// answers 404 whenever accept would refuse. nil when the store lacks the
 	// capability; the lookup then checks only missing, used and expired.
 	acceptChecker database.InviteAcceptChecker
+	// inviteByID resolves the admin routes' invite ID; nil when the store
+	// lacks the capability, and the pending list is searched instead.
+	inviteByID database.InviteIDLookup
+	// authEnabled mirrors config enable_auth (SetAuthEnabled). With auth off
+	// there is no caller to tell apart and the credential-route guard is off
+	// too, so invite tokens are listed as before. Defaults to true, so a
+	// handler nobody configured hides them.
+	authEnabled bool
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
 func NewUserHandler(store UserStore) *UserHandler {
-	h := &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store), creds: ResolveUserCredentialWriter(store), sendLimiter: newInviteSendLimiter()}
+	h := &UserHandler{store: store, absSessions: ResolveABSSessionRevoker(store), creds: ResolveUserCredentialWriter(store), sendLimiter: newInviteSendLimiter(), authEnabled: true}
 	if ds, ok := database.AsCapability[database.InviteDeliveryStore](store); ok {
 		h.deliveryStore = ds
 	}
@@ -77,8 +85,16 @@ func NewUserHandler(store UserStore) *UserHandler {
 	if ac, ok := database.AsCapability[database.InviteAcceptChecker](store); ok {
 		h.acceptChecker = ac
 	}
+	if il, ok := database.AsCapability[database.InviteIDLookup](store); ok {
+		h.inviteByID = il
+	}
 	return h
 }
+
+// SetAuthEnabled records config enable_auth (wire time), which decides
+// whether invite tokens are shown to every caller (auth off) or only as
+// inviteTokenVisible allows.
+func (h *UserHandler) SetAuthEnabled(enabled bool) { h.authEnabled = enabled }
 
 // generateToken produces a cryptographically random 32-byte hex string.
 func generateToken() string {
@@ -161,39 +177,122 @@ func (h *UserHandler) CreateInvite(c *gin.Context) {
 		httputil.InternalError(c, "failed to create invite", err)
 		return
 	}
+	// The creator sees the token: the route is a credential route (no API
+	// key reaches it), and an emailed invite from a creator who is not an
+	// admin binds no address and grants nothing (inviteCreatorMayGrant), so
+	// accepting it themselves gains them nothing.
+	view := newPendingInviteView(created, true)
 	resp := gin.H{
-		"invite": created, "token": token,
+		"invite": view, "token": token,
 		"invite_url": InviteURL(h.delivery.baseURL(), token),
 		"email_sent": false,
 	}
 	if req.SendEmail {
 		if blocked := h.delivery.sendBlocked(); blocked != "" {
 			resp["email_error"] = blocked
-		} else if why := h.sendLimiter.allow(token, currentUserID(c)); why != "" {
+		} else if why := h.sendLimiter.allow(view.ID, currentUserID(c)); why != "" {
 			resp["email_error"] = why
 		} else if sentAt, errMsg := h.sendInviteEmail(c.Request.Context(), created); errMsg != "" {
 			resp["email_error"] = errMsg
 		} else {
 			resp["email_sent"] = true
-			created.EmailSentAt = sentAt
+			view.EmailSentAt = sentAt
+			view.EmailSentTo = created.Email
 		}
 	}
 	httputil.RespondWithCreated(c, resp)
 }
 
-// ListInvites handles GET /api/v1/users/invites — returns active invites.
+// pendingInviteView is the admin's view of a pending invite. ID is the handle
+// the revoke and resend routes take. Token, the bearer secret that accepts
+// the invite, is present only when inviteTokenVisible allows it.
+type pendingInviteView struct {
+	ID              string     `json:"id"`
+	Token           string     `json:"token,omitempty"`
+	Username        string     `json:"username"`
+	Email           string     `json:"email,omitempty"`
+	RoleID          string     `json:"role_id"`
+	CreatedByUserID string     `json:"created_by_user_id,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	ExpiresAt       time.Time  `json:"expires_at"`
+	EmailSentAt     *time.Time `json:"email_sent_at,omitempty"`
+	EmailSentTo     string     `json:"email_sent_to,omitempty"`
+}
+
+func newPendingInviteView(inv *database.Invite, withToken bool) *pendingInviteView {
+	v := &pendingInviteView{
+		ID: database.InviteID(inv.Token), Username: inv.Username, Email: inv.Email,
+		RoleID: inv.RoleID, CreatedByUserID: inv.CreatedByUserID,
+		CreatedAt: inv.CreatedAt, ExpiresAt: inv.ExpiresAt,
+		EmailSentAt: inv.EmailSentAt, EmailSentTo: inv.EmailSentTo,
+	}
+	if withToken {
+		v.Token = inv.Token
+	}
+	return v
+}
+
+// inviteTokenVisible reports whether the caller of the invite list may see
+// inv's token. Holding the token of an invite an admin emailed lets anyone
+// accept it and receive the address verified, the SSO grant and the
+// Cloudflare guest entry, and later capture the real invitee's SSO sign-in,
+// so:
+//   - an API key, an ABS token or any other method that may not change
+//     credentials never sees a token (the same allowlist as the credential
+//     routes, so a method nobody classified is refused);
+//   - an invite with an email address shows its token only to an active
+//     admin: users.manage alone lets a non-admin list invites, and a resend
+//     can deliver an invite that was not emailed yet, so "has an email" is
+//     the test, not "was sent".
+//
+// With auth disabled there is no caller to tell apart and the credential
+// guard is off as well, so every token is shown, as before.
+func (h *UserHandler) inviteTokenVisible(c *gin.Context, inv *database.Invite) bool {
+	if !h.authEnabled {
+		return true
+	}
+	if !servermiddleware.CredentialChangeAllowed(c) {
+		return false
+	}
+	if inv.Email == "" {
+		return true
+	}
+	actor, ok := servermiddleware.CurrentUser(c)
+	return ok && actor != nil && actor.Status == "active" && slices.Contains(actor.Roles, adminRole)
+}
+
+// findInvite resolves an admin route's invite ID to the invite, or nil.
+func (h *UserHandler) findInvite(id string) (*database.Invite, error) {
+	if h.inviteByID != nil {
+		return h.inviteByID.GetInviteByID(id)
+	}
+	invites, err := h.store.ListActiveInvites()
+	if err != nil {
+		return nil, err
+	}
+	for i := range invites {
+		if database.InviteID(invites[i].Token) == id {
+			return &invites[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// ListInvites handles GET /api/v1/users/invites — returns active invites,
+// each with its ID and, only where inviteTokenVisible allows, its token.
 func (h *UserHandler) ListInvites(c *gin.Context) {
 	invites, err := h.store.ListActiveInvites()
 	if err != nil {
 		httputil.InternalError(c, "failed to list invites", err)
 		return
 	}
-	if invites == nil {
-		invites = []database.Invite{}
+	views := make([]*pendingInviteView, 0, len(invites))
+	for i := range invites {
+		views = append(views, newPendingInviteView(&invites[i], h.inviteTokenVisible(c, &invites[i])))
 	}
 	_, headersOK := h.delivery.headers()
 	httputil.RespondWithOK(c, gin.H{
-		"invites": invites, "count": len(invites),
+		"invites": views, "count": len(views),
 		// Accepted invites from the last 30 days with their Cloudflare
 		// guest-policy outcome, so a failed sync can be done by hand.
 		"accepted": h.acceptedInvites(),
@@ -206,14 +305,24 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 	})
 }
 
-// DeleteInvite handles DELETE /api/v1/users/invites/:token — revokes an invite.
+// DeleteInvite handles DELETE /api/v1/users/invites/:id — revokes an invite
+// by its ID (database.InviteID), never its token.
 func (h *UserHandler) DeleteInvite(c *gin.Context) {
-	token := c.Param("token")
-	if err := h.store.DeleteInvite(token); err != nil {
+	id := c.Param("id")
+	inv, err := h.findInvite(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to load invite", err)
+		return
+	}
+	if inv == nil {
+		httputil.RespondWithNotFound(c, "invite", id)
+		return
+	}
+	if err := h.store.DeleteInvite(inv.Token); err != nil {
 		httputil.InternalError(c, "failed to delete invite", err)
 		return
 	}
-	httputil.RespondWithOK(c, gin.H{"deleted": token})
+	httputil.RespondWithOK(c, gin.H{"deleted": id})
 }
 
 // AcceptInvite handles POST /api/v1/auth/accept-invite — consumes an invite and creates a user session.
