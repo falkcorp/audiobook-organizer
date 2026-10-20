@@ -1,7 +1,7 @@
 // file: internal/database/credits_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: a5a7e839-5ad1-49ad-8401-9428121f66e7
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -149,22 +149,22 @@ func TestNormalizeBookAuthors_PrimaryBreaksPositionTies(t *testing.T) {
 		primary *int
 		want    []int
 	}{
-		{"tie, AuthorID breaks it", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, intp(a), []int{a, b}},
+		{"tie, AuthorID breaks it", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, new(a), []int{a, b}},
 		{"tie, no AuthorID: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, nil, []int{b, a}},
-		{"tie, AuthorID zero: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, intp(0), []int{b, a}},
-		{"tie, AuthorID not in the join: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, intp(99), []int{b, a}},
+		{"tie, AuthorID zero: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, new(0), []int{b, a}},
+		{"tie, AuthorID not in the join: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, new(99), []int{b, a}},
 		{"prod shape A@0 B@0 A+B@1, AuthorID=B", []BookAuthor{
 			{AuthorID: a, Position: 0}, {AuthorID: b, Position: 0}, {AuthorID: ab, Position: 1},
-		}, intp(b), []int{b, a, ab}},
+		}, new(b), []int{b, a, ab}},
 		{"prod shape A@0 B@0 A+B@1, AuthorID=A+B (not in the tie group)", []BookAuthor{
 			{AuthorID: a, Position: 0}, {AuthorID: b, Position: 0}, {AuthorID: ab, Position: 1},
-		}, intp(ab), []int{a, b, ab}},
+		}, new(ab), []int{a, b, ab}},
 		{"AuthorID only reorders its own tie group", []BookAuthor{
 			{AuthorID: c, Position: 0}, {AuthorID: b, Position: 1}, {AuthorID: a, Position: 1},
-		}, intp(a), []int{c, a, b}},
+		}, new(a), []int{c, a, b}},
 		{"distinct positions are never overridden", []BookAuthor{
 			{AuthorID: b, Position: 0}, {AuthorID: a, Position: 1},
-		}, intp(a), []int{b, a}},
+		}, new(a), []int{b, a}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -680,7 +680,7 @@ func TestModifyBookCredits_SkipErrorMissingAndNoNarratorSync(t *testing.T) {
 	// The narrator list is whatever fn leaves: setting the column does not
 	// run the column -> junction sync that ModifyBook runs.
 	if _, _, err := s.ModifyBookCredits(b.ID, func(book *Book, c *BookCreditsEdit) error {
-		book.Narrator = strp("Kate Reading, Michael Kramer")
+		book.Narrator = new("Kate Reading, Michael Kramer")
 		return nil
 	}); err != nil {
 		t.Fatal(err)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/narrator_split_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fad820b8-36c7-4108-a80e-6bcf9554b61e
-// last-edited: 2026-09-22
+// last-edited: 2026-10-20
 
 package abs
 
@@ -12,15 +12,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-func strp(s string) *string { return &s }
-
 // 2026-09-22: a book whose cast came from a metadata provider has no junction
 // rows and a ", "-joined Narrator column. The app showed ONE narrator named
 // "Dorrie Sacks, Justin Thomas James, …". The column tier must yield people.
 func TestResolveNarratorTiers_LegacyColumnSplitsIntoPeople(t *testing.T) {
 	col := "Dorrie Sacks, Justin Thomas James, Gary Furlong, Ryan H. Reid, " +
 		"Christopher Ragland, Tiana Camacho, Andrea Parsneau, Jeff Hays"
-	got := resolveNarratorTiers(nil, nil, strp(col))
+	got := resolveNarratorTiers(nil, nil, new(col))
 	want := []string{"Dorrie Sacks", "Justin Thomas James", "Gary Furlong", "Ryan H. Reid",
 		"Christopher Ragland", "Tiana Camacho", "Andrea Parsneau", "Jeff Hays"}
 	if !reflect.DeepEqual(got, want) {
@@ -35,8 +33,8 @@ func TestResolveNarratorTiers_SurnameFirstStaysOnePerson(t *testing.T) {
 		name         string
 		json, column *string
 	}{
-		{"column", nil, strp("Le Guin, Ursula")},
-		{"bare-string json", strp("Le Guin, Ursula"), nil},
+		{"column", nil, new("Le Guin, Ursula")},
+		{"bare-string json", new("Le Guin, Ursula"), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := resolveNarratorTiers(nil, tc.json, tc.column)
@@ -49,7 +47,7 @@ func TestResolveNarratorTiers_SurnameFirstStaysOnePerson(t *testing.T) {
 
 // Other separators the shared splitter understands also split on the column.
 func TestResolveNarratorTiers_LegacyColumnAmpersand(t *testing.T) {
-	got := resolveNarratorTiers(nil, nil, strp("Kate Reading & Michael Kramer"))
+	got := resolveNarratorTiers(nil, nil, new("Kate Reading & Michael Kramer"))
 	if !reflect.DeepEqual(got, []string{"Kate Reading", "Michael Kramer"}) {
 		t.Fatalf("got %q", got)
 	}
@@ -57,7 +55,7 @@ func TestResolveNarratorTiers_LegacyColumnAmpersand(t *testing.T) {
 
 // The junction still wins outright; the column is not consulted.
 func TestResolveNarratorTiers_JunctionStillWins(t *testing.T) {
-	got := resolveNarratorTiers([]database.Narrator{{Name: "Only Junction"}}, nil, strp("A, B, C"))
+	got := resolveNarratorTiers([]database.Narrator{{Name: "Only Junction"}}, nil, new("A, B, C"))
 	if !reflect.DeepEqual(got, []string{"Only Junction"}) {
 		t.Fatalf("got %q", got)
 	}

@@ -1,7 +1,7 @@
 // file: internal/organizer/author_from_join_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1e2d94-6a3f-4b81-9d20-3e5a8c7f1b64
-// last-edited: 2026-09-05
+// last-edited: 2026-10-20
 
 package organizer
 
@@ -12,9 +12,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
-
-// intp is a small helper for the *int scalar AuthorID.
-func intp(i int) *int { return &i }
 
 // authorJoinStore is a hand-wired OrganizerStore that lets each test decide
 // exactly what the join table and the scalar author resolution return, so the
@@ -59,7 +56,7 @@ func TestResolveAuthorName_JoinBeatsRevertedScalar(t *testing.T) {
 	})
 	book := &database.Book{
 		ID:       "b1",
-		AuthorID: intp(200),                                     // reverted scalar
+		AuthorID: new(200),                                      // reverted scalar
 		Author:   &database.Author{ID: 200, Name: "Tag Author"}, // hydrated from scalar
 	}
 	if got := o.resolveAuthorName(book); got != "Applied Author" {
@@ -154,7 +151,7 @@ func TestResolveAuthorName_FallsThroughToScalar(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o := &Organizer{}
 			o.SetStore(tc.store)
-			book := &database.Book{ID: "b1", AuthorID: intp(9)} // Author obj nil -> scalar lookup
+			book := &database.Book{ID: "b1", AuthorID: new(9)} // Author obj nil -> scalar lookup
 			if got := o.resolveAuthorName(book); got != "Scalar Author" {
 				t.Fatalf("resolveAuthorName = %q, want scalar fall-through %q", got, "Scalar Author")
 			}

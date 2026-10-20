@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_year_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e2b4f61-3c7a-4d95-b0e8-5a1f9c6d2e47
-// last-edited: 2026-09-13
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -21,8 +21,6 @@ import (
 // The batch AI parse used to decode the model's year and drop it. It now
 // gap-fills audiobook_release_year under the same rule as the series position:
 // only into an empty, unlocked column, never over an existing year.
-
-func intPtr(v int) *int { return &v }
 
 // aiYearRow creates a row from seed, runs the AI save with the given model
 // year, and returns the stored row.
@@ -51,13 +49,13 @@ func TestSaveAIFields_FillsAnEmptyReleaseYear(t *testing.T) {
 // A stored pointer to 0 is empty to every year reader in the tree, so it is
 // empty here too.
 func TestSaveAIFields_FillsAZeroReleaseYear(t *testing.T) {
-	got := aiYearRow(t, &database.Book{Title: "T", AudiobookReleaseYear: intPtr(0)}, 2015, false)
+	got := aiYearRow(t, &database.Book{Title: "T", AudiobookReleaseYear: new(0)}, 2015, false)
 	require.NotNil(t, got.AudiobookReleaseYear)
 	require.Equal(t, 2015, *got.AudiobookReleaseYear)
 }
 
 func TestSaveAIFields_DoesNotOverwriteAnExistingReleaseYear(t *testing.T) {
-	got := aiYearRow(t, &database.Book{Title: "T", AudiobookReleaseYear: intPtr(2001)}, 2015, false)
+	got := aiYearRow(t, &database.Book{Title: "T", AudiobookReleaseYear: new(2001)}, 2015, false)
 	require.NotNil(t, got.AudiobookReleaseYear)
 	require.Equal(t, 2001, *got.AudiobookReleaseYear, "an existing year must never be overwritten")
 }
@@ -108,8 +106,8 @@ func TestRunAIBatchPhase_SavesYearOnlyForEligibleBooks(t *testing.T) {
 		expect *int
 	}
 	fixtures := []fixture{
-		{path: "/lib/empty.m4b", model: 2010, expect: intPtr(2010)},
-		{path: "/lib/existing.m4b", seed: intPtr(1999), model: 2010, expect: intPtr(1999)},
+		{path: "/lib/empty.m4b", model: 2010, expect: new(2010)},
+		{path: "/lib/existing.m4b", seed: new(1999), model: 2010, expect: new(1999)},
 		{path: "/lib/locked.m4b", lock: true, model: 2010},
 		{path: "/lib/bogus.m4b", model: 3024},
 	}

@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates_bookinfo_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 52b4b4c0-7157-4e40-901c-2a88bddf805e
 // last-edited: 2026-10-20
 
@@ -14,21 +14,18 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 )
 
-func strp(s string) *string { return &s }
-func intp(i int) *int       { return &i }
-
 // The review cards' book-info block reads these off the list response.
 func TestBuildCandidateBookInfo_ReviewCardFields(t *testing.T) {
 	book := &database.Book{
 		ID:                "b1",
 		Title:             "T",
-		Narrator:          strp("Reader One"),
-		ASIN:              strp("B000TEST01"),
-		ISBN10:            strp("0000000001"),
-		ISBN13:            strp("9780000000002"),
-		SeriesID:          intp(7),
+		Narrator:          new("Reader One"),
+		ASIN:              new("B000TEST01"),
+		ISBN10:            new("0000000001"),
+		ISBN13:            new("9780000000002"),
+		SeriesID:          new(7),
 		Series:            &database.Series{ID: 7, Name: "Saga"},
-		SeriesPositionRaw: strp("1.5"),
+		SeriesPositionRaw: new("1.5"),
 	}
 	store := &mockBookFileStore{files: []database.BookFile{{ID: "f1"}, {ID: "f2"}, {ID: "f3"}}}
 	info := metabatch.BuildCandidateBookInfo(store, book)
@@ -47,7 +44,7 @@ func TestBuildCandidateBookInfo_ReviewCardFields(t *testing.T) {
 }
 
 func TestBuildCandidateBookInfo_FileCountUnknownOnReadErrorAndNoFiles(t *testing.T) {
-	book := &database.Book{ID: "b1", ISBN10: strp("0000000001"), SeriesSequence: intp(3)}
+	book := &database.Book{ID: "b1", ISBN10: new("0000000001"), SeriesSequence: new(3)}
 	info := metabatch.BuildCandidateBookInfo(&mockBookFileStore{err: errors.New("boom")}, book)
 	if info.FileCount != 0 {
 		t.Errorf("file_count on failed read = %d, want 0 (unknown)", info.FileCount)
@@ -81,16 +78,16 @@ func (s *seriesStore) GetSeriesByIDs(ids []int) (map[int]*database.Series, error
 
 func TestResolveSeriesNames_OneBatchReadForTheWholeListing(t *testing.T) {
 	// A stale embedded object (another series' id) is not trusted.
-	stale := &database.Book{ID: "b0", SeriesID: intp(9), Series: &database.Series{ID: 8, Name: "Old"}}
+	stale := &database.Book{ID: "b0", SeriesID: new(9), Series: &database.Series{ID: 8, Name: "Old"}}
 	if info := metabatch.BuildCandidateBookInfoNoFiles(stale); info.Series != "" {
 		t.Fatalf("stale embedded series leaked: %q", info.Series)
 	}
 	var results []metabatch.CandidateResult
 	for i := range 500 {
-		b := &database.Book{ID: fmt.Sprintf("b%d", i), SeriesID: intp(i % 3)}
+		b := &database.Book{ID: fmt.Sprintf("b%d", i), SeriesID: new(i % 3)}
 		results = append(results, metabatch.CandidateResult{Book: metabatch.BuildCandidateBookInfoNoFiles(b)})
 	}
-	embedded := &database.Book{ID: "e", SeriesID: intp(5), Series: &database.Series{ID: 5, Name: "Kept"}}
+	embedded := &database.Book{ID: "e", SeriesID: new(5), Series: &database.Series{ID: 5, Name: "Kept"}}
 	results = append(results, metabatch.CandidateResult{Book: metabatch.BuildCandidateBookInfoNoFiles(embedded)})
 	results = append(results, metabatch.CandidateResult{Book: metabatch.BuildCandidateBookInfoNoFiles(&database.Book{ID: "none"})})
 
@@ -113,7 +110,7 @@ func TestResolveSeriesNames_NoReadWhenNothingMissingAndSafeOnFailure(t *testing.
 	if store.calls != 0 {
 		t.Errorf("read issued with nothing to resolve")
 	}
-	failing := []metabatch.CandidateResult{{Book: metabatch.BuildCandidateBookInfoNoFiles(&database.Book{ID: "b", SeriesID: intp(1)})}}
+	failing := []metabatch.CandidateResult{{Book: metabatch.BuildCandidateBookInfoNoFiles(&database.Book{ID: "b", SeriesID: new(1)})}}
 	metabatch.ResolveSeriesNames(&seriesStore{err: errors.New("x")}, failing)
 	if failing[0].Book.Series != "" {
 		t.Errorf("failed read set series %q", failing[0].Book.Series)

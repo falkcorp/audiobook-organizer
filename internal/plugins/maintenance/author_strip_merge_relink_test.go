@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
 // last-edited: 2026-10-20
 
@@ -46,9 +46,9 @@ type relinkFixture struct {
 func newRelinkFixture() *relinkFixture {
 	return &relinkFixture{
 		books: []database.BookCore{
-			{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: titleAsAuthorIntPtr(100), FilePath: "/lib/Arcane Chef 2/Arcane Chef 2"},
-			{ID: "bk-s", Title: "Arcane Chef 2", AuthorID: titleAsAuthorIntPtr(200), FilePath: "/lib/01 Arcane Chef 2/Arcane Chef 2"},
-			{ID: "bk-ward", Title: "Arcane Chef", AuthorID: titleAsAuthorIntPtr(300), FilePath: "/lib/T.J. Ward/Arcane Chef"},
+			{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: new(100), FilePath: "/lib/Arcane Chef 2/Arcane Chef 2"},
+			{ID: "bk-s", Title: "Arcane Chef 2", AuthorID: new(200), FilePath: "/lib/01 Arcane Chef 2/Arcane Chef 2"},
+			{ID: "bk-ward", Title: "Arcane Chef", AuthorID: new(300), FilePath: "/lib/T.J. Ward/Arcane Chef"},
 		},
 		files:   map[string][]database.BookFile{},
 		fetched: map[string]string{},

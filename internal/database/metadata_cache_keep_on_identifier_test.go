@@ -1,7 +1,7 @@
 // file: internal/database/metadata_cache_keep_on_identifier_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 247c268d-d5c6-4e27-b079-6b3a43dcd85d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package database
 
@@ -68,11 +68,11 @@ func requireStaleCandidates(t *testing.T, s *PebbleStore, bookID, msg string) {
 // does not move the cache generation (no cache row changed).
 func TestUpdateBook_FillingAnEmptyIdentifierKeepsCandidates(t *testing.T) {
 	for name, fill := range map[string]func(*Book){
-		"asin":   func(b *Book) { b.ASIN = strp("B00CANDID8") },
-		"isbn13": func(b *Book) { b.ISBN13 = strp("9780000000002") },
-		"isbn10": func(b *Book) { b.ISBN10 = strp("0000000001") },
+		"asin":   func(b *Book) { b.ASIN = new("B00CANDID8") },
+		"isbn13": func(b *Book) { b.ISBN13 = new("9780000000002") },
+		"isbn10": func(b *Book) { b.ISBN10 = new("0000000001") },
 		"all three": func(b *Book) {
-			b.ASIN, b.ISBN13, b.ISBN10 = strp("B00CANDID8"), strp("9780000000002"), strp("0000000001")
+			b.ASIN, b.ISBN13, b.ISBN10 = new("B00CANDID8"), new("9780000000002"), new("0000000001")
 		},
 	} {
 		t.Run(name+"/ModifyBook", func(t *testing.T) {
@@ -107,10 +107,10 @@ func TestUpdateBook_FillingAnEmptyIdentifierKeepsCandidates(t *testing.T) {
 // asks by series.
 func TestUpdateBook_ReplacedASINKeepsCandidatesForTheGate(t *testing.T) {
 	s := newKeepCacheStore(t)
-	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/c/x.m4b", Format: "m4b", ASIN: strp("B00OLDASIN")})
+	b, err := s.CreateBook(&Book{Title: "The Book", FilePath: "/lib/c/x.m4b", Format: "m4b", ASIN: new("B00OLDASIN")})
 	require.NoError(t, err)
 	seedCachedCandidate(t, s, b.ID, "B00OLDASIN")
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = strp("B00NEWASIN"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.ASIN = new("B00NEWASIN"); return nil })
 	require.NoError(t, err)
 	requireCandidates(t, s, b.ID, 1, "a replaced ASIN keeps the row; the apply gate judges it")
 

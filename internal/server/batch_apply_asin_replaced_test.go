@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_asin_replaced_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f6d3b82-9a47-4e05-b2c8-6e0a7d4f1c95
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package server
 
@@ -63,7 +63,7 @@ func TestPlanCachedApply_TranscriptionDoesNotLiftReplacedASIN(t *testing.T) {
 	asin := "B00HULKNEW"
 	mk := func() fakeBooks {
 		dur := 36000
-		return fakeBooks{"b1": {ID: "b1", Title: "", TranscribedTitle: strPtr(hulk), ASIN: &asin,
+		return fakeBooks{"b1": {ID: "b1", Title: "", TranscribedTitle: new(hulk), ASIN: &asin,
 			FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}}
 	}
 	cand := metafetch.MetadataCandidate{Title: hulk, Author: "Greg Pak", Score: 0.95, DurationSec: 36000, Source: "Google Books"}

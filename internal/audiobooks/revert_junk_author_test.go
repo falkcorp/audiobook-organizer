@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_junk_author_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f61a9d0-210f-4702-ae53-7ec0a671e4ff
-// last-edited: 2026-09-29
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -33,7 +33,7 @@ func junkRow(id, bookID string, snap undo.TitleRelinkCreditsSnapshot, move undo.
 // relinkMove is the 100 ("Demon Cycle") -> 300 relink that also moved the
 // primary.
 func relinkMove() undo.JunkAuthorCreditsMove {
-	return undo.JunkAuthorCreditsMove{FromAuthorID: 100, IntoAuthorID: 300, PrimaryAfter: intp(300), PrimaryChanged: true,
+	return undo.JunkAuthorCreditsMove{FromAuthorID: 100, IntoAuthorID: 300, PrimaryAfter: new(300), PrimaryChanged: true,
 		CreditsAfter: after(database.BookAuthor{BookID: "b1", AuthorID: 300, Role: "author"})}
 }
 
@@ -42,12 +42,12 @@ func relinkMove() undo.JunkAuthorCreditsMove {
 func TestRevertJunkAuthor_RestoresRelink(t *testing.T) {
 	orig := []database.BookAuthor{{BookID: "b1", AuthorID: 100, Role: "author"}}
 	rows := []*database.OperationChange{junkRow("c1", "b1",
-		undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: orig}, relinkMove())}
+		undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: orig}, relinkMove())}
 	s := newRelinkStore(rows)
 	s.authors[100] = database.Author{ID: 100, Name: "Demon Cycle"}
 	s.authors[300] = database.Author{ID: 300, Name: "Peter V. Brett"}
 	s.credits["b1"] = []database.BookAuthor{{BookID: "b1", AuthorID: 300, Role: "author"}}
-	s.primary["b1"] = intp(300)
+	s.primary["b1"] = new(300)
 
 	res, err := NewRevertService(s).RevertOperation("op")
 	if err != nil {
@@ -76,14 +76,14 @@ func TestRevertJunkAuthor_RestoresUnlink(t *testing.T) {
 	}
 	written := database.BookAuthor{BookID: "b1", AuthorID: 400, Role: "co-author", Position: 0}
 	rows := []*database.OperationChange{junkRow("c1", "b1",
-		undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: orig},
-		undo.JunkAuthorCreditsMove{FromAuthorID: 100, IntoAuthorID: 0, PrimaryAfter: intp(400), PrimaryChanged: true,
+		undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: orig},
+		undo.JunkAuthorCreditsMove{FromAuthorID: 100, IntoAuthorID: 0, PrimaryAfter: new(400), PrimaryChanged: true,
 			CreditsAfter: after(written)})}
 	s := newRelinkStore(rows)
 	s.authors[100] = database.Author{ID: 100, Name: "Unknown"}
 	s.authors[400] = database.Author{ID: 400, Name: "Co Writer"}
 	s.credits["b1"] = []database.BookAuthor{written}
-	s.primary["b1"] = intp(400)
+	s.primary["b1"] = new(400)
 
 	res, err := NewRevertService(s).RevertOperation("op")
 	if err != nil {
@@ -114,11 +114,11 @@ func TestRevertJunkAuthor_RefusesLaterChange(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rows := []*database.OperationChange{junkRow("c1", "b1",
-				undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: orig}, relinkMove())}
+				undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: orig}, relinkMove())}
 			s := newRelinkStore(rows)
 			s.authors[100] = database.Author{ID: 100, Name: "Demon Cycle"}
 			s.credits["b1"] = append([]database.BookAuthor{}, later...)
-			s.primary["b1"] = intp(300)
+			s.primary["b1"] = new(300)
 			res, _ := NewRevertService(s).RevertOperation("op")
 			if res == nil || res.Failed != 1 || res.Restored != 0 {
 				t.Fatalf("result = %+v, want failed 1", res)
@@ -138,11 +138,11 @@ func TestRevertJunkAuthor_RefusesLaterChange(t *testing.T) {
 func TestRevertJunkAuthor_RefusesChangedPrimary(t *testing.T) {
 	orig := []database.BookAuthor{{BookID: "b1", AuthorID: 100, Role: "author"}}
 	rows := []*database.OperationChange{junkRow("c1", "b1",
-		undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: orig}, relinkMove())}
+		undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: orig}, relinkMove())}
 	s := newRelinkStore(rows)
 	s.authors[100] = database.Author{ID: 100, Name: "Demon Cycle"}
 	s.credits["b1"] = []database.BookAuthor{{BookID: "b1", AuthorID: 300, Role: "author"}}
-	s.primary["b1"] = intp(777)
+	s.primary["b1"] = new(777)
 	res, _ := NewRevertService(s).RevertOperation("op")
 	if res == nil || res.Failed != 1 || res.ChangedSince != 1 {
 		t.Fatalf("result = %+v, want failed 1 changed-since 1", res)
@@ -161,13 +161,13 @@ func TestRevertJunkAuthor_RefusesChangedPrimary(t *testing.T) {
 func TestRevertJunkAuthor_RefusesAfterManualFix(t *testing.T) {
 	orig := []database.BookAuthor{{BookID: "b1", AuthorID: 100, Role: "author"}}
 	rows := []*database.OperationChange{junkRow("c1", "b1",
-		undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: orig},
+		undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: orig},
 		undo.JunkAuthorCreditsMove{FromAuthorID: 100, IntoAuthorID: 0, PrimaryChanged: true, CreditsAfter: after()})}
 	s := newRelinkStore(rows)
 	s.authors[100] = database.Author{ID: 100, Name: "GraphicAudio"}
 	fixed := []database.BookAuthor{{BookID: "b1", AuthorID: 900, Role: "author"}}
 	s.credits["b1"] = fixed
-	s.primary["b1"] = intp(900)
+	s.primary["b1"] = new(900)
 	res, _ := NewRevertService(s).RevertOperation("op")
 	if res == nil || res.Failed != 1 || res.ChangedSince != 1 {
 		t.Fatalf("result = %+v, want failed 1 changed-since 1", res)

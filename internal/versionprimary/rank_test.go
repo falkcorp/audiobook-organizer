@@ -1,7 +1,7 @@
 // file: internal/versionprimary/rank_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 18620ce0-4bca-4216-a65a-507cf54533a0
-// last-edited: 2026-09-24
+// last-edited: 2026-10-20
 
 package versionprimary
 
@@ -12,14 +12,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-func strp(s string) *string { return &s }
-func intp(i int) *int       { return &i }
-func boolp(b bool) *bool    { return &b }
-
 // organizedBook is an eligible-looking row; signals decide eligibility.
 func organizedBook(id string, created time.Time) *database.Book {
 	c := created
-	return &database.Book{ID: id, Title: "T " + id, LibraryState: strp("organized"), CreatedAt: &c}
+	return &database.Book{ID: id, Title: "T " + id, LibraryState: new("organized"), CreatedAt: &c}
 }
 
 // good is the signals of a member ABS can show.
@@ -39,11 +35,11 @@ func good(tier int) Signals {
 var t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func richMetadata(b *database.Book) *database.Book {
-	b.AuthorID = intp(7)
-	b.SeriesID = intp(3)
-	b.Description = strp("a description")
-	b.Narrator = strp("A Narrator")
-	b.ASIN = strp("B000TEST00")
+	b.AuthorID = new(7)
+	b.SeriesID = new(3)
+	b.Description = new("a description")
+	b.Narrator = new("A Narrator")
+	b.ASIN = new("B000TEST00")
 	return b
 }
 
@@ -105,9 +101,9 @@ func TestElect_IneligibleMembersNeverWin(t *testing.T) {
 	lib := organizedBook("LIB", t0.Add(time.Hour))
 
 	src := richMetadata(organizedBook("SRC", t0))
-	src.LibraryState = strp("organized_source")
+	src.LibraryState = new("organized_source")
 	imp := richMetadata(organizedBook("IMP", t0))
-	imp.LibraryState = strp("imported")
+	imp.LibraryState = new("imported")
 	miss := richMetadata(organizedBook("MISS", t0))
 	missSig := good(TierM4BChapters)
 	missSig.FilesMissingOnDisk = 1
@@ -167,7 +163,7 @@ func TestElect_UnknownAuthorPathLosesInsideATier(t *testing.T) {
 // HELD, not crowned with the worse copy.
 func TestElect_HeldWhenBestTierIsOnlyOutsideTheLibrary(t *testing.T) {
 	src := organizedBook("SRC", t0)
-	src.LibraryState = strp("organized_source")
+	src.LibraryState = new("organized_source")
 	lib := organizedBook("LIB", t0.Add(time.Hour))
 	d := Elect([]Member{{Book: src, Signals: good(TierM4BChapters)}, {Book: lib, Signals: good(TierM4BNoChapters)}})
 	if d.Kind != DecisionHeld || d.HoldReason != HoldBetterCopyNotInLibrary || d.WinnerID != "" {
@@ -177,7 +173,7 @@ func TestElect_HeldWhenBestTierIsOnlyOutsideTheLibrary(t *testing.T) {
 		t.Fatalf("tiers = %d/%d", d.BestTier, d.BestEligibleTier)
 	}
 	// A non-LIVE better copy (merged away) does not hold the group.
-	src.MergedIntoBookID = strp("LIB")
+	src.MergedIntoBookID = new("LIB")
 	srcSig := good(TierM4BChapters)
 	srcSig.Live = false
 	d = Elect([]Member{{Book: src, Signals: srcSig}, {Book: lib, Signals: good(TierM4BNoChapters)}})
@@ -188,7 +184,7 @@ func TestElect_HeldWhenBestTierIsOnlyOutsideTheLibrary(t *testing.T) {
 
 func TestElect_HeldWhenNoMemberIsEligible(t *testing.T) {
 	imp := organizedBook("IMP", t0)
-	imp.LibraryState = strp("imported")
+	imp.LibraryState = new("imported")
 	d := Elect([]Member{{Book: imp, Signals: good(TierOther)}})
 	if d.Kind != DecisionHeld || d.HoldReason != HoldNeedsOrganizeOrRestore {
 		t.Fatalf("got %+v, want held needs_organize_or_restore", d)
@@ -204,7 +200,7 @@ func TestElect_ReRunIsStable(t *testing.T) {
 	if d.Kind != DecisionElect || d.WinnerID != "A" {
 		t.Fatalf("first run: %+v", d)
 	}
-	a.IsPrimaryVersion, b.IsPrimaryVersion = boolp(true), boolp(false)
+	a.IsPrimaryVersion, b.IsPrimaryVersion = new(true), new(false)
 	d2 := Elect(members)
 	if d2.Kind != DecisionAlreadyOK || d2.WinnerID != "A" {
 		t.Fatalf("second run: %+v, want already_ok A", d2)
@@ -221,7 +217,7 @@ func TestElect_ReRunIsStable(t *testing.T) {
 func TestElect_IncumbentWinsExactTie(t *testing.T) {
 	a := organizedBook("A", t0)
 	b := organizedBook("B", t0.Add(time.Hour))
-	b.IsPrimaryVersion = boolp(true)
+	b.IsPrimaryVersion = new(true)
 	d := Elect([]Member{{Book: a, Signals: good(TierM4BChapters)}, {Book: b, Signals: good(TierM4BChapters)}})
 	if d.WinnerID != "B" {
 		t.Fatalf("winner = %q, want incumbent B", d.WinnerID)
@@ -231,7 +227,7 @@ func TestElect_IncumbentWinsExactTie(t *testing.T) {
 func TestElect_RuntimeAndBitrateBreakMetadataTies(t *testing.T) {
 	a := organizedBook("A", t0)
 	b := organizedBook("B", t0.Add(time.Hour))
-	a.AudibleRuntimeMin, b.AudibleRuntimeMin = intp(600), intp(600)
+	a.AudibleRuntimeMin, b.AudibleRuntimeMin = new(600), new(600)
 	sa, sb := good(TierM4BChapters), good(TierM4BChapters)
 	sa.RuntimeSec = 600 * 60 * 90 / 100 // 10% short
 	sb.RuntimeSec = 600*60 + 300        // within 2%
@@ -251,9 +247,9 @@ func TestMetadataScore_MatchesDedupWeights(t *testing.T) {
 		t.Fatalf("empty row scored %d", MetadataScore(b))
 	}
 	full := richMetadata(&database.Book{})
-	full.Duration = intp(1)
-	full.ITunesPersistentID = strp("X")
-	full.Publisher, full.Language, full.Genre, full.CoverURL = strp("p"), strp("l"), strp("g"), strp("c")
+	full.Duration = new(1)
+	full.ITunesPersistentID = new("X")
+	full.Publisher, full.Language, full.Genre, full.CoverURL = new("p"), new("l"), new("g"), new("c")
 	if got := MetadataScore(full); got != 100+20+10+5+5+10+10+3+2+2+3 {
 		t.Fatalf("full row scored %d", got)
 	}
@@ -265,9 +261,9 @@ func TestMetadataScore_MatchesDedupWeights(t *testing.T) {
 }
 
 func TestPlanAndApplyCarryOver_FillsOnlyEmptyFields(t *testing.T) {
-	winner := &database.Book{ID: "W", Description: strp("keep me"), Narrator: strp("  ")}
-	donor := &database.Book{ID: "D", Description: strp("donor desc"), Narrator: strp("Donor Narrator"),
-		Publisher: strp("Pub"), AuthorID: intp(4), ITunesPersistentID: strp("PID"), Duration: intp(99)}
+	winner := &database.Book{ID: "W", Description: new("keep me"), Narrator: new("  ")}
+	donor := &database.Book{ID: "D", Description: new("donor desc"), Narrator: new("Donor Narrator"),
+		Publisher: new("Pub"), AuthorID: new(4), ITunesPersistentID: new("PID"), Duration: new(99)}
 	p := PlanCarryOver(winner, donor)
 	fills := map[string]string{}
 	for _, f := range p.Fills {
@@ -294,17 +290,17 @@ func TestPlanAndApplyCarryOver_FillsOnlyEmptyFields(t *testing.T) {
 // A merge loser is not live while its survivor is; once the survivor is gone
 // it is the work's only copy and electable again. Soft-deleted never is.
 func TestElectable_MergeLoserFollowsItsSurvivor(t *testing.T) {
-	loser := &database.Book{ID: "L", MergedIntoBookID: strp("S")}
+	loser := &database.Book{ID: "L", MergedIntoBookID: new("S")}
 	if Electable(loser, func(string) bool { return true }) {
 		t.Fatal("loser of a live survivor must not be electable")
 	}
 	if !Electable(loser, func(string) bool { return false }) {
 		t.Fatal("loser of a dead survivor must be electable")
 	}
-	if !Electable(&database.Book{ID: "X", MergedIntoBookID: strp("")}, func(string) bool { return true }) {
+	if !Electable(&database.Book{ID: "X", MergedIntoBookID: new("")}, func(string) bool { return true }) {
 		t.Fatal("empty merge target is not a merge")
 	}
-	if Electable(&database.Book{ID: "D", MarkedForDeletion: boolp(true)}, func(string) bool { return false }) {
+	if Electable(&database.Book{ID: "D", MarkedForDeletion: new(true)}, func(string) bool { return false }) {
 		t.Fatal("soft-deleted must not be electable")
 	}
 }

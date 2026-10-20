@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8c3f1b52-6a04-4de7-9b18-2f7a05c9d6e1
-// last-edited: 2026-09-20
+// last-edited: 2026-10-20
 
 package jobs
 
@@ -47,9 +47,6 @@ func rvpTryRun(t *testing.T, store maintenance.JobStore, params string, dryRun b
 	return res, runErr
 }
 
-func rvpStr(s string) *string { return &s }
-func rvpBool(b bool) *bool    { return &b }
-
 // rvpSeedPair creates the prod shape: an imported, explicitly non-primary
 // single-file chapter record in dir, paired in a 2-member version group with an
 // organized single-file twin that holds the explicit primary flag and lives
@@ -60,15 +57,15 @@ func rvpSeedPair(t *testing.T, s *database.PebbleStore, dir, name string, i int,
 	author := 1
 	ipath := fmt.Sprintf("%s/%s - %d.mp3", dir, name, i)
 	imported = ddMustBook(t, s, &database.Book{
-		Title: fmt.Sprint(i), FilePath: ipath, Duration: chIntP(1200), AuthorID: &author,
-		IsPrimaryVersion: rvpBool(false), VersionGroupID: rvpStr(vgid), LibraryState: rvpStr("imported"),
+		Title: fmt.Sprint(i), FilePath: ipath, Duration: new(1200), AuthorID: &author,
+		IsPrimaryVersion: new(false), VersionGroupID: new(vgid), LibraryState: new("imported"),
 	})
 	ddMustFile(t, s, &database.BookFile{BookID: imported.ID, FilePath: ipath, Duration: 1200})
 
 	tpath := fmt.Sprintf("/lib/org/%s %d/%s %d.mp3", name, i, name, i)
 	twin = ddMustBook(t, s, &database.Book{
-		Title: fmt.Sprintf("%s %d", name, i), FilePath: tpath, Duration: chIntP(1200), AuthorID: &author,
-		IsPrimaryVersion: rvpBool(true), VersionGroupID: rvpStr(vgid), LibraryState: rvpStr("organized"),
+		Title: fmt.Sprintf("%s %d", name, i), FilePath: tpath, Duration: new(1200), AuthorID: &author,
+		IsPrimaryVersion: new(true), VersionGroupID: new(vgid), LibraryState: new("organized"),
 	})
 	ddMustFile(t, s, &database.BookFile{BookID: twin.ID, FilePath: tpath, Duration: 1200})
 	return imported, twin
@@ -189,12 +186,12 @@ func TestRepointVersionPrimary_RefusesWhenGroupWouldLosePrimary(t *testing.T) {
 	}
 	// A merge loser: countsAsPrimary would not count it, so promoting it leaves
 	// the group with ZERO primaries by elect-missing-primaries' reckoning.
-	idx.byID[imported[0].ID].MergedIntoBookID = rvpStr("other-book")
+	idx.byID[imported[0].ID].MergedIntoBookID = new("other-book")
 	if d := job.classify(s, idx, none, imported[0].ID, nil, false); d.Bucket != bucketNotElectable {
 		t.Fatalf("merge loser not refused: %+v", d)
 	}
 	// A trashed row: same reckoning.
-	idx.byID[imported[1].ID].MarkedForDeletion = rvpBool(true)
+	idx.byID[imported[1].ID].MarkedForDeletion = new(true)
 	if d := job.classify(s, idx, none, imported[1].ID, nil, false); d.Bucket != bucketNotElectable {
 		t.Fatalf("trashed member not refused: %+v", d)
 	}
@@ -347,7 +344,7 @@ func TestRepointVersionPrimary_StateMismatchIsNamed(t *testing.T) {
 	_, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 3, "vg")
 	for _, tw := range twins {
 		if _, err := s.ModifyBook(tw.ID, func(b *database.Book) error {
-			b.LibraryState = rvpStr("imported")
+			b.LibraryState = new("imported")
 			return nil
 		}); err != nil {
 			t.Fatalf("ModifyBook: %v", err)
@@ -408,7 +405,7 @@ func TestRepointVersionPrimary_PartiallyRepointedGroupStaysInScope(t *testing.T)
 	imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 3, "vg")
 	// Member 0's twin is not organized, so that pair cannot repoint this run.
 	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
-		b.LibraryState = rvpStr("imported")
+		b.LibraryState = new("imported")
 		return nil
 	}); err != nil {
 		t.Fatalf("ModifyBook: %v", err)
@@ -431,7 +428,7 @@ func TestRepointVersionPrimary_PartiallyRepointedGroupStaysInScope(t *testing.T)
 
 	// Repair the twin and the last member repoints.
 	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
-		b.LibraryState = rvpStr("organized")
+		b.LibraryState = new("organized")
 		return nil
 	}); err != nil {
 		t.Fatalf("ModifyBook: %v", err)
@@ -518,7 +515,7 @@ func TestRepointVersionPrimary_SkippedDemoteIsNotAFailedDemote(t *testing.T) {
 		gone   bool
 	}{
 		{"twin already demoted", func(b *database.Book) { b.IsPrimaryVersion = &fls }, false},
-		{"twin left the version group", func(b *database.Book) { b.VersionGroupID = rvpStr("vg-elsewhere") }, false},
+		{"twin left the version group", func(b *database.Book) { b.VersionGroupID = new("vg-elsewhere") }, false},
 		{"twin row is gone", nil, true},
 	}
 	for _, tc := range cases {
@@ -600,7 +597,7 @@ func TestRepointVersionPrimary_TwinDurationMustCorroborate(t *testing.T) {
 	_, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 3, "vg")
 	// twins[0] is really a whole book; twins[1] never had its duration measured.
 	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
-		b.Duration = chIntP(1200 * 12)
+		b.Duration = new(1200 * 12)
 		return nil
 	}); err != nil {
 		t.Fatalf("ModifyBook: %v", err)
@@ -621,7 +618,7 @@ func TestRepointVersionPrimary_TwinDurationMustCorroborate(t *testing.T) {
 	}
 	// A couple of seconds of rounding slack still qualifies.
 	if _, err := s.ModifyBook(twins[0].ID, func(b *database.Book) error {
-		b.Duration = chIntP(1201)
+		b.Duration = new(1201)
 		return nil
 	}); err != nil {
 		t.Fatalf("ModifyBook: %v", err)
@@ -645,7 +642,7 @@ func TestRepointVersionPrimary_ScanFlippedStateMidRunIsNotWritten(t *testing.T) 
 		s := ddRealStore(t)
 		imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 2, "vg")
 		fs := &rvpTwinStore{JobStore: s, inner: s, twinID: imported[0].ID,
-			before: func(b *database.Book) { b.LibraryState = rvpStr("organized") }}
+			before: func(b *database.Book) { b.LibraryState = new("organized") }}
 
 		res := rvpRun(t, fs, `{"apply":true}`, false)
 		if res.Counts[bucketDrifted] != 1 || res.Counts[bucketRepointed] != 1 {
@@ -671,7 +668,7 @@ func TestRepointVersionPrimary_ScanFlippedStateMidRunIsNotWritten(t *testing.T) 
 		s := ddRealStore(t)
 		imported, twins := rvpSeedRun(t, s, "/lib/imported/Saga", "Saga", 2, "vg")
 		fs := &rvpTwinStore{JobStore: s, inner: s, twinID: twins[0].ID,
-			before: func(b *database.Book) { b.LibraryState = rvpStr("imported") }}
+			before: func(b *database.Book) { b.LibraryState = new("imported") }}
 
 		// The twin is still explicitly primary, so this is the two-primaries
 		// case: reported, NOT reverted into a group with no primary at all.

@@ -1,7 +1,7 @@
 // file: internal/applygate/owner_rejected_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b82d75a5-b760-4375-98c3-d10426139c5d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -31,7 +31,7 @@ func (m kvRejections) ScanPrefix(prefix string) ([]database.KVPair, error) {
 // The owner-rejected leg refuses a rejected candidate before every other leg,
 // fails closed on an unreadable list, and no owner review lifts either.
 func TestEvaluate_OwnerRejectedLeg(t *testing.T) {
-	book := &database.Book{ID: "b1", Title: "Synthetic Field Notes 1", Duration: intp(36000)}
+	book := &database.Book{ID: "b1", Title: "Synthetic Field Notes 1", Duration: new(36000)}
 	rt := database.ComputeBookRuntime(book, nil)
 	c := metafetch.MetadataCandidate{Source: "Audible", Title: "Synthetic Field Notes 1", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
 	if v := EvaluateInBatch(book, snap(book), rt, &c, nil, nil, &Rejections{}); !v.Allowed {

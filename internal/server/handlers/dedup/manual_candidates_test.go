@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/manual_candidates_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f2b9c1e-6a47-4d8e-b5c0-9e1d7a4f2c68
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package deduphandler_test
 
@@ -70,8 +70,6 @@ func pairBody(dryRun *bool, pairs ...[2]string) map[string]any {
 	return body
 }
 
-func boolp(b bool) *bool { return &b }
-
 const manualURL = "/api/v1/dedup/candidates"
 
 // A body with no dry_run key must NOT write: the default is a dry run.
@@ -93,7 +91,7 @@ func TestEnqueueManual_ExplicitDryRunTrueWritesNothing(t *testing.T) {
 	h, d := newHandler(t)
 	books(d, &database.Book{ID: "a"}, &database.Book{ID: "b"})
 
-	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(boolp(true), [2]string{"a", "b"}), nil)
+	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(new(true), [2]string{"a", "b"}), nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Empty(t, allCandidates(t, d.es))
 }
@@ -102,7 +100,7 @@ func TestEnqueueManual_ApplyCreatesReviewableCandidate(t *testing.T) {
 	h, d := newHandler(t)
 	books(d, &database.Book{ID: "a"}, &database.Book{ID: "b"})
 
-	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(boolp(false), [2]string{"b", "a"}), nil)
+	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(new(false), [2]string{"b", "a"}), nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	r := decodeManual(t, w.Body.Bytes())
 	require.False(t, r.Data.DryRun)
@@ -150,7 +148,7 @@ func TestEnqueueManual_Idempotent(t *testing.T) {
 	h, d := newHandler(t)
 	books(d, &database.Book{ID: "a"}, &database.Book{ID: "b"})
 
-	body := pairBody(boolp(false), [2]string{"a", "b"})
+	body := pairBody(new(false), [2]string{"a", "b"})
 	first := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, body, nil)
 	require.Equal(t, http.StatusOK, first.Code)
 	firstID := decodeManual(t, first.Body.Bytes()).Data.Results[0].Candidate.ID
@@ -169,7 +167,7 @@ func TestEnqueueManual_PinsExistingScannerCandidate(t *testing.T) {
 	books(d, &database.Book{ID: "a"}, &database.Book{ID: "b"})
 	id, _, _ := insertCandidate(t, d.es, "a", "b")
 
-	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(boolp(false), [2]string{"a", "b"}), nil)
+	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(new(false), [2]string{"a", "b"}), nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	r := decodeManual(t, w.Body.Bytes())
 	require.Equal(t, "already_open", r.Data.Results[0].Outcome)
@@ -190,7 +188,7 @@ func TestEnqueueManual_RejectsInvalidPairs(t *testing.T) {
 		&database.Book{ID: "v1", VersionGroupID: &grp}, &database.Book{ID: "v2", VersionGroupID: &grp},
 	)
 
-	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(boolp(false),
+	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(new(false),
 		[2]string{"a", "a"},       // same_book
 		[2]string{"a", ""},        // missing_id
 		[2]string{"a", "missing"}, // book_not_found
@@ -216,7 +214,7 @@ func TestEnqueueManual_RefusesSoftDeletedBook(t *testing.T) {
 	deleted := true
 	books(d, &database.Book{ID: "a"}, &database.Book{ID: "gone", MarkedForDeletion: &deleted})
 
-	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(boolp(false), [2]string{"a", "gone"}), nil)
+	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(new(false), [2]string{"a", "gone"}), nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	r := decodeManual(t, w.Body.Bytes())
 	require.Equal(t, "rejected", r.Data.Results[0].Outcome)
@@ -230,7 +228,7 @@ func TestEnqueueManual_LookupErrorIsNotNotFound(t *testing.T) {
 	d.store.EXPECT().GetBookByID("a").Return(&database.Book{ID: "a"}, nil).Maybe()
 	d.store.EXPECT().GetBookByID("b").Return(nil, errors.New("pebble: closed")).Maybe()
 
-	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(boolp(false), [2]string{"a", "b"}), nil)
+	w := doReq(t, h.EnqueueManualDedupCandidates, http.MethodPost, manualURL, pairBody(new(false), [2]string{"a", "b"}), nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Equal(t, "lookup_failed", decodeManual(t, w.Body.Bytes()).Data.Results[0].Code)
 }

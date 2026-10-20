@@ -1,7 +1,7 @@
 // file: internal/server/organize_library_copy_wiring_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 96b14120-70fb-45b5-93bd-c9e1c9449b82
-// last-edited: 2026-10-09
+// last-edited: 2026-10-20
 
 package server
 
@@ -115,8 +115,6 @@ func (f *orgWiringFixture) call(t *testing.T, method, id string, preview bool) (
 	return w.Code, body
 }
 
-func strp(s string) *string { return &s }
-
 // The book's own library copy, whose FileHash has since diverged (tags were
 // written and a scan re-hashed it) but whose OriginalFileHash is still the
 // original's: preview and apply both act on the copy, apply is a no-op.
@@ -126,10 +124,10 @@ func TestOrganizeWiring_ProtectedOriginalUsesItsOwnLibraryCopy(t *testing.T) {
 	group := "vg-rift"
 	origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.mp3")
 	copyPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift", "Welcome to the Rift.mp3")
-	f.book(t, "orig", origPath, content, database.Book{FileHash: strp("h-orig"), VersionGroupID: &group, LibraryState: strp("imported")})
+	f.book(t, "orig", origPath, content, database.Book{FileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("imported")})
 	f.book(t, "copy", copyPath, content, database.Book{
-		FileHash: strp("h-after-tag-write"), OriginalFileHash: strp("h-orig"),
-		VersionGroupID: &group, LibraryState: strp("organized"),
+		FileHash: new("h-after-tag-write"), OriginalFileHash: new("h-orig"),
+		VersionGroupID: &group, LibraryState: new("organized"),
 	})
 
 	code, preview := f.call(t, http.MethodGet, "orig", true)
@@ -163,10 +161,10 @@ func TestOrganizeWiring_DifferentEditionIsNotTheLibraryCopy(t *testing.T) {
 	group := "vg-rift"
 	origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.m4b")
 	editionPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift (mp3)", "Welcome to the Rift.mp3")
-	f.book(t, "orig", origPath, bytes.Repeat([]byte{1}, 300), database.Book{FileHash: strp("h-m4b"), VersionGroupID: &group, LibraryState: strp("imported")})
+	f.book(t, "orig", origPath, bytes.Repeat([]byte{1}, 300), database.Book{FileHash: new("h-m4b"), VersionGroupID: &group, LibraryState: new("imported")})
 	f.book(t, "mp3", editionPath, bytes.Repeat([]byte{2}, 300), database.Book{
-		FileHash: strp("h-mp3"), OriginalFileHash: strp("h-mp3"), OrganizedFileHash: strp("h-mp3"),
-		VersionGroupID: &group, LibraryState: strp("organized"),
+		FileHash: new("h-mp3"), OriginalFileHash: new("h-mp3"), OrganizedFileHash: new("h-mp3"),
+		VersionGroupID: &group, LibraryState: new("organized"),
 	})
 
 	// The metadata apply's own resolver still accepts the edition (its rule

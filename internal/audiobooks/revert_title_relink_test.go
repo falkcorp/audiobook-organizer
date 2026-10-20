@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_title_relink_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6dda78bf-049e-4911-b7d4-eea7bb31d0b7
-// last-edited: 2026-09-26
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -124,7 +124,7 @@ var arcaneOriginal = []database.BookAuthor{
 func TestRevertTitleRelink_RestoresCreditsAndDeletesUncreditedAuthor(t *testing.T) {
 	rows := []*database.OperationChange{
 		createRow("c1", "b1", "Brand New Writer"),
-		creditsRow("c2", "b1", undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: arcaneOriginal}, 100, 901),
+		creditsRow("c2", "b1", undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: arcaneOriginal}, 100, 901),
 	}
 	s := newRelinkStore(rows)
 	s.authors[100] = database.Author{ID: 100, Name: "Arcane Chef 2"}
@@ -134,7 +134,7 @@ func TestRevertTitleRelink_RestoresCreditsAndDeletesUncreditedAuthor(t *testing.
 		{BookID: "b1", AuthorID: 400, Role: "co-author", Position: 1},
 		{BookID: "b1", AuthorID: 901, Role: "author", Position: 1},
 	}
-	s.primary["b1"] = intp(901)
+	s.primary["b1"] = new(901)
 
 	res, err := NewRevertService(s).RevertOperation("op")
 	if err != nil {
@@ -159,13 +159,13 @@ func TestRevertTitleRelink_RestoresCreditsAndDeletesUncreditedAuthor(t *testing.
 func TestRevertTitleRelink_KeepsCreatedAuthorStillCredited(t *testing.T) {
 	rows := []*database.OperationChange{
 		createRow("c1", "b1", "Brand New Writer"),
-		creditsRow("c2", "b1", undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: arcaneOriginal[:1]}, 100, 901),
+		creditsRow("c2", "b1", undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: arcaneOriginal[:1]}, 100, 901),
 	}
 	s := newRelinkStore(rows)
 	s.authors[100] = database.Author{ID: 100, Name: "Arcane Chef 2"}
 	s.authors[901] = database.Author{ID: 901, Name: "Brand New Writer"}
 	s.credits["b1"] = []database.BookAuthor{{BookID: "b1", AuthorID: 901, Role: "author"}}
-	s.primary["b1"] = intp(901)
+	s.primary["b1"] = new(901)
 	s.credits["b2"] = []database.BookAuthor{{BookID: "b2", AuthorID: 901, Role: "author"}}
 
 	res, err := NewRevertService(s).RevertOperation("op")
@@ -184,13 +184,13 @@ func TestRevertTitleRelink_KeepsCreatedAuthorStillCredited(t *testing.T) {
 // removed) is refused as changed-since, and nothing is written.
 func TestRevertTitleRelink_RefusesChangedCredits(t *testing.T) {
 	rows := []*database.OperationChange{
-		creditsRow("c1", "b1", undo.TitleRelinkCreditsSnapshot{AuthorID: intp(100), Credits: arcaneOriginal}, 100, 300),
+		creditsRow("c1", "b1", undo.TitleRelinkCreditsSnapshot{AuthorID: new(100), Credits: arcaneOriginal}, 100, 300),
 	}
 	s := newRelinkStore(rows)
 	s.authors[100] = database.Author{ID: 100, Name: "Arcane Chef 2"}
 	later := []database.BookAuthor{{BookID: "b1", AuthorID: 555, Role: "author"}}
 	s.credits["b1"] = later
-	s.primary["b1"] = intp(555)
+	s.primary["b1"] = new(555)
 
 	res, _ := NewRevertService(s).RevertOperation("op")
 	if res == nil || res.Failed != 1 || res.ChangedSince != 1 || res.Restored != 0 {

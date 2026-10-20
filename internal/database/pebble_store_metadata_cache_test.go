@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6d2a8f41-3b07-4c95-a1e6-9f5c0b7d3e28
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -109,14 +109,14 @@ func TestUpdateBook_RelinkToSameNameAuthorDoesNotStale(t *testing.T) {
 
 func TestUpdateBook_RetitleAndASINReplaceStampsBothInOneWrite(t *testing.T) {
 	s := newKeepCacheStore(t)
-	b, err := s.CreateBook(&Book{Title: "Title 000001", FilePath: "/lib/s/d.m4b", Format: "m4b", ASIN: strp("B00OLDASIN")})
+	b, err := s.CreateBook(&Book{Title: "Title 000001", FilePath: "/lib/s/d.m4b", Format: "m4b", ASIN: new("B00OLDASIN")})
 	require.NoError(t, err)
 	seedFingerprintedRow(t, s, b.ID, "fp-old")
 	g := s.MetadataCacheGeneration()
 
 	_, err = s.ModifyBook(b.ID, func(cur *Book) error {
 		cur.Title = "Title 000002"
-		cur.ASIN = strp("B00NEWASIN")
+		cur.ASIN = new("B00NEWASIN")
 		return nil
 	})
 	require.NoError(t, err)
@@ -210,7 +210,7 @@ func TestUpdateBook_NonIdentityWriteLeavesRowUntouched(t *testing.T) {
 	before := rawCacheRow(t, s, b.ID)
 	g := s.MetadataCacheGeneration()
 
-	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.Format = "mp3"; cur.Narrator = strp("Narrator 01"); return nil })
+	_, err = s.ModifyBook(b.ID, func(cur *Book) error { cur.Format = "mp3"; cur.Narrator = new("Narrator 01"); return nil })
 	require.NoError(t, err)
 
 	entry, err := s.GetMetadataCache(b.ID)

@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_carry_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e52db43b-d7f1-4be6-947a-639edb4e616c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -85,8 +85,6 @@ func TestMergeSplitBookCluster_CarriesProgressAndUndoRestoresIt(t *testing.T) {
 	require.NotEmpty(t, srcPos, "undo must restore the reader's position on the source")
 }
 
-func carryStrP(s string) *string { return &s }
-
 // Metadata only the sources carry is filled onto an EMPTY keep field, never
 // over a set one, never over a user lock, and undo empties it again.
 func TestMergeSplitBookCluster_FillEmptyAppliedLockedAndUndone(t *testing.T) {
@@ -99,8 +97,8 @@ func TestMergeSplitBookCluster_FillEmptyAppliedLockedAndUndone(t *testing.T) {
 	require.NoError(t, err)
 	seq := 3
 	_, err = s.ModifyBook(src, func(b *database.Book) error {
-		b.ASIN = carryStrP("B0TESTASIN")
-		b.Narrator = carryStrP("Some Reader")
+		b.ASIN = new("B0TESTASIN")
+		b.Narrator = new("Some Reader")
 		b.SeriesID, b.SeriesSequence = &series.ID, &seq
 		b.AuthorID = &author.ID
 		return nil
@@ -153,7 +151,7 @@ func TestMergeSplitBookCluster_FillEmptyConflictRefuses(t *testing.T) {
 	a, _ := carryBook(t, s, "02 - Tale", "/lib/A/Tale/02 - Tale.mp3", 2)
 	b, _ := carryBook(t, s, "03 - Tale", "/lib/A/Tale/03 - Tale.mp3", 3)
 	for id, asin := range map[string]string{a: "B0AAAAAAAA", b: "B0BBBBBBBB"} {
-		_, err := s.ModifyBook(id, func(bk *database.Book) error { bk.ASIN = carryStrP(asin); return nil })
+		_, err := s.ModifyBook(id, func(bk *database.Book) error { bk.ASIN = new(asin); return nil })
 		require.NoError(t, err)
 	}
 	_, err := MergeSplitBookClusterWithOptions(s, keep, []string{a, b}, "", SplitMergeOptions{FillEmpty: true})

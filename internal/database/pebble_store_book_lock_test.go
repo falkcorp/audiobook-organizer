@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8b1e4d27-5c93-4f0a-a6d2-7e39c1f5b084
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -46,14 +46,14 @@ func TestModifyBook_ConcurrentWritersLoseNothing(t *testing.T) {
 	}
 
 	setters := []func(*Book, string){
-		func(x *Book, v string) { x.Narrator = strp(v) },
-		func(x *Book, v string) { x.Publisher = strp(v) },
-		func(x *Book, v string) { x.Language = strp(v) },
-		func(x *Book, v string) { x.ISBN10 = strp(v) },
-		func(x *Book, v string) { x.ISBN13 = strp(v) },
-		func(x *Book, v string) { x.ASIN = strp(v) },
-		func(x *Book, v string) { x.Codec = strp(v) },
-		func(x *Book, v string) { x.MetadataSource = strp(v) },
+		func(x *Book, v string) { x.Narrator = new(v) },
+		func(x *Book, v string) { x.Publisher = new(v) },
+		func(x *Book, v string) { x.Language = new(v) },
+		func(x *Book, v string) { x.ISBN10 = new(v) },
+		func(x *Book, v string) { x.ISBN13 = new(v) },
+		func(x *Book, v string) { x.ASIN = new(v) },
+		func(x *Book, v string) { x.Codec = new(v) },
+		func(x *Book, v string) { x.MetadataSource = new(v) },
 	}
 	getters := []func(*Book) *string{
 		func(x *Book) *string { return x.Narrator },
@@ -133,11 +133,11 @@ func TestModifyBook_MergeKeepsConcurrentWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Title = "applied title"
-	a.Narrator = strp("applied narrator")
+	a.Narrator = new("applied narrator")
 
 	// Writer B commits in A's window.
 	if _, err := s.ModifyBook(b.ID, func(row *Book) error {
-		row.Publisher = strp("user publisher")
+		row.Publisher = new("user publisher")
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestModifyBook_MergeKeepsConcurrentWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.ModifyBook(b.ID, func(row *Book) error {
-		row.Language = strp("de")
+		row.Language = new("de")
 		return nil
 	}); err != nil {
 		t.Fatal(err)

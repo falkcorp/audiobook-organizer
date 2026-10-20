@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_duration_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9a3d6e14-2c7b-4f58-8e01-6b4f2d9c7a35
 // last-edited: 2026-10-20
 
@@ -15,8 +15,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
-
-func strp(s string) *string { return &s }
 
 func TestParseDurationValue_Units(t *testing.T) {
 	cases := map[string]int{
@@ -35,9 +33,9 @@ func TestParseDurationValue_Units(t *testing.T) {
 }
 
 func TestDurationMatches_ComparisonsAndRanges(t *testing.T) {
-	short := database.Book{ID: "s", Duration: intp(300)}  // 5 min
-	edge := database.Book{ID: "e", Duration: intp(1200)}  // exactly 20 min
-	long := database.Book{ID: "l", Duration: intp(36000)} // 10 h
+	short := database.Book{ID: "s", Duration: new(300)}  // 5 min
+	edge := database.Book{ID: "e", Duration: new(1200)}  // exactly 20 min
+	long := database.Book{ID: "l", Duration: new(36000)} // 10 h
 	cases := []struct {
 		expr string
 		want [3]bool // short, edge, long
@@ -65,14 +63,14 @@ func TestDurationMatches_ComparisonsAndRanges(t *testing.T) {
 // The substring bug this replaces: duration:>1200 matched nothing and
 // duration:0 matched every book whose seconds contained a zero digit.
 func TestDurationFilter_IsNotSubstring(t *testing.T) {
-	b := database.Book{ID: "x", Duration: intp(3600)}
+	b := database.Book{ID: "x", Duration: new(3600)}
 	assert.True(t, fieldMatchesValue(b, "duration", ">1200"))
 	assert.False(t, fieldMatchesValue(b, "duration", "0"), "3600 must not match duration:0 by containing a 0")
 	assert.False(t, fieldMatchesValue(b, "duration", "60"))
 }
 
 func TestDurationFilter_UnknownRuntime(t *testing.T) {
-	for _, b := range []database.Book{{ID: "nil"}, {ID: "zero", Duration: intp(0)}} {
+	for _, b := range []database.Book{{ID: "nil"}, {ID: "zero", Duration: new(0)}} {
 		for _, expr := range []string{">20m", "<20m", "[0 TO 99h]", "0"} {
 			assert.Falsef(t, fieldMatchesValue(b, "duration", expr), "unknown runtime must not match %s", expr)
 		}
@@ -81,7 +79,7 @@ func TestDurationFilter_UnknownRuntime(t *testing.T) {
 		// Negation is plain set complement: -duration:<20m keeps unknowns.
 		assert.True(t, matchesFieldFilters(b, []FieldFilter{{Field: "duration", Value: "<20m", Negated: true}}))
 	}
-	known := database.Book{ID: "k", Duration: intp(10)}
+	known := database.Book{ID: "k", Duration: new(10)}
 	assert.True(t, fieldMatchesValue(known, "has_duration", "yes"))
 }
 
@@ -90,7 +88,7 @@ func TestMetadataApplied_Definition(t *testing.T) {
 	for status, applied := range cases {
 		b := database.Book{ID: status}
 		if status != "" {
-			b.MetadataReviewStatus = strp(status)
+			b.MetadataReviewStatus = new(status)
 		}
 		assert.Equal(t, applied, BookMetadataApplied(&b), status)
 		assert.Equal(t, applied, fieldMatchesValue(b, "metadata", "applied"), status)
@@ -99,7 +97,7 @@ func TestMetadataApplied_Definition(t *testing.T) {
 		assert.Equal(t, !applied, fieldMatchesValue(b, "metadata", "unapplied"), status)
 	}
 	// MetadataSource alone (title repair stamps it) is not an apply.
-	src := database.Book{ID: "src", MetadataSource: strp("audible")}
+	src := database.Book{ID: "src", MetadataSource: new("audible")}
 	assert.False(t, BookMetadataApplied(&src))
 	nilBook := database.Book{}
 	assert.False(t, fieldMatchesValue(nilBook, "metadata", "bogus"))
@@ -111,11 +109,11 @@ func TestOwnerQuery_NeedsMetadataHidesChapters(t *testing.T) {
 		{Field: "duration", Value: ">20m"},
 	}
 	books := []database.Book{
-		{ID: "chapter", Duration: intp(600)},
-		{ID: "needs", Duration: intp(36000)},
-		{ID: "done", Duration: intp(36000), MetadataReviewStatus: strp("matched")},
-		{ID: "confirmed", Duration: intp(36000), MetadataReviewStatus: strp("audio_confirmed")},
-		{ID: "nomatch", Duration: intp(36000), MetadataReviewStatus: strp("no_match")},
+		{ID: "chapter", Duration: new(600)},
+		{ID: "needs", Duration: new(36000)},
+		{ID: "done", Duration: new(36000), MetadataReviewStatus: new("matched")},
+		{ID: "confirmed", Duration: new(36000), MetadataReviewStatus: new("audio_confirmed")},
+		{ID: "nomatch", Duration: new(36000), MetadataReviewStatus: new("no_match")},
 		{ID: "unknown"},
 	}
 	var got []string
@@ -167,22 +165,22 @@ func TestRuntimeIndex_UsesCanonicalRuntime(t *testing.T) {
 	ri := newRuntimeIndex()
 	require.True(t, ri.ensure(files))
 
-	multi := database.Book{ID: "multi", Duration: intp(1200)}
+	multi := database.Book{ID: "multi", Duration: new(1200)}
 	sec, ok := ri.runtimeOf(&multi)
 	assert.True(t, ok)
 	assert.Equal(t, 3600, sec)
 
-	partial := database.Book{ID: "partial", Duration: intp(600)}
+	partial := database.Book{ID: "partial", Duration: new(600)}
 	_, ok = ri.runtimeOf(&partial)
 	assert.False(t, ok, "a partial sum is a lower bound, never a runtime")
 	assert.False(t, durationMatches(&partial, "<20m", ri.runtimeOf), "a partial book must not be listed as short")
 
-	single := database.Book{ID: "single", Duration: intp(900)}
+	single := database.Book{ID: "single", Duration: new(900)}
 	sec, ok = ri.runtimeOf(&single)
 	assert.True(t, ok)
 	assert.Equal(t, 900, sec)
 
-	fresh := database.Book{ID: "not-in-index", Duration: intp(42)}
+	fresh := database.Book{ID: "not-in-index", Duration: new(42)}
 	sec, ok = ri.runtimeOf(&fresh)
 	assert.True(t, ok)
 	assert.Equal(t, 42, sec)
@@ -214,18 +212,18 @@ func syntheticLibrary(n int) ([]database.Book, coreFiles) {
 		b := database.Book{ID: id}
 		switch {
 		case i%100 < 36:
-			b.Duration = intp(300 + i%600)
+			b.Duration = new(300 + i%600)
 			files = append(files, database.BookFileCore{BookID: id, Duration: *b.Duration})
 		case i%100 < 53:
 			files = append(files, database.BookFileCore{BookID: id})
 		default:
-			b.Duration = intp(8 * 1800)
+			b.Duration = new(8 * 1800)
 			for range 8 {
 				files = append(files, database.BookFileCore{BookID: id, Duration: 1800})
 			}
 		}
 		if i%5 == 0 {
-			b.MetadataReviewStatus = strp("matched")
+			b.MetadataReviewStatus = new("matched")
 		}
 		books[i] = b
 	}

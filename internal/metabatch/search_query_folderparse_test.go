@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_folderparse_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2b7e9d40-6a15-4c83-8f2e-d0a41c9b7e56
 // last-edited: 2026-10-20
 
@@ -48,7 +48,7 @@ func TestFolderParseVariant_TitleEqualsAuthorFolderIsTheQuestion(t *testing.T) {
 	path := "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b"
 	files := liveAuthorFiles([]database.BookFile{{FilePath: path, Duration: 9 * 3600}}, nil)
 	for _, title := range []string{"Mara Quill", "mara quill", "Quill, Mara", "Mara  Quill."} {
-		book := database.Book{ID: "b1", Title: title, FilePath: path, Duration: ip(9 * 3600)}
+		book := database.Book{ID: "b1", Title: title, FilePath: path, Duration: new(9 * 3600)}
 		q := ResolveCandidateSearchQuery(files, &book)
 		require.True(t, q.Usable, title)
 		assert.Equal(t, "The Paper Garden", q.Title, title)
@@ -56,7 +56,7 @@ func TestFolderParseVariant_TitleEqualsAuthorFolderIsTheQuestion(t *testing.T) {
 	}
 
 	// A title that merely resembles nothing about the author is untouched.
-	book := database.Book{ID: "b1", Title: "The Paper Garden", FilePath: path, Duration: ip(9 * 3600)}
+	book := database.Book{ID: "b1", Title: "The Paper Garden", FilePath: path, Duration: new(9 * 3600)}
 	q := ResolveCandidateSearchQuery(files, &book)
 	assert.Equal(t, "The Paper Garden", q.Title)
 	assert.Equal(t, SearchQuerySourceTitle, q.Source)
@@ -119,7 +119,7 @@ func TestFolderParseVariant_PartRowStillRefused(t *testing.T) {
 	dir := "/library/Mara Quill/The Paper Garden"
 	self := "The Paper Garden - 02.mp3"
 	path := dir + "/" + self
-	book := database.Book{ID: "self", Title: "The Paper Garden - 02", FilePath: path, Duration: ip(20 * 60)}
+	book := database.Book{ID: "self", Title: "The Paper Garden - 02", FilePath: path, Duration: new(20 * 60)}
 	files := liveAuthorFiles([]database.BookFile{{FilePath: path, Duration: 20 * 60, FileSize: 20 * 60 * 8000}}, nil)
 	files.dir = siblingRows(dir, self, "The Paper Garden - 01.mp3", "The Paper Garden - 03.mp3")
 	q := ResolveCandidateSearchQuery(files, &book)
@@ -129,7 +129,7 @@ func TestFolderParseVariant_PartRowStillRefused(t *testing.T) {
 	// And a title equal to the author on such a row is refused the same way.
 	self = "Mara Quill - 02.mp3"
 	path = dir + "/" + self
-	title := database.Book{ID: "self", Title: "Mara Quill - 02", FilePath: path, Duration: ip(20 * 60)}
+	title := database.Book{ID: "self", Title: "Mara Quill - 02", FilePath: path, Duration: new(20 * 60)}
 	files = liveAuthorFiles([]database.BookFile{{FilePath: path, Duration: 20 * 60, FileSize: 20 * 60 * 8000}}, nil)
 	files.dir = siblingRows(dir, self, "Mara Quill - 01.mp3", "Mara Quill - 03.mp3")
 	q = ResolveCandidateSearchQuery(files, &title)
@@ -180,7 +180,7 @@ func TestFolderParseVariant_SwitchOffAsksTheStoredTitle(t *testing.T) {
 	withFolderParse(t, false)
 	path := "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b"
 	files := liveAuthorFiles([]database.BookFile{{FilePath: path, Duration: 9 * 3600}}, nil)
-	book := database.Book{ID: "b1", Title: "Mara Quill", FilePath: path, Duration: ip(9 * 3600)}
+	book := database.Book{ID: "b1", Title: "Mara Quill", FilePath: path, Duration: new(9 * 3600)}
 	q := ResolveCandidateSearchQuery(files, &book)
 	require.True(t, q.Usable)
 	assert.Equal(t, "Mara Quill", q.Title)

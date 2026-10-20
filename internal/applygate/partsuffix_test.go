@@ -1,7 +1,7 @@
 // file: internal/applygate/partsuffix_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a7e2c91-3b6d-4f08-9e15-c2d8a0b7f364
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -21,7 +21,7 @@ import (
 // refuse=true are the controls: a real series, a real number, or a source
 // independent of the suffix must still refuse.
 func TestCheckSequence_PartSuffix(t *testing.T) {
-	one := intp(1)
+	one := new(1)
 	cases := []struct {
 		name   string
 		book   database.Book
@@ -43,7 +43,7 @@ func TestCheckSequence_PartSuffix(t *testing.T) {
 		},
 		{
 			name: "The Rooster Bar - 001, raw position",
-			book: database.Book{Title: "The Rooster Bar - 001", SeriesPositionRaw: strp("1")},
+			book: database.Book{Title: "The Rooster Bar - 001", SeriesPositionRaw: new("1")},
 			cand: metafetch.MetadataCandidate{Title: "The Rooster Bar"},
 		},
 		{
@@ -62,7 +62,7 @@ func TestCheckSequence_PartSuffix(t *testing.T) {
 		},
 		{
 			name: "position differs from the part number",
-			book: database.Book{Title: "Rogue Lawyer - 001", SeriesSequence: intp(3)},
+			book: database.Book{Title: "Rogue Lawyer - 001", SeriesSequence: new(3)},
 			cand: metafetch.MetadataCandidate{Title: "Rogue Lawyer"}, refuse: true,
 		},
 		{
@@ -88,7 +88,7 @@ func TestCheckSequence_PartSuffix(t *testing.T) {
 		},
 		{
 			name: "The Sorcerer's Ring - 04 - A Cry of Honor",
-			book: database.Book{Title: "The Sorcerer's Ring - 04 - A Cry of Honor", SeriesPositionRaw: strp("4"),
+			book: database.Book{Title: "The Sorcerer's Ring - 04 - A Cry of Honor", SeriesPositionRaw: new("4"),
 				Series: &database.Series{Name: "The Sorcerer's Ring"}},
 			cand: metafetch.MetadataCandidate{Title: "A Cry of Honor"}, refuse: true,
 		},
@@ -129,21 +129,21 @@ func TestCheckSequence_PartSuffix(t *testing.T) {
 // TestCheckSeriesNumberLost_PartSuffix: the same suffix must not make a title
 // overwrite "lose" a volume number the book never had.
 func TestCheckSeriesNumberLost_PartSuffix(t *testing.T) {
-	book := database.Book{Title: "Rogue Lawyer - 001", SeriesSequence: intp(1)}
+	book := database.Book{Title: "Rogue Lawyer - 001", SeriesSequence: new(1)}
 	cand := metafetch.MetadataCandidate{Title: "Rogue Lawyer"}
 	if r := checkSeriesNumberLost(&book, &cand, []string{"title"}); r.Outcome == OutcomeBlock {
 		t.Fatalf("blocked %s: %s", r.Reason, r.Detail)
 	}
 	// A candidate with a different series number must still block, part
 	// suffix or not ("Wheel of Time - 003" -> #5).
-	wot := database.Book{Title: "Wheel of Time - 003", SeriesSequence: intp(3)}
+	wot := database.Book{Title: "Wheel of Time - 003", SeriesSequence: new(3)}
 	five := metafetch.MetadataCandidate{Title: "Wheel of Time", Series: "Other", SeriesPosition: "5"}
 	if r := checkSeriesNumberLost(&wot, &five, []string{"title"}); r.Outcome != OutcomeBlock {
 		t.Fatalf("different series number must block, got %+v", r)
 	}
 	// Control: under a real series the suffix counts again, so a result that
 	// keeps #1 nowhere (other series, other position) must block.
-	real := database.Book{Title: "Rogue Lawyer - 001", SeriesSequence: intp(1), Series: &database.Series{Name: "Theodore Boone"}}
+	real := database.Book{Title: "Rogue Lawyer - 001", SeriesSequence: new(1), Series: &database.Series{Name: "Theodore Boone"}}
 	moved := metafetch.MetadataCandidate{Title: "Rogue Lawyer", Series: "Zoo", SeriesPosition: "7"}
 	if r := checkSeriesNumberLost(&real, &moved, []string{"title"}); r.Outcome != OutcomeBlock {
 		t.Fatalf("control: under a real series the dropped #1 must block, got %+v", r)

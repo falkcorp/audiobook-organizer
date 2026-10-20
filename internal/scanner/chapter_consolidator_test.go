@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidator_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 04249a9d-8f2e-44f4-9652-258511aae768
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package scanner
 
@@ -13,8 +13,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
-
-func chIntPtr(v int) *int { return &v }
 
 // chBook is a record whose title is still its file stem (the scanner's
 // filename-derived title): a real title with only a numbered FILE is never a
@@ -32,7 +30,7 @@ func TestDetectChapterGroupsWithOptions_PrimaryIsLowestChapterNumber(t *testing.
 	// lexical).
 	var books []database.BookCore
 	for _, n := range []int{3, 10, 1, 7, 2, 9, 4, 8, 6, 5} {
-		books = append(books, chBook(fmt.Sprintf("id-%02d", 11-n), fmt.Sprintf("/lib/A/Book/%d - My Book.mp3", n), chIntPtr(300)))
+		books = append(books, chBook(fmt.Sprintf("id-%02d", 11-n), fmt.Sprintf("/lib/A/Book/%d - My Book.mp3", n), new(300)))
 	}
 	groups := DetectChapterGroupsWithOptions(books, ChapterDetectOptions{MinFiles: 2, MaxPerFileDuration: 600}).Groups
 	if len(groups) != 1 {
@@ -55,8 +53,8 @@ func TestDetectChapterGroupsWithOptions_PrimaryIsLowestChapterNumber(t *testing.
 func TestDetectChapterGroups_UnknownDurationStillGroups(t *testing.T) {
 	books := []database.BookCore{
 		chBook("1", "/lib/A/Book/01 - Novel.m4b", nil),
-		chBook("2", "/lib/A/Book/02 - Novel.m4b", chIntPtr(0)),
-		chBook("3", "/lib/A/Book/03 - Novel.m4b", chIntPtr(400)),
+		chBook("2", "/lib/A/Book/02 - Novel.m4b", new(0)),
+		chBook("3", "/lib/A/Book/03 - Novel.m4b", new(400)),
 	}
 	d := DetectChapterGroupsWithOptions(books, ChapterDetectOptions{MinFiles: 2})
 	if len(d.Groups) != 1 || d.Groups[0].FileCount != 3 {
@@ -74,14 +72,14 @@ func TestDetectChapterGroups_ExcludesMergedAndDeletedAndNonPrimary(t *testing.T)
 	primary := "p"
 	yes := true
 	no := false
-	merged := chBook("m", "/lib/A/Book/03 - My Book.mp3", chIntPtr(300))
+	merged := chBook("m", "/lib/A/Book/03 - My Book.mp3", new(300))
 	merged.MergedIntoBookID = &primary
-	deleted := chBook("d", "/lib/A/Book/04 - My Book.mp3", chIntPtr(300))
+	deleted := chBook("d", "/lib/A/Book/04 - My Book.mp3", new(300))
 	deleted.MarkedForDeletion = &yes
-	nonPrimary := chBook("n", "/lib/A/Book/02 - My Book.mp3", chIntPtr(300))
+	nonPrimary := chBook("n", "/lib/A/Book/02 - My Book.mp3", new(300))
 	nonPrimary.IsPrimaryVersion = &no
 	books := []database.BookCore{
-		chBook("p", "/lib/A/Book/01 - My Book.mp3", chIntPtr(300)),
+		chBook("p", "/lib/A/Book/01 - My Book.mp3", new(300)),
 		merged, deleted, nonPrimary,
 	}
 	d := DetectChapterGroupsWithOptions(books, ChapterDetectOptions{MinFiles: 2})
@@ -96,11 +94,11 @@ func TestDetectChapterGroups_ExcludesMergedAndDeletedAndNonPrimary(t *testing.T)
 
 func TestDetectChapterGroupsWithOptions_HonoursParams(t *testing.T) {
 	books := []database.BookCore{
-		chBook("a1", "/lib/A/Tale/01 - Tale.mp3", chIntPtr(900)),
-		chBook("a2", "/lib/A/Tale/02 - Tale.mp3", chIntPtr(900)),
-		chBook("b1", "/lib/AB/Other/01 - Saga.mp3", chIntPtr(300)),
-		chBook("b2", "/lib/AB/Other/02 - Saga.mp3", chIntPtr(300)),
-		chBook("b3", "/lib/AB/Other/03 - Saga.mp3", chIntPtr(300)),
+		chBook("a1", "/lib/A/Tale/01 - Tale.mp3", new(900)),
+		chBook("a2", "/lib/A/Tale/02 - Tale.mp3", new(900)),
+		chBook("b1", "/lib/AB/Other/01 - Saga.mp3", new(300)),
+		chBook("b2", "/lib/AB/Other/02 - Saga.mp3", new(300)),
+		chBook("b3", "/lib/AB/Other/03 - Saga.mp3", new(300)),
 	}
 	// min_files is the smallest group size.
 	d := DetectChapterGroupsWithOptions(books, ChapterDetectOptions{MinFiles: 3})
@@ -149,7 +147,7 @@ func chGroupOf(t *testing.T, dur int, names ...string) []ChapterGroup {
 	t.Helper()
 	books := make([]database.BookCore, len(names))
 	for i, n := range names {
-		books[i] = chBook(fmt.Sprintf("b%02d", i), "/lib/A/Dir/"+n, chIntPtr(dur))
+		books[i] = chBook(fmt.Sprintf("b%02d", i), "/lib/A/Dir/"+n, new(dur))
 	}
 	return DetectChapterGroupsWithOptions(books, ChapterDetectOptions{MinFiles: 2, MaxPerFileDuration: 600}).Groups
 }
@@ -200,8 +198,8 @@ func TestDetectChapterGroups_GoldenMustGroup(t *testing.T) {
 // are dedup's job, not chapter consolidation's.
 func TestDetectChapterGroups_FullLengthCopiesAreNotChapters(t *testing.T) {
 	books := []database.BookCore{
-		chBook("a", "/lib/A/Dir/01 - The Novel.mp3", chIntPtr(36000)),
-		chBook("b", "/lib/A/Dir/02 - The Novel.mp3", chIntPtr(36300)),
+		chBook("a", "/lib/A/Dir/01 - The Novel.mp3", new(36000)),
+		chBook("b", "/lib/A/Dir/02 - The Novel.mp3", new(36300)),
 	}
 	d := DetectChapterGroupsWithOptions(books, ChapterDetectOptions{MinFiles: 2, MaxPerFileDuration: 100000})
 	if len(d.Groups) != 0 || d.SkippedDuplicateCopies != 1 {
@@ -211,8 +209,8 @@ func TestDetectChapterGroups_FullLengthCopiesAreNotChapters(t *testing.T) {
 
 func TestDetectChapterGroups_ExcludeHook(t *testing.T) {
 	books := []database.BookCore{
-		chBook("a", "/lib/Doctor Who/Story/01 - The Story.mp3", chIntPtr(300)),
-		chBook("b", "/lib/Doctor Who/Story/02 - The Story.mp3", chIntPtr(300)),
+		chBook("a", "/lib/Doctor Who/Story/01 - The Story.mp3", new(300)),
+		chBook("b", "/lib/Doctor Who/Story/02 - The Story.mp3", new(300)),
 	}
 	d := DetectChapterGroupsWithOptions(books, ChapterDetectOptions{
 		MinFiles: 2,

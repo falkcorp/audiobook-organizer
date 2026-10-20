@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -430,7 +430,7 @@ func TestApplyTranscriptionCandidate_OwnerManualOnlyRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bookID := "book-bf"
 			book := &database.Book{ID: bookID, Title: "", SeriesID: &seriesID,
-				FilePath: "/library/Unknown Author/Unknown Title/book.m4b", TranscribedTitle: strPtr(chimes)}
+				FilePath: "/library/Unknown Author/Unknown Title/book.m4b", TranscribedTitle: new(chimes)}
 			cand := metafetch.MetadataCandidate{Title: chimes, Author: "Robert Shearman", Score: 0.95, Source: "test"}
 			entry := mustCandidateCache(t, bookID, cand)
 			store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)

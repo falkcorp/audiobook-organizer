@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single_stale_save_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 727f8bc0-ddad-4dd8-b81c-2a3cb7624332
-// last-edited: 2026-09-13
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -69,12 +69,9 @@ func stubMediaInfo(t *testing.T, fn func(string) (*mediainfo.MediaInfo, error)) 
 	t.Cleanup(func() { extractMediaInfo = orig })
 }
 
-func ip(v int) *int       { return &v }
-func sp(v string) *string { return &v }
-
 // (a) Nothing derived differs from the stored row: zero writes of any kind.
 func TestGetAudiobook_NothingChanged_NoWrites(t *testing.T) {
-	rs := &rowStore{t: t, row: database.Book{ID: "b1", Title: "T", FilePath: "/nope/b1.m4b", Duration: ip(100)}}
+	rs := &rowStore{t: t, row: database.Book{ID: "b1", Title: "T", FilePath: "/nope/b1.m4b", Duration: new(100)}}
 	stubMediaInfo(t, func(string) (*mediainfo.MediaInfo, error) {
 		t.Error("ffprobe ran although duration is stored")
 		return &mediainfo.MediaInfo{}, nil
@@ -104,7 +101,7 @@ func TestGetAudiobook_ProbeDerivesNothing_NoWrites(t *testing.T) {
 // (a) Tags endpoint with every probed field stored: zero writes.
 func TestGetAudiobookTags_NothingChanged_NoWrites(t *testing.T) {
 	rs := &rowStore{t: t, row: database.Book{ID: "b1", Title: "T", FilePath: "/nope/b1.m4b",
-		Codec: sp("aac"), Bitrate: ip(64), SampleRate: ip(44100), Channels: ip(2), Duration: ip(10)}}
+		Codec: new("aac"), Bitrate: new(64), SampleRate: new(44100), Channels: new(2), Duration: new(10)}}
 	stubMediaInfo(t, func(string) (*mediainfo.MediaInfo, error) {
 		t.Error("ffprobe ran although media info is stored")
 		return &mediainfo.MediaInfo{}, nil
@@ -126,7 +123,7 @@ func TestGetAudiobook_ConcurrentApplyNotReverted(t *testing.T) {
 	stubMediaInfo(t, func(string) (*mediainfo.MediaInfo, error) {
 		rs.mu.Lock()
 		rs.row.Title = "Applied Title"
-		rs.row.Narrator = sp("Applied Narrator")
+		rs.row.Narrator = new("Applied Narrator")
 		rs.mu.Unlock()
 		return &mediainfo.MediaInfo{Duration: 3600}, nil
 	})
@@ -157,7 +154,7 @@ func TestGetAudiobookTags_ConcurrentApplyNotReverted(t *testing.T) {
 	stubMediaInfo(t, func(string) (*mediainfo.MediaInfo, error) {
 		rs.mu.Lock()
 		rs.row.Title = "Applied Title"
-		rs.row.Codec = sp("opus")
+		rs.row.Codec = new("opus")
 		rs.mu.Unlock()
 		return &mediainfo.MediaInfo{Codec: "aac", Bitrate: 64, SampleRate: 44100, Channels: 2, Duration: 10}, nil
 	})
@@ -181,7 +178,7 @@ func TestGetAudiobookTags_ConcurrentApplyNotReverted(t *testing.T) {
 // (c) Only the fields that were empty and derived are sent, nothing else.
 func TestGetAudiobookTags_WritesOnlyChangedFields(t *testing.T) {
 	rs := &rowStore{t: t, row: database.Book{ID: "b1", Title: "T", FilePath: "/nope/b1.m4b",
-		Codec: sp("aac"), Channels: ip(2), Duration: ip(10)}}
+		Codec: new("aac"), Channels: new(2), Duration: new(10)}}
 	stubMediaInfo(t, func(string) (*mediainfo.MediaInfo, error) {
 		return &mediainfo.MediaInfo{Codec: "mp3", Bitrate: 64, SampleRate: 44100, Channels: 1, Duration: 99}, nil
 	})

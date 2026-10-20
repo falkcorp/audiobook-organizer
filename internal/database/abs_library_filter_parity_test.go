@@ -1,7 +1,7 @@
 // file: internal/database/abs_library_filter_parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 55a97246-46b1-44df-9aa4-676e9268e930
-// last-edited: 2026-10-01
+// last-edited: 2026-10-20
 
 package database
 
@@ -19,11 +19,11 @@ import (
 // exercise each other field.
 func TestBookSummaryFilter_MatchesCoreParity(t *testing.T) {
 	bools := []*bool{nil, new(false), new(true)}
-	states := []*string{nil, strp(""), strp("organized"), strp("imported"), strp("deleted"), strp("Organized")}
+	states := []*string{nil, new(""), new("organized"), new("imported"), new("deleted"), new("Organized")}
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	quarantine := []*time.Time{nil, &at}
-	merged := []*string{nil, strp("survivor")}
-	review := []*string{nil, strp("pending"), strp("approved")}
+	merged := []*string{nil, new("survivor")}
+	review := []*string{nil, new("pending"), new("approved")}
 	filters := map[string]BookSummaryFilter{
 		"abs":            ABSLibraryFilter(),
 		"zero":           {},

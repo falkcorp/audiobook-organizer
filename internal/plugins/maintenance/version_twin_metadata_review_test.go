@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c9e5b71-2a84-4f06-b1d3-8e7a6c40f259
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -62,7 +62,7 @@ func (l *vtLib) writer() *repairs.Writer {
 func TestVersionTwinFixer_Review_P1_ITunesAfterReplanRefusesApply(t *testing.T) {
 	cases := map[string]func(l *vtLib, id string){
 		"book pid": func(l *vtLib, id string) {
-			_, err := l.st.ModifyBook(id, func(b *database.Book) error { b.ITunesPersistentID = vtPtr("SYNTHPID00000001"); return nil })
+			_, err := l.st.ModifyBook(id, func(b *database.Book) error { b.ITunesPersistentID = new("SYNTHPID00000001"); return nil })
 			require.NoError(l.t, err)
 		},
 		"external id": func(l *vtLib, id string) {
@@ -189,7 +189,7 @@ func TestVersionTwinFixer_Review_P3_UndoLastApplyThenOpRevert(t *testing.T) {
 	_, err := metafetch.NewService(l.st).UndoLastApply(l.ids["p"])
 	require.NoError(t, err)
 	// A later edit the op revert must not touch.
-	_, err = l.st.ModifyBook(l.ids["p"], func(b *database.Book) error { b.Narrator = vtPtr("Synthetic Narrator Edit"); return nil })
+	_, err = l.st.ModifyBook(l.ids["p"], func(b *database.Book) error { b.Narrator = new("Synthetic Narrator Edit"); return nil })
 	require.NoError(t, err)
 
 	res, err := audiobooks.NewRevertService(l.st).RevertOperation(vtTestOpID)
@@ -203,7 +203,7 @@ func TestVersionTwinFixer_Review_P3_UndoLastApplyThenOpRevert(t *testing.T) {
 // and the other fields, never the twin's narrator or ASIN.
 func TestVersionTwinFixer_Review_P4_NoEditionEvidenceNoNarratorOrASIN(t *testing.T) {
 	l := newVTLib(t)
-	l.book("p", "g4", true, func(b *database.Book) { b.Duration = vtPtr(74000) })
+	l.book("p", "g4", true, func(b *database.Book) { b.Duration = new(74000) })
 	cand := vtSagaASIN("B0SYNTH004")
 	cand.Narrator = "Synthetic Narrator B"
 	l.appliedTwin("t", "g4", cand, nil)
@@ -227,7 +227,7 @@ func TestVersionTwinFixer_Review_P4_NoEditionEvidenceNoNarratorOrASIN(t *testing
 // and ASIN are filled.
 func TestVersionTwinFixer_Review_P4_RuntimeEvidenceFillsNarratorAndASIN(t *testing.T) {
 	l := newVTLib(t)
-	l.book("p", "g4b", true, func(b *database.Book) { b.Duration = vtPtr(75400) })
+	l.book("p", "g4b", true, func(b *database.Book) { b.Duration = new(75400) })
 	l.appliedTwin("t", "g4b", vtSagaASIN("B0SYNTH005"), nil)
 	_, rows := l.plan()
 	row := rows["g4b"]
@@ -240,7 +240,7 @@ func TestVersionTwinFixer_Review_P4_RuntimeEvidenceFillsNarratorAndASIN(t *testi
 // record's ASIN, so the record may be that book's; the row is held.
 func TestVersionTwinFixer_Review_P4_ASINOnBookOutsideGroupHolds(t *testing.T) {
 	l := newVTLib(t)
-	l.book("out", "g-other", true, func(b *database.Book) { b.ASIN = vtPtr("B0SYNTH006"); b.Title = "Synthetic Other" })
+	l.book("out", "g-other", true, func(b *database.Book) { b.ASIN = new("B0SYNTH006"); b.Title = "Synthetic Other" })
 	l.book("p", "g4c", true, nil)
 	l.appliedTwin("t", "g4c", vtSagaASIN("B0SYNTH006"), nil)
 	_, rows := l.plan()
@@ -257,19 +257,19 @@ func TestVersionTwinFixer_Review_P5_OutsideHashAfterReplanNoElection(t *testing.
 	l := newVTLib(t)
 	cand := vtSagaASIN("B0SYNTH007")
 	// Created first, with more files and an iTunes id: it would win MATCH-4.
-	l.book("out", "g-out", true, func(b *database.Book) { b.ITunesPersistentID = vtPtr("SYNTHPID00000005") })
+	l.book("out", "g-out", true, func(b *database.Book) { b.ITunesPersistentID = new("SYNTHPID00000005") })
 	for i := 2; i <= 4; i++ {
 		require.NoError(t, l.st.CreateBookFile(&database.BookFile{BookID: l.ids["out"],
 			FilePath: "/lib/Synthetic Author A/out/0" + string(rune('0'+i)) + ".m4b", Format: "m4b"}))
 	}
 	l.book("p", "g5", true, nil)
-	l.appliedTwin("t", "g5", cand, func(b *database.Book) { b.ITunesPersistentID = vtPtr("SYNTHPID00000006") })
+	l.appliedTwin("t", "g5", cand, func(b *database.Book) { b.ITunesPersistentID = new("SYNTHPID00000006") })
 	flags := l.primaryFlags()
 	fresh := l.vtFresh("g5")
 
 	_, err := l.st.ModifyBook(l.ids["out"], func(b *database.Book) error {
-		b.MetadataReviewStatus = vtPtr("matched")
-		b.MetadataSourceHash = vtPtr(metafetch.CandidateSourceHash(cand))
+		b.MetadataReviewStatus = new("matched")
+		b.MetadataSourceHash = new(metafetch.CandidateSourceHash(cand))
 		return nil
 	})
 	require.NoError(t, err)

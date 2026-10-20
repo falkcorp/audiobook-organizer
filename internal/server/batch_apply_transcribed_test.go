@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_transcribed_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6a7c9ec1-ca94-4bd5-b088-7920aaeb18af
-// last-edited: 2026-09-28
+// last-edited: 2026-10-20
 
 package server
 
@@ -26,7 +26,7 @@ import (
 func TestBulkApplyPlanners_OwnerManualOnly(t *testing.T) {
 	const chimes = "Doctor Who: The Chimes of Midnight"
 	dur := 36000
-	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(chimes),
+	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: new(chimes),
 		FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
 	cand := metafetch.MetadataCandidate{Title: chimes, Author: "Robert Shearman", Score: 0.95, DurationSec: 36000, Source: "Audible"}
 	stale := fmt.Errorf("%w: book b1 (stored a, current b)", metafetch.ErrStaleMetadataCache)
@@ -89,7 +89,7 @@ func (filesFaultBooks) GetBookFiles(string) ([]database.BookFile, error) {
 func TestBulkApplyPlanners_OwnerManualCheckFailed(t *testing.T) {
 	const hulk = "Marvel's Planet Hulk"
 	dur := 36000
-	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(hulk),
+	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: new(hulk),
 		FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
 	cand := metafetch.MetadataCandidate{Title: hulk, Author: "Greg Pak", Score: 0.95, DurationSec: 36000, Source: "Audible"}
 	stale := fmt.Errorf("%w: book b1 (stored a, current b)", metafetch.ErrStaleMetadataCache)
@@ -157,7 +157,7 @@ func TestPlanCachedApply_TranscribedRowNeedsTheCurrentAuthor(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			id := tc.liveID
-			book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(hulk), AuthorID: &id,
+			book := &database.Book{ID: "b1", Title: "", TranscribedTitle: new(hulk), AuthorID: &id,
 				FilePath: "/lib/Greg Pak/Unknown Title/book.m4b", Duration: &dur}
 			books := liveAuthorBooks{
 				fakeBooks: fakeBooks{"b1": book},
@@ -193,7 +193,7 @@ func TestBulkApplyPlanners_TranscribedTitleEvidence(t *testing.T) {
 	const hulk = "Marvel's Planet Hulk"
 	dur := 36000
 	book := func(mod func(*database.Book)) *database.Book {
-		b := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(hulk),
+		b := &database.Book{ID: "b1", Title: "", TranscribedTitle: new(hulk),
 			FilePath: "/lib/Greg Pak/Unknown Title/book.m4b", Duration: &dur}
 		if mod != nil {
 			mod(b)
@@ -221,7 +221,7 @@ func TestBulkApplyPlanners_TranscribedTitleEvidence(t *testing.T) {
 	}{
 		{name: "cached: row fetched for the transcription passes", book: book(nil), cand: cand(nil),
 			identityErr: stale, queryMatches: map[string]bool{hulk: true}, wantAllowed: true},
-		{name: "cached: ASIN conflict still refused", book: book(func(b *database.Book) { b.ASIN = strPtr("B000000001") }),
+		{name: "cached: ASIN conflict still refused", book: book(func(b *database.Book) { b.ASIN = new("B000000001") }),
 			cand:        cand(func(c *metafetch.MetadataCandidate) { c.ASIN = "B000000002" }),
 			identityErr: stale, queryMatches: map[string]bool{hulk: true}, wantReason: applygate.ReasonASINConflict},
 		{name: "cached: row fetched for another query stays stale", book: book(nil), cand: cand(nil),
@@ -239,7 +239,7 @@ func TestBulkApplyPlanners_TranscribedTitleEvidence(t *testing.T) {
 			opResult:   &CandidateResult{Book: CandidateBookInfo{ID: "b1"}, SearchQuery: hulk, SearchQuerySource: metabatch.SearchQuerySourceTranscribedTitle},
 			wantReason: applygate.ReasonIdentityStale},
 		{name: "op result: transcription since changed stays stale",
-			book: book(func(b *database.Book) { b.TranscribedTitle = strPtr("World War Hulk") }), cand: cand(nil),
+			book: book(func(b *database.Book) { b.TranscribedTitle = new("World War Hulk") }), cand: cand(nil),
 			opResult:   &CandidateResult{Book: CandidateBookInfo{ID: "b1"}, SearchQuery: hulk, SearchQuerySource: metabatch.SearchQuerySourceTranscribedTitle},
 			wantReason: applygate.ReasonIdentityStale},
 		{name: "op result: folder-title search of a chapter-titled book stays stale",
@@ -257,7 +257,7 @@ func TestBulkApplyPlanners_TranscribedTitleEvidence(t *testing.T) {
 				SearchQuerySource: metabatch.SearchQuerySourceFolderTitle},
 			wantReason: applygate.ReasonIdentityStale},
 		{name: "cached: heard \"X, by A\", candidate X by B stays stale",
-			book:        book(func(b *database.Book) { b.TranscribedAuthor = strPtr("Greg Pak") }),
+			book:        book(func(b *database.Book) { b.TranscribedAuthor = new("Greg Pak") }),
 			cand:        cand(func(c *metafetch.MetadataCandidate) { c.Author = "Someone Else" }),
 			identityErr: stale, queryMatches: map[string]bool{hulk: true}, wantReason: applygate.ReasonIdentityStale},
 		{name: "op result: legacy row with no title and no query stays stale", book: book(nil), cand: cand(nil),

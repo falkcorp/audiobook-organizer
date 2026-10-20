@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_transfer_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d3f2a90-5c1e-4b86-9a47-e0b8c4d1f259
-// last-edited: 2026-10-17
+// last-edited: 2026-10-20
 
 package merge
 
@@ -15,10 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func strPtr(s string) *string { return &s }
-func intPtr(i int) *int       { return &i }
-func i64Ptr(i int64) *int64   { return &i }
-
 // Nil fields on the keeper are filled from the loser; fields the keeper
 // already has are never overwritten (first-win).
 func TestTransferITunesMetadataFirstWin_FillsNilKeepsExisting(t *testing.T) {
@@ -26,17 +22,17 @@ func TestTransferITunesMetadataFirstWin_FillsNilKeepsExisting(t *testing.T) {
 	played := time.Date(2021, 6, 7, 8, 9, 10, 0, time.UTC)
 	keep := &database.Book{
 		ID:                 "KEEP",
-		ITunesPersistentID: strPtr("PID-KEEP"),
-		ITunesRating:       intPtr(60),
+		ITunesPersistentID: new("PID-KEEP"),
+		ITunesRating:       new(60),
 	}
 	from := &database.Book{
 		ID:                 "FROM",
-		ITunesPersistentID: strPtr("PID-FROM"),
-		ITunesPlayCount:    intPtr(7),
-		ITunesRating:       intPtr(100),
+		ITunesPersistentID: new("PID-FROM"),
+		ITunesPlayCount:    new(7),
+		ITunesRating:       new(100),
 		ITunesDateAdded:    &added,
 		ITunesLastPlayed:   &played,
-		ITunesBookmark:     i64Ptr(4200),
+		ITunesBookmark:     new(int64(4200)),
 	}
 
 	TransferITunesMetadataFirstWin(keep, from)
@@ -55,8 +51,8 @@ func TestTransferITunesMetadataFirstWin_FillsNilKeepsExisting(t *testing.T) {
 
 // An empty-string PID on the keeper counts as unset; nil arguments are no-ops.
 func TestTransferITunesMetadataFirstWin_EmptyPIDAndNilArgs(t *testing.T) {
-	keep := &database.Book{ITunesPersistentID: strPtr("")}
-	TransferITunesMetadataFirstWin(keep, &database.Book{ITunesPersistentID: strPtr("PID-FROM")})
+	keep := &database.Book{ITunesPersistentID: new("")}
+	TransferITunesMetadataFirstWin(keep, &database.Book{ITunesPersistentID: new("PID-FROM")})
 	assert.Equal(t, "PID-FROM", *keep.ITunesPersistentID)
 
 	assert.NotPanics(t, func() {
@@ -76,19 +72,19 @@ func TestService_MergeBooksWithOptions_CarryITunesFields(t *testing.T) {
 			winner := seedGuardBook(t, store, "Carry Winner", "m4b", true)
 			w, err := store.GetBookByID(winner.ID)
 			require.NoError(t, err)
-			w.ITunesRating = intPtr(55)
+			w.ITunesRating = new(55)
 			_, err = store.UpdateBook(w.ID, w)
 			require.NoError(t, err)
 			loser := seedGuardBook(t, store, "Carry Loser", "mp3", true)
 
 			l, err := store.GetBookByID(loser.ID)
 			require.NoError(t, err)
-			l.ITunesPersistentID = strPtr("PID-LOSER")
-			l.ITunesPlayCount = intPtr(9)
-			l.ITunesRating = intPtr(80)
+			l.ITunesPersistentID = new("PID-LOSER")
+			l.ITunesPlayCount = new(9)
+			l.ITunesRating = new(80)
 			l.ITunesDateAdded = &added
 			l.ITunesLastPlayed = &played
-			l.ITunesBookmark = i64Ptr(1234)
+			l.ITunesBookmark = new(int64(1234))
 			_, err = store.UpdateBook(l.ID, l)
 			require.NoError(t, err)
 

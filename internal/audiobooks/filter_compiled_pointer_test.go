@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled_pointer_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b7e2c14-8a93-4d60-b1f7-3c9a0e6d2f58
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package audiobooks
 
@@ -22,7 +22,7 @@ func TestCompiledDuration_ParsedOnce(t *testing.T) {
 	require.NoError(t, err)
 	books := make([]database.Book, 1000)
 	for i := range books {
-		books[i] = database.Book{ID: fmt.Sprintf("b%04d", i), Duration: intp(600 + i*3)}
+		books[i] = database.Book{ID: fmt.Sprintf("b%04d", i), Duration: new(600 + i*3)}
 	}
 	matched := 0
 	for i := range books {
@@ -61,10 +61,10 @@ func TestHydrateAuthorSeriesNames_DoesNotMutateSource(t *testing.T) {
 func TestDurationMatchesExpr_AgreesWithWrapper(t *testing.T) {
 	exprs := []string{">20m", "<20m", "[10m TO 20m]", "=0", "==1200", "!=1200", ">=20m", "<=20m"}
 	books := []database.Book{
-		{ID: "a", Duration: intp(0)},
-		{ID: "b", Duration: intp(600)},
-		{ID: "c", Duration: intp(1200)},
-		{ID: "d", Duration: intp(3600)},
+		{ID: "a", Duration: new(0)},
+		{ID: "b", Duration: new(600)},
+		{ID: "c", Duration: new(1200)},
+		{ID: "d", Duration: new(3600)},
 		{ID: "unknown"},
 	}
 	rts := map[string]runtimeFunc{"stored": nil, "unknown": func(*database.Book) (int, bool) { return 0, false }}

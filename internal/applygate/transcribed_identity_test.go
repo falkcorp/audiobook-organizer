@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -36,8 +36,8 @@ func TestEvaluateTranscribed(t *testing.T) {
 		return fixture{
 			bookTitle:   "",
 			path:        "/library/Greg Pak/Unknown Title/book.m4b",
-			transcribed: strp(hulk),
-			duration:    intp(36000),
+			transcribed: new(hulk),
+			duration:    new(36000),
 			authors:     Authors{"Greg Pak"},
 			cand:        metafetch.MetadataCandidate{Title: hulk, Author: "Greg Pak", Score: 0.95, DurationSec: 36000, Source: "Audible"},
 		}
@@ -57,7 +57,7 @@ func TestEvaluateTranscribed(t *testing.T) {
 		{name: "transcribed match passes identity and title", identityErr: stale, ts: explained,
 			wantAllowed: true, wantEvid: true, wantAgree: 3},
 		{name: "same match, ASIN conflict still refused",
-			mod:         func(f *fixture) { f.bookASIN = strp("B000000001"); f.cand.ASIN = "B000000002" },
+			mod:         func(f *fixture) { f.bookASIN = new("B000000001"); f.cand.ASIN = "B000000002" },
 			identityErr: stale, ts: explained, wantReason: ReasonASINConflict, wantBlock: ReasonASINConflict, wantEvid: true, wantAgree: -1},
 		{name: "same match, partial book still refused",
 			mod: func(f *fixture) {
@@ -199,7 +199,7 @@ func TestEvaluateTranscribed_BlocksTheTranscriptionCannotLift(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			book := &database.Book{ID: "b1", Title: tc.title, FilePath: tc.path, TranscribedTitle: strp(tc.heard), Duration: intp(36000)}
+			book := &database.Book{ID: "b1", Title: tc.title, FilePath: tc.path, TranscribedTitle: new(tc.heard), Duration: new(36000)}
 			cand := tc.cand
 			cand.Author, cand.Score, cand.DurationSec, cand.Source = "Terry Pratchett", 0.95, 36000, "Audible"
 			ts := TranscribedSearch{Query: tc.heard, Source: "transcribed_title", ExplainsStaleIdentity: true, FirstFilePath: tc.firstFile}
@@ -332,7 +332,7 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 			if author == "" {
 				author = "Robert Shearman"
 			}
-			book := &database.Book{ID: "b1", Title: tc.title, FilePath: tc.path, TranscribedTitle: strp(tc.transcribed), Duration: intp(36000)}
+			book := &database.Book{ID: "b1", Title: tc.title, FilePath: tc.path, TranscribedTitle: new(tc.transcribed), Duration: new(36000)}
 			cand := metafetch.MetadataCandidate{Title: tc.candTitle, Series: tc.candSeries, Publisher: tc.candPublisher, Author: author,
 				Score: 0.95, DurationSec: 36000, Source: "Audible"}
 			ts := TranscribedSearch{Query: tc.transcribed, Source: "transcribed_title", ExplainsStaleIdentity: true}

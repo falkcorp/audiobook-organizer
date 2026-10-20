@@ -1,7 +1,7 @@
 // file: internal/applygate/cast_test.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 3f9b6d20-8e1c-4a75-b2d4-6c0e9a7f1d58
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package applygate
 
@@ -25,14 +25,14 @@ func TestCheckCastInAuthor(t *testing.T) {
 	}{
 		{
 			name: "Old Soldiers: writer tagged as narrator, cast appended to the author",
-			book: database.Book{Title: "Old Soldiers", Narrator: strp("James Swallow"),
+			book: database.Book{Title: "Old Soldiers", Narrator: new("James Swallow"),
 				FilePath: "/lib/Doctor Who - BF Companion Chronicles/Old Soldiers/Old Soldiers.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Old Soldiers", Author: "James Swallow, Nicholas Courtney, Toby Longworth"},
 			want: ReasonCastInAuthor,
 		},
 		{
 			name: "The Glorious Revolution: two-name cast credit",
-			book: database.Book{Title: "The Glorious Revolution", Narrator: strp("Jonathan Morris")},
+			book: database.Book{Title: "The Glorious Revolution", Narrator: new("Jonathan Morris")},
 			cand: metafetch.MetadataCandidate{Title: "The Glorious Revolution", Author: "Jonathan Morris, Frazer Hines"},
 			want: ReasonCastInAuthor,
 		},
@@ -41,17 +41,17 @@ func TestCheckCastInAuthor(t *testing.T) {
 			// F3); without a cast credit in the files this row is not caught.
 			name: "The War Master: stored author is a non-first name, no cast credit",
 			book: database.Book{Title: "The War Master", Author: &database.Author{Name: "Derek Jacobi"},
-				Narrator: strp("Big Finish Productions")},
+				Narrator: new("Big Finish Productions")},
 			cand: metafetch.MetadataCandidate{Title: "The War Master", Author: "James Goss, Guy Adams, Derek Jacobi, Rob Harvey"},
 		},
 		{
 			name: "F1: co-author reads the book, stored author empty",
-			book: database.Book{Title: "Good Omens", Narrator: strp("Neil Gaiman")},
+			book: database.Book{Title: "Good Omens", Narrator: new("Neil Gaiman")},
 			cand: metafetch.MetadataCandidate{Title: "Good Omens", Author: "Terry Pratchett, Neil Gaiman"},
 		},
 		{
 			name: "F2: narrator shares only a surname with the first author",
-			book: database.Book{Title: "The Talisman", Narrator: strp("Owen King")},
+			book: database.Book{Title: "The Talisman", Narrator: new("Owen King")},
 			cand: metafetch.MetadataCandidate{Title: "The Talisman", Author: "Stephen King, Peter Straub"},
 		},
 		{
@@ -61,17 +61,17 @@ func TestCheckCastInAuthor(t *testing.T) {
 		},
 		{
 			name: "self-read (a): solo author reads their own book, no stored author",
-			book: database.Book{Title: "A Promised Land", Narrator: strp("Barack Obama")},
+			book: database.Book{Title: "A Promised Land", Narrator: new("Barack Obama")},
 			cand: metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama"},
 		},
 		{
 			name: "self-read (b): stored author, narrator and candidate are the same person",
-			book: database.Book{Title: "A Promised Land", Author: &database.Author{Name: "Barack Obama"}, Narrator: strp("Barack Obama")},
+			book: database.Book{Title: "A Promised Land", Author: &database.Author{Name: "Barack Obama"}, Narrator: new("Barack Obama")},
 			cand: metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama"},
 		},
 		{
 			name: "self-read (c): candidate names its own narrator, so the check steps aside",
-			book: database.Book{Title: "A Promised Land", Narrator: strp("Barack Obama")},
+			book: database.Book{Title: "A Promised Land", Narrator: new("Barack Obama")},
 			cand: metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama, Second Author", Narrator: "Barack Obama"},
 		},
 		{
@@ -81,7 +81,7 @@ func TestCheckCastInAuthor(t *testing.T) {
 			// credited to its writer plus the cast. A block only sends the row
 			// to manual review; nothing is written.
 			name: "self-read (d): co-written memoir read by its first author blocks",
-			book: database.Book{Title: "Becoming Kareem", Narrator: strp("Kareem Abdul-Jabbar")},
+			book: database.Book{Title: "Becoming Kareem", Narrator: new("Kareem Abdul-Jabbar")},
 			cand: metafetch.MetadataCandidate{Title: "Becoming Kareem", Author: "Kareem Abdul-Jabbar, Raymond Obstfeld"},
 			want: ReasonCastInAuthor,
 		},
@@ -90,19 +90,19 @@ func TestCheckCastInAuthor(t *testing.T) {
 			// (it skips the author only when it equals the narrator), so the
 			// author == narrator case must not be exempt.
 			name: "Big Finish: stored author = narrator = the writer, cast appended",
-			book: database.Book{Title: "Resistance", Author: &database.Author{Name: "Steve Lyons"}, Narrator: strp("Steve Lyons")},
+			book: database.Book{Title: "Resistance", Author: &database.Author{Name: "Steve Lyons"}, Narrator: new("Steve Lyons")},
 			cand: metafetch.MetadataCandidate{Title: "Resistance", Author: "Steve Lyons, Anneke Wills, John Sackville"},
 			want: ReasonCastInAuthor,
 		},
 		{
 			name: "narrator repeats the first author in full-name form",
-			book: database.Book{Title: "Frostfire", Narrator: strp("Marc Platt")},
+			book: database.Book{Title: "Frostfire", Narrator: new("Marc Platt")},
 			cand: metafetch.MetadataCandidate{Title: "Frostfire", Author: "Marc Platt, Maureen O'Brien"},
 			want: ReasonCastInAuthor,
 		},
 		{
 			name: "real co-authors, narrator is someone else",
-			book: database.Book{Title: "Good Omens", Narrator: strp("Martin Jarvis")},
+			book: database.Book{Title: "Good Omens", Narrator: new("Martin Jarvis")},
 			cand: metafetch.MetadataCandidate{Title: "Good Omens", Author: "Terry Pratchett, Neil Gaiman"},
 		},
 		{
@@ -113,17 +113,17 @@ func TestCheckCastInAuthor(t *testing.T) {
 		{
 			name: "narrator tag copied from the author credit",
 			book: database.Book{Title: "Tin Man", Author: &database.Author{Name: "Jason Anspach, Nick Cole"},
-				Narrator: strp("Jason Anspach, Nick Cole")},
+				Narrator: new("Jason Anspach, Nick Cole")},
 			cand: metafetch.MetadataCandidate{Title: "Tin Man", Author: "Jason Anspach, Nick Cole"},
 		},
 		{
 			name: "provider names its own narrator",
-			book: database.Book{Title: "Fully Loaded Thrillers", Narrator: strp("Blake Crouch")},
+			book: database.Book{Title: "Fully Loaded Thrillers", Narrator: new("Blake Crouch")},
 			cand: metafetch.MetadataCandidate{Title: "Fully Loaded Thrillers", Author: "Luke Daniels, Blake Crouch", Narrator: "Eric G. Dove"},
 		},
 		{
 			name: "single author who narrates the book",
-			book: database.Book{Title: "The Graveyard Book", Narrator: strp("Neil Gaiman")},
+			book: database.Book{Title: "The Graveyard Book", Narrator: new("Neil Gaiman")},
 			cand: metafetch.MetadataCandidate{Title: "The Graveyard Book", Author: "Neil Gaiman"},
 		},
 	}
@@ -144,7 +144,7 @@ func TestCheckCastInAuthor(t *testing.T) {
 // whole evidence leg: cast_in_author must stay neutral and must not be the
 // reason for any refusal.
 func TestCheckEvidenceInBatch_SelfReadIsNotCast(t *testing.T) {
-	book := database.Book{Title: "A Promised Land", Duration: intp(104400), Narrator: strp("Barack Obama"),
+	book := database.Book{Title: "A Promised Land", Duration: new(104400), Narrator: new("Barack Obama"),
 		FilePath: "/lib/Barack Obama/A Promised Land/A Promised Land.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama", DurationSec: 104400}
 	v := CheckEvidenceInBatch(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false, nil)
@@ -164,7 +164,7 @@ func TestCheckEvidenceInBatch_SelfReadIsNotCast(t *testing.T) {
 // TestCheckEvidence_CastInAuthorBlocks confirms the check is wired into the
 // evidence leg, on a row every other check agrees with.
 func TestCheckEvidenceInBatch_CastInAuthorBlocks(t *testing.T) {
-	book := database.Book{Title: "Old Soldiers", Duration: intp(4789), Narrator: strp("James Swallow"),
+	book := database.Book{Title: "Old Soldiers", Duration: new(4789), Narrator: new("James Swallow"),
 		FilePath: "/lib/James Swallow/Old Soldiers/Old Soldiers.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "Old Soldiers", Author: "James Swallow, Nicholas Courtney, Toby Longworth", DurationSec: 4789}
 	v := CheckEvidenceInBatch(&book, snap(&book), database.ComputeBookRuntime(&book, nil), &cand, false, nil)

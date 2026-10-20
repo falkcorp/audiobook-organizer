@@ -1,16 +1,13 @@
 // file: internal/database/pebble_store_book_media_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2bd37725-b63d-4529-8450-c4e8858d385b
-// last-edited: 2026-09-13
+// last-edited: 2026-10-20
 
 package database
 
 import (
 	"testing"
 )
-
-func intp(v int) *int       { return &v }
-func strp(v string) *string { return &v }
 
 // TestFillBookMediaInfo_KeepsConcurrentApply is the GET-reverts-apply bug at
 // the store: the read path read the row, an apply rewrote it, then the read
@@ -41,7 +38,7 @@ func TestFillBookMediaInfo_KeepsConcurrentApply(t *testing.T) {
 	if stale.Duration != nil {
 		t.Fatalf("precondition: stale row has a duration")
 	}
-	got, err := s.FillBookMediaInfo(b.ID, BookMediaInfoPatch{Duration: intp(3600), Codec: strp("aac")})
+	got, err := s.FillBookMediaInfo(b.ID, BookMediaInfoPatch{Duration: new(3600), Codec: new("aac")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +66,7 @@ func TestFillBookMediaInfo_NoWriteWhenNothingEmpty(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
 
-	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/b.m4b", Duration: intp(100), Codec: strp("mp3")})
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/b.m4b", Duration: new(100), Codec: new("mp3")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +79,7 @@ func TestFillBookMediaInfo_NoWriteWhenNothingEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.FillBookMediaInfo(b.ID, BookMediaInfoPatch{Duration: intp(999), Codec: strp("aac")})
+	got, err := s.FillBookMediaInfo(b.ID, BookMediaInfoPatch{Duration: new(999), Codec: new("aac")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,11 +108,11 @@ func TestFillBookMediaInfo_FillsOnlyEmptyFields(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
 
-	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/c.m4b", Bitrate: intp(64)})
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/c.m4b", Bitrate: new(64)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.FillBookMediaInfo(b.ID, BookMediaInfoPatch{Bitrate: intp(128), SampleRate: intp(44100)})
+	got, err := s.FillBookMediaInfo(b.ID, BookMediaInfoPatch{Bitrate: new(128), SampleRate: new(44100)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +128,7 @@ func TestFillBookMediaInfo_FillsOnlyEmptyFields(t *testing.T) {
 func TestFillBookMediaInfo_MissingBook(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
-	got, err := s.FillBookMediaInfo("no-such-id", BookMediaInfoPatch{Duration: intp(1)})
+	got, err := s.FillBookMediaInfo("no-such-id", BookMediaInfoPatch{Duration: new(1)})
 	if err != nil || got != nil {
 		t.Fatalf("got %v, %v; want nil, nil", got, err)
 	}

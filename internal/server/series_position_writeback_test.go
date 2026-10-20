@@ -1,7 +1,7 @@
 // file: internal/server/series_position_writeback_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 1e6f4a92-8c07-4d31-b5a8-72c9e0d3f416
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package server
 
@@ -118,10 +118,6 @@ func (f *normalizeFixture) seq(t *testing.T, id string) *int {
 	return b.SeriesSequence
 }
 
-func seriesID(n int) *int { return &n }
-
-func boolPtr(b bool) *bool { return &b }
-
 // The apply pass renamed "Discworld 05" to "Discworld" and threw the 5 away.
 // Renaming without recording the number destroys the only statement of where
 // the book sits in its series.
@@ -133,8 +129,8 @@ func TestExecuteSeriesNormalize_WritesStrippedPositionIntoSequence(t *testing.T)
 			{ID: 2, Name: "Nameless Sovereign #5", AuthorID: &authorID},
 		},
 		map[string]*database.Book{
-			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
-			"book-2": {ID: "book-2", Title: "The Fifth", SeriesID: seriesID(2)},
+			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: new(1)},
+			"book-2": {ID: "book-2", Title: "The Fifth", SeriesID: new(2)},
 			// A NON-PRIMARY version of book-1. The rename de-numbers the series
 			// row that this book points at too, so if the write-back is built
 			// from the primary-filtered listing, this row loses the 5 with
@@ -142,7 +138,7 @@ func TestExecuteSeriesNormalize_WritesStrippedPositionIntoSequence(t *testing.T)
 			// to prevent, so it is asserted explicitly below.
 			"book-1b": {
 				ID: "book-1b", Title: "Wyrd Sisters (unabridged)",
-				SeriesID: seriesID(1), IsPrimaryVersion: boolPtr(false),
+				SeriesID: new(1), IsPrimaryVersion: new(false),
 			},
 		})
 
@@ -175,7 +171,7 @@ func TestExecuteSeriesNormalize_BracketedRenamesSeriesButWritesNoSequence(t *tes
 	f := newNormalizeFixture(t,
 		[]database.Series{{ID: 3, Name: "Dragon Born [04]", AuthorID: &authorID}},
 		map[string]*database.Book{
-			"book-3": {ID: "book-3", Title: "Blood Bond", SeriesID: seriesID(3)},
+			"book-3": {ID: "book-3", Title: "Blood Bond", SeriesID: new(3)},
 		})
 
 	f.run(t)
@@ -196,7 +192,7 @@ func TestExecuteSeriesNormalize_DoesNotOverwriteExistingSequence(t *testing.T) {
 	f := newNormalizeFixture(t,
 		[]database.Series{{ID: 1, Name: "Discworld 05", AuthorID: &authorID}},
 		map[string]*database.Book{
-			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1), SeriesSequence: &existing},
+			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: new(1), SeriesSequence: &existing},
 		})
 
 	f.run(t)
@@ -221,8 +217,8 @@ func TestExecuteSeriesNormalize_LeavesCleanAndUnvouchedSeriesAlone(t *testing.T)
 			{ID: 2, Name: "08. Battle for the Abyss", AuthorID: &authorID},
 		},
 		map[string]*database.Book{
-			"book-1": {ID: "book-1", Title: "Leviathan Wakes", SeriesID: seriesID(1)},
-			"book-2": {ID: "book-2", Title: "Battle for the Abyss", SeriesID: seriesID(2)},
+			"book-1": {ID: "book-1", Title: "Leviathan Wakes", SeriesID: new(1)},
+			"book-2": {ID: "book-2", Title: "Battle for the Abyss", SeriesID: new(2)},
 		})
 	f.store.UpdateSeriesNameFunc = func(id int, name string) error {
 		renamed = append(renamed, fmt.Sprintf("%d=%s", id, name))
@@ -307,7 +303,7 @@ func TestExecuteSeriesNormalize_RespectsALockedSeriesPosition(t *testing.T) {
 	f := newNormalizeFixture(t,
 		[]database.Series{{ID: 1, Name: "Discworld 05", AuthorID: &authorID}},
 		map[string]*database.Book{
-			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
+			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: new(1)},
 		})
 	f.lockFields("book-1", database.FieldKeySeriesPosition)
 
@@ -326,7 +322,7 @@ func TestExecuteSeriesNormalize_ALockOnAnotherFieldDoesNotBlockThePosition(t *te
 	f := newNormalizeFixture(t,
 		[]database.Series{{ID: 1, Name: "Discworld 05", AuthorID: &authorID}},
 		map[string]*database.Book{
-			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
+			"book-1": {ID: "book-1", Title: "Wyrd Sisters", SeriesID: new(1)},
 		})
 	f.lockFields("book-1", database.FieldKeyNarrator)
 
@@ -350,9 +346,9 @@ func positionsFixture(t *testing.T) *normalizeFixture {
 			{ID: 2, Name: "Nameless Sovereign #5", AuthorID: &authorID},
 		},
 		map[string]*database.Book{
-			"book-1":  {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
-			"book-1b": {ID: "book-1b", Title: "Wyrd Sisters (unabridged)", SeriesID: seriesID(1), IsPrimaryVersion: boolPtr(false)},
-			"book-2":  {ID: "book-2", Title: "The Fifth", SeriesID: seriesID(2)},
+			"book-1":  {ID: "book-1", Title: "Wyrd Sisters", SeriesID: new(1)},
+			"book-1b": {ID: "book-1b", Title: "Wyrd Sisters (unabridged)", SeriesID: new(1), IsPrimaryVersion: new(false)},
+			"book-2":  {ID: "book-2", Title: "The Fifth", SeriesID: new(2)},
 		})
 }
 
