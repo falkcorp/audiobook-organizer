@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
 // last-edited: 2026-10-19
 
@@ -400,5 +400,30 @@ func (s *Server) recordEmailDisplaced(newUserID string, displacedUserIDs []strin
 		},
 	}); err != nil {
 		inviteAccessLog.Warn("recording the email-displacement audit entry failed: %v", err)
+	}
+}
+
+// operatorTrustedEmails is the operator's trusted address list: the owner
+// email and OAUTH_ALLOWED_EMAILS. Only the operator can set either
+// (environment, config file, or a proven owner session); no self-service path
+// writes them.
+func operatorTrustedEmails() []string {
+	snap := config.Snapshot()
+	return append([]string{snap.OwnerEmail}, oauth.ParseAllowedEmails(snap.OAuthAllowedEmails)...)
+}
+
+// installOperatorEmailTrust hands the store the operator list, as proof of an
+// address for its one active holder, and brings the verified-email index up
+// to date (the first run is the full provenance rebuild). Runs before any
+// sign-in route exists. A failure is logged; every verified-email lookup
+// retries it and refuses to answer while it fails.
+func (s *Server) installOperatorEmailTrust() {
+	t, ok := database.AsCapability[database.OperatorEmailTrust](s.storeForWiring())
+	if !ok {
+		return
+	}
+	t.SetOperatorTrustedEmails(operatorTrustedEmails)
+	if err := t.EnsureVerifiedEmailIndex(); err != nil {
+		inviteAccessLog.Error("verified-email index: rebuild failed; SSO linking by email is refused until it succeeds: %v", err)
 	}
 }

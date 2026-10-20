@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-19
 
@@ -149,7 +149,7 @@ func TestBackfillVerifiedEmailIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := s.RerunVerifiedEmailBackfillForTest()
+	res, err := s.RerunVerifiedEmailBackfillForTest(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +172,97 @@ func TestBackfillVerifiedEmailIndex(t *testing.T) {
 	if id, _ := s.GetOAuthIdentityByProviderSubject("google", "sub-linked"); id == nil || id.UserID != linked.ID {
 		t.Fatal("linked identities must be untouched")
 	}
-	if again, err := s.backfillVerifiedEmailIndex(); err != nil || !again.Skipped {
-		t.Fatalf("second run = %+v, %v; want skipped by the sentinel", again, err)
+	// Once applied, an unchanged (empty) operator list changes nothing.
+	s.SetOperatorTrustedEmails(func() []string { return nil })
+	if err := s.EnsureVerifiedEmailIndex(); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("invitee@example.com"); u == nil || u.ID != invitee.ID {
+		t.Fatal("an unchanged list must not touch the index")
+	}
+}
+
+// The operator's trusted list (owner email, OAUTH_ALLOWED_EMAILS) proves an
+// address for its one active holder; removing an address withdraws that
+// proof before the next lookup; adding it back restores it.
+func TestVerifiedEmailIndex_OperatorList(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "admin1", "admin", "active")
+	listed := mustUser(t, s, "listed", "viewer", "active")
+	listed.Email = "Listed@example.com" // self-set, unverified
+	if err := s.UpdateUser(listed); err != nil {
+		t.Fatal(err)
+	}
+	list := []string{"ADMIN1@admins.example.com", " listed@example.com "}
+	s.SetOperatorTrustedEmails(func() []string { return list })
+	if err := s.EnsureVerifiedEmailIndex(); err != nil { // first run: full rebuild
+		t.Fatal(err)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("admin1@admins.example.com"); u == nil || u.ID != admin.ID {
+		t.Fatalf("the owner-listed admin must be verified: %+v", u)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("listed@example.com"); u == nil || u.ID != listed.ID {
+		t.Fatalf("an allow-listed holder must be verified: %+v", u)
+	}
+
+	list = []string{"admin1@admins.example.com"} // the operator removes listed@
+	if u, err := s.GetUserByVerifiedEmail("listed@example.com"); err != nil || u != nil {
+		t.Fatalf("a removed address must stop resolving at once: %+v, %v", u, err)
+	}
+	if _, closer, err := s.db.Get([]byte(userEmailIndexPrefix + "listed@example.com")); err == nil {
+		closer.Close()
+		t.Fatal("the key must be deleted, so a rollback build does not trust it")
+	}
+	list = append(list, "listed@example.com") // and adds it back
+	if u, _ := s.GetUserByVerifiedEmail("listed@example.com"); u == nil || u.ID != listed.ID {
+		t.Fatalf("a re-added address must resolve again: %+v", u)
+	}
+
+	// An inactive holder is not proven by the list.
+	gone := mustUser(t, s, "gone", "viewer", "inactive")
+	setRawUserEmail(t, s, gone, "gone@example.com")
+	list = append(list, "gone@example.com")
+	if u, _ := s.GetUserByVerifiedEmail("gone@example.com"); u != nil {
+		t.Fatalf("an inactive holder must not be verified by the list: %+v", u)
+	}
+}
+
+// Two holders of one operator-listed address: a conflict, so no key, in both
+// the full rebuild and the re-apply after a list change; and the displacement
+// gate refuses.
+func TestVerifiedEmailIndex_OperatorListedDuplicateIsAConflict(t *testing.T) {
+	s := newInviteTestStore(t)
+	a := mustUser(t, s, "twin-a", "viewer", "active")
+	b := mustUser(t, s, "twin-b", "viewer", "active")
+	setRawUserEmail(t, s, a, "shared@example.com") // legacy duplicate, as a pre-fix UpdateUser allowed
+	setRawUserEmail(t, s, b, "shared@example.com")
+	res, err := s.RerunVerifiedEmailBackfillForTest([]string{"shared@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Conflict != 1 {
+		t.Fatalf("result = %+v, want 1 conflict", res)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("shared@example.com"); u != nil {
+		t.Fatalf("a conflicted address must not be verified: %+v", u)
+	}
+
+	s2 := newInviteTestStore(t)
+	c := mustUser(t, s2, "twin-c", "viewer", "active")
+	d := mustUser(t, s2, "twin-d", "viewer", "active")
+	setRawUserEmail(t, s2, c, "dup@example.com")
+	setRawUserEmail(t, s2, d, "dup@example.com")
+	list := []string{}
+	s2.SetOperatorTrustedEmails(func() []string { return list })
+	if err := s2.EnsureVerifiedEmailIndex(); err != nil {
+		t.Fatal(err)
+	}
+	list = []string{"dup@example.com"}
+	if u, err := s2.GetUserByVerifiedEmail("dup@example.com"); err != nil || u != nil {
+		t.Fatalf("a newly listed address with two holders must stay unverified: %+v, %v", u, err)
+	}
+	if _, _, err := s2.CreateUserDisplacingUnverifiedEmail("newcomer", "dup@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("displacing operator-listed holders = %v, want ErrUserEmailTaken", err)
 	}
 }
 
@@ -208,6 +297,70 @@ func TestCreateUserDisplacingUnverifiedEmail(t *testing.T) {
 	}
 	if v, _ := s.GetUserByVerifiedEmail("owner.real@example.com"); v == nil || v.ID != u.ID {
 		t.Fatal("the verified holder must keep the address")
+	}
+}
+
+// A holder with provenance is never displaced, even without a verified key:
+// a linked identity, the operator list or an invite grant each refuse.
+func TestCreateUserDisplacingUnverifiedEmail_RefusesAProvenHolder(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		prove func(t *testing.T, s *PebbleStore, holder *User)
+	}{
+		{"linked identity", func(t *testing.T, s *PebbleStore, holder *User) {
+			if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-holder", Email: "Shared@example.com", UserID: holder.ID}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"operator list", func(t *testing.T, s *PebbleStore, _ *User) {
+			s.SetOperatorTrustedEmails(func() []string { return []string{"shared@example.com"} })
+		}},
+		{"invite grant", func(t *testing.T, s *PebbleStore, holder *User) {
+			g, _ := json.Marshal(InviteEmailGrant{UserID: holder.ID, InviteToken: "tok"})
+			if err := s.db.Set([]byte(inviteEmailGrantPrefix+"shared@example.com"), g, pebble.Sync); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newInviteTestStore(t)
+			holder := mustUser(t, s, "holder", "viewer", "active")
+			holder.Email = "shared@example.com" // self-set: no verified key
+			if err := s.UpdateUser(holder); err != nil {
+				t.Fatal(err)
+			}
+			tc.prove(t, s, holder)
+			before, _ := s.CountUsers()
+			if _, _, err := s.CreateUserDisplacingUnverifiedEmail("newcomer", "shared@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
+				t.Fatalf("displacing a proven holder = %v, want ErrUserEmailTaken", err)
+			}
+			if got, _ := s.GetUserByID(holder.ID); got.Email != "shared@example.com" {
+				t.Fatalf("a proven holder must keep the address: %q", got.Email)
+			}
+			if after, _ := s.CountUsers(); after != before {
+				t.Fatal("a refused displacement must create nothing")
+			}
+		})
+	}
+}
+
+// An unreadable user row might be a holder; the displacement fails closed.
+func TestCreateUserDisplacingUnverifiedEmail_RefusesWhenARowIsUnreadable(t *testing.T) {
+	s := newInviteTestStore(t)
+	squatter := mustUser(t, s, "squatter", "viewer", "active")
+	squatter.Email = "contested@example.com"
+	if err := s.UpdateUser(squatter); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set([]byte("u:01UNREADABLEROW"), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := s.CreateUserDisplacingUnverifiedEmail("newcomer", "contested@example.com", "oauth", "", []string{"viewer"}, "active")
+	if !errors.Is(err, ErrUserEmailTaken) || !errors.Is(err, ErrUndecodableUserRows) {
+		t.Fatalf("err = %v, want ErrUserEmailTaken and ErrUndecodableUserRows", err)
+	}
+	if got, _ := s.GetUserByID(squatter.ID); got.Email != "contested@example.com" {
+		t.Fatal("nothing may be cleared when a row is unreadable")
 	}
 }
 

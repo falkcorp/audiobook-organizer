@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -140,9 +140,12 @@ type UnverifiedEmailDisplacer interface {
 	// clears the address from every such account (each keeps its account,
 	// password and sessions, and loses only the address) and creates the
 	// user with the address recorded as verified. It returns the new user
-	// and the ids of the accounts that lost the address. If any holder has
-	// the address verified, nothing is written and the error wraps
-	// ErrUserEmailTaken.
+	// and the ids of the accounts that lost the address. Nothing is written,
+	// and the error wraps ErrUserEmailTaken, when any holder has the address
+	// verified (the verified key) or proven (emailProvenFor: an invite grant
+	// naming them, a linked identity of theirs recorded with the address, or
+	// the operator's trusted list), or when any user row cannot be decoded (a
+	// holder that cannot be read must not be skipped by the check).
 	CreateUserDisplacingUnverifiedEmail(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, []string, error)
 }
 
@@ -174,19 +177,38 @@ func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passw
 	} else if err != pebble.ErrNotFound {
 		return nil, nil, err
 	}
-	users, _, err := p.listUsers()
+	users, badKeys, err := p.listUsers()
 	if err != nil {
 		return nil, nil, err
 	}
-	now := time.Now()
-	b := p.db.NewBatch()
-	defer b.Close()
-	var displaced []string
+	if len(badKeys) > 0 {
+		return nil, nil, fmt.Errorf("%w: %w: %d row(s) unreadable, so a holder of the address cannot be ruled out",
+			ErrUserEmailTaken, ErrUndecodableUserRows, len(badKeys))
+	}
+	var opSet map[string]bool
+	if list, ok := p.currentOperatorEmails(); ok {
+		opSet = operatorSet(list)
+	}
+	var holders []User
 	for i := range users {
 		u := users[i]
 		if !strings.EqualFold(strings.TrimSpace(u.Email), lowerEmail) {
 			continue
 		}
+		proven, err := p.emailProvenFor(&u, lowerEmail, opSet)
+		if err != nil {
+			return nil, nil, err
+		}
+		if proven {
+			return nil, nil, fmt.Errorf("email is proven for another account: %w", ErrUserEmailTaken)
+		}
+		holders = append(holders, u)
+	}
+	now := time.Now()
+	b := p.db.NewBatch()
+	defer b.Close()
+	var displaced []string
+	for _, u := range holders {
 		u.Email = ""
 		u.UpdatedAt = now
 		data, err := json.Marshal(u)
@@ -266,6 +288,11 @@ func (p *PebbleStore) GetUserByVerifiedEmail(email string) (*User, error) {
 	lower := strings.ToLower(strings.TrimSpace(email))
 	if lower == "" {
 		return nil, nil
+	}
+	// Apply any change to the operator's trusted list first, so a removed
+	// address stops resolving before this answers. Fails closed.
+	if err := p.EnsureVerifiedEmailIndex(); err != nil {
+		return nil, fmt.Errorf("verified-email index: %w", err)
 	}
 	u, err := p.getUserByIndex(userEmailIndexPrefix + lower)
 	if err != nil || u == nil {
