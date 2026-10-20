@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -183,7 +183,8 @@ func clientPrefixKey(ip string) (key string, ok bool) {
 //     address;
 //   - a private peer that is not a listed connector but carries Cloudflare
 //     markers (hasCloudflareMarkers) is most likely a connector nobody listed;
-//     it gets one bucket for its own address, shared by everyone it relays.
+//     it gets one bucket for its own address, shared by everyone it relays,
+//     and a warning is logged once per such address (warnUnlistedConnector).
 //     TUNNEL_CONNECTOR_ADDRS lists every connector in production, so this
 //     only happens when the setting is unset or incomplete, and then each
 //     source address is still limited;
@@ -206,5 +207,79 @@ func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 		}
 	}
 	ip = c.ClientIP()
-	return ip, !isConnector && !t.isLocalPeer(ip)
+	local := t.isLocalPeer(ip)
+	if !isConnector && !local && hasCloudflareMarkers(c) {
+		warnUnlistedConnector(ip)
+	}
+	return ip, !isConnector && !local
+}
+
+// unlistedConnectorWarnCap bounds how many distinct addresses
+// warnUnlistedConnector remembers (and so warns about). Real deployments have
+// a handful of connectors; past the cap it stops warning rather than grow.
+const unlistedConnectorWarnCap = 64
+
+// unlistedConnectors remembers the private peers already warned about.
+var unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
+
+// warnUnlistedConnector logs, once per address, that a private LAN peer not
+// in TUNNEL_CONNECTOR_ADDRS sent Cloudflare markers: it is most likely a
+// cloudflared connector nobody listed, so every visitor it relays shares one
+// per-client bucket. Public peers are skipped: a connector is on the LAN, and
+// anyone on the internet can send the headers, so warning about them would
+// let a caller fill the log (and the remembered set).
+func warnUnlistedConnector(ip string) {
+	a, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return
+	}
+	a = a.WithZone("").Unmap()
+	if !a.IsPrivate() {
+		return
+	}
+	switch unlistedConnectors.add(a.String()) {
+	case onceSetAdded:
+		clientTrustLog.Warn("peer %s sent Cloudflare headers but is not in TUNNEL_CONNECTOR_ADDRS: it looks like a cloudflared connector not in TUNNEL_CONNECTOR_ADDRS, so every visitor it relays shares one rate-limit bucket. Add it to TUNNEL_CONNECTOR_ADDRS", a)
+	case onceSetFull:
+		clientTrustLog.Warn("more than %d unlisted private peers sent Cloudflare headers; no longer warning about new ones. Check TUNNEL_CONNECTOR_ADDRS", unlistedConnectorWarnCap)
+	}
+}
+
+// onceSet is a bounded set of strings: add reports whether a value is new.
+// Once it holds max values it accepts no more, and reports onceSetFull exactly
+// once (on the first refused value) so the caller can say it stopped.
+type onceSet struct {
+	mu       sync.Mutex
+	max      int
+	seen     map[string]struct{}
+	fullSaid bool
+}
+
+type onceSetResult int
+
+const (
+	onceSetSeen  onceSetResult = iota // already present, or full and already said so
+	onceSetAdded                      // new, now remembered
+	onceSetFull                       // new, but the set is full; reported once
+)
+
+func newOnceSet(max int) *onceSet {
+	return &onceSet{max: max, seen: make(map[string]struct{})}
+}
+
+func (o *onceSet) add(v string) onceSetResult {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if _, ok := o.seen[v]; ok {
+		return onceSetSeen
+	}
+	if len(o.seen) >= o.max {
+		if o.fullSaid {
+			return onceSetSeen
+		}
+		o.fullSaid = true
+		return onceSetFull
+	}
+	o.seen[v] = struct{}{}
+	return onceSetAdded
 }
