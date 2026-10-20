@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-19
 
@@ -129,6 +129,101 @@ func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash
 		return nil, err
 	}
 	return user, nil
+}
+
+// UnverifiedEmailDisplacer lets an identity-provider login take its verified
+// address back from accounts that only typed it in. Not on Store; resolve it
+// with AsCapability.
+type UnverifiedEmailDisplacer interface {
+	// CreateUserDisplacingUnverifiedEmail is CreateUser for a login whose
+	// IdP-verified email other accounts hold unverified. In one batch it
+	// clears the address from every such account (each keeps its account,
+	// password and sessions, and loses only the address) and creates the
+	// user with the address recorded as verified. It returns the new user
+	// and the ids of the accounts that lost the address. If any holder has
+	// the address verified, nothing is written and the error wraps
+	// ErrUserEmailTaken.
+	CreateUserDisplacingUnverifiedEmail(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, []string, error)
+}
+
+var _ UnverifiedEmailDisplacer = (*PebbleStore)(nil)
+
+// CreateUserDisplacingUnverifiedEmail implements UnverifiedEmailDisplacer.
+func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, []string, error) {
+	p.inviteMu.Lock()
+	defer p.inviteMu.Unlock()
+	userWriteMu.Lock() // the holders' rows are rewritten
+	defer userWriteMu.Unlock()
+	lowerUser := strings.ToLower(username)
+	lowerEmail := strings.ToLower(strings.TrimSpace(email))
+	if lowerEmail == "" {
+		return nil, nil, fmt.Errorf("create user displacing unverified email: email required")
+	}
+	if _, closer, err := p.db.Get([]byte("idx:user:username:" + lowerUser)); err == nil {
+		closer.Close()
+		return nil, nil, fmt.Errorf("username already exists")
+	}
+	if v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + lowerEmail)); err == nil {
+		holder := string(v)
+		closer.Close()
+		if u, err := p.GetUserByID(holder); err != nil {
+			return nil, nil, err
+		} else if u != nil && strings.EqualFold(strings.TrimSpace(u.Email), lowerEmail) {
+			return nil, nil, fmt.Errorf("email is another account's verified email: %w", ErrUserEmailTaken)
+		}
+	} else if err != pebble.ErrNotFound {
+		return nil, nil, err
+	}
+	users, _, err := p.listUsers()
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	b := p.db.NewBatch()
+	defer b.Close()
+	var displaced []string
+	for i := range users {
+		u := users[i]
+		if !strings.EqualFold(strings.TrimSpace(u.Email), lowerEmail) {
+			continue
+		}
+		u.Email = ""
+		u.UpdatedAt = now
+		data, err := json.Marshal(u)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := b.Set([]byte("u:"+u.ID), data, nil); err != nil {
+			return nil, nil, err
+		}
+		displaced = append(displaced, u.ID)
+	}
+	id, err := newULID()
+	if err != nil {
+		return nil, nil, err
+	}
+	user := &User{
+		ID: id, Username: username, Email: email,
+		PasswordHashAlgo: passwordHashAlgo, PasswordHash: passwordHash,
+		Roles: roles, Status: status, CreatedAt: now, UpdatedAt: now, Version: 1,
+	}
+	data, err := json.Marshal(user)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := b.Set([]byte("u:"+id), data, nil); err != nil {
+		return nil, nil, err
+	}
+	if err := b.Set([]byte("idx:user:username:"+lowerUser), []byte(id), nil); err != nil {
+		return nil, nil, err
+	}
+	if err := b.Set([]byte(userEmailIndexPrefix+lowerEmail), []byte(id), nil); err != nil {
+		return nil, nil, err
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
+		return nil, nil, err
+	}
+	return user, displaced, nil
 }
 
 func (p *PebbleStore) GetUserByID(id string) (*User, error) {

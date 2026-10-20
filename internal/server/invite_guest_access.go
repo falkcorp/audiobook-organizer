@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
 // last-edited: 2026-10-19
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -374,4 +375,30 @@ func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 		return "another active user has this as their verified email"
 	}
 	return ""
+}
+
+// recordEmailDisplaced is oauth.Config.OnEmailDisplaced: it writes an audit
+// activity entry when a verified SSO login took its address back from
+// accounts that held it unverified, so an admin can see whose profile lost
+// its email and why. Account ids only; the address is not recorded.
+func (s *Server) recordEmailDisplaced(newUserID string, displacedUserIDs []string, provider string) {
+	if s.activityService == nil {
+		return
+	}
+	if err := s.activityService.Record(database.ActivityEntry{
+		Timestamp: time.Now().UTC(),
+		Tier:      "audit",
+		Type:      "auth_email_displaced",
+		Level:     "warn",
+		Source:    "oauth",
+		Summary: fmt.Sprintf("a verified %s sign-in claimed an email that %d account(s) had set without verification; their email was cleared and account %s was created",
+			provider, len(displacedUserIDs), newUserID),
+		Details: map[string]any{
+			"new_user_id":        newUserID,
+			"displaced_user_ids": displacedUserIDs,
+			"provider":           provider,
+		},
+	}); err != nil {
+		inviteAccessLog.Warn("recording the email-displacement audit entry failed: %v", err)
+	}
 }

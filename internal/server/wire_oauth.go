@@ -55,6 +55,7 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 		CFAccessTeamDomain: cfgSnap.CFAccessTeamDomain,
 		CFAccessAUD:        cfgSnap.CFAccessAUD,
 		ExtraAllowed:       inviteGrantAllowed(s.storeForWiring()),
+		OnEmailDisplaced:   s.recordEmailDisplaced,
 	})
 
 	codec, err := oauth.NewStateCodec(10 * time.Minute)

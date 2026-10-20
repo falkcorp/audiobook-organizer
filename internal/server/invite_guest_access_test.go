@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-19
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -544,4 +548,29 @@ func TestGuestPolicySync_RevokedBeforeSyncNeverCallsCloudflare(t *testing.T) {
 	if inv.GuestPolicyStatus != database.InviteGuestPolicyRevoked {
 		t.Fatalf("status = %q, want revoked", inv.GuestPolicyStatus)
 	}
+}
+
+// The displacement hook writes an audit entry an admin can find, naming the
+// accounts and never the address.
+func TestRecordEmailDisplaced_WritesAnAuditEntry(t *testing.T) {
+	db, err := pebble.Open("act.pebble", &pebble.Options{FS: vfs.NewMem()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	svc := activity.NewService(database.NewPebbleActivityStore(database.NewGatedDB(db)))
+	s := &Server{activityService: svc}
+	s.recordEmailDisplaced("new-user-1", []string{"squatter-1"}, "google")
+	entries, _, err := svc.Query(context.Background(), database.ActivityFilter{Type: "auth_email_displaced", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Tier != "audit" || !strings.Contains(entries[0].Summary, "new-user-1") {
+		t.Fatalf("entries = %+v", entries)
+	}
+	// Stored as JSON, so the list reads back as []any.
+	if got := fmt.Sprint(entries[0].Details["displaced_user_ids"]); got != "[squatter-1]" {
+		t.Fatalf("displaced_user_ids = %s", got)
+	}
+	(&Server{}).recordEmailDisplaced("x", nil, "google") // no activity service: no panic
 }

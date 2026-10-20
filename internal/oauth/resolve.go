@@ -1,5 +1,5 @@
 // file: internal/oauth/resolve.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
 // last-edited: 2026-10-19
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // Sentinel errors so callers can map to the right HTTP status (both → 403, never 500).
@@ -18,12 +19,18 @@ var (
 	ErrEmailNotVerified = errors.New("oauth: identity email is not verified")
 	ErrEmailNotAllowed  = errors.New("oauth: email is not on the allowlist")
 	// ErrEmailHeldUnverified: an existing account has this address as a
-	// self-set, unverified email. The login is not linked to that account
-	// (anyone can type any address into a profile) and no second account is
-	// made with the same address. It wraps ErrEmailNotAllowed so every
-	// caller's existing deny path (403, never 500) applies.
+	// self-set, unverified email and the store cannot take it back
+	// (no database.UnverifiedEmailDisplacer). The login is not linked to that
+	// account. It wraps ErrEmailNotAllowed so every caller's existing deny
+	// path (403, never 500) applies.
 	ErrEmailHeldUnverified = fmt.Errorf("%w: an existing account has this email unverified, so the login is not linked to it", ErrEmailNotAllowed)
+	// ErrEmailConflict: another account has this address as its VERIFIED
+	// email, yet the login did not link to it (a concurrent change). Denied,
+	// through the same ErrEmailNotAllowed path.
+	ErrEmailConflict = fmt.Errorf("%w: another account has this email verified", ErrEmailNotAllowed)
 )
+
+var resolveLog = logger.New("oauth.resolve")
 
 // UserStore is the slice of database.Store the resolver needs. database.Store
 // satisfies it directly.
@@ -47,9 +54,13 @@ type UserStore interface {
 //  4. Else resolve by an account's VERIFIED email (GetUserByVerifiedEmail) →
 //     auto-link this identity to that user. A self-set profile email is never
 //     matched: it would let anyone capture another person's first SSO login.
-//  5. Else auto-create a user (DefaultRole) + link the identity. If an account
-//     already has the address unverified, CreateUser refuses it and the login
-//     is denied (ErrEmailHeldUnverified).
+//  5. Else auto-create a user (DefaultRole) + link the identity. If accounts
+//     already hold the address UNVERIFIED, the verified login wins: in one
+//     batch the address is cleared from them (they keep their accounts) and
+//     the new user is created with it (database.UnverifiedEmailDisplacer).
+//     That is logged at Warn with the account ids and reported through
+//     Config.OnEmailDisplaced for the admin's audit log. If an account holds
+//     it VERIFIED, the login is denied (ErrEmailConflict).
 //
 // A rejected identity never touches the user/identity store past the lookups.
 func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.User, error) {
@@ -99,7 +110,8 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 	username := c.uniqueUsername(store, claims)
 	user, err := store.CreateUser(username, claims.Email, "oauth", "", []string{c.DefaultRole}, "active")
 	if errors.Is(err, database.ErrUserEmailTaken) {
-		return nil, ErrEmailHeldUnverified
+		// Step 4 found no verified holder, so the address is held unverified.
+		user, err = c.displaceUnverifiedHolders(store, username, claims)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("oauth resolve: create user: %w", err)
@@ -158,4 +170,26 @@ func sanitizeUsername(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// displaceUnverifiedHolders creates the login's user, taking its IdP-verified
+// address back from the accounts that only typed it in (see ResolveUser step 5).
+func (c *Config) displaceUnverifiedHolders(store UserStore, username string, claims IdentityClaims) (*database.User, error) {
+	d, ok := database.AsCapability[database.UnverifiedEmailDisplacer](store)
+	if !ok {
+		return nil, ErrEmailHeldUnverified
+	}
+	user, displaced, err := d.CreateUserDisplacingUnverifiedEmail(username, claims.Email, "oauth", "", []string{c.DefaultRole}, "active")
+	if errors.Is(err, database.ErrUserEmailTaken) {
+		return nil, ErrEmailConflict
+	}
+	if err != nil {
+		return nil, err
+	}
+	resolveLog.Warn("oauth resolve: verified %s login took its email back from unverified account(s) %v; new account %s",
+		logger.SanitizeLogValue(claims.Provider), displaced, user.ID)
+	if c.OnEmailDisplaced != nil {
+		c.OnEmailDisplaced(user.ID, displaced, claims.Provider)
+	}
+	return user, nil
 }
