@@ -26,7 +26,9 @@ verified Cloudflare Access assertion. Every other peer is keyed on its own
 address whatever headers it sends (public IPv6 by /64; a LAN IPv6 peer by
 its full address, since LAN devices share one /64), so forging `Cf-*` headers
 never takes a caller out of per-client limiting; an unlisted connector is
-therefore one bucket for everyone it relays. A listed connector, or a local
+therefore one bucket for everyone it relays, and a private peer that sends
+Cloudflare headers without being listed is logged once per address at
+warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
 skipped rather than shared, and the per-token and global layers still apply.
 The token is read first; then all three layers are reserved together, and a

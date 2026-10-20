@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -860,5 +861,59 @@ func TestInviteRateLimit_LANIPv6PeersInOneSlash64HaveTheirOwnBuckets(t *testing.
 	}
 	if w := h.get(inviteTestToken(500), "[fd12:3456:789a:1::6]", nil); w.Code != http.StatusOK {
 		t.Fatalf("another device on the same LAN /64: %d, want 200 (its own bucket)", w.Code)
+	}
+}
+
+// len reports how many values the set holds. Test-only.
+func (o *onceSet) len() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.seen)
+}
+
+// NIT3: a private peer that is not a listed connector but sends Cloudflare
+// headers is warned about once per address, so a missing
+// TUNNEL_CONNECTOR_ADDRS entry is visible; public peers and listed
+// connectors are not remembered.
+func TestTrustedClientIP_WarnsOncePerUnlistedPrivateConnector(t *testing.T) {
+	saved := unlistedConnectors
+	unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
+	t.Cleanup(func() { unlistedConnectors = saved })
+	listed, _ := parseConnectorPeers(piConnectors[0])
+	trust := clientTrust{isLocalPeer: func(string) bool { return false }, connectors: listed}
+	call := func(peer string, hdr map[string]string) {
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.RemoteAddr = peer + ":4000"
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		trustedClientIP(c, trust)
+	}
+	for range 3 {
+		call(piConnectors[1], cfHeaders("203.0.113.7")) // unlisted Pi
+	}
+	if n := unlistedConnectors.len(); n != 1 {
+		t.Fatalf("an unlisted Pi sending Cf headers three times: %d remembered, want 1", n)
+	}
+	call(piConnectors[0], cfHeaders("203.0.113.7")) // listed connector
+	call("198.51.100.20", cfHeaders("203.0.113.7")) // public peer forging headers
+	call(piConnectors[2], nil)                      // private peer, no markers
+	if n := unlistedConnectors.len(); n != 1 {
+		t.Fatalf("listed, public and marker-less peers were remembered: %d, want 1", n)
+	}
+}
+
+// The remembered set is bounded, and says once that it stopped.
+func TestOnceSet_Bounded(t *testing.T) {
+	o := newOnceSet(2)
+	got := []onceSetResult{o.add("a"), o.add("a"), o.add("b"), o.add("c"), o.add("d"), o.add("a")}
+	want := []onceSetResult{onceSetAdded, onceSetSeen, onceSetAdded, onceSetFull, onceSetSeen, onceSetSeen}
+	if !slices.Equal(got, want) {
+		t.Fatalf("add results %v, want %v", got, want)
+	}
+	if o.len() != 2 {
+		t.Fatalf("set holds %d, want 2", o.len())
 	}
 }
