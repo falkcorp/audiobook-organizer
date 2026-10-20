@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-20
 
@@ -41,7 +41,7 @@ type StrictUserLister interface {
 // idx:user:email:<lowercase email> -> user id caches the VERIFIED email: the
 // addresses an SSO login may be auto-linked to by email (oauth.ResolveUser,
 // through GetUserByVerifiedEmail). The answer itself is computed live from
-// each account's records (emailProvenFor in
+// each account's stamped EmailSource (emailProven in
 // pebble_store_verified_email_backfill.go); the key is kept in step with it
 // so that a rollback to an older build, whose ResolveUser reads this key and
 // nothing else, still sees only verified addresses. The paths that make an
@@ -54,18 +54,21 @@ type StrictUserLister interface {
 // key for the address the user gave up.
 //
 // Email uniqueness is enforced among PROVEN holders only: at most one account
-// holds a given address proven (emailProvenFor). Every path that makes an
+// holds a given address proven (emailProven). Every path that makes an
 // address proven (CreateUser, ConsumeInvite, SetUserEmailAsAdmin,
 // MarkUserEmailVerified, CreateUserDisplacingUnverifiedEmail) refuses, or
 // does nothing, when another account already holds it proven
 // (provenHolderOtherLocked). A self-set address (UpdateUser) is never proven,
-// so it is not checked at all: two accounts may type in the same address, and
-// neither copy links an SSO login. Refusing a self-set duplicate would tell
-// any signed-in user which addresses have accounts, and would protect nothing.
+// so two accounts may type in the same unproven address, and neither copy
+// links an SSO login. UpdateUser does refuse an address another account holds
+// proven, with an error the profile handler answers generically: a user may
+// not park on someone's verified address, and while the profile form then
+// tells a signed-in user that some account has that address verified, it says
+// nothing about addresses that are only typed in.
 const userEmailIndexPrefix = "idx:user:email:"
 
 // provenHolderOtherLocked reports whether any user other than exceptID holds
-// lower (already normalized) proven (emailProvenFor). It sees the rows the
+// lower (already normalized) proven (emailProven). It sees the rows the
 // verified lookup sees (verifiedHolderLocked): an unreadable user row is
 // skipped and logged, as it is there. That row cannot be linked to by an SSO
 // login while it is unreadable, and if it is ever repaired into a second
@@ -88,11 +91,7 @@ func (p *PebbleStore) provenHolderOtherLocked(lower, exceptID string) (bool, err
 		if users[i].ID == exceptID {
 			continue
 		}
-		proven, err := p.emailProvenFor(&users[i], lower)
-		if err != nil {
-			return false, err
-		}
-		if proven {
+		if emailProven(&users[i], lower) {
 			return true, nil
 		}
 	}
@@ -191,7 +190,7 @@ type UnverifiedEmailDisplacer interface {
 	// user with the address recorded as verified. It returns the new user
 	// and the ids of the accounts that lost the address. Nothing is written,
 	// and the error wraps ErrUserEmailTaken, when any holder has the address
-	// proven (emailProvenFor), or when any user row cannot be decoded (a
+	// proven (emailProven), or when any user row cannot be decoded (a
 	// holder that cannot be read must not be skipped by the check).
 	CreateUserDisplacingUnverifiedEmail(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, []string, error)
 }
@@ -262,7 +261,7 @@ func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passw
 
 // unprovenHoldersLocked returns every user whose current email is lower, for
 // a displacement. It refuses (wrapping ErrUserEmailTaken) when any holder has
-// the address proven (emailProvenFor), and when any user row cannot be
+// the address proven (emailProven), and when any user row cannot be
 // decoded, since a holder that cannot be read must not be skipped. Caller
 // holds inviteMu and userWriteMu.
 func (p *PebbleStore) unprovenHoldersLocked(lower string) ([]User, error) {
@@ -280,11 +279,7 @@ func (p *PebbleStore) unprovenHoldersLocked(lower string) ([]User, error) {
 		if util.NormalizeEmail(u.Email) != lower {
 			continue
 		}
-		proven, err := p.emailProvenFor(&u, lower)
-		if err != nil {
-			return nil, err
-		}
-		if proven {
+		if emailProven(&u, lower) {
 			return nil, fmt.Errorf("email is proven for another account: %w", ErrUserEmailTaken)
 		}
 		holders = append(holders, u)
@@ -348,7 +343,7 @@ func (p *PebbleStore) GetUserByUsername(username string) (*User, error) {
 }
 
 // GetUserByVerifiedEmail returns the one user whose current email is email
-// and proven (emailProvenFor), or nil. It is computed from the user rows on
+// and proven (emailProven), or nil. It is computed from the user rows on
 // every call (user counts are small), not read from the idx:user:email
 // cache; it then repairs that cache key if it disagrees. A self-set address
 // is never found here.
@@ -512,9 +507,10 @@ var ErrUserEmailTaken = errors.New("database: another account already has that e
 // it, so a whole-row write can never change, or revert, any of them. An unknown
 // id is ErrUserNotFound.
 //
-// An email change is never refused for being another account's address (see
-// the email keys: uniqueness is among proven holders, and a self-set address
-// is never proven). A change never makes the new address verified: UpdateUser is the self-service path (PATCH /auth/me), so it
+// An email change is refused (ErrUserEmailTaken) when another account holds
+// the new address proven (provenHolderOtherLocked); an address other accounts
+// only typed in is allowed, and stays unverified for everyone. A change never
+// makes the new address verified: UpdateUser is the self-service path (PATCH /auth/me), so it
 // never writes the verified-email key, and it drops the key for the address the
 // user gave up, in the same batch as the row, when that key points here. (A
 // self-set address that was verified would let anyone take over another
@@ -522,9 +518,9 @@ var ErrUserEmailTaken = errors.New("database: another account already has that e
 // store owns User.EmailSource: an email change sets it to EmailSourceSelf,
 // and otherwise the stored value is kept whatever the caller sent.
 //
-// inviteMu is taken first (lock order inviteMu, then userWriteMu): the proven
-// checks of the other email writers read this row's email under it, so a
-// change cannot land between one of their checks and its write.
+// inviteMu is taken first (lock order inviteMu, then userWriteMu): it guards
+// every proven-holder check-then-write, this one included, so no other writer
+// can make the address proven between this check and this write.
 func (p *PebbleStore) UpdateUser(user *User) error {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
@@ -545,6 +541,13 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 	}
 	oldEmail := util.NormalizeEmail(stored.Email)
 	newEmail := util.NormalizeEmail(user.Email)
+	if newEmail != oldEmail {
+		if taken, err := p.provenHolderOtherLocked(newEmail, user.ID); err != nil {
+			return err
+		} else if taken {
+			return ErrUserEmailTaken
+		}
+	}
 	// EmailSource is the store's to set: a self-service change makes it
 	// "self", anything else keeps what is stored, whatever the caller sent.
 	user.EmailSource = stored.EmailSource

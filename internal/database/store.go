@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.120.0
+// version: 2.121.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -740,7 +740,7 @@ type User struct {
 	CredentialEpoch int64 `json:"credential_epoch,omitempty"`
 	// EmailSource records how Email got onto the account (EmailSource*
 	// constants), and so whether the address is verified: setup, admin,
-	// invite and idp are; self and invite_link are not (see emailProvenFor).
+	// invite and idp are; self and invite_link are not (see emailProven).
 	// Only the store sets it; UpdateUser ignores a caller's value. "" is a row
 	// written by a build that did not know the field: the store stamps it at
 	// the next open (ReconcileVerifiedEmails) and treats it as unverified

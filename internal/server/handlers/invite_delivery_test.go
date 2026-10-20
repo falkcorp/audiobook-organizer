@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-20
 
@@ -524,5 +524,30 @@ func TestInviteEmail_RefusedWithoutAnAbsoluteBaseURL(t *testing.T) {
 				t.Fatalf("list settings = %v / %v", list["mail_configured"], list["mail_unavailable_reason"])
 			}
 		})
+	}
+}
+
+// A change onto an address another account holds verified answers the same
+// generic 400 as any unusable address and revokes nothing.
+func TestUpdateMe_EmailTakenIsGenericAndRevokesNothing(t *testing.T) {
+	mockStore := handlersmocks.NewMockAuthStore(t)
+	mockStore.EXPECT().UpdateUser(mock.Anything).Return(database.ErrUserEmailTaken)
+	h := handlers.NewAuthHandler(mockStore, true)
+	var calls []string
+	h.SetGuestAccessRevoker(func(userID, email, reason string) { calls = append(calls, userID) })
+
+	c, w := newAuthCtx(http.MethodPatch, "/api/v1/auth/me", map[string]any{"email": "Taken@example.com"})
+	setAuthUser(c, &database.User{ID: "u1", Status: "active", Email: "old@example.com"})
+	h.UpdateMe(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
+	}
+	for _, leak := range []string{"another account", "already", "exists", "taken", "Taken@example.com"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Fatalf("body reveals the address is registered (%q): %s", leak, w.Body.String())
+		}
+	}
+	if len(calls) != 0 {
+		t.Fatalf("a refused change must not revoke the old email's access: %v", calls)
 	}
 }
