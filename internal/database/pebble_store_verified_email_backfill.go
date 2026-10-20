@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-20
 
@@ -17,10 +17,9 @@ import (
 // Verified email, computed live.
 //
 // Whether a user's email is verified is decided from that user's own records
-// every time it is asked (emailProvenFor): the store-set EmailSource, an
-// accepted-invite SSO grant naming the user, or a linked identity of the user
-// recorded with that email. Nothing is applied once and remembered, so no
-// recorded state can leave an address stuck verified or stuck unverified.
+// every time it is asked (emailProven): the EmailSource the store stamped
+// when the address was written. Only the writing path proves anything, so a
+// self-service change can never inherit proof from older records.
 //
 // idx:user:email:<addr> (userEmailIndexPrefix) is only a cache of that answer,
 // kept for a rollback build: older builds link an SSO login to whatever user
@@ -39,41 +38,26 @@ func trustedEmailSource(source string) bool {
 	return false
 }
 
-// emailProvenFor reports whether lower (lowercased, trimmed) is proven to be
-// u's address: u holds it with a trusted EmailSource, an accepted-invite SSO
-// grant for it names u, or a linked identity of u was recorded with it. A
-// self-set address, an address bound by a copied invite link, and a row with
-// no EmailSource (written by a build that did not know the field, until the
-// next store open stamps it) prove nothing. It does not look at other
-// holders; callers treat two proven holders as a conflict.
-func (p *PebbleStore) emailProvenFor(u *User, lower string) (bool, error) {
-	if util.NormalizeEmail(u.Email) != lower {
-		return false, nil
-	}
-	if trustedEmailSource(u.EmailSource) {
-		return true, nil
-	}
-	g, err := p.GetInviteEmailGrant(lower)
-	if err != nil {
-		return false, err
-	}
-	if g != nil && g.UserID == u.ID {
-		return true, nil
-	}
-	ids, err := p.GetOAuthIdentitiesForUser(u.ID)
-	if err != nil {
-		return false, err
-	}
-	for _, id := range ids {
-		if util.NormalizeEmail(id.Email) == lower {
-			return true, nil
-		}
-	}
-	return false, nil
+// emailProven reports whether lower (normalized) is proven to be u's
+// address: u holds it and its EmailSource is one the store stamps only on a
+// path that proves control of the address (trustedEmailSource: setup, admin,
+// invite, idp). Nothing else counts, whatever the row is linked to: a self-set
+// address stays unproven even when the user has a linked identity recorded
+// with that address, or an invite grant for it, from before. Those records
+// say the user controlled the address once; they say nothing about who typed
+// it in now, and counting them let a self-service change create a second
+// proven holder. An IdP login that confirms the address re-stamps it idp
+// (MarkUserEmailVerified), which is the way a self-set address becomes
+// proven. A row with no EmailSource (written by a build that did not know the
+// field, until the next store open stamps it), "self" and "invite_link" prove
+// nothing. It does not look at other holders; callers treat two proven
+// holders as a conflict.
+func emailProven(u *User, lower string) bool {
+	return lower != "" && util.NormalizeEmail(u.Email) == lower && trustedEmailSource(u.EmailSource)
 }
 
 // verifiedHolderLocked returns the one user whose current email is lower and
-// proven (emailProvenFor), or nil when there is none or more than one (a
+// proven (emailProven), or nil when there is none or more than one (a
 // conflict, logged without the address). Undecodable user rows are skipped:
 // proof is per account, so an unreadable row cannot make another account's
 // proof false, and it cannot be returned to a caller either. Caller holds
@@ -89,11 +73,7 @@ func (p *PebbleStore) verifiedHolderLocked(lower string) (*User, error) {
 	var found *User
 	for i := range users {
 		u := &users[i]
-		ok, err := p.emailProvenFor(u, lower)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
+		if !emailProven(u, lower) {
 			continue
 		}
 		if found != nil {
@@ -142,13 +122,17 @@ type ReconcileResult struct {
 	// address another account already holds proven. Setting the address for
 	// them is refused (it would be proven twice); the duplicate account has
 	// to be cleared or merged instead.
-	SelfAdminsVerifiedElsewhere    []string
+	SelfAdminsVerifiedElsewhere []string
+	// DowngradedDuplicates lists legacy rows stamped "self" although their
+	// history pointed to a trusted source, because another account already
+	// held, or also qualified for, the address proven (demoteDuplicateProofs).
+	DowngradedDuplicates           []string
 	Kept, Added, Dropped, Conflict int // cache keys
 }
 
 // ReconcileVerifiedEmails runs at every store open: it stamps rows that have
 // an email and no EmailSource, then rewrites every idx:user:email key from
-// emailProvenFor. Both steps are idempotent, so there is no sentinel: a row
+// emailProven. Both steps are idempotent, so there is no sentinel: a row
 // rewritten by a rollback build (which drops the unknown email_source field)
 // is stamped again at the next open, and a cache key a rollback build left
 // is corrected.
@@ -170,6 +154,9 @@ func (p *PebbleStore) ReconcileVerifiedEmails() (ReconcileResult, error) {
 	}
 	if n := len(res.Stamped); n > 0 {
 		authLog.Info("verified email: stamped email sources on rows from an older build: %v", res.Stamped)
+	}
+	if len(res.DowngradedDuplicates) > 0 {
+		authLog.Warn("verified email: account(s) %v were stamped as typed in, not verified, because another account holds or also qualified for the same address verified; clear the duplicate or merge the accounts", res.DowngradedDuplicates)
 	}
 	if err := p.classifySelfAdminsLocked(&res); err != nil {
 		authLog.Warn("verified email: could not check whether the self-set admin addresses are verified elsewhere: %v", err)
@@ -231,13 +218,19 @@ func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error 
 	if err != nil {
 		return err
 	}
-	b := p.db.NewBatch()
-	defer b.Close()
+	sources := make(map[string]string, len(legacy))
 	for _, u := range legacy {
 		source, err := p.stampEmailSource(u, invites)
 		if err != nil {
 			return err
 		}
+		sources[u.ID] = source
+	}
+	res.DowngradedDuplicates = demoteDuplicateProofs(users, sources)
+	b := p.db.NewBatch()
+	defer b.Close()
+	for _, u := range legacy {
+		source := sources[u.ID]
 		u.EmailSource = source
 		data, err := json.Marshal(u)
 		if err != nil {
@@ -252,6 +245,75 @@ func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error 
 		}
 	}
 	return b.Commit(pebble.Sync)
+}
+
+// stampRank orders the trusted sources stamping can give a legacy row by how
+// directly they prove the address: the setup key (CreateUser) is unique per
+// address and written at creation, an admin-sent invite proves the inbox at
+// accept time, a recorded identity proves it at link time only.
+var stampRank = map[string]int{EmailSourceSetup: 3, EmailSourceInvite: 2, EmailSourceIdP: 1}
+
+// demoteDuplicateProofs keeps stamping from making a second proven holder.
+// sources maps each legacy row's id to the source stampEmailSource chose; for
+// every address that would end up proven for more than one account, legacy
+// candidates are demoted to "self" in place: all of them when a row that is
+// not legacy already holds the address proven (that row was proven by a
+// write path, which outranks history), otherwise all but a single
+// highest-ranked candidate (stampRank), or all of them on a tie. It returns
+// the demoted ids.
+func demoteDuplicateProofs(users []User, sources map[string]string) []string {
+	type cand struct {
+		id   string
+		rank int
+	}
+	existing := map[string]bool{}
+	candidates := map[string][]cand{}
+	for i := range users {
+		u := &users[i]
+		lower := util.NormalizeEmail(u.Email)
+		if lower == "" {
+			continue
+		}
+		if src, legacy := sources[u.ID]; legacy {
+			if trustedEmailSource(src) {
+				candidates[lower] = append(candidates[lower], cand{u.ID, stampRank[src]})
+			}
+		} else if emailProven(u, lower) {
+			existing[lower] = true
+		}
+	}
+	var demoted []string
+	demote := func(c cand) {
+		sources[c.id] = EmailSourceSelf
+		demoted = append(demoted, c.id)
+	}
+	for lower, cs := range candidates {
+		if existing[lower] {
+			for _, c := range cs {
+				demote(c)
+			}
+			continue
+		}
+		if len(cs) < 2 {
+			continue
+		}
+		best, tie := cs[0], false
+		for _, c := range cs[1:] {
+			switch {
+			case c.rank > best.rank:
+				best, tie = c, false
+			case c.rank == best.rank:
+				tie = true
+			}
+		}
+		for _, c := range cs {
+			if tie || c.id != best.id {
+				demote(c)
+			}
+		}
+	}
+	slices.Sort(demoted)
+	return demoted
 }
 
 // stampEmailSource decides a legacy row's EmailSource from what older builds
@@ -332,7 +394,7 @@ func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error
 }
 
 // rewriteVerifiedEmailCacheLocked rewrites every idx:user:email key from
-// emailProvenFor: one key per address proven for exactly one user, none for
+// emailProven: one key per address proven for exactly one user, none for
 // an address proven for two (logged without the address). A key naming an
 // undecodable user row is left alone: nothing can be decided about that
 // account until its row is readable. Caller holds inviteMu.
@@ -353,11 +415,7 @@ func (p *PebbleStore) rewriteVerifiedEmailCacheLocked(res *ReconcileResult) erro
 		if lower == "" {
 			continue
 		}
-		ok, err := p.emailProvenFor(u, lower)
-		if err != nil {
-			return err
-		}
-		if !ok {
+		if !emailProven(u, lower) {
 			continue
 		}
 		if other, dup := desired[lower]; dup && other != u.ID {

@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-20
 
@@ -16,27 +16,86 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-// SF2: uniqueness is among proven holders only. A self-set copy of another
-// account's address is allowed (refusing it would tell any signed-in user
-// which addresses have accounts) and is simply unverified.
-func TestUpdateUser_AllowsAnotherUsersEmailUnverified(t *testing.T) {
+// A self-service change may not park on an address another account holds
+// proven: refused, and nothing is written.
+func TestUpdateUser_RefusesAnAddressAnotherAccountHoldsProven(t *testing.T) {
 	s := newInviteTestStore(t)
-	alice := mustUser(t, s, "alice", "viewer", "active")
+	alice := mustUser(t, s, "alice", "viewer", "active") // setup: proven
 	bob := mustUser(t, s, "bob", "viewer", "active")
 
 	bob.Email = "ALICE@Admins.Example.com"
-	if err := s.UpdateUser(bob); err != nil {
-		t.Fatalf("UpdateUser to another user's email = %v, want nil", err)
+	if err := s.UpdateUser(bob); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("UpdateUser onto another account's proven address = %v, want ErrUserEmailTaken", err)
 	}
-	stored, _ := s.GetUserByID(bob.ID)
-	if stored.EmailSource != EmailSourceSelf {
-		t.Fatalf("bob's copy has source %q, want self", stored.EmailSource)
+	if stored, _ := s.GetUserByID(bob.ID); stored.Email != "bob@admins.example.com" {
+		t.Fatalf("a refused update must not write: email = %q", stored.Email)
 	}
 	if u, _ := s.GetUserByVerifiedEmail("alice@admins.example.com"); u == nil || u.ID != alice.ID {
 		t.Fatalf("alice's verified email must still resolve to alice: %+v", u)
 	}
-	if keyFor(t, s, "alice@admins.example.com") != alice.ID {
-		t.Fatal("bob's self-set copy must not touch alice's key")
+}
+
+// SF2: an address other accounts only typed in is allowed (refusing it would
+// tell any signed-in user which addresses have accounts) and stays
+// unverified for everyone.
+func TestUpdateUser_AllowsAnAddressHeldOnlyUnproven(t *testing.T) {
+	s := newInviteTestStore(t)
+	alice := mustUser(t, s, "alice", "viewer", "active")
+	bob := mustUser(t, s, "bob", "viewer", "active")
+	alice.Email = "shared@example.com"
+	if err := s.UpdateUser(alice); err != nil {
+		t.Fatal(err)
+	}
+	bob.Email = "Shared@Example.com"
+	if err := s.UpdateUser(bob); err != nil {
+		t.Fatalf("UpdateUser onto an address held only unproven = %v, want nil", err)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("shared@example.com"); u != nil {
+		t.Fatalf("neither self-set copy may be verified: %+v", u)
+	}
+}
+
+// A self-set address is never proven, whatever older records the account
+// has: a linked identity recorded with the address, or an invite grant for
+// it, says the account controlled it once, not that it does now.
+func TestSelfSetAddressIsNeverProvenByOlderRecords(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		record func(t *testing.T, s *PebbleStore, x *User)
+	}{
+		{"linked identity", func(t *testing.T, s *PebbleStore, x *User) {
+			if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-x", Email: "Addr@example.com", UserID: x.ID}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"invite grant", func(t *testing.T, s *PebbleStore, x *User) {
+			g, _ := json.Marshal(InviteEmailGrant{UserID: x.ID, InviteToken: "tok"})
+			if err := s.db.Set([]byte(inviteEmailGrantPrefix+"addr@example.com"), g, pebble.Sync); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newInviteTestStore(t)
+			x := mustUser(t, s, "x", "viewer", "active")
+			tc.record(t, s, x)
+			x.Email = "addr@example.com"
+			if err := s.UpdateUser(x); err != nil {
+				t.Fatal(err)
+			}
+			if u, _ := s.GetUserByVerifiedEmail("addr@example.com"); u != nil {
+				t.Fatalf("a self-set address counted as proven: %+v", u)
+			}
+			// So another account can still be given the address, verified.
+			y := mustUser(t, s, "y", "viewer", "active")
+			if _, err := s.SetUserEmailAsAdmin(y.ID, "addr@example.com"); err != nil {
+				t.Fatalf("x's self-set copy must not block a proven holder: %v", err)
+			}
+			// And x cannot be made a second proven holder by a stale key.
+			if u, _ := s.GetUserByVerifiedEmail("addr@example.com"); u == nil || u.ID != y.ID {
+				t.Fatalf("lookup = %+v; want y", u)
+			}
+		})
 	}
 }
 
@@ -519,19 +578,17 @@ func TestCreateUserDisplacingUnverifiedEmail_RefusesAProvenHolder(t *testing.T) 
 		name  string
 		prove func(t *testing.T, s *PebbleStore, holder *User)
 	}{
-		{"linked identity", func(t *testing.T, s *PebbleStore, holder *User) {
-			if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-holder", Email: "Shared@example.com", UserID: holder.ID}); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"trusted source (setup)", func(t *testing.T, s *PebbleStore, holder *User) {
+		{"setup", func(t *testing.T, s *PebbleStore, holder *User) {
 			setRawUserEmailSource(t, s, holder, "shared@example.com", EmailSourceSetup)
 		}},
-		{"invite grant", func(t *testing.T, s *PebbleStore, holder *User) {
-			g, _ := json.Marshal(InviteEmailGrant{UserID: holder.ID, InviteToken: "tok"})
-			if err := s.db.Set([]byte(inviteEmailGrantPrefix+"shared@example.com"), g, pebble.Sync); err != nil {
-				t.Fatal(err)
-			}
+		{"admin", func(t *testing.T, s *PebbleStore, holder *User) {
+			setRawUserEmailSource(t, s, holder, "shared@example.com", EmailSourceAdmin)
+		}},
+		{"invite", func(t *testing.T, s *PebbleStore, holder *User) {
+			setRawUserEmailSource(t, s, holder, "shared@example.com", EmailSourceInvite)
+		}},
+		{"idp", func(t *testing.T, s *PebbleStore, holder *User) {
+			setRawUserEmailSource(t, s, holder, "shared@example.com", EmailSourceIdP)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -701,10 +758,8 @@ func TestSetUserEmailAsAdmin_UnchangedAddressStillChecked(t *testing.T) {
 	s := newInviteTestStore(t)
 	owner := mustUser(t, s, "owner", "admin", "active") // owner@admins.example.com, setup
 	dup := mustUser(t, s, "dup", "viewer", "active")
-	dup.Email = "owner@admins.example.com"
-	if err := s.UpdateUser(dup); err != nil { // self-set duplicate, legal
-		t.Fatal(err)
-	}
+	// A self-set duplicate as prod has one (UpdateUser now refuses to make it).
+	setRawUserEmailSource(t, s, dup, "owner@admins.example.com", EmailSourceSelf)
 	if _, err := s.SetUserEmailAsAdmin(dup.ID, "owner@admins.example.com"); !errors.Is(err, ErrUserEmailTaken) {
 		t.Fatalf("admin re-set of a duplicate's unchanged address = %v, want ErrUserEmailTaken", err)
 	}
@@ -726,10 +781,7 @@ func TestMarkUserEmailVerified_NoPingPongWithAnotherProvenHolder(t *testing.T) {
 	s := newInviteTestStore(t)
 	owner := mustUser(t, s, "owner", "admin", "active")
 	dup := mustUser(t, s, "dup", "viewer", "active")
-	dup.Email = "owner@admins.example.com"
-	if err := s.UpdateUser(dup); err != nil {
-		t.Fatal(err)
-	}
+	setRawUserEmailSource(t, s, dup, "owner@admins.example.com", EmailSourceSelf)
 	// A stale key naming dup (as a rollback build could leave it).
 	if err := s.db.Set([]byte(userEmailIndexPrefix+"owner@admins.example.com"), []byte(dup.ID), pebble.Sync); err != nil {
 		t.Fatal(err)
@@ -797,9 +849,7 @@ func TestConsumeInvite_DisplacesAnEmailSetThroughUpdateUser(t *testing.T) {
 func TestConsumeInvite_RefusesWhenAHolderIsProvenOrARowUnreadable(t *testing.T) {
 	for name, setup := range map[string]func(t *testing.T, s *PebbleStore, holder *User){
 		"proven holder": func(t *testing.T, s *PebbleStore, holder *User) {
-			if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-h", Email: "guest@example.com", UserID: holder.ID}); err != nil {
-				t.Fatal(err)
-			}
+			setRawUserEmailSource(t, s, holder, "guest@example.com", EmailSourceIdP)
 		},
 		"unreadable row": func(t *testing.T, s *PebbleStore, _ *User) {
 			if err := s.db.Set([]byte("u:01UNREADABLEROW"), []byte("{not json"), pebble.Sync); err != nil {
@@ -880,5 +930,48 @@ func TestEmails_CompatibilityCharactersAreNormalized(t *testing.T) {
 	}
 	if inv.Email != "rose@example.com" {
 		t.Fatalf("invite email stored as %q, want the normalized form", inv.Email)
+	}
+}
+
+// Stamping never makes a second proven holder. A legacy row whose identity
+// was recorded with an address another account already holds proven is
+// stamped "self"; between two legacy rows the setup key outranks an identity.
+func TestReconcile_StampingDemotesDuplicateProof(t *testing.T) {
+	s := newInviteTestStore(t)
+	owner := mustUser(t, s, "owner", "admin", "active") // setup, not legacy
+	late := mustUser(t, s, "late", "viewer", "active")
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-late", Email: owner.Email, UserID: late.ID}); err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, late, owner.Email, "") // legacy: identity points to idp
+
+	keyed, err := s.CreateUser("keyed", "both@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, keyed, "both@example.com", "") // legacy: key points to setup
+	ided := mustUser(t, s, "ided", "viewer", "active")
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-ided", Email: "both@example.com", UserID: ided.ID}); err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, ided, "both@example.com", "") // legacy: identity points to idp
+
+	res, err := s.ReconcileVerifiedEmails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.DowngradedDuplicates) != 2 {
+		t.Fatalf("DowngradedDuplicates = %v, want late and ided", res.DowngradedDuplicates)
+	}
+	for id, want := range map[string]string{late.ID: EmailSourceSelf, ided.ID: EmailSourceSelf, keyed.ID: EmailSourceSetup} {
+		if got, _ := s.GetUserByID(id); got.EmailSource != want {
+			t.Fatalf("user %s stamped %q, want %q", id, got.EmailSource, want)
+		}
+	}
+	if u, _ := s.GetUserByVerifiedEmail(owner.Email); u == nil || u.ID != owner.ID {
+		t.Fatalf("owner lookup = %+v", u)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("both@example.com"); u == nil || u.ID != keyed.ID {
+		t.Fatalf("both@ lookup = %+v; want the setup-keyed account", u)
 	}
 }

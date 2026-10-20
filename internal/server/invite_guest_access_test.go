@@ -1,5 +1,5 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
 // last-edited: 2026-10-20
 
@@ -362,17 +362,24 @@ func TestRevokeGuestAccess_SelfSetEmailDoesNotBlockRemoval(t *testing.T) {
 	}
 }
 
-// SF2: through the real route, typing in an address another account holds
-// verified succeeds and stays unverified: the profile form answers the same
-// way for every address, so it cannot be used to test which ones have
-// accounts, and the copy links no SSO login.
-func TestUpdateMeRoute_AnotherAccountsEmailIsAllowedUnverified(t *testing.T) {
+// Through the real route: an address another account holds verified is
+// refused with a generic 400 that does not say the address is registered,
+// while an address other accounts only typed in is allowed, unverified.
+func TestUpdateMeRoute_ProvenAddressRefusedUnprovenAllowed(t *testing.T) {
 	saved := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
 	config.Mutate(func(c *config.Config) { c.EnableAuth = true })
 	srv, store := setupUserHandlerServer(t)
 	holder, err := store.CreateUser("holder", "held@example.com", "bcrypt", "h", []string{"viewer"}, "active")
 	if err != nil {
+		t.Fatal(err)
+	}
+	typist, err := store.CreateUser("typist", "typist@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	typist.Email = "typed@example.com"
+	if err := store.UpdateUser(typist); err != nil {
 		t.Fatal(err)
 	}
 	me, err := store.CreateUser("me", "me@example.com", "bcrypt", "h", []string{"viewer"}, "active")
@@ -383,21 +390,30 @@ func TestUpdateMeRoute_AnotherAccountsEmailIsAllowedUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(map[string]string{"email": "HELD@example.com"})
-	req := httptest.NewRequest(http.MethodPatch, "/api/v1/auth/me", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+sess.ID)
-	w := httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("PATCH /auth/me with another account's address: %d %s; want 200", w.Code, w.Body.String())
+	patch := func(email string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"email": email})
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/auth/me", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+sess.ID)
+		w := httptest.NewRecorder()
+		srv.router.ServeHTTP(w, req)
+		return w
 	}
-	got, _ := store.GetUserByID(me.ID)
-	if got.EmailSource != database.EmailSourceSelf {
-		t.Fatalf("the copy has source %q, want self", got.EmailSource)
+	w := patch("HELD@example.com")
+	if w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "another account") || strings.Contains(w.Body.String(), "already") {
+		t.Fatalf("PATCH /auth/me with a verified address: %d %s; want a generic 400", w.Code, w.Body.String())
+	}
+	if got, _ := store.GetUserByID(me.ID); got.Email != "me@example.com" {
+		t.Fatalf("the refused change must not be written: %q", got.Email)
 	}
 	if u, _ := store.GetUserByVerifiedEmail("held@example.com"); u == nil || u.ID != holder.ID {
 		t.Fatalf("the verified holder must be unchanged: %+v", u)
+	}
+	if w := patch("Typed@example.com"); w.Code != http.StatusOK {
+		t.Fatalf("PATCH /auth/me with an address only typed in elsewhere: %d %s; want 200", w.Code, w.Body.String())
+	}
+	if got, _ := store.GetUserByID(me.ID); got.EmailSource != database.EmailSourceSelf {
+		t.Fatalf("the copy has source %q, want self", got.EmailSource)
 	}
 }
 
