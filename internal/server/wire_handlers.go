@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.53.0
+// version: 2.54.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
@@ -39,6 +39,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 
 	// Built before the auth routes: the public invite lookup is one of them.
 	userH := handlers.NewUserHandler(s.storeForWiring())
+	userH.SetAuthEnabled(config.AppConfig.EnableAuth)
 	userH.SetInviteDelivery(s.inviteDelivery())
 	userH.SetGuestAccessRevoker(s.revokeGuestAccess)
 	authH.SetGuestAccessRevoker(s.revokeGuestAccess)

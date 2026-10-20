@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-10-20
 
@@ -1393,15 +1393,21 @@ func (p *PebbleStore) planInviteAcceptLocked(token string, now time.Time) (*invi
 		if err != nil {
 			return nil, err
 		}
-		// Trust assumption: the creator can read this invite's token (it is
-		// in the create response and the pending list), so they could accept
-		// it themselves and receive the address, verified, and the SSO grant
-		// for an address they do not control. That gives them nothing new
-		// only because both are limited to admins, who can already set any
-		// user's email and give any address access directly. A non-admin's
-		// invite binds nothing. If either is ever opened to lower roles, the
-		// token must stop being shown for emailed invites, or be rotated on
-		// send.
+		// Trust assumption: whoever holds this token can accept it and
+		// receive the address, verified, the SSO grant and the Cloudflare
+		// guest entry. So the token of an invite with an email is shown
+		// only to its creator (in the create response, a credential route
+		// no API key reaches) and, in the pending list, only to an active
+		// admin's own sign-in; the list never shows any token to an API
+		// key, and revoke and resend take the invite's ID, not its token
+		// (handlers.UserHandler inviteTokenVisible). The creator could
+		// still accept it themselves, which gives them nothing new only
+		// because binding requires the creator to be an admin
+		// (inviteCreatorMayGrant), who can already set any user's email and
+		// give any address access directly. A non-admin's invite binds
+		// nothing. If binding is ever opened to lower roles, the create
+		// response must stop carrying the token, or the token must be
+		// rotated on send.
 		if !inviteCreatorMayGrant(creator) {
 			inv.EmailBinding = InviteEmailCreatorNotAdmin
 			inv.SSOGrant = InviteSSOCreatorNotAdmin

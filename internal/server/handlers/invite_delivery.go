@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-10-20
 
@@ -280,23 +280,25 @@ func (k *keyedLimiter) get(key string) *rate.Limiter {
 // inviteSendLimiter enforces both limits atomically: a send is allowed only
 // when both buckets have a token, and then takes one from each.
 type inviteSendLimiter struct {
-	mu       sync.Mutex
-	perToken *keyedLimiter
-	perAdmin *keyedLimiter
+	mu        sync.Mutex
+	perInvite *keyedLimiter // keyed by database.InviteID, never the token
+	perAdmin  *keyedLimiter
 }
 
 func newInviteSendLimiter() *inviteSendLimiter {
 	return &inviteSendLimiter{
-		perToken: newKeyedLimiter(invitePerTokenEvery, 1),
-		perAdmin: newKeyedLimiter(invitePerAdminEvery, invitePerAdminBurst),
+		perInvite: newKeyedLimiter(invitePerTokenEvery, 1),
+		perAdmin:  newKeyedLimiter(invitePerAdminEvery, invitePerAdminBurst),
 	}
 }
 
 // allow returns "" when the send may proceed, else the reason.
-func (l *inviteSendLimiter) allow(token, adminID string) string {
+// inviteID is database.InviteID of the invite, so create-time sends and
+// resends share one bucket.
+func (l *inviteSendLimiter) allow(inviteID, adminID string) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	t := l.perToken.get(token)
+	t := l.perInvite.get(inviteID)
 	a := l.perAdmin.get(adminID)
 	if t.Tokens() < 1 {
 		return "this invitation was emailed less than a minute ago; wait a minute and try again"
@@ -355,10 +357,11 @@ func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite)
 	return &now, ""
 }
 
-// ResendInvite handles POST /api/v1/users/invites/:token/resend.
+// ResendInvite handles POST /api/v1/users/invites/:id/resend: the invite is
+// named by its ID (database.InviteID), never its token.
 func (h *UserHandler) ResendInvite(c *gin.Context) {
-	token := c.Param("token")
-	inv, err := h.store.GetInvite(token)
+	id := c.Param("id")
+	inv, err := h.findInvite(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to load invite", err)
 		return
@@ -380,7 +383,7 @@ func (h *UserHandler) ResendInvite(c *gin.Context) {
 		httputil.RespondWithError(c, http.StatusServiceUnavailable, publicURLMissingReason, "PUBLIC_URL_NOT_CONFIGURED")
 		return
 	}
-	if why := h.sendLimiter.allow(token, currentUserID(c)); why != "" {
+	if why := h.sendLimiter.allow(id, currentUserID(c)); why != "" {
 		httputil.RespondWithError(c, http.StatusTooManyRequests, why, "TOO_MANY_REQUESTS")
 		return
 	}

@@ -1,7 +1,7 @@
 // file: internal/logging/redact_path.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package logging
 
@@ -24,8 +24,12 @@ const InviteTokenRedacted = "[REDACTED]"
 //
 //	GET    /invite/:token                          SPA page (NoRoute fallback)
 //	GET    /api/v1/auth/invite/:token              public lookup
-//	DELETE /api/v1/users/invites/:token            revoke
-//	POST   /api/v1/users/invites/:token/resend     resend
+//	DELETE /api/v1/users/invites/:id               revoke
+//	POST   /api/v1/users/invites/:id/resend        resend
+//
+// Revoke and resend now take the invite's non-secret ID, not its token. The
+// segment is still redacted: an older client (or a hand-typed request) can
+// still put a token there, and it is logged before the route answers 404.
 var inviteTokenPrefixes = [][]string{
 	{"invite"},
 	{"api", "auth", "invite"},

@@ -1,7 +1,7 @@
 // file: web/src/pages/Users.tsx
-// version: 1.5.1
+// version: 1.6.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { apiFetch } from '../utils/apiFetch';
@@ -57,7 +57,13 @@ interface User {
 }
 
 interface Invite {
-  token: string;
+  /** Non-secret handle; revoke and resend take this. */
+  id: string;
+  /**
+   * The bearer secret that accepts the invite. The server leaves it out for
+   * an API key and, for an invite with an email, for anyone but an admin.
+   */
+  token?: string;
   username: string;
   email?: string;
   role_id: string;
@@ -80,6 +86,35 @@ interface InvitesBody {
   mail_unavailable_reason?: string;
   guest_headers_configured?: boolean;
   guest_policy_sync_configured?: boolean;
+}
+
+function InviteLinkCell({
+  token,
+  username,
+  copied,
+  onCopy,
+}: {
+  token: string;
+  username: string;
+  copied: boolean;
+  onCopy: (token: string) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <Typography variant="caption" noWrap sx={{ fontFamily: 'monospace', maxWidth: 200 }}>
+        {token.slice(0, 16)}...
+      </Typography>
+      <Tooltip title={copied ? 'Copied!' : 'Copy invitation link'}>
+        <IconButton
+          size="small"
+          aria-label={`Copy invitation link for ${username}`}
+          onClick={() => onCopy(token)}
+        >
+          <CopyIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
 }
 
 export default function Users() {
@@ -194,7 +229,10 @@ export default function Users() {
     async (inv: Invite) => {
       setNotice('');
       if (
-        await runUserAction(`/users/invites/${inv.token}/resend`, 'Failed to resend invitation')
+        await runUserAction(
+          `/users/invites/${encodeURIComponent(inv.id)}/resend`,
+          'Failed to resend invitation'
+        )
       ) {
         setNotice(`Invitation emailed again to ${inv.email}.`);
         load();
@@ -334,7 +372,7 @@ export default function Users() {
               </TableHead>
               <TableBody>
                 {invites.map((inv) => (
-                  <TableRow key={inv.token}>
+                  <TableRow key={inv.id}>
                     <TableCell>{inv.username}</TableCell>
                     <TableCell>{inv.email || '—'}</TableCell>
                     <TableCell>{inv.role_id}</TableCell>
@@ -360,29 +398,20 @@ export default function Users() {
                       </Box>
                     </TableCell>
                     <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Typography
-                          variant="caption"
-                          noWrap
-                          sx={{
-                            fontFamily: 'monospace',
-                            maxWidth: 200,
-                          }}
-                        >
-                          {inv.token.slice(0, 16)}...
-                        </Typography>
-                        <Tooltip
-                          title={copiedToken === inv.token ? 'Copied!' : 'Copy invitation link'}
-                        >
-                          <IconButton
-                            size="small"
-                            aria-label={`Copy invitation link for ${inv.username}`}
-                            onClick={() => handleCopyToken(inv.token)}
-                          >
-                            <CopyIcon fontSize="small" />
-                          </IconButton>
+                      {inv.token ? (
+                        <InviteLinkCell
+                          token={inv.token}
+                          username={inv.username}
+                          copied={copiedToken === inv.token}
+                          onCopy={handleCopyToken}
+                        />
+                      ) : (
+                        <Tooltip title="Only an admin signed in to the web interface can copy the link of an emailed invitation; resend the email instead">
+                          <Typography variant="body2" color="text.secondary">
+                            Hidden
+                          </Typography>
                         </Tooltip>
-                      </Box>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

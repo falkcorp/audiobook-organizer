@@ -1,7 +1,7 @@
 // file: web/src/pages/Users.test.tsx
-// version: 1.4.1
+// version: 1.5.0
 // guid: 26b39541-b8d3-4fc8-b131-190f15f5a5ab
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -248,6 +248,7 @@ describe('Users', () => {
 
   describe('invitations', () => {
     const pending = {
+      id: 'f'.repeat(32),
       token: 'b'.repeat(64),
       username: 'pending-guest',
       email: 'pending@example.com',
@@ -339,9 +340,11 @@ describe('Users', () => {
 
     it('resends a pending invitation and reports a rate limit', async () => {
       let resends = 0;
+      const urls: string[] = [];
       vi.stubGlobal(
         'fetch',
         vi.fn(async (url: string) => {
+          urls.push(url);
           if (url.endsWith('/resend')) {
             resends++;
             return resends === 1
@@ -373,6 +376,31 @@ describe('Users', () => {
         screen.getByRole('button', { name: /resend invitation email to pending@example.com/i })
       );
       expect(await screen.findByText(/less than a minute ago/i)).toBeInTheDocument();
+      // Resend names the invite by its id, never its token.
+      const resendURLs = urls.filter((u) => u.endsWith('/resend'));
+      expect(resendURLs[0]).toContain(`/users/invites/${pending.id}/resend`);
+      expect(resendURLs.join(' ')).not.toContain(pending.token);
+    });
+
+    it('shows "Hidden" instead of a copy button when the server withholds the token', async () => {
+      const { token: _withheld, ...noToken } = pending;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          if (url.endsWith('/users/invites'))
+            return envelope({ invites: [noToken], count: 1, mail_configured: true });
+          return envelope({ users: [activeUser], count: 1 });
+        })
+      );
+      renderWithProviders(<Users />);
+      expect(await screen.findByText('Hidden')).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /copy invitation link for pending-guest/i })
+      ).not.toBeInTheDocument();
+      // Resend still works from the id.
+      expect(
+        screen.getByRole('button', { name: /resend invitation email to pending@example.com/i })
+      ).toBeInTheDocument();
     });
 
     it('shows accepted invites with their Cloudflare outcome', async () => {
