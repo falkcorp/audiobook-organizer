@@ -1,7 +1,7 @@
 // file: internal/cfaccesspolicy/client.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c863e806-fb62-4ceb-9226-d971b7d4d048
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // Package cfaccesspolicy adds an email address to, and removes one from, ONE
 // Cloudflare Access reusable policy's include list. It backs the optional
@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // DefaultBaseURL is Cloudflare's API v4 root.
@@ -126,13 +128,25 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// NormalizeEmail lowercases and trims an address and checks it is one bare
-// address. It is the form compared against and written to the policy.
+// normalizeAddress is util.NormalizeEmail (trimmed, NFKC, lowercased, NFKC
+// again), repeated here because this package imports no module package
+// (layer 0 in internal/arch). TestCFAccessPolicyEmailMatchesUtil in
+// internal/server keeps the two identical.
+func normalizeAddress(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.TrimSpace(norm.NFKC.String(strings.ToLower(norm.NFKC.String(s))))
+}
+
+// NormalizeEmail normalizes an address (normalizeAddress) and checks it is one
+// bare address. It is the form compared against and written to the policy.
 func NormalizeEmail(email string) (string, error) {
 	if strings.ContainsAny(email, "\r\n") {
 		return "", fmt.Errorf("cfaccesspolicy: invalid email")
 	}
-	e := strings.ToLower(strings.TrimSpace(email))
+	e := normalizeAddress(email)
 	if e == "" || strings.ContainsAny(e, "\r\n\t <>\",") {
 		return "", fmt.Errorf("cfaccesspolicy: invalid email")
 	}
@@ -357,7 +371,7 @@ func isEmailRule(rule any, email string) bool {
 		return false
 	}
 	s, ok := inner["email"].(string)
-	return ok && strings.EqualFold(strings.TrimSpace(s), email)
+	return ok && normalizeAddress(s) == email
 }
 
 func includeList(policy map[string]any) ([]any, error) {
@@ -382,7 +396,7 @@ func hasEmail(include []any, email string) bool {
 		if !ok {
 			continue
 		}
-		if s, ok := inner["email"].(string); ok && strings.EqualFold(strings.TrimSpace(s), email) {
+		if s, ok := inner["email"].(string); ok && normalizeAddress(s) == email {
 			return true
 		}
 	}

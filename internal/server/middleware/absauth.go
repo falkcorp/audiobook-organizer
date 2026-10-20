@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -230,7 +231,7 @@ func (r *ABSIdentityResolver) CFCallerKey(c *gin.Context) (string, bool) {
 		}
 		return "", false
 	}
-	email := strings.ToLower(strings.TrimSpace(claims.Email))
+	email := util.NormalizeEmail(claims.Email)
 	if email == "" {
 		return "", false
 	}
