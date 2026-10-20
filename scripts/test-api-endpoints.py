@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test-api-endpoints.py
-# version: 1.1.1
+# version: 1.1.2
 # guid: a1b2c3d4-e5f6-7890-abcd-1234567890ab
 
 """
@@ -59,13 +59,9 @@ class APITester:
             if method == "GET":
                 response = self.session.get(url, params=params, timeout=10)
             elif method == "POST":
-                response = self.session.post(
-                    url, json=json_data, params=params, timeout=10
-                )
+                response = self.session.post(url, json=json_data, params=params, timeout=10)
             elif method == "PUT":
-                response = self.session.put(
-                    url, json=json_data, params=params, timeout=10
-                )
+                response = self.session.put(url, json=json_data, params=params, timeout=10)
             elif method == "DELETE":
                 response = self.session.delete(url, params=params, timeout=10)
             else:
@@ -93,9 +89,7 @@ class APITester:
             )
 
             status_icon = "✅" if success else "❌"
-            print(
-                f"{status_icon} Status: {response.status_code} (expected {expected_status})"
-            )
+            print(f"{status_icon} Status: {response.status_code} (expected {expected_status})")
             print(f"⏱️  Duration: {duration_ms:.2f}ms")
             print(f"Response: {json.dumps(response_json, indent=2)[:500]}")
 
@@ -128,9 +122,7 @@ class APITester:
 
         # Real-time events (SSE) - just test connection
         print("\n" + "=" * 80)
-        print(
-            "Note: /api/events (SSE) requires special handling - skipping in basic test"
-        )
+        print("Note: /api/events (SSE) requires special handling - skipping in basic test")
 
         # Audiobook endpoints
         self.test_endpoint(
@@ -184,9 +176,7 @@ class APITester:
         )
 
         # Library folder endpoints
-        self.test_endpoint(
-            "GET", "/api/v1/import-paths", description="List import paths"
-        )
+        self.test_endpoint("GET", "/api/v1/import-paths", description="List import paths")
 
         # Note: We won't actually add/remove folders in test mode
         print("\n" + "=" * 80)
@@ -214,9 +204,7 @@ class APITester:
         )
 
         # System endpoints
-        self.test_endpoint(
-            "GET", "/api/v1/system/status", description="Get system status"
-        )
+        self.test_endpoint("GET", "/api/v1/system/status", description="Get system status")
         self.test_endpoint("GET", "/api/v1/system/logs", description="Get system logs")
         self.test_endpoint("GET", "/api/v1/config", description="Get configuration")
 
@@ -248,9 +236,7 @@ class APITester:
             description="Validate metadata",
         )
 
-        self.test_endpoint(
-            "GET", "/api/v1/metadata/export", description="Export metadata"
-        )
+        self.test_endpoint("GET", "/api/v1/metadata/export", description="Export metadata")
 
         # Note: We won't import metadata in test mode
         print("\n" + "=" * 80)
@@ -357,9 +343,7 @@ class APITester:
                     print(f"     Status: {result.status_code}, Error: {result.error}")
 
         avg_duration = (
-            sum(r.duration_ms for r in self.results) / len(self.results)
-            if self.results
-            else 0
+            sum(r.duration_ms for r in self.results) / len(self.results) if self.results else 0
         )
         print(f"\nAverage Response Time: {avg_duration:.2f}ms")
 

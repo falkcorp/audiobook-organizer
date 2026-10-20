@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/dedup_bench_apply.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 6f4a2e8c-9d1b-4c7a-8e3f-2b6d5a9c0f14
-# last-edited: 2026-07-18
+# last-edited: 2026-10-20
 """Apply agreed AI dedup suggestions to the audiobook-organizer database.
 
 Reads testdata/dedup-bench/agreed_suggestions.json and applies each suggestion
@@ -35,9 +35,7 @@ import requests
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
-AGREED_PATH = os.path.join(
-    ROOT_DIR, "testdata", "dedup-bench", "agreed_suggestions.json"
-)
+AGREED_PATH = os.path.join(ROOT_DIR, "testdata", "dedup-bench", "agreed_suggestions.json")
 GROUPS_PATH = os.path.join(
     ROOT_DIR, "testdata", "dedup-bench", "2026-03-07T18-56-37", "groups.json"
 )
@@ -90,9 +88,7 @@ def api(method, server, endpoint, body=None, dry_run=False):
 def apply_merge(server, keep_id, merge_ids, canonical_name, dry_run):
     """Merge variant authors into the canonical one."""
     # First rename the kept author to the canonical name
-    ok, _ = api(
-        "PUT", server, f"/authors/{keep_id}/name", {"name": canonical_name}, dry_run
-    )
+    ok, _ = api("PUT", server, f"/authors/{keep_id}/name", {"name": canonical_name}, dry_run)
     if not ok:
         return False
     # Then merge the variants into it
@@ -108,9 +104,7 @@ def apply_merge(server, keep_id, merge_ids, canonical_name, dry_run):
 
 def apply_rename(server, author_id, new_name, dry_run):
     """Rename an author."""
-    ok, _ = api(
-        "PUT", server, f"/authors/{author_id}/name", {"name": new_name}, dry_run
-    )
+    ok, _ = api("PUT", server, f"/authors/{author_id}/name", {"name": new_name}, dry_run)
     return ok
 
 
@@ -123,9 +117,7 @@ def apply_split(server, author_id, names, dry_run):
 
 def apply_reclassify(server, author_id, dry_run):
     """Reclassify an author as narrator/publisher (moves to narrator)."""
-    ok, _ = api(
-        "POST", server, f"/authors/{author_id}/reclassify-as-narrator", dry_run=dry_run
-    )
+    ok, _ = api("POST", server, f"/authors/{author_id}/reclassify-as-narrator", dry_run=dry_run)
     return ok
 
 
@@ -193,9 +185,7 @@ def apply_g51_groups(agreed, groups, server, dry_run, id_to_name=None):
                 apply_rename(server, canonical_id, canonical_name, dry_run)
             # Merge variants into canonical
             if variant_ids:
-                ok = apply_merge(
-                    server, canonical_id, variant_ids, canonical_name, dry_run
-                )
+                ok = apply_merge(server, canonical_id, variant_ids, canonical_name, dry_run)
             else:
                 ok = True
 
@@ -203,16 +193,12 @@ def apply_g51_groups(agreed, groups, server, dry_run, id_to_name=None):
             # Reclassify all IDs (canonical + variants) as narrator/publisher.
             # But first, split any compound entries so real authors aren't lost.
             all_entries = [(canonical_id, group["canonical"].get("name", ""))]
-            all_entries += [
-                (v["id"], v.get("name", "")) for v in group.get("variants", [])
-            ]
+            all_entries += [(v["id"], v.get("name", "")) for v in group.get("variants", [])]
             ok = True
             for aid, aname in all_entries:
                 live_name = id_to_name.get(aid, aname)
                 if is_compound_entry(aid, live_name):
-                    print(
-                        f'           splitting compound entry first: id={aid} "{live_name}"'
-                    )
+                    print(f'           splitting compound entry first: id={aid} "{live_name}"')
                     apply_split(server, aid, None, dry_run)
                     # After split, the original ID may no longer exist — skip reclassify
                     continue
@@ -245,9 +231,7 @@ def apply_o4_full(agreed, server, dry_run):
         canonical_name = s.get("canonical_name", "")
         roles = s.get("roles", {})
 
-        print(
-            f"  [{action.upper():12s}] ids={author_ids}: {canonical_name or '(compound)'}"
-        )
+        print(f"  [{action.upper():12s}] ids={author_ids}: {canonical_name or '(compound)'}")
 
         ok = False
         if action == "rename":
@@ -296,9 +280,7 @@ def apply_o4_full(agreed, server, dry_run):
                     alias_names = roles["author"]["variants"]
                 # Merge all IDs into the first, then add aliases
                 if len(author_ids) > 1:
-                    ok = apply_merge(
-                        server, keep_id, author_ids[1:], canonical_name or "", dry_run
-                    )
+                    ok = apply_merge(server, keep_id, author_ids[1:], canonical_name or "", dry_run)
                 if alias_names:
                     apply_alias(server, keep_id, alias_names, dry_run)
                 ok = True
@@ -389,9 +371,7 @@ def apply_missed_items(items, server, dry_run):
     print(
         f"  [MERGE       ] GraphicAudio: merge {len(GRAPHICAUDIO_PURE_IDS)} pure variants into id={GRAPHICAUDIO_KEEP_ID}"
     )
-    ok = apply_merge(
-        server, GRAPHICAUDIO_KEEP_ID, GRAPHICAUDIO_PURE_IDS, "GraphicAudio", dry_run
-    )
+    ok = apply_merge(server, GRAPHICAUDIO_KEEP_ID, GRAPHICAUDIO_PURE_IDS, "GraphicAudio", dry_run)
     stats["ok" if ok else "fail"] += 1
     time.sleep(0.1)
 
@@ -431,9 +411,7 @@ def apply_missed_items(items, server, dry_run):
     time.sleep(0.1)
 
     # --- 7. Michael-Scott Earle: skip (medium confidence) ---
-    print(
-        f"  [SKIP        ] Michael-Scott Earle: medium confidence, needs manual review"
-    )
+    print(f"  [SKIP        ] Michael-Scott Earle: medium confidence, needs manual review")
     stats["skip"] += 1
 
     return stats
@@ -456,12 +434,9 @@ def main():
     parser.add_argument(
         "--server",
         default=DEFAULT_SERVER,
-        help="Server URL, e.g. https://<server>:8484 "
-        "(required; defaults to $ABK_API_URL)",
+        help="Server URL, e.g. https://<server>:8484 (required; defaults to $ABK_API_URL)",
     )
-    parser.add_argument(
-        "--agreed", default=AGREED_PATH, help="Path to agreed_suggestions.json"
-    )
+    parser.add_argument("--agreed", default=AGREED_PATH, help="Path to agreed_suggestions.json")
     parser.add_argument(
         "--groups",
         default=GROUPS_PATH,
@@ -495,9 +470,7 @@ def main():
     id_to_name = {}
     try:
         print("Fetching current authors from server...")
-        resp = requests.get(
-            f"{args.server}/api/v1/authors?limit=10000", verify=False, timeout=60
-        )
+        resp = requests.get(f"{args.server}/api/v1/authors?limit=10000", verify=False, timeout=60)
         if resp.status_code == 200:
             for a in resp.json().get("items", []):
                 id_to_name[a["id"]] = a["name"]
@@ -514,9 +487,7 @@ def main():
 
     if args.section in ("g51", "all"):
         print("=" * 60)
-        print(
-            f"Applying gpt-5.1 groups agreements ({len(agreed['g51_groups_agreed'])} items)"
-        )
+        print(f"Applying gpt-5.1 groups agreements ({len(agreed['g51_groups_agreed'])} items)")
         print("=" * 60)
         all_stats["g51_groups"] = apply_g51_groups(
             agreed["g51_groups_agreed"], groups, args.server, args.dry_run, id_to_name
@@ -525,22 +496,16 @@ def main():
 
     if args.section in ("o4", "all"):
         print("=" * 60)
-        print(
-            f"Applying o4-mini full agreements ({len(agreed['o4_full_agreed'])} items)"
-        )
+        print(f"Applying o4-mini full agreements ({len(agreed['o4_full_agreed'])} items)")
         print("=" * 60)
-        all_stats["o4_full"] = apply_o4_full(
-            agreed["o4_full_agreed"], args.server, args.dry_run
-        )
+        all_stats["o4_full"] = apply_o4_full(agreed["o4_full_agreed"], args.server, args.dry_run)
         print()
 
     if args.section in ("missed", "all"):
         print("=" * 60)
         print(f"Applying missed items ({len(agreed['missed_items'])} items)")
         print("=" * 60)
-        all_stats["missed"] = apply_missed_items(
-            agreed["missed_items"], args.server, args.dry_run
-        )
+        all_stats["missed"] = apply_missed_items(agreed["missed_items"], args.server, args.dry_run)
         print()
 
     # Summary
@@ -555,9 +520,7 @@ def main():
         total_ok += stats["ok"]
         total_fail += stats["fail"]
         total_skip += stats["skip"]
-    print(
-        f"  {'TOTAL':20s}  ok={total_ok:3d}  fail={total_fail:3d}  skip={total_skip:3d}"
-    )
+    print(f"  {'TOTAL':20s}  ok={total_ok:3d}  fail={total_fail:3d}  skip={total_skip:3d}")
 
     if total_fail > 0:
         print(f"\n⚠️  {total_fail} operations failed. Check output above for details.")

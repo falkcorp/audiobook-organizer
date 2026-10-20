@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# file: scripts/add_short_skip.py
+# version: 1.0.1
+# guid: c99b33b9-4a04-4018-835a-6605dd438591
+# last-edited: 2026-10-20
+
 """Add `if testing.Short() { t.Skip(...) }` to the top of every TestProp_*
 function in the listed slow property-test files. Idempotent — re-runs leave
 already-annotated tests alone.
@@ -58,9 +63,7 @@ def process(path: pathlib.Path) -> tuple[int, int]:
         receiver = match.group(2)
         if already_annotated(new_text, opening_end):
             continue
-        new_text = (
-            new_text[:opening_end] + skip_block(receiver) + new_text[opening_end:]
-        )
+        new_text = new_text[:opening_end] + skip_block(receiver) + new_text[opening_end:]
         inserted += 1
     if new_text != text:
         path.write_text(new_text)

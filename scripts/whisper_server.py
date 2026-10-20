@@ -1,7 +1,7 @@
 # file: scripts/whisper_server.py
-# version: 2.11.0
+# version: 2.11.1
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-09-19
+# last-edited: 2026-10-20
 #
 # /// script
 # requires-python = ">=3.11"
@@ -109,7 +109,9 @@ device = _resolve_device()
 # crash and leave CPU hosts exactly as broken.
 default_compute = "float16" if device == "cuda" else "int8"
 compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", default_compute)
-log.info(f"Loading {model_name} device={device} compute={compute_type} (first run downloads model)...")
+log.info(
+    f"Loading {model_name} device={device} compute={compute_type} (first run downloads model)..."
+)
 
 model = faster_whisper.WhisperModel(
     model_name,
@@ -122,11 +124,15 @@ model = faster_whisper.WhisperModel(
 # giving 2-3x speedup on Turing+ GPUs for clips longer than ~10 seconds.
 try:
     from faster_whisper import BatchedInferencePipeline
+
     batched_model = BatchedInferencePipeline(model=model)
-    log.info(f"BatchedInferencePipeline available — batch_size={int(os.environ.get('WHISPER_BATCH_SIZE', 8))}")
+    log.info(
+        f"BatchedInferencePipeline available — batch_size={int(os.environ.get('WHISPER_BATCH_SIZE', 8))}"
+    )
 except (ImportError, Exception) as e:
     batched_model = None
     log.warning(f"BatchedInferencePipeline unavailable ({e}), falling back to standard model")
+
 
 # The device/compute_type above are what we ASKED ctranslate2 for. What it
 # actually loaded can differ, and the difference is the whole point of the
@@ -172,9 +178,9 @@ log.info(
 # VAD parameters tuned for audiobook intros: lower threshold so music/quiet speech
 # isn't stripped; shorter silence gap so publisher jingles don't eat the whole clip.
 VAD_PARAMS = {
-    "threshold": 0.3,            # default 0.5 — lower = more permissive (catches quiet speech)
-    "min_silence_duration_ms": 500,   # default 2000 — split on shorter silences
-    "min_speech_duration_ms": 200,    # default 250 — keep shorter speech fragments
+    "threshold": 0.3,  # default 0.5 — lower = more permissive (catches quiet speech)
+    "min_silence_duration_ms": 500,  # default 2000 — split on shorter silences
+    "min_speech_duration_ms": 200,  # default 250 — keep shorter speech fragments
 }
 
 BATCH_SIZE = int(os.environ.get("WHISPER_BATCH_SIZE", 8))
@@ -295,11 +301,12 @@ async def health():
 
 if __name__ == "__main__":
     import os
+
     port = int(os.environ.get("WHISPER_PORT", "19847"))
-        # log_config=None is required, not cosmetic. uvicorn.run() otherwise
-        # applies its own dictConfig with disable_existing_loggers=True, which
-        # silences the module logger created above -- so uvicorn's access lines
-        # appear while every log.info/log.error from this file vanishes. That is
-        # how an ffmpeg failure on every single request left no trace here on
-        # 2026-08-31: 2,472 requests logged as "200 OK" and not one error line.
+    # log_config=None is required, not cosmetic. uvicorn.run() otherwise
+    # applies its own dictConfig with disable_existing_loggers=True, which
+    # silences the module logger created above -- so uvicorn's access lines
+    # appear while every log.info/log.error from this file vanishes. That is
+    # how an ffmpeg failure on every single request left no trace here on
+    # 2026-08-31: 2,472 requests logged as "200 OK" and not one error line.
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=None)

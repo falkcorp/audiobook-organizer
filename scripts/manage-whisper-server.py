@@ -1,7 +1,7 @@
 # file: scripts/manage-whisper-server.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: f7a8b9c0-d1e2-3456-fabc-678901234567
-# last-edited: 2026-07-18
+# last-edited: 2026-10-20
 #
 # /// script
 # requires-python = ">=3.11"
@@ -50,9 +50,9 @@ if not COMPUTER:
         "(hostname or IP of the Windows GPU machine, e.g. <windows-gpu-host>)"
     )
     sys.exit(1)
-WIN_USER   = "jdfalk"
+WIN_USER = "jdfalk"
 REMOTE_PATH = r"C:\Users\jdfalk\whisper_server.py"
-MODEL      = "base.en"
+MODEL = "base.en"
 HEALTH_URL = f"http://{COMPUTER}:8000/health"
 
 
@@ -60,7 +60,7 @@ def get_session(password: str) -> winrm.Session:
     return winrm.Session(
         f"http://{COMPUTER}:5985/wsman",
         auth=(WIN_USER, password),
-        transport="ntlm",      # NTLM works for non-domain (workgroup) machines
+        transport="ntlm",  # NTLM works for non-domain (workgroup) machines
         server_cert_validation="ignore",
     )
 
@@ -81,8 +81,11 @@ def cmd_status():
     try:
         with urllib.request.urlopen(HEALTH_URL, timeout=5) as r:
             import json
+
             data = json.loads(r.read())
-            print(f"  RUNNING — model={data.get('model')} batch_pipeline={data.get('batch_pipeline')}")
+            print(
+                f"  RUNNING — model={data.get('model')} batch_pipeline={data.get('batch_pipeline')}"
+            )
     except urllib.error.URLError:
         print("  NOT RESPONDING — server may be stopped")
 
@@ -100,11 +103,14 @@ def cmd_deploy(session: winrm.Session):
         encoded = base64.b64encode(f.read()).decode()
 
     # Decode on Windows and write to disk.
-    run_ps(session, f"""
+    run_ps(
+        session,
+        f"""
 $bytes = [Convert]::FromBase64String('{encoded}')
 [System.IO.File]::WriteAllBytes('{REMOTE_PATH}', $bytes)
 Write-Host "Written $($bytes.Length) bytes to {REMOTE_PATH}"
-""")
+""",
+    )
     print("  Deployed OK")
 
 
@@ -151,15 +157,16 @@ Write-Host "Started PID $($p.Id)"
     # Wait for model load then check health.
     print("  Waiting 15s for model load...")
     import time
+
     time.sleep(15)
     cmd_status()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Manage the remote Whisper server")
-    parser.add_argument("--deploy",  action="store_true", help="Copy whisper_server.py to Windows")
+    parser.add_argument("--deploy", action="store_true", help="Copy whisper_server.py to Windows")
     parser.add_argument("--restart", action="store_true", help="Kill + relaunch the server")
-    parser.add_argument("--status",  action="store_true", help="Check /health (no auth needed)")
+    parser.add_argument("--status", action="store_true", help="Check /health (no auth needed)")
     args = parser.parse_args()
 
     if not any([args.deploy, args.restart, args.status]):

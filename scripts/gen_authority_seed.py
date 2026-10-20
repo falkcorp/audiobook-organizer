@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/gen_authority_seed.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: dff4675b-1040-403a-a41d-de92bbf943e7
-# last-edited: 2026-10-05
+# last-edited: 2026-10-20
 
 """Generate the authority-list seed from an Audible library export.
 
@@ -68,15 +68,28 @@ SEED_TIER = "O"
 
 # internal/authorcredit/authorcredit.go collectiveCredits (letters keys).
 COLLECTIVE = {
-    "fullcast", "cast", "fullcastproduction", "fullcastdramatization",
-    "various", "variousauthors", "variousnarrators", "variousartists",
-    "dramatized", "dramatization", "others", "etal", "andothers",
-    "multipleauthors", "multiplenarrators", "uncredited",
+    "fullcast",
+    "cast",
+    "fullcastproduction",
+    "fullcastdramatization",
+    "various",
+    "variousauthors",
+    "variousnarrators",
+    "variousartists",
+    "dramatized",
+    "dramatization",
+    "others",
+    "etal",
+    "andothers",
+    "multipleauthors",
+    "multiplenarrators",
+    "uncredited",
 }
 
 # internal/catalog/entry.go dramatizedRe / fullCastRe.
 DRAMATIZED_RE = re.compile(
-    r"\bdramati[sz](?:ed|ation)\b|\bradio\s+(?:drama|play)\b|\baudio\s+drama\b", re.I)
+    r"\bdramati[sz](?:ed|ation)\b|\bradio\s+(?:drama|play)\b|\baudio\s+drama\b", re.I
+)
 FULL_CAST_RE = re.compile(r"\bfull[\s-]+cast\b", re.I)
 
 # internal/applygate/manual_only.go manualOnlyRe / manualOnlyUnitRe /
@@ -88,7 +101,8 @@ MANUAL_ONLY_RE = re.compile(
     r"gallifrey(?:an)?|daleks?|jago[\s._-]*(?:&|and)[\s._-]*litefoot|"
     r"diary[\s._-]*of[\s._-]*river[\s._-]*song|bernice[\s._-]*summerfield|"
     r"paternoster[\s._-]*gang|missy|blake[’']?s[\s._-]*7)\b",
-    re.I)
+    re.I,
+)
 MANUAL_ONLY_UNIT_RE = re.compile(r"(?:^|[/\\])\s*UNIT(?:\s*[:–—-]|\s)")
 COUNTER_MEASURES_RE = re.compile(r"(?:^|[\W_])counter[._-]+measures(?:$|[\W_])", re.I)
 
@@ -99,10 +113,16 @@ MAX_PLAIN_AUTHORS = 3
 # credits are "other" and never author evidence.
 ROLE_SUFFIX_RE = re.compile(
     r"^(.*?)\s*(?:[-\u2013\u2014,]\s*|\(\s*|\[\s*)(editor|compiler|translator|trans\.|illustrator|"
-    r"narrator|reader|foreword|introduction|afterword|contributor|adapter)\s*[)\]]?\s*$", re.I)
-ROLE_ED_ABBREV_RE = re.compile(r"^(.*?)\s*(?:\(\s*eds?\.?\s*\)|\[\s*eds?\.?\s*\]|,\s*eds?\.)\s*$", re.I)
+    r"narrator|reader|foreword|introduction|afterword|contributor|adapter)\s*[)\]]?\s*$",
+    re.I,
+)
+ROLE_ED_ABBREV_RE = re.compile(
+    r"^(.*?)\s*(?:\(\s*eds?\.?\s*\)|\[\s*eds?\.?\s*\]|,\s*eds?\.)\s*$", re.I
+)
 ROLE_PREFIX_RE = re.compile(
-    r"^\s*(edited|compiled|translated|illustrated|narrated|read|adapted|introduced)\s+by\s+(.+?)\s*$", re.I)
+    r"^\s*(edited|compiled|translated|illustrated|narrated|read|adapted|introduced)\s+by\s+(.+?)\s*$",
+    re.I,
+)
 
 
 def role_from_word(w: str) -> str:
@@ -139,8 +159,11 @@ def matches_manual_only(s: str) -> bool:
     if not s:
         return False
     folded = s.replace("_", " ")
-    return bool(MANUAL_ONLY_RE.search(folded) or MANUAL_ONLY_UNIT_RE.search(folded)
-                or COUNTER_MEASURES_RE.search(s))
+    return bool(
+        MANUAL_ONLY_RE.search(folded)
+        or MANUAL_ONLY_UNIT_RE.search(folded)
+        or COUNTER_MEASURES_RE.search(s)
+    )
 
 
 def series_titles(item: dict) -> list[str]:
@@ -252,12 +275,14 @@ def build(items: list[dict]) -> tuple[list[dict], dict]:
             kind, also_narrator = "narrator", False
         else:
             continue  # cast-only or role-only (translator ...): left out
-        entries.append({
-            "kind": kind,
-            "name": display,
-            "asins": keep_asins(p.asins, display),
-            "also_narrator": also_narrator,
-        })
+        entries.append(
+            {
+                "kind": kind,
+                "name": display,
+                "asins": keep_asins(p.asins, display),
+                "also_narrator": also_narrator,
+            }
+        )
     for key, c in pubs.items():
         display = pick_display(c)
         if key in title_keys:
@@ -313,7 +338,9 @@ def main() -> int:
     entries, dropped = build(load_items(args.export))
     for reason, names in dropped.items():
         if names:
-            print(f"dropped {len(names)} ({reason}): {', '.join(sorted(set(names)))}", file=sys.stderr)
+            print(
+                f"dropped {len(names)} ({reason}): {', '.join(sorted(set(names)))}", file=sys.stderr
+            )
 
     previous = None
     if args.out.exists():
@@ -322,8 +349,11 @@ def main() -> int:
     text = dump(doc)
 
     counts = collections.Counter(e["kind"] for e in entries)
-    print(f"seed: authors={counts['author']} narrators={counts['narrator']} "
-          f"publishers={counts['publisher']}", file=sys.stderr)
+    print(
+        f"seed: authors={counts['author']} narrators={counts['narrator']} "
+        f"publishers={counts['publisher']}",
+        file=sys.stderr,
+    )
 
     if args.check:
         current = args.out.read_text(encoding="utf-8") if args.out.exists() else ""

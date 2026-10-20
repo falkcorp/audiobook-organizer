@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/tests/test_find_spurious_stranded_book_rows.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 3e6f8b12-9d47-4a5c-b8e1-2f7a5c9d0e63
-# last-edited: 2026-08-23
+# last-edited: 2026-10-20
 """Tests for scripts/find_spurious_stranded_book_rows.py.
 
 Run with:
@@ -61,9 +61,7 @@ class TestIsNumericTitle(unittest.TestCase):
 
 class TestHasBogusPathSegment(unittest.TestCase):
     def test_wreckage_shaped_parent_matches(self):
-        self.assertTrue(
-            fsb.has_bogus_path_segment("/lib/BookA/Project Hail Mary - 24/31.mp3")
-        )
+        self.assertTrue(fsb.has_bogus_path_segment("/lib/BookA/Project Hail Mary - 24/31.mp3"))
 
     def test_ordinary_book_directory_does_not_match(self):
         self.assertFalse(fsb.has_bogus_path_segment("/lib/BookA/Neuromancer/chapter1.mp3"))
@@ -97,7 +95,9 @@ class TestIsInAffectedDir(unittest.TestCase):
         self.assertTrue(fsb.is_in_affected_dir("/lib/BookA/Project Hail Mary - 24", self.affected))
 
     def test_file_outside_any_affected_dir_does_not_match(self):
-        self.assertFalse(fsb.is_in_affected_dir("/lib/BookB/Neuromancer/chapter1.mp3", self.affected))
+        self.assertFalse(
+            fsb.is_in_affected_dir("/lib/BookB/Neuromancer/chapter1.mp3", self.affected)
+        )
 
     def test_none_file_path_does_not_match(self):
         self.assertFalse(fsb.is_in_affected_dir(None, self.affected))
@@ -248,7 +248,11 @@ class TestBuildReport(unittest.TestCase):
         books = [
             # Same wreckage shape, but under a DIFFERENT root prefix than
             # affected_dirs -- e.g. a Mac SMB mount vs. the DB's real path.
-            {"id": "1", "title": "31", "file_path": "/Volumes/nas/BookA/Project Hail Mary - 24/31.mp3"},
+            {
+                "id": "1",
+                "title": "31",
+                "file_path": "/Volumes/nas/BookA/Project Hail Mary - 24/31.mp3",
+            },
         ]
         report = fsb.build_report(books, affected, "/Volumes/nas", "http://test")
         joined = " ".join(report.notes)

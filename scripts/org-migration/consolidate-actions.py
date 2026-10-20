@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
+# file: scripts/org-migration/consolidate-actions.py
+# version: 1.0.1
+# guid: 7444eba2-0f96-4642-806c-e56f0a50d0e9
+# last-edited: 2026-10-20
+
 """Phase 1: Write consolidated action.yml files for 5 gha-release-* repos.
 
 Each consolidated action inlines the full base implementation so that
 callers no longer depend on a cross-repo uses: chain.
 """
+
 import os
 import subprocess
 import sys
@@ -14,12 +20,13 @@ BASE = f"{HOME}/repos/github.com/jdfalk"
 
 # Local dirs (wrappers) that point to falkcorp/gha-release-* remotes
 WRAPPER_DIRS = {
-    "go":       f"{BASE}/gha-release-go",
-    "python":   f"{BASE}/gha-release-python",
-    "rust":     f"{BASE}/gha-release-rust",
-    "docker":   f"{BASE}/gha-release-docker",
+    "go": f"{BASE}/gha-release-go",
+    "python": f"{BASE}/gha-release-python",
+    "rust": f"{BASE}/gha-release-rust",
+    "docker": f"{BASE}/gha-release-docker",
     "frontend": f"{BASE}/gha-release-frontend",
 }
+
 
 def run(cmd, cwd=None, check=True):
     print(f"  $ {' '.join(cmd) if isinstance(cmd, list) else cmd}")
@@ -28,6 +35,7 @@ def run(cmd, cwd=None, check=True):
         print(f"  STDERR: {result.stderr}")
         raise RuntimeError(f"Command failed: {cmd}")
     return result.stdout.strip()
+
 
 # ─── GO ───────────────────────────────────────────────────────────────────────
 GO_ACTION = """\
@@ -1034,10 +1042,10 @@ runs:
 """
 
 ACTIONS = {
-    "go":       (WRAPPER_DIRS["go"],       GO_ACTION),
-    "python":   (WRAPPER_DIRS["python"],   PYTHON_ACTION),
-    "rust":     (WRAPPER_DIRS["rust"],     RUST_ACTION),
-    "docker":   (WRAPPER_DIRS["docker"],   DOCKER_ACTION),
+    "go": (WRAPPER_DIRS["go"], GO_ACTION),
+    "python": (WRAPPER_DIRS["python"], PYTHON_ACTION),
+    "rust": (WRAPPER_DIRS["rust"], RUST_ACTION),
+    "docker": (WRAPPER_DIRS["docker"], DOCKER_ACTION),
     "frontend": (WRAPPER_DIRS["frontend"], FRONTEND_ACTION),
 }
 
@@ -1046,8 +1054,7 @@ def commit_with_retry(repo_dir, msg):
     """Commit, retrying once if pre-commit hook (prettier) modifies files."""
     for attempt in range(3):
         result = subprocess.run(
-            ["git", "commit", "-m", msg],
-            cwd=repo_dir, capture_output=True, text=True
+            ["git", "commit", "-m", msg], cwd=repo_dir, capture_output=True, text=True
         )
         if result.returncode == 0:
             return
@@ -1059,10 +1066,10 @@ def commit_with_retry(repo_dir, msg):
 
 def main():
     for lang, (repo_dir, content) in ACTIONS.items():
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  Consolidating gha-release-{lang}")
         print(f"  Dir: {repo_dir}")
-        print('='*60)
+        print("=" * 60)
 
         # Ensure we're on chore/falkcorp-migration
         current = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir)
@@ -1084,13 +1091,17 @@ def main():
             print(f"  SKIP commit (no changes)")
             continue
 
-        commit_with_retry(repo_dir,
-            f"feat: consolidate action — inline full implementation, remove cross-repo uses chain")
+        commit_with_retry(
+            repo_dir,
+            f"feat: consolidate action — inline full implementation, remove cross-repo uses chain",
+        )
 
         # Push
         result = subprocess.run(
             ["git", "push", "origin", "chore/falkcorp-migration"],
-            cwd=repo_dir, capture_output=True, text=True
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             print(f"  Push stderr: {result.stderr}")

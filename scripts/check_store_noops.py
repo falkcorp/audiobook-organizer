@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
+# file: scripts/check_store_noops.py
+# version: 1.0.1
+# guid: d8be29f8-1681-4bfd-b6a0-9637cc3e03d6
+# last-edited: 2026-10-20
+
 """For each candidate noop file, identify the struct field(s) of type
 `database.Store` and check whether the file actually calls any methods on
 those fields. Files with zero method calls are safe to migrate by deleting
 the field entirely."""
+
 from __future__ import annotations
 
 import pathlib
@@ -40,9 +46,7 @@ CANDIDATES = [
 FIELD_RE = re.compile(r"^\s+([a-z][a-zA-Z0-9_]*)\s+database\.Store\b", re.MULTILINE)
 
 # Method call: <name>.<Capital>...
-CALL_TEMPLATE = re.compile(
-    r"(?:^|[^a-zA-Z_0-9])(?:[a-z]\.)?{name}\.[A-Z][a-zA-Z0-9]+\s*\("
-)
+CALL_TEMPLATE = re.compile(r"(?:^|[^a-zA-Z_0-9])(?:[a-z]\.)?{name}\.[A-Z][a-zA-Z0-9]+\s*\(")
 
 
 def scan(path: pathlib.Path) -> dict:
@@ -51,7 +55,9 @@ def scan(path: pathlib.Path) -> dict:
     fields = list(dict.fromkeys(fields))  # preserve order, dedup
     report = {"path": str(path), "fields": fields, "calls": {}}
     for name in fields:
-        pat = re.compile(rf"(?:^|[^a-zA-Z_0-9]){re.escape(name)}\.[A-Z][a-zA-Z0-9]+\s*\(", re.MULTILINE)
+        pat = re.compile(
+            rf"(?:^|[^a-zA-Z_0-9]){re.escape(name)}\.[A-Z][a-zA-Z0-9]+\s*\(", re.MULTILINE
+        )
         hits = pat.findall(text)
         report["calls"][name] = len(hits)
     return report

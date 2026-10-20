@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
+# file: scripts/gen_pipeline_bot_tasks.py
+# version: 1.0.1
+# guid: 2e2a3779-57b4-4f8c-8c09-7b94bb1a03a2
+# last-edited: 2026-10-20
+
 """Generate the 23 bot-task files for the dedup pipeline spec.
 
 Run from repo root: python3 scripts/gen_pipeline_bot_tasks.py
 """
+
 from __future__ import annotations
 
 import datetime
@@ -11,7 +17,9 @@ import uuid
 
 OUT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "docs", "superpowers", "bot-tasks",
+    "docs",
+    "superpowers",
+    "bot-tasks",
 )
 os.makedirs(OUT, exist_ok=True)
 DATE = "2026-05-02"
@@ -20,8 +28,10 @@ SPEC = "docs/superpowers/specs/2026-05-02-audiobook-identification-dedup-pipelin
 # (task_id, slug, title, prereqs, files_summary, body_md)
 TASKS = []
 
+
 def add(task_id: str, slug: str, title: str, prereqs: list[str], body: str) -> None:
     TASKS.append((task_id, slug, title, prereqs, body))
+
 
 def prereq_block(prereqs: list[str]) -> str:
     if not prereqs:
@@ -33,11 +43,12 @@ def prereq_block(prereqs: list[str]) -> str:
     lines.append("```bash")
     for p in prereqs:
         lines.append(
-            f'count=$(gh pr list --label "task:{p}" --state merged --json number | jq \'length\')\n'
+            f"count=$(gh pr list --label \"task:{p}\" --state merged --json number | jq 'length')\n"
             f'[ "$count" -gt 0 ] || {{ echo "UNMET: task:{p}"; exit 0; }}'
         )
     lines.append("```")
     return "\n".join(lines) + "\n"
+
 
 def render(task_id: str, slug: str, title: str, prereqs: list[str], body: str) -> str:
     file_rel = f"docs/superpowers/bot-tasks/{DATE}-dedup-pipeline-{task_id.lower()}-{slug}.md"
@@ -51,7 +62,7 @@ def render(task_id: str, slug: str, title: str, prereqs: list[str], body: str) -
 
 # BOT TASK: {title}
 
-**Pipeline phase:** {task_id.split('-')[0]}
+**Pipeline phase:** {task_id.split("-")[0]}
 **Audience:** burndown bot
 **Master spec:** [`{SPEC}`]({os.path.relpath(SPEC, "docs/superpowers/bot-tasks")})
 
@@ -83,11 +94,14 @@ gh pr create \\
 ```
 """
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 0 — schema + stores
 # ─────────────────────────────────────────────────────────────────────────────
 
-add("P0-01", "fingerprint-schema-and-migrations",
+add(
+    "P0-01",
+    "fingerprint-schema-and-migrations",
     "Create fingerprints.db schema + migration runner",
     [],
     """## What This Does
@@ -260,9 +274,12 @@ go vet ./internal/database/...
 - [ ] `FingerprintDBPath` config field exists with default `data/fingerprints.db`
 - [ ] `make build-api` succeeds
 - [ ] Tests pass
-""")
+""",
+)
 
-add("P0-02", "fingerprint-store-iface",
+add(
+    "P0-02",
+    "fingerprint-store-iface",
     "Define FingerprintStore interface + record types",
     ["P0-01"],
     """## What This Does
@@ -371,9 +388,12 @@ go build ./...
 - [ ] Interface compiles
 - [ ] No new code paths actually use the interface yet (impl arrives in P0-03)
 - [ ] `go build ./...` succeeds
-""")
+""",
+)
 
-add("P0-03", "fingerprint-store-sqlite-impl",
+add(
+    "P0-03",
+    "fingerprint-store-sqlite-impl",
     "SQLite implementation of FingerprintStore",
     ["P0-01", "P0-02"],
     """## What This Does
@@ -663,9 +683,12 @@ go test ./internal/database/ -run TestFingerprintStore -count=1
 - [ ] Resurrect clears `deleted_at` and appends a `resurrected` event
 - [ ] Tests pass
 - [ ] No new top-level `internal/fingerprint` similarity helper if one exists; reuse
-""")
+""",
+)
 
-add("P0-04", "signal-store-schema-and-impl",
+add(
+    "P0-04",
+    "signal-store-schema-and-impl",
     "Create signal_store table + Go store",
     ["P0-01"],
     """## What This Does
@@ -884,9 +907,12 @@ go vet ./internal/dedup/signals/...
 - [ ] Migration runs cleanly on a fresh DB
 - [ ] All `Kind` constants documented and weighted to match spec §4.1
 - [ ] Tests pass
-""")
+""",
+)
 
-add("P0-05", "identity-results-schema",
+add(
+    "P0-05",
+    "identity-results-schema",
     "Add identity_results table to main DB",
     ["P0-04"],
     """## What This Does
@@ -940,9 +966,12 @@ go test ./internal/database/ -run TestIdentityResultsMigration
 - [ ] Table created with all 5 columns
 - [ ] `books.signal_revision` column added (idempotent)
 - [ ] Test passes
-""")
+""",
+)
 
-add("P0-06", "match-groups-schema",
+add(
+    "P0-06",
+    "match-groups-schema",
     "Add dedup_match_groups + members tables",
     ["P0-04"],
     """## What This Does
@@ -985,11 +1014,13 @@ into this one in Phase 6.
 
 - [ ] Both tables and both indexes created
 - [ ] Idempotent on re-run
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 1 — signals (each independent after P0-04)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def stage_task(task_id, slug, title, summary, payload, prereqs_extra=None):
     base_pre = ["P0-04"]
@@ -1001,8 +1032,8 @@ def stage_task(task_id, slug, title, summary, payload, prereqs_extra=None):
 
 ## Files to Create / Edit
 
-1. **Create** `internal/maintenance/jobs/{slug.replace('-', '_')}.go`
-2. **Create** `internal/maintenance/jobs/{slug.replace('-', '_')}_test.go`
+1. **Create** `internal/maintenance/jobs/{slug.replace("-", "_")}.go`
+2. **Create** `internal/maintenance/jobs/{slug.replace("-", "_")}_test.go`
 
 ## Implementation outline
 
@@ -1011,7 +1042,7 @@ def stage_task(task_id, slug, title, summary, payload, prereqs_extra=None):
 ## Verify
 
 ```bash
-go test ./internal/maintenance/jobs/... -run {slug.replace('-', '_').title().replace('_', '')}
+go test ./internal/maintenance/jobs/... -run {slug.replace("-", "_").title().replace("_", "")}
 go vet ./internal/maintenance/jobs/...
 ```
 
@@ -1025,7 +1056,10 @@ go vet ./internal/maintenance/jobs/...
 """
     add(task_id, slug, title, base_pre, body)
 
-stage_task("P1-01", "stage-sha256-full",
+
+stage_task(
+    "P1-01",
+    "stage-sha256-full",
     "Pipeline stage: full SHA-256 file hash",
     "Implements the mandatory SHA-256 stage. Reuses `scanner.ComputeFileHash` "
     "(`internal/scanner/scanner.go:1761`) — DO NOT reimplement chunking. "
@@ -1039,9 +1073,12 @@ stage_task("P1-01", "stage-sha256-full",
   Source: "sha256-full"}.
 - Failure: file unreadable → log warn, no signal emitted, pipeline continues.
 - Failure: 50 GB file → already streamed by ComputeFileHash, no special handling needed.
-""")
+""",
+)
 
-stage_task("P1-02", "stage-stream-content-hash",
+stage_task(
+    "P1-02",
+    "stage-stream-content-hash",
     "Pipeline stage: per-stream audio content hash",
     "Hashes only the audio stream payload (skipping container/metadata) so "
     "two files that are identical re-encodes still match. Uses ffmpeg "
@@ -1049,9 +1086,12 @@ stage_task("P1-02", "stage-stream-content-hash",
     """- Shell out to ffmpeg; parse the MD5 line.
 - Emit `KindStreamContentHash` with score=1.0, confidence=1.0 when matched.
 - Failure: ffmpeg missing → emit nothing; mark `stage_unavailable` metric.
-""")
+""",
+)
 
-stage_task("P1-03", "stage-chromaprint-segments",
+stage_task(
+    "P1-03",
+    "stage-chromaprint-segments",
     "Pipeline stage: chromaprint segments",
     "Calls `internal/fingerprint.FileSegments` (existing) to compute the 7 "
     "segments. Stores them on the FingerprintStore record AND emits one "
@@ -1061,9 +1101,12 @@ stage_task("P1-03", "stage-chromaprint-segments",
   match is found, emit a per-pair signal carrying the matched SHA in
   `EvidenceJSON`. The matrix uses these to build match groups.
 - Failure: backend missing → stage marks itself unavailable; matrix degrades.
-""")
+""",
+)
 
-stage_task("P1-04", "stage-acoustid-lookup",
+stage_task(
+    "P1-04",
+    "stage-acoustid-lookup",
     "Pipeline stage: AcoustID external lookup",
     "Submits the chromaprint full fingerprint to acoustid.org and records "
     "the returned MBID + score. Throttled and retried via "
@@ -1072,9 +1115,13 @@ stage_task("P1-04", "stage-acoustid-lookup",
 - Skip if `last_seen_at` < 24h (cache).
 - Failure: HTTP 429 → exponential backoff, signal stays unemitted; matrix proceeds.
 - Failure: HTTP 5xx > 3 retries → log warn, no signal emitted.
-""", prereqs_extra=["P1-03"])
+""",
+    prereqs_extra=["P1-03"],
+)
 
-stage_task("P1-05", "stage-tag-match",
+stage_task(
+    "P1-05",
+    "stage-tag-match",
     "Pipeline stage: tag-based pairwise comparison",
     "Walks each book's title/author/narrator/duration/track-count and "
     "emits `KindTagMatch` signals against any other book in the library that "
@@ -1086,18 +1133,24 @@ stage_task("P1-05", "stage-tag-match",
   `settings.dedup.duration_tolerance`).
 - Score = weighted blend (title 0.5, author 0.25, narrator 0.15, duration 0.10).
 - Confidence = 0.75 (constant).
-""")
+""",
+)
 
-stage_task("P1-06", "stage-filename-match",
+stage_task(
+    "P1-06",
+    "stage-filename-match",
     "Pipeline stage: filename / path heuristics",
     "Lowest-weight signal. Emits `KindFilenameMatch` for any pair of books "
     "whose normalized basenames or parent dir names exceed Jaccard 0.7.",
     """- Reuses `strings.ToLower` + non-alnum stripping logic already used in
   the legacy `dedup-books` job.
 - Confidence = 0.40.
-""")
+""",
+)
 
-stage_task("P1-07", "stage-embedding-similarity",
+stage_task(
+    "P1-07",
+    "stage-embedding-similarity",
     "Pipeline stage: chromem embedding similarity",
     "Reuses the existing `EmbeddingStore` / `ChromemEmbeddingStore` "
     "(`internal/database/embedding_store.go`, `chromem_embedding_store.go`). "
@@ -1106,13 +1159,16 @@ stage_task("P1-07", "stage-embedding-similarity",
   existing `embedding_backfill` machinery.
 - Confidence = 0.65.
 - Failure: chromem store unavailable → emit nothing.
-""")
+""",
+)
 
-stage_task("P1-08", "stage-whisper-intro",
+stage_task(
+    "P1-08",
+    "stage-whisper-intro",
     "Pipeline stage: Whisper transcription of first 2 minutes",
     "Extracts the first 120 s of audio with ffmpeg, sends to Whisper "
     "(OpenAI API by default; local whisper.cpp if `settings.whisper.local=true`), "
-    "fuzzy-matches transcript against `\"<title> by <author>\"`. Only runs "
+    'fuzzy-matches transcript against `"<title> by <author>"`. Only runs '
     "when identity_score from earlier stages is < 0.85 (gating happens in "
     "the coordinator P3-01; this stage assumes it's been called).",
     """- Use `ffmpeg -ss 0 -t 120 -i in -ar 16000 -ac 1 -c:a pcm_s16le out.wav`.
@@ -1124,13 +1180,16 @@ stage_task("P1-08", "stage-whisper-intro",
   duration ≥ 90s actually heard → `KindWhisperIntroNegative`.
 - Failure: Whisper API down → no signal; coordinator caps identity_score at
   0.85 to surface "needs verification".
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 2 — fusion
 # ─────────────────────────────────────────────────────────────────────────────
 
-add("P2-01", "decision-matrix-engine",
+add(
+    "P2-01",
+    "decision-matrix-engine",
     "Decision matrix: identity_score + per-pair match_score",
     ["P0-05", "P1-01", "P1-02", "P1-03", "P1-04", "P1-05", "P1-06", "P1-07", "P1-08"],
     """## What This Does
@@ -1193,9 +1252,12 @@ across signal kinds — see spec §4.2.
 - [ ] Property test: identity_score ∈ [0,1] for any random signal soup
 - [ ] Soft-clamp behavior verified
 - [ ] No dependency on `internal/server` or `internal/maintenance`
-""")
+""",
+)
 
-add("P2-02", "match-group-builder",
+add(
+    "P2-02",
+    "match-group-builder",
     "Build/update dedup_match_groups from MatchPair output",
     ["P0-06", "P2-01"],
     """## What This Does
@@ -1240,13 +1302,16 @@ func ApplyPairs(w GroupWriter, pairs []MatchPair) error { ... }
 - [ ] Idempotent: running the same pairs twice yields the same group set
 - [ ] No physical deletes — group merging marks one as `state=merged` rather
       than deleting members
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 3 — orchestration
 # ─────────────────────────────────────────────────────────────────────────────
 
-add("P3-01", "pipeline-coordinator-job",
+add(
+    "P3-01",
+    "pipeline-coordinator-job",
     "identification-pipeline coordinator job",
     ["P2-01", "P2-02"],
     """## What This Does
@@ -1300,9 +1365,12 @@ the per-stage jobs.
 - [ ] Job appears in `GET /api/v1/maintenance/jobs`
 - [ ] Resumable (CanResume=true) with checkpoint at end of each book
 - [ ] All Phase-1 stage jobs are dispatched through the operations queue
-""")
+""",
+)
 
-add("P3-02", "backpressure-and-metrics",
+add(
+    "P3-02",
+    "backpressure-and-metrics",
     "Per-stage concurrency caps + Prometheus metrics",
     ["P3-01"],
     """## What This Does
@@ -1324,13 +1392,16 @@ Adds the per-stage worker pools (spec §5.1) and Prometheus metrics:
       `whisper=2`, `acoustid=1`.
 - [ ] Metrics registered, exposed at `/metrics`.
 - [ ] Test verifies an over-saturated queue blocks rather than DoSing the API.
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 4 — HTTP
 # ─────────────────────────────────────────────────────────────────────────────
 
-add("P4-01", "identification-endpoints",
+add(
+    "P4-01",
+    "identification-endpoints",
     "/api/v1/identification/* HTTP endpoints",
     ["P3-01"],
     """## What This Does
@@ -1363,9 +1434,12 @@ GET  /api/v1/identification/fingerprints/chromaprint?fp=…&min=0.85
 - [ ] POST endpoints enqueue the `identification-pipeline` job (don't run sync)
 - [ ] 404 vs 200 distinguished correctly
 - [ ] Permissions enforced
-""")
+""",
+)
 
-add("P4-02", "match-groups-v2-endpoints",
+add(
+    "P4-02",
+    "match-groups-v2-endpoints",
     "/api/v1/dedup/v2/match-groups/* endpoints",
     ["P2-02"],
     """## What This Does
@@ -1397,13 +1471,16 @@ POST /api/v1/dedup/v2/recompute
       duplicate merge logic)
 - [ ] `dismiss` and `split` only mutate match-group state; books untouched
 - [ ] Forever-store sees a `LogMatch` entry with the chosen `decision`
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 5 — UI
 # ─────────────────────────────────────────────────────────────────────────────
 
-add("P5-01", "identification-tab-shell",
+add(
+    "P5-01",
+    "identification-tab-shell",
     "React Identification tab shell + library-health panel",
     ["P4-01", "P4-02"],
     """## What This Does
@@ -1424,9 +1501,12 @@ with availability + queue depth, and a "Recompute all (dry-run)" button.
 - [ ] Route renders without crashing on an empty library
 - [ ] Pie + stage table use `useAsyncAction` hook (existing pattern)
 - [ ] Vitest snapshot test passes
-""")
+""",
+)
 
-add("P5-02", "per-book-drawer",
+add(
+    "P5-02",
+    "per-book-drawer",
     "Per-book identification drawer",
     ["P5-01"],
     """## What This Does
@@ -1440,9 +1520,12 @@ menu that POSTs to `/api/v1/identification/books/:id/recompute`.
 - [ ] Renders timeline ordered by `computed_at` desc
 - [ ] Chips colored by contribution sign (positive vs negative)
 - [ ] Empty-state ("no signals yet — pipeline never ran for this book")
-""")
+""",
+)
 
-add("P5-03", "match-groups-table",
+add(
+    "P5-03",
+    "match-groups-table",
     "Match-groups table with inline resolve",
     ["P5-01", "P4-02"],
     """## What This Does
@@ -1456,13 +1539,16 @@ dropdown (merge / dismiss / split).
 - [ ] Server-side cursor pagination
 - [ ] Optimistic UI on resolve (rollback on 4xx/5xx)
 - [ ] E2E Playwright spec for the merge happy path
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 6 — migration
 # ─────────────────────────────────────────────────────────────────────────────
 
-add("P6-01", "backfill-existing-library",
+add(
+    "P6-01",
+    "backfill-existing-library",
     "Backfill pipeline for every existing book",
     ["P3-01"],
     """## What This Does
@@ -1478,9 +1564,12 @@ isn't starved.
 - [ ] Reports progress (`current/total`) on each batch boundary
 - [ ] Once finished, every book has a non-zero `signal_revision` and at least
       one row in `identity_results`
-""")
+""",
+)
 
-add("P6-02", "translate-dedup-candidates",
+add(
+    "P6-02",
+    "translate-dedup-candidates",
     "Translate legacy dedup_candidates → dedup_match_groups",
     ["P2-02"],
     """## What This Does
@@ -1500,9 +1589,12 @@ The legacy table is **not** dropped here — it remains for Phase 6-3.
 - [ ] Idempotent (uses a stable derived ID from the legacy candidate ID)
 - [ ] Counts logged per status
 - [ ] Spot-check: pick 10 legacy rows and confirm matching v2 rows exist
-""")
+""",
+)
 
-add("P6-03", "deprecate-legacy-routes",
+add(
+    "P6-03",
+    "deprecate-legacy-routes",
     "Add deprecation headers to legacy /api/v1/dedup/*",
     ["P4-02", "P5-01", "P5-02", "P5-03"],
     """## What This Does
@@ -1519,13 +1611,16 @@ release cycles later.
 - [ ] Every handler in `dedup_handlers.go` emits both headers
 - [ ] UI banner present on legacy dedup pages
 - [ ] CHANGELOG updated
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 7 — auto-merge
 # ─────────────────────────────────────────────────────────────────────────────
 
-add("P7-01", "trust-ladder-runner",
+add(
+    "P7-01",
+    "trust-ladder-runner",
     "Trust-ladder runner: emits suggestions / auto-merges per match group",
     ["P3-01", "P4-01"],
     """## What This Does
@@ -1544,9 +1639,12 @@ A new job `trust-ladder` that walks open match groups and:
 - [ ] Auto-merge path is gated by the global setting (default off)
 - [ ] Every action persists a `fingerprint_match_log` row for forensics
 - [ ] Test: with the setting on, score 0.95 group results in members merged
-""")
+""",
+)
 
-add("P7-02", "admin-opt-in-toggle",
+add(
+    "P7-02",
+    "admin-opt-in-toggle",
     "Settings UI + endpoint for auto-merge opt-in",
     ["P7-01"],
     """## What This Does
@@ -1561,7 +1659,8 @@ that all merges are reversible via the match log.
 - [ ] Toggle persists via existing `SettingsStore`
 - [ ] Confirmation modal shown on enable
 - [ ] Audit log entry written on toggle (existing `system_activity_log`)
-""")
+""",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 

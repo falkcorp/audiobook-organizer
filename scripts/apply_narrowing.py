@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# file: scripts/apply_narrowing.py
+# version: 1.0.1
+# guid: 7cf45b0f-299a-4f02-aa66-3e500d676cd0
+# last-edited: 2026-10-20
+
 """Replace `database.Store` with narrow composites in the 18 small struct-
 based services identified by narrow_struct_services.py. Each file gets a
 file-local named interface (e.g. `batchServiceStore`) because inline
@@ -6,6 +11,7 @@ anonymous interfaces with 3+ embedded sub-interfaces read poorly and clutter
 both the struct declaration and the constructor signature.
 
 Idempotent — re-run is a no-op once applied."""
+
 from __future__ import annotations
 
 import pathlib
@@ -62,7 +68,14 @@ SPEC = {
     },
     "internal/server/diagnostics_service.go": {
         "alias": "diagnosticsStore",
-        "ifaces": ["AuthorReader", "BookReader", "OperationStore", "SeriesReader", "StatsStore", "SystemActivityStore"],
+        "ifaces": [
+            "AuthorReader",
+            "BookReader",
+            "OperationStore",
+            "SeriesReader",
+            "StatsStore",
+            "SystemActivityStore",
+        ],
         "field_re": r"^(\s+)db\s+database\.Store\b",
         "field_sub": r"\1db diagnosticsStore",
         "param_re": r"db database\.Store",

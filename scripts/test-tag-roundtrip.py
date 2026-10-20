@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test-tag-roundtrip.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 5c8e2a4f-1d6b-4f9c-a3e7-8b2d0f6c4a19
-# last-edited: 2026-07-18
+# last-edited: 2026-10-20
 """Test tag write/read round-trip against a running audiobook-organizer server.
 
 Usage:
@@ -59,9 +59,7 @@ def main():
         default=os.environ.get("ABK_API_URL"),
         help="Server host:port, e.g. <server>:8484 (required; defaults to $ABK_API_URL)",
     )
-    parser.add_argument(
-        "--book-id", help="Book ID to test (uses first book if not specified)"
-    )
+    parser.add_argument("--book-id", help="Book ID to test (uses first book if not specified)")
     args = parser.parse_args()
 
     if not args.host:
@@ -111,12 +109,7 @@ def main():
     missing_in_file = []
     for field, sv in db_values.items():
         fv = file_values_before.get(field)
-        if (
-            (fv is None or fv == "" or fv == "\u2014")
-            and sv
-            and sv != ""
-            and sv != "\u2014"
-        ):
+        if (fv is None or fv == "" or fv == "\u2014") and sv and sv != "" and sv != "\u2014":
             missing_in_file.append(field)
 
     if missing_in_file:
@@ -126,9 +119,7 @@ def main():
 
     # Step 2: Trigger write-back
     print("\n2. Triggering write-back...")
-    wb_result = api(
-        host, "POST", f"/audiobooks/{book_id}/write-back", {"rename": False}
-    )
+    wb_result = api(host, "POST", f"/audiobooks/{book_id}/write-back", {"rename": False})
     if wb_result:
         print(f"  Write-back result: {wb_result.get('message', 'OK')}")
     else:
@@ -162,18 +153,14 @@ def main():
             if fv_after and str(fv_after) != "" and str(fv_after) != "\u2014":
                 print(f"  FIXED: {field} now has file value: {fv_after}")
             else:
-                issues.append(
-                    f"STILL MISSING: {field} - DB has '{sv}' but file still empty"
-                )
+                issues.append(f"STILL MISSING: {field} - DB has '{sv}' but file still empty")
 
     # Check: fields that had values before shouldn't lose them
     for field, fv_before in file_values_before.items():
         fv_after = file_values_after.get(field)
         if fv_before and str(fv_before) != "\u2014":
             if not fv_after or str(fv_after) == "\u2014" or str(fv_after) == "":
-                issues.append(
-                    f"LOST: {field} had '{fv_before}' but now empty after write-back"
-                )
+                issues.append(f"LOST: {field} had '{fv_before}' but now empty after write-back")
             elif str(fv_before) != str(fv_after):
                 # Value changed — not necessarily bad (could be normalization)
                 print(f"  CHANGED: {field}: '{fv_before}' -> '{fv_after}'")

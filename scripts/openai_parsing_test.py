@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/openai_parsing_test.py
-# version: 1.1.3
+# version: 1.1.4
 # guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 
 """
@@ -144,9 +144,7 @@ Set confidence based on:
 - medium: Some ambiguity but reasonable interpretation
 - low: Very unclear or minimal information"""
 
-    def parse_filename(
-        self, filename: str
-    ) -> tuple[ParsedMetadata | None, float, int | None]:
+    def parse_filename(self, filename: str) -> tuple[ParsedMetadata | None, float, int | None]:
         """
         Parse a filename using OpenAI.
 
@@ -220,8 +218,7 @@ Set confidence based on:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit all tasks
             future_to_filename = {
-                executor.submit(self.parse_filename, filename): filename
-                for filename in filenames
+                executor.submit(self.parse_filename, filename): filename for filename in filenames
             }
 
             # Collect results as they complete
@@ -345,9 +342,7 @@ def run_parsing_tests(
         Tuple of (test_results, metrics)
     """
     print(f"\nStarting parsing tests on {len(files):,} files...")
-    print(
-        f"Using batch size: {batch_size} with {parser.max_workers} concurrent workers"
-    )
+    print(f"Using batch size: {batch_size} with {parser.max_workers} concurrent workers")
     print(f"Results will be saved to: {output_dir}/")
 
     os.makedirs(output_dir, exist_ok=True)
@@ -501,11 +496,7 @@ def save_results(results: list[TestResult], metrics: TestMetrics, output_dir: st
         f.write("CONFIDENCE BREAKDOWN\n")
         f.write("-" * 80 + "\n")
         for confidence, count in sorted(metrics.confidence_breakdown.items()):
-            pct = (
-                count / metrics.successful_parses * 100
-                if metrics.successful_parses > 0
-                else 0
-            )
+            pct = count / metrics.successful_parses * 100 if metrics.successful_parses > 0 else 0
             f.write(f"  {confidence.capitalize()}: {count:,} ({pct:.1f}%)\n")
         f.write("\n")
 
@@ -524,9 +515,7 @@ def save_results(results: list[TestResult], metrics: TestMetrics, output_dir: st
             f.write(
                 f"Avg Tokens per Parse: {metrics.total_tokens / metrics.successful_parses:.1f}\n"
             )
-        f.write(
-            f"Processing Rate: {metrics.total_files / metrics.total_time:.2f} files/sec\n\n"
-        )
+        f.write(f"Processing Rate: {metrics.total_files / metrics.total_time:.2f} files/sec\n\n")
 
         if metrics.error_types:
             f.write("ERROR BREAKDOWN\n")
@@ -540,9 +529,7 @@ def save_results(results: list[TestResult], metrics: TestMetrics, output_dir: st
         f.write("SAMPLE SUCCESSFUL PARSES\n")
         f.write("-" * 80 + "\n")
         successful_results = [r for r in results if r.success and r.parsed_metadata]
-        for result in random.sample(
-            successful_results, min(20, len(successful_results))
-        ):
+        for result in random.sample(successful_results, min(20, len(successful_results))):
             f.write(f"\nFilename: {result.filename}\n")
             f.write(f"Source: {result.source_path}\n")
             if result.parsed_metadata:
@@ -580,20 +567,14 @@ def save_results(results: list[TestResult], metrics: TestMetrics, output_dir: st
     print(f"Total Tokens: {metrics.total_tokens:,}")
     print("\nConfidence Breakdown:")
     for confidence, count in sorted(metrics.confidence_breakdown.items()):
-        pct = (
-            count / metrics.successful_parses * 100
-            if metrics.successful_parses > 0
-            else 0
-        )
+        pct = count / metrics.successful_parses * 100 if metrics.successful_parses > 0 else 0
         print(f"  {confidence.capitalize()}: {count:,} ({pct:.1f}%)")
     print("=" * 80)
 
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Test OpenAI parsing on audiobook filenames"
-    )
+    parser = argparse.ArgumentParser(description="Test OpenAI parsing on audiobook filenames")
     parser.add_argument(
         "--file-list",
         default="/Users/jdfalk/repos/scratch/file-list-books",
@@ -622,9 +603,7 @@ def main():
         default=10,
         help="Number of concurrent workers for parallel requests (default: 10)",
     )
-    parser.add_argument(
-        "--seed", type=int, help="Random seed for reproducible sampling"
-    )
+    parser.add_argument("--seed", type=int, help="Random seed for reproducible sampling")
 
     args = parser.parse_args()
 

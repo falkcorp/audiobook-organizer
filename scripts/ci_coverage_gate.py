@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci_coverage_gate.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 0b6f2f0e-6d0c-4d5e-9a1b-3c7e2d9f4a61
-# last-edited: 2026-09-26
+# last-edited: 2026-10-20
 
 """Woodpecker coverage gate: the `coverage-check-short` step of `make ci`,
 computed across the parallel test workflows in .woodpecker/.
@@ -98,7 +98,10 @@ def decode_log_entries(entries: list[dict]) -> str:
 
 
 def _get(url: str) -> object:
-    headers = {"Authorization": f"Bearer {os.environ['WOODPECKER_TOKEN']}", "Accept": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {os.environ['WOODPECKER_TOKEN']}",
+        "Accept": "application/json",
+    }
     if os.environ.get("CF_ACCESS_CLIENT_ID"):
         headers["CF-Access-Client-Id"] = os.environ["CF_ACCESS_CLIENT_ID"]
         headers["CF-Access-Client-Secret"] = os.environ.get("CF_ACCESS_CLIENT_SECRET", "")

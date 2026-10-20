@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
+# file: scripts/org-migration/update-remotes.py
+# version: 1.0.1
+# guid: f361303b-7845-48b0-96d4-1348d770c811
+# last-edited: 2026-10-20
+
 """Phase 8: Update local git remotes to point to falkcorp."""
+
 import os
 import subprocess
 import sys
@@ -42,8 +48,7 @@ for entry in sorted(os.listdir(BASE)):
     new_remote = f"https://github.com/falkcorp/{new_name}.git"
 
     result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        capture_output=True, text=True, cwd=repo_dir
+        ["git", "remote", "get-url", "origin"], capture_output=True, text=True, cwd=repo_dir
     )
     current = result.stdout.strip()
 
@@ -54,10 +59,7 @@ for entry in sorted(os.listdir(BASE)):
     if "github.com/jdfalk/" in current or (
         "github.com/falkcorp/" in current and current != new_remote
     ):
-        subprocess.run(
-            ["git", "remote", "set-url", "origin", new_remote],
-            cwd=repo_dir, check=True
-        )
+        subprocess.run(["git", "remote", "set-url", "origin", new_remote], cwd=repo_dir, check=True)
         print(f"UPDATE {entry} → {new_remote}")
     else:
         print(f"OK    {entry} ({current})")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/find_spurious_stranded_book_rows.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 7c90e537-566f-4c72-ae73-033055c31c4a
-# last-edited: 2026-08-23
+# last-edited: 2026-10-20
 """REPORT-ONLY scan for Book rows the .tmp-rename path-construction bug may
 have spuriously created (TODO.md: "Investigate book rows affected as a side
 effect").
@@ -411,7 +411,9 @@ def main(argv: list[str] | None = None) -> int:
         "--insecure", action="store_true", help="skip TLS cert verification (self-signed prod cert)"
     )
     ap.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE)
-    ap.add_argument("--report", default=None, help="output report path (default: timestamped, in /tmp)")
+    ap.add_argument(
+        "--report", default=None, help="output report path (default: timestamped, in /tmp)"
+    )
     args = ap.parse_args(argv)
 
     if not args.base:
@@ -441,7 +443,10 @@ def main(argv: list[str] | None = None) -> int:
             detail = e.read().decode(errors="replace")
         except Exception:
             detail = ""
-        print(f"FATAL: could not fetch books from {args.base}: HTTP {e.code} {e.reason}", file=sys.stderr)
+        print(
+            f"FATAL: could not fetch books from {args.base}: HTTP {e.code} {e.reason}",
+            file=sys.stderr,
+        )
         if detail:
             print(f"  response body: {detail[:2000]}", file=sys.stderr)
         return 2

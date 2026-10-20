@@ -1,7 +1,7 @@
 # file: scripts/tests/test_deploy_preflight.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 9c4b2e1a-6d3f-4f8b-a1c7-5e0d8b7a2f13
-# last-edited: 2026-10-11
+# last-edited: 2026-10-20
 """Tests for scripts/deploy-preflight.sh (todo.d CI-01).
 
 The guard the deploy targets used to run inline, ``git merge-base
@@ -125,7 +125,10 @@ class DeployPreflightTests(unittest.TestCase):
         the script has to fetch, not trust the tracking ref it finds."""
         self.repos.push_from_other("remote-only")
         # Sanity: the local tracking ref still equals HEAD until something fetches.
-        self.assertEqual(_git(self.repos.local, "rev-parse", "HEAD"), _git(self.repos.local, "rev-parse", "origin/main"))
+        self.assertEqual(
+            _git(self.repos.local, "rev-parse", "HEAD"),
+            _git(self.repos.local, "rev-parse", "origin/main"),
+        )
         r = _preflight(self.repos.local)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
 
@@ -138,7 +141,11 @@ class DeployPreflightTests(unittest.TestCase):
 
     def test_bad_ref_argument_is_a_usage_error(self) -> None:
         r = subprocess.run(
-            ["bash", str(SCRIPT), "nomain"], cwd=self.repos.local, env=GIT_ENV, capture_output=True, text=True
+            ["bash", str(SCRIPT), "nomain"],
+            cwd=self.repos.local,
+            env=GIT_ENV,
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(r.returncode, 2)
 

@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
+# file: scripts/org-migration/transfer-repos.py
+# version: 1.0.1
+# guid: 798c668a-6864-4700-b10b-1cd5f5c36fa0
+# last-edited: 2026-10-20
+
 """
 Phase 3: Transfer all in-scope repos to falkcorp org.
 Uses post-rename names. Run after rename-repos.py completes.
 Transfers in tier order to minimize broken-reference window.
 """
+
 import subprocess
 import sys
 import time
@@ -88,11 +94,16 @@ def transfer_repo(name):
         print(f"  DRY   jdfalk/{name} → falkcorp/{name}")
         return True
 
-    stdout, stderr, rc = gh([
-        "api", "-X", "POST",
-        f"/repos/jdfalk/{name}/transfer",
-        "-f", f"new_owner={new_owner}",
-    ])
+    stdout, stderr, rc = gh(
+        [
+            "api",
+            "-X",
+            "POST",
+            f"/repos/jdfalk/{name}/transfer",
+            "-f",
+            f"new_owner={new_owner}",
+        ]
+    )
     if rc == 0:
         print(f"  OK    jdfalk/{name} → falkcorp/{name}")
         return True

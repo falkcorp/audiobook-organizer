@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
+# file: scripts/rebase-branches.py
+# version: 1.0.1
+# guid: 6155668c-d973-4826-aef8-773a851a4896
+# last-edited: 2026-10-20
+
 """
 Rebase all local branches onto origin/main.
 Aborts on conflicts and marks branches for manual review.
 """
+
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +32,7 @@ def run(cmd, capture=False):
 def get_all_branches():
     """Get all branches not named 'main'."""
     output = run("git branch --format='%(refname:short)'", capture=True)
-    branches = [b.strip() for b in output.split('\n') if b.strip() and b.strip() != 'main']
+    branches = [b.strip() for b in output.split("\n") if b.strip() and b.strip() != "main"]
     return branches
 
 
@@ -34,7 +40,7 @@ def has_conflicts():
     """Check if current rebase has conflicts."""
     output = run("git status --short", capture=True)
     # Conflicted files show as 'UU', 'DD', 'AA', 'DU', 'UD', etc.
-    return any(line[0:2] in ['UU', 'DD', 'AA', 'DU', 'UD'] for line in output.split('\n'))
+    return any(line[0:2] in ["UU", "DD", "AA", "DU", "UD"] for line in output.split("\n"))
 
 
 def main():
@@ -60,7 +66,7 @@ def main():
     succeeded = []
 
     for branch in branches:
-        print(f"  {branch}...", end=' ', flush=True)
+        print(f"  {branch}...", end=" ", flush=True)
 
         # Switch to branch (with --force to override any working tree changes)
         try:
@@ -98,7 +104,7 @@ def main():
     run("git stash pop || true")
 
     # Report
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Succeeded: {len(succeeded)}")
     print(f"Failed (conflicts/errors): {len(failed_branches)}")
 
@@ -110,5 +116,5 @@ def main():
     return 1 if failed_branches else 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_ci_coverage_gate.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 5e0d8c2a-7b3f-4f61-8c9e-1a2b4d6f8e03
-# last-edited: 2026-09-26
+# last-edited: 2026-10-20
 
 """Unit tests for scripts/ci_coverage_gate.py (no network).
 
@@ -38,7 +38,11 @@ class ParseCombineTest(unittest.TestCase):
         self.assertEqual(gate.parse_lines(text), [("test-database", 900, 1000)])
 
     def test_combine_is_statement_weighted(self):
-        found = [("test-database", 900, 1000), ("test-server-scanner", 100, 1000), ("test-rest", 0, 2000)]
+        found = [
+            ("test-database", 900, 1000),
+            ("test-server-scanner", 100, 1000),
+            ("test-rest", 0, 2000),
+        ]
         pct, problems = gate.combine(found)
         self.assertEqual(problems, [])
         self.assertEqual(pct, 25.0)  # 1000 / 4000, not the mean of 90/10/0
@@ -52,22 +56,21 @@ class ParseCombineTest(unittest.TestCase):
         self.assertIn("test-other: unexpected", text)
 
     def test_decode_log_entries(self):
-        entries = [{"data": base64.b64encode(b"CI-COVERAGE workflow=test-rest covered=1 total=2").decode()}]
+        entries = [
+            {"data": base64.b64encode(b"CI-COVERAGE workflow=test-rest covered=1 total=2").decode()}
+        ]
         self.assertEqual(gate.parse_lines(gate.decode_log_entries(entries)), [("test-rest", 1, 2)])
 
 
 class AwkMatchesGoToolCoverTest(unittest.TestCase):
     def test_awk_counts_statements(self):
-        profile = (
-            "mode: atomic\n"
-            "m/a/x.go:1.1,2.2 3 5\n"
-            "m/a/x.go:3.1,4.2 2 0\n"
-            "m/a/y.go:1.1,2.2 5 1\n"
-        )
+        profile = "mode: atomic\nm/a/x.go:1.1,2.2 3 5\nm/a/x.go:3.1,4.2 2 0\nm/a/y.go:1.1,2.2 5 1\n"
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "cover.out"
             p.write_text(profile)
-            out = subprocess.run(["awk", "-v", "wf=test-rest", AWK, str(p)], text=True, capture_output=True).stdout
+            out = subprocess.run(
+                ["awk", "-v", "wf=test-rest", AWK, str(p)], text=True, capture_output=True
+            ).stdout
         self.assertEqual(gate.parse_lines(out), [("test-rest", 8, 10)])
 
 
