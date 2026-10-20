@@ -1,5 +1,5 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
 // last-edited: 2026-10-20
 
@@ -221,6 +221,11 @@ func (r *IPRateLimiter) run(ctx context.Context) {
 // callers should prefix them. Idle keys are swept only if the limiter was
 // Start()ed; otherwise they are reclaimed by that bound (defaultMaxEntries) or
 // refreshed on their next lookup, exactly as for IPs.
+//
+// Do not mix AllowKey and ReserveKey on one limiter: ReserveKey counts its
+// in-flight pending admissions against a key's bucket, and AllowKey does not
+// see them, so mixing the two can admit more than the burst. Use one or the
+// other per limiter instance.
 func (r *IPRateLimiter) AllowKey(key string) bool {
 	if key == "" {
 		key = "unknown"
@@ -243,8 +248,13 @@ type KeyReservation struct {
 }
 
 // ReserveKey sets aside one token of key's bucket if one is available right
-// now, and reports false (nothing held) when it is not. Every reservation
-// must end in Commit or Cancel.
+// now, and reports false (nothing held) when it is not.
+//
+// Every reservation that succeeds MUST end in exactly one Commit or Cancel:
+// an unseen key's reservation holds a pending admission that only those
+// release, and a leaked one keeps counting against the key's burst until the
+// process restarts. Do not mix ReserveKey and AllowKey on one limiter
+// (AllowKey ignores pending admissions; see AllowKey).
 //
 // An unseen key gets NO entry. It always has a full burst, so its
 // reservation is recorded as a pending admission (r.pending) instead, and
@@ -378,17 +388,25 @@ type KeyStep struct {
 // ReserveKeys reserves one token from every step, in order. When a step
 // refuses it cancels every reservation already taken and returns false: the
 // request spends nothing and inserts nothing anywhere. On success the caller
-// must CommitReservations (or CancelReservations) the returned set.
+// must CommitReservations (or CancelReservations) the returned set. If a step
+// panics midway, the reservations already taken are cancelled before the
+// panic continues, so none is leaked.
 func ReserveKeys(steps ...KeyStep) ([]KeyReservation, bool) {
 	taken := make([]KeyReservation, 0, len(steps))
+	done := false
+	defer func() {
+		if !done {
+			CancelReservations(taken)
+		}
+	}()
 	for _, st := range steps {
 		res, ok := st.Limiter.ReserveKey(st.Key)
 		if !ok {
-			CancelReservations(taken)
-			return nil, false
+			return nil, false // the deferred cancel gives back what was taken
 		}
 		taken = append(taken, res)
 	}
+	done = true
 	return taken, true
 }
 
