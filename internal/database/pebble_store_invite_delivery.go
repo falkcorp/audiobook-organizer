@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_invite_delivery.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
 // last-edited: 2026-10-19
 
@@ -47,10 +47,11 @@ const (
 
 // Invite.EmailBinding and Invite.SSOGrant values.
 const (
-	InviteEmailBound         = "bound"
-	InviteEmailNotEmailed    = "not_emailed"
-	InviteSSOGranted         = "granted"
-	InviteSSOCreatorNotAdmin = "creator_not_admin"
+	InviteEmailBound           = "bound"
+	InviteEmailNotEmailed      = "not_emailed"
+	InviteEmailCreatorNotAdmin = "creator_not_admin" // emailed, but by someone without the admin role: not bound
+	InviteSSOGranted           = "granted"
+	InviteSSOCreatorNotAdmin   = "creator_not_admin"
 )
 
 // inviteAdminRole is the role an invite's creator must hold for the accept to

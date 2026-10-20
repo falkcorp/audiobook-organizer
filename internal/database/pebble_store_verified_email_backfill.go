@@ -1,378 +1,54 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 1.3.0
+// version: 2.0.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-19
 
 package database
 
 import (
-	"sort"
+	"encoding/json"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 )
 
-// verifiedEmailIndexKey records that idx:user:email has been rebuilt as the
-// verified-email index (see the email keys in pebble_store_auth.go) and holds
-// the operator-trusted address list that rebuild applied, one lowercase
-// address per line. v3: v1 (never deployed) trusted any key matching its
-// user's current email; v2 (never deployed) had no operator list.
-const verifiedEmailIndexKey = "system:backfill:user_verified_email_v3"
-
-// OperatorEmailTrust feeds the operator's trusted addresses (the owner email
-// and OAUTH_ALLOWED_EMAILS, which only the operator can set: environment,
-// config file, or a proven owner session) into the verified-email index. Not
-// on Store; resolve it with AsCapability.
-type OperatorEmailTrust interface {
-	// SetOperatorTrustedEmails installs the function that reads the current
-	// list. It is read on every verified-email lookup, so a change to the
-	// list is applied before the next lookup answers.
-	SetOperatorTrustedEmails(list func() []string)
-	// EnsureVerifiedEmailIndex rebuilds the index from provenance the first
-	// time (no sentinel), and afterwards re-applies only the addresses added
-	// to or removed from the operator list since the last run. A no-op until
-	// SetOperatorTrustedEmails has been called.
-	EnsureVerifiedEmailIndex() error
-}
-
-var _ OperatorEmailTrust = (*PebbleStore)(nil)
-
-// VerifiedEmailBackfillResult counts what a rebuild or re-apply changed.
-type VerifiedEmailBackfillResult struct {
-	Full     bool // a full rebuild (no sentinel yet), not a list re-apply
-	Dropped  int  // keys with no provenance (or pointing at the wrong user), deleted
-	Kept     int  // keys that were already right
-	Added    int  // provenance-backed keys that were missing, written
-	Conflict int  // addresses proven for more than one user; left unkeyed
-}
-
-// normalizeOperatorEmails lowercases, trims, de-duplicates and sorts.
-func normalizeOperatorEmails(list []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, e := range list {
-		e = strings.ToLower(strings.TrimSpace(e))
-		if e != "" && !seen[e] {
-			seen[e] = true
-			out = append(out, e)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func operatorSet(list []string) map[string]bool {
-	set := make(map[string]bool, len(list))
-	for _, e := range list {
-		set[e] = true
-	}
-	return set
-}
-
-// SetOperatorTrustedEmails implements OperatorEmailTrust.
-func (p *PebbleStore) SetOperatorTrustedEmails(list func() []string) {
-	p.operatorEmails.Store(&list)
-}
-
-// currentOperatorEmails returns the normalized operator list, and false when
-// no list function is installed.
-func (p *PebbleStore) currentOperatorEmails() ([]string, bool) {
-	fn := p.operatorEmails.Load()
-	if fn == nil || *fn == nil {
-		return nil, false
-	}
-	return normalizeOperatorEmails((*fn)()), true
-}
-
-// EnsureVerifiedEmailIndex implements OperatorEmailTrust.
-func (p *PebbleStore) EnsureVerifiedEmailIndex() error {
-	list, ok := p.currentOperatorEmails()
-	if !ok {
-		return nil
-	}
-	canon := strings.Join(list, "\n")
-	if applied := p.operatorApplied.Load(); applied != nil && *applied == canon {
-		return nil
-	}
-	p.inviteMu.Lock()
-	defer p.inviteMu.Unlock()
-	v, closer, err := p.db.Get([]byte(verifiedEmailIndexKey))
-	switch {
-	case err == pebble.ErrNotFound:
-		if _, err := p.rebuildVerifiedEmailIndexLocked(list); err != nil {
-			return err
-		}
-	case err != nil:
-		return err
-	default:
-		prior := string(v)
-		closer.Close()
-		if prior != canon {
-			var old []string
-			if prior != "" {
-				old = strings.Split(prior, "\n")
-			}
-			if _, err := p.reapplyOperatorEmailsLocked(old, list); err != nil {
-				return err
-			}
-		}
-	}
-	p.operatorApplied.Store(&canon)
-	return nil
-}
-
-// rebuildVerifiedEmailIndexLocked rebuilds idx:user:email from provenance
-// only. Caller holds inviteMu.
+// Verified email, computed live.
 //
-// A user's current email is verified when, and only when, there is a record
-// of how it was proven (emailProvenFor): an accepted-invite SSO grant naming
-// that user, a linked OAuth identity of that user recorded with that email,
-// or the address being on the operator's trusted list while that user is the
-// active holder and did not set the address themselves. Every other key is dropped, including keys CreateUser wrote
-// at setup or bootstrap for addresses the operator does not list: no
-// provenance is stored for those, and a key that merely matches the current
-// email proves nothing, since before this build anyone could have squatted an
-// address. People who already sign in through SSO are unaffected: ResolveUser
-// finds them by their (provider, subject) link before it reads this index.
+// Whether a user's email is verified is decided from that user's own records
+// every time it is asked (emailProvenFor): the store-set EmailSource, an
+// accepted-invite SSO grant naming the user, or a linked identity of the user
+// recorded with that email. Nothing is applied once and remembered, so no
+// recorded state can leave an address stuck verified or stuck unverified.
 //
-// An address proven for more than one user gets no key (logged without the
-// address). An undecodable user row keeps its keys, and while any row is
-// undecodable the operator list proves nothing, because an unreadable second
-// holder of a listed address cannot be ruled out.
-func (p *PebbleStore) rebuildVerifiedEmailIndexLocked(operator []string) (VerifiedEmailBackfillResult, error) {
-	res := VerifiedEmailBackfillResult{Full: true}
-	users, badKeys, err := p.listUsers()
-	if err != nil {
-		return res, err
-	}
-	undecodable := make(map[string]bool, len(badKeys))
-	for _, k := range badKeys {
-		undecodable[strings.TrimPrefix(k, "u:")] = true
-	}
-	opSet := operatorSet(operator)
-	if len(badKeys) > 0 && len(opSet) > 0 {
-		authLog.Warn("verified-email rebuild: %d user row(s) unreadable; the operator list proves nothing until they are fixed", len(badKeys))
-		opSet = nil
-	}
+// idx:user:email:<addr> (userEmailIndexPrefix) is only a cache of that answer,
+// kept for a rollback build: older builds link an SSO login to whatever user
+// that key names, without checking the user's current email, so the key must
+// never name an account that has not proven the address. Every write path
+// keeps it in step in its own batch, a lookup repairs the key for the address
+// it looked up, and ReconcileVerifiedEmails rewrites all of them at store open.
 
-	// desired: address -> the one user with provenance for it.
-	desired := map[string]string{}
-	conflicted := map[string]bool{}
-	for i := range users {
-		u := &users[i]
-		lower := strings.ToLower(strings.TrimSpace(u.Email))
-		if lower == "" {
-			continue
-		}
-		proven, err := p.emailProvenFor(u, lower, opSet)
-		if err != nil {
-			return res, err
-		}
-		if !proven {
-			continue
-		}
-		if other, ok := desired[lower]; ok && other != u.ID {
-			conflicted[lower] = true
-			continue
-		}
-		desired[lower] = u.ID
+// trustedEmailSource reports whether an EmailSource records a path that
+// proves the address belongs to the account.
+func trustedEmailSource(source string) bool {
+	switch source {
+	case EmailSourceSetup, EmailSourceAdmin, EmailSourceInvite, EmailSourceIdP:
+		return true
 	}
-	for lower := range conflicted {
-		delete(desired, lower)
-		res.Conflict++
-		authLog.Warn("verified-email rebuild: an address is proven for more than one user; left unverified for all of them")
-	}
-
-	b := p.db.NewBatch()
-	defer b.Close()
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte(userEmailIndexPrefix),
-		UpperBound: []byte(userEmailIndexPrefix + "\xff"),
-	})
-	if err != nil {
-		return res, err
-	}
-	for iter.First(); iter.Valid(); iter.Next() {
-		lower := strings.TrimPrefix(string(iter.Key()), userEmailIndexPrefix)
-		id := string(iter.Value())
-		if want, ok := desired[lower]; ok && want == id {
-			res.Kept++
-			delete(desired, lower)
-			continue
-		}
-		if undecodable[id] && !conflicted[lower] {
-			continue
-		}
-		if err := b.Delete(append([]byte(nil), iter.Key()...), nil); err != nil {
-			iter.Close()
-			return res, err
-		}
-		res.Dropped++
-	}
-	if err := iter.Close(); err != nil {
-		return res, err
-	}
-	for lower, id := range desired {
-		if err := b.Set([]byte(userEmailIndexPrefix+lower), []byte(id), nil); err != nil {
-			return res, err
-		}
-		res.Added++
-	}
-	if err := b.Set([]byte(verifiedEmailIndexKey), []byte(strings.Join(operator, "\n")), nil); err != nil {
-		return res, err
-	}
-	if err := b.Commit(pebble.Sync); err != nil {
-		return res, err
-	}
-	authLog.Info("verified-email index rebuilt from provenance: %d kept, %d added, %d dropped, %d conflicted",
-		res.Kept, res.Added, res.Dropped, res.Conflict)
-	return res, nil
+	return false
 }
 
-// reapplyOperatorEmailsLocked brings the index in line with a changed
-// operator list. Caller holds inviteMu.
-//   - A removed address keeps its key only if its holder still has other
-//     provenance; otherwise the key is dropped, so trust does not outlive the
-//     list entry that gave it.
-//   - An added address gets a key for its one holder that the list proves
-//     (active, not self-set; see emailProvenFor). More than one proven
-//     holder, any other holder with proof of its own, a key already naming
-//     another account, or any unreadable user row is a conflict: nothing is
-//     written or overwritten, and a Warn is logged without the address.
-func (p *PebbleStore) reapplyOperatorEmailsLocked(old, current []string) (VerifiedEmailBackfillResult, error) {
-	var res VerifiedEmailBackfillResult
-	oldSet, curSet := operatorSet(old), operatorSet(current)
-	users, badKeys, err := p.listUsers()
-	if err != nil {
-		return res, err
+// emailProvenFor reports whether lower (lowercased, trimmed) is proven to be
+// u's address: u holds it with a trusted EmailSource, an accepted-invite SSO
+// grant for it names u, or a linked identity of u was recorded with it. A
+// self-set address, an address bound by a copied invite link, and a row with
+// no EmailSource (written by a build that did not know the field, until the
+// next store open stamps it) prove nothing. It does not look at other
+// holders; callers treat two proven holders as a conflict.
+func (p *PebbleStore) emailProvenFor(u *User, lower string) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(u.Email), lower) {
+		return false, nil
 	}
-	byID := make(map[string]*User, len(users))
-	for i := range users {
-		byID[users[i].ID] = &users[i]
-	}
-	b := p.db.NewBatch()
-	defer b.Close()
-
-	for addr := range oldSet {
-		if curSet[addr] {
-			continue
-		}
-		v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + addr))
-		if err == pebble.ErrNotFound {
-			continue
-		} else if err != nil {
-			return res, err
-		}
-		holder := byID[string(v)]
-		closer.Close()
-		keep := false
-		if holder != nil && strings.EqualFold(strings.TrimSpace(holder.Email), addr) {
-			if keep, err = p.emailProvenFor(holder, addr, nil); err != nil {
-				return res, err
-			}
-		}
-		if keep {
-			res.Kept++
-			continue
-		}
-		if err := b.Delete([]byte(userEmailIndexPrefix+addr), nil); err != nil {
-			return res, err
-		}
-		res.Dropped++
-	}
-
-	for addr := range curSet {
-		if oldSet[addr] {
-			continue
-		}
-		if len(badKeys) > 0 {
-			authLog.Warn("verified-email index: an operator-listed address was not applied: %d user row(s) unreadable", len(badKeys))
-			res.Conflict++
-			continue
-		}
-		// The same rules as the full rebuild: the list proves the address for
-		// its one active, not-self-set holder; any other holder with proof of
-		// its own, or a key already naming someone else, is a conflict.
-		var holders []*User
-		for i := range users {
-			if strings.EqualFold(strings.TrimSpace(users[i].Email), addr) {
-				holders = append(holders, &users[i])
-			}
-		}
-		var eligible []*User
-		for _, h := range holders {
-			ok, err := p.emailProvenFor(h, addr, curSet)
-			if err != nil {
-				return res, err
-			}
-			if ok {
-				eligible = append(eligible, h)
-			}
-		}
-		if len(eligible) == 0 {
-			continue
-		}
-		conflict := len(eligible) > 1
-		chosen := eligible[0]
-		for _, h := range holders {
-			if conflict || h.ID == chosen.ID {
-				continue
-			}
-			ok, err := p.emailProvenFor(h, addr, nil)
-			if err != nil {
-				return res, err
-			}
-			conflict = ok
-		}
-		if !conflict {
-			if v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + addr)); err == nil {
-				conflict = string(v) != chosen.ID
-				closer.Close()
-				if !conflict {
-					res.Kept++
-					continue
-				}
-			} else if err != pebble.ErrNotFound {
-				return res, err
-			}
-		}
-		if conflict {
-			authLog.Warn("verified-email index: an operator-listed address has more than one proven holder, or is already verified for another account; left as it was")
-			res.Conflict++
-			continue
-		}
-		if err := b.Set([]byte(userEmailIndexPrefix+addr), []byte(chosen.ID), nil); err != nil {
-			return res, err
-		}
-		res.Added++
-	}
-	if err := b.Set([]byte(verifiedEmailIndexKey), []byte(strings.Join(current, "\n")), nil); err != nil {
-		return res, err
-	}
-	if err := b.Commit(pebble.Sync); err != nil {
-		return res, err
-	}
-	authLog.Info("verified-email index: operator list changed: %d added, %d dropped, %d kept, %d conflicted",
-		res.Added, res.Dropped, res.Kept, res.Conflict)
-	return res, nil
-}
-
-// emailProvenFor reports whether the store holds a record proving lower is
-// u's address: an invite grant naming u, a linked OAuth identity of u
-// recorded with that email, or lower being on operator (the operator's
-// trusted list) while u is active and did not type the address in
-// themselves (EmailSource is not "self"). A row written before EmailSource
-// existed ("") is accepted for the operator list: before this build no
-// self-service path wrote the verified-email index, so the operator listing
-// an address a legacy account holds is the operator vouching for that
-// account. Each such acceptance is logged with the user id. operator may be
-// nil. It does not check for other holders; callers treat two proven holders
-// as a conflict.
-func (p *PebbleStore) emailProvenFor(u *User, lower string, operator map[string]bool) (bool, error) {
-	if operator[lower] && u.Status == "active" && u.EmailSource != EmailSourceSelf {
-		if u.EmailSource == "" {
-			authLog.Info("verified-email: operator list accepted for a legacy account with no email source (user %s)", u.ID)
-		}
+	if trustedEmailSource(u.EmailSource) {
 		return true, nil
 	}
 	g, err := p.GetInviteEmailGrant(lower)
@@ -394,18 +70,314 @@ func (p *PebbleStore) emailProvenFor(u *User, lower string, operator map[string]
 	return false, nil
 }
 
-// RerunVerifiedEmailBackfillForTest runs the full rebuild with the given
-// operator list, as the first start of an upgraded store would, whatever the
-// sentinel says. Tests in other packages use it; an in-memory store cannot be
-// reopened.
-func (p *PebbleStore) RerunVerifiedEmailBackfillForTest(operator []string) (VerifiedEmailBackfillResult, error) {
+// verifiedHolderLocked returns the one user whose current email is lower and
+// proven (emailProvenFor), or nil when there is none or more than one (a
+// conflict, logged without the address). Undecodable user rows are skipped:
+// proof is per account, so an unreadable row cannot make another account's
+// proof false, and it cannot be returned to a caller either. Caller holds
+// inviteMu.
+func (p *PebbleStore) verifiedHolderLocked(lower string) (*User, error) {
+	users, badKeys, err := p.listUsers()
+	if err != nil {
+		return nil, err
+	}
+	if len(badKeys) > 0 {
+		authLog.Warn("verified-email lookup: %d user row(s) unreadable and skipped", len(badKeys))
+	}
+	var found *User
+	for i := range users {
+		u := &users[i]
+		ok, err := p.emailProvenFor(u, lower)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if found != nil {
+			authLog.Warn("verified-email lookup: an address is proven for more than one user (%s, %s); left unverified for both", found.ID, u.ID)
+			return nil, nil
+		}
+		found = u
+	}
+	return found, nil
+}
+
+// syncVerifiedEmailKeyLocked makes the cache key for lower name holder (nil:
+// no key). Caller holds inviteMu.
+func (p *PebbleStore) syncVerifiedEmailKeyLocked(lower string, holder *User) error {
+	key := []byte(userEmailIndexPrefix + lower)
+	v, closer, err := p.db.Get(key)
+	switch {
+	case err == pebble.ErrNotFound:
+		if holder == nil {
+			return nil
+		}
+		return p.db.Set(key, []byte(holder.ID), pebble.Sync)
+	case err != nil:
+		return err
+	}
+	current := string(v)
+	closer.Close()
+	if holder != nil && current == holder.ID {
+		return nil
+	}
+	if holder == nil {
+		return p.db.Delete(key, pebble.Sync)
+	}
+	return p.db.Set(key, []byte(holder.ID), pebble.Sync)
+}
+
+// ReconcileResult counts what ReconcileVerifiedEmails changed.
+type ReconcileResult struct {
+	// Stamped counts rows that had an email and no EmailSource, by the
+	// source they were given.
+	Stamped map[string]int
+	// StampedSelfAdmins lists admin-role accounts stamped "self": after this,
+	// an SSO login with that address takes it from them.
+	StampedSelfAdmins              []string
+	Kept, Added, Dropped, Conflict int // cache keys
+}
+
+// ReconcileVerifiedEmails runs at every store open: it stamps rows that have
+// an email and no EmailSource, then rewrites every idx:user:email key from
+// emailProvenFor. Both steps are idempotent, so there is no sentinel: a row
+// rewritten by a rollback build (which drops the unknown email_source field)
+// is stamped again at the next open, and a cache key a rollback build left
+// is corrected.
+//
+// Stamping (stampEmailSource) reads the keys the previous build wrote, so it
+// runs before the cache is rewritten, under the same locks (inviteMu, then
+// userWriteMu).
+func (p *PebbleStore) ReconcileVerifiedEmails() (ReconcileResult, error) {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
-	list := normalizeOperatorEmails(operator)
-	res, err := p.rebuildVerifiedEmailIndexLocked(list)
-	if err == nil {
-		canon := strings.Join(list, "\n")
-		p.operatorApplied.Store(&canon)
+	userWriteMu.Lock()
+	defer userWriteMu.Unlock()
+	res := ReconcileResult{Stamped: map[string]int{}}
+	if err := p.stampLegacyEmailSourcesLocked(&res); err != nil {
+		return res, err
 	}
-	return res, err
+	if err := p.rewriteVerifiedEmailCacheLocked(&res); err != nil {
+		return res, err
+	}
+	if n := len(res.Stamped); n > 0 {
+		authLog.Info("verified email: stamped email sources on rows from an older build: %v", res.Stamped)
+	}
+	if len(res.StampedSelfAdmins) > 0 {
+		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves; an SSO login with that address will take it from them. An admin can set it for them to keep it", res.StampedSelfAdmins)
+	}
+	authLog.Info("verified-email cache reconciled: %d kept, %d added, %d dropped, %d conflicted",
+		res.Kept, res.Added, res.Dropped, res.Conflict)
+	return res, nil
+}
+
+// stampLegacyEmailSourcesLocked gives every decodable row that has an email
+// and no EmailSource the source its history shows (stampEmailSource), in one
+// batch. Caller holds inviteMu and userWriteMu.
+func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error {
+	users, _, err := p.listUsers()
+	if err != nil {
+		return err
+	}
+	var legacy []*User
+	for i := range users {
+		if users[i].EmailSource == "" && strings.TrimSpace(users[i].Email) != "" {
+			legacy = append(legacy, &users[i])
+		}
+	}
+	if len(legacy) == 0 {
+		return nil
+	}
+	invites, err := p.listInviteRows()
+	if err != nil {
+		return err
+	}
+	b := p.db.NewBatch()
+	defer b.Close()
+	for _, u := range legacy {
+		source, err := p.stampEmailSource(u, invites)
+		if err != nil {
+			return err
+		}
+		u.EmailSource = source
+		data, err := json.Marshal(u)
+		if err != nil {
+			return err
+		}
+		if err := b.Set([]byte("u:"+u.ID), data, nil); err != nil {
+			return err
+		}
+		res.Stamped[source]++
+		if source == EmailSourceSelf && hasRole(u, inviteAdminRole) {
+			res.StampedSelfAdmins = append(res.StampedSelfAdmins, u.ID)
+		}
+	}
+	return b.Commit(pebble.Sync)
+}
+
+// stampEmailSource decides a legacy row's EmailSource from what older builds
+// left behind, first match wins:
+//  1. a linked identity of the user recorded with the address: an identity
+//     provider verified it, so "idp";
+//  2. a used invite that created this account (AcceptedUserID, or on rows
+//     from before that field the same username and email): "invite" if that
+//     accept bound a delivered address (EmailBinding "bound"), otherwise
+//     "invite_link" -- older builds bound whatever address the invite named,
+//     though the link may have been copied and forwarded, which proves
+//     nothing about the inbox;
+//  3. the idx:user:email key for the address names this user: before this
+//     feature only CreateUser (setup, bootstrap, the system user) and
+//     ConsumeInvite (handled by 2) wrote it, and a profile change never did,
+//     so "setup". Older builds lowercased the address without trimming it, so
+//     both spellings are checked;
+//  4. anything else was typed in through the profile: "self".
+func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error) {
+	lower := strings.ToLower(strings.TrimSpace(u.Email))
+	ids, err := p.GetOAuthIdentitiesForUser(u.ID)
+	if err != nil {
+		return "", err
+	}
+	for _, id := range ids {
+		if strings.EqualFold(strings.TrimSpace(id.Email), lower) {
+			return EmailSourceIdP, nil
+		}
+	}
+	for i := range invites {
+		inv := &invites[i]
+		if inv.UsedAt == nil || !strings.EqualFold(strings.TrimSpace(inv.Email), lower) {
+			continue
+		}
+		created := inv.AcceptedUserID == u.ID ||
+			(inv.AcceptedUserID == "" && strings.EqualFold(inv.Username, u.Username))
+		if !created {
+			continue
+		}
+		if inv.EmailBinding == InviteEmailBound {
+			return EmailSourceInvite, nil
+		}
+		return EmailSourceInviteLink, nil
+	}
+	for _, spelling := range []string{lower, strings.ToLower(u.Email)} {
+		v, closer, err := p.db.Get([]byte(userEmailIndexPrefix + spelling))
+		if err == pebble.ErrNotFound {
+			continue
+		} else if err != nil {
+			return "", err
+		}
+		pointsHere := string(v) == u.ID
+		closer.Close()
+		if pointsHere {
+			return EmailSourceSetup, nil
+		}
+	}
+	return EmailSourceSelf, nil
+}
+
+// rewriteVerifiedEmailCacheLocked rewrites every idx:user:email key from
+// emailProvenFor: one key per address proven for exactly one user, none for
+// an address proven for two (logged without the address). A key naming an
+// undecodable user row is left alone: nothing can be decided about that
+// account until its row is readable. Caller holds inviteMu.
+func (p *PebbleStore) rewriteVerifiedEmailCacheLocked(res *ReconcileResult) error {
+	users, badKeys, err := p.listUsers()
+	if err != nil {
+		return err
+	}
+	undecodable := make(map[string]bool, len(badKeys))
+	for _, k := range badKeys {
+		undecodable[strings.TrimPrefix(k, "u:")] = true
+	}
+	desired := map[string]string{}
+	conflicted := map[string]bool{}
+	for i := range users {
+		u := &users[i]
+		lower := strings.ToLower(strings.TrimSpace(u.Email))
+		if lower == "" {
+			continue
+		}
+		ok, err := p.emailProvenFor(u, lower)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if other, dup := desired[lower]; dup && other != u.ID {
+			conflicted[lower] = true
+			continue
+		}
+		desired[lower] = u.ID
+	}
+	for lower := range conflicted {
+		delete(desired, lower)
+		res.Conflict++
+		authLog.Warn("verified-email cache: an address is proven for more than one user; left unverified for all of them")
+	}
+
+	b := p.db.NewBatch()
+	defer b.Close()
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(userEmailIndexPrefix),
+		UpperBound: []byte(userEmailIndexPrefix + "\xff"),
+	})
+	if err != nil {
+		return err
+	}
+	for iter.First(); iter.Valid(); iter.Next() {
+		lower := strings.TrimPrefix(string(iter.Key()), userEmailIndexPrefix)
+		id := string(iter.Value())
+		if want, ok := desired[lower]; ok && want == id {
+			res.Kept++
+			delete(desired, lower)
+			continue
+		}
+		if undecodable[id] && !conflicted[lower] {
+			continue
+		}
+		if err := b.Delete(append([]byte(nil), iter.Key()...), nil); err != nil {
+			iter.Close()
+			return err
+		}
+		res.Dropped++
+	}
+	if err := iter.Close(); err != nil {
+		return err
+	}
+	for lower, id := range desired {
+		if err := b.Set([]byte(userEmailIndexPrefix+lower), []byte(id), nil); err != nil {
+			return err
+		}
+		res.Added++
+	}
+	return b.Commit(pebble.Sync)
+}
+
+// listInviteRows returns every decodable invite row (used or not).
+func (p *PebbleStore) listInviteRows() ([]Invite, error) {
+	prefix := []byte("invite:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	var out []Invite
+	for iter.First(); iter.Valid(); iter.Next() {
+		var inv Invite
+		if err := json.Unmarshal(iter.Value(), &inv); err != nil {
+			authLog.Warn("verified email: skipping an undecodable invite row")
+			continue
+		}
+		out = append(out, inv)
+	}
+	return out, iter.Error()
+}
+
+func hasRole(u *User, role string) bool {
+	for _, r := range u.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
 }

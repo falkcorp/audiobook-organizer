@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 1.4.0
+// version: 2.0.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-19
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -134,151 +135,276 @@ func setRawUserEmail(t *testing.T, s *PebbleStore, u *User, email string) {
 	}
 }
 
-// The open-time rebuild keeps only addresses with provenance (an invite grant
-// or a linked identity recorded with that email) and drops every other key,
-// including ones that merely match the user's current email.
-func TestBackfillVerifiedEmailIndex(t *testing.T) {
-	s := newInviteTestStore(t)
-	admin := mustUser(t, s, "admin1", "admin", "active") // key from CreateUser, no provenance
-	mover := mustUser(t, s, "mover", "viewer", "active")
-	setRawUserEmail(t, s, mover, "mover.now@example.com") // stale key for its old address
-	linked := mustUser(t, s, "linked", "viewer", "active")
-	setRawUserEmail(t, s, linked, "linked@example.com")
-	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "sub-linked", Email: "Linked@example.com", UserID: linked.ID}); err != nil {
-		t.Fatal(err)
+// keyFor returns the user id the idx:user:email cache key names, or "".
+func keyFor(t *testing.T, s *PebbleStore, lower string) string {
+	t.Helper()
+	v, closer, err := s.db.Get([]byte(userEmailIndexPrefix + lower))
+	if err == pebble.ErrNotFound {
+		return ""
 	}
-	deliveredInvite(t, s, admin.ID, "tok-prov", "invitee", "invitee@example.com")
-	invitee, err := s.ConsumeInvite("tok-prov", "bcrypt", "h")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A squatter whose key matches its current email (as a pre-fix build
-	// could leave it) but with no provenance.
+	defer closer.Close()
+	return string(v)
+}
+
+// putUsedInvite writes a used invite row the way an older build left it.
+func putUsedInvite(t *testing.T, s *PebbleStore, inv Invite) {
+	t.Helper()
+	now := time.Now()
+	inv.UsedAt = &now
+	data, _ := json.Marshal(inv)
+	if err := s.db.Set([]byte("invite:"+inv.Token), data, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// B1: rows an older build wrote have no EmailSource. Reconcile stamps each
+// from its history, and only the trusted stamps are verified. A viewer who
+// typed a listed address into their profile before deploy is "self" and is
+// never verified for it, whatever the operator lists.
+func TestReconcileVerifiedEmails_StampsLegacyRows(t *testing.T) {
+	s := newInviteTestStore(t)
+	// Created by CreateUser on an older build: key names it.
+	setup := mustUser(t, s, "setup", "admin", "active")
+	setRawUserEmailSource(t, s, setup, setup.Email, "")
+	// Typed into the profile on an older build: no key for it.
 	squatter := mustUser(t, s, "squatter", "viewer", "active")
-	setRawUserEmail(t, s, squatter, "someone@example.com")
+	setRawUserEmailSource(t, s, squatter, "owner.real@example.com", "")
+	// An admin who changed their own email through the profile.
+	selfAdmin := mustUser(t, s, "selfadmin", "admin", "active")
+	setRawUserEmailSource(t, s, selfAdmin, "boss.new@example.com", "")
+	// Accepted from a copied invite link on an older build, which wrote the
+	// key for whatever address the invite named.
+	linkGuest := mustUser(t, s, "linkguest", "viewer", "active")
+	setRawUserEmailSource(t, s, linkGuest, "linkguest@example.com", "")
+	if err := s.db.Set([]byte(userEmailIndexPrefix+"linkguest@example.com"), []byte(linkGuest.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	putUsedInvite(t, s, Invite{Token: "old-link", Username: "LinkGuest", Email: "linkguest@example.com", RoleID: "viewer"})
+	// Accepted from a delivered invite, then rewritten by a rollback build.
+	bound := mustUser(t, s, "bound", "viewer", "active")
+	setRawUserEmailSource(t, s, bound, "bound@example.com", "")
+	putUsedInvite(t, s, Invite{Token: "bound-tok", Username: "bound", Email: "bound@example.com", RoleID: "viewer", AcceptedUserID: bound.ID, EmailBinding: InviteEmailBound})
+	// Linked to an identity provider with this address.
+	linked := mustUser(t, s, "linked", "viewer", "active")
+	setRawUserEmailSource(t, s, linked, "linked@example.com", "")
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "g-linked", Email: "Linked@example.com", UserID: linked.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// An older build lowercased the address without trimming it.
+	padded := mustUser(t, s, "padded", "viewer", "active")
+	setRawUserEmailSource(t, s, padded, " Padded@example.com", "")
+	if err := s.db.Set([]byte(userEmailIndexPrefix+" padded@example.com"), []byte(padded.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.ReconcileVerifiedEmails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		setup.ID: EmailSourceSetup, squatter.ID: EmailSourceSelf, selfAdmin.ID: EmailSourceSelf,
+		linkGuest.ID: EmailSourceInviteLink, bound.ID: EmailSourceInvite, linked.ID: EmailSourceIdP,
+		padded.ID: EmailSourceSetup,
+	}
+	for id, src := range want {
+		if got, _ := s.GetUserByID(id); got.EmailSource != src {
+			t.Errorf("user %s (%s): source %q, want %q", got.Username, id, got.EmailSource, src)
+		}
+	}
+	if len(res.StampedSelfAdmins) != 1 || res.StampedSelfAdmins[0] != selfAdmin.ID {
+		t.Fatalf("StampedSelfAdmins = %v, want the self-set admin", res.StampedSelfAdmins)
+	}
+	for addr, id := range map[string]string{
+		setup.Email: setup.ID, "bound@example.com": bound.ID, "linked@example.com": linked.ID, "padded@example.com": padded.ID,
+	} {
+		if u, _ := s.GetUserByVerifiedEmail(addr); u == nil || u.ID != id {
+			t.Errorf("%s must be verified for %s: %+v", addr, id, u)
+		}
+	}
+	for _, addr := range []string{"owner.real@example.com", "boss.new@example.com", "linkguest@example.com"} {
+		if u, _ := s.GetUserByVerifiedEmail(addr); u != nil {
+			t.Errorf("%s must not be verified: %+v", addr, u)
+		}
+		if id := keyFor(t, s, addr); id != "" {
+			t.Errorf("%s must have no cache key (a rollback build would trust it), names %s", addr, id)
+		}
+	}
+	// The squatter is displaced by the real owner's verified login.
+	if _, displaced, err := s.CreateUserDisplacingUnverifiedEmail("owner.real", "owner.real@example.com", "oauth", "", []string{"viewer"}, "active"); err != nil || len(displaced) != 1 || displaced[0] != squatter.ID {
+		t.Fatalf("displacement = %v, %v; want the squatter", displaced, err)
+	}
+
+	// Idempotent: a second run stamps nothing.
+	res, err = s.ReconcileVerifiedEmails()
+	if err != nil || len(res.Stamped) != 0 {
+		t.Fatalf("second run = %+v, %v; want nothing stamped", res, err)
+	}
+	// A rollback build rewrites a row without the field; the next open
+	// stamps it again from the cache key that build left alone.
+	setRawUserEmailSource(t, s, setup, setup.Email, "")
+	if _, err := s.ReconcileVerifiedEmails(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetUserByID(setup.ID); got.EmailSource != EmailSourceSetup {
+		t.Fatalf("restamped source = %q, want setup", got.EmailSource)
+	}
+}
+
+// Reconcile rewrites the cache from live provenance: stale and squatted keys
+// go, missing ones come back, a key naming an unreadable row stays, and an
+// address proven for two accounts gets none.
+func TestReconcileVerifiedEmails_RewritesTheCache(t *testing.T) {
+	s := newInviteTestStore(t)
+	proven := mustUser(t, s, "proven", "viewer", "active")
+	if err := s.db.Delete([]byte(userEmailIndexPrefix+proven.Email), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	squatter := mustUser(t, s, "squatter", "viewer", "active")
+	squatter.Email = "someone@example.com"
+	if err := s.UpdateUser(squatter); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.db.Set([]byte(userEmailIndexPrefix+"someone@example.com"), []byte(squatter.ID), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-
-	res, err := s.RerunVerifiedEmailBackfillForTest(nil)
-	if err != nil {
+	if err := s.db.Set([]byte("u:01UNREADABLEROW"), []byte("{not json"), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-	// Dropped: admin1@, mover@ (stale), linked@admins (stale), squatter@admins
-	// (stale), someone@ (no provenance). Kept: invitee@. Added: linked@.
-	if res.Dropped != 5 || res.Kept != 1 || res.Added != 1 || res.Conflict != 0 {
-		t.Fatalf("result = %+v, want 5 dropped, 1 kept, 1 added", res)
-	}
-	for _, addr := range []string{"admin1@admins.example.com", "someone@example.com", "mover.now@example.com"} {
-		if u, _ := s.GetUserByVerifiedEmail(addr); u != nil {
-			t.Fatalf("%s has no provenance and must not be verified: %+v", addr, u)
-		}
-	}
-	if u, _ := s.GetUserByVerifiedEmail("linked@example.com"); u == nil || u.ID != linked.ID {
-		t.Fatalf("an identity-proven email must be verified: %+v", u)
-	}
-	if u, _ := s.GetUserByVerifiedEmail("invitee@example.com"); u == nil || u.ID != invitee.ID {
-		t.Fatalf("an invite-proven email must stay verified: %+v", u)
-	}
-	if id, _ := s.GetOAuthIdentityByProviderSubject("google", "sub-linked"); id == nil || id.UserID != linked.ID {
-		t.Fatal("linked identities must be untouched")
-	}
-	// Once applied, an unchanged (empty) operator list changes nothing.
-	s.SetOperatorTrustedEmails(func() []string { return nil })
-	if err := s.EnsureVerifiedEmailIndex(); err != nil {
+	if err := s.db.Set([]byte(userEmailIndexPrefix+"broken@example.com"), []byte("01UNREADABLEROW"), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-	if u, _ := s.GetUserByVerifiedEmail("invitee@example.com"); u == nil || u.ID != invitee.ID {
-		t.Fatal("an unchanged list must not touch the index")
-	}
-}
-
-// The operator's trusted list (owner email, OAUTH_ALLOWED_EMAILS) proves an
-// address for its one active holder; removing an address withdraws that
-// proof before the next lookup; adding it back restores it.
-func TestVerifiedEmailIndex_OperatorList(t *testing.T) {
-	s := newInviteTestStore(t)
-	admin := mustUser(t, s, "admin1", "admin", "active")
-	listed := mustUser(t, s, "listed", "viewer", "active")
-	setRawUserEmailSource(t, s, listed, "listed@example.com", "") // legacy row
-	selfSet := mustUser(t, s, "selfset", "viewer", "active")
-	selfSet.Email = "Squatted@example.com" // typed in through self-service
-	if err := s.UpdateUser(selfSet); err != nil {
-		t.Fatal(err)
-	}
-	list := []string{"ADMIN1@admins.example.com", " listed@example.com ", "squatted@example.com"}
-	s.SetOperatorTrustedEmails(func() []string { return list })
-	if err := s.EnsureVerifiedEmailIndex(); err != nil { // first run: full rebuild
-		t.Fatal(err)
-	}
-	if u, _ := s.GetUserByVerifiedEmail("admin1@admins.example.com"); u == nil || u.ID != admin.ID {
-		t.Fatalf("the owner-listed admin must be verified: %+v", u)
-	}
-	if u, _ := s.GetUserByVerifiedEmail("listed@example.com"); u == nil || u.ID != listed.ID {
-		t.Fatalf("an allow-listed legacy holder must be verified: %+v", u)
-	}
-	if u, _ := s.GetUserByVerifiedEmail("squatted@example.com"); u != nil {
-		t.Fatalf("the list must not vouch for an address its holder typed in: %+v", u)
-	}
-
-	list = []string{"admin1@admins.example.com", "squatted@example.com"} // the operator removes listed@
-	if u, err := s.GetUserByVerifiedEmail("listed@example.com"); err != nil || u != nil {
-		t.Fatalf("a removed address must stop resolving at once: %+v, %v", u, err)
-	}
-	if _, closer, err := s.db.Get([]byte(userEmailIndexPrefix + "listed@example.com")); err == nil {
-		closer.Close()
-		t.Fatal("the key must be deleted, so a rollback build does not trust it")
-	}
-	list = append(list, "listed@example.com") // and adds it back
-	if u, _ := s.GetUserByVerifiedEmail("listed@example.com"); u == nil || u.ID != listed.ID {
-		t.Fatalf("a re-added address must resolve again: %+v", u)
-	}
-
-	// An inactive holder is not proven by the list.
-	gone := mustUser(t, s, "gone", "viewer", "inactive")
-	setRawUserEmail(t, s, gone, "gone@example.com")
-	list = append(list, "gone@example.com")
-	if u, _ := s.GetUserByVerifiedEmail("gone@example.com"); u != nil {
-		t.Fatalf("an inactive holder must not be verified by the list: %+v", u)
-	}
-}
-
-// Two holders of one operator-listed address: a conflict, so no key, in both
-// the full rebuild and the re-apply after a list change; and the displacement
-// gate refuses.
-func TestVerifiedEmailIndex_OperatorListedDuplicateIsAConflict(t *testing.T) {
-	s := newInviteTestStore(t)
 	a := mustUser(t, s, "twin-a", "viewer", "active")
 	b := mustUser(t, s, "twin-b", "viewer", "active")
-	setRawUserEmail(t, s, a, "shared@example.com") // legacy duplicate, as a pre-fix UpdateUser allowed
-	setRawUserEmail(t, s, b, "shared@example.com")
-	res, err := s.RerunVerifiedEmailBackfillForTest([]string{"shared@example.com"})
+	setRawUserEmailSource(t, s, a, "shared@example.com", EmailSourceSetup)
+	setRawUserEmailSource(t, s, b, "shared@example.com", EmailSourceSetup)
+
+	res, err := s.ReconcileVerifiedEmails()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Conflict != 1 {
 		t.Fatalf("result = %+v, want 1 conflict", res)
 	}
+	if keyFor(t, s, proven.Email) != proven.ID {
+		t.Fatal("a proven address's missing key must be written")
+	}
+	if keyFor(t, s, "someone@example.com") != "" {
+		t.Fatal("a squatted key must be dropped")
+	}
+	if keyFor(t, s, "broken@example.com") != "01UNREADABLEROW" {
+		t.Fatal("a key naming an unreadable row is left alone")
+	}
+	if keyFor(t, s, "shared@example.com") != "" {
+		t.Fatal("an address proven for two accounts gets no key")
+	}
 	if u, _ := s.GetUserByVerifiedEmail("shared@example.com"); u != nil {
 		t.Fatalf("a conflicted address must not be verified: %+v", u)
 	}
+}
 
-	s2 := newInviteTestStore(t)
-	c := mustUser(t, s2, "twin-c", "viewer", "active")
-	d := mustUser(t, s2, "twin-d", "viewer", "active")
-	setRawUserEmail(t, s2, c, "dup@example.com")
-	setRawUserEmail(t, s2, d, "dup@example.com")
-	list := []string{}
-	s2.SetOperatorTrustedEmails(func() []string { return list })
-	if err := s2.EnsureVerifiedEmailIndex(); err != nil {
+// The lookup is computed live and repairs the cache key it disagrees with;
+// an unreadable row does not block it.
+func TestGetUserByVerifiedEmail_LiveAndRepairsTheCache(t *testing.T) {
+	s := newInviteTestStore(t)
+	admin := mustUser(t, s, "admin1", "admin", "active")
+	if err := s.db.Delete([]byte(userEmailIndexPrefix+admin.Email), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-	list = []string{"dup@example.com"}
-	if u, err := s2.GetUserByVerifiedEmail("dup@example.com"); err != nil || u != nil {
-		t.Fatalf("a newly listed address with two holders must stay unverified: %+v, %v", u, err)
+	if err := s.db.Set([]byte("u:01UNREADABLEROW"), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
 	}
-	if _, _, err := s2.CreateUserDisplacingUnverifiedEmail("newcomer", "dup@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
-		t.Fatalf("displacing operator-listed holders = %v, want ErrUserEmailTaken", err)
+	if u, err := s.GetUserByVerifiedEmail(admin.Email); err != nil || u == nil || u.ID != admin.ID {
+		t.Fatalf("lookup = %+v, %v; want the admin, computed without the key", u, err)
+	}
+	if keyFor(t, s, admin.Email) != admin.ID {
+		t.Fatal("the lookup must write the missing key back")
+	}
+	squatter := mustUser(t, s, "squatter", "viewer", "active")
+	squatter.Email = "planted@example.com"
+	if err := s.UpdateUser(squatter); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set([]byte(userEmailIndexPrefix+"planted@example.com"), []byte(squatter.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.GetUserByVerifiedEmail("planted@example.com"); u != nil {
+		t.Fatalf("a planted key must not verify a self-set address: %+v", u)
+	}
+	if keyFor(t, s, "planted@example.com") != "" {
+		t.Fatal("the lookup must delete a key that names an unproven holder")
+	}
+	// Status does not decide proof, so nothing sticks on reactivation.
+	if _, err := s.SetUserStatus(admin.ID, "locked"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetUserStatus(admin.ID, "active"); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.GetUserByVerifiedEmail(admin.Email); u == nil || u.ID != admin.ID {
+		t.Fatalf("after deactivate and reactivate: %+v", u)
+	}
+}
+
+// S4: a repeat login whose address is already IdP-verified takes no lock.
+func TestMarkUserEmailVerified_FastPathTakesNoLock(t *testing.T) {
+	s := newInviteTestStore(t)
+	u := mustUser(t, s, "repeat", "viewer", "active")
+	if ok, err := s.MarkUserEmailVerified(u.ID, u.Email); err != nil || !ok {
+		t.Fatalf("first mark = %v, %v", ok, err)
+	}
+	s.inviteMu.Lock()
+	done := make(chan bool, 1)
+	go func() {
+		ok, _ := s.MarkUserEmailVerified(u.ID, u.Email)
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		s.inviteMu.Unlock()
+		if ok {
+			t.Fatal("a repeat mark must report nothing written")
+		}
+	case <-time.After(2 * time.Second):
+		s.inviteMu.Unlock()
+		t.Fatal("a repeat mark of an IdP-verified address waited for inviteMu")
+	}
+}
+
+// The admin action sets a verified address (source admin) and moves the key;
+// clearing removes both; another account's address is refused.
+func TestSetUserEmailAsAdmin(t *testing.T) {
+	s := newInviteTestStore(t)
+	u := mustUser(t, s, "member", "viewer", "active")
+	old := u.Email
+	other := mustUser(t, s, "other", "viewer", "active")
+	prev, err := s.SetUserEmailAsAdmin(u.ID, " Member.New@example.com ")
+	if err != nil || prev != old {
+		t.Fatalf("SetUserEmailAsAdmin = %q, %v", prev, err)
+	}
+	got, _ := s.GetUserByID(u.ID)
+	if got.Email != "Member.New@example.com" || got.EmailSource != EmailSourceAdmin {
+		t.Fatalf("row = %q / %q, want the trimmed address with source admin", got.Email, got.EmailSource)
+	}
+	if keyFor(t, s, "member.new@example.com") != u.ID || keyFor(t, s, old) != "" {
+		t.Fatal("the key must move from the old address to the new one")
+	}
+	if v, _ := s.GetUserByVerifiedEmail("member.new@example.com"); v == nil || v.ID != u.ID {
+		t.Fatalf("an admin-set address is verified: %+v", v)
+	}
+	if _, err := s.SetUserEmailAsAdmin(u.ID, other.Email); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("another account's address = %v, want ErrUserEmailTaken", err)
+	}
+	if _, err := s.SetUserEmailAsAdmin(u.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetUserByID(u.ID); got.Email != "" || got.EmailSource != "" || keyFor(t, s, "member.new@example.com") != "" {
+		t.Fatalf("clearing must remove the address, source and key: %+v", got)
+	}
+	if _, err := s.SetUserEmailAsAdmin("01NOSUCHUSER", "x@example.com"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("unknown id = %v, want ErrUserNotFound", err)
 	}
 }
 
@@ -316,8 +442,8 @@ func TestCreateUserDisplacingUnverifiedEmail(t *testing.T) {
 	}
 }
 
-// A holder with provenance is never displaced, even without a verified key:
-// a linked identity, the operator list or an invite grant each refuse.
+// A holder with provenance is never displaced, even without a cache key: a
+// linked identity, a trusted EmailSource or an invite grant each refuse.
 func TestCreateUserDisplacingUnverifiedEmail_RefusesAProvenHolder(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -328,9 +454,8 @@ func TestCreateUserDisplacingUnverifiedEmail_RefusesAProvenHolder(t *testing.T) 
 				t.Fatal(err)
 			}
 		}},
-		{"operator list, holder not self-set", func(t *testing.T, s *PebbleStore, holder *User) {
+		{"trusted source (setup)", func(t *testing.T, s *PebbleStore, holder *User) {
 			setRawUserEmailSource(t, s, holder, "shared@example.com", EmailSourceSetup)
-			s.SetOperatorTrustedEmails(func() []string { return []string{"shared@example.com"} })
 		}},
 		{"invite grant", func(t *testing.T, s *PebbleStore, holder *User) {
 			g, _ := json.Marshal(InviteEmailGrant{UserID: holder.ID, InviteToken: "tok"})
@@ -361,19 +486,18 @@ func TestCreateUserDisplacingUnverifiedEmail_RefusesAProvenHolder(t *testing.T) 
 	}
 }
 
-// A self-set holder of an operator-listed address is not proven by the list,
-// so the real owner's IdP login displaces it.
-func TestCreateUserDisplacingUnverifiedEmail_SelfSetListedHolderIsDisplaced(t *testing.T) {
+// A self-set holder is displaced by the real owner's IdP login, and the
+// sources move with the address.
+func TestCreateUserDisplacingUnverifiedEmail_SourcesMoveWithTheAddress(t *testing.T) {
 	s := newInviteTestStore(t)
 	squatter := mustUser(t, s, "squatter", "viewer", "active")
 	squatter.Email = "guest@example.com" // typed in before the real guest registered
 	if err := s.UpdateUser(squatter); err != nil {
 		t.Fatal(err)
 	}
-	s.SetOperatorTrustedEmails(func() []string { return []string{"guest@example.com"} })
 	u, displaced, err := s.CreateUserDisplacingUnverifiedEmail("guest@example.com", "guest@example.com", "oauth", "", []string{"viewer"}, "active")
 	if err != nil {
-		t.Fatalf("a self-set listed holder must not block: %v", err)
+		t.Fatalf("a self-set holder must not block: %v", err)
 	}
 	if len(displaced) != 1 || displaced[0] != squatter.ID {
 		t.Fatalf("displaced = %v", displaced)
@@ -435,58 +559,6 @@ func TestEmailSource_SetOnEveryWritePath(t *testing.T) {
 	if got, _ := s.GetUserByID(inv.ID); got.EmailSource != "" {
 		t.Fatalf("cleared email source = %q, want empty", got.EmailSource)
 	}
-}
-
-// Re-apply after a list change follows the rebuild: another holder with proof
-// of its own, or a key already naming someone else, is a conflict and nothing
-// is written.
-func TestVerifiedEmailIndex_ReapplyConflicts(t *testing.T) {
-	s := newInviteTestStore(t)
-	active := mustUser(t, s, "active", "viewer", "active")
-	setRawUserEmailSource(t, s, active, "both@example.com", "")
-	inactive := mustUser(t, s, "inactive", "viewer", "inactive")
-	setRawUserEmail(t, s, inactive, "both@example.com")
-	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "g-inactive", Email: "both@example.com", UserID: inactive.ID}); err != nil {
-		t.Fatal(err)
-	}
-	keyed := mustUser(t, s, "keyed", "viewer", "active")
-	other := mustUser(t, s, "other", "viewer", "active")
-	setRawUserEmailSource(t, s, keyed, "keyed@example.com", "")
-	if err := s.db.Set([]byte(userEmailIndexPrefix+"keyed@example.com"), []byte(other.ID), pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-
-	list := []string{}
-	s.SetOperatorTrustedEmails(func() []string { return list })
-	if _, err := s.RerunVerifiedEmailBackfillForTest(nil); err != nil {
-		t.Fatal(err)
-	}
-	// The rebuild dropped the misdirected key and gave both@ to the inactive
-	// holder (its linked identity is proof). Put the first back and remove the
-	// second so the re-apply path's own rules are what get tested.
-	if err := s.db.Set([]byte(userEmailIndexPrefix+"keyed@example.com"), []byte(other.ID), pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.db.Delete([]byte(userEmailIndexPrefix+"both@example.com"), pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	list = []string{"both@example.com", "keyed@example.com"}
-	if err := s.EnsureVerifiedEmailIndex(); err != nil {
-		t.Fatal(err)
-	}
-	if v, closer, err := s.db.Get([]byte(userEmailIndexPrefix + "both@example.com")); err == nil {
-		owner := string(v)
-		closer.Close()
-		t.Fatalf("an address another (inactive) holder has proof for must get no key, got one for %s", owner)
-	}
-	v, closer, err := s.db.Get([]byte(userEmailIndexPrefix + "keyed@example.com"))
-	if err != nil {
-		t.Fatal("an existing key must not be removed by a conflict")
-	}
-	if string(v) != other.ID {
-		t.Fatalf("an existing key must not be overwritten: now %s", string(v))
-	}
-	closer.Close()
 }
 
 // An unreadable user row might be a holder; the displacement fails closed.
@@ -558,9 +630,10 @@ func TestUpdateUser_RacingClaimsOfOneEmailLetOneWin(t *testing.T) {
 	}
 }
 
-// An address set through the profile is now indexed, so an emailed invite for
-// it can no longer be accepted into a second account.
-func TestConsumeInvite_RefusesAnEmailSetThroughUpdateUser(t *testing.T) {
+// S2: an admin's invitation emailed to an address proves the inbox, as an
+// IdP-verified login does: an account that only typed the address into its
+// profile loses it to the accept, recorded on the invite.
+func TestConsumeInvite_DisplacesAnEmailSetThroughUpdateUser(t *testing.T) {
 	s := newInviteTestStore(t)
 	admin := mustUser(t, s, "admin1", "admin", "active")
 	bob := mustUser(t, s, "bob", "viewer", "active")
@@ -569,7 +642,81 @@ func TestConsumeInvite_RefusesAnEmailSetThroughUpdateUser(t *testing.T) {
 	if err := s.UpdateUser(bob); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ConsumeInvite("tok-profile-email", "bcrypt", "h"); !errors.Is(err, ErrInviteEmailTaken) {
-		t.Fatalf("ConsumeInvite = %v, want ErrInviteEmailTaken", err)
+	guest, err := s.ConsumeInvite("tok-profile-email", "bcrypt", "h")
+	if err != nil {
+		t.Fatalf("ConsumeInvite = %v", err)
+	}
+	if got, _ := s.GetUserByID(bob.ID); got.Email != "" || got.Status != "active" {
+		t.Fatalf("bob keeps his account and loses only the address: %+v", got)
+	}
+	inv, _ := s.GetInvite("tok-profile-email")
+	if len(inv.DisplacedUserIDs) != 1 || inv.DisplacedUserIDs[0] != bob.ID {
+		t.Fatalf("DisplacedUserIDs = %v, want bob", inv.DisplacedUserIDs)
+	}
+	if v, _ := s.GetUserByVerifiedEmail("guest@example.com"); v == nil || v.ID != guest.ID {
+		t.Fatalf("the guest holds the address verified: %+v", v)
+	}
+}
+
+// A holder with the address proven, or an unreadable row, refuses the accept
+// and nothing is written.
+func TestConsumeInvite_RefusesWhenAHolderIsProvenOrARowUnreadable(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, s *PebbleStore, holder *User){
+		"proven holder": func(t *testing.T, s *PebbleStore, holder *User) {
+			if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "github", Subject: "gh-h", Email: "guest@example.com", UserID: holder.ID}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"unreadable row": func(t *testing.T, s *PebbleStore, _ *User) {
+			if err := s.db.Set([]byte("u:01UNREADABLEROW"), []byte("{not json"), pebble.Sync); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newInviteTestStore(t)
+			admin := mustUser(t, s, "admin1", "admin", "active")
+			holder := mustUser(t, s, "holder", "viewer", "active")
+			deliveredInvite(t, s, admin.ID, "tok-x", "guest", "guest@example.com")
+			holder.Email = "guest@example.com"
+			if err := s.UpdateUser(holder); err != nil {
+				t.Fatal(err)
+			}
+			setup(t, s, holder)
+			if _, err := s.ConsumeInvite("tok-x", "bcrypt", "h"); !errors.Is(err, ErrInviteEmailTaken) {
+				t.Fatalf("ConsumeInvite = %v, want ErrInviteEmailTaken", err)
+			}
+			if got, _ := s.GetUserByID(holder.ID); got.Email != "guest@example.com" {
+				t.Fatal("nothing may be cleared on a refused accept")
+			}
+			if inv, _ := s.GetInvite("tok-x"); inv.UsedAt != nil {
+				t.Fatal("a refused accept must leave the invite unused")
+			}
+		})
+	}
+}
+
+// Nit 3: an invitation emailed by someone without the admin role binds
+// nothing: no email on the account, no cache key, no grant.
+func TestConsumeInvite_NonAdminCreatorBindsNothing(t *testing.T) {
+	s := newInviteTestStore(t)
+	editor := mustUser(t, s, "editor1", "editor", "active")
+	deliveredInvite(t, s, editor.ID, "tok-editor", "guest", "guest@example.com")
+	u, err := s.ConsumeInvite("tok-editor", "bcrypt", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Email != "" || u.EmailSource != "" {
+		t.Fatalf("a non-admin's invite must not bind the address: %+v", u)
+	}
+	if keyFor(t, s, "guest@example.com") != "" {
+		t.Fatal("a non-admin's invite must not write the cache key")
+	}
+	if g, _ := s.GetInviteEmailGrant("guest@example.com"); g != nil {
+		t.Fatal("a non-admin's invite must not grant SSO")
+	}
+	inv, _ := s.GetInvite("tok-editor")
+	if inv.EmailBinding != InviteEmailCreatorNotAdmin || inv.SSOGrant != InviteSSOCreatorNotAdmin {
+		t.Fatalf("binding/grant = %q/%q", inv.EmailBinding, inv.SSOGrant)
 	}
 }

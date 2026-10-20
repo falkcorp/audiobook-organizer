@@ -1573,7 +1573,6 @@ func (s *Server) setupRoutes() {
 	// /api/events depend on that. buildOAuthWiring is a pure constructor (it
 	// reads config and builds handlers/verifiers; it registers no routes), so
 	// hoisting it is safe, and it is still called exactly once.
-	s.installOperatorEmailTrust()
 	oauthH, cfMW, cfRecoveryMW := s.buildOAuthWiring()
 
 	// Health check endpoint
