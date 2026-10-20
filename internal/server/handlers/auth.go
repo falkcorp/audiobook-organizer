@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.19.0
+// version: 2.19.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-20
 
@@ -16,7 +16,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -140,8 +139,6 @@ type AuthHandler struct {
 	// email the user gave up in UpdateMe; nil = nothing to revoke.
 	revokeGuestAccess GuestAccessRevoker
 }
-
-var authHandlerLog = logger.New("handlers.auth")
 
 // NewAuthHandler constructs an AuthHandler.
 // enableAuth should be set from config.AppConfig.EnableAuth at wire time.

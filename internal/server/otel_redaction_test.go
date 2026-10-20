@@ -1,7 +1,7 @@
 // file: internal/server/otel_redaction_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c57d8b27-c4fa-4a32-8074-be746f84c425
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
@@ -109,7 +109,7 @@ func TestTracingMiddlewareSpansCarryNoInviteToken(t *testing.T) {
 					t.Fatalf("span name %q carries the invite token", s.Name())
 				}
 				for _, kv := range s.Attributes() {
-					v := kv.Value.Emit()
+					v := kv.Value.String()
 					if strings.Contains(v, tok) {
 						t.Fatalf("span %q attribute %s carries the invite token: %s", s.Name(), kv.Key, v)
 					}

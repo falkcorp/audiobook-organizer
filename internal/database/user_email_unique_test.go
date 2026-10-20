@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-20
 
@@ -180,17 +180,6 @@ func TestMarkUserEmailVerified_OnlyTheCurrentEmailAndNeverAnotherUsers(t *testin
 func setRawUserEmailSource(t *testing.T, s *PebbleStore, u *User, email, source string) {
 	t.Helper()
 	u.Email, u.EmailSource = email, source
-	data, _ := json.Marshal(u)
-	if err := s.db.Set([]byte("u:"+u.ID), data, pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// setRawUserEmail rewrites a user row's email directly, the way a pre-fix
-// UpdateUser did: no index change.
-func setRawUserEmail(t *testing.T, s *PebbleStore, u *User, email string) {
-	t.Helper()
-	u.Email = email
 	data, _ := json.Marshal(u)
 	if err := s.db.Set([]byte("u:"+u.ID), data, pebble.Sync); err != nil {
 		t.Fatal(err)

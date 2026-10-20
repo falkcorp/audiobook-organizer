@@ -1,5 +1,5 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
 // last-edited: 2026-10-20
 
@@ -449,7 +449,8 @@ func TestReserveKeys_RefusalEvictsNobody(t *testing.T) {
 		require.True(t, a.AllowKey("victim")) // victim's bucket is now empty
 	}
 	require.True(t, a.AllowKey("other"))
-	require.False(t, b.AllowKey("y") && b.AllowKey("y")) // b is empty
+	require.True(t, b.AllowKey("y"))  // b's only token
+	require.False(t, b.AllowKey("y")) // b is now empty
 	for i := range 20 {
 		_, ok := ReserveKeys(KeyStep{a, fmt.Sprintf("fresh-%d", i)}, KeyStep{b, "y"})
 		require.False(t, ok)
