@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-19
 
@@ -123,56 +123,91 @@ func setRawUserEmail(t *testing.T, s *PebbleStore, u *User, email string) {
 	}
 }
 
-// The open-time repair keeps every address that links today, drops keys for
-// addresses users changed away from, and adds IdP-verified current emails.
+// The open-time rebuild keeps only addresses with provenance (an invite grant
+// or a linked identity recorded with that email) and drops every other key,
+// including ones that merely match the user's current email.
 func TestBackfillVerifiedEmailIndex(t *testing.T) {
 	s := newInviteTestStore(t)
-	admin := mustUser(t, s, "admin1", "admin", "active") // admin1@admins.example.com, keyed by CreateUser
+	admin := mustUser(t, s, "admin1", "admin", "active") // key from CreateUser, no provenance
 	mover := mustUser(t, s, "mover", "viewer", "active")
-	setRawUserEmail(t, s, mover, "mover.now@example.com") // stale key for mover@admins..., none for the new one
+	setRawUserEmail(t, s, mover, "mover.now@example.com") // stale key for its old address
 	linked := mustUser(t, s, "linked", "viewer", "active")
 	setRawUserEmail(t, s, linked, "linked@example.com")
 	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "sub-linked", Email: "Linked@example.com", UserID: linked.ID}); err != nil {
 		t.Fatal(err)
 	}
-	selfSet := mustUser(t, s, "selfset", "viewer", "active")
-	setRawUserEmail(t, s, selfSet, "selfset@example.com")
-
-	// The store ran the repair at open on an empty store; run it again as a
-	// store upgraded from an older build would.
-	if err := s.db.Delete([]byte(verifiedEmailBackfillKey), pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	res, err := s.backfillVerifiedEmailIndex()
+	deliveredInvite(t, s, admin.ID, "tok-prov", "invitee", "invitee@example.com")
+	invitee, err := s.ConsumeInvite("tok-prov", "bcrypt", "h")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Stale keys: mover's, linked's and selfset's old CreateUser addresses.
-	if res.StaleDropped != 3 || res.IdPAdded != 1 {
-		t.Fatalf("result = %+v, want 3 stale dropped and 1 IdP-verified added", res)
+	// A squatter whose key matches its current email (as a pre-fix build
+	// could leave it) but with no provenance.
+	squatter := mustUser(t, s, "squatter", "viewer", "active")
+	setRawUserEmail(t, s, squatter, "someone@example.com")
+	if err := s.db.Set([]byte(userEmailIndexPrefix+"someone@example.com"), []byte(squatter.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
 	}
-	if u, _ := s.GetUserByVerifiedEmail("admin1@admins.example.com"); u == nil || u.ID != admin.ID {
-		t.Fatalf("an admin-created email must stay verified: %+v", u)
+
+	res, err := s.RerunVerifiedEmailBackfillForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Dropped: admin1@, mover@ (stale), linked@admins (stale), squatter@admins
+	// (stale), someone@ (no provenance). Kept: invitee@. Added: linked@.
+	if res.Dropped != 5 || res.Kept != 1 || res.Added != 1 || res.Conflict != 0 {
+		t.Fatalf("result = %+v, want 5 dropped, 1 kept, 1 added", res)
+	}
+	for _, addr := range []string{"admin1@admins.example.com", "someone@example.com", "mover.now@example.com"} {
+		if u, _ := s.GetUserByVerifiedEmail(addr); u != nil {
+			t.Fatalf("%s has no provenance and must not be verified: %+v", addr, u)
+		}
 	}
 	if u, _ := s.GetUserByVerifiedEmail("linked@example.com"); u == nil || u.ID != linked.ID {
-		t.Fatalf("an IdP-verified current email must become verified: %+v", u)
+		t.Fatalf("an identity-proven email must be verified: %+v", u)
 	}
-	if u, _ := s.GetUserByVerifiedEmail("selfset@example.com"); u != nil {
-		t.Fatalf("a self-set email must not become verified: %+v", u)
-	}
-	if u, _ := s.GetUserByVerifiedEmail("mover.now@example.com"); u != nil {
-		t.Fatalf("a self-set new email must not become verified: %+v", u)
-	}
-	if _, closer, err := s.db.Get([]byte(userEmailIndexPrefix + "mover@admins.example.com")); err == nil {
-		closer.Close()
-		t.Fatal("the key for the address mover changed away from must be dropped")
+	if u, _ := s.GetUserByVerifiedEmail("invitee@example.com"); u == nil || u.ID != invitee.ID {
+		t.Fatalf("an invite-proven email must stay verified: %+v", u)
 	}
 	if id, _ := s.GetOAuthIdentityByProviderSubject("google", "sub-linked"); id == nil || id.UserID != linked.ID {
 		t.Fatal("linked identities must be untouched")
 	}
-	again, err := s.backfillVerifiedEmailIndex()
-	if err != nil || !again.Skipped {
+	if again, err := s.backfillVerifiedEmailIndex(); err != nil || !again.Skipped {
 		t.Fatalf("second run = %+v, %v; want skipped by the sentinel", again, err)
+	}
+}
+
+func TestCreateUserDisplacingUnverifiedEmail(t *testing.T) {
+	s := newInviteTestStore(t)
+	squatter := mustUser(t, s, "squatter", "viewer", "active")
+	squatter.Email = "Owner.Real@example.com"
+	if err := s.UpdateUser(squatter); err != nil {
+		t.Fatal(err)
+	}
+	u, displaced, err := s.CreateUserDisplacingUnverifiedEmail("owner.real@example.com", "owner.real@example.com", "oauth", "", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(displaced) != 1 || displaced[0] != squatter.ID {
+		t.Fatalf("displaced = %v, want the squatter", displaced)
+	}
+	if got, _ := s.GetUserByID(squatter.ID); got == nil || got.Email != "" || got.Status != "active" || got.PasswordHash != "h" {
+		t.Fatalf("the squatter keeps its account and loses only the address: %+v", got)
+	}
+	if v, _ := s.GetUserByVerifiedEmail("owner.real@example.com"); v == nil || v.ID != u.ID {
+		t.Fatalf("the new account must hold the address verified: %+v", v)
+	}
+
+	// A verified holder is never displaced.
+	before, _ := s.CountUsers()
+	if _, _, err := s.CreateUserDisplacingUnverifiedEmail("again", "OWNER.REAL@example.com", "oauth", "", []string{"viewer"}, "active"); !errors.Is(err, ErrUserEmailTaken) {
+		t.Fatalf("displacing a verified holder = %v, want ErrUserEmailTaken", err)
+	}
+	if after, _ := s.CountUsers(); after != before {
+		t.Fatal("a refused displacement must write nothing")
+	}
+	if v, _ := s.GetUserByVerifiedEmail("owner.real@example.com"); v == nil || v.ID != u.ID {
+		t.Fatal("the verified holder must keep the address")
 	}
 }
 

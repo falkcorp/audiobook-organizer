@@ -1,5 +1,5 @@
 // file: internal/oauth/oauth.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c2a9e14-6b38-4d05-8f71-3a0e5b9d2c46
 // last-edited: 2026-10-19
 
@@ -62,6 +62,11 @@ type Config struct {
 	// environment-owned allowlist (see the server's inviteGrantAllowed). It must
 	// fail closed: any error or doubt is false.
 	ExtraAllowed func(email string) bool
+	// OnEmailDisplaced, when set, is told when a verified login took its
+	// address back from accounts that held it unverified (ResolveUser step 5),
+	// so the server can record an audit entry the admin can see. It receives
+	// account ids only, never the address.
+	OnEmailDisplaced func(newUserID string, displacedUserIDs []string, provider string)
 }
 
 // New normalizes an incoming config (lowercases the allowlist, trims blanks).

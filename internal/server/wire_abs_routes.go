@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-10-19
 
@@ -411,9 +411,10 @@ func (s *Server) wireABSRoutes() {
 	// lazily in the background as Cloudflare rotates signing keys.
 	var verifier servermiddleware.CFAssertionVerifier
 	oauthCfg := oauth.New(oauth.Config{
-		AllowedEmails: oauth.ParseAllowedEmails(snap.OAuthAllowedEmails),
-		DefaultRole:   snap.OAuthDefaultRole,
-		ExtraAllowed:  inviteGrantAllowed(s.storeForWiring()),
+		AllowedEmails:    oauth.ParseAllowedEmails(snap.OAuthAllowedEmails),
+		DefaultRole:      snap.OAuthDefaultRole,
+		ExtraAllowed:     inviteGrantAllowed(s.storeForWiring()),
+		OnEmailDisplaced: s.recordEmailDisplaced,
 	})
 	if cfg.Modes.CF {
 		if snap.CFAccessTeamDomain == "" || snap.CFAccessAUD == "" {
