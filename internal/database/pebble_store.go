@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.229.0
+// version: 1.230.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-19
 
@@ -204,28 +204,30 @@ type PebbleStore struct {
 	// life of the process. See memdb_pending.go for the invariant and the
 	// ordering argument.
 	memPending               memPendingBuffer
-	counterMu                sync.Mutex           // protects nextID read-modify-write
-	opsMu                    sync.Mutex           // serializes v2 op status writes, incl. the UpdateOperationV2StatusIf compare-and-set
-	reviewMu                 sync.Mutex           // serializes every review-item write (upsert, claim, decide, delete, index rebuild, Reset) — review_store.go, review_claim.go
-	reviewClaim              reviewClaimInstance  // this handle's apply-claim instance id: a claim carrying another id was left by a previous process (review_claim.go)
-	nameIdx                  nameIndexLocks       // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
-	apiKeyMu                 sync.Mutex           // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
-	inviteMu                 sync.Mutex           // serializes every invite write (create, consume, delete, mark-sent, guest-policy record) so an accept is single-use and a resend cannot resurrect a consumed invite, and every email uniqueness check-then-write (CreateUser, UpdateUser, CreateInvite, ConsumeInvite, MarkUserEmailVerified, the verified-email repair) so an email stays unique and idx:user:email (the verified-email index) stays consistent; taken before userWriteMu (pebble_store_auth.go, pebble_store_invite_delivery.go)
-	fileProvMu               sync.Mutex           // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
-	fpwinLocks               bookLocks            // per-window-ref stripes: a window write and the delete cascade of the same file serialize, different files do not (pebble_store_fpwin.go)
-	bookFileIDScans          atomic.Int64         // count of scanForBookFileByID full scans; instrumentation so tests can prove a path never falls back to the O(N) walk
-	atpathMarkers            undecodableMarkerSet // which book_atpath_undecodable:<id> markers may exist (pebble_store_atpath_markers.go)
-	atpathRuns               atpathRunLock        // one book_atpath backfill/rebuild/verify at a time, startup run included (pebble_store_atpath_markers.go)
-	bookLocks                bookLocks            // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
-	bookFileLocks            bookLocks            // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
-	bookOwnerLocks           bookLocks            // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
-	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors -> book_narrators (pebble_store_authors.go)
-	bookNarratorLocks        bookLocks            // per-book-ID stripes for the book_narrators join: SetBookNarrators, ModifyBookNarrators and ModifyBookCredits hold one across read AND commit, DeleteBook from its probe through its commit; taken last in the order above (credits_store.go)
-	opsLogSeq                atomic.Int64         // monotonic counter for log key uniqueness; accessed via atomic
-	opsV2MirrorOff           atomic.Bool          // true turns off the opv2: mirror of native opv3 writes (05-PR16, D25); off by default means mirror ON (pebble_store_ops_v3.go)
-	rootDir                  string               // organized library root; set via SetRootDir after config load
-	libraryCountsRecomputeMu sync.Mutex           // gates recompute to prevent stampede when N callers see dirty cache
-	UseMemDB                 bool                 // feature flag: use in-memory query layer for aggregations / filtered reads
+	counterMu                sync.Mutex                      // protects nextID read-modify-write
+	opsMu                    sync.Mutex                      // serializes v2 op status writes, incl. the UpdateOperationV2StatusIf compare-and-set
+	reviewMu                 sync.Mutex                      // serializes every review-item write (upsert, claim, decide, delete, index rebuild, Reset) — review_store.go, review_claim.go
+	reviewClaim              reviewClaimInstance             // this handle's apply-claim instance id: a claim carrying another id was left by a previous process (review_claim.go)
+	nameIdx                  nameIndexLocks                  // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
+	apiKeyMu                 sync.Mutex                      // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
+	inviteMu                 sync.Mutex                      // serializes every invite write (create, consume, delete, mark-sent, guest-policy record) so an accept is single-use and a resend cannot resurrect a consumed invite, and every email uniqueness check-then-write (CreateUser, UpdateUser, CreateInvite, ConsumeInvite, MarkUserEmailVerified, the verified-email repair) so an email stays unique and idx:user:email (the verified-email index) stays consistent; taken before userWriteMu (pebble_store_auth.go, pebble_store_invite_delivery.go)
+	operatorEmails           atomic.Pointer[func() []string] // the operator-trusted address list (owner email, OAUTH_ALLOWED_EMAILS), installed by the server (pebble_store_verified_email_backfill.go)
+	operatorApplied          atomic.Pointer[string]          // the canonical operator list the verified-email index last applied; a mismatch triggers a re-apply before the next lookup
+	fileProvMu               sync.Mutex                      // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
+	fpwinLocks               bookLocks                       // per-window-ref stripes: a window write and the delete cascade of the same file serialize, different files do not (pebble_store_fpwin.go)
+	bookFileIDScans          atomic.Int64                    // count of scanForBookFileByID full scans; instrumentation so tests can prove a path never falls back to the O(N) walk
+	atpathMarkers            undecodableMarkerSet            // which book_atpath_undecodable:<id> markers may exist (pebble_store_atpath_markers.go)
+	atpathRuns               atpathRunLock                   // one book_atpath backfill/rebuild/verify at a time, startup run included (pebble_store_atpath_markers.go)
+	bookLocks                bookLocks                       // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
+	bookFileLocks            bookLocks                       // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
+	bookOwnerLocks           bookLocks                       // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
+	bookAuthorLocks          bookLocks                       // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors -> book_narrators (pebble_store_authors.go)
+	bookNarratorLocks        bookLocks                       // per-book-ID stripes for the book_narrators join: SetBookNarrators, ModifyBookNarrators and ModifyBookCredits hold one across read AND commit, DeleteBook from its probe through its commit; taken last in the order above (credits_store.go)
+	opsLogSeq                atomic.Int64                    // monotonic counter for log key uniqueness; accessed via atomic
+	opsV2MirrorOff           atomic.Bool                     // true turns off the opv2: mirror of native opv3 writes (05-PR16, D25); off by default means mirror ON (pebble_store_ops_v3.go)
+	rootDir                  string                          // organized library root; set via SetRootDir after config load
+	libraryCountsRecomputeMu sync.Mutex                      // gates recompute to prevent stampede when N callers see dirty cache
+	UseMemDB                 bool                            // feature flag: use in-memory query layer for aggregations / filtered reads
 
 	// cacheGen is bumped by every write to the "metadata_cache:" keyspace
 	// (MetadataCacheGeneration lists the writers) and cacheChanges records
@@ -697,13 +699,6 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 	if err := store.migrateImportPathKeys(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate import path keys: %w", err)
-	}
-
-	// Not fatal: GetUserByVerifiedEmail already ignores a key whose user no
-	// longer has the address, and without the sentinel this retries on the
-	// next open.
-	if _, err := store.backfillVerifiedEmailIndex(); err != nil {
-		authLog.Error("verified-email index repair failed; retried at next open: %v", err)
 	}
 
 	// Initialize counters if they don't exist

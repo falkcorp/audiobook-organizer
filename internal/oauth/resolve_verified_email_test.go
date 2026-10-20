@@ -1,5 +1,5 @@
 // file: internal/oauth/resolve_verified_email_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b7d1909a-d742-41fb-b8cf-25bdae5ca124
 // last-edited: 2026-10-19
 
@@ -101,7 +101,7 @@ func TestResolveUser_SSOLinkedUserStillSignsInAfterRebuild(t *testing.T) {
 	if _, err := s.CreateOAuthIdentity(&database.OAuthIdentity{Provider: ProviderGoogle, Subject: "g-owner", Email: "owner.old@example.com", UserID: owner.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RerunVerifiedEmailBackfillForTest(); err != nil {
+	if _, err := s.RerunVerifiedEmailBackfillForTest(nil); err != nil {
 		t.Fatal(err)
 	}
 	if v, _ := s.GetUserByVerifiedEmail("owner@example.com"); v != nil {
@@ -187,5 +187,56 @@ func TestResolveUser_LinkedIdentityVerifiesMatchingEmail(t *testing.T) {
 	gh := IdentityClaims{Provider: ProviderGitHub, Subject: "gh-pat", Email: "pat@example.com", EmailVerified: true}
 	if got, err := cfg.ResolveUser(s, gh); err != nil || got.ID != u.ID {
 		t.Fatalf("second provider = %+v, %v; want the same account", got, err)
+	}
+}
+
+// The owner decision of 2026-10-19: the operator's trusted list proves an
+// address. An owner-email admin created at setup, never linked to SSO, has
+// that first SSO login linked to the admin account, not displaced from it.
+func TestResolveUser_OwnerEmailAdminFirstSSOLinksAndIsNotDisplaced(t *testing.T) {
+	s := newResolvePebble(t)
+	admin, err := s.CreateUser("admin", "owner@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Upgrade: the provenance rebuild with no list would drop this key; the
+	// owner email on the operator list keeps it.
+	s.SetOperatorTrustedEmails(func() []string { return []string{"Owner@example.com"} })
+	if err := s.EnsureVerifiedEmailIndex(); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.CountUsers()
+	displacedCalled := false
+	cfg := New(Config{AllowedEmails: []string{"owner@example.com"}, DefaultRole: "viewer",
+		OnEmailDisplaced: func(string, []string, string) { displacedCalled = true }})
+	user, err := cfg.ResolveUser(s, verifiedClaims("owner@example.com", "cf-owner"))
+	if err != nil || user == nil || user.ID != admin.ID {
+		t.Fatalf("ResolveUser = %+v, %v; want the admin account", user, err)
+	}
+	if got, _ := s.GetUserByID(admin.ID); got.Email != "owner@example.com" {
+		t.Fatalf("the admin must keep its email: %q", got.Email)
+	}
+	if after, _ := s.CountUsers(); after != before || displacedCalled {
+		t.Fatalf("no account may be created or displaced (users %d -> %d, displaced=%v)", before, after, displacedCalled)
+	}
+}
+
+// A user holding an address that is on OAUTH_ALLOWED_EMAILS is kept: their
+// SSO login links to them even though they typed the address in themselves.
+func TestResolveUser_AllowListedHolderIsKept(t *testing.T) {
+	s := newResolvePebble(t)
+	u, err := s.CreateUser("friend", "friend.old@example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Email = "friend@example.com"
+	if err := s.UpdateUser(u); err != nil {
+		t.Fatal(err)
+	}
+	s.SetOperatorTrustedEmails(func() []string { return []string{"friend@example.com"} })
+	cfg := New(Config{AllowedEmails: []string{"friend@example.com"}, DefaultRole: "viewer"})
+	user, err := cfg.ResolveUser(s, verifiedClaims("friend@example.com", "g-friend"))
+	if err != nil || user == nil || user.ID != u.ID {
+		t.Fatalf("ResolveUser = %+v, %v; want the allow-listed holder", user, err)
 	}
 }
