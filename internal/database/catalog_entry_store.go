@@ -668,11 +668,10 @@ func (s *CatalogStore) CountAuthorNameBlocks() (int, error) {
 	have := false
 	for iter.First(); iter.Valid(); iter.Next() {
 		rest := bytes.TrimPrefix(iter.Key(), p)
-		before, _, ok := bytes.Cut(rest, []byte{':'})
+		fold, _, ok := bytes.Cut(rest, []byte{':'})
 		if !ok {
 			continue
 		}
-		fold := before
 		if have && bytes.Equal(fold, last) {
 			continue
 		}

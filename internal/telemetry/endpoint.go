@@ -116,7 +116,7 @@ func parseOTLPEndpoint(key, endpoint string) (otlpTarget, error) {
 
 	ep := strings.TrimSpace(endpoint)
 	scheme, rest := "", ep
-	if before, after, ok0 := strings.Cut(ep, "://"); ok0 {
+	if before, after, ok := strings.Cut(ep, "://"); ok {
 		scheme, rest = strings.ToLower(before), after
 	}
 	switch scheme {

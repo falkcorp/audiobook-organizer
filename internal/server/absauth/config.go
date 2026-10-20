@@ -269,8 +269,7 @@ func (c *Config) SessionPastMaxLifetime(createdAt, now time.Time) bool {
 //
 // min(24h, RefreshTTL/10), so a short idle TTL configured for testing still slides.
 func (c *Config) SessionExtendWindow() time.Duration {
-	w := min(c.RefreshTTL/10, maxSessionExtendWindow)
-	return w
+	return min(c.RefreshTTL/10, maxSessionExtendWindow)
 }
 
 func parseModes(raw string) (Modes, error) {
