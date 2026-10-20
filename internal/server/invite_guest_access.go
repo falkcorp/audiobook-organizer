@@ -23,16 +23,6 @@ import (
 
 var inviteAccessLog = logger.New("server.invites")
 
-// Public invite endpoints (GET /auth/invite/:token and POST
-// /auth/accept-invite) share one limiter. The token space is 256 bits, so this
-// is about load, not guessing. Behind the shared reverse proxy every request
-// has the proxy's address (SetTrustedProxies(nil)), so the bucket is in effect
-// shared by all callers; real use is one page load and one accept per guest.
-const (
-	inviteAuthRatePerMinute = 20
-	inviteAuthRateBurst     = 10
-)
-
 // guestPolicySyncTimeout bounds one accept-time Cloudflare sync (GET + PUT).
 const guestPolicySyncTimeout = 30 * time.Second
 

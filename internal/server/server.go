@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.100.0
+// version: 2.101.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-19
 
@@ -607,10 +607,17 @@ func NewServer(store database.Store) *Server {
 	// Trust no proxy headers. Without this, Gin honors X-Forwarded-For from any
 	// source, so c.ClientIP() can be spoofed — bypassing every per-IP rate
 	// limiter (bootstrap, login throttle) by cycling the header (pen-test
-	// finding HIGH-2). This deployment is direct-connect (TLS terminated by the
-	// service, no reverse proxy). If a trusted reverse proxy is ever added,
-	// replace nil with its CIDR allowlist, e.g.
-	// router.SetTrustedProxies([]string{"10.0.0.0/8"}).
+	// finding HIGH-2). Production is reached through a Cloudflare tunnel:
+	// cloudflared on the host connects to the service locally, so c.ClientIP()
+	// is the tunnel's local address for every request and a per-IP limiter on it
+	// alone is one shared bucket. Proxy headers (X-Forwarded-For,
+	// CF-Connecting-IP) are still not trusted globally, because the service
+	// cannot prove on its own that any given request came through the tunnel
+	// rather than from a direct caller who set them. A route that needs the real
+	// client address must opt in, and only for a request that provably passed
+	// Cloudflare Access: see inviteRateLimits.inviteClientKey. If a trusted
+	// reverse proxy with a fixed address is ever added, replace nil with its CIDR
+	// allowlist, e.g. router.SetTrustedProxies([]string{"192.0.2.0/24"}).
 	if err := router.SetTrustedProxies(nil); err != nil {
 		slog.Warn("failed to disable trusted proxies", "err", err)
 	}
