@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_tally_defer_reasons_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b3f27d4-61ac-4e08-ae53-1c6f0a4d72be
-// last-edited: 2026-09-20
+// last-edited: 2026-10-20
 
 package acoustid
 
@@ -20,7 +20,7 @@ import (
 
 func TestWindowTallySummary_ShowsDeferralReasons(t *testing.T) {
 	var tally windowTally
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		tally.deferItem("not_under_libroot")
 	}
 	tally.deferItem("unknown_duration")
@@ -42,12 +42,12 @@ func TestWindowTallySummary_ReasonOrderIsDeterministic(t *testing.T) {
 	var tally windowTally
 	counts := map[string]int{"no_window_plan": 2, "not_under_libroot": 9, "unknown_duration": 2}
 	for why, n := range counts {
-		for i := 0; i < n; i++ {
+		for range n {
 			tally.deferItem(why)
 		}
 	}
 	want := "(not_under_libroot=9 no_window_plan=2 unknown_duration=2)"
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if got := tally.summary(); !strings.Contains(got, want) {
 			t.Fatalf("iteration %d: want %q inside %q", i, want, got)
 		}
@@ -70,11 +70,11 @@ func TestWindowTallySummary_NoDeferralsNoClause(t *testing.T) {
 func TestWindowTallySummary_ConcurrentWithDeferItem(t *testing.T) {
 	var tally windowTally
 	var wg sync.WaitGroup
-	for w := 0; w < 4; w++ {
+	for range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 200; i++ {
+			for range 200 {
 				tally.deferItem("not_under_libroot")
 			}
 		}()
@@ -82,7 +82,7 @@ func TestWindowTallySummary_ConcurrentWithDeferItem(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 200; i++ {
+		for range 200 {
 			_ = tally.summary()
 		}
 	}()

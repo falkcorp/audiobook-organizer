@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7b2d9e14-0c63-4a58-8f71-6d3a92c4e150
-// last-edited: 2026-09-25
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -119,7 +119,7 @@ func TestBookShape_Oversized(t *testing.T) {
 	var f bookShapeFixture
 	f.addBook("big", dir, "imported", true)
 	names := make([]string, 0, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		names = append(names, string(rune('a'+i))+".mp3")
 	}
 	paths := touchAudio(t, dir, names...)
@@ -510,7 +510,7 @@ func TestBookShape_IsDeclaredReadOnly(t *testing.T) {
 func TestBookShape_ConcurrentSweepIsRaceFree(t *testing.T) {
 	var f bookShapeFixture
 	roots := make([]string, 0, 32)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		dir := t.TempDir()
 		roots = append(roots, dir)
 		touchAudio(t, dir, "1.mp3", "2.mp3")

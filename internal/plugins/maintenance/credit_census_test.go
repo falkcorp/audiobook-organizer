@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credit_census_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 974607e6-4eb5-4df4-8e22-9eefce977bf4
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -160,7 +161,7 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 		s.junctions[id] = narratorsJunction(id, [2]int{10, 0}, [2]int{11, 1})
 	}
 	// Enough clean books that the worker pool really runs concurrently.
-	for i := 0; i < 300; i++ {
+	for i := range 300 {
 		cleanBook(fmt.Sprintf("clean-%03d", i))
 	}
 	// A clean book whose snapshot matches and whose NarratorsJSON agrees.
@@ -619,12 +620,7 @@ func TestCreditCensus_SwitchCoverage(t *testing.T) {
 		t.Fatalf("index: %v", err)
 	}
 	has := func(classes []string, k string) bool {
-		for _, c := range classes {
-			if c == k {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(classes, k)
 	}
 
 	authorCases := []struct {

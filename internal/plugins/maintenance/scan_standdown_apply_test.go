@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_standdown_apply_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c8e1a94-2d76-4f03-9b6e-1a4c7e0d258f
-// last-edited: 2026-09-06
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -138,7 +138,7 @@ func TestScanStandDownLostForApply(t *testing.T) {
 // flip to Missing=true on apply).
 func seedMarkGone(dir string, n int) *markFakeStore {
 	s := &markFakeStore{full: map[string][]database.BookFile{}}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := "f" + string(rune('a'+i))
 		bookID := "b" + string(rune('a'+i))
 		path := filepath.Join(dir, id+".mp3") // never written -> gone

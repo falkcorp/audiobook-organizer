@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/unknown_author_audit.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 730dab79-4f62-426a-9ab9-ac727bf31a58
-// last-edited: 2026-09-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -177,12 +178,7 @@ func pathHasPlaceholderAuthorDir(path string) bool {
 	if len(segments) < 2 {
 		return false // a bare filename has no directory segment
 	}
-	for _, seg := range segments[:len(segments)-1] {
-		if authorname.IsPlaceholder(seg) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(segments[:len(segments)-1], authorname.IsPlaceholder)
 }
 
 // buildUnknownAuthorAudit performs the sweep and RETURNS the report, so the

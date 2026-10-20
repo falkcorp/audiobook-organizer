@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/filepath_collision_report_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 989ac723-652b-498c-bd0f-55ce506ba859
-// last-edited: 2026-09-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -141,7 +141,7 @@ func TestFilePathCollisionReport_EmptyPathExcludedNotCounted(t *testing.T) {
 func TestFilePathCollisionReport_MultipleGroupsAndSampleCap(t *testing.T) {
 	var books []database.BookCore
 	// 5 collision groups of 2 books each, plus 1 unique book.
-	for g := 0; g < 5; g++ {
+	for g := range 5 {
 		path := fmt.Sprintf("/books/group%d.m4b", g)
 		books = append(books,
 			database.BookCore{ID: fmt.Sprintf("g%d-1", g), FilePath: path},
@@ -170,7 +170,7 @@ func TestFilePathCollisionReport_MultipleGroupsAndSampleCap(t *testing.T) {
 func TestFilePathCollisionReport_ShardsAcrossManyBooks(t *testing.T) {
 	const n = 500
 	var books []database.BookCore
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("book%d", i)
 		// Every 10th book shares a path with the one before it.
 		path := fmt.Sprintf("/books/unique%d.m4b", i)

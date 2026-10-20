@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_bulk_merge_revert_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7e4c19-5a62-4f38-9d81-e2c6a7f30d95
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -37,7 +37,7 @@ func TestSplitBookBulkMerge_UndoneByRevertingTheOp(t *testing.T) {
 	type pair struct{ keep, src, srcFile string }
 	var pairs []pair
 	var items []dedupengine.BulkSplitBookMergeItem
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		p := pair{keep: ulid.Make().String(), src: ulid.Make().String(), srcFile: ulid.Make().String()}
 		for _, id := range []string{p.keep, p.src} {
 			_, err := store.CreateBook(&database.Book{ID: id, Title: "Chapter " + id, Format: "mp3", FilePath: "/tmp/bulk-revert/" + id})

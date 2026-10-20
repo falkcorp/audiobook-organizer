@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2b8f4c71-6e05-4d39-a1c7-9e3d0f5a8b26
-// last-edited: 2026-10-02
+// last-edited: 2026-10-20
 
 package metafetch
 
@@ -714,7 +714,7 @@ func TestASINBackfill_BadRequestIsRememberedNotTripped(t *testing.T) {
 	p, s := newASINTestPlugin(t, fa)
 	aid := mkAuthor(t, s, "Pierce Brown")
 	var ids []string
-	for i := 0; i < asinBackfillMaxConsecutiveErrors+5; i++ {
+	for i := range asinBackfillMaxConsecutiveErrors + 5 {
 		ids = append(ids, mkBook(t, s, &database.Book{Title: fmt.Sprintf("Weird %d", i), AuthorID: &aid}).ID)
 	}
 	rep := &asinTestReporter{}
@@ -789,7 +789,7 @@ func TestASINBackfill_ManualOnlyByAuthorCredit(t *testing.T) {
 // out the others.
 func TestASINBackfill_ProposalCapIsPerKind(t *testing.T) {
 	tl := newASINBackfillTally()
-	for i := 0; i < asinProposalSampleCap+10; i++ {
+	for i := range asinProposalSampleCap + 10 {
 		tl.propose(asinProposal{BookID: fmt.Sprint("l", i), Via: "asin_lookup"})
 	}
 	tl.propose(asinProposal{BookID: "m1", Via: "match"})

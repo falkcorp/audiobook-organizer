@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 30beca88-5314-4b9d-92de-0c91dc9f4151
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -140,10 +141,8 @@ func spRowFor(t *testing.T, res *repairs.PlanResult, id int) repairs.Row {
 		}
 		var st spState
 		require.NoError(t, json.Unmarshal(r.State, &st))
-		for _, m := range st.MemberIDs {
-			if m == id {
-				return r
-			}
+		if slices.Contains(st.MemberIDs, id) {
+			return r
 		}
 	}
 	t.Fatalf("no row names series %d", id)
@@ -264,7 +263,7 @@ func TestSeriesPruneFixer_ReplanMatchesPlan(t *testing.T) {
 // apply merge repoints every book then deletes the emptied series.
 func TestSeriesPruneFixer_ApplyMerge(t *testing.T) {
 	l := newSPLibrary(t)
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &spCacheDeps{store: l.st}
 	f := newSeriesPruneFixer(&Plugin{deps: deps})
 	res := spPlan(t, l, f)
 	row := spRowFor(t, res, l.s2)
@@ -295,7 +294,7 @@ func TestSeriesPruneFixer_ApplyMerge(t *testing.T) {
 // apply orphan deletes only the series row.
 func TestSeriesPruneFixer_ApplyOrphan(t *testing.T) {
 	l := newSPLibrary(t)
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &spCacheDeps{store: l.st}
 	f := newSeriesPruneFixer(&Plugin{deps: deps})
 	res := spPlan(t, l, f)
 	before := map[string]int{}

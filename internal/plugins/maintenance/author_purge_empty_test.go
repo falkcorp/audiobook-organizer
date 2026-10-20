@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -682,7 +682,7 @@ func deletesIn(events []string) []string {
 // A dry run writes nothing, so it must not park the scanner.
 func TestPurgeEmptyAuthors_DryRunTakesNoStandDown(t *testing.T) {
 	var events []string
-	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: guardedPurgeStore(&events)}, renewAllowed: -1}
+	deps := &purgeScanDeps{store: guardedPurgeStore(&events), renewAllowed: -1}
 	p := &Plugin{deps: deps}
 	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":false}`), &opIDReporter{id: "op-dry"}); err != nil {
 		t.Fatalf("dry run: %v", err)
@@ -698,7 +698,7 @@ func TestPurgeEmptyAuthors_DryRunTakesNoStandDown(t *testing.T) {
 // Apply takes the stand-down exactly once, renews it per item, and releases it.
 func TestPurgeEmptyAuthors_ApplyHoldsStandDownAndRenewsPerItem(t *testing.T) {
 	var events []string
-	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: guardedPurgeStore(&events)}, renewAllowed: -1}
+	deps := &purgeScanDeps{store: guardedPurgeStore(&events), renewAllowed: -1}
 	p := &Plugin{deps: deps}
 	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-apply"}); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -768,7 +768,7 @@ func TestPurgeEmptyAuthors_ApplyHoldsAuthorWhenReCheckFails(t *testing.T) {
 // Losing the lease after the first delete aborts every remaining delete.
 func TestPurgeEmptyAuthors_ApplyAbortsWhenStandDownLeaseLost(t *testing.T) {
 	var events []string
-	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: guardedPurgeStore(&events)}, renewAllowed: 1}
+	deps := &purgeScanDeps{store: guardedPurgeStore(&events), renewAllowed: 1}
 	p := &Plugin{deps: deps}
 	err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-lease"})
 	if err == nil {
@@ -825,7 +825,7 @@ func TestPurgeEmptyAuthors_ApplyWithNothingEligibleTakesNoStandDown(t *testing.T
 	store.GetAllAuthorBookCountsFunc = func() (map[int]int, error) {
 		return map[int]int{1: 12, 2: 1, 3: 1, 4: 0}, nil
 	}
-	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: store}, renewAllowed: -1}
+	deps := &purgeScanDeps{store: store, renewAllowed: -1}
 	p := &Plugin{deps: deps}
 	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-empty"}); err != nil {
 		t.Fatalf("apply: %v", err)

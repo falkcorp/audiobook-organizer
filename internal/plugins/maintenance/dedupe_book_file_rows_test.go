@@ -1,16 +1,17 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3b6d19a7-4e52-4c08-b7f1-90a5e2c4d738
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package maintenance
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 
 // 🔴 The keeper choice is the data-loss-critical part of this op. Every one of
@@ -216,13 +217,7 @@ func TestRankKeeper_DoesNotMutateInput(t *testing.T) {
 // before the op's own body runs.
 func TestDedupeBookFileRowsDef_DependsOnLibraryScan(t *testing.T) {
 	def := (&Plugin{}).dedupeBookFileRowsDef()
-	found := false
-	for _, d := range def.DependsOn {
-		if d == "library.scan" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(def.DependsOn, "library.scan")
 	if !found {
 		t.Fatalf("DependsOn = %v, must contain \"library.scan\"", def.DependsOn)
 	}

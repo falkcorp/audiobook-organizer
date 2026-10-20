@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -1080,7 +1080,7 @@ func isWeakFileStem(stem string) bool {
 	if len([]rune(s)) <= 3 || strings.Contains(s, "_") || weakStemTokenRe.MatchString(s) {
 		return true
 	}
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		hasDigit := strings.IndexFunc(w, unicode.IsDigit) >= 0
 		hasLetter := strings.IndexFunc(w, unicode.IsLetter) >= 0
 		if hasDigit && hasLetter {

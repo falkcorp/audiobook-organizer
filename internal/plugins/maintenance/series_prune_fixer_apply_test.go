@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer_apply_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0f6b2d84-93e1-4c57-a8d2-5e17b4c9a3f0
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -125,7 +125,7 @@ func TestSeriesPruneFixer_ApplyDeclaresSeriesWriteSet(t *testing.T) {
 // the delete re-counts its one series first. Its journal row is voided.
 func TestSeriesPruneFixer_OrphanDeleteRecountsItsSeries(t *testing.T) {
 	l := newSPLibrary(t)
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &spCacheDeps{store: l.st}
 	base := newSeriesPruneFixer(&Plugin{deps: deps})
 	res := spPlan(t, l, base)
 	fx := spBeforeApply{seriesPruneFixer: base, before: func() { l.book(t, "b20", l.s7, true, false) }}
@@ -145,7 +145,7 @@ func TestSeriesPruneFixer_OrphanDeleteRecountsItsSeries(t *testing.T) {
 // pointed a trashed book at stays, and the row is partially applied.
 func TestSeriesPruneFixer_MergeDeleteRecountsItsSeries(t *testing.T) {
 	l := newSPLibrary(t)
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &spCacheDeps{store: l.st}
 	base := newSeriesPruneFixer(&Plugin{deps: deps})
 	res := spPlan(t, l, base)
 	fx := spBeforeApply{seriesPruneFixer: base, before: func() { l.book(t, "b20", l.s2, true, false) }}
@@ -193,7 +193,7 @@ func TestSeriesPruneFixer_JournalsEachRowBeforeItsWrite(t *testing.T) {
 // step of the delete (the third) is refused.
 func TestSeriesPruneFixer_LostLeaseDeletesNothingMore(t *testing.T) {
 	l := newSPLibrary(t)
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &spCacheDeps{store: l.st}
 	f := newSeriesPruneFixer(&Plugin{deps: deps})
 	res := spPlan(t, l, f)
 
@@ -270,7 +270,7 @@ func TestSeriesPruneFixer_MergeRefusesANewlyHeldCopy(t *testing.T) {
 // refuses it. The first book's move stands; the row is partial.
 func TestSeriesPruneFixer_UnderLockCheckKeepsAMovedSecondBook(t *testing.T) {
 	l := newSPLibrary(t)
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &spCacheDeps{store: l.st}
 	f := newSeriesPruneFixer(&Plugin{deps: deps})
 	res := spPlan(t, l, f)
 	var moved atomic.Bool
@@ -344,7 +344,7 @@ func TestSeriesPruneFixer_PartialMergeIsReportedPartial(t *testing.T) {
 func TestSeriesPruneFixer_ApplyRunReadsTheLibraryOnce(t *testing.T) {
 	l := newSPLibrary(t)
 	hook := &spStoreHook{PebbleStore: l.st}
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: hook}}
+	deps := &spCacheDeps{store: hook}
 	f := newSeriesPruneFixer(&Plugin{deps: deps})
 	res := spPlan(t, l, f)
 	hook.counts.Store(0)
@@ -415,7 +415,7 @@ func TestSeriesPruneFixer_UnreadableRecountDeletesNothing(t *testing.T) {
 // is never reported applied.
 func TestSeriesPruneFixer_OrphanCoreRefusalIsNeverApplied(t *testing.T) {
 	l := newSPLibrary(t)
-	deps := &spCacheDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &spCacheDeps{store: l.st}
 	f := newSeriesPruneFixer(&Plugin{deps: deps})
 	s7, err := l.st.GetSeriesByID(l.s7)
 	require.NoError(t, err)

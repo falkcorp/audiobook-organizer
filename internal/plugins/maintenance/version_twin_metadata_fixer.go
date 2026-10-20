@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -907,9 +908,7 @@ func (f *versionTwinFixer) display(b *vtBuild, ms []vtMember, pi, ti int, pAutho
 	// The lane renders every key as current -> proposed and reads a key
 	// missing from Proposed as cleared, so every display key is proposed
 	// unchanged; the class's own changes overwrite theirs below (row).
-	for k, v := range b.r.Current {
-		b.r.Proposed[k] = v
-	}
+	maps.Copy(b.r.Proposed, b.r.Current)
 	b.r.Evidence = []string{"same version group", "twin review status: " + dcStr(ms[ti].core.MetadataReviewStatus)}
 	if cand != nil {
 		b.r.Evidence = append(b.r.Evidence, "twin's applied record recovered from its candidate cache: "+vtRecord(cand))

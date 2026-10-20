@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5d2e8a41-9c3b-4f7e-8a10-2b6c4d9e1f30
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -315,7 +315,7 @@ func TestMergeSamePathRun_MergesUnderTheRunID(t *testing.T) {
 		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: id, FilePath: path, FileHash: "H"}))
 	}
 	var opIDs []string
-	p := New(samePathMergeDeps{fakeDeps: fakeDeps{store: st, root: t.TempDir()}, opIDs: &opIDs})
+	p := New(samePathMergeDeps{store: st, root: t.TempDir(), opIDs: &opIDs})
 	require.NoError(t, p.runMergeSamePathDupes(context.Background(),
 		[]byte(`{"apply":true}`), &opIDReporter{id: "op-same-path-run"}))
 	require.Equal(t, []string{"op-same-path-run"}, opIDs)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_cancel_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5c8e2a47-3d19-4b6f-a0e4-7f12b9d36c85
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -45,7 +45,7 @@ func goneRows(t *testing.T, bookID string, n int) *markFakeStore {
 	t.Helper()
 	dir := t.TempDir()
 	st := &markFakeStore{full: map[string][]database.BookFile{}}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("f%04d", i)
 		path := filepath.Join(dir, id+".mp3") // never written
 		st.cores = append(st.cores, database.BookFileCore{ID: id, BookID: bookID, FilePath: path})
@@ -73,7 +73,7 @@ func TestMarkMissing_PreCanceledRunDoesNothing(t *testing.T) {
 // RunItems item. Cancel must stop it between pages, not after every page.
 func TestMarkMissing_CancelStopsBookPaging(t *testing.T) {
 	st := goneRows(t, "b1", 1)
-	for i := 0; i < 3*bookPageSize; i++ {
+	for i := range 3 * bookPageSize {
 		st.books = append(st.books, database.BookCore{ID: fmt.Sprintf("book%05d", i)})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -95,7 +95,7 @@ func TestMarkMissing_CancelStopsBookPaging(t *testing.T) {
 // per books page.
 func TestMarkMissing_PlanPhaseStampsLiveness(t *testing.T) {
 	st := goneRows(t, "b1", 1)
-	for i := 0; i < 2*bookPageSize+1; i++ { // 3 pages
+	for i := range 2*bookPageSize + 1 { // 3 pages
 		st.books = append(st.books, database.BookCore{ID: fmt.Sprintf("book%05d", i)})
 	}
 	rep := &touchReporter{}

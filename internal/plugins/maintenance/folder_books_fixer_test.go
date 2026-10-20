@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,10 +83,8 @@ func fbRowCount(t *testing.T, s *database.PebbleStore) int {
 
 func fbFindRow(res *repairs.PlanResult, bookID string) *repairs.Row {
 	for i := range res.Rows {
-		for _, id := range res.Rows[i].BookIDs {
-			if id == bookID {
-				return &res.Rows[i]
-			}
+		if slices.Contains(res.Rows[i].BookIDs, bookID) {
+			return &res.Rows[i]
 		}
 	}
 	return nil
@@ -946,7 +945,7 @@ func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *test
 	require.NoError(t, err)
 	mine, err := f.s.CreateAuthor("Stephen King")
 	require.NoError(t, err)
-	for i := 0; i < 250; i++ {
+	for i := range 250 {
 		id := f.fbBook(t, fmt.Sprintf("it-%d", i), "It", f.path(fmt.Sprintf("Other/It %d.m4b", i)), 3600)
 		_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.AuthorID = &other.ID; return nil })
 		require.NoError(t, err)

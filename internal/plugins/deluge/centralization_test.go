@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package deluge
 
@@ -210,7 +210,7 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 			}
 			p := &Plugin{store: store}
 			if tc.seeding {
-				tor := delugeclient.TorrentDetail{TorrentStatus: delugeclient.TorrentStatus{Hash: linkTorrentID(1), SavePath: dir}}
+				tor := delugeclient.TorrentDetail{Hash: linkTorrentID(1), SavePath: dir}
 				_, client := newFakeDelugeClient(t, tor)
 				p.client = client
 				p.cache = delugeclient.NewProtectedPathCache(client, config.AppConfig.ProtectedPaths)

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
-// last-edited: 2026-09-21
+// last-edited: 2026-10-20
 
 package acoustid
 
@@ -514,7 +514,7 @@ func TestWorkerHub_ConcurrentLeaseResultsSweepAndServerLane(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			h.clock.advance(workerapi.LeaseTTL / 4)
 			time.Sleep(time.Millisecond)
 		}

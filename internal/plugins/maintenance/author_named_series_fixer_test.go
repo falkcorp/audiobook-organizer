@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_named_series_fixer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: aa736089-b4ed-43cf-b00e-426629a38cb7
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -195,7 +195,7 @@ func TestAuthorNamedSeriesFixer_Classification(t *testing.T) {
 // changed books, and is undoable both ways.
 func TestAuthorNamedSeriesFixer_ApplyUnlinksJournalsAndIsUndoable(t *testing.T) {
 	l := newANSLibrary(t)
-	deps := &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &ansEnqueueDeps{store: l.st}
 	f := newAuthorNamedSeriesFixer(&Plugin{deps: deps})
 	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
 	require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestAuthorNamedSeriesFixer_ApplyUnlinksJournalsAndIsUndoable(t *testing.T) 
 // the write (no op-journaled marker refuses it).
 func TestAuthorNamedSeriesFixer_UndoLastApplyRestoresLink(t *testing.T) {
 	l := newANSLibrary(t)
-	f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+	f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{store: l.st}})
 	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
 	require.NoError(t, err)
 	w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, "op-undo")
@@ -281,7 +281,7 @@ func TestAuthorNamedSeriesFixer_UndoLastApplyRestoresLink(t *testing.T) {
 // not written; a dry run writes nothing and enqueues nothing.
 func TestAuthorNamedSeriesFixer_ChangedSincePlanAndDryRun(t *testing.T) {
 	l := newANSLibrary(t)
-	deps := &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &ansEnqueueDeps{store: l.st}
 	f := newAuthorNamedSeriesFixer(&Plugin{deps: deps})
 	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
 	require.NoError(t, err)
@@ -330,7 +330,7 @@ func TestAuthorNamedSeriesFixer_ApplyCompareAndSet(t *testing.T) {
 // A failed enqueue fails no row: the writes were made, the error is recorded.
 func TestAuthorNamedSeriesFixer_EnqueueFailureIsRecorded(t *testing.T) {
 	l := newANSLibrary(t)
-	deps := &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}, err: errors.New("queue down")}
+	deps := &ansEnqueueDeps{store: l.st, err: errors.New("queue down")}
 	f := newAuthorNamedSeriesFixer(&Plugin{deps: deps})
 	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
 	require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestAuthorNamedSeriesFixer_EnqueueFailureIsRecorded(t *testing.T) {
 // both may re-plan first and hide a sibling-dependent fingerprint).
 func TestAuthorNamedSeriesFixer_SiblingsApplyTogether(t *testing.T) {
 	l := newANSLibrary(t)
-	deps := &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}
+	deps := &ansEnqueueDeps{store: l.st}
 	f := newAuthorNamedSeriesFixer(&Plugin{deps: deps})
 	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
 	require.NoError(t, err)
@@ -368,7 +368,7 @@ func TestAuthorNamedSeriesFixer_SiblingsApplyTogether(t *testing.T) {
 // back; the undo then restores the link and the position.
 func TestAuthorNamedSeriesFixer_HoldsTheSeriesForTheUndo(t *testing.T) {
 	l := newANSLibrary(t)
-	f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+	f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{store: l.st}})
 	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
 	require.NoError(t, err)
 	w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, "op-hold")
@@ -448,7 +448,7 @@ func TestSeriesUndo_PositionIsNotWrittenIntoAnotherSeries(t *testing.T) {
 	for _, path := range []string{"undo-last-apply", "op-revert"} {
 		t.Run(path, func(t *testing.T) {
 			l := newANSLibrary(t)
-			f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+			f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{store: l.st}})
 			res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
 			require.NoError(t, err)
 			const opID = "op-real"

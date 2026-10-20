@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -543,7 +543,7 @@ func TestFolderBooksFixer_LeaseLostBeforeTheAuthorCredit(t *testing.T) {
 func TestFragmentFixer_LeaseLostAtEveryBeatLeavesOnePrimary(t *testing.T) {
 	t.Parallel()
 	total := handOffProbeRenewals(t)
-	for k := 0; k < total; k++ {
+	for k := range total {
 		for _, retry := range []string{"op-apply", "op-retry"} {
 			t.Run(fmt.Sprintf("k%d_%s", k, retry), func(t *testing.T) {
 				t.Parallel()

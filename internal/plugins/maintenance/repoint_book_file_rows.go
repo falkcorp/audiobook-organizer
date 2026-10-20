@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -58,6 +58,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/oklog/ulid/v2"
@@ -654,10 +655,8 @@ func rbfCheckDisk(env rbfEnv, rp rbfRepoint, row *database.BookFile, r *rbfResul
 }
 
 func (r *rbfResult) addWarning(w string) {
-	for _, have := range r.Warnings {
-		if have == w {
-			return
-		}
+	if slices.Contains(r.Warnings, w) {
+		return
 	}
 	r.Warnings = append(r.Warnings, w)
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -267,7 +267,7 @@ func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource
 		// election reads liveness by id through the store (a member merged
 		// into the leftover is electable only once the leftover is gone),
 		// so the store answers for every member from members.
-		es := leftoverPostRetireStore{fragEnsureStore: fragEnsureStore{OpsStore: store, chapters: vps}, rows: map[string]*database.Book{}}
+		es := leftoverPostRetireStore{OpsStore: store, chapters: vps, rows: map[string]*database.Book{}}
 		for i := range members {
 			es.rows[members[i].ID] = &members[i]
 		}

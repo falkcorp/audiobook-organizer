@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -129,11 +130,8 @@ const someWorkKey = "christopher paolini some work # #"
 func rowsHolding(res *repairs.PlanResult, id string) int {
 	n := 0
 	for _, r := range res.Rows {
-		for _, b := range r.BookIDs {
-			if b == id {
-				n++
-				break
-			}
+		if slices.Contains(r.BookIDs, id) {
+			n++
 		}
 	}
 	return n

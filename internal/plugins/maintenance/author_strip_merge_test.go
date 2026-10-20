@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -183,7 +184,7 @@ func (r *summaryReporter) Logger() *slog.Logger {
 
 func (r *summaryReporter) summary(t *testing.T) string {
 	t.Helper()
-	for _, line := range strings.Split(r.buf.String(), "\n") {
+	for line := range strings.SplitSeq(r.buf.String(), "\n") {
 		if strings.Contains(line, "author-strip-merge done") {
 			return line
 		}
@@ -438,12 +439,7 @@ func TestAuthorStripMerge_DeleteJunkFalseKeepsJunk(t *testing.T) {
 }
 
 func containsInt(xs []int, v int) bool {
-	for _, x := range xs {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(xs, v)
 }
 
 // placeholderFixture: author 3 ("Unknown") owns bk-junk through the shared
@@ -1027,7 +1023,7 @@ func TestAuthorStripMerge_TitleAsAuthorRowIsNeverAMergeTarget(t *testing.T) {
 // line's time prefix), leaving the plan counts a dry run must match.
 func planOnlySummary(line string) string {
 	var keep []string
-	for _, f := range strings.Fields(line) {
+	for f := range strings.FieldsSeq(line) {
 		switch {
 		case strings.HasPrefix(f, "time="), strings.HasPrefix(f, "merged="),
 			strings.HasPrefix(f, "deleted="), strings.HasPrefix(f, "books-touched="):

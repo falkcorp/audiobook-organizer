@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -955,7 +955,7 @@ func TestSwappedTitleAuthorFixer_FetchedNarratorFoundBehindAPage(t *testing.T) {
 	v := `"Pat Voice"`
 	require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id, Field: field,
 		NewValue: &v, ChangeType: "fetched", ChangedAt: old}))
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id, Field: field,
 			NewValue: &v, ChangeType: "bulk_update", ChangedAt: old.Add(time.Duration(i+1) * time.Second)}))
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
-// last-edited: 2026-09-21
+// last-edited: 2026-10-20
 
 package acoustid
 
@@ -1225,11 +1225,11 @@ func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFil
 			}
 			sum := sha256.Sum256(w.Raw)
 			cf.Windows = append(cf.Windows, workerapi.CalibrationWindow{
-				Window: workerapi.Window{Kind: string(w.Kind), SlotBP: w.SlotBP, OffsetSec: w.OffsetSec,
-					LengthSec: w.LengthSec, CoversWhole: w.CoversWhole},
-				RawSHA256:    hex.EncodeToString(sum[:]),
-				Frames:       w.Frames,
-				ToolVersions: workerapi.ToolVersions{Fpcalc: w.FpcalcVersion, FFmpeg: w.FFmpegVersion},
+				Kind: string(w.Kind), SlotBP: w.SlotBP, OffsetSec: w.OffsetSec,
+				LengthSec: w.LengthSec, CoversWhole: w.CoversWhole,
+				RawSHA256: hex.EncodeToString(sum[:]),
+				Frames:    w.Frames,
+				Fpcalc:    w.FpcalcVersion, FFmpeg: w.FFmpegVersion,
 			})
 		}
 		if len(cf.Windows) > 0 {

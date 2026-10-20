@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/window_index_build_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c1a8f37-d29e-4b60-93a4-8e0f6b2d7c15
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -29,10 +29,10 @@ func winRaw(seed uint64) []byte {
 	const n = 969
 	out := make([]byte, 4*n)
 	f := rng.Uint32()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			var mask uint32
-			for bit := 0; bit < 32; bit++ {
+			for bit := range 32 {
 				if rng.Float64() < 0.15 {
 					mask |= 1 << bit
 				}
@@ -50,7 +50,7 @@ func winRaw(seed uint64) []byte {
 func seedWindowLibrary(t *testing.T, s *database.PebbleStore, files int) []string {
 	t.Helper()
 	ids := make([]string, 0, files)
-	for i := 0; i < files; i++ {
+	for i := range files {
 		b, err := s.CreateBook(&database.Book{Title: fmt.Sprintf("Title %04d", i), FilePath: fmt.Sprintf("/lib/t/%04d", i)})
 		require.NoError(t, err)
 		f := &database.BookFile{BookID: b.ID, FilePath: fmt.Sprintf("/lib/t/%04d/a.m4b", i), Format: "m4b"}

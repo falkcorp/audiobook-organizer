@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_match.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4fe74359-29db-4163-a16f-6d8b17834356
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -194,7 +194,7 @@ func (n *arsNames) UnmarshalJSON(b []byte) error {
 
 func splitNames(s string) []string {
 	var out []string
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}

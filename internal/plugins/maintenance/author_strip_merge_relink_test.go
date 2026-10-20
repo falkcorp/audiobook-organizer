@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -237,7 +237,7 @@ func TestAuthorStripMerge_RelinkPreviewWritesNothing(t *testing.T) {
 	}
 	strip := func(s string) string {
 		var keep []string
-		for _, f := range strings.Fields(planOnlySummary(s)) {
+		for f := range strings.FieldsSeq(planOnlySummary(s)) {
 			if !strings.HasPrefix(f, "relinked=") && !strings.HasPrefix(f, "relink-journal-rows=") {
 				keep = append(keep, f)
 			}

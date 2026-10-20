@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/unknown_author_audit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 397e4a71-cb8f-4f03-8a55-f548a6c33cf4
-// last-edited: 2026-09-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -109,7 +109,7 @@ func TestUnknownAuthorAudit_SampleCap(t *testing.T) {
 // default rather than meaning "list nothing".
 func TestUnknownAuthorAudit_DefaultSampleCap(t *testing.T) {
 	var books []database.BookCore
-	for i := 0; i < unknownAuthorAuditSampleLimit+5; i++ {
+	for i := range unknownAuthorAuditSampleLimit + 5 {
 		books = append(books, database.BookCore{
 			ID:       fmt.Sprintf("ua%04d", i),
 			FilePath: fmt.Sprintf("library/Unknown Author/T%04d/T.m4b", i),

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: edaf6525-dcbd-426d-b672-c3293aff05f5
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -506,7 +506,7 @@ func TestRelinkStaleSeries_ManyOtherHistoryRowsCannotHideAClear(t *testing.T) {
 	prev, empty := `"The Expanse"`, `""`
 	require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
 		Field: "series", PreviousValue: &prev, NewValue: &empty, ChangeType: "manual", Source: "manual", ChangedAt: time.Now().Add(-time.Hour)}))
-	for i := 0; i < 201; i++ {
+	for i := range 201 {
 		v := fmt.Sprintf(`"t%d"`, i)
 		require.NoError(t, lib.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
 			Field: "title", NewValue: &v, Source: "x", ChangedAt: time.Now().Add(-time.Duration(i) * time.Second)}))

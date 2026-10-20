@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c8a3b12-5d98-45d2-9751-c25bf96df34e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -142,7 +143,7 @@ func (f *tagFranchiseFixer) buildIndex(ctx context.Context, files []database.Boo
 	type part struct{ folder, twin map[string]franchise.Signal }
 	parts := make([]part, workers)
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
@@ -483,12 +484,7 @@ func tfDescribe(s franchise.Signal) string {
 }
 
 func tfContains(xs []string, x string) bool {
-	for _, y := range xs {
-		if y == x {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(xs, x)
 }
 
 func strOrEmpty(p *string) string {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_round3_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e4ed5d00-b92e-4387-91d0-1b1b72542bb2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -54,7 +54,7 @@ func TestDuplicateCopies_IndexIncompleteSaysSo(t *testing.T) {
 	d, a, _ := ubik(t)
 	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
 	require.True(t, r.Applicable(), r.SkipReason)
-	d.p.deps = scanDeps{fakeDeps: fakeDeps{root: d.root, store: dcNoHashLookup{d.s}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	d.p.deps = scanDeps{root: d.root, store: dcNoHashLookup{d.s}, labels: d.labels, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
 	re, err := newDuplicateCopiesFixer(d.p).Replan(context.Background(), nil, r, nil)
 	require.NoError(t, err)
 	require.False(t, re.Applicable())
@@ -72,7 +72,7 @@ func TestDuplicateCopies_IndexIncompleteSaysSo(t *testing.T) {
 func (d *dcFixture) dcRealVerdicts(t *testing.T) *database.EmbeddingStore {
 	t.Helper()
 	es := database.NewEmbeddingStore(d.s.DB())
-	d.p.deps = scanDeps{fakeDeps: fakeDeps{root: d.root, store: d.s, labels: es}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	d.p.deps = scanDeps{root: d.root, store: d.s, labels: es, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
 	return es
 }
 
@@ -141,7 +141,7 @@ func (c dcCountingStore) Unwrap() database.Store { return c.Store }
 // generation bump the store did not log forces the (correct, slower) rebuild.
 func TestTitleIndex_CatchesUpWithoutARebuild(t *testing.T) {
 	f := newGlobalRootFragFixture(t)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		_, err := f.s.CreateBook(&database.Book{Title: fmt.Sprintf("Filler %d", i), FilePath: f.path(fmt.Sprintf("Fill/%d", i))})
 		require.NoError(t, err)
 	}
@@ -216,7 +216,7 @@ func TestTitleIndex_ReReadErrorRebuildsInsteadOfWedging(t *testing.T) {
 	_, err := f.s.CreateBook(&database.Book{Title: "Filler", FilePath: f.path("Fill/0")})
 	require.NoError(t, err)
 	var full atomic.Int32
-	st := dcFailReadStore{dcCountingStore: dcCountingStore{Store: f.s, full: &full}}
+	st := dcFailReadStore{Store: f.s, full: &full}
 	fx := &folderBooksFixer{}
 	ids, err := fx.titleIndex(st, "sword")
 	require.NoError(t, err)
@@ -251,7 +251,7 @@ func TestDuplicateCopies_BulkApplyReadsTheLibraryOnce(t *testing.T) {
 	l2 := d.copyBook(t, "L2", "Ubik", "lib/Ubik copy",
 		dcRow{track: 1, dur: 600, hash: "u1"}, dcRow{track: 2, dur: 600, hash: "u2"}, dcRow{track: 3, dur: 600, hash: "u3"})
 	var full atomic.Int32
-	d.p.deps = scanDeps{fakeDeps: fakeDeps{root: d.root, store: dcCountingStore{Store: d.s, full: &full}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	d.p.deps = scanDeps{root: d.root, store: dcCountingStore{Store: d.s, full: &full}, labels: d.labels, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
 	res := d.planFor(t, dcFixerID, "op-plan", nil)
 	a, b := findRow(t, res, dupRowID(s, l)), findRow(t, res, dupRowID(s2, l2))
 	require.True(t, a.Applicable(), a.SkipReason)

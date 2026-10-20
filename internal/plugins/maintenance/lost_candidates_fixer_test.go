@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -76,7 +76,7 @@ func newLCLib(t *testing.T) *lcLib {
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
-	d := &lcDeps{fakeDeps: fakeDeps{store: st}, st: st, outcomes: map[string]CandidateFetchOutcome{}, found: map[string]int{}}
+	d := &lcDeps{store: st, st: st, outcomes: map[string]CandidateFetchOutcome{}, found: map[string]int{}}
 	p := &Plugin{deps: d, standDownWait: noWait}
 	return &lcLib{t: t, st: st, deps: d, p: p, fixer: newLostCandidatesFixer(p), ids: map[string]string{}}
 }

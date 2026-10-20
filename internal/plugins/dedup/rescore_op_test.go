@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_op_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6b3d90e7-4c21-4a58-8f07-1d92e5cb37a0
-// last-edited: 2026-09-11
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -213,7 +213,7 @@ func TestDedupScoreSink_SameLadderDedupesOnPurpose(t *testing.T) {
 	cfg := unified.DefaultScoreConfig()
 	cfg.BandCertainMin = 93
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := p.dedupScoreSink(context.Background(), cfg); err != nil {
 			t.Fatalf("sink call %d: %v", i, err)
 		}

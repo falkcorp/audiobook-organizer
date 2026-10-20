@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -685,10 +686,8 @@ var pfrCheckPriority = []string{pfrCheckMissing, pfrCheckLocation, pfrCheckForma
 // a future check still gets a deterministic class.
 func pfrPrimaryCheck(disagree []string) string {
 	for _, c := range pfrCheckPriority {
-		for _, got := range disagree {
-			if got == c {
-				return c
-			}
+		if slices.Contains(disagree, c) {
+			return c
 		}
 	}
 	if len(disagree) > 0 {

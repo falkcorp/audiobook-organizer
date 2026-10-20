@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.51.3
+// version: 1.51.4
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -678,12 +678,7 @@ func uniqueNonEmpty(vals ...string) []string {
 }
 
 func contains(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, v)
 }
 
 // fragMatch is a fragment's match to one parent row.
@@ -4439,7 +4434,7 @@ func holdSameAudioRows(rows []repairs.Row) {
 	}
 	why := map[int][]string{}
 	for _, idx := range byDir {
-		for a := 0; a < len(idx); a++ {
+		for a := range idx {
 			for b := a + 1; b < len(idx); b++ {
 				i, j := idx[a], idx[b]
 			pair:

@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/db_census_exact_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e7cd14b-bfab-4670-8ca5-b918e74112e6
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -74,9 +75,7 @@ func registryMerge(t *testing.T, params, checkpoint []byte) dbCensusExactParams 
 	require.NoError(t, json.Unmarshal(params, &m))
 	over := map[string]any{}
 	require.NoError(t, json.Unmarshal(checkpoint, &over))
-	for k, v := range over {
-		m[k] = v
-	}
+	maps.Copy(m, over)
 	b, err := json.Marshal(m)
 	require.NoError(t, err)
 	var out dbCensusExactParams
