@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
-<!-- last-edited: 2026-10-20 -->
+<!-- last-edited: 2026-10-21 -->
 
 # Inviting someone now sends them everything they need, by email
 
@@ -154,7 +154,11 @@ that account, and a new one goes to the account that has the address
 verified. Do not clear that account's email. Do not fix this by setting the
 address for an account on the Users page: that makes it the verified
 holder, which is wrong when the same person signs in through another
-account. Leave the accounts as they are until they can be merged.
+account. Leave the accounts as they are until they can be merged. When only
+one administrator account has the address and nobody else does, the
+warning says so separately: if the address is that person's own, setting it
+for them on the Users page is the fix; otherwise clear it. Addresses that no
+sign-in provider could ever use, such as admin@localhost, are not reported.
 
 **A second setting, set by this deploy.** The invite pages limit how often
 one visitor can try a link. The Cloudflare tunnel reaches the server through
