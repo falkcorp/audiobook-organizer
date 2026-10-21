@@ -16,7 +16,7 @@ allows new suggestions but never lifts the veto on the originally rejected
 data, only a human can lift or replace a human reject, and ids are canonicalised
 (whitespace refused, ULIDs upper-cased) so one proposal cannot hide under two
 spellings. Loading the veto set reads one point-in-time snapshot and writers
-serialise per database, so concurrent records cannot be half-seen. Decisions are
+serialise per database engine (even through different wrappers of it), so concurrent records cannot be half-seen. Decisions are
 never pruned: a test runs the log, activity, undo-journal, metrics, session,
 journal, soft-delete and stale-candidate prune entry points, a reflection canary
 fails when a new prune, sweep, purge, expiry or cleanup method appears on the

@@ -1,5 +1,5 @@
 // file: internal/database/raw_snapshot.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e7c1a94-3b28-4d60-8f17-a2d94c60b3e1
 // last-edited: 2026-10-21
 
@@ -40,6 +40,12 @@ func (p *PebbleStore) NewRawSnapshot() (RawSnapshot, error) {
 	}
 	return &rawSnapshot{snap: p.db.NewSnapshot()}, nil
 }
+
+// LockIdentity identifies this store's engine: the pointer to its gated
+// handle, the same for every wrapper that embeds the store and different for
+// every store. It satisfies the decisions package's KV and is used to key its
+// per-subject locks; it is not part of RawKVStore.
+func (p *PebbleStore) LockIdentity() any { return p.db }
 
 type rawSnapshot struct{ snap *GatedSnapshot }
 

@@ -1,5 +1,5 @@
 // file: internal/decisions/vetoes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a2e90c7-35d1-4b48-9f6e-d17b83a40c52
 // last-edited: 2026-10-21
 
@@ -20,7 +20,8 @@ var dlog = logger.New("decisions")
 
 // IDResolver maps an entity id to the id that survives merges: an author id
 // that was merged away resolves to its canonical author. It returns id
-// unchanged when there is no redirect.
+// unchanged when there is no redirect. What it returns is canonicalised
+// (CanonicalID) before use; a result that is not a valid id is an error.
 type IDResolver func(entityType, id string) (string, error)
 
 // maxTombstoneHops bounds a redirect chain; ResolveTombstoneChains keeps them
@@ -102,7 +103,9 @@ type Vetoes struct {
 // that commits while Load runs (a re-reject that moves a pair from one family
 // to another deletes one edge and writes another in one batch) is seen whole
 // or not at all, never half: without that, Load could read the subject as
-// rejected but miss both of its edges.
+// rejected but miss both of its edges. The raw rows are collected and the
+// snapshot closed BEFORE any id is resolved, so tombstone reads (database
+// reads of their own) never extend the snapshot's lease.
 //
 // Stored ids are resolved too: an edge recorded as (7, 9) still vetoes the
 // pair after 9 is merged into 4, because the snapshot holds (4, 7). An edge
@@ -112,19 +115,59 @@ func (s *Store) Load(ctx context.Context, resolve IDResolver) (*Vetoes, error) {
 	if resolve == nil {
 		resolve = func(_, id string) (string, error) { return id, nil }
 	}
+	rows, err := s.readRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// The snapshot is closed by now. Resolving can read the database (author
+	// tombstones), and those reads must not extend the snapshot's lease.
+	v := &Vetoes{
+		resolve:  resolve,
+		subjects: rows.subjects,
+		edges:    map[pairID]map[string]struct{}{},
+		members:  map[entityID]map[famRec]struct{}{},
+	}
+	for _, e := range rows.edges {
+		if err := v.addEdge(e.typ, e.a, e.b, e.family); err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range rows.members {
+		rid, err := v.resolveID(m.typ, m.id)
+		if err != nil {
+			return nil, err
+		}
+		k := entityID{m.typ, rid}
+		if v.members[k] == nil {
+			v.members[k] = map[famRec]struct{}{}
+		}
+		v.members[k][famRec{m.family, m.recordID}] = struct{}{}
+	}
+	return v, nil
+}
+
+type rawEdge struct{ typ, a, b, family string }
+type rawMember struct{ typ, id, family, recordID string }
+
+// loadedRows is what one snapshot read collected, before any id is resolved.
+type loadedRows struct {
+	subjects map[string]rejected
+	edges    []rawEdge
+	members  []rawMember
+}
+
+// readRows reads the three veto families from ONE snapshot and closes it
+// before returning.
+func (s *Store) readRows(ctx context.Context) (*loadedRows, error) {
 	snap, err := s.kv.NewRawSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("decisions: open snapshot: %w", err)
 	}
 	defer func() { _ = snap.Close() }()
 
-	v := &Vetoes{
-		resolve:  resolve,
-		subjects: map[string]rejected{},
-		edges:    map[pairID]map[string]struct{}{},
-		members:  map[entityID]map[famRec]struct{}{},
-	}
-	err = scanAll(ctx, snap, prefixActive, func(p database.KVPair) error {
+	rows := &loadedRows{subjects: map[string]rejected{}}
+	if err := scanAll(ctx, snap, prefixActive, func(p database.KVPair) error {
 		opKind, subject, ok := parseActiveKey(p.Key)
 		if !ok {
 			return fmt.Errorf("%w: unparseable active key %q", ErrCorrupt, p.Key)
@@ -133,10 +176,9 @@ func (s *Store) Load(ctx context.Context, resolve IDResolver) (*Vetoes, error) {
 		if err := json.Unmarshal(p.Value, &row); err != nil {
 			return fmt.Errorf("%w: decode active row %s: %w", ErrCorrupt, p.Key, err)
 		}
-		v.subjects[subjectLockKey(opKind, subject)] = rejected{hashes: row.RejectedHashes}
+		rows.subjects[subjectLockKey(opKind, subject)] = rejected{hashes: row.RejectedHashes}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if err := scanAll(ctx, snap, prefixEdge, func(p database.KVPair) error {
@@ -144,7 +186,8 @@ func (s *Store) Load(ctx context.Context, resolve IDResolver) (*Vetoes, error) {
 		if !ok {
 			return fmt.Errorf("%w: unparseable edge key %q", ErrCorrupt, p.Key)
 		}
-		return v.addEdge(typ, lo, hi, fam)
+		rows.edges = append(rows.edges, rawEdge{typ, lo, hi, fam})
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -153,28 +196,36 @@ func (s *Store) Load(ctx context.Context, resolve IDResolver) (*Vetoes, error) {
 		if !ok {
 			return fmt.Errorf("%w: unparseable membership key %q", ErrCorrupt, p.Key)
 		}
-		rid2, err := resolve(typ, id)
-		if err != nil {
-			return err
-		}
-		k := entityID{typ, rid2}
-		if v.members[k] == nil {
-			v.members[k] = map[famRec]struct{}{}
-		}
-		v.members[k][famRec{fam, rid}] = struct{}{}
+		rows.members = append(rows.members, rawMember{typ, id, fam, rid})
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return v, nil
+	return rows, nil
+}
+
+// resolveID resolves one id and canonicalises what the resolver returned: a
+// resolver is caller code, and a ULID it hands back in lower case, or with
+// stray whitespace, would otherwise key a different pair than the stored
+// (canonical) ids do. A result that is not a valid id is an error.
+func (v *Vetoes) resolveID(entityType, id string) (string, error) {
+	r, err := v.resolve(entityType, id)
+	if err != nil {
+		return "", err
+	}
+	c, err := CanonicalID(r)
+	if err != nil {
+		return "", fmt.Errorf("decisions: resolver returned a bad id for %s %q: %w", entityType, id, err)
+	}
+	return c, nil
 }
 
 func (v *Vetoes) addEdge(typ, a, b, family string) error {
-	ra, err := v.resolve(typ, a)
+	ra, err := v.resolveID(typ, a)
 	if err != nil {
 		return err
 	}
-	rb, err := v.resolve(typ, b)
+	rb, err := v.resolveID(typ, b)
 	if err != nil {
 		return err
 	}
@@ -198,6 +249,9 @@ func (v *Vetoes) addEdge(typ, a, b, family string) error {
 // blocked here, never auto-applied by the caller). subjectKey is
 // canonicalised; a malformed one is an error, never "not rejected".
 func (v *Vetoes) SubjectRejected(opKind, subjectKey, materialHash string) (bool, error) {
+	if err := checkComponent("op_kind", opKind); err != nil {
+		return false, err
+	}
 	subjectKey, err := CanonicalSubjectKey(subjectKey)
 	if err != nil {
 		return false, err
@@ -230,11 +284,11 @@ func (v *Vetoes) PairVetoed(entityType, a, b, family string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ra, err := v.resolve(entityType, a)
+	ra, err := v.resolveID(entityType, a)
 	if err != nil {
 		return false, err
 	}
-	rb, err := v.resolve(entityType, b)
+	rb, err := v.resolveID(entityType, b)
 	if err != nil {
 		return false, err
 	}

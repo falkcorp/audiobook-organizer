@@ -1,5 +1,5 @@
 // file: internal/decisions/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f7b3a91-d542-4e86-a1c3-78e9b60d2f15
 // last-edited: 2026-10-21
 
@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +37,13 @@ type KV interface {
 	// through one, so they agree with each other however many records commit
 	// meanwhile. database.RawSnapshotter, which *PebbleStore implements.
 	NewRawSnapshot() (database.RawSnapshot, error)
+	// LockIdentity returns a pointer that identifies the engine behind this
+	// KV, the same pointer for every wrapper of one engine and a different one
+	// for each engine. Record's per-subject lock is keyed by it, so two Stores
+	// over two wrappers of one store still exclude each other. *PebbleStore
+	// returns its engine handle; a wrapper that embeds a KV inherits the
+	// method and must not override it.
+	LockIdentity() any
 }
 
 var (
@@ -62,24 +68,20 @@ const scanPage = 500
 
 // subjectLocks serialises Record per (store identity, subject). It is
 // package-level on purpose: the lock must protect the KEYS, and two Store
-// values over one KV write the same keys, so a lock inside each Store let them
-// interleave the verdict read-modify-write and fork the SupersedesID chain.
+// values over one engine write the same keys, so a lock inside each Store let
+// them interleave the verdict read-modify-write and fork the SupersedesID
+// chain.
 var subjectLocks keyedmutex.Mutex
 
-// kvScope names a KV for lock purposes: its address. A KV that is not a
-// pointer has no identity and cannot be told apart from a copy, so New
-// refuses it rather than lock the wrong thing.
-func kvScope(kv KV) string {
-	v := reflect.ValueOf(kv)
-	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
-		panic(fmt.Sprintf("decisions: New needs a non-nil pointer KV (it identifies the store by address), got %T", kv))
-	}
-	return fmt.Sprintf("%x", v.Pointer())
-}
+// lockScope names the engine behind kv for lock purposes: its LockIdentity,
+// which a wrapper inherits from the store it embeds. It is formatted with %p,
+// so an identity that is not a pointer yields one shared fixed scope: the
+// locks then over-serialise (every such KV shares them), they never miss.
+func lockScope(kv KV) string { return fmt.Sprintf("%p", kv.LockIdentity()) }
 
-// Store reads and writes decisions. Any number of Stores may share one KV
-// (the per-subject lock is keyed by the KV itself); they must be built over
-// the very same KV value, not over different wrappers of it.
+// Store reads and writes decisions. Any number of Stores may share one engine,
+// through the same KV value or through different wrappers of it: the
+// per-subject lock is keyed by KV.LockIdentity, not by the KV value.
 type Store struct {
 	kv  KV
 	now func() time.Time
@@ -102,9 +104,9 @@ func WithEntropy(r io.Reader) Option {
 	return func(s *Store) { s.entropy = ulid.Monotonic(r, 0) }
 }
 
-// New returns a Store over kv. kv must be a non-nil pointer.
+// New returns a Store over kv.
 func New(kv KV, opts ...Option) *Store {
-	s := &Store{kv: kv, now: time.Now, entropy: ulid.Monotonic(crand.Reader, 0), lockScope: kvScope(kv)}
+	s := &Store{kv: kv, now: time.Now, entropy: ulid.Monotonic(crand.Reader, 0), lockScope: lockScope(kv)}
 	for _, o := range opts {
 		o(s)
 	}
@@ -380,8 +382,14 @@ func (s *Store) readRecord(id string) (*Record, error) {
 }
 
 // Verdict returns the current state of a proposal, or nil when nothing was
-// ever decided about it. subjectKey is canonicalised (lower-case hex).
+// ever decided about it. subjectKey is canonicalised (lower-case hex) and
+// opKind must be a valid key component (not empty, no control character): a
+// malformed one is an error (ErrInvalidComponent), never "nothing decided",
+// which would read as "not rejected". Lookup and History go through here.
 func (s *Store) Verdict(opKind, subjectKey string) (*Verdict, error) {
+	if err := checkComponent("op_kind", opKind); err != nil {
+		return nil, err
+	}
 	subjectKey, err := CanonicalSubjectKey(subjectKey)
 	if err != nil {
 		return nil, err
@@ -504,6 +512,14 @@ type Filter struct {
 
 // Iterate visits records in ULID (decision time) order, for listing and
 // JSONL export. fn returning an error stops the walk and returns that error.
+//
+// ULID order is the order ids were minted, which can differ slightly from
+// commit order when several Store instances write to one KV: each Store keeps
+// its own monotonic entropy and clock reading, and two records minted in the
+// same millisecond by different Stores may commit in the opposite order. A
+// subject's own history (History) is exact either way: it follows
+// SupersedesID pointers, which the per-subject lock makes one linear chain, not
+// id order.
 func (s *Store) Iterate(ctx context.Context, f Filter, fn func(Record) error) error {
 	if f.OpKind != "" {
 		prefix := opPrefix(f.OpKind)
