@@ -167,8 +167,13 @@ to an account keep signing in to it, because the resolver matches provider and
 subject before the email. It says not to clear the verified holder's email,
 not to set the address for the others (refused, or wrong when this person
 signs in to another account through SSO), and to leave the accounts as they
-are until they are merged. Each account appears in one warning. No address is
-logged.
+are until they are merged. Each account appears in one warning. An admin
+that alone holds a typed-in address gets its own text instead: there is
+nothing to merge, so it says setting the address as an admin makes it
+verified when it is the owner's own, and to clear it otherwise; it is
+skipped for addresses no identity provider could carry (`@localhost`, bare
+host names, IP literals, `.local`, `.internal`, `.test` and similar). No
+address is logged.
 
 When an identity-provider-verified login, or the acceptance of an invite an
 admin emailed, finds its address held unproven by other accounts, the verified

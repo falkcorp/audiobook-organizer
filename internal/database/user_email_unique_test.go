@@ -1,7 +1,7 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package database
 
@@ -1228,13 +1228,18 @@ func TestEmailConflictWarning_NoHolder(t *testing.T) {
 }
 
 // A non-admin alone holding an address as typed in is not a conflict; an
-// admin alone is (an SSO login would take the address from it).
+// admin alone is (an SSO login would take the address from it), with its own
+// text: nothing to merge, and setting the address is the remedy when it is
+// the owner's. An address no identity provider can carry (admin@localhost)
+// is skipped.
 func TestReconcile_LoneTypedInAddressWarnsOnlyForAnAdmin(t *testing.T) {
 	s := newInviteTestStore(t)
 	viewer := mustUser(t, s, "viewer1", "viewer", "active")
 	setRawUserEmailSource(t, s, viewer, "viewer1@example.com", EmailSourceSelf)
 	admin := mustUser(t, s, "admin1", "admin", "active")
 	setRawUserEmailSource(t, s, admin, "admin1@example.com", EmailSourceSelf)
+	local := mustUser(t, s, "admin2", "admin", "active")
+	setRawUserEmailSource(t, s, local, "admin@localhost", EmailSourceSelf)
 	res, err := s.ReconcileVerifiedEmails()
 	if err != nil {
 		t.Fatal(err)
@@ -1242,5 +1247,40 @@ func TestReconcile_LoneTypedInAddressWarnsOnlyForAnAdmin(t *testing.T) {
 	want := []EmailConflict{{Unverified: []EmailConflictAccount{{ID: admin.ID, Admin: true}}}}
 	if !reflect.DeepEqual(res.EmailConflicts, want) {
 		t.Fatalf("EmailConflicts = %+v, want %+v", res.EmailConflicts, want)
+	}
+	msg := warningNaming(t, res.Warnings, admin.ID)
+	for _, part := range []string{
+		"account " + admin.ID + " (admin) has a typed-in address (not verified) that no other account holds",
+		"setting it for account " + admin.ID + " as an admin on the Users page makes it verified",
+		"clear it from this one",
+	} {
+		if !strings.Contains(msg, part) {
+			t.Fatalf("warning lacks %q: %s", part, msg)
+		}
+	}
+	for _, wrong := range []string{"until they are merged", "Do not set the address", "Do NOT clear"} {
+		if strings.Contains(msg, wrong) {
+			t.Fatalf("the lone-admin warning uses the multi-account advice %q: %s", wrong, msg)
+		}
+	}
+}
+
+func TestIdPCanCarry(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"owner@example.com":      true,
+		"a@mail.example.org":     true,
+		"admin@localhost":        false,
+		"admin@host":             false,
+		"admin@box.local":        false,
+		"admin@svc.internal":     false,
+		"admin@x.test":           false,
+		"admin@foo.localhost":    false,
+		"admin@[192.0.2.1]":      false,
+		"admin@router.home.arpa": false,
+		"no-at-sign.example.com": false,
+	} {
+		if got := idpCanCarry(addr); got != want {
+			t.Errorf("idpCanCarry(%q) = %v, want %v", addr, got, want)
+		}
 	}
 }

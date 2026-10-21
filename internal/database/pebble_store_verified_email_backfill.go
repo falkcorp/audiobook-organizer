@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package database
 
@@ -122,7 +122,8 @@ type DowngradedDuplicate struct {
 
 // EmailConflict is one address, as the user rows stand now, that an operator
 // should know about: held by more than one account, or held as typed in (not
-// verified) by an admin account. HolderID holds it verified ("" when no
+// verified) by an admin account alone when an identity provider could carry
+// it (idpCanCarry). HolderID holds it verified ("" when no
 // account does); Unverified hold it as typed in.
 type EmailConflict struct {
 	HolderID   string
@@ -151,6 +152,9 @@ type EmailConflictAccount struct {
 // address from the typed-in holders), while identities already linked to an
 // account keep signing in to it. No email address is logged.
 func emailConflictWarning(c EmailConflict) string {
+	if c.HolderID == "" && len(c.Unverified) == 1 {
+		return loneTypedInAdminWarning(c.Unverified[0])
+	}
 	var b strings.Builder
 	b.WriteString("verified email: ")
 	desc := make([]string, 0, len(c.Unverified))
@@ -190,6 +194,42 @@ func emailConflictWarning(c EmailConflict) string {
 	return b.String()
 }
 
+// loneTypedInAdminWarning is the warning for an admin account holding an
+// address as typed in that no other account holds. There is nothing to merge,
+// and setting the address is the remedy when it is this account's own.
+func loneTypedInAdminWarning(a EmailConflictAccount) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "verified email: account %s (admin) has a typed-in address (not verified) that no other account holds. A NEW SSO identity with this address would create a separate account and take the address from it", a.ID)
+	if a.Linked {
+		fmt.Fprintf(&b, "; identities already linked to account %s keep signing in to account %s", a.ID, a.ID)
+	}
+	fmt.Fprintf(&b, ". If the address is this account owner's own, setting it for account %s as an admin on the Users page makes it verified (a new SSO identity with it then links here); if SSO with it should reach a different account, clear it from this one. This warning repeats at every start until then", a.ID)
+	return b.String()
+}
+
+// idpCanCarry reports whether an identity provider could ever assert lower
+// (normalized) as a verified address: false for a local or non-routable
+// domain (localhost, a bare host name, an IP literal, or a reserved or
+// local-only suffix such as .local, .internal, .test). A lone typed-in admin
+// address that no IdP can carry cannot be taken by an SSO login, so it is not
+// worth a warning.
+func idpCanCarry(lower string) bool {
+	at := strings.LastIndexByte(lower, '@')
+	if at < 0 {
+		return false
+	}
+	domain := strings.TrimSuffix(lower[at+1:], ".")
+	if domain == "" || strings.HasPrefix(domain, "[") || !strings.Contains(domain, ".") {
+		return false
+	}
+	for _, suffix := range []string{".localhost", ".local", ".localdomain", ".internal", ".invalid", ".test", ".example", ".lan", ".home.arpa"} {
+		if strings.HasSuffix(domain, suffix) {
+			return false
+		}
+	}
+	return true
+}
+
 // emailConflictsLocked computes the EmailConflicts from the user rows as they
 // stand, so the warnings repeat at every start until the accounts are merged
 // (not only at the start that stamped legacy rows). demoted marks the ids
@@ -226,8 +266,11 @@ func (p *PebbleStore) emailConflictsLocked(demoted map[string]bool) ([]EmailConf
 			anyAdmin = anyAdmin || admin
 			c.Unverified = append(c.Unverified, EmailConflictAccount{ID: u.ID, Admin: admin, Demoted: demoted[u.ID], Linked: len(ids) > 0})
 		}
-		if len(c.Unverified) == 0 || (c.HolderID == "" && len(c.Unverified) == 1 && !anyAdmin) {
+		if len(c.Unverified) == 0 {
 			continue
+		}
+		if c.HolderID == "" && len(c.Unverified) == 1 && (!anyAdmin || !idpCanCarry(lower)) {
+			continue // a lone typed-in address: worth a warning only for an admin, and only if an IdP could carry it
 		}
 		slices.SortFunc(c.Unverified, func(a, b EmailConflictAccount) int { return strings.Compare(a.ID, b.ID) })
 		out = append(out, c)
