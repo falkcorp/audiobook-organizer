@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.31.0
+// version: 1.31.1
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -398,6 +398,8 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_same_audio_other_row: 'Same chapters in another row of the folder',
   skipped_ambiguous: 'Matches more than one parent',
   skipped_copy_unproven: 'Copy not proven (no import path or hash)',
+  skipped_no_hash: 'Copy not proven (a file hash is missing)',
+  held_ambiguous_parent: 'Hash matches more than one multi-file book',
   skipped_moved_unproven: 'Move not proven (name and size only)',
   skipped_duration_gate: 'Files too long to be chapters',
   skipped_duration_unknown: 'Chapter durations unknown',
