@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-18
+// last-edited: 2026-10-21
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -398,6 +398,20 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read tags of %s: %v", c.BookID, err)}
 		}
 		return verdictOf(CheckBookTagAdd(tags, c))
+	case ChangeTypeUserContentFollow:
+		// A rating row is checked against the survivor's ratings, as the
+		// revert will (CheckRatingFollowCurrent). Collection and playlist
+		// rows are compare-and-sets under the list's own lock and have no
+		// preflight reader; the revert runs them.
+		kind, id, _ := UserContentFromField(c.FieldName)
+		if kind != UserContentRating {
+			return rowVerdict{}
+		}
+		survivor, refusal := CheckRestoreBook(store, id)
+		if refusal != nil {
+			return rowVerdict{refusal: refusal}
+		}
+		return verdictOf(CheckRatingFollowCurrent(survivor, c))
 	case ChangeTypeUserBookStateSet:
 		// The revert puts the user's state and positions back only while
 		// they still hold what the import wrote (CheckUserBookStateSet). It
