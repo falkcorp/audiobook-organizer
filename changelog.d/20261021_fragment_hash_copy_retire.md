@@ -21,12 +21,15 @@ A hash only retires a book when it can stand as proof. A hash-copy child is held
 the parent row's file is not on disk, `held_degenerate_hash` for a zero-length
 file, the empty-file digest, or two files of different sizes,
 `held_short_or_boilerplate` for a known duration under 60 seconds or an intro,
-credits or sting title, and `copy_unproven` when both paths name one file. Over
+credits or sting title, and `skipped_copy_unproven` when both paths name one file or one is a hard link of the other. A held row's id is `held-<kind>:<child>` (the kind's own `held_`/`skipped_` is not repeated). Over
 the sampling threshold, where the stored hash covers only the head, tail and
 size, the two files are compared by whole-file SHA-256 at plan time
 (`held_partial_hash_unproven` when that read fails, `held_partial_hash_mismatch`
 when the bytes differ); the proof is stored with the row and apply re-checks
-both files by stat rather than re-reading them. `book_ids` now scopes only the
+both files by stat rather than re-reading them, except on a filesystem with
+whole-second timestamps, where a same-size rewrite can leave the stat unchanged,
+so apply reads both files again under the merge lock and refuses the row if the
+digest differs. `book_ids` now scopes only the
 children, so a scoped plan sees the same parents as a full one, and an iTunes
 copy of the parent that the iTunes-parent rule sets aside no longer counts as a
 second parent at apply.
@@ -37,4 +40,15 @@ Every Repairs retire (`fragment-consolidation`, `duplicate-copies`,
 its places in static collections and playlists onto the survivor, as the
 listening state already was. Each move is journaled as `user_content_follow`
 and restored by the undo of the apply, which refuses to overwrite a rating,
-collection or playlist edited since.
+collection or playlist edited since. A store that cannot reach collections or
+playlists refuses the retire before its first write rather than carrying part
+of the state. The collections and playlists are listed once per apply operation
+(an index with a 30 second lifetime, a hint only: every list is read again
+under its lock before it is written), not once per retire. Ratings revert field
+by field, so reverting one retire never undoes a field another retire filled.
+When a later retire removed its book from a list because the survivor was
+already listed there, it journals a marker on the survivor, so reverting the
+EARLIER retire keeps the survivor in the list until the later one is reverted
+too. The undo preflight predicts a refusal for a carried collection, playlist or
+rating that was edited since (it gives no prediction when the store cannot read
+lists).

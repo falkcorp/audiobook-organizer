@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_filesig_unix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3c6a19-2f7b-4d05-b9a4-1c6e8f3d7a52
-// last-edited: 2026-10-06
+// last-edited: 2026-10-21
 
 //go:build linux || darwin
 
@@ -93,7 +93,7 @@ func TestFragmentFixer_ZeroInodeNeverProves(t *testing.T) {
 		ps, _, err := fragHashFile(pa)
 		require.NoError(t, err)
 		fs.Dev, fs.Ino = 0, 0
-		why := fx.restoreContentProofs(newFragLibrary(), []fragContentProof{{FragBook: "b", FragFile: "f", FragPath: a, FragSig: fs,
+		why := fx.restoreContentProofs(context.Background(), newFragLibrary(), []fragContentProof{{FragBook: "b", FragFile: "f", FragPath: a, FragSig: fs,
 			FragDigest: "d", ParentRow: "r", ParentPath: pa, ParentSig: ps, ParentDigest: "d"}})
 		require.Contains(t, why, "no file identity")
 	})
