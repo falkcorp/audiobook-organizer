@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 04ccc271-b21f-4dfa-b788-6ab9e21ca3ca
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package metafetch
 
@@ -130,6 +130,7 @@ func newSweepFixture(t *testing.T) *sweepFixture {
 	for k, v := range map[string][]byte{
 		"metadata_fetch_cache:book-gone-01:audible": legacy,
 		"opchange:synthetic-01":                     []byte(`{}`),
+		"decision:v:synthetic-kind:synthetic-01":    []byte(`{}`), // owner decisions are never pruned
 	} {
 		if err := s.SetRaw(k, v); err != nil {
 			t.Fatal(err)

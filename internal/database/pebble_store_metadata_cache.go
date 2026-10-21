@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-10-12
+// last-edited: 2026-10-21
 
 package database
 
@@ -145,7 +145,8 @@ func (p *PebbleStore) commitMetadataCacheWrite(bookID string, data []byte, entry
 //   - UpdateBook, when a retitle or re-credit marks the book's cache row
 //     Stale in the book's own batch, or an ASIN replacement stamps it;
 //   - DeleteBook, which deletes the row with the book's other sidecars;
-//   - SetRaw, DeleteRaw and DeleteRawBatch on a key under the prefix;
+//   - SetRaw, DeleteRaw, DeleteRawBatch and ApplyRawBatch on a key under the
+//     prefix;
 //   - Reset, which wipes everything (and so records no book: a reader behind
 //     it is told to rebuild).
 //

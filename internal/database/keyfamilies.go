@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package database
 
@@ -177,6 +177,14 @@ var keyFamilies = []KeyFamily{
 	{"cat_raw:", "catalog raw provider payloads", "internal/database/catalog_entry_store.go"},
 	{"cat_series:", "catalog index by series", "internal/database/catalog_entry_store.go"},
 	{"cat_stale:", "catalog staleness index", "internal/database/catalog_entry_store.go"},
+
+	// ── Decisions (internal/decisions): owner rejects/approves, never pruned ──
+	{"decision:ent:", "decision history index by entity (never pruned)", "internal/decisions/store.go"},
+	{"decision:mb:", "decision veto membership rows for rejected sets over 50 entities (never pruned)", "internal/decisions/store.go"},
+	{"decision:op:", "decision history index by op kind, export order (never pruned)", "internal/decisions/store.go"},
+	{"decision:pe:", "decision pair-edge veto index, one row per rejecting record (never pruned)", "internal/decisions/store.go"},
+	{"decision:r:", "decision log: one labelled example per owner decision (never pruned)", "internal/decisions/store.go"},
+	{"decision:v:", "decision verdicts: current reject state of each proposal (never pruned)", "internal/decisions/store.go"},
 
 	// ── Dedup and embeddings (EmbeddingStore shares the main DB) ──
 	{"dedup:", "dedup engine state", "internal/database/embedding_store.go"},

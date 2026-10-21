@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package database
 
@@ -966,7 +966,7 @@ func TestGetOpLogsV2_TailMatchesFull(t *testing.T) {
 // A NEW function that needs the key must be added here with the right role,
 // and a new writer must go through commitOpV2Row or call stageOpRow. That is
 // the point: review sees every place that can touch the row family. The
-// runtime half is rejectOpv2OpRawKey on SetRaw/DeleteRaw/DeleteRawBatch, for
+// runtime half is rejectOpv2OpRawKey on SetRaw/DeleteRaw/DeleteRawBatch/ApplyRawBatch, for
 // keys built where no AST check can follow them.
 var opv2OpKeyAllowlist = map[string]string{
 	"internal/database/pebble_store_ops_v2_timeline.go:const opv2OpPrefix":                           "read",
@@ -1479,8 +1479,9 @@ func opv2Calls(body ast.Node, name string) bool {
 }
 
 // TestRawKeyEntryPointsRefuseOpRows is the runtime half of the ratchet:
-// SetRaw, DeleteRaw and DeleteRawBatch refuse an opv2:op: key however it was
-// built, and DeleteRawBatch refuses the whole batch before deleting anything.
+// SetRaw, DeleteRaw, DeleteRawBatch and ApplyRawBatch refuse an opv2:op: key
+// however it was built, and the batch forms refuse the whole batch before
+// writing anything.
 func TestRawKeyEntryPointsRefuseOpRows(t *testing.T) {
 	p := newTimelineStore(t)
 	refused := []string{
@@ -1497,6 +1498,12 @@ func TestRawKeyEntryPointsRefuseOpRows(t *testing.T) {
 		}
 		if err := p.SetRaw("unrelated:k", []byte("v")); err != nil {
 			t.Fatal(err)
+		}
+		if err := p.ApplyRawBatch([]RawWrite{{Key: "unrelated:k", Delete: true}, {Key: key, Value: []byte("{}")}}); !errors.Is(err, errOpv2OpRawKey) {
+			t.Fatalf("ApplyRawBatch(%q) = %v, want errOpv2OpRawKey", key, err)
+		}
+		if v, err := p.GetRaw("unrelated:k"); err != nil || string(v) != "v" {
+			t.Fatalf("a refused ApplyRawBatch changed another key: %q %v", v, err)
 		}
 		if err := p.DeleteRawBatch([]string{"unrelated:k", key}); !errors.Is(err, errOpv2OpRawKey) {
 			t.Fatalf("DeleteRawBatch(%q) = %v, want errOpv2OpRawKey", key, err)
