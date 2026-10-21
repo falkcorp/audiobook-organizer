@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package abs
 
@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -161,8 +162,24 @@ import (
 //
 // Every hop-2 load logs the assertion kind it received and the names of any CF_
 // cookies, and a reauth load that still carries a service token gets its own
-// warning, so the journal says which case is live. Only after the single
-// bounce does a missing identity become a terminal access_denied.
+// warning, so the journal says which case is live.
+//
+// The strict-OFF case is recovered server-side (2026-10-20), and a plain 302
+// cannot do it: a redirect cannot shed a cookie. A service-token browser
+// navigation is instead answered with a static page (middleware.WriteCFBouncePage)
+// that meta-refreshes to hop 2 with reauth=N+1, and expires the poisoned
+// CF_Authorization cookie so that refresh reaches Cloudflare's identity login:
+//
+//   - first load, service-token assertion: bounce to reauth=1, expiring the
+//     cookie when the CF_Authorization cookie is itself a service-token session;
+//   - reauth=1, still a service token (so the cookie alone is carrying it):
+//     expire the cookie unconditionally, bounce to reauth=2;
+//   - reauth=2 or higher, still a service token: terminal access_denied.
+//
+// Only a browser navigation (Sec-Fetch-Mode navigate, Sec-Fetch-Dest document)
+// is ever bounced -- see middleware.IsBrowserNavigation. The same helper recovers
+// the web UI's own pages (middleware.CFServiceTokenRecovery), which the same
+// poisoned cookie locks out of the login.
 //
 // # Why hop 3 does not require an identity assertion
 //
@@ -210,8 +227,14 @@ const (
 	// OIDCBrowserPath is hop 2, opened in the system browser.
 	OIDCBrowserPath = "/auth/openid/browser"
 
-	// oidcReauthParam marks hop 2's single self-redirect (see the file comment).
+	// oidcReauthParam counts hop 2's service-token recovery bounces: absent or 0 on
+	// the first load, 1 after the first bounce, 2 after the second (see the file
+	// comment). Any other non-empty value is treated as the last stage so a junk
+	// value can only deny, never loop.
 	oidcReauthParam = "reauth"
+
+	// oidcMaxReauth is the stage at which a still-service-token load is denied.
+	oidcMaxReauth = 2
 
 	// oidcMaxClientIDLen caps client_id. Real clients send a short fixed name
 	// ("AudioBooth", "Audiobookshelf-App"); the value is parked, echoed into the
@@ -725,7 +748,8 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 
 	identity, authErr := h.resolver.ResolveCFAssertion(c)
 	noPerson := authErr == nil && (identity == nil || identity.User == nil)
-	reauth := c.Query(oidcReauthParam) != ""
+	reauthStage := oidcReauthStage(c.Query(oidcReauthParam))
+	reauth := reauthStage > 0
 
 	// One line per browser-hop load, first and reauth alike, saying what
 	// Cloudflare actually let through: which kind of assertion, and whether a
@@ -739,23 +763,41 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		cfCookies, logger.SanitizeLogValue(pending.CallerKey))
 
 	// A valid assertion that names no person: on iOS 17.4+ the initial browser
-	// load carries the app's service token. Redirect to ourselves once; that load
-	// is not the initial URL, so it carries no service-token HEADER, and
-	// Cloudflare has to admit it some other way. Whether that is the person
-	// depends on the Access configuration — see the file comment.
-	if noPerson && strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)) != "" && !reauth {
-		if origin, ok := h.oidcOrigin(c); ok {
-			c.Header("Location", oidcBrowserURL(origin, reqID, true))
-			c.Status(http.StatusFound)
-			return
+	// load carries the app's service token, and with strict_service_token_auth
+	// off Cloudflare also leaves a service-token CF_Authorization cookie in the
+	// browser's shared jar. A redirect cannot shed that cookie, so answer a
+	// service-token navigation with the static bounce page instead (see the file
+	// comment): it expires the cookie and meta-refreshes to the next stage, a
+	// fresh navigation without the custom headers that Cloudflare must send
+	// through its identity login.
+	if noPerson && assertionKind == oidcAssertionServiceToken && reauthStage < oidcMaxReauth {
+		if info := h.resolver.ServiceTokenBouncer().Inspect(c); info.Kind == servermiddleware.CFNavServiceToken {
+			if origin, ok := h.oidcOrigin(c); ok {
+				// Stage 0 expires only a cookie that is verifiably the service-token
+				// session; stage 1 means that cookie (or one we could not classify)
+				// is all that is left, so it goes unconditionally.
+				expire := info.CookiePoisoned || reauthStage >= 1
+				if reauthStage >= 1 {
+					oidcLog.Warn("openid browser hop reauth load still carried a service-token assertion: service_token=%s cf_cookies=%s caller=%s",
+						logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)), cfCookies,
+						logger.SanitizeLogValue(pending.CallerKey))
+				}
+				oidcLog.Info("openid browser hop bouncing a service-token navigation: next_reauth=%d expire_cookie=%t service_token=%s caller=%s",
+					reauthStage+1, expire, servermiddleware.CFLogName(info.CommonName),
+					logger.SanitizeLogValue(pending.CallerKey))
+				oidcBrowserHeaders(c)
+				servermiddleware.WriteCFBouncePage(c, oidcBrowserURL(origin, reqID, reauthStage+1), expire)
+				return
+			}
 		}
 	}
 	if noPerson && reauth && assertionKind == oidcAssertionServiceToken {
-		// The bounce did not shed the token: Cloudflare admitted the reload on a
-		// service token again — most likely a service-token CF_Authorization
-		// cookie in the browser's shared jar (strict_service_token_auth off).
-		oidcLog.Warn("openid browser hop reauth load still carried a service-token assertion: service_token=%s cf_cookies=%s caller=%s",
-			logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)), cfCookies,
+		// Nothing left to try: the recovery bounces did not shed the token, or the
+		// request was not a browser navigation we may bounce. Name the likely cause
+		// (the owner's fix is Cloudflare's own logout page), then deny below.
+		oidcLog.Warn("openid browser hop still carried a service-token assertion after recovery: service_token=%s cf_cookies=%s reauth=%d caller=%s; "+
+			"the browser's CF_Authorization session is a service token. Opening /cdn-cgi/access/logout on this host clears it",
+			logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)), cfCookies, reauthStage,
 			logger.SanitizeLogValue(pending.CallerKey))
 	}
 
@@ -1307,14 +1349,27 @@ func oidcBrowserReqID(c *gin.Context) (string, bool) {
 }
 
 // oidcBrowserURL is hop 2's absolute URL for a parked request, as used by
-// hop 2's own reauth bounce (the browser follows it directly, so it needs no
-// echoes for the official app).
-func oidcBrowserURL(origin, reqID string, reauth bool) string {
+// hop 2's own recovery bounce (the browser follows it directly, so it needs no
+// echoes for the official app). stage is the reauth value: 0 omits it.
+func oidcBrowserURL(origin, reqID string, stage int) string {
 	u := origin + OIDCBrowserPath + "?req=" + url.QueryEscape(reqID)
-	if reauth {
-		u += "&" + oidcReauthParam + "=1"
+	if stage > 0 {
+		u += "&" + oidcReauthParam + "=" + strconv.Itoa(stage)
 	}
 	return u
+}
+
+// oidcReauthStage parses the reauth query value: 0 when absent, the number when
+// 1..oidcMaxReauth, and oidcMaxReauth for anything else non-empty.
+func oidcReauthStage(v string) int {
+	switch strings.TrimSpace(v) {
+	case "":
+		return 0
+	case "1":
+		return 1
+	default:
+		return oidcMaxReauth
+	}
 }
 
 // isS256Shaped reports whether s is exactly 43 unpadded base64url characters —

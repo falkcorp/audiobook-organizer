@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package abs_test
 
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -114,8 +115,79 @@ func (h *harness) get(t *testing.T, path, assertion string) *httptest.ResponseRe
 	if assertion != "" {
 		headers[oauth.CFAccessHeader] = assertion
 	}
+	// Hop 2 is opened in a real browser, which always sends these; hop 1 and
+	// the rest are the app's URLSession and do not.
+	if strings.HasPrefix(path, abshandler.OIDCBrowserPath) {
+		headers["Sec-Fetch-Mode"] = "navigate"
+		headers["Sec-Fetch-Dest"] = "document"
+	}
 	w, _ := h.do(t, request{method: http.MethodGet, path: path, headers: headers})
 	return w
+}
+
+// getWithCookie is a hop-2 browser navigation that also carries a
+// CF_Authorization cookie, as Safari's shared jar does.
+func (h *harness) getWithCookie(t *testing.T, path, assertion, cfCookie string) *httptest.ResponseRecorder {
+	t.Helper()
+	headers := map[string]string{
+		"Sec-Fetch-Mode": "navigate",
+		"Sec-Fetch-Dest": "document",
+		"Cookie":         "CF_Authorization=" + cfCookie,
+	}
+	if assertion != "" {
+		headers[oauth.CFAccessHeader] = assertion
+	}
+	w, _ := h.do(t, request{method: http.MethodGet, path: path, headers: headers})
+	return w
+}
+
+const wantExpireCFCookie = "CF_Authorization=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Secure; HttpOnly"
+
+var bounceMetaRe = regexp.MustCompile(`<meta http-equiv="refresh" content="0;url=([^"]+)">`)
+
+// assertHop2Bounce checks a hop-2 recovery bounce page and returns its target
+// as a request URI: 200, no-store, CSP, no script, a visible Continue link, a
+// meta refresh to hop 2 on this origin at reauth=wantStage, and the
+// CF_Authorization expiry exactly when wantExpire.
+func assertHop2Bounce(t *testing.T, w *httptest.ResponseRecorder, wantStage string, wantExpire bool) string {
+	t.Helper()
+	if w.Code != http.StatusOK || w.Header().Get("Location") != "" {
+		t.Fatalf("status %d Location %q body %q; want a 200 bounce page, not a redirect", w.Code, w.Header().Get("Location"), w.Body.String())
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.HasPrefix(csp, "default-src 'none'") {
+		t.Fatalf("Content-Security-Policy = %q, want default-src 'none'", csp)
+	}
+	body := w.Body.String()
+	if strings.Contains(strings.ToLower(body), "<script") {
+		t.Fatalf("bounce page must carry no script:\n%s", body)
+	}
+	cookies := w.Result().Header.Values("Set-Cookie")
+	if wantExpire {
+		if len(cookies) != 1 || cookies[0] != wantExpireCFCookie {
+			t.Fatalf("Set-Cookie = %q, want exactly %q", cookies, wantExpireCFCookie)
+		}
+	} else if len(cookies) != 0 {
+		t.Fatalf("Set-Cookie = %q, want none (a person's cookie must survive)", cookies)
+	}
+	m := bounceMetaRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("no meta refresh in bounce page:\n%s", body)
+	}
+	target := html.UnescapeString(m[1])
+	if !strings.Contains(body, `>Continue</a>`) || !strings.Contains(body, `href="`+html.EscapeString(target)+`"`) {
+		t.Fatalf("bounce page needs a visible Continue link to the same target:\n%s", body)
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "https" || u.Host != "example.com" || u.Path != abshandler.OIDCBrowserPath {
+		t.Fatalf("bounce target %q must be hop 2 on this origin", target)
+	}
+	if got := u.Query().Get("reauth"); got != wantStage {
+		t.Fatalf("bounce target %q has reauth=%q, want %q", target, got, wantStage)
+	}
+	return u.RequestURI()
 }
 
 // assertBrowserHopLocation is the core regression assertion: an ABSOLUTE https
@@ -543,38 +615,93 @@ func TestOpenIDHop2_NoIdentityRedirectsErrorWithoutConsuming(t *testing.T) {
 	h.consentPage(t, browser, oidcPersonAssertion)
 }
 
-// iOS 17.4+ loads hop 2 with the service token. Hop 2 redirects once to itself
-// (reauth=1) WITHOUT consuming, so the next load — which carries no service
-// token — can be authenticated as the person.
-func TestOpenIDHop2_ServiceTokenBouncesOnceThenCompletes(t *testing.T) {
+// With strict_service_token_auth off, iOS 17.4+ loads hop 2 with the service
+// token AND Safari's shared jar holds a service-token CF_Authorization cookie.
+// A plain 302 cannot shed a cookie, so hop 2 answers each service-token
+// navigation with a static page that expires the cookie and meta-refreshes to
+// the next stage; the reload reaches Cloudflare's identity login and comes back
+// as a person.
+func TestOpenIDHop2_PoisonedCookieIsExpiredThenPersonCompletes(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "s1")
 
-	w := h.get(t, browser, oidcServiceAssertion)
-	if w.Code != http.StatusFound {
-		t.Fatalf("status = %d, want 302", w.Code)
-	}
-	bounce, err := url.Parse(w.Header().Get("Location"))
-	if err != nil || bounce.Scheme != "https" || bounce.Host != "example.com" || bounce.Path != abshandler.OIDCBrowserPath {
-		t.Fatalf("bounce Location %q must be hop 2 on this origin", w.Header().Get("Location"))
-	}
-	if bounce.Query().Get("reauth") != "1" {
-		t.Fatalf("bounce %q must carry reauth=1", bounce)
-	}
+	next := assertHop2Bounce(t, h.getWithCookie(t, browser, oidcServiceAssertion, oidcServiceAssertion), "1", true)
 
-	q := h.allow(t, bounce.RequestURI(), oidcPersonAssertion)
+	q := h.allow(t, next, oidcPersonAssertion)
 	if q.Get("code") == "" || q.Get("state") != "s1" {
 		t.Fatalf("after the bounce a person must get a code; params %v", q)
 	}
 }
 
-// After the one bounce, a still person-less load is terminal.
-func TestOpenIDHop2_ServiceTokenAfterBounceIsDenied(t *testing.T) {
+// A cookie that is a PERSON's must never be deleted just because the first
+// load carried the app's service-token headers.
+func TestOpenIDHop2_PersonCookieSurvivesFirstBounce(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	q := appCallback(t, h.get(t, browser+"&reauth=1", oidcServiceAssertion))
-	if q.Get("error") != "access_denied" || q.Get("code") != "" {
-		t.Fatalf("params %v: want access_denied and no code", q)
+	next := assertHop2Bounce(t, h.getWithCookie(t, browser, oidcServiceAssertion, oidcPersonAssertion), "1", false)
+	if q := h.allow(t, next, oidcPersonAssertion); q.Get("code") == "" {
+		t.Fatalf("params %v: want a code after the bounce", q)
+	}
+}
+
+// No cookie at all (the headers alone made it a service token): bounce, nothing
+// to expire.
+func TestOpenIDHop2_ServiceTokenWithoutCookieBouncesWithoutExpiry(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	assertHop2Bounce(t, h.get(t, browser, oidcServiceAssertion), "1", false)
+}
+
+// load 1 -> reauth=1 (expire) -> reauth=2 (deny), and a denied hop 2 leaves the
+// parked request alone so the app can start over.
+func TestOpenIDHop2_RecoveryStagesThenDeny(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "s2")
+
+	// Stage 0: the cookie is a person's, so it is kept.
+	r1 := assertHop2Bounce(t, h.getWithCookie(t, browser, oidcServiceAssertion, oidcPersonAssertion), "1", false)
+	// Stage 1 still arrives as a service token (the cookie alone): it goes now,
+	// whatever it was.
+	r2 := assertHop2Bounce(t, h.getWithCookie(t, r1, oidcServiceAssertion, oidcServiceAssertion), "2", true)
+	// Stage 2 is the end of the road: deny through the app's callback.
+	w := h.getWithCookie(t, r2, oidcServiceAssertion, oidcServiceAssertion)
+	if w.Body.Len() != 0 && strings.Contains(w.Body.String(), "http-equiv") {
+		t.Fatalf("reauth=2 must not bounce again:\n%s", w.Body.String())
+	}
+	q := appCallback(t, w)
+	if q.Get("error") != "access_denied" || q.Get("code") != "" || q.Get("state") != "s2" {
+		t.Fatalf("params %v: want access_denied with state s2 and no code", q)
+	}
+	h.consentPage(t, browser, oidcPersonAssertion)
+}
+
+// A junk reauth value can only deny, never loop.
+func TestOpenIDHop2_JunkReauthDenies(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	for _, v := range []string{"3", "abc", "-1", "9999"} {
+		w := h.get(t, browser+"&reauth="+v, oidcServiceAssertion)
+		if q := appCallback(t, w); q.Get("error") != "access_denied" {
+			t.Fatalf("reauth=%s: params %v, want access_denied", v, q)
+		}
+	}
+}
+
+// Only a browser navigation may be bounced. A service-token hop-2 load without
+// Sec-Fetch navigation headers is denied outright, as before.
+func TestOpenIDHop2_NonNavigationServiceTokenIsNotBounced(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	for name, hdrs := range map[string]map[string]string{
+		"no sec-fetch": {},
+		"cors":         {"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"},
+		"api key":      {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Authorization": "Bearer abk_0123456789"},
+	} {
+		hdrs[oauth.CFAccessHeader] = oidcServiceAssertion
+		w, _ := h.do(t, request{method: http.MethodGet, path: browser, headers: hdrs})
+		if q := appCallback(t, w); q.Get("error") != "access_denied" {
+			t.Fatalf("%s: params %v, want access_denied and no bounce", name, q)
+		}
 	}
 }
 
