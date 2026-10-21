@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.26.2
+// version: 1.26.3
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-17
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 // AuthorDedupGroup represents a group of potentially duplicate authors.
@@ -453,7 +454,7 @@ func newAuthorPrecomputed(index int, a database.Author) authorPrecomputed {
 		index:  index,
 		author: a,
 	}
-	if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || IsDirtyAuthorName(a.Name) {
+	if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || IsDirtyAuthorName(a.Name) || personname.HasPartTrackMarker(a.Name) {
 		pre.skip = true
 	} else {
 		pre.norm = strings.ToLower(NormalizeAuthorName(a.Name))
