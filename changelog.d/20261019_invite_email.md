@@ -142,7 +142,11 @@ verified holder: a row whose history points to a trusted source is stamped
 another old row also qualifies with a higher rank. On a tie for the highest
 rank, the row the existing email index entry names keeps it (the account an
 SSO login reached before this update); with no entry naming one of them, all
-tied rows are demoted. Those ids are logged. Admin accounts stamped `self` are
+tied rows are demoted. A warning per address names the demoted ids and the
+account that now holds the address verified (SSO signs in there), says not
+to clear that holder's email and to leave the accounts as they are until
+they are merged; with no holder it says no account holds the address
+verified. No address is logged. Admin accounts stamped `self` are
 logged by id at warning level: an SSO login with that address will take it
 from them. The log says to leave the account as it is, not to set the address
 for them, which would make that account the verified holder. When another
