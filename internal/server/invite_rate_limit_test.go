@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -1123,5 +1123,50 @@ func TestCompressionMiddleware_ExcludesAcceptInvite(t *testing.T) {
 		if got := w.Header().Get("Content-Encoding") == "gzip"; got != wantGzip {
 			t.Errorf("%s: gzipped=%v, want %v", path, got, wantGzip)
 		}
+	}
+}
+
+// S-A: a body larger than the cap whose sender then stalls (4097 bytes of a
+// declared 5000) is answered 413 at once, with Connection: close, and the
+// connection is closed within the read deadline. Before the fix net/http
+// tried to drain the unread body before writing the response headers, with
+// the deadline already cleared, so the caller got no answer at all.
+func TestInviteRateLimit_OversizeThenStallIs413Promptly(t *testing.T) {
+	saved := inviteAcceptBodyReadTimeout
+	inviteAcceptBodyReadTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { inviteAcceptBodyReadTimeout = saved })
+	h := newInviteLimitHarness(t, false)
+	srv := httptest.NewServer(h.engine)
+	t.Cleanup(srv.Close)
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST /accept HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\nContent-Type: application/json\r\nContent-Length: 5000\r\n\r\n%s", strings.Repeat("a", inviteAcceptBodyLimit+1))
+	start := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("no response to an oversize body whose sender stalled: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413", resp.StatusCode)
+	}
+	if !resp.Close {
+		t.Fatal("the 413 does not carry Connection: close")
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("the 413 took %v", el)
+	}
+	// The server closes the connection once the bounded drain gives up.
+	if _, err := br.ReadByte(); err == nil {
+		t.Fatal("the connection stayed open after the 413")
+	}
+	if el := time.Since(start); el > 2500*time.Millisecond {
+		t.Fatalf("the connection closed only after %v; the post-response drain was not bounded", el)
 	}
 }

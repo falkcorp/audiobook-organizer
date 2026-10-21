@@ -54,7 +54,10 @@ connection read deadline, cleared afterwards). The deadline is set through
 the connection captured before the gzip middleware wraps the response
 writer, and the route is also excluded from gzip, so it holds for browsers
 sending `Accept-Encoding: gzip`; if it still cannot be set, that is logged
-once and parsed once for both the limiter and the handler. Invite tokens
+once. When the body did not reach its end (too large, too slow, or a read
+error), the response carries `Connection: close` and the deadline stays in
+force, so a sender that stops mid-body gets its 413 or 408 at once and the
+connection is closed within the deadline and parsed once for both the limiter and the handler. Invite tokens
 are redacted from request logs, trace span attributes (`url.path`) and error
 logs.
 
