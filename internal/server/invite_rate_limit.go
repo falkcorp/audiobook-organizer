@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -155,7 +155,21 @@ func readAcceptInviteBody(c *gin.Context) parsedAcceptInvite {
 	} else {
 		restore := setBodyReadDeadline(c, inviteAcceptBodyReadTimeout)
 		buf, err := io.ReadAll(io.LimitReader(c.Request.Body, inviteAcceptBodyLimit+1))
-		restore()
+		if err == nil && len(buf) <= inviteAcceptBodyLimit {
+			// The body reached EOF: clear the deadline so a keep-alive
+			// connection's next request is unaffected.
+			restore()
+		} else {
+			// The body did NOT reach EOF (too large, timed out, or a read
+			// error). Whatever response follows, the connection closes after
+			// it: without Connection: close, net/http drains up to 256 KiB of
+			// the unread body BEFORE writing the response headers, and a
+			// caller that stops sending holds the request with no answer.
+			// The read deadline stays in force, so the drain net/http still
+			// does after the response (finishRequest closes the body) is
+			// bounded too; the connection is closed afterwards anyway.
+			c.Header("Connection", "close")
+		}
 		switch {
 		case len(buf) > inviteAcceptBodyLimit:
 			p.tooLarge = true
@@ -413,7 +427,6 @@ func inviteTokenFromBody(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	if p.timedOut {
-		c.Header("Connection", "close")
 		httputil.RespondWithError(c, http.StatusRequestTimeout, "request body not received in time", "REQUEST_TIMEOUT")
 		return "", false
 	}
