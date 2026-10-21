@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-10-21
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -913,6 +914,18 @@ func dropMergesIntoRemovedRows(plans []authorStripPlan, report *authorStripMerge
 	return kept
 }
 
+// isRealAuthor reports whether author id exists and is not junk by name
+// (authorjunk.ClassifyName). A lookup that fails or finds nothing answers false:
+// a credit that cannot be shown to be a person does not count as the book's
+// remaining author, so the book is held rather than left to it.
+func (p *Plugin) isRealAuthor(store OpsStore, id int) bool {
+	a, err := store.GetAuthorByID(id)
+	if err != nil || a == nil || a.ID != id {
+		return false
+	}
+	return !authorjunk.ClassifyName(a.Name).Junk()
+}
+
 // unlinkAndDeleteAuthor removes a junk author from every book that credits it
 // and then deletes the row, returning the number of books rewritten and the
 // IDs of those books left with no credit once every row in doomed (the run's
@@ -963,7 +976,10 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			if ba.AuthorID == from.ID {
 				continue
 			}
-			if !doomed[ba.AuthorID] {
+			// A survivor is an author-role credit (a narrator is never one) whose
+			// author is not itself junk by name: the same test the junk-author
+			// repair uses (hasOtherRealAuthorCredit), so the two never disagree.
+			if !doomed[ba.AuthorID] && isPrimaryAuthorRole(ba.Role) && p.isRealAuthor(store, ba.AuthorID) {
 				survivors++
 			}
 			ba.Position = len(remaining)
@@ -973,8 +989,12 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 		// its denormalized primary does not name some third, living author
 		// (junction and AuthorID are known to diverge on this library; a book
 		// whose primary is not being touched keeps that credit).
-		keepsPrimary := book.AuthorID != nil && *book.AuthorID != from.ID && !doomed[*book.AuthorID]
-		if survivors == 0 && !keepsPrimary && !relinked[book.ID] {
+		keepsPrimary := book.AuthorID != nil && *book.AuthorID != from.ID && !doomed[*book.AuthorID] &&
+			p.isRealAuthor(store, *book.AuthorID)
+		// A trashed book does not hold the row: it is not in the library, and a
+		// junk row that only trashed books still credit would otherwise stay
+		// for ever.
+		if survivors == 0 && !keepsPrimary && !relinked[book.ID] && !book.IsSoftDeleted() {
 			// The only author credit: kept, not removed.
 			held = append(held, book.ID)
 			continue

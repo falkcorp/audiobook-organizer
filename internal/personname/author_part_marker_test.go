@@ -1,5 +1,5 @@
 // file: internal/personname/author_part_marker_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e2b4d91-6c3a-4f08-b7d5-1a9e0c4f2e76
 // last-edited: 2026-10-21
 
@@ -121,6 +121,8 @@ func TestIsLoneMarkerPhrase(t *testing.T) {
 		"Prologue", "Epilogue", "Intro", "Part II", "Volume XXXIX",
 		// Letterless disc/track codes are labels under the owner rule.
 		"1-02", "10-01", "3", "2001", "1.5",
+		// "of" between numbers, "#" before a number, "/" in a range.
+		"Part 1 of 3", "Book #2", "Track 1/12", "Disc 2 of 10 (Unabridged)", "#3",
 	}
 	for _, n := range lone {
 		if !IsLoneMarkerPhrase(n) {
@@ -152,6 +154,8 @@ func TestIsLoneMarkerPhrase(t *testing.T) {
 		// front is never a lone phrase.
 		"A", "Track A Smith", "Prologue Smith", "Introduction To Physics", "Vitamin C", "- ", "+",
 		"Charles Dickens Episode 4", "Charles Dickens Prologue",
+		// "of" joins numbers only; entity shrapnel is not a number.
+		"Part of 3", "Part 1 of", "Book 1 of Smith", "Part 1 of Three", "&#169", "&#169;", "&#xA9;",
 	}
 	for _, n := range notLone {
 		if IsLoneMarkerPhrase(n) {

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
-// last-edited: 2026-10-14
+// last-edited: 2026-10-21
 
 package entities
 
@@ -207,6 +207,13 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 				unknown = u
 			}
 			successor = unknown
+		}
+		if len(newAuthors) == 0 {
+			// The reclassified author was the book's only author. The credit
+			// list is the ordered source of truth and the primary is only its
+			// first entry, so the Unknown Author fallback goes into the list
+			// too: a book is never left with an empty credit list.
+			newAuthors = []database.BookAuthor{{BookID: book.ID, AuthorID: successor.ID, Role: "author", Position: 0}}
 		}
 		hasNarrator := false
 		for _, bn := range bookNarrators {

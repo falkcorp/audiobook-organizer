@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-10-18
+// last-edited: 2026-10-21
 
 package entities_test
 
@@ -1105,7 +1105,9 @@ func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
 	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{
 		{BookID: "b1", AuthorID: 5, Role: "author", Position: 0},
 	}, nil)
-	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
+	var wroteCredits []database.BookAuthor
+	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).
+		RunAndReturn(func(_ string, ba []database.BookAuthor) error { wroteCredits = ba; return nil })
 	d.store.EXPECT().GetAuthorByName(database.UnknownAuthorName).
 		Return(&database.Author{ID: 9, Name: database.UnknownAuthorName}, nil)
 	wrote := expectModifyBook(d, &database.Book{
@@ -1126,6 +1128,10 @@ func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
 	assert.Equal(t, 9, *(*wrote).AuthorID, "with no surviving author, AuthorID must fall back to Unknown Author")
 	require.NotNil(t, (*wrote).Author)
 	assert.Equal(t, 9, (*wrote).Author.ID, "the denormalized Author must agree with the new AuthorID")
+	// The credit list is the ordered source of truth: Unknown Author is written
+	// into it too, never an empty list beside a non-empty primary.
+	require.Len(t, wroteCredits, 1, "the credit list must not be left empty")
+	assert.Equal(t, database.BookAuthor{BookID: "b1", AuthorID: 9, Role: "author", Position: 0}, wroteCredits[0])
 }
 
 // The split relink list includes the trash (GetBooksByAuthorIDForRelinkCore):

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-10-21
 
@@ -1067,4 +1067,21 @@ func TestJunkAuthorFixer_ReplanHoldsCreditThatBecameSole(t *testing.T) {
 	fresh, err := f.fixer.Replan(context.Background(), nil, *r, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, junkAuthorSkipHeldSoleCredit, fresh.Skipped, fresh.SkipReason)
+}
+
+// hasOtherRealAuthorCredit must not count a co-credit that is itself junk: a
+// book credited to two publishers has no real author, so BOTH rows are held.
+// Removing the `!junk(ba.AuthorID)` test there turns each into an unlink
+// (the other publisher "survives"), which fails this test.
+func TestJunkAuthorFixer_JunkCoCreditDoesNotCountAsAnAuthor(t *testing.T) {
+	f := newJunkFixture(t)
+	id := f.book(junkBookSpec{title: "Synthetic Title", path: "/lib/syn/pp", author: "GraphicAudio", coAuthor: "Audible Studios"})
+	plan := f.plan()
+	for _, name := range []string{"GraphicAudio", "Audible Studios"} {
+		r := f.row(plan, name, id)
+		require.NotNil(t, r, name)
+		require.Equal(t, junkAuthorSkipHeldSoleCredit, r.Skipped, "%s: %s / %s", name, r.Reason, r.SkipReason)
+	}
+	f.apply(plan, nil)
+	require.ElementsMatch(t, []int{f.authors["GraphicAudio"], f.authors["Audible Studios"]}, f.credits(id), "no credit removed")
 }

@@ -12,3 +12,11 @@ found. Names that are only a part, track or book label ("Book 2 (Unabridged)",
 `label_only` rule, which needs the provider or two independent kinds of
 evidence. `personname.IsLoneMarkerPhrase` now covers ranges, decimals, letter
 labels, prologue/epilogue/introduction words and number-only codes.
+
+Two more places no longer strand a book without an author. Reclassifying an
+author as a narrator falls back to the unknown-author record when no author
+credit would survive, and a failed rollback of an organized copy no longer
+clears the author credits of a book it then cannot delete. The strip-merge
+treats a narrator-only or junk co-credit as no author at all, and labels such
+as "Part 1 of 3", "Book #2" and "Track 1/12" are label-only. HTML entity
+shrapnel such as "&#169" is not read as a label.

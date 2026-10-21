@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
 // last-edited: 2026-10-21
 
@@ -177,6 +177,66 @@ func TestUnlinkAndDeleteAuthor_SoleCreditIsHeldAndRowKept(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Empty(t, held)
+}
+
+// A survivor counts only if it is an author-role credit of a real (non-junk)
+// author, the same test the junk-author repair uses. A narrator-role co-credit
+// is not one: the book is held.
+func TestUnlinkAndDeleteAuthor_NarratorOnlyCoCreditIsHeld(t *testing.T) {
+	s := newRelinkTrashedStore(t)
+	junk, err := s.CreateAuthor("Relink Junk")
+	require.NoError(t, err)
+	reader, err := s.CreateAuthor("Relink Reader")
+	require.NoError(t, err)
+	id := mkRelinkTrashedBook(t, s, "narrator-co", junk.ID, false)
+	require.NoError(t, s.SetBookAuthors(id, []database.BookAuthor{
+		{BookID: id, AuthorID: junk.ID, Role: "author", Position: 0},
+		{BookID: id, AuthorID: reader.ID, Role: "narrator", Position: 1},
+	}))
+
+	p := &Plugin{deps: fakeDeps{store: s}}
+	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.Equal(t, []string{id}, held)
+	got, err := s.GetAuthorByID(junk.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "row kept")
+}
+
+// A co-credit whose author is itself junk by name (a publisher) is not a
+// surviving author either: the book is held.
+func TestUnlinkAndDeleteAuthor_JunkCoCreditIsHeld(t *testing.T) {
+	s := newRelinkTrashedStore(t)
+	junk, err := s.CreateAuthor("Relink Junk")
+	require.NoError(t, err)
+	studio, err := s.CreateAuthor("GraphicAudio")
+	require.NoError(t, err)
+	id := mkRelinkTrashedBook(t, s, "junk-co", junk.ID, false, studio.ID)
+
+	p := &Plugin{deps: fakeDeps{store: s}}
+	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.Equal(t, []string{id}, held)
+	credits, err := s.GetBookAuthors(id)
+	require.NoError(t, err)
+	require.Len(t, credits, 2, "no credit removed")
+}
+
+// A trashed book does not hold a junk row: only live books do.
+func TestUnlinkAndDeleteAuthor_TrashedSoleCreditDoesNotHoldTheRow(t *testing.T) {
+	s := newRelinkTrashedStore(t)
+	junk, err := s.CreateAuthor("Relink Junk")
+	require.NoError(t, err)
+	mkRelinkTrashedBook(t, s, "trashed-sole", junk.ID, true)
+
+	p := &Plugin{deps: fakeDeps{store: s}}
+	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Empty(t, held)
+	requireAuthorGone(t, s, junk.ID)
 }
 
 // runAuthorSplitScan is the maintenance author-split op (maintenance/author.go).
