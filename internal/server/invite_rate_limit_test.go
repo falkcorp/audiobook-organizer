@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-21
 
@@ -256,7 +256,7 @@ const connectorPeer = "192.0.2.1"
 
 // withConnector configures connectorPeer as the tunnel connector.
 func (h *inviteLimitHarness) withConnector() *inviteLimitHarness {
-	peers, bad := parseConnectorPeers(connectorPeer)
+	peers, bad, _ := parseConnectorPeers(connectorPeer)
 	if len(bad) != 0 {
 		h.t.Fatalf("bad connector %v", bad)
 	}
@@ -428,7 +428,7 @@ func TestTrustedClientIP(t *testing.T) {
 	local := func(addr string) bool {
 		return strings.HasPrefix(addr, "127.") || strings.HasPrefix(addr, "[::1]") || strings.HasPrefix(addr, "::1")
 	}
-	connectors, _ := parseConnectorPeers("198.51.100.20, 2001:db8::20")
+	connectors, _, _ := parseConnectorPeers("198.51.100.20, 2001:db8::20")
 	tests := []struct {
 		name     string
 		remote   string
@@ -485,7 +485,7 @@ func TestTrustedClientIP(t *testing.T) {
 }
 
 func TestParseConnectorPeers(t *testing.T) {
-	peers, bad := parseConnectorPeers(" 192.0.2.5 ,, ::ffff:192.0.2.6, not-an-ip,2001:db8::5")
+	peers, bad, _ := parseConnectorPeers(" 192.0.2.5 ,, ::ffff:192.0.2.6, not-an-ip,2001:db8::5")
 	if len(peers) != 3 || len(bad) != 1 || bad[0] != "not-an-ip" {
 		t.Fatalf("peers=%v bad=%v", peers, bad)
 	}
@@ -657,7 +657,7 @@ func TestInviteRateLimit_PiConnectorsUnset_EachPiIsOneBucket(t *testing.T) {
 // innocent guest still gets 200.
 func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
-	peers, bad := parseConnectorPeers(strings.Join(piConnectors, ","))
+	peers, bad, _ := parseConnectorPeers(strings.Join(piConnectors, ","))
 	if len(bad) != 0 {
 		t.Fatal(bad)
 	}
@@ -692,7 +692,7 @@ func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 // addresses inside one /64 buys no fresh bucket.
 func TestInviteRateLimit_IPv6VisitorsShareTheirSlash64(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
-	peers, _ := parseConnectorPeers(piConnectors[0])
+	peers, _, _ := parseConnectorPeers(piConnectors[0])
 	h.limits.connectors = peers
 	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
 		return h.get(inviteTestToken(i), piConnectors[0], cfHeaders(fmt.Sprintf("2001:db8:5:6::%x", i+1)))
@@ -887,7 +887,7 @@ func TestTrustedClientIP_WarnsOncePerUnlistedPrivateConnector(t *testing.T) {
 	saved := unlistedConnectors
 	unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
 	t.Cleanup(func() { unlistedConnectors = saved })
-	listed, _ := parseConnectorPeers(piConnectors[0])
+	listed, _, _ := parseConnectorPeers(piConnectors[0])
 	trust := clientTrust{isLocalPeer: func(string) bool { return false }, connectors: listed}
 	call := func(peer string, hdr map[string]string) {
 		req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -1172,28 +1172,143 @@ func TestInviteRateLimit_OversizeThenStallIs413Promptly(t *testing.T) {
 	}
 }
 
-// N-b: a connector listed as fe80::5 connecting from "[fe80::5%en0]" is
-// recognised (zones are ignored), so its visitors are keyed on their
-// CF-Connecting-IP rather than on the connector.
+// N-b (security review): a link-local address is only unique per interface,
+// so a connector entry must carry its zone and is matched with it. A listed
+// fe80::5%en0 connecting from "[fe80::5%en0]" is trusted (its visitors are
+// keyed on CF-Connecting-IP); the same address arriving on en1 is a
+// different host, NOT trusted: it is keyed on its own address and, sending
+// Cloudflare headers, counts as an unlisted LAN peer.
 func TestInviteRateLimit_ZonedLinkLocalConnectorIsRecognised(t *testing.T) {
-	peers, bad := parseConnectorPeers("fe80::5")
-	if len(bad) != 0 {
-		t.Fatal(bad)
-	}
-	if !peers.contains("[fe80::5%en0]:4000") || !peers.contains("fe80::5%en0") {
-		t.Fatal("a zoned form of the listed connector did not match")
+	withFreshUnlistedWarnings(t)
+	peers, bad, noZone := parseConnectorPeers("fe80::5%en0")
+	if len(bad) != 0 || len(noZone) != 0 {
+		t.Fatal(bad, noZone)
 	}
 	h := newInviteLimitHarness(t, false)
 	h.limits.connectors = peers
-	req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
-	req.RemoteAddr = "[fe80::5%en0]:4000"
-	for k, v := range cfHeaders("203.0.113.44") {
-		req.Header.Set(k, v)
+	keyFrom := func(remote string) (inviteClient, bool) {
+		req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+		req.RemoteAddr = remote
+		for k, v := range cfHeaders("203.0.113.44") {
+			req.Header.Set(k, v)
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		return h.limits.inviteClientKey(c)
 	}
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = req
-	if ic, ok := h.limits.inviteClientKey(c); !ok || ic != (inviteClient{key: "invite-client:203.0.113.44"}) {
-		t.Fatalf("inviteClientKey = %+v, %v; want the visitor's address, no LAN aggregate and no global exemption", ic, ok)
+	if ic, ok := keyFrom("[fe80::5%en0]:4000"); !ok || ic != (inviteClient{key: "invite-client:203.0.113.44"}) {
+		t.Fatalf("listed connector on its own interface: inviteClientKey = %+v, %v; want the visitor's address", ic, ok)
+	}
+	want := inviteClient{key: "invite-client:fe80::5", prefixKey: "invite-unlisted-lan:fe80::/64", totalKey: inviteUnlistedLANTotalKey, unlisted: true}
+	if ic, ok := keyFrom("[fe80::5%en1]:4000"); !ok || ic != want {
+		t.Fatalf("the same address on another interface: inviteClientKey = %+v, %v; want %+v (not trusted)", ic, ok, want)
+	}
+}
+
+// A zoneless IPv6 link-local connector entry would trust that address on
+// every interface, so it is rejected (and not trusted); a zoned one matches
+// only with its zone; global, ULA and IPv4 entries stay zone-free, and a
+// zone on them is ignored.
+func TestParseConnectorPeers_LinkLocalNeedsItsZone(t *testing.T) {
+	peers, bad, noZone := parseConnectorPeers("fe80::5%en0, fe80::6, 10.0.0.9, fd12:3456:789a:1::11%en0, 2001:db8::5")
+	if len(bad) != 0 || len(noZone) != 1 || noZone[0] != "fe80::6" {
+		t.Fatalf("bad=%v noZone=%v, want only fe80::6 rejected for its missing zone", bad, noZone)
+	}
+	if len(peers) != 4 {
+		t.Fatalf("peers=%v, want 4", peers)
+	}
+	for addr, want := range map[string]bool{
+		"[fe80::5%en0]:4000":              true,
+		"fe80::5%en0":                     true,
+		"[fe80::5%en1]:4000":              false,
+		"[fe80::5]:4000":                  false,
+		"fe80::5":                         false,
+		"[fe80::6%en0]:4000":              false, // the rejected zoneless entry trusts nothing
+		"[fe80::6]:4000":                  false,
+		"10.0.0.9:4000":                   true,
+		"[::ffff:10.0.0.9]:4000":          true,
+		"[fd12:3456:789a:1::11]:4000":     true,
+		"[fd12:3456:789a:1::11%en3]:4000": true,
+		"[2001:db8::5%eth0]:4000":         true,
+	} {
+		if got := peers.contains(addr); got != want {
+			t.Errorf("contains(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+// parseTrustAddr keeps the zone only on an IPv6 link-local address.
+func TestParseTrustAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		"[fe80::5%en0]:4000":      "fe80::5%en0",
+		"fe80::5%en0":             "fe80::5%en0",
+		"[fe80::5]:4000":          "fe80::5",
+		"[fd12::1%en0]:4000":      "fd12::1",
+		"[2001:db8::1%eth0]:4000": "2001:db8::1",
+		"[::ffff:10.0.0.1]:4000":  "10.0.0.1",
+		"10.0.0.1":                "10.0.0.1",
+	} {
+		a, ok := parseTrustAddr(in)
+		if !ok || a.String() != want {
+			t.Errorf("parseTrustAddr(%q) = %v, %v; want %s", in, a, ok, want)
+		}
+	}
+	if _, ok := parseTrustAddr("not-an-address"); ok {
+		t.Error("parseTrustAddr accepted garbage")
+	}
+}
+
+// A link-local peer is this host only when the interface that owns the
+// address is the one its zone names (by name or numeric index); the same
+// address with another zone, or no zone, is not local. Other addresses match
+// on any interface.
+func TestAddrIsLocal_LinkLocalNeedsTheOwningInterface(t *testing.T) {
+	ifaces := []localIface{
+		{name: "en0", index: 4, addrs: []netip.Addr{netip.MustParseAddr("fe80::5"), netip.MustParseAddr("10.0.0.2")}},
+		{name: "en1", index: 5, addrs: []netip.Addr{netip.MustParseAddr("192.0.2.1")}},
+	}
+	for in, want := range map[string]bool{
+		"fe80::5%en0": true,
+		"fe80::5%4":   true,
+		"fe80::5%en1": false,
+		"fe80::5%5":   false,
+		"fe80::5%en9": false,
+		"fe80::5":     false,
+		"fe80::6%en0": false,
+		"10.0.0.2":    true,
+		"192.0.2.1":   true,
+		"10.0.0.3":    false,
+	} {
+		a, ok := parseTrustAddr(in)
+		if !ok {
+			t.Fatalf("parseTrustAddr(%q) failed", in)
+		}
+		if got := addrIsLocal(a, ifaces); got != want {
+			t.Errorf("addrIsLocal(%s) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// remoteAddrIsLocal on a described host: a link-local peer whose zone names
+// another interface than the one owning the address is not this host.
+func TestRemoteAddrIsLocal_MismatchedZoneIsNotLocal(t *testing.T) {
+	saved := hostInterfaces
+	hostInterfaces = func() ([]localIface, error) {
+		return []localIface{
+			{name: "en0", index: 4, addrs: []netip.Addr{netip.MustParseAddr("fe80::5")}},
+			{name: "en1", index: 5},
+		}, nil
+	}
+	t.Cleanup(func() { hostInterfaces = saved })
+	for addr, want := range map[string]bool{
+		"[fe80::5%en0]:4000": true,
+		"[fe80::5%en1]:4000": false,
+		"[fe80::5]:4000":     false,
+		"127.0.0.1:4000":     true,
+	} {
+		if got := remoteAddrIsLocal(addr); got != want {
+			t.Errorf("remoteAddrIsLocal(%q) = %v, want %v", addr, got, want)
+		}
 	}
 }
 
