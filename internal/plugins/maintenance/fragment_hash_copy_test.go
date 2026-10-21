@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_hash_copy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2f4a68-3c1b-4e95-b0a7-6f8e1d5c9b34
 // last-edited: 2026-10-21
 
@@ -7,6 +7,8 @@ package maintenance
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,13 +47,24 @@ func (f *fragFixture) hcSetHash(t *testing.T, bookRole, rowRole, hash string) {
 	f.updateRow(t, f.ids[bookRole], f.rowIDs[rowRole], func(r *database.BookFile) { r.FileHash = hash })
 }
 
+// hcSizeFor is the size of the child file that carries hash: the size of the
+// parent track "hash-pNN" names (hcSeed gives row NN 1000+NN bytes), since a
+// copy has its parent's size (hashCopyGate), else 3000.
+func hcSizeFor(hash string) int {
+	if n, err := strconv.Atoi(strings.TrimPrefix(hash, "hash-p")); err == nil && strings.HasPrefix(hash, "hash-p") {
+		return 1000 + n
+	}
+	return 3000
+}
+
 // hcChild adds a live single-file book named so that it carries NO chapter
 // evidence (a plain title, a plain file name), whose one row has hash.
 func (f *fragFixture) hcChild(t *testing.T, role, title, hash string) string {
 	t.Helper()
-	p := f.file(t, "lib/Stray "+role+"/stray-"+role+".mp3", 3000)
+	size := hcSizeFor(hash)
+	p := f.file(t, "lib/Stray "+role+"/stray-"+role+".mp3", size)
 	id := f.book(t, role, title, p, nil)
-	f.row(t, role, id, p, "stray-"+role+".mp3", 3000, 600, 0)
+	f.row(t, role, id, p, "stray-"+role+".mp3", int64(size), 600, 0)
 	if hash != "" {
 		f.hcSetHash(t, role, role, hash)
 	}
@@ -266,6 +279,9 @@ func TestFragmentFixer_HashCopy_TwoRowsOfOneParentIsNotAmbiguous(t *testing.T) {
 	// The parent holds the same file twice (rows 02 and 03 share a hash): one
 	// parent, so one proposal, and the same row is chosen on every plan.
 	f.hcSetHash(t, "parent", "p02", "hash-p03")
+	// Same hash, so the same file: row 02's file is the size of row 03's.
+	f.file(t, "lib/Alpha Omnibus/track-02.mp3", 1003)
+	f.updateRow(t, f.ids["parent"], f.rowIDs["p02"], func(r *database.BookFile) { r.FileSize = 1003 })
 	child := f.hcChild(t, "c3", "Stray Recording", "hash-p03")
 	parent := f.ids["parent"]
 
@@ -323,8 +339,8 @@ func TestFragmentFixer_HashCopy_ManyChildren(t *testing.T) {
 	parent := f.book(t, "parent", "Large Omnibus", f.path("lib/Large Omnibus"), nil)
 	for i := 1; i <= rows; i++ {
 		role := fmt.Sprintf("p%02d", i)
-		p := f.file(t, fmt.Sprintf("lib/Large Omnibus/part-%02d.mp3", i), 500+i)
-		f.row(t, role, parent, p, fmt.Sprintf("part-%02d.mp3", i), int64(500+i), 300, i)
+		p := f.file(t, fmt.Sprintf("lib/Large Omnibus/part-%02d.mp3", i), 1000+i)
+		f.row(t, role, parent, p, fmt.Sprintf("part-%02d.mp3", i), int64(1000+i), 300, i)
 		f.hcSetHash(t, "parent", role, "hash-"+role)
 	}
 	var want []string

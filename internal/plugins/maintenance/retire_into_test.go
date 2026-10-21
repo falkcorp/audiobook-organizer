@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -36,6 +36,14 @@ type journalCountingStore struct {
 	OpsStore
 	inner bookJournalReader
 	scans int
+}
+
+// Unwrap makes the counter a transparent decorator (database.StoreUnwrapper),
+// so a retire reaches the store's collection and playlist capabilities
+// through it (carryUserContentInto).
+func (s *journalCountingStore) Unwrap() database.Store {
+	st, _ := s.OpsStore.(database.Store)
+	return st
 }
 
 func (s *journalCountingStore) GetBookChanges(bookID string) ([]*database.OperationChange, error) {
