@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.14.0
+# version: 2.15.0
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-10-16
+# last-edited: 2026-10-21
 
 name: Frontend CI
 
@@ -61,7 +61,7 @@ jobs:
     name: Frontend Build and Test
     needs: frontend-config
     if: needs.frontend-config.outputs.has-frontend == 'true'
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@49028321ec682a0eda781494aa034bec5c83c15d # main 2026-10-16 (github-common#376: go-test-timeout input)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@861d4e83ccf918c9354a2d5f5685068f655cdf58 # main 2026-10-21 (github-common#378: ruff 0.17.0 pin)
     with:
       go-version: '1.27.2'
       node-version: ${{ needs.frontend-config.outputs.node-version }}
