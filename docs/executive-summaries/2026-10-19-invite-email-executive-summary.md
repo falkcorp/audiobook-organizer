@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-20 -->
 
@@ -144,14 +144,17 @@ email, so they are not affected.
 
 **One thing to check before deploying.** If an administrator's own address
 was last changed through their profile page, it is labelled as typed in, and
-the first Google or GitHub sign-in with that address would move it to a new
-account. The server logs the ids of any such administrator accounts at
-startup. Do not fix this by setting the address for them on the Users page:
-that makes the account the verified holder, which is wrong when the same
-person already signs in through another account. Leave it as it is. If the
-log says another account already has the same address verified, it names
-both accounts and which one is the verified holder: do not clear that
-holder's email, and leave both accounts alone until they can be merged.
+the first Google or GitHub sign-in with that address that is not already
+linked to an account would move it to a new account. The same applies when
+two accounts share an address. The server logs a warning about each such
+address at every start, until the accounts are merged. It names the
+accounts, says which one has the address verified, and says where sign-ins
+go: a Google or GitHub sign-in already linked to an account keeps going to
+that account, and a new one goes to the account that has the address
+verified. Do not clear that account's email. Do not fix this by setting the
+address for an account on the Users page: that makes it the verified
+holder, which is wrong when the same person signs in through another
+account. Leave the accounts as they are until they can be merged.
 
 **A second setting, set by this deploy.** The invite pages limit how often
 one visitor can try a link. The Cloudflare tunnel reaches the server through
