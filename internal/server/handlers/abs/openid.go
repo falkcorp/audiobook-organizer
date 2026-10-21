@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.9.1
+// version: 2.10.0
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-20
 
@@ -176,10 +176,13 @@ import (
 //     expire the cookie unconditionally, bounce to reauth=2;
 //   - reauth=2 or higher, still a service token: terminal access_denied.
 //
-// Only a browser navigation (Sec-Fetch-Mode navigate, Sec-Fetch-Dest document)
-// is ever bounced -- see middleware.IsBrowserNavigation. The same helper recovers
-// the web UI's own pages (middleware.CFServiceTokenRecovery), which the same
-// poisoned cookie locks out of the login.
+// Hop 2 is browser-only, so it does NOT require Sec-Fetch headers
+// (middleware.InspectBrowserHop): requiring them would add no safety and would
+// deny the first load if the sheet did not send them. It still excludes API-key
+// and AppleCoreMedia requests and requires a service-token assertion. The same
+// helper recovers the web UI's own pages (middleware.CFServiceTokenRecovery),
+// which share paths with fetch and so DO require a browser navigation, and which
+// the same poisoned cookie locks out of the login.
 //
 // # Why hop 3 does not require an identity assertion
 //
@@ -773,7 +776,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 	// The gate is Inspect's own test (a verified assertion with no email), not the
 	// log classification above: that one also needs a non-empty common_name.
 	if noPerson && reauthStage < oidcMaxReauth {
-		if info := h.resolver.ServiceTokenBouncer().Inspect(c); info.Kind == servermiddleware.CFNavServiceToken {
+		if info := h.resolver.ServiceTokenBouncer().InspectBrowserHop(c); info.Kind == servermiddleware.CFNavServiceToken {
 			if origin, ok := h.oidcOrigin(c); ok {
 				// Stage 0 expires only a cookie that is verifiably the service-token
 				// session; stage 1 means that cookie (or one we could not classify)
@@ -784,8 +787,12 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 						logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)), cfCookies,
 						logger.SanitizeLogValue(pending.CallerKey))
 				}
-				oidcLog.Info("openid browser hop bouncing a service-token navigation: next_reauth=%d expire_cookie=%t service_token=%s caller=%s",
+				// Sec-Fetch values are logged because they are not required here
+				// (this route is browser-only) and nobody has yet confirmed what
+				// the ASWebAuthenticationSession sheet sends. "-" means absent.
+				oidcLog.Info("openid browser hop bouncing a service-token navigation: next_reauth=%d expire_cookie=%t service_token=%s sec_fetch_mode=%s sec_fetch_dest=%s caller=%s",
 					reauthStage+1, expire, servermiddleware.CFLogName(info.CommonName),
+					servermiddleware.CFLogHeader(info.SecFetchMode), servermiddleware.CFLogHeader(info.SecFetchDest),
 					logger.SanitizeLogValue(pending.CallerKey))
 				oidcBrowserHeaders(c)
 				servermiddleware.WriteCFBouncePage(c, oidcBrowserURL(origin, reqID, reauthStage+1), expire)
