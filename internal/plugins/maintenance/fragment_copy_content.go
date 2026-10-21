@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_copy_content.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d7b2e95-1c6a-4f38-8e0d-b5a9c3f1e762
 // last-edited: 2026-10-21
 
@@ -98,6 +98,18 @@ func sigOf(fi os.FileInfo) (fragFileSig, error) {
 // identified reports whether s carries a file identity (an inode): a
 // signature without one never backs a proof.
 func (s fragFileSig) identified() bool { return s.Ino != 0 }
+
+// coarseTimestamps reports a signature whose modification and status-change
+// times both lack nanoseconds (a whole-second filesystem or mount: FAT, some
+// SMB and NFS exports, HFS+): there a same-size rewrite inside one clock tick
+// changes neither, so the signature cannot prove the bytes unchanged
+// (restoreContentProofs reads such a file again). The signature check
+// assumes nanosecond timestamps and stable inodes everywhere else; an inode
+// of 0 already fails closed (sigOf).
+func (s fragFileSig) coarseTimestamps() bool {
+	const sec = int64(1e9)
+	return s.MtimeNS%sec == 0 && s.CtimeNS%sec == 0
+}
 
 // sameFile reports whether two signatures name one file (device and inode).
 func (s fragFileSig) sameFile(o fragFileSig) bool {
@@ -503,13 +515,14 @@ func (lib *fragLibrary) readableForProof(id, path string) bool {
 // runs under the merge lock). A file whose signature moved (size, mtime,
 // ctime, device or inode), that cannot be identified, or that is gone, is a
 // change ("" when every proof still holds).
-func (f *fragmentFixer) restoreContentProofs(lib *fragLibrary, proofs []fragContentProof) string {
+func (f *fragmentFixer) restoreContentProofs(ctx context.Context, lib *fragLibrary, proofs []fragContentProof) string {
 	sort.Slice(proofs, func(i, j int) bool { return proofs[i].FragFile < proofs[j].FragFile })
 	for _, p := range proofs {
 		for _, side := range []struct {
-			path string
-			sig  fragFileSig
-		}{{p.FragPath, p.FragSig}, {p.ParentPath, p.ParentSig}} {
+			path   string
+			sig    fragFileSig
+			digest string
+		}{{p.FragPath, p.FragSig, p.FragDigest}, {p.ParentPath, p.ParentSig, p.ParentDigest}} {
 			if !side.sig.identified() {
 				return fmt.Sprintf("the plan's content proof for fragment %s has no file identity for %s; plan again", p.FragBook, side.path)
 			}
@@ -523,6 +536,22 @@ func (f *fragmentFixer) restoreContentProofs(lib *fragLibrary, proofs []fragCont
 			}
 			if now != side.sig {
 				return fmt.Sprintf("file %s changed since the plan compared its content (%s then, %s now)", side.path, side.sig, now)
+			}
+			// The signature stands in for the bytes only where timestamps are
+			// fine-grained: a same-size rewrite within one clock tick of a
+			// 1-second (or 2-second) filesystem leaves size and mtime equal,
+			// and the ctime is as coarse as the mtime. Where both timestamps
+			// have no nanoseconds the file is read again and its digest must
+			// still be the one the plan proved (at most the pair's two reads,
+			// under the merge lock, on such a filesystem only).
+			if side.sig.coarseTimestamps() {
+				_, sum, err := f.wholeHash(ctx, side.path)
+				if err != nil {
+					return fmt.Sprintf("file %s, whose content proved fragment %s a copy, cannot be read again (its timestamps are whole seconds, so a signature cannot prove it unchanged): %v", side.path, p.FragBook, err)
+				}
+				if sum != side.digest {
+					return fmt.Sprintf("file %s changed since the plan compared its content (its timestamps are whole seconds; the bytes differ now)", side.path)
+				}
 			}
 		}
 		if p.FragDigest == "" || p.FragDigest != p.ParentDigest || p.FragSig.sameFile(p.ParentSig) {

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.80.0
+// version: 1.81.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-21
 
@@ -931,22 +931,49 @@ func (rs *RevertService) revertUserContentFollow(c *database.OperationChange) er
 	}
 	switch kind {
 	case undo.UserContentRating:
-		old, err := undo.DecodeRating(c.OldValue)
-		if err != nil {
-			return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: err.Error()}
-		}
 		return rs.modifyBook(c.OperationID, id, func(survivor *database.Book) error {
-			if err := undo.CheckRatingFollowCurrent(survivor, c); err != nil {
+			// Only the fields this row filled are put back, each while the
+			// survivor still holds what the row wrote (undo.RestoreRating).
+			restored, err := undo.RestoreRating(undo.RatingOf(survivor), c)
+			if err != nil {
 				return err
 			}
-			old.Apply(survivor)
+			restored.Apply(survivor)
 			return nil
 		})
+	case undo.UserContentCollectionHeld, undo.UserContentPlaylistHeld:
+		// A marker on the survivor: it wrote nothing, so there is nothing
+		// to restore; reverting the operation just marks it reverted.
+		return nil
 	case undo.UserContentCollection:
 		return rs.revertCollectionFollow(c, id)
 	default:
 		return rs.revertPlaylistFollow(c, id)
 	}
+}
+
+// survivorStandsIn reports whether the survivor's entry in the list, which
+// this row's retire put in the retired book's slot, is also the place of a
+// book another standing operation retired into the same survivor
+// (undo.SurvivorStandsIn). Only a replaced slot (the survivor was not listed
+// before) can be shared that way. The revert then keeps the survivor listed.
+func (rs *RevertService) survivorStandsIn(c *database.OperationChange, rec undo.MembershipRecord, kind, listID string) (bool, error) {
+	if rec.SurvivorWasMember {
+		return false, nil
+	}
+	// Resolved as a capability, not added to revertServiceStore: the revert
+	// reads the journal of one book only here.
+	journal, ok := database.AsCapability[interface {
+		GetBookChanges(bookID string) ([]*database.OperationChange, error)
+	}](rs.db)
+	if !ok {
+		return false, fmt.Errorf("store cannot read the journal of survivor %s", c.NewValue)
+	}
+	rows, err := journal.GetBookChanges(c.NewValue)
+	if err != nil {
+		return false, fmt.Errorf("read the journal of survivor %s: %w", c.NewValue, err)
+	}
+	return undo.SurvivorStandsIn(rows, c.OperationID, kind, listID), nil
 }
 
 // revertCollectionFollow puts the retired book back in static collection id.
@@ -961,8 +988,12 @@ func (rs *RevertService) revertCollectionFollow(c *database.OperationChange, col
 	if !ok {
 		return fmt.Errorf("store cannot edit collection members; book %s left out of collection %s", c.BookID, collectionID)
 	}
+	keep, err := rs.survivorStandsIn(c, rec, undo.UserContentCollection, collectionID)
+	if err != nil {
+		return err
+	}
 	_, err = members.UpdateCollectionBooks(collectionID, func(cur []string) ([]string, error) {
-		return undo.RestoreMembership(cur, c.BookID, c.NewValue, rec)
+		return undo.RestoreMembership(cur, c.BookID, c.NewValue, rec, keep)
 	})
 	if errors.Is(err, database.ErrCollectionNotFound) || errors.Is(err, database.ErrCollectionNotStatic) {
 		return undo.ErrAlreadyRestored
@@ -981,6 +1012,10 @@ func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playl
 	if !ok {
 		return fmt.Errorf("store cannot edit playlists; book %s left out of playlist %s", c.BookID, playlistID)
 	}
+	keep, err := rs.survivorStandsIn(c, rec, undo.UserContentPlaylist, playlistID)
+	if err != nil {
+		return err
+	}
 	for range userContentRevertAttempts {
 		pl, err := pls.GetUserPlaylist(playlistID)
 		if err != nil {
@@ -989,7 +1024,7 @@ func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playl
 		if pl == nil || pl.Type != database.UserPlaylistTypeStatic {
 			return undo.ErrAlreadyRestored
 		}
-		next, err := undo.RestoreMembership(pl.BookIDs, c.BookID, c.NewValue, rec)
+		next, err := undo.RestoreMembership(pl.BookIDs, c.BookID, c.NewValue, rec, keep)
 		if err != nil {
 			return err
 		}

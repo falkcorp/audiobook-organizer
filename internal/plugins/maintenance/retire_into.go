@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-21
 
@@ -140,10 +140,12 @@ type retireOpts struct {
 // Every refusal (an iTunes id on the book, an iTunes id or (unless
 // retireOpts.AllowITunesPath) an iTunes path on one of its rows, or an
 // iTunes id among its external ids; none of them under
-// retireOpts.ITunesDatabaseOnly) is checked BEFORE step 1, so a refused
-// retire has written nothing. The count is the steps written, a persisted follow snapshot
-// included, so a failure after it reports partially_applied; a book already
-// soft-deleted counts none (the last step of an earlier run).
+// retireOpts.ITunesDatabaseOnly), and a store that lacks the collection or
+// playlist capability the carry of step 1b needs (resolveCarryStores), is
+// checked BEFORE step 1, so a refused retire has written nothing. The count
+// is the steps written, a persisted follow snapshot included, so a failure
+// after it reports partially_applied; a book already soft-deleted counts none
+// (the last step of an earlier run).
 //
 // A follow that could not move every user leaves merge's pending-repair
 // record behind. Its sweep defers while the retired book is live
@@ -205,6 +207,14 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 			return 0, fmt.Errorf("%w: book %s now carries iTunes id %s", repairs.ErrChangedSincePlan, id, e.ExternalID)
 		}
 	}
+	// The list capabilities the carry of step 1b writes through are resolved
+	// here, with the other refusals: a store without them refuses before the
+	// listening state (step 1) has moved, so the book stays live and nothing
+	// is half carried.
+	carry, err := resolveCarryStores(store)
+	if err != nil {
+		return 0, fmt.Errorf("carry user content of %s: %w", id, err)
+	}
 	steps := 0
 	// 1. listening state
 	did, err := followUserStateInto(p, w, target, id, slice)
@@ -213,7 +223,7 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
 	}
 	// 1b. ratings, collection memberships and playlist entries
-	did, err = carryUserContentInto(store, w, target, id)
+	did, err = carryUserContentInto(p, store, carry, w, target, id)
 	steps += did
 	if err != nil {
 		return steps, fmt.Errorf("carry user content of %s: %w", id, err)

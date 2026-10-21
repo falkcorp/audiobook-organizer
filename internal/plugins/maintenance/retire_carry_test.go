@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e9a7c15-84d2-4b60-a1f7-0c5d8e2b6f49
 // last-edited: 2026-10-21
 
@@ -107,13 +107,19 @@ func TestRetireCarry_RatingsCollectionsAndPlaylistsFollowAndUndo(t *testing.T) {
 		if c.ChangeType != undo.ChangeTypeUserContentFollow {
 			continue
 		}
-		require.Equal(t, child, c.BookID)
 		require.Empty(t, undo.NotRestorableLabel(c), "every row is restorable: %+v", c)
 		k, _, ok := undo.UserContentFromField(c.FieldName)
 		require.True(t, ok)
+		if k == undo.UserContentCollectionHeld || k == undo.UserContentPlaylistHeld {
+			require.Equal(t, parent, c.BookID, "a marker is journaled on the survivor")
+			require.Equal(t, child, c.NewValue)
+		} else {
+			require.Equal(t, child, c.BookID)
+		}
 		kinds[k]++
 	}
-	require.Equal(t, map[string]int{undo.UserContentRating: 1, undo.UserContentCollection: 2, undo.UserContentPlaylist: 1}, kinds)
+	require.Equal(t, map[string]int{undo.UserContentRating: 1, undo.UserContentCollection: 2, undo.UserContentPlaylist: 1, undo.UserContentCollectionHeld: 1}, kinds,
+		"colB (the survivor already listed) also journals a marker on the survivor")
 
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
 	require.NoError(t, err)
@@ -195,28 +201,4 @@ func TestRetireCarry_ADeletedListCountsRestored(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, rr.Failed, "%+v", rr)
 	require.True(t, f.live(t, "c3"))
-}
-
-func TestCarryMembership_RoundTrips(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		cur  []string
-		want []string
-	}{
-		{"replaced in place", []string{"a", "r", "b"}, []string{"a", "s", "b"}},
-		{"survivor already listed", []string{"s", "r", "b"}, []string{"s", "b"}},
-		{"survivor listed after", []string{"r", "b", "s"}, []string{"b", "s"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			next, rec, ok := undo.CarryMembership(tc.cur, "r", "s")
-			require.True(t, ok)
-			require.Equal(t, tc.want, next)
-			back, err := undo.RestoreMembership(next, "r", "s", rec)
-			require.NoError(t, err)
-			require.Equal(t, tc.cur, back)
-		})
-	}
-	_, _, ok := undo.CarryMembership([]string{"a"}, "r", "s")
-	require.False(t, ok, "not listed: nothing to carry")
 }

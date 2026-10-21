@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
 // last-edited: 2026-10-21
 
@@ -29,6 +29,14 @@ import (
 //     retired book goes back in the survivor's slot (or its old index when
 //     the survivor was already a member).
 //   - "playlist:<playlist id>": the same for a static playlist.
+//   - "collection-held:<collection id>" and "playlist-held:<playlist id>":
+//     a marker journaled on the SURVIVOR (BookID) when a retire only removed
+//     the retired book because the survivor was already listed, so the
+//     survivor now also stands in for it (NewValue is the retired book,
+//     OldValue its MembershipRecord). It writes nothing and restores nothing.
+//     Another operation's revert of the survivor's own slot reads it
+//     (SurvivorStandsIn) so that it keeps the survivor listed rather than
+//     replace it and lose the retired book's place.
 //
 // Database rows only; nothing on disk changes. A collection or playlist that
 // has since been deleted has nothing left to restore and counts restored.
@@ -39,6 +47,10 @@ const (
 	UserContentRating     = "rating"
 	UserContentCollection = "collection"
 	UserContentPlaylist   = "playlist"
+	// UserContentCollectionHeld and UserContentPlaylistHeld are the
+	// survivor-side markers described on ChangeTypeUserContentFollow.
+	UserContentCollectionHeld = "collection-held"
+	UserContentPlaylistHeld   = "playlist-held"
 )
 
 // UserContentField builds the FieldName of a ChangeTypeUserContentFollow row.
@@ -52,7 +64,7 @@ func UserContentFromField(field string) (kind, id string, ok bool) {
 		return "", "", false
 	}
 	switch kind {
-	case UserContentRating, UserContentCollection, UserContentPlaylist:
+	case UserContentRating, UserContentCollection, UserContentPlaylist, UserContentCollectionHeld, UserContentPlaylistHeld:
 		return kind, id, true
 	}
 	return "", "", false
@@ -136,28 +148,62 @@ func DecodeRating(v string) (RatingSnapshot, error) {
 	return s, nil
 }
 
-// CheckRatingFollowCurrent is the compare-and-set for a rating row, shared by
-// the revert and the preflight: nil while the survivor still holds the row's
-// NewValue (put OldValue back), ErrAlreadyRestored when it already holds
-// OldValue, and a ReasonChangedSince refusal when it holds anything else (a
-// person rated the book since).
-func CheckRatingFollowCurrent(survivor *database.Book, c *database.OperationChange) error {
+// RestoreRating is the compare-and-set for a rating row, shared by the revert
+// and the preflight. A row owns only the fields it changed (the ones where its
+// OldValue and NewValue differ), so a later operation's fill of another field
+// of the same survivor does not block, and is not undone by, reverting this
+// one. For each owned field the survivor now holds cur: the row's NewValue
+// (put OldValue back), already OldValue (nothing to do), or anything else (a
+// person rated the book since: the whole row is refused and nothing is
+// written). It returns the ratings to write; ErrAlreadyRestored when no owned
+// field needed restoring.
+func RestoreRating(cur RatingSnapshot, c *database.OperationChange) (RatingSnapshot, error) {
 	oldS, err := DecodeRating(c.OldValue)
 	if err != nil {
-		return &ReferentError{Reason: ReasonOldValueUnparsable, Detail: err.Error()}
+		return cur, &ReferentError{Reason: ReasonOldValueUnparsable, Detail: err.Error()}
 	}
 	newS, err := DecodeRating(c.NewValue)
 	if err != nil {
-		return &ReferentError{Reason: ReasonOldValueUnparsable, Detail: err.Error()}
+		return cur, &ReferentError{Reason: ReasonOldValueUnparsable, Detail: err.Error()}
 	}
-	cur := RatingOf(survivor)
-	switch {
-	case cur.Equal(newS):
-		return nil
-	case cur.Equal(oldS):
-		return ErrAlreadyRestored
+	out := cur
+	restored := false
+	// field restores one owned field: set puts the old value into out.
+	field := func(name string, owned, atNew, atOld bool, set func()) error {
+		switch {
+		case !owned:
+			return nil
+		case atNew:
+			set()
+			restored = true
+			return nil
+		case atOld:
+			return nil
+		}
+		return refuse(ReasonChangedSince, "book %s %s rating changed since the retire carried it", c.BookID, name)
 	}
-	return refuse(ReasonChangedSince, "book %s ratings changed since the retire carried them", survivor.ID)
+	for _, f := range []error{
+		field("overall", !floatPtrEqual(oldS.Overall, newS.Overall), floatPtrEqual(cur.Overall, newS.Overall), floatPtrEqual(cur.Overall, oldS.Overall), func() { out.Overall = oldS.Overall }),
+		field("story", !floatPtrEqual(oldS.Story, newS.Story), floatPtrEqual(cur.Story, newS.Story), floatPtrEqual(cur.Story, oldS.Story), func() { out.Story = oldS.Story }),
+		field("performance", !floatPtrEqual(oldS.Performance, newS.Performance), floatPtrEqual(cur.Performance, newS.Performance), floatPtrEqual(cur.Performance, oldS.Performance), func() { out.Performance = oldS.Performance }),
+		field("notes", !strPtrEqual(oldS.Notes, newS.Notes), strPtrEqual(cur.Notes, newS.Notes), strPtrEqual(cur.Notes, oldS.Notes), func() { out.Notes = oldS.Notes }),
+	} {
+		if f != nil {
+			return cur, f
+		}
+	}
+	if !restored {
+		return cur, ErrAlreadyRestored
+	}
+	return out, nil
+}
+
+// CheckRatingFollowCurrent is RestoreRating's verdict on survivor's ratings
+// without the result, for the preflight: nil when the row would restore,
+// ErrAlreadyRestored, or a ReasonChangedSince refusal.
+func CheckRatingFollowCurrent(survivor *database.Book, c *database.OperationChange) error {
+	_, err := RestoreRating(RatingOf(survivor), c)
+	return err
 }
 
 // MembershipRecord is the OldValue of a collection or playlist row: where the
@@ -211,12 +257,21 @@ func CarryMembership(cur []string, retired, survivor string) (next []string, rec
 // now. ErrAlreadyRestored when the retired book is listed again; a
 // ReasonChangedSince refusal when the survivor was put in the retired book's
 // slot and has since been taken out (the owner removed it on purpose).
-func RestoreMembership(cur []string, retired, survivor string, rec MembershipRecord) ([]string, error) {
+//
+// keepSurvivor is for a survivor that another, still standing retire also
+// folded into this list (SurvivorStandsIn): the survivor is then the only
+// entry that retire left for its own book, so the retired book goes back at
+// its slot and the survivor stays listed beside it, instead of being replaced
+// and taking that other book's place with it.
+func RestoreMembership(cur []string, retired, survivor string, rec MembershipRecord, keepSurvivor bool) ([]string, error) {
 	if slices.Contains(cur, retired) {
 		return nil, ErrAlreadyRestored
 	}
 	next := slices.Clone(cur)
-	if rec.SurvivorWasMember {
+	if rec.SurvivorWasMember || keepSurvivor {
+		if keepSurvivor && !slices.Contains(next, survivor) {
+			return nil, refuse(ReasonChangedSince, "book %s is no longer listed where the retire put it", survivor)
+		}
 		at := min(rec.Index, len(next))
 		return slices.Insert(next, at, retired), nil
 	}
@@ -226,6 +281,40 @@ func RestoreMembership(cur []string, retired, survivor string, rec MembershipRec
 	}
 	next[j] = retired
 	return next, nil
+}
+
+// CheckMembershipFollow is what the revert of a collection or playlist row
+// would do to the list as it is now, for the preflight: nil when it would put
+// the retired book back, ErrAlreadyRestored, or a ReasonChangedSince
+// refusal. The survivor-side markers (SurvivorStandsIn) change a revert only
+// from a refusal-free replace to a keep, so they are not read here.
+func CheckMembershipFollow(cur []string, c *database.OperationChange) error {
+	rec, err := DecodeMembership(c.OldValue)
+	if err != nil {
+		return &ReferentError{Reason: ReasonOldValueUnparsable, Detail: err.Error()}
+	}
+	_, err = RestoreMembership(cur, c.BookID, c.NewValue, rec, false)
+	return err
+}
+
+// HeldKind is the marker kind that goes with a collection or playlist row kind.
+func HeldKind(kind string) string { return kind + "-held" }
+
+// SurvivorStandsIn reports whether, among the survivor's journal rows
+// (GetBookChanges of the survivor), another operation than thisOp left a
+// standing marker that the survivor also holds list listID of kind (rows with
+// RevertedAt set, or voided, no longer count). A standing marker means the
+// survivor's entry in that list is also the place of a book that operation
+// retired into it.
+func SurvivorStandsIn(survivorRows []*database.OperationChange, thisOp, kind, listID string) bool {
+	want := UserContentField(HeldKind(kind), listID)
+	for _, r := range survivorRows {
+		if r.ChangeType == ChangeTypeUserContentFollow && r.FieldName == want &&
+			r.OperationID != thisOp && r.RevertedAt == nil && !r.Voided {
+			return true
+		}
+	}
+	return false
 }
 
 func validUserContentFollowRow(c *database.OperationChange) bool {

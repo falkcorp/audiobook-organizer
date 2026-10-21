@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-21
 //
@@ -399,19 +399,49 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		}
 		return verdictOf(CheckBookTagAdd(tags, c))
 	case ChangeTypeUserContentFollow:
-		// A rating row is checked against the survivor's ratings, as the
-		// revert will (CheckRatingFollowCurrent). Collection and playlist
-		// rows are compare-and-sets under the list's own lock and have no
-		// preflight reader; the revert runs them.
+		// Every kind is checked as the revert will check it: a rating row
+		// against the survivor's ratings (RestoreRating), a collection or
+		// playlist row against the list as it is now (CheckMembershipFollow;
+		// a list deleted or no longer static counts restored, as in the
+		// revert). A store that cannot read lists gets no prediction; the
+		// revert still runs the compare-and-set under the list's lock. The
+		// survivor-side markers restore nothing and always pass.
 		kind, id, _ := UserContentFromField(c.FieldName)
-		if kind != UserContentRating {
-			return rowVerdict{}
+		switch kind {
+		case UserContentRating:
+			survivor, refusal := CheckRestoreBook(store, id)
+			if refusal != nil {
+				return rowVerdict{refusal: refusal}
+			}
+			return verdictOf(CheckRatingFollowCurrent(survivor, c))
+		case UserContentCollection:
+			cols, ok := database.AsCapability[database.CollectionStore](store)
+			if !ok {
+				return rowVerdict{}
+			}
+			col, err := cols.GetCollection(id)
+			if err != nil {
+				return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read collection %s: %v", id, err)}
+			}
+			if col == nil || col.Type != database.CollectionTypeStatic {
+				return rowVerdict{already: true}
+			}
+			return verdictOf(CheckMembershipFollow(col.BookIDs, c))
+		case UserContentPlaylist:
+			pls, ok := database.AsCapability[database.UserPlaylistReader](store)
+			if !ok {
+				return rowVerdict{}
+			}
+			pl, err := pls.GetUserPlaylist(id)
+			if err != nil {
+				return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read playlist %s: %v", id, err)}
+			}
+			if pl == nil || pl.Type != database.UserPlaylistTypeStatic {
+				return rowVerdict{already: true}
+			}
+			return verdictOf(CheckMembershipFollow(pl.BookIDs, c))
 		}
-		survivor, refusal := CheckRestoreBook(store, id)
-		if refusal != nil {
-			return rowVerdict{refusal: refusal}
-		}
-		return verdictOf(CheckRatingFollowCurrent(survivor, c))
+		return rowVerdict{}
 	case ChangeTypeUserBookStateSet:
 		// The revert puts the user's state and positions back only while
 		// they still hold what the import wrote (CheckUserBookStateSet). It
