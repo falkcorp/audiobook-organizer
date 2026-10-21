@@ -22,6 +22,6 @@ journal, soft-delete and stale-candidate prune entry points, a reflection canary
 fails when a new prune, sweep, purge, expiry or cleanup method appears on the
 store types without coverage, and plugin sweeps carry a decision sentinel; a
 backup round trip is pinned too. To make a record, its verdict and its veto rows
-commit together, `RawKVStore` gains `ApplyRawBatch`, an atomic mixed set and
-delete write (mocks regenerated), and a new `RawSnapshotter` interface gives a
-point-in-time raw reader.
+commit together, `*PebbleStore` gains `ApplyRawBatch`, an atomic mixed set and
+delete write, and a `RawSnapshotter` gives a point-in-time raw reader; both are
+small separate interfaces, so `Store` and its mocks do not widen.

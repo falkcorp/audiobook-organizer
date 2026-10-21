@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk_test.go
-// version: 1.4.2
+// version: 1.4.1
 // guid: 3e91c7d4-8b52-4a06-9f13-6c8d2e5a70b4
-// last-edited: 2026-10-21
+// last-edited: 2026-10-01
 
 package metafetch
 
@@ -28,7 +28,6 @@ func (emptyKV) DeleteRaw(string) error                       { return nil }
 func (emptyKV) ScanPrefix(string) ([]database.KVPair, error) { return nil, nil }
 func (emptyKV) CountPrefix(string) (int64, error)            { return 0, nil }
 func (emptyKV) DeleteRawBatch([]string) error                { return nil }
-func (emptyKV) ApplyRawBatch([]database.RawWrite) error      { return nil }
 func (emptyKV) ScanPrefixPage(string, string, int) ([]database.KVPair, string, error) {
 	return nil, "", nil
 }

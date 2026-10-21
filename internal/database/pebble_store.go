@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.231.3
+// version: 1.231.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-21
 
@@ -5848,7 +5848,7 @@ func (p *PebbleStore) DeleteRawBatch(keys []string) error {
 	return nil
 }
 
-// ApplyRawBatch implements RawKVStore.ApplyRawBatch: one pebble batch, one
+// ApplyRawBatch implements RawBatchApplier: one pebble batch, one
 // synced commit, through the same commitRawWrites path as SetRaw and
 // DeleteRawBatch (so metadata_cache: rows keep the identification index
 // current).

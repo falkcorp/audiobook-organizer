@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_test.go
-// version: 1.3.4
+// version: 1.3.3
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-21
+// last-edited: 2026-10-10
 
 package metabatch_test
 
@@ -154,9 +154,6 @@ func (m *mockRawKVStore) ScanPrefixPage(_, _ string, _ int) ([]database.KVPair, 
 	return m.pairs, "", m.err
 }
 func (m *mockRawKVStore) DeleteRawBatch(_ []string) error { return nil }
-func (m *mockRawKVStore) ApplyRawBatch(_ []database.RawWrite) error {
-	return nil
-}
 func (m *mockRawKVStore) CountPrefix(_ string) (int64, error) {
 	return int64(len(m.pairs)), nil
 }

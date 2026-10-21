@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.153.1
+// version: 1.153.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-21
+// last-edited: 2026-10-19
 
 package database
 
@@ -375,7 +375,6 @@ type MockStore struct {
 	ScanPrefixFunc                   func(prefix string) ([]KVPair, error)
 	ScanPrefixPageFunc               func(prefix, after string, limit int) ([]KVPair, string, error)
 	DeleteRawBatchFunc               func(keys []string) error
-	ApplyRawBatchFunc                func(writes []RawWrite) error
 	CountPrefixFunc                  func(prefix string) (int64, error)
 	CreateOperationResultFunc        func(result *OperationResult) error
 	GetOperationResultsFunc          func(operationID string) ([]OperationResult, error)
@@ -3041,12 +3040,6 @@ func (m *MockStore) ScanPrefixPage(prefix, after string, limit int) ([]KVPair, s
 func (m *MockStore) DeleteRawBatch(keys []string) error {
 	if m.DeleteRawBatchFunc != nil {
 		return m.DeleteRawBatchFunc(keys)
-	}
-	return nil
-}
-func (m *MockStore) ApplyRawBatch(writes []RawWrite) error {
-	if m.ApplyRawBatchFunc != nil {
-		return m.ApplyRawBatchFunc(writes)
 	}
 	return nil
 }

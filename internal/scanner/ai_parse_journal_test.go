@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_journal_test.go
-// version: 1.0.2
+// version: 1.0.1
 // guid: b62c07fa-91e5-4d38-8c74-3a19de5b20f7
-// last-edited: 2026-10-21
+// last-edited: 2026-09-26
 
 package scanner
 
@@ -69,19 +69,6 @@ func (s *parseKV) ScanPrefixPage(prefix, after string, limit int) ([]database.KV
 		last = k
 	}
 	return out, last, nil
-}
-
-func (s *parseKV) ApplyRawBatch(writes []database.RawWrite) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, w := range writes {
-		if w.Delete {
-			delete(s.m, w.Key)
-		} else {
-			s.m[w.Key] = w.Value
-		}
-	}
-	return nil
 }
 
 func (s *parseKV) DeleteRawBatch(keys []string) error {
