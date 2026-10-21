@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.106.0
+// version: 2.107.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-20
 
@@ -662,6 +662,10 @@ func NewServer(store database.Store) *Server {
 	//
 	// /api/events is an SSE stream: buffering it through a compressor defeats
 	// incremental delivery, so events arrive only when the buffer flushes.
+	// Before compressionMiddleware: gin-contrib/gzip swaps c.Writer for a
+	// wrapper without Unwrap, after which no connection deadline can be set
+	// (the accept-invite body read deadline, setBodyReadDeadline).
+	router.Use(captureRawResponseController())
 	router.Use(compressionMiddleware())
 	// OpenTelemetry instrumentation: create per-handler spans and record metrics.
 	// otelgin v0.72 records url.path only (no url.query / url.full /
@@ -1538,9 +1542,13 @@ func (server *Server) ensureSingleFileBookFile(book *database.Book) (bool, error
 //     gzip" check passes the first chunk through raw, strips Content-Encoding,
 //     then compresses every later chunk, so browsers saved a file gunzip rejects
 //     ("data stream error") on every operation's log download.
+//   - /api/v1/auth/accept-invite: its body is read under a connection read
+//     deadline (setBodyReadDeadline), and the gzip writer hides the
+//     connection; captureRawResponseController covers that too, so this is
+//     the second of two guards. Its response is a few bytes of JSON.
 func compressionMiddleware() gin.HandlerFunc {
 	return gzip.Gzip(gzip.DefaultCompression,
-		gzip.WithExcludedPaths([]string{"/api/events", "/metrics"}),
+		gzip.WithExcludedPaths([]string{"/api/events", "/metrics", "/api/v1/auth/accept-invite"}),
 		gzip.WithExcludedPathsRegexs([]string{`^/api/v1/operations/v2/[^/]+/logs/download$`}),
 	)
 }

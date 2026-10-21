@@ -50,7 +50,11 @@ markers (any `Cf-*` header or the `CF_Authorization` cookie); with the
 setting unset, a connector request stripped of every one of them would count
 as a direct caller. The accept body is capped at 4 KiB (413
 above it) and must arrive within 5 seconds (408 otherwise; a per-request
-connection read deadline, cleared afterwards) and parsed once for both the limiter and the handler. Invite tokens
+connection read deadline, cleared afterwards). The deadline is set through
+the connection captured before the gzip middleware wraps the response
+writer, and the route is also excluded from gzip, so it holds for browsers
+sending `Accept-Encoding: gzip`; if it still cannot be set, that is logged
+once and parsed once for both the limiter and the handler. Invite tokens
 are redacted from request logs, trace span attributes (`url.path`) and error
 logs.
 
