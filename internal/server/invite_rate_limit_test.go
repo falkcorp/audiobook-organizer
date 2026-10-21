@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -1043,5 +1043,23 @@ func TestInviteRateLimit_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t 
 	})
 	if !limited || allowed < inviteAuthRateBurst {
 		t.Fatalf("a direct device after the tunnel flood: %d admitted (limited=%v), want its burst of %d", allowed, limited, inviteAuthRateBurst)
+	}
+}
+
+// N1: a link-local client with a zoned RemoteAddr ("[fe80::1%en0]:4000") is
+// attributed through the real request path: gin's ClientIP returns "" for
+// it, which skipped the per-client layer. It is now keyed on its address
+// (zone dropped), limited at its burst, and a second link-local device has
+// its own bucket.
+func TestInviteRateLimit_ZonedLinkLocalPeerIsAttributed(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(i), "[fe80::1%en0]", nil)
+	})
+	if !limited || allowed != inviteAuthRateBurst {
+		t.Fatalf("zoned link-local peer: allowed %d (limited=%v), want its burst of %d", allowed, limited, inviteAuthRateBurst)
+	}
+	if w := h.get(inviteTestToken(500), "[fe80::2%en0]", nil); w.Code != http.StatusOK {
+		t.Fatalf("another link-local device: %d, want 200", w.Code)
 	}
 }

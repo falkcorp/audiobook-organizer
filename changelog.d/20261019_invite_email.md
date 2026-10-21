@@ -28,7 +28,9 @@ its full address, since LAN devices share one /64; a direct LAN peer, one
 that is not a connector and sends no Cloudflare markers, also shares an
 aggregate bucket per /64 at four times the per-client budget, so one host
 rotating through its /64 is still capped, and tunnel traffic never touches
-that aggregate), so forging `Cf-*` headers
+that aggregate; link-local peers count as LAN, and the peer address is parsed
+from the connection with its zone dropped, so a zoned link-local client is
+attributed), so forging `Cf-*` headers
 never takes a caller out of per-client limiting; an unlisted connector is
 therefore one bucket for everyone it relays, and a private peer that sends
 Cloudflare headers without being listed is logged once per address at

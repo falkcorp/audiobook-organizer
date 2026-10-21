@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -598,5 +598,14 @@ func TestBootstrapLimiter_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t
 	}
 	if n != bootstrapMaxAttempts {
 		t.Fatalf("the owner's direct peer after the flood: %d attempts admitted, want %d", n, bootstrapMaxAttempts)
+	}
+}
+
+// N1: a zoned link-local peer is a direct LAN caller (link-local is only
+// reachable on-link), keyed on its address without the zone.
+func TestBootstrapClientKey_ZonedLinkLocalIsDirect(t *testing.T) {
+	key, exempt := bootstrapKeyFor(t, "", "[fe80::1%en0]:4000", nil)
+	if key != "direct:fe80::1" || !exempt {
+		t.Fatalf("zoned link-local peer: key %q exempt %v, want direct:fe80::1 and exempt", key, exempt)
 	}
 }

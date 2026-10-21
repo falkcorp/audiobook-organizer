@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -167,9 +167,29 @@ func lanIPv6Prefix(ip string) (string, bool) {
 	return netip.PrefixFrom(a, 64).Masked().String(), true
 }
 
+// peerAddr is the request's TCP peer address, parsed from RemoteAddr with
+// its zone dropped and IPv4-mapped forms unmapped. The trust code uses it,
+// not c.ClientIP(), wherever it needs the PEER: gin's ClientIP returns "" for
+// a zoned link-local RemoteAddr ("[fe80::1%en0]:4000"), which made a
+// link-local client unattributed. The router trusts no proxy headers, so for
+// every other address this is what ClientIP returns.
+func peerAddr(c *gin.Context) (netip.Addr, bool) {
+	remote := strings.TrimSpace(c.Request.RemoteAddr)
+	var a netip.Addr
+	if ap, err := netip.ParseAddrPort(remote); err == nil {
+		a = ap.Addr()
+	} else if parsed, err := netip.ParseAddr(remote); err == nil {
+		a = parsed
+	} else {
+		return netip.Addr{}, false
+	}
+	return a.WithZone("").Unmap(), true
+}
+
 // directLANPeer reports whether the request is a direct caller on this
 // network rather than tunnel or proxy traffic: the peer is a private
-// (RFC 1918 / ULA) or loopback address, is not a configured tunnel connector,
+// (RFC 1918 / ULA), link-local or loopback address, is not a configured
+// tunnel connector,
 // and the request carries none of the Cloudflare markers
 // (hasCloudflareMarkers). Cloudflare's edge adds those to everything it
 // proxies and the connector passes them through, so tunnel traffic is never
@@ -180,23 +200,20 @@ func lanIPv6Prefix(ip string) (string, bool) {
 // connector request stripped of every Cloudflare header on the way would
 // count as direct too (see trustedClientIP).
 func directLANPeer(c *gin.Context, connectors connectorPeers) bool {
-	peer := c.Request.RemoteAddr
-	if connectors.contains(peer) {
+	if connectors.contains(c.Request.RemoteAddr) {
 		return false
 	}
-	host, _, err := net.SplitHostPort(peer)
-	if err != nil {
-		host = peer
-	}
-	a, err := netip.ParseAddr(strings.TrimSpace(host))
-	if err != nil {
-		return false
-	}
-	a = a.Unmap()
-	if !a.IsLoopback() && !a.IsPrivate() {
+	a, ok := peerAddr(c)
+	if !ok || !isLANAddr(a) {
 		return false
 	}
 	return !hasCloudflareMarkers(c)
+}
+
+// isLANAddr reports whether a is only reachable from this network: private
+// (RFC 1918 / ULA), link-local or loopback.
+func isLANAddr(a netip.Addr) bool {
+	return a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLoopback()
 }
 
 // trustedClientIP returns the address a per-client limiter should key the
@@ -222,7 +239,7 @@ func directLANPeer(c *gin.Context, connectors connectorPeers) bool {
 // The header is parsed with net.ParseIP and re-rendered with String() so that
 // equivalent spellings share one key; an unparseable value counts as absent.
 //
-// Every other request is keyed on c.ClientIP(), the peer's own address (the
+// Every other request is keyed on the peer's own address (peerAddr; the
 // router trusts no proxy headers), so a spoofed header is ignored.
 //
 // ok is false only when the peer is a configured connector or this host and
@@ -260,7 +277,11 @@ func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 			return parsed.String(), true
 		}
 	}
-	ip = c.ClientIP()
+	a, parsed := peerAddr(c)
+	if !parsed {
+		return "", false
+	}
+	ip = a.String()
 	local := t.isLocalPeer(ip)
 	if !isConnector && !local && hasCloudflareMarkers(c) {
 		warnUnlistedConnector(ip)
@@ -288,7 +309,7 @@ func warnUnlistedConnector(ip string) {
 		return
 	}
 	a = a.WithZone("").Unmap()
-	if !a.IsPrivate() {
+	if !a.IsPrivate() && !a.IsLinkLocalUnicast() {
 		return
 	}
 	switch unlistedConnectors.add(a.String()) {
