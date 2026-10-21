@@ -1,7 +1,7 @@
 // file: web/src/components/library/TagCloud.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f3d2c1b-8a9e-4d7c-b6a5-2e1f9c8d7b6a
-// last-edited: 2026-09-11
+// last-edited: 2026-10-21
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
@@ -244,5 +244,43 @@ describe('formatTagLabel', () => {
 
   it('keeps a colon that appears inside the value segment itself', () => {
     expect(formatTagLabel('metadata:isbn:978:0:1234')).toBe('isbn: 978:0:1234');
+  });
+});
+
+describe('TagCloud stays mounted in every data state', () => {
+  it('loading with no tags yet renders the panel with skeletons', () => {
+    renderWithProviders(<TagCloud {...defaultProps({ availableTags: [], loading: true })} />);
+    expect(screen.getByTestId('tag-cloud-panel')).toBeInTheDocument();
+    expect(screen.getAllByTestId('tag-cloud-skeleton').length).toBeGreaterThan(0);
+  });
+
+  it('reloading keeps the previous chips and shows a spinner', () => {
+    renderWithProviders(<TagCloud {...defaultProps({ loading: true })} />);
+    expect(screen.getByText('fantasy (100)')).toBeInTheDocument();
+    expect(screen.getByTestId('tag-cloud-spinner')).toBeInTheDocument();
+    expect(screen.queryByTestId('tag-cloud-skeleton')).toBeNull();
+  });
+
+  it('error renders the message as an alert', () => {
+    renderWithProviders(
+      <TagCloud {...defaultProps({ availableTags: [], errorMessage: 'Could not load' })} />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load');
+  });
+
+  it('empty renders the empty message, distinct from error and loading', () => {
+    renderWithProviders(
+      <TagCloud
+        {...defaultProps({ availableTags: [], emptyMessage: 'No tags in these results.' })}
+      />
+    );
+    expect(screen.getByText('No tags in these results.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByTestId('tag-cloud-skeleton')).toBeNull();
+  });
+
+  it('renders nothing when there is nothing to say', () => {
+    renderWithProviders(<TagCloud {...defaultProps({ availableTags: [] })} />);
+    expect(screen.queryByTestId('tag-cloud-panel')).toBeNull();
   });
 });

@@ -1,9 +1,19 @@
 // file: web/src/components/library/TagCloud.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e6c9a1d-3f2b-4c8e-9a5d-1b6f8e2c4d9a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-21
 import { useMemo, useState } from 'react';
-import { Box, Button, Chip, Collapse, IconButton, Stack, Typography } from '@mui/material';
+import {
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Collapse,
+  IconButton,
+  Skeleton,
+  Stack,
+  Typography,
+} from '@mui/material';
 import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
 
 import { STORAGE_KEYS } from '../../lib/storageKeys';
@@ -18,7 +28,31 @@ export interface TagCloudProps {
    * vanish and look broken.
    */
   emptyMessage?: string;
+  /**
+   * The answer for the current query is outstanding. With no tags yet this
+   * renders skeleton chips; with tags already shown (a reload) it keeps them,
+   * dimmed, with a small spinner — the panel never collapses.
+   */
+  loading?: boolean;
+  /**
+   * The current query's request failed. Rendered in the panel, in place of
+   * chips, at the same reserved height as every other state.
+   */
+  errorMessage?: string;
 }
+
+/**
+ * Height reserved for the chip area of the collapsed panel, in px.
+ *
+ * The panel stays mounted through loading, reload, empty and error, so the
+ * "Select All" bar and book-card checkboxes below it must not move when the
+ * facets answer arrives. Every state therefore renders its body inside a box
+ * at least this tall. The widest preview chip is 1.5rem text with 4px padding
+ * top and bottom plus the chip's own line box; this leaves room for exactly
+ * one row, which is how the preview lays out at desktop widths.
+ */
+export const TAG_CLOUD_BODY_MIN_HEIGHT = 48;
+const SKELETON_WIDTHS = [96, 72, 120, 84, 104];
 
 const MIN_FONT_SIZE = 0.75; // rem
 const MAX_FONT_SIZE = 1.5; // rem
@@ -103,6 +137,8 @@ export function TagCloud({
   selectedTags,
   onTagsChange,
   emptyMessage,
+  loading = false,
+  errorMessage,
 }: TagCloudProps) {
   const [expanded, setExpanded] = useState(readStoredExpanded);
 
@@ -146,17 +182,13 @@ export function TagCloud({
     return [...top, ...selectedOutside];
   }, [sortedTags, selectedTags]);
 
-  if (visibleTags.length === 0) {
-    if (!emptyMessage) return null;
-    return (
-      <Box sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}>
-        <Typography variant="subtitle2">Browse by Tag</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          {emptyMessage}
-        </Typography>
-      </Box>
-    );
-  }
+  // The panel renders in every state once it has anything to say. A bare
+  // empty list with no message, no pending request and no error means the
+  // caller has nothing to show (legacy callers), so render nothing.
+  if (visibleTags.length === 0 && !loading && !errorMessage && !emptyMessage) return null;
+
+  // Reloading with a previous answer on screen: keep it, dimmed.
+  const reloading = loading && visibleTags.length > 0;
 
   const setExpandedPersisted = (next: boolean) => {
     setExpanded(next);
@@ -188,7 +220,11 @@ export function TagCloud({
   };
   const hiddenCount = sortedTags.length - previewTags.length;
   return (
-    <Box sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+    <Box
+      data-testid="tag-cloud-panel"
+      aria-busy={loading}
+      sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}
+    >
       <Stack
         direction="row"
         onClick={() => setExpandedPersisted(!expanded)}
@@ -201,6 +237,14 @@ export function TagCloud({
         <Typography variant="subtitle2">
           Browse by Tag{!expanded && sortedTags.length > 0 ? ` (${sortedTags.length})` : ''}
         </Typography>
+        {loading && (
+          <CircularProgress
+            size={14}
+            aria-label="Loading tags"
+            sx={{ ml: 'auto', mr: 1 }}
+            data-testid="tag-cloud-spinner"
+          />
+        )}
         <IconButton
           size="small"
           aria-label={expanded ? 'Collapse tag cloud' : 'Expand tag cloud'}
@@ -226,17 +270,63 @@ export function TagCloud({
         </IconButton>
       </Stack>
 
-      {!expanded && (
-        <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 1, alignItems: 'center' }}>
-          {previewTags.map(renderChip)}
-          {hiddenCount > 0 && (
-            <Button size="small" onClick={() => setExpandedPersisted(true)}>
-              Show all {sortedTags.length}
-            </Button>
+      {visibleTags.length === 0 ? (
+        <Box
+          data-testid="tag-cloud-body"
+          sx={{
+            mt: 1,
+            minHeight: TAG_CLOUD_BODY_MIN_HEIGHT,
+            display: 'flex',
+            gap: 0.75,
+            flexWrap: 'wrap',
+            alignItems: 'center',
+          }}
+        >
+          {errorMessage ? (
+            <Typography variant="body2" color="error" role="alert">
+              {errorMessage}
+            </Typography>
+          ) : loading ? (
+            SKELETON_WIDTHS.map((w) => (
+              <Skeleton
+                key={w}
+                variant="rounded"
+                width={w}
+                height={32}
+                sx={{ borderRadius: 4 }}
+                data-testid="tag-cloud-skeleton"
+              />
+            ))
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              {emptyMessage}
+            </Typography>
           )}
         </Box>
-      )}
-
+      ) : (
+        <>
+          {!expanded && (
+            <Box
+              data-testid="tag-cloud-body"
+              sx={{
+                display: 'flex',
+                gap: 0.75,
+                flexWrap: 'wrap',
+                mt: 1,
+                alignItems: 'center',
+                minHeight: TAG_CLOUD_BODY_MIN_HEIGHT,
+                opacity: reloading ? 0.5 : 1,
+                transition: 'opacity 0.15s',
+              }}
+            >
+              {previewTags.map(renderChip)}
+              {hiddenCount > 0 && (
+                <Button size="small" onClick={() => setExpandedPersisted(true)}>
+                  Show all {sortedTags.length}
+                </Button>
+              )}
+            </Box>
+          )}
       {/*
         unmountOnExit is required, not cosmetic. Collapse keeps its children
         mounted by default, so without it the collapsed state renders every
@@ -245,10 +335,21 @@ export function TagCloud({
         expects a tag to appear once.
       */}
       <Collapse in={expanded} unmountOnExit>
-        <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 0.75,
+            flexWrap: 'wrap',
+            mt: 1,
+            opacity: reloading ? 0.5 : 1,
+            transition: 'opacity 0.15s',
+          }}
+        >
           {sortedTags.map(renderChip)}
         </Box>
       </Collapse>
+        </>
+      )}
     </Box>
   );
 }

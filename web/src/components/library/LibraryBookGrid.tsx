@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-06
+// last-edited: 2026-10-21
 
 import {
   Typography,
@@ -152,6 +152,10 @@ interface LibraryBookGridProps {
   onTagCloudChange?: (tags: string[]) => void;
   /** Shown in place of the chips when the current results carry no tags. */
   tagCloudEmptyMessage?: string;
+  /** Facets answer for the current results is outstanding. */
+  tagCloudLoading?: boolean;
+  /** Set when the current results' facets request failed. */
+  tagCloudError?: string;
 }
 
 export const LibraryBookGrid = ({
@@ -232,6 +236,8 @@ export const LibraryBookGrid = ({
   tagCloudSelected,
   onTagCloudChange,
   tagCloudEmptyMessage,
+  tagCloudLoading,
+  tagCloudError,
 }: LibraryBookGridProps) => (
   <>
     {libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) ===
@@ -320,14 +326,17 @@ export const LibraryBookGrid = ({
           searchErrorText={queryErrorMessage(loadError)}
         />
 
-        {((tagCloudTags ?? availableTags).length > 0 || tagCloudEmptyMessage) && (
-          <TagCloud
-            availableTags={tagCloudTags ?? availableTags}
-            selectedTags={tagCloudSelected ?? selectedTags}
-            onTagsChange={onTagCloudChange ?? handleTagFilterChange}
-            emptyMessage={tagCloudEmptyMessage}
-          />
-        )}
+        {/* Always mounted: a panel that appears when facets answer pushes the
+            Select All bar and card checkboxes down mid-click. TagCloud renders
+            its own loading / error / empty body at a reserved height. */}
+        <TagCloud
+          availableTags={tagCloudTags ?? availableTags}
+          selectedTags={tagCloudSelected ?? selectedTags}
+          onTagsChange={onTagCloudChange ?? handleTagFilterChange}
+          emptyMessage={tagCloudEmptyMessage}
+          loading={tagCloudLoading}
+          errorMessage={tagCloudError}
+        />
 
         {/* Select All bar — always visible */}
         <Stack
