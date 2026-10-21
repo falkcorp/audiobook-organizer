@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -30,7 +30,8 @@ import (
 //     LAN IPv6 /64 also shares one aggregate window of
 //     bootstrapLANPrefixFactor times the per-key cap, so one LAN host cannot
 //     rotate through its /64 for fresh windows (tunnel traffic never touches
-//     that window; it has the global ceiling);
+//     that window); a LAN host sending Cloudflare markers gets its own /64
+//     aggregate ("unlisted-lan64:") on top of the global ceiling;
 //   - entries are kept in creation order, and every call first drops the ones
 //     whose window has ended, so the map holds only live windows;
 //   - the map is hard-capped at bootstrapMaxTrackedKeys, evicting the oldest;
@@ -133,8 +134,9 @@ func bootstrapDirectKey(ip string) string {
 }
 
 // bootstrapClientKey returns the bootstrap limiter key for the request, the
-// aggregate key of its LAN IPv6 /64 (bootstrapDirectLANKey; "" unless the
-// request is a direct LAN IPv6 peer), the address to log, and whether the request is exempt from
+// aggregate key of its LAN IPv6 /64 (bootstrapDirectLANKey for a direct LAN
+// peer, "unlisted-lan64:" for a LAN host sending Cloudflare markers, "" for
+// anything else), the address to log, and whether the request is exempt from
 // the global ceiling (a direct LAN peer, directLANPeer). Every other
 // request is keyed through trustedClientIP: a visitor's own address when it
 // can be believed, otherwise the shared untrustedLocalClientKey. A connector
@@ -148,7 +150,16 @@ func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer f
 	}
 	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
 	ip = strings.TrimSpace(ip)
-	return bootstrapRateKey(ip, attributed), "", ip, false
+	key = bootstrapRateKey(ip, attributed)
+	if attributed {
+		// A LAN host sending Cloudflare markers (not direct) and keyed on
+		// its own address: its /64 shares an aggregate of its own, never the
+		// direct one (lanAggregate).
+		if prefix, direct, lan := lanAggregate(c, ip, connectors); lan && !direct {
+			lanKey = "unlisted-lan64:" + prefix
+		}
+	}
+	return key, lanKey, ip, false
 }
 
 // bootstrapDirectLANKey is the aggregate window key of a DIRECT LAN IPv6
@@ -156,7 +167,8 @@ func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer f
 // (directLANPeer), under a prefix of its own: tunnel traffic, including an
 // unlisted connector on a LAN address in the same /64, never touches it, so
 // it cannot spend the window the owner's direct recovery depends on. Tunnel
-// traffic has the global ceiling instead.
+// traffic has the global ceiling instead, and a LAN host sending Cloudflare
+// markers its own "unlisted-lan64:" window.
 func bootstrapDirectLANKey(ip string) string {
 	if prefix, ok := lanIPv6Prefix(ip); ok {
 		return "direct-lan64:" + prefix

@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -46,9 +46,10 @@ import (
 //     carries a verified Access assertion and the peer is this host),
 //     otherwise the peer's own address; public IPv6 clients are grouped by
 //     /64, LAN IPv6 peers keep their full address (clientPrefixKey) and every
-//     address of a direct LAN /64 (directLANPeer: no connector, no Cloudflare
-//     markers) also shares an aggregate bucket at four times the per-client
-//     budget (lanIPv6Prefix), reserved with the per-client one; sending Cf-* headers does not change a non-connector
+//     address of a LAN /64 also shares an aggregate bucket at four times the
+//     per-client budget, reserved with the per-client one: direct peers
+//     (directLANPeer) in one, LAN hosts sending Cloudflare markers in another
+//     (lanAggregate), so tunnel-looking traffic never spends the direct one; sending Cf-* headers does not change a non-connector
 //     peer's key. A request whose client cannot be established (a configured
 //     connector or a local peer with no trusted header) SKIPS this layer: a
 //     key taken from an unproven header would let a caller pick its own
@@ -247,8 +248,8 @@ func inviteTokenKey(token string) string {
 // /64 (clientPrefixKey), as the bootstrap limiter keys them, so one host cannot
 // rotate through its /64 for fresh buckets; a LAN IPv6 peer (ULA, link-local)
 // keeps its full address, so LAN devices sharing a /64 do not share a bucket,
-// and for a DIRECT LAN IPv6 peer lanKey is its /64's aggregate bucket
-// (perLANPrefix); "" otherwise.
+// and lanKey is then its /64's aggregate bucket (perLANPrefix; direct and
+// unlisted-connector peers in separate buckets, lanAggregate); "" otherwise.
 func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (key, lanKey string, ok bool) {
 	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
 	if !ok {
@@ -258,13 +259,17 @@ func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (key, lanKey string, 
 	if !ok {
 		return "", "", false
 	}
-	// The /64 aggregate is for direct LAN peers only (directLANPeer): never
-	// for a visitor attributed through a connector, nor for a connector's
-	// own address, so tunnel traffic cannot spend the aggregate of the LAN
-	// devices that share its /64. Tunnel traffic has the global layer.
-	if directLANPeer(c, l.connectors) {
-		if prefix, lan := lanIPv6Prefix(ip); lan {
+	// A LAN IPv6 peer keyed on its own address gets a /64 aggregate
+	// (lanAggregate): direct peers in "invite-direct-lan64:", LAN hosts
+	// sending Cloudflare markers in "invite-unlisted-lan64:", so neither
+	// can rotate through its /64 for fresh buckets and tunnel-looking
+	// traffic never spends the direct aggregate. A visitor attributed
+	// through a connector gets none (the global layer covers it).
+	if prefix, direct, lan := lanAggregate(c, ip, l.connectors); lan {
+		if direct {
 			lanKey = "invite-direct-lan64:" + prefix
+		} else {
+			lanKey = "invite-unlisted-lan64:" + prefix
 		}
 	}
 	return "invite-client:" + k, lanKey, true

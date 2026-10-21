@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -186,6 +186,26 @@ func peerAddr(c *gin.Context) (netip.Addr, bool) {
 	return a.WithZone("").Unmap(), true
 }
 
+// lanAggregate reports whether a request keyed on ip gets a LAN /64
+// aggregate bucket, and which kind: ip must be a LAN IPv6 address that is the
+// request's own peer (not a visitor address taken from CF-Connecting-IP) and
+// not a listed connector. direct (directLANPeer) selects the direct-* bucket;
+// otherwise the peer is a LAN host sending Cloudflare markers (most likely an
+// unlisted connector, or a host pretending to be one) and gets the unlisted-*
+// bucket. The two are separate so tunnel-looking traffic can never spend the
+// aggregate a direct LAN caller (the owner) depends on, while one LAN host
+// rotating through its /64 is capped in either case.
+func lanAggregate(c *gin.Context, ip string, connectors connectorPeers) (prefix string, direct, ok bool) {
+	prefix, ok = lanIPv6Prefix(ip)
+	if !ok || connectors.contains(c.Request.RemoteAddr) {
+		return "", false, false
+	}
+	if peer, parsed := peerAddr(c); !parsed || peer.String() != ip {
+		return "", false, false
+	}
+	return prefix, directLANPeer(c, connectors), true
+}
+
 // directLANPeer reports whether the request is a direct caller on this
 // network rather than tunnel or proxy traffic: the peer is a private
 // (RFC 1918 / ULA), link-local or loopback address, is not a configured
@@ -289,7 +309,7 @@ func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 	return ip, !isConnector && !local
 }
 
-// unlistedConnectorWarnCap bounds how many distinct addresses
+// unlistedConnectorWarnCap bounds how many distinct addresses (IPv6: /64s)
 // warnUnlistedConnector remembers (and so warns about). Real deployments have
 // a handful of connectors; past the cap it stops warning rather than grow.
 const unlistedConnectorWarnCap = 64
@@ -297,7 +317,7 @@ const unlistedConnectorWarnCap = 64
 // unlistedConnectors remembers the private peers already warned about.
 var unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
 
-// warnUnlistedConnector logs, once per address, that a private LAN peer not
+// warnUnlistedConnector logs, once per address (once per /64 for IPv6), that a private LAN peer not
 // in TUNNEL_CONNECTOR_ADDRS sent Cloudflare markers: it is most likely a
 // cloudflared connector nobody listed, so every visitor it relays shares one
 // per-client bucket. Public peers are skipped: a connector is on the LAN, and
@@ -312,7 +332,14 @@ func warnUnlistedConnector(ip string) {
 	if !a.IsPrivate() && !a.IsLinkLocalUnicast() {
 		return
 	}
-	switch unlistedConnectors.add(a.String()) {
+	// An IPv6 host is remembered by its /64, so one host rotating through
+	// its addresses cannot fill the set and silence the warning about a real
+	// connector.
+	key := a.String()
+	if prefix, ok := lanIPv6Prefix(key); ok {
+		key = prefix
+	}
+	switch unlistedConnectors.add(key) {
 	case onceSetAdded:
 		clientTrustLog.Warn("peer %s sent Cloudflare headers but is not listed in TUNNEL_CONNECTOR_ADDRS; it is probably a cloudflared connector, and every visitor it relays shares one rate-limit bucket. Add its address to that setting", a)
 	case onceSetFull:
