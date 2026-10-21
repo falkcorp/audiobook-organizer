@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
 // last-edited: 2026-10-21
 
@@ -29,14 +29,20 @@ import (
 //     retired book goes back in the survivor's slot (or its old index when
 //     the survivor was already a member).
 //   - "playlist:<playlist id>": the same for a static playlist.
-//   - "collection-held:<collection id>" and "playlist-held:<playlist id>":
-//     a marker journaled on the SURVIVOR (BookID) when a retire only removed
-//     the retired book because the survivor was already listed, so the
-//     survivor now also stands in for it (NewValue is the retired book,
-//     OldValue its MembershipRecord). It writes nothing and restores nothing.
-//     Another operation's revert of the survivor's own slot reads it
-//     (SurvivorStandsIn) so that it keeps the survivor listed rather than
-//     replace it and lose the retired book's place.
+//   - "collection-held:<id>" and "playlist-held:<id>": a marker journaled on
+//     the SURVIVOR (BookID) when a retire only removed the retired book
+//     because the survivor was already listed, so the survivor now also
+//     stands in for it (NewValue is the retired book, OldValue its
+//     MembershipRecord).
+//   - "collection-took:<id>" and "playlist-took:<id>": a marker journaled on
+//     the SURVIVOR when a retire replaced the retired book, in its slot, with
+//     the survivor (the survivor was not listed before).
+//     Neither marker writes anything or restores anything (IsMarker). They let
+//     one operation's revert see what another operation left standing: when
+//     the replacing operation is reverted first, the survivor stays listed
+//     for the removing one (SurvivorStandsIn), and when that one is reverted
+//     it takes the survivor out again, because nothing else keeps it there
+//     (SurvivorOnlyStandsByReplace). Either order ends with the original list.
 //
 // Database rows only; nothing on disk changes. A collection or playlist that
 // has since been deleted has nothing left to restore and counts restored.
@@ -51,7 +57,19 @@ const (
 	// survivor-side markers described on ChangeTypeUserContentFollow.
 	UserContentCollectionHeld = "collection-held"
 	UserContentPlaylistHeld   = "playlist-held"
+	UserContentCollectionTook = "collection-took"
+	UserContentPlaylistTook   = "playlist-took"
 )
+
+// IsMarker reports whether kind is a survivor-side marker kind: it writes
+// nothing, so its revert only marks the row reverted.
+func IsMarker(kind string) bool {
+	switch kind {
+	case UserContentCollectionHeld, UserContentPlaylistHeld, UserContentCollectionTook, UserContentPlaylistTook:
+		return true
+	}
+	return false
+}
 
 // UserContentField builds the FieldName of a ChangeTypeUserContentFollow row.
 func UserContentField(kind, id string) string { return kind + ":" + id }
@@ -64,7 +82,10 @@ func UserContentFromField(field string) (kind, id string, ok bool) {
 		return "", "", false
 	}
 	switch kind {
-	case UserContentRating, UserContentCollection, UserContentPlaylist, UserContentCollectionHeld, UserContentPlaylistHeld:
+	case UserContentRating, UserContentCollection, UserContentPlaylist:
+		return kind, id, true
+	}
+	if IsMarker(kind) {
 		return kind, id, true
 	}
 	return "", "", false
@@ -253,27 +274,50 @@ func CarryMembership(cur []string, retired, survivor string) (next []string, rec
 	return next, rec, true
 }
 
+// SurvivorStand says what the survivor does in a list when a retire's row is
+// reverted, as decided from the other operations' standing markers.
+type SurvivorStand int
+
+const (
+	// SurvivorDefault: the row alone decides (a replaced slot goes back to
+	// the retired book, a removal puts the book back beside the survivor).
+	SurvivorDefault SurvivorStand = iota
+	// SurvivorStays: another standing retire also folded into the survivor's
+	// slot (SurvivorStandsIn), so the retired book goes back at its slot and
+	// the survivor stays listed beside it.
+	SurvivorStays
+	// SurvivorLeaves: the retire only removed its book because the survivor
+	// was already listed, and the survivor is there only because a replace
+	// that has since been reverted left it for this one
+	// (SurvivorOnlyStandsByReplace), so it leaves the list with this book's
+	// return.
+	SurvivorLeaves
+)
+
 // RestoreMembership is the revert of CarryMembership on the list as it is
 // now. ErrAlreadyRestored when the retired book is listed again; a
 // ReasonChangedSince refusal when the survivor was put in the retired book's
-// slot and has since been taken out (the owner removed it on purpose).
-//
-// keepSurvivor is for a survivor that another, still standing retire also
-// folded into this list (SurvivorStandsIn): the survivor is then the only
-// entry that retire left for its own book, so the retired book goes back at
-// its slot and the survivor stays listed beside it, instead of being replaced
-// and taking that other book's place with it.
-func RestoreMembership(cur []string, retired, survivor string, rec MembershipRecord, keepSurvivor bool) ([]string, error) {
+// slot (or is to stay) and has since been taken out (the owner removed it on
+// purpose). stand is the survivor's part (SurvivorStand); a survivor the
+// owner already took out of the list is not removed again for SurvivorLeaves.
+func RestoreMembership(cur []string, retired, survivor string, rec MembershipRecord, stand SurvivorStand) ([]string, error) {
 	if slices.Contains(cur, retired) {
 		return nil, ErrAlreadyRestored
 	}
 	next := slices.Clone(cur)
-	if rec.SurvivorWasMember || keepSurvivor {
-		if keepSurvivor && !slices.Contains(next, survivor) {
+	if rec.SurvivorWasMember || stand == SurvivorStays {
+		if stand == SurvivorStays && !rec.SurvivorWasMember && !slices.Contains(next, survivor) {
 			return nil, refuse(ReasonChangedSince, "book %s is no longer listed where the retire put it", survivor)
 		}
-		at := min(rec.Index, len(next))
-		return slices.Insert(next, at, retired), nil
+		if stand == SurvivorLeaves && rec.SurvivorWasMember {
+			// Out first: rec.Index counts the list as it stood with the
+			// survivor in the replaced slot, which the retired book's
+			// predecessor's revert has since filled again.
+			if j := slices.Index(next, survivor); j >= 0 {
+				next = slices.Delete(next, j, j+1)
+			}
+		}
+		return slices.Insert(next, min(rec.Index, len(next)), retired), nil
 	}
 	j := slices.Index(next, survivor)
 	if j < 0 {
@@ -293,19 +337,22 @@ func CheckMembershipFollow(cur []string, c *database.OperationChange) error {
 	if err != nil {
 		return &ReferentError{Reason: ReasonOldValueUnparsable, Detail: err.Error()}
 	}
-	_, err = RestoreMembership(cur, c.BookID, c.NewValue, rec, false)
+	_, err = RestoreMembership(cur, c.BookID, c.NewValue, rec, SurvivorDefault)
 	return err
 }
 
-// HeldKind is the marker kind that goes with a collection or playlist row kind.
+// HeldKind is the marker kind a removal journals (the survivor was already
+// listed), and TookKind the one a replace journals (the survivor took the
+// retired book's slot), for a collection or playlist row kind.
 func HeldKind(kind string) string { return kind + "-held" }
+func TookKind(kind string) string { return kind + "-took" }
 
 // SurvivorStandsIn reports whether, among the survivor's journal rows
 // (GetBookChanges of the survivor), another operation than thisOp left a
-// standing marker that the survivor also holds list listID of kind (rows with
-// RevertedAt set, or voided, no longer count). A standing marker means the
-// survivor's entry in that list is also the place of a book that operation
-// retired into it.
+// standing "held" marker that the survivor also holds list listID of kind
+// (rows with RevertedAt set, or voided, no longer count). A standing marker
+// means the survivor's entry in that list is also the place of a book that
+// operation retired into it.
 func SurvivorStandsIn(survivorRows []*database.OperationChange, thisOp, kind, listID string) bool {
 	want := UserContentField(HeldKind(kind), listID)
 	for _, r := range survivorRows {
@@ -315,6 +362,38 @@ func SurvivorStandsIn(survivorRows []*database.OperationChange, thisOp, kind, li
 		}
 	}
 	return false
+}
+
+// SurvivorOnlyStandsByReplace reports whether the survivor, listed in list
+// listID of kind only because another operation's retire put it there in a
+// retired book's slot, is no longer kept there by anything but this row: row
+// is the revert's row (a removal, rec.SurvivorWasMember) of operation row's.
+//
+// It is true when survivorRows hold another operation's "took" marker for the
+// list that was journaled before row and reverted after it (that revert kept
+// the survivor listed on row's behalf, see SurvivorStays), and no other
+// operation's marker, "took" or "held", still stands. A "took" marker
+// reverted before row was written, or never reverted, or any other standing
+// marker, keeps the survivor where it is.
+func SurvivorOnlyStandsByReplace(survivorRows []*database.OperationChange, row *database.OperationChange, kind, listID string) bool {
+	took := UserContentField(TookKind(kind), listID)
+	held := UserContentField(HeldKind(kind), listID)
+	revertedReplace := false
+	for _, r := range survivorRows {
+		if r.ChangeType != ChangeTypeUserContentFollow || r.OperationID == row.OperationID || r.Voided {
+			continue
+		}
+		if r.FieldName != took && r.FieldName != held {
+			continue
+		}
+		if r.RevertedAt == nil {
+			return false // another retire's marker still stands
+		}
+		if r.FieldName == took && r.CreatedAt.Before(row.CreatedAt) && r.RevertedAt.After(row.CreatedAt) {
+			revertedReplace = true
+		}
+	}
+	return revertedReplace
 }
 
 func validUserContentFollowRow(c *database.OperationChange) bool {
