@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_integrity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f81c3d2-9e4a-4b67-a0d8-2c7e9b13f456
-// last-edited: 2026-09-14
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -68,7 +68,7 @@ func TestMergeSplitBookCluster_KeepWriteDoesNotRevertConcurrentColumns(t *testin
 		return nil
 	}
 
-	res, err := MergeSplitBookCluster(m, keepID, []string{srcID}, "New Title")
+	res, err := mergeSplitBookCluster(m, keepID, []string{srcID}, "New Title")
 	require.NoError(t, err)
 	require.Empty(t, res.Errors)
 
@@ -98,7 +98,7 @@ func TestMergeSplitBookCluster_ExternalIDReassignFailureLeavesSrcLive(t *testing
 	}
 	m.ReassignExternalIDsFunc = func(string, string) error { return assert.AnError }
 
-	res, err := MergeSplitBookCluster(m, keepID, []string{srcID}, "")
+	res, err := mergeSplitBookCluster(m, keepID, []string{srcID}, "")
 	require.NoError(t, err)
 	assert.False(t, rows[srcID].IsSoftDeleted(), "a src still holding its PIDs must not be soft-deleted")
 	assert.Equal(t, 0, res.MergedSrcCount)
@@ -119,7 +119,7 @@ func TestMergeSplitBookCluster_ReassignsExternalIDsAndIsUndoable(t *testing.T) {
 	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: fileID, BookID: srcID, FilePath: "/tmp/split/s/02.mp3", Format: "mp3", Duration: 60, TrackNumber: 2}))
 	require.NoError(t, store.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: pid, BookID: srcID}))
 
-	res, err := MergeSplitBookCluster(store, keepID, []string{srcID}, "Keep (Complete)")
+	res, err := mergeSplitBookCluster(store, keepID, []string{srcID}, "Keep (Complete)")
 	require.NoError(t, err)
 	require.Empty(t, res.Errors)
 	require.NotEmpty(t, res.JournalID, "the merge must be journaled")

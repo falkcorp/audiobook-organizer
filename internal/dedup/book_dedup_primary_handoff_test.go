@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_primary_handoff_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9a2c7e41-5b3d-4f86-8e10-c4d7b2a95f63
-// last-edited: 2026-10-17
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -26,7 +26,7 @@ func TestMergeSplitBookCluster_RetiredPrimaryHandsOn(t *testing.T) {
 	src := f.Book(t, vptest.Spec{ID: "src", Group: "g-src", Primary: "true"})
 	sibling := f.Book(t, vptest.Spec{ID: "sib", Group: "g-src", Primary: "nil"})
 
-	res, err := MergeSplitBookCluster(f.S, keep, []string{src}, "")
+	res, err := mergeSplitBookCluster(f.S, keep, []string{src}, "")
 	require.NoError(t, err)
 	require.Equal(t, 1, res.MergedSrcCount)
 	f.RequireSinglePrimary(t, "g-src", sibling)

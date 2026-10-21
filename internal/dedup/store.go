@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-10-13
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -74,7 +74,7 @@ type dedupBookQueries interface {
 type dedupBookReader interface {
 	dedupBookQueries
 
-	// The user's field locks. MergeSplitBookCluster (keep.Title) and
+	// The user's field locks. MergeSplitBookClusterWithOptions (keep.Title) and
 	// DedupSeries (SeriesID) write user-lockable columns on the WINNER and go
 	// through database.LoadFieldLocks -- the guard every metadata writer shares.
 	database.MetadataFieldStateReader
@@ -91,7 +91,7 @@ type dedupBookReader interface {
 
 type dedupBookWriter interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	// ModifyBook is the locked read-modify-write: MergeSplitBookCluster
+	// ModifyBook is the locked read-modify-write: MergeSplitBookClusterWithOptions
 	// writes the keep row through it so a column another writer (or the
 	// file move's own aggregate recompute) changed is not reverted.
 	// The series repoints also write one column (SeriesID) on rows
@@ -141,7 +141,7 @@ type dedupDuplicateStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
-// dedupSplitMergeStore is what MergeSplitBookCluster needs beyond the book
+// dedupSplitMergeStore is what MergeSplitBookClusterWithOptions needs beyond the book
 // surface: the src's external-ID mappings (reassigned to the keep before the
 // src is soft-deleted, via merge.AsExternalIDReassigner) and the raw-key write
 // for the combine undo journal. Both are on database.Store itself.
@@ -156,7 +156,7 @@ type dedupSplitMergeStore interface {
 
 // Store is the whole surface, for Engine and the exported entry points.
 //
-// Exported because MergeBooks and MergeSplitBookCluster are exported: a caller
+// Exported because MergeBooks and MergeSplitBookClusterWithOptions are exported: a caller
 // that forwards its own store into them has to be able to name this. See
 // internal/reconcile and internal/server/handlers.
 type Store interface {

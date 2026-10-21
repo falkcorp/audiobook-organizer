@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c4e1a92-6d3b-4f18-b0a5-2e9c7d514af3
-// last-edited: 2026-07-16
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -61,7 +61,7 @@ func TestMergeSplitBookCluster_FailedMoveSrcNotDeleted(t *testing.T) {
 	hardDeleted := map[string]bool{}
 	store := newSplitMergeMock(src1, src2, src2 /* S2 move fails */, softDeleted, hardDeleted)
 
-	result, err := MergeSplitBookCluster(store, keepID, []string{src1, src2}, "")
+	result, err := mergeSplitBookCluster(store, keepID, []string{src1, src2}, "")
 	require.NoError(t, err)
 
 	// S1 moved cleanly → soft-deleted. S2's move failed → left intact.
@@ -81,7 +81,7 @@ func TestMergeSplitBookCluster_AllMovesSucceed_AllDeleted(t *testing.T) {
 	hardDeleted := map[string]bool{}
 	store := newSplitMergeMock(src1, src2, "" /* no failure */, softDeleted, hardDeleted)
 
-	result, err := MergeSplitBookCluster(store, keepID, []string{src1, src2}, "")
+	result, err := mergeSplitBookCluster(store, keepID, []string{src1, src2}, "")
 	require.NoError(t, err)
 
 	assert.True(t, softDeleted[src1])
@@ -109,7 +109,7 @@ func TestMergeSplitBookCluster_EmptySrcStillDeleted(t *testing.T) {
 	}
 	m.DeleteBookFunc = func(id string) error { hardDeleted[id] = true; return nil }
 
-	result, err := MergeSplitBookCluster(m, keepID, []string{src1}, "")
+	result, err := mergeSplitBookCluster(m, keepID, []string{src1}, "")
 	require.NoError(t, err)
 	assert.True(t, softDeleted[src1], "an already-empty src is safe to soft-delete")
 	assert.Equal(t, 1, result.MergedSrcCount)

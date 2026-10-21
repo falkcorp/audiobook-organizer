@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-20-split-books-distinct-works-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7e2b4d19-3a6c-4f80-b5d1-0c9a8e7f6b24 -->
-<!-- last-edited: 2026-10-20 -->
+<!-- last-edited: 2026-10-21 -->
 
 # The split-books repair stopped proposing to merge different books
 
@@ -38,6 +38,14 @@
   tripping a name-based rule), 2 more are caught by name alone, 1 has unknown
   lengths, and about 14 stay applicable. 15 very large folders could not be
   checked offline and need a fresh trial to settle.
-- **One thing to do.** Run the Split Books scan again. Candidates stored by
-  earlier scans are not re-checked when merged, so they stay as they were until
-  the scan replaces them.
+- **Old saved suggestions are checked again at merge time.** The Split Books
+  tab keeps the suggestions from the last scan. Merging one used to trust that
+  saved copy. Now, whether you merge one at a time or in a batch, the app looks
+  at the books as they are at that moment and refuses if they no longer look
+  like chapters of one book (different volume numbers, a file as long as a whole
+  book, a file with no recorded length, a book with no files). A refused
+  suggestion stays on the list and nothing is changed. A practice run of the
+  batch merge now tells you which ones would be refused.
+- **One thing to do.** Run the Split Books scan again after this is deployed so
+  the list itself is refreshed, and look over the 15 very large folders that
+  could not be checked offline.

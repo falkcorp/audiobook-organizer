@@ -1,7 +1,7 @@
 // file: internal/dedup/field_locks_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 1e6b8d2c-5f93-4a07-b7c4-9d3e2a8f0b61
-// last-edited: 2026-09-14
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -56,7 +56,7 @@ func TestMergeSplitBookCluster_LockedKeepTitleStands(t *testing.T) {
 		return prev(id, b)
 	}
 
-	result, err := MergeSplitBookCluster(m, keepID, []string{src1, src2}, "Suggested Title")
+	result, err := mergeSplitBookCluster(m, keepID, []string{src1, src2}, "Suggested Title")
 	require.NoError(t, err)
 	assert.Empty(t, result.Errors)
 	assert.True(t, result.TitleKeptLocked, "the result must say the title was kept")
@@ -79,7 +79,7 @@ func TestMergeSplitBookCluster_UnlockedKeepTitleChanges(t *testing.T) {
 		return prev(id, b)
 	}
 
-	result, err := MergeSplitBookCluster(m, keepID, []string{src1, src2}, "Suggested Title")
+	result, err := mergeSplitBookCluster(m, keepID, []string{src1, src2}, "Suggested Title")
 	require.NoError(t, err)
 	assert.False(t, result.TitleKeptLocked)
 	require.NotNil(t, keepWrite)
@@ -112,7 +112,7 @@ func TestMergeSplitBookCluster_LockReadErrorKeepsTitle(t *testing.T) {
 		return prev(id, b)
 	}
 
-	result, err := MergeSplitBookCluster(m, keepID, []string{src1, src2}, "Suggested Title")
+	result, err := mergeSplitBookCluster(m, keepID, []string{src1, src2}, "Suggested Title")
 	require.NoError(t, err)
 	require.Len(t, result.Errors, 1)
 	assert.Contains(t, result.Errors[0], database.ErrFieldLocksUnavailable.Error())
