@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.105.0
+// version: 1.106.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-21
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1000,9 +1000,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     },
     [tagCloudSelected, selectedTags, handleTagFilterChange]
   );
-  const tagCloudEmptyMessage = scopedTagFacets.error
-    ? "Couldn't load tags for these results."
-    : scopedTagFacets.tags !== null && scopedTagFacets.tags.length === 0
+  const tagCloudError = scopedTagFacets.error ? "Couldn't load tags for these results." : undefined;
+  const tagCloudEmptyMessage =
+    !scopedTagFacets.error && scopedTagFacets.tags !== null && scopedTagFacets.tags.length === 0
       ? 'No tags in these results.'
       : undefined;
 
@@ -2553,6 +2553,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           tagCloudSelected={tagCloudSelected}
           onTagCloudChange={handleTagCloudChange}
           tagCloudEmptyMessage={tagCloudEmptyMessage}
+          tagCloudLoading={scopedTagFacets.loading}
+          tagCloudError={tagCloudError}
         />
 
         <LibraryDialogs

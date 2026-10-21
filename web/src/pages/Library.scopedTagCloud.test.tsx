@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.scopedTagCloud.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d7b4f2a-8c3e-4a19-b6d5-2e9f1c7a3b84
-// last-edited: 2026-10-06
+// last-edited: 2026-10-21
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -45,17 +45,15 @@ vi.mock('../services/api', () => {
     countBooks: vi.fn().mockResolvedValue(1),
     getBookFacets: vi.fn().mockResolvedValue({ genres: [], languages: [] }),
     getAuthors: vi.fn().mockResolvedValue([]),
-    getSeries: vi
-      .fn()
-      .mockResolvedValue([
-        {
-          id: 42,
-          name: 'The Expanse',
-          created_at: '2026-01-01T00:00:00Z',
-          book_count: 9,
-          file_count: 9,
-        },
-      ]),
+    getSeries: vi.fn().mockResolvedValue([
+      {
+        id: 42,
+        name: 'The Expanse',
+        created_at: '2026-01-01T00:00:00Z',
+        book_count: 9,
+        file_count: 9,
+      },
+    ]),
     getSystemStatus: vi.fn().mockResolvedValue({
       status: 'ok',
       library: { path: '/tmp', book_count: 1, total_size: 0 },
@@ -145,10 +143,9 @@ describe('Library Browse-by-Tag chips are scoped to the current results', () => 
     );
     fireEvent.click(await screen.findByText('fantasy (20)', {}, { timeout: 3000 }));
 
-    await waitFor(
-      () => expect(screen.getByDisplayValue('tag:"fantasy"')).toBeInTheDocument(),
-      { timeout: 3000 }
-    );
+    await waitFor(() => expect(screen.getByDisplayValue('tag:"fantasy"')).toBeInTheDocument(), {
+      timeout: 3000,
+    });
     await waitFor(() => expect(lastBooksCall()?.tags).toEqual(['fantasy']), { timeout: 3000 });
     await waitFor(() => expect(lastFacetsCall()?.tags).toEqual(['fantasy']), { timeout: 3000 });
 
@@ -162,5 +159,48 @@ describe('Library Browse-by-Tag chips are scoped to the current results', () => 
     await waitFor(() => expect(lastBooksCall()?.tags).toEqual(['fantasy', 'epic']), {
       timeout: 3000,
     });
+  });
+
+  it('keeps the panel mounted before facets resolve and across a predicate change', async () => {
+    type Facets = Awaited<ReturnType<typeof api.getScopedTagFacets>>;
+    const pending: Array<(v: Facets) => void> = [];
+    vi.mocked(api.getScopedTagFacets).mockImplementation(
+      () => new Promise<Facets>((resolve) => pending.push(resolve))
+    );
+    render(
+      <MemoryRouter initialEntries={['/library']}>
+        <Library />
+      </MemoryRouter>
+    );
+
+    // Before any facets answer: the panel exists, as a skeleton, and so does
+    // the Select All bar it must not push around.
+    const panel = await screen.findByTestId('tag-cloud-panel');
+    expect(panel).toBeInTheDocument();
+    expect(screen.getAllByTestId('tag-cloud-skeleton').length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Select All')).toBeInTheDocument();
+    await waitFor(() => expect(pending.length).toBe(1), { timeout: 3000 });
+
+    pending[0]({
+      tags: [
+        { tag: 'fantasy', count: 20 },
+        { tag: 'epic', count: 5 },
+      ],
+      total: 25,
+    });
+    fireEvent.click(await screen.findByText('fantasy (20)', {}, { timeout: 3000 }));
+
+    // The click changes the predicate; the new answer is held back. The same
+    // DOM node stays mounted, the old chips stay visible, and a spinner shows.
+    await waitFor(() => expect(pending.length).toBe(2), { timeout: 3000 });
+    expect(screen.getByTestId('tag-cloud-panel')).toBe(panel);
+    expect(screen.getByText('fantasy (20)')).toBeInTheDocument();
+    expect(screen.getByTestId('tag-cloud-spinner')).toBeInTheDocument();
+    expect(screen.queryByTestId('tag-cloud-skeleton')).toBeNull();
+
+    pending[1]({ tags: [{ tag: 'epic', count: 3 }], total: 3 });
+    expect(await screen.findByText('epic (3)', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByTestId('tag-cloud-panel')).toBe(panel);
+    expect(screen.queryByTestId('tag-cloud-spinner')).toBeNull();
   });
 });
