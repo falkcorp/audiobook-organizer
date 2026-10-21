@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: .github/workflows/scripts/release_workflow.py
-# version: 2.1.0
+# version: 2.1.1
 # guid: 9f7e6d5c-4b3a-2f1e-0d9c-8b7a6f5e4d3c
 
 """
@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import textwrap
 
 
 def write_output(key: str, value: str) -> None:

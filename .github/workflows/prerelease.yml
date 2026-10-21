@@ -1,7 +1,7 @@
 # file: .github/workflows/prerelease.yml
-# version: 3.3.0
+# version: 3.3.1
 # guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-# last-edited: 2026-10-16
+# last-edited: 2026-10-21
 
 name: Prerelease on Merge
 
@@ -31,7 +31,7 @@ env:
 jobs:
   prerelease:
     name: Create Prerelease Build
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@1f0d70e877c89a21a597db5a24e2775d3015ddda # main 2026-10-16: release notes by file, capped under GitHub's body limit (github-common#374); move with .github/ghcommon-ref.txt
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@861d4e83ccf918c9354a2d5f5685068f655cdf58 # main 2026-10-21: CI ruff 0.17.0 (github-common#378); move with .github/ghcommon-ref.txt
     with:
       release-type: 'auto'
       prerelease: true

@@ -1,7 +1,7 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.12.0
+# version: 4.12.1
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-10-16
+# last-edited: 2026-10-21
 
 name: Production Release
 
@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@1f0d70e877c89a21a597db5a24e2775d3015ddda # main 2026-10-16: release notes by file, capped under GitHub's body limit (github-common#374); move with .github/ghcommon-ref.txt
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@861d4e83ccf918c9354a2d5f5685068f655cdf58 # main 2026-10-21: CI ruff 0.17.0 (github-common#378); move with .github/ghcommon-ref.txt
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false

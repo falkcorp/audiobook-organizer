@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-08-18-ci-lint-wiring-audit.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 2f6b8d43-9c15-4e70-a8b2-51d037e9c4a8 -->
-<!-- last-edited: 2026-08-18 -->
+<!-- last-edited: 2026-10-21 -->
 
 # CI lint wiring — what actually runs today
 
@@ -46,6 +46,7 @@ correct; only the folder name is misleading.
 - `.github/linters/super-linter-{pr,ci}.env` exist here.
 - **No workflow in this repo runs super-linter.** Only `.github/workflows/scripts/ci_workflow.py`
   mentions it (`load_super_linter_config`), and nothing invokes that path from a workflow.
+  _Update 2026-10-21: the local `ci_workflow.py` was deleted (PR #4098), so this reference no longer exists._
 - **No *reusable* ghcommon workflow runs it either.** `ghcommon/pr-automation.yml:130` does use
   `super-linter/super-linter@v8.6.0` — but that file has **no `workflow_call` trigger**, so it
   runs only inside ghcommon and cannot be called from here. `reusable-ci.yml` mentions

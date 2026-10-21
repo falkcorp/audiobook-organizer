@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Delete all branches with rebase conflicts."""
+
 import subprocess
-import sys
 
 conflicts = [
     "audit/branch-conflicts",
@@ -46,8 +46,10 @@ conflicts = [
     "worktree-agent-ac49815a411d89251",
 ]
 
+
 def run(cmd):
     subprocess.run(cmd, shell=True, capture_output=True)
+
 
 print(f"Deleting {len(conflicts)} conflict branches...\n")
 
@@ -62,6 +64,6 @@ for branch in conflicts:
         print(f"✗ {branch}")
         failed += 1
 
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print(f"Deleted: {deleted}")
 print(f"Failed: {failed}")

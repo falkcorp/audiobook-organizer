@@ -1,7 +1,7 @@
 # file: .gitignore
-# version: 1.0.4
+# version: 1.0.5
 # guid: f7d7af3c-a1f1-4d89-87ef-4a8dc9faea8a
-# last-edited: 2026-10-10
+# last-edited: 2026-10-21
 
 # Local overrides
 Makefile.local
@@ -348,6 +348,7 @@ PLAN*.md
 # Ad-hoc scripts (moved to scripts/ — ignore if regenerated at root)
 analyze-*.py
 delete-*.py
+!scripts/delete-conflicts.py
 
 # Backup tarballs
 backups/
