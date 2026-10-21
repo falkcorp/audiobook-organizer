@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.51.4
+// version: 1.51.5
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-20
 
@@ -3786,11 +3786,7 @@ func importChapterSec() int {
 // them 2026-10-03 so the jobs could use 120 minutes without changing what
 // the scanner groups on import.
 func repairChapterMaxSec() int {
-	mins := config.AppConfig.RepairChapterMaxMin
-	if mins <= 0 {
-		mins = 120 // the documented default; never "disabled"
-	}
-	return mins * 60
+	return config.AppConfig.ResolveRepairChapterMaxMin() * 60
 }
 
 // groupDir is the folder a fragment is grouped under: its import folder, or,

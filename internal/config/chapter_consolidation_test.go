@@ -1,7 +1,7 @@
 // file: internal/config/chapter_consolidation_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a48766bd-8d5c-496e-b7f9-1cddea31517e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-20
 
 // A 0 in chapter_consolidation_threshold_min used to switch chapter
 // consolidation off, and 0 is also the zero value every partially-populated
@@ -30,6 +30,20 @@ func TestResolveChapterConsolidationThresholdMin(t *testing.T) {
 	} {
 		c := Config{ChapterConsolidationThresholdMin: tc.stored}
 		require.Equal(t, tc.want, c.ResolveChapterConsolidationThresholdMin(), "stored %d", tc.stored)
+	}
+}
+
+func TestResolveRepairChapterMaxMin(t *testing.T) {
+	for _, tc := range []struct {
+		stored, want int
+	}{
+		{0, DefaultRepairChapterMaxMin},
+		{-1, DefaultRepairChapterMaxMin},
+		{30, 30},
+		{180, 180},
+	} {
+		c := Config{RepairChapterMaxMin: tc.stored}
+		require.Equal(t, tc.want, c.ResolveRepairChapterMaxMin(), "stored %d", tc.stored)
 	}
 }
 

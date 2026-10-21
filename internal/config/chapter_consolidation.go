@@ -1,7 +1,7 @@
 // file: internal/config/chapter_consolidation.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 352b4f24-83a2-44dd-83d3-0d58454324bf
-// last-edited: 2026-10-09
+// last-edited: 2026-10-20
 
 package config
 
@@ -12,6 +12,11 @@ import "github.com/falkcorp/audiobook-organizer/internal/logger"
 // load/save normalization below and every consumer's fallback read it from
 // here, so the number exists once.
 const DefaultChapterConsolidationThresholdMin = 10
+
+// DefaultRepairChapterMaxMin is the shipped value of repair_chapter_max_min
+// (minutes): the longest a single file may run and still count as a chapter
+// when a repair job folds chapter files into one book.
+const DefaultRepairChapterMaxMin = 120
 
 // configLog carries the normalization warning. It goes through
 // internal/logger rather than log/slog so the line gets the log-injection
@@ -41,6 +46,19 @@ func (c *Config) ResolveChapterConsolidationThresholdMin() int {
 		return DefaultChapterConsolidationThresholdMin
 	}
 	return c.ChapterConsolidationThresholdMin
+}
+
+// ResolveRepairChapterMaxMin returns the effective repair-job chapter limit in
+// minutes: the configured repair_chapter_max_min, or DefaultRepairChapterMaxMin
+// when it is 0 or negative (never "disabled": same rule as
+// ResolveChapterConsolidationThresholdMin). Both the fragment fixer and the
+// split-book detector read it here, so "too long to be a chapter" has one
+// definition.
+func (c *Config) ResolveRepairChapterMaxMin() int {
+	if c.RepairChapterMaxMin <= 0 {
+		return DefaultRepairChapterMaxMin
+	}
+	return c.RepairChapterMaxMin
 }
 
 // normalizeChapterConsolidationThreshold rewrites a 0-or-negative threshold to
