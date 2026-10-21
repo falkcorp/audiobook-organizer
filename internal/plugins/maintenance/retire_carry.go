@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b8d3f64-72a1-4c5e-8f19-6e4a9d2c7b35
 // last-edited: 2026-10-21
 
@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -73,105 +71,31 @@ func resolveCarryStores(store OpsStore) (carryStores, error) {
 	return cs, nil
 }
 
-// carryIndexMaxAge bounds how long an apply op reuses one listing of the
-// collections and playlists. A person who adds the retired book to a list
-// after the listing, within this window, is the one case the index can miss
-// (the write itself always re-reads the list under its lock).
-const carryIndexMaxAge = 30 * time.Second
-
-// carryIndex is one listing of every static collection and playlist, as
-// book id -> the lists that name it. It is a hint only: carryCollectionsInto
-// reads each list again before it writes, so a stale entry costs one read and
-// never a wrong write.
-type carryIndex struct {
-	builtAt     time.Time
-	collections map[string][]string
-	playlists   map[string][]string
-}
-
-// carryIndexes holds one carryIndex per apply op (keyed by the Writer's op
-// id), so a whole-library apply lists the collections and playlists once, not
-// once per retired book (52 copies, 52 full scans). Entries are replaced
-// after carryIndexMaxAge and dropped after twice that.
-type carryIndexes struct {
-	mu   sync.Mutex
-	byOp map[string]*carryIndex
-	// now is the clock (nil is time.Now); tests move it.
-	now func() time.Time
-}
-
-func (ci *carryIndexes) clock() time.Time {
-	if ci.now != nil {
-		return ci.now()
-	}
-	return time.Now()
-}
-
-// listsOf returns the ids of the static collections and playlists that name
-// book id, from op's index (built, or rebuilt when stale, by one listing).
-func (ci *carryIndexes) listsOf(op string, cs carryStores, id string) (collections, playlists []string, err error) {
-	ci.mu.Lock()
-	defer ci.mu.Unlock()
-	now := ci.clock()
-	for k, e := range ci.byOp {
-		if now.Sub(e.builtAt) > 2*carryIndexMaxAge {
-			delete(ci.byOp, k)
-		}
-	}
-	e := ci.byOp[op]
-	if e == nil || now.Sub(e.builtAt) > carryIndexMaxAge {
-		e, err = buildCarryIndex(cs, now)
-		if err != nil {
-			return nil, nil, err
-		}
-		if ci.byOp == nil {
-			ci.byOp = map[string]*carryIndex{}
-		}
-		ci.byOp[op] = e
-	}
-	return slices.Clone(e.collections[id]), slices.Clone(e.playlists[id]), nil
-}
-
-func buildCarryIndex(cs carryStores, now time.Time) (*carryIndex, error) {
-	e := &carryIndex{builtAt: now, collections: map[string][]string{}, playlists: map[string][]string{}}
+// listsNaming returns the ids of the static collections and playlists that
+// name book id, from one listing of each. It is read per retire, not cached
+// across a run: a cached listing could miss a list the owner added the book to
+// since, and the lists are few. It is a hint all the same: every list is read
+// again before it is written (carryCollectionsInto, carryPlaylistsInto).
+func listsNaming(cs carryStores, id string) (collections, playlists []string, err error) {
 	cols, _, err := cs.cols.ListCollections(database.CollectionTypeStatic, 0, 0)
 	if err != nil {
-		return nil, fmt.Errorf("list collections: %w", err)
+		return nil, nil, fmt.Errorf("list collections: %w", err)
 	}
 	for _, c := range cols {
-		for _, b := range c.BookIDs {
-			e.collections[b] = append(e.collections[b], c.ID)
+		if slices.Contains(c.BookIDs, id) {
+			collections = append(collections, c.ID)
 		}
 	}
 	pls, _, err := cs.pls.ListUserPlaylists(database.UserPlaylistTypeStatic, 0, 0)
 	if err != nil {
-		return nil, fmt.Errorf("list playlists: %w", err)
+		return nil, nil, fmt.Errorf("list playlists: %w", err)
 	}
 	for _, pl := range pls {
-		for _, b := range pl.BookIDs {
-			e.playlists[b] = append(e.playlists[b], pl.ID)
+		if slices.Contains(pl.BookIDs, id) {
+			playlists = append(playlists, pl.ID)
 		}
 	}
-	return e, nil
-}
-
-// moved records that a carry put survivor in list listID in place of retired,
-// so a later retire of survivor in the same op (a chain) finds it.
-func (ci *carryIndexes) moved(op, kind, listID, retired, survivor string) {
-	ci.mu.Lock()
-	defer ci.mu.Unlock()
-	e := ci.byOp[op]
-	if e == nil {
-		return
-	}
-	m := e.collections
-	if kind == undo.UserContentPlaylist {
-		m = e.playlists
-	}
-	m[retired] = slices.DeleteFunc(m[retired], func(l string) bool { return l == listID })
-	if !slices.Contains(m[survivor], listID) {
-		m[survivor] = append(m[survivor], listID)
-	}
+	return collections, playlists, nil
 }
 
 // carryUserContentInto carries the retired book id's user ratings, collection
@@ -184,27 +108,29 @@ func (ci *carryIndexes) moved(op, kind, listID, retired, survivor string) {
 //   - Collections and playlists (static ones; a dynamic or smart list names
 //     its members by query): the retired book is replaced in its slot by the
 //     survivor, or just removed when the survivor is already listed. A
-//     removal also journals a marker on the survivor (the survivor now stands
-//     in for the retired book), which another operation's revert of the
-//     survivor's own slot reads so that it does not take this book's place
-//     with it (undo.SurvivorStandsIn).
-func carryUserContentInto(p *Plugin, store OpsStore, cs carryStores, w *repairs.Writer, target, id string) (int, error) {
+//     removal journals a "held" marker on the survivor (it now stands in for
+//     the retired book), and a replace journals a "took" marker (it entered
+//     the list in that book's slot). Another operation's revert reads both so
+//     that, whichever of two retires into the survivor is reverted first, the
+//     survivor leaves the list with the last of them and never before or after
+//     (undo.SurvivorStandsIn, undo.SurvivorOnlyStandsByReplace).
+func carryUserContentInto(store OpsStore, cs carryStores, w *repairs.Writer, target, id string) (int, error) {
 	steps := 0
 	n, err := carryRatingsInto(store, w, target, id)
 	steps += n
 	if err != nil {
 		return steps, fmt.Errorf("carry ratings of %s: %w", id, err)
 	}
-	cols, pls, err := p.carry.listsOf(w.OpID(), cs, id)
+	cols, pls, err := listsNaming(cs, id)
 	if err != nil {
 		return steps, fmt.Errorf("carry lists of %s: %w", id, err)
 	}
-	n, err = carryCollectionsInto(p, cs, w, target, id, cols)
+	n, err = carryCollectionsInto(cs, w, target, id, cols)
 	steps += n
 	if err != nil {
 		return steps, fmt.Errorf("carry collections of %s: %w", id, err)
 	}
-	n, err = carryPlaylistsInto(p, cs, w, target, id, pls)
+	n, err = carryPlaylistsInto(cs, w, target, id, pls)
 	steps += n
 	if err != nil {
 		return steps, fmt.Errorf("carry playlists of %s: %w", id, err)
@@ -255,9 +181,14 @@ func carryRatingsInto(store OpsStore, w *repairs.Writer, target, id string) (int
 
 // carryMembership journals and makes one carry on one list. write applies fn
 // to the list under the list's own lock and must return errCarryStale when fn
-// did (the list no longer matches rec). A removal (the survivor already
-// listed) journals the survivor-side marker in the same step, so both rows are
-// voided together when the write is refused.
+// did (the list no longer matches rec). It journals a survivor-side marker in
+// the same step as the retired book's row, so both are voided together when
+// the write is refused: a "held" marker on a removal (the survivor was already
+// listed and now also stands in for the retired book) and a "took" marker on a
+// replace (the survivor entered the list in the retired book's slot). The
+// markers write nothing; a later operation's revert reads them to decide
+// whether the survivor stays in the list (undo.SurvivorStandsIn,
+// undo.SurvivorOnlyStandsByReplace).
 func carryMembership(w *repairs.Writer, kind, listID, target, id string, rec undo.MembershipRecord, write func(carry func(cur []string) ([]string, error)) error) error {
 	oldV, err := undo.EncodeMembership(rec)
 	if err != nil {
@@ -271,10 +202,11 @@ func carryMembership(w *repairs.Writer, kind, listID, target, id string, rec und
 		return n, nil
 	}
 	entry := repairs.UndoEntry{ChangeType: undo.ChangeTypeUserContentFollow, Field: undo.UserContentField(kind, listID), Old: oldV, New: target}
-	if !rec.SurvivorWasMember {
-		return w.JournalStep(id, entry, func() error { return write(carry) })
+	markerKind := undo.TookKind(kind)
+	if rec.SurvivorWasMember {
+		markerKind = undo.HeldKind(kind)
 	}
-	marker := repairs.UndoEntry{ChangeType: undo.ChangeTypeUserContentFollow, Field: undo.UserContentField(undo.HeldKind(kind), listID), Old: oldV, New: id}
+	marker := repairs.UndoEntry{ChangeType: undo.ChangeTypeUserContentFollow, Field: undo.UserContentField(markerKind, listID), Old: oldV, New: id}
 	// The restore of the retired book's row runs first (newest first), then
 	// the marker's, so the marker is journaled first.
 	return w.JournalSteps([]repairs.BookStep{{BookID: target, Entry: marker}, {BookID: id, Entry: entry}}, func() ([]bool, error) {
@@ -285,7 +217,7 @@ func carryMembership(w *repairs.Writer, kind, listID, target, id string, rec und
 	})
 }
 
-func carryCollectionsInto(p *Plugin, cs carryStores, w *repairs.Writer, target, id string, listIDs []string) (int, error) {
+func carryCollectionsInto(cs carryStores, w *repairs.Writer, target, id string, listIDs []string) (int, error) {
 	steps := 0
 	for _, colID := range listIDs {
 		col, err := cs.cols.GetCollection(colID)
@@ -307,7 +239,6 @@ func carryCollectionsInto(p *Plugin, cs carryStores, w *repairs.Writer, target, 
 			})
 			if err == nil {
 				steps++
-				p.carry.moved(w.OpID(), undo.UserContentCollection, colID, id, target)
 				break
 			}
 			if errors.Is(err, database.ErrCollectionNotFound) || errors.Is(err, database.ErrCollectionNotStatic) {
@@ -329,7 +260,7 @@ func carryCollectionsInto(p *Plugin, cs carryStores, w *repairs.Writer, target, 
 	return steps, nil
 }
 
-func carryPlaylistsInto(p *Plugin, cs carryStores, w *repairs.Writer, target, id string, listIDs []string) (int, error) {
+func carryPlaylistsInto(cs carryStores, w *repairs.Writer, target, id string, listIDs []string) (int, error) {
 	steps := 0
 	for _, plID := range listIDs {
 		pl, err := cs.pls.GetUserPlaylist(plID)
@@ -368,7 +299,6 @@ func carryPlaylistsInto(p *Plugin, cs carryStores, w *repairs.Writer, target, id
 			})
 			if err == nil {
 				steps++
-				p.carry.moved(w.OpID(), undo.UserContentPlaylist, plID, id, target)
 				break
 			}
 			if errors.Is(err, errCarryGone) {

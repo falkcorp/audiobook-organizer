@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-21
 
@@ -223,7 +223,7 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
 	}
 	// 1b. ratings, collection memberships and playlist entries
-	did, err = carryUserContentInto(p, store, carry, w, target, id)
+	did, err = carryUserContentInto(store, carry, w, target, id)
 	steps += did
 	if err != nil {
 		return steps, fmt.Errorf("carry user content of %s: %w", id, err)
