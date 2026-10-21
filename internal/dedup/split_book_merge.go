@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-10-21
 
@@ -207,7 +207,14 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 
 	if opts.Precheck != nil {
 		if err := opts.Precheck(); err != nil {
-			return nil, fmt.Errorf("split-book merge refused: %w", err)
+			// A refusal (SplitBookRefusal) already reads "split-book merge
+			// refused: ..."; wrapping it again would double the prefix. Any
+			// other Precheck error (a failed read, a caller's own refusal)
+			// gets a neutral wrap.
+			if errors.Is(err, ErrSplitBookRefused) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("split-book precheck: %w", err)
 		}
 	}
 

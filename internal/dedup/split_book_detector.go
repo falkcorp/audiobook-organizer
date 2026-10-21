@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
 // last-edited: 2026-10-21
 
@@ -717,11 +717,14 @@ var (
 	splitChapterWordRe = regexp.MustCompile(`(?i)\b(?:chapter|ch|track|tr|part|pt|disc|disk|cd)\.?\s*#?\s*\d{1,4}\b`)
 
 	// splitVolMarkerRe is a series-volume marker: Book/Bk/Vol/Volume/# and its
-	// number. NOT "part". Group 1 is a digit number; group 2 (Book/Bk/Vol/
-	// Volume only, never "#") is a Roman numeral I-XX, upper case ("Book III";
-	// a lower-case "book i" is ordinary prose) or a number word One-Twenty,
-	// either case. volMarkerNumber turns the match into the number.
-	splitVolMarkerRe = regexp.MustCompile(`(?i)(?:\bbook|\bbk|\bvol(?:ume)?\.?|#)\s*0*(\d{1,3})\b|(?:\bbook|\bbk|\bvol(?:ume)?)\.?\s+((?-i:XX|XIX|XVIII|XVII|XVI|XV|XIV|XIII|XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b`)
+	// number. NOT "part". Group 1 is a digit number. Group 2 (after Book/Bk/
+	// Vol/Volume only, never "#") is a word form: a Roman numeral, upper case
+	// ("Book III"; a lower-case "book i" is ordinary prose), or a number word
+	// One-Ninety-Nine, hyphenated or spaced ("Book Twenty-One", "Vol. thirty
+	// two"), either case. The regex only finds the candidate; volMarkerNumber
+	// parses it (a Roman numeral must be well formed and I-XL), so a
+	// look-alike such as "Book IIII" or "Book VX" is not a volume.
+	splitVolMarkerRe = regexp.MustCompile(`(?i)(?:\bbook|\bbk|\bvol(?:ume)?\.?|#)\s*0*(\d{1,3})\b|(?:\bbook|\bbk|\bvol(?:ume)?)\.?\s+((?-i:[IVXL]{1,6})|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s]+(?:one|two|three|four|five|six|seven|eight|nine))?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b`)
 
 	// splitNumSubtitleRe is "Stem N: Subtitle".
 	splitNumSubtitleRe = regexp.MustCompile(`^(.*?\S)\s+0*(\d{1,3})\s*:\s*(\S.*)$`)
@@ -739,38 +742,107 @@ func splitFileStem(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 
-// volWordNumbers maps the number words and upper-case Roman numerals
-// splitVolMarkerRe accepts to their values.
-var volWordNumbers = func() map[string]int {
-	m := map[string]int{}
-	for i, w := range []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-		"eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"} {
-		m[w] = i + 1
-	}
-	for i, r := range []string{"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
-		"XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX"} {
-		m[r] = i + 1
-	}
-	return m
-}()
+var (
+	volUnitWords = map[string]int{"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9}
+	volTeenWords = map[string]int{"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+		"sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
+	volTensWords = map[string]int{"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+	volSplitRe   = regexp.MustCompile(`[-\s]+`)
+)
 
-// volMarkerNumber is the volume number in a splitVolMarkerRe match.
-func volMarkerNumber(m []string) int {
+// numberWordValue parses an English number word from one to ninety-nine:
+// "seven", "fourteen", "forty", "twenty-one" or "twenty one" (any case).
+// ok is false for anything else.
+func numberWordValue(s string) (n int, ok bool) {
+	parts := volSplitRe.Split(strings.ToLower(strings.TrimSpace(s)), -1)
+	switch len(parts) {
+	case 1:
+		if v, found := volUnitWords[parts[0]]; found {
+			return v, true
+		}
+		if v, found := volTeenWords[parts[0]]; found {
+			return v, true
+		}
+		v, found := volTensWords[parts[0]]
+		return v, found
+	case 2:
+		t, tok := volTensWords[parts[0]]
+		u, uok := volUnitWords[parts[1]]
+		if tok && uok {
+			return t + u, true
+		}
+	}
+	return 0, false
+}
+
+// romanValue parses an upper-case Roman numeral from I to XL. It reads the
+// subtractive notation the usual way (a smaller symbol before a larger one is
+// subtracted) and then accepts the result only if re-encoding the value gives
+// the same text, so "IIII", "VX", "IC" and "XIIII" are rejected rather than
+// guessed at. ok is false for those, for anything that is not I/V/X/L, and for
+// a value outside 1-40.
+func romanValue(s string) (n int, ok bool) {
+	vals := map[byte]int{'I': 1, 'V': 5, 'X': 10, 'L': 50}
+	if s == "" {
+		return 0, false
+	}
+	prev := 0
+	for i := len(s) - 1; i >= 0; i-- {
+		v, known := vals[s[i]]
+		if !known {
+			return 0, false
+		}
+		if v < prev {
+			n -= v
+		} else {
+			n += v
+			prev = v
+		}
+	}
+	if n < 1 || n > 40 || romanText(n) != s {
+		return 0, false
+	}
+	return n, true
+}
+
+// romanText is the canonical Roman numeral for 1-49.
+func romanText(n int) string {
+	var b strings.Builder
+	for _, sym := range []struct {
+		v int
+		s string
+	}{{40, "XL"}, {10, "X"}, {9, "IX"}, {5, "V"}, {4, "IV"}, {1, "I"}} {
+		for n >= sym.v {
+			b.WriteString(sym.s)
+			n -= sym.v
+		}
+	}
+	return b.String()
+}
+
+// volMarkerNumber is the volume number in a splitVolMarkerRe match; ok is
+// false for a word form that does not parse (a malformed Roman numeral).
+func volMarkerNumber(m []string) (n int, ok bool) {
 	if m[1] != "" {
-		return extractChapterNumber(m[1])
+		return extractChapterNumber(m[1]), true
 	}
-	if n, ok := volWordNumbers[m[2]]; ok {
-		return n
+	if n, ok := romanValue(m[2]); ok {
+		return n, true
 	}
-	return volWordNumbers[strings.ToLower(m[2])]
+	return numberWordValue(m[2])
 }
 
 // volNumbers is the distinct, ascending Book/Vol numbers across texts.
 func volNumbers(texts []string) []int {
 	seen := map[int]bool{}
 	for _, t := range texts {
-		if m := splitVolMarkerRe.FindStringSubmatch(splitChapterWordRe.ReplaceAllString(t, " ")); m != nil {
-			seen[volMarkerNumber(m)] = true
+		// The first marker in the text that parses: a malformed one ("Book
+		// IIII") is skipped, not read as a number.
+		for _, m := range splitVolMarkerRe.FindAllStringSubmatch(splitChapterWordRe.ReplaceAllString(t, " "), -1) {
+			if n, ok := volMarkerNumber(m); ok {
+				seen[n] = true
+				break
+			}
 		}
 	}
 	out := make([]int, 0, len(seen))
@@ -806,8 +878,8 @@ func joinInts(ns []int) string {
 // (empty = no veto). Each rule alone vetoes:
 //
 //	V2   two or more distinct numbers in Book/Vol markers (book|bk|vol|volume|#
-//	     + N; "Book"/"Vol" also take a Roman numeral I-XX or a number word
-//	     One-Twenty; NOT part), read separately across the titles, the member
+//	     + N; "Book"/"Vol" also take a Roman numeral I-XL or a number word
+//	     One-Ninety-Nine; NOT part), read separately across the titles, the member
 //	     subfolder names and the file-name stems
 //	V2b  two or more titles of the shape "Stem N: Subtitle" whose subtitles
 //	     differ

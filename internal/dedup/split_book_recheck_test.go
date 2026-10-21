@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_recheck_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d3f5b21-6a94-4c70-b1e8-2f7a4c9d0e35
 // last-edited: 2026-10-21
 
@@ -231,4 +231,26 @@ func TestMergeSplitBookClusterRechecked_CallerPrecheckStillRuns(t *testing.T) {
 	_, err = MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "", opts)
 	assert.True(t, errors.Is(err, ErrSplitBookRefused))
 	assert.Zero(t, called, "the recheck refused first")
+}
+
+// The refusal reads "split-book merge refused: ..." once; a Precheck failure
+// that is not a refusal (a failed read) gets a neutral "split-book precheck:"
+// wrap and is not an ErrSplitBookRefused.
+func TestMergeSplitBookClusterRechecked_ErrorTextHasNoDoubledPrefix(t *testing.T) {
+	writes := 0
+	r := chapters()
+	r.files["b2"][0].Duration = 0
+	_, err := MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "", SplitMergeOptions{})
+	require.Error(t, err)
+	assert.Equal(t, 1, strings.Count(err.Error(), "split-book merge refused"), err.Error())
+	assert.True(t, strings.HasPrefix(err.Error(), ErrSplitBookRefused.Error()+": "), err.Error())
+	assert.Contains(t, err.Error(), "have no recorded duration")
+
+	r = chapters()
+	r.err = errors.New("disk on fire")
+	_, err = MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "", SplitMergeOptions{})
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrSplitBookRefused))
+	assert.Equal(t, "split-book precheck: split-book recheck: read book b1: disk on fire", err.Error())
+	assert.Zero(t, writes)
 }

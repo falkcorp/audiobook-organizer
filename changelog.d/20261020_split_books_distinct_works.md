@@ -7,8 +7,8 @@ proof that several books were chapters of one, which is also exactly what the
 volumes of a series look like. The Repairs lane offered to merge them. The
 detector now vetoes a cluster that shows evidence of being several works: two
 or more distinct Book/Vol numbers in titles, subfolder names or file names (V2;
-the number may be digits, a Roman numeral I-XX or a word One-Twenty after
-Book/Bk/Vol); "Stem N: Subtitle" titles with different subtitles (V2b, which now
+the number may be digits, an upper-case Roman numeral I-XL or a number word
+One-Ninety-Nine, compounds included, after Book/Bk/Vol); "Stem N: Subtitle" titles with different subtitles (V2b, which now
 also sees "Episode N" and "Section N" titles: only Chapter, Track, Part and Disc
 markers are stripped first); a folder named for
 several works, such as "Books 1-4", a series, collection, omnibus or box set

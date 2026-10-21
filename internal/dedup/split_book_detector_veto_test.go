@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_detector_veto_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5d3a8e21-7c94-4b60-a1f2-9e0c4b7d6a35
 // last-edited: 2026-10-21
 
@@ -271,9 +271,23 @@ func TestVeto_EpisodesAndNumberedBooks(t *testing.T) {
 		wantQualifies(t, titled("Saga Book Two - 01", "Saga Book Two - 02", "Saga Book Two - 03"))
 		wantQualifies(t, titled("Saga Book II - 01", "Saga Book II - 02", "Saga Book II - 03"))
 	})
+	t.Run("compound number words and Roman numerals up to XL", func(t *testing.T) {
+		wantVetoed(t, titled("Saga Book Twenty-One", "Saga Book Twenty Two", "Saga Book thirty-three"), "V2")
+		wantVetoed(t, titled("Saga Book XXI", "Saga Book XXII", "Saga Book XXXIX"), "V2")
+		wantVetoed(t, titled("Saga Book XL", "Saga Book Ninety-Nine", "Saga Book Forty"), "V2")
+	})
+	t.Run("malformed Roman numerals are not volumes", func(t *testing.T) {
+		if got := volNumbers([]string{"Saga Book IIII", "Saga Book VX", "Saga Book IC", "Saga Book XLI", "Saga Book LX", "Saga Book XXXXI"}); len(got) != 0 {
+			t.Errorf("volNumbers = %v, want none", got)
+		}
+		// A malformed marker does not hide a later good one in the same text.
+		if got := volNumbers([]string{"Book IIII and Book 3"}); !slices.Equal(got, []int{3}) {
+			t.Errorf("volNumbers = %v, want [3]", got)
+		}
+	})
 	t.Run("volNumbers", func(t *testing.T) {
-		got := volNumbers([]string{"Book XIV", "bk Nine", "Vol. 3", "Book i", "Book Ten Thousand", "Books Two"})
-		if !slices.Equal(got, []int{3, 9, 10, 14}) {
+		got := volNumbers([]string{"Book XIV", "bk Nine", "Vol. 3", "Book i", "Book Ten Thousand", "Books Two", "Volume Twenty-One", "Vol. thirty two"})
+		if !slices.Equal(got, []int{3, 9, 10, 14, 21, 32}) {
 			t.Errorf("volNumbers = %v", got)
 		}
 	})
@@ -525,5 +539,35 @@ func TestVetoParityWithClassifier(t *testing.T) {
 	}
 	if kept := detectKept(all, nil, testChapterMaxSec); len(kept) != wantKept {
 		t.Errorf("fail-closed detector keeps %d clusters, want %d", len(kept), wantKept)
+	}
+}
+
+func TestRomanValue(t *testing.T) {
+	good := map[string]int{"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "IX": 9, "X": 10, "XIV": 14, "XIX": 19,
+		"XX": 20, "XXI": 21, "XXIX": 29, "XXXIV": 34, "XXXIX": 39, "XL": 40}
+	for in, want := range good {
+		if got, ok := romanValue(in); !ok || got != want {
+			t.Errorf("romanValue(%q) = %d, %v; want %d", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "IIII", "VV", "VX", "IC", "IL", "XIIII", "IXI", "XLI", "L", "LX", "XXXX", "xl", "VIV"} {
+		if got, ok := romanValue(in); ok {
+			t.Errorf("romanValue(%q) = %d, want rejected", in, got)
+		}
+	}
+}
+
+func TestNumberWordValue(t *testing.T) {
+	good := map[string]int{"one": 1, "Nine": 9, "ten": 10, "Nineteen": 19, "twenty": 20, "Forty": 40, "ninety": 90,
+		"twenty-one": 21, "Twenty One": 21, "THIRTY-THREE": 33, "ninety-nine": 99, "sixty  four": 64}
+	for in, want := range good {
+		if got, ok := numberWordValue(in); !ok || got != want {
+			t.Errorf("numberWordValue(%q) = %d, %v; want %d", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "zero", "twenty-ten", "ten-one", "one-two", "hundred", "twenty-", "twentyone"} {
+		if got, ok := numberWordValue(in); ok {
+			t.Errorf("numberWordValue(%q) = %d, want rejected", in, got)
+		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.12.0
+// version: 1.12.1
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-21
 
@@ -962,7 +962,7 @@ export function useRepairsLane(
           setPreparingApplyFor(action.fixerId);
           const settled = new Set(settledRowIds);
           void (async () => {
-            let confirmed = false;
+            let confirmed: boolean;
             try {
               const targets = await previewApplicable(
                 action.fixerId,
