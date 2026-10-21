@@ -1,5 +1,5 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.23.0
+// version: 2.24.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
 // last-edited: 2026-10-21
 
@@ -901,11 +901,10 @@ export async function setupMockApiRoutes(
     //                useLibraryFilters.ts): { genres, languages }
     // Both are answered with empty, successful results. Left unhandled they fell
     // through to the real server (a 401, at a time the test does not control).
-    // That matters for the scoped one: the Browse-by-Tag panel is not rendered
-    // until its first answer settles, and mounting it inserts it above the Select
-    // All bar, shifting the grid down by its height. A click aimed at Select All
-    // or a card checkbox before then can land on the panel instead (PR #4105 run
-    // 39606817582). Specs that click right after load call waitForTagPanel().
+    // That matters for the scoped one: the Browse-by-Tag panel shows its loading
+    // state until its first answer settles. The panel is always mounted at a
+    // fixed height, so the answer no longer moves the grid, but specs that click
+    // right after load still call waitForTagPanel() so they do not race it.
     // scoped_total counts the mock books matching library_state only; the
     // search/tag/field filters the real endpoint also applies are not modelled,
     // and nothing asserts on it.
@@ -2060,20 +2059,19 @@ export function generateTestBook(overrides: Record<string, unknown> = {}) {
 }
 
 /**
- * Wait until the Library's Browse-by-Tag panel has settled, i.e. the layout
- * above the book grid is final. The panel mounts only once the first
- * scoped-facets request answers, and mounting it moves everything below it
- * (Select All, the card and row checkboxes) down by the panel's height, so a
- * click aimed before then can land on the panel instead. Call this after the
+ * Wait until the Library's Browse-by-Tag panel has settled, i.e. its first
+ * scoped-facets answer is in. The panel is always mounted at a fixed height, so
+ * the layout above the book grid does not change when the answer arrives; this
+ * still gates on it so specs that click Select All or a card checkbox right
+ * after load do not race the panel's own loading state. Call it after the
  * Library has loaded and before clicking any selection control.
  *
- * 'No tags in these results.' is what the panel shows for the empty answer the
- * mocks return (setupMockApiRoutes here, and scan-import-organize's own fetch
- * override). Text-based on purpose for now; a stable hook on the panel can
- * replace the body later without touching the callers.
+ * Keyed on the panel's `aria-busy`, which is "true" while a facets answer is
+ * outstanding and "false" once it has settled, whatever the answer was (tags,
+ * the empty message, or an error), so it does not depend on the mock's copy.
  */
 export async function waitForTagPanel(page: Page): Promise<void> {
-  await expect(page.getByText('No tags in these results.')).toBeVisible();
+  await expect(page.getByTestId('tag-cloud-panel')).toHaveAttribute('aria-busy', 'false');
 }
 
 /**
