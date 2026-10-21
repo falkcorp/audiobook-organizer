@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-20
 
@@ -293,7 +293,7 @@ func warnUnlistedConnector(ip string) {
 	}
 	switch unlistedConnectors.add(a.String()) {
 	case onceSetAdded:
-		clientTrustLog.Warn("peer %s sent Cloudflare headers but is not in TUNNEL_CONNECTOR_ADDRS: it looks like a cloudflared connector not in TUNNEL_CONNECTOR_ADDRS, so every visitor it relays shares one rate-limit bucket. Add it to TUNNEL_CONNECTOR_ADDRS", a)
+		clientTrustLog.Warn("peer %s sent Cloudflare headers but is not listed in TUNNEL_CONNECTOR_ADDRS; it is probably a cloudflared connector, and every visitor it relays shares one rate-limit bucket. Add its address to that setting", a)
 	case onceSetFull:
 		clientTrustLog.Warn("more than %d unlisted private peers sent Cloudflare headers; no longer warning about new ones. Check TUNNEL_CONNECTOR_ADDRS", unlistedConnectorWarnCap)
 	}
