@@ -1,5 +1,5 @@
 // file: internal/personname/author_part_marker.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3d0f6a52-8b1e-4c77-9a4e-5e61c2f0b9d3
 // last-edited: 2026-10-21
 
@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Part/track/disc markers glued onto a name by a filename or an artist tag
@@ -104,7 +105,7 @@ func HasPartTrackMarker(name string) bool {
 	}
 	// A lone label ("Side 2", "Chapter Twelve") has no name in front: it is
 	// IsLoneMarkerPhrase's, so the two never both answer true.
-	if isLoneLabelRun(toks) {
+	if isLoneLabelRun(loneTokens(toks)) {
 		return false
 	}
 	end := peelMarkers(toks)
@@ -120,26 +121,41 @@ func HasPartTrackMarker(name string) bool {
 // Chapter 10", "Part 2 P3"). It is the complement of HasPartTrackMarker, which
 // needs a name in front. Such a row is a structural label, not a person.
 //
-// It also accepts a label written with number words, roman numerals or a
-// section-style word ("Chapter Twelve", "Volume IV", "Side 2", "Episode 4"), and
-// a lone edition word ("Unabridged"): see isLoneLabelRun. Those extra words are
-// recognised ONLY for a lone phrase; they are not markers when a name stands in
-// front, so HasPartTrackMarker is unchanged.
+// It also accepts, for a lone phrase only (see isLoneLabelRun):
+//   - number words, roman numerals up to XXXIX and a single letter after a
+//     label word ("Chapter Twelve", "Volume IV", "Track A");
+//   - number ranges and decimals ("Books 1-3", "Book 2.5");
+//   - section-style words ("Side 2", "Episode 4"), the front and back matter
+//     words prologue, epilogue, introduction and intro ("Prologue Chapter 1",
+//     "Chapter 5 Epilogue"), and a lone edition word ("Unabridged");
+//   - separators between the parts ("- Introduction", "Prologue + Chapter 1",
+//     "Disk 2 -Track 01");
+//   - a letterless disc/track code made only of numbers ("1-02", "10-01").
+//
+// Those extra words are recognised ONLY when the whole name is labels; with a
+// name in front they are not markers, so HasPartTrackMarker does not flag
+// "Charles Dickens Episode 4" and returns false for a lone phrase.
 func IsLoneMarkerPhrase(name string) bool {
 	toks := markerTokens(name)
 	if len(toks) == 0 {
 		return false
 	}
-	return peelMarkers(toks) == 0 || isLoneLabelRun(toks)
+	if peelMarkers(toks) == 0 {
+		return true
+	}
+	lone := loneTokens(toks)
+	return isLoneLabelRun(lone) || isNumberCodeRun(lone)
 }
 
 // loneLabelWords are label words that are a label only when the whole name is
 // labels: not part of partMarkerWords because "Dickens Episode 4" is judged by
-// other rules.
+// other rules. (partMarkerWords' own words, "disc" among them, are labels in a
+// lone run too and are not repeated here.)
 var loneLabelWords = map[string]bool{
 	"side": true, "section": true, "episode": true, "episodes": true,
 	"chapters": true, "parts": true, "books": true, "volumes": true,
-	"disc": true, "discs": true, "unabridged": true, "abridged": true,
+	"discs": true, "unabridged": true, "abridged": true,
+	"prologue": true, "epilogue": true, "introduction": true, "intro": true,
 }
 
 // loneNumberWords: "Part One", "Book Twelve".
@@ -151,23 +167,59 @@ var loneNumberWords = map[string]bool{
 	"nineteen": true, "twenty": true,
 }
 
-var loneRomanRe = regexp.MustCompile(`(?i)^[ivxlc]+$`)
+// loneRomanRe: roman numerals I..XXXIX only, so "Li", "Vic", "Civil" and "ill"
+// are not numerals. Matched case-insensitively and never against "".
+var loneRomanRe = regexp.MustCompile(`(?i)^(?:x{0,3})(?:ix|iv|v?i{0,3})$`)
+
+// loneNumberRe: a number, a decimal or a range of either ("3", "2.5", "1-3",
+// "1-02"; hyphen or en dash).
+var loneNumberRe = regexp.MustCompile(`^\p{Nd}+(?:\.\p{Nd}+)?(?:[-\x{2013}]\p{Nd}+(?:\.\p{Nd}+)?)?$`)
+
+// loneTokens trims separator punctuation hanging on the tokens of a lone
+// phrase ("-Track", "+") and drops tokens that were only separators.
+func loneTokens(toks []string) []string {
+	out := make([]string, 0, len(toks))
+	for _, t := range toks {
+		if t = strings.Trim(t, "-\u2013\u2014+&/|"); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
 // isLoneLabelRun reports whether every token is a label word, a glued marker,
-// a number, a number word or a roman numeral, with at least one label word.
+// a number, a number word, a roman numeral or (right after a label word) a
+// single letter, with at least one label word.
 func isLoneLabelRun(toks []string) bool {
-	sawLabel := false
+	sawLabel, prevLabel := false, false
 	for _, t := range toks {
 		l := strings.ToLower(t)
 		switch {
 		case partMarkerWords[l] || loneLabelWords[l] || partMarkerTokenRe.MatchString(t):
-			sawLabel = true
-		case digitsOnlyRe.MatchString(t) || loneNumberWords[l] || loneRomanRe.MatchString(t):
+			sawLabel, prevLabel = true, true
+			continue
+		case loneNumberRe.MatchString(t) || loneNumberWords[l] || (l != "" && loneRomanRe.MatchString(l)):
+		case prevLabel && utf8.RuneCountInString(t) == 1 && unicode.IsLetter([]rune(t)[0]):
 		default:
 			return false
 		}
+		prevLabel = false
 	}
 	return sawLabel
+}
+
+// isNumberCodeRun reports whether every token is a number, decimal or range: a
+// letterless disc/track code ("1-02", "10-01", "3").
+func isNumberCodeRun(toks []string) bool {
+	if len(toks) == 0 {
+		return false
+	}
+	for _, t := range toks {
+		if !loneNumberRe.MatchString(t) {
+			return false
+		}
+	}
+	return true
 }
 
 func tokenHasDigit(t string) bool { return strings.IndexFunc(t, unicode.IsDigit) >= 0 }

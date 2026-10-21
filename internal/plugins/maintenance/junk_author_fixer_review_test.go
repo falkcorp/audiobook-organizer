@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
 // last-edited: 2026-10-21
 
@@ -299,21 +299,24 @@ func TestJunkAuthorFixer_WeakNeverUnlinks(t *testing.T) {
 
 // ---- H5: a narrator credit is never promoted to primary ----
 
-// S4: removing the junk primary leaves only a narrator credit: the primary is
-// nil. A real co-author left in the junction is promoted.
+// S4: a book whose only AUTHOR credit is the junk row (a narrator credit sits
+// beside it) is held, not unlinked: removing it would leave only a narrator,
+// and a narrator is never promoted to primary. A real co-author left in the
+// junction is promoted.
 func TestJunkAuthorFixer_UnlinkNeverPromotesNarrator(t *testing.T) {
 	f := newJunkFixture(t)
 	onlyNarr := f.book(junkBookSpec{title: "Some Title", path: "/lib/u/b1", author: "GraphicAudio", narratorCredit: "Mark Boyett"})
 	withCo := f.book(junkBookSpec{title: "Other Title", path: "/lib/u/b2", author: "GraphicAudio",
 		coAuthor: "Jacqueline Simpson", narratorCredit: "Mark Boyett"})
 	plan := f.plan()
-	for _, id := range []string{onlyNarr, withCo} {
-		require.Equal(t, junkAuthorDecUnlink, f.row(plan, "GraphicAudio", id).Proposed["decision"])
-	}
+	held := f.row(plan, "GraphicAudio", onlyNarr)
+	require.NotNil(t, held)
+	require.Equal(t, junkAuthorSkipHeldSoleCredit, held.Skipped, held.SkipReason)
+	require.Equal(t, junkAuthorDecUnlink, f.row(plan, "GraphicAudio", withCo).Proposed["decision"])
 	res := f.apply(plan, nil)
-	require.Equal(t, 2, res.Applied, "by outcome: %v", res.ByOutcome)
-	require.Nil(t, f.primary(onlyNarr), "a narrator is not a primary author")
-	require.Equal(t, []int{f.authors["Mark Boyett"]}, f.credits(onlyNarr))
+	require.Equal(t, 1, res.Applied, "by outcome: %v", res.ByOutcome)
+	require.Equal(t, f.authors["GraphicAudio"], *f.primary(onlyNarr), "held: still credited to the junk row")
+	require.Equal(t, []int{f.authors["GraphicAudio"], f.authors["Mark Boyett"]}, f.credits(onlyNarr))
 	require.Equal(t, f.authors["Jacqueline Simpson"], *f.primary(withCo))
 
 	rev, err := audiobooks.NewRevertService(f.s).RevertOperation(junkTestOpID)
@@ -527,7 +530,8 @@ func TestJunkAuthorFixer_OwnerManualByTitle(t *testing.T) {
 // owner's fix stands (credits and primary), nothing is half-reverted.
 func TestJunkAuthorFixer_RevertKeepsAManualFix(t *testing.T) {
 	f := newJunkFixture(t)
-	id := f.book(junkBookSpec{title: "Some Title", path: "/lib/u/b1", author: "GraphicAudio"})
+	// A real co-author keeps the book authored, so the junk credit may go.
+	id := f.book(junkBookSpec{title: "Some Title", path: "/lib/u/b1", author: "GraphicAudio", coAuthor: "Co Author"})
 	res := f.apply(f.plan(), nil)
 	require.Equal(t, 1, res.Applied)
 	real := f.author("Real Person")
@@ -946,7 +950,7 @@ func TestJunkAuthorFixer_ReleaseTaggedNameRelinksToCleanedName(t *testing.T) {
 	}
 	r := f.row(plan, "64k 01;02;03 100MB", bare)
 	require.NotNil(t, r)
-	require.Equal(t, junkAuthorDecUnlink, r.Proposed["decision"], "no name survives the clean: %s", r.Reason)
+	require.Equal(t, junkAuthorSkipHeldSoleCredit, r.Skipped, "no name survives the clean and it is the only credit: held, %s", r.Reason)
 
 	res := f.apply(plan, []string{f.row(plan, "Synthetic Writer [32k 01;02;03 250MB]", tagged).RowID})
 	require.Equal(t, 1, res.Applied, "by outcome: %v", res.ByOutcome)
@@ -1023,14 +1027,44 @@ func TestJunkAuthorFixer_LabelOnlyCreditIsRelinkOnly(t *testing.T) {
 }
 
 // A structural word inside a longer name (a title with a part number) is not a
-// lone label: it keeps the structural_word rule and its unlink behaviour.
-func TestJunkAuthorFixer_NonLabelStructuralJunkStillUnlinks(t *testing.T) {
+// lone label: it keeps the structural_word rule, which is not relink-only. But
+// owner decision 2026-10-21 (never leave a book authorless) still holds it when
+// it is the book's only author credit; only a credit beside a real co-author
+// is unlinked.
+func TestJunkAuthorFixer_NonLabelStructuralJunkSoleCreditIsHeld(t *testing.T) {
 	f := newJunkFixture(t)
 	const name = "Synthetic Quest Book 3"
-	id := f.book(junkBookSpec{title: "Synthetic Title", path: "/lib/syn/q", author: name})
+	sole := f.book(junkBookSpec{title: "Synthetic Title", path: "/lib/syn/q", author: name})
+	shared := f.book(junkBookSpec{title: "Synthetic Other", path: "/lib/syn/q2", author: name, coAuthor: "Synthetic Coauthor"})
 	plan := f.plan()
-	r := f.row(plan, name, id)
+	r := f.row(plan, name, sole)
+	require.NotNil(t, r)
+	require.Equal(t, junkAuthorSkipHeldSoleCredit, r.Skipped, "%s / %s", r.Reason, r.SkipReason)
+	r = f.row(plan, name, shared)
 	require.NotNil(t, r)
 	require.Empty(t, r.Skipped, "%s / %s", r.Reason, r.SkipReason)
 	require.Equal(t, junkAuthorDecUnlink, r.Proposed["decision"], r.Reason)
+
+	f.apply(plan, nil)
+	require.Equal(t, []int{f.authors[name]}, f.credits(sole), "the only credit is kept")
+	require.Equal(t, []int{f.authors["Synthetic Coauthor"]}, f.credits(shared), "the credit beside a real co-author is removed")
+}
+
+// Owner decision 2026-10-21, any junk class: with no evidence the junk credit
+// is NEVER the only thing removed from a book. Replan (which Apply runs on
+// every row) holds a credit that became the sole one since the plan.
+func TestJunkAuthorFixer_ReplanHoldsCreditThatBecameSole(t *testing.T) {
+	f := newJunkFixture(t)
+	id := f.book(junkBookSpec{title: "Synthetic Title", path: "/lib/syn/r", author: "GraphicAudio", coAuthor: "Synthetic Coauthor"})
+	plan := f.plan()
+	r := f.row(plan, "GraphicAudio", id)
+	require.NotNil(t, r)
+	require.Equal(t, junkAuthorDecUnlink, r.Proposed["decision"], r.Reason)
+
+	// The co-author is removed after the plan: the junk credit is now the only one.
+	ga := f.authors["GraphicAudio"]
+	require.NoError(t, f.s.SetBookAuthors(id, []database.BookAuthor{{BookID: id, AuthorID: ga, Role: "author"}}))
+	fresh, err := f.fixer.Replan(context.Background(), nil, *r, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, junkAuthorSkipHeldSoleCredit, fresh.Skipped, fresh.SkipReason)
 }

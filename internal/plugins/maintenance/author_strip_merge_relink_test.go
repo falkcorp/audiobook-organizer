@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -177,7 +177,7 @@ func TestAuthorStripMerge_RelinkOneAgreeingSource(t *testing.T) {
 	if len(f.created) != 0 {
 		t.Errorf("an existing author was re-created: %v", f.created)
 	}
-	wantSummary(t, summary, "relink-planned=2 ", "relinked=2 ", "twin-deletes=1", "books-left-authorless=0 ",
+	wantSummary(t, summary, "relink-planned=2 ", "relinked=2 ", "twin-deletes=1", "books-held-sole-credit=0 ",
 		"relink-conflict=0 ", "relink-no-candidate=0 ", "relink-new-authors=0 ", "target-is-junk=1 ", "mergeable=0 ")
 }
 

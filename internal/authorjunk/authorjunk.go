@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-10-21
 
@@ -712,10 +712,13 @@ func classifyBaseParts(s string) (Verdict, *nameParts) {
 		}
 	}
 	// A lone label ("Book 2 (Unabridged)", "[Track 003] 2") is junk that the
-	// repair may only replace, never remove (RuleLabelOnly). A bare number has
-	// no label word in it and is left to the gate. The class is the one the rules it replaces gave: a work title when a
+	// repair may only replace, never remove (RuleLabelOnly). A letterless
+	// disc/track code ("1-02", "10-01", "3") counts as a label under the owner
+	// rule, so there is deliberately no "has a letter" guard here.
+	//
+	// The class is the one the rules it replaces gave: a work title when a
 	// structural word is in it, else other shrapnel ("Track01").
-	if personname.IsLoneMarkerPhrase(core) && strings.IndexFunc(core, unicode.IsLetter) >= 0 {
+	if personname.IsLoneMarkerPhrase(core) {
 		class := ClassOther
 		for _, w := range words {
 			if structuralWords[w] {
