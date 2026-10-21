@@ -1,11 +1,12 @@
 // file: internal/server/client_trust.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
 package server
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -337,15 +338,28 @@ func warnUnlistedConnector(ip string) {
 	// its addresses cannot fill the set and silence the warning about a real
 	// connector.
 	key := a.String()
-	if prefix, ok := lanIPv6Prefix(key); ok {
+	prefix, byPrefix := lanIPv6Prefix(key)
+	if byPrefix {
 		key = prefix
 	}
 	switch unlistedConnectors.add(key) {
 	case onceSetAdded:
-		clientTrustLog.Warn("peer %s sent Cloudflare headers but is not listed in TUNNEL_CONNECTOR_ADDRS; it is probably a cloudflared connector, and every visitor it relays shares one rate-limit bucket. Add its address to that setting", a)
+		clientTrustLog.Warn("%s", unlistedConnectorMessage(a, prefix))
 	case onceSetFull:
 		clientTrustLog.Warn("more than %d unlisted private peers sent Cloudflare headers; no longer warning about new ones. Check TUNNEL_CONNECTOR_ADDRS", unlistedConnectorWarnCap)
 	}
+}
+
+// unlistedConnectorMessage is warnUnlistedConnector's warning for peer a.
+// prefix is a's /64 when the warning is keyed by it (IPv6), "" otherwise:
+// the message then says it covers every address in that /64, since later
+// peers there are not warned about separately.
+func unlistedConnectorMessage(a netip.Addr, prefix string) string {
+	const tail = " sent Cloudflare headers but is not listed in TUNNEL_CONNECTOR_ADDRS; it is probably a cloudflared connector, and every visitor it relays shares one rate-limit bucket. Add its address to that setting"
+	if prefix != "" {
+		return fmt.Sprintf("peer %s%s (warning once for all addresses in %s)", a, tail, prefix)
+	}
+	return fmt.Sprintf("peer %s%s", a, tail)
 }
 
 // onceSet is a bounded set of strings: add reports whether a value is new.
