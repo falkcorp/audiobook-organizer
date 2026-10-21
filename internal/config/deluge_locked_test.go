@@ -1,7 +1,7 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // The five Deluge connection settings are config/env-authoritative (owner
 // decision 2026-10-11): a value the environment (DELUGE_*) or the server's config
@@ -952,14 +952,12 @@ func TestSaveConfigToDatabase_ConcurrentSavesLeaveTheNewestBlob(t *testing.T) {
 	const writers = 8
 	var wg sync.WaitGroup
 	for i := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			Mutate(func(c *Config) { c.RootDir = fmt.Sprintf("/lib/%d", i) })
 			if err := SaveConfigToDatabase(store); err != nil {
 				t.Errorf("save %d: %v", i, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

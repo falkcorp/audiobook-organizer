@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-20
 
@@ -1286,14 +1286,12 @@ func TestFolderMemo_ConcurrentCallersShareOneRead(t *testing.T) {
 				errs := make(chan error, callers)
 				sizes := make(chan int, callers)
 				for range callers {
-					done.Add(1)
-					go func() {
-						defer done.Done()
+					done.Go(func() {
 						arrived.Done()
 						got, err := k.list(memo, l)
 						errs <- err
 						sizes <- len(got)
-					}()
+					})
 				}
 				finished := make(chan struct{})
 				go func() { done.Wait(); close(finished) }()

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package opsv3
 
@@ -121,8 +121,7 @@ func TestSSEProgressCarriesChunks(t *testing.T) {
 	mem := &memRuns{runs: map[string]database.RunRecord{"b1": batchRecord("b1", 10, 1)}}
 	hub := newFakeHub()
 	br := NewBroker(mem, hub, nil, BrokerOptions{FlushEvery: 5 * time.Millisecond})
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	go br.Run(ctx)
 
 	srv := httptest.NewServer(newRouter(New(Deps{Runs: mem, Broker: br})))
@@ -328,8 +327,7 @@ func TestSSEStreamsEndOnServerClosing(t *testing.T) {
 // does not run until a client subscribes, starts exactly once, and does not
 // start once its context is done.
 func TestSSEBrokerStartsOnFirstSubscriber(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	br := NewBroker(&memRuns{}, newFakeHub(), nil, BrokerOptions{})
 	var mu sync.Mutex
 	spawned := 0
@@ -373,8 +371,7 @@ func TestSSETerminalSurvivesADroppedEvent(t *testing.T) {
 	mem := &memRuns{runs: map[string]database.RunRecord{"r1": {ID: "r1", DefID: "test.batch", State: state.V3Running}}}
 	hub := newFakeHub()
 	br := NewBroker(mem, hub, nil, BrokerOptions{FlushEvery: 5 * time.Millisecond})
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	go br.Run(ctx)
 	srv := httptest.NewServer(newRouter(New(Deps{Runs: mem, Broker: br})))
 	t.Cleanup(srv.Close)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/cache_refresh.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c2e4a91-5b3d-4f08-9e6a-2d1b8c7f4e30
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package abs
 
@@ -42,16 +42,14 @@ func (r *cacheRefresher) refresh(name string, build func() error) {
 	if !r.busy.CompareAndSwap(false, true) {
 		return
 	}
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
+	r.wg.Go(func() {
 		defer r.busy.Store(false)
 		started := time.Now()
 		if err := build(); err != nil {
 			cacheLog.Warn("abs: background refresh of the %s cache failed after %dms; still serving the previous build: %v",
 				name, time.Since(started).Milliseconds(), err)
 		}
-	}()
+	})
 }
 
 // servableStale reports whether a build stamped at builtAt may still be served

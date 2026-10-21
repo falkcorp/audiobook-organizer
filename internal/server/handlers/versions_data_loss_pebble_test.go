@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_data_loss_pebble_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c0e2a7d-9b41-4f6e-8a3c-1d7f4b2e6a95
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package handlers_test
 
@@ -403,15 +403,13 @@ func TestSetAudiobookPrimary_ConcurrentCallsLeaveOnePrimary(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for _, id := range []string{"cc-x", "cc-y"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			c, _, res := versionsCall(id, "")
 			h.SetAudiobookPrimary(c)
 			if code, body := res(); code != http.StatusOK {
 				t.Errorf("set-primary %s: want 200, got %d: %s", id, code, body)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if got := primariesIn(t, pebble, "g1"); len(got) != 1 {

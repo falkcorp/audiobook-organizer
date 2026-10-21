@@ -1,7 +1,7 @@
 // file: internal/database/test_deadline_selftest_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: a3232db7-10d7-425f-865c-cb905b10b5c3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -119,9 +119,7 @@ func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 	t.Cleanup(func() { testWaitBudgetOverride = nil })
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		statuses := []string{ReviewStatusApproved, ReviewStatusRejected}
 		start := time.Now()
 		for i := 0; runFor == 0 || time.Since(start) < runFor; i++ {
@@ -131,7 +129,7 @@ func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 			}
 		}
 		fmt.Fprintln(os.Stderr, deadlineChildWorkerFinished)
-	}()
+	})
 
 	waitGroupOrFatal(t, &wg, deadlineChildWhat)
 	if mode != "slow" {

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_chapter_merge_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3b8f5d21-7c4e-4a96-8e0b-2d6f1a9c7e53
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -50,9 +50,7 @@ func TestChapterMergeReparent_FileRowIsNeverAbsentFromBothBooks(t *testing.T) {
 	var observations, gaps atomic.Int64
 	var firstGap atomic.Value
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for !done.Load() {
 			seen := map[string]bool{}
 			for _, src := range srcIDs {
@@ -82,7 +80,7 @@ func TestChapterMergeReparent_FileRowIsNeverAbsentFromBothBooks(t *testing.T) {
 				}
 			}
 		}
-	}()
+	})
 
 	var err error
 	for _, src := range srcIDs {

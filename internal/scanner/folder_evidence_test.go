@@ -1,5 +1,5 @@
 // file: internal/scanner/folder_evidence_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 477ad146-9156-4328-bc92-4bad0d35ece0
 // last-edited: 2026-10-20
 
@@ -142,14 +142,12 @@ func TestFolderNameEvidence_FirstLoadIsShared(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			if FolderNameEvidence().IsKnownSeries == nil {
 				t.Error("a waiting caller got no snapshot")
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

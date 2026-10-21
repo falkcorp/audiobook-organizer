@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 8b1e4d27-5c93-4f0a-a6d2-7e39c1f5b084
 // last-edited: 2026-10-20
 
@@ -364,9 +364,7 @@ func TestBookLock_MoveBookFilesSameStripeDoesNotDeadlock(t *testing.T) {
 				}
 			}(id)
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := s.MoveBookFilesToBook([]string{f.ID}, src, primary); err != nil {
 				t.Error(err)
 				return
@@ -374,7 +372,7 @@ func TestBookLock_MoveBookFilesSameStripeDoesNotDeadlock(t *testing.T) {
 			if err := s.FlagMetadataHashDuplicate(primary, src); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 		wg.Wait()
 	})
 

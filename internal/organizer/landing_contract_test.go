@@ -1,7 +1,7 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-10-04
+// last-edited: 2026-10-20
 
 package organizer
 
@@ -301,12 +301,10 @@ func TestRenameFiles_TwoWritersOneTarget_NeitherFileIsLost(t *testing.T) {
 		results := make([]*RenameFilesResult, 2)
 		errs := make([]error, 2)
 		for i, src := range []string{srcA, srcB} {
-			done.Add(1)
-			go func() {
-				defer done.Done()
+			done.Go(func() {
 				start.Wait()
 				results[i], errs[i] = RenameFiles([]FileRenameEntry{{SegmentID: "s", SourcePath: src, TargetPath: dst}}, nil)
-			}()
+			})
 		}
 		start.Done()
 		done.Wait()
@@ -519,12 +517,10 @@ func TestReOrganizeInPlace_TwoBooksSameTarget_NeitherIsDestroyed(t *testing.T) {
 		paths := make([]string, 2)
 		errs := make([]error, 2)
 		for i, b := range []*database.Book{bookA, bookB} {
-			done.Add(1)
-			go func() {
-				defer done.Done()
+			done.Go(func() {
 				start.Wait()
 				paths[i], errs[i] = svc.ReOrganizeInPlace(b, &noopLogger{})
-			}()
+			})
 		}
 		start.Done()
 		done.Wait()

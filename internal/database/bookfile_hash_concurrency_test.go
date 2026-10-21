@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_hash_concurrency_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2f7a9d14-6b3e-4c85-a0d9-8e1c5b7f3a26
-// last-edited: 2026-09-14
+// last-edited: 2026-10-20
 
 package database
 
@@ -74,12 +74,10 @@ func TestUpdateBookFileHashes_ConcurrentFieldPatchIsNotReverted(t *testing.T) {
 	finished := make(chan struct{})
 	skip := true
 	updateBookFileHashesReadHook = func() {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer close(finished)
 			_, _, patchErr = s.PatchBookFileFields(book.ID, f.ID, BookFileFieldPatch{SkipScan: &skip})
-		}()
+		})
 		select {
 		case <-finished:
 		case <-time.After(300 * time.Millisecond):

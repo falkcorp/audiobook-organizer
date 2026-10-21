@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_name_index_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f51fb8d5-ac26-4268-85ee-c4bdb523de0b
-// last-edited: 2026-09-12
+// last-edited: 2026-10-20
 
 package database
 
@@ -382,16 +382,14 @@ func TestNameIndex_ConcurrentCreateSeriesMintsOneRow(t *testing.T) {
 	var start, wg sync.WaitGroup
 	start.Add(1)
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			start.Wait()
 			s, err := p.CreateSeries("One Series Only", &author.ID)
 			errs[i] = err
 			if s != nil {
 				ids[i] = s.ID
 			}
-		}()
+		})
 	}
 	start.Done()
 	wg.Wait()
@@ -414,14 +412,12 @@ func TestNameIndex_ConcurrentCreateAuthorAliasAcceptsOne(t *testing.T) {
 	var start, wg sync.WaitGroup
 	start.Add(1)
 	for range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			start.Wait()
 			if _, err := p.CreateAuthorAlias(author.ID, "One Alias Only", "pen_name"); err == nil {
 				ok.Add(1)
 			}
-		}()
+		})
 	}
 	start.Done()
 	wg.Wait()

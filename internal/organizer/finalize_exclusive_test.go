@@ -1,7 +1,7 @@
 // file: internal/organizer/finalize_exclusive_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8b2e4f61-9d3a-4c07-b5e8-2f6a1c9d7e43
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package organizer
 
@@ -148,16 +148,14 @@ func TestOrganizeBookDirectory_ConcurrentSameTarget_NeverRecordsTheOtherBooksByt
 		var start, done sync.WaitGroup
 		start.Add(1)
 		for i := range 2 {
-			done.Add(1)
-			go func() {
-				defer done.Done()
+			done.Go(func() {
 				org := NewOrganizer(cfg)
 				book := &database.Book{ID: "book-" + string(rune('a'+i)), Title: "Same Title", Format: "m4b",
 					Author: &database.Author{Name: "Same Author"}}
 				start.Wait()
 				_, pm, err := organizeDirTriple(org, book, segsFor(srcs[i]))
 				results[i] = result{pm, err}
-			}()
+			})
 		}
 		start.Done()
 		done.Wait()
@@ -219,16 +217,14 @@ func TestOrganizeBookDirectory_ConcurrentSameTargetDirectory_NeverShared(t *test
 		var start, done sync.WaitGroup
 		start.Add(1)
 		for i := range 2 {
-			done.Add(1)
-			go func() {
-				defer done.Done()
+			done.Go(func() {
 				org := NewOrganizer(cfg)
 				book := &database.Book{ID: "book-" + string(rune('a'+i)), Title: "Same Title", Format: "m4b",
 					Author: &database.Author{Name: "Same Author"}}
 				start.Wait()
 				dir, pm, err := organizeDirTriple(org, book, segsFor(srcs[i]...))
 				results[i] = result{dir, pm, err}
-			}()
+			})
 		}
 		start.Done()
 		done.Wait()

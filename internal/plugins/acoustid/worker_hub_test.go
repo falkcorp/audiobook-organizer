@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
 // last-edited: 2026-10-20
 
@@ -500,25 +500,21 @@ func TestWorkerHub_ConcurrentLeaseResultsSweepAndServerLane(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	// Server lane: walks the list in order, like RunItems.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := range h.items {
 			if h.hub.claimServer(i) {
 				serverDone.Add(1)
 				h.hub.serverDone(i)
 			}
 		}
-	}()
+	})
 	// Clock pusher: expires some leases mid-flight.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 20 {
 			h.clock.advance(workerapi.LeaseTTL / 4)
 			time.Sleep(time.Millisecond)
 		}
-	}()
+	})
 	// Workers: lease, post some results, time some out, release the rest.
 	for w := range 4 {
 		wg.Add(1)
@@ -589,9 +585,7 @@ func TestWindowBackfill_RemoteWorkerSharesTheQueue(t *testing.T) {
 	defer cancel()
 	var wg sync.WaitGroup
 	var remoteAccepted atomic.Int64
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		h := &hubEnv{wbEnv: e, hub: hub, clock: clock}
 		abandoned := false
 		for ctx.Err() == nil {
@@ -622,7 +616,7 @@ func TestWindowBackfill_RemoteWorkerSharesTheQueue(t *testing.T) {
 				}
 			}
 		}
-	}()
+	})
 	res, err := e.run(ctx, nil, WindowBackfillParams{Live: true, Concurrency: 1})
 	cancel()
 	wg.Wait()

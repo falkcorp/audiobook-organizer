@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_lock_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 511d8e1c-2f2f-49f7-a5f0-1e48bce72f0f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 // A1#10: applyBookMergeReroute used to copy the losers' iTunes stats onto the
 // keep book itself -- GetBookByID + full-row UpdateBook, outside
@@ -194,12 +194,10 @@ func TestApplyBookMergeReroute_ConcurrentMergesShareLoser(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i, k := range keepers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			_, errs[i] = applyBookMergeReroute(ms, "", k, []string{loserID})
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

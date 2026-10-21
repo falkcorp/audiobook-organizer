@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/user_state_deadlock_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 0630076b-d80b-4cf5-b741-2fcc6a0bf393
 // last-edited: 2026-10-20
 
@@ -168,16 +168,14 @@ func TestUserStateLock_ProgressAllWritersNoDeadlock(t *testing.T) {
 	}
 	errs := make(chan error, 16*rounds)
 	run := func(name string, f func(i int) error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range rounds {
 				if err := f(i); err != nil {
 					errs <- fmt.Errorf("%s: %w", name, err)
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	svc := merge.NewService(store)

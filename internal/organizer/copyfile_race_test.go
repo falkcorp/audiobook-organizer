@@ -1,7 +1,7 @@
 // file: internal/organizer/copyfile_race_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f9c2a7e-6b41-4d58-9e02-7c1a5d8f4b36
-// last-edited: 2026-09-09
+// last-edited: 2026-10-20
 
 package organizer
 
@@ -51,12 +51,10 @@ func TestCopyFile_ConcurrentWritersNeverShareATemp(t *testing.T) {
 		var done sync.WaitGroup
 		errs := make([]error, 2)
 		for i, src := range []string{srcA, srcB} {
-			done.Add(1)
-			go func() {
-				defer done.Done()
+			done.Go(func() {
 				start.Wait()
 				errs[i] = o.copyFile(src, dst)
-			}()
+			})
 		}
 		start.Done()
 		done.Wait()
@@ -198,12 +196,10 @@ func TestCopyFile_PinnedNonce_NoTwoWritersHoldTheTempAtOnce(t *testing.T) {
 		start.Add(1)
 		errs := make([]error, 2)
 		for i, src := range []string{srcA, srcB} {
-			done.Add(1)
-			go func() {
-				defer done.Done()
+			done.Go(func() {
 				start.Wait()
 				errs[i] = o.copyFile(src, dst)
-			}()
+			})
 		}
 		start.Done()
 		done.Wait()

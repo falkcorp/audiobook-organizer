@@ -1,7 +1,7 @@
 // file: internal/deluge/client_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0b8c9d7e-1f2a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 package deluge
 
@@ -632,12 +632,10 @@ func TestCall_ConcurrentExpiredSessionLogsInOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := c.ListTorrentDetails([]string{hashA})
 			errs <- err
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

@@ -1,7 +1,7 @@
 // file: internal/database/ulid_order_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 31364789-bcf5-4d20-bf45-120283862710
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -40,9 +40,7 @@ func TestNewULID_ConcurrentCallersStayOrderedAndUnique(t *testing.T) {
 	out := make([][]string, workers)
 	var wg sync.WaitGroup
 	for w := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			ids := make([]string, 0, perWorker)
 			for range perWorker {
 				id, err := newULID()
@@ -53,7 +51,7 @@ func TestNewULID_ConcurrentCallersStayOrderedAndUnique(t *testing.T) {
 				ids = append(ids, id)
 			}
 			out[w] = ids
-		}()
+		})
 	}
 	wg.Wait()
 	seen := make(map[string]struct{}, workers*perWorker)

@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package aiscan
 
@@ -575,11 +575,9 @@ func TestBatchScanCollectedOnceAcrossRestart(t *testing.T) {
 	acct.setAllStatus("completed")
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			pm2.PollBatchPhases(context.Background())
-		}()
+		})
 	}
 	wg.Wait()
 	require.NoError(t, pollUntilDone(t, pm2, run))

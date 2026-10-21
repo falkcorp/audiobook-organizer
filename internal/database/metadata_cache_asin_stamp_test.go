@@ -1,5 +1,5 @@
 // file: internal/database/metadata_cache_asin_stamp_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9c3f1a7e-52d8-4b6a-8e0f-d41b7c2a9e53
 // last-edited: 2026-10-20
 
@@ -136,13 +136,11 @@ func TestUpdateBook_ASINStampDoesNotClobberAConcurrentFetch(t *testing.T) {
 		if op != "update" || id != b.ID {
 			return
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer close(putDone)
 			_ = s.PutMetadataCache(&MetadataCandidateCache{BookID: b.ID, FetchedAt: time.Now(),
 				Candidates: []json.RawMessage{fresh, freshTwo}, SourceHash: "h2", FetchedForASIN: "B00RACENEW"})
-		}()
+		})
 		// Give an unlocked Put every chance to land before the commit.
 		select {
 		case <-putDone:

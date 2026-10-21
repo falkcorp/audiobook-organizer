@@ -1,5 +1,5 @@
 // file: internal/server/library_list_warmer_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5b0c8f4e-2d7a-4c1e-9a63-7e1f0b3d8a52
 // last-edited: 2026-10-20
 
@@ -491,11 +491,9 @@ func TestEntityWarmersWaitForMemdb(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for _, warm := range []func(){server.warmAuthorsCache, server.warmSeriesCache} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			warm()
-		}()
+		})
 	}
 
 	// Both warmers must have reached the wait, and stay parked there.

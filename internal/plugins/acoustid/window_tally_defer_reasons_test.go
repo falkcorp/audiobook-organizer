@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_tally_defer_reasons_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9b3f27d4-61ac-4e08-ae53-1c6f0a4d72be
 // last-edited: 2026-10-20
 
@@ -71,21 +71,17 @@ func TestWindowTallySummary_ConcurrentWithDeferItem(t *testing.T) {
 	var tally windowTally
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 200 {
 				tally.deferItem("not_under_libroot")
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 200 {
 			_ = tally.summary()
 		}
-	}()
+	})
 	wg.Wait()
 
 	if got := tally.summary(); !strings.Contains(got, "not_under_libroot=800") {

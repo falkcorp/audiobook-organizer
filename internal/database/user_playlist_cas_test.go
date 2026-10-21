@@ -1,7 +1,7 @@
 // file: internal/database/user_playlist_cas_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ea68480d-5643-4659-be0a-53f661c7cd00
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -55,25 +55,21 @@ func TestUpdateUserPlaylistWithRetry_ConcurrentEditsCompose(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, adders+1)
 	for i := range adders {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := UpdateUserPlaylistWithRetry(store, pl.ID, func(p *UserPlaylist) error {
 				p.BookIDs = append(p.BookIDs, fmt.Sprintf("book-%02d", i))
 				return nil
 			})
 			errs <- err
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, err := UpdateUserPlaylistWithRetry(store, pl.ID, func(p *UserPlaylist) error {
 			p.Name = "Race renamed"
 			return nil
 		})
 		errs <- err
-	}()
+	})
 	wg.Wait()
 	close(errs)
 	for err := range errs {

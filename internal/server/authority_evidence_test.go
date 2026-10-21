@@ -1,7 +1,7 @@
 // file: internal/server/authority_evidence_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4492804b-1186-4576-8833-2d1d7a405363
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package server
 
@@ -251,12 +251,10 @@ func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
 	// delayed runs each load after d, tracked by loads.
 	delayed := func(d time.Duration) func(string, func()) {
 		return func(_ string, fn func()) {
-			loads.Add(1)
-			go func() {
-				defer loads.Done()
+			loads.Go(func() {
 				time.Sleep(d)
 				fn()
-			}()
+			})
 		}
 	}
 	on := func() bool { return true }
