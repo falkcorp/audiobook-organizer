@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.1 -->
+<!-- version: 10.78.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-20 -->
+<!-- last-edited: 2026-10-21 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,8 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] Optional: enable Cloudflare `strict_service_token_auth` after verifying AudioBooth streaming and the Watch app with it on. With it off, a service-token request is handed a `CF_Authorization` cookie, which is what poisoned Safari's cookie jar (recovered server-side since 2026-10-20, see `internal/server/middleware/cfbounce.go`). Turning it on would stop the cookie being issued, but the Access application covering `/auth/openid/browser` must then also accept the app's Service Auth policy.
 
 - [ ] **ADMIN-COMPROMISED-ACCOUNT-RESET** Admin "compromised account" reset
       should invalidate the old password. Owner decision. Today the admin
