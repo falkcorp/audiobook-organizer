@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.10.0
+// version: 2.10.1
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-20
 
@@ -230,10 +230,10 @@ const (
 	// OIDCBrowserPath is hop 2, opened in the system browser.
 	OIDCBrowserPath = "/auth/openid/browser"
 
-	// oidcReauthParam counts hop 2's service-token recovery bounces: absent or 0 on
-	// the first load, 1 after the first bounce, 2 after the second (see the file
-	// comment). Any other non-empty value is treated as the last stage so a junk
-	// value can only deny, never loop.
+	// oidcReauthParam counts hop 2's service-token recovery bounces: absent on the
+	// first load, 1 after the first bounce, 2 after the second (see the file
+	// comment). Any other non-empty value, "0" included, is treated as the last
+	// stage and denies, so a junk value can never loop.
 	oidcReauthParam = "reauth"
 
 	// oidcMaxReauth is the stage at which a still-service-token load is denied.
@@ -779,12 +779,13 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		if info := h.resolver.ServiceTokenBouncer().InspectBrowserHop(c); info.Kind == servermiddleware.CFNavServiceToken {
 			if origin, ok := h.oidcOrigin(c); ok {
 				// Stage 0 expires only a cookie that is verifiably the service-token
-				// session; stage 1 means that cookie (or one we could not classify)
-				// is all that is left, so it goes unconditionally.
-				expire := info.CookiePoisoned || reauthStage >= 1
+				// session. Stage 1 means that cookie (or one we could not classify)
+				// is all that is left, so it goes too -- unless it verifies as a
+				// PERSON, which is never deleted.
+				expire := info.CookiePoisoned || (reauthStage >= 1 && !info.CookieIsPerson)
 				if reauthStage >= 1 {
 					oidcLog.Warn("openid browser hop reauth load still carried a service-token assertion: service_token=%s cf_cookies=%s caller=%s",
-						logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)), cfCookies,
+						servermiddleware.CFLogName(servermiddleware.ABSServiceToken(c)), cfCookies,
 						logger.SanitizeLogValue(pending.CallerKey))
 				}
 				// Sec-Fetch values are logged because they are not required here
@@ -794,7 +795,6 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 					reauthStage+1, expire, servermiddleware.CFLogName(info.CommonName),
 					servermiddleware.CFLogHeader(info.SecFetchMode), servermiddleware.CFLogHeader(info.SecFetchDest),
 					logger.SanitizeLogValue(pending.CallerKey))
-				oidcBrowserHeaders(c)
 				servermiddleware.WriteCFBouncePage(c, oidcBrowserURL(origin, reqID, reauthStage+1), expire)
 				return
 			}
@@ -806,7 +806,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		// (the owner's fix is Cloudflare's own logout page), then deny below.
 		oidcLog.Warn("openid browser hop still carried a service-token assertion after recovery: service_token=%s cf_cookies=%s reauth=%d caller=%s; "+
 			"the browser's CF_Authorization session is a service token. Opening /cdn-cgi/access/logout on this host clears it",
-			logger.SanitizeLogValue(servermiddleware.ABSServiceToken(c)), cfCookies, reauthStage,
+			servermiddleware.CFLogName(servermiddleware.ABSServiceToken(c)), cfCookies, reauthStage,
 			logger.SanitizeLogValue(pending.CallerKey))
 	}
 
