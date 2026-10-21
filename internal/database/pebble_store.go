@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.231.0
+// version: 1.231.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package database
 
@@ -5833,6 +5833,39 @@ func (p *PebbleStore) DeleteRawBatch(keys []string) error {
 		}
 	}
 	if err := p.commitRawWrites(keys, make([][]byte, len(keys))); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		p.noteRawMetadataCacheWrite(k)
+	}
+	return nil
+}
+
+// ApplyRawBatch implements RawKVStore.ApplyRawBatch: one pebble batch, one
+// synced commit, through the same commitRawWrites path as SetRaw and
+// DeleteRawBatch (so metadata_cache: rows keep the identification index
+// current).
+func (p *PebbleStore) ApplyRawBatch(writes []RawWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	keys := make([]string, len(writes))
+	values := make([][]byte, len(writes))
+	// Refuse the whole batch before staging anything.
+	for i, w := range writes {
+		if err := rejectOpv2OpRawKey(w.Key); err != nil {
+			return err
+		}
+		keys[i] = w.Key
+		if w.Delete {
+			continue // nil value means delete to commitRawWrites
+		}
+		values[i] = w.Value
+		if values[i] == nil {
+			values[i] = []byte{} // a set of nothing is still a set
+		}
+	}
+	if err := p.commitRawWrites(keys, values); err != nil {
 		return err
 	}
 	for _, k := range keys {

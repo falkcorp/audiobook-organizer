@@ -5338,6 +5338,57 @@ func (_c *MockStore_AppendOpLogsV2_Call) RunAndReturn(run func(rows []database.O
 	return _c
 }
 
+// ApplyRawBatch provides a mock function for the type MockStore
+func (_mock *MockStore) ApplyRawBatch(writes []database.RawWrite) error {
+	ret := _mock.Called(writes)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ApplyRawBatch")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func([]database.RawWrite) error); ok {
+		r0 = returnFunc(writes)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_ApplyRawBatch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyRawBatch'
+type MockStore_ApplyRawBatch_Call struct {
+	*mock.Call
+}
+
+// ApplyRawBatch is a helper method to define mock.On call
+//   - writes []database.RawWrite
+func (_e *MockStore_Expecter) ApplyRawBatch(writes any) *MockStore_ApplyRawBatch_Call {
+	return &MockStore_ApplyRawBatch_Call{Call: _e.mock.On("ApplyRawBatch", writes)}
+}
+
+func (_c *MockStore_ApplyRawBatch_Call) Run(run func(writes []database.RawWrite)) *MockStore_ApplyRawBatch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []database.RawWrite
+		if args[0] != nil {
+			arg0 = args[0].([]database.RawWrite)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ApplyRawBatch_Call) Return(err error) *MockStore_ApplyRawBatch_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_ApplyRawBatch_Call) RunAndReturn(run func(writes []database.RawWrite) error) *MockStore_ApplyRawBatch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BatchCreateBookFiles provides a mock function for the type MockStore
 func (_mock *MockStore) BatchCreateBookFiles(files []*database.BookFile) error {
 	ret := _mock.Called(files)
