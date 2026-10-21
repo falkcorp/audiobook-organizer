@@ -1,5 +1,5 @@
 // file: internal/decisions/vetoes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 47c2d9e5-1f80-4a36-b3d7-90e6a5c8142f
 // last-edited: 2026-10-21
 
@@ -23,9 +23,9 @@ func TestVetoes_SubjectsPairsAndFamilies(t *testing.T) {
 	forceEdge(t, kv, testType, "b8", "b9", FamilyAny)
 
 	v := mustLoad(t, s, nil)
-	require.True(t, v.SubjectRejected(testKind, rec.SubjectKey, ""))
-	require.False(t, v.SubjectRejected("dedup:book-candidate", rec.SubjectKey, ""), "kind scoped")
-	require.False(t, v.SubjectRejected(testKind, subjectOf(labelInput(DecisionApplied, "b7", "b8")), ""), "applied is no veto")
+	require.True(t, snapRejected(t, v, testKind, rec.SubjectKey, ""))
+	require.False(t, snapRejected(t, v, "dedup:book-candidate", rec.SubjectKey, ""), "kind scoped")
+	require.False(t, snapRejected(t, v, testKind, subjectOf(t, labelInput(DecisionApplied, "b7", "b8")), ""), "applied is no veto")
 
 	for _, p := range [][2]string{{"b1", "b2"}, {"b2", "b1"}, {"b1", "b3"}, {"b2", "b3"}} {
 		require.True(t, snapVetoed(t, v, testType, p[0], p[1], FamilySameWork), "%v", p)
@@ -63,7 +63,7 @@ func TestVetoes_UnrejectedAreNotLoaded(t *testing.T) {
 	rec := mustRecord(t, s, humanReject("b1", "b2"))
 	mustRecord(t, s, labelInput(DecisionUnreject, "b1", "b2"))
 	v := mustLoad(t, s, nil)
-	require.False(t, v.SubjectRejected(testKind, rec.SubjectKey, ""))
+	require.False(t, snapRejected(t, v, testKind, rec.SubjectKey, ""))
 	require.False(t, snapVetoed(t, v, testType, "b1", "b2", FamilySameWork))
 }
 
@@ -89,13 +89,13 @@ func TestVetoes_SnapshotAgreesWithLookupOnMaterialHash(t *testing.T) {
 		for _, now := range []string{"", h1, h2} {
 			st, err := s.Lookup(rec.OpKind, rec.SubjectKey, now)
 			require.NoError(t, err)
-			require.Equal(t, st.Blocked, v.SubjectRejected(rec.OpKind, rec.SubjectKey, now),
+			require.Equal(t, st.Blocked, snapRejected(t, v, rec.OpKind, rec.SubjectKey, now),
 				"scope %q, material hash now %q: snapshot and Lookup disagree", rec.Scope, now)
 		}
 	}
-	require.False(t, v.SubjectRejected(withHash.OpKind, withHash.SubjectKey, h2), "changed data reopens a hashed reject")
-	require.True(t, v.SubjectRejected(withHash.OpKind, withHash.SubjectKey, h1))
-	require.True(t, v.SubjectRejected(sticky.OpKind, sticky.SubjectKey, h2), "a sticky reject is never reopened by data")
+	require.False(t, snapRejected(t, v, withHash.OpKind, withHash.SubjectKey, h2), "changed data is a new suggestion")
+	require.True(t, snapRejected(t, v, withHash.OpKind, withHash.SubjectKey, h1))
+	require.True(t, snapRejected(t, v, sticky.OpKind, sticky.SubjectKey, h2), "a sticky reject is never reopened by data")
 }
 
 // A group that grew by one member is still vetoed for the old pairs; this is
@@ -186,7 +186,7 @@ func TestVetoes_LoadFailsClosedWhenTheStoreCannotBeRead(t *testing.T) {
 	kv := newKV(t)
 	good := New(kv)
 	mustRecord(t, good, humanReject("b1", "b2"))
-	for _, prefix := range []string{prefixVerdict, prefixEdge, prefixMember} {
+	for _, prefix := range []string{prefixActive, prefixEdge, prefixMember} {
 		s := New(&failingKV{KV: kv, failScan: prefix})
 		v, err := s.Load(context.Background(), nil)
 		require.Error(t, err, prefix)
@@ -226,4 +226,4 @@ type errTombstones struct{ err error }
 
 func (e errTombstones) GetAuthorTombstone(int) (int, error) { return 0, e.err }
 
-var _ KV = (database.RawKVStore)(nil)
+var _ KV = (*database.PebbleStore)(nil)

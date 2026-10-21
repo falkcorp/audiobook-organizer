@@ -1,5 +1,5 @@
 // file: internal/decisions/fingerprint.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e17c9a4-2b68-4f03-8d71-a4c0e93b6f28
 // last-edited: 2026-10-21
 
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"sort"
 )
 
@@ -50,7 +51,32 @@ func (h *hasher) sum() string {
 // ids (order and duplicates do not matter) and an op-defined scope that
 // separates different proposals about the same entities (a metadata source and
 // candidate, a repairs fixer id and row id). It is 64 lowercase hex characters.
-func SubjectKey(opKind, entityType string, entityIDs []string, scope string) string {
+//
+// Ids are canonicalised first (see CanonicalID): a ULID id is upper-cased, and
+// an id with leading or trailing whitespace, a control character or no text is
+// refused with an error wrapping ErrInvalid, so a caller can never fingerprint
+// a spelling that misses the stored veto. The hash of canonical input is
+// byte-for-byte the frozen scheme (see subjectHash).
+func SubjectKey(opKind, entityType string, entityIDs []string, scope string) (string, error) {
+	for _, c := range []struct{ field, v string }{{"op_kind", opKind}, {"entity_type", entityType}} {
+		if err := checkComponent(c.field, c.v); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+	}
+	ids, err := canonicalIDs(entityIDs)
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", invalid("entity_ids is empty")
+	}
+	return subjectHash(opKind, entityType, ids, scope), nil
+}
+
+// subjectHash is the frozen byte encoding behind SubjectKey. It does no
+// validation and takes ids as given (it only sorts and de-duplicates them), so
+// the golden vectors and the collision tests can pin the encoding itself.
+func subjectHash(opKind, entityType string, entityIDs []string, scope string) string {
 	h := newHasher(subjectDomain)
 	h.str(opKind)
 	h.str(entityType)

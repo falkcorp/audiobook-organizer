@@ -1,5 +1,5 @@
 // file: internal/decisions/record.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91d4e7b2-6a03-4c58-b1f9-0e5d28a7c463
 // last-edited: 2026-10-21
 
@@ -13,15 +13,29 @@
 // nothing else: no book, author, series or book_file row. Decisions are
 // durable and are never pruned.
 //
-// Owner rules this store encodes (2026-10-20):
-//   - A reject blocks only its own proposal kind. The verdict is keyed by
-//     op_kind, and a pair edge carries an op family (FamilySameWork, ...)
-//     that PairVetoed matches exactly. FamilyAny, which only the "never
-//     merge" override (a later PR) uses, matches every family.
+// Owner rules this store encodes (2026-10-20, refined 2026-10-21):
+//   - A reject blocks only its own QUESTION FAMILY. The verdict is keyed by
+//     op_kind (that exact proposal), and a pair edge carries an op family
+//     (FamilySameWork, ...) that PairVetoed matches exactly. So a reject made
+//     in repairs:dedup.split-books, family same_work, also blocks
+//     repairs:fragment-consolidation and repairs:folder-books from proposing
+//     the same pair (they ask the same question), and does NOT block a
+//     same_copy (duplicate-copies, version-twin) proposal of that pair.
+//     FamilyAny, which only the "never merge" override (a later PR) uses,
+//     matches every family.
+//   - A reopen allows NEW suggestions only. When the data behind a
+//     field-rewrite proposal changes, a reopened record lets the changed
+//     proposal be made again, but the originally rejected value stays blocked
+//     for good: if the data flips back to it, it is rejected again. The
+//     verdict keeps every rejected material hash for that. Only an unreject
+//     (a human, explicitly) lifts a block.
 //   - Approve, applied, auto_applied, undone and skip are labels. None of
-//     them blocks anything. An undo does not veto: the owner may have undone
-//     it for an unrelated reason. Skip is a weak signal.
-//   - There is no approve-but-do-not-apply decision.
+//     them blocks anything and none lifts a block. "approve" records that the
+//     owner accepted the proposal; carrying it out is a separate applied or
+//     auto_applied record, and there is no approve-but-do-not-apply decision.
+//     An undo does not veto: the owner may have undone it for an unrelated
+//     reason. Skip is a weak signal.
+//   - Only a human replaces or lifts a human's reject.
 package decisions
 
 import (
@@ -43,6 +57,12 @@ const (
 	// MaxEdgeSet is the largest rejected set stored as pairwise edges
 	// (n*(n-1)/2 rows). A larger set is stored as one membership row per
 	// member (n rows) and vetoes exactly the same pairs.
+	//
+	// FROZEN: never edit this in place. Each reject record persists the shape
+	// it was written in (Record.IndexShape) and its undo deletes by that shape,
+	// so a changed value would not strand old rows, but readers and the docs
+	// quote 50 and a retuned limit belongs in a new, deliberate PR with a
+	// migration plan, not a drive-by edit.
 	MaxEdgeSet = 50
 	// MaxSnapshotPaths caps the file paths kept per entity snapshot.
 	MaxSnapshotPaths = 50
@@ -59,7 +79,10 @@ const (
 	DecisionUnreject    Decision = "unreject"
 	DecisionAutoApplied Decision = "auto_applied"
 	// DecisionReopened records that changed data re-opened a rejected
-	// proposal (field-rewrite ops only; see MaterialHash). It lifts the veto.
+	// proposal so NEW suggestions may be made (field-rewrite ops only: the
+	// reject and the reopen both carry a MaterialHash and the two differ). It
+	// does NOT lift the veto on the rejected value: that stays blocked, and so
+	// do its pair edges. Only an unreject lifts it.
 	DecisionReopened Decision = "reopened"
 	// DecisionSkip is the weak "skip for now" signal. It never vetoes.
 	DecisionSkip Decision = "skip"
@@ -86,15 +109,44 @@ const (
 	FamilySameCopy   = "same_copy"   // dedup / duplicate-copies / version-twin
 	FamilySamePerson = "same_person" // authors
 	FamilySameSeries = "same_series"
-	// FamilyAny, as an edge's family, vetoes the pair for every family. Only
-	// the owner's "never merge" override uses it, and that write path is a
-	// later PR: Record refuses it, so an ordinary reject can never block every
-	// kind. The lookups already honour it.
+	// FamilyAny has two meanings, by direction.
+	//
+	// STORED on an edge, it vetoes the pair for every family. Only the owner's
+	// "never merge" override uses it, and that write path is a later PR:
+	// Record refuses it, so an ordinary reject can never block every kind. The
+	// lookups already honour it.
+	//
+	// QUERIED (PairVetoed's family argument), it asks "is this pair vetoed in
+	// ANY family?", for a screen that shows whether a pair carries a reject at
+	// all. A producer deciding whether to propose a pair must ask its own
+	// family, never FamilyAny.
 	FamilyAny = "*"
 )
 
-// Families are the op families a reject may carry.
+// Families are the op families a reject may carry, and the only families (plus
+// FamilyAny) a PairVetoed query accepts: an unknown one is an error, never
+// "not vetoed" (a typo would otherwise silently fail open).
 var Families = []string{FamilySameWork, FamilySameCopy, FamilySamePerson, FamilySameSeries}
+
+// Index shapes: how a reject of two or more entities stored its veto rows.
+const (
+	// IndexEdges: one decision:pe: row per pair.
+	IndexEdges = "edges"
+	// IndexMembers: one decision:mb: row per member.
+	IndexMembers = "members"
+)
+
+// indexShapeFor is the shape a reject of n entities is written in.
+func indexShapeFor(n int) string {
+	switch {
+	case n < 2:
+		return ""
+	case n <= MaxEdgeSet:
+		return IndexEdges
+	default:
+		return IndexMembers
+	}
+}
 
 // ErrInvalid wraps every validation failure, so a handler can answer 400 for
 // it and 500 for anything else.
@@ -179,6 +231,10 @@ type Record struct {
 	Decision Decision `json:"decision"`
 	Source   Source   `json:"source"`
 	Family   string   `json:"family,omitempty"`
+	// IndexShape is how a reject of two or more entities stored its veto rows
+	// (IndexEdges or IndexMembers). It is persisted so the undo deletes exactly
+	// the rows that were written, whatever MaxEdgeSet is by then.
+	IndexShape string `json:"index_shape,omitempty"`
 
 	ReasonCode  string    `json:"reason_code,omitempty"`
 	ReasonText  string    `json:"reason_text,omitempty"`
@@ -201,8 +257,9 @@ const (
 	StateActive VerdictState = "active"
 	// StateUnrejected: the owner lifted the reject. Blocks nothing.
 	StateUnrejected VerdictState = "unrejected"
-	// StateReopened: the data changed materially after the reject. Blocks
-	// nothing, and is never auto-applied.
+	// StateReopened: the data changed materially after the reject, so new
+	// suggestions are allowed; never auto-applied. The rejected value is STILL
+	// blocked (RejectedHashes), and so are the reject's pair edges.
 	StateReopened VerdictState = "reopened"
 )
 
@@ -214,14 +271,39 @@ type Verdict struct {
 	// LatestID is the newest record of any decision on the subject.
 	LatestID string `json:"latest_id"`
 	// RejectID is the reject record whose pair edges are live; "" unless
-	// State is active.
+	// State is active or reopened.
 	RejectID string `json:"reject_id,omitempty"`
-	// MaterialHash is the rejected proposal's material hash.
-	MaterialHash string `json:"material_hash,omitempty"`
+	// RejectedHashes are the material hashes still blocked, sorted. Empty
+	// while the verdict is live means a sticky reject: it blocks the proposal
+	// whatever its data. A reject with a hash adds to the set, a reopen never
+	// removes from it, an unreject clears it.
+	RejectedHashes []string `json:"rejected_hashes,omitempty"`
 }
 
-// Blocks reports whether the verdict suppresses the proposal.
-func (v *Verdict) Blocks() bool { return v != nil && v.State == StateActive }
+// Live reports whether a reject is in force: active, or reopened (a reopen
+// leaves the rejected value blocked).
+func (v *Verdict) Live() bool {
+	return v != nil && (v.State == StateActive || v.State == StateReopened)
+}
+
+// BlocksMaterial reports whether the verdict suppresses a proposal whose
+// current material hash is materialHash ("" for a sticky op, whose data
+// cannot be told apart). It blocks when a reject is live and either the
+// reject is sticky, the caller gave no hash, or the hash is one that was
+// rejected. A hash that was never rejected is a new suggestion.
+func (v *Verdict) BlocksMaterial(materialHash string) bool {
+	return v.Live() && blocksMaterial(v.RejectedHashes, materialHash)
+}
+
+func blocksMaterial(rejected []string, materialHash string) bool {
+	return len(rejected) == 0 || materialHash == "" || slices.Contains(rejected, materialHash)
+}
+
+// ActiveRow is the value of a decision:va: row: what Load needs to apply a
+// live reject without reading its verdict.
+type ActiveRow struct {
+	RejectedHashes []string `json:"rejected_hashes,omitempty"`
+}
 
 func (d Decision) valid() bool { return slices.Contains(validDecisions, d) }
 
@@ -235,17 +317,15 @@ func (in *Input) validate() ([]string, error) {
 		{"op_kind", in.OpKind}, {"entity_type", in.EntityType},
 	} {
 		if err := checkComponent(c.field, c.v); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 	}
-	ids := sortedUnique(in.EntityIDs)
+	ids, err := canonicalIDs(in.EntityIDs)
+	if err != nil {
+		return nil, err
+	}
 	if len(ids) == 0 {
 		return nil, invalid("entity_ids is empty")
-	}
-	for _, id := range ids {
-		if err := checkComponent("entity_id", id); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
-		}
 	}
 	if !in.Decision.valid() {
 		return nil, invalid("unknown decision %q", in.Decision)
@@ -255,6 +335,12 @@ func (in *Input) validate() ([]string, error) {
 	}
 	if in.Source == SourceHuman && strings.TrimSpace(in.ActorUserID) == "" {
 		return nil, invalid("a human decision must carry actor_user_id")
+	}
+	if in.Decision == DecisionUnreject && in.Source != SourceHuman {
+		return nil, invalid("only a human can unreject, got source %q", in.Source)
+	}
+	if in.Decision == DecisionReopened && in.MaterialHash == "" {
+		return nil, invalid("a reopen must carry the new material_hash")
 	}
 	if len(in.ReasonText) > MaxReasonTextLen {
 		return nil, invalid("reason_text is longer than %d characters", MaxReasonTextLen)

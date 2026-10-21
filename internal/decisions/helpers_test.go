@@ -1,5 +1,5 @@
 // file: internal/decisions/helpers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b5e03c18-7a64-4d29-8f10-c94a6e27d3b8
 // last-edited: 2026-10-21
 
@@ -84,8 +84,16 @@ func forceEdge(t testing.TB, kv KV, typ, a, b, family string) {
 	require.NoError(t, kv.ApplyRawBatch([]database.RawWrite{{Key: edgeKey(typ, lo, hi, family, "01FORCED0000000000000000AA")}}))
 }
 
-func subjectOf(in Input) string {
-	return SubjectKey(in.OpKind, in.EntityType, in.EntityIDs, in.Scope)
+func subjectOf(t testing.TB, in Input) string {
+	t.Helper()
+	return mustSubjectKey(t, in.OpKind, in.EntityType, in.EntityIDs, in.Scope)
+}
+
+func mustSubjectKey(t testing.TB, opKind, entityType string, ids []string, scope string) string {
+	t.Helper()
+	k, err := SubjectKey(opKind, entityType, ids, scope)
+	require.NoError(t, err)
+	return k
 }
 
 func ids(prefix string, n int) []string {
@@ -136,4 +144,33 @@ func (f *failingKV) ScanPrefixPage(prefix, after string, limit int) ([]database.
 		return nil, "", errors.New("injected scan failure")
 	}
 	return f.KV.ScanPrefixPage(prefix, after, limit)
+}
+
+// NewRawSnapshot hands Load a snapshot that fails the same scans, so the
+// fail-closed tests still bite now that Load reads through a snapshot.
+func (f *failingKV) NewRawSnapshot() (database.RawSnapshot, error) {
+	snap, err := f.KV.NewRawSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return &failingSnapshot{RawSnapshot: snap, failScan: f.failScan}, nil
+}
+
+type failingSnapshot struct {
+	database.RawSnapshot
+	failScan string
+}
+
+func (f *failingSnapshot) ScanPrefixPage(prefix, after string, limit int) ([]database.KVPair, string, error) {
+	if f.failScan != "" && strings.HasPrefix(prefix, f.failScan) {
+		return nil, "", errors.New("injected scan failure")
+	}
+	return f.RawSnapshot.ScanPrefixPage(prefix, after, limit)
+}
+
+func snapRejected(t testing.TB, v *Vetoes, opKind, subject, hash string) bool {
+	t.Helper()
+	got, err := v.SubjectRejected(opKind, subject, hash)
+	require.NoError(t, err)
+	return got
 }

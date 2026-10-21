@@ -1,5 +1,5 @@
 // file: internal/decisions/store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e91a7d04-3b58-4c62-a0f7-5d28c61b94e3
 // last-edited: 2026-10-21
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +25,7 @@ func TestRecord_RejectWritesLogVerdictAndEveryIndex(t *testing.T) {
 
 	require.Equal(t, SchemaVersion, rec.SchemaVersion)
 	require.Equal(t, []string{"b1", "b2", "b3"}, rec.EntityIDs, "ids are stored sorted")
-	require.Equal(t, subjectOf(in), rec.SubjectKey)
+	require.Equal(t, subjectOf(t, in), rec.SubjectKey)
 	require.Equal(t, FamilySameWork, rec.Family)
 	require.Equal(t, "u1", rec.ActorUserID)
 	require.False(t, rec.DecidedAt.IsZero())
@@ -34,6 +36,7 @@ func TestRecord_RejectWritesLogVerdictAndEveryIndex(t *testing.T) {
 
 	require.Equal(t, 1, countPrefix(t, kv, prefixRecord))
 	require.Equal(t, 1, countPrefix(t, kv, prefixVerdict))
+	require.Equal(t, 1, countPrefix(t, kv, prefixActive), "a live reject has one active-index row")
 	require.Equal(t, 3, countPrefix(t, kv, prefixEdge), "3 entities -> 3 pair edges")
 	require.Equal(t, 0, countPrefix(t, kv, prefixMember))
 	require.Equal(t, 3, countPrefix(t, kv, prefixEntity), "one history row per entity")
@@ -44,7 +47,7 @@ func TestRecord_RejectWritesLogVerdictAndEveryIndex(t *testing.T) {
 	require.Equal(t, StateActive, v.State)
 	require.Equal(t, rec.ID, v.LatestID)
 	require.Equal(t, rec.ID, v.RejectID)
-	require.True(t, v.Blocks())
+	require.True(t, v.Live())
 }
 
 func TestRecord_Validation(t *testing.T) {
@@ -65,6 +68,11 @@ func TestRecord_Validation(t *testing.T) {
 		"set reject no family":  mut(func(i *Input) { i.Family = "" }),
 		"typo family":           mut(func(i *Input) { i.Family = "same-work" }),
 		"never-merge family":    mut(func(i *Input) { i.Family = FamilyAny }),
+		"leading space id":      mut(func(i *Input) { i.EntityIDs = []string{" b1", "b2"} }),
+		"trailing space id":     mut(func(i *Input) { i.EntityIDs = []string{"b1", "b2\t"} }),
+		"unreject by auto":      mut(func(i *Input) { i.Decision, i.Source, i.ActorUserID = DecisionUnreject, SourceAuto, "" }),
+		"unreject by llm":       mut(func(i *Input) { i.Decision, i.Source, i.ActorUserID = DecisionUnreject, SourceLLM, "" }),
+		"reopen without hash":   mut(func(i *Input) { i.Decision, i.ReasonCode, i.MaterialHash = DecisionReopened, "", "" }),
 		"too many paths": mut(func(i *Input) {
 			i.Snapshot.Entities = []EntitySnapshot{{EntityType: "book", EntityID: "b1", Paths: ids("/p", MaxSnapshotPaths+1)}}
 		}),
@@ -100,7 +108,7 @@ func TestRecord_SupersedesChainAndHistory(t *testing.T) {
 	require.Len(t, hist, 3)
 	require.Equal(t, []string{r3.ID, r2.ID, r1.ID}, []string{hist[0].ID, hist[1].ID, hist[2].ID})
 
-	none, err := s.History(testKind, "no-such-subject")
+	none, err := s.History(testKind, strings.Repeat("0", 64))
 	require.NoError(t, err)
 	require.Empty(t, none)
 }
@@ -115,12 +123,13 @@ func TestRecord_UnrejectLiftsVetoKeepsTheRecord(t *testing.T) {
 
 	require.False(t, mustVetoed(t, s, testType, "b1", "b2", FamilySameWork))
 	require.Equal(t, 0, countPrefix(t, kv, prefixEdge))
+	require.Equal(t, 0, countPrefix(t, kv, prefixActive), "the unreject removed the active-index row")
 	require.Equal(t, 2, countPrefix(t, kv, prefixRecord), "the reject and the unreject both stay in the log")
 	v, err := s.Verdict(testKind, rec.SubjectKey)
 	require.NoError(t, err)
 	require.Equal(t, StateUnrejected, v.State)
 	require.Empty(t, v.RejectID)
-	require.False(t, v.Blocks())
+	require.False(t, v.Live())
 
 	// Reject again after the unreject: vetoed again, edges rebuilt.
 	mustRecord(t, s, humanReject("b1", "b2", "b3"))
@@ -132,7 +141,9 @@ func TestRecord_UnrejectNeedsAnActiveReject(t *testing.T) {
 	s, kv := newStore(t)
 	_, err := s.Record(labelInput(DecisionUnreject, "b1", "b2"))
 	require.ErrorIs(t, err, ErrNotRejected)
-	_, err = s.Record(labelInput(DecisionReopened, "b1", "b2"))
+	reopen := labelInput(DecisionReopened, "b1", "b2")
+	reopen.MaterialHash = "h"
+	_, err = s.Record(reopen)
 	require.ErrorIs(t, err, ErrNotRejected)
 
 	mustRecord(t, s, labelInput(DecisionApplied, "b1", "b2"))
@@ -181,11 +192,11 @@ func TestRecord_LabelsNeverVeto(t *testing.T) {
 		}
 		mustRecord(t, s, in)
 	}
-	sub := subjectOf(labelInput(DecisionSkip, "b1", "b2"))
+	sub := subjectOf(t, labelInput(DecisionSkip, "b1", "b2"))
 	v, err := s.Verdict(testKind, sub)
 	require.NoError(t, err)
 	require.Equal(t, StateNone, v.State)
-	require.False(t, v.Blocks())
+	require.False(t, v.Live())
 	require.False(t, mustVetoed(t, s, testType, "b1", "b2", FamilySameWork))
 	require.Equal(t, 0, countPrefix(t, kv, prefixEdge))
 	st, err := s.Lookup(testKind, sub, "")
@@ -215,7 +226,7 @@ func TestRecord_VetoIsScopedToItsFamily(t *testing.T) {
 
 	// What PR8's never-merge override will write: FamilyAny, directly.
 	forceEdge(t, kv, testType, "b8", "b9", FamilyAny)
-	for _, fam := range []string{FamilySameWork, FamilySameCopy, FamilySamePerson, FamilySameSeries, "anything_new"} {
+	for _, fam := range append(slices.Clone(Families), FamilyAny) {
 		require.True(t, mustVetoed(t, s, testType, "b8", "b9", fam), fam)
 		require.True(t, snapVetoed(t, mustLoad(t, s, nil), testType, "b9", "b8", fam), "snapshot: "+fam)
 	}
@@ -227,7 +238,7 @@ func TestRecord_SubjectsAreKindScoped(t *testing.T) {
 	rec := mustRecord(t, s, humanReject("b1", "b2"))
 	other := humanReject("b1", "b2")
 	other.OpKind, other.ReasonCode = "dedup:book-candidate", "different_books_same_title"
-	st, err := s.Lookup(other.OpKind, subjectOf(other), "")
+	st, err := s.Lookup(other.OpKind, subjectOf(t, other), "")
 	require.NoError(t, err)
 	require.False(t, st.Blocked, "a reject blocks only its own proposal kind")
 	st, err = s.Lookup(testKind, rec.SubjectKey, "")
@@ -268,16 +279,20 @@ func TestLookup_MaterialChangeReopens(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, st.Blocked)
 
-	// Recording the reopen persists it and lifts the veto.
+	// Recording the reopen persists it. It allows the new suggestion and leaves
+	// the rejected value blocked (see reopen_test.go).
 	re := in
-	re.Decision, re.ReasonCode, re.Source, re.ActorUserID = DecisionReopened, "", SourceAuto, ""
+	re.Decision, re.ReasonCode, re.Source, re.ActorUserID, re.MaterialHash = DecisionReopened, "", SourceAuto, "", h2
 	mustRecord(t, s, re)
 	st, err = s.Lookup(in.OpKind, rec.SubjectKey, h2)
 	require.NoError(t, err)
 	require.Equal(t, StateReopened, st.State)
 	require.False(t, st.Blocked)
+	st, err = s.Lookup(in.OpKind, rec.SubjectKey, h1)
+	require.NoError(t, err)
+	require.True(t, st.Blocked, "a persisted reopen does not lift the block on the rejected value")
 
-	none, err := s.Lookup(in.OpKind, "never-seen", h1)
+	none, err := s.Lookup(in.OpKind, strings.Repeat("0", 64), h1)
 	require.NoError(t, err)
 	require.Equal(t, Status{}, none)
 }

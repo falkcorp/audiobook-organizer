@@ -1,5 +1,5 @@
 // file: internal/decisions/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f7b3a91-d542-4e86-a1c3-78e9b60d2f15
 // last-edited: 2026-10-21
 
@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +34,10 @@ type KV interface {
 	// ApplyRawBatch must be atomic: a record, its verdict and its veto rows
 	// commit together or not at all.
 	ApplyRawBatch(writes []database.RawWrite) error
+	// NewRawSnapshot opens a point-in-time view: Load reads its several scans
+	// through one, so they agree with each other however many records commit
+	// meanwhile. database.RawSnapshotter, which *PebbleStore implements.
+	NewRawSnapshot() (database.RawSnapshot, error)
 }
 
 var (
@@ -40,6 +46,13 @@ var (
 	// ErrNotRejected is returned for an unreject or reopen of a proposal
 	// that has no active reject.
 	ErrNotRejected = errors.New("decisions: proposal has no active reject")
+	// ErrNotReopenable is returned for a reopen of a reject that cannot be
+	// reopened: a sticky reject (no material hash, so no changed data to tell
+	// apart) or a proposal whose material hash is one that was rejected.
+	ErrNotReopenable = errors.New("decisions: reject cannot be reopened")
+	// ErrHumanRejectLive is returned when a non-human decision tries to
+	// replace a live reject a human made. Only a human replaces a human.
+	ErrHumanRejectLive = errors.New("decisions: a human reject is live; only a human can replace it")
 	// ErrCorrupt is returned when the log contradicts itself (a verdict
 	// pointing at a record that is not there). The caller must fail closed.
 	ErrCorrupt = errors.New("decisions: store is inconsistent")
@@ -47,14 +60,31 @@ var (
 
 const scanPage = 500
 
-// Store reads and writes decisions.
+// subjectLocks serialises Record per (store identity, subject). It is
+// package-level on purpose: the lock must protect the KEYS, and two Store
+// values over one KV write the same keys, so a lock inside each Store let them
+// interleave the verdict read-modify-write and fork the SupersedesID chain.
+var subjectLocks keyedmutex.Mutex
+
+// kvScope names a KV for lock purposes: its address. A KV that is not a
+// pointer has no identity and cannot be told apart from a copy, so New
+// refuses it rather than lock the wrong thing.
+func kvScope(kv KV) string {
+	v := reflect.ValueOf(kv)
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
+		panic(fmt.Sprintf("decisions: New needs a non-nil pointer KV (it identifies the store by address), got %T", kv))
+	}
+	return fmt.Sprintf("%x", v.Pointer())
+}
+
+// Store reads and writes decisions. Any number of Stores may share one KV
+// (the per-subject lock is keyed by the KV itself); they must be built over
+// the very same KV value, not over different wrappers of it.
 type Store struct {
 	kv  KV
 	now func() time.Time
 
-	// locks serialises Record per subject: it reads the verdict, links
-	// SupersedesID to it and writes the next one.
-	locks keyedmutex.Mutex
+	lockScope string
 
 	idMu     sync.Mutex
 	entropy  *ulid.MonotonicEntropy
@@ -72,9 +102,9 @@ func WithEntropy(r io.Reader) Option {
 	return func(s *Store) { s.entropy = ulid.Monotonic(r, 0) }
 }
 
-// New returns a Store over kv.
+// New returns a Store over kv. kv must be a non-nil pointer.
 func New(kv KV, opts ...Option) *Store {
-	s := &Store{kv: kv, now: time.Now, entropy: ulid.Monotonic(crand.Reader, 0)}
+	s := &Store{kv: kv, now: time.Now, entropy: ulid.Monotonic(crand.Reader, 0), lockScope: kvScope(kv)}
 	for _, o := range opts {
 		o(s)
 	}
@@ -100,14 +130,25 @@ func (s *Store) newID(at time.Time) (string, error) {
 
 func subjectLockKey(opKind, subjectKey string) string { return opKind + "\x00" + subjectKey }
 
+// lockSubject takes the subject's lock on this store's KV.
+func (s *Store) lockSubject(opKind, subjectKey string) func() {
+	return subjectLocks.Lock(s.lockScope + "\x00" + subjectLockKey(opKind, subjectKey))
+}
+
 // Record appends one decision to the log and updates the verdict and indexes
 // in one atomic commit. It returns the stored record.
 //
 //   - reject: the proposal becomes active (vetoed). A reject of two or more
 //     entities also vetoes each pair among them, within Input.Family. A reject
-//     of an already-rejected proposal replaces its edges.
-//   - unreject: lifts the veto and deletes its edges. The record stays.
-//   - reopened: lifts the veto because the data changed (see MaterialHash).
+//     of an already-rejected proposal replaces its edges and adds its material
+//     hash to the rejected set. A non-human reject of a proposal a human
+//     rejected is refused (ErrHumanRejectLive).
+//   - unreject: human only. Lifts the veto, clears the rejected set and
+//     deletes its edges. The record stays.
+//   - reopened: the data changed (Input.MaterialHash is the new hash and must
+//     differ from every rejected one; ErrNotReopenable otherwise, and for a
+//     sticky reject). It allows NEW suggestions only: the rejected hashes stay
+//     blocked and so do the edges.
 //   - approve, applied, auto_applied, undone, skip: labels only. None vetoes
 //     and none lifts a veto.
 func (s *Store) Record(in Input) (*Record, error) {
@@ -115,14 +156,26 @@ func (s *Store) Record(in Input) (*Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	subject := SubjectKey(in.OpKind, in.EntityType, ids, in.Scope)
-	unlock := s.locks.Lock(subjectLockKey(in.OpKind, subject))
+	subject := subjectHash(in.OpKind, in.EntityType, ids, in.Scope) // ids are canonical
+	unlock := s.lockSubject(in.OpKind, subject)
 	defer unlock()
 
-	prev, err := s.Verdict(in.OpKind, subject)
+	prev, err := s.readVerdict(in.OpKind, subject)
 	if err != nil {
 		return nil, err
 	}
+	// The reject whose rows are live now, if any.
+	var live *Record
+	if prev.Live() {
+		live, err = s.readRecord(prev.RejectID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: verdict %s/%s names reject %q: %w", ErrCorrupt, in.OpKind, subject, prev.RejectID, err)
+		}
+	}
+	if err := checkTransition(prev, live, &in); err != nil {
+		return nil, fmt.Errorf("%w: %s %s", err, in.OpKind, subject)
+	}
+
 	at := s.now().UTC()
 	id, err := s.newID(at)
 	if err != nil {
@@ -147,16 +200,17 @@ func (s *Store) Record(in Input) (*Record, error) {
 	verdict.LatestID = rec.ID
 
 	var writes []database.RawWrite
-	// dropLiveEdges deletes the veto rows of the reject that is live now.
+	// dropLiveEdges deletes the veto rows of the reject that is live now, by
+	// the shape that reject was written in.
 	dropLiveEdges := func() error {
-		if prev == nil || prev.State != StateActive {
+		if live == nil {
 			return nil
 		}
-		old, err := s.Get(prev.RejectID)
+		keys, err := indexKeys(live)
 		if err != nil {
-			return fmt.Errorf("%w: verdict %s/%s names reject %q: %v", ErrCorrupt, in.OpKind, subject, prev.RejectID, err)
+			return err
 		}
-		for _, k := range indexKeys(old) {
+		for _, k := range keys {
 			writes = append(writes, database.RawWrite{Key: k, Delete: true})
 		}
 		return nil
@@ -166,27 +220,35 @@ func (s *Store) Record(in Input) (*Record, error) {
 	case DecisionReject:
 		if len(ids) >= 2 {
 			rec.Family = in.Family
+			rec.IndexShape = indexShapeFor(len(ids))
 		}
 		if err := dropLiveEdges(); err != nil {
 			return nil, err
 		}
-		verdict.State, verdict.RejectID, verdict.MaterialHash = StateActive, rec.ID, in.MaterialHash
-		for _, k := range indexKeys(&rec) {
+		verdict.State, verdict.RejectID = StateActive, rec.ID
+		verdict.RejectedHashes = rejectedAfterReject(prev, in.MaterialHash)
+		keys, err := indexKeys(&rec)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range keys {
 			writes = append(writes, database.RawWrite{Key: k})
 		}
-	case DecisionUnreject, DecisionReopened:
-		if prev == nil || prev.State != StateActive {
-			return nil, fmt.Errorf("%w: %s %s", ErrNotRejected, in.OpKind, subject)
+		activeRaw, err := json.Marshal(ActiveRow{RejectedHashes: verdict.RejectedHashes})
+		if err != nil {
+			return nil, fmt.Errorf("decisions: encode active row: %w", err)
 		}
+		writes = append(writes, database.RawWrite{Key: activeKey(in.OpKind, subject), Value: activeRaw})
+	case DecisionUnreject:
 		if err := dropLiveEdges(); err != nil {
 			return nil, err
 		}
-		verdict.RejectID = ""
-		if in.Decision == DecisionUnreject {
-			verdict.State = StateUnrejected
-		} else {
-			verdict.State = StateReopened
-		}
+		verdict.State, verdict.RejectID, verdict.RejectedHashes = StateUnrejected, "", nil
+		writes = append(writes, database.RawWrite{Key: activeKey(in.OpKind, subject), Delete: true})
+	case DecisionReopened:
+		// No edge, no hash and no active-row change: the reject stays in force
+		// for the value it rejected.
+		verdict.State = StateReopened
 	}
 
 	recRaw, err := json.Marshal(&rec)
@@ -211,33 +273,98 @@ func (s *Store) Record(in Input) (*Record, error) {
 	return &rec, nil
 }
 
-// indexKeys are the veto rows a reject record owns: pair edges for a set of up
-// to MaxEdgeSet entities, membership rows for a larger one. The same function
-// names the rows to write and the rows to delete, so they can never drift.
-func indexKeys(rec *Record) []string {
-	n := len(rec.EntityIDs)
-	if n < 2 || rec.Family == "" {
+// checkTransition refuses a decision the current state does not allow.
+func checkTransition(prev *Verdict, live *Record, in *Input) error {
+	switch in.Decision {
+	case DecisionReject:
+		// A human's reject is replaced only by a human. Letting an auto or
+		// llm reject take it over, even in the same family, would hand the
+		// record to a source that may then be replaced by another, so the
+		// human's family could be rewritten without a human.
+		if live != nil && live.Source == SourceHuman && in.Source != SourceHuman {
+			return ErrHumanRejectLive
+		}
+	case DecisionUnreject:
+		if !prev.Live() {
+			return ErrNotRejected
+		}
+	case DecisionReopened:
+		if !prev.Live() {
+			return ErrNotRejected
+		}
+		if len(prev.RejectedHashes) == 0 {
+			return fmt.Errorf("%w: the reject is sticky (it recorded no material hash)", ErrNotReopenable)
+		}
+		if slices.Contains(prev.RejectedHashes, in.MaterialHash) {
+			return fmt.Errorf("%w: the material hash is one that was rejected", ErrNotReopenable)
+		}
+	}
+	return nil
+}
+
+// rejectedAfterReject is the rejected-hash set once a reject with material
+// hash h lands on prev. A sticky reject (h == "") blocks whatever the data is
+// and an existing sticky verdict stays sticky; otherwise h joins the set of a
+// live verdict, or starts a new one.
+func rejectedAfterReject(prev *Verdict, h string) []string {
+	if h == "" {
 		return nil
 	}
-	if n > MaxEdgeSet {
+	if !prev.Live() {
+		return []string{h}
+	}
+	if len(prev.RejectedHashes) == 0 {
+		return nil
+	}
+	out := append(slices.Clone(prev.RejectedHashes), h)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// indexKeys are the veto rows a reject record owns, by the shape it persisted:
+// pair edges (IndexEdges) or one membership row per member (IndexMembers). The
+// same function names the rows to write and the rows to delete, so they can
+// never drift, and it reads the record's own shape, never MaxEdgeSet. A reject
+// of two or more entities with no recognisable shape is corrupt: deleting by a
+// guess would strand veto rows that nothing could ever remove.
+func indexKeys(rec *Record) ([]string, error) {
+	n := len(rec.EntityIDs)
+	if n < 2 {
+		return nil, nil
+	}
+	if rec.Family == "" {
+		return nil, fmt.Errorf("%w: reject %s of %d entities has no family", ErrCorrupt, rec.ID, n)
+	}
+	switch rec.IndexShape {
+	case IndexMembers:
 		keys := make([]string, 0, n)
 		for _, id := range rec.EntityIDs {
 			keys = append(keys, memberKey(rec.EntityType, id, rec.Family, rec.ID))
 		}
-		return keys
-	}
-	keys := make([]string, 0, n*(n-1)/2)
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			lo, hi := orderPair(rec.EntityIDs[i], rec.EntityIDs[j])
-			keys = append(keys, edgeKey(rec.EntityType, lo, hi, rec.Family, rec.ID))
+		return keys, nil
+	case IndexEdges:
+		keys := make([]string, 0, n*(n-1)/2)
+		for i := 0; i < n; i++ {
+			for j := i + 1; j < n; j++ {
+				lo, hi := orderPair(rec.EntityIDs[i], rec.EntityIDs[j])
+				keys = append(keys, edgeKey(rec.EntityType, lo, hi, rec.Family, rec.ID))
+			}
 		}
+		return keys, nil
 	}
-	return keys
+	return nil, fmt.Errorf("%w: reject %s of %d entities has index shape %q", ErrCorrupt, rec.ID, n, rec.IndexShape)
 }
 
-// Get returns one record.
+// Get returns one record. The id's case is canonicalised (a ULID).
 func (s *Store) Get(id string) (*Record, error) {
+	id, err := CanonicalRecordID(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.readRecord(id)
+}
+
+func (s *Store) readRecord(id string) (*Record, error) {
 	raw, err := s.kv.GetRaw(recordKey(id))
 	if err != nil {
 		return nil, fmt.Errorf("decisions: read record %s: %w", id, err)
@@ -247,14 +374,22 @@ func (s *Store) Get(id string) (*Record, error) {
 	}
 	var rec Record
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return nil, fmt.Errorf("%w: decode record %s: %v", ErrCorrupt, id, err)
+		return nil, fmt.Errorf("%w: decode record %s: %w", ErrCorrupt, id, err)
 	}
 	return &rec, nil
 }
 
 // Verdict returns the current state of a proposal, or nil when nothing was
-// ever decided about it.
+// ever decided about it. subjectKey is canonicalised (lower-case hex).
 func (s *Store) Verdict(opKind, subjectKey string) (*Verdict, error) {
+	subjectKey, err := CanonicalSubjectKey(subjectKey)
+	if err != nil {
+		return nil, err
+	}
+	return s.readVerdict(opKind, subjectKey)
+}
+
+func (s *Store) readVerdict(opKind, subjectKey string) (*Verdict, error) {
 	raw, err := s.kv.GetRaw(verdictKey(opKind, subjectKey))
 	if err != nil {
 		return nil, fmt.Errorf("decisions: read verdict: %w", err)
@@ -264,7 +399,7 @@ func (s *Store) Verdict(opKind, subjectKey string) (*Verdict, error) {
 	}
 	var v Verdict
 	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, fmt.Errorf("%w: decode verdict %s/%s: %v", ErrCorrupt, opKind, subjectKey, err)
+		return nil, fmt.Errorf("%w: decode verdict %s/%s: %w", ErrCorrupt, opKind, subjectKey, err)
 	}
 	return &v, nil
 }
@@ -272,24 +407,35 @@ func (s *Store) Verdict(opKind, subjectKey string) (*Verdict, error) {
 // Status is what a producer asks before proposing something again.
 type Status struct {
 	Verdict *Verdict
-	// State is the effective state: StateReopened when the verdict is active
-	// but the proposal's material hash differs from the rejected one.
-	// Empty when nothing was ever decided about the proposal.
+	// State is the effective state for the proposal as asked: StateActive
+	// when a live reject blocks it, StateReopened when a reject is live but the
+	// proposal's material hash was never rejected (a new suggestion), else the
+	// stored state. Empty when nothing was ever decided about the proposal.
 	State VerdictState
 	// Blocked is true when the proposal must be skipped.
 	Blocked bool
 }
 
 // Lookup finds a proposal by fingerprint. materialHash is MaterialHash of the
-// proposal as it would be made now ("" for a sticky op).
+// proposal as it would be made now ("" for a sticky op). subjectKey is
+// canonicalised; a malformed one is an error (never "not found", which would
+// read as "not rejected").
+//
+// A live reject blocks the proposal when its material is any rejected one, so
+// a reopen never lifts the block on the value that was rejected: if the data
+// flips back, the proposal is blocked again.
 func (s *Store) Lookup(opKind, subjectKey, materialHash string) (Status, error) {
 	v, err := s.Verdict(opKind, subjectKey)
 	if err != nil || v == nil {
 		return Status{}, err
 	}
-	st := Status{Verdict: v, State: v.State, Blocked: v.Blocks()}
-	if v.State == StateActive && v.MaterialHash != "" && materialHash != "" && v.MaterialHash != materialHash {
-		st.State, st.Blocked = StateReopened, false
+	st := Status{Verdict: v, State: v.State}
+	if v.Live() {
+		if v.BlocksMaterial(materialHash) {
+			st.State, st.Blocked = StateActive, true
+		} else {
+			st.State = StateReopened
+		}
 	}
 	return st, nil
 }
@@ -308,7 +454,7 @@ func (s *Store) History(opKind, subjectKey string) ([]Record, error) {
 			return nil, fmt.Errorf("%w: supersedes cycle at %s", ErrCorrupt, id)
 		}
 		seen[id] = true
-		rec, err := s.Get(id)
+		rec, err := s.readRecord(id)
 		if err != nil {
 			return nil, err
 		}
@@ -318,19 +464,24 @@ func (s *Store) History(opKind, subjectKey string) ([]Record, error) {
 	return out, nil
 }
 
+// pager is the one method scanAll needs, so it reads a live KV or a snapshot.
+type pager interface {
+	ScanPrefixPage(prefix, after string, limit int) (pairs []database.KVPair, next string, err error)
+}
+
 // scanAll pages through every pair under prefix in key order.
-func (s *Store) scanAll(ctx context.Context, prefix string, fn func(database.KVPair) error) error {
+func scanAll(ctx context.Context, p pager, prefix string, fn func(database.KVPair) error) error {
 	after := ""
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		pairs, next, err := s.kv.ScanPrefixPage(prefix, after, scanPage)
+		pairs, next, err := p.ScanPrefixPage(prefix, after, scanPage)
 		if err != nil {
 			return fmt.Errorf("decisions: scan %s: %w", prefix, err)
 		}
-		for _, p := range pairs {
-			if err := fn(p); err != nil {
+		for _, kv := range pairs {
+			if err := fn(kv); err != nil {
 				return err
 			}
 		}
@@ -339,6 +490,10 @@ func (s *Store) scanAll(ctx context.Context, prefix string, fn func(database.KVP
 		}
 		after = next
 	}
+}
+
+func (s *Store) scanAll(ctx context.Context, prefix string, fn func(database.KVPair) error) error {
+	return scanAll(ctx, s.kv, prefix, fn)
 }
 
 // Filter narrows an iteration.
@@ -353,9 +508,9 @@ func (s *Store) Iterate(ctx context.Context, f Filter, fn func(Record) error) er
 	if f.OpKind != "" {
 		prefix := opPrefix(f.OpKind)
 		return s.scanAll(ctx, prefix, func(p database.KVPair) error {
-			rec, err := s.Get(strings.TrimPrefix(p.Key, prefix))
+			rec, err := s.readRecord(strings.TrimPrefix(p.Key, prefix))
 			if err != nil {
-				return fmt.Errorf("%w: op index %s: %v", ErrCorrupt, p.Key, err)
+				return fmt.Errorf("%w: op index %s: %w", ErrCorrupt, p.Key, err)
 			}
 			return fn(*rec)
 		})
@@ -363,30 +518,61 @@ func (s *Store) Iterate(ctx context.Context, f Filter, fn func(Record) error) er
 	return s.scanAll(ctx, prefixRecord, func(p database.KVPair) error {
 		var rec Record
 		if err := json.Unmarshal(p.Value, &rec); err != nil {
-			return fmt.Errorf("%w: decode %s: %v", ErrCorrupt, p.Key, err)
+			return fmt.Errorf("%w: decode %s: %w", ErrCorrupt, p.Key, err)
 		}
 		return fn(rec)
 	})
 }
 
-// ByEntity visits the records that name one entity, in decision order.
+// ByEntity visits the records that name one entity, in decision order. The
+// entity id is canonicalised (see CanonicalID).
 func (s *Store) ByEntity(ctx context.Context, entityType, entityID string, fn func(Record) error) error {
+	entityID, err := CanonicalID(entityID)
+	if err != nil {
+		return err
+	}
 	prefix := entityPrefix(entityType, entityID)
 	return s.scanAll(ctx, prefix, func(p database.KVPair) error {
-		rec, err := s.Get(strings.TrimPrefix(p.Key, prefix))
+		rec, err := s.readRecord(strings.TrimPrefix(p.Key, prefix))
 		if err != nil {
-			return fmt.Errorf("%w: entity index %s: %v", ErrCorrupt, p.Key, err)
+			return fmt.Errorf("%w: entity index %s: %w", ErrCorrupt, p.Key, err)
 		}
 		return fn(*rec)
 	})
 }
 
+// checkQueryFamily refuses a family PairVetoed does not know. An unknown
+// family is an error, never "not vetoed": a typo ("same-work") would otherwise
+// read as no veto, the unsafe direction.
+func checkQueryFamily(family string) error {
+	if family == FamilyAny || slices.Contains(Families, family) {
+		return nil
+	}
+	return invalid("unknown family %q, want one of %v or %q", family, Families, FamilyAny)
+}
+
 // PairVetoed reports whether an active reject vetoes joining a and b in the
-// given family (rows stored with FamilyAny veto every family). It reads the
-// store directly and does NO id resolution: a merged-away id is looked up as
-// given. For a whole plan run load a Vetoes snapshot with an IDResolver
-// instead.
+// given family. Rows stored with FamilyAny veto every family; a query for
+// FamilyAny asks whether the pair is vetoed in ANY family. It reads the store
+// directly and does NO id resolution: a merged-away id is looked up as given
+// (after canonicalisation: a ULID is upper-cased, an id with surrounding
+// whitespace is an error), and an unknown family is an error. For a whole plan
+// run load a Vetoes snapshot with an IDResolver instead.
 func (s *Store) PairVetoed(entityType, a, b, family string) (bool, error) {
+	if err := checkComponent("entity_type", entityType); err != nil {
+		return false, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := checkQueryFamily(family); err != nil {
+		return false, err
+	}
+	a, err := CanonicalID(a)
+	if err != nil {
+		return false, err
+	}
+	b, err = CanonicalID(b)
+	if err != nil {
+		return false, err
+	}
 	if a == b {
 		return false, nil
 	}
@@ -394,7 +580,7 @@ func (s *Store) PairVetoed(entityType, a, b, family string) (bool, error) {
 	lo, hi := orderPair(a, b)
 	errStop := errors.New("found")
 	prefix := edgePairPrefix(entityType, lo, hi)
-	err := s.scanAll(ctx, prefix, func(p database.KVPair) error {
+	err = s.scanAll(ctx, prefix, func(p database.KVPair) error {
 		if f, _, ok := splitFamilyRecord(strings.TrimPrefix(p.Key, prefix)); ok && familyMatches(f, family) {
 			return errStop
 		}
@@ -427,11 +613,9 @@ func (s *Store) PairVetoed(entityType, a, b, family string) (bool, error) {
 	return false, err
 }
 
-func familyMatches(stored, want string) bool { return stored == want || stored == FamilyAny }
-
-func unmarshalVerdict(p database.KVPair, v *Verdict) error {
-	if err := json.Unmarshal(p.Value, v); err != nil {
-		return fmt.Errorf("%w: decode verdict %s: %v", ErrCorrupt, p.Key, err)
-	}
-	return nil
+// familyMatches reports whether a stored edge family answers a query: an
+// exact match, a stored FamilyAny (vetoes every family), or a queried
+// FamilyAny (asks about every family).
+func familyMatches(stored, want string) bool {
+	return want == FamilyAny || stored == want || stored == FamilyAny
 }
