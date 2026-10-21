@@ -1,5 +1,5 @@
 // file: internal/dedup/field_locks_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 1e6b8d2c-5f93-4a07-b7c4-9d3e2a8f0b61
 // last-edited: 2026-10-21
 
@@ -28,7 +28,7 @@ func lockRows(bookID string, keys ...string) func(string) ([]database.MetadataFi
 	}
 }
 
-// ── MergeSplitBookCluster: keep.Title ───────────────────────────────────────
+// ── MergeSplitBookClusterWithOptions: keep.Title ───────────────────────────────────────
 
 // The keep's title is user-locked; the candidate's suggested title must not
 // replace it. The unlocked duration recount still lands on the same write.

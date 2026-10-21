@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -829,6 +829,30 @@ describe('RepairsPanel — owner rows', () => {
     await vi.waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.startRepairApply).mock.calls[0][2]).toEqual(['g1', 'g2']);
     expect(api.startRepairOwnerApply).not.toHaveBeenCalled();
+  });
+
+  it('turns Apply all off while it reads the rows its confirm names: a double click opens one confirm', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    const base = vi.mocked(api.getRepairPlanRows).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    vi.mocked(api.getRepairPlanRows).mockImplementationOnce(
+      async (...args: Parameters<typeof api.getRepairPlanRows>) => {
+        await gate;
+        return base(...args);
+      }
+    );
+    await user.dblClick(screen.getByTestId('repairs-apply-all'));
+    await vi.waitFor(() => expect(screen.getByTestId('repairs-apply-all')).toBeDisabled());
+    expect(screen.getByTestId('repairs-apply-selected')).toBeDisabled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
   });
 });
 

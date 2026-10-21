@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -427,6 +427,64 @@ describe('useRepairsLane: selection and apply', () => {
     expect(ids).toEqual(many.map((r) => r.row_id));
   });
 
+  it('apply-all ignores a second click while its pre-read is in flight: one confirm, buttons off', async () => {
+    const { result } = await renderLane();
+    stubApply(applyResult({ requested: 2 }));
+    const base = vi.mocked(api.getRepairPlanRows).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    vi.mocked(api.getRepairPlanRows).mockImplementationOnce(
+      async (...args: Parameters<typeof api.getRepairPlanRows>) => {
+        await gate;
+        return base(...args);
+      }
+    );
+    const applyAll = () =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyAllApplicable',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+      });
+
+    act(() => {
+      applyAll();
+      applyAll(); // a double click lands before the pre-read returns
+    });
+    await waitFor(() => expect(result.current.applyPreparing).toBe(true));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    act(() => applyAll()); // and a third one, after the flag is visible
+
+    release();
+    await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(api.startRepairApply).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.applyPreparing).toBe(false));
+  });
+
+  it('apply-all whose pre-read fails confirms with the count alone, then still applies', async () => {
+    const { result } = await renderLane();
+    stubApply(applyResult({ requested: 2 }));
+    // Only the pre-read (the next call) fails; collecting the ids afterwards works.
+    vi.mocked(api.getRepairPlanRows).mockRejectedValueOnce(new Error('rows unavailable'));
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyAllApplicable',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+      })
+    );
+    await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledWith(repairApplyConfirmMessage(2, 'Version group primary'));
+    expect(confirmSpy.mock.calls[0][0]).not.toContain('  - ');
+    expect(vi.mocked(api.startRepairApply).mock.calls[0][2]).toEqual(['g1', 'g2']);
+    expect(result.current.applyPreparing).toBe(false);
+  });
+
   it('never selects a skipped row with select page', async () => {
     const { result } = await renderLane();
     act(() => result.current.setFilter('skipped'));
@@ -623,6 +681,13 @@ describe('useRepairsLane: naming the rows an apply writes', () => {
     expect(line).toContain('"Title r9" (1 book)');
     expect(line).not.toContain('Title r10');
     expect(line).toMatch(/, and 3 more\.$/);
+  });
+
+  it('leaves the book count out when it is unknown, never "(0 books)"', () => {
+    const unknown = { rowId: 'r1', title: 'Title r1' };
+    expect(summarizeAppliedRows([unknown, target('b', 2)])).toBe('Applied: "Title r1", "Title b" (2 books).');
+    expect(repairApplyConfirmMessage(1, 'Split books', [unknown])).toContain('  - "Title r1"\n');
+    expect(summarizeAppliedRows([unknown])).not.toContain('(0 books)');
   });
 
   it('names a row with several books by its member count, and carries the applied rows', async () => {

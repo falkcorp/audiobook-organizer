@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
 // last-edited: 2026-10-21
 
@@ -35,7 +35,7 @@
 //     separate books looks like too, and a run of numbers is what volumes
 //     of that series look like. So a cluster that passes 1-4 is still
 //     dropped when it carries evidence of being several works rather than
-//     chapters of one (vetoDistinctWorks: V2, V2b, V4, V5, V8, V9, V3). The
+//     chapters of one (vetoDistinctWorks: V2, V2b, V4, V5, V7, V8, V9, V3). The
 //     detector FAILS CLOSED: DetectSplitBookCandidates never returns a vetoed
 //     cluster; DetectSplitBookCandidatesWithVetoes returns them with their
 //     reasons so a caller can show a held row instead of nothing.
@@ -116,6 +116,9 @@ type splitBookSlim struct {
 	// veto: the field is polluted on exactly the rows this detector looks at.
 	SeriesSequence    *int
 	SeriesPositionRaw string
+	// ASIN is the book's Audible/Amazon id, trimmed and upper-cased; "" is
+	// none. Two members with different ASINs are two catalogued products (V7).
+	ASIN string
 }
 
 // DetectSplitBookCandidates walks every book in the store and returns the
@@ -183,6 +186,10 @@ func slimFromBook(b *database.BookCore) splitBookSlim {
 	if b.SeriesPositionRaw != nil {
 		seriesRaw = *b.SeriesPositionRaw
 	}
+	asin := ""
+	if b.ASIN != nil {
+		asin = strings.ToUpper(strings.TrimSpace(*b.ASIN))
+	}
 	return splitBookSlim{
 		ID:                b.ID,
 		Title:             b.Title,
@@ -193,6 +200,7 @@ func slimFromBook(b *database.BookCore) splitBookSlim {
 		Duration:          b.Duration,
 		SeriesSequence:    b.SeriesSequence,
 		SeriesPositionRaw: seriesRaw,
+		ASIN:              asin,
 	}
 }
 
@@ -703,12 +711,17 @@ var (
 	// splitChapterWordRe is a chapter-style position ("Chapter 3", "Track #4",
 	// "Part 2"). Removed before V2/V2b read a title or name, so a "#" or a
 	// "Stem N: Subtitle" shape that is really a chapter heading is not
-	// mistaken for a series volume.
-	splitChapterWordRe = regexp.MustCompile(`(?i)\b(?:chapter|ch|track|tr|part|pt|disc|disk|cd|section|episode|ep)\.?\s*#?\s*\d{1,4}\b`)
+	// mistaken for a series volume. "Episode" and "Section" are NOT here: a
+	// run of "Saga Episode 1: The Pilot" titles is separate installments, and
+	// stripping the marker would hide the shape from V2b.
+	splitChapterWordRe = regexp.MustCompile(`(?i)\b(?:chapter|ch|track|tr|part|pt|disc|disk|cd)\.?\s*#?\s*\d{1,4}\b`)
 
 	// splitVolMarkerRe is a series-volume marker: Book/Bk/Vol/Volume/# and its
-	// number. NOT "part".
-	splitVolMarkerRe = regexp.MustCompile(`(?i)(?:\bbook|\bbk|\bvol(?:ume)?\.?|#)\s*0*(\d{1,3})\b`)
+	// number. NOT "part". Group 1 is a digit number; group 2 (Book/Bk/Vol/
+	// Volume only, never "#") is a Roman numeral I-XX, upper case ("Book III";
+	// a lower-case "book i" is ordinary prose) or a number word One-Twenty,
+	// either case. volMarkerNumber turns the match into the number.
+	splitVolMarkerRe = regexp.MustCompile(`(?i)(?:\bbook|\bbk|\bvol(?:ume)?\.?|#)\s*0*(\d{1,3})\b|(?:\bbook|\bbk|\bvol(?:ume)?)\.?\s+((?-i:XX|XIX|XVIII|XVII|XVI|XV|XIV|XIII|XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b`)
 
 	// splitNumSubtitleRe is "Stem N: Subtitle".
 	splitNumSubtitleRe = regexp.MustCompile(`^(.*?\S)\s+0*(\d{1,3})\s*:\s*(\S.*)$`)
@@ -726,12 +739,38 @@ func splitFileStem(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 
+// volWordNumbers maps the number words and upper-case Roman numerals
+// splitVolMarkerRe accepts to their values.
+var volWordNumbers = func() map[string]int {
+	m := map[string]int{}
+	for i, w := range []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+		"eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"} {
+		m[w] = i + 1
+	}
+	for i, r := range []string{"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+		"XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX"} {
+		m[r] = i + 1
+	}
+	return m
+}()
+
+// volMarkerNumber is the volume number in a splitVolMarkerRe match.
+func volMarkerNumber(m []string) int {
+	if m[1] != "" {
+		return extractChapterNumber(m[1])
+	}
+	if n, ok := volWordNumbers[m[2]]; ok {
+		return n
+	}
+	return volWordNumbers[strings.ToLower(m[2])]
+}
+
 // volNumbers is the distinct, ascending Book/Vol numbers across texts.
 func volNumbers(texts []string) []int {
 	seen := map[int]bool{}
 	for _, t := range texts {
 		if m := splitVolMarkerRe.FindStringSubmatch(splitChapterWordRe.ReplaceAllString(t, " ")); m != nil {
-			seen[extractChapterNumber(m[1])] = true
+			seen[volMarkerNumber(m)] = true
 		}
 	}
 	out := make([]int, 0, len(seen))
@@ -767,16 +806,19 @@ func joinInts(ns []int) string {
 // (empty = no veto). Each rule alone vetoes:
 //
 //	V2   two or more distinct numbers in Book/Vol markers (book|bk|vol|volume|#
-//	     + N; NOT part), read separately across the titles, the member
+//	     + N; "Book"/"Vol" also take a Roman numeral I-XX or a number word
+//	     One-Twenty; NOT part), read separately across the titles, the member
 //	     subfolder names and the file-name stems
 //	V2b  two or more titles of the shape "Stem N: Subtitle" whose subtitles
 //	     differ
 //	V4   the cluster folder is named for several works (books N-M, series,
 //	     collection, omnibus, box set)
-//	V5   the run's numbers include a year (yearRun, from sequentialRunShape)
+//	V5   the run's numbers include a year (yearRun, the years flag sequentialRun returns)
 //	V8   two or more file stems end in a copy/dup suffix
 //	V9   grandparent shape whose member subfolders, with Part/(N of M) markers
 //	     and digits removed, do not all name the same thing
+//	V7   two or more distinct ASINs among the members: separate catalogued
+//	     products (an unset ASIN counts for nothing)
 //	V3   any member runs chapterMaxSec or longer (the fragment fixer's
 //	     duration gate); an unknown duration (nil or 0) is not a veto here,
 //	     the Repairs fixer holds those on the book_file rows
@@ -853,6 +895,17 @@ func vetoDistinctWorks(group []splitBookSlim, shape, parentKey string, chapterMa
 		if len(stems) >= 2 {
 			vetoes = append(vetoes, fmt.Sprintf("V9 the member subfolders name %d different things once part numbers are removed", len(stems)))
 		}
+	}
+
+	// V7.
+	asins := map[string]bool{}
+	for _, b := range group {
+		if b.ASIN != "" {
+			asins[b.ASIN] = true
+		}
+	}
+	if len(asins) >= 2 {
+		vetoes = append(vetoes, fmt.Sprintf("V7 the members hold %d different ASINs: separate catalogued products, not chapters of one", len(asins)))
 	}
 
 	// V3.

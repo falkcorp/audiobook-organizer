@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.164.1
+// version: 1.164.2
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package config
 
@@ -3987,7 +3987,7 @@ func ResetToDefaults() {
 			ScanProgressEvery:                20,
 			ScanStandDownGraceSeconds:        45,
 			ChapterConsolidationThresholdMin: DefaultChapterConsolidationThresholdMin,
-			RepairChapterMaxMin:              120,
+			RepairChapterMaxMin:              DefaultRepairChapterMaxMin,
 			FragmentWindowContainmentMin:     DefaultFragmentWindowContainmentMin,
 			OperationTimeoutMinutes:          30,
 			DBCensusExactReadMBPerSec:        DefaultDBCensusExactReadMBPerSec,

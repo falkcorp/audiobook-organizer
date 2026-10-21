@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector_veto_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d3a8e21-7c94-4b60-a1f2-9e0c4b7d6a35
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Every name below is synthetic: the repo is public, so no real library titles.
@@ -84,16 +86,16 @@ func wantQualifies(t *testing.T, books []splitBookSlim) SplitBookCandidate {
 
 // A series folder of separate books: one subfolder per volume, same author and
 // series, distinct subtitles, 6-9 hour books. Passed every old check.
-func TestVeto_MendedHeartsSeriesFolder(t *testing.T) {
+func TestVeto_SeriesFolderOfSeparateBooks(t *testing.T) {
 	author, series := new(11), new(21)
 	var books []splitBookSlim
 	for i, name := range []string{"Bold", "Brave", "Quiet", "Open"} {
 		n := i + 1
 		books = append(books, vbook(
 			fmt.Sprintf("01HM%08d", n),
-			fmt.Sprintf("%s Hearts: A Romance (The Mended Hearts Series, Book %d)", name, n),
-			fmt.Sprintf("/lib/Author Q/Mended Hearts Series Books 1-4/Mended Hearts %02d - %s Hearts/%s Hearts.m4b", n, name, name),
-			author, series, secs((6+i)*3600)))
+			fmt.Sprintf("%s Quill: A Tale (The Quill Saga, Book %d)", name, n),
+			fmt.Sprintf("/lib/Author Q/Quill Saga Books 1-4/Quill Saga %02d - %s Quill/%s Quill.m4b", n, name, name),
+			author, series, secs((5+i)*3600)))
 		books[len(books)-1].SeriesSequence = secs(n)
 	}
 	c := wantVetoed(t, books, "V2", "V3", "V4", "V9")
@@ -127,8 +129,8 @@ func TestVeto_KestrelTalesNumberedSubtitles(t *testing.T) {
 func TestVeto_YearsRun(t *testing.T) {
 	var books []splitBookSlim
 	for y := 2010; y <= 2012; y++ {
-		books = append(books, vbook(fmt.Sprintf("01BS%08d", y), "Best Stories",
-			fmt.Sprintf("/lib/Author T/Best Stories/Best Stories %d.m4b", y), new(7), nil, secs(1800)))
+		books = append(books, vbook(fmt.Sprintf("01BS%08d", y), "Yearly Digest",
+			fmt.Sprintf("/lib/Author T/Yearly Digest/Yearly Digest %d.m4b", y), new(7), nil, secs(1800)))
 	}
 	wantVetoed(t, books, "V5")
 	if _, _, years := sequentialRun([]int{2010, 2011, 2012}); !years {
@@ -202,6 +204,81 @@ func TestVeto_EachRuleAlone(t *testing.T) {
 	})
 }
 
+// V7: two or more distinct ASINs among the members are separate catalogued
+// products.
+func TestVeto_DistinctASINs(t *testing.T) {
+	mkBooks := func(asins ...string) []splitBookSlim {
+		var books []splitBookSlim
+		for i, a := range asins {
+			b := vbook(fmt.Sprintf("asin-%d", i), "Reedmarsh", fmt.Sprintf("/lib/A/Reedmarsh/%02d.m4b", i+1), new(1), nil, secs(300))
+			b.ASIN = a
+			books = append(books, b)
+		}
+		return books
+	}
+	t.Run("two distinct ASINs veto", func(t *testing.T) {
+		wantVetoed(t, mkBooks("B000AAAAA1", "B000AAAAA2", "B000AAAAA1"), "V7")
+	})
+	t.Run("case and padding do not make a distinct ASIN", func(t *testing.T) {
+		// slimFromBook normalises; the detector input is already normalised.
+		a := "  b000aaaaa1 "
+		core := &database.BookCore{ID: "x", Title: "T", FilePath: "/lib/A/T/01.m4b", ASIN: &a}
+		if got := slimFromBook(core).ASIN; got != "B000AAAAA1" {
+			t.Errorf("slimFromBook ASIN = %q", got)
+		}
+	})
+	t.Run("one ASIN, or ASINs on only some members, qualifies", func(t *testing.T) {
+		wantQualifies(t, mkBooks("B000AAAAA1", "B000AAAAA1", "B000AAAAA1"))
+		wantQualifies(t, mkBooks("B000AAAAA1", "", ""))
+		wantQualifies(t, mkBooks("", "", ""))
+	})
+}
+
+// "Episode" and "Section" are not chapter words: a run of "Stem Episode N:
+// Subtitle" titles is separate installments (V2b), and a Book number written
+// as a Roman numeral or a word is a volume (V2).
+func TestVeto_EpisodesAndNumberedBooks(t *testing.T) {
+	titled := func(titles ...string) []splitBookSlim {
+		var books []splitBookSlim
+		for i, ti := range titles {
+			books = append(books, vbook(fmt.Sprintf("ep-%d", i), ti, fmt.Sprintf("/lib/A/Saga/%02d.m4b", i+1), new(1), nil, secs(300)))
+		}
+		return books
+	}
+	t.Run("Episode N: Subtitle", func(t *testing.T) {
+		wantVetoed(t, titled("Saga Episode 1: The Pilot", "Saga Episode 2: The Chase", "Saga Episode 3: The End"), "V2b")
+	})
+	t.Run("Section N: Subtitle", func(t *testing.T) {
+		wantVetoed(t, titled("Saga Section 1: Dawn", "Saga Section 2: Dusk", "Saga Section 3: Night"), "V2b")
+	})
+	t.Run("Book I/II/III", func(t *testing.T) {
+		wantVetoed(t, titled("Saga Book I", "Saga Book II", "Saga Book III"), "V2")
+	})
+	t.Run("Book One/Two/Three", func(t *testing.T) {
+		wantVetoed(t, titled("Saga Book One", "Saga Book Two", "Saga Book Three"), "V2")
+	})
+	t.Run("Volume IV and Vol. twelve in file names", func(t *testing.T) {
+		var books []splitBookSlim
+		for i, n := range []string{"Saga Volume IV", "Saga Vol. twelve", "Saga Vol. XX"} {
+			books = append(books, vbook(fmt.Sprintf("vf-%d", i), "Saga", fmt.Sprintf("/lib/A/Saga/%02d %s.m4b", i+1, n), new(1), nil, secs(300)))
+		}
+		wantVetoed(t, books, "V2")
+	})
+	t.Run("a genuine Part 1/2/3 split of one book still qualifies", func(t *testing.T) {
+		wantQualifies(t, titled("Saga Part 1: Arrival", "Saga Part 2: Voyage", "Saga Part 3: Landfall"))
+	})
+	t.Run("one Roman or word Book marker across the cluster is one work", func(t *testing.T) {
+		wantQualifies(t, titled("Saga Book Two - 01", "Saga Book Two - 02", "Saga Book Two - 03"))
+		wantQualifies(t, titled("Saga Book II - 01", "Saga Book II - 02", "Saga Book II - 03"))
+	})
+	t.Run("volNumbers", func(t *testing.T) {
+		got := volNumbers([]string{"Book XIV", "bk Nine", "Vol. 3", "Book i", "Book Ten Thousand", "Books Two"})
+		if !slices.Equal(got, []int{3, 9, 10, 14}) {
+			t.Errorf("volNumbers = %v", got)
+		}
+	})
+}
+
 // A chapter heading is not a series volume: "Chapter N: Name" and "Track #N"
 // titles are not V2b / V2.
 func TestVeto_ChapterHeadingsAreNotVolumes(t *testing.T) {
@@ -222,12 +299,12 @@ func TestVeto_ChapterHeadingsAreNotVolumes(t *testing.T) {
 // V9 order: Part and (N of M) markers come off BEFORE the digits.
 func TestSubdirStem(t *testing.T) {
 	for in, want := range map[string]string{
-		"Moonwatch - Part 01":      "moonwatch",
-		"Moonwatch - Part 2 of 5":  "moonwatch",
-		"Moonwatch (3 of 5)":       "moonwatch",
-		"Mended Hearts 02 - Brave": "mended hearts - brave",
-		"4":                        "",
-		"Disc 2":                   "",
+		"Moonwatch - Part 01":     "moonwatch",
+		"Moonwatch - Part 2 of 5": "moonwatch",
+		"Moonwatch (3 of 5)":      "moonwatch",
+		"Quill Saga 02 - Brave":   "quill saga - brave",
+		"4":                       "",
+		"Disc 2":                  "",
 	} {
 		if got := subdirStem(in); got != want {
 			t.Errorf("subdirStem(%q) = %q, want %q", in, got, want)
@@ -388,26 +465,26 @@ func TestVetoParityWithClassifier(t *testing.T) {
 
 	cases := []cluster{
 		// VETOED categories.
-		mk("c01", "Gilded Hearts Series Books 1-4", 4, func(i int) string {
-			return fmt.Sprintf("%s Hearts: A Romance (Gilded Hearts Series, Book %d)", words[i], i)
+		mk("c01", "Quill Saga Books 1-4", 4, func(i int) string {
+			return fmt.Sprintf("%s Quill: A Tale (Quill Saga, Book %d)", words[i], i)
 		},
-			named("Gilded Hearts"), hours(8), "V2", "V3", "V4", "V9"),
-		mk("c02", "Overlord Lite", 6, num("Overlord Lite %d: Sub%[1]d"), grandNum("Volume %d"), hours(9), "V2", "V2b", "V3"),
-		mk("c03", "Moonlit Tamer - SERIES", 7, same("Moonlit Tamer"), num("Moonlit Tamer Book %02d.m4b"), hours(15), "V2", "V3", "V4"),
-		mk("c04", "Hawk and Fisher [03]", 3, same("Hawk and Fisher"), num("%02d.m4b"), hours(5), "V3"),
-		mk("c05", "Firebrand series Books 1 thru 6", 6, same("Firebrand"), named("Firebrand"), hours(4), "V3", "V4", "V9"),
-		mk("c06", "French Kisses", 3, num("French Kisses %d: Part Name %[1]d"), num("%02d.m4b"), hours(8), "V2b", "V3"),
-		mk("c07", "Apocalypse Wrangler", 3, same("Apocalypse Wrangler"), num("%02d.m4b"), hours(17), "V3"),
-		mk("c08", "Best Reads", 3, same("Best Reads"), func(i int) string { return fmt.Sprintf("Best Reads %d.m4b", 2009+i) }, hours(6), "V3", "V5"),
-		mk("c09", "Fox Chronicles", 5, same("Fox Chronicles"), named("Fox"), short(1), "V9"),
-		mk("c10", "Jasmine Copies", 5, same("Jasmine Copies"), num("Jasmine Copies_copy%d.m4b"), short(3), "V8"),
-		mk("c11", "Cat Chronicles", 4, same("Cat Chronicles"), num("Cat Chronicles - Book %d.m4b"), hours(4), "V2", "V3"),
-		mk("c12", "Starbreaker Lite", 5, same("Starbreaker Lite"), grandNum("Starbreaker Lite - Volume %d"), hours(12), "V2", "V3"),
+			named("Quill Saga"), hours(7), "V2", "V3", "V4", "V9"),
+		mk("c02", "Zephyr Example", 5, num("Zephyr Example %d: Sub%[1]d"), grandNum("Volume %d"), hours(11), "V2", "V2b", "V3"),
+		mk("c03", "Quill Weaver - SERIES", 6, same("Quill Weaver"), num("Quill Weaver Book %02d.m4b"), hours(13), "V2", "V3", "V4"),
+		mk("c04", "Plover and Wren [02]", 4, same("Plover and Wren"), num("%02d.m4b"), hours(4), "V3"),
+		mk("c05", "Nimbus Cove series Books 1 thru 5", 5, same("Nimbus Cove"), named("Nimbus Cove"), hours(3), "V3", "V4", "V9"),
+		mk("c06", "Marble Orchard", 4, num("Marble Orchard %d: Part Name %[1]d"), num("%02d.m4b"), hours(7), "V2b", "V3"),
+		mk("c07", "Quartz Harvester", 4, same("Quartz Harvester"), num("%02d.m4b"), hours(14), "V3"),
+		mk("c08", "Top Picks", 4, same("Top Picks"), func(i int) string { return fmt.Sprintf("Top Picks %d.m4b", 2009+i) }, hours(5), "V3", "V5"),
+		mk("c09", "Otter Annals", 4, same("Otter Annals"), named("Otter"), short(2), "V9"),
+		mk("c10", "Thistle Copies", 6, same("Thistle Copies"), num("Thistle Copies_copy%d.m4b"), short(4), "V8"),
+		mk("c11", "Heron Records", 5, same("Heron Records"), num("Heron Records - Book %d.m4b"), hours(3), "V2", "V3"),
+		mk("c12", "Cobalt Drift Lite", 4, same("Cobalt Drift Lite"), grandNum("Cobalt Drift Lite - Volume %d"), hours(10), "V2", "V3"),
 		// STILL APPLICABLE categories.
-		mk("a01", "Last Flight", 9, same("Last Flight"), num("%02d.m4b"), short(65)),
-		mk("a02", "Blue Moon [01]", 3, same("Blue Moon"), num("%02d.m4b"), short(90)),
-		mk("a03", "Dragon Head", 152, same("Dragon Head"), num("%03d.mp3"), unknown),
-		mk("a04", "Windlass", 16, same("Windlass"), num("Windlass %02d.mp3"), short(77)),
+		mk("a01", "Paper Lantern", 7, same("Paper Lantern"), num("%02d.m4b"), short(58)),
+		mk("a02", "Amber Reach [01]", 4, same("Amber Reach"), num("%02d.m4b"), short(80)),
+		mk("a03", "Willow Gate", 137, same("Willow Gate"), num("%03d.mp3"), unknown),
+		mk("a04", "Birchwood Lane", 13, same("Birchwood Lane"), num("Birchwood Lane %02d.mp3"), short(71)),
 		mk("a05", "Part Subfolders", 4, num("Part Subfolders - Part %d"), grandNum("Part Subfolders - Part %02d"), short(50)),
 		mk("a06", "Galaxy Run Book 3", 5, same("Galaxy Run Book 3"), num("%02d.mp3"), short(40)),
 	}

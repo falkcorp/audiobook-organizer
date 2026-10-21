@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.26.0
+// version: 1.27.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -541,7 +541,7 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
   const selectedCount = repairs.selectedRowIds.size;
   const applicable = (inClass ? page?.applicable_in_class : undefined) ?? page?.applicable ?? 0;
   const remaining = repairs.remainingApplicable ?? 0;
-  const applyDisabled = repairs.applying || running;
+  const applyDisabled = repairs.applying || repairs.applyPreparing || running;
 
   return (
     <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>

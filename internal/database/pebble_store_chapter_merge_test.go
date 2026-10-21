@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_chapter_merge_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3b8f5d21-7c4e-4a96-8e0b-2d6f1a9c7e53
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package database
 
@@ -20,7 +20,7 @@ import (
 // book_file:<src>:<id> key in its own Sync commit and only then created
 // book_file:<primary>:<id>; between the two the row existed under neither book.
 // #3446 made that path one batch. MergeChapterBooks is gone (2026-09-19): the
-// job now merges through dedup.MergeSplitBookCluster, which re-parents each
+// job now merges through dedup.MergeSplitBookClusterWithOptions, which re-parents each
 // source with MoveBookFilesToBook (a one-move MoveBookFilesToBookBulk), so that
 // is the call this pins.
 //
