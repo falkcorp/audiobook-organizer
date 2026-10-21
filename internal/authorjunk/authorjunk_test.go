@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-10-21
 
@@ -660,6 +660,8 @@ func TestClassifyName_PartTrackMarker(t *testing.T) {
 		"David Copperfield P2",
 		"Great Expectations Pt4",
 		"Charles Dickens CD2",
+		"Charles Dickens Disc1",
+		"Charles Dickens S01E02",
 		"Charles Dickens D1T05",
 	} {
 		v := ClassifyName(name)
@@ -686,7 +688,7 @@ func TestClassifyName_PartTrackMarker(t *testing.T) {
 	}
 	for _, name := range []string{
 		"Malcolm X", "Pope John Paul II", "Louis XIV", "50 Cent",
-		"Thurston Howell 3rd", "Charles Dickens", "Agent K9",
+		"Thurston Howell 3rd", "Charles Dickens", "Agent K9", "R2 D2", "Tech N9ne",
 	} {
 		if v := ClassifyName(name); v.Rule == RulePartTrackMarker {
 			t.Errorf("ClassifyName(%q) flagged as part_track_marker: %+v", name, v)
