@@ -1,5 +1,5 @@
 // file: internal/decisions/reopen_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a47e3c19-5d82-4b06-93f1-e2c80d6b7a54
 // last-edited: 2026-10-21
 
@@ -94,7 +94,7 @@ func TestReopen_RefusedWhenItCannotApply(t *testing.T) {
 	_, err := s.Record(reopenOf(in, hashNew))
 	require.ErrorIs(t, err, ErrNotRejected)
 
-	// A sticky reject (merge-shaped: no material hash) cannot be reopened.
+	// A sticky reject (no material hash recorded) cannot be reopened.
 	sticky := rewriteReject("")
 	sticky.Scope = "sticky"
 	mustRecord(t, s, sticky)

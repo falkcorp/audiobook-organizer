@@ -1,5 +1,5 @@
 // file: internal/decisions/review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c18d5f62-0e47-4a93-b6d1-7f3a92e4058c
 // last-edited: 2026-10-21
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,10 +34,24 @@ func (s *slowKV) GetRaw(key string) ([]byte, error) {
 // lock: it is keyed by the KV, not held per Store. Before it was, the stores
 // interleaved the read-modify-write and forked the SupersedesID chain.
 func TestRecord_TwoStoresOnOneKVKeepOneLinearChain(t *testing.T) {
-	// Both Stores are built over the very same KV value (a pointer, which is
-	// its identity); the slow reads make an unprotected interleaving certain.
+	// Both Stores are built over the very same KV value; the slow reads make
+	// an unprotected interleaving certain.
 	slow := &slowKV{newKV(t)}
-	a, b := New(slow), New(slow)
+	requireLinearChain(t, New(slow), New(slow))
+}
+
+// Two Stores over two DIFFERENT wrappers of one engine (a metrics decorator
+// in one handler, a bare store in a job) still share the subject lock: the
+// lock is keyed by KV.LockIdentity, which a wrapper inherits from the store it
+// embeds, not by the wrapper's own address. Keyed by address, each wrapper got
+// its own lock and the stores forked the SupersedesID chain.
+func TestRecord_TwoWrappersOfOneStoreShareTheLock(t *testing.T) {
+	p := newKV(t)
+	requireLinearChain(t, New(&slowKV{p}), New(&slowKV{p}))
+}
+
+func requireLinearChain(t *testing.T, a, b *Store) {
+	t.Helper()
 	const n = 40
 	var wg sync.WaitGroup
 	errs := make([]error, n)
@@ -72,13 +87,6 @@ func TestRecord_TwoStoresOnOneKVKeepOneLinearChain(t *testing.T) {
 		require.Equal(t, 1, c, "record %q has more than one successor: the chain forked", p)
 	}
 }
-
-func TestNew_RefusesAKVWithNoIdentity(t *testing.T) {
-	require.Panics(t, func() { New(valueKV{}) })
-	require.Panics(t, func() { New(nil) })
-}
-
-type valueKV struct{ KV }
 
 // hookKV runs onScan the first time a snapshot scans prefix, so a test can
 // commit a record exactly between Load's scans.
@@ -412,3 +420,101 @@ func TestAuthorTombstoneResolver_SelfRedirectIsLiveNotAnError(t *testing.T) {
 type selfTombstone struct{}
 
 func (selfTombstone) GetAuthorTombstone(old int) (int, error) { return old, nil }
+
+// A resolver is caller code. What it returns is canonicalised before it keys a
+// pair, so a ULID handed back in lower case still meets the stored (upper
+// case) edge, and an id with stray whitespace or nothing at all is an error,
+// never a silent miss.
+func TestVetoes_ResolverOutputIsCanonicalised(t *testing.T) {
+	const a, b = "01J0000000000000000000000A", "01J0000000000000000000000B"
+	s, _ := newStore(t)
+	mustRecord(t, s, humanReject(a, b))
+
+	lower := func(_, id string) (string, error) { return strings.ToLower(id), nil }
+	v := mustLoad(t, s, lower)
+	require.True(t, snapVetoed(t, v, testType, a, b, FamilySameWork), "lower-case resolver output must meet the stored edge")
+
+	for name, bad := range map[string]string{"whitespace": " " + a, "empty": "", "newline": a + "\n"} {
+		t.Run(name, func(t *testing.T) {
+			// At Load (stored edge ids) ...
+			_, err := s.Load(context.Background(), func(_, id string) (string, error) { return bad, nil })
+			require.Error(t, err)
+			// ... and at query time.
+			ok := mustLoad(t, s, nil)
+			ok.resolve = func(_, id string) (string, error) { return bad, nil }
+			_, err = ok.PairVetoed(testType, a, b, FamilySameWork)
+			require.Error(t, err)
+		})
+	}
+}
+
+// Resolving can read the database (author tombstones), so Load closes its
+// snapshot BEFORE it resolves any id: those reads must not extend the lease.
+func TestLoad_ClosesTheSnapshotBeforeResolving(t *testing.T) {
+	kv := &closeTrackKV{KV: newKV(t)}
+	s := New(kv)
+	mustRecord(t, s, humanReject("b1", "b2"))
+	mustRecord(t, s, humanReject("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16", "m17", "m18", "m19", "m20",
+		"m21", "m22", "m23", "m24", "m25", "m26", "m27", "m28", "m29", "m30", "m31", "m32", "m33", "m34", "m35", "m36", "m37", "m38", "m39", "m40",
+		"m41", "m42", "m43", "m44", "m45", "m46", "m47", "m48", "m49", "m50", "m51"))
+
+	calls := 0
+	_, err := s.Load(context.Background(), func(_, id string) (string, error) {
+		calls++
+		require.Equal(t, int32(0), kv.open.Load(), "a snapshot was still open while resolving %q", id)
+		return id, nil
+	})
+	require.NoError(t, err)
+	require.Positive(t, calls)
+	require.Equal(t, int32(1), kv.opened.Load(), "one snapshot for the whole Load")
+}
+
+type closeTrackKV struct {
+	KV
+	open, opened atomic.Int32
+}
+
+func (k *closeTrackKV) NewRawSnapshot() (database.RawSnapshot, error) {
+	snap, err := k.KV.NewRawSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	k.open.Add(1)
+	k.opened.Add(1)
+	return &closeTrackSnap{RawSnapshot: snap, k: k}, nil
+}
+
+type closeTrackSnap struct {
+	database.RawSnapshot
+	k    *closeTrackKV
+	once sync.Once
+}
+
+func (s *closeTrackSnap) Close() error {
+	s.once.Do(func() { s.k.open.Add(-1) })
+	return s.RawSnapshot.Close()
+}
+
+// The read paths validate op_kind like the write path does: a malformed one is
+// an error, never "nothing decided" (which reads as "not rejected").
+func TestReads_RefuseAMalformedOpKind(t *testing.T) {
+	s, _ := newStore(t)
+	rec := mustRecord(t, s, humanReject("b1", "b2"))
+	v := mustLoad(t, s, nil)
+	for name, kind := range map[string]string{"empty": "", "control": "repairs:dedup\x00split"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := s.Verdict(kind, rec.SubjectKey)
+			require.ErrorIs(t, err, ErrInvalidComponent)
+			_, err = s.Lookup(kind, rec.SubjectKey, "")
+			require.ErrorIs(t, err, ErrInvalidComponent)
+			_, err = s.History(kind, rec.SubjectKey)
+			require.ErrorIs(t, err, ErrInvalidComponent)
+			_, err = v.SubjectRejected(kind, rec.SubjectKey, "")
+			require.ErrorIs(t, err, ErrInvalidComponent)
+		})
+	}
+	// The valid kind still answers.
+	st, err := s.Lookup(testKind, rec.SubjectKey, "")
+	require.NoError(t, err)
+	require.True(t, st.Blocked)
+}
