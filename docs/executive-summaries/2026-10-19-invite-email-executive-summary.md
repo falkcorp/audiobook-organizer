@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.13.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-21 -->
 
@@ -166,5 +166,13 @@ three small relay machines on the home network, so every visitor arrives from
 one of those three addresses. `TUNNEL_CONNECTOR_ADDRS` names them, which lets
 the server read the real visitor address that Cloudflare attaches and give
 each visitor their own limit. It ships with this deploy. Without it, each
-relay would get one limit shared by every guest who came through it. Faking
+relay would get one limit shared by every guest who came through it, and all
+of them together a quarter of the overall allowance. Faking
 Cloudflare's headers does not let anyone else pick or escape their limit.
+
+A flood of invite requests from the internet can no longer stop someone at
+home from opening an invite: devices that reach the server directly on the
+home network have an allowance of their own, outside the overall one. A
+machine at home that sends Cloudflare's headers without being one of the
+listed relays is held to a quarter of the overall allowance, however many
+addresses it uses, so it cannot use up everyone else's.

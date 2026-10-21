@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -30,8 +30,12 @@ import (
 //     LAN IPv6 /64 also shares one aggregate window of
 //     bootstrapLANPrefixFactor times the per-key cap, so one LAN host cannot
 //     rotate through its /64 for fresh windows (tunnel traffic never touches
-//     that window); a LAN host sending Cloudflare markers gets its own /64
-//     aggregate ("unlisted-lan64:") on top of the global ceiling;
+//     that window); a LAN host sending Cloudflare markers but not a listed
+//     connector ("unlisted", classifyLANPeer) gets, on top of the global
+//     ceiling, its own /64 (IPv6) or /24 (IPv4) aggregate ("unlisted-lan:")
+//     and the unlisted LAN total (bootstrapUnlistedLANTotalKey, a quarter of
+//     the global ceiling), so one LAN host rotating through many addresses,
+//     /64s or /24s can never spend the global budget for everyone else;
 //   - entries are kept in creation order, and every call first drops the ones
 //     whose window has ended, so the map holds only live windows;
 //   - the map is hard-capped at bootstrapMaxTrackedKeys, evicting the oldest;
@@ -63,6 +67,11 @@ const (
 	// failures (it runs before the token is checked), so the window is four
 	// times the per-key cap: room for several real devices on the LAN.
 	bootstrapLANPrefixFactor = 4
+
+	// bootstrapUnlistedLANTotalFactor sizes the one window all unlisted LAN
+	// traffic shares (bootstrapUnlistedLANTotalKey): 25 attempts an hour, a
+	// quarter of the global ceiling.
+	bootstrapUnlistedLANTotalFactor = 5
 
 	bootstrapGlobalMaxAttempts = 100
 	bootstrapMaxTrackedKeys    = 10_000
@@ -133,33 +142,52 @@ func bootstrapDirectKey(ip string) string {
 	return "direct:" + a.WithZone("").Unmap().String()
 }
 
+// bootstrapUnlistedLANTotalKey is the window every unlisted LAN request
+// shares (bootstrapUnlistedLANTotalFactor).
+const bootstrapUnlistedLANTotalKey = "unlisted-lan:all"
+
+// bootstrapAgg is an aggregate window a request also counts against, with
+// room for factor times the per-key cap.
+type bootstrapAgg struct {
+	key    string
+	factor int
+}
+
 // bootstrapClientKey returns the bootstrap limiter key for the request, the
-// aggregate key of its LAN IPv6 /64 (bootstrapDirectLANKey for a direct LAN
-// peer, "unlisted-lan64:" for a LAN host sending Cloudflare markers, "" for
-// anything else), the address to log, and whether the request is exempt from
-// the global ceiling (a direct LAN peer, directLANPeer). Every other
-// request is keyed through trustedClientIP: a visitor's own address when it
+// aggregate windows it also counts against, the address to log, and whether
+// the request is exempt from the global ceiling (a direct LAN peer,
+// directLANPeer). The aggregates are bootstrapDirectLANKey for a direct LAN
+// IPv6 peer; for an unlisted LAN host (Cloudflare markers, keyed on its own
+// address, classifyLANPeer) its "unlisted-lan:" /64 or /24 window and the
+// unlisted LAN total; none for anything else. Every request that is not
+// direct is keyed through trustedClientIP: a visitor's own address when it
 // can be believed, otherwise the shared untrustedLocalClientKey. A connector
 // request with no usable CF-Connecting-IP is therefore untrusted-local and
 // NOT exempt.
-func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key, lanKey, logIP string, exempt bool) {
+func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key string, aggs []bootstrapAgg, logIP string, exempt bool) {
 	if directLANPeer(c, connectors) {
 		a, _ := peerAddr(c) // directLANPeer already parsed it
 		ip := a.String()
-		return bootstrapDirectKey(ip), bootstrapDirectLANKey(ip), ip, true
+		if k := bootstrapDirectLANKey(ip); k != "" {
+			aggs = []bootstrapAgg{{key: k, factor: bootstrapLANPrefixFactor}}
+		}
+		return bootstrapDirectKey(ip), aggs, ip, true
 	}
 	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
 	ip = strings.TrimSpace(ip)
 	key = bootstrapRateKey(ip, attributed)
 	if attributed {
 		// A LAN host sending Cloudflare markers (not direct) and keyed on
-		// its own address: its /64 shares an aggregate of its own, never the
-		// direct one (lanAggregate).
-		if prefix, direct, lan := lanAggregate(c, ip, connectors); lan && !direct {
-			lanKey = "unlisted-lan64:" + prefix
+		// its own address: its prefix shares a window of its own, never the
+		// direct one, and all such traffic shares the unlisted total.
+		if lp := classifyLANPeer(c, ip, connectors); lp.unlisted {
+			if lp.prefix != "" {
+				aggs = append(aggs, bootstrapAgg{key: "unlisted-lan:" + lp.prefix, factor: bootstrapLANPrefixFactor})
+			}
+			aggs = append(aggs, bootstrapAgg{key: bootstrapUnlistedLANTotalKey, factor: bootstrapUnlistedLANTotalFactor})
 		}
 	}
-	return key, lanKey, ip, false
+	return key, aggs, ip, false
 }
 
 // bootstrapDirectLANKey is the aggregate window key of a DIRECT LAN IPv6
@@ -168,7 +196,7 @@ func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer f
 // unlisted connector on a LAN address in the same /64, never touches it, so
 // it cannot spend the window the owner's direct recovery depends on. Tunnel
 // traffic has the global ceiling instead, and a LAN host sending Cloudflare
-// markers its own "unlisted-lan64:" window.
+// markers its own "unlisted-lan:" window and the unlisted total.
 func bootstrapDirectLANKey(ip string) string {
 	if prefix, ok := lanIPv6Prefix(ip); ok {
 		return "direct-lan64:" + prefix
@@ -192,15 +220,14 @@ func (l *bootstrapLimiter) removeLocked(el *list.Element) {
 	l.order.Remove(el)
 }
 
-// allow records one attempt for key (and for lanKey, the aggregate window of
-// a LAN IPv6 /64, when it is not "") and reports whether it may proceed. Both
-// windows must admit the attempt, and the check and the increments happen
-// under one lock, so they are atomic. A refused attempt is not recorded
-// anywhere, so it spends neither window nor the global budget.
-// exemptFromGlobal (a direct LAN peer) skips the global ceiling entirely: it
-// is neither refused by it nor counted against it; its direct LAN aggregate
-// still applies to it.
-func (l *bootstrapLimiter) allow(key, lanKey string, exemptFromGlobal bool) bool {
+// allow records one attempt for key and for each aggregate window in aggs,
+// and reports whether it may proceed. Every window must admit the attempt,
+// and the checks and the increments happen under one lock, all checks first,
+// so they are atomic: a refused attempt is not recorded anywhere, so it
+// spends no window and no global budget. exemptFromGlobal (a direct LAN peer)
+// skips the global ceiling entirely: it is neither refused by it nor counted
+// against it; its aggregates still apply to it.
+func (l *bootstrapLimiter) allow(key string, exemptFromGlobal bool, aggs ...bootstrapAgg) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -209,8 +236,10 @@ func (l *bootstrapLimiter) allow(key, lanKey string, exemptFromGlobal bool) bool
 	if l.countLocked(key) >= l.maxPerKey {
 		return false
 	}
-	if lanKey != "" && l.countLocked(lanKey) >= bootstrapLANPrefixFactor*l.maxPerKey {
-		return false
+	for _, a := range aggs {
+		if l.countLocked(a.key) >= a.factor*l.maxPerKey {
+			return false
+		}
 	}
 	if !exemptFromGlobal {
 		if l.global.count == 0 || now.Sub(l.global.firstAt) > l.window {
@@ -222,8 +251,8 @@ func (l *bootstrapLimiter) allow(key, lanKey string, exemptFromGlobal bool) bool
 		l.global.count++
 	}
 	l.incrementLocked(key, now)
-	if lanKey != "" {
-		l.incrementLocked(lanKey, now)
+	for _, a := range aggs {
+		l.incrementLocked(a.key, now)
 	}
 	return true
 }

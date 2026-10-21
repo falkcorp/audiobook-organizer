@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
@@ -146,11 +146,10 @@ func clientPrefixKey(ip string) (key string, ok bool) {
 // lanIPv6Prefix returns the /64 of a LAN IPv6 address (ULA fc00::/7 or
 // link-local), and false for anything else (IPv4, public IPv6, loopback,
 // unparseable). clientPrefixKey keys such an address on its full address so
-// LAN devices sharing one /64 do not share a bucket; for a DIRECT LAN peer
-// (directLANPeer) this /64 is the aggregate bucket on top of that, so one LAN
-// host rotating through addresses in its /64 cannot mint unlimited
-// per-address buckets. Tunnel traffic never gets it, so it cannot spend a
-// direct peer's aggregate.
+// LAN devices sharing one /64 do not share a bucket; this /64 is then the
+// aggregate bucket on top of that (classifyLANPeer, separate buckets for
+// direct and unlisted peers), so one LAN host rotating through addresses in
+// its /64 cannot mint unlimited per-address buckets.
 func lanIPv6Prefix(ip string) (string, bool) {
 	a, err := netip.ParseAddr(strings.TrimSpace(ip))
 	if err != nil {
@@ -189,25 +188,41 @@ func requestClientIP(c *gin.Context) string {
 	return ip
 }
 
-// lanAggregate reports whether a request keyed on ip gets a LAN /64
-// aggregate bucket, and which kind: ip must be a LAN IPv6 address that is the
-// request's own peer (not a visitor address taken from CF-Connecting-IP) and
-// not a listed connector. direct (directLANPeer) selects the direct-* bucket;
-// otherwise the peer is a LAN host sending Cloudflare markers (most likely an
-// unlisted connector, or a host pretending to be one) and gets the unlisted-*
-// bucket. The two are separate so tunnel-looking traffic can never spend the
-// aggregate a direct LAN caller (the owner) depends on, while one LAN host
-// rotating through its /64 is capped in either case.
-func lanAggregate(c *gin.Context, ip string, connectors connectorPeers) (prefix string, direct, ok bool) {
-	prefix, ok = lanIPv6Prefix(ip)
-	if !ok {
-		return "", false, false
-	}
+// lanPeer classifies a request keyed on ip whose ip is the request's own
+// peer (not a visitor address taken from CF-Connecting-IP) and not a listed
+// connector:
+//   - direct: a direct LAN caller (directLANPeer: LAN address, no Cloudflare
+//     markers);
+//   - unlisted: a LAN host sending Cloudflare markers, most likely an
+//     unlisted connector or a host pretending to be one;
+//   - prefix: the aggregate bucket its address shares, "" for none: the /64
+//     of a LAN IPv6 address (direct or unlisted), and the /24 of an unlisted
+//     private IPv4 address, so one host cannot rotate addresses (IPv6 in its
+//     /64, IPv4 aliases in its /24) for fresh per-client buckets. A direct
+//     IPv4 caller has no aggregate: IPv4 aliases on a LAN host are few, and
+//     a /24 bucket would be shared by every device on the home network.
+//
+// Direct and unlisted traffic use separate buckets, so tunnel-looking traffic
+// can never spend the aggregate a direct LAN caller (the owner) depends on.
+// Every field is zero for any other request.
+type lanPeer struct {
+	direct, unlisted bool
+	prefix           string
+}
+
+func classifyLANPeer(c *gin.Context, ip string, connectors connectorPeers) lanPeer {
 	peer, parsed := peerAddr(c)
-	if !parsed || peer.String() != ip || connectors.contains(ip) {
-		return "", false, false
+	if !parsed || peer.String() != ip || connectors.contains(ip) || !isLANAddr(peer) || peer.IsLoopback() {
+		return lanPeer{}
 	}
-	return prefix, directLANPeer(c, connectors), true
+	lp := lanPeer{direct: directLANPeer(c, connectors)}
+	lp.unlisted = !lp.direct
+	if prefix, ok := lanIPv6Prefix(ip); ok {
+		lp.prefix = prefix
+	} else if lp.unlisted && peer.Is4() {
+		lp.prefix = netip.PrefixFrom(peer, 24).Masked().String()
+	}
+	return lp
 }
 
 // directLANPeer reports whether the request is a direct caller on this
@@ -218,9 +233,9 @@ func lanAggregate(c *gin.Context, ip string, connectors connectorPeers) (prefix 
 // (hasCloudflareMarkers). Cloudflare's edge adds those to everything it
 // proxies and the connector passes them through, so tunnel traffic is never
 // direct even though the connectors reach this service from private LAN
-// addresses. The bootstrap limiter exempts a direct caller from its global
-// ceiling; both limiters give a direct LAN IPv6 caller the per-/64 aggregate
-// (lanIPv6Prefix), and only a direct caller. With TUNNEL_CONNECTOR_ADDRS unset, a
+// addresses. Both limiters exempt a direct caller from their global ceiling
+// and give it LAN aggregates no other traffic can spend (classifyLANPeer).
+// With TUNNEL_CONNECTOR_ADDRS unset, a
 // connector request stripped of every Cloudflare header on the way would
 // count as direct too (see trustedClientIP).
 func directLANPeer(c *gin.Context, connectors connectorPeers) bool {

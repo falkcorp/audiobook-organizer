@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-21
 
@@ -27,8 +27,8 @@ import (
 )
 
 // Public invite endpoints (GET /auth/invite/:token and POST
-// /auth/accept-invite) are bounded by three layers and a request must pass all
-// three. The token space is 256 bits, so this is about load and about
+// /auth/accept-invite) are bounded by three layers and a request must pass each
+// one that applies to it. The token space is 256 bits, so this is about load and about
 // protecting one guest's invitation from another caller, not about guessing.
 //
 // Production sits behind a Cloudflare tunnel whose connectors (cloudflared)
@@ -47,11 +47,19 @@ import (
 //     be believed (the peer is a configured tunnel connector, or the request
 //     carries a verified Access assertion and the peer is this host),
 //     otherwise the peer's own address; public IPv6 clients are grouped by
-//     /64, LAN IPv6 peers keep their full address (clientPrefixKey) and every
-//     address of a LAN /64 also shares an aggregate bucket at four times the
-//     per-client budget, reserved with the per-client one: direct peers
-//     (directLANPeer) in one, LAN hosts sending Cloudflare markers in another
-//     (lanAggregate), so tunnel-looking traffic never spends the direct one; sending Cf-* headers does not change a non-connector
+//     /64, LAN IPv6 peers keep their full address (clientPrefixKey). A LAN
+//     peer keyed on its own address also gets LAN aggregates, reserved with
+//     the per-client bucket (classifyLANPeer, inviteClientKey). A direct
+//     peer (directLANPeer) gets its /64's aggregate when it is IPv6, at
+//     four times the per-client budget, and the direct LAN total, half the
+//     global layer. A LAN host sending Cloudflare markers but not a listed
+//     connector ("unlisted") gets its /64 (IPv6) or /24 (IPv4) aggregate,
+//     at twice the per-client budget, and the unlisted LAN total, a quarter
+//     of the global layer, so one LAN host rotating
+//     through many addresses, /64s or /24s can never drain the global layer
+//     for everyone else. Direct and unlisted traffic never share a bucket,
+//     so tunnel-looking traffic cannot spend what a direct LAN caller
+//     depends on. Sending Cf-* headers does not change a non-connector
 //     peer's key. A request whose client cannot be established (a configured
 //     connector or a local peer with no trusted header) SKIPS this layer: a
 //     key taken from an unproven header would let a caller pick its own
@@ -62,6 +70,12 @@ import (
 //     start-up when the setting is empty).
 //  3. global: a generous ceiling across every token and client, so
 //     enumeration spread over many tokens or many clients is still bounded.
+//     A direct LAN peer is EXEMPT from it (it has the direct LAN total
+//     instead), so a flood from the internet cannot lock out a caller on
+//     this network; the price is that a LAN device can spend the direct
+//     total and lock out other direct callers, as the internet could spend
+//     the global layer before. A request whose client is unattributed, a tunnel
+//     visitor and an unlisted LAN host all stay under it.
 //
 // Real use is one page load and one accept per guest.
 //
@@ -71,12 +85,16 @@ import (
 // it a fresh burst (eviction only ever refreshes a bucket; see
 // IPRateLimiter.insertLocked). A request the middleware refuses inserts no
 // key anywhere (an unseen key's entry is created only when the request is
-// admitted, ReserveKey/Commit), so every new per-client or per-token entry
-// belongs to a request the global layer admitted: each of those limiters
-// gains at most
-// inviteGlobalRateBurst + 15 * inviteGlobalRatePerMinute = 4,600 keys per
-// idle TTL, and the global limiter has one key. That is why the global
-// ceiling is not larger.
+// admitted, ReserveKey/Commit), so every new per-client, per-token or LAN
+// aggregate entry belongs to a request that the global layer or, for a
+// direct LAN peer exempt from it, the direct LAN total admitted (unlisted
+// LAN traffic stays under the global layer): each of those limiters gains at
+// most inviteGlobalRateBurst + 15 * inviteGlobalRatePerMinute = 4,600 keys
+// from the first and inviteDirectLANTotalRateBurst +
+// 15 * inviteDirectLANTotalRatePerMinute = 2,300 from the second per idle
+// TTL, 6,900 in all, and the global and LAN total limiters hold one key
+// each. That is why neither ceiling is larger, and why the global exemption
+// comes with a total of its own.
 const (
 	// Per client (layer 2). Name kept from the single shared limiter this
 	// replaced.
@@ -88,14 +106,41 @@ const (
 	inviteTokenRatePerMinute = 6
 	inviteTokenRateBurst     = 8
 
-	// Per direct LAN /64 (part of layer 2): a direct LAN IPv6 peer is keyed
-	// on its full address, so every address of its /64 also shares this
-	// aggregate (never given to tunnel traffic) at four times the per-client
-	// budget: one LAN host rotating through its /64 is capped here before it
-	// reaches the global layer, while a few distinct LAN devices each keep
-	// their own per-client bucket.
-	inviteLANPrefixRatePerMinute = 4 * inviteAuthRatePerMinute
-	inviteLANPrefixRateBurst     = 4 * inviteAuthRateBurst
+	// LAN aggregates (part of layer 2). A LAN peer keyed on its own address
+	// shares a prefix aggregate with every address of its prefix, so one
+	// LAN host rotating through its prefix is capped there while a few
+	// distinct LAN devices each keep their own per-client bucket, and a
+	// total with all LAN traffic of its kind. Direct and unlisted traffic
+	// have separate limiters, so neither can spend the other's. The layers
+	// nest, each larger than the one before, so each can be the one that
+	// refuses (bursts; per-minute rates likewise):
+	//   - direct: per client 10 < /64 40 < direct total 50 (exempt from
+	//     the global layer);
+	//   - unlisted: per client 10 < /64 or /24 20 < unlisted total 25 <
+	//     global 100.
+
+	// Direct LAN IPv6 /64: four times the per-client budget, room for the
+	// devices of a household sharing one ULA /64.
+	inviteDirectLANPrefixRatePerMinute = 4 * inviteAuthRatePerMinute
+	inviteDirectLANPrefixRateBurst     = 4 * inviteAuthRateBurst
+
+	// Direct LAN total: half the global layer. It bounds the traffic the
+	// global exemption lets through, so the per-client and per-token tables
+	// stay within the tuning constraint above, and an IPv4 LAN host (which
+	// has no prefix aggregate) cannot rotate aliases without limit.
+	inviteDirectLANTotalRatePerMinute = inviteGlobalRatePerMinute / 2
+	inviteDirectLANTotalRateBurst     = inviteGlobalRateBurst / 2
+
+	// Unlisted LAN /64 (IPv6) or /24 (IPv4): twice the per-client budget,
+	// below the unlisted total so it can bind.
+	inviteUnlistedLANPrefixRatePerMinute = 2 * inviteAuthRatePerMinute
+	inviteUnlistedLANPrefixRateBurst     = 2 * inviteAuthRateBurst
+
+	// Unlisted LAN total: a quarter of the global layer, so a LAN host
+	// sending Cloudflare markers cannot drain the global layer by rotating
+	// across prefixes.
+	inviteUnlistedLANTotalRatePerMinute = inviteGlobalRatePerMinute / 4
+	inviteUnlistedLANTotalRateBurst     = inviteGlobalRateBurst / 4
 
 	// Global (layer 3), across all tokens and clients.
 	inviteGlobalRatePerMinute = 300
@@ -240,14 +285,23 @@ func setBodyReadDeadline(c *gin.Context, d time.Duration) (restore func()) {
 // inviteGlobalKey is the single bucket of the global layer.
 const inviteGlobalKey = "invite:global"
 
-// inviteRateLimits holds the three limiters of the public invite endpoints.
+// The single buckets of the LAN total limiters.
+const (
+	inviteDirectLANTotalKey   = "invite-lan-total:direct"
+	inviteUnlistedLANTotalKey = "invite-lan-total:unlisted"
+)
+
+// inviteRateLimits holds the limiters of the public invite endpoints.
 type inviteRateLimits struct {
 	perToken  *servermiddleware.IPRateLimiter
 	perClient *servermiddleware.IPRateLimiter
-	// perLANPrefix is the aggregate per LAN IPv6 /64 (lanIPv6Prefix),
-	// reserved together with perClient.
-	perLANPrefix *servermiddleware.IPRateLimiter
-	global       *servermiddleware.IPRateLimiter
+	// The LAN aggregates (classifyLANPeer), reserved together with
+	// perClient: per prefix and total, for direct and unlisted peers.
+	directLANPrefix   *servermiddleware.IPRateLimiter
+	directLANTotal    *servermiddleware.IPRateLimiter
+	unlistedLANPrefix *servermiddleware.IPRateLimiter
+	unlistedLANTotal  *servermiddleware.IPRateLimiter
+	global            *servermiddleware.IPRateLimiter
 	// isLocalPeer reports whether an address is this host. Injectable for tests.
 	isLocalPeer func(remoteAddr string) bool
 	// connectors are the configured tunnel connector addresses (see
@@ -260,19 +314,25 @@ var inviteLimitLog = logger.New("server.invite-rate-limit")
 // newInviteRateLimits builds the limiters and starts their idle sweepers on ctx.
 func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 	l := &inviteRateLimits{
-		perToken:     servermiddleware.NewIPRateLimiter(inviteTokenRatePerMinute, inviteTokenRateBurst),
-		perClient:    servermiddleware.NewIPRateLimiter(inviteAuthRatePerMinute, inviteAuthRateBurst),
-		perLANPrefix: servermiddleware.NewIPRateLimiter(inviteLANPrefixRatePerMinute, inviteLANPrefixRateBurst),
-		global:       servermiddleware.NewIPRateLimiter(inviteGlobalRatePerMinute, inviteGlobalRateBurst),
-		isLocalPeer:  remoteAddrIsLocal,
-		connectors:   tunnelConnectorPeers(),
+		perToken:          servermiddleware.NewIPRateLimiter(inviteTokenRatePerMinute, inviteTokenRateBurst),
+		perClient:         servermiddleware.NewIPRateLimiter(inviteAuthRatePerMinute, inviteAuthRateBurst),
+		directLANPrefix:   servermiddleware.NewIPRateLimiter(inviteDirectLANPrefixRatePerMinute, inviteDirectLANPrefixRateBurst),
+		directLANTotal:    servermiddleware.NewIPRateLimiter(inviteDirectLANTotalRatePerMinute, inviteDirectLANTotalRateBurst),
+		unlistedLANPrefix: servermiddleware.NewIPRateLimiter(inviteUnlistedLANPrefixRatePerMinute, inviteUnlistedLANPrefixRateBurst),
+		unlistedLANTotal:  servermiddleware.NewIPRateLimiter(inviteUnlistedLANTotalRatePerMinute, inviteUnlistedLANTotalRateBurst),
+		global:            servermiddleware.NewIPRateLimiter(inviteGlobalRatePerMinute, inviteGlobalRateBurst),
+		isLocalPeer:       remoteAddrIsLocal,
+		connectors:        tunnelConnectorPeers(),
 	}
 	if len(l.connectors) == 0 {
-		inviteLimitLog.Info("TUNNEL_CONNECTOR_ADDRS is not set: no tunnel visitor address can be established, so each tunnel connector gets one invite per-client bucket shared by every visitor it relays; the per-token and global limits still apply")
+		inviteLimitLog.Info("TUNNEL_CONNECTOR_ADDRS is not set: no tunnel visitor address can be established, so each tunnel connector gets one invite per-client bucket shared by every visitor it relays, and all tunnel traffic shares the unlisted LAN total (a quarter of the global limit); the per-token and global limits still apply")
 	}
 	l.perToken.Start(ctx)
 	l.perClient.Start(ctx)
-	l.perLANPrefix.Start(ctx)
+	l.directLANPrefix.Start(ctx)
+	l.directLANTotal.Start(ctx)
+	l.unlistedLANPrefix.Start(ctx)
+	l.unlistedLANTotal.Start(ctx)
 	l.global.Start(ctx)
 	return l
 }
@@ -288,38 +348,62 @@ func inviteTokenKey(token string) string {
 	return "invite-token:" + hex.EncodeToString(sum[:16])
 }
 
-// inviteClientKey returns the per-client bucket key for the request, and false
-// when no trusted client address can be established (see trustedClientIP), in
-// which case the per-client layer is skipped for the request. The key is never
-// derived from an unproven header. Public IPv6 clients share one bucket per
-// /64 (clientPrefixKey), as the bootstrap limiter keys them, so one host cannot
-// rotate through its /64 for fresh buckets; a LAN IPv6 peer (ULA, link-local)
-// keeps its full address, so LAN devices sharing a /64 do not share a bucket,
-// and lanKey is then its /64's aggregate bucket (perLANPrefix; direct and
-// unlisted-connector peers in separate buckets, lanAggregate); "" otherwise.
-func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (key, lanKey string, ok bool) {
+// inviteClient is how the client layer keys one request (inviteClientKey).
+type inviteClient struct {
+	// key is the per-client bucket.
+	key string
+	// prefixKey is the LAN prefix aggregate, "" for none.
+	prefixKey string
+	// totalKey is the LAN total, "" for none.
+	totalKey string
+	// direct: a direct LAN peer (direct limiters; skips the global layer);
+	// unlisted: an unlisted Cf-marked LAN peer (unlisted limiters). Both
+	// false for any other request.
+	direct, unlisted bool
+}
+
+// inviteClientKey returns how the client layer keys the request, and false
+// when no trusted client address can be established (see trustedClientIP),
+// in which case the per-client layer is skipped for the request and the
+// global layer applies. The key is never derived from an unproven header.
+// Public IPv6 clients share one bucket per /64 (clientPrefixKey), as the
+// bootstrap limiter keys them, so one host cannot rotate through its /64 for
+// fresh buckets; a LAN IPv6 peer (ULA, link-local) keeps its full address, so
+// LAN devices sharing a /64 do not share a bucket. A LAN peer keyed on its
+// own address also gets its LAN aggregates (classifyLANPeer):
+//   - direct: "invite-direct-lan64:<its /64>" for IPv6 (none for IPv4: a /24
+//     bucket would be shared by every device on the home network), the
+//     direct LAN total, and the global exemption;
+//   - unlisted (Cloudflare markers, not a listed connector):
+//     "invite-unlisted-lan:<its /64 or /24>" and the unlisted LAN total.
+//
+// A visitor attributed through a connector gets none of them (the global
+// layer covers it).
+func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (inviteClient, bool) {
 	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
 	if !ok {
-		return "", "", false
+		return inviteClient{}, false
 	}
 	k, ok := clientPrefixKey(ip)
 	if !ok {
-		return "", "", false
+		return inviteClient{}, false
 	}
-	// A LAN IPv6 peer keyed on its own address gets a /64 aggregate
-	// (lanAggregate): direct peers in "invite-direct-lan64:", LAN hosts
-	// sending Cloudflare markers in "invite-unlisted-lan64:", so neither
-	// can rotate through its /64 for fresh buckets and tunnel-looking
-	// traffic never spends the direct aggregate. A visitor attributed
-	// through a connector gets none (the global layer covers it).
-	if prefix, direct, lan := lanAggregate(c, ip, l.connectors); lan {
-		if direct {
-			lanKey = "invite-direct-lan64:" + prefix
-		} else {
-			lanKey = "invite-unlisted-lan64:" + prefix
+	ic := inviteClient{key: "invite-client:" + k}
+	switch lp := classifyLANPeer(c, ip, l.connectors); {
+	case lp.direct:
+		if lp.prefix != "" {
+			ic.prefixKey = "invite-direct-lan64:" + lp.prefix
 		}
+		ic.totalKey = inviteDirectLANTotalKey
+		ic.direct = true
+	case lp.unlisted:
+		if lp.prefix != "" {
+			ic.prefixKey = "invite-unlisted-lan:" + lp.prefix
+		}
+		ic.totalKey = inviteUnlistedLANTotalKey
+		ic.unlisted = true
 	}
-	return "invite-client:" + k, lanKey, true
+	return ic, true
 }
 
 // remoteAddrIsLocal reports whether addr ("host:port") is a loopback address or
@@ -346,7 +430,7 @@ func remoteAddrIsLocal(addr string) bool {
 	return false
 }
 
-// middleware returns the Gin middleware enforcing all three layers.
+// middleware returns the Gin middleware enforcing the layers.
 // tokenOf extracts the invite token from the request; "" (missing or
 // unparseable) uses the shared fallback bucket. ok=false means tokenOf has
 // already answered the request (413) and the chain stops.
@@ -356,11 +440,12 @@ func remoteAddrIsLocal(addr string) bool {
 //     bounded in size (inviteAcceptBodyLimit, 4 KiB) and in time
 //     (inviteAcceptBodyReadTimeout), and doing it first means a request
 //     tokenOf rejects never reaches a limiter at all.
-//  2. The client, token and global layers are then reserved together
+//  2. The client (with its LAN aggregates), token and global layers are
+//     then reserved together
 //     (ReserveKeys). Each reservation is atomic (IPRateLimiter.ReserveKey),
 //     and when any layer refuses, every reservation already taken is
 //     cancelled: a refused request spends nothing anywhere.
-//  3. Only once all three admit is the set committed. A per-client or
+//  3. Only once every layer admits is the set committed. A per-client or
 //     per-token key the limiter has never seen is NOT inserted until then;
 //     an unseen key is always allowed at full burst, so ReserveKey records a
 //     pending admission instead of an entry. A refused request therefore
@@ -376,7 +461,8 @@ func remoteAddrIsLocal(addr string) bool {
 // tables, so it cannot evict anyone's bucket.
 //
 // A request with no trusted client address skips the client layer (see
-// inviteClientKey). Every layer refuses with the same status and body, so a
+// inviteClientKey), and a direct LAN peer skips the global layer (its LAN
+// total stands in for it). Every layer refuses with the same status and body, so a
 // caller cannot tell which layer tripped.
 func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, ok bool)) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -389,17 +475,25 @@ func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, 
 		if tokenKey == "" {
 			tokenKey = inviteFallbackTokenKey
 		}
-		steps := make([]servermiddleware.KeyStep, 0, 4)
-		if key, lanKey, attributed := l.inviteClientKey(c); attributed {
-			steps = append(steps, servermiddleware.KeyStep{Limiter: l.perClient, Key: key})
-			if lanKey != "" {
-				steps = append(steps, servermiddleware.KeyStep{Limiter: l.perLANPrefix, Key: lanKey})
+		steps := make([]servermiddleware.KeyStep, 0, 5)
+		ic, attributed := l.inviteClientKey(c)
+		if attributed {
+			steps = append(steps, servermiddleware.KeyStep{Limiter: l.perClient, Key: ic.key})
+			prefix, total := l.unlistedLANPrefix, l.unlistedLANTotal
+			if ic.direct {
+				prefix, total = l.directLANPrefix, l.directLANTotal
+			}
+			if ic.prefixKey != "" {
+				steps = append(steps, servermiddleware.KeyStep{Limiter: prefix, Key: ic.prefixKey})
+			}
+			if ic.totalKey != "" {
+				steps = append(steps, servermiddleware.KeyStep{Limiter: total, Key: ic.totalKey})
 			}
 		}
-		steps = append(steps,
-			servermiddleware.KeyStep{Limiter: l.perToken, Key: tokenKey},
-			servermiddleware.KeyStep{Limiter: l.global, Key: inviteGlobalKey},
-		)
+		steps = append(steps, servermiddleware.KeyStep{Limiter: l.perToken, Key: tokenKey})
+		if !ic.direct {
+			steps = append(steps, servermiddleware.KeyStep{Limiter: l.global, Key: inviteGlobalKey})
+		}
 		held, ok := servermiddleware.ReserveKeys(steps...)
 		if !ok {
 			httputil.RespondWithError(c, http.StatusTooManyRequests, "rate limit exceeded", "TOO_MANY_REQUESTS")

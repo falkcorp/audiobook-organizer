@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -317,9 +317,9 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// is not tunnel traffic: it is keyed on its own address and exempt from the
 	// global ceiling, so internet traffic cannot lock it out
 	// (see bootstrapClientKey and directLANPeer).
-	limitKey, lanKey, ip, direct := bootstrapClientKey(c, tunnelConnectorPeers(), remoteAddrIsLocal)
+	limitKey, aggs, ip, direct := bootstrapClientKey(c, tunnelConnectorPeers(), remoteAddrIsLocal)
 
-	if !bootstrapLimits.allow(limitKey, lanKey, direct) {
+	if !bootstrapLimits.allow(limitKey, direct, aggs...) {
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many bootstrap attempts — try again later", "TOO_MANY_REQUESTS")
 		return
 	}
