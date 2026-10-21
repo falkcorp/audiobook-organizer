@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/split_books_fixer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 946919fd-5279-41f2-bb7e-1331ea924e5e
-// last-edited: 2026-10-12
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -698,10 +698,117 @@ func TestSplitBooksFixer_D21OverlapWithFragmentNoParent(t *testing.T) {
 	t.Logf("D21: %d split-book clusters; %d also fragment no-parent rows (%v), %d of them applicable there (%v)",
 		len(split.Rows), len(both), both, len(bothApplicable), bothApplicable)
 	// Measured: the grandparent shape (one chapter per numbered subfolder)
-	// is the split fixer's alone; the hour-long parts are a fragment
-	// no-parent row too, but skipped there by its duration gate (the split
-	// detector has none).
+	// is the split fixer's alone. The hour-long parts are a fragment
+	// no-parent row too, skipped there by its duration gate; the split fixer
+	// now holds them with the same gate (held_duration_gate, the same
+	// repair_chapter_max_min limit), so the two fixers agree on which of the
+	// overlapping rows are applicable.
 	assert.Len(t, split.Rows, 4)
 	assert.Equal(t, []string{"Book One", "Book Three", "Book Two"}, both)
 	assert.Equal(t, []string{"Book One", "Book Two"}, bothApplicable)
+	var splitApplicable []string
+	for _, r := range split.Rows {
+		if r.Applicable() {
+			splitApplicable = append(splitApplicable, r.Title)
+		}
+	}
+	sort.Strings(splitApplicable)
+	assert.Equal(t, []string{"Book Four", "Book One", "Book Two"}, splitApplicable,
+		"the split fixer applies the same rows the fragment fixer does, plus the grandparent shape that is its own")
+	for _, r := range split.Rows {
+		if r.Title == "Book Three" {
+			assert.Equal(t, sbHeldDurationGate, r.Skipped, r.SkipReason)
+		}
+	}
+}
+
+// sbSeedNoFiles seeds n books in dir, one numbered file each on disk but NO
+// book_file rows (the detector groups by the stored book path, which can be
+// stale), and returns their ids sorted.
+func sbSeedNoFiles(t *testing.T, f *fragFixture, dir, stem string, n int) []string {
+	t.Helper()
+	ids := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		name := fmt.Sprintf("%s %02d", stem, i)
+		rel := filepath.Join(dir, name+".mp3")
+		p := f.file(t, rel, 800+i)
+		ids = append(ids, f.book(t, rel, name, p, nil))
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// A cluster whose books have no book_file rows is listed but never
+// applicable: skipped_no_files.
+func TestSplitBooksFixer_ZeroFileClusterIsSkipped(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	ghost := sbSeedNoFiles(t, f, "lib/Author A/Ghost Book", "Ghost Book", 3)
+	ok := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
+
+	res := sbPlan(t, f, sbFixer(f))
+	r := sbRowWith(t, res, ghost)
+	assert.False(t, r.Applicable())
+	assert.Equal(t, sbSkipNoFiles, r.Skipped)
+	assert.Contains(t, r.SkipReason, "3 of 3 books have no file rows")
+	assert.Len(t, r.Members, 3, "a skipped row still lists its books")
+	assert.True(t, sbRowWith(t, res, ok).Applicable())
+}
+
+// A file at or over repair_chapter_max_min is a whole book: held_duration_gate
+// (the fragment fixer's gate and limit).
+func TestSplitBooksFixer_LongFilesAreHeldByDurationGate(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	long := sbCluster(t, f, "lib/Author A/Book Long", "Book Long", 3, 3*3600)
+	res := sbPlan(t, f, sbFixer(f))
+	r := sbRowWith(t, res, long)
+	assert.False(t, r.Applicable())
+	assert.Equal(t, sbHeldDurationGate, r.Skipped, r.SkipReason)
+	assert.Contains(t, r.SkipReason, "3 of 3 file rows run 120 min or longer")
+	assert.Contains(t, strings.Join(r.Evidence, "\n"), "3 at or over 120 min")
+}
+
+// A file with no recorded duration cannot be told from a whole book: an
+// unknown duration is not "short" (fragment fixer rule).
+func TestSplitBooksFixer_UnknownDurationIsHeld(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	unk := sbCluster(t, f, "lib/Author A/Book Unknown", "Book Unknown", 3, 0)
+	res := sbPlan(t, f, sbFixer(f))
+	r := sbRowWith(t, res, unk)
+	assert.False(t, r.Applicable())
+	assert.Equal(t, sbHeldDurationUnknown, r.Skipped, r.SkipReason)
+	assert.Contains(t, r.SkipReason, "3 of 3 file rows have no recorded duration")
+}
+
+// A series folder of separate books is held with the detector's vetoes in its
+// evidence, and a re-plan finds the row (it is not "resolved").
+func TestSplitBooksFixer_DistinctWorksAreHeld(t *testing.T) {
+	t.Parallel()
+	f := newFragFixture(t)
+	series := sbCluster(t, f, "lib/Author A/Embergate Series", "Embergate", 3, 300)
+	other := sbCluster(t, f, "lib/Author A/Book One", "Book One", 3, 300)
+	fx := sbFixer(f)
+	res := sbPlan(t, f, fx)
+	r := sbRowWith(t, res, series)
+	assert.False(t, r.Applicable())
+	assert.Equal(t, sbHeldDistinctWorks, r.Skipped, r.SkipReason)
+	assert.Contains(t, r.SkipReason, "V4")
+	assert.Contains(t, strings.Join(r.Evidence, "\n"), "VETO V4")
+	assert.True(t, sbRowWith(t, res, other).Applicable())
+
+	again, err := fx.Replan(context.Background(), nil, r, &fakeReporter{})
+	require.NoError(t, err)
+	assert.Equal(t, sbHeldDistinctWorks, again.Skipped, "the held row is re-planned as held, not resolved")
+	assert.Equal(t, r.Fingerprint, again.Fingerprint)
+
+	// The fail-closed detector (the scan op, the bulk merge, the CLI) never
+	// lists the vetoed cluster.
+	cands, err := dedup.DetectSplitBookCandidates(context.Background(), f.s, nil)
+	require.NoError(t, err)
+	for _, c := range cands {
+		assert.NotEqual(t, series, append([]string(nil), c.BookIDs...))
+	}
+	assert.Len(t, cands, 1)
 }
