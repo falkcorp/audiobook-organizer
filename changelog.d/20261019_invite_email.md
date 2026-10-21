@@ -28,13 +28,15 @@ its full address, since LAN devices share one /64; a direct LAN peer, one
 that is not a connector and sends no Cloudflare markers, also shares an
 aggregate bucket per /64 at four times the per-client budget, so one host
 rotating through its /64 is still capped, and tunnel traffic never touches
-that aggregate; link-local peers count as LAN, and the peer address is parsed
+that aggregate; a LAN IPv6 host that sends Cloudflare markers without being a
+listed connector shares a separate aggregate per /64, so it cannot rotate
+either; link-local peers count as LAN, and the peer address is parsed
 from the connection with its zone dropped, so a zoned link-local client is
 attributed), so forging `Cf-*` headers
 never takes a caller out of per-client limiting; an unlisted connector is
 therefore one bucket for everyone it relays, and a private peer that sends
-Cloudflare headers without being listed is logged once per address at
-warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
+Cloudflare headers without being listed is logged once per address (once
+per /64 for IPv6, so rotation cannot fill it) at warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
 skipped rather than shared, and the per-token and global layers still apply.
 The token is read first; then all three layers are reserved together, and a
@@ -203,7 +205,9 @@ devices on IPv6 share one /64); every address of a direct LAN IPv6 /64 also
 shares one aggregate window of 20 attempts an hour, which is what caps a LAN host
 rotating through its /64, since direct callers skip the global ceiling.
 Tunnel traffic, including connectors on LAN addresses in the same /64, never
-counts against that window, so it cannot lock out the owner's recovery.
+counts against that window, so it cannot lock out the owner's recovery. A LAN
+IPv6 host sending Cloudflare markers has its own 20-an-hour window per /64 on
+top of the global ceiling.
 
 #### The startup read-only key no longer creates an admin
 

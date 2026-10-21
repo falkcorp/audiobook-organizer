@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-20
 
@@ -607,5 +607,31 @@ func TestBootstrapClientKey_ZonedLinkLocalIsDirect(t *testing.T) {
 	key, exempt := bootstrapKeyFor(t, "", "[fe80::1%en0]:4000", nil)
 	if key != "direct:fe80::1" || !exempt {
 		t.Fatalf("zoned link-local peer: key %q exempt %v, want direct:fe80::1 and exempt", key, exempt)
+	}
+}
+
+// S2: a LAN host rotating ULA addresses with a Cf-* header (not direct) is
+// capped by its own unlisted-lan64 window, and the owner's direct peer in the
+// same /64 still gets its full window afterwards.
+func TestBootstrapLimiter_CfMarkedULARotationIsCapped(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, 1000) // a global ceiling the flood cannot reach
+	admitted := 0
+	for i := range 250 {
+		if bootstrapAttemptVia(l, fmt.Sprintf("[fd12:3456:789a:1::%x]:4000", 0x100+i), nil, map[string]string{"Cf-Ray": "x"}) {
+			admitted++
+		}
+	}
+	if want := bootstrapLANPrefixFactor * bootstrapMaxAttempts; admitted != want {
+		t.Fatalf("Cf-marked ULA rotation: %d of 250 admitted, want the unlisted aggregate %d", admitted, want)
+	}
+	n := 0
+	for range bootstrapMaxAttempts + 2 {
+		if bootstrapAttemptFrom(l, "[fd12:3456:789a:1::1]:4000") {
+			n++
+		}
+	}
+	if n != bootstrapMaxAttempts {
+		t.Fatalf("the owner's direct peer after the flood: %d admitted, want %d", n, bootstrapMaxAttempts)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -1061,5 +1061,36 @@ func TestInviteRateLimit_ZonedLinkLocalPeerIsAttributed(t *testing.T) {
 	}
 	if w := h.get(inviteTestToken(500), "[fe80::2%en0]", nil); w.Code != http.StatusOK {
 		t.Fatalf("another link-local device: %d, want 200", w.Code)
+	}
+}
+
+// S2: a LAN host rotating ULA addresses while sending a Cf-* header is not
+// direct, so it used to get full-address keys and no /64 aggregate (100/100
+// admitted, draining the global burst). It now shares the
+// invite-unlisted-lan64 aggregate, the owner's direct peer in the same /64 is
+// still admitted afterwards, and the rotation is remembered as one /64 by the
+// unlisted-connector warning set.
+func TestInviteRateLimit_CfMarkedULARotationIsCapped(t *testing.T) {
+	saved := unlistedConnectors
+	unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
+	t.Cleanup(func() { unlistedConnectors = saved })
+	h := newInviteLimitHarness(t, false)
+	admitted := 0
+	for i := range 100 {
+		if w := h.get(inviteTestToken(i), fmt.Sprintf("[fd12:3456:789a:1::%x]", 0x100+i), map[string]string{"Cf-Ray": "x"}); w.Code == http.StatusOK {
+			admitted++
+		}
+	}
+	if admitted > inviteLANPrefixRateBurst+1 {
+		t.Fatalf("Cf-marked ULA rotation: %d of 100 admitted, want at most the aggregate burst of %d", admitted, inviteLANPrefixRateBurst)
+	}
+	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+		return h.get(inviteTestToken(500+i), "[fd12:3456:789a:1::1]", nil)
+	})
+	if !limited || allowed < inviteAuthRateBurst {
+		t.Fatalf("the owner's direct peer after the flood: %d admitted (limited=%v), want its burst of %d", allowed, limited, inviteAuthRateBurst)
+	}
+	if n := unlistedConnectors.len(); n != 1 {
+		t.Fatalf("the rotation filled %d warning slots, want 1 (its /64)", n)
 	}
 }
