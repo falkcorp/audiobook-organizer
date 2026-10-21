@@ -32,7 +32,7 @@ that aggregate; a LAN IPv6 host that sends Cloudflare markers without being a
 listed connector shares a separate aggregate per /64, so it cannot rotate
 either; link-local peers count as LAN, and the peer address is parsed
 from the connection with its zone dropped, so a zoned link-local client is
-attributed), so forging `Cf-*` headers
+attributed and a zoned link-local connector matches its listed address), so forging `Cf-*` headers
 never takes a caller out of per-client limiting; an unlisted connector is
 therefore one bucket for everyone it relays, and a private peer that sends
 Cloudflare headers without being listed is logged once per address (once

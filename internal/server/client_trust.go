@@ -1,7 +1,7 @@
 // file: internal/server/client_trust.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -31,20 +31,15 @@ type connectorPeers []netip.Addr
 
 // contains reports whether remoteAddr ("host:port" or a bare host) is one of
 // the configured connector addresses. IPv4-mapped IPv6 forms match their IPv4
-// address.
+// address, and a zone is ignored ("[fe80::5%en0]:4000" matches fe80::5).
 func (p connectorPeers) contains(remoteAddr string) bool {
 	if len(p) == 0 {
 		return false
 	}
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	a, err := netip.ParseAddr(strings.TrimSpace(host))
-	if err != nil {
+	a, ok := parseHostAddr(remoteAddr)
+	if !ok {
 		return false
 	}
-	a = a.Unmap()
 	for _, c := range p {
 		if c == a {
 			return true
@@ -66,7 +61,7 @@ func parseConnectorPeers(csv string) (peers connectorPeers, bad []string) {
 			bad = append(bad, part)
 			continue
 		}
-		peers = append(peers, a.Unmap())
+		peers = append(peers, a.WithZone("").Unmap())
 	}
 	return peers, bad
 }
@@ -174,11 +169,19 @@ func lanIPv6Prefix(ip string) (string, bool) {
 // link-local client unattributed. The router trusts no proxy headers, so for
 // every other address this is what ClientIP returns.
 func peerAddr(c *gin.Context) (netip.Addr, bool) {
-	remote := strings.TrimSpace(c.Request.RemoteAddr)
+	return parseHostAddr(c.Request.RemoteAddr)
+}
+
+// parseHostAddr parses "host:port", "[v6%zone]:port" or a bare address, and
+// returns the address with its zone dropped and IPv4-mapped forms unmapped.
+// Every address comparison in the trust code goes through it, so a zoned
+// link-local peer compares equal to the same address listed without a zone.
+func parseHostAddr(s string) (netip.Addr, bool) {
+	s = strings.TrimSpace(s)
 	var a netip.Addr
-	if ap, err := netip.ParseAddrPort(remote); err == nil {
+	if ap, err := netip.ParseAddrPort(s); err == nil {
 		a = ap.Addr()
-	} else if parsed, err := netip.ParseAddr(remote); err == nil {
+	} else if parsed, err := netip.ParseAddr(s); err == nil {
 		a = parsed
 	} else {
 		return netip.Addr{}, false
@@ -197,10 +200,11 @@ func peerAddr(c *gin.Context) (netip.Addr, bool) {
 // rotating through its /64 is capped in either case.
 func lanAggregate(c *gin.Context, ip string, connectors connectorPeers) (prefix string, direct, ok bool) {
 	prefix, ok = lanIPv6Prefix(ip)
-	if !ok || connectors.contains(c.Request.RemoteAddr) {
+	if !ok {
 		return "", false, false
 	}
-	if peer, parsed := peerAddr(c); !parsed || peer.String() != ip {
+	peer, parsed := peerAddr(c)
+	if !parsed || peer.String() != ip || connectors.contains(ip) {
 		return "", false, false
 	}
 	return prefix, directLANPeer(c, connectors), true
@@ -220,11 +224,8 @@ func lanAggregate(c *gin.Context, ip string, connectors connectorPeers) (prefix 
 // connector request stripped of every Cloudflare header on the way would
 // count as direct too (see trustedClientIP).
 func directLANPeer(c *gin.Context, connectors connectorPeers) bool {
-	if connectors.contains(c.Request.RemoteAddr) {
-		return false
-	}
 	a, ok := peerAddr(c)
-	if !ok || !isLANAddr(a) {
+	if !ok || connectors.contains(a.String()) || !isLANAddr(a) {
 		return false
 	}
 	return !hasCloudflareMarkers(c)
@@ -290,19 +291,19 @@ func isLANAddr(a netip.Addr) bool {
 // per-client layer, and the bootstrap limiter uses the fixed
 // untrustedLocalClientKey.
 func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
-	peer := c.Request.RemoteAddr
-	isConnector := t.connectors.contains(peer)
-	if isConnector || (servermiddleware.CFAccessVerified(c) && t.isLocalPeer(peer)) {
-		if parsed := net.ParseIP(strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))); parsed != nil {
-			return parsed.String(), true
-		}
-	}
 	a, parsed := peerAddr(c)
 	if !parsed {
 		return "", false
 	}
-	ip = a.String()
-	local := t.isLocalPeer(ip)
+	peer := a.String()
+	isConnector := t.connectors.contains(peer)
+	local := t.isLocalPeer(peer)
+	if isConnector || (servermiddleware.CFAccessVerified(c) && local) {
+		if parsed := net.ParseIP(strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))); parsed != nil {
+			return parsed.String(), true
+		}
+	}
+	ip = peer
 	if !isConnector && !local && hasCloudflareMarkers(c) {
 		warnUnlistedConnector(ip)
 	}

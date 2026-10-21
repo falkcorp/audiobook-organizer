@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-21
 
@@ -1168,5 +1168,30 @@ func TestInviteRateLimit_OversizeThenStallIs413Promptly(t *testing.T) {
 	}
 	if el := time.Since(start); el > 2500*time.Millisecond {
 		t.Fatalf("the connection closed only after %v; the post-response drain was not bounded", el)
+	}
+}
+
+// N-b: a connector listed as fe80::5 connecting from "[fe80::5%en0]" is
+// recognised (zones are ignored), so its visitors are keyed on their
+// CF-Connecting-IP rather than on the connector.
+func TestInviteRateLimit_ZonedLinkLocalConnectorIsRecognised(t *testing.T) {
+	peers, bad := parseConnectorPeers("fe80::5")
+	if len(bad) != 0 {
+		t.Fatal(bad)
+	}
+	if !peers.contains("[fe80::5%en0]:4000") || !peers.contains("fe80::5%en0") {
+		t.Fatal("a zoned form of the listed connector did not match")
+	}
+	h := newInviteLimitHarness(t, false)
+	h.limits.connectors = peers
+	req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+	req.RemoteAddr = "[fe80::5%en0]:4000"
+	for k, v := range cfHeaders("203.0.113.44") {
+		req.Header.Set(k, v)
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	if key, lanKey, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:203.0.113.44" || lanKey != "" {
+		t.Fatalf("inviteClientKey = %q, %q, %v; want the visitor's address and no LAN aggregate", key, lanKey, ok)
 	}
 }

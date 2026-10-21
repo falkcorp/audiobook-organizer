@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-21
 
@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"sync"
 	"time"
@@ -324,12 +325,8 @@ func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (key, lanKey string, 
 // remoteAddrIsLocal reports whether addr ("host:port") is a loopback address or
 // an address assigned to one of this host's interfaces.
 func remoteAddrIsLocal(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
+	ip, ok := parseHostAddr(addr) // zone dropped: fe80::1%en0 matches fe80::1
+	if !ok {
 		return false
 	}
 	if ip.IsLoopback() {
@@ -340,8 +337,10 @@ func remoteAddrIsLocal(addr string) bool {
 		return false
 	}
 	for _, a := range addrs {
-		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.Equal(ip) {
-			return true
+		if ipn, ok := a.(*net.IPNet); ok {
+			if own, ok := netip.AddrFromSlice(ipn.IP); ok && own.WithZone("").Unmap() == ip {
+				return true
+			}
 		}
 	}
 	return false
