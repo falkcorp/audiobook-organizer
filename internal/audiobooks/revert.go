@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.79.3
+// version: 1.80.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package audiobooks
 
@@ -781,6 +781,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertFieldLock(c)
 	case undo.ChangeTypeBookTagAdd:
 		return rs.revertBookTagAdd(c)
+	case undo.ChangeTypeUserContentFollow:
+		return rs.revertUserContentFollow(c)
 	case undo.ChangeTypeUserBookStateSet:
 		return rs.revertUserBookStateSet(c)
 	case undo.ChangeTypeMetadataApply:
@@ -912,6 +914,93 @@ func (rs *RevertService) revertBookTagAdd(c *database.OperationChange) error {
 		return fmt.Errorf("remove tag %q of %s: %w", c.FieldName, c.BookID, err)
 	}
 	return nil
+}
+
+// userContentRevertAttempts bounds the read-modify-write retry of a static
+// playlist, whose store write is a compare-and-swap on Version.
+const userContentRevertAttempts = 5
+
+// revertUserContentFollow puts back what a retire carried from the retired
+// book onto its survivor (undo.ChangeTypeUserContentFollow): the survivor's
+// ratings while they still hold exactly what the retire wrote, and the
+// retired book's place in a static collection or playlist. Database rows only.
+func (rs *RevertService) revertUserContentFollow(c *database.OperationChange) error {
+	kind, id, ok := undo.UserContentFromField(c.FieldName)
+	if !ok {
+		return fmt.Errorf("user_content_follow row %s is malformed (field %q)", c.ID, c.FieldName)
+	}
+	switch kind {
+	case undo.UserContentRating:
+		old, err := undo.DecodeRating(c.OldValue)
+		if err != nil {
+			return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: err.Error()}
+		}
+		return rs.modifyBook(c.OperationID, id, func(survivor *database.Book) error {
+			if err := undo.CheckRatingFollowCurrent(survivor, c); err != nil {
+				return err
+			}
+			old.Apply(survivor)
+			return nil
+		})
+	case undo.UserContentCollection:
+		return rs.revertCollectionFollow(c, id)
+	default:
+		return rs.revertPlaylistFollow(c, id)
+	}
+}
+
+// revertCollectionFollow puts the retired book back in static collection id.
+// A collection deleted since, or one that is no longer static, has no member
+// list to restore into and counts restored.
+func (rs *RevertService) revertCollectionFollow(c *database.OperationChange, collectionID string) error {
+	rec, err := undo.DecodeMembership(c.OldValue)
+	if err != nil {
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: err.Error()}
+	}
+	members, ok := database.AsCapability[database.CollectionMembershipStore](rs.db)
+	if !ok {
+		return fmt.Errorf("store cannot edit collection members; book %s left out of collection %s", c.BookID, collectionID)
+	}
+	_, err = members.UpdateCollectionBooks(collectionID, func(cur []string) ([]string, error) {
+		return undo.RestoreMembership(cur, c.BookID, c.NewValue, rec)
+	})
+	if errors.Is(err, database.ErrCollectionNotFound) || errors.Is(err, database.ErrCollectionNotStatic) {
+		return undo.ErrAlreadyRestored
+	}
+	return err
+}
+
+// revertPlaylistFollow puts the retired book back in static playlist id,
+// retrying on a version conflict. A playlist deleted since counts restored.
+func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playlistID string) error {
+	rec, err := undo.DecodeMembership(c.OldValue)
+	if err != nil {
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: err.Error()}
+	}
+	pls, ok := database.AsCapability[database.UserPlaylistStore](rs.db)
+	if !ok {
+		return fmt.Errorf("store cannot edit playlists; book %s left out of playlist %s", c.BookID, playlistID)
+	}
+	for range userContentRevertAttempts {
+		pl, err := pls.GetUserPlaylist(playlistID)
+		if err != nil {
+			return fmt.Errorf("read playlist %s: %w", playlistID, err)
+		}
+		if pl == nil || pl.Type != database.UserPlaylistTypeStatic {
+			return undo.ErrAlreadyRestored
+		}
+		next, err := undo.RestoreMembership(pl.BookIDs, c.BookID, c.NewValue, rec)
+		if err != nil {
+			return err
+		}
+		pl.BookIDs = next
+		err = pls.UpdateUserPlaylist(pl)
+		if errors.Is(err, database.ErrUserPlaylistVersionConflict) {
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("playlist %s kept changing during the revert", playlistID)
 }
 
 // userStateRevertStore is what the revert of a user_book_state_set row
