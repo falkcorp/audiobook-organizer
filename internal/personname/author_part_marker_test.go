@@ -1,5 +1,5 @@
 // file: internal/personname/author_part_marker_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e2b4d91-6c3a-4f08-b7d5-1a9e0c4f2e76
 // last-edited: 2026-10-21
 
@@ -111,6 +111,10 @@ func TestIsLoneMarkerPhrase(t *testing.T) {
 		"S4 E1",
 		"Vol3",
 		"Bk 3",
+		// Number words, roman numerals, section-style words and a lone
+		// edition word (added 2026-10-21 for the label-only relink rule).
+		"Track01", "Chapter Twelve", "Volume IV", "Part One", "Side 2", "Section 3",
+		"Episode 4", "Unabridged", "Abridged", "Book 2 Unabridged",
 	}
 	for _, n := range lone {
 		if !IsLoneMarkerPhrase(n) {
@@ -135,6 +139,7 @@ func TestIsLoneMarkerPhrase(t *testing.T) {
 		"Book Club",
 		"R2 D2",
 		"Tech N9ne",
+		"Unabridged Lies", "Side Effects", "Episode Guide", "Chapter And Verse", "Volume Control",
 	}
 	for _, n := range notLone {
 		if IsLoneMarkerPhrase(n) {

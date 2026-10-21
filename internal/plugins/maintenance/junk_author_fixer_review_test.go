@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
-// last-edited: 2026-10-11
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -571,6 +571,9 @@ func TestJunkAuthorFixer_GateRefusedNamesPlanApplyRevert(t *testing.T) {
 		books[name] = f.book(junkBookSpec{title: "Title for " + name, path: "/lib/Brent Weeks/" + name, author: name,
 			tags: map[string]string{"artist": "Brent Weeks"}})
 	}
+	// A label-only credit is relink-only (owner 2026-10-21): it moves on the
+	// provider's answer, not on a tag and a folder name.
+	f.setProvider(books["Book 1 (Unabridged)"], "Title for Book 1 (Unabridged)", "Brent Weeks")
 	plan := f.plan()
 	for name, id := range books {
 		r := f.row(plan, name, id)
@@ -948,4 +951,86 @@ func TestJunkAuthorFixer_ReleaseTaggedNameRelinksToCleanedName(t *testing.T) {
 	res := f.apply(plan, []string{f.row(plan, "Synthetic Writer [32k 01;02;03 250MB]", tagged).RowID})
 	require.Equal(t, 1, res.Applied, "by outcome: %v", res.ByOutcome)
 	require.Equal(t, []int{f.authors["Synthetic Writer"]}, f.credits(tagged))
+}
+
+// Owner decision 2026-10-21: a credit that is only a part/track/book label is
+// replaced by a real author found by evidence and is never just removed. With
+// no evidence the book keeps the label credit (never ends up with no author);
+// with the provider naming a real author the credit is swapped.
+func TestJunkAuthorFixer_LabelOnlyCreditIsRelinkOnly(t *testing.T) {
+	labels := []string{"Book 2 (Unabridged)", "Part 2", "Disc 1", "Vol. 01", "[Track 003] 2"}
+
+	t.Run("no evidence keeps the credit", func(t *testing.T) {
+		f := newJunkFixture(t)
+		books := map[string]string{}
+		for i, n := range labels {
+			books[n] = f.book(junkBookSpec{title: "Synthetic Title " + strconv.Itoa(i), path: "/lib/syn/" + strconv.Itoa(i), author: n})
+		}
+		plan := f.plan()
+		for n, id := range books {
+			r := f.row(plan, n, id)
+			require.NotNil(t, r, n)
+			require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s: %s / %s", n, r.Reason, r.SkipReason)
+			require.Contains(t, r.SkipReason, "the credit is kept", n)
+		}
+		// Nothing is applicable; even asking for every held row by id leaves
+		// the credits alone.
+		var ids []string
+		for _, r := range plan.Rows {
+			ids = append(ids, r.RowID)
+		}
+		f.apply(plan, ids)
+		for n, id := range books {
+			require.Equal(t, []int{f.authors[n]}, f.credits(id), "%s keeps its credit", n)
+			require.NotEmpty(t, f.credits(id), "%s must never end with no author", n)
+		}
+	})
+
+	t.Run("provider evidence relinks", func(t *testing.T) {
+		f := newJunkFixture(t)
+		real := f.author("Synthetic Author")
+		books := map[string]string{}
+		for i, n := range labels {
+			id := f.book(junkBookSpec{title: "Synthetic Title " + strconv.Itoa(i), path: "/lib/syn/" + strconv.Itoa(i), author: n})
+			f.setProvider(id, "Synthetic Title "+strconv.Itoa(i), "Synthetic Author")
+			books[n] = id
+		}
+		plan := f.plan()
+		for n, id := range books {
+			r := f.row(plan, n, id)
+			require.NotNil(t, r, n)
+			require.Empty(t, r.Skipped, "%s: %s", n, r.SkipReason)
+			require.Equal(t, junkAuthorDecRelink, r.Proposed["decision"], "%s: %s", n, r.Reason)
+			require.Equal(t, "Synthetic Author", r.Proposed["author"], n)
+		}
+		f.apply(plan, nil)
+		for n, id := range books {
+			require.Equal(t, []int{real}, f.credits(id), "%s swapped to the real author", n)
+		}
+	})
+
+	t.Run("one tag alone does not replace the credit", func(t *testing.T) {
+		f := newJunkFixture(t)
+		id := f.book(junkBookSpec{title: "Synthetic Title", path: "/lib/syn/tag", author: "Part 2",
+			tags: map[string]string{"artist": "Synthetic Author"}})
+		plan := f.plan()
+		r := f.row(plan, "Part 2", id)
+		require.NotNil(t, r)
+		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s / %s", r.Reason, r.SkipReason)
+		f.apply(plan, []string{r.RowID})
+		require.Equal(t, []int{f.authors["Part 2"]}, f.credits(id))
+	})
+}
+
+// A structural word inside a longer name (a title with a part number) is not a
+// lone label: it keeps the structural_word rule and its unlink behaviour.
+func TestJunkAuthorFixer_NonLabelStructuralJunkStillUnlinks(t *testing.T) {
+	f := newJunkFixture(t)
+	const name = "Synthetic Quest Book 3"
+	id := f.book(junkBookSpec{title: "Synthetic Title", path: "/lib/syn/q", author: name})
+	plan := f.plan()
+	r := f.row(plan, name, id)
+	require.NotNil(t, r)
+	require.Empty(t, r.Skipped, "%s / %s", r.Reason, r.SkipReason)
+	require.Equal(t, junkAuthorDecUnlink, r.Proposed["decision"], r.Reason)
 }

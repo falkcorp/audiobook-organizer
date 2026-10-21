@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.15.0
+// version: 1.14.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-10-21
 
@@ -466,7 +466,7 @@ func TestVerdict_RelinkOnly(t *testing.T) {
 	if v := ClassifyNameInLibrary("Dante King (Dragon Born)", func(n string) bool { return n == "dragon born" }); !v.RelinkOnly() {
 		t.Errorf("library series parenthetical must be relink-only: %+v", v)
 	}
-	for _, n := range []string{"Demon Cycle", "Book 1 (Unabridged)", "GraphicAudio", "Science Fiction", "Unknown", "The Way of Shadows"} {
+	for _, n := range []string{"Demon Cycle", "GraphicAudio", "Science Fiction", "Unknown", "The Way of Shadows"} {
 		if v := ClassifyName(n); !v.Junk() || v.RelinkOnly() {
 			t.Errorf("ClassifyName(%q) = %+v, want junk that may unlink", n, v)
 		}
@@ -695,5 +695,35 @@ func TestClassifyName_PartTrackMarker(t *testing.T) {
 		if v := ClassifyName(name); v.Rule == RulePartTrackMarker {
 			t.Errorf("ClassifyName(%q) flagged as part_track_marker: %+v", name, v)
 		}
+	}
+}
+
+// Owner decision 2026-10-21: a name that is only a part/track/book label is
+// relink-only (replaced by a real author found by evidence, never removed).
+// A label inside a longer name keeps its rule and its unlink behaviour.
+func TestClassifyName_LabelOnlyIsRelinkOnly(t *testing.T) {
+	for _, n := range []string{
+		"Book 1", "Book 2 (Unabridged)", "Book 1 (Unabridged)", "Part 2", "Disc 1", "Vol. 01",
+		"[Track 003] 2", "Track01", "Chapter Twelve", "Volume IV", "Unabridged",
+	} {
+		v := ClassifyName(n)
+		if !v.Junk() || v.Strength != Strong || v.Rule != RuleLabelOnly || !v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) = %+v, want a strong relink-only %s verdict", n, v, RuleLabelOnly)
+		}
+	}
+	// A label with a title or series in it is not label-only: it keeps the
+	// older rule, which may unlink.
+	for n, rule := range map[string]string{
+		"Jonathan Strange and Mr Norrell part 4": RuleStructuralWord,
+		"Uglies Unabridged":                      RuleStructuralWord,
+		"Synthetic Quest Book 3":                 RuleStructuralWord,
+	} {
+		v := ClassifyName(n)
+		if !v.Junk() || v.Rule != rule || v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) = %+v, want %s that may unlink", n, v, rule)
+		}
+	}
+	if v := ClassifyName("read by narrator"); !v.Junk() || v.RelinkOnly() {
+		t.Errorf("a narrator credit is not a label: %+v", v)
 	}
 }
