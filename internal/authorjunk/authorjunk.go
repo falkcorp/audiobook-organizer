@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-10-21
 
@@ -182,9 +182,13 @@ const (
 	// RuleUnbalancedBracket: a name cut off inside a bracket ("Graphic Audio
 	// [Jon Scieszka").
 	RuleUnbalancedBracket = "unbalanced_bracket"
-	// RulePartTrackMarker: a name ending in a part/track/disc marker ("David
-	// Copperfield P2 S3", "Great Expectations Pt 4") or whose surname is only
-	// digits ("Copperfield 07"); personname.HasPartTrackMarker.
+	// RulePartTrackMarker: a name ending in a GLUED part/track/disc marker
+	// ("David Copperfield P2 S3", "Dickens CD2", "Dickens Disc1", "Dickens
+	// D1T05", "Dickens S01E02"); personname.HasPartTrackMarker. Relink-only.
+	// Spaced and numeric markers keep their earlier verdicts, which differ in
+	// what they may do: "Copperfield 07" and "Great Expectations Pt 4" are
+	// number_word (relink-only), "Dickens Part 2" is structural_word (strong,
+	// and unlike this rule it may unlink the credit).
 	RulePartTrackMarker = "part_track_marker"
 )
 
@@ -800,9 +804,10 @@ func classifyAdded(s, core, n, full string, words []string) Verdict {
 			}
 		}
 	}
-	// A part/track/disc marker the number-word rule does not see ("David
-	// Copperfield P2 S3", "Dickens CD2"); a purely numeric surname is the
-	// number-word rule's above and keeps its label.
+	// A glued part/track/disc marker the number-word rule does not see
+	// ("David Copperfield P2 S3", "Dickens CD2"). A name with a numeric word
+	// ("Copperfield 07", "Pt 4") never reaches here: number_word judged it above
+	// and keeps its label.
 	if personname.HasPartTrackMarker(core) {
 		return strong(ClassOther, RulePartTrackMarker)
 	}
