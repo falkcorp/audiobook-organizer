@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.63.2
+// version: 1.64.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package organizer
 
@@ -2135,9 +2135,12 @@ func resolveOrganizedFilePath(srcPath string, landed map[string]string, log logg
 //     orphan audit row, and it is the reason this is called a rollback and not a
 //     transaction.
 //
-// DeleteBook does NOT delete book_file or book_authors rows (pebble_store.go:2811
-// tears down seven index families and neither of those), which is why the author
-// links are cleared explicitly rather than left to it.
+// DeleteBook tears down the book's book_authors junction row itself (it stages
+// the delete under the book_authors stripe, PebbleStore.DeleteBook) but NOT its
+// book_file rows, which it refuses to orphan (database.ErrBookOwnsFiles). The
+// author links are therefore not cleared here: clearing them first and then
+// failing the delete would leave a live book with no author, and a clear after
+// a successful delete would write a junction row for a book that is gone.
 //
 // On disk it removes ONLY landing.Created — the files this organize wrote —
 // and then the target directory if that left it empty (unlinkCreated, shared
@@ -2151,10 +2154,6 @@ func resolveOrganizedFilePath(srcPath string, landed map[string]string, log logg
 // run and is not ours to remove.
 func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landing, log logger.Logger) {
 	if newBookID != "" {
-		// SetBookAuthors with no authors clears the links this function copied.
-		if err := orgSvc.db.SetBookAuthors(newBookID, nil); err != nil {
-			log.Warn("organize: rollback could not clear author links for %s: %v", newBookID, err)
-		}
 		if err := orgSvc.db.DeleteBook(newBookID); err != nil {
 			// The book row survives, so the files this organize wrote must
 			// survive with it: if the delete was refused because rows name

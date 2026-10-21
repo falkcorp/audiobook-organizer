@@ -1,5 +1,5 @@
 // file: internal/personname/author_part_marker.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3d0f6a52-8b1e-4c77-9a4e-5e61c2f0b9d3
 // last-edited: 2026-10-21
 
@@ -130,12 +130,19 @@ func HasPartTrackMarker(name string) bool {
 //     "Chapter 5 Epilogue"), and a lone edition word ("Unabridged");
 //   - separators between the parts ("- Introduction", "Prologue + Chapter 1",
 //     "Disk 2 -Track 01");
-//   - a letterless disc/track code made only of numbers ("1-02", "10-01").
+//   - a letterless disc/track code made only of numbers ("1-02", "10-01");
+//   - "of" between two numbers and a "#" in front of one ("Part 1 of 3",
+//     "Book #2"), and "/" inside a number range ("Track 1/12").
 //
 // Those extra words are recognised ONLY when the whole name is labels; with a
 // name in front they are not markers, so HasPartTrackMarker does not flag
 // "Charles Dickens Episode 4" and returns false for a lone phrase.
 func IsLoneMarkerPhrase(name string) bool {
+	// "&#169" is entity shrapnel, not a number: callers strip leading
+	// punctuation before asking, which would leave a bare "169".
+	if htmlEntityRe.MatchString(name) {
+		return false
+	}
 	toks := markerTokens(name)
 	if len(toks) == 0 {
 		return false
@@ -172,15 +179,15 @@ var loneNumberWords = map[string]bool{
 var loneRomanRe = regexp.MustCompile(`(?i)^(?:x{0,3})(?:ix|iv|v?i{0,3})$`)
 
 // loneNumberRe: a number, a decimal or a range of either ("3", "2.5", "1-3",
-// "1-02"; hyphen or en dash).
-var loneNumberRe = regexp.MustCompile(`^\p{Nd}+(?:\.\p{Nd}+)?(?:[-\x{2013}]\p{Nd}+(?:\.\p{Nd}+)?)?$`)
+// "1-02", "1/12"; hyphen, en dash or slash).
+var loneNumberRe = regexp.MustCompile(`^\p{Nd}+(?:\.\p{Nd}+)?(?:[-\x{2013}/]\p{Nd}+(?:\.\p{Nd}+)?)?$`)
 
 // loneTokens trims separator punctuation hanging on the tokens of a lone
 // phrase ("-Track", "+") and drops tokens that were only separators.
 func loneTokens(toks []string) []string {
 	out := make([]string, 0, len(toks))
 	for _, t := range toks {
-		if t = strings.Trim(t, "-\u2013\u2014+&/|"); t != "" {
+		if t = strings.TrimLeft(strings.Trim(t, "-\u2013\u2014+&/|"), "#"); t != "" {
 			out = append(out, t)
 		}
 	}
@@ -191,19 +198,24 @@ func loneTokens(toks []string) []string {
 // a number, a number word, a roman numeral or (right after a label word) a
 // single letter, with at least one label word.
 func isLoneLabelRun(toks []string) bool {
-	sawLabel, prevLabel := false, false
-	for _, t := range toks {
+	sawLabel, prevLabel, prevNumber := false, false, false
+	for i, t := range toks {
 		l := strings.ToLower(t)
+		isNumber := loneNumberRe.MatchString(t)
 		switch {
 		case partMarkerWords[l] || loneLabelWords[l] || partMarkerTokenRe.MatchString(t):
-			sawLabel, prevLabel = true, true
+			sawLabel, prevLabel, prevNumber = true, true, false
 			continue
-		case loneNumberRe.MatchString(t) || loneNumberWords[l] || (l != "" && loneRomanRe.MatchString(l)):
+		case isNumber || loneNumberWords[l] || (l != "" && loneRomanRe.MatchString(l)):
 		case prevLabel && utf8.RuneCountInString(t) == 1 && unicode.IsLetter([]rune(t)[0]):
+		case l == "of" && prevNumber && i+1 < len(toks) && loneNumberRe.MatchString(toks[i+1]):
+			// "Part 1 of 3": "of" joins two numbers and nothing else.
+			prevLabel, prevNumber = false, false
+			continue
 		default:
 			return false
 		}
-		prevLabel = false
+		prevLabel, prevNumber = false, isNumber
 	}
 	return sawLabel
 }

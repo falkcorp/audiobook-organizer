@@ -1,7 +1,7 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package organizer
 
@@ -216,7 +216,8 @@ func TestRollbackOrganizedVersion_DeleteRefusedKeepsCreatedFiles(t *testing.T) {
 	rootDir := t.TempDir()
 	config.AppConfig = config.Config{RootDir: rootDir}
 	store := newMockStore(t)
-	store.EXPECT().SetBookAuthors("new-book", mock.Anything).Return(nil)
+	// No SetBookAuthors expectation: the mock fails the test if the rollback
+	// clears the author credits of a book it then cannot delete.
 	store.EXPECT().DeleteBook("new-book").Return(fmt.Errorf("delete book new-book: %w", database.ErrBookOwnsFiles))
 	svc := NewService(store)
 

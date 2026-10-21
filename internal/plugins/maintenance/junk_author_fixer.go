@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
 // last-edited: 2026-10-21
 
@@ -265,8 +265,8 @@ func (f *junkAuthorFixer) Description() string {
 		"title, its sibling books or its folder -- never to one of its narrators. With no evidence the junk " +
 		"credit is removed only when the book keeps another real author; a book's only author credit is " +
 		"held, never removed, and so are collective credits (Various Authors, Anonymous) and names that " +
-		"are junk only because another author's series or title uses them. Names joined by \"_\" are left for Author split. The emptied author record " +
-		"is kept for Purge empty authors."
+		"are junk only because another author's series or title uses them. Names joined by \"_\" are " +
+		"left for Author split. The emptied author record is kept for Purge empty authors."
 }
 
 type junkAuthorParams struct {
@@ -2247,6 +2247,12 @@ func (f *junkAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned r
 		}
 		plannedTarget = n
 	}
+	// Deliberately stricter than the plan's final junk set: the plan drops
+	// weak rows it found unconfirmed (that needs every one of their books
+	// read), Replan keeps every weak row but the planned target as junk. That
+	// can only make apply hold a book the preview showed as actionable (a
+	// co-credit that is weak junk by name does not count as another author),
+	// never strip a credit the plan would have held: it fails closed.
 	isJunk := func(id int) bool {
 		if _, ok := idx.strongJunk[id]; ok {
 			return true
@@ -2590,9 +2596,8 @@ func junkAuthorRow(d *junkAuthorBookDecision) repairs.Row {
 		r.Reason = what
 		r.Risk = repairs.RiskReview
 	case d.Decision == junkAuthorDecUnlink:
-		r.Proposed = map[string]string{"author": "(none: needs an author by hand)", "decision": junkAuthorDecUnlink}
+		r.Proposed = map[string]string{"author": "(none: the book keeps its other author)", "decision": junkAuthorDecUnlink}
 		r.Reason = what + "; no evidence of the real author, so the junk credit is removed (the book keeps its other author)"
-		r.Proposed["author"] = "(none: the book keeps its other author)"
 		r.Risk = repairs.RiskReview
 	default:
 		r.Proposed = map[string]string{"author": d.Target.Name, "decision": d.Decision, "source": d.Source}

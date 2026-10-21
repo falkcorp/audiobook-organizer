@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-10-21
 
@@ -735,10 +735,21 @@ func TestClassifyName_LabelOnlyIsRelinkOnly(t *testing.T) {
 // guard in the classifier: adding one makes these fall back to the creation
 // gate's unlinkable verdict and fails this test.
 func TestClassifyName_LetterlessCodesAreLabelOnly(t *testing.T) {
-	for _, n := range []string{"1-02", "10-01", "3", "2001", "1.5"} {
+	for _, n := range []string{"1-02", "10-01", "3", "2001", "1.5", "Part 1 of 3", "Book #2", "Track 1/12"} {
 		v := ClassifyName(n)
 		if !v.Junk() || v.Strength != Strong || v.Rule != RuleLabelOnly || !v.RelinkOnly() {
 			t.Errorf("ClassifyName(%q) = %+v, want a strong relink-only %s verdict", n, v, RuleLabelOnly)
+		}
+	}
+}
+
+// "&#169" is entity shrapnel, not a number: the classifier strips leading
+// punctuation, which would otherwise leave a bare "169" and make it a
+// relink-only label.
+func TestClassifyName_EntityShrapnelIsNotALabel(t *testing.T) {
+	for _, n := range []string{"&#169", "&#169;", "&#xA9;"} {
+		if v := ClassifyName(n); v.Rule == RuleLabelOnly || v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) = %+v, want not label_only / relink-only", n, v)
 		}
 	}
 }

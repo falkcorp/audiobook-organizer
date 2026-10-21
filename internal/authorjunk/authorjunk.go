@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-10-21
 
@@ -718,7 +718,7 @@ func classifyBaseParts(s string) (Verdict, *nameParts) {
 	//
 	// The class is the one the rules it replaces gave: a work title when a
 	// structural word is in it, else other shrapnel ("Track01").
-	if personname.IsLoneMarkerPhrase(core) {
+	if personname.IsLoneMarkerPhrase(s) {
 		class := ClassOther
 		for _, w := range words {
 			if structuralWords[w] {
