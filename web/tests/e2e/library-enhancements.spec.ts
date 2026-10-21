@@ -1,12 +1,13 @@
 // file: web/tests/e2e/library-enhancements.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: e8f9a0b1-c2d3-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-08-09
+// last-edited: 2026-10-21
 
 import { test, expect, Page } from '@playwright/test';
 import {
   setupPhase2Interactive,
   generateTestBooks,
+  waitForTagPanel,
   type MockApiOptions,
 } from './utils/test-helpers';
 
@@ -398,6 +399,10 @@ test.describe('Tag Management', () => {
 
     // Wait for table rows
     await page.waitForSelector('table tbody tr', { timeout: 10000 });
+
+    // The Browse-by-Tag panel mounts once its first facets answer lands and
+    // shifts the table down; let it settle before aiming at the header checkbox.
+    await waitForTagPanel(page);
 
     // Select books using the "select all" checkbox in the header
     const selectAllCheckbox = page

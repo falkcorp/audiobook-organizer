@@ -1,9 +1,9 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.22.0
+// version: 2.23.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
 // last-edited: 2026-10-21
 
-import { Page } from '@playwright/test';
+import { expect, Page } from '@playwright/test';
 
 // Re-export setup mode helpers for convenience
 export {
@@ -894,18 +894,25 @@ export async function setupMockApiRoutes(
       );
     }
 
-    // Browse-by-Tag facets for the Library. useScopedTagFacets requests these
-    // (debounced) after every filter change, and the panel they feed is not
-    // rendered until the request settles -- at which point it is inserted above
-    // the Select All bar and shifts the whole grid down by its height. Left
-    // unhandled this fell through to the real server (a 401, at a time the test
-    // does not control), so a click aimed at Select All or a card checkbox could
-    // land on the panel that had just mounted (PR #4105 run 39606817582). A
-    // prompt, successful, empty answer makes the layout settle deterministically;
-    // specs that click right after load wait for the panel's
-    // 'No tags in these results.' message. Honours library_state so
-    // scoped_total matches the list the same request describes.
+    // Facets for the Library. Two shapes share this path, told apart by the
+    // `scoped` param:
+    //   scoped=1  -> useScopedTagFacets (Browse-by-Tag): { scoped_tags, scoped_total }
+    //   otherwise -> getBookFacets (the filter drawer's genre/language lists,
+    //                useLibraryFilters.ts): { genres, languages }
+    // Both are answered with empty, successful results. Left unhandled they fell
+    // through to the real server (a 401, at a time the test does not control).
+    // That matters for the scoped one: the Browse-by-Tag panel is not rendered
+    // until its first answer settles, and mounting it inserts it above the Select
+    // All bar, shifting the grid down by its height. A click aimed at Select All
+    // or a card checkbox before then can land on the panel instead (PR #4105 run
+    // 39606817582). Specs that click right after load call waitForTagPanel().
+    // scoped_total counts the mock books matching library_state only; the
+    // search/tag/field filters the real endpoint also applies are not modelled,
+    // and nothing asserts on it.
     if (pathname === '/api/v1/audiobooks/facets' && method === 'GET') {
+      if (!url.searchParams.get('scoped')) {
+        return route.fulfill(jsonResponse({ genres: [], languages: [] }));
+      }
       const state = (url.searchParams.get('library_state') || '').toLowerCase();
       const rows = (mockState.books as Array<Record<string, unknown>>).filter(
         (b) => !state || String(b.library_state ?? '').toLowerCase() === state
@@ -2050,6 +2057,23 @@ export function generateTestBook(overrides: Record<string, unknown> = {}) {
     file_size: 450000000,
     ...overrides,
   };
+}
+
+/**
+ * Wait until the Library's Browse-by-Tag panel has settled, i.e. the layout
+ * above the book grid is final. The panel mounts only once the first
+ * scoped-facets request answers, and mounting it moves everything below it
+ * (Select All, the card and row checkboxes) down by the panel's height, so a
+ * click aimed before then can land on the panel instead. Call this after the
+ * Library has loaded and before clicking any selection control.
+ *
+ * 'No tags in these results.' is what the panel shows for the empty answer the
+ * mocks return (setupMockApiRoutes here, and scan-import-organize's own fetch
+ * override). Text-based on purpose for now; a stable hook on the panel can
+ * replace the body later without touching the callers.
+ */
+export async function waitForTagPanel(page: Page): Promise<void> {
+  await expect(page.getByText('No tags in these results.')).toBeVisible();
 }
 
 /**
