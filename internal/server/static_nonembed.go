@@ -1,8 +1,8 @@
 //go:build !embed_frontend
 
-// version: 1.1.0
+// version: 1.2.0
 // file: internal/server/static_nonembed.go
-// last-edited: 2026-08-01
+// last-edited: 2026-10-20
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-05-01
 
@@ -21,8 +21,10 @@ func SetEmbeddedFS(fs embed.FS) {
 	// No-op: not using embedded frontend
 }
 
-// setupStaticFiles serves a placeholder HTML page (no embedded frontend)
-func (s *Server) setupStaticFiles() {
+// setupStaticFiles serves a placeholder HTML page (no embedded frontend). The
+// SPA middleware the embedded build runs on its page fallback has nothing to
+// guard here, so it is accepted for signature parity and ignored.
+func (s *Server) setupStaticFiles(_ ...gin.HandlerFunc) {
 	s.setupPlaceholder()
 }
 
