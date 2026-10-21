@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_hash_copy_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b1c47-9a52-4d06-8f73-c5d2a9e04b16
 // last-edited: 2026-10-21
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -109,20 +110,24 @@ func TestFragmentFixer_HashCopyGate_DegenerateHashesAreHeld(t *testing.T) {
 			require.Zero(t, res.Applicable, "%+v", res.ByClass)
 			r := hcOnlyRow(t, res)
 			require.Equal(t, hcRowPrefix(tc.want)+f.ids["c3"], r.RowID)
+			require.NotContains(t, r.RowID, "held-held", "the held_ of the kind is not repeated")
+			require.NotContains(t, r.RowID, "held-skipped")
+			wantLiteral := map[string]string{
+				fragSkipDegenerateHash:     "held-degenerate-hash:",
+				fragSkipShortOrBoilerplate: "held-short-or-boilerplate:",
+			}[tc.want]
+			require.Equal(t, wantLiteral+f.ids["c3"], r.RowID, "spelled out, not derived from the kind")
 			requireHeld(t, f, r, tc.want, f.ids["c3"])
 		})
 	}
 }
 
+// hcRowPrefix is the row id prefix of a held kind: the kind's own held_ or
+// skipped_ is not repeated ("held-file-absent:<child>", not
+// "held-held-file-absent:<child>").
 func hcRowPrefix(skip string) string {
-	out := "held-"
-	for _, r := range skip {
-		if r == '_' {
-			r = '-'
-		}
-		out += string(r)
-	}
-	return out + ":"
+	skip = strings.TrimPrefix(strings.TrimPrefix(skip, "held_"), "skipped_")
+	return "held-" + strings.ReplaceAll(skip, "_", "-") + ":"
 }
 
 // An unknown duration (the real children record none) is not "short": the

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.90.0
+// version: 1.90.1
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -38,6 +38,11 @@ type Plugin struct {
 	// config.Snapshot().OwnerEmail, the only value production uses; tests
 	// set it rather than the process-wide config.
 	ownerEmail func() string
+
+	// carry is the per-apply-op listing of collections and playlists the
+	// retire's user-content carry reads (retire_carry.go); its zero value is
+	// ready.
+	carry carryIndexes
 
 	repairsOnce sync.Once
 	repairsReg  *repairs.Registry

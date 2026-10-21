@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-21
 
@@ -3722,7 +3722,10 @@ func fileSig(c *fragCandidate, stat func(string) (os.FileInfo, error)) (fragFile
 // the reason. Its row id names the hold ("held-file-absent:<child>"), so a
 // re-plan returns it as planned.
 func (f *fragmentFixer) hashCopyGateRow(lib *fragLibrary, c *fragCandidate, m fragMatch, skip, why string) repairs.Row {
-	prefix := "held-" + strings.ReplaceAll(skip, "_", "-")
+	// The kind already says held_ or skipped_: the id says it once, so
+	// held_file_absent is "held-file-absent" and skipped_unreadable
+	// "held-unreadable", never "held-held-file-absent".
+	prefix := "held-" + strings.ReplaceAll(strings.TrimPrefix(strings.TrimPrefix(skip, "held_"), "skipped_"), "_", "-")
 	r := f.holdRow(lib, c, prefix, fragClassHashCopy, skip, "has the file hash "+c.File.Hash+" of parent "+m.Row.BookID+" row "+m.Row.ID+", but "+why, []fragMatch{m})
 	r.Current = map[string]string{"hash": c.File.Hash, "child_path": c.File.Path, "parent_path": m.Row.Path}
 	r.Fingerprint = fragFingerprint(prefix, c.Book.ID, m.Row.ID, c.File.Hash, why)
@@ -6243,10 +6246,10 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 	class, rest, _ := strings.Cut(planned.RowID, ":")
 	switch class {
 	case fragClassMoved, fragClassCopy, fragClassGhost, fragRowCopyUnproven, fragRowMovedUnproven:
-		return f.replanParent(store, lib, hist, planned, rest)
+		return f.replanParent(ctx, store, lib, hist, planned, rest)
 	case fragClassHashCopy:
 		parentID, _, _ := strings.Cut(rest, "/")
-		fresh, err := f.replanParent(store, lib, hist, planned, parentID)
+		fresh, err := f.replanParent(ctx, store, lib, hist, planned, parentID)
 		if err != nil || !fresh.Applicable() {
 			return fresh, err
 		}
@@ -6292,7 +6295,7 @@ func replanLoad(store OpsStore, lib *fragLibrary, id string) error {
 	return nil
 }
 
-func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, parentID string) (repairs.Row, error) {
+func (f *fragmentFixer) replanParent(ctx context.Context, store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, parentID string) (repairs.Row, error) {
 	var ps fragParentState
 	if len(planned.State) > 0 {
 		if err := json.Unmarshal(planned.State, &ps); err != nil {
@@ -6305,7 +6308,7 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 			frags = append(frags, id)
 		}
 	}
-	rows, why, err := f.rebuildParentRows(store, lib, hist, ps, parentID, frags,
+	rows, why, err := f.rebuildParentRows(ctx, store, lib, hist, ps, parentID, frags,
 		strings.HasPrefix(planned.RowID, fragClassHashCopy+":"))
 	if err != nil || why != "" {
 		return changedRow(planned, why), err
@@ -6335,10 +6338,10 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 // hashCopy (a hash-copy row's re-plan) also admits a fragment with no chapter
 // evidence when its file hash matches a present row of the parent
 // (candidateOrHashCopy); every other caller keeps the chapter-evidence gate.
-func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, ps fragParentState, parentID string, frags []string, hashCopy bool) ([]repairs.Row, string, error) {
+func (f *fragmentFixer) rebuildParentRows(ctx context.Context, store OpsStore, lib *fragLibrary, hist FragmentRepairReader, ps fragParentState, parentID string, frags []string, hashCopy bool) ([]repairs.Row, string, error) {
 	// The plan's content proofs, re-stat'ed (never re-read): a file that
 	// changed since the plan is a change, said as such.
-	if why := f.restoreContentProofs(lib, ps.ContentProofs); why != "" {
+	if why := f.restoreContentProofs(ctx, lib, ps.ContentProofs); why != "" {
 		return nil, why, nil
 	}
 	// The iTunes copies the rule set aside at plan time come back as
@@ -6555,7 +6558,7 @@ func (f *fragmentFixer) replanJoin(ctx context.Context, store OpsStore, lib *fra
 		if len(st.ParentState) > 0 && json.Unmarshal(st.ParentState, &ps) != nil {
 			return changedRow(planned, "the plan's stored parent state is unreadable; plan again"), nil
 		}
-		rows, why, err := f.rebuildParentRows(store, lib, hist, ps, st.FromParent, frags, false)
+		rows, why, err := f.rebuildParentRows(ctx, store, lib, hist, ps, st.FromParent, frags, false)
 		if err != nil || why != "" {
 			return changedRow(planned, why), err
 		}
