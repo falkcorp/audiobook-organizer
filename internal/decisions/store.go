@@ -1,5 +1,5 @@
 // file: internal/decisions/store.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0f7b3a91-d542-4e86-a1c3-78e9b60d2f15
 // last-edited: 2026-10-21
 
@@ -25,7 +25,9 @@ import (
 
 // KV is the slice of the store this package needs. It is deliberately narrow:
 // the decision store has no business with books, files or anything else on
-// database.Store. database.RawKVStore satisfies it. It omits the unbounded
+// database.Store. *database.PebbleStore satisfies it (its RawKVStore reads plus
+// database.RawBatchApplier and database.RawSnapshotter, which are deliberately
+// not on RawKVStore or Store). It omits the unbounded
 // ScanPrefix: decisions grow with every reject for the life of the library.
 type KV interface {
 	GetRaw(key string) ([]byte, error)

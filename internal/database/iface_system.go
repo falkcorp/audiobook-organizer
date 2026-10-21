@@ -1,7 +1,7 @@
 // file: internal/database/iface_system.go
-// version: 1.5.1
+// version: 1.5.0
 // guid: 92c85d7d-c1fb-43c0-a0a4-2ef742107420
-// last-edited: 2026-10-21
+// last-edited: 2026-10-11
 
 package database
 
@@ -90,14 +90,6 @@ type RawKVStore interface {
 	// (one fsync for the whole slice instead of one per key, which is what
 	// DeleteRaw costs). Missing keys are not an error.
 	DeleteRawBatch(keys []string) error
-	// ApplyRawBatch applies every write (sets and deletes mixed) in one
-	// atomic, durably-synced commit: a reader sees all of them or none, and
-	// a crash leaves all of them or none. Writes apply in order, so a later
-	// write to the same key wins. Like SetRaw it refuses opv2:op: keys, and
-	// it refuses the whole batch before staging anything. An empty batch is
-	// a no-op. internal/decisions needs this: a decision record, its verdict
-	// and its veto index rows must never be half-written.
-	ApplyRawBatch(writes []RawWrite) error
 }
 
 // LifecycleStore covers store startup/teardown.
