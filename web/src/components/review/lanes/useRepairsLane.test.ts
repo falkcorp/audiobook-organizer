@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -28,6 +28,7 @@ import {
   applySeverity,
   repairApplyConfirmMessage,
   repairOwnerApplyConfirmMessage,
+  summarizeAppliedRows,
   summarizeApply,
   useRepairsLane,
 } from './useRepairsLane';
@@ -62,6 +63,11 @@ function row(id: string, extra: Partial<RepairRow> = {}): RepairRow {
     fingerprint: `fp-${id}`,
     ...extra,
   };
+}
+
+/** The target the confirm and banner name for a plan row built by `row`. */
+function target(id: string, members = 1) {
+  return { rowId: id, title: `Title ${id}`, members };
 }
 
 const APPLICABLE = [row('g1'), row('g2')];
@@ -341,7 +347,9 @@ describe('useRepairsLane: selection and apply', () => {
     await waitFor(() => expect(result.current.applyResult).not.toBeNull());
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy).toHaveBeenCalledWith(repairApplyConfirmMessage(1, 'Version group primary'));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      repairApplyConfirmMessage(1, 'Version group primary', [target('g1')])
+    );
     expect(api.startRepairApply).toHaveBeenCalledTimes(1);
     expect(api.startRepairApply).toHaveBeenCalledWith('vg-primary', 'plan-1', ['g1']);
     expect(result.current.rowOutcomes.get('g1')?.outcome).toBe('applied');
@@ -378,8 +386,14 @@ describe('useRepairsLane: selection and apply', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(confirmSpy).toHaveBeenCalledTimes(2);
     expect(api.startRepairApply).not.toHaveBeenCalled();
-    // Apply-all asks BEFORE resolving ids, so a cancel costs no request either.
-    expect(vi.mocked(api.getRepairPlanRows).mock.calls.length).toBe(rowsCalls);
+    // Apply-all asks BEFORE collecting ids: a cancel costs one small read (the
+    // first rows, so the confirm can name them), not a walk of the whole plan.
+    expect(vi.mocked(api.getRepairPlanRows).mock.calls.length).toBe(rowsCalls + 1);
+    expect(vi.mocked(api.getRepairPlanRows).mock.calls.at(-1)?.[2]).toMatchObject({
+      filter: 'applicable',
+      offset: 0,
+      limit: 10,
+    });
     expect(result.current.selectedRowIds.has('g1')).toBe(true);
   });
 
@@ -399,7 +413,14 @@ describe('useRepairsLane: selection and apply', () => {
       })
     );
     await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
-    expect(confirmSpy).toHaveBeenCalledWith(repairApplyConfirmMessage(620, 'Version group primary'));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      repairApplyConfirmMessage(
+        620,
+        'Version group primary',
+        many.slice(0, 10).map((r) => target(r.row_id))
+      )
+    );
+    expect(confirmSpy.mock.calls[0][0]).toContain('and 610 more');
     const ids = vi.mocked(api.startRepairApply).mock.calls[0][2];
     expect(ids).toHaveLength(620);
     expect(new Set(ids).size).toBe(620);
@@ -562,12 +583,99 @@ describe('useRepairsLane: selection and apply', () => {
       })
     );
     await waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(2));
-    expect(confirmSpy).toHaveBeenCalledWith(repairApplyConfirmMessage(1, 'Version group primary'));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      repairApplyConfirmMessage(1, 'Version group primary', [target('g2')])
+    );
     expect(vi.mocked(api.startRepairApply).mock.calls[1][2]).toEqual(['g2']);
     await waitFor(() => expect(result.current.rowOutcomes.get('g2')?.outcome).toBe('failed'));
     expect(result.current.rowOutcomes.get('g1')?.outcome).toBe('applied');
     // A failed row stays retryable.
     expect(result.current.settledRowIds.has('g2')).toBe(false);
+  });
+});
+
+describe('useRepairsLane: naming the rows an apply writes', () => {
+  it('formats the confirm: title and book count per row, ten at most, then "and N more"', () => {
+    const t = Array.from({ length: 12 }, (_, i) => target(`r${i}`, i === 0 ? 1 : 3));
+    const msg = repairApplyConfirmMessage(15, 'Split books', t);
+    expect(msg).toContain('Apply 15 repair row(s) from "Split books"?');
+    expect(msg).toContain('- "Title r0" (1 book)');
+    expect(msg).toContain('- "Title r9" (3 books)');
+    expect(msg).not.toContain('Title r10');
+    expect(msg).toContain('and 5 more');
+    // No titles known: the original one-line confirm.
+    expect(repairApplyConfirmMessage(2, 'Split books')).toBe(
+      'Apply 2 repair row(s) from "Split books"? This writes to the library, and each change ' +
+        'is recorded in the book history. If a library scan is running it pauses briefly while ' +
+        'the rows are written.'
+    );
+    // Exactly ten rows: nothing more to say.
+    expect(repairApplyConfirmMessage(10, 'Split books', t.slice(0, 10))).not.toContain('more');
+  });
+
+  it('formats the banner naming of applied rows', () => {
+    expect(summarizeAppliedRows([])).toBe('');
+    expect(summarizeAppliedRows([target('a'), target('b', 4)])).toBe(
+      'Applied: "Title a" (1 book), "Title b" (4 books).'
+    );
+    const many = Array.from({ length: 13 }, (_, i) => target(`r${i}`));
+    const line = summarizeAppliedRows(many);
+    expect(line).toContain('"Title r9" (1 book)');
+    expect(line).not.toContain('Title r10');
+    expect(line).toMatch(/, and 3 more\.$/);
+  });
+
+  it('names a row with several books by its member count, and carries the applied rows', async () => {
+    mockRows({
+      'plan-1': {
+        applicable: [
+          row('g1', {
+            members: [
+              { book_id: 'b1', files: 1 },
+              { book_id: 'b2', files: 1 },
+              { book_id: 'b3', files: 1 },
+            ],
+          }),
+          row('g2'),
+        ],
+        skipped: SKIPPED,
+      },
+    });
+    const { result } = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(result.current.page?.applicable).toBe(2));
+    vi.mocked(api.startRepairApply).mockResolvedValue({
+      operation_id: 'apply-1',
+      def_id: 'repairs.apply',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockResolvedValue(op('apply-1', 'completed'));
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue(
+      applyResult({
+        rows: [
+          { row_id: 'g1', outcome: 'applied' },
+          { row_id: 'g2', outcome: 'failed', error: 'x' },
+        ],
+      })
+    );
+    act(() => {
+      result.current.toggleRow('g1');
+      result.current.toggleRow('g2');
+    });
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyRows',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+        rowIds: ['g1', 'g2'],
+      })
+    );
+    await waitFor(() => expect(result.current.applyResult).not.toBeNull());
+    expect(confirmSpy.mock.calls[0][0]).toContain('"Title g1" (3 books)');
+    expect(confirmSpy.mock.calls[0][0]).toContain('"Title g2" (1 book)');
+    // Only the row that was written is named in the banner.
+    expect(result.current.appliedRows).toEqual([target('g1', 3)]);
   });
 });
 

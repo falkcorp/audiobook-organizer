@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -173,9 +173,15 @@ describe('RepairsPanel', () => {
     await screen.findByTestId('repairs-apply-result');
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(confirmSpy.mock.calls[0][0]).toMatch(/^Apply 1 repair row/);
+    // The confirm names the row being applied, not just how many.
+    expect(confirmSpy.mock.calls[0][0]).toContain('"Title g2" (1 book)');
     expect(api.startRepairApply).toHaveBeenCalledTimes(1);
     expect(api.startRepairApply).toHaveBeenCalledWith('vg-primary', 'plan-1', ['g2']);
     expect(screen.getByTestId('repairs-outcome-g2')).toHaveTextContent('Applied');
+    // And so does the "Apply finished" banner.
+    expect(screen.getByTestId('repairs-apply-result-rows')).toHaveTextContent(
+      'Applied: "Title g2" (1 book).'
+    );
     expect(screen.queryByTestId('repairs-outcome-g1')).not.toBeInTheDocument();
     expect(screen.getByTestId('repairs-apply-result')).toHaveTextContent(/Re-run trial/);
   });
