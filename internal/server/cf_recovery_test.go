@@ -38,7 +38,7 @@ func TestIsCFRecoverySPAPath(t *testing.T) {
 		{"/socket.io/", false},
 		{"/ping", false},
 		{"/status", false},
-		{"/login", false},
+		{"/login", true}, // ABS owns POST /login only; GET is the SPA login page a locked-out browser reloads
 		{"/logout", false},
 		{"/public/session/x/track/1", false},
 		{"/abs/x", false},

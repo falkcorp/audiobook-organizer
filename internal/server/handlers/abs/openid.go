@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.9.0
+// version: 2.9.1
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
 // last-edited: 2026-10-20
 
@@ -770,7 +770,9 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 	// comment): it expires the cookie and meta-refreshes to the next stage, a
 	// fresh navigation without the custom headers that Cloudflare must send
 	// through its identity login.
-	if noPerson && assertionKind == oidcAssertionServiceToken && reauthStage < oidcMaxReauth {
+	// The gate is Inspect's own test (a verified assertion with no email), not the
+	// log classification above: that one also needs a non-empty common_name.
+	if noPerson && reauthStage < oidcMaxReauth {
 		if info := h.resolver.ServiceTokenBouncer().Inspect(c); info.Kind == servermiddleware.CFNavServiceToken {
 			if origin, ok := h.oidcOrigin(c); ok {
 				// Stage 0 expires only a cookie that is verifiably the service-token

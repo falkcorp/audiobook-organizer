@@ -57,3 +57,25 @@ remove a cookie.
 **The fix.** A short page, shown only for a page opened in a browser, clears
 the bad cookie and reloads the address so Cloudflare asks for the person
 again, with a marker and an error page so it can never repeat forever.
+
+## The app's single sign-on step
+
+**What it was.** When the sign-in page opened by the app still looked like a
+device token, the server redirected once and then gave up, but a redirect
+cannot remove a cookie, so the second try failed the same way.
+
+**Why it mattered.** Single sign-on could not recover for anyone whose browser
+held the bad cookie, and they had to clear it by hand.
+
+**The fix.** The sign-in step now clears the cookie and retries up to two times,
+then reports a clear failure to the app instead of looping.
+
+## Diagnostic log
+
+**What it was.** The debug log lumped every Cloudflare cookie into one length,
+including an unrelated bot-check cookie that most requests carry.
+
+**Why it mattered.** It could not answer the question the log exists for: did
+the sign-in cookie arrive with the request.
+
+**The fix.** The sign-in cookie's length is now logged on its own.
