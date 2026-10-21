@@ -1,5 +1,5 @@
 // file: web/tests/e2e/library-tag-panel-layout-shift.spec.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6b2f8c4e-1d7a-4f93-a5c0-9e3d7b1a2c58
 // last-edited: 2026-10-21
 
@@ -157,6 +157,40 @@ test.describe('library tag panel layout stability', () => {
 
     expect(await geometry(page)).toEqual(before);
   });
+
+  for (const width of [1280, 390]) {
+    test(`a selected long low-count tag keeps "Show all" inside the row at ${width}px`, async ({
+      page,
+    }) => {
+      // The selected tag is prioritised into the collapsed row ahead of the
+      // busier ones, so the fit count must be measured in that same order. If
+      // it is measured in count order instead, the long chip is clipped and
+      // "Show all N" ends up outside the row while still focusable.
+      const LONG = 'An Exceptionally Long Low Count Genre Name';
+      const tags: Tag[] = [...GENRES.slice(0, 8), { tag: LONG, count: 1 }];
+      await open(page, width, true); // saved expanded, so we exercise collapse
+      const facets = await gateFacets(page, tags);
+      await page.goto(`/library?search=${encodeURIComponent(`tag:"${LONG}"`)}`);
+      facets.release();
+      await expect(page.getByTestId('tag-cloud-panel')).toHaveAttribute('aria-busy', 'false');
+      await page.getByRole('button', { name: 'Collapse tag cloud' }).click();
+
+      const body = page.getByTestId('tag-cloud-body');
+      const showAll = page.getByRole('button', { name: 'Show all 9' });
+      await expect(showAll).toBeVisible();
+
+      const row = (await body.boundingBox())!;
+      const rowRight = row.x + row.width;
+      const children = await body.locator(':scope > *').all();
+      expect(children.length).toBeGreaterThan(0);
+      for (const child of children) {
+        const box = (await child.boundingBox())!;
+        expect(box.x + box.width, await child.innerText()).toBeLessThanOrEqual(rowRight + 0.5);
+      }
+      const buttonBox = (await showAll.boundingBox())!;
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(rowRight + 0.5);
+    });
+  }
 
   test('geometry is stable across a filter change (reload, then new answer)', async ({ page }) => {
     await open(page, 1024, false);
