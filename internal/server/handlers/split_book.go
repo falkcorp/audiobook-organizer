@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-09-25
+// last-edited: 2026-10-21
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. SplitBookHandler covers the split-book deduplication
@@ -11,6 +11,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -41,7 +42,7 @@ type SplitBookCandidateStore interface {
 type SplitBookHandler struct {
 	opEnqueuer SplitBookOpEnqueuer     // may be nil
 	candStore  SplitBookCandidateStore // may be nil
-	mergeStore dedup.Store             // required by MergeSplitBookCluster
+	mergeStore dedup.Store             // required by MergeSplitBookClusterRechecked
 }
 
 // NewSplitBookHandler constructs a SplitBookHandler.
@@ -89,7 +90,11 @@ func (h *SplitBookHandler) ListSplitBookCandidates(c *gin.Context) {
 //
 // Optional JSON body: { "keep_id": "<bookID>" }. If keep_id is omitted, the
 // first BookID in the candidate (earliest ULID) is used as the keep target.
-// On success, the candidate row is deleted so it is not surfaced again.
+// On success, the candidate row is deleted so it is not surfaced again. The
+// stored candidate is a snapshot, so the members are re-read first: a cluster
+// that is no longer shown to be chapters of one work (a distinct-works veto, a
+// missing file row, an unknown or over-limit file duration) is refused with 409
+// and nothing is written.
 func (h *SplitBookHandler) MergeSplitBookCandidate(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
@@ -139,7 +144,14 @@ func (h *SplitBookHandler) MergeSplitBookCandidate(c *gin.Context) {
 		return
 	}
 
-	result, err := dedup.MergeSplitBookCluster(h.mergeStore, keepID, srcIDs, cand.SuggestedTitle)
+	// The stored candidate is a scan-time snapshot: re-read every member and
+	// refuse a cluster that is no longer shown to be chapters of one work. The
+	// candidate row stays, so it can be reviewed (or dropped by the next scan).
+	result, err := dedup.MergeSplitBookClusterRechecked(h.mergeStore, cand.BookIDs, keepID, cand.SuggestedTitle, dedup.SplitMergeOptions{})
+	if errors.Is(err, dedup.ErrSplitBookRefused) {
+		httputil.RespondWithConflict(c, err.Error())
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "split-book merge failed", err)
 		return

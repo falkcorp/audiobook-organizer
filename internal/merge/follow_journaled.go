@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-10-18
+// last-edited: 2026-10-21
 
 package merge
 
@@ -25,7 +25,7 @@ var ErrNoSyncFollower = errors.New("merge: store cannot carry sync identity or l
 // absorbed book -- and returns the journal entries UndoCombine needs to put it
 // back: CombineAbsorbed.Progress and CombineAbsorbed.SyncRedirected.
 //
-// It exists for merge paths outside Service (dedup.MergeSplitBookCluster, and
+// It exists for merge paths outside Service (dedup.MergeSplitBookClusterWithOptions, and
 // through it the chapter-group and split-book merges), which moved files and
 // external IDs but never followed progress, so a reader's position on a
 // soft-deleted chapter book was lost when the purge removed it.

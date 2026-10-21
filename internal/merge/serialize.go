@@ -1,7 +1,7 @@
 // file: internal/merge/serialize.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b1e7d4a9-2c63-4f81-9a05-6d3e2f0c7b48
-// last-edited: 2026-10-18
+// last-edited: 2026-10-21
 
 package merge
 
@@ -17,7 +17,7 @@ import (
 //
 //   - merge.Service.MergeBooks     (version-group merge; soft-deletes losers)
 //   - merge.Service.CombineBooks   (multi-file combine; hard-deletes shells)
-//   - dedup.MergeSplitBookCluster  (moves BookFiles onto keep, recomputes
+//   - dedup.MergeSplitBookClusterWithOptions  (moves BookFiles onto keep, recomputes
 //     duration, soft-deletes each src; another
 //     SEPARATE package function reaching this
 //     lock via LockMergeRMW)
@@ -31,13 +31,13 @@ import (
 // / ddSoftDeleteBook do the same shape of unguarded read-modify-write (a
 // legacy, separately-maintained dedup job) but do not take this lock. Tracked
 // separately — out of scope for this fix, which only wires in
-// dedup.MergeSplitBookCluster (DA-01).
+// dedup.MergeSplitBookClusterWithOptions (DA-01).
 //
 // Why one shared lock, not one per path: each does an unguarded
 // GetBookByID -> mutate -> UpdateBook / DeleteBook / SoftDeleteBook / external-ID
 // reassignment with no transaction. They run concurrently — CombineBooks is a
 // synchronous HTTP handler with no concurrency key, and
-// dedup.MergeSplitBookCluster is reachable from both an async bulk-merge op
+// dedup.MergeSplitBookClusterWithOptions is reachable from both an async bulk-merge op
 // (whose ConcurrencyKey only serializes it against itself) and a synchronous
 // HTTP handler with no concurrency key at all — so two of them (or one racing
 // MergeBooks) can interleave writes to the same book and leave it
@@ -107,7 +107,7 @@ func (m *countedMutex) Unlock() { m.mu.Unlock() }
 func MergeLockAcquisitions() uint64 { return mergeSerializeMu.acquired.Load() }
 
 // LockMergeRMW acquires the shared merge serialization lock for a caller OUTSIDE
-// this package (specifically dedup.MergeSplitBookCluster, whose read-modify-writes must be mutually exclusive with
+// this package (specifically dedup.MergeSplitBookClusterWithOptions, whose read-modify-writes must be mutually exclusive with
 // merge.Service.MergeBooks / CombineBooks on shared book rows). Pair it with a
 // deferred UnlockMergeRMW. Non-reentrant: a caller must not already hold this
 // lock and must not call another merge-family path while holding it.

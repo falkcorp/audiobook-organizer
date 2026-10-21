@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 // Package dedup — split-book backfill detector.
 //
@@ -39,6 +39,10 @@
 //     detector FAILS CLOSED: DetectSplitBookCandidates never returns a vetoed
 //     cluster; DetectSplitBookCandidatesWithVetoes returns them with their
 //     reasons so a caller can show a held row instead of nothing.
+//  6. A STORED candidate is only a snapshot of what a scan saw. The merge paths
+//     that act on one (the bulk-merge op, POST /dedup/split-book-candidates/:id/merge)
+//     re-read the members and re-apply these vetoes plus the no-files and
+//     duration checks first: MergeSplitBookClusterRechecked (split_book_recheck.go).
 
 package dedup
 
@@ -51,6 +55,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // SplitBookCandidate is one detected cluster of Books that look like
@@ -166,6 +171,31 @@ func withoutVetoed(all []SplitBookCandidate) []SplitBookCandidate {
 	return out
 }
 
+// slimFromBook projects a book row (a Book goes through Book.Core) to the fields the detector reads. The scan
+// (loadSlimBooks) and the merge-time recheck (RecheckSplitBookMembers) build
+// their input through this one function, so they judge the same fields.
+func slimFromBook(b *database.BookCore) splitBookSlim {
+	originalFilename := ""
+	if b.OriginalFilename != nil {
+		originalFilename = *b.OriginalFilename
+	}
+	seriesRaw := ""
+	if b.SeriesPositionRaw != nil {
+		seriesRaw = *b.SeriesPositionRaw
+	}
+	return splitBookSlim{
+		ID:                b.ID,
+		Title:             b.Title,
+		FilePath:          b.FilePath,
+		OriginalFilename:  originalFilename,
+		AuthorID:          b.AuthorID,
+		SeriesID:          b.SeriesID,
+		Duration:          b.Duration,
+		SeriesSequence:    b.SeriesSequence,
+		SeriesPositionRaw: seriesRaw,
+	}
+}
+
 // loadSlimBooks paginates through every book and projects to splitBookSlim.
 // progress, if non-nil, is called once per page with the total books loaded
 // so far (pages are 1000 books).
@@ -193,25 +223,7 @@ func loadSlimBooks(ctx context.Context, store Store, progress func(loaded int)) 
 			if b.IsSoftDeleted() {
 				continue
 			}
-			originalFilename := ""
-			if b.OriginalFilename != nil {
-				originalFilename = *b.OriginalFilename
-			}
-			seriesRaw := ""
-			if b.SeriesPositionRaw != nil {
-				seriesRaw = *b.SeriesPositionRaw
-			}
-			all = append(all, splitBookSlim{
-				ID:                b.ID,
-				Title:             b.Title,
-				FilePath:          b.FilePath,
-				OriginalFilename:  originalFilename,
-				AuthorID:          b.AuthorID,
-				SeriesID:          b.SeriesID,
-				Duration:          b.Duration,
-				SeriesSequence:    b.SeriesSequence,
-				SeriesPositionRaw: seriesRaw,
-			})
+			all = append(all, slimFromBook(b))
 		}
 		loaded += len(batch)
 		if progress != nil {
@@ -533,6 +545,27 @@ func numberSource(fromFilename, fromSubdir int) string {
 	}
 }
 
+// typedChapterNumbers extracts each member's chapter number: the filename
+// basename first, the immediate parent dir name as the fallback (rogue-subdir
+// case). It also counts which source each number really came from: the
+// pattern label must say so.
+func typedChapterNumbers(group []splitBookSlim) (nums []int, fromFilename, fromSubdir int) {
+	nums = make([]int, 0, len(group))
+	for _, b := range group {
+		n := extractChapterNumber(splitFileStem(b.FilePath))
+		if n >= 0 {
+			fromFilename++
+		} else {
+			n = extractChapterNumber(filepath.Base(filepath.Dir(b.FilePath)))
+			if n >= 0 {
+				fromSubdir++
+			}
+		}
+		nums = append(nums, n)
+	}
+	return nums, fromFilename, fromSubdir
+}
+
 // qualifyTypedGroup applies size/author/series/sequence checks, then the
 // distinct-works vetoes. A cluster that passes the first but trips a veto is
 // returned with Vetoes set (ok true): detectFromSlimWithVetoes sorts it.
@@ -574,20 +607,7 @@ func qualifyTypedGroup(group []splitBookSlim, parentKey, shape string, resolveAu
 	// Extract chapter numbers — filename basename first, fall back to
 	// immediate parent dir name (rogue-subdir case). Count which source each
 	// number really came from: the label below must say so.
-	nums := make([]int, 0, len(group))
-	fromFilename, fromSubdir := 0, 0
-	for _, b := range group {
-		n := extractChapterNumber(splitFileStem(b.FilePath))
-		if n >= 0 {
-			fromFilename++
-		} else {
-			n = extractChapterNumber(filepath.Base(filepath.Dir(b.FilePath)))
-			if n >= 0 {
-				fromSubdir++
-			}
-		}
-		nums = append(nums, n)
-	}
+	nums, fromFilename, fromSubdir := typedChapterNumbers(group)
 	ok, pattern, yearRun := sequentialRun(nums)
 	if !ok {
 		return SplitBookCandidate{}, false

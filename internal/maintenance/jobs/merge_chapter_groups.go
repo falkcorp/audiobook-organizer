@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.20.1
+// version: 1.20.2
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package jobs
 
@@ -103,7 +103,7 @@ func (j *mergeChapterGroupsJob) ValidateParams(raw json.RawMessage, dryRun bool)
 //
 // A real run merges groups one at a time. They are disjoint by construction (a
 // book is in at most one reviewed group, which verification enforces), but
-// MergeSplitBookCluster holds the process-wide merge.LockMergeRMW for its whole
+// MergeSplitBookClusterWithOptions holds the process-wide merge.LockMergeRMW for its whole
 // run, so parallel workers would only queue on that lock. The preview only
 // reads, and runs its groups on a worker pool (see preview).
 func (j *mergeChapterGroupsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {

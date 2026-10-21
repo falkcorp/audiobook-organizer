@@ -27,8 +27,20 @@ The Repairs fixer lists vetoed clusters as held rows with the veto lines in the
 evidence, and adds the fragment fixer's checks: `skipped_no_files` (a member has
 no file rows), `held_duration_gate` and `held_duration_unknown` (same
 `repair_chapter_max_min` limit, unknown before long), and
-`held_distinct_works`. Candidates already stored by an earlier scan keep their
-old contents until the scan runs again.
+`held_distinct_works`.
+
+Candidates stored by an earlier scan are snapshots, and the bulk-merge op
+(`dedup.split-book-bulk-merge`) and `POST /dedup/split-book-candidates/:id/merge`
+used to merge them as written. Both now go through
+`dedup.MergeSplitBookClusterRechecked`, which re-reads every member and refuses
+(the route answers 409, the op skips the candidate and leaves it stored) unless
+the current rows still pass: no gone or path-less member, a file row on every
+member, no file with an unknown (0) duration or one at or over
+`repair_chapter_max_min`, and no distinct-works veto. The shape the vetoes need
+is inferred from the members' current paths, not from the stored row. A dry run
+of the op reports which candidates the real run would refuse. The unused
+`MergeSplitBookCluster` wrapper was removed (its callers use
+`MergeSplitBookClusterWithOptions` or the rechecked entry point).
 
 ### Changed
 

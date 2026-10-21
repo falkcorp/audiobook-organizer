@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.31.3
+// version: 1.31.4
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package merge
 
@@ -112,7 +112,7 @@ type CombineJournal struct {
 	CreatedAt  time.Time `json:"created_at"`
 	SurvivorID string    `json:"survivor_id"`
 	// Origin names the operation that wrote the journal when it is not
-	// CombineBooks (empty): "split_book_merge" for dedup.MergeSplitBookCluster.
+	// CombineBooks (empty): "split_book_merge" for dedup.MergeSplitBookClusterWithOptions.
 	Origin string `json:"origin,omitempty"`
 
 	// Absorbed holds one entry per book folded into the survivor.
@@ -370,7 +370,7 @@ type CombineJournalWriter interface {
 
 // NewCombineJournal returns an empty Pending journal for survivorID with a
 // fresh chronologically-sortable id. Callers outside this package that fold
-// books into a survivor (dedup.MergeSplitBookCluster) record their work in
+// books into a survivor (dedup.MergeSplitBookClusterWithOptions) record their work in
 // this same format so UndoCombine can reverse it.
 func NewCombineJournal(survivorID string) *CombineJournal {
 	return &CombineJournal{

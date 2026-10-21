@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-21
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -37,7 +37,7 @@ import (
 var splitMergeLog = logger.New("dedup.split-merge")
 
 // SplitBookMergeJournalOrigin marks a combine journal written by
-// MergeSplitBookCluster.
+// MergeSplitBookClusterWithOptions.
 const SplitBookMergeJournalOrigin = "split_book_merge"
 
 // SplitBookMergeResult summarises a successful merge.
@@ -94,28 +94,6 @@ type splitSrcPlan struct {
 	files       []database.BookFile
 	fileIDs     []string
 	hasMappings bool // any mapping, tombstoned included: all ride ReassignExternalIDs
-}
-
-// MergeSplitBookCluster absorbs every srcID into keepID:
-//
-//  0. Read every src (files, external-ID mappings) and write a Pending
-//     combine journal before any mutation. A journal that cannot be written
-//     refuses the merge.
-//  1. For each src: MoveBookFilesToBook(ids, src, keep), then reassign its
-//     external-ID mappings (iTunes PIDs etc.) to keep, then soft-delete it.
-//     A src whose move or reassignment fails is left live -- deleting it would
-//     strand audio or PIDs on a deleted row -- and re-running the merge
-//     finishes it.
-//  2. Recompute keep duration as sum of all bookfile durations.
-//  3. Optionally update keep.Title to suggestedTitle (when non-empty).
-//     Steps 2 and 3 go through ModifyBook and set only those two columns.
-//  4. Mark the journal Applied, listing only the srcs that completed step 1.
-//
-// Per-src errors are collected but do not abort — the remaining sources
-// still get processed so the operator doesn't end up with a half-merged
-// cluster.
-func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggestedTitle string) (*SplitBookMergeResult, error) {
-	return MergeSplitBookClusterWithOptions(store, keepID, srcIDs, suggestedTitle, SplitMergeOptions{})
 }
 
 // SplitMergeOptions tunes MergeSplitBookClusterWithOptions.
@@ -176,7 +154,26 @@ type SplitMergeOptions struct {
 	BeforeSource func(srcID string) error
 }
 
-// MergeSplitBookClusterWithOptions is MergeSplitBookCluster with options.
+// MergeSplitBookClusterWithOptions absorbs every srcID into keepID:
+//
+//  0. Read every src (files, external-ID mappings) and write a Pending
+//     combine journal before any mutation. A journal that cannot be written
+//     refuses the merge.
+//  1. For each src: MoveBookFilesToBook(ids, src, keep), then reassign its
+//     external-ID mappings (iTunes PIDs etc.) to keep, then soft-delete it.
+//     A src whose move or reassignment fails is left live -- deleting it would
+//     strand audio or PIDs on a deleted row -- and re-running the merge
+//     finishes it.
+//  2. Recompute keep duration as sum of all bookfile durations.
+//  3. Optionally update keep.Title to suggestedTitle (when non-empty).
+//     Steps 2 and 3 go through ModifyBook and set only those two columns.
+//  4. Mark the journal Applied, listing only the srcs that completed step 1.
+//
+// Per-src errors are collected but do not abort — the remaining sources
+// still get processed so the operator doesn't end up with a half-merged
+// cluster.
+//
+// SplitMergeOptions tunes it (the zero value is the plain merge).
 //
 // CRASH SAFETY. The journal is written Pending before the first write and
 // re-written after every step that changes something (each src's file move,
@@ -188,10 +185,10 @@ type SplitMergeOptions struct {
 // was written is dropped from it.
 func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []string, suggestedTitle string, opts SplitMergeOptions) (*SplitBookMergeResult, error) {
 	if keepID == "" {
-		return nil, fmt.Errorf("MergeSplitBookCluster: empty keepID")
+		return nil, fmt.Errorf("MergeSplitBookClusterWithOptions: empty keepID")
 	}
 	if len(srcIDs) == 0 {
-		return nil, fmt.Errorf("MergeSplitBookCluster: no srcIDs")
+		return nil, fmt.Errorf("MergeSplitBookClusterWithOptions: no srcIDs")
 	}
 
 	// This is a fourth unguarded read-modify-write over shared book rows

@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_concurrent_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e3a91f7c-5b2d-4a6e-9c81-0f4d2b7e8a15
-// last-edited: 2026-10-17
+// last-edited: 2026-10-21
 
 package dedup
 
@@ -53,7 +53,7 @@ func TestMergeSplitBookCluster_SharesLockWithMergeService(t *testing.T) {
 			p := pairs[i]
 			if i%2 == 0 {
 				// MergeSplitBookCluster: move files, recompute duration, soft-delete src.
-				_, _ = MergeSplitBookCluster(probe, p.keep, []string{p.src}, "")
+				_, _ = mergeSplitBookCluster(probe, p.keep, []string{p.src}, "")
 			} else {
 				// merge.Service.MergeBooks: version-group merge (keep is m4b winner).
 				_, _ = ms.MergeBooks([]string{p.keep, p.src}, "")
