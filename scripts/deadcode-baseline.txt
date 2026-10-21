@@ -455,8 +455,9 @@ internal/operations/registry.batchRun.settleStop
 internal/operations/registry.chunkLedger.allMarks
 internal/operations/registry.chunkLedger.clearPending
 internal/operations/registry.chunkLedger.pendingMarks
-# 09-PR1 (Universal Reject, #4110) one-time addition for the staged internal/decisions
-# package: the store lands first, store-only (plan approved by the owner 2026-10-20), and
+# 09-PR1 (Universal Reject, #4110) one-time addition (owner approved 2026-10-21) for the
+# staged internal/decisions package: the store lands first, store-only (plan approved by
+# the owner 2026-10-20), and
 # nothing in production calls it until PR2 wires the first producer from main. Exactly the
 # 75 internal/decisions. identifiers below; PR2 must confirm every name drops out, then
 # --prune (todo.d 2026-10-21-decisions-deadcode-prune).
