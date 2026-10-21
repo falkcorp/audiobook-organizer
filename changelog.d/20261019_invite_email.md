@@ -150,18 +150,22 @@ verified holder: a row whose history points to a trusted source is stamped
 another old row also qualifies with a higher rank. On a tie for the highest
 rank, the row the existing email index entry names keeps it (the account an
 SSO login reached before this update); with no entry naming one of them, all
-tied rows are demoted. A warning per address names the demoted ids and the
-account that now holds the address verified (SSO signs in there), says not
-to clear that holder's email and to leave the accounts as they are until
-they are merged; with no holder it says no account holds the address
-verified. No address is logged. Admin accounts stamped `self` are
-logged by id at warning level: an SSO login with that address will take it
-from them. The log says to leave the account as it is, not to set the address
-for them, which would make that account the verified holder. When another
-account already holds the same address verified, one warning per pair names
-both ids, says which one is the verified holder (SSO signs in there), and
-says not to clear the holder's email and to leave both until they are
-merged.
+tied rows are demoted.
+
+At every start, not only the one that stamps old rows, the server logs one
+warning per address that more than one account holds, or that an admin
+account holds only as typed in. It is computed from the rows as they stand,
+so it repeats until the accounts are merged. It names every account by id,
+marks admins and rows demoted at this start, and says which account holds the
+address verified. It says where SSO logins go: a NEW identity with the address
+links to the verified holder (with none, it creates a separate account and
+takes the address from the typed-in holders), while identities already linked
+to an account keep signing in to it, because the resolver matches provider and
+subject before the email. It says not to clear the verified holder's email,
+not to set the address for the others (refused, or wrong when this person
+signs in to another account through SSO), and to leave the accounts as they
+are until they are merged. Each account appears in one warning. No address is
+logged.
 
 When an identity-provider-verified login, or the acceptance of an invite an
 admin emailed, finds its address held unproven by other accounts, the verified

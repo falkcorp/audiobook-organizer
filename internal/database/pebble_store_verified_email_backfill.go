@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-20
 
@@ -111,13 +111,6 @@ func (p *PebbleStore) syncVerifiedEmailKeyLocked(lower string, holder *User) err
 	return p.db.Set(key, []byte(holder.ID), pebble.Sync)
 }
 
-// SelfAdminConflict pairs an admin account stamped "self" with the other
-// account that holds the same address proven.
-type SelfAdminConflict struct {
-	AdminID  string // holds the address as typed in (not verified)
-	HolderID string // holds the address verified; SSO with it signs in here
-}
-
 // DowngradedDuplicate is one address's demoted legacy rows: Demoted were
 // stamped "self" (typed in, not verified); HolderID holds the address
 // verified, so SSO with it signs in there, or is "" when the tied candidates
@@ -127,15 +120,120 @@ type DowngradedDuplicate struct {
 	Demoted  []string
 }
 
-// downgradedDuplicateWarning is the boot warning for one DowngradedDuplicate.
-// It names every account involved and says which one, if any, holds the
-// address verified, so the operator knows whose email must not be cleared.
-// No email address is logged.
-func downgradedDuplicateWarning(d DowngradedDuplicate) string {
-	if d.HolderID != "" {
-		return fmt.Sprintf("verified email: account(s) %v were stamped as typed in, not verified: account %s holds the same address verified, and SSO with that address signs in account %s. Do NOT clear the email of account %s (the verified holder). Leave all of these accounts as they are until they are merged", d.Demoted, d.HolderID, d.HolderID, d.HolderID)
+// EmailConflict is one address, as the user rows stand now, that an operator
+// should know about: held by more than one account, or held as typed in (not
+// verified) by an admin account. HolderID holds it verified ("" when no
+// account does); Unverified hold it as typed in.
+type EmailConflict struct {
+	HolderID   string
+	Unverified []EmailConflictAccount
+}
+
+// EmailConflictAccount is one account holding a conflicted address as typed
+// in.
+type EmailConflictAccount struct {
+	ID    string
+	Admin bool
+	// Demoted: stamped as typed in at this start although its history
+	// pointed to a trusted source (demoteDuplicateProofs).
+	Demoted bool
+	// Linked: the account has linked SSO identities. ResolveUser matches an
+	// identity by provider and subject (step 3) before it looks at the email
+	// (step 4), so those identities keep signing in to this account whatever
+	// holds the address.
+	Linked bool
+}
+
+// emailConflictWarning is the boot warning for one EmailConflict. It names
+// every account involved, says which one, if any, holds the address verified,
+// and where SSO logins go: a NEW identity with the address links to the
+// verified holder (or, with none, creates a separate account and takes the
+// address from the typed-in holders), while identities already linked to an
+// account keep signing in to it. No email address is logged.
+func emailConflictWarning(c EmailConflict) string {
+	var b strings.Builder
+	b.WriteString("verified email: ")
+	desc := make([]string, 0, len(c.Unverified))
+	var linked []string
+	for _, a := range c.Unverified {
+		d := "account " + a.ID
+		var notes []string
+		if a.Admin {
+			notes = append(notes, "admin")
+		}
+		if a.Demoted {
+			notes = append(notes, "demoted at this start: its address was stamped as typed in")
+		}
+		if len(notes) > 0 {
+			d += " (" + strings.Join(notes, "; ") + ")"
+		}
+		desc = append(desc, d)
+		if a.Linked {
+			linked = append(linked, a.ID)
+		}
 	}
-	return fmt.Sprintf("verified email: account(s) %v qualified equally for the same verified address and none could be preferred, so all were stamped as typed in and no account holds it verified; an SSO login with that address reaches or creates a separate account. Leave these accounts as they are until they are merged", d.Demoted)
+	if c.HolderID != "" {
+		fmt.Fprintf(&b, "account %s holds an address verified that %s also hold(s) as typed in (not verified). A NEW SSO identity with this address links to account %s", c.HolderID, strings.Join(desc, ", "), c.HolderID)
+	} else {
+		fmt.Fprintf(&b, "%s hold(s) an address as typed in (not verified) and no account holds it verified. A NEW SSO identity with this address creates a separate account and takes the address from them", strings.Join(desc, ", "))
+	}
+	for _, id := range linked {
+		fmt.Fprintf(&b, "; identities already linked to account %s keep signing in to account %s", id, id)
+	}
+	b.WriteString(". ")
+	if c.HolderID != "" {
+		fmt.Fprintf(&b, "Do NOT clear the email of account %s (the verified holder), and do not set the address for the others (it will be refused). ", c.HolderID)
+	} else {
+		b.WriteString("Do not set the address for one of them on the Users page: that makes it the verified holder, which is wrong if this person signs in to another account through SSO. ")
+	}
+	b.WriteString("Leave these accounts as they are until they are merged; this warning repeats at every start until then")
+	return b.String()
+}
+
+// emailConflictsLocked computes the EmailConflicts from the user rows as they
+// stand, so the warnings repeat at every start until the accounts are merged
+// (not only at the start that stamped legacy rows). demoted marks the ids
+// stamped as typed in at this start. One user scan plus one identity lookup
+// per typed-in account in a conflict. Caller holds inviteMu.
+func (p *PebbleStore) emailConflictsLocked(demoted map[string]bool) ([]EmailConflict, error) {
+	users, _, err := p.listUsers()
+	if err != nil {
+		return nil, err
+	}
+	byAddr := map[string][]*User{}
+	for i := range users {
+		if lower := util.NormalizeEmail(users[i].Email); lower != "" {
+			byAddr[lower] = append(byAddr[lower], &users[i])
+		}
+	}
+	var out []EmailConflict
+	for lower, holders := range byAddr {
+		var c EmailConflict
+		anyAdmin := false
+		for _, u := range holders {
+			if c.HolderID == "" && emailProven(u, lower) {
+				c.HolderID = u.ID
+				continue
+			}
+			if emailProven(u, lower) {
+				continue // a second proven holder: the cache rewrite reports it as a conflict
+			}
+			ids, err := p.GetOAuthIdentitiesForUser(u.ID)
+			if err != nil {
+				return nil, err
+			}
+			admin := hasRole(u, inviteAdminRole)
+			anyAdmin = anyAdmin || admin
+			c.Unverified = append(c.Unverified, EmailConflictAccount{ID: u.ID, Admin: admin, Demoted: demoted[u.ID], Linked: len(ids) > 0})
+		}
+		if len(c.Unverified) == 0 || (c.HolderID == "" && len(c.Unverified) == 1 && !anyAdmin) {
+			continue
+		}
+		slices.SortFunc(c.Unverified, func(a, b EmailConflictAccount) int { return strings.Compare(a.ID, b.ID) })
+		out = append(out, c)
+	}
+	slices.SortFunc(out, func(a, b EmailConflict) int { return strings.Compare(a.Unverified[0].ID, b.Unverified[0].ID) })
+	return out, nil
 }
 
 // ReconcileResult counts what ReconcileVerifiedEmails changed.
@@ -146,16 +244,16 @@ type ReconcileResult struct {
 	// StampedSelfAdmins lists admin-role accounts stamped "self": after this,
 	// an SSO login with that address takes it from them.
 	StampedSelfAdmins []string
-	// SelfAdminsVerifiedElsewhere is the subset of StampedSelfAdmins whose
-	// address another account already holds proven, each with that holder.
-	// Setting the address for the admin is refused (it would be proven
-	// twice); both accounts are left as they are until they are merged.
-	SelfAdminsVerifiedElsewhere []SelfAdminConflict
 	// DowngradedDuplicates lists, per address, the legacy rows stamped "self"
 	// although their history pointed to a trusted source, because another
 	// account already held, or also qualified for, the address proven
 	// (demoteDuplicateProofs), with the account that holds it verified now.
-	DowngradedDuplicates           []DowngradedDuplicate
+	DowngradedDuplicates []DowngradedDuplicate
+	// EmailConflicts are computed from the rows as they stand after
+	// stamping, at every start (emailConflictsLocked), and Warnings holds
+	// the boot warning logged for each.
+	EmailConflicts                 []EmailConflict
+	Warnings                       []string
 	Kept, Added, Dropped, Conflict int // cache keys
 }
 
@@ -184,46 +282,25 @@ func (p *PebbleStore) ReconcileVerifiedEmails() (ReconcileResult, error) {
 	if n := len(res.Stamped); n > 0 {
 		authLog.Info("verified email: stamped email sources on rows from an older build: %v", res.Stamped)
 	}
+	demoted := map[string]bool{}
 	for _, d := range res.DowngradedDuplicates {
-		authLog.Warn("%s", downgradedDuplicateWarning(d))
+		for _, id := range d.Demoted {
+			demoted[id] = true
+		}
 	}
-	if err := p.classifySelfAdminsLocked(&res); err != nil {
-		authLog.Warn("verified email: could not check whether the self-set admin addresses are verified elsewhere: %v", err)
+	conflicts, err := p.emailConflictsLocked(demoted)
+	if err != nil {
+		authLog.Warn("verified email: could not check the accounts for shared or unverified admin addresses: %v", err)
 	}
-	if settable := slices.DeleteFunc(slices.Clone(res.StampedSelfAdmins), func(id string) bool {
-		return slices.ContainsFunc(res.SelfAdminsVerifiedElsewhere, func(c SelfAdminConflict) bool { return c.AdminID == id })
-	}); len(settable) > 0 {
-		authLog.Warn("verified email: admin account(s) %v hold an email they set themselves, so it is not verified; an SSO login with that address reaches or creates a different account and takes the address from them. Do not set the address for them on the Users page: that makes this account its verified holder, which is wrong if the address signs in another account through SSO. Leave the account as it is; if a second account for the same person appears, leave both as they are until they are merged", settable)
-	}
-	for _, c := range res.SelfAdminsVerifiedElsewhere {
-		authLog.Warn("verified email: admin account %s holds an email it set itself (not verified); account %s holds the same address verified, and SSO with that address signs in account %s. Do NOT clear the email of account %s (the verified holder), and do not set the address for account %s (it will be refused). Leave both accounts as they are until they are merged", c.AdminID, c.HolderID, c.HolderID, c.HolderID, c.AdminID)
+	res.EmailConflicts = conflicts
+	for _, c := range conflicts {
+		w := emailConflictWarning(c)
+		res.Warnings = append(res.Warnings, w)
+		authLog.Warn("%s", w)
 	}
 	authLog.Info("verified-email cache reconciled: %d kept, %d added, %d dropped, %d conflicted",
 		res.Kept, res.Added, res.Dropped, res.Conflict)
 	return res, nil
-}
-
-// classifySelfAdminsLocked fills res.SelfAdminsVerifiedElsewhere: the admins
-// stamped "self" whose address another account holds proven. Caller holds
-// inviteMu.
-func (p *PebbleStore) classifySelfAdminsLocked(res *ReconcileResult) error {
-	for _, id := range res.StampedSelfAdmins {
-		u, err := p.GetUserByID(id)
-		if err != nil {
-			return err
-		}
-		if u == nil {
-			continue
-		}
-		holder, err := p.provenHolderOtherIDLocked(util.NormalizeEmail(u.Email), id)
-		if err != nil {
-			return err
-		}
-		if holder != "" {
-			res.SelfAdminsVerifiedElsewhere = append(res.SelfAdminsVerifiedElsewhere, SelfAdminConflict{AdminID: id, HolderID: holder})
-		}
-	}
-	return nil
 }
 
 // stampLegacyEmailSourcesLocked gives every decodable row that has an email

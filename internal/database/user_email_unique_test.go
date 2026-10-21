@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-20
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -997,8 +998,8 @@ func TestReconcile_StampingDemotesDuplicateProof(t *testing.T) {
 		if g.HolderID != wantGroups[i].HolderID || !slices.Equal(g.Demoted, wantGroups[i].Demoted) {
 			t.Fatalf("DowngradedDuplicates = %+v, want %+v", res.DowngradedDuplicates, wantGroups)
 		}
-		msg := downgradedDuplicateWarning(g)
-		if !strings.Contains(msg, "Do NOT clear the email of account "+g.HolderID+" (the verified holder)") || !strings.Contains(msg, g.Demoted[0]) {
+		msg := warningNaming(t, res.Warnings, g.Demoted[0])
+		if !strings.Contains(msg, "Do NOT clear the email of account "+g.HolderID+" (the verified holder)") || !strings.Contains(msg, "demoted at this start") {
 			t.Fatalf("warning does not name the holder %s and the demoted %v: %s", g.HolderID, g.Demoted, msg)
 		}
 		if strings.Contains(msg, "merge the accounts") || strings.Contains(msg, "@") {
@@ -1110,9 +1111,25 @@ func TestReconcile_TieGoesToTheRowTheKeyNames(t *testing.T) {
 	}
 }
 
+// warningNaming returns the one boot warning that names account id, failing
+// when none or several do (an account must be reported exactly once).
+func warningNaming(t *testing.T, warnings []string, id string) string {
+	t.Helper()
+	var found []string
+	for _, w := range warnings {
+		if strings.Contains(w, "account "+id) {
+			found = append(found, w)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d warnings name account %s, want exactly 1: %q", len(found), id, warnings)
+	}
+	return found[0]
+}
+
 // A self-set admin whose address another account holds verified is reported
-// with that holder's id, so the boot warning can name both accounts and say
-// which one must not be cleared.
+// with that holder, and the warning names both and says which one must not
+// be cleared.
 func TestReconcile_SelfAdminConflictNamesTheVerifiedHolder(t *testing.T) {
 	s := newInviteTestStore(t)
 	holder := mustUser(t, s, "ssoholder", "viewer", "active")
@@ -1124,22 +1141,106 @@ func TestReconcile_SelfAdminConflictNamesTheVerifiedHolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []SelfAdminConflict{{AdminID: admin.ID, HolderID: holder.ID}}
-	if !slices.Equal(res.SelfAdminsVerifiedElsewhere, want) {
-		t.Fatalf("SelfAdminsVerifiedElsewhere = %+v, want %+v", res.SelfAdminsVerifiedElsewhere, want)
+	want := []EmailConflict{{HolderID: holder.ID, Unverified: []EmailConflictAccount{{ID: admin.ID, Admin: true}}}}
+	if !reflect.DeepEqual(res.EmailConflicts, want) {
+		t.Fatalf("EmailConflicts = %+v, want %+v", res.EmailConflicts, want)
+	}
+	msg := warningNaming(t, res.Warnings, admin.ID)
+	for _, part := range []string{
+		"account " + holder.ID + " holds an address verified",
+		"A NEW SSO identity with this address links to account " + holder.ID,
+		"Do NOT clear the email of account " + holder.ID + " (the verified holder)",
+	} {
+		if !strings.Contains(msg, part) {
+			t.Fatalf("warning lacks %q: %s", part, msg)
+		}
+	}
+	if strings.Contains(msg, "keep signing in") {
+		t.Fatalf("the admin has no linked identity, yet the warning says one keeps signing in: %s", msg)
 	}
 }
 
-// With no verified holder (a tie the key breaks for nobody), the warning says
-// so, names every demoted account, and implies no merge tool.
-func TestDowngradedDuplicateWarning_NoHolder(t *testing.T) {
-	msg := downgradedDuplicateWarning(DowngradedDuplicate{Demoted: []string{"u-a", "u-b"}})
-	for _, want := range []string{"u-a", "u-b", "no account holds it verified", "until they are merged"} {
+// S3: the owner's likely state. jdfalk has the setup key for the address;
+// johnathan.falk (an admin) holds the same address and has a Google identity
+// linked by an older build. Stamping makes jdfalk the verified holder and
+// demotes johnathan.falk. The single warning for the pair says a NEW SSO
+// identity links to jdfalk while johnathan.falk's linked identity keeps
+// signing in to johnathan.falk (ResolveUser matches provider+subject first),
+// and johnathan.falk is reported once, not again as a separate self-admin
+// line. N2: the warning repeats at the next start, no longer "demoted".
+func TestReconcile_OwnerStateWarningRoutesSSOCorrectly(t *testing.T) {
+	s := newInviteTestStore(t)
+	jdfalk, err := s.CreateUser("jdfalk", "owner@example.com", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, jdfalk, "owner@example.com", "") // legacy: setup key
+	jf := mustUser(t, s, "johnathan.falk", "admin", "active")
+	if _, err := s.CreateOAuthIdentity(&OAuthIdentity{Provider: "google", Subject: "g-jf", Email: "owner@example.com", UserID: jf.ID}); err != nil {
+		t.Fatal(err)
+	}
+	setRawUserEmailSource(t, s, jf, "owner@example.com", "") // legacy: identity only
+
+	for start, demoted := range []bool{true, false} {
+		res, err := s.ReconcileVerifiedEmails()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []EmailConflict{{HolderID: jdfalk.ID, Unverified: []EmailConflictAccount{{ID: jf.ID, Admin: true, Demoted: demoted, Linked: true}}}}
+		if !reflect.DeepEqual(res.EmailConflicts, want) {
+			t.Fatalf("start %d: EmailConflicts = %+v, want %+v", start, res.EmailConflicts, want)
+		}
+		if len(res.Warnings) != 1 {
+			t.Fatalf("start %d: %d warnings, want 1: %q", start, len(res.Warnings), res.Warnings)
+		}
+		msg := warningNaming(t, res.Warnings, jf.ID)
+		for _, part := range []string{
+			"A NEW SSO identity with this address links to account " + jdfalk.ID,
+			"identities already linked to account " + jf.ID + " keep signing in to account " + jf.ID,
+			"Do NOT clear the email of account " + jdfalk.ID + " (the verified holder)",
+			"repeats at every start",
+		} {
+			if !strings.Contains(msg, part) {
+				t.Fatalf("start %d: warning lacks %q: %s", start, part, msg)
+			}
+		}
+		if got := strings.Contains(msg, "demoted at this start"); got != demoted {
+			t.Fatalf("start %d: demoted note = %v, want %v: %s", start, got, demoted, msg)
+		}
+		if strings.Contains(msg, "@") {
+			t.Fatalf("start %d: the warning logs an address: %s", start, msg)
+		}
+	}
+}
+
+// With no verified holder, the warning says so, says where a NEW identity
+// goes, and implies no merge tool.
+func TestEmailConflictWarning_NoHolder(t *testing.T) {
+	msg := emailConflictWarning(EmailConflict{Unverified: []EmailConflictAccount{{ID: "u-a", Demoted: true}, {ID: "u-b", Linked: true}}})
+	for _, want := range []string{"account u-a", "account u-b", "no account holds it verified", "creates a separate account", "identities already linked to account u-b keep signing in to account u-b", "until they are merged"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("warning lacks %q: %s", want, msg)
 		}
 	}
 	if strings.Contains(msg, "merge the accounts") || strings.Contains(msg, "clear the duplicate") {
 		t.Fatalf("warning keeps the old advice: %s", msg)
+	}
+}
+
+// A non-admin alone holding an address as typed in is not a conflict; an
+// admin alone is (an SSO login would take the address from it).
+func TestReconcile_LoneTypedInAddressWarnsOnlyForAnAdmin(t *testing.T) {
+	s := newInviteTestStore(t)
+	viewer := mustUser(t, s, "viewer1", "viewer", "active")
+	setRawUserEmailSource(t, s, viewer, "viewer1@example.com", EmailSourceSelf)
+	admin := mustUser(t, s, "admin1", "admin", "active")
+	setRawUserEmailSource(t, s, admin, "admin1@example.com", EmailSourceSelf)
+	res, err := s.ReconcileVerifiedEmails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EmailConflict{{Unverified: []EmailConflictAccount{{ID: admin.ID, Admin: true}}}}
+	if !reflect.DeepEqual(res.EmailConflicts, want) {
+		t.Fatalf("EmailConflicts = %+v, want %+v", res.EmailConflicts, want)
 	}
 }
