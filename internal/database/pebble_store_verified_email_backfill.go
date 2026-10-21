@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-21
 
@@ -8,6 +8,7 @@ package database
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -209,7 +210,8 @@ func loneTypedInAdminWarning(a EmailConflictAccount) string {
 
 // idpCanCarry reports whether an identity provider could ever assert lower
 // (normalized) as a verified address: false for a local or non-routable
-// domain (localhost, a bare host name, an IP literal, or a reserved or
+// domain (localhost, a bare host name, an IP literal, bracketed or not, or a
+// reserved or
 // local-only suffix such as .local, .internal, .test). A lone typed-in admin
 // address that no IdP can carry cannot be taken by an SSO login, so it is not
 // worth a warning.
@@ -220,6 +222,11 @@ func idpCanCarry(lower string) bool {
 	}
 	domain := strings.TrimSuffix(lower[at+1:], ".")
 	if domain == "" || strings.HasPrefix(domain, "[") || !strings.Contains(domain, ".") {
+		return false
+	}
+	// An unbracketed IP literal (admin@192.0.2.1) is no more a mail domain
+	// an IdP would vouch for than a bracketed one.
+	if _, err := netip.ParseAddr(domain); err == nil {
 		return false
 	}
 	for _, suffix := range []string{".localhost", ".local", ".localdomain", ".internal", ".invalid", ".test", ".example", ".lan", ".home.arpa"} {
