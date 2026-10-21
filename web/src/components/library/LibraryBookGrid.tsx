@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-21
 
@@ -150,8 +150,8 @@ interface LibraryBookGridProps {
   tagCloudTags?: Array<{ tag: string; count: number }>;
   tagCloudSelected?: string[];
   onTagCloudChange?: (tags: string[]) => void;
-  /** Shown in place of the chips when the current results carry no tags. */
-  tagCloudEmptyMessage?: string;
+  /** Shown in place of the chips when the current results show no tags. */
+  tagCloudEmptyMessage: string;
   /** Facets answer for the current results is outstanding. */
   tagCloudLoading?: boolean;
   /** Set when the current results' facets request failed. */
@@ -336,6 +336,7 @@ export const LibraryBookGrid = ({
           emptyMessage={tagCloudEmptyMessage}
           loading={tagCloudLoading}
           errorMessage={tagCloudError}
+          errorIsSecondary={Boolean(queryErrorMessage(loadError))}
         />
 
         {/* Select All bar — always visible */}

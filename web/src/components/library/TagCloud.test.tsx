@@ -1,5 +1,5 @@
 // file: web/src/components/library/TagCloud.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f3d2c1b-8a9e-4d7c-b6a5-2e1f9c8d7b6a
 // last-edited: 2026-10-21
 
@@ -17,6 +17,7 @@ function defaultProps(overrides: Partial<Parameters<typeof TagCloud>[0]> = {}) {
     ],
     selectedTags: [] as string[],
     onTagsChange: vi.fn(),
+    emptyMessage: 'No tags in these results.',
     ...overrides,
   };
 }
@@ -49,11 +50,10 @@ describe('TagCloud', () => {
     expect(screen.getByText('mystery (20)')).toBeInTheDocument();
   });
 
-  it('renders nothing when there are no available tags', () => {
-    const { container } = renderWithProviders(
-      <TagCloud {...defaultProps({ availableTags: [] })} />
-    );
-    expect(container.firstChild).toBeNull();
+  it('keeps the panel and says so when there are no available tags', () => {
+    renderWithProviders(<TagCloud {...defaultProps({ availableTags: [] })} />);
+    expect(screen.getByTestId('tag-cloud-panel')).toBeInTheDocument();
+    expect(screen.getByText('No tags in these results.')).toBeInTheDocument();
   });
 
   it('sizes chips proportionally to their count', () => {
@@ -279,8 +279,56 @@ describe('TagCloud stays mounted in every data state', () => {
     expect(screen.queryByTestId('tag-cloud-skeleton')).toBeNull();
   });
 
-  it('renders nothing when there is nothing to say', () => {
-    renderWithProviders(<TagCloud {...defaultProps({ availableTags: [] })} />);
-    expect(screen.queryByTestId('tag-cloud-panel')).toBeNull();
+  it('an answer made only of hidden-namespace tags shows the empty message, not nothing', () => {
+    // Every returned tag is bookkeeping (dedup:* / metadata:source:*), so none
+    // is displayable. "Empty" is decided on what is displayed, and the panel
+    // stays mounted — it used to unmount here, shifting the page by its height.
+    renderWithProviders(
+      <TagCloud
+        {...defaultProps({
+          availableTags: [
+            { tag: 'dedup:duration-match', count: 10 },
+            { tag: 'metadata:source:audible', count: 10 },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByTestId('tag-cloud-panel')).toHaveAttribute('data-state', 'empty');
+    expect(screen.getByText('No tags in these results.')).toBeInTheDocument();
+  });
+
+  it('announces its error as an alert by default, politely when another error already did', () => {
+    const { rerender } = renderWithProviders(
+      <TagCloud {...defaultProps({ availableTags: [], errorMessage: 'Could not load' })} />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load');
+    rerender(
+      <TagCloud
+        {...defaultProps({
+          availableTags: [],
+          errorMessage: 'Could not load',
+          errorIsSecondary: true,
+        })}
+      />
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Could not load');
+  });
+
+  it('gives every state a body of the same fixed height', () => {
+    const heights = (props: Parameters<typeof defaultProps>[0]) => {
+      const { unmount } = renderWithProviders(<TagCloud {...defaultProps(props)} />);
+      const h = getComputedStyle(screen.getByTestId('tag-cloud-body')).height;
+      unmount();
+      return h;
+    };
+    const populated = heights({});
+    // An explicit height, not 'auto' (jsdom has no layout, so this guards the
+    // style; the e2e spec guards the geometry).
+    expect(populated).toMatch(/calc\(/);
+    expect(heights({ availableTags: [], loading: true })).toBe(populated);
+    expect(heights({ availableTags: [] })).toBe(populated);
+    expect(heights({ availableTags: [], errorMessage: 'x' })).toBe(populated);
+    expect(heights({ loading: true })).toBe(populated);
   });
 });

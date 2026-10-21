@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.106.0
+// version: 1.107.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-21
 
@@ -1001,10 +1001,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     [tagCloudSelected, selectedTags, handleTagFilterChange]
   );
   const tagCloudError = scopedTagFacets.error ? "Couldn't load tags for these results." : undefined;
-  const tagCloudEmptyMessage =
-    !scopedTagFacets.error && scopedTagFacets.tags !== null && scopedTagFacets.tags.length === 0
-      ? 'No tags in these results.'
-      : undefined;
+  // Constant on purpose: whether the cloud is EMPTY is TagCloud's call, made on
+  // the tags it will actually display (it hides dedup:* / metadata:source:*).
+  // Deciding it here from the raw answer left an all-hidden answer showing
+  // neither chips nor message.
+  const tagCloudEmptyMessage = 'No tags in these results.';
 
   // Cancelling a slow load also clears the active tag filter — a slow tag
   // filter is exactly the case a user is likely cancelling out of, and
