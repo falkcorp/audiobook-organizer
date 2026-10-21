@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -161,6 +161,10 @@ const (
 	// junkAuthorSkipComposite: the junk row is two people joined by "_"; that is
 	// maintenance.author-split's job (a relink here would drop one of them).
 	junkAuthorSkipComposite = "skipped_composite_credit"
+	// junkAuthorSkipHeldSoleCredit: the junk credit is the book's only author
+	// credit and no evidence names a real author. Owner decision 2026-10-21:
+	// NEVER leave a book authorless, so the credit is held, not removed.
+	junkAuthorSkipHeldSoleCredit = "held_sole_credit"
 )
 
 // junkAuthorSrcCleaned: the junk name itself with its junk removed ("- Arthur C.
@@ -259,9 +263,9 @@ func (f *junkAuthorFixer) Description() string {
 		"placeholders, studios, narrator credits and filename leftovers. Each book is relinked to its " +
 		"real author from the name itself (\"- Arthur C. Clarke\"), its file tags, a provider match on its " +
 		"title, its sibling books or its folder -- never to one of its narrators. With no evidence the junk " +
-		"credit is removed and the book needs an author by hand, except for collective credits (Various " +
-		"Authors, Anonymous) and names that are junk only because another author's series or title uses " +
-		"them, which are kept. Names joined by \"_\" are left for Author split. The emptied author record " +
+		"credit is removed only when the book keeps another real author; a book's only author credit is " +
+		"held, never removed, and so are collective credits (Various Authors, Anonymous) and names that " +
+		"are junk only because another author's series or title uses them. Names joined by \"_\" are left for Author split. The emptied author record " +
 		"is kept for Purge empty authors."
 }
 
@@ -1801,6 +1805,15 @@ func decideBook(r junkAuthorEvidenceReader, idx *junkAuthorIndex, a database.Aut
 	if d.Skip == "" && d.Decision == junkAuthorDecUnlink && strings.EqualFold(strings.TrimSpace(a.Name), database.UnknownAuthorName) {
 		d.Skip, d.SkipReason = junkAuthorSkipAmbiguous, "no evidence of the real author; the Unknown Author fallback credit is kept"
 	}
+	// Owner decision 2026-10-21: never leave a book authorless. An unlink that
+	// would remove the book's only author credit is held instead; it stays held
+	// until evidence names a real author (a relink), or a real co-author exists.
+	// Replan runs this again at apply time, so a credit that became the sole one
+	// since the plan is held then too.
+	if d.Skip == "" && d.Decision == junkAuthorDecUnlink && !hasOtherRealAuthorCredit(d.Credits, a.ID, junk) {
+		d.Skip, d.SkipReason = junkAuthorSkipHeldSoleCredit, fmt.Sprintf(
+			"%q is the book's only author credit and no real author was found; the credit is held so the book is never left without an author", a.Name)
+	}
 	if d.AuthorLocked && d.Skip == "" {
 		d.Skip, d.SkipReason = junkAuthorSkipUserLocked, "the book's author is locked by the user"
 	}
@@ -2437,6 +2450,18 @@ func (f *junkAuthorFixer) linkSeries(w *repairs.Writer, store OpsStore, bookID s
 	return err
 }
 
+// hasOtherRealAuthorCredit reports whether the junction holds an author-role
+// credit other than the junk row's whose author is not itself junk: the book
+// keeps an author when the junk credit is removed.
+func hasOtherRealAuthorCredit(credits []database.BookAuthor, junkID int, junk func(int) bool) bool {
+	for _, ba := range credits {
+		if ba.AuthorID != junkID && isPrimaryAuthorRole(ba.Role) && (junk == nil || !junk(ba.AuthorID)) {
+			return true
+		}
+	}
+	return false
+}
+
 // moveCredit replaces the junk credit with target in place (same position; a
 // narrator role becomes "author": the target is the writer the evidence
 // names, not a reader), or drops it when target is nil or already credited.
@@ -2566,7 +2591,8 @@ func junkAuthorRow(d *junkAuthorBookDecision) repairs.Row {
 		r.Risk = repairs.RiskReview
 	case d.Decision == junkAuthorDecUnlink:
 		r.Proposed = map[string]string{"author": "(none: needs an author by hand)", "decision": junkAuthorDecUnlink}
-		r.Reason = what + "; no evidence of the real author, so the junk credit is removed"
+		r.Reason = what + "; no evidence of the real author, so the junk credit is removed (the book keeps its other author)"
+		r.Proposed["author"] = "(none: the book keeps its other author)"
 		r.Risk = repairs.RiskReview
 	default:
 		r.Proposed = map[string]string{"author": d.Target.Name, "decision": d.Decision, "source": d.Source}

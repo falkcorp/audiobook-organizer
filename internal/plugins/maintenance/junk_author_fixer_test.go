@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 3d080ff3-6e67-4d08-a849-8bc0996a8315
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -152,6 +152,11 @@ func (f *junkFixture) apply(plan *repairs.PlanResult, rowIDs []string) *repairs.
 				rowIDs = append(rowIDs, r.RowID)
 			}
 		}
+		if len(rowIDs) == 0 {
+			// Every row is held (the framework refuses an empty apply): nothing
+			// to write.
+			return &repairs.ApplyResult{}
+		}
 	}
 	all, err := f.s.GetAllSeries()
 	require.NoError(f.t, err)
@@ -213,7 +218,10 @@ func seedJunkLibrary(f *junkFixture) map[string]string {
 	b["noser"] = f.book(junkBookSpec{title: "The Skull Throne", path: "/lib/bk-noser", author: demonCycle,
 		tags: map[string]string{"album_artist": "Peter V. Brett"}})
 	b["folder"] = f.book(junkBookSpec{title: "Brayan's Gold", path: "/lib/Peter V. Brett/bk-folder", author: graphicAudio})
+	// No evidence: with the junk credit as the book's only author it is HELD
+	// (never leave a book authorless); with a real co-author it is unlinked.
 	b["none"] = f.book(junkBookSpec{title: "Nothing Known", path: "/lib/bk-none", author: graphicAudio})
+	b["unlink"] = f.book(junkBookSpec{title: "Has A Coauthor", path: "/lib/bk-unlink", author: graphicAudio, coAuthor: "Peter V. Brett"})
 	b["amb"] = f.book(junkBookSpec{title: "Two Artists", path: "/lib/bk-amb", author: graphicAudio,
 		tags: map[string]string{"artist": "Brent Weeks", "album_artist": "Peter V. Brett"}})
 	b["create"] = f.book(junkBookSpec{title: "Assassin's Apprentice", path: "/lib/bk-create", author: graphicAudio,
@@ -267,7 +275,8 @@ func TestJunkAuthorFixer_PlanDecisions(t *testing.T) {
 		{key: "series", author: demon, decision: junkAuthorDecRelink, source: junkAuthorSrcSeries, target: "Peter V. Brett"},
 		{key: "noser", author: demon, decision: junkAuthorDecRelink, source: junkAuthorSrcTags, target: "Peter V. Brett"},
 		{key: "folder", author: ga, decision: junkAuthorDecRelink, source: junkAuthorSrcPath, target: "Peter V. Brett"},
-		{key: "none", author: ga, decision: junkAuthorDecUnlink},
+		{key: "none", author: ga, skip: junkAuthorSkipHeldSoleCredit},
+		{key: "unlink", author: ga, decision: junkAuthorDecUnlink},
 		{key: "create", author: ga, decision: junkAuthorDecCreate, source: junkAuthorSrcTags, target: "Robin Hobb"},
 		{key: "amb", author: ga, skip: junkAuthorSkipAmbiguous},
 		{key: "locked", author: way, skip: junkAuthorSkipUserLocked},
@@ -355,8 +364,10 @@ func TestJunkAuthorFixer_ApplyThenRevert(t *testing.T) {
 	require.Equal(t, []int{brett}, f.credits(b["series"]))
 	require.Equal(t, []int{brett}, f.credits(b["folder"]))
 	require.Equal(t, []int{rowling}, f.credits(b["hp"]))
-	require.Empty(t, f.credits(b["none"]), "no evidence: junk credit removed")
-	require.Nil(t, f.primary(b["none"]))
+	require.Equal(t, []int{ga}, f.credits(b["none"]), "no evidence and the only credit: held, never removed")
+	require.Equal(t, ga, *f.primary(b["none"]))
+	require.Equal(t, []int{brett}, f.credits(b["unlink"]), "no evidence but a real co-author: junk credit removed")
+	require.Equal(t, brett, *f.primary(b["unlink"]))
 	hobb, err := f.s.GetAuthorByName("Robin Hobb")
 	require.NoError(t, err)
 	require.NotNil(t, hobb, "missing target author created")
@@ -367,7 +378,7 @@ func TestJunkAuthorFixer_ApplyThenRevert(t *testing.T) {
 	require.Equal(t, f.series["Demon Cycle"], *noser.SeriesID, "series proposal applied")
 
 	// Guarded and held rows untouched.
-	for _, k := range []string{"amb", "locked", "itunes", "dw"} {
+	for _, k := range []string{"amb", "locked", "itunes", "dw", "none"} {
 		require.Equal(t, before[k], f.credits(b[k]), k)
 	}
 	// The junk author rows are NOT deleted (left for purge-empty-authors).
@@ -390,6 +401,7 @@ func TestJunkAuthorFixer_ApplyThenRevert(t *testing.T) {
 		require.Equal(t, before[k], f.credits(id), "credits of %s after revert", k)
 	}
 	require.Equal(t, ga, *f.primary(b["none"]))
+	require.Equal(t, ga, *f.primary(b["unlink"]))
 	require.Equal(t, way, *f.primary(b["tags"]))
 	noser, err = f.s.GetBookByID(b["noser"])
 	require.NoError(t, err)
@@ -506,7 +518,7 @@ func TestJunkAuthorFixer_ConfirmedWeakRowIsNotATarget(t *testing.T) {
 	rj := rowByID(plan, junkAuthorRowID(f.authors["GraphicAudio"], j))
 	require.NotNil(t, rj)
 	require.NotEqual(t, "Night Angel", rj.Proposed["author"], "relinked junk to junk: %s", rj.Reason)
-	require.Equal(t, junkAuthorDecUnlink, rj.Proposed["decision"], rj.Reason)
+	require.Equal(t, junkAuthorSkipHeldSoleCredit, rj.Skipped, "no evidence and the only credit: held, %s", rj.SkipReason)
 
 	// Replan agrees with the plan (the weak exclusion is the same both times).
 	for _, r := range []*repairs.Row{rw, rj} {

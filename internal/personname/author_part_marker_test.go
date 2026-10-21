@@ -1,5 +1,5 @@
 // file: internal/personname/author_part_marker_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e2b4d91-6c3a-4f08-b7d5-1a9e0c4f2e76
 // last-edited: 2026-10-21
 
@@ -115,6 +115,12 @@ func TestIsLoneMarkerPhrase(t *testing.T) {
 		// edition word (added 2026-10-21 for the label-only relink rule).
 		"Track01", "Chapter Twelve", "Volume IV", "Part One", "Side 2", "Section 3",
 		"Episode 4", "Unabridged", "Abridged", "Book 2 Unabridged",
+		// Ranges, decimals, separators, letter labels, front/back matter.
+		"Books 1-3", "Books 4-6 (Unabridged)", "Book 2.5", "Disk 2 -Track 01", "Track A", "Disc B",
+		"- Introduction", "Prologue Chapter 1", "Prologue + Chapter 1", "Chapter 5   Epilogue",
+		"Prologue", "Epilogue", "Intro", "Part II", "Volume XXXIX",
+		// Letterless disc/track codes are labels under the owner rule.
+		"1-02", "10-01", "3", "2001", "1.5",
 	}
 	for _, n := range lone {
 		if !IsLoneMarkerPhrase(n) {
@@ -140,6 +146,12 @@ func TestIsLoneMarkerPhrase(t *testing.T) {
 		"R2 D2",
 		"Tech N9ne",
 		"Unabridged Lies", "Side Effects", "Episode Guide", "Chapter And Verse", "Volume Control",
+		// Not valid roman numerals (or too large), so not numbered labels.
+		"Part Li", "Book Vic", "Book Civil", "Part ill", "Volume XL",
+		// A letter is a label only right after a label word, and a name in
+		// front is never a lone phrase.
+		"A", "Track A Smith", "Prologue Smith", "Introduction To Physics", "Vitamin C", "- ", "+",
+		"Charles Dickens Episode 4", "Charles Dickens Prologue",
 	}
 	for _, n := range notLone {
 		if IsLoneMarkerPhrase(n) {

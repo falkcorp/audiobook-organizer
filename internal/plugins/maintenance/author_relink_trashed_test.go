@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -129,14 +129,54 @@ func TestUnlinkAndDeleteAuthor_PromotesSurvivorOnTrashedBook(t *testing.T) {
 	trashed := mkRelinkTrashedBook(t, s, "strip-trashed", junk.ID, true, keep.ID)
 
 	p := &Plugin{deps: fakeDeps{store: s}}
-	n, authorless, err := p.unlinkAndDeleteAuthor(context.Background(), *junk,
-		map[int]bool{junk.ID: true}, false, slog.Default())
+	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk,
+		map[int]bool{junk.ID: true}, nil, false, slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
-	require.Empty(t, authorless)
+	require.Empty(t, held)
 
 	requireAuthorGone(t, s, junk.ID)
 	assertCreditedTo(t, s, trashed, keep.ID, true)
+}
+
+// Owner decision 2026-10-21: never leave a book authorless. A junk row that is
+// a book's ONLY author credit keeps that credit, the row is not deleted, and
+// the book is reported held. A book of the same row that has a real co-author
+// is still unlinked (its credit removed, the co-author promoted).
+func TestUnlinkAndDeleteAuthor_SoleCreditIsHeldAndRowKept(t *testing.T) {
+	s := newRelinkTrashedStore(t)
+	junk, err := s.CreateAuthor("Relink Junk")
+	require.NoError(t, err)
+	keep, err := s.CreateAuthor("Relink Survivor")
+	require.NoError(t, err)
+
+	sole := mkRelinkTrashedBook(t, s, "sole-credit", junk.ID, false)
+	shared := mkRelinkTrashedBook(t, s, "shared-credit", junk.ID, false, keep.ID)
+
+	p := &Plugin{deps: fakeDeps{store: s}}
+	doomed := map[int]bool{junk.ID: true}
+
+	// Dry run and apply agree.
+	for _, dry := range []bool{true, false} {
+		n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, doomed, nil, dry, slog.Default())
+		require.NoError(t, err)
+		require.Equal(t, 1, n, "only the co-authored book is unlinked (dry=%v)", dry)
+		require.Equal(t, []string{sole}, held, "dry=%v", dry)
+	}
+
+	// The row is kept: a delete would sweep the sole book's only credit.
+	got, err := s.GetAuthorByID(junk.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the junk row is kept while a book depends on it")
+	assertCreditedTo(t, s, sole, junk.ID, false)
+	assertCreditedTo(t, s, shared, keep.ID, false)
+
+	// A book relinked to a real author in the same run is not at risk: a
+	// run that has relinked it (dry-run prediction) may delete the row.
+	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, doomed, map[string]bool{sole: true}, true, slog.Default())
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Empty(t, held)
 }
 
 // runAuthorSplitScan is the maintenance author-split op (maintenance/author.go).

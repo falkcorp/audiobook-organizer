@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.14.0
+// version: 1.16.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
 // last-edited: 2026-10-21
 
@@ -705,6 +705,8 @@ func TestClassifyName_LabelOnlyIsRelinkOnly(t *testing.T) {
 	for _, n := range []string{
 		"Book 1", "Book 2 (Unabridged)", "Book 1 (Unabridged)", "Part 2", "Disc 1", "Vol. 01",
 		"[Track 003] 2", "Track01", "Chapter Twelve", "Volume IV", "Unabridged",
+		"Books 1-3", "Books 4-6 (Unabridged)", "Book 2.5", "Disk 2 -Track 01", "Track A",
+		"- Introduction", "Prologue Chapter 1", "Prologue + Chapter 1", "Chapter 5   Epilogue",
 	} {
 		v := ClassifyName(n)
 		if !v.Junk() || v.Strength != Strong || v.Rule != RuleLabelOnly || !v.RelinkOnly() {
@@ -725,5 +727,18 @@ func TestClassifyName_LabelOnlyIsRelinkOnly(t *testing.T) {
 	}
 	if v := ClassifyName("read by narrator"); !v.Junk() || v.RelinkOnly() {
 		t.Errorf("a narrator credit is not a label: %+v", v)
+	}
+}
+
+// Owner rule 2026-10-21: a letterless disc/track code ("1-02", "10-01", "3") is
+// a label too, so it is relink-only. There is deliberately no "needs a letter"
+// guard in the classifier: adding one makes these fall back to the creation
+// gate's unlinkable verdict and fails this test.
+func TestClassifyName_LetterlessCodesAreLabelOnly(t *testing.T) {
+	for _, n := range []string{"1-02", "10-01", "3", "2001", "1.5"} {
+		v := ClassifyName(n)
+		if !v.Junk() || v.Strength != Strong || v.Rule != RuleLabelOnly || !v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q) = %+v, want a strong relink-only %s verdict", n, v, RuleLabelOnly)
+		}
 	}
 }

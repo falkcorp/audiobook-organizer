@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_targets_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b0e6c1f-8d0a-4c55-9f7e-2a61d3c4b9e8
-// last-edited: 2026-09-29
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -120,8 +120,10 @@ func junkBadShapes() []junkBadShape {
 			bad: "zzJim Butcher", want: "Jim Butcher", build: tagShape},
 
 		// Class 4: "Author (Narrator)".
+		// "- Intro" is a lone label (relink-only since 2026-10-21): one file tag is
+		// not enough to replace it, so it is held and nothing is proposed.
 		{name: "Kevin Hearne (Luke Daniels) / file_tags", rows: 3, junk: "- Intro", title: "Hounded",
-			bad: "Kevin Hearne (Luke Daniels)", want: "Kevin Hearne", build: tagShape},
+			bad: "Kevin Hearne (Luke Daniels)", build: tagShape},
 		{name: "Kevin Hearne (Christopher Ragland) / file_tags", rows: 2, junk: "Chapter 30-Acknowledgements", title: "Trapped",
 			bad: "Kevin Hearne (Christopher Ragland)", want: "Kevin Hearne", build: tagShape},
 	}
@@ -327,7 +329,7 @@ func TestJunkAuthorFixer_PersonShapedWorksAreRefused(t *testing.T) {
 		require.NotEqual(t, c.bad, r.Proposed["author"], "%s: %s", c.bad, r.Reason)
 		require.NotEqual(t, junkAuthorDecCreate, r.Proposed["decision"], "%s: %s", c.bad, r.Reason)
 		if c.titleGate {
-			require.Equal(t, junkAuthorDecUnlink, r.Proposed["decision"], "%s: %s", c.bad, r.Reason)
+			require.Equal(t, junkAuthorSkipHeldSoleCredit, r.Skipped, "%s: the only credit is held, not unlinked: %s", c.bad, r.Reason)
 			continue
 		}
 		require.Equal(t, junkAuthorSkipAmbiguous, r.Skipped, "%s: held, not unlinked: %v %s", c.bad, r.Proposed, r.Reason)

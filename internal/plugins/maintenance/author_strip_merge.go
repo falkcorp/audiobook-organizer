@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-10-18
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -38,7 +38,12 @@ import (
 //
 //   - JUNK -> deleted. dedup.CleanAuthorNameForCreation rejects the name
 //     outright. The books keep existing and simply lose a bogus credit; a
-//     future scan can recreate the author correctly.
+//     future scan can recreate the author correctly. EXCEPT (owner decision
+//     2026-10-21: never leave a book authorless): a credit that is a book's
+//     ONLY author credit is never removed. Such a book keeps the junk credit,
+//     it is reported (books-held-sole-credit), and a junk row that still has
+//     one is kept (rows-held-sole-credit) rather than deleted. The row is
+//     deleted only once no book depends on it.
 //   - STRIPPED and the residue names an EXISTING author -> merged into it.
 //     This is the 603-row "001-147 Kevin J Anderson" cluster, where a real
 //     person is wrapped in numbering.
@@ -345,16 +350,18 @@ type authorStripMergeReport struct {
 	Merged                  int
 	Deleted                 int
 	BooksTouched            int
-	// BooksLeftAuthorless counts books whose EVERY credit is a row this run
-	// deletes. Computed in the dry run too, through the same code the apply
-	// uses, so the report says what the apply will do to books and not just
-	// to author rows. Counted as distinct books, judged against the whole
-	// run's delete set: a book credited by two doomed rows is one authorless
-	// book, and the dry run must say so even though it never sees the first
-	// deletion land.
-	BooksLeftAuthorless int
-	Failed              int
-	Sample              []string
+	// BooksHeldSoleCredit counts books whose EVERY credit is a row this run
+	// would delete: the junk credit is the book's only author credit, so it is
+	// kept (never leave a book authorless). Computed in the dry run too,
+	// through the same code the apply uses. Counted as distinct books, judged
+	// against the whole run's delete set: a book credited by two doomed rows
+	// is one held book.
+	BooksHeldSoleCredit int
+	// RowsHeldSoleCredit counts junk rows kept (not deleted) because at least
+	// one book they credit was held.
+	RowsHeldSoleCredit int
+	Failed             int
+	Sample             []string
 
 	// Title-as-author relink (author_strip_merge_relink.go). RelinkPlanned
 	// books have exactly one real author; RelinkNoCandidate and
@@ -383,11 +390,11 @@ type authorStripMergeReport struct {
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-left-authorless=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d relink-journal-rows=%d twin-deletes=%d",
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-held-sole-credit=%d rows-held-sole-credit=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d relink-journal-rows=%d twin-deletes=%d",
 		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.TargetUnverified, r.MergeTargetRemoved,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
-		r.BooksLeftAuthorless, r.Failed,
+		r.BooksHeldSoleCredit, r.RowsHeldSoleCredit, r.Failed,
 		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkFailed, r.RelinkAmbiguous, r.RelinkDeferred, r.Relinked, r.RelinkNewAuthors, r.RelinkJournalRows, r.TwinDeletes)
 }
 
@@ -752,7 +759,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			doomed[pl.from.ID] = true
 		}
 	}
-	authorlessBooks := map[string]struct{}{}
+	heldBooks := map[string]struct{}{}
 
 	for i, pl := range plans {
 		if ctx.Err() != nil {
@@ -815,17 +822,12 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		// set it reads every credit and reports what it WOULD do, so the
 		// authorless count in a report-only run is the apply's own number
 		// rather than a second estimate that could drift from it.
-		n, authorless, err := p.unlinkAndDeleteAuthor(ctx, pl.from, doomed, !params.Apply, log)
+		n, held, err := p.unlinkAndDeleteAuthor(ctx, pl.from, doomed, relinkedBooks, !params.Apply, log)
 		// Partial counts are still real work (or real prediction): a row that
 		// failed on its third book did rewrite two, and the report must not
 		// shrink because of it.
-		for _, id := range authorless {
-			if relinkedBooks[id] {
-				// Relinked to its real author (in a report-only run, will
-				// be), so the delete does not leave it authorless.
-				continue
-			}
-			authorlessBooks[id] = struct{}{}
+		for _, id := range held {
+			heldBooks[id] = struct{}{}
 		}
 		if params.Apply {
 			report.BooksTouched += n
@@ -836,11 +838,18 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 				"author_id", pl.from.ID, "name", pl.from.Name, "reason", pl.reason, "err", err)
 			continue
 		}
+		if len(held) > 0 {
+			// The row still credits books it is the only author of: kept.
+			report.RowsHeldSoleCredit++
+			log.Info("author-strip-merge: junk row kept, it is the only author credit of some books",
+				"author_id", pl.from.ID, "name", pl.from.Name, "held_books", len(held))
+			continue
+		}
 		if params.Apply {
 			report.Deleted++
 		}
 	}
-	report.BooksLeftAuthorless = len(authorlessBooks)
+	report.BooksHeldSoleCredit = len(heldBooks)
 
 	_ = reporter.UpdateProgress(len(plans), len(plans), report.summary())
 	log.Info("author-strip-merge done", "summary", report.summary())
@@ -919,11 +928,14 @@ func dropMergesIntoRemovedRows(plans []authorStripPlan, report *authorStripMerge
 // of the 2026-08-24 incident, where two entity handlers stranded ~212 authors'
 // books behind ids that no longer resolve.
 //
-// A book losing its only author is the intended outcome, not a failure: the
-// credit being removed was never a person, and a book with no author is honest
-// where one named "Track 01" is a repair job. A future scan recreates it
-// correctly, now that the creation path is gated.
-func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, doomed map[int]bool, dryRun bool, log *slog.Logger) (unlinked int, authorless []string, err error) {
+// A book is NEVER left without an author (owner decision 2026-10-21; this used
+// to be the intended outcome). A book whose only author credit is from, with no
+// surviving or soon-relinked author, keeps the credit and is returned in held;
+// when held is not empty the row is NOT deleted (a delete would sweep the
+// credit), so a later run can finish once evidence or a real author exists.
+// relinked holds books the title-as-author relink gives a real author in this
+// same run (a dry run has not written them yet), which are not at risk.
+func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, doomed map[int]bool, relinked map[string]bool, dryRun bool, log *slog.Logger) (unlinked int, held []string, err error) {
 	store := p.deps.OpsStore()
 
 	// ForRelink, not WithRole: the trash is included, because DeleteAuthor
@@ -935,14 +947,14 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 
 	for _, book := range books {
 		if ctx.Err() != nil {
-			return unlinked, authorless, ctx.Err()
+			return unlinked, held, ctx.Err()
 		}
 		bookAuthors, err := store.GetBookAuthors(book.ID)
 		if err != nil {
 			// Do NOT fall through to DeleteAuthor after this: dropping the row
 			// while a book still credits it is precisely the orphaning this
 			// function exists to avoid.
-			return unlinked, authorless, fmt.Errorf("get book authors for %s: %w", book.ID, err)
+			return unlinked, held, fmt.Errorf("get book authors for %s: %w", book.ID, err)
 		}
 
 		var remaining []database.BookAuthor
@@ -957,20 +969,22 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			ba.Position = len(remaining)
 			remaining = append(remaining, ba)
 		}
-		// A book is authorless only if nothing survives in the junction AND
+		// A book is held only if nothing survives in the junction AND
 		// its denormalized primary does not name some third, living author
 		// (junction and AuthorID are known to diverge on this library; a book
 		// whose primary is not being touched keeps that credit).
 		keepsPrimary := book.AuthorID != nil && *book.AuthorID != from.ID && !doomed[*book.AuthorID]
-		if survivors == 0 && !keepsPrimary {
-			authorless = append(authorless, book.ID)
+		if survivors == 0 && !keepsPrimary && !relinked[book.ID] {
+			// The only author credit: kept, not removed.
+			held = append(held, book.ID)
+			continue
 		}
 		if dryRun {
 			unlinked++
 			continue
 		}
 		if err := store.SetBookAuthors(book.ID, remaining); err != nil {
-			return unlinked, authorless, fmt.Errorf("set book authors for %s: %w", book.ID, err)
+			return unlinked, held, fmt.Errorf("set book authors for %s: %w", book.ID, err)
 		}
 
 		// Move the denormalized primary off the row being deleted: promote the
@@ -990,7 +1004,7 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			if len(remaining) > 0 {
 				survivor, err := store.GetAuthorByID(remaining[0].AuthorID)
 				if err != nil {
-					return unlinked, authorless, fmt.Errorf("load surviving author %d for %s: %w", remaining[0].AuthorID, book.ID, err)
+					return unlinked, held, fmt.Errorf("load surviving author %d for %s: %w", remaining[0].AuthorID, book.ID, err)
 				}
 				promoted = survivor
 			}
@@ -1012,23 +1026,23 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 				return nil
 			})
 			if err != nil {
-				return unlinked, authorless, fmt.Errorf("rewrite primary author of %s: %w", book.ID, err)
+				return unlinked, held, fmt.Errorf("rewrite primary author of %s: %w", book.ID, err)
 			}
 			if written == nil {
-				return unlinked, authorless, fmt.Errorf("hydrate book %s for primary rewrite: not found", book.ID)
+				return unlinked, held, fmt.Errorf("hydrate book %s for primary rewrite: not found", book.ID)
 			}
 		}
 		unlinked++
 	}
 
-	if dryRun {
-		return unlinked, authorless, nil
+	if dryRun || len(held) > 0 {
+		return unlinked, held, nil
 	}
 	if err := database.VerifyAuthorUnlinked(store, from.ID); err != nil {
-		return unlinked, authorless, err
+		return unlinked, held, err
 	}
 	if err := store.DeleteAuthor(from.ID); err != nil {
-		return unlinked, authorless, fmt.Errorf("delete author %d: %w", from.ID, err)
+		return unlinked, held, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
-	return unlinked, authorless, nil
+	return unlinked, held, nil
 }

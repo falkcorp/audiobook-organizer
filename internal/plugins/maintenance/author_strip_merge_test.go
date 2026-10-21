@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package maintenance
 
@@ -43,6 +43,9 @@ func stripFixture() []database.Author {
 		{ID: 7, Name: "Jane Roe"},
 		{ID: 8, Name: "Jane Roe"},
 		{ID: 9, Name: "003_Jane Roe"},
+		// Co-credits two books with the real author 1: deleting it leaves both
+		// books an author, so (unlike rows 3, 5 and 6) it may go.
+		{ID: 10, Name: "004_Lonely Title"},
 	}
 }
 
@@ -88,6 +91,13 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 			if authorID == 6 {
 				return []database.BookCore{{ID: "bk-twice", Title: "Head of the Dragon 2", AuthorID: currentPrimary("bk-twice", 5)}}, nil
 			}
+			if authorID == 10 {
+				id := 10
+				return []database.BookCore{
+					{ID: "bk-co1", Title: "Co One", AuthorID: &id},
+					{ID: "bk-co2", Title: "Co Two", AuthorID: &id},
+				}, nil
+			}
 			return nil, nil
 		},
 		GetBookAuthorsFunc: func(bookID string) ([]database.BookAuthor, error) {
@@ -113,6 +123,11 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 					{BookID: bookID, AuthorID: 5, Role: "author"},
 					{BookID: bookID, AuthorID: 6, Role: "author", Position: 1},
 				}, nil
+			case "bk-co1", "bk-co2":
+				return []database.BookAuthor{
+					{BookID: bookID, AuthorID: 10, Role: "author"},
+					{BookID: bookID, AuthorID: 1, Role: "author", Position: 1},
+				}, nil
 			}
 			return nil, nil
 		},
@@ -130,6 +145,13 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 				return &database.Book{ID: id, AuthorID: &a}, nil
 			case "bk-title":
 				a := 5
+				return &database.Book{ID: id, AuthorID: &a}, nil
+			case "bk-co1", "bk-co2":
+				if b, ok := calls.updated[id]; ok {
+					c := *b
+					return &c, nil
+				}
+				a := 10
 				return &database.Book{ID: id, AuthorID: &a}, nil
 			case "bk-twice":
 				if b, ok := calls.updated[id]; ok {
@@ -240,24 +262,45 @@ func TestAuthorStripMerge_MergesNumberedRowIntoRealAuthor(t *testing.T) {
 	}
 }
 
+// 🔴 NEVER LEAVE A BOOK AUTHORLESS (owner decision 2026-10-21). Junk row 3
+// is bk-junk's ONLY author credit: the credit is kept, the row is kept, and the
+// summary reports the held book. Nothing is written for it.
+func TestAuthorStripMerge_SoleJunkCreditIsHeldNotDeleted(t *testing.T) {
+	calls, summary := runStripMergeWithSummary(t, `{"apply":true}`)
+	if containsInt(calls.deleted, 3) {
+		t.Fatal("junk author 3 was deleted although it is bk-junk's only author credit")
+	}
+	if got, ok := calls.setAuthors["bk-junk"]; ok {
+		t.Errorf("bk-junk's credits were rewritten: %+v", got)
+	}
+	if b, ok := calls.updated["bk-junk"]; ok {
+		t.Errorf("bk-junk's primary was rewritten: %+v", b)
+	}
+	if !strings.Contains(summary, "books-held-sole-credit=1 ") || !strings.Contains(summary, "rows-held-sole-credit=1 ") {
+		t.Errorf("summary should report the held book and row: %s", summary)
+	}
+}
+
 // 🔴 THE DANGLING-AuthorID GUARD. store.DeleteAuthor sweeps the junction but
 // leaves book.AuthorID pointing at the deleted row -- the exact mechanism that
-// stranded ~212 authors' books on 2026-08-24. Deleting a junk author MUST clear
-// the denormalized primary too.
-func TestAuthorStripMerge_JunkDeleteClearsPrimaryAuthorID(t *testing.T) {
-	calls := runStripMerge(t, `{"apply":true}`)
-	if !containsInt(calls.deleted, 3) {
-		t.Fatalf("junk author 3 was not deleted; deleted=%v", calls.deleted)
+// stranded ~212 authors' books on 2026-08-24. Deleting a junk author MUST move
+// the denormalized primary too: here to the surviving co-author. Row 10 is junk
+// only because it is not a person, and every book it credits has a real
+// co-author, so it is deleted.
+func TestAuthorStripMerge_JunkDeleteMovesPrimaryToCoAuthor(t *testing.T) {
+	calls := runStripMerge(t, `{"apply":true,"delete_unmatched":true}`)
+	if !containsInt(calls.deleted, 10) {
+		t.Fatalf("row 10 was not deleted; deleted=%v", calls.deleted)
 	}
-	if got, ok := calls.setAuthors["bk-junk"]; !ok || len(got) != 0 {
-		t.Errorf("junk credit not removed from book_authors: %+v (present=%v)", got, ok)
-	}
-	updated, ok := calls.updated["bk-junk"]
-	if !ok {
-		t.Fatal("book.AuthorID was never rewritten -- it still points at the deleted author")
-	}
-	if updated.AuthorID != nil {
-		t.Errorf("book.AuthorID = %v, want nil after its only author was deleted", *updated.AuthorID)
+	for _, id := range []string{"bk-co1", "bk-co2"} {
+		got := calls.setAuthors[id]
+		if len(got) != 1 || got[0].AuthorID != 1 || got[0].Position != 0 {
+			t.Errorf("%s credits after unlink = %+v, want only author 1 at position 0", id, got)
+		}
+		updated, ok := calls.updated[id]
+		if !ok || updated.AuthorID == nil || *updated.AuthorID != 1 {
+			t.Fatalf("%s primary was not promoted to author 1: %+v (present=%v)", id, updated, ok)
+		}
 	}
 }
 
@@ -288,8 +331,13 @@ func TestAuthorStripMerge_DoesNotRenameWhenNoTargetExists(t *testing.T) {
 // is promoted to the book's primary, and nothing is ever renamed.
 func TestAuthorStripMerge_DeleteUnmatchedDeletesNoTargetRow(t *testing.T) {
 	calls, summary := runStripMergeWithSummary(t, `{"apply":true,"delete_unmatched":true}`)
-	if !containsInt(calls.deleted, 5) {
-		t.Fatalf("row 5 was not deleted under delete_unmatched; deleted=%v", calls.deleted)
+	if !containsInt(calls.deleted, 10) {
+		t.Fatalf("row 10 was not deleted under delete_unmatched; deleted=%v", calls.deleted)
+	}
+	// Rows 5 and 6 credit bk-twice, whose ONLY credits they are: the book is
+	// held, so neither row is deleted (never leave a book authorless).
+	if containsInt(calls.deleted, 5) || containsInt(calls.deleted, 6) {
+		t.Errorf("rows 5/6 were deleted although bk-twice would be left authorless; deleted=%v", calls.deleted)
 	}
 	if len(calls.renamed) != 0 {
 		t.Errorf("rows %v were renamed; delete_unmatched must delete, never rename", calls.renamed)
@@ -315,18 +363,18 @@ func TestAuthorStripMerge_DeleteUnmatchedDeletesNoTargetRow(t *testing.T) {
 	if !strings.Contains(summary, "ambiguous=1") {
 		t.Errorf("summary should still count the ambiguous row: %s", summary)
 	}
-	// bk-junk loses its only credit (row 3); bk-twice loses both (rows 5 and
-	// 6); bk-title keeps author 1. Two books, counted once each.
-	if !strings.Contains(summary, "books-left-authorless=2") {
-		t.Errorf("summary should report exactly two books left authorless: %s", summary)
+	// bk-junk (row 3) and bk-twice (rows 5 and 6) have no other author: held,
+	// untouched. Two books, counted once each; three rows kept.
+	if !strings.Contains(summary, "books-held-sole-credit=2 ") || !strings.Contains(summary, "rows-held-sole-credit=3 ") {
+		t.Errorf("summary should report two held books and three held rows: %s", summary)
 	}
-	// bk-twice ends with no credits and no primary, whichever order rows 5
-	// and 6 were processed in.
-	if got := calls.setAuthors["bk-twice"]; len(got) != 0 {
-		t.Errorf("bk-twice still has credits after both doomed rows went: %+v", got)
-	}
-	if b := calls.updated["bk-twice"]; b == nil || b.AuthorID != nil {
-		t.Errorf("bk-twice primary should be cleared once both doomed rows are gone: %+v", b)
+	for _, id := range []string{"bk-junk", "bk-twice"} {
+		if got, ok := calls.setAuthors[id]; ok {
+			t.Errorf("%s credits were rewritten: %+v", id, got)
+		}
+		if b, ok := calls.updated[id]; ok {
+			t.Errorf("%s primary was rewritten: %+v", id, b)
+		}
 	}
 }
 
@@ -341,15 +389,14 @@ func TestAuthorStripMerge_DeleteUnmatchedDryRunReportsWithoutWriting(t *testing.
 	if len(calls.setAuthors) != 0 || len(calls.updated) != 0 {
 		t.Errorf("dry run wrote book links: setAuthors=%v updated=%v", calls.setAuthors, calls.updated)
 	}
-	if !strings.Contains(summary, "stripped-no-target=2") {
+	if !strings.Contains(summary, "stripped-no-target=3") {
 		t.Errorf("summary should still count the bucket: %s", summary)
 	}
 	// 🔴 PARITY WITH THE APPLY. bk-twice is credited by two doomed rows. The
 	// apply sees row 5's removal before it judges row 6; the dry run never
-	// does. Both must still report the book, or the operator's number is low
-	// in the unsafe direction.
-	if !strings.Contains(summary, "books-left-authorless=2") {
-		t.Errorf("dry run should predict the same authorless count as the apply (2): %s", summary)
+	// does. Both must still report the book as held, like the apply.
+	if !strings.Contains(summary, "books-held-sole-credit=2 ") || !strings.Contains(summary, "rows-held-sole-credit=3 ") {
+		t.Errorf("dry run should predict the same held counts as the apply (2 books, 3 rows): %s", summary)
 	}
 	if !strings.Contains(summary, "deleted=0") || !strings.Contains(summary, "books-touched=0") {
 		t.Errorf("dry run must report nothing applied: %s", summary)
@@ -365,18 +412,18 @@ func TestAuthorStripMerge_PrimaryRewriteFailureKeepsAuthorRow(t *testing.T) {
 	p := newStripPlugin(stripFixture(), calls)
 	store := p.deps.OpsStore().(*database.MockStore)
 	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
-		if id == "bk-junk" {
+		if id == "bk-co1" {
 			return nil, context.DeadlineExceeded
 		}
 		calls.updated[id] = b
 		return b, nil
 	}
 	rep := &summaryReporter{}
-	if err := p.runAuthorStripMerge(context.Background(), json.RawMessage(`{"apply":true}`), rep); err != nil {
+	if err := p.runAuthorStripMerge(context.Background(), json.RawMessage(`{"apply":true,"delete_unmatched":true}`), rep); err != nil {
 		t.Fatalf("runAuthorStripMerge: %v", err)
 	}
-	if containsInt(calls.deleted, 3) {
-		t.Fatal("junk author 3 was deleted although its book's primary rewrite failed")
+	if containsInt(calls.deleted, 10) {
+		t.Fatal("row 10 was deleted although its book's primary rewrite failed")
 	}
 	summary := rep.summary(t)
 	if !strings.Contains(summary, "failed=1") {
@@ -388,15 +435,15 @@ func TestAuthorStripMerge_PrimaryRewriteFailureKeepsAuthorRow(t *testing.T) {
 	}
 }
 
-// 🔴 PARTIAL WORK IS STILL WORK. Row 5 rewrites bk-title, then fails on
-// bk-twice. That first rewrite happened and must be in books-touched; the
+// 🔴 PARTIAL WORK IS STILL WORK. Row 10 rewrites bk-co1, then fails on
+// bk-co2. That first rewrite happened and must be in books-touched; the
 // report must not shrink because the row later errored.
 func TestAuthorStripMerge_PartialWorkOnErroringRowIsReported(t *testing.T) {
 	calls := &stripMergeCalls{}
 	p := newStripPlugin(stripFixture(), calls)
 	store := p.deps.OpsStore().(*database.MockStore)
 	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
-		if id == "bk-twice" && !containsInt(calls.deleted, 5) {
+		if id == "bk-co2" && !containsInt(calls.deleted, 10) {
 			return nil, context.DeadlineExceeded
 		}
 		calls.updated[id] = b
@@ -406,14 +453,14 @@ func TestAuthorStripMerge_PartialWorkOnErroringRowIsReported(t *testing.T) {
 	if err := p.runAuthorStripMerge(context.Background(), json.RawMessage(`{"apply":true,"delete_unmatched":true}`), rep); err != nil {
 		t.Fatalf("runAuthorStripMerge: %v", err)
 	}
-	if containsInt(calls.deleted, 5) {
-		t.Fatal("row 5 was deleted although its second book's rewrite failed")
+	if containsInt(calls.deleted, 10) {
+		t.Fatal("row 10 was deleted although its second book's rewrite failed")
 	}
 	summary := rep.summary(t)
-	// bk-merge (merge) + bk-junk (junk) + bk-title (row 5, before the
-	// failure) + bk-twice (row 6) = 4 books rewritten; row 5 counts as failed.
-	if !strings.Contains(summary, "books-touched=4") || !strings.Contains(summary, "failed=1") {
-		t.Errorf("want books-touched=4 failed=1, got: %s", summary)
+	// bk-merge (merge) + bk-title (row 5, a co-authored book) + bk-co1 (row 10,
+	// before the failure) = 3 books rewritten; row 10 counts as failed.
+	if !strings.Contains(summary, "books-touched=3") || !strings.Contains(summary, "failed=1") {
+		t.Errorf("want books-touched=3 failed=1, got: %s", summary)
 	}
 }
 
@@ -423,7 +470,7 @@ func TestAuthorStripMerge_DeleteUnmatchedWithoutJunk(t *testing.T) {
 	if containsInt(calls.deleted, 3) {
 		t.Error("delete_junk=false still deleted the junk row")
 	}
-	if !containsInt(calls.deleted, 5) {
+	if !containsInt(calls.deleted, 10) {
 		t.Error("delete_unmatched did not delete the unmatched row when delete_junk=false")
 	}
 }
@@ -519,7 +566,7 @@ func TestAuthorStripMerge_KeepsCanonicalUnknownAndMergesPlaceholders(t *testing.
 	if !strings.Contains(summary, "placeholders=7") || !strings.Contains(summary, "canonical-unknown-id=50") {
 		t.Errorf("summary should count 7 placeholders and name the canonical row: %s", summary)
 	}
-	if !strings.Contains(summary, "books-left-authorless=0") {
+	if !strings.Contains(summary, "books-held-sole-credit=0 ") {
 		t.Errorf("merging placeholders must leave no book authorless: %s", summary)
 	}
 }
@@ -860,19 +907,29 @@ func runTitleAsAuthorStripMerge(t *testing.T, params string) (*stripMergeCalls, 
 // 🔴 THE ARCANE CHEF CASE. Author 100 "Arcane Chef 2" credits only a book
 // titled "Arcane Chef 2: A LitRPG Adventure" — the exact pattern fixed by
 // hand on 2026-09-25 (author id 64477). It, and the series-matched author
-// 103, must be deleted as junk; the legitimate Stephen King row must survive.
-func TestAuthorStripMerge_TitleAsAuthorDeletesSelfTitledRow(t *testing.T) {
+// 103, are still FLAGGED as title-as-author, but each is its book's only author
+// credit, so since 2026-10-21 (never leave a book authorless) neither is
+// deleted: the books keep their credit until relink_title_as_author finds the
+// real author. The legitimate Stephen King row survives either way.
+func TestAuthorStripMerge_TitleAsAuthorSoleCreditIsHeld(t *testing.T) {
 	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true,"delete_title_as_author":true}`)
 	for _, id := range []int{100, 102, 103} {
-		if !containsInt(calls.deleted, id) {
-			t.Errorf("title-as-author row %d was not deleted; deleted=%v", id, calls.deleted)
+		if containsInt(calls.deleted, id) {
+			t.Errorf("title-as-author row %d was deleted although it is its book's only author credit; deleted=%v", id, calls.deleted)
+		}
+	}
+	for _, id := range []string{"bk-arcane", "bk-solo", "bk-broken-circle"} {
+		if as, ok := calls.setAuthors[id]; ok {
+			t.Errorf("%s credits were rewritten: %+v", id, as)
 		}
 	}
 	if containsInt(calls.deleted, 101) {
 		t.Errorf("Stephen King (row 101) was deleted, but it credits a differently-titled book too")
 	}
-	if !strings.Contains(summary, "title-as-author=3") {
-		t.Errorf("summary should count 3 title-as-author rows: %s", summary)
+	for _, want := range []string{"title-as-author=3 ", "books-held-sole-credit=3 ", "rows-held-sole-credit=3 "} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary missing %q: %s", want, summary)
+		}
 	}
 }
 
@@ -974,8 +1031,8 @@ func TestAuthorStripMerge_TitleAsAuthorRowIsNeverAMergeTarget(t *testing.T) {
 			}
 
 			calls, summary := run(`{"apply":true,"delete_title_as_author":true}`)
-			if !containsInt(calls.deleted, ids.t) {
-				t.Errorf("title-as-author row %d was not deleted; deleted=%v", ids.t, calls.deleted)
+			if containsInt(calls.deleted, ids.t) {
+				t.Errorf("title-as-author row %d was deleted although it is its book's only author credit; deleted=%v", ids.t, calls.deleted)
 			}
 			if containsInt(calls.deleted, ids.s) {
 				t.Errorf("numbered row %d was removed although its merge target is gone; deleted=%v", ids.s, calls.deleted)
