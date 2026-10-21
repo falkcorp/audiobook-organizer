@@ -6,11 +6,16 @@ The split-book detector took a shared author and series plus a run of numbers as
 proof that several books were chapters of one, which is also exactly what the
 volumes of a series look like. The Repairs lane offered to merge them. The
 detector now vetoes a cluster that shows evidence of being several works: two
-or more distinct Book/Vol numbers in titles, subfolder names or file names (V2);
-"Stem N: Subtitle" titles with different subtitles (V2b); a folder named for
+or more distinct Book/Vol numbers in titles, subfolder names or file names (V2;
+the number may be digits, a Roman numeral I-XX or a word One-Twenty after
+Book/Bk/Vol); "Stem N: Subtitle" titles with different subtitles (V2b, which now
+also sees "Episode N" and "Section N" titles: only Chapter, Track, Part and Disc
+markers are stripped first); a folder named for
 several works, such as "Books 1-4", a series, collection, omnibus or box set
-(V4); a run of years (V5, also rejected by `sequentialRun`); copy/dup file
-suffixes (V8); grandparent-shape subfolders that name different things (V9); and
+(V4); a run of years (V5, reported by `sequentialRun` and vetoed by the
+detector, not rejected by it); copy/dup file
+suffixes (V8); grandparent-shape subfolders that name different things (V9); two
+or more distinct ASINs among the members (V7); and
 any member at or over `repair_chapter_max_min` (V3). `series_sequence` is shown
 as evidence and is not a veto.
 
@@ -34,7 +39,9 @@ Candidates stored by an earlier scan are snapshots, and the bulk-merge op
 used to merge them as written. Both now go through
 `dedup.MergeSplitBookClusterRechecked`, which re-reads every member and refuses
 (the route answers 409, the op skips the candidate and leaves it stored) unless
-the current rows still pass: no gone or path-less member, a file row on every
+the current rows still pass (the check runs under the merge lock, as the
+merge's `Precheck`, so a row edited just before the merge is judged as it is
+then): no gone or path-less member, a file row on every
 member, no file with an unknown (0) duration or one at or over
 `repair_chapter_max_min`, and no distinct-works veto. The shape the vetoes need
 is inferred from the members' current paths, not from the stored row. A dry run

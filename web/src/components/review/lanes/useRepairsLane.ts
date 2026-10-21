@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -98,7 +98,8 @@ function isInFlight(status: string | undefined): boolean {
 export interface RepairApplyTarget {
   rowId: string;
   title: string;
-  members: number;
+  /** Undefined when the row's book count was never read: the count is then left out. */
+  members?: number;
 }
 
 /** How many rows the confirm and the result banner list before "and N more". */
@@ -114,6 +115,7 @@ export function repairApplyTarget(r: RepairRow): RepairApplyTarget {
 }
 
 function describeTarget(t: RepairApplyTarget): string {
+  if (t.members === undefined) return `"${t.title}"`;
   return `"${t.title}" (${t.members} ${t.members === 1 ? 'book' : 'books'})`;
 }
 
@@ -321,6 +323,8 @@ export interface RepairsLane {
 
   /** An apply is in flight for the selected fixer. */
   applying: boolean;
+  /** Apply-all is reading the rows its confirm names; the buttons stay off. */
+  applyPreparing: boolean;
   /** The last apply went wrong (error) or out of sight (warning). */
   applyError: RepairApplyProblem | null;
   /** Rows of the plan on screen that an apply already settled; not re-sent. */
@@ -375,6 +379,13 @@ export function useRepairsLane(
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
   const [applyingFor, setApplyingFor] = useState<string | null>(null);
+  // Apply-all reads its first rows before it asks for the confirm. While that
+  // read is in flight the buttons stay disabled and a second click is
+  // ignored, so one click never opens two confirms. The ref is the guard
+  // (state is not yet visible to a second click in the same tick); the state
+  // is what the buttons render.
+  const preparingApplyRef = useRef(false);
+  const [preparingApplyFor, setPreparingApplyFor] = useState<string | null>(null);
   const [applyErrors, setApplyErrors] = useState<Record<string, RepairApplyProblem>>({});
   const [applyResults, setApplyResults] = useState<Record<string, RepairApplyResult>>({});
   // The rows each fixer's latest apply wrote (outcome "applied"), for the
@@ -845,7 +856,6 @@ export function useRepairsLane(
                 rowTargets.current.get(`${r.plan_op_id}|${row.row_id}`) ?? {
                   rowId: row.row_id,
                   title: row.row_id,
-                  members: 0,
                 }
             ),
         }));
@@ -947,18 +957,27 @@ export function useRepairsLane(
           // nothing. The confirm names the first rows, read in one small
           // request (the ids are still collected only after the yes).
           const n = remainingApplicable ?? 0;
-          if (n === 0) return;
+          if (n === 0 || preparingApplyRef.current) return;
+          preparingApplyRef.current = true;
+          setPreparingApplyFor(action.fixerId);
           const settled = new Set(settledRowIds);
           void (async () => {
-            const targets = await previewApplicable(
-              action.fixerId,
-              action.planOpId,
-              settled,
-              action.rowClass
-            );
-            if (!window.confirm(repairApplyConfirmMessage(n, fixerTitle(action.fixerId), targets))) {
-              return;
+            let confirmed = false;
+            try {
+              const targets = await previewApplicable(
+                action.fixerId,
+                action.planOpId,
+                settled,
+                action.rowClass
+              );
+              confirmed = window.confirm(
+                repairApplyConfirmMessage(n, fixerTitle(action.fixerId), targets)
+              );
+            } finally {
+              preparingApplyRef.current = false;
+              setPreparingApplyFor(null);
             }
+            if (!confirmed) return;
             await runApply(action.fixerId, action.planOpId, () =>
               collectApplicableIds(action.fixerId, action.planOpId, settled, action.rowClass)
             );
@@ -1044,6 +1063,7 @@ export function useRepairsLane(
     selectRows,
     clearSelection,
     applying: applyingFor !== null && applyingFor === selectedFixerId,
+    applyPreparing: preparingApplyFor !== null && preparingApplyFor === selectedFixerId,
     applyError: selectedFixerId ? (applyErrors[selectedFixerId] ?? null) : null,
     settledRowIds,
     remainingApplicable,

@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_recheck_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3f5b21-6a94-4c70-b1e8-2f7a4c9d0e35
 // last-edited: 2026-10-21
 
@@ -189,4 +189,46 @@ func TestMergeSplitBookClusterRechecked_KeepMustBeInTheCluster(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrSplitBookRefused))
 	assert.Zero(t, writes)
+}
+
+// The recheck is the merge's Precheck, so it runs under the merge lock: a row
+// that changes between the call and the lock being taken is still caught.
+func TestMergeSplitBookClusterRechecked_RecheckRunsUnderTheLock(t *testing.T) {
+	r := chapters() // passes when the merge is called
+	writes := 0
+	locked := false
+	opts := SplitMergeOptions{AcquireLock: func(lock, unlock func()) error {
+		lock()
+		locked = true
+		// A concurrent edit lands after the caller's call but before the
+		// first write: the members now read as separate volumes.
+		r.books["b1"].Title, r.books["b2"].Title, r.books["b3"].Title = "Sample Saga Book 1", "Sample Saga Book 2", "Sample Saga Book 3"
+		return nil
+	}}
+	res, err := MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "Sample Saga", opts)
+	require.True(t, locked)
+	require.Error(t, err)
+	assert.Nil(t, res)
+	assert.True(t, errors.Is(err, ErrSplitBookRefused), "the Precheck wrap keeps errors.Is working: %v", err)
+	assert.Zero(t, writes, "a refusal under the lock writes nothing")
+}
+
+// A caller's own Precheck still runs, after the recheck and under the lock; a
+// refused recheck short-circuits it.
+func TestMergeSplitBookClusterRechecked_CallerPrecheckStillRuns(t *testing.T) {
+	boom := errors.New("caller precheck says no")
+	called := 0
+	opts := SplitMergeOptions{Precheck: func() error { called++; return boom }}
+	writes := 0
+	_, err := MergeSplitBookClusterRechecked(recheckMergeMock(chapters(), &writes), chapterIDs, "b1", "", opts)
+	require.ErrorIs(t, err, boom)
+	assert.Equal(t, 1, called)
+	assert.Zero(t, writes)
+
+	r := chapters()
+	r.files["b2"][0].Duration = 0
+	called = 0
+	_, err = MergeSplitBookClusterRechecked(recheckMergeMock(r, &writes), chapterIDs, "b1", "", opts)
+	assert.True(t, errors.Is(err, ErrSplitBookRefused))
+	assert.Zero(t, called, "the recheck refused first")
 }

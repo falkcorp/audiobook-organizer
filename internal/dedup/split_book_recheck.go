@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_recheck.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e8c2a47-d1b9-4f63-a0e5-7b3c9d12f684
 // last-edited: 2026-10-21
 
@@ -174,10 +174,10 @@ func recheckYearRun(group []splitBookSlim) bool {
 	return ok && years
 }
 
-// MergeSplitBookClusterRechecked merges a REVIEWED split-book cluster: it first
-// re-reads the members (RecheckSplitBookMembers, at the repair_chapter_max_min
-// limit) and refuses with a *SplitBookRefusal, writing nothing, unless they
-// still pass. Callers acting on a stored SplitBookCandidate snapshot (the
+// MergeSplitBookClusterRechecked merges a REVIEWED split-book cluster: under the
+// merge lock and before the first write it re-reads the members
+// (RecheckSplitBookMembers, at the repair_chapter_max_min limit) and refuses
+// with a *SplitBookRefusal, writing nothing, unless they still pass. Callers acting on a stored SplitBookCandidate snapshot (the
 // bulk-merge op, the single-candidate merge route) must use this and not
 // MergeSplitBookClusterWithOptions directly.
 //
@@ -197,12 +197,25 @@ func MergeSplitBookClusterRechecked(store Store, bookIDs []string, keepID, sugge
 	if !keepFound {
 		return nil, fmt.Errorf("MergeSplitBookClusterRechecked: keep %q is not among the cluster's books", keepID)
 	}
-	reasons, err := RecheckSplitBookMembers(store, bookIDs, RepairChapterMaxSec())
-	if err != nil {
-		return nil, err
-	}
-	if len(reasons) > 0 {
-		return nil, &SplitBookRefusal{Reasons: reasons}
+	// The recheck runs as the merge's Precheck, i.e. UNDER the merge lock and
+	// immediately before the first write. Run before the lock it would be a
+	// time-of-check/time-of-use gap: another merge, an edit or a re-tag could
+	// land between the check and the lock and the merge would act on rows the
+	// check never saw. A caller's own Precheck still runs, after ours.
+	callerPrecheck := opts.Precheck
+	chapterMaxSec := RepairChapterMaxSec()
+	opts.Precheck = func() error {
+		reasons, err := RecheckSplitBookMembers(store, bookIDs, chapterMaxSec)
+		if err != nil {
+			return err
+		}
+		if len(reasons) > 0 {
+			return &SplitBookRefusal{Reasons: reasons}
+		}
+		if callerPrecheck != nil {
+			return callerPrecheck()
+		}
+		return nil
 	}
 	return MergeSplitBookClusterWithOptions(store, keepID, srcIDs, suggestedTitle, opts)
 }
