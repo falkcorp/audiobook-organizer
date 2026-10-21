@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -54,13 +55,36 @@ func (p connectorPeers) contains(remoteAddr string) bool {
 	return false
 }
 
-// parseConnectorPeers parses a comma-separated address list. Entries that are
-// not IP addresses are returned in bad, and IPv6 link-local entries without a
-// zone in noZone; neither is trusted. A link-local address is only unique per
-// interface, so a zoneless one would trust that address arriving on every
-// interface: it must be written with its zone (fe80::5%eth0). Any other
-// entry is kept without a zone, which it cannot meaningfully carry.
-func parseConnectorPeers(csv string) (peers connectorPeers, bad, noZone []string) {
+// connectorReject is a TUNNEL_CONNECTOR_ADDRS entry parseConnectorPeers
+// refused, and why. A refused entry is never trusted.
+type connectorReject struct {
+	entry  string
+	reason connectorRejectReason
+}
+
+type connectorRejectReason int
+
+const (
+	// rejectNotIP: the entry is not an IP address.
+	rejectNotIP connectorRejectReason = iota
+	// rejectNoZone: an IPv6 link-local entry without a zone.
+	rejectNoZone
+	// rejectUnknownZone: an IPv6 link-local entry whose zone names no
+	// interface of this host.
+	rejectUnknownZone
+)
+
+// parseConnectorPeers parses a comma-separated address list. A link-local
+// address is only unique per interface, so an IPv6 link-local entry must be
+// written with its zone (fe80::5%eth0): a zoneless one would trust that
+// address arriving on every interface. The zone is normalised to the
+// interface's NAME (resolveZone), because the peer address the server sees
+// always carries the name: a numeric zone (fe80::5%2) or one in the wrong
+// case (fe80::5%ETH0) would otherwise be accepted and never match. An entry
+// that is not an address, a link-local one without a zone, or one whose zone
+// names no interface is refused (rejected) and NOT trusted. Any other entry
+// is kept without a zone, which it cannot meaningfully carry.
+func parseConnectorPeers(csv string) (peers connectorPeers, rejected []connectorReject) {
 	for _, part := range strings.Split(csv, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -68,17 +92,59 @@ func parseConnectorPeers(csv string) (peers connectorPeers, bad, noZone []string
 		}
 		a, err := netip.ParseAddr(part)
 		if err != nil {
-			bad = append(bad, part)
+			rejected = append(rejected, connectorReject{part, rejectNotIP})
 			continue
 		}
 		a = trustAddr(a)
-		if needsZone(a) && a.Zone() == "" {
-			noZone = append(noZone, part)
-			continue
+		if needsZone(a) {
+			if a.Zone() == "" {
+				rejected = append(rejected, connectorReject{part, rejectNoZone})
+				continue
+			}
+			name, ok := resolveZone(a.Zone())
+			if !ok {
+				rejected = append(rejected, connectorReject{part, rejectUnknownZone})
+				continue
+			}
+			a = a.WithZone(name)
 		}
 		peers = append(peers, a)
 	}
-	return peers, bad, noZone
+	return peers, rejected
+}
+
+// resolveZone returns the name of the interface zone names (lookupZoneInterface),
+// and false when it names none. A variable so tests can describe a host.
+var resolveZone = func(zone string) (string, bool) {
+	ifi, err := lookupZoneInterface(zone)
+	if err != nil {
+		return "", false
+	}
+	return ifi.Name, true
+}
+
+// lookupZoneInterface finds the interface an IPv6 zone names: by index for a
+// numeric zone, otherwise by name, falling back to a case-insensitive match
+// (interface names are case-sensitive, so ETH0 for eth0 is a typo, not a
+// different interface, unless one by that exact name exists).
+func lookupZoneInterface(zone string) (*net.Interface, error) {
+	if n, err := strconv.Atoi(zone); err == nil {
+		return net.InterfaceByIndex(n)
+	}
+	ifi, err := net.InterfaceByName(zone)
+	if err == nil {
+		return ifi, nil
+	}
+	ifs, lerr := net.Interfaces()
+	if lerr != nil {
+		return nil, err
+	}
+	for i := range ifs {
+		if strings.EqualFold(ifs[i].Name, zone) {
+			return &ifs[i], nil
+		}
+	}
+	return nil, err
 }
 
 // needsZone reports whether a is an IPv6 link-local address, which is unique
@@ -129,12 +195,20 @@ func tunnelConnectorPeers() connectorPeers {
 	connectorPeersMu.Lock()
 	defer connectorPeersMu.Unlock()
 	if !connectorPeersSet || raw != connectorPeersRaw {
-		peers, bad, noZone := parseConnectorPeers(raw)
-		if len(bad) > 0 {
-			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS has %d entries that are not IP addresses; ignored", len(bad))
+		peers, rejected := parseConnectorPeers(raw)
+		notIP := 0
+		for _, r := range rejected {
+			switch r.reason {
+			case rejectNotIP:
+				notIP++
+			case rejectNoZone:
+				clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q is an IPv6 link-local address without a zone; ignored, because a link-local address is only unique per interface. Write it with the interface it arrives on, e.g. %s%%eth0", r.entry, r.entry)
+			case rejectUnknownZone:
+				clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q names an interface this host does not have; ignored. Write the zone as the name of the interface the connector arrives on, e.g. fe80::5%%eth0", r.entry)
+			}
 		}
-		for _, e := range noZone {
-			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q is an IPv6 link-local address without a zone; ignored, because a link-local address is only unique per interface. Write it with the interface it arrives on, e.g. %s%%eth0", e, e)
+		if notIP > 0 {
+			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS has %d entries that are not IP addresses; ignored", notIP)
 		}
 		connectorPeersRaw, connectorPeersVal, connectorPeersSet = raw, peers, true
 	}
@@ -169,15 +243,18 @@ func hasCloudflareMarkers(c *gin.Context) bool {
 
 // clientPrefixKey is the rate-limit identity for a client address: the address
 // itself for IPv4 (and IPv4-mapped IPv6), its /64 for a public IPv6 address, so
-// a caller who owns a /64 cannot mint 2^64 buckets. A LAN IPv6 address (ULA
-// fc00::/7, link-local, loopback) is keyed on its FULL address instead: every
+// a caller who owns a /64 cannot mint 2^64 buckets. A LAN IPv6 address
+// (isLANAddr: ULA fc00::/7, link-local, loopback, or a global address inside
+// an on-link prefix of this host) is keyed on its FULL address instead: every
 // machine on an IPv6 LAN shares one /64, so a /64 key would let one LAN device
 // spend every other device's budget (the bootstrap limiter keys direct LAN
 // peers the same way, bootstrapDirectKey). For a direct LAN peer callers add
 // an aggregate bucket per /64 (lanIPv6Prefix) so rotating addresses cannot
-// mint unlimited buckets. Such an address can only be a
-// direct peer: it is not routable from the internet, and Cloudflare's edge
-// never sets CF-Connecting-IP to one. ok is false when ip does not parse;
+// mint unlimited buckets. A ULA, link-local or loopback address can only be a
+// direct peer (it is not routable from the internet, and Cloudflare's edge
+// never sets CF-Connecting-IP to one); an on-link global address can also be
+// a tunnel visitor's, but only a device on this network has one, so keying
+// it on its full address gives nobody else anything. ok is false when ip does not parse;
 // callers then treat the client as unattributed and never fall back to text
 // taken from the request.
 func clientPrefixKey(ip string) (key string, ok bool) {
@@ -186,14 +263,15 @@ func clientPrefixKey(ip string) (key string, ok bool) {
 		return "", false
 	}
 	a = a.WithZone("").Unmap()
-	if a.Is6() && !a.IsPrivate() && !a.IsLinkLocalUnicast() && !a.IsLoopback() {
+	if a.Is6() && !isLANAddr(a) {
 		return netip.PrefixFrom(a, 64).Masked().String(), true
 	}
 	return a.String(), true
 }
 
-// lanIPv6Prefix returns the /64 of a LAN IPv6 address (ULA fc00::/7 or
-// link-local), and false for anything else (IPv4, public IPv6, loopback,
+// lanIPv6Prefix returns the /64 of a LAN IPv6 address (isLANAddr: ULA
+// fc00::/7, link-local, or a global address in an on-link prefix of this
+// host), and false for anything else (IPv4, other public IPv6, loopback,
 // unparseable). clientPrefixKey keys such an address on its full address so
 // LAN devices sharing one /64 do not share a bucket; this /64 is then the
 // aggregate bucket on top of that (classifyLANPeer, separate buckets for
@@ -205,7 +283,7 @@ func lanIPv6Prefix(ip string) (string, bool) {
 		return "", false
 	}
 	a = a.WithZone("").Unmap()
-	if !a.Is6() || !(a.IsPrivate() || a.IsLinkLocalUnicast()) {
+	if !a.Is6() || a.IsLoopback() || !isLANAddr(a) {
 		return "", false
 	}
 	return netip.PrefixFrom(a, 64).Masked().String(), true
@@ -233,9 +311,14 @@ func parseKeyAddr(s string) (netip.Addr, bool) { return servermiddleware.ParseHo
 
 // remoteAddrIsLocal reports whether addr ("host:port" or a bare address) is
 // this host: a loopback address, or an address assigned to one of its
-// interfaces (hostInterfaces, addrIsLocal). An IPv6 link-local peer counts
-// only when the interface that owns the address is the one named by the
-// peer's zone.
+// interfaces. It runs for every unauthenticated request that is not from a
+// configured connector, so it asks the kernel once, not once per interface:
+//   - an IPv6 link-local peer counts only when the interface its zone names
+//     owns the address (zoneInterfaceAddrs: that one interface's addresses),
+//     since the same link-local address on another interface is another
+//     host; a zoneless one never counts;
+//   - any other address is looked up in one net.InterfaceAddrs() call
+//     (hostInterfaceAddrs).
 func remoteAddrIsLocal(addr string) bool {
 	a, ok := parseTrustAddr(addr)
 	if !ok {
@@ -244,78 +327,123 @@ func remoteAddrIsLocal(addr string) bool {
 	if a.IsLoopback() {
 		return true
 	}
-	ifaces, err := hostInterfaces()
+	var owned []netip.Addr
+	var err error
+	if needsZone(a) {
+		if a.Zone() == "" {
+			return false
+		}
+		owned, err = zoneInterfaceAddrs(a.Zone())
+	} else {
+		owned, err = hostInterfaceAddrs()
+	}
 	if err != nil {
 		return false
 	}
-	return addrIsLocal(a, ifaces)
-}
-
-// localIface is one of this host's interfaces and its addresses (zone
-// dropped, unmapped).
-type localIface struct {
-	name  string
-	index int
-	addrs []netip.Addr
-}
-
-// hostInterfaces lists this host's interfaces and their addresses. A
-// variable so tests can describe a host.
-var hostInterfaces = func() ([]localIface, error) {
-	nifs, err := net.Interfaces()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]localIface, 0, len(nifs))
-	for _, nif := range nifs {
-		li := localIface{name: nif.Name, index: nif.Index}
-		addrs, err := nif.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, ad := range addrs {
-			if ipn, ok := ad.(*net.IPNet); ok {
-				if own, ok := netip.AddrFromSlice(ipn.IP); ok {
-					li.addrs = append(li.addrs, own.WithZone("").Unmap())
-				}
-			}
-		}
-		out = append(out, li)
-	}
-	return out, nil
-}
-
-// addrIsLocal reports whether a (trust form, parseTrustAddr) is assigned to
-// one of ifaces. An IPv6 link-local address is only unique per interface,
-// so it matches only on the interface its zone names (by name, or by index
-// for a numeric zone); a zoneless one never matches. Any other address
-// matches on any interface.
-func addrIsLocal(a netip.Addr, ifaces []localIface) bool {
 	bare := a.WithZone("")
-	for _, li := range ifaces {
-		if needsZone(a) && !zoneNames(a.Zone(), li) {
-			continue
-		}
-		for _, own := range li.addrs {
-			if own == bare {
-				return true
-			}
+	for _, own := range owned {
+		if own == bare {
+			return true
 		}
 	}
 	return false
 }
 
-// zoneNames reports whether zone names interface li: its name, or its index
-// when the zone is numeric. An empty zone names nothing.
-func zoneNames(zone string, li localIface) bool {
-	if zone == "" {
-		return false
+// zoneInterfaceAddrs returns the addresses (zone dropped, unmapped) of the
+// interface zone names (lookupZoneInterface). A variable so tests can
+// describe a host and count lookups.
+var zoneInterfaceAddrs = func(zone string) ([]netip.Addr, error) {
+	ifi, err := lookupZoneInterface(zone)
+	if err != nil {
+		return nil, err
 	}
-	if zone == li.name {
-		return true
+	addrs, err := ifi.Addrs()
+	if err != nil {
+		return nil, err
 	}
-	n, err := strconv.Atoi(zone)
-	return err == nil && n == li.index
+	return netAddrsToAddrs(addrs), nil
+}
+
+// hostInterfaceAddrs returns every address (zone dropped, unmapped) assigned
+// to this host's interfaces, in one net.InterfaceAddrs() call. A variable so
+// tests can describe a host and count lookups.
+var hostInterfaceAddrs = func() ([]netip.Addr, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	return netAddrsToAddrs(addrs), nil
+}
+
+// netAddrsToAddrs converts interface addresses to netip form, zone dropped
+// and unmapped, skipping anything that is not an *net.IPNet.
+func netAddrsToAddrs(addrs []net.Addr) []netip.Addr {
+	out := make([]netip.Addr, 0, len(addrs))
+	for _, ad := range addrs {
+		if ipn, ok := ad.(*net.IPNet); ok {
+			if a, ok := netip.AddrFromSlice(ipn.IP); ok {
+				out = append(out, a.WithZone("").Unmap())
+			}
+		}
+	}
+	return out
+}
+
+// onLinkPrefixTTL is how long the on-link prefix list (onLinkIPv6Prefixes)
+// is reused before it is read again: addresses change rarely (a new
+// SLAAC prefix), and isLANAddr runs on every request.
+const onLinkPrefixTTL = 30 * time.Second
+
+// onLinkCache holds the last on-link prefix list read.
+var onLinkCache struct {
+	mu       sync.Mutex
+	at       time.Time
+	prefixes []netip.Prefix
+}
+
+// onLinkIPv6Prefixes returns the global-unicast IPv6 prefixes on-link on
+// this host's interfaces (the prefix of each assigned global address, e.g.
+// the /64 of a SLAAC address), read with one net.InterfaceAddrs() call at
+// most every onLinkPrefixTTL; on a read error the previous list is kept. A
+// variable so tests can describe a host.
+var onLinkIPv6Prefixes = func() []netip.Prefix {
+	onLinkCache.mu.Lock()
+	defer onLinkCache.mu.Unlock()
+	now := time.Now()
+	if !onLinkCache.at.IsZero() && now.Sub(onLinkCache.at) < onLinkPrefixTTL {
+		return onLinkCache.prefixes
+	}
+	onLinkCache.at = now
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return onLinkCache.prefixes
+	}
+	var out []netip.Prefix
+	for _, ad := range addrs {
+		ipn, ok := ad.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		a, ok := netip.AddrFromSlice(ipn.IP)
+		if !ok {
+			continue
+		}
+		a = a.WithZone("").Unmap()
+		ones, bits := ipn.Mask.Size()
+		if !isOnLinkGlobalIPv6(a) || bits != 128 || ones == 0 || ones == 128 {
+			continue
+		}
+		out = append(out, netip.PrefixFrom(a, ones).Masked())
+	}
+	onLinkCache.prefixes = out
+	return out
+}
+
+// isOnLinkGlobalIPv6 reports whether a is the kind of address an on-link
+// global prefix can contain: global-unicast IPv6 that is not ULA (the
+// other LAN kinds isLANAddr covers on their own).
+func isOnLinkGlobalIPv6(a netip.Addr) bool {
+	return a.Is6() && a.IsGlobalUnicast() && !a.IsPrivate()
 }
 
 // requestClientIP is the client address to record or log for a request: the
@@ -387,9 +515,27 @@ func directLANPeer(c *gin.Context, connectors connectorPeers) bool {
 }
 
 // isLANAddr reports whether a is only reachable from this network: private
-// (RFC 1918 / ULA), link-local or loopback.
+// (RFC 1918 / ULA), link-local, loopback, or a global IPv6 address inside a
+// prefix on-link on one of this host's interfaces (onLinkIPv6Prefixes: home
+// IPv6 LANs mostly use the ISP's global /64, not ULA). A peer cannot claim
+// such an address over TCP without being on that link: the handshake's
+// replies are delivered on-link, so a spoofed source never completes it.
+// Global IPv4 on-link prefixes are not counted: a public IPv4 /24 on a
+// hosting provider's segment is shared with other customers.
 func isLANAddr(a netip.Addr) bool {
-	return a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLoopback()
+	if a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLoopback() {
+		return true
+	}
+	if !isOnLinkGlobalIPv6(a) {
+		return false
+	}
+	bare := a.WithZone("")
+	for _, p := range onLinkIPv6Prefixes() {
+		if p.Contains(bare) {
+			return true
+		}
+	}
+	return false
 }
 
 // trustedClientIP returns the address a per-client limiter should key the
@@ -454,7 +600,10 @@ func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 	// Trust is decided on the raw RemoteAddr, zone included (parseTrustAddr);
 	// peer, zone dropped, is only the key.
 	isConnector := t.connectors.contains(c.Request.RemoteAddr)
-	local := t.isLocalPeer(c.Request.RemoteAddr)
+	// isLocalPeer asks the kernel; a connector's answer would change nothing
+	// (both branches below treat a connector the same whether or not it is
+	// local), so it is asked only for other peers.
+	local := !isConnector && t.isLocalPeer(c.Request.RemoteAddr)
 	if isConnector || (servermiddleware.CFAccessVerified(c) && local) {
 		if parsed := net.ParseIP(strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))); parsed != nil {
 			return parsed.String(), true
@@ -462,7 +611,7 @@ func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 	}
 	ip = peer
 	if !isConnector && !local && hasCloudflareMarkers(c) {
-		warnUnlistedConnector(ip)
+		warnUnlistedConnector(c.Request.RemoteAddr)
 	}
 	return ip, !isConnector && !local
 }
@@ -475,45 +624,49 @@ const unlistedConnectorWarnCap = 64
 // unlistedConnectors remembers the private peers already warned about.
 var unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
 
-// warnUnlistedConnector logs, once per address (once per /64 for IPv6), that a private LAN peer not
-// in TUNNEL_CONNECTOR_ADDRS sent Cloudflare markers: it is most likely a
+// warnUnlistedConnector logs, once per address (once per /64 for IPv6, and
+// for link-local once per /64 per interface), that a LAN peer not in
+// TUNNEL_CONNECTOR_ADDRS sent Cloudflare markers: it is most likely a
 // cloudflared connector nobody listed, so every visitor it relays shares one
-// per-client bucket. Public peers are skipped: a connector is on the LAN, and
-// anyone on the internet can send the headers, so warning about them would
-// let a caller fill the log (and the remembered set).
-func warnUnlistedConnector(ip string) {
-	a, err := netip.ParseAddr(strings.TrimSpace(ip))
-	if err != nil {
-		return
-	}
-	a = a.WithZone("").Unmap()
-	if !a.IsPrivate() && !a.IsLinkLocalUnicast() {
+// per-client bucket. remoteAddr is the raw peer address, so a link-local
+// peer keeps its zone: fe80::/64 on en0 and on en1 are different links, and
+// each gets its own warning. Public peers are skipped: a connector is on the
+// LAN, and anyone on the internet can send the headers, so warning about
+// them would let a caller fill the log (and the remembered set).
+func warnUnlistedConnector(remoteAddr string) {
+	a, ok := parseTrustAddr(remoteAddr)
+	if !ok || a.IsLoopback() || !isLANAddr(a) {
 		return
 	}
 	// An IPv6 host is remembered by its /64, so one host rotating through
 	// its addresses cannot fill the set and silence the warning about a real
 	// connector.
-	key := a.String()
-	prefix, byPrefix := lanIPv6Prefix(key)
+	key := a.WithZone("").String()
+	scope, byPrefix := lanIPv6Prefix(key)
 	if byPrefix {
-		key = prefix
+		key = scope
+		if z := a.Zone(); z != "" {
+			key += "%" + z
+			scope += " on interface " + z
+		}
 	}
 	switch unlistedConnectors.add(key) {
 	case onceSetAdded:
-		clientTrustLog.Warn("%s", unlistedConnectorMessage(a, prefix))
+		clientTrustLog.Warn("%s", unlistedConnectorMessage(a, scope))
 	case onceSetFull:
 		clientTrustLog.Warn("more than %d unlisted private peers sent Cloudflare headers; no longer warning about new ones. Check TUNNEL_CONNECTOR_ADDRS", unlistedConnectorWarnCap)
 	}
 }
 
 // unlistedConnectorMessage is warnUnlistedConnector's warning for peer a.
-// prefix is a's /64 when the warning is keyed by it (IPv6), "" otherwise:
-// the message then says it covers every address in that /64, since later
-// peers there are not warned about separately.
-func unlistedConnectorMessage(a netip.Addr, prefix string) string {
+// scope is what the warning covers when it is keyed by a /64 (IPv6), e.g.
+// "fd12::/64" or "fe80::/64 on interface en0", and "" otherwise: the message
+// then says it covers every address there, since later peers in it are not
+// warned about separately.
+func unlistedConnectorMessage(a netip.Addr, scope string) string {
 	const tail = " sent Cloudflare headers but is not listed in TUNNEL_CONNECTOR_ADDRS; it is probably a cloudflared connector, and every visitor it relays shares one rate-limit bucket. Add its address to that setting"
-	if prefix != "" {
-		return fmt.Sprintf("peer %s%s (warning once for all addresses in %s)", a, tail, prefix)
+	if scope != "" {
+		return fmt.Sprintf("peer %s%s (warning once for all addresses in %s)", a, tail, scope)
 	}
 	return fmt.Sprintf("peer %s%s", a, tail)
 }

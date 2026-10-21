@@ -24,7 +24,10 @@ on other LAN hosts and reach the service from their own private addresses, so
 `TUNNEL_CONNECTOR_ADDRS`, or from a local peer whose request carried a
 verified Cloudflare Access assertion. Every other peer is keyed on its own
 address whatever headers it sends (public IPv6 by /64; a LAN IPv6 peer by
-its full address, since LAN devices share one /64; a direct LAN peer, one
+its full address, since LAN devices share one /64, where LAN IPv6 means ULA,
+link-local, or a global address inside a prefix that is on-link on one of
+the server's interfaces, as on a home network numbered from the ISP's /64,
+read at most every 30 seconds; a direct LAN peer, one
 that is not a connector and sends no Cloudflare markers, also shares an
 aggregate bucket per IPv6 /64 at four times the per-client budget, so one host
 rotating through its /64 is still capped, and tunnel traffic never touches
@@ -37,12 +40,18 @@ link-local client is attributed), so forging `Cf-*` headers
 never takes a caller out of per-client limiting. Trust decisions keep the
 zone of an IPv6 link-local address, which is only unique per interface: a
 link-local `TUNNEL_CONNECTOR_ADDRS` entry must carry its zone
-(`fe80::5%eth0`; one without is ignored with a warning naming it) and
-matches only a peer arriving on that interface, and a link-local peer counts
-as this host only when the interface its zone names owns the address. An
+(`fe80::5%eth0`; one without is ignored with a warning naming it), the zone
+is normalised to the interface's name (`fe80::5%2` becomes `fe80::5%eth0`,
+and a wrong-case name is corrected, since the peer address always carries
+the name; a zone that names no interface is ignored with a warning), and it
+matches only a peer arriving on that interface. A link-local peer counts as
+this host only when the interface its zone names owns the address; that
+check looks up only that interface (any other address takes one
+whole-host lookup), and it is skipped for a listed connector. An
 unlisted connector is one bucket for everyone it relays, and a private peer that sends
 Cloudflare headers without being listed is logged once per address (once
-per /64 for IPv6, so rotation cannot fill it) at warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
+per /64 for IPv6, so rotation cannot fill it, and once per /64 per interface
+for link-local) at warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
 skipped rather than shared, and the per-token and global layers still apply.
 A direct LAN peer is exempt from the global layer, so a flood from the
@@ -71,9 +80,12 @@ the connection captured before the gzip middleware wraps the response
 writer, and the route is also excluded from gzip, so it holds for browsers
 sending `Accept-Encoding: gzip`; if it still cannot be set, that is logged
 once. When the body did not reach its end (too large, too slow, or a read
-error), the response carries `Connection: close` and the deadline stays in
-force, so a sender that stops mid-body gets its 413 or 408 at once and the
-connection is closed within the deadline. The body is parsed once for both
+error), the deadline stays in force and, on HTTP/1, the response carries
+`Connection: close`, so a sender that stops mid-body gets its 413 or 408 at
+once and the connection is closed within the deadline. HTTP/2 and HTTP/3
+responses do not carry it: Go's HTTP/2 server would turn it into a GOAWAY
+for every stream on the connection, and those protocols reset just the
+unfinished stream. The body is parsed once for both
 the limiter and the handler. Invite tokens
 are redacted from request logs, trace span attributes (`url.path`) and error
 logs.
