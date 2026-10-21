@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-20
 
@@ -673,6 +673,14 @@ func TestOpenIDHop2_RecoveryStagesThenDeny(t *testing.T) {
 		t.Fatalf("params %v: want access_denied with state s2 and no code", q)
 	}
 	h.consentPage(t, browser, oidcPersonAssertion)
+}
+
+// A service token with an EMPTY common_name is still a service token: the bounce
+// is gated on "verified, no email", not on the log label.
+func TestOpenIDHop2_ServiceTokenWithoutCommonNameStillBounces(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	assertHop2Bounce(t, h.get(t, browser, oidcNoCNService), "1", false)
 }
 
 // A junk reauth value can only deny, never loop.

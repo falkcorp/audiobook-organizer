@@ -19,16 +19,22 @@ import (
 // shell (/api, /auth/, /socket.io/). Two groups:
 //
 //   - the Audiobookshelf-compatible surface and its machine clients (/ping,
-//     /status, /login, /logout, /public/, /abs/, /audiobookshelf/): AudioBooth,
-//     Absorb and ShelfPlayer carry service tokens there on purpose, and
-//     /auth/openid and /auth/openid/callback are covered by /auth/;
+//     /status, /logout, /public/, /abs/, /audiobookshelf/): AudioBooth, Absorb
+//     and ShelfPlayer carry service tokens there on purpose, and /auth/openid
+//     and /auth/openid/callback are covered by /auth/;
 //   - operational endpoints and Cloudflare's own paths (/health, /metrics,
 //     /cdn-cgi/).
 //
 // /auth/openid/browser (SSO hop 2) is in /auth/ and has its own recovery in
 // handlers/abs/openid.go.
+//
+// /login is deliberately NOT excluded, although the ABS surface owns it: ABS
+// registers only POST /login, so a GET navigation to /login is unmatched and is
+// the SPA's login page. That page is exactly where a locked-out browser sits
+// (the SPA sends every unauthenticated visit there), and a reload of it must be
+// recoverable. POST /login never reaches the NoRoute chain this runs on.
 var cfRecoveryExcludedPrefixes = []string{
-	"/ping", "/status", "/login", "/logout", "/public/", "/abs/", "/audiobookshelf/",
+	"/ping", "/status", "/logout", "/public/", "/abs/", "/audiobookshelf/",
 	"/health", "/metrics", "/cdn-cgi/",
 }
 
