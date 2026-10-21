@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.31.1
+// version: 1.31.2
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-23
 
@@ -400,6 +400,11 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_copy_unproven: 'Copy not proven (no import path or hash)',
   skipped_no_hash: 'Copy not proven (a file hash is missing)',
   held_ambiguous_parent: 'Hash matches more than one multi-file book',
+  held_file_absent: 'A file is not on disk (kept, may be the only copy)',
+  held_degenerate_hash: 'Hash proves nothing (empty file, or sizes differ)',
+  held_short_or_boilerplate: 'Short or boilerplate file (shared by different works)',
+  held_partial_hash_unproven: 'Over 100 MB: whole-file comparison could not run',
+  held_partial_hash_mismatch: 'Over 100 MB: whole files differ despite equal sampled hashes',
   skipped_moved_unproven: 'Move not proven (name and size only)',
   skipped_duration_gate: 'Files too long to be chapters',
   skipped_duration_unknown: 'Chapter durations unknown',
