@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-20
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -117,6 +118,26 @@ type SelfAdminConflict struct {
 	HolderID string // holds the address verified; SSO with it signs in here
 }
 
+// DowngradedDuplicate is one address's demoted legacy rows: Demoted were
+// stamped "self" (typed in, not verified); HolderID holds the address
+// verified, so SSO with it signs in there, or is "" when the tied candidates
+// were all demoted and no account holds it verified.
+type DowngradedDuplicate struct {
+	HolderID string
+	Demoted  []string
+}
+
+// downgradedDuplicateWarning is the boot warning for one DowngradedDuplicate.
+// It names every account involved and says which one, if any, holds the
+// address verified, so the operator knows whose email must not be cleared.
+// No email address is logged.
+func downgradedDuplicateWarning(d DowngradedDuplicate) string {
+	if d.HolderID != "" {
+		return fmt.Sprintf("verified email: account(s) %v were stamped as typed in, not verified: account %s holds the same address verified, and SSO with that address signs in account %s. Do NOT clear the email of account %s (the verified holder). Leave all of these accounts as they are until they are merged", d.Demoted, d.HolderID, d.HolderID, d.HolderID)
+	}
+	return fmt.Sprintf("verified email: account(s) %v qualified equally for the same verified address and none could be preferred, so all were stamped as typed in and no account holds it verified; an SSO login with that address reaches or creates a separate account. Leave these accounts as they are until they are merged", d.Demoted)
+}
+
 // ReconcileResult counts what ReconcileVerifiedEmails changed.
 type ReconcileResult struct {
 	// Stamped counts rows that had an email and no EmailSource, by the
@@ -130,10 +151,11 @@ type ReconcileResult struct {
 	// Setting the address for the admin is refused (it would be proven
 	// twice); both accounts are left as they are until they are merged.
 	SelfAdminsVerifiedElsewhere []SelfAdminConflict
-	// DowngradedDuplicates lists legacy rows stamped "self" although their
-	// history pointed to a trusted source, because another account already
-	// held, or also qualified for, the address proven (demoteDuplicateProofs).
-	DowngradedDuplicates           []string
+	// DowngradedDuplicates lists, per address, the legacy rows stamped "self"
+	// although their history pointed to a trusted source, because another
+	// account already held, or also qualified for, the address proven
+	// (demoteDuplicateProofs), with the account that holds it verified now.
+	DowngradedDuplicates           []DowngradedDuplicate
 	Kept, Added, Dropped, Conflict int // cache keys
 }
 
@@ -162,8 +184,8 @@ func (p *PebbleStore) ReconcileVerifiedEmails() (ReconcileResult, error) {
 	if n := len(res.Stamped); n > 0 {
 		authLog.Info("verified email: stamped email sources on rows from an older build: %v", res.Stamped)
 	}
-	if len(res.DowngradedDuplicates) > 0 {
-		authLog.Warn("verified email: account(s) %v were stamped as typed in, not verified, because another account holds or also qualified for the same address verified; clear the duplicate or merge the accounts", res.DowngradedDuplicates)
+	for _, d := range res.DowngradedDuplicates {
+		authLog.Warn("%s", downgradedDuplicateWarning(d))
 	}
 	if err := p.classifySelfAdminsLocked(&res); err != nil {
 		authLog.Warn("verified email: could not check whether the self-set admin addresses are verified elsewhere: %v", err)
@@ -287,13 +309,14 @@ var stampRank = map[string]int{
 //     so the account keeps the address it had on main; all of them when the
 //     key names none of the tied candidates.
 //
-// It returns the demoted ids.
-func demoteDuplicateProofs(users []User, sources, keyHolders map[string]string) []string {
+// It returns the demoted ids per address, with the account that holds the
+// address verified afterwards ("" when none does), sorted by first demoted id.
+func demoteDuplicateProofs(users []User, sources, keyHolders map[string]string) []DowngradedDuplicate {
 	type cand struct {
 		id   string
 		rank int
 	}
-	existing := map[string]bool{}
+	existing := map[string]string{} // address -> the non-legacy row holding it proven
 	candidates := map[string][]cand{}
 	for i := range users {
 		u := &users[i]
@@ -306,19 +329,24 @@ func demoteDuplicateProofs(users []User, sources, keyHolders map[string]string) 
 				candidates[lower] = append(candidates[lower], cand{u.ID, stampRank[src]})
 			}
 		} else if emailProven(u, lower) {
-			existing[lower] = true
+			if _, seen := existing[lower]; !seen {
+				existing[lower] = u.ID
+			}
 		}
 	}
-	var demoted []string
-	demote := func(c cand) {
-		sources[c.id] = EmailSourceSelf
-		demoted = append(demoted, c.id)
-	}
+	var out []DowngradedDuplicate
 	for lower, cs := range candidates {
-		if existing[lower] {
+		var demoted []string
+		demote := func(c cand) {
+			sources[c.id] = EmailSourceSelf
+			demoted = append(demoted, c.id)
+		}
+		if holder, ok := existing[lower]; ok {
 			for _, c := range cs {
 				demote(c)
 			}
+			slices.Sort(demoted)
+			out = append(out, DowngradedDuplicate{HolderID: holder, Demoted: demoted})
 			continue
 		}
 		if len(cs) < 2 {
@@ -349,9 +377,13 @@ func demoteDuplicateProofs(users []User, sources, keyHolders map[string]string) 
 				demote(c)
 			}
 		}
+		if len(demoted) > 0 {
+			slices.Sort(demoted)
+			out = append(out, DowngradedDuplicate{HolderID: keep, Demoted: demoted})
+		}
 	}
-	slices.Sort(demoted)
-	return demoted
+	slices.SortFunc(out, func(a, b DowngradedDuplicate) int { return strings.Compare(a.Demoted[0], b.Demoted[0]) })
+	return out
 }
 
 // emailKeyHolder returns the id the idx:user:email key for lower names, ""

@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-20
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -982,8 +983,27 @@ func TestReconcile_StampingDemotesDuplicateProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.DowngradedDuplicates) != 2 {
-		t.Fatalf("DowngradedDuplicates = %v, want late and ided", res.DowngradedDuplicates)
+	// Each demoted row is reported with the account that holds its address
+	// verified, and the boot warning names that holder as the one not to clear.
+	wantGroups := []DowngradedDuplicate{
+		{HolderID: owner.ID, Demoted: []string{late.ID}},
+		{HolderID: keyed.ID, Demoted: []string{ided.ID}},
+	}
+	slices.SortFunc(wantGroups, func(a, b DowngradedDuplicate) int { return strings.Compare(a.Demoted[0], b.Demoted[0]) })
+	if len(res.DowngradedDuplicates) != len(wantGroups) {
+		t.Fatalf("DowngradedDuplicates = %+v, want %+v", res.DowngradedDuplicates, wantGroups)
+	}
+	for i, g := range res.DowngradedDuplicates {
+		if g.HolderID != wantGroups[i].HolderID || !slices.Equal(g.Demoted, wantGroups[i].Demoted) {
+			t.Fatalf("DowngradedDuplicates = %+v, want %+v", res.DowngradedDuplicates, wantGroups)
+		}
+		msg := downgradedDuplicateWarning(g)
+		if !strings.Contains(msg, "Do NOT clear the email of account "+g.HolderID+" (the verified holder)") || !strings.Contains(msg, g.Demoted[0]) {
+			t.Fatalf("warning does not name the holder %s and the demoted %v: %s", g.HolderID, g.Demoted, msg)
+		}
+		if strings.Contains(msg, "merge the accounts") || strings.Contains(msg, "@") {
+			t.Fatalf("warning implies a merge tool or logs an address: %s", msg)
+		}
 	}
 	for id, want := range map[string]string{late.ID: EmailSourceSelf, ided.ID: EmailSourceSelf, keyed.ID: EmailSourceSetup} {
 		if got, _ := s.GetUserByID(id); got.EmailSource != want {
@@ -1028,8 +1048,9 @@ func TestReconcile_KeyAndIdentityOutranksIdentityOnly(t *testing.T) {
 			t.Fatalf("user %s stamped %q, want %q", id, got.EmailSource, want)
 		}
 	}
-	if len(res.DowngradedDuplicates) != 1 || res.DowngradedDuplicates[0] != second.ID {
-		t.Fatalf("DowngradedDuplicates = %v, want only the identity-only account", res.DowngradedDuplicates)
+	if want := []DowngradedDuplicate{{HolderID: first.ID, Demoted: []string{second.ID}}}; len(res.DowngradedDuplicates) != 1 ||
+		res.DowngradedDuplicates[0].HolderID != want[0].HolderID || !slices.Equal(res.DowngradedDuplicates[0].Demoted, want[0].Demoted) {
+		t.Fatalf("DowngradedDuplicates = %+v, want only the identity-only account, held by the setup account: %+v", res.DowngradedDuplicates, want)
 	}
 	if u, _ := s.GetUserByVerifiedEmail("owner@example.com"); u == nil || u.ID != first.ID {
 		t.Fatalf("verified lookup = %+v; want the account with the setup key", u)
@@ -1106,5 +1127,19 @@ func TestReconcile_SelfAdminConflictNamesTheVerifiedHolder(t *testing.T) {
 	want := []SelfAdminConflict{{AdminID: admin.ID, HolderID: holder.ID}}
 	if !slices.Equal(res.SelfAdminsVerifiedElsewhere, want) {
 		t.Fatalf("SelfAdminsVerifiedElsewhere = %+v, want %+v", res.SelfAdminsVerifiedElsewhere, want)
+	}
+}
+
+// With no verified holder (a tie the key breaks for nobody), the warning says
+// so, names every demoted account, and implies no merge tool.
+func TestDowngradedDuplicateWarning_NoHolder(t *testing.T) {
+	msg := downgradedDuplicateWarning(DowngradedDuplicate{Demoted: []string{"u-a", "u-b"}})
+	for _, want := range []string{"u-a", "u-b", "no account holds it verified", "until they are merged"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("warning lacks %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "merge the accounts") || strings.Contains(msg, "clear the duplicate") {
+		t.Fatalf("warning keeps the old advice: %s", msg)
 	}
 }
