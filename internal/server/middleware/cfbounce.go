@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfbounce.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7e1d52-9c04-4a68-b1f3-5d2a8e60c9b7
 // last-edited: 2026-10-20
 
@@ -92,6 +92,14 @@ type CFNavInspection struct {
 	// CookiePoisoned: the CF_Authorization COOKIE value itself verifies as a
 	// non-identity (service-token) session. Only set for CFNavServiceToken.
 	CookiePoisoned bool
+	// SecFetchMode and SecFetchDest are the request's Sec-Fetch-Mode/-Dest values
+	// ("" when absent), sanitized for logging. Set whenever Kind is not CFNavSkip,
+	// and on a SkippedNoSecFetch skip.
+	SecFetchMode, SecFetchDest string
+	// SkippedNoSecFetch: a navigation-LOOKING request (GET, Accept text/html) that
+	// carries a service-token assertion was passed through only because it has no
+	// Sec-Fetch headers. Only ever set by Inspect, never InspectBrowserHop.
+	SkippedNoSecFetch bool
 }
 
 // CFServiceTokenBouncer holds the verifier the recovery decisions run on. A nil
@@ -123,34 +131,78 @@ func IsBrowserNavigation(r *http.Request) bool {
 		strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")), "document")
 }
 
-// Inspect classifies the request. It never mutates the request or response.
+// Inspect classifies the request for the WEB UI, which shares paths with fetch
+// and XHR and therefore requires browser-navigation Sec-Fetch headers. It never
+// mutates the request or response.
 func (b *CFServiceTokenBouncer) Inspect(c *gin.Context) CFNavInspection {
+	return b.inspect(c, true)
+}
+
+// InspectBrowserHop classifies a request to a route only ever opened by a browser
+// (SSO hop 2, the ASWebAuthenticationSession sheet). Sec-Fetch headers are NOT
+// required there: demanding them adds no safety on a browser-only route and would
+// deny the first load if the sheet did not send them. The method (GET), API-key
+// and AppleCoreMedia exclusions still apply, and a service-token assertion is
+// still required.
+func (b *CFServiceTokenBouncer) InspectBrowserHop(c *gin.Context) CFNavInspection {
+	return b.inspect(c, false)
+}
+
+func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavInspection {
 	if b == nil || b.verifier == nil || c == nil || c.Request == nil {
 		return CFNavInspection{}
 	}
+	r := c.Request
+	mode := logger.SanitizeLogValue(strings.TrimSpace(r.Header.Get("Sec-Fetch-Mode")))
+	dest := logger.SanitizeLogValue(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")))
 	// Same test as CloudflareAccessAuth: a key authenticates the request, an
 	// assertion riding along with it is not considered.
-	if !IsBrowserNavigation(c.Request) || APIKeyFromRequest(c.Request) != "" {
+	if r.Method != http.MethodGet || strings.Contains(r.UserAgent(), "AppleCoreMedia") || APIKeyFromRequest(r) != "" {
+		return CFNavInspection{}
+	}
+	nav := IsBrowserNavigation(r)
+	if requireNav && !nav {
+		// Not bounced. If it merely LOOKS like a page load (Accept: text/html, no
+		// Sec-Fetch headers at all) say so, so a device test can tell whether a
+		// client that needed recovery was passed over for want of the headers.
+		if mode == "" && dest == "" && strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+			if raw := strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)); raw != "" {
+				if _, err := b.verifier.Verify(r.Context(), raw); errors.Is(err, oauth.ErrNonIdentityAssertion) {
+					return CFNavInspection{SkippedNoSecFetch: true, CommonName: strings.TrimSpace(oauth.CFAssertionCommonName(err))}
+				}
+			}
+		}
 		return CFNavInspection{}
 	}
 	raw := strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader))
 	if raw == "" {
 		return CFNavInspection{}
 	}
-	ctx := c.Request.Context()
+	ctx := r.Context()
 	_, err := b.verifier.Verify(ctx, raw)
 	switch {
 	case err == nil:
-		return CFNavInspection{Kind: CFNavPerson}
+		return CFNavInspection{Kind: CFNavPerson, SecFetchMode: mode, SecFetchDest: dest}
 	case !errors.Is(err, oauth.ErrNonIdentityAssertion):
 		return CFNavInspection{} // forged / expired / wrong aud: not ours to recover
 	}
-	out := CFNavInspection{Kind: CFNavServiceToken, CommonName: strings.TrimSpace(oauth.CFAssertionCommonName(err))}
+	out := CFNavInspection{
+		Kind: CFNavServiceToken, CommonName: strings.TrimSpace(oauth.CFAssertionCommonName(err)),
+		SecFetchMode: mode, SecFetchDest: dest,
+	}
 	if ck, cerr := c.Cookie(CFAuthorizationCookie); cerr == nil && strings.TrimSpace(ck) != "" {
 		_, verr := b.verifier.Verify(ctx, strings.TrimSpace(ck))
 		out.CookiePoisoned = errors.Is(verr, oauth.ErrNonIdentityAssertion)
 	}
 	return out
+}
+
+// CFLogHeader renders a possibly-empty header value for a log line.
+func CFLogHeader(v string) string {
+	if v == "" {
+		return "-"
+	}
+	return v
 }
 
 // CFLogName is the form of a service token's common_name that is safe to log:
@@ -268,6 +320,10 @@ func CFServiceTokenRecovery(b *CFServiceTokenBouncer, eligible func(path string)
 		}
 		ins := b.Inspect(c)
 		if ins.Kind == CFNavSkip {
+			if ins.SkippedNoSecFetch {
+				cfBounceLog.Info("cfaccess: page-like request with a service-token assertion left alone: no Sec-Fetch headers (sec_fetch_mode=- sec_fetch_dest=-) service_token=%s path=%s",
+					CFLogName(ins.CommonName), logger.SanitizeLogValue(c.Request.URL.Path))
+			}
 			c.Next()
 			return
 		}
@@ -301,8 +357,9 @@ func CFServiceTokenRecovery(b *CFServiceTokenBouncer, eligible func(path string)
 				c.Next()
 				return
 			}
-			cfBounceLog.Info("cfaccess: bouncing browser navigation that carries a service-token session: service_token=%s cookie_poisoned=%t path=%s",
-				CFLogName(ins.CommonName), ins.CookiePoisoned, logger.SanitizeLogValue(c.Request.URL.Path))
+			cfBounceLog.Info("cfaccess: bouncing browser navigation that carries a service-token session: service_token=%s cookie_poisoned=%t sec_fetch_mode=%s sec_fetch_dest=%s path=%s",
+				CFLogName(ins.CommonName), ins.CookiePoisoned, CFLogHeader(ins.SecFetchMode), CFLogHeader(ins.SecFetchDest),
+				logger.SanitizeLogValue(c.Request.URL.Path))
 			WriteCFBouncePage(c, target, ins.CookiePoisoned)
 		}
 	}

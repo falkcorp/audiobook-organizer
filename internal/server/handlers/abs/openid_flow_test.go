@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-20
 
@@ -695,17 +695,30 @@ func TestOpenIDHop2_JunkReauthDenies(t *testing.T) {
 	}
 }
 
-// Only a browser navigation may be bounced. A service-token hop-2 load without
-// Sec-Fetch navigation headers is denied outright, as before.
-func TestOpenIDHop2_NonNavigationServiceTokenIsNotBounced(t *testing.T) {
+// Hop 2 is reached only by a browser, so it does NOT require Sec-Fetch headers
+// (nobody has confirmed the sign-in sheet sends them): a service-token load
+// without them bounces like any other.
+func TestOpenIDHop2_ServiceTokenBouncesWithoutSecFetchHeaders(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	w, _ := h.do(t, request{method: http.MethodGet, path: browser,
+		headers: map[string]string{oauth.CFAccessHeader: oidcServiceAssertion}})
+	next := assertHop2Bounce(t, w, "1", false)
+	if q := h.allow(t, next, oidcPersonAssertion); q.Get("code") == "" {
+		t.Fatalf("params %v: want a code after the bounce", q)
+	}
+}
+
+// What still keeps a hop-2 load out of the bounce: an API key, AppleCoreMedia,
+// and a non-service-token assertion (none at all).
+func TestOpenIDHop2_ExcludedRequestsAreNotBounced(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
 	for name, hdrs := range map[string]map[string]string{
-		"no sec-fetch": {},
-		"cors":         {"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"},
-		"api key":      {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Authorization": "Bearer abk_0123456789"},
+		"api key":        {oauth.CFAccessHeader: oidcServiceAssertion, "Authorization": "Bearer abk_0123456789"},
+		"AppleCoreMedia": {oauth.CFAccessHeader: oidcServiceAssertion, "User-Agent": "AppleCoreMedia/1.0.0.21A329 (iPhone; U; CPU OS 17_0 like Mac OS X; en_us)"},
+		"no assertion":   {},
 	} {
-		hdrs[oauth.CFAccessHeader] = oidcServiceAssertion
 		w, _ := h.do(t, request{method: http.MethodGet, path: browser, headers: hdrs})
 		if q := appCallback(t, w); q.Get("error") != "access_denied" {
 			t.Fatalf("%s: params %v, want access_denied and no bounce", name, q)

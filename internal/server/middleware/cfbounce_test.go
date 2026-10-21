@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfbounce_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5c1a7d3-2f94-4b60-8d17-a3b9c6e04f28
 // last-edited: 2026-10-20
 
@@ -346,5 +346,67 @@ func TestCFLogName_TruncatesAndSanitizes(t *testing.T) {
 	}
 	if got := CFLogName("short"); got != "short" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The web UI requires Sec-Fetch headers, but says so (SkippedNoSecFetch, logged by
+// the middleware) when it passes over a page-looking request only for lack of them.
+func TestInspect_ReportsSkipForMissingSecFetch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    bool
+	}{
+		{"html accept, no sec-fetch", map[string]string{"Accept": "text/html,application/xhtml+xml", "Cf-Access-Jwt-Assertion": bounceSvcHeader}, true},
+		{"json accept", map[string]string{"Accept": "application/json", "Cf-Access-Jwt-Assertion": bounceSvcHeader}, false},
+		{"cors fetch", map[string]string{"Accept": "text/html", "Sec-Fetch-Mode": "cors", "Cf-Access-Jwt-Assertion": bounceSvcHeader}, false},
+		{"person assertion", map[string]string{"Accept": "text/html", "Cf-Access-Jwt-Assertion": bouncePerson}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodGet, "/library", nil)
+			for k, v := range tc.headers {
+				c.Request.Header.Set(k, v)
+			}
+			ins := b.Inspect(c)
+			if ins.SkippedNoSecFetch != tc.want || ins.Kind != CFNavSkip {
+				t.Fatalf("got kind=%v skipped=%v, want skip with skipped=%v", ins.Kind, ins.SkippedNoSecFetch, tc.want)
+			}
+		})
+	}
+}
+
+// InspectBrowserHop needs no Sec-Fetch headers, but keeps the other exclusions.
+func TestInspectBrowserHop_NoSecFetchRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	tests := []struct {
+		name    string
+		method  string
+		headers map[string]string
+		want    CFNavKind
+	}{
+		{"no sec-fetch", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader}, CFNavServiceToken},
+		{"with sec-fetch", http.MethodGet, with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader), CFNavServiceToken},
+		{"api key", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader, "Authorization": "Bearer abk_0123456789"}, CFNavSkip},
+		{"AppleCoreMedia", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader, "User-Agent": "AppleCoreMedia/1.0"}, CFNavSkip},
+		{"POST", http.MethodPost, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader}, CFNavSkip},
+		{"person", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bouncePerson}, CFNavPerson},
+		{"no assertion", http.MethodGet, nil, CFNavSkip},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(tc.method, "/auth/openid/browser", nil)
+			for k, v := range tc.headers {
+				c.Request.Header.Set(k, v)
+			}
+			if got := b.InspectBrowserHop(c).Kind; got != tc.want {
+				t.Fatalf("kind = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
