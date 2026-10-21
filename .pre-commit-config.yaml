@@ -1,7 +1,7 @@
 # file: .pre-commit-config.yaml
-# version: 2.6.1
+# version: 2.6.2
 # guid: f8e7d6c5-b4a3-9281-7069-5a4b3c2d1e0f
-# last-edited: 2026-10-20
+# last-edited: 2026-10-21
 
 # Pre-commit hooks configuration for comprehensive code quality checks
 # This configuration uses official pre-commit.com hooks and integrates with
@@ -185,9 +185,8 @@ repos:
     rev: v0.17.0
     hooks:
       - id: ruff-check
-        args: [--config=ruff.toml, --fix]
+        args: [--fix]
       - id: ruff-format
-        args: [--config=ruff.toml]
 
   # Pyupgrade for modernizing Python code (Dict->dict, List->list, etc.)
   - repo: https://github.com/asottile/pyupgrade
