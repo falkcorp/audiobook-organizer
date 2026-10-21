@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.21.3
+// version: 2.22.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-10-17
+// last-edited: 2026-10-21
 
 import { Page } from '@playwright/test';
 
@@ -892,6 +892,25 @@ export async function setupMockApiRoutes(
           limit,
         })
       );
+    }
+
+    // Browse-by-Tag facets for the Library. useScopedTagFacets requests these
+    // (debounced) after every filter change, and the panel they feed is not
+    // rendered until the request settles -- at which point it is inserted above
+    // the Select All bar and shifts the whole grid down by its height. Left
+    // unhandled this fell through to the real server (a 401, at a time the test
+    // does not control), so a click aimed at Select All or a card checkbox could
+    // land on the panel that had just mounted (PR #4105 run 39606817582). A
+    // prompt, successful, empty answer makes the layout settle deterministically;
+    // specs that click right after load wait for the panel's
+    // 'No tags in these results.' message. Honours library_state so
+    // scoped_total matches the list the same request describes.
+    if (pathname === '/api/v1/audiobooks/facets' && method === 'GET') {
+      const state = (url.searchParams.get('library_state') || '').toLowerCase();
+      const rows = (mockState.books as Array<Record<string, unknown>>).filter(
+        (b) => !state || String(b.library_state ?? '').toLowerCase() === state
+      );
+      return route.fulfill(jsonResponse({ scoped_tags: [], scoped_total: rows.length }));
     }
 
     if (pathname === '/api/v1/audiobooks/count') {

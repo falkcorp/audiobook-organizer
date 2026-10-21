@@ -1,7 +1,7 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-21
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -220,6 +220,24 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
           jsonResponse({ items: filtered, audiobooks: filtered })
         );
       }
+      // Browse-by-Tag facets. The Library asks for these (debounced) after every
+      // filter change, and without a handler here the request falls through to
+      // the real server and 401s at a moment nothing in the test controls. That
+      // matters because the Browse-by-Tag panel is not rendered until this
+      // request settles; when it settles it is inserted ABOVE the Select All
+      // bar and pushes the checkbox ~84px down. A click that Playwright had
+      // already aimed at the checkbox then lands on the new panel and selects
+      // nothing (PR #4105 run 39606817582: click at y=300, panel at y=304,
+      // checkbox at y=384). Answer it, and let waitForTagPanel() wait for it.
+      if (pathname === '/api/v1/audiobooks/facets' && method === 'GET') {
+        const state = urlObj.searchParams.get('library_state');
+        const rows = state
+          ? libraryBooks.filter((b) => b.library_state === state)
+          : libraryBooks;
+        return Promise.resolve(
+          jsonResponse({ scoped_tags: [], scoped_total: rows.length })
+        );
+      }
       if (pathname === '/api/v1/audiobooks' && method === 'GET') {
         // Honour library_state. This handler used to return every book
         // regardless, so filtering to "Imported" after an organize still
@@ -289,6 +307,16 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
   }, options);
 };
 
+
+// Wait until the Library's Browse-by-Tag panel has settled, i.e. the layout
+// above the book grid is final. The panel mounts only once the scoped-facets
+// request answers, and mounting it moves everything below it (Select All, the
+// card checkboxes) by the panel's height. Clicking before then races that move.
+// 'No tags in these results.' is what the panel shows for the empty answer the
+// mocks return.
+const waitForTagPanel = async (page: Page) => {
+  await expect(page.getByText('No tags in these results.')).toBeVisible();
+};
 
 // NOTE: navigate to '/settings#paths', not '/settings'.
 //
@@ -394,7 +422,12 @@ test.describe('Scan/Import/Organize Workflow', () => {
         .filter({ visible: true }),
     ).toHaveCount(0, { timeout: 15000 });
     await expect(page.getByText('Import Book 1')).toBeVisible();
-    await page.getByLabel('Select All').click();
+    // The filter change above re-requests the tag facets; wait for the panel
+    // they mount so Select All is not moved out from under the click. check()
+    // (not click()) so a click that does not take fails here, naming the
+    // checkbox, rather than 30s later on the button that never appeared.
+    await waitForTagPanel(page);
+    await page.getByLabel('Select All').check();
     await page.getByRole('button', { name: 'Organize Selected' }).click();
     await page
       .getByRole('button', { name: 'Organize Selected' })
@@ -534,9 +567,10 @@ test.describe('Scan/Import/Organize Workflow', () => {
 
     await page.goto('/library');
     await page.waitForLoadState('networkidle');
+    await waitForTagPanel(page);
 
     // Act
-    await page.getByLabel('Select Import Book 1').click();
+    await page.getByLabel('Select Import Book 1').check();
     await page.getByRole('button', { name: 'Organize Selected' }).click();
     await page
       .getByRole('button', { name: 'Organize Selected' })
@@ -582,11 +616,12 @@ test.describe('Scan/Import/Organize Workflow', () => {
 
     await page.goto('/library');
     await page.waitForLoadState('networkidle');
+    await waitForTagPanel(page);
 
     // Act
-    await page.getByLabel('Select Import Book 1').click();
-    await page.getByLabel('Select Import Book 2').click();
-    await page.getByLabel('Select Import Book 3').click();
+    await page.getByLabel('Select Import Book 1').check();
+    await page.getByLabel('Select Import Book 2').check();
+    await page.getByLabel('Select Import Book 3').check();
     await page.getByRole('button', { name: 'Organize Selected' }).click();
     await page
       .getByRole('button', { name: 'Organize Selected' })
