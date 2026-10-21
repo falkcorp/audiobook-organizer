@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfbounce.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b7e1d52-9c04-4a68-b1f3-5d2a8e60c9b7
 // last-edited: 2026-10-20
 
@@ -92,6 +92,9 @@ type CFNavInspection struct {
 	// CookiePoisoned: the CF_Authorization COOKIE value itself verifies as a
 	// non-identity (service-token) session. Only set for CFNavServiceToken.
 	CookiePoisoned bool
+	// CookieIsPerson: the CF_Authorization cookie verifies as a PERSON. Only set
+	// for CFNavServiceToken. Such a cookie is never deleted.
+	CookieIsPerson bool
 	// SecFetchMode and SecFetchDest are the request's Sec-Fetch-Mode/-Dest values
 	// ("" when absent), sanitized for logging. Set whenever Kind is not CFNavSkip,
 	// and on a SkippedNoSecFetch skip.
@@ -153,8 +156,8 @@ func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavIn
 		return CFNavInspection{}
 	}
 	r := c.Request
-	mode := logger.SanitizeLogValue(strings.TrimSpace(r.Header.Get("Sec-Fetch-Mode")))
-	dest := logger.SanitizeLogValue(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")))
+	mode := cfSecFetchLogValue(r.Header.Get("Sec-Fetch-Mode"))
+	dest := cfSecFetchLogValue(r.Header.Get("Sec-Fetch-Dest"))
 	// Same test as CloudflareAccessAuth: a key authenticates the request, an
 	// assertion riding along with it is not considered.
 	if r.Method != http.MethodGet || strings.Contains(r.UserAgent(), "AppleCoreMedia") || APIKeyFromRequest(r) != "" {
@@ -193,8 +196,21 @@ func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavIn
 	if ck, cerr := c.Cookie(CFAuthorizationCookie); cerr == nil && strings.TrimSpace(ck) != "" {
 		_, verr := b.verifier.Verify(ctx, strings.TrimSpace(ck))
 		out.CookiePoisoned = errors.Is(verr, oauth.ErrNonIdentityAssertion)
+		out.CookieIsPerson = verr == nil
 	}
 	return out
+}
+
+// cfSecFetchMaxLen caps a logged Sec-Fetch value: real values are short keywords
+// ("navigate", "document"), and the header is client-controlled.
+const cfSecFetchMaxLen = 32
+
+func cfSecFetchLogValue(v string) string {
+	v = logger.SanitizeLogValue(strings.TrimSpace(v))
+	if len(v) > cfSecFetchMaxLen {
+		v = v[:cfSecFetchMaxLen]
+	}
+	return v
 }
 
 // CFLogHeader renders a possibly-empty header value for a log line.
@@ -217,9 +233,11 @@ func CFLogName(commonName string) string {
 }
 
 // CFRecoveryURL builds the same-origin relative URL for path/query of u with the
-// loop-guard marker added (marker true) or removed (false). ok is false when u's
-// path cannot be safely emitted as a relative URL (a leading "//" would be read as
-// a scheme-relative URL to another host).
+// loop-guard marker added (marker true) or removed (false). The query is edited
+// as raw text -- the marker is appended, or only its own pair dropped -- so every
+// other parameter keeps its original order and encoding. ok is false when u's
+// path cannot be safely emitted as a relative URL (a leading "//" would be read
+// as a scheme-relative URL to another host).
 func CFRecoveryURL(u *url.URL, marker bool) (string, bool) {
 	if u == nil {
 		return "", false
@@ -231,14 +249,23 @@ func CFRecoveryURL(u *url.URL, marker bool) (string, bool) {
 	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\\r\n") {
 		return "", false
 	}
-	q := u.Query()
-	if marker {
-		q.Set(CFResetParam, "1")
-	} else {
-		q.Del(CFResetParam)
+	kept := make([]string, 0, 4)
+	if u.RawQuery != "" {
+		for _, pair := range strings.Split(u.RawQuery, "&") {
+			key, _, _ := strings.Cut(pair, "=")
+			if k, err := url.QueryUnescape(key); err == nil && k == CFResetParam {
+				continue
+			}
+			if pair != "" {
+				kept = append(kept, pair)
+			}
+		}
 	}
-	if enc := q.Encode(); enc != "" {
-		p += "?" + enc
+	if marker {
+		kept = append(kept, CFResetParam+"=1")
+	}
+	if len(kept) > 0 {
+		p += "?" + strings.Join(kept, "&")
 	}
 	return p, true
 }
@@ -272,31 +299,16 @@ func WriteCFBouncePage(c *gin.Context, target string, expireCookie bool) {
 	c.Abort()
 }
 
-// cfLogoutURL is the Access logout link for the request host, or the host-relative
-// path when the Host header is not a plausible hostname.
-func cfLogoutURL(host string) string {
-	const path = "/cdn-cgi/access/logout"
-	host = strings.TrimSpace(host)
-	if host == "" || len(host) > 255 {
-		return path
-	}
-	for _, r := range host {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == ':':
-		default:
-			return path
-		}
-	}
-	return "https://" + host + path
-}
+// cfLogoutPath is Cloudflare Access's logout path on the host the browser is
+// already on. It is relative on purpose: no dependence on the Host header.
+const cfLogoutPath = "/cdn-cgi/access/logout"
 
 // WriteCFLoopErrorPage is the terminal answer when a navigation that already went
 // through the one-shot bounce STILL arrives as a service token: no redirect, just
-// instructions. 403 and no-store.
+// instructions with a host-relative logout link. 403 and no-store.
 func WriteCFLoopErrorPage(c *gin.Context) {
 	setCFRecoveryHeaders(c)
-	link := cfLogoutURL(c.Request.Host)
-	esc := html.EscapeString(link)
+	esc := html.EscapeString(cfLogoutPath)
 	body := `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
 		`<title>Sign-in needs a reset</title><style>` + cfRecoveryPageStyle + `</style></head>

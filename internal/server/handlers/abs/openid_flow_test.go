@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
 // last-edited: 2026-10-20
 
@@ -660,8 +660,8 @@ func TestOpenIDHop2_RecoveryStagesThenDeny(t *testing.T) {
 
 	// Stage 0: the cookie is a person's, so it is kept.
 	r1 := assertHop2Bounce(t, h.getWithCookie(t, browser, oidcServiceAssertion, oidcPersonAssertion), "1", false)
-	// Stage 1 still arrives as a service token (the cookie alone): it goes now,
-	// whatever it was.
+	// Stage 1 still arrives as a service token and the cookie now verifies as a
+	// service-token session: it goes.
 	r2 := assertHop2Bounce(t, h.getWithCookie(t, r1, oidcServiceAssertion, oidcServiceAssertion), "2", true)
 	// Stage 2 is the end of the road: deny through the app's callback.
 	w := h.getWithCookie(t, r2, oidcServiceAssertion, oidcServiceAssertion)
@@ -683,11 +683,23 @@ func TestOpenIDHop2_ServiceTokenWithoutCommonNameStillBounces(t *testing.T) {
 	assertHop2Bounce(t, h.get(t, browser, oidcNoCNService), "1", false)
 }
 
+// Stage 1 with the service-token HEADER still present but a verified PERSON
+// cookie: the cookie is never deleted, however many bounces it took.
+func TestOpenIDHop2_PersonCookieSurvivesStageOneBounce(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "")
+	w := h.getWithCookie(t, browser+"&reauth=1", oidcServiceAssertion, oidcPersonAssertion)
+	next := assertHop2Bounce(t, w, "2", false)
+	if u, err := url.Parse(next); err != nil || u.Query().Get("reauth") != "2" {
+		t.Fatalf("next %q must be stage 2", next)
+	}
+}
+
 // A junk reauth value can only deny, never loop.
 func TestOpenIDHop2_JunkReauthDenies(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
-	for _, v := range []string{"3", "abc", "-1", "9999"} {
+	for _, v := range []string{"0", "3", "abc", "-1", "9999"} {
 		w := h.get(t, browser+"&reauth="+v, oidcServiceAssertion)
 		if q := appCallback(t, w); q.Get("error") != "access_denied" {
 			t.Fatalf("reauth=%s: params %v, want access_denied", v, q)

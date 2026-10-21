@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfbounce_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5c1a7d3-2f94-4b60-8d17-a3b9c6e04f28
 // last-edited: 2026-10-20
 
@@ -41,7 +41,7 @@ func bounceTestVerifier() *fakeCFVerifier {
 
 // bounceEligible is a stand-in for the server's SPA path test: pages only.
 func bounceEligible(p string) bool {
-	for _, pre := range []string{"/api", "/auth/", "/ping", "/status", "/login", "/abs/", "/assets/"} {
+	for _, pre := range []string{"/api", "/auth/", "/ping", "/status", "/abs/", "/assets/"} {
 		if strings.HasPrefix(p, pre) {
 			return false
 		}
@@ -115,9 +115,11 @@ func TestCFServiceTokenRecovery_Bounce(t *testing.T) {
 		wantExpire bool
 		wantURL    string
 	}{
-		{"poisoned cookie is expired", "/library?x=1", map[string]string{"CF_Authorization": bounceSvcCookie}, true, "/library?cfreset=1&x=1"},
+		{"poisoned cookie is expired", "/library?x=1", map[string]string{"CF_Authorization": bounceSvcCookie}, true, "/library?x=1&cfreset=1"},
 		{"person cookie is kept", "/library", map[string]string{"CF_Authorization": bouncePerson}, false, "/library?cfreset=1"},
 		{"no cookie at all", "/", nil, false, "/?cfreset=1"},
+		{"SPA login page is recoverable", "/login", map[string]string{"CF_Authorization": bounceSvcCookie}, true, "/login?cfreset=1"},
+		{"query order and encoding preserved", "/library?z=1&a=%2Fb+c&m", nil, false, "/library?z=1&a=%2Fb+c&m&cfreset=1"},
 		{"unverifiable cookie is kept", "/settings", map[string]string{"CF_Authorization": "forged"}, false, "/settings?cfreset=1"},
 		{"other cf cookie is not CF_Authorization", "/", map[string]string{"cf_clearance": bounceSvcCookie}, false, "/?cfreset=1"},
 	}
@@ -183,7 +185,7 @@ func TestCFServiceTokenRecovery_LoopGuard(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Cloudflare signed this browser in with a device token instead of your account.",
-		`<a href="https://books.example.com/cdn-cgi/access/logout">`,
+		`<a href="/cdn-cgi/access/logout">/cdn-cgi/access/logout</a>`,
 		", then reload.",
 	} {
 		if !strings.Contains(body, want) {
@@ -191,15 +193,6 @@ func TestCFServiceTokenRecovery_LoopGuard(t *testing.T) {
 		}
 	}
 	assertRecoveryHeaders(t, w)
-}
-
-func TestCFServiceTokenRecovery_LoopGuardHostIsEscapedAndValidated(t *testing.T) {
-	if got := cfLogoutURL(`evil"><script>`); got != "/cdn-cgi/access/logout" {
-		t.Fatalf("implausible host must fall back to a relative link, got %q", got)
-	}
-	if got := cfLogoutURL("books.example.com:8443"); got != "https://books.example.com:8443/cdn-cgi/access/logout" {
-		t.Fatalf("got %q", got)
-	}
 }
 
 func TestCFServiceTokenRecovery_PersonWithMarkerGetsCleanURL(t *testing.T) {
@@ -257,7 +250,6 @@ func TestCFServiceTokenRecovery_UntouchedRequests(t *testing.T) {
 		{"HEAD", bounceReq{method: http.MethodHead, target: "/library", headers: with(navHeaders, svc, bounceSvcHeader)}},
 		{"abs ping", bounceReq{target: "/ping", headers: with(navHeaders, svc, bounceSvcHeader)}},
 		{"abs status", bounceReq{target: "/status", headers: with(navHeaders, svc, bounceSvcHeader)}},
-		{"abs login", bounceReq{target: "/login", headers: with(navHeaders, svc, bounceSvcHeader)}},
 		{"abs prefix", bounceReq{target: "/abs/anything", headers: with(navHeaders, svc, bounceSvcHeader)}},
 		{"openid hop 1", bounceReq{target: "/auth/openid?client_id=AudioBooth", headers: with(navHeaders, svc, bounceSvcHeader)}},
 		{"openid hop 2", bounceReq{target: "/auth/openid/browser?req=x", headers: with(navHeaders, svc, bounceSvcHeader)}},
@@ -304,11 +296,14 @@ func TestCFRecoveryURL(t *testing.T) {
 		want   string
 		ok     bool
 	}{
-		{"/a/b?x=1", true, "/a/b?cfreset=1&x=1", true},
+		{"/a/b?x=1", true, "/a/b?x=1&cfreset=1", true},
+		{"/a?z=1&a=%2Fb+c&m", true, "/a?z=1&a=%2Fb+c&m&cfreset=1", true},
+		{"/a?z=1&cfreset=1&a=%2Fb+c", false, "/a?z=1&a=%2Fb+c", true},
+		{"/a?cfreset=0&x=1", true, "/a?x=1&cfreset=1", true},
 		{"/a/b?cfreset=1&x=1", false, "/a/b?x=1", true},
 		{"/", true, "/?cfreset=1", true},
 		{"/ok", true, "/ok?cfreset=1", true},
-		{"/q?next=%22%3E%3Cscript%3E", true, "/q?cfreset=1&next=%22%3E%3Cscript%3E", true},
+		{"/q?next=%22%3E%3Cscript%3E", true, "/q?next=%22%3E%3Cscript%3E&cfreset=1", true},
 	}
 	// url.Parse reads "//evil.example/p" as a HOST; a request line can still carry
 	// it as a PATH, so build that one by hand.
@@ -408,5 +403,39 @@ func TestInspectBrowserHop_NoSecFetchRequired(t *testing.T) {
 				t.Fatalf("kind = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestInspect_SecFetchLogValuesAreCapped(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/auth/openid/browser", nil)
+	c.Request.Header.Set("Cf-Access-Jwt-Assertion", bounceSvcHeader)
+	c.Request.Header.Set("Sec-Fetch-Mode", strings.Repeat("m", 500))
+	ins := b.InspectBrowserHop(c)
+	if len(ins.SecFetchMode) != 32 {
+		t.Fatalf("Sec-Fetch-Mode log value is %d chars, want capped at 32", len(ins.SecFetchMode))
+	}
+}
+
+// A service-token header over a cookie that verifies as a person: CookieIsPerson,
+// never CookiePoisoned.
+func TestInspect_ReportsCookieIsPerson(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	for cookie, want := range map[string][2]bool{
+		bouncePerson:    {false, true},
+		bounceSvcCookie: {true, false},
+		"forged":        {false, false},
+	} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/auth/openid/browser", nil)
+		c.Request.Header.Set("Cf-Access-Jwt-Assertion", bounceSvcHeader)
+		c.Request.AddCookie(&http.Cookie{Name: "CF_Authorization", Value: cookie})
+		ins := b.InspectBrowserHop(c)
+		if ins.CookiePoisoned != want[0] || ins.CookieIsPerson != want[1] {
+			t.Errorf("cookie %q: poisoned=%v person=%v, want %v", cookie, ins.CookiePoisoned, ins.CookieIsPerson, want)
+		}
 	}
 }
