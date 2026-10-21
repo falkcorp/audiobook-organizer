@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_stack_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b2d7e91-3c46-4a08-9f15-e6a0d83c7b24
 // last-edited: 2026-10-21
 
@@ -7,7 +7,7 @@ package maintenance
 
 import (
 	"context"
-	"sync/atomic"
+	"fmt"
 	"testing"
 	"time"
 
@@ -180,10 +180,11 @@ func (o *twoOps) revert(t *testing.T, op string) {
 }
 
 // Reverting the EARLIER operation first must not lose what the later one
-// carried: the later op's retire of c4 was made because the survivor was
-// already listed (in c3's slot), so putting c3 back keeps the survivor listed
-// until c4's own revert says otherwise. The ratings revert field by field.
-func TestRetireCarry_RevertingTheEarlierOperationKeepsTheLaterOnesCarry(t *testing.T) {
+// carried, and must not leave the survivor behind either. The later op's
+// retire of c4 was made because the survivor was already listed (in c3's
+// slot), so putting c3 back keeps the survivor listed until c4's own revert,
+// which then takes it out again: both orders end with the original lists.
+func TestRetireCarry_RevertingTheEarlierOperationFirstEndsWithTheOriginalLists(t *testing.T) {
 	t.Parallel()
 	o := seedTwoOps(t)
 	f := o.f
@@ -206,16 +207,61 @@ func TestRetireCarry_RevertingTheEarlierOperationKeepsTheLaterOnesCarry(t *testi
 
 	o.revert(t, "op-apply-2")
 	require.True(t, f.liveID(t, o.c4))
-	col = f.rcMembers(t, o.colX)
-	require.Equal(t, 1, countOf(col, o.c3))
-	require.Equal(t, 1, countOf(col, o.c4), "c4 is back")
-	require.Equal(t, 1, countOf(col, "y"))
-	pl = f.rcPlaylistMembers(t, o.plX)
-	require.Equal(t, 1, countOf(pl, o.c3))
-	require.Equal(t, 1, countOf(pl, o.c4))
+	require.Equal(t, []string{o.c3, o.c4, "y"}, f.rcMembers(t, o.colX), "the exact original list, the survivor not left behind")
+	require.Equal(t, []string{o.c3, "y", o.c4}, f.rcPlaylistMembers(t, o.plX))
+	require.Zero(t, countOf(f.rcMembers(t, o.colX), o.parent))
+	require.Zero(t, countOf(f.rcPlaylistMembers(t, o.plX), o.parent))
 	p, err = f.s.GetBookByID(o.parent)
 	require.NoError(t, err)
 	require.Nil(t, p.UserRatingNotes)
+}
+
+// Three operations retire three children into one survivor (the first replaces
+// a slot, the other two are removed because the survivor is listed). Whatever
+// order they are reverted in, every retired book is back and the survivor is
+// out of the lists. A removal is put back by the index it had, so the order
+// within the list is exact when the newest operation is reverted first and can
+// be a slot off when an older one goes first (the index was counted before the
+// others' removals); no book is lost or left behind either way.
+func TestRetireCarry_ThreeOperationsRevertInAnyOrder(t *testing.T) {
+	t.Parallel()
+	perms := [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
+	for _, perm := range perms {
+		t.Run(fmt.Sprint(perm), func(t *testing.T) {
+			t.Parallel()
+			f := hcSeed(t)
+			parent := f.ids["parent"]
+			kids := []string{
+				f.hcChild(t, "c3", "Stray Three", "hash-p03"),
+				f.hcChild(t, "c4", "Stray Four", "hash-p04"),
+				f.hcChild(t, "c5", "Stray Five", "hash-p05"),
+			}
+			colX := f.rcCollection(t, "Shared", kids[0], kids[1], "x", kids[2])
+			plX := f.rcPlaylist(t, "Shared list", "x", kids[0], kids[2], kids[1])
+			wantCol := []string{kids[0], kids[1], "x", kids[2]}
+			wantPl := []string{"x", kids[0], kids[2], kids[1]}
+			f.plan(t, "op-plan")
+			for i, k := range kids {
+				out := f.apply(t, "op-plan", fmt.Sprintf("op-apply-%d", i), []string{hcRowID(parent, k)}, nil)
+				require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			}
+			require.Equal(t, []string{parent, "x"}, f.rcMembers(t, colX))
+			for _, i := range perm {
+				rr, err := audiobooks.NewRevertService(f.s).RevertOperation(fmt.Sprintf("op-apply-%d", i))
+				require.NoError(t, err)
+				require.Zero(t, rr.Failed, "op %d: %+v", i, rr)
+			}
+			require.ElementsMatch(t, wantCol, f.rcMembers(t, colX), "revert order %v", perm)
+			require.ElementsMatch(t, wantPl, f.rcPlaylistMembers(t, plX), "revert order %v", perm)
+			if perm[0] == 2 && perm[1] == 1 {
+				require.Equal(t, wantCol, f.rcMembers(t, colX), "newest first is exact")
+				require.Equal(t, wantPl, f.rcPlaylistMembers(t, plX), "newest first is exact")
+			}
+			for _, k := range kids {
+				require.True(t, f.liveID(t, k))
+			}
+		})
+	}
 }
 
 // Reverting in reverse order restores the original lists exactly.
@@ -234,26 +280,67 @@ func TestRetireCarry_RevertingInReverseOrderRestoresExactly(t *testing.T) {
 	require.Nil(t, p.UserRatingOverall)
 	require.Nil(t, p.UserRatingStory)
 	require.Nil(t, p.UserRatingNotes)
+	require.Zero(t, countOf(f.rcMembers(t, o.colX), o.parent))
 }
 
-// The survivor-side marker that makes the previous test work is journaled on
-// the survivor, by the op that removed the retired book because the survivor
-// was already listed.
-func TestRetireCarry_AMarkerIsJournaledOnTheSurvivorWhenItWasAlreadyListed(t *testing.T) {
+// Each carry on a list journals a marker on the survivor: "took" when the
+// survivor replaced the retired book in its slot, "held" when the retired book
+// was only removed because the survivor was already listed. They are what the
+// two reverts above read.
+func TestRetireCarry_AMarkerIsJournaledOnTheSurvivorForEveryListCarry(t *testing.T) {
 	t.Parallel()
 	o := seedTwoOps(t)
-	changes, err := o.f.s.GetOperationChanges("op-apply-2")
+	count := func(op string) map[string]int {
+		changes, err := o.f.s.GetOperationChanges(op)
+		require.NoError(t, err)
+		kinds := map[string]int{}
+		for _, c := range changes {
+			k, _, ok := undo.UserContentFromField(c.FieldName)
+			if ok && undo.IsMarker(k) {
+				require.Equal(t, o.parent, c.BookID, "a marker is journaled on the survivor")
+				kinds[k]++
+			}
+		}
+		return kinds
+	}
+	require.Equal(t, map[string]int{undo.UserContentCollectionTook: 1, undo.UserContentPlaylistTook: 1}, count("op-apply-1"))
+	require.Equal(t, map[string]int{undo.UserContentCollectionHeld: 1, undo.UserContentPlaylistHeld: 1}, count("op-apply-2"))
+}
+
+// The revert counts a marker row apart from the restored rows: it restores
+// nothing, so it is not in Restored (and not in RestoredTypes), and the
+// summary says so.
+func TestRetireCarry_RevertReportsMarkersApartFromRestored(t *testing.T) {
+	t.Parallel()
+	f := hcSeed(t)
+	child := f.hcChild(t, "c3", "Stray Recording", "hash-p03")
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: rcFloat(4)})
+	f.rcCollection(t, "Favourites", "other-1", child)
+	f.rcPlaylist(t, "Road trip", child)
+	f.rcRetire(t, child)
+
+	changes, err := f.s.GetOperationChanges("op-apply")
 	require.NoError(t, err)
-	markers := 0
+	markers, others := 0, 0
 	for _, c := range changes {
-		k, _, ok := undo.UserContentFromField(c.FieldName)
-		if ok && (k == undo.UserContentCollectionHeld || k == undo.UserContentPlaylistHeld) {
+		if k, _, ok := undo.UserContentFromField(c.FieldName); ok && undo.IsMarker(k) {
 			markers++
-			require.Equal(t, o.parent, c.BookID)
-			require.Equal(t, o.c4, c.NewValue)
+		} else {
+			others++
 		}
 	}
-	require.Equal(t, 2, markers, "one for the collection, one for the playlist")
+	require.Equal(t, 2, markers)
+
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	require.Equal(t, markers, rr.Markers, "%+v", rr)
+	require.Equal(t, len(changes)-markers, rr.Restored, "the markers are not counted restored: %+v", rr)
+	require.Equal(t, 3, rr.RestoredTypes[undo.ChangeTypeUserContentFollow], "the rating, collection and playlist rows only: %+v", rr.RestoredTypes)
+	require.Contains(t, rr.Summary(), "2 marker row(s) cleared")
+	// Every row, markers included, is marked reverted: a second revert has nothing to do.
+	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.ErrorContains(t, err, "already been reverted")
 }
 
 // Preflight predicts what the revert will do for carried rows: restorable
@@ -293,76 +380,38 @@ func TestRetireCarry_PreflightPredictsTheRevert(t *testing.T) {
 	require.Equal(t, 3, rr.Failed, "%+v", rr)
 }
 
-// countingCarryStore counts the listings a retire's carry makes.
-type countingCarryStore struct {
-	*database.PebbleStore
-	cols, pls atomic.Int32
-}
-
-func (s *countingCarryStore) ListCollections(typ string, limit, offset int) ([]database.Collection, int, error) {
-	s.cols.Add(1)
-	return s.PebbleStore.ListCollections(typ, limit, offset)
-}
-
-func (s *countingCarryStore) ListUserPlaylists(typ string, limit, offset int) ([]database.UserPlaylist, int, error) {
-	s.pls.Add(1)
-	return s.PebbleStore.ListUserPlaylists(typ, limit, offset)
-}
-
-// An apply operation that retires many books lists the collections and the
-// playlists once, not once per retire (and a fresh operation lists again).
-func TestRetireCarry_AnOperationListsTheListsOnce(t *testing.T) {
-	t.Parallel()
-	f := hcSeed(t)
-	parent := f.ids["parent"]
-	cs := &countingCarryStore{PebbleStore: f.s}
-	col := f.rcCollection(t, "Favourites")
-	var ids []string
-	for _, n := range []string{"1", "2", "3", "4"} {
-		c := f.hcChild(t, "c"+n, "Stray "+n, "hash-p0"+n)
-		ids = append(ids, c)
-		_, err := f.s.AddBooksToCollection(col, []string{c})
-		require.NoError(t, err)
-	}
-
-	w := f.fragWriter(t, "op-apply")
-	for _, c := range ids {
-		_, err := retireInto(context.Background(), f.p, cs, w, time.Now, fragFixerID, c, parent, nil)
-		require.NoError(t, err)
-	}
-	require.EqualValues(t, 1, cs.cols.Load(), "one collection listing for four retires")
-	require.EqualValues(t, 1, cs.pls.Load(), "one playlist listing for four retires")
-	require.Equal(t, []string{parent}, f.rcMembers(t, col), "all four carried: one place for the survivor")
-
-	// A stale index is rebuilt: a clock past the TTL lists again.
-	now := time.Now().Add(2 * carryIndexMaxAge)
-	f.p.carry.now = func() time.Time { return now }
-	c5 := f.hcChild(t, "c5", "Stray 5", "hash-p05")
-	_, err := retireInto(context.Background(), f.p, cs, w, time.Now, fragFixerID, c5, parent, nil)
-	require.NoError(t, err)
-	require.EqualValues(t, 2, cs.cols.Load(), "a stale index is rebuilt")
-}
-
-// A list the index missed (the owner added the retired book after it was
-// built) is not carried by the stale index, but a list the index names is
-// always re-read before it is written: removing the book from the list after
-// the index was built leaves the survivor out of it.
-func TestRetireCarry_TheIndexIsAHintEveryListIsReRead(t *testing.T) {
+// A list is read for every retire, never from an earlier listing: a list the
+// owner adds the retired book to between two retires of one operation is
+// carried, one it removes the book from is left alone, and a chain (the
+// survivor is itself retired later in the operation) finds the list the first
+// carry put it in.
+func TestRetireCarry_EveryRetireReadsTheListsAfresh(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	parent := f.ids["parent"]
 	c1 := f.hcChild(t, "c1", "Stray 1", "hash-p01")
 	c2 := f.hcChild(t, "c2", "Stray 2", "hash-p02")
+	c3 := f.hcChild(t, "c3", "Stray 3", "hash-p03")
 	col := f.rcCollection(t, "Favourites", c1, c2)
 	w := f.fragWriter(t, "op-apply")
 	_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, c1, parent, nil)
 	require.NoError(t, err)
-	// The owner removes c2 from the list; the index (built before) still names it.
+	require.Equal(t, []string{parent, c2}, f.rcMembers(t, col))
+
+	// Between the retires the owner removes c2 from the list, adds c3 to it
+	// and makes a second list with c3.
 	_, err = f.s.RemoveBookFromCollection(col, c2)
 	require.NoError(t, err)
+	_, err = f.s.AddBooksToCollection(col, []string{c3})
+	require.NoError(t, err)
+	col2 := f.rcCollection(t, "New", c3)
 	_, err = retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, c2, parent, nil)
 	require.NoError(t, err)
-	require.Equal(t, []string{parent}, f.rcMembers(t, col), "c2 was not in the list: nothing carried for it, and the survivor stays")
+	require.Equal(t, []string{parent, c3}, f.rcMembers(t, col), "c2 was no longer listed: nothing carried for it")
+	_, err = retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, c3, parent, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{parent}, f.rcMembers(t, col), "a list added mid-op is carried, the survivor already listed")
+	require.Equal(t, []string{parent}, f.rcMembers(t, col2), "so is a list made mid-op")
 }
 
 // The carry runs for the other Repairs retire fixers too.

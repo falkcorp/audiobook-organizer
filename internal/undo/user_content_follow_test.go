@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
 // last-edited: 2026-10-21
 
@@ -53,7 +53,7 @@ func TestCarryMembership(t *testing.T) {
 				t.Fatalf("record %+v, want %+v", rec, tc.wantRec)
 			}
 			ucEq(t, tc.cur, orig) // the input is never written
-			back, err := RestoreMembership(next, "r", "s", rec, false)
+			back, err := RestoreMembership(next, "r", "s", rec, SurvivorDefault)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +76,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("the retired book is listed again: already restored", func(t *testing.T) {
 		t.Parallel()
-		_, err := RestoreMembership([]string{"r", "s"}, "r", "s", MembershipRecord{}, false)
+		_, err := RestoreMembership([]string{"r", "s"}, "r", "s", MembershipRecord{}, SurvivorDefault)
 		if !errors.Is(err, ErrAlreadyRestored) {
 			t.Fatalf("err = %v", err)
 		}
@@ -84,7 +84,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("the survivor was taken out of the slot: refused, never guessed", func(t *testing.T) {
 		t.Parallel()
-		_, err := RestoreMembership([]string{"a", "b"}, "r", "s", MembershipRecord{Index: 1}, false)
+		_, err := RestoreMembership([]string{"a", "b"}, "r", "s", MembershipRecord{Index: 1}, SurvivorDefault)
 		if RefusalReason(err) != ReasonChangedSince {
 			t.Fatalf("err = %v", err)
 		}
@@ -92,7 +92,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("survivor was already a member: the book goes back at its index", func(t *testing.T) {
 		t.Parallel()
-		got, err := RestoreMembership([]string{"s", "b"}, "r", "s", MembershipRecord{Index: 1, SurvivorWasMember: true}, false)
+		got, err := RestoreMembership([]string{"s", "b"}, "r", "s", MembershipRecord{Index: 1, SurvivorWasMember: true}, SurvivorDefault)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +101,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("the index is clamped to a list that shrank", func(t *testing.T) {
 		t.Parallel()
-		got, err := RestoreMembership([]string{"s"}, "r", "s", MembershipRecord{Index: 9, SurvivorWasMember: true}, false)
+		got, err := RestoreMembership([]string{"s"}, "r", "s", MembershipRecord{Index: 9, SurvivorWasMember: true}, SurvivorDefault)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,26 +110,44 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("an unrelated edit of the list does not block the restore", func(t *testing.T) {
 		t.Parallel()
-		got, err := RestoreMembership([]string{"x", "s", "y", "z"}, "r", "s", MembershipRecord{Index: 1}, false)
+		got, err := RestoreMembership([]string{"x", "s", "y", "z"}, "r", "s", MembershipRecord{Index: 1}, SurvivorDefault)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ucEq(t, got, []string{"x", "r", "y", "z"})
 	})
 
-	t.Run("keepSurvivor: another retire stands in the slot, so the survivor stays", func(t *testing.T) {
+	t.Run("SurvivorStays: another retire stands in the slot, so the survivor stays", func(t *testing.T) {
 		t.Parallel()
 		// Op1 replaced r by s at index 0; op2 removed b because s was listed.
-		got, err := RestoreMembership([]string{"s"}, "r", "s", MembershipRecord{Index: 0}, true)
+		got, err := RestoreMembership([]string{"s"}, "r", "s", MembershipRecord{Index: 0}, SurvivorStays)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ucEq(t, got, []string{"r", "s"})
 	})
 
-	t.Run("keepSurvivor with the survivor gone is still a refusal", func(t *testing.T) {
+	t.Run("SurvivorLeaves: a removal puts the book back and takes the survivor out", func(t *testing.T) {
 		t.Parallel()
-		_, err := RestoreMembership([]string{"a"}, "r", "s", MembershipRecord{Index: 0}, true)
+		got, err := RestoreMembership([]string{"x", "s", "y"}, "r", "s", MembershipRecord{Index: 1, SurvivorWasMember: true}, SurvivorLeaves)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ucEq(t, got, []string{"x", "r", "y"})
+	})
+
+	t.Run("SurvivorLeaves with the survivor already gone just puts the book back", func(t *testing.T) {
+		t.Parallel()
+		got, err := RestoreMembership([]string{"y"}, "r", "s", MembershipRecord{Index: 0, SurvivorWasMember: true}, SurvivorLeaves)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ucEq(t, got, []string{"r", "y"})
+	})
+
+	t.Run("SurvivorStays with the survivor gone is still a refusal", func(t *testing.T) {
+		t.Parallel()
+		_, err := RestoreMembership([]string{"a"}, "r", "s", MembershipRecord{Index: 0}, SurvivorStays)
 		if RefusalReason(err) != ReasonChangedSince {
 			t.Fatalf("err = %v", err)
 		}
@@ -280,9 +298,60 @@ func TestSurvivorStandsIn(t *testing.T) {
 	}
 }
 
+func TestSurvivorOnlyStandsByReplace(t *testing.T) {
+	t.Parallel()
+	base := time.Now()
+	at := func(d time.Duration) time.Time { return base.Add(d) }
+	tp := func(t time.Time) *time.Time { return &t }
+	took := UserContentField(UserContentCollectionTook, "c1")
+	held := UserContentField(UserContentCollectionHeld, "c1")
+	// row is op2's removal, written at +10s.
+	row := &database.OperationChange{ChangeType: ChangeTypeUserContentFollow, OperationID: "op2", CreatedAt: at(10 * time.Second)}
+	mk := func(op, field string, created time.Time, reverted *time.Time) *database.OperationChange {
+		return &database.OperationChange{ChangeType: ChangeTypeUserContentFollow, OperationID: op, FieldName: field, CreatedAt: created, RevertedAt: reverted}
+	}
+	cases := []struct {
+		name string
+		rows []*database.OperationChange
+		want bool
+	}{
+		{"the replace was reverted after the removal: the survivor leaves", []*database.OperationChange{mk("op1", took, at(0), tp(at(20*time.Second)))}, true},
+		{"the replace is still standing", []*database.OperationChange{mk("op1", took, at(0), nil)}, false},
+		{"the replace was reverted BEFORE the removal was written (the owner added the survivor later)", []*database.OperationChange{mk("op1", took, at(0), tp(at(5*time.Second)))}, false},
+		{"another removal still stands", []*database.OperationChange{mk("op1", took, at(0), tp(at(20*time.Second))), mk("op3", held, at(12*time.Second), nil)}, false},
+		{"another removal was reverted too", []*database.OperationChange{mk("op1", took, at(0), tp(at(20*time.Second))), mk("op3", held, at(12*time.Second), tp(at(30*time.Second)))}, true},
+		{"this op's own replace marker is not another op's", []*database.OperationChange{mk("op2", took, at(0), tp(at(20*time.Second)))}, false},
+		{"a voided replace marker does not count", []*database.OperationChange{{ChangeType: ChangeTypeUserContentFollow, OperationID: "op1", FieldName: took, CreatedAt: at(0), RevertedAt: tp(at(20 * time.Second)), Voided: true}}, false},
+		{"another list's marker does not count", []*database.OperationChange{mk("op1", UserContentField(UserContentCollectionTook, "c9"), at(0), tp(at(20*time.Second)))}, false},
+		{"no rows", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := SurvivorOnlyStandsByReplace(tc.rows, row, UserContentCollection, "c1"); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsMarker(t *testing.T) {
+	t.Parallel()
+	for _, k := range []string{UserContentCollectionHeld, UserContentPlaylistHeld, UserContentCollectionTook, UserContentPlaylistTook} {
+		if !IsMarker(k) {
+			t.Fatalf("%s is a marker", k)
+		}
+	}
+	for _, k := range []string{UserContentRating, UserContentCollection, UserContentPlaylist, "", "x"} {
+		if IsMarker(k) {
+			t.Fatalf("%s is not a marker", k)
+		}
+	}
+}
+
 func TestUserContentFollow_FieldsAndValidity(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{UserContentRating, UserContentCollection, UserContentPlaylist, UserContentCollectionHeld, UserContentPlaylistHeld} {
+	for _, kind := range []string{UserContentRating, UserContentCollection, UserContentPlaylist, UserContentCollectionHeld, UserContentPlaylistHeld, UserContentCollectionTook, UserContentPlaylistTook} {
 		k, id, ok := UserContentFromField(UserContentField(kind, "x1"))
 		if !ok || k != kind || id != "x1" {
 			t.Fatalf("%s: %q %q %v", kind, k, id, ok)
