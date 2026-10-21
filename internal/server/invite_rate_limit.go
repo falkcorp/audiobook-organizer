@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -32,12 +32,12 @@ import (
 // Production sits behind a Cloudflare tunnel whose connectors (cloudflared)
 // run on other LAN hosts and connect to the service from their own private
 // addresses, and the router trusts no proxy headers (SetTrustedProxies(nil),
-// see NewServer), so c.ClientIP() is a connector's address for every tunnel
+// see NewServer), so the peer address is a connector's address for every tunnel
 // request: a limiter keyed on it alone is one bucket per connector, shared by
 // every visitor, and a single caller could exhaust it for every guest. The
 // invite routes also bypass Cloudflare Access (a guest accepts before being
 // allowed in), so there is no Access assertion to lean on. The layers
-// therefore do not rely on c.ClientIP():
+// therefore do not rely on the peer address alone:
 //
 //  1. per token: a token's lookups and accept attempts, from anywhere, share
 //     one small bucket (keyed by a hash of the token, never the raw token).

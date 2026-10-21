@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-20
 
@@ -142,7 +142,8 @@ func bootstrapDirectKey(ip string) string {
 // NOT exempt.
 func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key, lanKey, logIP string, exempt bool) {
 	if directLANPeer(c, connectors) {
-		ip := strings.TrimSpace(c.ClientIP())
+		a, _ := peerAddr(c) // directLANPeer already parsed it
+		ip := a.String()
 		return bootstrapDirectKey(ip), bootstrapDirectLANKey(ip), ip, true
 	}
 	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
