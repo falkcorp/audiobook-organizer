@@ -1,5 +1,5 @@
 // file: internal/database/user_email_unique_test.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 76d177ea-781f-4827-8e57-febd941f7965
 // last-edited: 2026-10-21
 
@@ -1267,17 +1267,20 @@ func TestReconcile_LoneTypedInAddressWarnsOnlyForAnAdmin(t *testing.T) {
 
 func TestIdPCanCarry(t *testing.T) {
 	for addr, want := range map[string]bool{
-		"owner@example.com":      true,
-		"a@mail.example.org":     true,
-		"admin@localhost":        false,
-		"admin@host":             false,
-		"admin@box.local":        false,
-		"admin@svc.internal":     false,
-		"admin@x.test":           false,
-		"admin@foo.localhost":    false,
-		"admin@[192.0.2.1]":      false,
-		"admin@router.home.arpa": false,
-		"no-at-sign.example.com": false,
+		"owner@example.com":       true,
+		"a@mail.example.org":      true,
+		"admin@localhost":         false,
+		"admin@host":              false,
+		"admin@box.local":         false,
+		"admin@svc.internal":      false,
+		"admin@x.test":            false,
+		"admin@foo.localhost":     false,
+		"admin@[192.0.2.1]":       false,
+		"admin@192.0.2.1":         false,
+		"admin@192.0.2.1.":        false,
+		"admin@1.2.3.example.com": true,
+		"admin@router.home.arpa":  false,
+		"no-at-sign.example.com":  false,
 	} {
 		if got := idpCanCarry(addr); got != want {
 			t.Errorf("idpCanCarry(%q) = %v, want %v", addr, got, want)
