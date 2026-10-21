@@ -1,12 +1,13 @@
 // file: web/tests/e2e/batch-operations.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d6e7f80-9a0b-1c2d-3e4f-5a6b7c8d9e0f
-// last-edited: 2026-08-09
+// last-edited: 2026-10-21
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
   generateTestBooks,
   setupLibraryWithBooks,
+  waitForTagPanel,
   waitForToast,
 } from './utils/test-helpers';
 
@@ -15,6 +16,9 @@ const arrangeLibrary = async (page: Page, count = 40) => {
   await setupLibraryWithBooks(page, books);
   await page.goto('/library');
   await page.waitForLoadState('networkidle');
+  // Every test here clicks a selection control next; the Browse-by-Tag panel
+  // mounting shifts them, so let the layout settle first.
+  await waitForTagPanel(page);
   return books;
 };
 

@@ -1,5 +1,5 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-21
 
@@ -10,6 +10,7 @@ import {
   skipWelcomeWizard,
   setupLibraryWithBooks,
   waitForToast,
+  waitForTagPanel,
 } from './utils/test-helpers';
 
 type ScanMockOptions = {
@@ -220,20 +221,20 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
           jsonResponse({ items: filtered, audiobooks: filtered })
         );
       }
-      // Browse-by-Tag facets. The Library asks for these (debounced) after every
-      // filter change, and without a handler here the request falls through to
-      // the real server and 401s at a moment nothing in the test controls. That
-      // matters because the Browse-by-Tag panel is not rendered until this
-      // request settles; when it settles it is inserted ABOVE the Select All
-      // bar and pushes the checkbox ~84px down. A click that Playwright had
-      // already aimed at the checkbox then lands on the new panel and selects
-      // nothing (PR #4105 run 39606817582: click at y=300, panel at y=304,
-      // checkbox at y=384). Answer it, and let waitForTagPanel() wait for it.
+      // Facets. Same two shapes and the same reasoning as the shared mock in
+      // utils/test-helpers.ts (see the comment there): this spec mocks via a
+      // window.fetch override and inherits none of setupMockApiRoutes, so without
+      // a handler the request falls through to the real server and 401s at a time
+      // the test does not control, and the Browse-by-Tag panel it feeds mounts
+      // mid-click and shifts Select All (PR #4105 run 39606817582).
       if (pathname === '/api/v1/audiobooks/facets' && method === 'GET') {
-        const state = urlObj.searchParams.get('library_state');
-        const rows = state
-          ? libraryBooks.filter((b) => b.library_state === state)
-          : libraryBooks;
+        if (!urlObj.searchParams.get('scoped')) {
+          return Promise.resolve(jsonResponse({ genres: [], languages: [] }));
+        }
+        const state = (urlObj.searchParams.get('library_state') || '').toLowerCase();
+        const rows = libraryBooks.filter(
+          (b) => !state || String(b.library_state ?? '').toLowerCase() === state
+        );
         return Promise.resolve(
           jsonResponse({ scoped_tags: [], scoped_total: rows.length })
         );
@@ -307,16 +308,6 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
   }, options);
 };
 
-
-// Wait until the Library's Browse-by-Tag panel has settled, i.e. the layout
-// above the book grid is final. The panel mounts only once the scoped-facets
-// request answers, and mounting it moves everything below it (Select All, the
-// card checkboxes) by the panel's height. Clicking before then races that move.
-// 'No tags in these results.' is what the panel shows for the empty answer the
-// mocks return.
-const waitForTagPanel = async (page: Page) => {
-  await expect(page.getByText('No tags in these results.')).toBeVisible();
-};
 
 // NOTE: navigate to '/settings#paths', not '/settings'.
 //
@@ -422,8 +413,9 @@ test.describe('Scan/Import/Organize Workflow', () => {
         .filter({ visible: true }),
     ).toHaveCount(0, { timeout: 15000 });
     await expect(page.getByText('Import Book 1')).toBeVisible();
-    // The filter change above re-requests the tag facets; wait for the panel
-    // they mount so Select All is not moved out from under the click. check()
+    // The Library's first tag-facets request settles asynchronously after the
+    // page loads, and the panel it mounts shifts Select All down; wait for it so
+    // the checkbox is not moved out from under the click. check()
     // (not click()) so a click that does not take fails here, naming the
     // checkbox, rather than 30s later on the button that never appeared.
     await waitForTagPanel(page);
