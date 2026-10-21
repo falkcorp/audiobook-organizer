@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.10.1
+// version: 1.11.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-15
+// last-edited: 2026-10-20
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -94,16 +94,67 @@ function isInFlight(status: string | undefined): boolean {
   return status === 'queued' || status === 'running' || status === 'pending';
 }
 
+/** A row an apply names to the reviewer: its title and how many books it holds. */
+export interface RepairApplyTarget {
+  rowId: string;
+  title: string;
+  members: number;
+}
+
+/** How many rows the confirm and the result banner list before "and N more". */
+export const REPAIRS_APPLY_NAMED_ROWS = 10;
+
+/** The target a plan row stands for: its title and member count. */
+export function repairApplyTarget(r: RepairRow): RepairApplyTarget {
+  return {
+    rowId: r.row_id,
+    title: r.title || r.row_id,
+    members: r.members?.length || r.book_ids.length,
+  };
+}
+
+function describeTarget(t: RepairApplyTarget): string {
+  return `"${t.title}" (${t.members} ${t.members === 1 ? 'book' : 'books'})`;
+}
+
 /**
- * The confirm every apply shows, whichever button sent it. Names the count and
- * says what happens to a running scan -- it pauses briefly; nothing is blocked.
+ * The rows an apply names, one per line, up to REPAIRS_APPLY_NAMED_ROWS, then
+ * "and N more" for the rest of `total`. Empty when no title is known.
  */
-export function repairApplyConfirmMessage(count: number, fixerTitle: string): string {
+function listTargets(targets: readonly RepairApplyTarget[], total: number): string {
+  const shown = targets.slice(0, REPAIRS_APPLY_NAMED_ROWS);
+  if (shown.length === 0) return '';
+  const lines = shown.map((t) => `  - ${describeTarget(t)}`);
+  if (total > shown.length) lines.push(`  and ${(total - shown.length).toLocaleString()} more`);
+  return lines.join('\n');
+}
+
+/**
+ * The confirm every apply shows, whichever button sent it. Names the count,
+ * lists the rows being applied (title and book count, up to ten, then "and N
+ * more") when `targets` are known, and says what happens to a running scan --
+ * it pauses briefly; nothing is blocked.
+ */
+export function repairApplyConfirmMessage(
+  count: number,
+  fixerTitle: string,
+  targets: readonly RepairApplyTarget[] = []
+): string {
+  const list = listTargets(targets, count);
   return (
-    `Apply ${count.toLocaleString()} repair row(s) from "${fixerTitle}"? ` +
+    `Apply ${count.toLocaleString()} repair row(s) from "${fixerTitle}"?` +
+    (list ? `\n\n${list}\n\n` : ' ') +
     'This writes to the library, and each change is recorded in the book history. ' +
     'If a library scan is running it pauses briefly while the rows are written.'
   );
+}
+
+/** The result banner's naming of the rows that were applied; "" for none. */
+export function summarizeAppliedRows(targets: readonly RepairApplyTarget[]): string {
+  const shown = targets.slice(0, REPAIRS_APPLY_NAMED_ROWS).map(describeTarget);
+  if (shown.length === 0) return '';
+  const more = targets.length - shown.length;
+  return `Applied: ${shown.join(', ')}${more > 0 ? `, and ${more.toLocaleString()} more` : ''}.`;
 }
 
 /** One line summarising an apply result, for the toast and the result banner. */
@@ -278,6 +329,8 @@ export interface RepairsLane {
   remainingApplicable: number | null;
   /** The newest apply result for the plan on screen. */
   applyResult: RepairApplyResult | null;
+  /** The rows that apply wrote (outcome "applied"), titles for the banner. */
+  appliedRows: readonly RepairApplyTarget[];
   /** Every outcome reported for the plan on screen, across applies. */
   rowOutcomes: ReadonlyMap<string, RepairRowResult>;
 
@@ -324,6 +377,11 @@ export function useRepairsLane(
   const [applyingFor, setApplyingFor] = useState<string | null>(null);
   const [applyErrors, setApplyErrors] = useState<Record<string, RepairApplyProblem>>({});
   const [applyResults, setApplyResults] = useState<Record<string, RepairApplyResult>>({});
+  // The rows each fixer's latest apply wrote (outcome "applied"), for the
+  // result banner to name.
+  const [appliedTargets, setAppliedTargets] = useState<
+    Record<string, readonly RepairApplyTarget[]>
+  >({});
   // Every row outcome reported for a plan, merged across applies, so a second
   // apply does not wipe the first one's badges.
   const [outcomesByPlan, setOutcomesByPlan] = useState<
@@ -520,7 +578,11 @@ export function useRepairsLane(
   // all" count subtracts only that class's settled rows. Every settled row
   // was read first (a page on screen, or collectApplicableIds), so it is here.
   const [rowClasses, setRowClasses] = useState<Readonly<Record<string, string>>>({});
+  // The title and book count of every row read, same key: the apply confirm
+  // and the result banner name rows, and a selection can span pages.
+  const rowTargets = useRef(new Map<string, RepairApplyTarget>());
   const noteRowClasses = useCallback((plan: string, rows: readonly RepairRow[]) => {
+    for (const r of rows) rowTargets.current.set(`${plan}|${r.row_id}`, repairApplyTarget(r));
     setRowClasses((prev) => {
       let next: Record<string, string> | null = null;
       for (const r of rows) {
@@ -774,6 +836,19 @@ export function useRepairsLane(
         }
         const r = result;
         setApplyResults((prev) => ({ ...prev, [fixerId]: r }));
+        setAppliedTargets((prev) => ({
+          ...prev,
+          [fixerId]: r.rows
+            .filter((row) => row.outcome === 'applied')
+            .map(
+              (row) =>
+                rowTargets.current.get(`${r.plan_op_id}|${row.row_id}`) ?? {
+                  rowId: row.row_id,
+                  title: row.row_id,
+                  members: 0,
+                }
+            ),
+        }));
         setOutcomesByPlan((prev) => {
           const merged = { ...(prev[r.plan_op_id] ?? {}) };
           for (const row of r.rows) merged[row.row_id] = row;
@@ -808,6 +883,45 @@ export function useRepairsLane(
     return Math.max(0, (currentPage.applicable_in_class ?? 0) - settledInClass);
   }, [currentPage, rowClass, settledRowIds, planOpId, rowClasses]);
 
+  /** The titles of rows already read, for the confirm; unknown ids are left out. */
+  const targetsFor = useCallback(
+    (plan: string, ids: readonly string[]): RepairApplyTarget[] =>
+      ids.flatMap((id) => {
+        const t = rowTargets.current.get(`${plan}|${id}`);
+        return t ? [t] : [];
+      }),
+    []
+  );
+
+  /**
+   * The first applicable rows of the plan (less those settled), read for the
+   * apply-all confirm to name. One small read: the confirm still comes before
+   * every id is collected. A failed read gives none and the confirm shows the
+   * count alone; the apply itself reports a read that keeps failing.
+   */
+  const previewApplicable = useCallback(
+    async (
+      fixerId: string,
+      plan: string,
+      settled: ReadonlySet<string>,
+      rowClass?: string
+    ): Promise<RepairApplyTarget[]> => {
+      try {
+        const p = await api.getRepairPlanRows(fixerId, plan, {
+          filter: 'applicable',
+          offset: 0,
+          limit: Math.min(api.REPAIRS_ROWS_MAX_LIMIT, REPAIRS_APPLY_NAMED_ROWS + settled.size),
+          rowClass,
+        });
+        noteRowClasses(plan, p.rows);
+        return p.rows.filter((r) => !r.skipped && !settled.has(r.row_id)).map(repairApplyTarget);
+      } catch {
+        return [];
+      }
+    },
+    [noteRowClasses]
+  );
+
   const dispatch = useCallback(
     (action: RepairsAction) => {
       switch (action.type) {
@@ -817,7 +931,10 @@ export function useRepairsLane(
         case 'applyRows': {
           const ids = action.rowIds.filter((id) => !settledRowIds.has(id));
           if (ids.length === 0) return;
-          if (!window.confirm(repairApplyConfirmMessage(ids.length, fixerTitle(action.fixerId)))) {
+          const targets = targetsFor(action.planOpId, ids);
+          if (
+            !window.confirm(repairApplyConfirmMessage(ids.length, fixerTitle(action.fixerId), targets))
+          ) {
             return;
           }
           void runApply(action.fixerId, action.planOpId, async () => ids);
@@ -826,15 +943,26 @@ export function useRepairsLane(
         case 'applyAllApplicable': {
           // The count is the stored plan's own tally (which does not change)
           // less the rows this session already settled: exact before a single
-          // id is fetched, so the confirm comes first and a cancel sends
-          // nothing at all.
+          // id is collected, so the confirm comes first and a cancel sends
+          // nothing. The confirm names the first rows, read in one small
+          // request (the ids are still collected only after the yes).
           const n = remainingApplicable ?? 0;
           if (n === 0) return;
-          if (!window.confirm(repairApplyConfirmMessage(n, fixerTitle(action.fixerId)))) return;
           const settled = new Set(settledRowIds);
-          void runApply(action.fixerId, action.planOpId, () =>
-            collectApplicableIds(action.fixerId, action.planOpId, settled, action.rowClass)
-          );
+          void (async () => {
+            const targets = await previewApplicable(
+              action.fixerId,
+              action.planOpId,
+              settled,
+              action.rowClass
+            );
+            if (!window.confirm(repairApplyConfirmMessage(n, fixerTitle(action.fixerId), targets))) {
+              return;
+            }
+            await runApply(action.fixerId, action.planOpId, () =>
+              collectApplicableIds(action.fixerId, action.planOpId, settled, action.rowClass)
+            );
+          })();
           return;
         }
         case 'ownerApplyRow': {
@@ -859,13 +987,24 @@ export function useRepairsLane(
         }
       }
     },
-    [collectApplicableIds, fixerTitle, remainingApplicable, runApply, runTrial, settledRowIds]
+    [
+      collectApplicableIds,
+      fixerTitle,
+      previewApplicable,
+      remainingApplicable,
+      runApply,
+      runTrial,
+      settledRowIds,
+      targetsFor,
+    ]
   );
 
   const applyResult =
     selectedFixerId && applyResults[selectedFixerId]?.plan_op_id === planOpId
       ? applyResults[selectedFixerId]
       : null;
+
+  const appliedRows = applyResult && selectedFixerId ? (appliedTargets[selectedFixerId] ?? []) : [];
 
   const rowOutcomes = useMemo(() => new Map(Object.entries(planOutcomes)), [planOutcomes]);
 
@@ -909,6 +1048,7 @@ export function useRepairsLane(
     settledRowIds,
     remainingApplicable,
     applyResult,
+    appliedRows,
     rowOutcomes,
     dispatch,
   };

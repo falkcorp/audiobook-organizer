@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.25.1
+// version: 1.26.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-10
+// last-edited: 2026-10-20
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -60,6 +60,7 @@ import {
   REPAIRS_PAGE_SIZES,
   applySeverity,
   summarizeApply,
+  summarizeAppliedRows,
   type RepairTrialState,
   type RepairsLane,
 } from './lanes/useRepairsLane';
@@ -400,6 +401,10 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_moved_unproven: 'Move not proven (name and size only)',
   skipped_duration_gate: 'Files too long to be chapters',
   skipped_duration_unknown: 'Chapter durations unknown',
+  skipped_no_files: 'A book has no file rows',
+  held_duration_gate: 'Held: files too long to be chapters',
+  held_duration_unknown: 'Held: chapter durations unknown',
+  held_distinct_works: 'Held: looks like several books, not chapters',
   skipped_files_missing: 'Files missing on disk',
   skipped_unreadable: 'Could not read a file',
   skipped_track_order: 'Chapter order cannot be told',
@@ -711,6 +716,11 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
                 '. Rows marked "Retry later" could not be checked right now; apply them again in a few minutes.'}
               {(repairs.applyResult.by_outcome.canceled_skipped ?? 0) > 0 &&
                 '. The apply was canceled; rows marked "Canceled" were not applied, or were stopped partway. Apply them again to finish them.'}
+              {!repairs.applyResult.dry_run && repairs.appliedRows.length > 0 && (
+                <Typography variant="body2" sx={{ mt: 0.5 }} data-testid="repairs-apply-result-rows">
+                  {summarizeAppliedRows(repairs.appliedRows)}
+                </Typography>
+              )}
             </Alert>
           )}
 
