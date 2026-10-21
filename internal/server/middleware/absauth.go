@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package middleware
 
