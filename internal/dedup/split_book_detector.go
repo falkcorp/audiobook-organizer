@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
 // last-edited: 2026-10-20
 
@@ -225,14 +225,10 @@ func loadSlimBooks(ctx context.Context, store Store, progress func(loaded int)) 
 	return all, nil
 }
 
-// detectFromSlim is the fail-closed core: detectFromSlimWithVetoes without the
-// vetoed clusters. chapterMaxSec is the duration limit (RepairChapterMaxSec).
-func detectFromSlim(all []splitBookSlim, resolveAuthorName func(int) string, chapterMaxSec int) []SplitBookCandidate {
-	return withoutVetoed(detectFromSlimWithVetoes(all, resolveAuthorName, chapterMaxSec))
-}
-
 // detectFromSlimWithVetoes is the pure detection core; isolated from store
-// lookups so it can be unit-tested without a fake Store. A vetoed cluster is
+// lookups so it can be unit-tested without a fake Store. chapterMaxSec is the
+// duration limit (RepairChapterMaxSec). DetectSplitBookCandidates is this
+// through withoutVetoed (fail closed). A vetoed cluster is
 // returned (Vetoes set) AND claims its books exactly as a qualified one does,
 // so a later pass cannot re-emit the same books under another shape: the
 // veto is a property of the books, not of the pass that found them.
@@ -427,18 +423,11 @@ const yearFloor = 1900
 
 // sequentialRun checks whether nums form a near-sequential run: ≥70%
 // coverage of [min..max] across unique values, and no gap >2 between
-// successive unique values. A run containing a year (V5, any number
-// ≥ yearFloor) is no run.
-func sequentialRun(nums []int) (bool, string) {
-	ok, pattern, years := sequentialRunShape(nums)
-	return ok && !years, pattern
-}
-
-// sequentialRunShape is sequentialRun's shape test alone: ok says the numbers
-// are a near-sequential run, years that the run holds a year (V5). The
-// qualifiers use it so a year run comes back as a vetoed cluster with its
-// reason instead of vanishing.
-func sequentialRunShape(nums []int) (ok bool, pattern string, years bool) {
+// successive unique values. years reports that the run holds a year (V5, any
+// number ≥ yearFloor): dated editions, not chapters. The qualifiers turn it
+// into a V5 veto, so a year run comes back as a vetoed cluster with its reason
+// instead of vanishing.
+func sequentialRun(nums []int) (ok bool, pattern string, years bool) {
 	if len(nums) < 3 {
 		return false, "", false
 	}
@@ -599,7 +588,7 @@ func qualifyTypedGroup(group []splitBookSlim, parentKey, shape string, resolveAu
 		}
 		nums = append(nums, n)
 	}
-	ok, pattern, yearRun := sequentialRunShape(nums)
+	ok, pattern, yearRun := sequentialRun(nums)
 	if !ok {
 		return SplitBookCandidate{}, false
 	}
@@ -665,7 +654,7 @@ func qualifyRelaxedNumberedSiblingGroup(group []splitBookSlim, parentKey string,
 			return SplitBookCandidate{}, false
 		}
 	}
-	ok, pattern, yearRun := sequentialRunShape(nums)
+	ok, pattern, yearRun := sequentialRun(nums)
 	if !ok {
 		return SplitBookCandidate{}, false
 	}

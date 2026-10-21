@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_detector_veto_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d3a8e21-7c94-4b60-a1f2-9e0c4b7d6a35
 // last-edited: 2026-10-20
 
@@ -20,6 +20,12 @@ import (
 const testChapterMaxSec = 2 * 3600
 
 func secs(n int) *int { return &n }
+
+// detectKept is what the fail-closed DetectSplitBookCandidates returns for
+// slim books: the clusters with no veto.
+func detectKept(books []splitBookSlim, resolve func(int) string, chapterMaxSec int) []SplitBookCandidate {
+	return withoutVetoed(detectFromSlimWithVetoes(books, resolve, chapterMaxSec))
+}
 
 // vetoCodes is the rule codes ("V2", "V9", ...) a cluster carries, sorted,
 // each once.
@@ -58,7 +64,7 @@ func wantVetoed(t *testing.T, books []splitBookSlim, codes ...string) SplitBookC
 	if got := vetoCodes(c); !slices.Equal(got, codes) {
 		t.Fatalf("veto codes: want %v, got %v (%q)", codes, got, c.Vetoes)
 	}
-	if kept := detectFromSlim(books, nil, testChapterMaxSec); len(kept) != 0 {
+	if kept := detectKept(books, nil, testChapterMaxSec); len(kept) != 0 {
 		t.Fatalf("a vetoed cluster must not come back from the fail-closed detector: %+v", kept)
 	}
 	return c
@@ -70,7 +76,7 @@ func wantQualifies(t *testing.T, books []splitBookSlim) SplitBookCandidate {
 	if len(c.Vetoes) != 0 {
 		t.Fatalf("want a clean candidate, got vetoes %q", c.Vetoes)
 	}
-	if kept := detectFromSlim(books, nil, testChapterMaxSec); len(kept) != 1 {
+	if kept := detectKept(books, nil, testChapterMaxSec); len(kept) != 1 {
 		t.Fatalf("a clean cluster must come back from the fail-closed detector, got %d", len(kept))
 	}
 	return c
@@ -125,8 +131,8 @@ func TestVeto_YearsRun(t *testing.T) {
 			fmt.Sprintf("/lib/Author T/Best Stories/Best Stories %d.m4b", y), new(7), nil, secs(1800)))
 	}
 	wantVetoed(t, books, "V5")
-	if ok, _ := sequentialRun([]int{2010, 2011, 2012}); ok {
-		t.Error("sequentialRun must not accept a run of years")
+	if _, _, years := sequentialRun([]int{2010, 2011, 2012}); !years {
+		t.Error("sequentialRun must flag a run of years")
 	}
 }
 
@@ -333,7 +339,7 @@ func TestVetoedClusterClaimsItsBooks(t *testing.T) {
 	if len(got) != 1 || len(got[0].Vetoes) == 0 {
 		t.Fatalf("want one vetoed cluster and nothing else, got %+v", got)
 	}
-	if kept := detectFromSlim(books, nil, testChapterMaxSec); len(kept) != 0 {
+	if kept := detectKept(books, nil, testChapterMaxSec); len(kept) != 0 {
 		t.Fatalf("fail closed: %+v", kept)
 	}
 }
@@ -440,7 +446,7 @@ func TestVetoParityWithClassifier(t *testing.T) {
 			wantKept++
 		}
 	}
-	if kept := detectFromSlim(all, nil, testChapterMaxSec); len(kept) != wantKept {
+	if kept := detectKept(all, nil, testChapterMaxSec); len(kept) != wantKept {
 		t.Errorf("fail-closed detector keeps %d clusters, want %d", len(kept), wantKept)
 	}
 }
