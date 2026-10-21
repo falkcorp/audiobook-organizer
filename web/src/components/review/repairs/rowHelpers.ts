@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/rowHelpers.ts
-// version: 1.2.0
+// version: 1.2.1
 // guid: 21e5fc7d-cd22-4c0a-9773-b83015403a68
-// last-edited: 2026-10-11
+// last-edited: 2026-10-21
 
 /**
  * Pure helpers shared by the three repairs row views (Compact, Details,
@@ -129,6 +129,7 @@ export function classLabel(c: string): string {
 const CLASS_LABELS: Record<string, string> = {
   moved: 'Moved',
   copy: 'Copy',
+  'hash-copy': 'Single-file copy of a track (same file hash)',
   'no-parent': 'No parent',
   'manual-only': 'Manual only',
   ambiguous: 'Ambiguous',
