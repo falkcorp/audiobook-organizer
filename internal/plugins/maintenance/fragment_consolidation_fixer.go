@@ -427,7 +427,9 @@ func (f *fragmentFixer) Description() string {
 		"hour or more, no parent or copy in the library — one book, in number order. A numbered set whose folder " +
 		"names no work (chapter files directly in an author folder) takes its title from the album tag every file " +
 		"shares, and is held when they share none. Listening progress " +
-		"and external ids follow each retired fragment. Fragments iTunes knows about are combined like any other: " +
+		"and external ids follow each retired fragment. Hash copy: a single-file book of any title whose one " +
+		"file has the file hash of a present row of one live multi-file book — retire it into that book " +
+		"(held when two books match, skipped when a hash is missing). Fragments iTunes knows about are combined like any other: " +
 		"only database rows change (no file is moved and the iTunes library is never written). Doctor Who / " +
 		"Big Finish / Torchwood are listed for manual action only. Every step is undoable from the apply operation."
 }
@@ -712,6 +714,9 @@ type fragMatch struct {
 // candidate's own book are ignored. A tier that yields a match ends the
 // search.
 func (ix *fragIndex) match(c *fragCandidate) []fragMatch {
+	if c.HashCopy {
+		return ix.hashCopyMatch(c)
+	}
 	own := c.Book.ID
 	var out []fragMatch
 	// A finished step: some parent row already names the fragment's file.
@@ -762,6 +767,62 @@ func (ix *fragIndex) match(c *fragCandidate) []fragMatch {
 		}
 		out = append(out, fragMatch{Row: r, Evidence: ev})
 	}
+	return out
+}
+
+// hashCopyMatch is match for a hash-copy candidate (the owner's 2026-10-21
+// rule): the present rows of OTHER books whose current file hash equals the
+// candidate's, one per parent book (the lowest row id, so a parent that holds
+// the same file twice still gives one parent and the same row on every plan),
+// sorted by parent book id. Only the file hash counts: never the import path,
+// a finished step, or a name and size, so a hash-copy row can never repoint a
+// parent row. The index holds only live multi-file books' rows.
+func (ix *fragIndex) hashCopyMatch(c *fragCandidate) []fragMatch {
+	h := c.File.Hash
+	if h == "" {
+		return nil
+	}
+	best := map[string]fragFile{}
+	for _, r := range ix.byHash[h] {
+		if r.BookID == c.Book.ID || r.Missing || r.Hash != h {
+			continue
+		}
+		if cur, ok := best[r.BookID]; !ok || r.ID < cur.ID {
+			best[r.BookID] = r
+		}
+	}
+	parents := make([]string, 0, len(best))
+	for id := range best {
+		parents = append(parents, id)
+	}
+	sort.Strings(parents)
+	out := make([]fragMatch, 0, len(parents))
+	for _, id := range parents {
+		out = append(out, fragMatch{Row: best[id], Evidence: fragEvHash})
+	}
+	return out
+}
+
+// noHashMatches are the present parent rows a single-file book matches by
+// original name and size where the file hash is missing on one side (the
+// child's or the row's), so the hash-copy rule cannot decide: the book's
+// skipped_no_hash row lists them. Both hashes present and different is a
+// contradiction, and both present and equal is a hash match; neither is here.
+func (ix *fragIndex) noHashMatches(c *fragCandidate) []fragMatch {
+	if c.OrigName == "" || c.File.Size <= 0 {
+		return nil
+	}
+	var out []fragMatch
+	for _, r := range ix.byName[strings.ToLower(c.OrigName)] {
+		if r.BookID == c.Book.ID || r.Missing || r.Size != c.File.Size {
+			continue
+		}
+		if c.File.Hash != "" && r.Hash != "" {
+			continue
+		}
+		out = append(out, fragMatch{Row: r, Evidence: fragEvNameSize})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Row.ID < out[j].Row.ID })
 	return out
 }
 
@@ -978,10 +1039,11 @@ func importPathOf(hist []database.BookPathChange) string {
 	return ""
 }
 
-// candidateFrom builds a candidate from a live single-file book, or returns
-// false when the book carries no chapter evidence.
-func (f *fragmentFixer) candidateFrom(store OpsStore, b fragBook, file fragFile, hist FragmentRepairReader) (*fragCandidate, bool, error) {
-	c := &fragCandidate{Book: b, File: file, DiskSize: -1}
+// candidateBase reads the single-file book b's history and builds its
+// candidate without a stat. chapter says whether the book carries chapter
+// evidence (the gate candidateFrom applies).
+func (f *fragmentFixer) candidateBase(b fragBook, file fragFile, hist FragmentRepairReader) (c *fragCandidate, chapter bool, err error) {
+	c = &fragCandidate{Book: b, File: file, DiskSize: -1}
 	h, err := hist.GetBookPathHistory(b.ID)
 	if err != nil {
 		return nil, false, fmt.Errorf("path history of %s: %w", b.ID, err)
@@ -997,16 +1059,61 @@ func (f *fragmentFixer) candidateFrom(store OpsStore, b fragBook, file fragFile,
 		c.OrigName = filepath.Base(file.Path)
 	}
 	_, kind := metadata.ChapterGroupKey(c.origStem())
-	if kind == metadata.ChapterKeyNone && !metadata.IsChapterOnlyTitle(b.Title) {
-		return nil, false, nil
-	}
-	if fi, err := f.statFn(file.Path); err == nil {
+	chapter = kind != metadata.ChapterKeyNone || metadata.IsChapterOnlyTitle(b.Title)
+	return c, chapter, nil
+}
+
+// statCandidate records whether the candidate's own file is on disk.
+func (f *fragmentFixer) statCandidate(c *fragCandidate) {
+	if fi, err := f.statFn(c.File.Path); err == nil {
 		c.Present = true
 		c.DiskSize = fi.Size()
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		c.StatErr = err.Error()
 	}
+}
+
+// candidateFrom builds a candidate from a live single-file book, or returns
+// false when the book carries no chapter evidence.
+func (f *fragmentFixer) candidateFrom(store OpsStore, b fragBook, file fragFile, hist FragmentRepairReader) (*fragCandidate, bool, error) {
+	c, chapter, err := f.candidateBase(b, file, hist)
+	if err != nil || !chapter {
+		return nil, false, err
+	}
+	f.statCandidate(c)
 	return c, true, nil
+}
+
+// candidateOrHashCopy is candidateFrom for the paths that also admit the
+// hash-copy rule (Plan, and the re-plan of a hash-copy row): a book with
+// chapter evidence is the ordinary candidate; one without it is admitted
+// (HashCopy) only when its file row is present, carries a hash, and ix holds
+// a present row with that hash in another book. A book with no chapter
+// evidence that ix matches by name and size where a hash is missing comes
+// back with noHash set: c is then that book (never a candidate). Anything
+// else gives a nil c. ix is only read, so Plan's workers share it.
+func (f *fragmentFixer) candidateOrHashCopy(b fragBook, file fragFile, hist FragmentRepairReader, ix *fragIndex) (c *fragCandidate, noHash []fragMatch, err error) {
+	c, chapter, err := f.candidateBase(b, file, hist)
+	if err != nil {
+		return nil, nil, err
+	}
+	if chapter {
+		f.statCandidate(c)
+		return c, nil, nil
+	}
+	if file.Missing {
+		return nil, nil, nil
+	}
+	c.HashCopy = true
+	if len(ix.hashCopyMatch(c)) > 0 {
+		f.statCandidate(c)
+		return c, nil, nil
+	}
+	c.HashCopy = false
+	if nh := ix.noHashMatches(c); len(nh) > 0 {
+		return c, nh, nil
+	}
+	return nil, nil, nil
 }
 
 // fragLibrary is the library snapshot a plan reads.
@@ -1378,19 +1485,26 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	sort.Slice(singles, func(i, j int) bool { return singles[i].b.ID < singles[j].b.ID })
 
 	cands := make([]*fragCandidate, len(singles))
+	// noHashC and noHashM are the singles the hash-copy rule skipped for a
+	// missing hash, and their parent rows (candidateOrHashCopy).
+	noHashC := make([]*fragCandidate, len(singles))
+	noHashM := make([][]fragMatch, len(singles))
 	idx := make([]int, len(singles))
 	for i := range idx {
 		idx[i] = i
 	}
 	var done atomic.Int64
-	// Each worker writes only cands[i] for its own i.
+	// Each worker writes only cands[i], noHashC[i] and noHashM[i] for its own
+	// i; ix is complete before the pool starts and only read inside it.
 	if err := registry.RunItems(ctx, rep, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
-		c, ok, cerr := f.candidateFrom(store, singles[i].b, singles[i].file, hist)
+		c, nh, cerr := f.candidateOrHashCopy(singles[i].b, singles[i].file, hist, ix)
 		if cerr != nil {
 			return cerr
 		}
-		if ok {
+		if len(nh) > 0 {
+			noHashC[i], noHashM[i] = c, nh
+		} else {
 			cands[i] = c
 		}
 		return nil
@@ -1414,6 +1528,11 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 		return nil, err
 	}
 	rows := f.buildRows(lib, ix, live)
+	for i, c := range noHashC {
+		if c != nil {
+			rows = append(rows, f.noHashRow(lib, c, noHashM[i]))
+		}
+	}
 	holdInterruptedFolders(rows, intr)
 	f.holdCoOwned(lib, rows)
 	rows = append(rows, intr.rows...)
@@ -2990,6 +3109,12 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		ms = lib.withContent(c, ms)
 		matchOf[c] = ms
 		switch {
+		case c.HashCopy && len(ms) == 0:
+			// Admitted on a hash that matches no parent now (a re-plan after
+			// the parent changed): never a no-parent member. No row; the
+			// re-plan reports the planned row gone.
+		case c.HashCopy && len(parents) > 1:
+			rows = append(rows, f.hashCopyHeldRow(lib, c, ms, parents))
 		case len(ms) == 0:
 			unmatched = append(unmatched, c)
 		case c.StatErr != "":
@@ -3167,6 +3292,14 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		return keys[i].kind < keys[j].kind
 	})
 	for _, k := range keys {
+		if k.kind == fragClassHashCopy {
+			// One row per child: the plan's count is the number of
+			// proposals, and an apply or a refusal is per child.
+			for _, p := range pairs[k] {
+				rows = append(rows, f.parentRow(lib, k.parent, k.kind, []fragPair{p}))
+			}
+			continue
+		}
 		rows = append(rows, f.parentRow(lib, k.parent, k.kind, pairs[k]))
 	}
 	rows = append(rows, f.noParentRows(lib, unmatched)...)
@@ -3307,6 +3440,11 @@ func (f *fragmentFixer) splitOrphanTwins(lib *fragLibrary, parentID string, kept
 func (f *fragmentFixer) pairFor(c *fragCandidate, m fragMatch, lib *fragLibrary, ignored []string) (kind string, p fragPair, hold string) {
 	p = fragPair{Frag: c, Parent: m.Row, Evidence: m.Evidence, Done: m.Evidence == fragEvDone,
 		Slice: sliceIn(lib.files[m.Row.BookID], m.Row), IgnoredITunes: ignored}
+	if c.HashCopy {
+		// Proven by the hash alone; the parent's row is never repointed, so
+		// neither the child's nor the parent's file is stat'ed for the kind.
+		return fragClassHashCopy, p, ""
+	}
 	if !c.Present {
 		return fragClassGhost, p, ""
 	}
@@ -3399,6 +3537,46 @@ func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, cl
 	return r
 }
 
+// hashCopyHeldRow is the never-applied row of a hash-copy child whose hash
+// is carried by present rows of two or more live multi-file books
+// (held_ambiguous_parent): it lists every candidate parent and its row.
+func (f *fragmentFixer) hashCopyHeldRow(lib *fragLibrary, c *fragCandidate, ms []fragMatch, parents map[string]bool) repairs.Row {
+	why := fmt.Sprintf("has the file hash %s, which present rows of %d live multi-file books carry; which parent keeps it is the owner's decision", c.File.Hash, len(parents))
+	r := f.holdRow(lib, c, "held-ambiguous-parent", fragClassHashCopy, fragSkipAmbiguousParent, why, ms)
+	r.Current = map[string]string{"hash": c.File.Hash, "child_path": c.File.Path, "candidate_parents": strconv.Itoa(len(parents))}
+	r.Fingerprint = fragFingerprint(append([]string{"held-ambiguous-parent", c.Book.ID, c.File.Hash}, parentIDsOf(ms)...)...)
+	return r
+}
+
+// noHashRow is the never-applied row of a single-file book that matches a
+// present parent row by original name and size where a file hash is missing
+// (skipped_no_hash): nothing proves it a copy.
+func (f *fragmentFixer) noHashRow(lib *fragLibrary, c *fragCandidate, ms []fragMatch) repairs.Row {
+	var side []string
+	if c.File.Hash == "" {
+		side = append(side, "the book's file")
+	}
+	for _, m := range ms {
+		if m.Row.Hash == "" {
+			side = append(side, "parent "+m.Row.BookID+" row "+m.Row.ID)
+		}
+	}
+	why := fmt.Sprintf("matches present row(s) of %d multi-file book(s) by original name and size, but no file hash is recorded for %s, so it is not proven a copy; hash the file(s) and plan again",
+		len(parentIDsOf(ms)), strings.Join(uniqueSorted(side), ", "))
+	r := f.holdRow(lib, c, "no-hash", fragClassHashCopy, fragSkipNoHash, why, ms)
+	r.Current = map[string]string{"child_path": c.File.Path}
+	return r
+}
+
+// parentIDsOf is the sorted, distinct parent book ids of ms.
+func parentIDsOf(ms []fragMatch) []string {
+	var ids []string
+	for _, m := range ms {
+		ids = append(ids, m.Row.BookID)
+	}
+	return uniqueSorted(ids)
+}
+
 // parentRow is a moved or copy row: one parent and every fragment matched to
 // it in that kind (proven or not).
 func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pairs []fragPair) repairs.Row {
@@ -3413,6 +3591,10 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	}
 	r := repairs.Row{RowID: rowKind + ":" + parentID, Class: class, Title: parent.Title,
 		Author: lib.authorName(parent), Risk: repairs.RiskLow, Detail: pairs}
+	if rowKind == fragClassHashCopy {
+		// One row per child (buildRows passes exactly one pair).
+		r.RowID += "/" + pairs[0].Frag.Book.ID
+	}
 	r.BookIDs = []string{parentID}
 	r.Members = []repairs.RowMember{member(lib, parent, "parent")}
 	books := []fragBook{parent}
@@ -3430,8 +3612,15 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		if p.Done {
 			done++
 		}
-		r.Evidence = append(r.Evidence, fmt.Sprintf("%s ← parent row %s (%s): %s",
-			p.Frag.File.Path, p.Parent.ID, filepath.Base(p.Parent.Path), p.Evidence))
+		if rowKind == fragClassHashCopy {
+			// The child, the parent, the matching file paths and the hash.
+			r.Evidence = append(r.Evidence, fmt.Sprintf("child %s (%q) file %s ← parent %s (%q) row %s file %s: %s: %s",
+				p.Frag.Book.ID, p.Frag.Book.Title, p.Frag.File.Path, parentID, parent.Title, p.Parent.ID, p.Parent.Path,
+				p.Evidence, p.Frag.File.Hash))
+		} else {
+			r.Evidence = append(r.Evidence, fmt.Sprintf("%s ← parent row %s (%s): %s",
+				p.Frag.File.Path, p.Parent.ID, filepath.Base(p.Parent.Path), p.Evidence))
+		}
 		for _, it := range p.IgnoredITunes {
 			r.Evidence = append(r.Evidence, fmt.Sprintf("fragment %s also matches iTunes copy %s (%s): disregarded, never written",
 				p.Frag.Book.ID, it, lib.itunes[it]))
@@ -3441,6 +3630,9 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		// for the same decision.
 		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID,
 			strconv.FormatBool(provenMatch(rowKind, p.Evidence))}, "|"))
+		if rowKind == fragClassHashCopy {
+			fpParts = append(fpParts, "hash|"+p.Frag.File.Hash)
+		}
 		// A pair proven by its content carries the proof: both files'
 		// signatures as read (size, mtime, ctime, device, inode) and the
 		// digest. Replan restores it only while
@@ -3463,6 +3655,13 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		r.Current["content_proven"] = strconv.Itoa(len(st.ContentProofs))
 	}
 	switch rowKind {
+	case fragClassHashCopy:
+		p := pairs[0]
+		r.Current["hash"] = p.Frag.File.Hash
+		r.Current["child_path"] = p.Frag.File.Path
+		r.Current["parent_path"] = p.Parent.Path
+		r.Proposed = map[string]string{"action": fmt.Sprintf("retire single-file book %s into multi-file book %s (merge-style, undoable): its one file is already the parent's row %s; the parent's rows are not written and no book_file row is deleted", p.Frag.Book.ID, parentID, p.Parent.ID)}
+		r.Reason = fmt.Sprintf("single-file book %q holds a file with the same hash as a present row of live multi-file book %q", p.Frag.Book.Title, parent.Title)
 	case fragClassMoved, fragRowMovedUnproven:
 		r.Current["stale_parent_rows"] = strconv.Itoa(n - done)
 		r.Proposed = map[string]string{
@@ -5864,6 +6063,13 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 	switch class {
 	case fragClassMoved, fragClassCopy, fragClassGhost, fragRowCopyUnproven, fragRowMovedUnproven:
 		return f.replanParent(store, lib, hist, planned, rest)
+	case fragClassHashCopy:
+		parentID, _, _ := strings.Cut(rest, "/")
+		fresh, err := f.replanParent(store, lib, hist, planned, parentID)
+		if err != nil || !fresh.Applicable() {
+			return fresh, err
+		}
+		return f.hashCopyParentCheck(store, lib, planned, fresh, parentID)
 	case fragClassNoParent:
 		return f.replanGroup(ctx, store, lib, hist, planned, beat, pre)
 	case fragClassExistingBook:
@@ -5918,7 +6124,8 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 			frags = append(frags, id)
 		}
 	}
-	rows, why, err := f.rebuildParentRows(store, lib, hist, ps, parentID, frags)
+	rows, why, err := f.rebuildParentRows(store, lib, hist, ps, parentID, frags,
+		strings.HasPrefix(planned.RowID, fragClassHashCopy+":"))
 	if err != nil || why != "" {
 		return changedRow(planned, why), err
 	}
@@ -5933,7 +6140,11 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 // rebuildParentRows rebuilds the rows of parent parentID and fragments frags
 // from the stored state ps, and decides their co-owners again (holdCoOwned)
 // with the co-owners ps recorded loaded. A non-empty why is a change.
-func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, ps fragParentState, parentID string, frags []string) ([]repairs.Row, string, error) {
+//
+// hashCopy (a hash-copy row's re-plan) also admits a fragment with no chapter
+// evidence when its file hash matches a present row of the parent
+// (candidateOrHashCopy); every other caller keeps the chapter-evidence gate.
+func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, ps fragParentState, parentID string, frags []string, hashCopy bool) ([]repairs.Row, string, error) {
 	// The plan's content proofs, re-stat'ed (never re-read): a file that
 	// changed since the plan is a change, said as such.
 	if why := f.restoreContentProofs(lib, ps.ContentProofs); why != "" {
@@ -5996,11 +6207,20 @@ func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist
 		// A fragment a partial run already retired is still evaluated: its
 		// row is still there, and the parent's finished repoint names it.
 		b.SoftDeleted = false
-		c, ok, err := f.candidateFrom(store, b, lib.files[id][0], hist)
+		var c *fragCandidate
+		var err error
+		if hashCopy {
+			c, _, err = f.candidateOrHashCopy(b, lib.files[id][0], hist, ix)
+		} else {
+			var isCand bool
+			if c, isCand, err = f.candidateFrom(store, b, lib.files[id][0], hist); !isCand {
+				c = nil
+			}
+		}
 		if err != nil {
 			return nil, "", err
 		}
-		if !ok {
+		if c == nil {
 			return nil, fmt.Sprintf("fragment %s carries no chapter evidence now", id), nil
 		}
 		cands = append(cands, c)
@@ -6008,6 +6228,56 @@ func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist
 	rows := f.buildRows(lib, ix, cands)
 	f.holdCoOwned(lib, rows)
 	return rows, "", nil
+}
+
+// hashCopyParentCheck is the hash-copy row's re-check against the WHOLE
+// library, which the parent-only re-plan cannot see: every row anywhere that
+// carries the child's hash is read (BookFilesWithHash), and the row changes
+// when a live multi-file book other than the parent holds a present row with
+// it (a second parent appeared since the plan, held_ambiguous_parent at plan
+// time). An index that cannot answer (ErrBookFilesWithHashUnavailable) fails
+// closed: the row changes rather than retiring a book unchecked.
+func (f *fragmentFixer) hashCopyParentCheck(store OpsStore, lib *fragLibrary, planned, fresh repairs.Row, parentID string) (repairs.Row, error) {
+	for _, id := range fresh.BookIDs {
+		if id == parentID {
+			continue
+		}
+		rows := lib.files[id]
+		if len(rows) != 1 || rows[0].Hash == "" {
+			return changedRow(planned, fmt.Sprintf("fragment %s no longer holds one hashed file row", id)), nil
+		}
+		hash := rows[0].Hash
+		found, err := store.BookFilesWithHash(hash)
+		if errors.Is(err, database.ErrBookFilesWithHashUnavailable) {
+			return changedRow(planned, "the hash index cannot answer, so a second parent of "+id+" cannot be ruled out; plan again"), nil
+		}
+		if err != nil {
+			return repairs.Row{}, fmt.Errorf("rows with hash %s: %w", hash, err)
+		}
+		seen := map[string]bool{id: true, parentID: true}
+		for i := range found {
+			other := found[i].BookID
+			if seen[other] || found[i].Missing || found[i].FileHash != hash {
+				continue
+			}
+			seen[other] = true
+			ob, err := store.GetBookByID(other)
+			if err != nil {
+				return repairs.Row{}, fmt.Errorf("read %s: %w", other, err)
+			}
+			if ob == nil || ob.IsSoftDeleted() {
+				continue
+			}
+			files, err := store.GetBookFiles(other)
+			if err != nil {
+				return repairs.Row{}, fmt.Errorf("read files of %s: %w", other, err)
+			}
+			if len(files) >= 2 {
+				return changedRow(planned, fmt.Sprintf("live multi-file book %s also holds a present row with the hash of %s: more than one parent", other, id)), nil
+			}
+		}
+	}
+	return fresh, nil
 }
 
 // replanJoin re-plans an existing-book row from its own books: the target
@@ -6078,7 +6348,7 @@ func (f *fragmentFixer) replanJoin(ctx context.Context, store OpsStore, lib *fra
 		if len(st.ParentState) > 0 && json.Unmarshal(st.ParentState, &ps) != nil {
 			return changedRow(planned, "the plan's stored parent state is unreadable; plan again"), nil
 		}
-		rows, why, err := f.rebuildParentRows(store, lib, hist, ps, st.FromParent, frags)
+		rows, why, err := f.rebuildParentRows(store, lib, hist, ps, st.FromParent, frags, false)
 		if err != nil || why != "" {
 			return changedRow(planned, why), err
 		}
@@ -7114,6 +7384,8 @@ func rowParent(r *repairs.Row) string {
 		return ""
 	}
 	_, parentID, _ := strings.Cut(r.RowID, ":")
+	// A hash-copy row is "hash-copy:<parent>/<child>".
+	parentID, _, _ = strings.Cut(parentID, "/")
 	return parentID
 }
 
@@ -7495,7 +7767,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		}
 		return nil
 	case []fragPair:
-		_, parentID, _ := strings.Cut(locked.RowID, ":")
+		parentID := rowParent(&locked)
 		// A parent row is repointed once per row, and from the pair that
 		// carries the file's own facts: a path twin's pair names the same
 		// parent row and the same file as its donor's but has no hash or
