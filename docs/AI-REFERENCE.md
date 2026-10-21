@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.7.2 -->
+<!-- version: 1.7.3 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-21 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -430,6 +430,21 @@ Key format note: `<id16hex>` is a 16-character lowercase hex string encoding a s
 
 **Index-maintenance invariant** (fixed 2026-07-17): `DeleteCandidate` deletes all four candidate key families in one batch — `dedup:r:`, `dedup:p:`, both `dedup:e:` entries, and `dedup:s:`. Any bulk delete/purge path MUST do the same; deleting only `dedup:r:` leaves orphaned pair/entity/status index rows that block re-emission and corrupt status-filtered counts. Status changes must move the `dedup:s:` row (delete old-status key, write new-status key) — see `UpdateCandidateStatus` / `WriteCandidateStatusIndexRow` in `embedding_store.go`.
 
+
+### Decisions keyspace (internal/decisions, main audiobooks.pebble DB)
+
+```
+decision:r:<ULID>                                              → Record JSON       (append-only log; one labelled example per decision)
+decision:v:<op_kind>:<subject_key>                             → Verdict JSON      (current reject state: none|active|unrejected|reopened)
+decision:pe:<type>:<lo>:<hi>:<family>:<record_id>              → (empty)           (pair-edge veto; one row per rejecting record, so un-rejecting one owner keeps a shared pair vetoed)
+decision:mb:<type>:<id>:<family>:<record_id>                   → (empty)           (membership row for a rejected set over 50 entities; vetoes every pair inside it)
+decision:ent:<type>:<id>:<ULID>                                → (empty)           (history of one entity)
+decision:op:<op_kind>:<ULID>                                   → (empty)           (history of one op kind; export order)
+```
+
+Every variable component is escaped (`%` and `:` and control bytes become `%XX`) so an `op_kind` such as `repairs:dedup.split-books` cannot be mistaken for a delimiter. `<subject_key>` is `SubjectKey(op_kind, entity_type, ids, scope)` (sha256 hex, ids sorted and de-duplicated, length-prefixed fields; frozen by golden vectors). A record, its verdict and its veto rows are written with one `ApplyRawBatch` commit.
+
+**Durability invariant**: `decision:` keys are never pruned and have no TTL. They are owner decisions and training data. `internal/decisions/retention_test.go` runs every prune/sweep entry point and fails when a new one is added without coverage; only `internal/decisions` may build `decision:` keys.
 ---
 
 ## Critical Implementation Details

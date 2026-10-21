@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: f45601a9-ba63-4626-ad91-75720525f1be
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 // Timeline indexes for opv2 operation rows.
 //
@@ -116,7 +116,7 @@ var errOpv2OpRawKey = errors.New("opv2: raw write refused")
 var opv2RawRefusedPrefixes = []string{opv2OpPrefix, opv2OpenPrefix, opv2DonePrefix}
 
 // rejectOpv2OpRawKey is the runtime half of the row-write ratchet: the raw
-// key-value entry points (SetRaw, DeleteRaw, DeleteRawBatch) take a key
+// key-value entry points (SetRaw, DeleteRaw, DeleteRawBatch, ApplyRawBatch) take a key
 // built anywhere, which the AST ratchet cannot follow, so they refuse the
 // operation-row and timeline-index prefixes outright. A raw write to either
 // would let the row and its index key disagree; rows must go through

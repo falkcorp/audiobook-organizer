@@ -1,7 +1,7 @@
 // file: internal/database/ident_state_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 325f377a-6217-41c5-9b34-7f92c945f8d9
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package database
 
@@ -212,11 +212,23 @@ func identRandomOp(s *PebbleStore, pool *identPool, r *rand.Rand) error {
 		}
 		return s.SetRaw(metadataCacheKeyPrefix+id, data)
 	case 7: // raw delete, single or batched with another book's row
-		if r.Intn(2) == 0 {
+		switch r.Intn(3) {
+		case 0:
 			return s.DeleteRaw(metadataCacheKeyPrefix + id)
+		case 1:
+			_, other := pool.pick(r)
+			return s.DeleteRawBatch([]string{metadataCacheKeyPrefix + id, metadataCacheKeyPrefix + other})
 		}
+		// A mixed atomic batch: set this book's row, delete another's.
 		_, other := pool.pick(r)
-		return s.DeleteRawBatch([]string{metadataCacheKeyPrefix + id, metadataCacheKeyPrefix + other})
+		data, err := json.Marshal(&MetadataCandidateCache{BookID: id, Candidates: identCands(r.Intn(3))})
+		if err != nil {
+			return err
+		}
+		return s.ApplyRawBatch([]RawWrite{
+			{Key: metadataCacheKeyPrefix + id, Value: data},
+			{Key: metadataCacheKeyPrefix + other, Delete: true},
+		})
 	case 8: // trash toggle
 		v := r.Intn(2) == 0
 		return modify(func(b *Book) { b.MarkedForDeletion = &v })

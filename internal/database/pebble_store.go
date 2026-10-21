@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.231.1
+// version: 1.231.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-21
 
@@ -5645,7 +5645,7 @@ func (p *PebbleStore) recomputeDurationMap(bookNumericID int) error {
 
 // ---- Operation State Persistence (resumable operations) ----
 
-// SetRaw, DeleteRaw and DeleteRawBatch refuse opv2:op: keys
+// SetRaw, DeleteRaw, DeleteRawBatch and ApplyRawBatch refuse opv2:op: keys
 // (rejectOpv2OpRawKey): those rows must be written through commitOpV2Row so
 // the timeline index changes in the same batch.
 //
