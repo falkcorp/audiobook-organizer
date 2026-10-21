@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-19-invite-email-executive-summary.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.14.0 -->
 <!-- guid: dcdc41d2-cf49-46aa-bf82-9b7b4fe9160a -->
 <!-- last-edited: 2026-10-21 -->
 
@@ -175,4 +175,8 @@ home from opening an invite: devices that reach the server directly on the
 home network have an allowance of their own, outside the overall one. A
 machine at home that sends Cloudflare's headers without being one of the
 listed relays is held to a quarter of the overall allowance, however many
-addresses it uses, so it cannot use up everyone else's.
+addresses it uses, so it cannot use up everyone else's. Emergency recovery
+attempts from the home network are capped at 50 an hour in total, however
+many addresses a machine uses; attempts made on the server itself are not
+counted against that cap, so recovery from the server always remains
+possible.

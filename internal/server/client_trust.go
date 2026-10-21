@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
@@ -70,8 +70,11 @@ const (
 	// rejectNoZone: an IPv6 link-local entry without a zone.
 	rejectNoZone
 	// rejectUnknownZone: an IPv6 link-local entry whose zone names no
-	// interface of this host.
+	// interface of this host (yet: tunnelConnectorPeers retries it).
 	rejectUnknownZone
+	// rejectAmbiguousZone: an IPv6 link-local entry whose zone matches no
+	// interface exactly and more than one ignoring case.
+	rejectAmbiguousZone
 )
 
 // parseConnectorPeers parses a comma-separated address list. A link-local
@@ -82,7 +85,8 @@ const (
 // always carries the name: a numeric zone (fe80::5%2) or one in the wrong
 // case (fe80::5%ETH0) would otherwise be accepted and never match. An entry
 // that is not an address, a link-local one without a zone, or one whose zone
-// names no interface is refused (rejected) and NOT trusted. Any other entry
+// names no interface or, ignoring case, more than one, is refused
+// (rejected) and NOT trusted. Any other entry
 // is kept without a zone, which it cannot meaningfully carry.
 func parseConnectorPeers(csv string) (peers connectorPeers, rejected []connectorReject) {
 	for _, part := range strings.Split(csv, ",") {
@@ -101,9 +105,13 @@ func parseConnectorPeers(csv string) (peers connectorPeers, rejected []connector
 				rejected = append(rejected, connectorReject{part, rejectNoZone})
 				continue
 			}
-			name, ok := resolveZone(a.Zone())
-			if !ok {
+			name, m := resolveZone(a.Zone())
+			switch m {
+			case zoneUnknown:
 				rejected = append(rejected, connectorReject{part, rejectUnknownZone})
+				continue
+			case zoneAmbiguous:
+				rejected = append(rejected, connectorReject{part, rejectAmbiguousZone})
 				continue
 			}
 			a = a.WithZone(name)
@@ -113,36 +121,76 @@ func parseConnectorPeers(csv string) (peers connectorPeers, rejected []connector
 	return peers, rejected
 }
 
-// resolveZone returns the name of the interface zone names (lookupZoneInterface),
-// and false when it names none. A variable so tests can describe a host.
-var resolveZone = func(zone string) (string, bool) {
-	ifi, err := lookupZoneInterface(zone)
+// zoneMatch is how a zone matched this host's interfaces (matchZone).
+type zoneMatch int
+
+const (
+	zoneFound zoneMatch = iota
+	zoneUnknown
+	zoneAmbiguous
+)
+
+// resolveZone resolves a zone written in TUNNEL_CONNECTOR_ADDRS to the
+// interface's name (matchZone with the case-insensitive fallback). Config
+// parsing only: a peer's zone is always the exact kernel name, so the trust
+// path uses lookupZoneInterface, which never folds case. A variable so tests
+// can describe a host.
+var resolveZone = func(zone string) (string, zoneMatch) {
+	ifs, err := net.Interfaces()
 	if err != nil {
-		return "", false
+		return "", zoneUnknown
 	}
-	return ifi.Name, true
+	return matchZone(zone, ifs, true)
 }
 
-// lookupZoneInterface finds the interface an IPv6 zone names: by index for a
-// numeric zone, otherwise by name, falling back to a case-insensitive match
-// (interface names are case-sensitive, so ETH0 for eth0 is a typo, not a
-// different interface, unless one by that exact name exists).
-func lookupZoneInterface(zone string) (*net.Interface, error) {
-	if n, err := strconv.Atoi(zone); err == nil {
-		return net.InterfaceByIndex(n)
+// matchZone finds the interface zone names among ifs: the exact name first,
+// then a numeric zone as an index, then, only when foldCase is set (config
+// parsing), a case-insensitive name match, which must be unique: two names
+// that fold to the zone with neither exact (eth0 and Eth0 for ETH0) is
+// ambiguous rather than a guess.
+func matchZone(zone string, ifs []net.Interface, foldCase bool) (string, zoneMatch) {
+	for _, ifi := range ifs {
+		if ifi.Name == zone {
+			return ifi.Name, zoneFound
+		}
 	}
+	if n, err := strconv.Atoi(zone); err == nil {
+		for _, ifi := range ifs {
+			if ifi.Index == n {
+				return ifi.Name, zoneFound
+			}
+		}
+		return "", zoneUnknown
+	}
+	if !foldCase {
+		return "", zoneUnknown
+	}
+	name, found := "", 0
+	for _, ifi := range ifs {
+		if strings.EqualFold(ifi.Name, zone) {
+			name, found = ifi.Name, found+1
+		}
+	}
+	switch found {
+	case 0:
+		return "", zoneUnknown
+	case 1:
+		return name, zoneFound
+	default:
+		return "", zoneAmbiguous
+	}
+}
+
+// lookupZoneInterface finds the interface a PEER's zone names, for the trust
+// path: the exact name first (net.InterfaceByName), then a numeric zone as an
+// index. No case folding: Go fills a peer's zone from the kernel, exactly.
+func lookupZoneInterface(zone string) (*net.Interface, error) {
 	ifi, err := net.InterfaceByName(zone)
 	if err == nil {
 		return ifi, nil
 	}
-	ifs, lerr := net.Interfaces()
-	if lerr != nil {
-		return nil, err
-	}
-	for i := range ifs {
-		if strings.EqualFold(ifs[i].Name, zone) {
-			return &ifs[i], nil
-		}
+	if n, aerr := strconv.Atoi(zone); aerr == nil {
+		return net.InterfaceByIndex(n)
 	}
 	return nil, err
 }
@@ -181,38 +229,73 @@ func parseTrustAddr(s string) (netip.Addr, bool) {
 
 var clientTrustLog = logger.New("server.client-trust")
 
-var (
-	connectorPeersMu  sync.Mutex
-	connectorPeersRaw string
-	connectorPeersVal connectorPeers
-	connectorPeersSet bool
-)
+// connectorRetryAfter is how long a parse of TUNNEL_CONNECTOR_ADDRS that
+// refused an entry for an unknown zone is reused before it is parsed again:
+// the interface may come up after the server starts (a VLAN or bridge
+// created later), and the entry should then be trusted without a restart.
+const connectorRetryAfter = 30 * time.Second
 
-// tunnelConnectorPeers returns the configured connector addresses, parsed once
-// per distinct configured value; an invalid entry is logged once and ignored.
+// connectorCache is the parsed TUNNEL_CONNECTOR_ADDRS: parsed once per
+// distinct value, and again every connectorRetryAfter while an entry is
+// refused for an unknown zone. Refusals are logged once per distinct set,
+// not at every retry.
+type connectorCache struct {
+	mu       sync.Mutex
+	set      bool
+	raw      string
+	at       time.Time
+	peers    connectorPeers
+	retry    bool   // the last parse refused an entry for an unknown zone
+	reported string // the refusals last logged
+}
+
+var tunnelConnectors connectorCache
+
+// tunnelConnectorPeers returns the configured connector addresses
+// (connectorCache); an invalid entry is logged and ignored.
 func tunnelConnectorPeers() connectorPeers {
-	raw := config.TunnelConnectorAddrs()
-	connectorPeersMu.Lock()
-	defer connectorPeersMu.Unlock()
-	if !connectorPeersSet || raw != connectorPeersRaw {
-		peers, rejected := parseConnectorPeers(raw)
-		notIP := 0
-		for _, r := range rejected {
-			switch r.reason {
-			case rejectNotIP:
-				notIP++
-			case rejectNoZone:
-				clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q is an IPv6 link-local address without a zone; ignored, because a link-local address is only unique per interface. Write it with the interface it arrives on, e.g. %s%%eth0", r.entry, r.entry)
-			case rejectUnknownZone:
-				clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q names an interface this host does not have; ignored. Write the zone as the name of the interface the connector arrives on, e.g. fe80::5%%eth0", r.entry)
-			}
-		}
-		if notIP > 0 {
-			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS has %d entries that are not IP addresses; ignored", notIP)
-		}
-		connectorPeersRaw, connectorPeersVal, connectorPeersSet = raw, peers, true
+	return tunnelConnectors.get(config.TunnelConnectorAddrs(), time.Now())
+}
+
+func (cc *connectorCache) get(raw string, now time.Time) connectorPeers {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	if cc.set && raw == cc.raw && !(cc.retry && now.Sub(cc.at) >= connectorRetryAfter) {
+		return cc.peers
 	}
-	return connectorPeersVal
+	peers, rejected := parseConnectorPeers(raw)
+	cc.set, cc.raw, cc.at, cc.peers, cc.retry = true, raw, now, peers, false
+	for _, r := range rejected {
+		if r.reason == rejectUnknownZone {
+			cc.retry = true
+		}
+	}
+	if key := fmt.Sprint(rejected); key != cc.reported {
+		cc.reported = key
+		reportConnectorRejects(rejected)
+	}
+	return peers
+}
+
+// reportConnectorRejects logs why each TUNNEL_CONNECTOR_ADDRS entry was
+// refused.
+func reportConnectorRejects(rejected []connectorReject) {
+	notIP := 0
+	for _, r := range rejected {
+		switch r.reason {
+		case rejectNotIP:
+			notIP++
+		case rejectNoZone:
+			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q is an IPv6 link-local address without a zone; ignored, because a link-local address is only unique per interface. Write it with the interface it arrives on, e.g. %s%%eth0", r.entry, r.entry)
+		case rejectUnknownZone:
+			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q names an interface this host does not have; ignored until it appears (checked again every %s). Write the zone as the name of the interface the connector arrives on, e.g. fe80::5%%eth0", r.entry, connectorRetryAfter)
+		case rejectAmbiguousZone:
+			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q matches more than one interface name ignoring case and none exactly; ignored. Write the interface name exactly", r.entry)
+		}
+	}
+	if notIP > 0 {
+		clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS has %d entries that are not IP addresses; ignored", notIP)
+	}
 }
 
 // clientTrust is what trustedClientIP needs to decide whose word to take.
@@ -401,12 +484,69 @@ var onLinkCache struct {
 	prefixes []netip.Prefix
 }
 
-// onLinkIPv6Prefixes returns the global-unicast IPv6 prefixes on-link on
-// this host's interfaces (the prefix of each assigned global address, e.g.
-// the /64 of a SLAAC address), read with one net.InterfaceAddrs() call at
-// most every onLinkPrefixTTL; on a read error the previous list is kept. A
-// variable so tests can describe a host.
-var onLinkIPv6Prefixes = func() []netip.Prefix {
+// onLinkIface is one interface as onLinkPrefixesOf sees it.
+type onLinkIface struct {
+	flags net.Flags
+	addrs []net.Addr
+}
+
+// hostOnLinkIfaces lists this host's interfaces with their flags and
+// addresses. A variable so tests can describe a host.
+var hostOnLinkIfaces = func() ([]onLinkIface, error) {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]onLinkIface, 0, len(ifs))
+	for _, ifi := range ifs {
+		addrs, err := ifi.Addrs()
+		if err != nil {
+			continue
+		}
+		out = append(out, onLinkIface{flags: ifi.Flags, addrs: addrs})
+	}
+	return out, nil
+}
+
+// onLinkMinPrefixBits is the widest on-link prefix counted as LAN: a /64,
+// the size of one IPv6 link. A wider one (a /48 assigned to an interface)
+// spans more than the segment the host is on, so being in it proves little.
+const onLinkMinPrefixBits = 64
+
+// onLinkPrefixesOf returns the on-link prefixes isLANAddr counts: for each
+// interface that is up, broadcast-capable (a shared segment such as Ethernet
+// or Wi-Fi) and not point-to-point (a tunnel, VPN or PPP link, whose prefix
+// covers the far side), the prefix of each global-unicast, non-ULA IPv6
+// address on it whose length is /64 or narrower and not /128.
+func onLinkPrefixesOf(ifaces []onLinkIface) []netip.Prefix {
+	var out []netip.Prefix
+	for _, ifi := range ifaces {
+		if ifi.flags&net.FlagUp == 0 || ifi.flags&net.FlagBroadcast == 0 || ifi.flags&net.FlagPointToPoint != 0 {
+			continue
+		}
+		for _, ad := range ifi.addrs {
+			ipn, ok := ad.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			a, ok := netip.AddrFromSlice(ipn.IP)
+			if !ok {
+				continue
+			}
+			a = a.WithZone("").Unmap()
+			ones, bits := ipn.Mask.Size()
+			if !isOnLinkGlobalIPv6(a) || bits != 128 || ones < onLinkMinPrefixBits || ones == 128 {
+				continue
+			}
+			out = append(out, netip.PrefixFrom(a, ones).Masked())
+		}
+	}
+	return out
+}
+
+// onLinkIPv6Prefixes returns onLinkPrefixesOf(this host's interfaces), read
+// at most every onLinkPrefixTTL; on a read error the previous list is kept.
+func onLinkIPv6Prefixes() []netip.Prefix {
 	onLinkCache.mu.Lock()
 	defer onLinkCache.mu.Unlock()
 	now := time.Now()
@@ -414,29 +554,12 @@ var onLinkIPv6Prefixes = func() []netip.Prefix {
 		return onLinkCache.prefixes
 	}
 	onLinkCache.at = now
-	addrs, err := net.InterfaceAddrs()
+	ifaces, err := hostOnLinkIfaces()
 	if err != nil {
 		return onLinkCache.prefixes
 	}
-	var out []netip.Prefix
-	for _, ad := range addrs {
-		ipn, ok := ad.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		a, ok := netip.AddrFromSlice(ipn.IP)
-		if !ok {
-			continue
-		}
-		a = a.WithZone("").Unmap()
-		ones, bits := ipn.Mask.Size()
-		if !isOnLinkGlobalIPv6(a) || bits != 128 || ones == 0 || ones == 128 {
-			continue
-		}
-		out = append(out, netip.PrefixFrom(a, ones).Masked())
-	}
-	onLinkCache.prefixes = out
-	return out
+	onLinkCache.prefixes = onLinkPrefixesOf(ifaces)
+	return onLinkCache.prefixes
 }
 
 // isOnLinkGlobalIPv6 reports whether a is the kind of address an on-link
@@ -514,14 +637,15 @@ func directLANPeer(c *gin.Context, connectors connectorPeers) bool {
 	return !hasCloudflareMarkers(c)
 }
 
-// isLANAddr reports whether a is only reachable from this network: private
-// (RFC 1918 / ULA), link-local, loopback, or a global IPv6 address inside a
-// prefix on-link on one of this host's interfaces (onLinkIPv6Prefixes: home
-// IPv6 LANs mostly use the ISP's global /64, not ULA). A peer cannot claim
-// such an address over TCP without being on that link: the handshake's
-// replies are delivered on-link, so a spoofed source never completes it.
-// Global IPv4 on-link prefixes are not counted: a public IPv4 /24 on a
-// hosting provider's segment is shared with other customers.
+// isLANAddr reports whether a is a LAN address: private (RFC 1918 / ULA),
+// link-local or loopback, or a global-unicast IPv6 address inside one of
+// onLinkIPv6Prefixes, i.e. the /64 (or narrower) prefix of a global address
+// assigned to an up, broadcast-capable, non-point-to-point interface of this
+// host (home IPv6 LANs mostly use the ISP's global /64, not ULA). A peer
+// cannot complete a TCP handshake from such an address without being on that
+// segment, since the replies are delivered on-link. Global IPv4 prefixes are
+// never counted: a public IPv4 /24 on a hosting provider's segment is shared
+// with other customers.
 func isLANAddr(a netip.Addr) bool {
 	if a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLoopback() {
 		return true

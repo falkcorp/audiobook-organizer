@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-21
 
@@ -698,5 +698,60 @@ func TestBootstrapLimiter_RefusedByAnAggregateSpendsNothing(t *testing.T) {
 	}
 	if l.global.count != bootstrapMaxAttempts {
 		t.Fatalf("global count %d, want %d (the refused attempt spent it)", l.global.count, bootstrapMaxAttempts)
+	}
+}
+
+// Round 8: the bootstrap direct path has a total, as the invite one does.
+// One direct LAN host rotating 100 IPv4 aliases (no prefix window for IPv4)
+// gets a fresh 5-attempt window per alias, but all direct traffic shares
+// the direct total, so it stops there; it never touched the global ceiling,
+// and loopback (the owner's recovery from the server itself) is outside the
+// total, so it still gets its full window.
+func TestBootstrapLimiter_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	admitted := 0
+	for i := range 100 {
+		if bootstrapAttemptFrom(l, fmt.Sprintf("10.0.%d.%d:4000", i/200, i%200+1)) {
+			admitted++
+		}
+	}
+	if want := bootstrapDirectLANTotalFactor * bootstrapMaxAttempts; admitted != want {
+		t.Fatalf("direct IPv4 alias rotation: %d of 100 admitted, want the direct total %d", admitted, want)
+	}
+	l.mu.Lock()
+	global := l.global.count
+	l.mu.Unlock()
+	if global != 0 {
+		t.Fatalf("direct attempts spent %d of the global ceiling, want 0", global)
+	}
+	for _, lo := range []string{"127.0.0.1:4000", "[::1]:4000"} {
+		n := 0
+		for range bootstrapMaxAttempts + 2 {
+			if bootstrapAttemptFrom(l, lo) {
+				n++
+			}
+		}
+		if n != bootstrapMaxAttempts {
+			t.Fatalf("loopback %s after the direct total was spent: %d admitted, want %d", lo, n, bootstrapMaxAttempts)
+		}
+	}
+}
+
+// Round 8: a direct host rotating across many ULA /64s gets a fresh /64
+// window each time; the direct total is what stops it.
+func TestBootstrapLimiter_DirectRotationAcrossSlash64sIsCappedByTheDirectTotal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	admitted := 0
+	for i := range 60 {
+		for j := range 3 {
+			if bootstrapAttemptFrom(l, fmt.Sprintf("[fd12:3456:%x::%x]:4000", 0x100+i, j+1)) {
+				admitted++
+			}
+		}
+	}
+	if want := bootstrapDirectLANTotalFactor * bootstrapMaxAttempts; admitted != want {
+		t.Fatalf("direct rotation across 60 /64s: %d of 180 admitted, want the direct total %d", admitted, want)
 	}
 }
