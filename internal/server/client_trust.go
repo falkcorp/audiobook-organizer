@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -27,17 +28,21 @@ import (
 const untrustedLocalClientKey = "untrusted-local"
 
 // connectorPeers is the set of addresses the Cloudflare tunnel connectors
-// connect to this service from (config TUNNEL_CONNECTOR_ADDRS).
+// connect to this service from (config TUNNEL_CONNECTOR_ADDRS), in
+// trust form (trustAddr): an IPv6 link-local entry carries its zone.
 type connectorPeers []netip.Addr
 
 // contains reports whether remoteAddr ("host:port" or a bare host) is one of
-// the configured connector addresses. IPv4-mapped IPv6 forms match their IPv4
-// address, and a zone is ignored ("[fe80::5%en0]:4000" matches fe80::5).
+// the configured connector addresses, compared in trust form (parseTrustAddr):
+// IPv4-mapped IPv6 forms match their IPv4 address, and an IPv6 link-local
+// address matches only with the same zone, since fe80::5 on en0 and fe80::5
+// on en1 are different hosts ("[fe80::5%en0]:4000" matches fe80::5%en0, not
+// fe80::5%en1).
 func (p connectorPeers) contains(remoteAddr string) bool {
 	if len(p) == 0 {
 		return false
 	}
-	a, ok := parseHostAddr(remoteAddr)
+	a, ok := parseTrustAddr(remoteAddr)
 	if !ok {
 		return false
 	}
@@ -50,8 +55,12 @@ func (p connectorPeers) contains(remoteAddr string) bool {
 }
 
 // parseConnectorPeers parses a comma-separated address list. Entries that are
-// not IP addresses are returned in bad and are NOT trusted.
-func parseConnectorPeers(csv string) (peers connectorPeers, bad []string) {
+// not IP addresses are returned in bad, and IPv6 link-local entries without a
+// zone in noZone; neither is trusted. A link-local address is only unique per
+// interface, so a zoneless one would trust that address arriving on every
+// interface: it must be written with its zone (fe80::5%eth0). Any other
+// entry is kept without a zone, which it cannot meaningfully carry.
+func parseConnectorPeers(csv string) (peers connectorPeers, bad, noZone []string) {
 	for _, part := range strings.Split(csv, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -62,9 +71,46 @@ func parseConnectorPeers(csv string) (peers connectorPeers, bad []string) {
 			bad = append(bad, part)
 			continue
 		}
-		peers = append(peers, a.WithZone("").Unmap())
+		a = trustAddr(a)
+		if needsZone(a) && a.Zone() == "" {
+			noZone = append(noZone, part)
+			continue
+		}
+		peers = append(peers, a)
 	}
-	return peers, bad
+	return peers, bad, noZone
+}
+
+// needsZone reports whether a is an IPv6 link-local address, which is unique
+// only together with its zone (the interface). IPv4 link-local addresses
+// carry no zone in Go's address forms, so they are compared as they are.
+func needsZone(a netip.Addr) bool { return a.Is6() && a.IsLinkLocalUnicast() }
+
+// trustAddr is a in the form trust decisions compare: IPv4-mapped forms
+// unmapped, and the zone kept only on an IPv6 link-local address (needsZone).
+func trustAddr(a netip.Addr) netip.Addr {
+	a = a.Unmap()
+	if !needsZone(a) {
+		a = a.WithZone("")
+	}
+	return a
+}
+
+// parseTrustAddr parses "host:port", "[v6%zone]:port" or a bare address into
+// trust form (trustAddr). Every trust decision (is this peer a configured
+// connector, is it this host) goes through it, never through parseKeyAddr,
+// which drops the zone for rate-limit bucketing.
+func parseTrustAddr(s string) (netip.Addr, bool) {
+	s = strings.TrimSpace(s)
+	var a netip.Addr
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		a = ap.Addr()
+	} else if parsed, err := netip.ParseAddr(s); err == nil {
+		a = parsed
+	} else {
+		return netip.Addr{}, false
+	}
+	return trustAddr(a), true
 }
 
 var clientTrustLog = logger.New("server.client-trust")
@@ -83,9 +129,12 @@ func tunnelConnectorPeers() connectorPeers {
 	connectorPeersMu.Lock()
 	defer connectorPeersMu.Unlock()
 	if !connectorPeersSet || raw != connectorPeersRaw {
-		peers, bad := parseConnectorPeers(raw)
+		peers, bad, noZone := parseConnectorPeers(raw)
 		if len(bad) > 0 {
 			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS has %d entries that are not IP addresses; ignored", len(bad))
+		}
+		for _, e := range noZone {
+			clientTrustLog.Warn("TUNNEL_CONNECTOR_ADDRS entry %q is an IPv6 link-local address without a zone; ignored, because a link-local address is only unique per interface. Write it with the interface it arrives on, e.g. %s%%eth0", e, e)
 		}
 		connectorPeersRaw, connectorPeersVal, connectorPeersSet = raw, peers, true
 	}
@@ -162,21 +211,112 @@ func lanIPv6Prefix(ip string) (string, bool) {
 	return netip.PrefixFrom(a, 64).Masked().String(), true
 }
 
-// peerAddr is the request's TCP peer address, parsed from RemoteAddr with
-// its zone dropped and IPv4-mapped forms unmapped. The trust code uses it,
-// not c.ClientIP(), wherever it needs the PEER: gin's ClientIP returns "" for
-// a zoned link-local RemoteAddr ("[fe80::1%en0]:4000"), which made a
-// link-local client unattributed. The router trusts no proxy headers, so for
-// every other address this is what ClientIP returns.
-func peerAddr(c *gin.Context) (netip.Addr, bool) {
-	return parseHostAddr(c.Request.RemoteAddr)
+// peerKeyAddr is the request's TCP peer address in KEY form (parseKeyAddr):
+// zone dropped, IPv4-mapped forms unmapped. It is what a peer is keyed,
+// logged and classified (LAN, loopback) on, used instead of c.ClientIP():
+// gin's ClientIP returns "" for a zoned link-local RemoteAddr
+// ("[fe80::1%en0]:4000"), which made a link-local client unattributed. The
+// router trusts no proxy headers, so for every other address this is what
+// ClientIP returns. It must never decide trust: fe80::5%en0 and
+// fe80::5%en1 have the same key form but are different hosts. Trust
+// decisions pass c.Request.RemoteAddr to connectorPeers.contains and
+// isLocalPeer, which compare in trust form (parseTrustAddr).
+func peerKeyAddr(c *gin.Context) (netip.Addr, bool) {
+	return parseKeyAddr(c.Request.RemoteAddr)
 }
 
-// parseHostAddr is servermiddleware.ParseHostAddr: the address with its zone
-// dropped and IPv4-mapped forms unmapped. Every address comparison in the
-// trust code goes through it, so a zoned link-local peer compares equal to
-// the same address listed without a zone.
-func parseHostAddr(s string) (netip.Addr, bool) { return servermiddleware.ParseHostAddr(s) }
+// parseKeyAddr is servermiddleware.ParseHostAddr: the address with its zone
+// dropped and IPv4-mapped forms unmapped. It is for rate-limit keys and
+// logs only, where two link-local hosts sharing a bucket costs nothing; trust
+// decisions use parseTrustAddr.
+func parseKeyAddr(s string) (netip.Addr, bool) { return servermiddleware.ParseHostAddr(s) }
+
+// remoteAddrIsLocal reports whether addr ("host:port" or a bare address) is
+// this host: a loopback address, or an address assigned to one of its
+// interfaces (hostInterfaces, addrIsLocal). An IPv6 link-local peer counts
+// only when the interface that owns the address is the one named by the
+// peer's zone.
+func remoteAddrIsLocal(addr string) bool {
+	a, ok := parseTrustAddr(addr)
+	if !ok {
+		return false
+	}
+	if a.IsLoopback() {
+		return true
+	}
+	ifaces, err := hostInterfaces()
+	if err != nil {
+		return false
+	}
+	return addrIsLocal(a, ifaces)
+}
+
+// localIface is one of this host's interfaces and its addresses (zone
+// dropped, unmapped).
+type localIface struct {
+	name  string
+	index int
+	addrs []netip.Addr
+}
+
+// hostInterfaces lists this host's interfaces and their addresses. A
+// variable so tests can describe a host.
+var hostInterfaces = func() ([]localIface, error) {
+	nifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]localIface, 0, len(nifs))
+	for _, nif := range nifs {
+		li := localIface{name: nif.Name, index: nif.Index}
+		addrs, err := nif.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, ad := range addrs {
+			if ipn, ok := ad.(*net.IPNet); ok {
+				if own, ok := netip.AddrFromSlice(ipn.IP); ok {
+					li.addrs = append(li.addrs, own.WithZone("").Unmap())
+				}
+			}
+		}
+		out = append(out, li)
+	}
+	return out, nil
+}
+
+// addrIsLocal reports whether a (trust form, parseTrustAddr) is assigned to
+// one of ifaces. An IPv6 link-local address is only unique per interface,
+// so it matches only on the interface its zone names (by name, or by index
+// for a numeric zone); a zoneless one never matches. Any other address
+// matches on any interface.
+func addrIsLocal(a netip.Addr, ifaces []localIface) bool {
+	bare := a.WithZone("")
+	for _, li := range ifaces {
+		if needsZone(a) && !zoneNames(a.Zone(), li) {
+			continue
+		}
+		for _, own := range li.addrs {
+			if own == bare {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// zoneNames reports whether zone names interface li: its name, or its index
+// when the zone is numeric. An empty zone names nothing.
+func zoneNames(zone string, li localIface) bool {
+	if zone == "" {
+		return false
+	}
+	if zone == li.name {
+		return true
+	}
+	n, err := strconv.Atoi(zone)
+	return err == nil && n == li.index
+}
 
 // requestClientIP is the client address to record or log for a request: the
 // visitor's address when trustedClientIP can establish it (a tunnel visitor's
@@ -211,8 +351,8 @@ type lanPeer struct {
 }
 
 func classifyLANPeer(c *gin.Context, ip string, connectors connectorPeers) lanPeer {
-	peer, parsed := peerAddr(c)
-	if !parsed || peer.String() != ip || connectors.contains(ip) || !isLANAddr(peer) || peer.IsLoopback() {
+	peer, parsed := peerKeyAddr(c)
+	if !parsed || peer.String() != ip || connectors.contains(c.Request.RemoteAddr) || !isLANAddr(peer) || peer.IsLoopback() {
 		return lanPeer{}
 	}
 	lp := lanPeer{direct: directLANPeer(c, connectors)}
@@ -239,8 +379,8 @@ func classifyLANPeer(c *gin.Context, ip string, connectors connectorPeers) lanPe
 // connector request stripped of every Cloudflare header on the way would
 // count as direct too (see trustedClientIP).
 func directLANPeer(c *gin.Context, connectors connectorPeers) bool {
-	a, ok := peerAddr(c)
-	if !ok || connectors.contains(a.String()) || !isLANAddr(a) {
+	a, ok := peerKeyAddr(c)
+	if !ok || connectors.contains(c.Request.RemoteAddr) || !isLANAddr(a) {
 		return false
 	}
 	return !hasCloudflareMarkers(c)
@@ -275,7 +415,7 @@ func isLANAddr(a netip.Addr) bool {
 // The header is parsed with net.ParseIP and re-rendered with String() so that
 // equivalent spellings share one key; an unparseable value counts as absent.
 //
-// Every other request is keyed on the peer's own address (peerAddr; the
+// Every other request is keyed on the peer's own address (peerKeyAddr; the
 // router trusts no proxy headers), so a spoofed header is ignored.
 //
 // ok is false only when the peer is a configured connector or this host and
@@ -306,13 +446,15 @@ func isLANAddr(a netip.Addr) bool {
 // per-client layer, and the bootstrap limiter uses the fixed
 // untrustedLocalClientKey.
 func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
-	a, parsed := peerAddr(c)
+	a, parsed := peerKeyAddr(c)
 	if !parsed {
 		return "", false
 	}
 	peer := a.String()
-	isConnector := t.connectors.contains(peer)
-	local := t.isLocalPeer(peer)
+	// Trust is decided on the raw RemoteAddr, zone included (parseTrustAddr);
+	// peer, zone dropped, is only the key.
+	isConnector := t.connectors.contains(c.Request.RemoteAddr)
+	local := t.isLocalPeer(c.Request.RemoteAddr)
 	if isConnector || (servermiddleware.CFAccessVerified(c) && local) {
 		if parsed := net.ParseIP(strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))); parsed != nil {
 			return parsed.String(), true

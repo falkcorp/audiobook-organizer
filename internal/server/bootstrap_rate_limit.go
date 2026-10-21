@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-21
 
@@ -166,7 +166,7 @@ type bootstrapAgg struct {
 // NOT exempt.
 func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key string, aggs []bootstrapAgg, logIP string, exempt bool) {
 	if directLANPeer(c, connectors) {
-		a, _ := peerAddr(c) // directLANPeer already parsed it
+		a, _ := peerKeyAddr(c) // directLANPeer already parsed it
 		ip := a.String()
 		if k := bootstrapDirectLANKey(ip); k != "" {
 			aggs = []bootstrapAgg{{key: k, factor: bootstrapLANPrefixFactor}}

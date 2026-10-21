@@ -1,5 +1,5 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
 // last-edited: 2026-10-21
 
@@ -428,8 +428,10 @@ func CancelReservations(rs []KeyReservation) {
 
 // ParseHostAddr parses "host:port", "[v6%zone]:port" or a bare address and
 // returns the address with its zone dropped and IPv4-mapped forms unmapped.
-// It is the one parser for peer addresses: gin's ClientIP returns "" for a
-// zoned link-local RemoteAddr ("[fe80::1%en0]:4000").
+// It is the parser for rate-limit KEYS (gin's ClientIP returns "" for a
+// zoned link-local RemoteAddr, "[fe80::1%en0]:4000"). It must not decide
+// trust: fe80::1%en0 and fe80::1%en1 are different hosts with the same key
+// form, so the server's trust checks keep link-local zones (parseTrustAddr).
 func ParseHostAddr(s string) (netip.Addr, bool) {
 	s = strings.TrimSpace(s)
 	var a netip.Addr

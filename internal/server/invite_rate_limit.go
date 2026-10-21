@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-21
 
@@ -13,9 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"sync"
 	"time"
@@ -404,30 +402,6 @@ func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (inviteClient, bool) 
 		ic.unlisted = true
 	}
 	return ic, true
-}
-
-// remoteAddrIsLocal reports whether addr ("host:port") is a loopback address or
-// an address assigned to one of this host's interfaces.
-func remoteAddrIsLocal(addr string) bool {
-	ip, ok := parseHostAddr(addr) // zone dropped: fe80::1%en0 matches fe80::1
-	if !ok {
-		return false
-	}
-	if ip.IsLoopback() {
-		return true
-	}
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, a := range addrs {
-		if ipn, ok := a.(*net.IPNet); ok {
-			if own, ok := netip.AddrFromSlice(ipn.IP); ok && own.WithZone("").Unmap() == ip {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // middleware returns the Gin middleware enforcing the layers.

@@ -32,10 +32,15 @@ that aggregate; a LAN host that sends Cloudflare markers without being a
 listed connector shares a separate aggregate per IPv6 /64 or IPv4 /24 at
 twice the per-client budget, so it cannot rotate addresses or IPv4 aliases
 either; link-local peers count as LAN, and the peer address is parsed
-from the connection with its zone dropped, so a zoned link-local client is
-attributed and a zoned link-local connector matches its listed address), so forging `Cf-*` headers
-never takes a caller out of per-client limiting; an unlisted connector is
-therefore one bucket for everyone it relays, and a private peer that sends
+from the connection with its zone dropped for its rate-limit key, so a zoned
+link-local client is attributed), so forging `Cf-*` headers
+never takes a caller out of per-client limiting. Trust decisions keep the
+zone of an IPv6 link-local address, which is only unique per interface: a
+link-local `TUNNEL_CONNECTOR_ADDRS` entry must carry its zone
+(`fe80::5%eth0`; one without is ignored with a warning naming it) and
+matches only a peer arriving on that interface, and a link-local peer counts
+as this host only when the interface its zone names owns the address. An
+unlisted connector is one bucket for everyone it relays, and a private peer that sends
 Cloudflare headers without being listed is logged once per address (once
 per /64 for IPv6, so rotation cannot fill it) at warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
