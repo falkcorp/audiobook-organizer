@@ -1,5 +1,5 @@
 // file: web/src/components/library/TagCloud.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7e6c9a1d-3f2b-4c8e-9a5d-1b6f8e2c4d9a
 // last-edited: 2026-10-21
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -203,10 +203,13 @@ export function TagCloud({
   const rowRef = useRef<HTMLDivElement>(null);
   const { fit, measuring } = useFitCount(rowRef, priorityTags, !expanded);
 
-  // While measuring, every candidate renders (unwrapped, clipped) so real
-  // widths can be read; afterwards only the ones that fit.
+  // While measuring, every candidate renders in PRIORITY order (unwrapped,
+  // clipped) so real widths can be read; afterwards only the ones that fit,
+  // in display (count) order. The fit count is a count of PRIORITY slots, so
+  // it must be applied to the priority list and measured against it.
   const previewTags = useMemo(() => {
-    const count = measuring ? priorityTags.length : (fit ?? FALLBACK_PREVIEW_COUNT);
+    if (measuring) return priorityTags;
+    const count = fit ?? FALLBACK_PREVIEW_COUNT;
     const shown = new Set(priorityTags.slice(0, count).map((t) => t.tag));
     return sortedTags.filter((t) => shown.has(t.tag));
   }, [priorityTags, sortedTags, fit, measuring]);
@@ -235,6 +238,7 @@ export function TagCloud({
       <Chip
         key={t.tag}
         label={`${formatTagLabel(t.tag)} (${t.count})`}
+        data-tag={t.tag}
         onClick={() => handleToggleTag(t.tag)}
         color={isSelected ? 'primary' : undefined}
         variant={isSelected ? 'filled' : 'outlined'}
@@ -412,10 +416,17 @@ function useFitCount(
     const avail = row?.clientWidth ?? 0;
     let count: number | null = null;
     if (row && avail > 0) {
-      const kids = Array.from(row.children) as HTMLElement[];
-      const button = kids.pop();
-      const widths = kids.map((k) => k.getBoundingClientRect().width);
-      const buttonWidth = button ? button.getBoundingClientRect().width : 0;
+      // Width by tag, not by DOM position: the row's order is the caller's
+      // business, the sum below must follow priority order regardless.
+      const byTag = new Map<string, number>();
+      let buttonWidth = 0;
+      for (const kid of Array.from(row.children) as HTMLElement[]) {
+        const w = kid.getBoundingClientRect().width;
+        const tag = kid.dataset.tag;
+        if (tag === undefined) buttonWidth = w;
+        else byTag.set(tag, w);
+      }
+      const widths = tags.map((t) => byTag.get(t.tag) ?? 0);
       const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
       const total = widths.length;
       const chipsWidth = (k: number) =>
@@ -433,7 +444,7 @@ function useFitCount(
     // Layout measurement is the legitimate reason to set state from an effect:
     // the value does not exist until the browser has laid the row out.
     setMeasured({ key, count });
-  }, [measuring, key, rowRef]);
+  }, [measuring, key, rowRef, tags]);
 
   return { fit: measured?.count ?? null, measuring };
 }

@@ -1,5 +1,5 @@
 // file: web/src/components/library/TagCloud.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f3d2c1b-8a9e-4d7c-b6a5-2e1f9c8d7b6a
 // last-edited: 2026-10-21
 
@@ -315,7 +315,7 @@ describe('TagCloud stays mounted in every data state', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Could not load');
   });
 
-  it('gives every state a body of the same fixed height', () => {
+  it('applies the same explicit calc() height style to every state (style string only; geometry is the e2e spec)', () => {
     const heights = (props: Parameters<typeof defaultProps>[0]) => {
       const { unmount } = renderWithProviders(<TagCloud {...defaultProps(props)} />);
       const h = getComputedStyle(screen.getByTestId('tag-cloud-body')).height;
