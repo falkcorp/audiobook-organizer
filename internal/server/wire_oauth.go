@@ -1,7 +1,7 @@
 // file: internal/server/wire_oauth.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c2e8b04-7a19-4d63-8f05-3b6a0c9e2d47
-// last-edited: 2026-10-07
+// last-edited: 2026-10-20
 
 package server
 
@@ -25,10 +25,14 @@ import (
 var cfAccessVerifierOverride servermiddleware.CFAssertionVerifier
 
 // buildOAuthWiring constructs the OAuth login handler and the Cloudflare Access
-// middleware from config. Returns (nil-safe handler, cfMiddleware-or-nil). Nothing is
-// enabled unless configured, and a provider/verifier that fails to initialize is
-// logged and skipped rather than aborting startup.
-func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc) {
+// middleware from config. Returns (nil-safe handler, cfMiddleware-or-nil,
+// recoveryMiddleware-or-nil). The recovery middleware is the web UI's
+// service-token browser recovery (servermiddleware.CFServiceTokenRecovery) built
+// on the same verifier as cfMW, so it exists exactly when cfMW does; it belongs on
+// the SPA page routes, not the API. Nothing is enabled unless configured, and a
+// provider/verifier that fails to initialize is logged and skipped rather than
+// aborting startup.
+func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gin.HandlerFunc) {
 	// Read OAuth/Cloudflare-Access settings from config like every other subsystem.
 	// config.AppConfig is authoritative here because the DB-load path re-applies the
 	// environment-authoritative keys on top of the config blob (see
@@ -55,7 +59,7 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc) {
 	codec, err := oauth.NewStateCodec(10 * time.Minute)
 	if err != nil {
 		slog.Error("oauth: state codec init failed — OAuth login disabled", "err", err)
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Google OIDC discovery is a synchronous network call; give it a bounded context.
@@ -84,19 +88,21 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc) {
 	// Cloudflare Access middleware. NewCFAccessVerifier uses a lazy remote keyset that
 	// refreshes in the BACKGROUND, so it must get a long-lived context, not the
 	// discovery timeout context above.
-	var cfMW gin.HandlerFunc
+	var cfMW, cfRecoveryMW gin.HandlerFunc
 	if cfAccessVerifierOverride != nil {
 		cfMW = servermiddleware.CloudflareAccessAuth(
 			servermiddleware.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring()))
+		cfRecoveryMW = newCFRecoveryMiddleware(cfAccessVerifierOverride)
 	} else if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
 		if v, verr := oauth.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
 			cfMW = servermiddleware.CloudflareAccessAuth(
 				servermiddleware.NewCFAccessAuthenticator(v, cfg, s.storeForWiring()))
+			cfRecoveryMW = newCFRecoveryMiddleware(v)
 			slog.Info("oauth: Cloudflare Access identity passthrough enabled", "team", cfg.CFAccessTeamDomain)
 		} else {
 			slog.Error("oauth: Cloudflare Access verifier init failed — passthrough disabled", "err", verr)
 		}
 	}
 
-	return oauthH, cfMW
+	return oauthH, cfMW, cfRecoveryMW
 }

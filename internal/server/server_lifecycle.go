@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.55.2
+// version: 4.56.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package server
 
@@ -1573,7 +1573,7 @@ func (s *Server) setupRoutes() {
 	// /api/events depend on that. buildOAuthWiring is a pure constructor (it
 	// reads config and builds handlers/verifiers; it registers no routes), so
 	// hoisting it is safe, and it is still called exactly once.
-	oauthH, cfMW := s.buildOAuthWiring()
+	oauthH, cfMW, cfRecoveryMW := s.buildOAuthWiring()
 
 	// Health check endpoint
 	// Prometheus metrics endpoint (standard path). AUTHENTICATED.
@@ -1991,7 +1991,9 @@ func (s *Server) setupRoutes() {
 
 	// Serve static files (React frontend)
 	// Implementation is in static_embed.go or static_nonembed.go depending on build tags
-	s.setupStaticFiles()
+	// cfRecoveryMW (nil without Cloudflare Access) runs on the SPA page fallback:
+	// the one place browser page navigations are served. See cf_recovery.go.
+	s.setupStaticFiles(cfRecoveryMW)
 }
 
 func isStaleOperationStatus(status string) bool {

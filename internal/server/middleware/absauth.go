@@ -167,6 +167,16 @@ func (r *ABSIdentityResolver) Enabled() bool {
 	return r != nil && r.cfg != nil && r.cfg.Enabled && r.store != nil
 }
 
+// ServiceTokenBouncer returns the service-token browser-recovery helper on this
+// resolver's Cloudflare Access verifier, or nil when CF assertions are not enabled
+// (the SSO browser hop then has nothing to recover with). See cfbounce.go.
+func (r *ABSIdentityResolver) ServiceTokenBouncer() *CFServiceTokenBouncer {
+	if !r.CFAssertionsEnabled() {
+		return nil
+	}
+	return NewCFServiceTokenBouncer(r.verifier)
+}
+
 // Config exposes the resolved ABS config to handlers wired alongside the resolver.
 func (r *ABSIdentityResolver) Config() *absauth.Config {
 	if r == nil {

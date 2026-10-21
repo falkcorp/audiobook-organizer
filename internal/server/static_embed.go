@@ -1,8 +1,8 @@
 //go:build embed_frontend
 
-// version: 1.1.0
+// version: 1.2.0
 // file: internal/server/static_embed.go
-// last-edited: 2026-08-01
+// last-edited: 2026-10-20
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-05-01
 
@@ -28,8 +28,10 @@ func SetEmbeddedFS(fs embed.FS) {
 	webFS = fs
 }
 
-// setupStaticFiles serves the embedded React frontend
-func (s *Server) setupStaticFiles() {
+// setupStaticFiles serves the embedded React frontend. spaMiddleware (nil
+// entries are dropped) runs ahead of the fallback handler: only unmatched paths
+// reach it, so registered routes -- the API, the ABS surface -- never see it.
+func (s *Server) setupStaticFiles(spaMiddleware ...gin.HandlerFunc) {
 	// Get the web/dist subdirectory from the embedded filesystem
 	webDist, err := fs.Sub(webFS, "web/dist")
 	if err != nil {
@@ -38,7 +40,13 @@ func (s *Server) setupStaticFiles() {
 	}
 
 	// NoRoute handler to serve static files or SPA index.html
-	s.router.NoRoute(func(c *gin.Context) {
+	spaHandlers := make([]gin.HandlerFunc, 0, len(spaMiddleware)+1)
+	for _, mw := range spaMiddleware {
+		if mw != nil {
+			spaHandlers = append(spaHandlers, mw)
+		}
+	}
+	spaHandlers = append(spaHandlers, func(c *gin.Context) {
 		// Server-side paths must 404 rather than render the SPA shell. Serving
 		// the React index for an unimplemented protocol endpoint tells a client
 		// the feature exists — see isNonSPAPath for the AudioBooth OIDC case.
@@ -94,6 +102,7 @@ func (s *Server) setupStaticFiles() {
 		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexData)
 	})
+	s.router.NoRoute(spaHandlers...)
 }
 
 // setupPlaceholder serves the API documentation placeholder page (fallback)
