@@ -26,10 +26,11 @@ verified Cloudflare Access assertion. Every other peer is keyed on its own
 address whatever headers it sends (public IPv6 by /64; a LAN IPv6 peer by
 its full address, since LAN devices share one /64; a direct LAN peer, one
 that is not a connector and sends no Cloudflare markers, also shares an
-aggregate bucket per /64 at four times the per-client budget, so one host
+aggregate bucket per IPv6 /64 at four times the per-client budget, so one host
 rotating through its /64 is still capped, and tunnel traffic never touches
-that aggregate; a LAN IPv6 host that sends Cloudflare markers without being a
-listed connector shares a separate aggregate per /64, so it cannot rotate
+that aggregate; a LAN host that sends Cloudflare markers without being a
+listed connector shares a separate aggregate per IPv6 /64 or IPv4 /24 at
+twice the per-client budget, so it cannot rotate addresses or IPv4 aliases
 either; link-local peers count as LAN, and the peer address is parsed
 from the connection with its zone dropped, so a zoned link-local client is
 attributed and a zoned link-local connector matches its listed address), so forging `Cf-*` headers
@@ -39,7 +40,17 @@ Cloudflare headers without being listed is logged once per address (once
 per /64 for IPv6, so rotation cannot fill it) at warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
 skipped rather than shared, and the per-token and global layers still apply.
-The token is read first; then all three layers are reserved together, and a
+A direct LAN peer is exempt from the global layer, so a flood from the
+internet cannot lock out a guest on the LAN; all direct LAN traffic shares
+one total of half the global limit instead (50 at once, 150 a minute),
+which also keeps the per-client and per-token tables bounded (a LAN device
+can spend that total and lock out other direct callers, as the internet
+could spend the global limit before). All LAN traffic with Cloudflare
+markers from unlisted peers shares a second total of a quarter of the
+global limit (25 at once, 75 a minute), under the global layer, so one LAN host rotating
+across many /64s or /24s cannot drain the global layer for everyone else;
+with `TUNNEL_CONNECTOR_ADDRS` unset that means all tunnel traffic shares it.
+The token is read first; then every layer that applies is reserved together, and a
 refusal from any layer cancels the others, so a refused request spends
 nothing and adds no entry to the per-client or per-token tables (a key seen
 for the first time is recorded only once the request is admitted), and
@@ -57,7 +68,8 @@ sending `Accept-Encoding: gzip`; if it still cannot be set, that is logged
 once. When the body did not reach its end (too large, too slow, or a read
 error), the response carries `Connection: close` and the deadline stays in
 force, so a sender that stops mid-body gets its 413 or 408 at once and the
-connection is closed within the deadline and parsed once for both the limiter and the handler. Invite tokens
+connection is closed within the deadline. The body is parsed once for both
+the limiter and the handler. Invite tokens
 are redacted from request logs, trace span attributes (`url.path`) and error
 logs.
 
@@ -222,8 +234,10 @@ shares one aggregate window of 20 attempts an hour, which is what caps a LAN hos
 rotating through its /64, since direct callers skip the global ceiling.
 Tunnel traffic, including connectors on LAN addresses in the same /64, never
 counts against that window, so it cannot lock out the owner's recovery. A LAN
-IPv6 host sending Cloudflare markers has its own 20-an-hour window per /64 on
-top of the global ceiling.
+host sending Cloudflare markers without being a listed connector has its own
+20-an-hour window per IPv6 /64 or IPv4 /24, and all such traffic shares one
+25-an-hour window, both on top of the global ceiling, so it cannot spend the
+global budget by rotating addresses.
 
 #### The startup read-only key no longer creates an admin
 

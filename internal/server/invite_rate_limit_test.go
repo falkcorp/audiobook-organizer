@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-21
 
@@ -646,8 +646,8 @@ func TestInviteRateLimit_PiConnectorsUnset_EachPiIsOneBucket(t *testing.T) {
 	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	if key, _, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:"+piConnectors[2] {
-		t.Fatalf("inviteClientKey = %q, %v; want the unlisted Pi's own address", key, ok)
+	if ic, ok := h.limits.inviteClientKey(c); !ok || ic.key != "invite-client:"+piConnectors[2] {
+		t.Fatalf("inviteClientKey = %q, %v; want the unlisted Pi's own address", ic.key, ok)
 	}
 }
 
@@ -683,8 +683,8 @@ func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 	req.Header.Set("CF-Connecting-IP", "198.51.100.7")
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	if key, _, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:198.51.100.7" {
-		t.Fatalf("inviteClientKey = %q, %v; want the visitor's address", key, ok)
+	if ic, ok := h.limits.inviteClientKey(c); !ok || ic.key != "invite-client:198.51.100.7" {
+		t.Fatalf("inviteClientKey = %q, %v; want the visitor's address", ic.key, ok)
 	}
 }
 
@@ -941,11 +941,11 @@ func TestInviteRateLimit_LANSlash64RotationIsCappedByTheAggregate(t *testing.T) 
 			}
 		}
 	}
-	if admitted > inviteLANPrefixRateBurst+1 {
-		t.Fatalf("one LAN /64 rotating 50 addresses got %d requests through, want at most the aggregate burst of %d", admitted, inviteLANPrefixRateBurst)
+	if admitted > inviteDirectLANPrefixRateBurst+1 {
+		t.Fatalf("one LAN /64 rotating 50 addresses got %d requests through, want at most the aggregate burst of %d", admitted, inviteDirectLANPrefixRateBurst)
 	}
-	if admitted < inviteLANPrefixRateBurst {
-		t.Fatalf("the /64 got only %d through, want the aggregate burst of %d", admitted, inviteLANPrefixRateBurst)
+	if admitted < inviteDirectLANPrefixRateBurst {
+		t.Fatalf("the /64 got only %d through, want the aggregate burst of %d", admitted, inviteDirectLANPrefixRateBurst)
 	}
 	if w := h.get(inviteTestToken(900), "198.51.100.30", nil); w.Code != http.StatusOK {
 		t.Fatalf("another client after the rotation: %d, want 200 (global not drained)", w.Code)
@@ -1074,7 +1074,7 @@ func TestInviteRateLimit_ZonedLinkLocalPeerIsAttributed(t *testing.T) {
 // S2: a LAN host rotating ULA addresses while sending a Cf-* header is not
 // direct, so it used to get full-address keys and no /64 aggregate (100/100
 // admitted, draining the global burst). It now shares the
-// invite-unlisted-lan64 aggregate, the owner's direct peer in the same /64 is
+// invite-unlisted-lan aggregate, the owner's direct peer in the same /64 is
 // still admitted afterwards, and the rotation is remembered as one /64 by the
 // unlisted-connector warning set.
 func TestInviteRateLimit_CfMarkedULARotationIsCapped(t *testing.T) {
@@ -1088,8 +1088,8 @@ func TestInviteRateLimit_CfMarkedULARotationIsCapped(t *testing.T) {
 			admitted++
 		}
 	}
-	if admitted > inviteLANPrefixRateBurst+1 {
-		t.Fatalf("Cf-marked ULA rotation: %d of 100 admitted, want at most the aggregate burst of %d", admitted, inviteLANPrefixRateBurst)
+	if admitted > inviteUnlistedLANPrefixRateBurst+1 {
+		t.Fatalf("Cf-marked ULA rotation: %d of 100 admitted, want at most the aggregate burst of %d", admitted, inviteUnlistedLANPrefixRateBurst)
 	}
 	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
 		return h.get(inviteTestToken(500+i), "[fd12:3456:789a:1::1]", nil)
@@ -1192,8 +1192,8 @@ func TestInviteRateLimit_ZonedLinkLocalConnectorIsRecognised(t *testing.T) {
 	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	if key, lanKey, ok := h.limits.inviteClientKey(c); !ok || key != "invite-client:203.0.113.44" || lanKey != "" {
-		t.Fatalf("inviteClientKey = %q, %q, %v; want the visitor's address and no LAN aggregate", key, lanKey, ok)
+	if ic, ok := h.limits.inviteClientKey(c); !ok || ic != (inviteClient{key: "invite-client:203.0.113.44"}) {
+		t.Fatalf("inviteClientKey = %+v, %v; want the visitor's address, no LAN aggregate and no global exemption", ic, ok)
 	}
 }
 
@@ -1218,5 +1218,165 @@ func TestRequestClientIP_ZonedPeer(t *testing.T) {
 	c.Request = req
 	if got := requestClientIP(c); got != "fe80::1" {
 		t.Fatalf("requestClientIP = %q, want fe80::1", got)
+	}
+}
+
+// withFreshUnlistedWarnings gives the test its own unlisted-connector warning
+// set, so the rotations below neither fill nor depend on the package one.
+func withFreshUnlistedWarnings(t *testing.T) {
+	saved := unlistedConnectors
+	unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
+	t.Cleanup(func() { unlistedConnectors = saved })
+}
+
+// N-a: how inviteClientKey keys each kind of peer: a direct LAN peer gets
+// the direct total and the global exemption (and its /64 aggregate when it
+// is IPv6), an unlisted Cf-marked LAN peer its /64 or /24 aggregate and the
+// unlisted total, and a public client none of them.
+func TestInviteClientKey_LANAggregates(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	withFreshUnlistedWarnings(t)
+	cf := map[string]string{"Cf-Ray": "x"}
+	tests := []struct {
+		name, peer string
+		hdr        map[string]string
+		want       inviteClient
+	}{
+		{"direct IPv4", "10.0.0.50", nil, inviteClient{key: "invite-client:10.0.0.50", totalKey: inviteDirectLANTotalKey, direct: true}},
+		{"direct ULA", "[fd12:3456:789a:1::5]", nil, inviteClient{key: "invite-client:fd12:3456:789a:1::5", prefixKey: "invite-direct-lan64:fd12:3456:789a:1::/64", totalKey: inviteDirectLANTotalKey, direct: true}},
+		{"unlisted IPv4", "10.0.7.9", cf, inviteClient{key: "invite-client:10.0.7.9", prefixKey: "invite-unlisted-lan:10.0.7.0/24", totalKey: inviteUnlistedLANTotalKey, unlisted: true}},
+		{"unlisted ULA", "[fd12:3456:789a:2::9]", cf, inviteClient{key: "invite-client:fd12:3456:789a:2::9", prefixKey: "invite-unlisted-lan:fd12:3456:789a:2::/64", totalKey: inviteUnlistedLANTotalKey, unlisted: true}},
+		{"public IPv4", "198.51.100.7", nil, inviteClient{key: "invite-client:198.51.100.7"}},
+		{"public IPv4 with Cf headers", "198.51.100.7", cf, inviteClient{key: "invite-client:198.51.100.7"}},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+		req.RemoteAddr = tt.peer + ":4000"
+		for k, v := range tt.hdr {
+			req.Header.Set(k, v)
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		if got, ok := h.limits.inviteClientKey(c); !ok || got != tt.want {
+			t.Errorf("%s: inviteClientKey = %+v, %v; want %+v", tt.name, got, ok, tt.want)
+		}
+	}
+}
+
+// N-a: a direct LAN peer is exempt from the global layer. Once a public
+// client has spent the whole global budget, a direct LAN caller (IPv4 and
+// ULA, no Cloudflare markers) still gets its per-client burst, while an
+// unlisted Cf-marked LAN host, which stays under the global layer, is
+// refused.
+func TestInviteRateLimit_DirectLANPeerIsExemptFromTheGlobalLayer(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	withFreshUnlistedWarnings(t)
+	h.limits.global = servermiddleware.NewIPRateLimiter(1, 1)
+	if w := h.get(inviteTestToken(1), "198.51.100.30", nil); w.Code != http.StatusOK {
+		t.Fatalf("the public client spending the global budget: %d, want 200", w.Code)
+	}
+	if w := h.get(inviteTestToken(2), "198.51.100.31", nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("a second public client: %d, want 429 (global spent)", w.Code)
+	}
+	for d, peer := range []string{"10.0.0.50", "[fd12:3456:789a:1::50]"} {
+		allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
+			return h.get(inviteTestToken(100*(d+1)+i), peer, nil)
+		})
+		if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+1 {
+			t.Fatalf("direct LAN peer %s with the global spent: %d admitted (limited=%v), want its burst of %d", peer, allowed, limited, inviteAuthRateBurst)
+		}
+	}
+	if w := h.get(inviteTestToken(900), "10.0.0.60", map[string]string{"Cf-Ray": "x"}); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("an unlisted Cf-marked LAN host with the global spent: %d, want 429", w.Code)
+	}
+}
+
+// N-a: the global exemption comes with a total. One direct LAN host
+// rotating through 100 IPv4 aliases (no IPv4 prefix aggregate: a /24 would be
+// shared by the whole home network) gets a fresh per-client bucket each
+// time, but all direct traffic shares the direct total, so it is capped
+// there; and it never touched the global layer, so a public client is
+// still admitted.
+func TestInviteRateLimit_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	admitted := 0
+	for i := range 100 {
+		peer := fmt.Sprintf("10.0.%d.%d", i/200, i%200+1)
+		for j := range 2 {
+			if w := h.get(inviteTestToken(i*2+j), peer, nil); w.Code == http.StatusOK {
+				admitted++
+			}
+		}
+	}
+	if admitted < inviteDirectLANTotalRateBurst || admitted > inviteDirectLANTotalRateBurst+1 {
+		t.Fatalf("direct IPv4 alias rotation: %d of 200 admitted, want the direct total's burst of %d", admitted, inviteDirectLANTotalRateBurst)
+	}
+	for i := range inviteGlobalRateBurst - 5 {
+		if w := h.get(inviteTestToken(1000+i), fmt.Sprintf("198.51.100.%d", i+1), nil); w.Code != http.StatusOK {
+			t.Fatalf("public client %d after the direct rotation: %d, want 200 (direct traffic never spent the global)", i, w.Code)
+		}
+	}
+}
+
+// N-a: a Cf-marked LAN host rotating IPv4 aliases inside one /24 is capped
+// by that /24's unlisted aggregate, and spread across many /24s by the
+// unlisted total; the direct peer in the same /24 is still admitted.
+func TestInviteRateLimit_CfMarkedIPv4AliasRotationIsCapped(t *testing.T) {
+	withFreshUnlistedWarnings(t)
+	cf := map[string]string{"Cf-Ray": "x"}
+
+	h := newInviteLimitHarness(t, false)
+	admitted := 0
+	for i := range 100 {
+		if w := h.get(inviteTestToken(i), fmt.Sprintf("10.0.0.%d", i+100), cf); w.Code == http.StatusOK {
+			admitted++
+		}
+	}
+	if admitted < inviteUnlistedLANPrefixRateBurst || admitted > inviteUnlistedLANPrefixRateBurst+1 {
+		t.Fatalf("Cf-marked rotation within one /24: %d of 100 admitted, want the /24 aggregate's burst of %d", admitted, inviteUnlistedLANPrefixRateBurst)
+	}
+	if w := h.get(inviteTestToken(500), "10.0.0.50", nil); w.Code != http.StatusOK {
+		t.Fatalf("the direct peer in that /24 after the rotation: %d, want 200 (separate buckets)", w.Code)
+	}
+
+	h = newInviteLimitHarness(t, false)
+	admitted = 0
+	for i := range 100 {
+		if w := h.get(inviteTestToken(i), fmt.Sprintf("10.0.%d.9", i), cf); w.Code == http.StatusOK {
+			admitted++
+		}
+	}
+	if admitted < inviteUnlistedLANTotalRateBurst || admitted > inviteUnlistedLANTotalRateBurst+1 {
+		t.Fatalf("Cf-marked rotation across 100 /24s: %d admitted, want the unlisted total's burst of %d", admitted, inviteUnlistedLANTotalRateBurst)
+	}
+}
+
+// N-a: a Cf-marked LAN host rotating across many ULA /64s used to get a
+// fresh /64 aggregate each time, so 60 /64s drained the global layer for
+// every guest. The unlisted total now caps it, well below the global burst,
+// so public clients and the owner's direct peer are still admitted.
+func TestInviteRateLimit_CfMarkedRotationAcrossSlash64sCannotDrainTheGlobal(t *testing.T) {
+	withFreshUnlistedWarnings(t)
+	h := newInviteLimitHarness(t, false)
+	admitted := 0
+	for i := range 60 {
+		for j := range 3 {
+			peer := fmt.Sprintf("[fd12:3456:%x::%x]", 0x100+i, j+1)
+			if w := h.get(inviteTestToken(i*3+j), peer, map[string]string{"Cf-Ray": "x"}); w.Code == http.StatusOK {
+				admitted++
+			}
+		}
+	}
+	if admitted < inviteUnlistedLANTotalRateBurst || admitted > inviteUnlistedLANTotalRateBurst+1 {
+		t.Fatalf("Cf-marked rotation across 60 /64s: %d of 180 admitted, want the unlisted total's burst of %d", admitted, inviteUnlistedLANTotalRateBurst)
+	}
+	// What is left of the global burst is still there for everyone else.
+	for i := range inviteGlobalRateBurst - inviteUnlistedLANTotalRateBurst - 5 {
+		if w := h.get(inviteTestToken(1000+i), fmt.Sprintf("198.51.100.%d", i+1), nil); w.Code != http.StatusOK {
+			t.Fatalf("public client %d after the rotation: %d, want 200 (global not drained)", i, w.Code)
+		}
+	}
+	if w := h.get(inviteTestToken(2000), "[fd12:3456:789a:1::1]", nil); w.Code != http.StatusOK {
+		t.Fatalf("the owner's direct peer after the rotation: %d, want 200", w.Code)
 	}
 }
