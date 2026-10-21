@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-21
 
@@ -262,7 +262,7 @@ func (h *inviteLimitHarness) withConnector() *inviteLimitHarness {
 	if len(bad) != 0 {
 		h.t.Fatalf("bad connector %v", bad)
 	}
-	h.limits.connectors = peers
+	h.limits.connectors = fixedConnectors(peers)
 	return h
 }
 
@@ -663,7 +663,7 @@ func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 	if len(bad) != 0 {
 		t.Fatal(bad)
 	}
-	h.limits.connectors = peers
+	h.limits.connectors = fixedConnectors(peers)
 
 	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
 		return h.get(inviteTestToken(1000+i), piConnectors[i%3], cfHeaders("203.0.113.66"))
@@ -695,7 +695,7 @@ func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 func TestInviteRateLimit_IPv6VisitorsShareTheirSlash64(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
 	peers, _ := parseConnectorPeers(piConnectors[0])
-	h.limits.connectors = peers
+	h.limits.connectors = fixedConnectors(peers)
 	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
 		return h.get(inviteTestToken(i), piConnectors[0], cfHeaders(fmt.Sprintf("2001:db8:5:6::%x", i+1)))
 	})
@@ -1188,7 +1188,7 @@ func TestInviteRateLimit_ZonedLinkLocalConnectorIsRecognised(t *testing.T) {
 		t.Fatal(rejected)
 	}
 	h := newInviteLimitHarness(t, false)
-	h.limits.connectors = peers
+	h.limits.connectors = fixedConnectors(peers)
 	keyFrom := func(remote string) (inviteClient, bool) {
 		req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
 		req.RemoteAddr = remote
@@ -1262,30 +1262,71 @@ func TestParseTrustAddr(t *testing.T) {
 	}
 }
 
-// fakeHost counts the interface lookups a test makes.
+// fakeHost counts the interface lookups a test makes. configZones is what
+// resolveZone (config parsing) knows, zone -> interface name; a test may add
+// to it to bring an interface up.
 type fakeHost struct {
-	zoneLookups, hostLookups atomic.Int32
+	zoneLookups, hostLookups, resolves atomic.Int32
+	configZones                        map[string]string
+}
+
+// fixedConnectors is an inviteRateLimits.connectors that always returns peers.
+func fixedConnectors(peers connectorPeers) func() connectorPeers {
+	return func() connectorPeers { return peers }
+}
+
+// ipNet is cidr ("2001:db8:1::2/64") as an interface address: the address
+// with its prefix length.
+func ipNet(t *testing.T, cidr string) net.Addr {
+	t.Helper()
+	ip, n, err := net.ParseCIDR(cidr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &net.IPNet{IP: ip, Mask: n.Mask}
+}
+
+// withOnLinkIfaces describes this host's interfaces for the on-link prefix
+// list and empties its cache, before and after the test.
+func withOnLinkIfaces(t *testing.T, ifaces ...onLinkIface) {
+	t.Helper()
+	resetOnLink := func() {
+		onLinkCache.mu.Lock()
+		onLinkCache.at, onLinkCache.prefixes = time.Time{}, nil
+		onLinkCache.mu.Unlock()
+	}
+	saved := hostOnLinkIfaces
+	hostOnLinkIfaces = func() ([]onLinkIface, error) { return ifaces, nil }
+	resetOnLink()
+	t.Cleanup(func() {
+		hostOnLinkIfaces = saved
+		resetOnLink()
+	})
 }
 
 // withFakeHost describes a host for the trust code: en0 (index 2) owns
-// fe80::5 and 10.0.0.2, en1 (index 3) owns 192.0.2.1, and 2001:db8:1::/64
-// is on-link. It counts interface lookups.
+// fe80::5 and 10.0.0.2, en1 (index 3) owns 192.0.2.1, and an up broadcast
+// interface carries 2001:db8:1::2/64. Config parsing also accepts EN0 for
+// en0 (case folding); the trust path does not. It counts interface lookups.
 func withFakeHost(t *testing.T) *fakeHost {
 	t.Helper()
-	fh := &fakeHost{}
+	fh := &fakeHost{configZones: map[string]string{"en0": "en0", "2": "en0", "EN0": "en0", "en1": "en1", "3": "en1"}}
 	byZone := map[string][]netip.Addr{
 		"en0": {netip.MustParseAddr("fe80::5"), netip.MustParseAddr("10.0.0.2")},
 		"en1": {netip.MustParseAddr("192.0.2.1")},
 	}
-	names := map[string]string{"en0": "en0", "2": "en0", "EN0": "en0", "en1": "en1", "3": "en1"}
-	savedResolve, savedZone, savedHost, savedOnLink := resolveZone, zoneInterfaceAddrs, hostInterfaceAddrs, onLinkIPv6Prefixes
-	resolveZone = func(zone string) (string, bool) {
-		n, ok := names[zone]
-		return n, ok
+	trustNames := map[string]string{"en0": "en0", "2": "en0", "en1": "en1", "3": "en1"}
+	savedResolve, savedZone, savedHost := resolveZone, zoneInterfaceAddrs, hostInterfaceAddrs
+	resolveZone = func(zone string) (string, zoneMatch) {
+		fh.resolves.Add(1)
+		if n, ok := fh.configZones[zone]; ok {
+			return n, zoneFound
+		}
+		return "", zoneUnknown
 	}
 	zoneInterfaceAddrs = func(zone string) ([]netip.Addr, error) {
 		fh.zoneLookups.Add(1)
-		n, ok := names[zone]
+		n, ok := trustNames[zone]
 		if !ok {
 			return nil, fmt.Errorf("no interface %q", zone)
 		}
@@ -1295,9 +1336,9 @@ func withFakeHost(t *testing.T) *fakeHost {
 		fh.hostLookups.Add(1)
 		return slices.Concat(byZone["en0"], byZone["en1"]), nil
 	}
-	onLinkIPv6Prefixes = func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64")} }
+	withOnLinkIfaces(t, onLinkIface{flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{ipNet(t, "2001:db8:1::2/64")}})
 	t.Cleanup(func() {
-		resolveZone, zoneInterfaceAddrs, hostInterfaceAddrs, onLinkIPv6Prefixes = savedResolve, savedZone, savedHost, savedOnLink
+		resolveZone, zoneInterfaceAddrs, hostInterfaceAddrs = savedResolve, savedZone, savedHost
 	})
 	return fh
 }
@@ -1408,12 +1449,23 @@ func TestLookupZoneInterface_Loopback(t *testing.T) {
 				continue // an interface really has that name
 			}
 		}
-		if name, ok := resolveZone(zone); !ok || name != lo.Name {
-			t.Errorf("resolveZone(%q) = %q, %v; want %q", zone, name, ok, lo.Name)
+		if name, m := resolveZone(zone); m != zoneFound || name != lo.Name {
+			t.Errorf("resolveZone(%q) = %q, %v; want %q", zone, name, m, lo.Name)
 		}
 	}
-	if _, ok := resolveZone("nosuchif0"); ok {
+	if _, m := resolveZone("nosuchif0"); m != zoneUnknown {
 		t.Error("resolveZone found an interface that does not exist")
+	}
+	// The trust path never folds case: a peer's zone is the exact name.
+	if up := strings.ToUpper(lo.Name); up != lo.Name {
+		if _, err := net.InterfaceByName(up); err != nil {
+			if _, err := lookupZoneInterface(up); err == nil {
+				t.Errorf("lookupZoneInterface(%q) matched ignoring case", up)
+			}
+		}
+	}
+	if ifi, err := lookupZoneInterface(strconv.Itoa(lo.Index)); err != nil || ifi.Name != lo.Name {
+		t.Errorf("lookupZoneInterface(index %d) = %v, %v; want %s", lo.Index, ifi, err, lo.Name)
 	}
 	addrs, err := zoneInterfaceAddrs(lo.Name)
 	if err != nil || len(addrs) == 0 {
@@ -1692,5 +1744,171 @@ func TestInviteRateLimit_OversizeOnHTTP2KeepsTheConnection(t *testing.T) {
 	}
 	if !reused {
 		t.Fatal("the next request opened a new connection: the 413 closed the HTTP/2 connection (GOAWAY)")
+	}
+}
+
+// Round 8 S1: only a /64 or narrower prefix of a global IPv6 address on an
+// up, broadcast-capable, non-point-to-point interface counts as on-link.
+func TestOnLinkPrefixesOf(t *testing.T) {
+	bcast := net.FlagUp | net.FlagBroadcast
+	got := onLinkPrefixesOf([]onLinkIface{
+		{flags: bcast, addrs: []net.Addr{ipNet(t, "2001:db8:1::2/64"), ipNet(t, "2001:db8:1:9::2/80")}},
+		{flags: bcast, addrs: []net.Addr{ipNet(t, "2001:db8:2::2/48")}},                             // too wide
+		{flags: net.FlagUp | net.FlagPointToPoint, addrs: []net.Addr{ipNet(t, "2001:db8:3::2/64")}}, // a tunnel
+		{flags: net.FlagUp | net.FlagBroadcast | net.FlagPointToPoint, addrs: []net.Addr{ipNet(t, "2001:db8:4::2/64")}},
+		{flags: net.FlagUp, addrs: []net.Addr{ipNet(t, "2001:db8:5::2/64")}},        // not broadcast
+		{flags: net.FlagBroadcast, addrs: []net.Addr{ipNet(t, "2001:db8:6::2/64")}}, // down
+		{flags: bcast, addrs: []net.Addr{ipNet(t, "fd12::2/64"), ipNet(t, "2001:db8:7::2/128"), ipNet(t, "198.51.100.2/24")}},
+	})
+	want := []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("2001:db8:1:9::/80")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("onLinkPrefixesOf = %v, want %v", got, want)
+	}
+}
+
+// Round 8 S1, end to end through isLANAddr: a broadcast /64 is LAN; a /48
+// on-link prefix and a point-to-point interface's /64 are not.
+func TestIsLANAddr_OnLinkPrefixRules(t *testing.T) {
+	withOnLinkIfaces(t,
+		onLinkIface{flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{ipNet(t, "2001:db8:1::2/64"), ipNet(t, "2001:db8:2::2/48")}},
+		onLinkIface{flags: net.FlagUp | net.FlagPointToPoint, addrs: []net.Addr{ipNet(t, "2001:db8:3::2/64")}},
+	)
+	for in, want := range map[string]bool{
+		"2001:db8:1::50":   true,
+		"2001:db8:2:5::50": false,
+		"2001:db8:2::50":   false,
+		"2001:db8:3::50":   false,
+		"2001:db8:9::50":   false,
+	} {
+		if got := isLANAddr(netip.MustParseAddr(in)); got != want {
+			t.Errorf("isLANAddr(%s) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// Round 8 NIT3: a tunnel visitor's address inside a wide on-link prefix
+// (here a /48) is not LAN, so visitors there are grouped by /64 as public
+// IPv6 is, not given a bucket per address. Inside a counted /64 a visitor
+// is keyed on its full address, which only a device on that segment has.
+func TestInviteClientKey_TunnelVisitorInAWidePrefixIsGroupedBy64(t *testing.T) {
+	withOnLinkIfaces(t, onLinkIface{flags: net.FlagUp | net.FlagBroadcast, addrs: []net.Addr{ipNet(t, "2001:db8:1::2/48"), ipNet(t, "2001:db8:9::2/64")}})
+	h := newInviteLimitHarness(t, false)
+	peers, rejected := parseConnectorPeers("10.0.0.9")
+	if len(rejected) != 0 {
+		t.Fatal(rejected)
+	}
+	h.limits.connectors = fixedConnectors(peers)
+	for visitor, want := range map[string]string{
+		"2001:db8:1:5::7": "invite-client:2001:db8:1:5::/64",
+		"2001:db8:1:6::8": "invite-client:2001:db8:1:6::/64",
+		"2001:db8:9::7":   "invite-client:2001:db8:9::7",
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+		req.RemoteAddr = "10.0.0.9:4000"
+		for k, v := range cfHeaders(visitor) {
+			req.Header.Set(k, v)
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		if ic, ok := h.limits.inviteClientKey(c); !ok || ic != (inviteClient{key: want}) {
+			t.Errorf("visitor %s: inviteClientKey = %+v, %v; want key %s only", visitor, ic, ok, want)
+		}
+	}
+}
+
+// Round 8 NIT1: config zones match the exact name first, then a numeric
+// index, then (config only) a unique case-insensitive name; two names that
+// fold to the zone with neither exact is ambiguous. The trust path never
+// folds.
+func TestMatchZone(t *testing.T) {
+	ifs := []net.Interface{{Name: "eth0", Index: 2}, {Name: "Eth0", Index: 3}, {Name: "wlan0", Index: 4}, {Name: "4", Index: 9}}
+	for _, tt := range []struct {
+		zone string
+		fold bool
+		name string
+		want zoneMatch
+	}{
+		{"eth0", true, "eth0", zoneFound},
+		{"Eth0", true, "Eth0", zoneFound}, // exact beats folding
+		{"ETH0", true, "", zoneAmbiguous},
+		{"WLAN0", true, "wlan0", zoneFound},
+		{"WLAN0", false, "", zoneUnknown},
+		{"2", false, "eth0", zoneFound},
+		{"4", false, "4", zoneFound}, // an interface named "4" beats index 4
+		{"99", true, "", zoneUnknown},
+		{"nosuch", true, "", zoneUnknown},
+	} {
+		if name, m := matchZone(tt.zone, ifs, tt.fold); name != tt.name || m != tt.want {
+			t.Errorf("matchZone(%q, fold=%v) = %q, %v; want %q, %v", tt.zone, tt.fold, name, m, tt.name, tt.want)
+		}
+	}
+}
+
+// Round 8 NIT1: an ambiguous config zone is refused, not guessed.
+func TestParseConnectorPeers_AmbiguousZoneIsRefused(t *testing.T) {
+	saved := resolveZone
+	resolveZone = func(zone string) (string, zoneMatch) {
+		return matchZone(zone, []net.Interface{{Name: "eth0", Index: 2}, {Name: "Eth0", Index: 3}}, true)
+	}
+	t.Cleanup(func() { resolveZone = saved })
+	peers, rejected := parseConnectorPeers("fe80::5%ETH0, fe80::6%Eth0")
+	if len(rejected) != 1 || rejected[0] != (connectorReject{"fe80::5%ETH0", rejectAmbiguousZone}) {
+		t.Fatalf("rejected=%v, want fe80::5%%ETH0 as ambiguous", rejected)
+	}
+	if !peers.contains("[fe80::6%Eth0]:4000") || peers.contains("[fe80::6%eth0]:4000") {
+		t.Fatalf("peers=%v, want fe80::6 on Eth0 only", peers)
+	}
+}
+
+// Round 8 NIT2: an entry refused because its interface does not exist yet
+// becomes trusted once the interface appears, without a restart: the parse
+// is retried after connectorRetryAfter. A parse with no unknown-zone refusal
+// is never retried. The invite limiter reads the connectors on every
+// request, so the new entry applies at once.
+func TestConnectorCache_RetriesAnUnknownZone(t *testing.T) {
+	fh := withFakeHost(t)
+	var cc connectorCache
+	t0 := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	if peers := cc.get("fe80::5%en5", t0); len(peers) != 0 {
+		t.Fatalf("before en5 exists: %v, want none", peers)
+	}
+	fh.configZones["en5"] = "en5" // the interface comes up
+	if peers := cc.get("fe80::5%en5", t0.Add(connectorRetryAfter/2)); len(peers) != 0 {
+		t.Fatalf("within the retry window: %v, want the cached refusal", peers)
+	}
+	peers := cc.get("fe80::5%en5", t0.Add(connectorRetryAfter))
+	if !peers.contains("[fe80::5%en5]:4000") {
+		t.Fatalf("after the retry window: %v, want fe80::5%%en5 trusted", peers)
+	}
+
+	var ok connectorCache
+	ok.get("fe80::5%en0", t0)
+	before := fh.resolves.Load()
+	ok.get("fe80::5%en0", t0.Add(10*connectorRetryAfter))
+	if fh.resolves.Load() != before {
+		t.Fatal("a parse with nothing refused for an unknown zone was retried")
+	}
+
+	h := newInviteLimitHarness(t, false)
+	var current connectorPeers
+	h.limits.connectors = func() connectorPeers { return current }
+	keyOf := func() string {
+		req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+		req.RemoteAddr = "[fe80::5%en5]:4000"
+		for k, v := range cfHeaders("203.0.113.44") {
+			req.Header.Set(k, v)
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		ic, _ := h.limits.inviteClientKey(c)
+		return ic.key
+	}
+	withFreshUnlistedWarnings(t)
+	if k := keyOf(); k != "invite-client:fe80::5" {
+		t.Fatalf("before the entry is trusted: key %q, want the peer's own", k)
+	}
+	current = peers
+	if k := keyOf(); k != "invite-client:203.0.113.44" {
+		t.Fatalf("after: key %q, want the visitor's (connectors read per request)", k)
 	}
 }

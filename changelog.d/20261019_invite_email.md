@@ -25,9 +25,11 @@ on other LAN hosts and reach the service from their own private addresses, so
 verified Cloudflare Access assertion. Every other peer is keyed on its own
 address whatever headers it sends (public IPv6 by /64; a LAN IPv6 peer by
 its full address, since LAN devices share one /64, where LAN IPv6 means ULA,
-link-local, or a global address inside a prefix that is on-link on one of
-the server's interfaces, as on a home network numbered from the ISP's /64,
-read at most every 30 seconds; a direct LAN peer, one
+link-local, or a global address inside the /64 (or narrower) prefix of a
+global address on one of the server's up, broadcast-capable,
+non-point-to-point interfaces, as on a home network numbered from the ISP's
+/64, read at most every 30 seconds; a wider on-link prefix such as a /48,
+and the prefix of a tunnel or VPN interface, do not count; a direct LAN peer, one
 that is not a connector and sends no Cloudflare markers, also shares an
 aggregate bucket per IPv6 /64 at four times the per-client budget, so one host
 rotating through its /64 is still capped, and tunnel traffic never touches
@@ -42,9 +44,14 @@ zone of an IPv6 link-local address, which is only unique per interface: a
 link-local `TUNNEL_CONNECTOR_ADDRS` entry must carry its zone
 (`fe80::5%eth0`; one without is ignored with a warning naming it), the zone
 is normalised to the interface's name (`fe80::5%2` becomes `fe80::5%eth0`,
-and a wrong-case name is corrected, since the peer address always carries
-the name; a zone that names no interface is ignored with a warning), and it
-matches only a peer arriving on that interface. A link-local peer counts as
+since the peer address always carries the name; the exact name is tried
+first, then the index, then a case-insensitive name, which must be unique;
+a zone that matches more than one name ignoring case and none exactly is
+ignored with a warning, and one that names no interface is ignored with a
+warning and retried every 30 seconds, so an interface that comes up later
+makes the entry trusted without a restart), and it matches only a peer
+arriving on that interface; the invite limiter reads the list on every
+request. A link-local peer counts as
 this host only when the interface its zone names owns the address; that
 check looks up only that interface (any other address takes one
 whole-host lookup), and it is skipped for a listed connector. An
@@ -250,7 +257,13 @@ devices on IPv6 share one /64); every address of a direct LAN IPv6 /64 also
 shares one aggregate window of 20 attempts an hour, which is what caps a LAN host
 rotating through its /64, since direct callers skip the global ceiling.
 Tunnel traffic, including connectors on LAN addresses in the same /64, never
-counts against that window, so it cannot lock out the owner's recovery. A LAN
+counts against that window, so it cannot lock out the owner's recovery. All
+direct LAN callers except loopback also share one window of 50 attempts an
+hour (half the global ceiling, as the invite direct total is half its global
+limit), so a LAN host cannot rotate IPv4 aliases, which have no prefix
+window, or /64s for fresh windows; a LAN device can spend it and lock out
+other direct LAN callers for up to an hour, but loopback is left out of it,
+so recovery from the server itself still works. A LAN
 host sending Cloudflare markers without being a listed connector has its own
 20-an-hour window per IPv6 /64 or IPv4 /24, and all such traffic shares one
 25-an-hour window, both on top of the global ceiling, so it cannot spend the

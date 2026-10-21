@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-21
 
@@ -30,7 +30,10 @@ import (
 //     LAN IPv6 /64 also shares one aggregate window of
 //     bootstrapLANPrefixFactor times the per-key cap, so one LAN host cannot
 //     rotate through its /64 for fresh windows (tunnel traffic never touches
-//     that window); a LAN host sending Cloudflare markers but not a listed
+//     that window), and all direct LAN traffic except loopback shares one
+//     direct total (bootstrapDirectLANTotalKey, half the global ceiling),
+//     so one LAN host cannot rotate IPv4 aliases or /64s for fresh windows
+//     either; a LAN host sending Cloudflare markers but not a listed
 //     connector ("unlisted", classifyLANPeer) gets, on top of the global
 //     ceiling, its own /64 (IPv6) or /24 (IPv4) aggregate ("unlisted-lan:")
 //     and the unlisted LAN total (bootstrapUnlistedLANTotalKey, a quarter of
@@ -67,6 +70,19 @@ const (
 	// failures (it runs before the token is checked), so the window is four
 	// times the per-key cap: room for several real devices on the LAN.
 	bootstrapLANPrefixFactor = 4
+
+	// bootstrapDirectLANTotalFactor sizes the one window all direct LAN
+	// traffic except loopback shares (bootstrapDirectLANTotalKey): 50
+	// attempts an hour, half the global ceiling, as the invite limiter's
+	// direct total is half its global layer. Direct peers are exempt from
+	// the global ceiling, so without it a LAN host could rotate IPv4 aliases
+	// (which have no prefix window) or /64s for fresh windows without limit,
+	// and the key table would churn. It is larger than the /64 window (20),
+	// so either can be the one that refuses. A LAN device can spend it and
+	// lock out other direct LAN callers for up to an hour; loopback is left
+	// out of it, so the owner's recovery from the server itself
+	// (bootstrapClientKey) cannot be locked out from the LAN.
+	bootstrapDirectLANTotalFactor = 10
 
 	// bootstrapUnlistedLANTotalFactor sizes the one window all unlisted LAN
 	// traffic shares (bootstrapUnlistedLANTotalKey): 25 attempts an hour, a
@@ -146,6 +162,10 @@ func bootstrapDirectKey(ip string) string {
 // shares (bootstrapUnlistedLANTotalFactor).
 const bootstrapUnlistedLANTotalKey = "unlisted-lan:all"
 
+// bootstrapDirectLANTotalKey is the window every direct LAN request except
+// loopback shares (bootstrapDirectLANTotalFactor).
+const bootstrapDirectLANTotalKey = "direct-lan:all"
+
 // bootstrapAgg is an aggregate window a request also counts against, with
 // room for factor times the per-key cap.
 type bootstrapAgg struct {
@@ -156,8 +176,9 @@ type bootstrapAgg struct {
 // bootstrapClientKey returns the bootstrap limiter key for the request, the
 // aggregate windows it also counts against, the address to log, and whether
 // the request is exempt from the global ceiling (a direct LAN peer,
-// directLANPeer). The aggregates are bootstrapDirectLANKey for a direct LAN
-// IPv6 peer; for an unlisted LAN host (Cloudflare markers, keyed on its own
+// directLANPeer). The aggregates are, for a direct LAN peer, its IPv6 /64's
+// window (bootstrapDirectLANKey) and, unless it is loopback, the direct total
+// (bootstrapDirectLANTotalKey); for an unlisted LAN host (Cloudflare markers, keyed on its own
 // address, classifyLANPeer) its "unlisted-lan:" /64 or /24 window and the
 // unlisted LAN total; none for anything else. Every request that is not
 // direct is keyed through trustedClientIP: a visitor's own address when it
@@ -169,7 +190,10 @@ func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer f
 		a, _ := peerKeyAddr(c) // directLANPeer already parsed it
 		ip := a.String()
 		if k := bootstrapDirectLANKey(ip); k != "" {
-			aggs = []bootstrapAgg{{key: k, factor: bootstrapLANPrefixFactor}}
+			aggs = append(aggs, bootstrapAgg{key: k, factor: bootstrapLANPrefixFactor})
+		}
+		if !a.IsLoopback() {
+			aggs = append(aggs, bootstrapAgg{key: bootstrapDirectLANTotalKey, factor: bootstrapDirectLANTotalFactor})
 		}
 		return bootstrapDirectKey(ip), aggs, ip, true
 	}

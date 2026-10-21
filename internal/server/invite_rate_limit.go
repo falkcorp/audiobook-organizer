@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-21
 
@@ -312,9 +312,11 @@ type inviteRateLimits struct {
 	global            *servermiddleware.IPRateLimiter
 	// isLocalPeer reports whether an address is this host. Injectable for tests.
 	isLocalPeer func(remoteAddr string) bool
-	// connectors are the configured tunnel connector addresses (see
-	// trustedClientIP).
-	connectors connectorPeers
+	// connectors returns the configured tunnel connector addresses (see
+	// trustedClientIP), read on every request so an entry that becomes
+	// valid later (tunnelConnectorPeers) applies without a restart.
+	// Injectable for tests.
+	connectors func() connectorPeers
 }
 
 var inviteLimitLog = logger.New("server.invite-rate-limit")
@@ -330,9 +332,9 @@ func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 		unlistedLANTotal:  servermiddleware.NewIPRateLimiter(inviteUnlistedLANTotalRatePerMinute, inviteUnlistedLANTotalRateBurst),
 		global:            servermiddleware.NewIPRateLimiter(inviteGlobalRatePerMinute, inviteGlobalRateBurst),
 		isLocalPeer:       remoteAddrIsLocal,
-		connectors:        tunnelConnectorPeers(),
+		connectors:        tunnelConnectorPeers,
 	}
-	if len(l.connectors) == 0 {
+	if len(l.connectors()) == 0 {
 		inviteLimitLog.Info("TUNNEL_CONNECTOR_ADDRS is not set: no tunnel visitor address can be established, so each tunnel connector gets one invite per-client bucket shared by every visitor it relays, and all tunnel traffic shares the unlisted LAN total (a quarter of the global limit); the per-token and global limits still apply")
 	}
 	l.perToken.Start(ctx)
@@ -389,7 +391,8 @@ type inviteClient struct {
 // A visitor attributed through a connector gets none of them (the global
 // layer covers it).
 func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (inviteClient, bool) {
-	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: l.connectors})
+	connectors := l.connectors()
+	ip, ok := trustedClientIP(c, clientTrust{isLocalPeer: l.isLocalPeer, connectors: connectors})
 	if !ok {
 		return inviteClient{}, false
 	}
@@ -398,7 +401,7 @@ func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (inviteClient, bool) 
 		return inviteClient{}, false
 	}
 	ic := inviteClient{key: "invite-client:" + k}
-	switch lp := classifyLANPeer(c, ip, l.connectors); {
+	switch lp := classifyLANPeer(c, ip, connectors); {
 	case lp.direct:
 		if lp.prefix != "" {
 			ic.prefixKey = "invite-direct-lan64:" + lp.prefix
