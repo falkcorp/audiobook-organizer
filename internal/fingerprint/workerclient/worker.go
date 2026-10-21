@@ -1,7 +1,7 @@
 // file: internal/fingerprint/workerclient/worker.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 201f885e-8d5c-40a3-8022-a6a19631e9d9
-// last-edited: 2026-09-19
+// last-edited: 2026-10-20
 
 package workerclient
 
@@ -469,12 +469,10 @@ func (w *worker) loop(ctx context.Context) (runChanged bool) {
 			held++
 			w.queued.Add(int64(len(resp.Jobs)))
 			log.Info("lease %s: %d jobs, expires %s", resp.LeaseID, len(resp.Jobs), resp.ExpiresAt.Format(time.RFC3339))
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				w.runLease(ctx, resp)
 				leaseDone <- struct{}{}
-			}()
+			})
 			continue
 		}
 		if isRunChanged(st, err) {
@@ -554,14 +552,12 @@ func (w *worker) runLease(ctx context.Context, resp *workerapi.LeaseResponse) {
 		}
 		w.queued.Add(-1)
 		w.signalWake()
-		jobs.Add(1)
-		go func() {
-			defer jobs.Done()
+		jobs.Go(func() {
 			defer func() { <-w.sem }()
 			res := w.process(ctx, job)
 			w.countOutcome(res.Outcome)
 			results <- res
-		}()
+		})
 	}
 	if len(unstarted) > 0 {
 		w.queued.Add(-int64(len(unstarted)))

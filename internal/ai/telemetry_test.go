@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
 // last-edited: 2026-10-20
 
@@ -1336,9 +1336,7 @@ func TestModelLabelConcurrentUse(t *testing.T) {
 	modelLabels.setConfigured(modelPair{providerLocal, "model-a"}, modelPair{providerLocal, "model-b"})
 	var wg sync.WaitGroup
 	for g := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range 200 {
 				if g == 0 && i%50 == 0 {
 					modelLabels.setConfigured(modelPair{providerLocal, "model-a"}, modelPair{providerLocal, "model-b"})
@@ -1352,7 +1350,7 @@ func TestModelLabelConcurrentUse(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

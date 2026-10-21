@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/conformance_mutation_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9a4f2c63-1e8b-4d57-b0a9-5c3e7f1d2b86
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package opstest
 
@@ -280,9 +280,7 @@ func TestCatches_WriteAfterRunEnds(t *testing.T) {
 				_, err := rc.Writer().ModifyBook(rc.Context(), b.ID, upperTitle)
 				if fenced(err) && leak != "" { // the bug: the write outlives the run
 					opID := rc.OpID()
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
+					wg.Go(func() {
 						<-release
 						if leak == "journal" {
 							_ = journal.CreateOperationChange(&database.OperationChange{OperationID: opID,
@@ -290,7 +288,7 @@ func TestCatches_WriteAfterRunEnds(t *testing.T) {
 							return
 						}
 						_, _ = books.ModifyBook(b.ID, upperTitle)
-					}()
+					})
 				}
 				return err
 			},

@@ -1,12 +1,11 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -477,8 +476,7 @@ func TestOpsV3Routes_EventStreamsEndOnShutdownAndStartLazily(t *testing.T) {
 
 	srv := httptest.NewServer(s.router)
 	defer srv.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v3/ops/events", nil)
 	require.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)

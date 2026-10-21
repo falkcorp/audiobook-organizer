@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0f6d3b82-9e14-4c7a-b25d-7a1e8c4f9d03
-// last-edited: 2026-10-05
+// last-edited: 2026-10-20
 
 package repairs
 
@@ -158,9 +158,7 @@ func acquireOnce(ctx context.Context, sd StandDown, holderOpID, reason string,
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	if reporter != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			t := time.NewTicker(opts.TouchEvery)
 			defer t.Stop()
 			for {
@@ -171,7 +169,7 @@ func acquireOnce(ctx context.Context, sd StandDown, holderOpID, reason string,
 					registry.TouchLiveness(reporter)
 				}
 			}
-		}()
+		})
 	}
 	rel, err := sd.AcquireScanStandDown(actx, holderOpID, reason)
 	close(done)

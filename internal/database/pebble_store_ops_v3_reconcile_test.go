@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_reconcile_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: ea4b7eaf-18c6-45d2-9344-3838c68c905f
-// last-edited: 2026-10-11
+// last-edited: 2026-10-20
 
 package database
 
@@ -379,9 +379,7 @@ func TestReconcileOpsV3SafeAgainstLiveWrites(t *testing.T) {
 		rawSetOp(t, p, *row) // stale: an older binary dispatched it
 	}
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i, id := range ids {
 			if i%2 == 0 {
 				_ = p.UpdateOpProgressV2(id, i, 300, "live")
@@ -390,7 +388,7 @@ func TestReconcileOpsV3SafeAgainstLiveWrites(t *testing.T) {
 				_ = p.UpdateOperationV2Status(id, "failed", nil, &now, &msg)
 			}
 		}
-	}()
+	})
 	rep, err := p.ReconcileOpsV3WithV2(context.Background())
 	wg.Wait()
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_abssession_sliding_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a8617fc-1971-4c2c-96c2-a40298b4675e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -225,9 +225,7 @@ func TestABSSession_ConcurrentExtendSweepRevoke(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for w := range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for round := range 20 {
 				for i := range n {
 					id := fmt.Sprintf("s%02d", i)
@@ -235,7 +233,7 @@ func TestABSSession_ConcurrentExtendSweepRevoke(t *testing.T) {
 						base.Add(time.Duration(round+w+1)*time.Hour), 0)
 				}
 			}
-		}()
+		})
 	}
 	wg.Add(2)
 	go func() {

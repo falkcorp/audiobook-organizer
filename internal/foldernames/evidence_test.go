@@ -1,5 +1,5 @@
 // file: internal/foldernames/evidence_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6cbae67b-604d-4b23-be02-29ef9669f74f
 // last-edited: 2026-10-20
 
@@ -179,9 +179,7 @@ func TestSnapshot_ConcurrentCallers(t *testing.T) {
 	ev := snap.Evidence()
 	var wg sync.WaitGroup
 	for range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 50 {
 				if ev.IsKnownSeries("Brandon Sanderson") || !ev.IsKnownSeries("Star Wars") {
 					t.Error("concurrent verdict changed")
@@ -190,7 +188,7 @@ func TestSnapshot_ConcurrentCallers(t *testing.T) {
 				_ = ev.IsAuthorRow("Star Wars")
 				_ = ev.IsKnownAuthor("Brandon Sanderson")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

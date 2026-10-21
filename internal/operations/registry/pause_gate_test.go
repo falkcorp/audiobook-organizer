@@ -1,7 +1,7 @@
 // file: internal/operations/registry/pause_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c41a7b59-3e08-4d62-9f15-8a20d7c63e41
-// last-edited: 2026-09-20
+// last-edited: 2026-10-20
 
 package registry_test
 
@@ -97,8 +97,7 @@ func TestPause_StampsLivenessWhileParked(t *testing.T) {
 	_ = registry.PauseOperations("test", "tester")
 
 	rep := &livenessReporter{}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go func() {
 		_ = registry.RunItems(ctx, rep, []int{1, 2},

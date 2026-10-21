@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-10-16
+// last-edited: 2026-10-20
 
 package server
 
@@ -159,9 +159,7 @@ func (s *Server) runSearchBackfill(ctx context.Context, store searchBackfillStor
 	// Progress heartbeat so a long build is visible in the log.
 	progressDone := make(chan struct{})
 	var progressWG sync.WaitGroup
-	progressWG.Add(1)
-	go func() {
-		defer progressWG.Done()
+	progressWG.Go(func() {
 		t := time.NewTicker(searchBackfillProgressEvery)
 		defer t.Stop()
 		for {
@@ -176,7 +174,7 @@ func (s *Server) runSearchBackfill(ctx context.Context, store searchBackfillStor
 					"elapsed", elapsed.Round(time.Second), "books_per_sec", int(rate))
 			}
 		}
-	}()
+	})
 	defer func() {
 		close(progressDone)
 		progressWG.Wait()

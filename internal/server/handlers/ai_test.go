@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 0e40aea8-a75e-4dc9-9521-11521efacaf8
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package handlers_test
 
@@ -298,14 +298,12 @@ func TestAIHandler_StartScan_ConcurrentStartsCreateExactlyOneScan(t *testing.T) 
 	var wg sync.WaitGroup
 	gate := make(chan struct{})
 	for i := range starters {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			c, w := newAICtx(http.MethodPost, "/ai/scans", `{"mode":"realtime"}`, nil)
 			<-gate
 			h.StartScan(c)
 			codes[i] = w.Code
-		}()
+		})
 	}
 	close(gate)
 	wg.Wait()

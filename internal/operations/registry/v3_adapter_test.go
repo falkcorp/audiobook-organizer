@@ -1,5 +1,5 @@
 // file: internal/operations/registry/v3_adapter_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3ffc035f-1ee4-4409-afce-613375ef8fcd
 // last-edited: 2026-10-20
 
@@ -421,8 +421,7 @@ func TestBatchResumesThroughTheExecutor(t *testing.T) {
 	if err := Register(r1, "test", mkDef(first, true)); err != nil {
 		t.Fatal(err)
 	}
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	defer cancel1()
+	ctx1 := t.Context()
 	r1.Start(ctx1)
 	opID, err := r1.EnqueueOp(ctx1, "test.resumable", nil)
 	if err != nil {
@@ -527,8 +526,7 @@ func TestBatchResumesAfterACrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := newCounts()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	rc := ops.NewRC(ops.RunEnv{Context: ctx, OpID: "crashing", DefID: "test.crashy", Mode: ops.Live})
 	job, err := ops.Compile(mkDef(first)).OpenBatch(rc, nil)
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_metrics_export_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 7f67b147-94c7-439f-8b61-2ea3da025abe
-// last-edited: 2026-10-19
+// last-edited: 2026-10-20
 
 package database
 
@@ -83,9 +83,7 @@ func TestPebbleSampleFromDB_ConcurrentClose(t *testing.T) {
 		var wg sync.WaitGroup
 		panics := make(chan any, 4)
 		for range 3 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				defer func() {
 					if r := recover(); r != nil {
 						panics <- r
@@ -99,7 +97,7 @@ func TestPebbleSampleFromDB_ConcurrentClose(t *testing.T) {
 						p.PebbleMetricsSample()
 					}
 				}
-			}()
+			})
 		}
 		if err := p.Close(); err != nil {
 			t.Fatal(err)

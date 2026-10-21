@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/world_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b7e1c93-6a28-4d50-9f3e-c1a85d02e7b4
-// last-edited: 2026-10-14
+// last-edited: 2026-10-20
 
 package opstest
 
@@ -51,15 +51,13 @@ func TestLeakedUseAfterCleanupIsRefused(t *testing.T) {
 	var wg sync.WaitGroup
 	release := make(chan struct{})
 	for name, use := range uses {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-release
 			err := use()
 			mu.Lock()
 			got[name] = err
 			mu.Unlock()
-		}()
+		})
 	}
 	close(release)
 	wg.Wait()

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-20
 
@@ -1252,16 +1252,14 @@ func TestReviewQuery_ConcurrentIdenticalRequestsShareOneEvaluation(t *testing.T)
 	var wg sync.WaitGroup
 	totals := make([]int, 16)
 	for i := range totals {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			q := "hide_runtime=true&q=title"
 			if i%2 == 1 {
 				q = "sort=confidence&ids=all"
 			}
 			r, _, _ := servePage(t, h, q)
 			totals[i] = r.Data.TotalCount + r.Data.Total
-		}()
+		})
 	}
 	wg.Wait()
 	require.EqualValues(t, 2, h.reviewQuery.evaluations.Load()-before)

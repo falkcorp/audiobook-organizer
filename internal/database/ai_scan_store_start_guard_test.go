@@ -1,7 +1,7 @@
 // file: internal/database/ai_scan_store_start_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2a9e41-3b85-4c60-bf17-9e4a1c6d8f23
-// last-edited: 2026-10-13
+// last-edited: 2026-10-20
 
 package database
 
@@ -31,9 +31,7 @@ func TestCreateScanIfNoneActive_ConcurrentStartsCreateExactlyOne(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for range starters {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			_, err := store.CreateScanIfNoneActive("realtime", nil, 3)
 			var running *ScanAlreadyRunningError
@@ -45,7 +43,7 @@ func TestCreateScanIfNoneActive_ConcurrentStartsCreateExactlyOne(t *testing.T) {
 			default:
 				t.Errorf("unexpected error: %v", err)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

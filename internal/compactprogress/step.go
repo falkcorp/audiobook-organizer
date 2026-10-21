@@ -1,7 +1,7 @@
 // file: internal/compactprogress/step.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0e9c7d31-5a4b-4f62-8b1e-7c3d9a2f6e15
-// last-edited: 2026-10-02
+// last-edited: 2026-10-20
 
 package compactprogress
 
@@ -102,9 +102,7 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		// A panic in the sampler (a reporter bug, say) must stop sampling,
 		// not take the process down with it: the compaction carries on and
 		// its completion line still gets written.
@@ -114,7 +112,7 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 			}
 		}()
 		sample(ctx, rep, s, interval, start, res.Before, stop)
-	}()
+	})
 
 	// stop+wait in a closure with a defer so a panicking Run still stops the
 	// sampler before the panic propagates.
