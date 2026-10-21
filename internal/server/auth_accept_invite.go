@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 // Rescued from user_handlers.go during Phase 2 handler extraction.
 // handleAcceptInvite remains a *Server method because it bridges auth
@@ -75,7 +75,7 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 			// the route is public, so distinct messages would tell a caller
 			// which tokens exist. The detail stays here, never the token.
 			inviteAccessLog.Warn("invite accept refused: %s (client %s)",
-				logger.SanitizeLogValue(err.Error()), logger.SanitizeLogValue(c.ClientIP()))
+				logger.SanitizeLogValue(err.Error()), logger.SanitizeLogValue(requestClientIP(c)))
 			httputil.RespondWithBadRequest(c, acceptInviteInvalidMessage)
 			return
 		}
@@ -85,7 +85,7 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 	s.recordAcceptDisplacement(req.Token, user.ID)
 	s.startGuestPolicySync(req.Token, user.ID)
 
-	sess, err := s.Ops().CreateSession(user.ID, c.ClientIP(), c.Request.UserAgent(), 30*24*time.Hour)
+	sess, err := s.Ops().CreateSession(user.ID, requestClientIP(c), c.Request.UserAgent(), 30*24*time.Hour)
 	if err != nil {
 		httputil.InternalError(c, "create session", err)
 		return

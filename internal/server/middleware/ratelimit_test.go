@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package middleware
 
@@ -480,4 +480,41 @@ func TestReserveKeys_PanicCancelsPartialReservations(t *testing.T) {
 	if _, ok := a.ReserveKey("x"); !ok {
 		t.Fatal("x's only token was not given back after the panic")
 	}
+}
+
+// N-d: zoned link-local peers ("[fe80::1%en0]:4000"), for which gin's
+// ClientIP is "", are keyed on their own address rather than sharing one
+// "unknown" bucket.
+func TestIPRateLimiter_MiddlewareKeysZonedLinkLocalPeersApart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := NewIPRateLimiter(1, 1)
+	engine := gin.New()
+	engine.Use(r.Middleware())
+	engine.GET("/x", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	get := func(remote string) int {
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+		return w.Code
+	}
+	require.Equal(t, http.StatusOK, get("[fe80::1%en0]:4000"))
+	require.Equal(t, http.StatusTooManyRequests, get("[fe80::1%en0]:4001"), "same peer, burst of 1")
+	assert.Equal(t, http.StatusOK, get("[fe80::2%en0]:4000"), "another link-local peer shared the first one's bucket")
+}
+
+func TestParseHostAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		"[fe80::1%en0]:4000":  "fe80::1",
+		"fe80::1%en0":         "fe80::1",
+		"10.0.0.5:80":         "10.0.0.5",
+		"[::ffff:10.0.0.5]:1": "10.0.0.5",
+		"2001:db8::1":         "2001:db8::1",
+	} {
+		a, ok := ParseHostAddr(in)
+		require.True(t, ok, in)
+		assert.Equal(t, want, a.String(), in)
+	}
+	_, ok := ParseHostAddr("not-an-address")
+	assert.False(t, ok)
 }
