@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-21
 
@@ -1205,5 +1205,18 @@ func TestUnlistedConnectorMessage_NamesThePrefix(t *testing.T) {
 	}
 	if msg := unlistedConnectorMessage(netip.MustParseAddr("10.0.0.12"), ""); strings.Contains(msg, "addresses in") {
 		t.Fatalf("an address-keyed message mentions a prefix: %s", msg)
+	}
+}
+
+// N-d: the accept handler records the client address through
+// requestClientIP, which, unlike c.ClientIP(), is not "" for a zoned
+// link-local peer.
+func TestRequestClientIP_ZonedPeer(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	req.RemoteAddr = "[fe80::1%en0]:4000"
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	if got := requestClientIP(c); got != "fe80::1" {
+		t.Fatalf("requestClientIP = %q, want fe80::1", got)
 	}
 }

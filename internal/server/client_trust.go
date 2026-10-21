@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
@@ -173,21 +173,20 @@ func peerAddr(c *gin.Context) (netip.Addr, bool) {
 	return parseHostAddr(c.Request.RemoteAddr)
 }
 
-// parseHostAddr parses "host:port", "[v6%zone]:port" or a bare address, and
-// returns the address with its zone dropped and IPv4-mapped forms unmapped.
-// Every address comparison in the trust code goes through it, so a zoned
-// link-local peer compares equal to the same address listed without a zone.
-func parseHostAddr(s string) (netip.Addr, bool) {
-	s = strings.TrimSpace(s)
-	var a netip.Addr
-	if ap, err := netip.ParseAddrPort(s); err == nil {
-		a = ap.Addr()
-	} else if parsed, err := netip.ParseAddr(s); err == nil {
-		a = parsed
-	} else {
-		return netip.Addr{}, false
-	}
-	return a.WithZone("").Unmap(), true
+// parseHostAddr is servermiddleware.ParseHostAddr: the address with its zone
+// dropped and IPv4-mapped forms unmapped. Every address comparison in the
+// trust code goes through it, so a zoned link-local peer compares equal to
+// the same address listed without a zone.
+func parseHostAddr(s string) (netip.Addr, bool) { return servermiddleware.ParseHostAddr(s) }
+
+// requestClientIP is the client address to record or log for a request: the
+// visitor's address when trustedClientIP can establish it (a tunnel visitor's
+// CF-Connecting-IP from a configured connector), otherwise the peer's own
+// address, zone dropped. Never c.ClientIP(), which is a connector's address
+// for every tunnel request and "" for a zoned link-local peer.
+func requestClientIP(c *gin.Context) string {
+	ip, _ := trustedClientIP(c, clientTrust{isLocalPeer: remoteAddrIsLocal, connectors: tunnelConnectorPeers()})
+	return ip
 }
 
 // lanAggregate reports whether a request keyed on ip gets a LAN /64

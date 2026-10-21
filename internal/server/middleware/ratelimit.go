@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package middleware
 
@@ -9,6 +9,8 @@ import (
 	"container/list"
 	"context"
 	"net/http"
+	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -424,12 +426,36 @@ func CancelReservations(rs []KeyReservation) {
 	}
 }
 
+// ParseHostAddr parses "host:port", "[v6%zone]:port" or a bare address and
+// returns the address with its zone dropped and IPv4-mapped forms unmapped.
+// It is the one parser for peer addresses: gin's ClientIP returns "" for a
+// zoned link-local RemoteAddr ("[fe80::1%en0]:4000").
+func ParseHostAddr(s string) (netip.Addr, bool) {
+	s = strings.TrimSpace(s)
+	var a netip.Addr
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		a = ap.Addr()
+	} else if parsed, err := netip.ParseAddr(s); err == nil {
+		a = parsed
+	} else {
+		return netip.Addr{}, false
+	}
+	return a.WithZone("").Unmap(), true
+}
+
 // Middleware returns a Gin middleware that enforces the configured limit.
+// The key is c.ClientIP() (the router trusts no proxies, so the peer), and
+// the parsed peer address when ClientIP is empty: a zoned link-local peer
+// used to fall into one shared "unknown" bucket with every other one.
 func (r *IPRateLimiter) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
 		if ip == "" {
-			ip = "unknown"
+			if a, ok := ParseHostAddr(c.Request.RemoteAddr); ok {
+				ip = a.String()
+			} else {
+				ip = "unknown"
+			}
 		}
 		if !r.limiterForIP(ip).Allow() {
 			httputil.RespondWithError(c, http.StatusTooManyRequests, "rate limit exceeded", "TOO_MANY_REQUESTS")
