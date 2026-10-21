@@ -1,5 +1,5 @@
 // file: internal/dedup/author_dirty_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c8f2e91-3a67-4b04-9d2e-7f1a6c3b8d50
 // last-edited: 2026-10-21
 
@@ -43,8 +43,8 @@ func TestIsDirtyAuthorName_CopyrightAndEntityShrapnel(t *testing.T) {
 }
 
 // TestFindDuplicateAuthors_ExcludesPartTrackMarkers: filename shrapnel such as
-// "Charles Dickens CD2" is not a person, so rows of it are never grouped
-// (owner-approved 2026-10-21). Every pair below is one the code BEFORE this
+// "Charles Dickens CD2" is not a person, so rows of it are never grouped; nor
+// is a lone label such as "Book 2 (Unabridged)" (owner-approved 2026-10-21). Every pair below is one the code BEFORE this
 // rule grouped (identical or case-only twins), so the test fails against the
 // old newAuthorPrecomputed; the last pair is the positive control that real
 // duplicates are still found.
@@ -56,6 +56,10 @@ func TestFindDuplicateAuthors_ExcludesPartTrackMarkers(t *testing.T) {
 		{ID: 4, Name: "maroon 5"},
 		{ID: 5, Name: "Pip Estella 2 (Unabridged)"},
 		{ID: 6, Name: "Pip Estella 2 (Unabridged)"},
+		{ID: 9, Name: "Book 2 (Unabridged)"},
+		{ID: 10, Name: "Book 2 (Unabridged)"},
+		{ID: 11, Name: "[Track 003] 2"},
+		{ID: 12, Name: "[Track 003] 2"},
 		{ID: 7, Name: "Charles Dickens"},
 		{ID: 8, Name: "Charles  Dickens"},
 	}
@@ -67,7 +71,7 @@ func TestFindDuplicateAuthors_ExcludesPartTrackMarkers(t *testing.T) {
 			ids = append(ids, v.ID)
 		}
 		for _, id := range ids {
-			if id <= 6 {
+			if id <= 6 || id >= 9 {
 				t.Errorf("junk author id %d grouped: canonical=%d ids=%v", id, g.Canonical.ID, ids)
 			}
 		}
