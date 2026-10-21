@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
-// last-edited: 2026-10-11
+// last-edited: 2026-10-21
 
 package authorjunk
 
@@ -648,6 +648,48 @@ func TestCleanedName_ReleaseTagTail(t *testing.T) {
 	} {
 		if got, ok := CleanedName(in); ok {
 			t.Errorf("CleanedName(%q) = %q, want no clean name", in, got)
+		}
+	}
+}
+
+// TestClassifyName_PartTrackMarker pins the part/track/disc marker rule
+// (owner-approved 2026-10-21): flagged, relink-only, never a real name.
+func TestClassifyName_PartTrackMarker(t *testing.T) {
+	for _, name := range []string{
+		"David Copperfield P2 S3",
+		"David Copperfield P2",
+		"Great Expectations Pt4",
+		"Charles Dickens CD2",
+		"Charles Dickens D1T05",
+	} {
+		v := ClassifyName(name)
+		if !v.Junk() || v.Strength != Strong || v.Rule != RulePartTrackMarker {
+			t.Errorf("ClassifyName(%q) = %+v, want strong %s", name, v, RulePartTrackMarker)
+		}
+		if !v.RelinkOnly() {
+			t.Errorf("ClassifyName(%q): part_track_marker must be relink-only", name)
+		}
+	}
+	// Names another, earlier rule already judges keep that verdict: a bare
+	// number is number_word, a "Part"/"Track"/"Disc" word is structural or
+	// chapter_label. Still junk, which is what matters here.
+	for name, rule := range map[string]string{
+		"Copperfield 07":            RuleNumberWord,
+		"Charles Dickens Part 2":    RuleStructuralWord,
+		"Great Expectations Pt 4":   RuleNumberWord,
+		"Charles Dickens Track 07":  RuleNumberWord,
+		"Charles Dickens Disc 1 P3": RuleStructuralWord,
+	} {
+		if v := ClassifyName(name); !v.Junk() || v.Rule != rule {
+			t.Errorf("ClassifyName(%q) = %+v, want junk via %s", name, v, rule)
+		}
+	}
+	for _, name := range []string{
+		"Malcolm X", "Pope John Paul II", "Louis XIV", "50 Cent",
+		"Thurston Howell 3rd", "Charles Dickens", "Agent K9",
+	} {
+		if v := ClassifyName(name); v.Rule == RulePartTrackMarker {
+			t.Errorf("ClassifyName(%q) flagged as part_track_marker: %+v", name, v)
 		}
 	}
 }

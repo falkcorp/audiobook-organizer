@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -182,6 +182,10 @@ const (
 	// RuleUnbalancedBracket: a name cut off inside a bracket ("Graphic Audio
 	// [Jon Scieszka").
 	RuleUnbalancedBracket = "unbalanced_bracket"
+	// RulePartTrackMarker: a name ending in a part/track/disc marker ("David
+	// Copperfield P2 S3", "Great Expectations Pt 4") or whose surname is only
+	// digits ("Copperfield 07"); personname.HasPartTrackMarker.
+	RulePartTrackMarker = "part_track_marker"
 )
 
 // relinkOnlyRules are the rules added on 2026-09-29 for the junk-author
@@ -195,7 +199,7 @@ var relinkOnlyRules = map[string]bool{
 	RuleFranchise: true, RuleSiteTag: true, RuleSeriesParenthetical: true,
 	RuleGenreLabel: true, RuleProductionPhrase: true,
 	RuleEncoderTag: true, RuleReleaseName: true, RuleChapterLabel: true, RuleSortPrefix: true,
-	RuleUnbalancedBracket: true, RulePlaceholderPhrase: true,
+	RuleUnbalancedBracket: true, RulePlaceholderPhrase: true, RulePartTrackMarker: true,
 }
 
 // RelinkOnly reports whether the verdict may only relink a book to a real
@@ -795,6 +799,12 @@ func classifyAdded(s, core, n, full string, words []string) Verdict {
 				return strong(ClassOther, RuleNumberWord)
 			}
 		}
+	}
+	// A part/track/disc marker the number-word rule does not see ("David
+	// Copperfield P2 S3", "Dickens CD2"); a purely numeric surname is the
+	// number-word rule's above and keeps its label.
+	if personname.HasPartTrackMarker(core) {
+		return strong(ClassOther, RulePartTrackMarker)
 	}
 	if isSlug(s) {
 		return strong(ClassOther, RuleSlug)
