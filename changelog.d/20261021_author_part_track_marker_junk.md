@@ -17,3 +17,8 @@ Part 2" stays `structural_word`, which can unlink the credit. Real names such
 as "Malcolm X", "Pope John Paul II", "Louis XIV", "50 Cent", "Agent K9" and
 "R2 D2" are untouched; a band that truly ends in a bare number ("Maroon 5") is
 flagged, which is the accepted cost of the owner-approved rule.
+
+Names that are only a part/track/book label ("Book 2 (Unabridged)", "[Track
+003] 2", "Vol. 01", "10 Chapter 10") are also skipped by author dedup
+(`personname.IsLoneMarkerPhrase`). The junk-author classifier is unchanged for
+them: it already flags them as `structural_word` or `author_creation_gate`.

@@ -1,5 +1,5 @@
 // file: internal/dedup/author.go
-// version: 1.26.4
+// version: 1.26.5
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-21
 
@@ -438,7 +438,7 @@ type ProgressCallback func(current, total int, message string)
 type authorPrecomputed struct {
 	index     int
 	author    database.Author
-	skip      bool   // dirty, multi-author, composite, or part/track-marker name
+	skip      bool   // dirty, multi-author, composite, part/track-marker or lone marker phrase
 	norm      string // lowercased normalized name
 	base      string // lowercased base author (before slash etc.)
 	first     string // first name part
@@ -448,14 +448,16 @@ type authorPrecomputed struct {
 
 // newAuthorPrecomputed builds the comparison form of one author: dirty,
 // multi-author, composite and part/track-marker names ("Charles Dickens CD2",
-// "Copperfield 07"; personname.HasPartTrackMarker) are marked skip and carry no name parts;
+// "Copperfield 07"; personname.HasPartTrackMarker) and lone marker phrases
+// ("Book 2 (Unabridged)", "[Track 003] 2"; personname.IsLoneMarkerPhrase) are
+// marked skip and carry no name parts;
 // every other name gets its normalized, base, first/last parts filled in.
 func newAuthorPrecomputed(index int, a database.Author) authorPrecomputed {
 	pre := authorPrecomputed{
 		index:  index,
 		author: a,
 	}
-	if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || IsDirtyAuthorName(a.Name) || personname.HasPartTrackMarker(a.Name) {
+	if isMultiAuthorString(a.Name) || isCompositeAuthorName(a.Name) || IsDirtyAuthorName(a.Name) || personname.HasPartTrackMarker(a.Name) || personname.IsLoneMarkerPhrase(a.Name) {
 		pre.skip = true
 	} else {
 		pre.norm = strings.ToLower(NormalizeAuthorName(a.Name))

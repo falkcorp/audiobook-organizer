@@ -1,5 +1,5 @@
 // file: internal/personname/author_part_marker_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e2b4d91-6c3a-4f08-b7d5-1a9e0c4f2e76
 // last-edited: 2026-10-21
 
@@ -67,6 +67,8 @@ func TestHasPartTrackMarker(t *testing.T) {
 		"P2", // lone token: not judged here
 		"07", // lone token: pure-number gate's business
 		"R2 D2",
+		"R2 D2 P3",
+		"H2g2 S4 E1",
 		"Tech N9ne",
 		"Book 3",
 		"Vol 3",
@@ -90,6 +92,53 @@ func TestHasPartTrackMarker(t *testing.T) {
 	for _, n := range clean {
 		if HasPartTrackMarker(n) {
 			t.Errorf("HasPartTrackMarker(%q) = true, want false", n)
+		}
+	}
+}
+
+func TestIsLoneMarkerPhrase(t *testing.T) {
+	lone := []string{
+		"Book 1",
+		"Book 2 (Unabridged)",
+		"[Track 003] 2",
+		"Vol. 01",
+		"10 Chapter 10",
+		"Part 2",
+		"Disc 1",
+		"Part 2 P3",
+		"Part 2 Track 07",
+		"P2 S3",
+		"S4 E1",
+		"Vol3",
+		"Bk 3",
+	}
+	for _, n := range lone {
+		if !IsLoneMarkerPhrase(n) {
+			t.Errorf("IsLoneMarkerPhrase(%q) = false, want true", n)
+		}
+		if HasPartTrackMarker(n) {
+			t.Errorf("HasPartTrackMarker(%q) = true; a lone phrase has no name in front", n)
+		}
+	}
+	notLone := []string{
+		"",
+		"Charles Dickens",
+		"Charles Dickens Part 2",
+		"Pip Estella 1 Track 04",
+		"Copperfield 07",
+		"Maroon 5",
+		"Malcolm X",
+		"Pope John Paul II",
+		"50 Cent",
+		"Agent K9",
+		"Part Time",
+		"Book Club",
+		"R2 D2",
+		"Tech N9ne",
+	}
+	for _, n := range notLone {
+		if IsLoneMarkerPhrase(n) {
+			t.Errorf("IsLoneMarkerPhrase(%q) = true, want false", n)
 		}
 	}
 }
