@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e9a7c15-84d2-4b60-a1f7-0c5d8e2b6f49
 // last-edited: 2026-10-21
 
@@ -110,7 +110,7 @@ func TestRetireCarry_RatingsCollectionsAndPlaylistsFollowAndUndo(t *testing.T) {
 		require.Empty(t, undo.NotRestorableLabel(c), "every row is restorable: %+v", c)
 		k, _, ok := undo.UserContentFromField(c.FieldName)
 		require.True(t, ok)
-		if k == undo.UserContentCollectionHeld || k == undo.UserContentPlaylistHeld {
+		if undo.IsMarker(k) {
 			require.Equal(t, parent, c.BookID, "a marker is journaled on the survivor")
 			require.Equal(t, child, c.NewValue)
 		} else {
@@ -118,8 +118,9 @@ func TestRetireCarry_RatingsCollectionsAndPlaylistsFollowAndUndo(t *testing.T) {
 		}
 		kinds[k]++
 	}
-	require.Equal(t, map[string]int{undo.UserContentRating: 1, undo.UserContentCollection: 2, undo.UserContentPlaylist: 1, undo.UserContentCollectionHeld: 1}, kinds,
-		"colB (the survivor already listed) also journals a marker on the survivor")
+	require.Equal(t, map[string]int{undo.UserContentRating: 1, undo.UserContentCollection: 2, undo.UserContentPlaylist: 1,
+		undo.UserContentCollectionTook: 1, undo.UserContentPlaylistTook: 1, undo.UserContentCollectionHeld: 1}, kinds,
+		"colA and plA (the survivor took the slot) journal a took marker on the survivor, colB (already listed) a held one")
 
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
 	require.NoError(t, err)

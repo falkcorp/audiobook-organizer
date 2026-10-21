@@ -42,13 +42,19 @@ listening state already was. Each move is journaled as `user_content_follow`
 and restored by the undo of the apply, which refuses to overwrite a rating,
 collection or playlist edited since. A store that cannot reach collections or
 playlists refuses the retire before its first write rather than carrying part
-of the state. The collections and playlists are listed once per apply operation
-(an index with a 30 second lifetime, a hint only: every list is read again
-under its lock before it is written), not once per retire. Ratings revert field
-by field, so reverting one retire never undoes a field another retire filled.
-When a later retire removed its book from a list because the survivor was
-already listed there, it journals a marker on the survivor, so reverting the
-EARLIER retire keeps the survivor in the list until the later one is reverted
-too. The undo preflight predicts a refusal for a carried collection, playlist or
-rating that was edited since (it gives no prediction when the store cannot read
-lists).
+of the state. The lists are read afresh for every retire, so a list the owner
+changed since the last one is seen. Ratings revert field by field, so
+reverting one retire never undoes a field another retire filled. Each list
+carry journals a marker row on the survivor (`collection-took` or
+`playlist-took` when the survivor took the retired book's slot,
+`collection-held` or `playlist-held` when the book was only removed because the
+survivor was already listed). Reverting one of several retires into the same
+survivor reads the others' markers: the survivor stays in the list until the
+last of them is reverted, then leaves it, so two retires reverted in either
+order end with the original list and no survivor left behind (a removal is put
+back by its recorded index, so with three or more retires the position of a
+restored book can be one slot off unless the newest is reverted first; none is
+lost). Marker rows restore nothing, so the revert result counts them in a
+separate `markers` figure, not in `restored`. The undo preflight predicts a
+refusal for a carried collection, playlist or rating that was edited since (it
+gives no prediction when the store cannot read lists).
