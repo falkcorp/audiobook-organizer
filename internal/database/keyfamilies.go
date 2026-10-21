@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-21
 
@@ -184,6 +184,7 @@ var keyFamilies = []KeyFamily{
 	{"decision:op:", "decision history index by op kind, export order (never pruned)", "internal/decisions/store.go"},
 	{"decision:pe:", "decision pair-edge veto index, one row per rejecting record (never pruned)", "internal/decisions/store.go"},
 	{"decision:r:", "decision log: one labelled example per owner decision (never pruned)", "internal/decisions/store.go"},
+	{"decision:va:", "decision live-reject index: one row per active or reopened reject, what the veto snapshot scans (never pruned)", "internal/decisions/store.go"},
 	{"decision:v:", "decision verdicts: current reject state of each proposal (never pruned)", "internal/decisions/store.go"},
 
 	// ── Dedup and embeddings (EmbeddingStore shares the main DB) ──

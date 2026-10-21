@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.231.2
+// version: 1.231.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-21
 
@@ -5780,11 +5780,18 @@ func (p *PebbleStore) ScanPrefix(prefix string) ([]KVPair, error) {
 // handles a trailing 0xff byte, as ScanPrefix and CountPrefix now do through
 // prefixIterOptions.
 func (p *PebbleStore) ScanPrefixPage(prefix, after string, limit int) ([]KVPair, string, error) {
+	return scanPrefixPageWith(p.db.NewIter, prefix, after, limit)
+}
+
+// scanPrefixPageWith is ScanPrefixPage over any iterator source: the live
+// engine (PebbleStore.ScanPrefixPage) or a snapshot (rawSnapshot), so a
+// snapshot page is read by exactly the code a live page is.
+func scanPrefixPageWith(newIter func(*pebble.IterOptions) (*GatedIter, error), prefix, after string, limit int) ([]KVPair, string, error) {
 	if limit <= 0 {
 		return nil, "", fmt.Errorf("ScanPrefixPage: limit must be positive, got %d", limit)
 	}
 	prefixBytes := []byte(prefix)
-	iter, err := p.db.NewIter(&pebble.IterOptions{
+	iter, err := newIter(&pebble.IterOptions{
 		LowerBound: prefixBytes,
 		UpperBound: prefixUpperBound(prefixBytes),
 	})

@@ -1,5 +1,5 @@
 // file: internal/decisions/keys.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8f2d6e-41c7-4a95-9e0d-6f12a7c8b534
 // last-edited: 2026-10-21
 
@@ -17,10 +17,17 @@ import (
 //
 //	decision:r:<ULID>                                                 -> Record JSON (append-only log; the dataset)
 //	decision:v:<op_kind>:<subject_key>                                -> Verdict JSON (current state of one proposal)
+//	decision:va:<op_kind>:<subject_key>                               -> ActiveRow JSON (one row per LIVE reject; what Load scans)
 //	decision:pe:<entity_type>:<lo>:<hi>:<family>:<record_id>          -> empty (pair-edge veto, one row per rejecting record)
 //	decision:mb:<entity_type>:<entity_id>:<family>:<record_id>        -> empty (membership of a rejected set larger than MaxEdgeSet)
 //	decision:ent:<entity_type>:<entity_id>:<ULID>                     -> empty (history of one entity)
 //	decision:op:<op_kind>:<ULID>                                      -> empty (history of one op kind, export order)
+//
+// decision:va: exists so Load reads only the proposals that can veto
+// something, not every label-only verdict ever written (approve, applied,
+// skip and undo each leave one). It holds the rejected material hashes and is
+// written and deleted in the same atomic batch as the verdict, so the two can
+// never disagree: it exists exactly while the verdict is active or reopened.
 //
 // Every variable component is escaped (escapeComponent) so a ':' inside an
 // op_kind such as "repairs:dedup.split-books" can never be mistaken for a
@@ -33,6 +40,7 @@ import (
 const (
 	prefixRecord  = "decision:r:"
 	prefixVerdict = "decision:v:"
+	prefixActive  = "decision:va:"
 	prefixEdge    = "decision:pe:"
 	prefixMember  = "decision:mb:"
 	prefixEntity  = "decision:ent:"
@@ -42,7 +50,7 @@ const (
 // Prefixes lists every key prefix the package writes, for tests and tooling
 // that must cover the whole decision keyspace.
 func Prefixes() []string {
-	return []string{prefixRecord, prefixVerdict, prefixEdge, prefixMember, prefixEntity, prefixOp}
+	return []string{prefixRecord, prefixVerdict, prefixActive, prefixEdge, prefixMember, prefixEntity, prefixOp}
 }
 
 // ErrInvalidComponent is returned for a key component that is empty or holds a
@@ -96,6 +104,10 @@ func verdictKey(opKind, subjectKey string) string {
 	return prefixVerdict + escapeComponent(opKind) + ":" + escapeComponent(subjectKey)
 }
 
+func activeKey(opKind, subjectKey string) string {
+	return prefixActive + escapeComponent(opKind) + ":" + escapeComponent(subjectKey)
+}
+
 func opPrefix(opKind string) string { return prefixOp + escapeComponent(opKind) + ":" }
 
 func opKey(opKind, id string) string { return opPrefix(opKind) + id }
@@ -109,9 +121,13 @@ func entityKey(entityType, entityID, id string) string {
 }
 
 // orderPair returns the pair in canonical order. The order is plain string
-// comparison of the ids, so author ids "10" and "9" order as "10" < "9";
-// that is fine because it only has to be the same function for every writer
-// and reader of an edge.
+// comparison of the RAW ids, so author ids "10" and "9" order as "10" < "9".
+// It is compared before escaping and the key holds the escaped ids, so the
+// escaped strings need not sort the way the raw ones do (':' is 0x3A, its
+// escape starts with '%' 0x25): that is harmless because every writer builds
+// an edge as orderPair(raw a, raw b) and every reader, including the Load
+// snapshot, unescapes the two ids from the key and calls orderPair again
+// before it looks the pair up. Never compare the escaped halves of a key.
 func orderPair(a, b string) (lo, hi string) {
 	if a <= b {
 		return a, b

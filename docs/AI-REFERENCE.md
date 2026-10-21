@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.7.3 -->
+<!-- version: 1.7.4 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-21 -->
 
@@ -434,8 +434,9 @@ Key format note: `<id16hex>` is a 16-character lowercase hex string encoding a s
 ### Decisions keyspace (internal/decisions, main audiobooks.pebble DB)
 
 ```
-decision:r:<ULID>                                              → Record JSON       (append-only log; one labelled example per decision)
-decision:v:<op_kind>:<subject_key>                             → Verdict JSON      (current reject state: none|active|unrejected|reopened)
+decision:r:<ULID>                                              → Record JSON       (append-only log; one labelled example per decision; carries IndexShape edges|members)
+decision:v:<op_kind>:<subject_key>                             → Verdict JSON      (current reject state: none|active|unrejected|reopened; every rejected MaterialHash)
+decision:va:<op_kind>:<subject_key>                            → ActiveRow JSON    (exists exactly while the verdict is active or reopened; Load scans this, not every verdict)
 decision:pe:<type>:<lo>:<hi>:<family>:<record_id>              → (empty)           (pair-edge veto; one row per rejecting record, so un-rejecting one owner keeps a shared pair vetoed)
 decision:mb:<type>:<id>:<family>:<record_id>                   → (empty)           (membership row for a rejected set over 50 entities; vetoes every pair inside it)
 decision:ent:<type>:<id>:<ULID>                                → (empty)           (history of one entity)
@@ -444,7 +445,16 @@ decision:op:<op_kind>:<ULID>                                   → (empty)      
 
 Every variable component is escaped (`%` and `:` and control bytes become `%XX`) so an `op_kind` such as `repairs:dedup.split-books` cannot be mistaken for a delimiter. `<subject_key>` is `SubjectKey(op_kind, entity_type, ids, scope)` (sha256 hex, ids sorted and de-duplicated, length-prefixed fields; frozen by golden vectors). A record, its verdict and its veto rows are written with one `ApplyRawBatch` commit.
 
-**Durability invariant**: `decision:` keys are never pruned and have no TTL. They are owner decisions and training data. `internal/decisions/retention_test.go` runs every prune/sweep entry point and fails when a new one is added without coverage; only `internal/decisions` may build `decision:` keys.
+**Semantics**
+- **Per question family.** A reject vetoes a pair for the family it was made in (`same_work`, ...). A split-books `same_work` reject also stops fragment-consolidation and folder-books from proposing the same pair; it does not stop an unrelated family. `FamilyAny` stored on an edge would veto every family, but `Record` refuses it until the never-merge override lands (a later PR); as a `PairVetoed` query it means "vetoed in any family". An unknown family is an error everywhere (fail closed), never a quiet miss.
+- **Reopen never lifts the original veto.** A `reopened` verdict allows new suggestions only when the material changed; the originally rejected material hash stays blocked, so if the data flips back the proposal is still vetoed. Reopen needs a previous and a new `MaterialHash` that differ, and is refused for sticky and merge-shaped rejects.
+- **Only a human lifts or replaces a human reject.** Unreject requires `SourceHuman`; a non-human reject over a live human reject is refused.
+- **Ids are canonicalised at every entry point.** Leading/trailing whitespace is refused; ULIDs are upper-cased; subject keys are lower-cased hex. Golden vectors are unchanged for canonical input.
+- **Writers serialise per KV.** The subject lock is a package-level registry keyed by the KV pointer, so two `Store` values on one KV share it. `Load` reads one point-in-time snapshot (`database.RawSnapshotter`), so a record committing mid-load cannot be half-seen.
+- **Book merges are not resolved yet.** The author-tombstone resolver is provided; a caller-composed resolver over `merge.ResolveMergeSurvivor` is required before a book-merging consumer lands (until then snapshots fail open for merged-away book ids).
+
+**Durability invariant**: `decision:` keys are never pruned and have no TTL. They are owner decisions and training data. `internal/decisions/retention_test.go` runs the prune, sweep, purge, expiry and cleanup entry points of the log, activity, undo-journal, metrics and session stores plus `resultjournal.Journal.Prune`, `AudiobookService.PurgeSoftDeletedBooks` and `dedup.Engine.PurgeStaleCandidates`, and fails when a method of the four reflected store types matching `Prune|Sweep|Purge|DeleteExpired|Cleanup` is added without coverage. A sweep on any other type is listed by hand; plugin sweeps with their own fixed prefixes (`pcache_sweep`, the resultjournal) carry a `decision:` sentinel in their own tests. Only `internal/decisions` may build `decision:` keys (source guard).
+
 ---
 
 ## Critical Implementation Details

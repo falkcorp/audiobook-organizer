@@ -1,7 +1,7 @@
 // file: internal/ai/resultjournal/journal_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c28e392-3a6b-4bf2-9949-6f7efc1aedd2
-// last-edited: 2026-09-26
+// last-edited: 2026-10-21
 
 package resultjournal
 
@@ -133,6 +133,12 @@ func TestPrune_DeletesOldAndCorruptKeepsFreshAndOtherKinds(t *testing.T) {
 	_ = j.Complete("old", "e", "m", result{Text: "old"})
 	_ = other.Complete("old-other-kind", "e", "m", result{Text: "x"})
 	_ = s.SetRaw("aijournal:whisper:corrupt", []byte("nope"))
+	// A decision-log row is a different keyspace; Prune is range-scoped to its
+	// own "aijournal:<kind>:" prefix and must never reach it. The raw value is
+	// undecodable as a journal Entry, so a widened range would delete it as
+	// "corrupt".
+	const decisionSentinel = "decision:v:synthetic-kind:synthetic-01"
+	_ = s.SetRaw(decisionSentinel, []byte("not-a-journal-entry"))
 
 	j.now = func() time.Time { return base.Add(10 * 24 * time.Hour) }
 	_ = j.Complete("fresh", "e", "m", result{Text: "fresh"})
@@ -152,6 +158,9 @@ func TestPrune_DeletesOldAndCorruptKeepsFreshAndOtherKinds(t *testing.T) {
 	}
 	if _, ok, _ := other.Lookup("old-other-kind"); !ok {
 		t.Error("Prune of kind whisper deleted a kind llm entry")
+	}
+	if v, err := s.GetRaw(decisionSentinel); err != nil || string(v) != "not-a-journal-entry" {
+		t.Errorf("Prune deleted or altered the decision sentinel: %q, %v", v, err)
 	}
 }
 
