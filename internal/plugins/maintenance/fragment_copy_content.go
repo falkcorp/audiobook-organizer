@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_copy_content.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d7b2e95-1c6a-4f38-8e0d-b5a9c3f1e762
-// last-edited: 2026-10-08
+// last-edited: 2026-10-21
 
 // Content proof of a copy claimant (owner decision 2026-10-06, "hash both,
 // read-only"). A fragment that matches a parent row by its original name and
@@ -30,7 +30,11 @@ package maintenance
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -149,6 +153,60 @@ func fragHashFile(path string) (fragFileSig, string, error) {
 	return before, sum, nil
 }
 
+// fragWholeHashFile is the default fragmentFixer.wholeHashFn: the SHA-256 of
+// EVERY byte of the file at path, streamed (hashing bytes only, no decoding),
+// with the signature of the bytes it read. It exists for the hash-copy rule
+// over filehash.Threshold, where book_files.file_hash is a sampled digest
+// (head, tail and size) that cannot prove two files identical: fragHashFile
+// refuses such a file, so this is its whole-file read path. ctx is checked
+// before every 1 MiB chunk, so a canceled plan stops inside a large file. The
+// descriptor is stat'ed before and after, and the byte count must equal the
+// size it had; a file that changed meanwhile is an error, never a digest.
+func fragWholeHashFile(ctx context.Context, path string) (fragFileSig, string, error) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return fragFileSig{}, "", err
+	}
+	defer fh.Close()
+	bfi, err := fh.Stat()
+	if err != nil {
+		return fragFileSig{}, "", err
+	}
+	before, err := sigOf(bfi)
+	if err != nil {
+		return fragFileSig{}, "", err
+	}
+	h := sha256.New()
+	buf := make([]byte, 1<<20)
+	var read int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return fragFileSig{}, "", err
+		}
+		n, rerr := fh.Read(buf)
+		h.Write(buf[:n])
+		read += int64(n)
+		if errors.Is(rerr, io.EOF) {
+			break
+		}
+		if rerr != nil {
+			return fragFileSig{}, "", rerr
+		}
+	}
+	afi, err := fh.Stat()
+	if err != nil {
+		return fragFileSig{}, "", err
+	}
+	after, err := sigOf(afi)
+	if err != nil {
+		return fragFileSig{}, "", err
+	}
+	if before != after || read != before.Size {
+		return fragFileSig{}, "", fmt.Errorf("%s changed while it was read (%s, then %s; %d bytes read)", path, before, after, read)
+	}
+	return before, hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // fragContentProof is the content comparison of one fragment file against
 // one parent row's file. Only equal proofs are stored with the plan
 // (fragParentState.ContentProofs); NotCompared is plan-time only.
@@ -216,7 +274,10 @@ func (lib *fragLibrary) withContent(c *fragCandidate, ms []fragMatch) []fragMatc
 // contentProofOf is the plan's proof behind pair p's evidence, ok only for a
 // pair the content proved (a path twin's proof is its donor's).
 func (lib *fragLibrary) contentProofOf(p fragPair) (fragContentProof, bool) {
-	if !strings.HasPrefix(p.Evidence, fragEvContentHashPrefix) {
+	// A hash-copy pair's evidence is its hash (fragEvHash); the whole-file
+	// proof behind it, made only for files over filehash.Threshold
+	// (proveHashCopiesWhole), is looked up by key.
+	if !p.Frag.HashCopy && !strings.HasPrefix(p.Evidence, fragEvContentHashPrefix) {
 		return fragContentProof{}, false
 	}
 	pr, ok := lib.content[contentKey(p.Frag.File.ID, p.Parent.ID)]
@@ -230,11 +291,7 @@ func (lib *fragLibrary) contentProofOf(p fragPair) (fragContentProof, bool) {
 // to lib.content. A file read error is a NotCompared proof (the pair stays
 // unproven and says why); only cancellation fails the plan.
 func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.Reporter, lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) error {
-	type job struct {
-		c *fragCandidate
-		m fragMatch
-	}
-	var jobs []job
+	var jobs []fragProofJob
 	for _, c := range cands {
 		if !c.Present || c.StatErr != "" || c.DiskSize <= 0 {
 			continue
@@ -250,12 +307,40 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 		if !lib.readableForProof(c.Book.ID, c.File.Path) || !lib.readableForProof(ms[0].Row.BookID, ms[0].Row.Path) {
 			continue
 		}
-		jobs = append(jobs, job{c: c, m: ms[0]})
+		jobs = append(jobs, fragProofJob{c: c, m: ms[0]})
 	}
+	return f.runProofJobs(ctx, rep, lib, jobs, "Copy content",
+		func(_ context.Context, path string) (fragFileSig, string, error) { return f.hashFn(path) },
+		func(j fragProofJob) string {
+			// Pre-check, so neither file is opened; fragHashFile refuses such
+			// a file too, whatever its caller.
+			if j.c.DiskSize > filehash.Threshold {
+				return fmt.Sprintf("the files are over %d MB (filehash.Threshold), where the file hash samples the head and tail rather than every byte, so equal hashes would not prove identical content",
+					filehash.Threshold/(1024*1024))
+			}
+			return ""
+		})
+}
+
+// fragProofJob is one fragment file to compare against one parent row's file.
+type fragProofJob struct {
+	c *fragCandidate
+	m fragMatch
+}
+
+// runProofJobs hashes, on a pool of fragHashLimit, both files of each job and
+// records the comparison in lib.content (a file read error is a NotCompared
+// proof; only cancellation fails the run). A job whose parent row's file is
+// not on disk at the fragment's size makes no proof: the caller's rule
+// decides it. refuse, when it names a reason for a job, records NotCompared
+// with it before any file is opened. hash reads one file (the copy rule's
+// BookFileHash digest, or the whole-file SHA-256 of the hash-copy rule); one
+// read per file, several claimants sharing one parent row's file.
+func (f *fragmentFixer) runProofJobs(ctx context.Context, rep registry.Reporter, lib *fragLibrary, jobs []fragProofJob, label string,
+	hash func(context.Context, string) (fragFileSig, string, error), refuse func(fragProofJob) string) error {
 	if len(jobs) == 0 {
 		return nil
 	}
-	// One read per file: several claimants share one parent row's file.
 	type hashed struct {
 		sig    fragFileSig
 		digest string
@@ -263,12 +348,12 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 	}
 	var memoMu sync.Mutex
 	memo := map[string]func() hashed{}
-	hashOf := func(path string) hashed {
+	hashOf := func(ctx context.Context, path string) hashed {
 		memoMu.Lock()
 		fn, ok := memo[path]
 		if !ok {
 			fn = sync.OnceValue(func() hashed {
-				s, d, err := f.hashFn(path)
+				s, d, err := hash(ctx, path)
 				return hashed{s, d, err}
 			})
 			memo[path] = fn
@@ -287,19 +372,18 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 		j := jobs[i]
 		fi, err := f.statFn(j.m.Row.Path)
 		if err != nil || fi.Size() != j.c.DiskSize {
-			return nil // not a same-size copy on disk: pairFor decides it
+			return nil // not a same-size copy on disk: the caller's rule decides it
 		}
 		p := &fragContentProof{FragBook: j.c.Book.ID, FragFile: j.c.File.ID, FragPath: j.c.File.Path,
 			ParentRow: j.m.Row.ID, ParentPath: j.m.Row.Path}
 		out[i] = p
-		// Pre-check, so neither file is opened; fragHashFile refuses such
-		// a file too, whatever its caller.
-		if j.c.DiskSize > filehash.Threshold {
-			p.NotCompared = fmt.Sprintf("the files are over %d MB (filehash.Threshold), where the file hash samples the head and tail rather than every byte, so equal hashes would not prove identical content",
-				filehash.Threshold/(1024*1024))
-			return nil
+		if refuse != nil {
+			if why := refuse(j); why != "" {
+				p.NotCompared = why
+				return nil
+			}
 		}
-		fr := hashOf(j.c.File.Path)
+		fr := hashOf(ctx, j.c.File.Path)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -307,7 +391,7 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 			p.NotCompared = "the fragment's file is unreadable: " + fr.err.Error()
 			return nil
 		}
-		pr := hashOf(j.m.Row.Path)
+		pr := hashOf(ctx, j.m.Row.Path)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -328,13 +412,14 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 	}, registry.RunItemsOptions{
 		Concurrency: fragHashLimit,
 		ErrMode:     registry.ErrModeFail,
-		Label:       func(_, total int) string { return fmt.Sprintf("Copy content %d/%d", done.Load(), total) },
+		Label:       func(_, total int) string { return fmt.Sprintf("%s %d/%d", label, done.Load(), total) },
 	})
+	what := strings.ToLower(label)
 	if err != nil {
-		return fmt.Errorf("%s: copy content: %w", fragFixerID, err)
+		return fmt.Errorf("%s: %s: %w", fragFixerID, what, err)
 	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("%s: copy content: %w", fragFixerID, err)
+		return fmt.Errorf("%s: %s: %w", fragFixerID, what, err)
 	}
 	for _, p := range out {
 		if p != nil {
@@ -342,6 +427,63 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 		}
 	}
 	return nil
+}
+
+// sampledAbove is the size over which book_files.file_hash is a sampled digest
+// (filehash.Threshold; tests lower partialHashAbove).
+func (f *fragmentFixer) sampledAbove() int64 {
+	if f.partialHashAbove > 0 {
+		return f.partialHashAbove
+	}
+	return int64(filehash.Threshold)
+}
+
+// wholeHash is fragWholeHashFile unless a test replaced wholeHashFn.
+func (f *fragmentFixer) wholeHash(ctx context.Context, path string) (fragFileSig, string, error) {
+	if f.wholeHashFn != nil {
+		return f.wholeHashFn(ctx, path)
+	}
+	return fragWholeHashFile(ctx, path)
+}
+
+// needsWholeProof reports whether a hash-copy pair's stored hash may be a
+// sampled digest: either file, by its size on disk or its recorded size, is
+// over the threshold. Such a pair is proven only by comparing the whole files
+// (proveHashCopiesWhole).
+func (f *fragmentFixer) needsWholeProof(c *fragCandidate, parent fragFile, parentDisk int64) bool {
+	return max(c.DiskSize, parentDisk, c.File.Size, parent.Size) > f.sampledAbove()
+}
+
+// proveHashCopiesWhole compares, by whole-file SHA-256 on the bounded pool, the
+// two files of each hash-copy pair that needsWholeProof: over
+// filehash.Threshold the stored hash covers only the head, tail and size, and
+// the rule must not retire a book on a sampled digest (the same reason
+// fragHashFile refuses such a file for the copy rule). Equal digests make an
+// equal proof, which the row stores (fragParentState.ContentProofs) so a
+// re-plan re-stats both files rather than re-reading them; anything else
+// leaves a NotCompared or differing proof, and the gate holds the pair. A
+// pair under the threshold is never read: its stored hash is already the
+// whole-file SHA-256. Results go to lib.content.
+func (f *fragmentFixer) proveHashCopiesWhole(ctx context.Context, rep registry.Reporter, lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) error {
+	var jobs []fragProofJob
+	for _, c := range cands {
+		if !c.HashCopy || !c.Present || c.StatErr != "" || c.DiskSize <= 0 {
+			continue
+		}
+		ms, _, parents, _ := f.effectiveMatches(lib, ix, c)
+		if len(ms) != 1 || len(parents) != 1 {
+			continue
+		}
+		fi, err := f.statFn(ms[0].Row.Path)
+		if err != nil || fi.Size() != c.DiskSize || !f.needsWholeProof(c, ms[0].Row, fi.Size()) {
+			continue
+		}
+		if !lib.readableForProof(c.Book.ID, c.File.Path) || !lib.readableForProof(ms[0].Row.BookID, ms[0].Row.Path) {
+			continue
+		}
+		jobs = append(jobs, fragProofJob{c: c, m: ms[0]})
+	}
+	return f.runProofJobs(ctx, rep, lib, jobs, "Hash-copy whole-file proof", f.wholeHash, nil)
 }
 
 // readableForProof reports whether the proof may read the file at path of

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-21
 
@@ -285,6 +285,14 @@ const (
 	// ("hash-copy:<parent>/<child>"), so the plan's count is the number of
 	// proposals. Apply retires the child into the parent exactly as a copy
 	// is retired; nothing is repointed and no row is deleted.
+	//
+	// The hash must be able to stand as proof (hashCopyGate), else the child
+	// is held on a row of its own: both files on disk, neither empty, the
+	// same size, not a short or boilerplate file, not one file under two
+	// paths, and, over filehash.Threshold where the stored hash is a sample,
+	// equal whole-file SHA-256 digests (proveHashCopiesWhole). A second
+	// parent holds it (held_ambiguous_parent), except iTunes copies of the
+	// parent the iTunes-parent rule sets aside.
 	fragClassHashCopy = "hash-copy"
 )
 
@@ -361,7 +369,35 @@ const (
 	// fragSkipAmbiguousParent (hash-copy rule): the child's hash is carried
 	// by present rows of two or more live multi-file books. Never applied.
 	fragSkipAmbiguousParent = "held_ambiguous_parent"
+	// The hash-copy rule retires a book on the strength of a file hash, so
+	// it first asks whether that hash can stand as proof (hashCopyGate).
+	// Each of these holds the pair on a row of its own, never applied:
+	//
+	// fragSkipFileAbsent: the child's file or the parent row's file is not on
+	// disk. The child's file may be the only copy of that track, and a gone
+	// parent file is a repoint (the moved class), which a hash alone must
+	// not authorize.
+	fragSkipFileAbsent = "held_file_absent"
+	// fragSkipDegenerateHash: the hash proves nothing here: the SHA-256 of an
+	// empty file, a zero-length file on either side, or sizes on disk that
+	// differ though the recorded hashes are equal.
+	fragSkipDegenerateHash = "held_degenerate_hash"
+	// fragSkipShortOrBoilerplate: the file is under dcMinLinkSec (60 s) or the
+	// book is an intro, credits or similar title: identical files of that kind
+	// are shared by different works (the same bar the iTunes-parent rule sets).
+	fragSkipShortOrBoilerplate = "held_short_or_boilerplate"
+	// fragSkipPartialUnproven: a file over filehash.Threshold, whose stored hash
+	// is a head, tail and size sample, and the whole-file comparison that
+	// would prove it could not run (unreadable, no file identity, not made).
+	fragSkipPartialUnproven = "held_partial_hash_unproven"
+	// fragSkipPartialMismatch: a file over filehash.Threshold whose sampled
+	// hashes agree but whose whole-file SHA-256 digests differ.
+	fragSkipPartialMismatch = "held_partial_hash_mismatch"
 )
+
+// fragEmptySHA256 is the SHA-256 of zero bytes: the file hash of any empty
+// file, which every empty file shares.
+const fragEmptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
 const (
@@ -388,6 +424,14 @@ type fragmentFixer struct {
 	// hashFn reads and hashes one file for a copy's content proof
 	// (fragHashFile; replaced in tests): its signature and digest.
 	hashFn func(string) (fragFileSig, string, error)
+	// wholeHashFn reads and hashes EVERY byte of one file for the hash-copy
+	// rule's proof over filehash.Threshold (fragWholeHashFile; replaced in
+	// tests).
+	wholeHashFn func(context.Context, string) (fragFileSig, string, error)
+	// partialHashAbove, when positive, replaces filehash.Threshold as the size
+	// over which a stored hash counts as sampled (tests only: a 100 MB fixture
+	// is not needed to exercise the whole-file proof).
+	partialHashAbove int64
 	// readDir replaces os.ReadDir in tests.
 	readDir func(string) ([]os.DirEntry, error)
 	// now replaces time.Now in tests.
@@ -399,7 +443,7 @@ type fragmentFixer struct {
 }
 
 func newFragmentFixer(p *Plugin) *fragmentFixer {
-	return &fragmentFixer{p: p, statFn: os.Stat, hashFn: fragHashFile, readDir: os.ReadDir, now: time.Now}
+	return &fragmentFixer{p: p, statFn: os.Stat, hashFn: fragHashFile, wholeHashFn: fragWholeHashFile, readDir: os.ReadDir, now: time.Now}
 }
 
 var (
@@ -429,7 +473,7 @@ func (f *fragmentFixer) Description() string {
 		"shares, and is held when they share none. Listening progress " +
 		"and external ids follow each retired fragment. Hash copy: a single-file book of any title whose one " +
 		"file has the file hash of a present row of one live multi-file book — retire it into that book " +
-		"(held when two books match, skipped when a hash is missing). Fragments iTunes knows about are combined like any other: " +
+		"(held when two books match, when a file is absent, empty, short or boilerplate, or over 100 MB without a whole-file match, and skipped when a hash is missing). Fragments iTunes knows about are combined like any other: " +
 		"only database rows change (no file is moved and the iTunes library is never written). Doctor Who / " +
 		"Big Finish / Torchwood are listed for manual action only. Every step is undoable from the apply operation."
 }
@@ -808,16 +852,46 @@ func (ix *fragIndex) hashCopyMatch(c *fragCandidate) []fragMatch {
 // child's or the row's), so the hash-copy rule cannot decide: the book's
 // skipped_no_hash row lists them. Both hashes present and different is a
 // contradiction, and both present and equal is a hash match; neither is here.
-func (ix *fragIndex) noHashMatches(c *fragCandidate) []fragMatch {
-	if c.OrigName == "" || c.File.Size <= 0 {
+//
+// The sizes are read from disk (c is stat'ed here): the recorded file_size
+// of the real children is 0, so a recorded size gates nothing. The child's
+// size is its size on disk (the recorded one only when the file is absent);
+// a parent row's is its recorded size, or its size on disk when none is
+// recorded. ix is only read, so Plan's workers share it.
+func (f *fragmentFixer) noHashMatches(ix *fragIndex, c *fragCandidate) []fragMatch {
+	if c.OrigName == "" {
 		return nil
 	}
-	var out []fragMatch
+	var rows []fragFile
 	for _, r := range ix.byName[strings.ToLower(c.OrigName)] {
-		if r.BookID == c.Book.ID || r.Missing || r.Size != c.File.Size {
+		if r.BookID == c.Book.ID || r.Missing {
 			continue
 		}
 		if c.File.Hash != "" && r.Hash != "" {
+			continue
+		}
+		rows = append(rows, r)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	f.statCandidate(c)
+	size := c.File.Size
+	if c.Present && c.DiskSize > 0 {
+		size = c.DiskSize
+	}
+	if size <= 0 {
+		return nil
+	}
+	var out []fragMatch
+	for _, r := range rows {
+		rs := r.Size
+		if rs <= 0 {
+			if fi, err := f.statFn(r.Path); err == nil {
+				rs = fi.Size()
+			}
+		}
+		if rs != size {
 			continue
 		}
 		out = append(out, fragMatch{Row: r, Evidence: fragEvNameSize})
@@ -1110,7 +1184,7 @@ func (f *fragmentFixer) candidateOrHashCopy(b fragBook, file fragFile, hist Frag
 		return c, nil, nil
 	}
 	c.HashCopy = false
-	if nh := ix.noHashMatches(c); len(nh) > 0 {
+	if nh := f.noHashMatches(ix, c); len(nh) > 0 {
 		return c, nh, nil
 	}
 	return nil, nil, nil
@@ -1469,14 +1543,18 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	var singles []single
 	for id, rows := range lib.files {
 		b, ok := lib.books[id]
-		if !ok || b.SoftDeleted || (only != nil && !only[id]) {
+		if !ok || b.SoftDeleted {
 			continue
 		}
+		// The parent index is the whole library's whatever book_ids scopes
+		// the plan to: scoping it too would hide a second parent (or the one
+		// parent) of a scoped book, and a trial would then promise a row the
+		// full plan never makes. book_ids scopes the candidates only.
 		if len(rows) >= 2 {
 			for _, r := range rows {
 				ix.add(r)
 			}
-		} else if len(rows) == 1 && !intr.exclude[id] {
+		} else if len(rows) == 1 && !intr.exclude[id] && (only == nil || only[id]) {
 			// A book a continued (or held) interrupted run holds is in that
 			// row only: never a candidate of another.
 			singles = append(singles, single{b: b, file: rows[0]})
@@ -1525,6 +1603,9 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 		return nil, err
 	}
 	if err := f.proveCopiesByContent(ctx, rep, lib, ix, live); err != nil {
+		return nil, err
+	}
+	if err := f.proveHashCopiesWhole(ctx, rep, lib, ix, live); err != nil {
 		return nil, err
 	}
 	rows := f.buildRows(lib, ix, live)
@@ -3108,6 +3189,12 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		}
 		ms = lib.withContent(c, ms)
 		matchOf[c] = ms
+		// A hash-copy child with one parent is retired on its hash alone, so
+		// first ask whether the hash can stand as proof (hashCopyGate).
+		var gateSkip, gateWhy string
+		if c.HashCopy && len(ms) == 1 && len(parents) == 1 {
+			gateSkip, gateWhy = f.hashCopyGate(lib, c, ms[0])
+		}
 		switch {
 		case c.HashCopy && len(ms) == 0:
 			// Admitted on a hash that matches no parent now (a re-plan after
@@ -3115,6 +3202,8 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 			// re-plan reports the planned row gone.
 		case c.HashCopy && len(parents) > 1:
 			rows = append(rows, f.hashCopyHeldRow(lib, c, ms, parents))
+		case gateSkip != "":
+			rows = append(rows, f.hashCopyGateRow(lib, c, ms[0], gateSkip, gateWhy))
 		case len(ms) == 0:
 			unmatched = append(unmatched, c)
 		case c.StatErr != "":
@@ -3545,6 +3634,98 @@ func (f *fragmentFixer) hashCopyHeldRow(lib *fragLibrary, c *fragCandidate, ms [
 	r := f.holdRow(lib, c, "held-ambiguous-parent", fragClassHashCopy, fragSkipAmbiguousParent, why, ms)
 	r.Current = map[string]string{"hash": c.File.Hash, "child_path": c.File.Path, "candidate_parents": strconv.Itoa(len(parents))}
 	r.Fingerprint = fragFingerprint(append([]string{"held-ambiguous-parent", c.Book.ID, c.File.Hash}, parentIDsOf(ms)...)...)
+	return r
+}
+
+// hashCopyGate decides whether the file hash may stand as proof that hash-copy
+// child c is a copy of parent row m.Row. skip is "" when it may; otherwise the
+// held kind and the reason, for the row hashCopyGateRow lists. It runs at
+// plan time and again, through buildRows, in every re-plan (Apply's under the
+// merge lock included), against the files as they are then.
+//
+// In order: the child's file must be on disk (a stat error other than absent
+// is left to buildRows' unreadable case) and so must the parent row's; a
+// zero-length file, the empty-file digest, or sizes that differ make the hash
+// meaningless; a file under dcMinLinkSec or a boilerplate title (the bar of
+// disregardITunesParents) is shared between works; the two paths must not name
+// one file; and a pair over filehash.Threshold, whose stored hash is a sample,
+// needs the whole-file proof proveHashCopiesWhole made.
+//
+// The short-duration bar applies to a KNOWN duration only (recorded, and
+// under 60 s): the real children of the first run record none, and holding
+// every unknown-duration track would hold the whole case. A boilerplate title
+// holds regardless.
+func (f *fragmentFixer) hashCopyGate(lib *fragLibrary, c *fragCandidate, m fragMatch) (skip, why string) {
+	if c.StatErr != "" {
+		return "", ""
+	}
+	if !c.Present {
+		return fragSkipFileAbsent, fmt.Sprintf("the book's file %s is not on disk, so it may be the only copy; it is not retired on a hash", c.File.Path)
+	}
+	pfi, err := f.statFn(m.Row.Path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fragSkipFileAbsent, fmt.Sprintf("parent %s row %s's file %s is not on disk, so the book's file may be the only copy of that track; a gone parent file is a repoint (the moved class), which a hash alone does not authorize",
+			m.Row.BookID, m.Row.ID, m.Row.Path)
+	case err != nil:
+		return fragSkipUnreadable, fmt.Sprintf("parent %s row %s's file %s is unreadable (%s)", m.Row.BookID, m.Row.ID, m.Row.Path, err)
+	}
+	switch {
+	case c.DiskSize <= 0 || pfi.Size() <= 0:
+		return fragSkipDegenerateHash, fmt.Sprintf("a zero-length file (%d bytes on disk here, %d in parent row %s): the hash of an empty file proves nothing", max(c.DiskSize, 0), pfi.Size(), m.Row.ID)
+	case c.File.Hash == fragEmptySHA256:
+		return fragSkipDegenerateHash, "the hash is the SHA-256 of an empty file, which every empty file shares"
+	case c.DiskSize != pfi.Size():
+		return fragSkipDegenerateHash, fmt.Sprintf("the files differ in size on disk (%d bytes here, %d in parent row %s), so one recorded hash does not describe both", c.DiskSize, pfi.Size(), m.Row.ID)
+	}
+	if d := c.File.Duration; (d > 0 && d < dcMinLinkSec) || boilerplate.IsBoilerplateTitle(c.Book.Title) {
+		return fragSkipShortOrBoilerplate, fmt.Sprintf("%q (%d s) is a short or boilerplate file (under %d s, or an intro, credits or sting title): such a file is shared by different works, so its hash is not proof of one",
+			c.Book.Title, c.File.Duration, dcMinLinkSec)
+	}
+	if c.File.Path == m.Row.Path {
+		return fragSkipCopyUnproven, fmt.Sprintf("same file as parent %s row %s (one path)", m.Row.BookID, m.Row.ID)
+	}
+	if cs, e1 := fileSig(c, f.statFn); e1 == nil {
+		if ps, e2 := sigOf(pfi); e2 == nil && cs.sameFile(ps) {
+			return fragSkipCopyUnproven, fmt.Sprintf("same file as parent %s row %s (path alias)", m.Row.BookID, m.Row.ID)
+		}
+	}
+	if !f.needsWholeProof(c, m.Row, pfi.Size()) {
+		return "", ""
+	}
+	mb := f.sampledAbove() / (1024 * 1024)
+	pr, ok := lib.content[contentKey(c.File.ID, m.Row.ID)]
+	switch {
+	case !ok:
+		return fragSkipPartialUnproven, fmt.Sprintf("over %d MB the stored hash covers only the head, tail and size of a file, so it does not prove the two files identical, and no whole-file comparison was made", mb)
+	case pr.NotCompared != "":
+		return fragSkipPartialUnproven, fmt.Sprintf("over %d MB the stored hash is a sample, and the whole-file comparison could not run: %s", mb, pr.NotCompared)
+	case pr.Alias:
+		return fragSkipCopyUnproven, fmt.Sprintf("same file as parent %s row %s (path alias)", m.Row.BookID, m.Row.ID)
+	case !pr.equal():
+		return fragSkipPartialMismatch, fmt.Sprintf("the stored (sampled) hashes agree but the whole files differ: sha256:%s here, sha256:%s in parent row %s", pr.FragDigest, pr.ParentDigest, m.Row.ID)
+	}
+	return "", ""
+}
+
+// fileSig is the signature of c's file as stat'ed through stat.
+func fileSig(c *fragCandidate, stat func(string) (os.FileInfo, error)) (fragFileSig, error) {
+	fi, err := stat(c.File.Path)
+	if err != nil {
+		return fragFileSig{}, err
+	}
+	return sigOf(fi)
+}
+
+// hashCopyGateRow is the never-applied row of a hash-copy child held by
+// hashCopyGate: the child, its one candidate parent and row, the hash and
+// the reason. Its row id names the hold ("held-file-absent:<child>"), so a
+// re-plan returns it as planned.
+func (f *fragmentFixer) hashCopyGateRow(lib *fragLibrary, c *fragCandidate, m fragMatch, skip, why string) repairs.Row {
+	prefix := "held-" + strings.ReplaceAll(skip, "_", "-")
+	r := f.holdRow(lib, c, prefix, fragClassHashCopy, skip, "has the file hash "+c.File.Hash+" of parent "+m.Row.BookID+" row "+m.Row.ID+", but "+why, []fragMatch{m})
+	r.Current = map[string]string{"hash": c.File.Hash, "child_path": c.File.Path, "parent_path": m.Row.Path}
+	r.Fingerprint = fragFingerprint(prefix, c.Book.ID, m.Row.ID, c.File.Hash, why)
 	return r
 }
 
@@ -6134,6 +6315,16 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 			return f.checkOwners(store, hist, planned, r)
 		}
 	}
+	if strings.HasPrefix(planned.RowID, fragClassHashCopy+":") {
+		// A hash-copy child the gate now holds comes back as its hold row:
+		// say why, rather than that it no longer matches.
+		_, child, _ := strings.Cut(strings.TrimPrefix(planned.RowID, fragClassHashCopy+":"), "/")
+		for _, r := range rows {
+			if r.Class == fragClassHashCopy && r.Skipped != "" && strings.HasSuffix(r.RowID, ":"+child) {
+				return changedRow(planned, fmt.Sprintf("the hash can no longer stand as proof (%s): %s", r.Skipped, r.SkipReason)), nil
+			}
+		}
+	}
 	return changedRow(planned, "the fragments no longer match the parent in this kind"), nil
 }
 
@@ -6235,9 +6426,19 @@ func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist
 // carries the child's hash is read (BookFilesWithHash), and the row changes
 // when a live multi-file book other than the parent holds a present row with
 // it (a second parent appeared since the plan, held_ambiguous_parent at plan
-// time). An index that cannot answer (ErrBookFilesWithHashUnavailable) fails
-// closed: the row changes rather than retiring a book unchecked.
+// time). The iTunes copies of the parent the row's own state records as set
+// aside (fragParentState.IgnoredITunes, re-decided by this re-plan) are not
+// second parents, as at plan time. An index that cannot answer
+// (ErrBookFilesWithHashUnavailable) fails closed: the row changes rather than
+// retiring a book unchecked.
 func (f *fragmentFixer) hashCopyParentCheck(store OpsStore, lib *fragLibrary, planned, fresh repairs.Row, parentID string) (repairs.Row, error) {
+	var ps fragParentState
+	if len(fresh.State) > 0 {
+		if err := json.Unmarshal(fresh.State, &ps); err != nil {
+			return changedRow(planned, "the re-plan's stored iTunes parents are unreadable; plan again"), nil
+		}
+	}
+	ignored := ps.IgnoredITunes
 	for _, id := range fresh.BookIDs {
 		if id == parentID {
 			continue
@@ -6255,6 +6456,12 @@ func (f *fragmentFixer) hashCopyParentCheck(store OpsStore, lib *fragLibrary, pl
 			return repairs.Row{}, fmt.Errorf("rows with hash %s: %w", hash, err)
 		}
 		seen := map[string]bool{id: true, parentID: true}
+		// The iTunes copies of the parent the iTunes-parent rule set aside
+		// (the row's own state, as this re-plan just re-decided it) are not
+		// second parents: the plan did not count them either.
+		for _, it := range ignored {
+			seen[it] = true
+		}
 		for i := range found {
 			other := found[i].BookID
 			if seen[other] || found[i].Missing || found[i].FileHash != hash {
