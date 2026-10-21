@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-21
 
@@ -205,14 +205,24 @@ func readAcceptInviteBody(c *gin.Context) parsedAcceptInvite {
 			restore()
 		} else {
 			// The body did NOT reach EOF (too large, timed out, or a read
-			// error). Whatever response follows, the connection closes after
-			// it: without Connection: close, net/http drains up to 256 KiB of
+			// error). The read deadline stays in force either way.
+			//
+			// HTTP/1: whatever response follows, the connection closes after
+			// it. Without Connection: close, net/http drains up to 256 KiB of
 			// the unread body BEFORE writing the response headers, and a
-			// caller that stops sending holds the request with no answer.
-			// The read deadline stays in force, so the drain net/http still
-			// does after the response (finishRequest closes the body) is
-			// bounded too; the connection is closed afterwards anyway.
-			c.Header("Connection", "close")
+			// caller that stops sending holds the request with no answer. The
+			// deadline also bounds the drain net/http still does after the
+			// response (finishRequest closes the body).
+			//
+			// HTTP/2 and HTTP/3: no header. The Go HTTP/2 server turns
+			// Connection: close into a GOAWAY, which would end every stream
+			// the browser has open on that connection, and neither protocol
+			// needs it: one stream's unread body never delays its response,
+			// and the server resets just that stream when the handler
+			// returns.
+			if c.Request.ProtoMajor == 1 {
+				c.Header("Connection", "close")
+			}
 		}
 		switch {
 		case len(buf) > inviteAcceptBodyLimit:
@@ -366,7 +376,8 @@ type inviteClient struct {
 // global layer applies. The key is never derived from an unproven header.
 // Public IPv6 clients share one bucket per /64 (clientPrefixKey), as the
 // bootstrap limiter keys them, so one host cannot rotate through its /64 for
-// fresh buckets; a LAN IPv6 peer (ULA, link-local) keeps its full address, so
+// fresh buckets; a LAN IPv6 peer (isLANAddr: ULA, link-local, on-link global)
+// keeps its full address, so
 // LAN devices sharing a /64 do not share a bucket. A LAN peer keyed on its
 // own address also gets its LAN aggregates (classifyLANPeer):
 //   - direct: "invite-direct-lan64:<its /64>" for IPv6 (none for IPv4: a /24

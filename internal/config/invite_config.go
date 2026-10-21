@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-21
 
@@ -113,7 +113,9 @@ func inviteEnvOnlyKeyInUpdate(payload map[string]any) (string, bool) {
 // bootstrap routes read it on every request. The value is a comma-separated
 // list of IP addresses; an IPv6 link-local entry must carry its zone
 // (fe80::5%eth0), since a link-local address is only unique per interface,
-// and one without a zone is ignored with a warning.
+// and one without a zone is ignored with a warning. A numeric or wrong-case
+// zone is normalised to the interface's name, and one that names no
+// interface is ignored with a warning.
 func TunnelConnectorAddrs() string {
 	mu.RLock()
 	defer mu.RUnlock()

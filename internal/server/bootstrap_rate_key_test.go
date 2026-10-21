@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-21
 
@@ -404,7 +404,7 @@ func TestHandleBootstrap_LoopbackWithCFHeaderCountsAgainstGlobal(t *testing.T) {
 }
 
 func TestBootstrapDirectLANPeer(t *testing.T) {
-	connectors, _, _ := parseConnectorPeers("10.0.0.9")
+	connectors, _ := parseConnectorPeers("10.0.0.9")
 	tests := []struct {
 		name    string
 		remote  string
@@ -453,7 +453,7 @@ func TestBootstrapDirectLANPeer(t *testing.T) {
 func bootstrapKeyFor(t *testing.T, connectorsCSV, remote string, hdr map[string]string) (string, bool) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	connectors, bad, _ := parseConnectorPeers(connectorsCSV)
+	connectors, bad := parseConnectorPeers(connectorsCSV)
 	if len(bad) != 0 {
 		t.Fatal(bad)
 	}
@@ -577,7 +577,7 @@ func TestBootstrapLimiter_LANDevicesInOneSlash64EachGetTheirWindow(t *testing.T)
 func TestBootstrapLimiter_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
-	listed, _, _ := parseConnectorPeers("fd12:3456:789a:1::11")
+	listed, _ := parseConnectorPeers("fd12:3456:789a:1::11")
 	for i := range 60 {
 		bootstrapAttemptVia(l, "[fd12:3456:789a:1::11]:4000", listed,
 			map[string]string{"CF-Connecting-IP": fmt.Sprintf("203.0.113.%d", i%250+1), "Cf-Ray": "x"})

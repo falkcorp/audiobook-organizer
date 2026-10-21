@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-21
 
@@ -13,8 +13,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -256,7 +258,7 @@ const connectorPeer = "192.0.2.1"
 
 // withConnector configures connectorPeer as the tunnel connector.
 func (h *inviteLimitHarness) withConnector() *inviteLimitHarness {
-	peers, bad, _ := parseConnectorPeers(connectorPeer)
+	peers, bad := parseConnectorPeers(connectorPeer)
 	if len(bad) != 0 {
 		h.t.Fatalf("bad connector %v", bad)
 	}
@@ -428,7 +430,7 @@ func TestTrustedClientIP(t *testing.T) {
 	local := func(addr string) bool {
 		return strings.HasPrefix(addr, "127.") || strings.HasPrefix(addr, "[::1]") || strings.HasPrefix(addr, "::1")
 	}
-	connectors, _, _ := parseConnectorPeers("198.51.100.20, 2001:db8::20")
+	connectors, _ := parseConnectorPeers("198.51.100.20, 2001:db8::20")
 	tests := []struct {
 		name     string
 		remote   string
@@ -485,8 +487,8 @@ func TestTrustedClientIP(t *testing.T) {
 }
 
 func TestParseConnectorPeers(t *testing.T) {
-	peers, bad, _ := parseConnectorPeers(" 192.0.2.5 ,, ::ffff:192.0.2.6, not-an-ip,2001:db8::5")
-	if len(peers) != 3 || len(bad) != 1 || bad[0] != "not-an-ip" {
+	peers, bad := parseConnectorPeers(" 192.0.2.5 ,, ::ffff:192.0.2.6, not-an-ip,2001:db8::5")
+	if len(peers) != 3 || len(bad) != 1 || bad[0] != (connectorReject{"not-an-ip", rejectNotIP}) {
 		t.Fatalf("peers=%v bad=%v", peers, bad)
 	}
 	for addr, want := range map[string]bool{
@@ -657,7 +659,7 @@ func TestInviteRateLimit_PiConnectorsUnset_EachPiIsOneBucket(t *testing.T) {
 // innocent guest still gets 200.
 func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
-	peers, bad, _ := parseConnectorPeers(strings.Join(piConnectors, ","))
+	peers, bad := parseConnectorPeers(strings.Join(piConnectors, ","))
 	if len(bad) != 0 {
 		t.Fatal(bad)
 	}
@@ -692,7 +694,7 @@ func TestInviteRateLimit_PiConnectorsSet_PerVisitorBuckets(t *testing.T) {
 // addresses inside one /64 buys no fresh bucket.
 func TestInviteRateLimit_IPv6VisitorsShareTheirSlash64(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
-	peers, _, _ := parseConnectorPeers(piConnectors[0])
+	peers, _ := parseConnectorPeers(piConnectors[0])
 	h.limits.connectors = peers
 	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
 		return h.get(inviteTestToken(i), piConnectors[0], cfHeaders(fmt.Sprintf("2001:db8:5:6::%x", i+1)))
@@ -887,7 +889,7 @@ func TestTrustedClientIP_WarnsOncePerUnlistedPrivateConnector(t *testing.T) {
 	saved := unlistedConnectors
 	unlistedConnectors = newOnceSet(unlistedConnectorWarnCap)
 	t.Cleanup(func() { unlistedConnectors = saved })
-	listed, _, _ := parseConnectorPeers(piConnectors[0])
+	listed, _ := parseConnectorPeers(piConnectors[0])
 	trust := clientTrust{isLocalPeer: func(string) bool { return false }, connectors: listed}
 	call := func(peer string, hdr map[string]string) {
 		req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -1180,9 +1182,10 @@ func TestInviteRateLimit_OversizeThenStallIs413Promptly(t *testing.T) {
 // Cloudflare headers, counts as an unlisted LAN peer.
 func TestInviteRateLimit_ZonedLinkLocalConnectorIsRecognised(t *testing.T) {
 	withFreshUnlistedWarnings(t)
-	peers, bad, noZone := parseConnectorPeers("fe80::5%en0")
-	if len(bad) != 0 || len(noZone) != 0 {
-		t.Fatal(bad, noZone)
+	withFakeHost(t)
+	peers, rejected := parseConnectorPeers("fe80::5%en0")
+	if len(rejected) != 0 {
+		t.Fatal(rejected)
 	}
 	h := newInviteLimitHarness(t, false)
 	h.limits.connectors = peers
@@ -1210,9 +1213,10 @@ func TestInviteRateLimit_ZonedLinkLocalConnectorIsRecognised(t *testing.T) {
 // only with its zone; global, ULA and IPv4 entries stay zone-free, and a
 // zone on them is ignored.
 func TestParseConnectorPeers_LinkLocalNeedsItsZone(t *testing.T) {
-	peers, bad, noZone := parseConnectorPeers("fe80::5%en0, fe80::6, 10.0.0.9, fd12:3456:789a:1::11%en0, 2001:db8::5")
-	if len(bad) != 0 || len(noZone) != 1 || noZone[0] != "fe80::6" {
-		t.Fatalf("bad=%v noZone=%v, want only fe80::6 rejected for its missing zone", bad, noZone)
+	withFakeHost(t)
+	peers, rejected := parseConnectorPeers("fe80::5%en0, fe80::6, 10.0.0.9, fd12:3456:789a:1::11%en0, 2001:db8::5")
+	if len(rejected) != 1 || rejected[0] != (connectorReject{"fe80::6", rejectNoZone}) {
+		t.Fatalf("rejected=%v, want only fe80::6, for its missing zone", rejected)
 	}
 	if len(peers) != 4 {
 		t.Fatalf("peers=%v, want 4", peers)
@@ -1258,57 +1262,209 @@ func TestParseTrustAddr(t *testing.T) {
 	}
 }
 
-// A link-local peer is this host only when the interface that owns the
-// address is the one its zone names (by name or numeric index); the same
-// address with another zone, or no zone, is not local. Other addresses match
-// on any interface.
-func TestAddrIsLocal_LinkLocalNeedsTheOwningInterface(t *testing.T) {
-	ifaces := []localIface{
-		{name: "en0", index: 4, addrs: []netip.Addr{netip.MustParseAddr("fe80::5"), netip.MustParseAddr("10.0.0.2")}},
-		{name: "en1", index: 5, addrs: []netip.Addr{netip.MustParseAddr("192.0.2.1")}},
-	}
-	for in, want := range map[string]bool{
-		"fe80::5%en0": true,
-		"fe80::5%4":   true,
-		"fe80::5%en1": false,
-		"fe80::5%5":   false,
-		"fe80::5%en9": false,
-		"fe80::5":     false,
-		"fe80::6%en0": false,
-		"10.0.0.2":    true,
-		"192.0.2.1":   true,
-		"10.0.0.3":    false,
-	} {
-		a, ok := parseTrustAddr(in)
-		if !ok {
-			t.Fatalf("parseTrustAddr(%q) failed", in)
-		}
-		if got := addrIsLocal(a, ifaces); got != want {
-			t.Errorf("addrIsLocal(%s) = %v, want %v", in, got, want)
-		}
-	}
+// fakeHost counts the interface lookups a test makes.
+type fakeHost struct {
+	zoneLookups, hostLookups atomic.Int32
 }
 
-// remoteAddrIsLocal on a described host: a link-local peer whose zone names
-// another interface than the one owning the address is not this host.
-func TestRemoteAddrIsLocal_MismatchedZoneIsNotLocal(t *testing.T) {
-	saved := hostInterfaces
-	hostInterfaces = func() ([]localIface, error) {
-		return []localIface{
-			{name: "en0", index: 4, addrs: []netip.Addr{netip.MustParseAddr("fe80::5")}},
-			{name: "en1", index: 5},
-		}, nil
+// withFakeHost describes a host for the trust code: en0 (index 2) owns
+// fe80::5 and 10.0.0.2, en1 (index 3) owns 192.0.2.1, and 2001:db8:1::/64
+// is on-link. It counts interface lookups.
+func withFakeHost(t *testing.T) *fakeHost {
+	t.Helper()
+	fh := &fakeHost{}
+	byZone := map[string][]netip.Addr{
+		"en0": {netip.MustParseAddr("fe80::5"), netip.MustParseAddr("10.0.0.2")},
+		"en1": {netip.MustParseAddr("192.0.2.1")},
 	}
-	t.Cleanup(func() { hostInterfaces = saved })
+	names := map[string]string{"en0": "en0", "2": "en0", "EN0": "en0", "en1": "en1", "3": "en1"}
+	savedResolve, savedZone, savedHost, savedOnLink := resolveZone, zoneInterfaceAddrs, hostInterfaceAddrs, onLinkIPv6Prefixes
+	resolveZone = func(zone string) (string, bool) {
+		n, ok := names[zone]
+		return n, ok
+	}
+	zoneInterfaceAddrs = func(zone string) ([]netip.Addr, error) {
+		fh.zoneLookups.Add(1)
+		n, ok := names[zone]
+		if !ok {
+			return nil, fmt.Errorf("no interface %q", zone)
+		}
+		return byZone[n], nil
+	}
+	hostInterfaceAddrs = func() ([]netip.Addr, error) {
+		fh.hostLookups.Add(1)
+		return slices.Concat(byZone["en0"], byZone["en1"]), nil
+	}
+	onLinkIPv6Prefixes = func() []netip.Prefix { return []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64")} }
+	t.Cleanup(func() {
+		resolveZone, zoneInterfaceAddrs, hostInterfaceAddrs, onLinkIPv6Prefixes = savedResolve, savedZone, savedHost, savedOnLink
+	})
+	return fh
+}
+
+// A link-local peer is this host only when the interface its zone names
+// (by name or numeric index) owns the address; the same address with another
+// zone, or no zone, is not local. Other addresses match on any interface.
+func TestRemoteAddrIsLocal_MismatchedZoneIsNotLocal(t *testing.T) {
+	withFakeHost(t)
 	for addr, want := range map[string]bool{
 		"[fe80::5%en0]:4000": true,
+		"[fe80::5%2]:4000":   true,
 		"[fe80::5%en1]:4000": false,
+		"[fe80::5%3]:4000":   false,
+		"[fe80::5%en9]:4000": false,
 		"[fe80::5]:4000":     false,
+		"[fe80::6%en0]:4000": false,
+		"10.0.0.2:4000":      true,
+		"192.0.2.1:4000":     true,
+		"10.0.0.3:4000":      false,
 		"127.0.0.1:4000":     true,
 	} {
 		if got := remoteAddrIsLocal(addr); got != want {
 			t.Errorf("remoteAddrIsLocal(%q) = %v, want %v", addr, got, want)
 		}
+	}
+}
+
+// S1: the local-peer check asks the kernel once per request, and not at all
+// for a configured connector: a connector request makes no interface lookup,
+// a link-local peer looks up only its own interface, and any other peer
+// makes one whole-host lookup.
+func TestTrustedClientIP_InterfaceLookups(t *testing.T) {
+	fh := withFakeHost(t)
+	connectors, rejected := parseConnectorPeers("10.0.0.9, fe80::9%en0")
+	if len(rejected) != 0 {
+		t.Fatal(rejected)
+	}
+	trust := clientTrust{isLocalPeer: remoteAddrIsLocal, connectors: connectors}
+	call := func(remote string) {
+		req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+		req.RemoteAddr = remote
+		req.Header.Set("CF-Connecting-IP", "203.0.113.5")
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		trustedClientIP(c, trust)
+	}
+	for _, tt := range []struct {
+		remote     string
+		zone, host int32
+	}{
+		{"10.0.0.9:4000", 0, 0},      // connector
+		{"[fe80::9%en0]:4000", 0, 0}, // link-local connector
+		{"10.0.0.50:4000", 0, 1},
+		{"[fe80::7%en0]:4000", 1, 0},
+	} {
+		fh.zoneLookups.Store(0)
+		fh.hostLookups.Store(0)
+		call(tt.remote)
+		if z, h := fh.zoneLookups.Load(), fh.hostLookups.Load(); z != tt.zone || h != tt.host {
+			t.Errorf("%s: %d zone and %d host lookups, want %d and %d", tt.remote, z, h, tt.zone, tt.host)
+		}
+	}
+}
+
+// S2: the peer address the server sees always carries the interface NAME,
+// so a numeric or wrong-case zone in TUNNEL_CONNECTOR_ADDRS is normalised to
+// the name at parse time (it used to be accepted and never match), and a
+// zone that names no interface is refused.
+func TestParseConnectorPeers_NormalisesTheZone(t *testing.T) {
+	withFakeHost(t)
+	peers, rejected := parseConnectorPeers("fe80::5%2, fe80::6%EN0, fe80::7%9")
+	if len(rejected) != 1 || rejected[0] != (connectorReject{"fe80::7%9", rejectUnknownZone}) {
+		t.Fatalf("rejected=%v, want only fe80::7%%9 (no interface 9)", rejected)
+	}
+	for addr, want := range map[string]bool{
+		"[fe80::5%en0]:4000": true,
+		"[fe80::5%en1]:4000": false,
+		"[fe80::6%en0]:4000": true,
+		"[fe80::7%9]:4000":   false,
+	} {
+		if got := peers.contains(addr); got != want {
+			t.Errorf("contains(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+// The real zone lookup, on the loopback interface every host has: by name,
+// by index, and by a wrong-case name all find it; a made-up name does not.
+func TestLookupZoneInterface_Loopback(t *testing.T) {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		t.Skip(err)
+	}
+	var lo *net.Interface
+	for i := range ifs {
+		if ifs[i].Flags&net.FlagLoopback != 0 {
+			lo = &ifs[i]
+			break
+		}
+	}
+	if lo == nil {
+		t.Skip("no loopback interface")
+	}
+	for _, zone := range []string{lo.Name, strconv.Itoa(lo.Index), strings.ToUpper(lo.Name)} {
+		if strings.ToUpper(lo.Name) == zone && zone != lo.Name {
+			if _, err := net.InterfaceByName(zone); err == nil {
+				continue // an interface really has that name
+			}
+		}
+		if name, ok := resolveZone(zone); !ok || name != lo.Name {
+			t.Errorf("resolveZone(%q) = %q, %v; want %q", zone, name, ok, lo.Name)
+		}
+	}
+	if _, ok := resolveZone("nosuchif0"); ok {
+		t.Error("resolveZone found an interface that does not exist")
+	}
+	addrs, err := zoneInterfaceAddrs(lo.Name)
+	if err != nil || len(addrs) == 0 {
+		t.Fatalf("zoneInterfaceAddrs(%q) = %v, %v; want the loopback addresses", lo.Name, addrs, err)
+	}
+	for _, a := range addrs {
+		if !a.IsLoopback() && !a.IsLinkLocalUnicast() {
+			t.Errorf("loopback interface address %s is neither loopback nor link-local", a)
+		}
+	}
+}
+
+// NIT1: a home IPv6 LAN usually runs on the ISP's global /64, not ULA. A
+// peer inside an on-link prefix of this host is a LAN peer: keyed on its
+// full address, with its /64 aggregate, direct when it sends no Cloudflare
+// markers. A global address outside every on-link prefix stays public.
+func TestInviteClientKey_OnLinkGlobalIPv6IsLAN(t *testing.T) {
+	withFakeHost(t)
+	withFreshUnlistedWarnings(t)
+	h := newInviteLimitHarness(t, false)
+	for _, tt := range []struct {
+		peer string
+		want inviteClient
+	}{
+		{"[2001:db8:1::50]", inviteClient{key: "invite-client:2001:db8:1::50", prefixKey: "invite-direct-lan64:2001:db8:1::/64", totalKey: inviteDirectLANTotalKey, direct: true}},
+		{"[2001:db8:2::50]", inviteClient{key: "invite-client:2001:db8:2::/64"}},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/invite/x", nil)
+		req.RemoteAddr = tt.peer + ":4000"
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		if got, ok := h.limits.inviteClientKey(c); !ok || got != tt.want {
+			t.Errorf("%s: inviteClientKey = %+v, %v; want %+v", tt.peer, got, ok, tt.want)
+		}
+	}
+}
+
+// NIT4: an unlisted connector on a link-local address is warned about once
+// per /64 PER INTERFACE: fe80::/64 on en0 and on en1 are different links, so
+// a connector on en1 is not silenced by one already seen on en0.
+func TestWarnUnlistedConnector_LinkLocalPerInterface(t *testing.T) {
+	withFreshUnlistedWarnings(t)
+	warnUnlistedConnector("[fe80::5%en0]:4000")
+	warnUnlistedConnector("[fe80::6%en0]:4000") // same /64, same link
+	warnUnlistedConnector("[fe80::5%en1]:4000")
+	if n := unlistedConnectors.len(); n != 2 {
+		t.Fatalf("%d warnings remembered, want 2 (one per interface)", n)
+	}
+	a, _ := parseTrustAddr("fe80::5%en1")
+	if msg := unlistedConnectorMessage(a, "fe80::/64 on interface en1"); !strings.Contains(msg, "peer fe80::5%en1") || !strings.Contains(msg, "all addresses in fe80::/64 on interface en1") {
+		t.Fatalf("message: %s", msg)
 	}
 }
 
@@ -1493,5 +1649,48 @@ func TestInviteRateLimit_CfMarkedRotationAcrossSlash64sCannotDrainTheGlobal(t *t
 	}
 	if w := h.get(inviteTestToken(2000), "[fd12:3456:789a:1::1]", nil); w.Code != http.StatusOK {
 		t.Fatalf("the owner's direct peer after the rotation: %d, want 200", w.Code)
+	}
+}
+
+// NIT2: on HTTP/2 an oversize accept body is still answered 413, but the
+// connection is NOT closed: Connection: close there would become a GOAWAY
+// for every stream the browser has open, and HTTP/2 has no drain to
+// short-circuit (the unread stream is reset when the handler returns). The
+// next request reuses the connection.
+func TestInviteRateLimit_OversizeOnHTTP2KeepsTheConnection(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	srv := httptest.NewUnstartedServer(h.engine)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	post := func(body string) (*http.Response, bool) {
+		t.Helper()
+		reused := false
+		trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused }}
+		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace), http.MethodPost, srv.URL+"/accept", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp, reused
+	}
+	resp, _ := post(strings.Repeat("x", inviteAcceptBodyLimit+500))
+	if resp.ProtoMajor != 2 || resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize body: %s %d, want HTTP/2 413", resp.Proto, resp.StatusCode)
+	}
+	resp, reused := post(`{"token":"` + inviteTestToken(1) + `","password":"x"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("next request: %d, want 200", resp.StatusCode)
+	}
+	if !reused {
+		t.Fatal("the next request opened a new connection: the 413 closed the HTTP/2 connection (GOAWAY)")
 	}
 }
