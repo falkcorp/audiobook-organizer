@@ -1,5 +1,5 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
 // last-edited: 2026-10-21
 
@@ -190,6 +190,14 @@ const (
 	// number_word (relink-only), "Dickens Part 2" is structural_word (strong,
 	// and unlike this rule it may unlink the credit).
 	RulePartTrackMarker = "part_track_marker"
+	// RuleLabelOnly: a name made only of part/track/book label words and
+	// numbers ("Book 2 (Unabridged)", "Part 2", "Disc 1", "Vol. 01",
+	// "[Track 003] 2"). Relink-only: owner decision 2026-10-21, a label credit
+	// is replaced by a real author found by evidence and is never just removed.
+	// It takes the place of RuleStructuralWord / RuleCreationGate for these
+	// names; a label WITH a title or series in it ("Night Angel Book 1") still
+	// gets those rules and their unlink behaviour.
+	RuleLabelOnly = "label_only"
 )
 
 // relinkOnlyRules are the rules added on 2026-09-29 for the junk-author
@@ -204,6 +212,7 @@ var relinkOnlyRules = map[string]bool{
 	RuleGenreLabel: true, RuleProductionPhrase: true,
 	RuleEncoderTag: true, RuleReleaseName: true, RuleChapterLabel: true, RuleSortPrefix: true,
 	RuleUnbalancedBracket: true, RulePlaceholderPhrase: true, RulePartTrackMarker: true,
+	RuleLabelOnly: true,
 }
 
 // RelinkOnly reports whether the verdict may only relink a book to a real
@@ -701,6 +710,19 @@ func classifyBaseParts(s string) (Verdict, *nameParts) {
 		if (w == "saga" || w == "sagas") && !(personShaped && len(words) == 2) {
 			return strong(ClassSeriesName, RuleSeriesMarker), nil
 		}
+	}
+	// A lone label ("Book 2 (Unabridged)", "[Track 003] 2") is junk that the
+	// repair may only replace, never remove (RuleLabelOnly). A bare number has
+	// no label word in it and is left to the gate. The class is the one the rules it replaces gave: a work title when a
+	// structural word is in it, else other shrapnel ("Track01").
+	if personname.IsLoneMarkerPhrase(core) && strings.IndexFunc(core, unicode.IsLetter) >= 0 {
+		class := ClassOther
+		for _, w := range words {
+			if structuralWords[w] {
+				class = ClassWorkTitle
+			}
+		}
+		return strong(class, RuleLabelOnly), nil
 	}
 	for _, w := range words {
 		if structuralWords[w] {

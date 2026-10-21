@@ -1,5 +1,5 @@
 // file: internal/personname/author_part_marker.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3d0f6a52-8b1e-4c77-9a4e-5e61c2f0b9d3
 // last-edited: 2026-10-21
 
@@ -102,6 +102,11 @@ func HasPartTrackMarker(name string) bool {
 	if n < 2 {
 		return false
 	}
+	// A lone label ("Side 2", "Chapter Twelve") has no name in front: it is
+	// IsLoneMarkerPhrase's, so the two never both answer true.
+	if isLoneLabelRun(toks) {
+		return false
+	}
 	end := peelMarkers(toks)
 	// Something must have peeled, and at least one token left in front must be
 	// a word: "R2 D2", "R2 D2 P3" and "H2g2 S4 E1" are all digits-and-codes and
@@ -114,9 +119,55 @@ func HasPartTrackMarker(name string) bool {
 // number ("Book 1", "Book 2 (Unabridged)", "[Track 003] 2", "Vol. 01", "10
 // Chapter 10", "Part 2 P3"). It is the complement of HasPartTrackMarker, which
 // needs a name in front. Such a row is a structural label, not a person.
+//
+// It also accepts a label written with number words, roman numerals or a
+// section-style word ("Chapter Twelve", "Volume IV", "Side 2", "Episode 4"), and
+// a lone edition word ("Unabridged"): see isLoneLabelRun. Those extra words are
+// recognised ONLY for a lone phrase; they are not markers when a name stands in
+// front, so HasPartTrackMarker is unchanged.
 func IsLoneMarkerPhrase(name string) bool {
 	toks := markerTokens(name)
-	return len(toks) > 0 && peelMarkers(toks) == 0
+	if len(toks) == 0 {
+		return false
+	}
+	return peelMarkers(toks) == 0 || isLoneLabelRun(toks)
+}
+
+// loneLabelWords are label words that are a label only when the whole name is
+// labels: not part of partMarkerWords because "Dickens Episode 4" is judged by
+// other rules.
+var loneLabelWords = map[string]bool{
+	"side": true, "section": true, "episode": true, "episodes": true,
+	"chapters": true, "parts": true, "books": true, "volumes": true,
+	"disc": true, "discs": true, "unabridged": true, "abridged": true,
+}
+
+// loneNumberWords: "Part One", "Book Twelve".
+var loneNumberWords = map[string]bool{
+	"one": true, "two": true, "three": true, "four": true, "five": true,
+	"six": true, "seven": true, "eight": true, "nine": true, "ten": true,
+	"eleven": true, "twelve": true, "thirteen": true, "fourteen": true,
+	"fifteen": true, "sixteen": true, "seventeen": true, "eighteen": true,
+	"nineteen": true, "twenty": true,
+}
+
+var loneRomanRe = regexp.MustCompile(`(?i)^[ivxlc]+$`)
+
+// isLoneLabelRun reports whether every token is a label word, a glued marker,
+// a number, a number word or a roman numeral, with at least one label word.
+func isLoneLabelRun(toks []string) bool {
+	sawLabel := false
+	for _, t := range toks {
+		l := strings.ToLower(t)
+		switch {
+		case partMarkerWords[l] || loneLabelWords[l] || partMarkerTokenRe.MatchString(t):
+			sawLabel = true
+		case digitsOnlyRe.MatchString(t) || loneNumberWords[l] || loneRomanRe.MatchString(t):
+		default:
+			return false
+		}
+	}
+	return sawLabel
 }
 
 func tokenHasDigit(t string) bool { return strings.IndexFunc(t, unicode.IsDigit) >= 0 }
