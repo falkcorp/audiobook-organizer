@@ -157,7 +157,9 @@ func TestFragmentFixer_HashCopy_NoProposalWithoutAMatchOrWhenTheParentIsNotEligi
 	}{
 		{"no hash matches", func(t *testing.T, f *fragFixture) {}},
 		{"parent soft-deleted", func(t *testing.T, f *fragFixture) {
-			require.NoError(t, f.s.DeleteBook(f.ids["parent"]))
+			yes := true
+			_, err := f.s.ModifyBook(f.ids["parent"], func(b *database.Book) error { b.MarkedForDeletion = &yes; return nil })
+			require.NoError(t, err)
 		}},
 		{"parent row missing", func(t *testing.T, f *fragFixture) {
 			f.updateRow(t, f.ids["parent"], f.rowIDs["p03"], func(r *database.BookFile) { r.Missing = true })
@@ -196,10 +198,13 @@ func TestFragmentFixer_HashCopy_SkippedNoHash(t *testing.T) {
 		t.Run(side+" has no hash", func(t *testing.T) {
 			t.Parallel()
 			f := hcSeed(t)
-			// The child is a track-03 file by name and size, but proof is missing.
-			p := f.file(t, "lib/Stray/track-03.mp3", 1003)
+			// The parent's third row is "opening-theme.mp3" (no chapter shape);
+			// the child has that name and size, but proof is missing.
+			np := f.file(t, "lib/Alpha Omnibus/opening-theme.mp3", 1003)
+			f.updateRow(t, f.ids["parent"], f.rowIDs["p03"], func(r *database.BookFile) { r.FilePath = np })
+			p := f.file(t, "lib/Stray/opening-theme.mp3", 1003)
 			id := f.book(t, "c3", "Stray Recording", p, nil)
-			f.row(t, "c3", id, p, "track-03.mp3", 1003, 600, 0)
+			f.row(t, "c3", id, p, "opening-theme.mp3", 1003, 600, 0)
 			if side == "child" {
 				f.hcSetHash(t, "parent", "p03", "hash-p03")
 			} else {
