@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-20
 
@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -172,17 +173,48 @@ func readAcceptInviteBody(c *gin.Context) parsedAcceptInvite {
 	return p
 }
 
+// rawResponseControllerKey is the gin context key under which
+// captureRawResponseController stores the request's *http.ResponseController.
+const rawResponseControllerKey = "server.rawResponseController"
+
+// captureRawResponseController stores an http.ResponseController for the
+// writer as it is when this middleware runs. It must be installed BEFORE any
+// middleware that replaces c.Writer with a wrapper lacking Unwrap: the gzip
+// middleware (compressionMiddleware) does, and a ResponseController built on
+// its writer cannot set connection deadlines (http.ErrNotSupported), which
+// silently disabled the accept-invite body read deadline for every client
+// sending Accept-Encoding: gzip (every browser).
+func captureRawResponseController() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(rawResponseControllerKey, http.NewResponseController(c.Writer))
+		c.Next()
+	}
+}
+
+// bodyDeadlineUnsupported warns once that no body read deadline could be set.
+var bodyDeadlineUnsupported sync.Once
+
 // setBodyReadDeadline sets a read deadline d from now on the request's
-// connection and returns the function that clears it again. The server has no
-// ReadTimeout, so the connection's read deadline is zero while a handler
-// runs; clearing restores exactly that, and the next request on a keep-alive
-// connection is unaffected. A writer that cannot set deadlines
-// (http.ErrNotSupported: HTTP/2 streams without support, test recorders)
-// leaves the read unbounded in time, as before; the 4 KiB cap still applies.
+// connection and returns the function that clears it again. It uses the
+// controller captureRawResponseController stored before any writer wrapper,
+// falling back to one built on c.Writer. The server has no ReadTimeout, so
+// the connection's read deadline is zero while a handler runs; clearing
+// restores exactly that, and the next request on a keep-alive connection is
+// unaffected. When the deadline still cannot be set (http.ErrNotSupported:
+// an HTTP/2 stream without support, a test recorder, or the capture
+// middleware missing), the read is unbounded in time, as before (the 4 KiB
+// cap still applies), and that is logged once at Warn.
 func setBodyReadDeadline(c *gin.Context, d time.Duration) (restore func()) {
-	rc := http.NewResponseController(c.Writer)
+	rc, _ := c.Value(rawResponseControllerKey).(*http.ResponseController)
+	if rc == nil {
+		rc = http.NewResponseController(c.Writer)
+	}
 	if err := rc.SetReadDeadline(time.Now().Add(d)); err != nil {
-		if !errors.Is(err, http.ErrNotSupported) {
+		if errors.Is(err, http.ErrNotSupported) {
+			bodyDeadlineUnsupported.Do(func() {
+				inviteLimitLog.Warn("accept-invite: the connection does not support read deadlines, so the body read is bounded only in size; check that captureRawResponseController runs before any response-writer wrapper")
+			})
+		} else {
 			inviteLimitLog.Debug("accept-invite: could not set a body read deadline: %v", err)
 		}
 		return func() {}

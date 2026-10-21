@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-10-20
 
@@ -49,6 +49,9 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	if err := r.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
+	// The production writer chain: the raw controller captured, then gzip
+	// (which wraps c.Writer for clients sending Accept-Encoding: gzip).
+	r.Use(captureRawResponseController(), compressionMiddleware())
 	r.Use(func(c *gin.Context) {
 		if c.GetHeader("X-Test-Verified") != "" {
 			servermiddleware.MarkCFAccessVerified(c)
@@ -965,8 +968,10 @@ func TestInviteRateLimit_LANDevicesInOneSlash64EachGetTheirBurst(t *testing.T) {
 	}
 }
 
-// NIT5: a body trickled slower than inviteAcceptBodyReadTimeout is answered
-// 408 instead of holding the connection, and the deadline is cleared after
+// NIT5 / S1: a body trickled slower than inviteAcceptBodyReadTimeout is
+// answered 408 instead of holding the connection, also for a client sending
+// Accept-Encoding: gzip through the gzip middleware (which hides the
+// connection unless captureRawResponseController ran first), and the deadline is cleared after
 // the read, so a later request on the same keep-alive connection, sent after
 // the timeout has passed, is unaffected.
 func TestInviteRateLimit_SlowBodyTimesOut(t *testing.T) {
@@ -996,7 +1001,8 @@ func TestInviteRateLimit_SlowBodyTimesOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "POST /accept HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"tok")
+	// Accept-Encoding: gzip, as every browser sends: gzip wraps the writer.
+	fmt.Fprintf(conn, "POST /accept HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"tok")
 	start := time.Now()
 	if code := readStatus(conn, bufio.NewReader(conn)); code != http.StatusRequestTimeout {
 		t.Fatalf("trickled body: %d, want 408", code)
@@ -1015,7 +1021,7 @@ func TestInviteRateLimit_SlowBodyTimesOut(t *testing.T) {
 	br := bufio.NewReader(conn2)
 	body := `{"token":"` + inviteTestToken(1) + `","password":"x"}`
 	send := func() {
-		fmt.Fprintf(conn2, "POST /accept HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		fmt.Fprintf(conn2, "POST /accept HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	}
 	send()
 	if code := readStatus(conn2, br); code != http.StatusOK {
@@ -1092,5 +1098,30 @@ func TestInviteRateLimit_CfMarkedULARotationIsCapped(t *testing.T) {
 	}
 	if n := unlistedConnectors.len(); n != 1 {
 		t.Fatalf("the rotation filled %d warning slots, want 1 (its /64)", n)
+	}
+}
+
+// S1: the accept-invite route is excluded from gzip, so its body read
+// deadline never depends on the gzip writer; an ordinary route is still
+// compressed.
+func TestCompressionMiddleware_ExcludesAcceptInvite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(compressionMiddleware())
+	big := strings.Repeat("x", 4096)
+	r.POST("/api/v1/auth/accept-invite", func(c *gin.Context) { c.String(http.StatusOK, big) })
+	r.GET("/api/v1/other", func(c *gin.Context) { c.String(http.StatusOK, big) })
+	for path, wantGzip := range map[string]bool{"/api/v1/auth/accept-invite": false, "/api/v1/other": true} {
+		method := http.MethodGet
+		if path == "/api/v1/auth/accept-invite" {
+			method = http.MethodPost
+		}
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if got := w.Header().Get("Content-Encoding") == "gzip"; got != wantGzip {
+			t.Errorf("%s: gzipped=%v, want %v", path, got, wantGzip)
+		}
 	}
 }
