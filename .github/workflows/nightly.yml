@@ -1,7 +1,7 @@
 # file: .github/workflows/nightly.yml
-# version: 1.5.0
+# version: 1.6.0
 # guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-# last-edited: 2026-10-16
+# last-edited: 2026-10-21
 
 # Nightly full CI: property tests, coverage check, E2E, staticcheck.
 # Runs the complete reusable-ci.yml suite on a schedule.
@@ -28,7 +28,7 @@ permissions:
 jobs:
   full-ci:
     name: Full CI Suite
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@49028321ec682a0eda781494aa034bec5c83c15d # main 2026-10-16 (github-common#376: go-test-timeout input)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@861d4e83ccf918c9354a2d5f5685068f655cdf58 # main 2026-10-21 (github-common#378: ruff 0.17.0 pin)
     with:
       go-version: '1.27.2'
       node-version: '26'
