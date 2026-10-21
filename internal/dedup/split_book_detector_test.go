@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 1f7e3b4c-c2a9-4c0e-9c83-1d5b6f0a8e74
-// last-edited: 2026-09-02
+// last-edited: 2026-10-20
 
 package dedup
 
@@ -35,7 +35,7 @@ func TestDetect_ParentFlat_Tarkin(t *testing.T) {
 			author, nil,
 		))
 	}
-	got := detectFromSlim(books, func(id int) string { return "James Luceno" })
+	got := detectFromSlim(books, func(id int) string { return "James Luceno" }, testChapterMaxSec)
 	if len(got) != 1 {
 		t.Fatalf("want 1 candidate, got %d (%+v)", len(got), got)
 	}
@@ -71,7 +71,7 @@ func TestDetect_Grandparent_RogueSubdir(t *testing.T) {
 			author, nil,
 		))
 	}
-	got := detectFromSlim(books, func(id int) string { return "" })
+	got := detectFromSlim(books, func(id int) string { return "" }, testChapterMaxSec)
 	if len(got) != 1 {
 		t.Fatalf("want 1 candidate, got %d (%+v)", len(got), got)
 	}
@@ -90,7 +90,7 @@ func TestDetect_TooSmall(t *testing.T) {
 		makeSlim("a", "Title", "/lib/A/Title/01.mp3", author, nil),
 		makeSlim("b", "Title", "/lib/A/Title/02.mp3", author, nil),
 	}
-	got := detectFromSlim(books, nil)
+	got := detectFromSlim(books, nil, testChapterMaxSec)
 	if len(got) != 0 {
 		t.Fatalf("want 0 candidates, got %d", len(got))
 	}
@@ -103,7 +103,7 @@ func TestDetect_AuthorMismatch_Disqualifies(t *testing.T) {
 		makeSlim("b", "T", "/lib/X/T/02.mp3", a, nil),
 		makeSlim("c", "T", "/lib/X/T/03.mp3", b, nil),
 	}
-	got := detectFromSlim(books, nil)
+	got := detectFromSlim(books, nil, testChapterMaxSec)
 	if len(got) != 0 {
 		t.Fatalf("want 0 candidates, got %d (%+v)", len(got), got)
 	}
@@ -118,7 +118,7 @@ func TestDetect_NumberedSiblingFilenamesIgnorePollutedMetadata(t *testing.T) {
 		{ID: "b", Title: "02 - The Book", FilePath: "/lib/A/The Book/02 - The Book.mp3", OriginalFilename: "02 - The Book.mp3", AuthorID: new(2), SeriesID: nil},
 		{ID: "c", Title: "03 - The Book", FilePath: "/lib/A/The Book/03 - The Book.mp3", OriginalFilename: "03 - The Book.mp3", AuthorID: nil, SeriesID: new(30)},
 	}
-	got := detectFromSlim(books, nil)
+	got := detectFromSlim(books, nil, testChapterMaxSec)
 	if len(got) != 1 {
 		t.Fatalf("want 1 relaxed preview candidate, got %d (%+v)", len(got), got)
 	}
@@ -139,7 +139,7 @@ func TestDetect_NumberedSiblingRejectsStandaloneNumericTitles(t *testing.T) {
 		{ID: "b", Title: "86-Neon", FilePath: "/lib/A/1984/86-Neon.m4b", OriginalFilename: "86-Neon.m4b"},
 		{ID: "c", Title: "2001", FilePath: "/lib/A/1984/2001.m4b", OriginalFilename: "2001.m4b"},
 	}
-	if got := detectFromSlim(books, nil); len(got) != 0 {
+	if got := detectFromSlim(books, nil, testChapterMaxSec); len(got) != 0 {
 		t.Fatalf("standalone numeric titles must not form a candidate: %+v", got)
 	}
 }
@@ -152,7 +152,7 @@ func TestDetect_SeriesMismatch_Disqualifies(t *testing.T) {
 		makeSlim("b", "T", "/lib/X/T/02.mp3", a, s1),
 		makeSlim("c", "T", "/lib/X/T/03.mp3", a, s2),
 	}
-	got := detectFromSlim(books, nil)
+	got := detectFromSlim(books, nil, testChapterMaxSec)
 	if len(got) != 0 {
 		t.Fatalf("want 0 candidates, got %d (%+v)", len(got), got)
 	}
@@ -166,7 +166,7 @@ func TestDetect_NonSequential_Disqualifies(t *testing.T) {
 		makeSlim("b", "T", "/lib/X/T/50.mp3", a, nil),
 		makeSlim("c", "T", "/lib/X/T/99.mp3", a, nil),
 	}
-	got := detectFromSlim(books, nil)
+	got := detectFromSlim(books, nil, testChapterMaxSec)
 	if len(got) != 0 {
 		t.Fatalf("want 0 candidates, got %d", len(got))
 	}
@@ -195,7 +195,7 @@ func TestDetect_ParentBeatsGrandparent(t *testing.T) {
 			a, nil,
 		))
 	}
-	got := detectFromSlim(books, nil)
+	got := detectFromSlim(books, nil, testChapterMaxSec)
 	if len(got) != 2 {
 		t.Fatalf("want 2 candidates, got %d (%+v)", len(got), got)
 	}
@@ -221,6 +221,15 @@ func TestStripChapterMarker(t *testing.T) {
 		{"Tarkin 03", "Tarkin"},
 		{"Tarkin", "Tarkin"},
 		{"   Tarkin (Chapter 1)  ", "Tarkin"},
+		// A number after Book/Vol/# is the series volume, not a chapter.
+		{"Galaxy Run Book 3", "Galaxy Run Book 3"},
+		{"Galaxy Run, Bk 03", "Galaxy Run, Bk 03"},
+		{"Starfall, Vol. 2", "Starfall, Vol. 2"},
+		{"Starfall Volume 12", "Starfall Volume 12"},
+		{"Starfall #4", "Starfall #4"},
+		{"Galaxy Run Book 3 - 02", "Galaxy Run Book 3"},
+		{"Galaxy Run Book 3 - Chapter 2", "Galaxy Run Book 3"},
+		{"Bookshelf 03", "Bookshelf"},
 	}
 	for _, c := range cases {
 		got := stripChapterMarker(c.in)
@@ -236,12 +245,15 @@ func TestSequentialRun(t *testing.T) {
 		want bool
 	}{
 		{[]int{1, 2, 3, 4, 5}, true},
-		{[]int{1, 2, 3, 5}, true},     // gap=2 ok
-		{[]int{1, 2, 3, 6}, false},    // gap=3 fails
-		{[]int{1, 50, 99}, false},     // sparse coverage fails
-		{[]int{5, 5, 5}, false},       // not enough unique
-		{[]int{1, 2}, false},          // too few
-		{[]int{10, 11, 12, 13}, true}, // shifted run ok
+		{[]int{1, 2, 3, 5}, true},        // gap=2 ok
+		{[]int{1, 2, 3, 6}, false},       // gap=3 fails
+		{[]int{1, 50, 99}, false},        // sparse coverage fails
+		{[]int{5, 5, 5}, false},          // not enough unique
+		{[]int{1, 2}, false},             // too few
+		{[]int{10, 11, 12, 13}, true},    // shifted run ok
+		{[]int{2010, 2011, 2012}, false}, // a run of years is no run (V5)
+		{[]int{1898, 1899, 1900}, false}, // any number >= 1900
+		{[]int{1895, 1896, 1897}, true},  // just under the floor
 	}
 	for _, c := range cases {
 		got, _ := sequentialRun(c.in)
