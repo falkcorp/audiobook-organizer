@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.51.5
+// version: 1.52.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -279,6 +279,13 @@ const (
 	// it; never applied. Until 2026-10-05 these fell out of the plan with no
 	// row and no reason (2,249 number-leading books on prod).
 	fragClassUnplaced = "unplaced"
+	// fragClassHashCopy (owner decision 2026-10-21): a single-file book with
+	// NO chapter evidence whose sole present file row carries the file hash
+	// of a present row of one other live multi-file book. One row per child
+	// ("hash-copy:<parent>/<child>"), so the plan's count is the number of
+	// proposals. Apply retires the child into the parent exactly as a copy
+	// is retired; nothing is repointed and no row is deleted.
+	fragClassHashCopy = "hash-copy"
 )
 
 // Row id prefixes of a parent's UNPROVEN matches, so they never share a row
@@ -347,6 +354,13 @@ const (
 	// the parent. The row is held until the two books are deduplicated,
 	// never joined into the copy (coordinator decision 2026-10-05).
 	fragSkipCoOwnerDuplicate = "skipped_co_owner_duplicate_copy"
+	// fragSkipNoHash (hash-copy rule): a single-file book matches a present
+	// row of a multi-file book by original name and size, but the file hash
+	// is missing on one side, so nothing proves it a copy. Never applied.
+	fragSkipNoHash = "skipped_no_hash"
+	// fragSkipAmbiguousParent (hash-copy rule): the child's hash is carried
+	// by present rows of two or more live multi-file books. Never applied.
+	fragSkipAmbiguousParent = "held_ambiguous_parent"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -628,6 +642,10 @@ type fragCandidate struct {
 	Present    bool   // the fragment's own file is on disk
 	DiskSize   int64  // its size on disk (-1 unknown)
 	StatErr    string // a stat error other than not-exist
+	// HashCopy marks a candidate admitted by the hash-copy rule instead of
+	// chapter evidence: it matches parent rows by file hash only
+	// (fragIndex.hashCopyMatch) and never enters a no-parent group.
+	HashCopy bool
 }
 
 // origStem is the filename stem the chapter key is read from.
