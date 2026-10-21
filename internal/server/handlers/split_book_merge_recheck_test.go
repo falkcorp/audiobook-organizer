@@ -1,5 +1,5 @@
 // file: internal/server/handlers/split_book_merge_recheck_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f2a6d84-3c17-4b50-8e91-a4d7c0b35f62
 // last-edited: 2026-10-21
 
@@ -60,6 +60,9 @@ func TestMergeSplitBookCandidate_RefusesAStoredCandidateThatIsNowVetoed(t *testi
 	w := postSplitMerge(NewSplitBookHandler(nil, cands, store), "stale", ids[0])
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), "V2")
+	// The exact body: the refusal text once, not behind a second prefix.
+	require.JSONEq(t, `{"error":"split-book merge refused: the members are not shown to be chapters of one work: V2 distinct Book/Vol numbers [1, 2, 3] in titles","code":"CONFLICT","status":409}`, w.Body.String())
+	require.Equal(t, 1, strings.Count(w.Body.String(), "split-book merge refused"))
 	for _, id := range ids {
 		b, err := store.GetBookByID(id)
 		require.NoError(t, err)

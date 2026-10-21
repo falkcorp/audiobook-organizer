@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/split_book_bulk_merge_recheck_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b9e7c13-a5d2-4e68-9f40-c1d8e3a72b56
 // last-edited: 2026-10-21
 
@@ -82,6 +82,9 @@ func TestSplitBookBulkMerge_RefusesAStoredCandidateThatIsNowVetoed(t *testing.T)
 	require.NotNil(t, kept, "a refused candidate stays stored")
 	require.Contains(t, logs.String(), "no longer shown to be chapters")
 	require.Contains(t, logs.String(), "V2")
+	// The refusal text once: the merge adds no second "split-book merge refused:".
+	require.Contains(t, logs.String(), `error="split-book merge refused: the members are not shown to be chapters of one work: V2 distinct Book/Vol numbers [1, 2, 3] in titles"`)
+	require.NotContains(t, logs.String(), "refused: split-book merge refused")
 }
 
 // The same op merges a stored candidate whose rows still pass, and a file whose
