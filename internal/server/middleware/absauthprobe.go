@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauthprobe.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5c9f21a7-3e64-48db-b0d2-9a8e7c4f6103
-// last-edited: 2026-09-13
+// last-edited: 2026-10-20
 
 package middleware
 
@@ -60,10 +60,18 @@ func ABSAuthProbe() gin.HandlerFunc {
 		// exists to answer. Names cannot authenticate anything; values are never read.
 		cookieNames := make([]string, 0, 4)
 		cfCookieLen := 0
+		// CF_Authorization's own length, apart from the CF_-prefixed roll-up: that
+		// roll-up also counts cf_clearance (bot management), which is present on
+		// plenty of requests that carry NO Access session, so it cannot answer
+		// "did the Access cookie ride along". Value lengths only, never values.
+		cfAuthLen := 0
 		for _, ck := range c.Request.Cookies() {
 			cookieNames = append(cookieNames, ck.Name)
 			if strings.HasPrefix(strings.ToUpper(ck.Name), "CF_") {
 				cfCookieLen += len(ck.Value)
+			}
+			if strings.EqualFold(ck.Name, CFAuthorizationCookie) {
+				cfAuthLen += len(ck.Value)
 			}
 		}
 
@@ -90,10 +98,15 @@ func ABSAuthProbe() gin.HandlerFunc {
 			"cf_assertion_len", len(assertion),
 			// THE question this probe was built for. cookie_names is the ground truth
 			// (a CF_-prefixed name means the edge cookie rode along); cf_cookie_len is
-			// the convenience roll-up.
+			// the convenience roll-up over EVERY CF_-prefixed cookie (cf_clearance
+			// included; see cf_authorization_len for the Access cookie alone).
 			"cookie_names", strings.Join(cookieNames, ","),
 			"cf_cookie", cfCookieLen > 0,
 			"cf_cookie_len", cfCookieLen,
+			// CF_Authorization alone (the Access app-session cookie), excluding
+			// cf_clearance and every other CF_-prefixed cookie cf_cookie_len sums.
+			"cf_authorization", cfAuthLen > 0,
+			"cf_authorization_len", cfAuthLen,
 			// Mode B signal: the two-header service-token form. Plappa cannot use the
 			// single-header Authorization variant (it collides with ABS auth), so this
 			// pair is what a working Mode B request looks like.
