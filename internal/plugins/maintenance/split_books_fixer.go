@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/split_books_fixer.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b55e5de5-a785-4658-9cb0-ab1d3f20a781
-// last-edited: 2026-10-18
+// last-edited: 2026-10-20
 
 package maintenance
 
@@ -48,6 +48,22 @@ const (
 	sbSkipResolved = "resolved"
 	// sbSkipError: a member could not be read, so the row cannot be decided.
 	sbSkipError = "error"
+	// sbSkipNoFiles: a member book has no book_file row. The detector groups
+	// by book.file_path, which can be stale; with no file row there is
+	// nothing to move onto the keep, and nothing to say the book is a chapter.
+	sbSkipNoFiles = "skipped_no_files"
+	// sbHeldDurationGate: a member's file runs repair_chapter_max_min or
+	// longer, so it is a whole book, not a chapter (the fragment fixer's
+	// duration gate, same limit).
+	sbHeldDurationGate = "held_duration_gate"
+	// sbHeldDurationUnknown: a member's file has no recorded duration, so
+	// chapters cannot be told from whole books (the fragment fixer's rule: an
+	// unknown duration is not "short").
+	sbHeldDurationUnknown = "held_duration_unknown"
+	// sbHeldDistinctWorks: the detector's distinct-works vetoes fired (dedup.
+	// vetoDistinctWorks): the folder holds several books of a series, not one
+	// book in chapters. The row's evidence lists every veto.
+	sbHeldDistinctWorks = "held_distinct_works"
 )
 
 // splitBooksFixer merges split-book clusters: one book stored as several
@@ -67,6 +83,14 @@ const (
 // refusal (merge.GuardITunesProtected), so the plan never offers a row the
 // merge would refuse. A path whose location cannot be settled skips the row
 // (fail closed).
+//
+// HOLDS. A cluster is listed but never applicable when its members are not
+// shown to be chapters: a member with no book_file row (skipped_no_files), a
+// member file at or over repair_chapter_max_min (held_duration_gate) or with
+// no recorded duration (held_duration_unknown) -- the fragment fixer's gate,
+// with its precedence: unknown before long -- or a distinct-works veto of the
+// detector (held_distinct_works; dedup.DetectSplitBookCandidatesWithVetoes
+// returns those clusters so the row can say why instead of vanishing).
 //
 // APPLY PATH (03-PR9c, the brief's DISCREPANCY). The spec named an op
 // "dedup.split-book-merge"; no such op exists (op_ids.golden has only
@@ -226,7 +250,9 @@ func (f *splitBooksFixer) loadSnapshot(ctx context.Context, progress func(loaded
 	if err != nil {
 		return nil, err
 	}
-	cands, err := dedup.DetectSplitBookCandidates(ctx, ds, progress)
+	// WithVetoes: a vetoed cluster is still a row (held_distinct_works), and a
+	// re-plan must find it by its row id rather than report it resolved.
+	cands, err := dedup.DetectSplitBookCandidatesWithVetoes(ctx, ds, progress)
 	if err != nil {
 		return nil, fmt.Errorf("%s: detect split-book clusters: %w", splitBooksFixerID, err)
 	}
@@ -442,6 +468,34 @@ func (f *splitBooksFixer) evaluate(ctx context.Context, rd sbReader, res *repair
 		"chapter numbers " + c.SequentialPattern,
 		fmt.Sprintf("suggested keep %s (the lowest id)", keep),
 	}
+	// The fragment fixer's duration gate, on this cluster's book_file rows:
+	// the same limit, and every row counted once as unknown (<= 0) or long.
+	limit := repairChapterMaxSec()
+	noFiles, unknown, long := 0, 0, 0
+	for _, id := range c.BookIDs {
+		m := members[id]
+		if m == nil {
+			continue
+		}
+		if m.n == 0 {
+			noFiles++
+		}
+		for _, row := range m.rows {
+			switch d := row.Duration; {
+			case d <= 0:
+				unknown++
+			case d >= limit:
+				long++
+			}
+		}
+	}
+	fmt.Fprintf(&fp, "|dur=%d/%d|nofiles=%d|vetoes=%s", unknown, long, noFiles, strings.Join(c.Vetoes, ";"))
+	r.Evidence = append(r.Evidence, fmt.Sprintf("durations of the %d file row(s): %d unknown, %d at or over %d min",
+		files, unknown, long, limit/60))
+	r.Evidence = append(r.Evidence, c.Evidence...)
+	for _, v := range c.Vetoes {
+		r.Evidence = append(r.Evidence, "VETO "+v)
+	}
 	keepTitle := ""
 	if m := members[keep]; m != nil {
 		keepTitle = m.book.Title
@@ -493,6 +547,20 @@ func (f *splitBooksFixer) evaluate(ctx context.Context, rd sbReader, res *repair
 	case len(doubt) > 0:
 		r.Skipped, r.SkipReason = repairs.SkipGuardUnreadable, "could not tell whether a file is under books/itunes/**"
 		r.Reason = fmt.Sprintf("Could not tell whether book(s) %s are iTunes books (a path could not be resolved).", strings.Join(doubt, ", "))
+	case noFiles > 0:
+		r.Skipped, r.SkipReason = sbSkipNoFiles, fmt.Sprintf("%d of %d books have no file rows", noFiles, len(c.BookIDs))
+		r.Reason = "The detector groups books by their stored path, which can be stale: " + r.SkipReason +
+			", so there is nothing to move onto the keep and nothing to show they are chapters."
+	case unknown > 0:
+		// The fragment fixer's rule: an unknown duration is not "short".
+		r.Skipped, r.SkipReason = sbHeldDurationUnknown, fmt.Sprintf("%d of %d file rows have no recorded duration; cannot tell chapters from whole books", unknown, files)
+		r.Reason = r.SkipReason + ". Held until the durations are read."
+	case long > 0:
+		r.Skipped, r.SkipReason = sbHeldDurationGate, fmt.Sprintf("%d of %d file rows run %d min or longer: likely separate books, not chapters", long, files, limit/60)
+		r.Reason = r.SkipReason + "."
+	case len(c.Vetoes) > 0:
+		r.Skipped, r.SkipReason = sbHeldDistinctWorks, "looks like several books, not chapters of one: "+strings.Join(sbVetoCodes(c.Vetoes), ", ")
+		r.Reason = "The folder looks like distinct works (a series), not one book in chapters. " + strings.Join(c.Vetoes, "; ") + "."
 	}
 	if r.Applicable() {
 		d := &sbDecision{rowID: r.RowID, keep: keep, title: c.SuggestedTitle,
@@ -509,6 +577,19 @@ func (f *splitBooksFixer) evaluate(ctx context.Context, rd sbReader, res *repair
 	}
 	r.Fingerprint = sbFingerprint(r, fp.String())
 	return r, nil
+}
+
+// sbVetoCodes is the rule codes ("V2", "V9", ...) of the detector's veto
+// lines, in order, each once.
+func sbVetoCodes(vetoes []string) []string {
+	var out []string
+	for _, v := range vetoes {
+		code, _, _ := strings.Cut(v, " ")
+		if !slices.Contains(out, code) {
+			out = append(out, code)
+		}
+	}
+	return out
 }
 
 // sbReadMember reads one member book and its book_file rows.
