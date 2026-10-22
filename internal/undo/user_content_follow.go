@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
 // last-edited: 2026-10-21
 
@@ -233,8 +233,18 @@ type MembershipRecord struct {
 	// Index is the retired book's position when the retire ran.
 	Index int `json:"index"`
 	// SurvivorWasMember: the survivor was already listed, so the retire only
-	// removed the retired book and the revert puts it back at Index.
+	// removed the retired book and the revert puts it back beside its recorded
+	// neighbours (Index when none can be found).
 	SurvivorWasMember bool `json:"survivor_was_member"`
+	// Anchored: Prev and Next are recorded. Rows journaled before the anchors
+	// existed have neither, and are put back by Index alone.
+	Anchored bool `json:"anchored,omitempty"`
+	// Prev and Next are the ids of the books right before and after the
+	// retired book in the list when the retire ran ("" at the head or the
+	// tail). The revert finds the slot by them (MembershipGraph); Index is
+	// the fallback.
+	Prev string `json:"prev,omitempty"`
+	Next string `json:"next,omitempty"`
 }
 
 // EncodeMembership renders r as a row value.
@@ -265,7 +275,13 @@ func CarryMembership(cur []string, retired, survivor string) (next []string, rec
 	if i < 0 {
 		return cur, MembershipRecord{}, false
 	}
-	rec = MembershipRecord{Index: i, SurvivorWasMember: slices.Contains(cur, survivor)}
+	rec = MembershipRecord{Index: i, SurvivorWasMember: slices.Contains(cur, survivor), Anchored: true}
+	if i > 0 {
+		rec.Prev = cur[i-1]
+	}
+	if i+1 < len(cur) {
+		rec.Next = cur[i+1]
+	}
 	next = slices.Clone(cur)
 	if rec.SurvivorWasMember {
 		return slices.Delete(next, i, i+1), rec, true
@@ -300,31 +316,44 @@ const (
 // slot (or is to stay) and has since been taken out (the owner removed it on
 // purpose). stand is the survivor's part (SurvivorStand); a survivor the
 // owner already took out of the list is not removed again for SurvivorLeaves.
-func RestoreMembership(cur []string, retired, survivor string, rec MembershipRecord, stand SurvivorStand) ([]string, error) {
+//
+// A replaced slot the survivor still holds goes straight back to the retired
+// book. Otherwise the book is inserted where the recorded neighbours put it
+// (g, see MembershipGraph), so it lands in its original place whatever order
+// several retires into the survivor are reverted in. note is non-empty when
+// that was not possible and the recorded index was used (g nil, no neighbour
+// of the book resolves in the list now, or the row predates the anchors); the
+// caller reports it.
+func RestoreMembership(cur []string, retired, survivor string, rec MembershipRecord, stand SurvivorStand, g *MembershipGraph) (next []string, note string, err error) {
 	if slices.Contains(cur, retired) {
-		return nil, ErrAlreadyRestored
+		return nil, "", ErrAlreadyRestored
 	}
-	next := slices.Clone(cur)
-	if rec.SurvivorWasMember || stand == SurvivorStays {
-		if stand == SurvivorStays && !rec.SurvivorWasMember && !slices.Contains(next, survivor) {
-			return nil, refuse(ReasonChangedSince, "book %s is no longer listed where the retire put it", survivor)
+	next = slices.Clone(cur)
+	if !rec.SurvivorWasMember && stand != SurvivorStays {
+		j := slices.Index(next, survivor)
+		if j < 0 {
+			return nil, "", refuse(ReasonChangedSince, "book %s is no longer listed where the retire put it", survivor)
 		}
-		if stand == SurvivorLeaves && rec.SurvivorWasMember {
-			// Out first: rec.Index counts the list as it stood with the
-			// survivor in the replaced slot, which the retired book's
-			// predecessor's revert has since filled again.
-			if j := slices.Index(next, survivor); j >= 0 {
-				next = slices.Delete(next, j, j+1)
-			}
+		next[j] = retired
+		return next, "", nil
+	}
+	if !rec.SurvivorWasMember && !slices.Contains(next, survivor) {
+		return nil, "", refuse(ReasonChangedSince, "book %s is no longer listed where the retire put it", survivor)
+	}
+	if stand == SurvivorLeaves && rec.SurvivorWasMember {
+		if j := slices.Index(next, survivor); j >= 0 {
+			next = slices.Delete(next, j, j+1)
 		}
-		return slices.Insert(next, min(rec.Index, len(next)), retired), nil
 	}
-	j := slices.Index(next, survivor)
-	if j < 0 {
-		return nil, refuse(ReasonChangedSince, "book %s is no longer listed where the retire put it", survivor)
+	if !rec.Anchored {
+		note = fmt.Sprintf("book %s was put back by its recorded index %d: the row predates neighbour anchors", retired, rec.Index)
+	} else {
+		if at, ok := g.slot(next, retired); ok {
+			return slices.Insert(next, at, retired), "", nil
+		}
+		note = fmt.Sprintf("book %s was put back by its recorded index %d: none of its neighbours could be found in the list", retired, rec.Index)
 	}
-	next[j] = retired
-	return next, nil
+	return slices.Insert(next, min(rec.Index, len(next)), retired), note, nil
 }
 
 // CheckMembershipFollow is what the revert of a collection or playlist row
@@ -337,7 +366,7 @@ func CheckMembershipFollow(cur []string, c *database.OperationChange) error {
 	if err != nil {
 		return &ReferentError{Reason: ReasonOldValueUnparsable, Detail: err.Error()}
 	}
-	_, err = RestoreMembership(cur, c.BookID, c.NewValue, rec, SurvivorDefault)
+	_, _, err = RestoreMembership(cur, c.BookID, c.NewValue, rec, SurvivorDefault, nil)
 	return err
 }
 
