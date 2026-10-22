@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
 // last-edited: 2026-10-21
 
@@ -268,71 +268,78 @@ func TestCheckMembershipFollow(t *testing.T) {
 	}
 }
 
-func TestSurvivorStandsIn(t *testing.T) {
+func TestSurvivorStandOf(t *testing.T) {
 	t.Parallel()
-	now := time.Now()
-	marker := func(op, field string) *database.OperationChange {
-		return &database.OperationChange{ChangeType: ChangeTypeUserContentFollow, OperationID: op, FieldName: field, NewValue: "b"}
+	base := time.Unix(1_700_000_000, 0)
+	at := func(sec int) time.Time { return base.Add(time.Duration(sec) * time.Second) }
+	tp := func(sec int) *time.Time { v := at(sec); return &v }
+	took := UserContentField(UserContentCollectionTook, "c1")
+	held := UserContentField(UserContentCollectionHeld, "c1")
+	mk := func(op, retired, field string, created int, reverted *time.Time) *database.OperationChange {
+		return &database.OperationChange{ID: op + "/" + retired, ChangeType: ChangeTypeUserContentFollow, OperationID: op, BookID: "s",
+			FieldName: field, NewValue: retired, CreatedAt: at(created), RevertedAt: reverted}
 	}
-	field := UserContentField(UserContentCollectionHeld, "c1")
+	row := func(op, retired string) *database.OperationChange {
+		return &database.OperationChange{ChangeType: ChangeTypeUserContentFollow, OperationID: op, BookID: retired, NewValue: "s"}
+	}
 	cases := []struct {
 		name string
 		rows []*database.OperationChange
-		want bool
+		row  *database.OperationChange
+		want SurvivorStand
 	}{
-		{"another op's standing marker", []*database.OperationChange{marker("op2", field)}, true},
-		{"this op's own marker does not count", []*database.OperationChange{marker("op1", field)}, false},
-		{"a reverted marker does not count", []*database.OperationChange{{ChangeType: ChangeTypeUserContentFollow, OperationID: "op2", FieldName: field, RevertedAt: &now}}, false},
-		{"a voided marker does not count", []*database.OperationChange{{ChangeType: ChangeTypeUserContentFollow, OperationID: "op2", FieldName: field, Voided: true}}, false},
-		{"another list's marker does not count", []*database.OperationChange{marker("op2", UserContentField(UserContentCollectionHeld, "c9"))}, false},
-		{"a playlist marker does not count for a collection", []*database.OperationChange{marker("op2", UserContentField(UserContentPlaylistHeld, "c1"))}, false},
-		{"another change type does not count", []*database.OperationChange{{ChangeType: "metadata_update", OperationID: "op2", FieldName: field}}, false},
-		{"no rows", nil, false},
+		{"a took row with a borrowing marker standing: the survivor stays",
+			[]*database.OperationChange{mk("op0", "a", took, 1, nil), mk("op1", "b", held, 2, nil)}, row("op0", "a"), SurvivorStays},
+		{"the last took row: the survivor swaps back out",
+			[]*database.OperationChange{mk("op0", "a", took, 1, nil), mk("op1", "b", held, 2, tp(5))}, row("op0", "a"), SurvivorDefault},
+		{"the last held row that borrows: the survivor leaves",
+			[]*database.OperationChange{mk("op0", "a", took, 1, tp(4)), mk("op1", "b", held, 2, nil)}, row("op1", "b"), SurvivorLeaves},
+		{"a held row with a sibling still standing: stays",
+			[]*database.OperationChange{mk("op0", "a", took, 1, tp(4)), mk("op1", "b", held, 2, nil), mk("op1", "c", held, 3, nil)}, row("op1", "b"), SurvivorStays},
+		{"a held row whose siblings were already restored: leaves",
+			[]*database.OperationChange{mk("op0", "a", took, 1, tp(4)), mk("op1", "b", held, 2, nil), mk("op1", "c", held, 3, tp(5))}, row("op1", "b"), SurvivorLeaves},
+		{"held borrows through another held (transitive), took reverted since: the later one stays while the earlier stands",
+			[]*database.OperationChange{mk("op0", "a", took, 1, tp(6)), mk("op1", "b", held, 2, nil), mk("op2", "c", held, 3, nil)}, row("op1", "b"), SurvivorStays},
+		{"held borrows through another held (transitive): the last of them leaves",
+			[]*database.OperationChange{mk("op0", "a", took, 1, tp(6)), mk("op1", "b", held, 2, tp(7)), mk("op2", "c", held, 3, nil)}, row("op2", "c"), SurvivorLeaves},
+		{"a held marker written when the survivor was an original member does not borrow",
+			[]*database.OperationChange{mk("op0", "a", held, 1, nil)}, row("op0", "a"), SurvivorDefault},
+		{"a held marker written after the took one was reverted does not borrow",
+			[]*database.OperationChange{mk("op0", "a", took, 1, tp(3)), mk("op1", "b", held, 5, nil)}, row("op1", "b"), SurvivorDefault},
+		{"a voided marker does not count",
+			[]*database.OperationChange{mk("op0", "a", took, 1, nil), {ID: "v", ChangeType: ChangeTypeUserContentFollow, OperationID: "op1", BookID: "s", FieldName: held, NewValue: "b", CreatedAt: at(2), Voided: true}}, row("op0", "a"), SurvivorDefault},
+		{"another list's marker does not count",
+			[]*database.OperationChange{mk("op0", "a", took, 1, nil), mk("op1", "b", UserContentField(UserContentCollectionHeld, "c9"), 2, nil)}, row("op0", "a"), SurvivorDefault},
+		{"a playlist marker does not count for a collection",
+			[]*database.OperationChange{mk("op0", "a", took, 1, nil), mk("op1", "b", UserContentField(UserContentPlaylistHeld, "c1"), 2, nil)}, row("op0", "a"), SurvivorDefault},
+		{"no marker for the row (journaled before markers)",
+			[]*database.OperationChange{mk("op1", "b", took, 1, nil)}, row("op0", "a"), SurvivorDefault},
+		{"no rows", nil, row("op0", "a"), SurvivorDefault},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := SurvivorStandsIn(tc.rows, "op1", UserContentCollection, "c1"); got != tc.want {
+			if got := SurvivorStandOf(tc.rows, tc.row, UserContentCollection, "c1"); got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestSurvivorOnlyStandsByReplace(t *testing.T) {
+func TestMarkerOf(t *testing.T) {
 	t.Parallel()
-	base := time.Now()
-	at := func(d time.Duration) time.Time { return base.Add(d) }
-	tp := func(t time.Time) *time.Time { return &t }
-	took := UserContentField(UserContentCollectionTook, "c1")
 	held := UserContentField(UserContentCollectionHeld, "c1")
-	// row is op2's removal, written at +10s.
-	row := &database.OperationChange{ChangeType: ChangeTypeUserContentFollow, OperationID: "op2", CreatedAt: at(10 * time.Second)}
-	mk := func(op, field string, created time.Time, reverted *time.Time) *database.OperationChange {
-		return &database.OperationChange{ChangeType: ChangeTypeUserContentFollow, OperationID: op, FieldName: field, CreatedAt: created, RevertedAt: reverted}
+	m := &database.OperationChange{ID: "m", ChangeType: ChangeTypeUserContentFollow, OperationID: "op1", BookID: "s", FieldName: held, NewValue: "r"}
+	other := &database.OperationChange{ID: "o", ChangeType: ChangeTypeUserContentFollow, OperationID: "op2", BookID: "s", FieldName: held, NewValue: "r"}
+	row := &database.OperationChange{OperationID: "op1", BookID: "r", NewValue: "s"}
+	if got := MarkerOf([]*database.OperationChange{other, m}, row, UserContentCollection, "c1"); got != m {
+		t.Fatalf("got %+v", got)
 	}
-	cases := []struct {
-		name string
-		rows []*database.OperationChange
-		want bool
-	}{
-		{"the replace was reverted after the removal: the survivor leaves", []*database.OperationChange{mk("op1", took, at(0), tp(at(20*time.Second)))}, true},
-		{"the replace is still standing", []*database.OperationChange{mk("op1", took, at(0), nil)}, false},
-		{"the replace was reverted BEFORE the removal was written (the owner added the survivor later)", []*database.OperationChange{mk("op1", took, at(0), tp(at(5*time.Second)))}, false},
-		{"another removal still stands", []*database.OperationChange{mk("op1", took, at(0), tp(at(20*time.Second))), mk("op3", held, at(12*time.Second), nil)}, false},
-		{"another removal was reverted too", []*database.OperationChange{mk("op1", took, at(0), tp(at(20*time.Second))), mk("op3", held, at(12*time.Second), tp(at(30*time.Second)))}, true},
-		{"this op's own replace marker is not another op's", []*database.OperationChange{mk("op2", took, at(0), tp(at(20*time.Second)))}, false},
-		{"a voided replace marker does not count", []*database.OperationChange{{ChangeType: ChangeTypeUserContentFollow, OperationID: "op1", FieldName: took, CreatedAt: at(0), RevertedAt: tp(at(20 * time.Second)), Voided: true}}, false},
-		{"another list's marker does not count", []*database.OperationChange{mk("op1", UserContentField(UserContentCollectionTook, "c9"), at(0), tp(at(20*time.Second)))}, false},
-		{"no rows", nil, false},
+	if MarkerOf([]*database.OperationChange{other}, row, UserContentCollection, "c1") != nil {
+		t.Fatal("another operation's marker is not this row's")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := SurvivorOnlyStandsByReplace(tc.rows, row, UserContentCollection, "c1"); got != tc.want {
-				t.Fatalf("got %v, want %v", got, tc.want)
-			}
-		})
+	if MarkerOf([]*database.OperationChange{m}, row, UserContentCollection, "c2") != nil {
+		t.Fatal("another list's marker is not this row's")
 	}
 }
 
@@ -391,5 +398,38 @@ func TestUserContentFollow_FieldsAndValidity(t *testing.T) {
 	}
 	if _, err := DecodeMembership(`{"index":-1}`); err == nil {
 		t.Fatal("a negative index must not decode")
+	}
+}
+
+func TestPairedRow(t *testing.T) {
+	mk := func(id, op, book, field, nv string) *database.OperationChange {
+		return &database.OperationChange{ID: id, OperationID: op, BookID: book, ChangeType: ChangeTypeUserContentFollow, FieldName: field, NewValue: nv}
+	}
+	row := mk("r1", "op1", "retired", UserContentField(UserContentCollection, "c1"), "survivor")
+	otherList := mk("r2", "op1", "retired", UserContentField(UserContentCollection, "c2"), "survivor")
+	otherOp := mk("r3", "op2", "retired", UserContentField(UserContentCollection, "c1"), "survivor")
+	otherBook := mk("r4", "op1", "other", UserContentField(UserContentCollection, "c1"), "survivor")
+	pl := mk("r5", "op1", "retired", UserContentField(UserContentPlaylist, "c1"), "survivor")
+	all := []*database.OperationChange{otherList, otherOp, otherBook, pl, row}
+
+	m := mk("m1", "op1", "survivor", UserContentField(UserContentCollectionHeld, "c1"), "retired")
+	if got := PairedRow(all, m); got != row {
+		t.Fatalf("held collection marker paired with %v, want r1", got)
+	}
+	m.FieldName = UserContentField(UserContentCollectionTook, "c1")
+	if got := PairedRow(all, m); got != row {
+		t.Fatalf("took collection marker paired with %v, want r1", got)
+	}
+	m.FieldName = UserContentField(UserContentPlaylistTook, "c1")
+	if got := PairedRow(all, m); got != pl {
+		t.Fatalf("playlist marker paired with %v, want r5", got)
+	}
+	m.FieldName = UserContentField(UserContentCollectionHeld, "zz")
+	if got := PairedRow(all, m); got != nil {
+		t.Fatalf("marker of an unknown list paired with %v, want nil", got)
+	}
+	m.FieldName = "bogus"
+	if got := PairedRow(all, m); got != nil {
+		t.Fatalf("unparsable marker paired with %v, want nil", got)
 	}
 }

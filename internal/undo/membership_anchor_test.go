@@ -1,5 +1,5 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
 // last-edited: 2026-10-21
 
@@ -64,8 +64,9 @@ func (s *carrySim) retire(op, retired string) {
 	s.byRetired[retired] = [2]*database.OperationChange{row, marker}
 }
 
-// revert undoes the retire of one book; rows is every journal row of the list
-// the revert may read (the survivor's journal, plus the row itself).
+// revert undoes the retire of one book the way RevertOperation does for a
+// row: the survivor's part from its journal (SurvivorStandOf), the slot from
+// the neighbour graph, and the marker stamped reverted together with the row.
 func (s *carrySim) revert(retired string) error {
 	pair := s.byRetired[retired]
 	row, marker := pair[0], pair[1]
@@ -73,13 +74,7 @@ func (s *carrySim) revert(retired string) error {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	stand := SurvivorDefault
-	switch {
-	case !rec.SurvivorWasMember && SurvivorStandsIn(s.survivorJ, row.OperationID, UserContentCollection, s.listID):
-		stand = SurvivorStays
-	case rec.SurvivorWasMember && SurvivorOnlyStandsByReplace(s.survivorJ, row, UserContentCollection, s.listID):
-		stand = SurvivorLeaves
-	}
+	stand := SurvivorStandOf(s.survivorJ, row, UserContentCollection, s.listID)
 	g := NewMembershipGraph(s.survivor, UserContentCollection, s.listID)
 	g.AddRows(s.survivorJ)
 	g.AddRows([]*database.OperationChange{row})
@@ -93,6 +88,16 @@ func (s *carrySim) revert(retired string) error {
 	s.list = next
 	at := s.tick()
 	row.RevertedAt, marker.RevertedAt = &at, &at
+	return nil
+}
+
+// revertOp undoes every row of an operation, newest first, as one pass.
+func (s *carrySim) revertOp(books []string) error {
+	for _, b := range slices.Backward(books) {
+		if err := s.revert(b); err != nil {
+			return fmt.Errorf("revert %s: %w", b, err)
+		}
+	}
 	return nil
 }
 
@@ -254,8 +259,8 @@ func TestMembershipAnchors_AnchorsResolveThroughOtherRetires(t *testing.T) {
 
 // The rows of one operation are reverted together but in no fixed order, and
 // the operations in any order: every such order restores the list. (Rows of
-// two operations interleaved with one another are not a case the revert
-// produces: RevertOperation undoes one operation's rows in a single pass.)
+// different operations interleaved with one another are covered by
+// TestMembershipHistory_AllRowPermutations.)
 func TestMembershipAnchors_ExactInAnyRowOrderWithinOperations(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewPCG(3, 5))
@@ -334,5 +339,8 @@ func TestMembershipAnchors_SurvivorStandsInForTheBookItReplaced(t *testing.T) {
 			}
 		}
 		ucEq(t, sim.list, l0)
+		if len(sim.notes) > 0 {
+			t.Fatalf("%v: fell back to the index: %v", order, sim.notes)
+		}
 	}
 }
