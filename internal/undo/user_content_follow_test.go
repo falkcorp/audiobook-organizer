@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
 // last-edited: 2026-10-22
 
@@ -501,7 +501,8 @@ func TestRestoreMember(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			next, _, released, err := RestoreMember(tc.cur, "r", "s", tc.rec, tc.stand, tc.borrowed, nil)
+			next, res, err := RestoreMember(tc.cur, "r", "s", tc.rec, MemberRole{Stand: tc.stand, Borrowed: tc.borrowed}, nil)
+			released := res.Released
 			if tc.wantAlready {
 				if !errors.Is(err, ErrAlreadyRestored) || released {
 					t.Fatalf("got released=%v err=%v, want ErrAlreadyRestored", released, err)
@@ -515,6 +516,139 @@ func TestRestoreMember(t *testing.T) {
 				t.Fatalf("released=%v, want %v", released, tc.wantReleased)
 			}
 			ucEq(t, next, tc.want)
+		})
+	}
+}
+
+// RestoreMember with a retired book that stays out (MemberRole.RetiredStaysOut):
+// the book is not put back, the survivor plays its part as for any row, and the
+// result says so. A book already listed is still ErrAlreadyRestored.
+func TestRestoreMember_RetiredBookStaysOut(t *testing.T) {
+	t.Parallel()
+	tookRec := MembershipRecord{Index: 1, SurvivorWasMember: false}
+	heldRec := MembershipRecord{Index: 1, SurvivorWasMember: true}
+	cases := []struct {
+		name        string
+		cur         []string
+		rec         MembershipRecord
+		stand       SurvivorStand
+		want        []string
+		wantAlready bool
+	}{
+		{"the survivor took the slot and nothing stands on it: it leaves, the book stays out", []string{"x", "s", "y"}, tookRec, SurvivorDefault, []string{"x", "y"}, false},
+		{"the survivor took the slot and another retire stands on it: it stays", []string{"x", "s", "y"}, tookRec, SurvivorStays, []string{"x", "s", "y"}, false},
+		{"a removal whose survivor was left for it: the survivor leaves", []string{"x", "s", "y"}, heldRec, SurvivorLeaves, []string{"x", "y"}, false},
+		{"a removal whose survivor was an original member: nothing changes", []string{"x", "s", "y"}, heldRec, SurvivorDefault, []string{"x", "s", "y"}, false},
+		{"the survivor is not listed: nothing to take out", []string{"x", "y"}, tookRec, SurvivorDefault, []string{"x", "y"}, false},
+		{"the book is listed after all: already restored", []string{"x", "r", "y"}, heldRec, SurvivorDefault, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			next, res, err := RestoreMember(tc.cur, "r", "s", tc.rec, MemberRole{Stand: tc.stand, Borrowed: true, RetiredStaysOut: true}, nil)
+			if tc.wantAlready {
+				if !errors.Is(err, ErrAlreadyRestored) || res.LeftOut {
+					t.Fatalf("got leftOut=%v err=%v, want ErrAlreadyRestored", res.LeftOut, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.LeftOut {
+				t.Fatal("the result does not say the book was left out")
+			}
+			ucEq(t, next, tc.want)
+		})
+	}
+}
+
+// RetiredStaysOut: a retired book that was itself a survivor, listed only on
+// other retires' account, comes back only while one of them still stands.
+func TestRetiredStaysOut(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(1_700_000_000, 0)
+	at := func(sec int) time.Time { return base.Add(time.Duration(sec) * time.Second) }
+	reverted := func(c *database.OperationChange, sec int) *database.OperationChange {
+		t := at(sec)
+		c.RevertedAt = &t
+		return c
+	}
+	// r is the survivor of these markers (BookID r).
+	mk := func(op, retired string, took bool, created int) *database.OperationChange {
+		kind := UserContentCollectionHeld
+		if took {
+			kind = UserContentCollectionTook
+		}
+		return &database.OperationChange{ID: op + "/" + retired, ChangeType: ChangeTypeUserContentFollow, OperationID: op, BookID: "r",
+			FieldName: UserContentField(kind, "c1"), NewValue: retired, CreatedAt: at(created)}
+	}
+	// The row that retired r into another survivor, at second 10.
+	row := &database.OperationChange{ID: "op9/r", ChangeType: ChangeTypeUserContentFollow, OperationID: "op9", BookID: "r", NewValue: "s3",
+		FieldName: UserContentField(UserContentCollection, "c1"), CreatedAt: at(10)}
+	cases := []struct {
+		name string
+		rows []*database.OperationChange
+		want bool
+	}{
+		{"an original member of the list (no markers of its own): comes back", nil, false},
+		{"an original member that held a book for another retire: comes back", []*database.OperationChange{mk("op0", "a", false, 1)}, false},
+		{"listed on a took marker that still stands: comes back", []*database.OperationChange{mk("op0", "a", true, 1)}, false},
+		{"listed on a took marker and a held one, only the held one stands: comes back", []*database.OperationChange{reverted(mk("op0", "a", true, 1), 5), mk("op1", "b", false, 2)}, false},
+		{"listed on borrowed account, every retire reverted since the book was retired: stays out", []*database.OperationChange{reverted(mk("op0", "a", true, 1), 12), reverted(mk("op1", "b", false, 2), 13)}, true},
+		{"the same, one reverted before the book was retired and one after: stays out", []*database.OperationChange{reverted(mk("op0", "a", true, 1), 5), reverted(mk("op1", "b", false, 2), 11)}, true},
+		{"borrowed account ended before the book was retired: it was an original member by then", []*database.OperationChange{reverted(mk("op0", "a", true, 1), 5)}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := RetiredStaysOut(tc.rows, row, UserContentCollection, "c1"); got != tc.want {
+				t.Fatalf("RetiredStaysOut = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// NewerCarryStands: the standing carry of the same book into the same list that
+// was journaled after the row, and none other.
+func TestNewerCarryStands(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(1_700_000_000, 0)
+	at := func(sec int) time.Time { return base.Add(time.Duration(sec) * time.Second) }
+	mk := func(id, book, field string, created int) *database.OperationChange {
+		return &database.OperationChange{ID: id, ChangeType: ChangeTypeUserContentFollow, OperationID: "op-" + id, BookID: book, FieldName: field, CreatedAt: at(created)}
+	}
+	main := UserContentField(UserContentCollection, "c1")
+	row := mk("old", "r", main, 5)
+	done := mk("done", "r", main, 9)
+	t0 := at(10)
+	done.RevertedAt = &t0
+	voided := mk("voided", "r", main, 9)
+	voided.Voided = true
+	cases := []struct {
+		name string
+		rows []*database.OperationChange
+		want string
+	}{
+		{"nothing newer", []*database.OperationChange{row}, ""},
+		{"a newer standing row", []*database.OperationChange{row, mk("new", "r", main, 8)}, "new"},
+		{"the newest of several", []*database.OperationChange{row, mk("new", "r", main, 8), mk("newer", "r", main, 9)}, "newer"},
+		{"an older row is not newer", []*database.OperationChange{row, mk("older", "r", main, 2)}, ""},
+		{"a newer row already reverted does not stand", []*database.OperationChange{row, done}, ""},
+		{"a voided row does not stand", []*database.OperationChange{row, voided}, ""},
+		{"another list is not this one", []*database.OperationChange{row, mk("other", "r", UserContentField(UserContentCollection, "c2"), 8)}, ""},
+		{"another kind of list is not this one", []*database.OperationChange{row, mk("pl", "r", UserContentField(UserContentPlaylist, "c1"), 8)}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := NewerCarryStands(tc.rows, row, UserContentCollection, "c1")
+			switch {
+			case tc.want == "" && got != nil:
+				t.Fatalf("got %s, want none", got.ID)
+			case tc.want != "" && (got == nil || got.ID != tc.want):
+				t.Fatalf("got %v, want %s", got, tc.want)
+			}
 		})
 	}
 }

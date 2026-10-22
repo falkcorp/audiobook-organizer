@@ -1,5 +1,5 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
 // last-edited: 2026-10-22
 
@@ -89,7 +89,8 @@ func (s *carrySim) revertStamping(retired string, stamp bool) error {
 	// Every book other than the survivor has no journal rows besides the
 	// retire rows already in the pool.
 	g.SetJournalLoader(func(string) ([]*database.OperationChange, error) { return nil, nil })
-	next, note, _, err := RestoreMember(s.list, retired, s.survivor, rec, stand, borrowed, g)
+	next, res, err := RestoreMember(s.list, retired, s.survivor, rec, MemberRole{Stand: stand, Borrowed: borrowed}, g)
+	note := res.Note
 	if err != nil && !errors.Is(err, ErrAlreadyRestored) {
 		return err
 	}
