@@ -1,7 +1,7 @@
 // file: internal/config/removed_keys.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package config
 
@@ -50,6 +50,13 @@ const reviewServerQueryRemovedMessage = "the review_metadata_server_query settin
 const activityDBRemovedMessage = "this setting was removed with the SQLite activity backend: Pebble, inside the " +
 	"main database, is the only activity store, so there is no separate activity database to place or move. " +
 	"An existing activity.sqlite file is left where it is and can be deleted by hand"
+
+// guestServiceTokenRemovedMessage explains the removal of the shared guest
+// Cloudflare Access service token that invitations used to hand out.
+const guestServiceTokenRemovedMessage = "the shared guest Cloudflare service token (INVITE_CF_ACCESS_CLIENT_ID and " +
+	"INVITE_CF_ACCESS_CLIENT_SECRET) was removed: guests now get through Cloudflare by email login, because " +
+	"accepting an invitation adds the invitee's email to the guest Access policy (CF_ACCOUNT_ID, " +
+	"CF_GUESTS_POLICY_ID, CF_POLICY_API_TOKEN). Delete both variables, and revoke the service token in Cloudflare"
 
 // removedConfigKey is a setting that used to exist and no longer does.
 type removedConfigKey struct {
@@ -123,6 +130,11 @@ var removedConfigKeys = []removedConfigKey{
 	// validated, and "sqlite" stops startup (config.ValidateActivityBackend).
 	{key: "activity_db_path", message: activityDBRemovedMessage},
 	{key: "activity_db_move_on_change", message: activityDBRemovedMessage},
+	// Removed 2026-10-21 (public-surface hardening). The pair was environment
+	// only; both names warn at startup and a PUT naming one is refused with the
+	// removal message.
+	{key: "invite_cf_access_client_id", message: guestServiceTokenRemovedMessage},
+	{key: "invite_cf_access_client_secret", message: guestServiceTokenRemovedMessage},
 }
 
 // removedKeyInUpdate returns the rejection text for the first removed key

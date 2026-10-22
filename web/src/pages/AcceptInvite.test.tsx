@@ -1,7 +1,7 @@
 // file: web/src/pages/AcceptInvite.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e5a17-8b42-4d6f-a1e0-7f2b8d4c9e53
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -32,26 +32,18 @@ afterEach(() => {
 });
 
 describe('AcceptInvite', () => {
-  it('shows the invitation and the AudioBooth header pair for a valid token', async () => {
+  it('shows the invitation and the email-login AudioBooth steps for a valid token', async () => {
     const fetchMock = vi.fn(async (_url: string) =>
-      jsonResponse({
-        data: {
-          username: 'guest',
-          expires_at: '2026-10-22T12:00:00Z',
-          guest_headers: { client_id: 'abc.access', client_secret: 'secret-xyz' },
-        },
-      })
+      jsonResponse({ data: { username: 'guest', expires_at: '2026-10-22T12:00:00Z' } })
     );
     vi.stubGlobal('fetch', fetchMock);
     renderPage();
     expect((await screen.findAllByText('guest', { selector: 'strong' })).length).toBeGreaterThan(0);
-    expect(screen.getByText('abc.access')).toBeInTheDocument();
-    expect(screen.getByText('secret-xyz')).toBeInTheDocument();
-    expect(screen.getByText('CF-Access-Client-Secret')).toBeInTheDocument();
+    expect(screen.getByText(/one-time code/i)).toBeInTheDocument();
     expect(String(fetchMock.mock.calls[0][0])).toBe(`/api/v1/auth/invite/${TOKEN}`);
   });
 
-  it('omits the header steps when the server has no header pair', async () => {
+  it('never tells a guest to install headers or copy a shared credential', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -60,7 +52,9 @@ describe('AcceptInvite', () => {
     );
     renderPage();
     await screen.findByLabelText(/choose a password/i);
-    expect(screen.queryByText('CF-Access-Client-Id')).not.toBeInTheDocument();
+    expect(screen.queryByText(/CF-Access-Client/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/custom headers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/shared guest credentials/i)).not.toBeInTheDocument();
   });
 
   it('explains an invalid, used or expired token', async () => {

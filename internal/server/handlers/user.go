@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.12.0
+// version: 1.13.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -48,7 +48,7 @@ type UserHandler struct {
 	// deliveryStore records invitation email sends and lists accepted
 	// invites. nil when the store lacks the capability; sends still go out.
 	deliveryStore database.InviteDeliveryStore
-	// delivery supplies the mail sender, link base and guest headers; nil or
+	// delivery supplies the mail sender, link base and policy-sync switch; nil or
 	// empty means invitation email is off (SetInviteDelivery).
 	delivery *InviteDelivery
 	// sendLimiter bounds invitation emails per invite and per admin.
@@ -290,7 +290,6 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 	for i := range invites {
 		views = append(views, newPendingInviteView(&invites[i], h.inviteTokenVisible(c, &invites[i])))
 	}
-	_, headersOK := h.delivery.headers()
 	httputil.RespondWithOK(c, gin.H{
 		"invites": views, "count": len(views),
 		// Accepted invites from the last 30 days with their Cloudflare
@@ -300,7 +299,6 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 		// an absolute link base); mail_unavailable_reason says why not.
 		"mail_configured":              h.delivery.sendBlocked() == "",
 		"mail_unavailable_reason":      h.delivery.sendBlocked(),
-		"guest_headers_configured":     headersOK,
 		"guest_policy_sync_configured": h.delivery.policySync(),
 	})
 }

@@ -1,5 +1,5 @@
 // file: internal/config/invite_config_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
 // last-edited: 2026-10-21
 
@@ -11,15 +11,15 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 // Sentinel values: if any of them shows up in serialized output, a secret leaked.
 const (
-	testSMTPPassword   = "smtp-pass-SENTINEL-1f2e"
-	testCFClientID     = "client-id-SENTINEL-3a4b.access"
-	testCFClientSecret = "client-secret-SENTINEL-5c6d"
-	testCFPolicyToken  = "policy-token-SENTINEL-7e8f"
-	testSMTPUsername   = "mailer-SENTINEL@example.com"
+	testSMTPPassword  = "smtp-pass-SENTINEL-1f2e"
+	testCFPolicyToken = "policy-token-SENTINEL-7e8f"
+	testSMTPUsername  = "mailer-SENTINEL@example.com"
 )
 
 func setInviteEnv(t *testing.T) {
@@ -30,8 +30,6 @@ func setInviteEnv(t *testing.T) {
 	t.Setenv("SMTP_PASSWORD", testSMTPPassword)
 	t.Setenv("SMTP_FROM", "Books <books@example.com>")
 	t.Setenv("PUBLIC_BASE_URL", "https://books.example.com/")
-	t.Setenv("INVITE_CF_ACCESS_CLIENT_ID", testCFClientID)
-	t.Setenv("INVITE_CF_ACCESS_CLIENT_SECRET", testCFClientSecret)
 	t.Setenv("CF_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
 	t.Setenv("CF_GUESTS_POLICY_ID", "11111111-2222-3333-4444-555555555555")
 	t.Setenv("CF_POLICY_API_TOKEN", testCFPolicyToken)
@@ -44,7 +42,7 @@ func TestInviteConfig_DefaultsAreInert(t *testing.T) {
 	registerInviteDefaults()
 	var c Config
 	applyInviteEnv(&c)
-	if c.InviteMailConfigured() || c.InviteHeadersConfigured() || c.GuestPolicySyncConfigured() {
+	if c.InviteMailConfigured() || c.GuestPolicySyncConfigured() {
 		t.Fatalf("an unconfigured server must have every invite feature off: %+v", c)
 	}
 	if c.SMTPPort != DefaultSMTPPort {
@@ -69,8 +67,8 @@ func TestInviteConfig_EnvReachesConfigAndSurvivesBlobOverlay(t *testing.T) {
 	if c.SMTPHost != "127.0.0.1" || c.SMTPPort != 25 || c.SMTPPassword != testSMTPPassword {
 		t.Fatalf("SMTP settings not applied: host=%q port=%d", c.SMTPHost, c.SMTPPort)
 	}
-	if !c.InviteMailConfigured() || !c.InviteHeadersConfigured() || !c.GuestPolicySyncConfigured() {
-		t.Fatal("all three invite features must report configured")
+	if !c.InviteMailConfigured() || !c.GuestPolicySyncConfigured() {
+		t.Fatal("both invite features must report configured")
 	}
 	if got := c.InviteBaseURL("http://fallback"); got != "https://books.example.com" {
 		t.Fatalf("InviteBaseURL = %q", got)
@@ -84,10 +82,7 @@ func TestInviteConfig_EnvReachesConfigAndSurvivesBlobOverlay(t *testing.T) {
 }
 
 func TestInviteConfig_PartialSettingsStayInert(t *testing.T) {
-	c := Config{InviteCFAccessClientID: "id-only", CFAccountID: "acct", CFGuestsPolicyID: "pol"}
-	if c.InviteHeadersConfigured() {
-		t.Fatal("one half of the header pair must not count as configured")
-	}
+	c := Config{CFAccountID: "acct", CFGuestsPolicyID: "pol"}
 	if c.GuestPolicySyncConfigured() {
 		t.Fatal("policy sync without its API token must be inert")
 	}
@@ -124,7 +119,7 @@ func TestInviteConfig_NeverSerialized(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := string(b)
-		for _, secret := range []string{testSMTPPassword, testCFClientID, testCFClientSecret, testCFPolicyToken, testSMTPUsername} {
+		for _, secret := range []string{testSMTPPassword, testCFPolicyToken, testSMTPUsername} {
 			if strings.Contains(out, secret) {
 				t.Fatalf("%s config JSON contains an invite secret", name)
 			}
@@ -147,7 +142,7 @@ func TestInviteConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "invite_cf_access_client_secret", "tunnel_connector_addrs", "allowed_peer_cidrs"} {
+	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "tunnel_connector_addrs", "allowed_peer_cidrs"} {
 		status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 			key:         "x",
 			"log_level": "warn",
@@ -165,5 +160,57 @@ func TestInviteConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
 	}
 	if len(*blobs) != 0 {
 		t.Fatal("refused PUT persisted a blob")
+	}
+}
+
+// The shared guest service token was removed (2026-10-21). Its two names are
+// no longer env-only settings: a PUT naming one gets the removal message, not
+// the env-only refusal, and a stale value in the environment is warned about
+// at startup and never reaches Config.
+func TestInviteConfig_GuestServiceTokenIsGone(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) { c.EnableAuth = false })
+	ms, blobs := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+	for _, key := range []string{"invite_cf_access_client_id", "invite_cf_access_client_secret"} {
+		status, resp := svc.UpdateConfig(context.Background(), map[string]any{key: "x", "log_level": "warn"})
+		if status != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400; resp = %v", key, status, resp)
+		}
+		msg, _ := resp["error"].(string)
+		if !strings.Contains(msg, "was removed") || strings.Contains(msg, EnvOnlySettingsRefusedMessage) {
+			t.Fatalf("%s: want the removal message, got %q", key, msg)
+		}
+	}
+	if len(*blobs) != 0 {
+		t.Fatal("refused PUT persisted a blob")
+	}
+	for _, s := range inviteEnvOnlySettings {
+		if strings.HasPrefix(s.key, "invite_cf_access") {
+			t.Fatalf("%s is still bound as an invite setting", s.key)
+		}
+	}
+}
+
+func TestInitConfig_StaleGuestServiceTokenEnvWarns(t *testing.T) {
+	restoreAppConfig(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	logs := captureRemovedKeyLogs(t)
+
+	t.Setenv("INVITE_CF_ACCESS_CLIENT_ID", "stale-id.access")
+	t.Setenv("INVITE_CF_ACCESS_CLIENT_SECRET", "stale-secret-SENTINEL")
+	viper.AutomaticEnv() // same order as cmd/root.go initConfig
+
+	InitConfig()
+
+	out := logs.String()
+	for _, k := range []string{"key=invite_cf_access_client_id ", "key=invite_cf_access_client_secret "} {
+		if !strings.Contains(out, k) || !strings.Contains(out, "removed setting is ignored") {
+			t.Errorf("expected a removed-setting WARN containing %q, got:\n%s", k, out)
+		}
+	}
+	if strings.Contains(out, "stale-secret-SENTINEL") || strings.Contains(out, "stale-id.access") {
+		t.Errorf("the warning must name the key, never log its value:\n%s", out)
 	}
 }

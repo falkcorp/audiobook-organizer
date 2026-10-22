@@ -1,7 +1,7 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package server
 
@@ -23,9 +23,9 @@ func (s *Server) wireAuthRoutes(
 	userH *handlers.UserHandler,
 ) {
 	// The two public invite endpoints are bounded per token, per client and
-	// globally (see inviteRateLimits): the lookup returns the guest header
-	// pair for a live token, and accept answers differently for missing, used
-	// and expired tokens.
+	// globally (see inviteRateLimits): the lookup says whether a token is
+	// live, and accept answers differently for missing, used and expired
+	// tokens.
 	inviteLimits := newInviteRateLimits(s.bgCtx)
 
 	authGroup := api.Group("/auth")

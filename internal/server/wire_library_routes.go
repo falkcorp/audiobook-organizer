@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -157,8 +157,8 @@ func (s *Server) wireLibraryRoutes(
 		users.GET("/invites", s.perm("users.manage"), userH.ListInvites)
 		users.DELETE("/invites/:id", s.perm("users.manage"), userH.DeleteInvite)
 		// Emails the invitee again. A credential route because the email
-		// carries the shared guest header pair; the address is the one stored
-		// on the invite, never one from the request.
+		// carries the invite link, whose token accepts the invitation; the
+		// address is the one stored on the invite, never one from the request.
 		s.credRoute(users, http.MethodPost, "/invites/:id/resend", s.perm("users.manage"), userH.ResendInvite)
 		s.credRoute(users, http.MethodPost, "/:id/deactivate", s.perm("users.manage"), userH.DeactivateUser)
 		s.credRoute(users, http.MethodPost, "/:id/reactivate", s.perm("users.manage"), userH.ReactivateUser)

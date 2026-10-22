@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -91,13 +91,6 @@ func (s *Server) inviteDelivery() *handlers.InviteDelivery {
 		BaseURL: func() string {
 			snap := config.Snapshot()
 			return snap.InviteBaseURL(s.externalURL)
-		},
-		GuestHeaders: func() (handlers.GuestHeaders, bool) {
-			snap := config.Snapshot()
-			if !snap.InviteHeadersConfigured() {
-				return handlers.GuestHeaders{}, false
-			}
-			return handlers.GuestHeaders{ClientID: snap.InviteCFAccessClientID, ClientSecret: snap.InviteCFAccessClientSecret}, true
 		},
 		GuestPolicySyncConfigured: func() bool {
 			snap := config.Snapshot()
