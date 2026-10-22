@@ -1,5 +1,5 @@
 // file: internal/server/csp.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 95fa1ac8-51ae-43a4-8c85-5055eef7c9dd
 // last-edited: 2026-10-21
 
@@ -29,8 +29,14 @@ import (
 //   - images: same-origin covers, data: and blob: previews, and https: because
 //     the metadata search dialogs show provider cover URLs (Open Library,
 //     Google Books, Audible CDNs) straight from the candidate rows.
-//   - connect: same-origin fetch and the SSE stream. No third-party call is
-//     made from the browser.
+//   - connect: same-origin fetch and the SSE stream, plus
+//     *.cloudflareaccess.com. When a Cloudflare Access session expires the
+//     edge answers an /api fetch with a 302 to the team's cloudflareaccess.com
+//     login; apiFetch recognises the expiry by seeing that redirect followed to
+//     a cross-origin URL (assertNotAuthRedirect, signal 1). With connect-src
+//     'self' alone the browser would block the redirect and the user would see
+//     a generic network error instead of "session expired". No other
+//     third-party call is made from the browser.
 //   - nothing else: no fonts from a CDN, no workers, no frames, no plugins.
 //
 // The policy is sent on every response, not only the HTML shell: a browser
@@ -43,7 +49,7 @@ const cspBase = "default-src 'self'; " +
 	"img-src 'self' data: blob: https:; " +
 	"font-src 'self' data:; " +
 	"media-src 'self' blob:; " +
-	"connect-src 'self'; " +
+	"connect-src 'self' https://*.cloudflareaccess.com; " +
 	"object-src 'none'; " +
 	"base-uri 'none'; " +
 	"form-action 'self'; " +
