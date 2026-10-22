@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-10-22
 
@@ -582,6 +582,7 @@ func New(o Options) (*Handler, error) {
 	if name == "" {
 		name = "Books"
 	}
+	absauth.WarmLoginDummy() // so the first login for an unknown name costs what any other does
 	throttle := o.Throttle
 	if throttle == nil {
 		throttle = absauth.NewThrottle()

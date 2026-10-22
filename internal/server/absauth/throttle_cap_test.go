@@ -1,5 +1,5 @@
 // file: internal/server/absauth/throttle_cap_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 341f8c6a-9fe0-4742-b163-b125af970b92
 // last-edited: 2026-10-22
 
@@ -86,5 +86,56 @@ func TestThrottle_UntrackedAccountsStillCount(t *testing.T) {
 	defer th.mu.Unlock()
 	if c, _ := th.byIP.Get("9.9.9.9"); c.count != n {
 		t.Fatalf("an untracked account's success refunded %d", n-c.count)
+	}
+}
+
+// N3: a username that has been refused (SoftThreshold failures) is not washed out
+// by a stream of distinct names. Before pinning, the refused account's counter was
+// the coldest entry (nothing writes it while it is refused) and the first to go.
+func TestThrottle_RefusedAccountCounterSurvivesNameRotation(t *testing.T) {
+	th := NewThrottle()
+	th.SetSleep(func(time.Duration) {})
+	for i := 0; i < SoftThreshold; i++ {
+		th.RecordFailure("admin", fmt.Sprintf("10.0.0.%d", i))
+	}
+	for i := 0; i < 2*MaxKeys; i++ {
+		th.RecordFailure(fmt.Sprintf("n-%d", i), fmt.Sprintf("10.1.%d.%d", i/250%250, i%250))
+	}
+	if got := th.AccountFailures("admin"); got != SoftThreshold {
+		t.Fatalf("the refused account's counter is %d after a stream of names, want %d", got, SoftThreshold)
+	}
+}
+
+// ...but when every counter is refused the coldest goes, so the table stays bounded.
+func TestThrottle_WhenEveryCounterIsRefusedTheTableStaysBounded(t *testing.T) {
+	th := NewThrottle()
+	th.SetSleep(func(time.Duration) {})
+	for i := 0; i < MaxKeys+50; i++ {
+		for j := 0; j < SoftThreshold; j++ {
+			th.RecordFailure(fmt.Sprintf("hot-%d", i), "")
+		}
+	}
+	if n := th.byAcct.Len(); n != MaxKeys {
+		t.Fatalf("table holds %d, want the bound %d", n, MaxKeys)
+	}
+	if th.AccountFailures("hot-0") != 0 {
+		t.Fatal("the coldest refused counter should have been evicted when all are refused")
+	}
+	if th.AccountFailures(fmt.Sprintf("hot-%d", MaxKeys+49)) != SoftThreshold {
+		t.Fatal("the newest refused counter must be kept")
+	}
+}
+
+// The same holds for a source that has spent its budget.
+func TestThrottle_SpentSourceSurvivesAddressRotation(t *testing.T) {
+	th := NewThrottle()
+	for i := 0; i < MaxFailuresPerIP; i++ {
+		th.RecordFailure("", "192.0.2.1")
+	}
+	for i := 0; i < 2*MaxKeys; i++ {
+		th.RecordFailure("", fmt.Sprintf("10.%d.%d.%d", i/65025%250, i/250%250, i%250))
+	}
+	if !th.IPBlocked("192.0.2.1") {
+		t.Fatal("a spent source was washed out by address rotation")
 	}
 }

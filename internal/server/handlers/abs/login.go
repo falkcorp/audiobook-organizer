@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
 // last-edited: 2026-10-22
 
@@ -91,7 +91,11 @@ func (h *Handler) Login(c *gin.Context) {
 	// keep probing. It is 429, never 401/403 — a 4xx-auth answer would tell a client
 	// its credential is dead.
 	throttleKey := h.throttleKey(c)
-	if h.throttle.IPBlocked(throttleKey) {
+	// Two budgets: this door's own, and the refresh endpoint's (a source spending
+	// its refresh budget on dead tokens does not get to keep guessing passwords
+	// either). The web login checks only its own key, and the refresh endpoint only
+	// the refresh key, so web mistypes never stop a token refresh.
+	if h.throttle.IPBlocked(throttleKey) || h.throttle.IPBlocked(absauth.RefreshKey(throttleKey)) {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
 			Username: req.Username, Reason: "ip-failure-budget-exhausted",
@@ -141,14 +145,16 @@ func (h *Handler) Login(c *gin.Context) {
 	if user == nil {
 		// Charged to the source and the submitted name even for an unknown
 		// username, so guessing cannot dodge the hard limit and the name slows
-		// down like a real one.
+		// down like a real one. The same password work is spent first, so the
+		// response time does not give the name away either.
+		absauth.SpendVerification(req.Password)
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, throttleKey))
 		h.auditLoginFailure(c, ip, username, "", "unknown-user")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	ok, needsRehash := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password)
+	ok, needsRehash := absauth.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password)
 	if !ok {
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, throttleKey))
 		h.auditLoginFailure(c, ip, username, user.ID, "bad-password")
