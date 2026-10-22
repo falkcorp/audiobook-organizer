@@ -1,5 +1,5 @@
 // file: internal/server/absauth/throttle.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f9a1c86-2d57-4e0b-b843-9c60e5a7f218
 // last-edited: 2026-10-22
 
@@ -33,9 +33,10 @@ import (
 //     one valid account would otherwise get unlimited guesses at every other account
 //     from one address by logging in between rounds.
 //   - Refresh failures (a dead ABS refresh token) are a budget of their own under
-//     RefreshKey(source). The ABS login honours a spent refresh budget as well as
-//     its own; the web login only its own; no success path hands refresh failures
-//     back.
+//     RefreshKey(source), which only /auth/refresh checks and charges: a refresh
+//     storm cannot lock the same visitor out of either password login, and
+//     password typos cannot stop a token refresh. No success path hands refresh
+//     failures back.
 //
 // §1.9.4 item 3 makes this non-optional: AudioBooth issue #326 records a post-403
 // request storm of 959 requests in 44 s that got a real user CrowdSec-banned. Both
@@ -76,8 +77,8 @@ const (
 // RefreshKey is the source key under which ABS refresh-token failures are
 // counted. Refresh has its own budget, apart from the password logins': a client
 // storming /auth/refresh with a dead token must not spend the visitor's password
-// budget (and a mistyped password must not stop a token refresh). The ABS login
-// checks both its own key and this one; the web login only its own.
+// budget (and a mistyped password must not stop a token refresh). Only
+// /auth/refresh reads or charges it; neither password login does.
 func RefreshKey(sourceKey string) string {
 	if sourceKey == "" {
 		return ""
@@ -260,7 +261,11 @@ func (t *Throttle) Clear(accountKey, ip string) {
 		t.byIP.Delete(ip)
 		return
 	}
-	t.byIP.Touch(ip) // the count changed: file it under its new pin state
+	// The count changed: file it under its new pin state, and as written now. The
+	// table is in write order and expiry is read from lastSeen, so a counter moved
+	// to the front keeps a lastSeen to match.
+	c.lastSeen = t.now()
+	t.byIP.Touch(ip)
 }
 
 // bump adds one failure to key's counter, starting a new window when there is none

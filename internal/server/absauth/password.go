@@ -1,5 +1,5 @@
 // file: internal/server/absauth/password.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
 // last-edited: 2026-10-22
 
@@ -188,11 +188,9 @@ var (
 func dummyArgon2idHash() string {
 	dummyOnce.Do(func() {
 		secret := make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
-			// A fixed, public fallback is still a correct argon2id hash to burn time on;
-			// no real credential is ever compared against it.
-			secret = []byte("absauth-dummy-credential-fallback")
-		}
+		// crypto/rand.Read never fails (Go 1.24: it crashes the program if the system
+		// source is unavailable), so there is no error path to fall back from.
+		_, _ = rand.Read(secret)
 		_, h, err := HashPassword(base64.RawStdEncoding.EncodeToString(secret))
 		if err != nil {
 			return

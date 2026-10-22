@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
 // last-edited: 2026-10-22
 
@@ -69,6 +69,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 			Action: "refresh", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
 			Reason: "ip-failure-budget-exhausted", Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
+		absauth.SetRetryAfter(c)
 		respondError(c, http.StatusTooManyRequests, "too many failed refresh attempts from this source — try again later")
 		return
 	}

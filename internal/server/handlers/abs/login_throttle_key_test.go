@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/login_throttle_key_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e4d306c4-3290-49d2-b0b1-c9afae9e0fef
 // last-edited: 2026-10-22
 
@@ -79,8 +79,9 @@ func TestLoginThrottle_ThrottleKeySeparatesVisitorsBehindOnePeer(t *testing.T) {
 
 // /auth/refresh charges the same throttle: the visitor's key, not the peer's,
 // so one map never holds two kinds of key. Refresh failures are counted under
-// their own key (absauth.RefreshKey) and the ABS login door honours it too; the
-// reverse (login typos locking refresh) is TestRefreshBudget_LoginTyposDoNotSpendIt.
+// their own key (absauth.RefreshKey) that no password login reads; the budgets
+// are isolated in both directions (TestRefreshBudget_LoginTyposDoNotSpendIt and
+// TestRefreshBudget_SpentRefreshBudgetDoesNotRefuseAbsLogin).
 func TestRefreshThrottle_UsesTheSameVisitorKeyAsLogin(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey())
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
@@ -95,9 +96,10 @@ func TestRefreshThrottle_UsesTheSameVisitorKeyAsLogin(t *testing.T) {
 	if code := failRefresh(t, h, "192.0.2.11"); code != http.StatusUnauthorized {
 		t.Fatalf("refresh by another visitor through the same peer: %d, want 401", code)
 	}
-	// The ABS login door also refuses a visitor whose refresh budget is spent.
-	if code := failLogin(t, h, "192.0.2.10"); code != http.StatusTooManyRequests {
-		t.Fatalf("login by the visitor that spent its budget on refresh: %d, want 429 (the refresh budget is honoured at login)", code)
+	// The ABS login door does not read the refresh budget: a wrong password is
+	// an ordinary 401 for the visitor that spent it.
+	if code := failLogin(t, h, "192.0.2.10"); code != http.StatusUnauthorized {
+		t.Fatalf("login by the visitor that spent its budget on refresh: %d, want 401 (the refresh budget is not consulted at login)", code)
 	}
 	if code := failLogin(t, h, "192.0.2.11"); code != http.StatusUnauthorized {
 		t.Fatalf("login by the other visitor: %d, want 401", code)

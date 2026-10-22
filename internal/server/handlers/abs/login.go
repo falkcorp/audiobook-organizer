@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
 // last-edited: 2026-10-22
 
@@ -91,16 +91,17 @@ func (h *Handler) Login(c *gin.Context) {
 	// keep probing. It is 429, never 401/403 — a 4xx-auth answer would tell a client
 	// its credential is dead.
 	throttleKey := h.throttleKey(c)
-	// Two budgets: this door's own, and the refresh endpoint's (a source spending
-	// its refresh budget on dead tokens does not get to keep guessing passwords
-	// either). The web login checks only its own key, and the refresh endpoint only
-	// the refresh key, so web mistypes never stop a token refresh.
-	if h.throttle.IPBlocked(throttleKey) || h.throttle.IPBlocked(absauth.RefreshKey(throttleKey)) {
+	// Only this door's own budget is read. The refresh endpoint spends a separate
+	// one (absauth.RefreshKey), and neither password login looks at it: a client
+	// holding a stale token that burns its refresh budget must still be able to
+	// sign in with its password, which is how it gets a fresh token.
+	if h.throttle.IPBlocked(throttleKey) {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
 			Username: req.Username, Reason: "ip-failure-budget-exhausted",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
+		absauth.SetRetryAfter(c)
 		respondError(c, http.StatusTooManyRequests, "too many failed login attempts from this source — try again later")
 		return
 	}
@@ -128,6 +129,7 @@ func (h *Handler) Login(c *gin.Context) {
 			Username: username, Reason: "login-ceiling-account-failures",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
+		absauth.SetRetryAfter(c)
 		respondError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later")
 		return
 	}

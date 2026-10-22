@@ -1,5 +1,5 @@
 // file: internal/server/absauth/throttle_cap_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 341f8c6a-9fe0-4742-b163-b125af970b92
 // last-edited: 2026-10-22
 
@@ -137,5 +137,56 @@ func TestThrottle_SpentSourceSurvivesAddressRotation(t *testing.T) {
 	}
 	if !th.IPBlocked("192.0.2.1") {
 		t.Fatal("a spent source was washed out by address rotation")
+	}
+}
+
+// M9: a success takes back some of a source's failures; when that drops the
+// source below its budget it is no longer refused, so it must stop being pinned
+// and be evictable like any other counter (Clear re-files the entry).
+func TestThrottle_ClearRefilesASourceThatFellBelowThePinThreshold(t *testing.T) {
+	th := NewThrottle()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	th.SetClock(func() time.Time { return now })
+	const src = "198.51.100.7"
+	for i := 0; i < MaxFailuresPerIP-SoftThreshold; i++ {
+		th.RecordFailure("other", src)
+	}
+	for i := 0; i < SoftThreshold; i++ {
+		th.RecordFailure("mine", src)
+	}
+	if !th.IPBlocked(src) {
+		t.Fatal("setup: the source is at its budget")
+	}
+	th.Clear("mine", src) // takes back the SoftThreshold failures against "mine"
+	if th.IPBlocked(src) {
+		t.Fatal("the source is back under its budget")
+	}
+	for i := 0; i < MaxKeys+5; i++ {
+		now = now.Add(time.Millisecond)
+		th.RecordFailure("", fmt.Sprintf("rot-%d", i))
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if _, ok := th.byIP.Get(src); ok {
+		t.Fatal("a source under its budget is the oldest idle counter: the bound evicts it, it is not still pinned")
+	}
+}
+
+// Clear also marks the counter written now: the table is in write order and
+// expiry reads lastSeen, so a counter moved to the front keeps a lastSeen to match.
+func TestThrottle_ClearUpdatesLastSeen(t *testing.T) {
+	th := NewThrottle()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	th.SetClock(func() time.Time { return now })
+	const src = "198.51.100.8"
+	th.RecordFailure("a", src)
+	th.RecordFailure("b", src)
+	now = now.Add(5 * time.Minute)
+	th.Clear("a", src)
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	c, ok := th.byIP.Get(src)
+	if !ok || !c.lastSeen.Equal(now) {
+		t.Fatalf("lastSeen after Clear = %v, want %v (counter %+v)", c, now, c)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-22
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -307,6 +308,8 @@ func (h *AuthHandler) SetupInitialAdmin(c *gin.Context) {
 	})
 }
 
+var authLoginLog = logger.New("handlers.auth")
+
 // Login handles POST /auth/login.
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req struct {
@@ -331,6 +334,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// Per-IP throttle first: a source that has burned through its failure budget
 	// is rejected before any credential work, so it can't keep probing (HIGH-3).
 	if h.throttle.IPBlocked(ip) {
+		absauth.SetRetryAfter(c)
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts from this source — try again later", "TOO_MANY_REQUESTS")
 		return
 	}
@@ -341,13 +345,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// whether the name exists.
 	if absauth.LoginSaturated(c) &&
 		absauth.RefuseSaturatedLogin(c, h.throttle.AccountFailures(accountKey), h.throttle.Delay) {
+		absauth.SetRetryAfter(c)
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
 		return
 	}
 	user, err := h.store.GetUserByUsername(req.Username)
 	if err != nil {
 		// A store failure is not a credential verdict: nothing is charged to the
-		// source or the name, and the caller is told it was our fault.
+		// source or the name, and the caller is told it was our fault. The cause
+		// goes to the log, because the response deliberately carries none.
+		authLoginLog.Error("login: user lookup failed: %s", logger.SanitizeLogValue(err.Error()))
 		httputil.RespondWithInternalError(c, "could not verify credentials")
 		return
 	}
@@ -367,6 +374,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		// with no password credential at all spends the same verification work.
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, ip))
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
+		return
+	}
+	// A correct password for a disabled account is 403, as on the ABS door: the
+	// credential is fine, the authorization is not. It is checked AFTER the
+	// verification (so a disabled account costs the same password work as any
+	// other and the response time does not reveal its status) and BEFORE the
+	// success bookkeeping and the session: a disabled account must not mint a
+	// session, hand back this source's failures, or clear its own counter. It is
+	// not charged as a credential failure either.
+	if !auth.UserIsActive(user) {
+		httputil.RespondWithForbidden(c, "account is not active")
 		return
 	}
 	// A success clears this account's counter and takes back only this source's

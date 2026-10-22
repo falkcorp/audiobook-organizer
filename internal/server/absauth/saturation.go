@@ -1,5 +1,5 @@
 // file: internal/server/absauth/saturation.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f4881432-1772-4d8d-a653-33fde6815d7a
 // last-edited: 2026-10-22
 
@@ -29,6 +29,16 @@ const (
 	// SaturationDelayMax caps the delay.
 	SaturationDelayMax = 3 * time.Second
 )
+
+// RetryAfterSeconds is the Retry-After value (seconds) every login-door 429
+// carries: the failure windows the budgets refill over are measured in minutes,
+// so a shorter hint would only invite a client to hammer a refusal.
+const RetryAfterSeconds = "60"
+
+// SetRetryAfter adds the Retry-After header every handler-level 429 sends, so
+// a handler's own refusals tell a well-behaved client how long to back off just
+// as the ceiling middleware's do.
+func SetRetryAfter(c *gin.Context) { c.Header("Retry-After", RetryAfterSeconds) }
 
 const loginSaturatedKey = "login_ceiling_saturated"
 
