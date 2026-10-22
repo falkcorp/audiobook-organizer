@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -98,3 +98,9 @@ undo above. Books that own files are still never purged.
   fingerprint. Both now leave an entry alone unless it still points at the book
   being changed, and a new repair operation (a preview by default) restores
   any entry that was already lost.
+- If a record of a past combine is damaged and cannot be read, the purge now
+  stops and deletes nothing, because that record might be an undo that still
+  needs one of the trashed books. The message names the damaged record, and a
+  new read-only check ("combine journal check") lists every damaged one. The
+  cost is that one damaged record pauses all purging, the nightly one
+  included, until someone fixes or removes it.

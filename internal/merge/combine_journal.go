@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.31.5
+// version: 1.32.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-22
 
@@ -444,26 +444,105 @@ func (ms *Service) ListCombineJournals(limit int) ([]CombineJournal, error) {
 	return listCombineJournals(ms.db, limit)
 }
 
-// listCombineJournals is ListCombineJournals over any raw-key reader.
+// listCombineJournals is ListCombineJournals over any raw-key reader. It is
+// the LENIENT lister: a row it cannot decode is skipped with a warning, which
+// is right for a listing a person reads and for the pointer backfill. A caller
+// that must not act on "cannot tell" (the purge's undo hold) uses
+// scanCombineJournals and refuses on the unreadable rows.
 func listCombineJournals(kv journalKVReader, limit int) ([]CombineJournal, error) {
-	rows, err := kv.ScanPrefix(combineJournalPrefix)
+	out, unreadable, err := scanCombineJournals(kv)
 	if err != nil {
-		return nil, fmt.Errorf("list combine journals: %w", err)
+		return nil, err
 	}
-	out := make([]CombineJournal, 0, len(rows))
-	for _, r := range rows {
-		var j CombineJournal
-		if err := json.Unmarshal(r.Value, &j); err != nil {
-			mlog.Warn("combine journal: skipping undecodable row key=%s err=%s", logger.SanitizeLogValue(r.Key), logger.SanitizeLogValue(fmt.Sprint(err)))
-			continue
-		}
-		out = append(out, j)
+	for _, u := range unreadable {
+		mlog.Warn("combine journal: skipping undecodable row key=%s err=%s", logger.SanitizeLogValue(u.Key), logger.SanitizeLogValue(u.Err))
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].ID > out[k].ID })
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// UnreadableCombineJournal is a combine-journal row whose value cannot be
+// decoded, so nothing can be said about which shells its undo needs.
+type UnreadableCombineJournal struct {
+	// Key is the row's full store key (merge:combine-journal:<id>).
+	Key string `json:"key"`
+	// Err is the decode error.
+	Err string `json:"error"`
+}
+
+// scanCombineJournals reads every combine-journal row once and returns the
+// journals it could decode, unordered, and the rows it could not. An error is
+// the scan itself failing.
+func scanCombineJournals(kv journalKVReader) ([]CombineJournal, []UnreadableCombineJournal, error) {
+	rows, err := kv.ScanPrefix(combineJournalPrefix)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list combine journals: %w", err)
+	}
+	out := make([]CombineJournal, 0, len(rows))
+	var unreadable []UnreadableCombineJournal
+	for _, r := range rows {
+		var j CombineJournal
+		if err := json.Unmarshal(r.Value, &j); err != nil {
+			unreadable = append(unreadable, UnreadableCombineJournal{Key: r.Key, Err: err.Error()})
+			continue
+		}
+		out = append(out, j)
+	}
+	return out, unreadable, nil
+}
+
+// CombineJournalCheckOp is the operation that lists unreadable combine-journal
+// rows. UnreadableCombineJournalsError names it so the person who sees the
+// purge refuse knows where to look.
+const CombineJournalCheckOp = "maintenance.combine-journal-check"
+
+// CombineJournalCheck is the outcome of CheckCombineJournals.
+type CombineJournalCheck struct {
+	// Rows is how many combine-journal rows exist.
+	Rows int `json:"rows"`
+	// Unreadable are the rows that cannot be decoded, by key.
+	Unreadable []UnreadableCombineJournal `json:"unreadable"`
+}
+
+// CheckCombineJournals reads every combine-journal row and reports the ones
+// that cannot be decoded. It writes nothing.
+func CheckCombineJournals(kv journalKVReader) (CombineJournalCheck, error) {
+	ok, unreadable, err := scanCombineJournals(kv)
+	if err != nil {
+		return CombineJournalCheck{}, err
+	}
+	sort.Slice(unreadable, func(i, k int) bool { return unreadable[i].Key < unreadable[k].Key })
+	return CombineJournalCheck{Rows: len(ok) + len(unreadable), Unreadable: unreadable}, nil
+}
+
+// UnreadableCombineJournalsError is why the purge refuses while a combine
+// journal row cannot be decoded: such a row may be an undo that still needs a
+// shell the purge would delete, and it cannot say which. It names the keys and
+// the operation that lists them. Repair is manual: fix or remove the row, then
+// purge again.
+type UnreadableCombineJournalsError struct {
+	Rows []UnreadableCombineJournal
+}
+
+func (e *UnreadableCombineJournalsError) Error() string {
+	const show = 5
+	keys := make([]string, 0, show)
+	for i, r := range e.Rows {
+		if i == show {
+			break
+		}
+		keys = append(keys, fmt.Sprintf("%q", r.Key))
+	}
+	more := ""
+	if n := len(e.Rows) - len(keys); n > 0 {
+		more = fmt.Sprintf(" and %d more", n)
+	}
+	return fmt.Sprintf("%d combine journal row(s) cannot be decoded (%s%s), so the purge cannot tell which trashed books a combine's undo still needs; "+
+		"every purge is refused until they are repaired. List every unreadable row with the %s operation, fix or remove them, then purge again",
+		len(e.Rows), strings.Join(keys, ", "), more, CombineJournalCheckOp)
 }
 
 // snapshotProgress captures every user's state and positions on one book.
