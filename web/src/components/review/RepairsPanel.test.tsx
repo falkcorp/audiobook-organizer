@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -289,6 +289,17 @@ describe('RepairsPanel', () => {
     expect(within(skipped).getByText('Lives in the iTunes library')).toBeInTheDocument();
     expect(within(skipped).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.queryByTestId('repairs-apply-selected')).not.toBeInTheDocument();
+  });
+
+  it('shows a preview-only fixer with its rows but no checkbox and no Apply control', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([{ ...FIXER, plan_only: true }]);
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    expect(screen.getByTestId('repairs-plan-only')).toHaveTextContent(/Preview only/);
+    expect(screen.queryByRole('checkbox', { name: 'Select Title g1' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-apply-selected')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-apply-all')).not.toBeInTheDocument();
+    expect(api.startRepairApply).not.toHaveBeenCalled();
   });
 
   it('gives each skip kind a count that opens exactly its rows', async () => {

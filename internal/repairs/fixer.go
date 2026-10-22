@@ -1,7 +1,7 @@
 // file: internal/repairs/fixer.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 // Package repairs is the shared framework behind the Repairs lane of /review:
 // one contract every library fixer implements, and one engine that plans,
@@ -111,6 +111,24 @@ const DefaultPermission = auth.PermLibraryEditMetadata
 // route's own gate.
 type PermissionScoped interface {
 	RequiredPermissions() []auth.Permission
+}
+
+// PlanOnly is implemented by a fixer that only previews: its Plan and Replan
+// classify rows, and it has no Apply yet (the retired-versions fixer until its
+// apply lands). The apply routes refuse it (ErrPlanOnly) and the Repairs lane
+// hides its Apply controls, so no run is ever queued for it. The fixer's own
+// Apply must still refuse: this is the front door, not the only lock.
+type PlanOnly interface {
+	PlanOnly() bool
+}
+
+// ErrPlanOnly is what starting an apply of a PlanOnly fixer answers.
+var ErrPlanOnly = errors.New("repairs: this fixer only previews; it cannot be applied")
+
+// IsPlanOnly reports whether f only previews (PlanOnly).
+func IsPlanOnly(f Fixer) bool {
+	x, ok := f.(PlanOnly)
+	return ok && x.PlanOnly()
 }
 
 // RequiredPermissions is what starting f's plan or apply requires: f's own

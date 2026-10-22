@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.69.1
+// version: 1.70.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -131,6 +132,28 @@ func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 		return r
 	}
 	return nil
+}
+
+// OwnerVetoes hands the retired-versions fixer the owner's rejects. The
+// decisions store is built over the engine's raw key-value surface, resolved
+// through database.AsCapability so a decorated store still reaches it. nil
+// when the store has none (a non-Pebble backend): the fixer then refuses to
+// plan.
+func (s *Server) OwnerVetoes() maintenanceplugin.OwnerVetoReader {
+	kv, ok := database.AsCapability[decisions.KV](s.store)
+	if !ok {
+		return nil
+	}
+	return decisions.New(kv)
+}
+
+// CombineJournals hands the retired-versions fixer the combine undo journal's
+// prefix scan, which is part of database.Store (RawKVStore).
+func (s *Server) CombineJournals() maintenanceplugin.CombineJournalScanner {
+	if s.store == nil {
+		return nil
+	}
+	return s.store
 }
 
 // FragmentRepairReader hands the fragment-consolidation fixer the book

@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RowParts.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: 09def8d7-b23c-49be-80d7-cfdb4a959792
-// last-edited: 2026-10-10
+// last-edited: 2026-10-22
 
 /**
  * Pieces of a repairs row that every view renders the same way: its title
@@ -95,6 +95,8 @@ export function RowTitle({ row }: { row: RepairRow }) {
  */
 export function RowCheckbox({ row, repairs }: { row: RepairRow } & RepairsViewProps) {
   if (!isSelectableRow(row, repairs.settledRowIds)) return null;
+  // A fixer that only previews has nothing to apply, so nothing to tick.
+  if (repairs.selectedFixer?.plan_only) return null;
   return (
     <Checkbox
       size="small"

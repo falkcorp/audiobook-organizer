@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RepairsGroupedView.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1b25c3ed-d0f6-4bba-b8d6-48e102e77e18
-// last-edited: 2026-10-08
+// last-edited: 2026-10-22
 
 /**
  * Grouped by fix: the page's rows grouped by class and reason (the same
@@ -57,6 +57,7 @@ function GroupSection({
   const summary = summaries.length === 1 ? summaries[0] : `${summaries[0]} (varies by row)`;
 
   const fixer = repairs.selectedFixer;
+  const planOnly = fixer?.plan_only === true;
   const planOpId = repairs.planOpId;
   const applyDisabled =
     repairs.applying || repairs.trial?.phase === 'running' || selectable.length === 0 || !fixer || !planOpId;
@@ -74,7 +75,7 @@ function GroupSection({
   return (
     <Box data-testid={tid} sx={{ borderBottom: 1, borderColor: 'divider' }}>
       <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', px: 1, py: 0.5, flexWrap: 'wrap' }}>
-        {!skippedTab && (
+        {!skippedTab && !planOnly && (
           <Checkbox
             size="small"
             checked={all}
@@ -99,7 +100,7 @@ function GroupSection({
         </Box>
         {group.rowClass && <Chip size="small" variant="outlined" label={classLabel(group.rowClass)} />}
         <Chip size="small" label={`${group.rows.length} row${group.rows.length === 1 ? '' : 's'}`} data-testid={`${tid}-count`} />
-        {!skippedTab && (
+        {!skippedTab && !planOnly && (
           <Button
             size="small"
             variant="outlined"
