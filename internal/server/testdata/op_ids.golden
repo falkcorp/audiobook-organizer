@@ -277,3 +277,4 @@ maintenance.transcode-temp-cleanup
 identification.advance
 maintenance.backfill-merge-undo-pointers
 collections.refresh-relative-dynamic
+library.purge-soft-deleted

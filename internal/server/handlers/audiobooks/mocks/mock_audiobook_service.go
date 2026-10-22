@@ -770,6 +770,52 @@ func (_c *MockAudiobookService_InvalidateListCache_Call) RunAndReturn(run func()
 	return _c
 }
 
+// LastPurgeBreakdown provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) LastPurgeBreakdown() *audiobooks.PurgeBreakdown {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for LastPurgeBreakdown")
+	}
+
+	var r0 *audiobooks.PurgeBreakdown
+	if returnFunc, ok := ret.Get(0).(func() *audiobooks.PurgeBreakdown); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*audiobooks.PurgeBreakdown)
+		}
+	}
+	return r0
+}
+
+// MockAudiobookService_LastPurgeBreakdown_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LastPurgeBreakdown'
+type MockAudiobookService_LastPurgeBreakdown_Call struct {
+	*mock.Call
+}
+
+// LastPurgeBreakdown is a helper method to define mock.On call
+func (_e *MockAudiobookService_Expecter) LastPurgeBreakdown() *MockAudiobookService_LastPurgeBreakdown_Call {
+	return &MockAudiobookService_LastPurgeBreakdown_Call{Call: _e.mock.On("LastPurgeBreakdown")}
+}
+
+func (_c *MockAudiobookService_LastPurgeBreakdown_Call) Run(run func()) *MockAudiobookService_LastPurgeBreakdown_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_LastPurgeBreakdown_Call) Return(purgeBreakdown *audiobooks.PurgeBreakdown) *MockAudiobookService_LastPurgeBreakdown_Call {
+	_c.Call.Return(purgeBreakdown)
+	return _c
+}
+
+func (_c *MockAudiobookService_LastPurgeBreakdown_Call) RunAndReturn(run func() *audiobooks.PurgeBreakdown) *MockAudiobookService_LastPurgeBreakdown_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListAllUserTags provides a mock function for the type MockAudiobookService
 func (_mock *MockAudiobookService) ListAllUserTags() ([]database.TagWithCount, error) {
 	ret := _mock.Called()
@@ -821,80 +867,6 @@ func (_c *MockAudiobookService_ListAllUserTags_Call) Return(tagWithCounts []data
 }
 
 func (_c *MockAudiobookService_ListAllUserTags_Call) RunAndReturn(run func() ([]database.TagWithCount, error)) *MockAudiobookService_ListAllUserTags_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// PurgeSoftDeletedBooks provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobooks.PurgeResult, error) {
-	ret := _mock.Called(ctx, deleteFiles, olderThanDays)
-
-	if len(ret) == 0 {
-		panic("no return value specified for PurgeSoftDeletedBooks")
-	}
-
-	var r0 *audiobooks.PurgeResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, bool, *int) (*audiobooks.PurgeResult, error)); ok {
-		return returnFunc(ctx, deleteFiles, olderThanDays)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, bool, *int) *audiobooks.PurgeResult); ok {
-		r0 = returnFunc(ctx, deleteFiles, olderThanDays)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*audiobooks.PurgeResult)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, bool, *int) error); ok {
-		r1 = returnFunc(ctx, deleteFiles, olderThanDays)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAudiobookService_PurgeSoftDeletedBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PurgeSoftDeletedBooks'
-type MockAudiobookService_PurgeSoftDeletedBooks_Call struct {
-	*mock.Call
-}
-
-// PurgeSoftDeletedBooks is a helper method to define mock.On call
-//   - ctx context.Context
-//   - deleteFiles bool
-//   - olderThanDays *int
-func (_e *MockAudiobookService_Expecter) PurgeSoftDeletedBooks(ctx any, deleteFiles any, olderThanDays any) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
-	return &MockAudiobookService_PurgeSoftDeletedBooks_Call{Call: _e.mock.On("PurgeSoftDeletedBooks", ctx, deleteFiles, olderThanDays)}
-}
-
-func (_c *MockAudiobookService_PurgeSoftDeletedBooks_Call) Run(run func(ctx context.Context, deleteFiles bool, olderThanDays *int)) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 bool
-		if args[1] != nil {
-			arg1 = args[1].(bool)
-		}
-		var arg2 *int
-		if args[2] != nil {
-			arg2 = args[2].(*int)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAudiobookService_PurgeSoftDeletedBooks_Call) Return(purgeResult *audiobooks.PurgeResult, err error) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
-	_c.Call.Return(purgeResult, err)
-	return _c
-}
-
-func (_c *MockAudiobookService_PurgeSoftDeletedBooks_Call) RunAndReturn(run func(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobooks.PurgeResult, error)) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }

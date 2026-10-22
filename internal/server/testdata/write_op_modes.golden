@@ -110,6 +110,7 @@ library.folder-auto-scan	no-mode
 library.import	no-mode
 library.organize	no-mode
 library.organize-when-scanned	preview
+library.purge-soft-deleted	preview
 library.scan	no-mode
 library.transcode	no-mode
 maintenance.activity-filter-index-backfill	no-mode

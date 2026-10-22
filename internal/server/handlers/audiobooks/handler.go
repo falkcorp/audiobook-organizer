@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.36.2
+// version: 1.37.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -92,6 +92,9 @@ type Handler struct {
 
 	audiobookService AudiobookService
 	audiobookUpdater AudiobookUpdater
+
+	// enqueuePurge queues the manual purge operation (SetPurgeEnqueuer).
+	enqueuePurge PurgeEnqueuer
 
 	metadataStateService MetadataStateService
 	metadataFetchService MetadataFetchService
@@ -897,6 +900,10 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 		"total":  total,
 		"limit":  params.Limit,
 		"offset": params.Offset,
+		// How many of the trash a purge would remove right now versus how many
+		// are blocked, by reason, as the last purge pass or preview measured
+		// it (null before one has run). The listing never recomputes it.
+		"purge_breakdown": h.audiobookService.LastPurgeBreakdown(),
 	})
 }
 
@@ -966,6 +973,8 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "audiobook", id)
 	case errors.Is(err, database.ErrBookOwnsFiles):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
+	case errors.Is(err, audiobookspkg.ErrPurgeUndoPossible):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
 	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, audiobookspkg.ErrDiscardRefused):
 		httputil.RespondWithConflict(c, err.Error())
 	case errors.Is(err, audiobookspkg.ErrAuditUnavailable):
@@ -975,25 +984,69 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 	}
 }
 
-// PurgeSoftDeletedAudiobooks handles DELETE /audiobooks/purge-soft-deleted.
-func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
-	deleteFiles := c.Query("delete_files") == "true"
-	olderThanStr := c.Query("older_than_days")
+// PurgeEnqueuer queues the manual purge operation and returns its id. The
+// server wires it to the operations registry (SetPurgeEnqueuer).
+type PurgeEnqueuer func(ctx context.Context, params any) (opID string, err error)
 
+// SetPurgeEnqueuer wires the manual purge operation's enqueue. Without it the
+// purge endpoints answer 500, rather than purging inside the request.
+func (h *Handler) SetPurgeEnqueuer(fn PurgeEnqueuer) { h.enqueuePurge = fn }
+
+// purgeOpParams is the body of the library.purge-soft-deleted op (the server's
+// PurgeSoftDeletedOpParams). The mode is always sent: DryRun is never omitted,
+// so neither endpoint depends on the op's omitted-means-preview default.
+type purgeOpParams struct {
+	DeleteFiles   bool  `json:"delete_files,omitempty"`
+	OlderThanDays *int  `json:"older_than_days,omitempty"`
+	DryRun        *bool `json:"dry_run"`
+}
+
+// PurgeSoftDeletedAudiobooks handles DELETE /audiobooks/purge-soft-deleted.
+//
+// It queues the library.purge-soft-deleted operation and answers 202 with its
+// id; the purge runs there, with progress, and its result (what was purged and
+// what was kept, by reason) is the operation's result. It used to run inside
+// the request: 72 s on 2026-10-21, no progress, no log line, and a response
+// whose breakdown the UI discarded. WHICH books are purgeable is unchanged.
+func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
+	h.enqueuePurgeOp(c, false)
+}
+
+// PreviewPurgeSoftDeleted handles POST /audiobooks/purge-soft-deleted/preview:
+// the same operation as a dry run. It classifies every trashed book exactly as
+// the purge would and changes nothing, so the dialog can say what a purge will
+// do before it is clicked.
+func (h *Handler) PreviewPurgeSoftDeleted(c *gin.Context) {
+	h.enqueuePurgeOp(c, true)
+}
+
+func (h *Handler) enqueuePurgeOp(c *gin.Context, dryRun bool) {
+	if h.enqueuePurge == nil {
+		httputil.RespondWithInternalError(c, "operation registry not initialized")
+		return
+	}
 	var olderThanDays *int
-	if olderThanStr != "" {
-		if days, err := strconv.Atoi(olderThanStr); err == nil && days > 0 {
+	if raw := c.Query("older_than_days"); raw != "" {
+		if days, err := strconv.Atoi(raw); err == nil && days > 0 {
 			olderThanDays = &days
 		}
 	}
-
-	result, err := h.audiobookService.PurgeSoftDeletedBooks(c.Request.Context(), deleteFiles, olderThanDays)
+	params := purgeOpParams{
+		DeleteFiles:   c.Query("delete_files") == "true",
+		OlderThanDays: olderThanDays,
+		DryRun:        &dryRun,
+	}
+	opID, err := h.enqueuePurge(c.Request.Context(), params)
 	if err != nil {
-		httputil.InternalError(c, "failed to purge deleted audiobooks", err)
+		httputil.InternalError(c, "failed to enqueue the purge operation", err)
 		return
 	}
-
-	httputil.RespondWithOK(c, result)
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
+		"id":      opID,
+		"type":    "purge-soft-deleted",
+		"status":  "queued",
+		"dry_run": dryRun,
+	})
 }
 
 // ReconcileAudiobookFiles re-stats the book's files on disk and updates the

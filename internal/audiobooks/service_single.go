@@ -12,12 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -338,74 +334,12 @@ func (svc *AudiobookService) CountSoftDeletedBooks(ctx context.Context, olderTha
 // back on a book between its check and its delete. The file-row check and
 // the on-disk file removal run outside it, in parallel.
 func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*PurgeResult, error) {
-	if svc.store == nil {
-		return nil, fmt.Errorf("database not initialized")
-	}
-
-	var cutoff *time.Time
-	if olderThanDays != nil && *olderThanDays > 0 {
-		ts := time.Now().AddDate(0, 0, -*olderThanDays)
-		cutoff = &ts
-	}
-
-	books, err := svc.store.ListSoftDeletedBooks(1_000_000, 0, cutoff)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &PurgeResult{
-		Attempted: len(books),
-		Errors:    []string{},
-	}
-	// Users are listed once per pass, not once per book (step 0b).
-	var stateProbe *merge.UserStateProbe
-	if len(books) > 0 {
-		stateProbe, err = merge.NewUserStateProbe(svc.store)
-		if err != nil {
-			return nil, fmt.Errorf("purge refused: cannot list users to check their listening state: %w", err)
-		}
-	}
-
-	var mu sync.Mutex
-	var g errgroup.Group
-	g.SetLimit(runtime.NumCPU())
-	for _, part := range purgePartitions(books) {
-		if ctx.Err() != nil {
-			break
-		}
-		g.Go(func() error {
-			for i := range part {
-				if ctx.Err() != nil {
-					return nil
-				}
-				out := svc.purgeOne(&part[i], deleteFiles, stateProbe)
-				mu.Lock()
-				result.add(part[i].ID, out)
-				mu.Unlock()
-			}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		// The workers report per-book outcomes in result and return nil;
-		// an error here is a bug, reported rather than dropped.
-		result.Errors = append(result.Errors, fmt.Sprintf("purge worker failed: %v", err))
-	}
-	if err := ctx.Err(); err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("purge stopped early: %v", err))
-	}
-	result.sortIDs()
-
-	if result.Purged > 0 {
-		svc.InvalidateListCache()
-	}
-
-	return result, nil
+	return svc.RunPurge(ctx, PurgeOptions{DeleteFiles: deleteFiles, OlderThanDays: olderThanDays})
 }
 
 // purgeOne runs the purge of one soft-deleted book and reports what
 // happened. It is safe to run for books of different version groups at once.
-func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, stateProbe *merge.UserStateProbe) purgeOutcome {
+func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env purgeEnv) purgeOutcome {
 	// Step 0: refuse a book that still owns book_file rows — BEFORE any
 	// side effect (external-ID tombstones, iTunes removes, the tombstone
 	// snapshot), because a book we will not delete must keep all of those.
@@ -425,12 +359,8 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	// pre-check exists so the refusal happens before the side effects
 	// above, not after them. Fail closed: an unreadable file list is not
 	// proof there are no rows.
-	ownedFiles, ownErr := svc.store.GetBookFiles(book.ID)
-	if ownErr != nil {
-		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot read its book_file rows: %v", book.ID, ownErr)}}
-	}
-	if len(ownedFiles) > 0 {
-		return purgeOutcome{kind: purgeOwnsFiles}
+	if o, blocked := svc.purgeGate(book, env); blocked {
+		return o
 	}
 	// Step 0b: a book a user still has listening state on, checked at the
 	// same point (before any side effect). A merge moves a loser's progress
@@ -446,12 +376,14 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	// state onto a trashed book under that lock, so a check made outside it
 	// could read "none", lose the race to the revert, and delete the book the
 	// revert had just put a user's progress on.
-	r := svc.purgeIfStateless(book, stateProbe)
+	r := svc.purgeIfStateless(book, env)
 	switch {
 	case r.readErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot re-read it under the merge lock: %v", book.ID, r.readErr)}}
 	case r.notInTrash:
 		return purgeOutcome{kind: purgeNotInTrash}
+	case r.keptUndo:
+		return purgeOutcome{kind: purgeKeptUndo}
 	case r.stateErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(r.stateErr), r.stateErr)}}
 	case r.hasState:
@@ -475,7 +407,10 @@ type statelessPurge struct {
 	// hasState, notInTrash and every error are unset).
 	fresh *database.Book
 	// notInTrash: restored, or already gone, by the time the lock was held.
-	notInTrash                   bool
+	notInTrash bool
+	// keptUndo: the row, as re-read under the lock, is the retired shell of a
+	// combine whose undo can still run (merge.UndoShellIndex).
+	keptUndo                     bool
 	hasState                     bool
 	readErr, stateErr, deleteErr error
 }
@@ -502,7 +437,7 @@ type statelessPurge struct {
 // merge.MergeLockAcquisitions). Anything added under this hold that writes a
 // file row, or anything else such a snapshot reads unlogged, must switch it
 // back to merge.LockMergeRMW.
-func (svc *AudiobookService) purgeIfStateless(book *database.Book, probe *merge.UserStateProbe) (r statelessPurge) {
+func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv) (r statelessPurge) {
 	merge.LockMergeRMWBookRowsOnly()
 	defer merge.UnlockMergeRMW()
 	cur, err := svc.store.GetBookByID(book.ID)
@@ -515,7 +450,14 @@ func (svc *AudiobookService) purgeIfStateless(book *database.Book, probe *merge.
 		return r
 	}
 	r.fresh = cur
-	r.hasState, r.stateErr = probe.Has(cur.ID)
+	// The undo hold is decided on the row as it is NOW, not on the listing's
+	// copy: a shell restored or re-deleted since carries another stamp and is
+	// not held (merge.UndoShellIndex.Holds).
+	if _, held := env.undo.Holds(cur); held {
+		r.keptUndo = true
+		return r
+	}
+	r.hasState, r.stateErr = env.probe.Has(cur.ID)
 	if r.stateErr != nil || r.hasState {
 		return r
 	}
