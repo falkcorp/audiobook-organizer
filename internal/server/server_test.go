@@ -1,5 +1,5 @@
 // file: internal/server/server_test.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 // last-edited: 2026-10-22
 
@@ -141,6 +141,9 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	// BookFilesWithHash, ...) refuse until it is serving, and a purge with
 	// delete_files=true would keep the file and fail the test under load.
 	store.WaitForWarmup()
+	// The undo hold on a purge is fail-closed until the operation-journal
+	// by-book index is trusted; boot runs this ensure before serving.
+	ensureLedgerIndexTrusted(t, store)
 	database.SetGlobalStore(store)
 
 	// Run migrations to ensure schema is up to date

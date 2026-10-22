@@ -1,7 +1,7 @@
 // file: internal/server/combine_revert_route_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3c8a5f12-7e46-4d91-b0a3-9f2e6d17c548
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
@@ -19,9 +20,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// A manual combine (POST /api/v1/audiobooks/combine) runs in no operation, so
-// it journals its undo pointer under a correlation id of its own and answers
-// it as operation_id. POST /api/v1/operations/:id/revert with that id -- the
+// A manual combine (POST /api/v1/audiobooks/combine) answers 202 with the
+// dedup.book-combine operation it queued, and that operation's id is the
+// revert operation id its journal is stamped with. POST /api/v1/operations/:id/revert with that id -- the
 // live undo path now that POST /merge/undo/:journal_id is retired -- puts every
 // book, file row and external id back. Both requests go through the server's
 // router.
@@ -73,23 +74,27 @@ func TestCombineRoute_UndoneByOperationsRevert(t *testing.T) {
 	}
 
 	w := post("/api/v1/audiobooks/combine", map[string]any{"keep_id": keep, "merge_ids": []string{a, b}})
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var combined struct {
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	var started struct {
 		Data struct {
-			OperationID string `json:"operation_id"`
-			JournalID   string `json:"journal_id"`
+			ID   string `json:"id"`
+			Type string `json:"type"`
 		} `json:"data"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &combined))
-	require.NotEmpty(t, combined.Data.OperationID, w.Body.String())
-	require.NotEmpty(t, combined.Data.JournalID)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &started))
+	require.NotEmpty(t, started.Data.ID, w.Body.String())
+	require.Equal(t, "book-combine", started.Data.Type)
+	// The combine is the op: its own id is the revert operation id, so the
+	// 202 body already carries what an undo needs.
+	done := waitForOperationStatus(t, started.Data.ID, 30*time.Second)
+	require.Equal(t, "completed", done.Status)
 	require.True(t, softDeleted(a))
 	require.True(t, softDeleted(b))
 	for id, owner := range owners() {
 		require.Equal(t, keep, owner, "file %s on keep after the combine", id)
 	}
 
-	w = post("/api/v1/operations/"+combined.Data.OperationID+"/revert", nil)
+	w = post("/api/v1/operations/"+started.Data.ID+"/revert", nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
 	require.False(t, softDeleted(a), "a restored")
