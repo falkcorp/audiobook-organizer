@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_hash_index_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 4e8b2d63-9a17-4c50-b3f6-1d7a0c5e9b82
 // last-edited: 2026-10-22
 
@@ -437,4 +437,33 @@ func hashTestBook(t *testing.T, s *PebbleStore, id string) *Book {
 	require.NoError(t, err)
 	require.NotNil(t, b)
 	return b
+}
+
+// UpdateBook is keyed by its id argument, and a caller may pass a Book whose ID
+// is empty or stale: the keys must follow the row, not the struct.
+func TestBookHashIndex_UpdateBookKeysFollowTheIDArgument(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	hashBook(t, s, "a", "H", false)
+	_, err := s.UpdateBook("a", &Book{Title: "a", FilePath: "/p/a", FileHash: new("H2")})
+	require.NoError(t, err)
+	assert.True(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H2", "a")))
+	assert.False(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H", "a")))
+	assert.False(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H2", "")), "no key under an empty id")
+	assert.Equal(t, "a", hashOwners(t, s, "H2")[0])
+}
+
+// Reset wipes the sentinel with everything else, so it must drop the cached
+// trust too: a stale true would make lookups ignore the legacy keys.
+func TestBookHashIndex_ResetClearsTheCachedTrust(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	_, err := s.RepairBookHashIndex(context.Background(), nil)
+	require.NoError(t, err)
+	trusted, err := s.bookHashIndexTrusted()
+	require.NoError(t, err)
+	require.True(t, trusted)
+
+	require.NoError(t, s.Reset())
+	trusted, err = s.bookHashIndexTrusted()
+	require.NoError(t, err)
+	assert.False(t, trusted)
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_hash_index.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9a4d7e21-3b86-4c05-8f19-e5c2a7d0b634
 // last-edited: 2026-10-22
 
@@ -138,23 +138,24 @@ func bookHashBounds(kind int, hash string) (lower, upper []byte) {
 	return lower, upper
 }
 
-// stageBookHashKeys stages the hash keys of book into batch: the set of keys
+// stageBookHashKeys stages the hash keys of book id into batch (id is the row's
+// key, not book.ID, which a caller may leave empty): the set of keys
 // for the hashes it holds now and, when old is non-nil, the delete of the keys
 // for hashes it held and no longer does. UpdateBook passes the row it read,
 // CreateBook passes nil. The Set is unconditional, so a row whose key went
 // missing heals on its next update.
-func stageBookHashKeys(batch *GatedBatch, old, book *Book) error {
+func stageBookHashKeys(batch *GatedBatch, id string, old, book *Book) error {
 	for i := range bookHashKinds {
 		cur := bookHashKinds[i].ofBook(book)
 		if old != nil {
 			if prev := bookHashKinds[i].ofBook(old); prev != "" && prev != cur {
-				if err := batch.Delete(bookHashKey(i, prev, book.ID), nil); err != nil {
+				if err := batch.Delete(bookHashKey(i, prev, id), nil); err != nil {
 					return err
 				}
 			}
 		}
 		if cur != "" {
-			if err := batch.Set(bookHashKey(i, cur, book.ID), []byte{}, nil); err != nil {
+			if err := batch.Set(bookHashKey(i, cur, id), []byte{}, nil); err != nil {
 				return err
 			}
 		}
@@ -162,11 +163,11 @@ func stageBookHashKeys(batch *GatedBatch, old, book *Book) error {
 	return nil
 }
 
-// stageBookHashKeyDeletes stages the delete of every hash key book owns.
-func stageBookHashKeyDeletes(batch *GatedBatch, book *Book) error {
+// stageBookHashKeyDeletes stages the delete of every hash key book id owns.
+func stageBookHashKeyDeletes(batch *GatedBatch, id string, book *Book) error {
 	for i := range bookHashKinds {
 		if h := bookHashKinds[i].ofBook(book); h != "" {
-			if err := batch.Delete(bookHashKey(i, h, book.ID), nil); err != nil {
+			if err := batch.Delete(bookHashKey(i, h, id), nil); err != nil {
 				return err
 			}
 		}
