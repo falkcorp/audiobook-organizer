@@ -1,5 +1,5 @@
 // file: internal/server/csp_report.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d896d6d8-b883-482d-8e34-d41a4abd52df
 // last-edited: 2026-10-22
 
@@ -56,13 +56,17 @@ type cspReporter struct {
 	limiter *rate.Limiter
 	dropped atomic.Int64
 
-	// visitors are the per-visitor limiters, keyed on loginThrottleKey (the
-	// tunnel visitor where one can be believed, else the peer), bounded and swept
-	// from the cold end.
+	// visitors are the per-visitor limiters, keyed on loginSaturatedKey (the
+	// tunnel visitor where one can be believed, else the peer; a public IPv6
+	// visitor grouped per /48, so a caller holding a /48 cannot mint a fresh
+	// budget per /64), bounded and swept from the cold end.
 	mu         sync.Mutex
 	visitors   *absauth.LRU[*cspVisitor]
 	newVisitor func() *rate.Limiter
 	now        func() time.Time
+	// charge takes k tokens from a limiter at now; (*rate.Limiter).AllowN. A field
+	// only so a test can make a charge fail, which cannot happen otherwise.
+	charge func(l *rate.Limiter, now time.Time, k int) bool
 }
 
 type cspVisitor struct {
@@ -88,6 +92,7 @@ func newCSPReporter(limiter *rate.Limiter) *cspReporter {
 		visitors:   absauth.NewLRU[*cspVisitor](maxCSPVisitors),
 		newVisitor: func() *rate.Limiter { return rate.NewLimiter(rate.Every(10*time.Second), cspReportMaxPerRequest) },
 		now:        time.Now,
+		charge:     (*rate.Limiter).AllowN,
 	}
 }
 
@@ -128,8 +133,18 @@ func (r *cspReporter) admit(visitor string, n int) int {
 	if k <= 0 {
 		return 0
 	}
-	r.limiter.AllowN(now, k)
-	v.limiter.AllowN(now, k)
+	// Both charges succeed: k was just read from these two limiters at this very
+	// instant under r.mu, the only path to either, so nothing can have spent a
+	// token in between. Should that ever stop being true (a second writer, a
+	// limiter swapped for one with different semantics), fail closed: log nothing
+	// rather than log past a budget. A charge that did go through is not undone;
+	// the library cannot give tokens back reliably (see above).
+	okService := r.charge(r.limiter, now, k)
+	okVisitor := r.charge(v.limiter, now, k)
+	if !okService || !okVisitor {
+		cspReportLog.Error("CSP report limiter refused a charge it had just verified (service=%t visitor=%t, k=%d): dropping the reports", okService, okVisitor, k)
+		return 0
+	}
 	return k
 }
 
@@ -163,7 +178,7 @@ func (r *cspReporter) handle(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 		return
 	}
-	admitted := r.admit(loginThrottleKey(c), len(reports))
+	admitted := r.admit(loginSaturatedKey(c), len(reports))
 	if rest := len(reports) - admitted; rest > 0 {
 		r.dropped.Add(int64(rest))
 	}

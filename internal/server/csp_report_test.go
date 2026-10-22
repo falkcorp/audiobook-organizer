@@ -1,5 +1,5 @@
 // file: internal/server/csp_report_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b0cfe71e-4a49-4714-bc3b-9cbae5c214f5
 // last-edited: 2026-10-22
 
@@ -488,4 +488,72 @@ func TestCSPReporter_ConcurrentRefusalsNeverMoveTheServiceBudget(t *testing.T) {
 		require.GreaterOrEqual(t, svc.TokensAt(now), 0.0, "never in debt")
 		require.InDelta(t, 0, svc.TokensAt(now), 0.001)
 	})
+}
+
+// A public IPv6 visitor is keyed per /48 (clientSaturatedKey), so a caller that
+// owns a /48 cannot mint a fresh per-visitor budget for every /64 it has. Another
+// /48 and IPv4 are separate visitors.
+func TestCSPReportHandler_VisitorBudgetIsPerIPv6Slash48(t *testing.T) {
+	buf := captureSlog(t)
+	rep := newCSPReporter(rate.NewLimiter(rate.Inf, 1))
+	rep.newVisitor = func() *rate.Limiter { return rate.NewLimiter(rate.Every(time.Hour), 3) }
+	r := cspReportRouter(rep)
+	const body = `{"csp-report":{"violated-directive":"img-src","blocked-uri":"inline"}}`
+	post := func(remote string) {
+		req := httptest.NewRequest(http.MethodPost, cspReportPath, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/csp-report")
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNoContent, w.Code)
+	}
+	logged := func() int {
+		n := 0
+		for _, m := range buf.all() {
+			if strings.Contains(m, "CSP violation") {
+				n++
+			}
+		}
+		return n
+	}
+	for _, remote := range []string{"[2001:db8:aaaa:1::1]:4000", "[2001:db8:aaaa:2::1]:4000", "[2001:db8:aaaa:3::1]:4000"} {
+		post(remote)
+	}
+	require.Equal(t, 3, logged(), "three /64s of one /48 fit the one budget of three")
+	post("[2001:db8:aaaa:4::1]:4000")
+	post("[2001:db8:aaaa:ffff::7]:4000")
+	require.Equal(t, 3, logged(), "a fourth and fifth /64 of the same /48 share the spent budget")
+	post("[2001:db8:bbbb:1::1]:4000")
+	post("192.0.2.5:4000")
+	require.Equal(t, 5, logged(), "another /48 and an IPv4 address are their own visitors")
+}
+
+// Fail closed: if a charge ever refuses after the tokens were verified, nothing is
+// logged (and nothing is claimed admitted), and the refusal is itself logged.
+func TestCSPReporter_AFailedChargeFailsClosed(t *testing.T) {
+	buf := captureSlog(t)
+	rep := newCSPReporter(rate.NewLimiter(rate.Inf, 1))
+	rep.newVisitor = func() *rate.Limiter { return rate.NewLimiter(rate.Inf, 1) }
+	require.Equal(t, 3, rep.admit("198.51.100.1", 3), "sanity: admitted with a working charge")
+	for name, failing := range map[string]func(l *rate.Limiter) bool{
+		"service": func(l *rate.Limiter) bool { return l == rep.limiter },
+		"visitor": func(l *rate.Limiter) bool { return l != rep.limiter },
+	} {
+		real := rep.charge
+		rep.charge = func(l *rate.Limiter, now time.Time, k int) bool {
+			if failing(l) {
+				return false
+			}
+			return real(l, now, k)
+		}
+		require.Equal(t, 0, rep.admit("198.51.100.1", 3), "%s charge refused: nothing admitted", name)
+		rep.charge = real
+	}
+	logged := 0
+	for _, m := range buf.all() {
+		if strings.Contains(m, "refused a charge it had just verified") {
+			logged++
+		}
+	}
+	require.Equal(t, 2, logged)
 }
