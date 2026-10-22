@@ -1,6 +1,6 @@
 //go:build embed_frontend
 
-// version: 1.3.0
+// version: 1.3.1
 // file: internal/server/static_embed.go
 // last-edited: 2026-10-21
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
@@ -12,7 +12,6 @@ import (
 	"embed"
 	"io"
 	"io/fs"
-	"log/slog"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -44,7 +43,7 @@ func (s *Server) setupStaticFiles(spaMiddleware ...gin.HandlerFunc) {
 		// served below (csp.go), so the policy cannot drift from the build.
 		if index, err := fs.ReadFile(webDist, "index.html"); err == nil {
 			n := setSPAInlineScripts(index)
-			slog.Info("CSP: allowing inline scripts in index.html by hash", "count", n)
+			lifecycleLog.Info("CSP: allowing %d inline script(s) in index.html by hash", n)
 		}
 	}
 
