@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-22
 
 package database
 
@@ -676,24 +676,44 @@ func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs
 	if len(changeIDs) == 0 {
 		return nil
 	}
+	return p.markOperationChangesRevertedWith(operationID, changeIDs, nil)
+}
+
+// OperationMark names the rows of one operation a write marks reverted in the
+// same batch as itself (see CollectionMembershipMarkStore). The zero value
+// marks nothing.
+type OperationMark struct {
+	OperationID string
+	ChangeIDs   []string
+}
+
+// markOperationChangesRevertedWith is MarkOperationChangesReverted with extra
+// staged into the same batch before it commits: the marks and extra land
+// together or not at all. extra may be nil; with extra non-nil the batch is
+// committed even when every wanted row is already reverted (extra still has to
+// land). The caller may hold its own list lock: this takes opChangeJournalMu's
+// read side after it, never the other way round.
+func (p *PebbleStore) markOperationChangesRevertedWith(operationID string, changeIDs []string, extra func(b *GatedBatch) error) error {
 	want := make(map[string]struct{}, len(changeIDs))
 	for _, id := range changeIDs {
 		want[id] = struct{}{}
 	}
-	changes, err := p.GetOperationChanges(operationID)
-	if err != nil {
-		return err
-	}
 	var keys [][]byte
-	for _, c := range changes {
-		if _, ok := want[c.ID]; ok && c.RevertedAt == nil {
-			keys = append(keys, opChangeKey(c.OperationID, c.ID))
+	if len(want) > 0 {
+		changes, err := p.GetOperationChanges(operationID)
+		if err != nil {
+			return err
+		}
+		for _, c := range changes {
+			if _, ok := want[c.ID]; ok && c.RevertedAt == nil {
+				keys = append(keys, opChangeKey(c.OperationID, c.ID))
+			}
 		}
 	}
-	if len(keys) == 0 {
+	if len(keys) == 0 && extra == nil {
 		return nil
 	}
-	if opChangeMarkAfterScan != nil {
+	if len(keys) > 0 && opChangeMarkAfterScan != nil {
 		opChangeMarkAfterScan()
 	}
 	p.opChangeJournalMu.RLock()
@@ -732,7 +752,11 @@ func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs
 		}
 		staged++
 	}
-	if staged == 0 {
+	if extra != nil {
+		if err := extra(batch); err != nil {
+			return err
+		}
+	} else if staged == 0 {
 		return nil
 	}
 	return batch.Commit(pebble.Sync)
