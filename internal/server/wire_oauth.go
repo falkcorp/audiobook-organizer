@@ -1,5 +1,5 @@
 // file: internal/server/wire_oauth.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5c2e8b04-7a19-4d63-8f05-3b6a0c9e2d47
 // last-edited: 2026-10-21
 
@@ -95,11 +95,13 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 		cfMW = servermiddleware.CloudflareAccessAuth(
 			servermiddleware.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring()))
 		cfRecoveryMW = newCFRecoveryMiddleware(cfAccessVerifierOverride)
+		s.loginCeilingExempt = newAccessExemption(cfAccessVerifierOverride, cfg)
 	} else if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
 		if v, verr := oauth.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
 			cfMW = servermiddleware.CloudflareAccessAuth(
 				servermiddleware.NewCFAccessAuthenticator(v, cfg, s.storeForWiring()))
 			cfRecoveryMW = newCFRecoveryMiddleware(v)
+			s.loginCeilingExempt = newAccessExemption(v, cfg)
 			slog.Info("oauth: Cloudflare Access identity passthrough enabled", "team", cfg.CFAccessTeamDomain)
 		} else {
 			slog.Error("oauth: Cloudflare Access verifier init failed — passthrough disabled", "err", verr)

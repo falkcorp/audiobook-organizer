@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.21.0
+// version: 2.22.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-21
 
@@ -282,6 +282,21 @@ func (h *AuthHandler) recordFailure(userID, ip string) time.Duration {
 	return d
 }
 
+// accountFailures is the number of failures counted against the account in the
+// current window.
+func (h *AuthHandler) accountFailures(userID string) int {
+	if userID == "" {
+		return 0
+	}
+	h.failMu.Lock()
+	defer h.failMu.Unlock()
+	a, ok := h.acctFails[userID]
+	if !ok || time.Since(a.firstAt) > loginThrottleWindow {
+		return 0
+	}
+	return a.count
+}
+
 // clearFailures resets both counters after a successful login.
 func (h *AuthHandler) clearFailures(userID, ip string) {
 	h.failMu.Lock()
@@ -452,6 +467,23 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	user, err := h.store.GetUserByUsername(req.Username)
+	// While the aggregate login ceilings are spent (absauth.MarkLoginSaturated) an
+	// account with few failures of its own is delayed, not refused, before any
+	// password work; only one that has already failed SoftThreshold times is
+	// refused. An unknown username has no failures of its own, so it is delayed
+	// like any other and the answer does not tell the caller whether it exists.
+	if absauth.LoginSaturated(c) {
+		accountID := ""
+		if err == nil && user != nil {
+			accountID = user.ID
+		}
+		delay, refuse := absauth.SaturationPolicy(h.accountFailures(accountID))
+		if refuse {
+			httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
+			return
+		}
+		h.failureDelay(delay)
+	}
 	if err != nil || user == nil {
 		// Count the failure against the IP even for unknown users so username
 		// guessing can't dodge the throttle.

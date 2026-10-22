@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.109.0
+// version: 2.110.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-21
 
@@ -390,7 +390,8 @@ type Server struct {
 	// guestPolicyOverride, when set before the first accept, replaces it
 	// (tests only).
 	loginCeilingOnce    sync.Once
-	loginCeilingState   *loginCeiling // shared by the web and ABS password logins (login_ceiling.go)
+	loginCeilingState   *loginCeiling           // shared by the web and ABS password logins (login_ceiling.go)
+	loginCeilingExempt  func(*gin.Context) bool // verified Access identity test, set by buildOAuthWiring
 	guestPolicyOnce     sync.Once
 	guestPolicy         guestPolicyEnsurer
 	guestPolicyErr      error
