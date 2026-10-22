@@ -1,5 +1,5 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.20.0
+# version: 1.21.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
 # last-edited: 2026-10-23
 #
@@ -280,3 +280,4 @@ maintenance.backfill-merge-undo-pointers
 collections.refresh-relative-dynamic
 library.purge-soft-deleted
 maintenance.book-hash-index-repair
+maintenance.combine-journal-check

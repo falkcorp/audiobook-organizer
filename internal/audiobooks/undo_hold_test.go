@@ -1,5 +1,5 @@
 // file: internal/audiobooks/undo_hold_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e5a17-8d42-4b60-a1f3-7e0b6d2c9a48
 // last-edited: 2026-10-22
 
@@ -327,4 +327,62 @@ func TestPurgeCarryingState_PrecheckHoldsALedgerShell(t *testing.T) {
 	assert.Equal(t, purgeKeptUndo, out.kind, "%+v", out)
 	assert.False(t, bookGone(t, store, "dup"))
 	assert.Equal(t, 40, userPct(t, store, u.ID, "dup"))
+}
+
+// A combine-journal row that cannot be decoded may be an undo that still needs
+// a trashed book, and cannot say which. Owner decision 2026-10-22: it blocks
+// every purge, whichever way it starts, until repaired, and the refusal names
+// the row's key and the op that lists such rows. Nothing is deleted.
+func TestPurge_UnreadableCombineJournalRowRefusesEveryPurgePath(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "shell", "")
+	softDeleted(t, store, "plain", "")
+	holdByCombine(t, store, "shell")
+	const badKey = "merge:combine-journal:01CORRUPTROW"
+	require.NoError(t, store.SetRaw(badKey, []byte("{not json")))
+
+	for _, dry := range []bool{false, true} {
+		res, err := svc.RunPurge(context.Background(), PurgeOptions{DryRun: dry})
+		require.Error(t, err, "dry=%t", dry)
+		assert.Contains(t, err.Error(), badKey, "dry=%t", dry)
+		assert.Contains(t, err.Error(), merge.CombineJournalCheckOp, "dry=%t", dry)
+		var ue *merge.UnreadableCombineJournalsError
+		assert.True(t, errors.As(err, &ue), "%v", err)
+		require.NotNil(t, res)
+		assert.True(t, res.StoppedEarly, "dry=%t", dry)
+		assert.Contains(t, res.StopReason, "purge refused", "dry=%t", dry)
+		assert.Contains(t, res.StopReason, badKey, "dry=%t", dry)
+		assert.Zero(t, res.Purged, "dry=%t", dry)
+	}
+	row, err := store.GetBookByID("plain")
+	require.NoError(t, err)
+	_, err = svc.purgeNow(row)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), badKey)
+	svc.auditOverride = &fakeRecorder{}
+	_, err = svc.DiscardProgressAndPurge(context.Background(), "plain", "owner")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), badKey)
+	assert.False(t, bookGone(t, store, "plain"), "nothing may be deleted while a journal row is unreadable")
+	assert.False(t, bookGone(t, store, "shell"))
+}
+
+// With no corrupt rows the same store purges normally: the held shell is kept,
+// the plain one is purged. Removing the bad row (the manual repair) is enough.
+func TestPurge_RepairedCombineJournalRowPurgesNormally(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "shell", "")
+	softDeleted(t, store, "plain", "")
+	holdByCombine(t, store, "shell")
+	const badKey = "merge:combine-journal:01CORRUPTROW"
+	require.NoError(t, store.SetRaw(badKey, []byte("{not json")))
+	_, err := svc.RunPurge(context.Background(), PurgeOptions{DryRun: true})
+	require.Error(t, err)
+
+	require.NoError(t, store.DeleteRaw(badKey))
+	res := purgeOnce(t, svc)
+	assert.Equal(t, 1, res.Purged, "%+v", res)
+	assert.Equal(t, []string{"shell"}, res.KeptUndoPossibleIDs)
+	assert.True(t, bookGone(t, store, "plain"))
+	assert.False(t, bookGone(t, store, "shell"))
 }
