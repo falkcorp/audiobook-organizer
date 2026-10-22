@@ -1,7 +1,7 @@
 // file: internal/database/iface_catalog.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package database
 
@@ -63,6 +63,16 @@ type CollectionMembershipStore interface {
 	// UpdateCollectionBooks is the primitive both are built on: fn maps the
 	// current membership (a private copy, read inside the lock) to the new one.
 	UpdateCollectionBooks(id string, fn func(current []string) ([]string, error)) (*Collection, error)
+}
+
+// CollectionMembershipMarkStore is UpdateCollectionBooks that also marks rows of
+// an operation's journal reverted in the same batch as the member list (the
+// list and the marks land together or not at all). It is a separate capability,
+// not part of CollectionMembershipStore: a store without it still reverts, with
+// the list write and the marks as two writes (the revert then repairs the gap
+// on its retry). The marks are made also when fn leaves the list unchanged.
+type CollectionMembershipMarkStore interface {
+	UpdateCollectionBooksAndMark(id string, fn func(current []string) ([]string, error), mark OperationMark) (*Collection, error)
 }
 
 // WorkScanStore is the whole-table side of the works store: a cancelable walk

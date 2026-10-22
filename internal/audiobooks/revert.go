@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.84.0
+// version: 1.85.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package audiobooks
 
@@ -10,14 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -608,6 +606,13 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			plan.Record(c, nil)
 			continue
 		}
+		if released, ok := errors.AsType[*survivorReleased](err); ok {
+			// The book was already back; what an interrupted earlier revert of
+			// this row left behind (the survivor still listed) was repaired.
+			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, released.detail))
+			revertLog.Warn("revert of change %s: %s", c.ID, released.detail)
+			already, err = true, nil
+		}
 		if byIndex, ok := errors.AsType[*indexRestore](err); ok {
 			// The row is restored: the book is back in its list, at the
 			// slot its recorded index names. Said so, never silently.
@@ -684,6 +689,11 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		restoredSet[id] = true
 	}
 	for _, m := range deferredMarkers {
+		// A marker with no paired row among the operation's rows (the row was
+		// never journaled, or is voided) is stamped here: nothing can restore
+		// it later, and left standing it would keep the survivor listed for
+		// every other retire. A marker whose row IS here is stamped by the
+		// row's own revert, in the batch that writes the list.
 		row := undo.PairedRow(changes, m)
 		if row != nil && row.RevertedAt == nil && !restoredSet[row.ID] {
 			revertLog.Warn("marker %s left standing: its row %s is not restored", m.ID, row.ID)
@@ -1022,72 +1032,94 @@ type bookJournal interface {
 	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }
 
-// survivorLocks serialise the reverts of collection and playlist rows that
-// share a survivor. The rows of a retire's carry decide the survivor's part
-// from the markers other operations left on it, and stamp their own marker when
-// they restore, so two operations reverting at once would each see the other's
-// marker standing and both leave the survivor in the list. The per-operation
-// lock does not cover that (it is per operation). A fixed set of mutexes keyed
-// by the survivor's id: two survivors sharing a mutex only wait for each other,
-// and a row holds one for one list write and never nests another.
-var survivorLocks [64]sync.Mutex
+// listWrite is what revertListFollow hands the write of one list: the
+// survivor's part, whether the row borrowed the survivor (undo.RestoreMember),
+// the graph that places the book, and the marker stamp to make with the write
+// (nil when there is none to make).
+type listWrite struct {
+	stand    undo.SurvivorStand
+	borrowed bool
+	g        *undo.MembershipGraph
+	mark     *database.OperationMark
+}
 
-func lockSurvivor(survivorID string) (unlock func()) {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(survivorID))
-	mu := &survivorLocks[h.Sum32()%uint32(len(survivorLocks))]
-	mu.Lock()
-	return mu.Unlock
+// listWritten is what a list write reports: the note of a position taken from
+// the recorded index, whether the survivor was taken out of the list because an
+// interrupted earlier revert left it there (undo.RestoreMember), and whether
+// the marker stamp landed in the same batch as the list.
+type listWritten struct {
+	note     string
+	released bool
+	marked   bool
 }
 
 // revertListFollow is the revert of one collection or playlist row c of a
-// retire's carry into list listID of kind, whose slot is written by write
-// (given the survivor's part and the recorded neighbours, it returns the
-// note of a position taken from the recorded index, see undo.RestoreMembership).
-// Under the survivor's lock (survivorLocks) it:
+// retire's carry into list listID of kind, whose slot is written by write.
+// Under the list's lock (undo.LockList, the same one the carry takes around its
+// journal and write) it:
 //
 //  1. reads the survivor's journal, and decides the survivor's part from the
-//     markers (undo.SurvivorStandOf) and the neighbours that place the book
-//     (undo.MembershipGraph; a row journaled before the anchors gets none);
-//  2. writes the list;
-//  3. stamps the row's survivor-side marker reverted, and only now: a marker
-//     stands until its row is restored, so a row that failed or was refused
-//     leaves it standing for the retry, and the next row of this run (or
-//     another operation's) sees the truth.
+//     markers (undo.SurvivorStandFor) and the neighbours that place the book
+//     (undo.MembershipGraph, which reads the journals of the other books it
+//     needs through GetBookChanges; a row journaled before the anchors gets
+//     none);
+//  2. writes the list, and in the same batch stamps the row's survivor-side
+//     marker reverted when the store can (database.CollectionMembershipMarkStore,
+//     database.UserPlaylistMarkStore). A marker stands until its row is
+//     restored, so a row that failed or was refused leaves it standing for the
+//     retry, and the next row of this run (or another operation's) sees the
+//     truth. Without the atomic capability the stamp is a second write, and a
+//     death between the two is repaired by the retry (step 3);
+//  3. on a retry that finds the book already listed: when the row borrowed the
+//     survivor and nothing else stands on it, the survivor is in the list only
+//     because the interrupted revert wrote and died before stamping, and it is
+//     taken out now (survivorReleased); otherwise the marker is stamped.
 //
 // A book placed by its recorded index, not its neighbours, is reported
 // (indexRestore) after the write.
+//
+// Lock order: the operation's lock, then the list lock, then the list store's
+// own lock. The carry takes the merge lock, then the list lock, then the list
+// store's lock.
 func (rs *RevertService) revertListFollow(c *database.OperationChange, rec undo.MembershipRecord, kind, listID string,
-	write func(stand undo.SurvivorStand, g *undo.MembershipGraph) (note string, err error)) error {
+	write func(w listWrite) (listWritten, error)) error {
 	journal, ok := database.AsCapability[bookJournal](rs.db)
 	if !ok {
 		return fmt.Errorf("store cannot read the journal of survivor %s", c.NewValue)
 	}
-	defer lockSurvivor(c.NewValue)()
+	defer undo.LockList(kind, listID)()
 	rows, err := journal.GetBookChanges(c.NewValue)
 	if err != nil {
 		return fmt.Errorf("read the journal of survivor %s: %w", c.NewValue, err)
 	}
-	stand := undo.SurvivorStandOf(rows, c, kind, listID)
+	stand, borrowed := undo.SurvivorStandFor(rows, c, kind, listID)
 	var g *undo.MembershipGraph
 	if rec.Anchored {
 		g = undo.NewMembershipGraph(c.NewValue, kind, listID)
-		g.AddRows(rows)
 		g.AddRows([]*database.OperationChange{c})
+		g.AddJournal(c.NewValue, rows)
+		g.SetJournalLoader(journal.GetBookChanges)
 	}
-	note, err := write(stand, g)
+	var mark *database.OperationMark
+	if m := undo.MarkerOf(rows, c, kind, listID); m != nil && m.RevertedAt == nil {
+		mark = &database.OperationMark{OperationID: m.OperationID, ChangeIDs: []string{m.ID}}
+	}
+	res, err := write(listWrite{stand: stand, borrowed: borrowed, g: g, mark: mark})
 	if err != nil && !errors.Is(err, undo.ErrAlreadyRestored) {
 		return err
 	}
-	if m := undo.MarkerOf(rows, c, kind, listID); m != nil && m.RevertedAt == nil {
-		if markErr := rs.db.MarkOperationChangesReverted(m.OperationID, []string{m.ID}); markErr != nil {
+	if mark != nil && !res.marked {
+		if markErr := rs.db.MarkOperationChangesReverted(mark.OperationID, mark.ChangeIDs); markErr != nil {
 			// The list is restored; the next revert of the row finds the book
-			// listed (already restored) and stamps the marker then.
-			return fmt.Errorf("restored book %s in %s %s but failed to mark its marker %s reverted: %w", c.BookID, kind, listID, m.ID, markErr)
+			// listed and stamps the marker then (or releases the survivor).
+			return fmt.Errorf("restored book %s in %s %s but failed to mark its marker %s reverted: %w", c.BookID, kind, listID, mark.ChangeIDs[0], markErr)
 		}
 	}
-	if err == nil && note != "" {
-		return &indexRestore{detail: fmt.Sprintf("%s %s: %s", kind, listID, note)}
+	if res.released {
+		return &survivorReleased{detail: fmt.Sprintf("%s %s: book %s was already listed; survivor %s, left in the list by an interrupted earlier revert of this row, was taken out", kind, listID, c.BookID, c.NewValue)}
+	}
+	if err == nil && res.note != "" {
+		return &indexRestore{detail: fmt.Sprintf("%s %s: %s", kind, listID, res.note)}
 	}
 	return err
 }
@@ -1104,18 +1136,30 @@ func (rs *RevertService) revertCollectionFollow(c *database.OperationChange, col
 	if !ok {
 		return fmt.Errorf("store cannot edit collection members; book %s left out of collection %s", c.BookID, collectionID)
 	}
+	atomic, hasAtomic := database.AsCapability[database.CollectionMembershipMarkStore](rs.db)
 	return rs.revertListFollow(c, rec, undo.UserContentCollection, collectionID,
-		func(stand undo.SurvivorStand, g *undo.MembershipGraph) (string, error) {
-			var note string
-			_, err := members.UpdateCollectionBooks(collectionID, func(cur []string) ([]string, error) {
-				next, n, err := undo.RestoreMembership(cur, c.BookID, c.NewValue, rec, stand, g)
-				note = n
+		func(w listWrite) (listWritten, error) {
+			var res listWritten
+			fn := func(cur []string) ([]string, error) {
+				res = listWritten{}
+				next, note, released, err := undo.RestoreMember(cur, c.BookID, c.NewValue, rec, w.stand, w.borrowed, w.g)
+				res.note, res.released = note, released
 				return next, err
-			})
-			if errors.Is(err, database.ErrCollectionNotFound) || errors.Is(err, database.ErrCollectionNotStatic) {
-				return "", undo.ErrAlreadyRestored
 			}
-			return note, err
+			var err error
+			if w.mark != nil && hasAtomic {
+				_, err = atomic.UpdateCollectionBooksAndMark(collectionID, fn, *w.mark)
+				res.marked = err == nil
+			} else {
+				_, err = members.UpdateCollectionBooks(collectionID, fn)
+			}
+			if errors.Is(err, database.ErrCollectionNotFound) || errors.Is(err, database.ErrCollectionNotStatic) {
+				return listWritten{}, undo.ErrAlreadyRestored
+			}
+			if err != nil {
+				return listWritten{}, err
+			}
+			return res, nil
 		})
 }
 
@@ -1130,28 +1174,38 @@ func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playl
 	if !ok {
 		return fmt.Errorf("store cannot edit playlists; book %s left out of playlist %s", c.BookID, playlistID)
 	}
+	atomic, hasAtomic := database.AsCapability[database.UserPlaylistMarkStore](rs.db)
 	return rs.revertListFollow(c, rec, undo.UserContentPlaylist, playlistID,
-		func(stand undo.SurvivorStand, g *undo.MembershipGraph) (string, error) {
+		func(w listWrite) (listWritten, error) {
 			for range userContentRevertAttempts {
 				pl, err := pls.GetUserPlaylist(playlistID)
 				if err != nil {
-					return "", fmt.Errorf("read playlist %s: %w", playlistID, err)
+					return listWritten{}, fmt.Errorf("read playlist %s: %w", playlistID, err)
 				}
 				if pl == nil || pl.Type != database.UserPlaylistTypeStatic {
-					return "", undo.ErrAlreadyRestored
+					return listWritten{}, undo.ErrAlreadyRestored
 				}
-				next, note, err := undo.RestoreMembership(pl.BookIDs, c.BookID, c.NewValue, rec, stand, g)
+				next, note, released, err := undo.RestoreMember(pl.BookIDs, c.BookID, c.NewValue, rec, w.stand, w.borrowed, w.g)
 				if err != nil {
-					return "", err
+					return listWritten{}, err
 				}
 				pl.BookIDs = next
-				err = pls.UpdateUserPlaylist(pl)
+				res := listWritten{note: note, released: released}
+				if w.mark != nil && hasAtomic {
+					err = atomic.UpdateUserPlaylistAndMark(pl, *w.mark)
+					res.marked = err == nil
+				} else {
+					err = pls.UpdateUserPlaylist(pl)
+				}
 				if errors.Is(err, database.ErrUserPlaylistVersionConflict) {
 					continue
 				}
-				return note, err
+				if err != nil {
+					return listWritten{}, err
+				}
+				return res, nil
 			}
-			return "", fmt.Errorf("playlist %s kept changing during the revert", playlistID)
+			return listWritten{}, fmt.Errorf("playlist %s kept changing during the revert", playlistID)
 		})
 }
 
@@ -1562,6 +1616,15 @@ type markerRestore struct{}
 type indexRestore struct{ detail string }
 
 func (i *indexRestore) Error() string { return "restored by index: " + i.detail }
+
+// survivorReleased is what the revert of a collection or playlist row returns
+// when the retired book was already listed again and the row repaired what an
+// interrupted earlier revert of it left behind: the survivor it had borrowed
+// was still in the list and was taken out (undo.RestoreMember). The row counts
+// as already restored, and the repair is named in Kept.
+type survivorReleased struct{ detail string }
+
+func (s *survivorReleased) Error() string { return "survivor released: " + s.detail }
 
 func (*markerRestore) Error() string { return "marker: nothing to restore" }
 
