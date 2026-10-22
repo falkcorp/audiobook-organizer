@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.31.4
+// version: 1.31.5
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package merge
 
@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -382,8 +383,23 @@ func NewCombineJournal(survivorID string) *CombineJournal {
 	}
 }
 
+// combineJournalGen counts combine-journal writes in this process. It exists
+// for readers that cache a view of the journals (UndoShellIndex) and must know
+// when the cache may be missing a journal written after it was built.
+var combineJournalGen atomic.Uint64
+
+// CombineJournalGeneration is how many combine-journal writes this process has
+// made. It is bumped AFTER the write lands (and after a failed write too: a
+// failed SetRaw may still have persisted), so a reader that reads it, then
+// reads the journals, sees a changed value if any write finished after its
+// read. Every journal writer (merge.Service combine, dedup split-book merge)
+// holds the merge lock across the write, so a reader holding that lock reads
+// an exact answer; without it, a write still in flight can go unseen.
+func CombineJournalGeneration() uint64 { return combineJournalGen.Load() }
+
 // WriteCombineJournal persists j under its key.
 func WriteCombineJournal(db CombineJournalWriter, j *CombineJournal) error {
+	defer combineJournalGen.Add(1)
 	data, err := json.Marshal(j)
 	if err != nil {
 		return fmt.Errorf("marshal combine journal %s: %w", j.ID, err)
