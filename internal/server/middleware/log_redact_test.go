@@ -1,7 +1,7 @@
 // file: internal/server/middleware/log_redact_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 67c415d9-c181-4b1c-9481-527366cb1090
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package middleware
 
@@ -103,5 +103,19 @@ func TestRedactLogPath_BothRedactions(t *testing.T) {
 	want := "/api/v1/auth/invite/[REDACTED]?token=REDACTED&x=1"
 	if got != want {
 		t.Fatalf("RedactLogPath = %q, want %q", got, want)
+	}
+}
+
+// SF2: RequestURI keeps %2F escaped; the token behind an encoded slash is masked.
+func TestRedactLogPath_EncodedSlashBeforeTheInviteToken(t *testing.T) {
+	for in, want := range map[string]string{
+		"/api/v1/auth/invite%2Fsome-token":           "/api/v1/auth/invite/[REDACTED]",
+		"/api/v1/auth/invite%2fsome-token?token=abc": "/api/v1/auth/invite/[REDACTED]?token=REDACTED",
+		"/api/v1/users/invites%2Fsome-token/resend":  "/api/v1/users/invites/[REDACTED]/resend",
+		"/invite%2Fsome-token?x=1":                   "/invite/[REDACTED]?x=1",
+	} {
+		if got := RedactLogPath(in); got != want {
+			t.Fatalf("RedactLogPath(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
