@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-21-public-surface-hardening-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: f48321db-42a2-44f8-a617-4c75ee6ae1ff -->
 <!-- last-edited: 2026-10-21 -->
 
@@ -39,7 +39,7 @@ Branch `fix/public-surface-hardening`. No separate spec. Drawn from an internal 
 
 **Why it mattered.** A single attacker could use up the budget and block every real user behind that relay, and a user could not be told apart from an attacker.
 
-**The fix.** The counter uses the visitor's real address, believed only when it comes from a listed relay or a verified Cloudflare sign-in. A request from anywhere else is counted by its own address, so a forged header cannot pick a counter. Because one visitor with many addresses would still get a fresh allowance per address, password login also has overall limits on failed attempts, per relay and for the whole service. Reaching them does not lock everyone out: people signed in through Cloudflare are exempt, and anyone else is simply slowed by a second or more before their password is checked, and only refused if their own account has already failed five times. The remaining cost is that, while the limits are used up, someone guessing at one account can get that account's password login refused for up to 15 minutes. People already signed in are not affected, and a restart clears it.
+**The fix.** The counter uses the visitor's real address, believed only when it comes from a listed relay or a verified Cloudflare sign-in. A request from anywhere else is counted by its own address, so a forged header cannot pick a counter. Because one visitor with many addresses would still get a fresh allowance per address, password login also has overall limits on failed attempts, per relay and for the whole service. Reaching them does not lock everyone out: people signed in through Cloudflare are exempt, and anyone else is simply slowed by a second or more before their password is checked, and only refused if their own account has already failed five times or they have already failed once while the limits were used up. A flood from many addresses cannot crowd out a newcomer's first try, and logging in successfully only wipes out your own earlier misses on that same account, so one valid account cannot be used to reset the counters and keep guessing at others. The remaining cost is that, while the limits are used up, someone guessing at one account can get that account's password login refused for up to 15 minutes. People already signed in are not affected, and a restart clears it.
 
 ## Allowed-peer list
 

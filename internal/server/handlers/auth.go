@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.22.0
+// version: 2.23.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-21
 
@@ -467,6 +467,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	user, err := h.store.GetUserByUsername(req.Username)
+	if err == nil && user != nil {
+		absauth.NoteLoginAccount(c, user.ID) // for the login ceilings' same-account refund
+	}
 	// While the aggregate login ceilings are spent (absauth.MarkLoginSaturated) an
 	// account with few failures of its own is delayed, not refused, before any
 	// password work; only one that has already failed SoftThreshold times is

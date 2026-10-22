@@ -1,5 +1,5 @@
 // file: internal/server/absauth/saturation.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f4881432-1772-4d8d-a653-33fde6815d7a
 // last-edited: 2026-10-21
 
@@ -41,6 +41,22 @@ func LoginSaturated(c *gin.Context) bool {
 	v, _ := c.Get(loginSaturatedKey)
 	b, _ := v.(bool)
 	return b
+}
+
+const loginAccountKey = "login_account_id"
+
+// NoteLoginAccount records on c the id of the account a login attempt names,
+// once the handler has looked it up. The login ceilings read it after the
+// handler answers, so that a successful login can hand back the failures the
+// same visitor made against the same account and no others.
+func NoteLoginAccount(c *gin.Context, accountID string) { c.Set(loginAccountKey, accountID) }
+
+// LoginAccount is the id NoteLoginAccount recorded, "" when none was (an
+// unknown username, or a request that never reached the lookup).
+func LoginAccount(c *gin.Context) string {
+	v, _ := c.Get(loginAccountKey)
+	s, _ := v.(string)
+	return s
 }
 
 // SaturationPolicy is what a saturated login for an account with
