@@ -1,7 +1,7 @@
 // file: internal/server/spa_fallback_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4c7e01-3f28-4b95-86d0-c1e57b2f0348
-// last-edited: 2026-08-12
+// last-edited: 2026-10-21
 
 package server
 
@@ -37,6 +37,13 @@ func TestIsNonSPAPath(t *testing.T) {
 		"/socket.io/?EIO=4&transport=polling",
 		"/socket.io/?EIO=4&transport=websocket&sid=abc",
 		"/socket.io",
+		// Redirects are off, so a slash/case/dot-segment variant of a
+		// registered server path lands in NoRoute and must not become the SPA.
+		"/ping", "/ping/", "/PING", "/Ping/", "//ping", "/./ping", "/x/../ping",
+		"/status", "/status/", "/Status", "//status//",
+		"/logout", "/logout/", "/health/", "/metrics/", "/public/", "/public/abc",
+		"/auth//openid", "/AUTH/openid", "/Api/v1/x", "//api//v1",
+		"/socket.io//", "/SOCKET.IO/",
 	}
 	for _, p := range mustNotBeSPA {
 		require.True(t, isNonSPAPath(p), "%q is server-side and must 404, not render the SPA", p)
@@ -57,6 +64,10 @@ func TestIsNonSPAPath(t *testing.T) {
 		// Same slash discipline as /authors: "/socket.io/" must not swallow a
 		// path that merely starts with those characters.
 		"/socket.iodine",
+		// GET /login is the SPA login page (only POST /login is a server route).
+		"/login", "/login/", "/Login",
+		// Whole-segment match: names that merely start with a server word.
+		"/statuses", "/pingpong", "/logout-help", "/healthy", "/publications",
 	}
 	for _, p := range mustBeSPA {
 		require.False(t, isNonSPAPath(p), "%q is a client route and must still render the SPA", p)
@@ -133,4 +144,44 @@ func TestSocketIOHandshakeIs404(t *testing.T) {
 				"%s %s must not return the SPA shell", method, path)
 		}
 	}
+}
+
+// The method rule: the SPA shell is served to GET/HEAD only. A POST or DELETE
+// that matched no route is a 404, which also makes POST /login/ (a slash miss
+// of the ABS login route) a 404 while GET /login/ stays the SPA page.
+func TestSPAWillNotServe(t *testing.T) {
+	cases := []struct {
+		method, target string
+		want           bool
+	}{
+		{http.MethodGet, "/library", false},
+		{http.MethodHead, "/library", false},
+		{http.MethodGet, "/login/", false},
+		{http.MethodPost, "/login/", true},
+		{http.MethodPost, "/library", true},
+		{http.MethodDelete, "/library", true},
+		{http.MethodGet, "/ping/", true},
+		{http.MethodGet, "/PING", true},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.target, nil)
+		require.Equal(t, tc.want, spaWillNotServe(req), "%s %s", tc.method, tc.target)
+	}
+}
+
+// End to end: with redirects off, a slash/case miss of a server route is a 404
+// and never the SPA shell, and the normalised path is not dispatched.
+func TestSlashAndCaseMissesOfServerRoutesAre404(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	for _, path := range []string{"/ping/", "/PING", "//ping", "/status/", "/health/", "/metrics/", "/logout/"} {
+		w := httptest.NewRecorder()
+		server.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusNotFound, w.Code, "GET %s", path)
+		require.NotContains(t, w.Body.String(), "<!doctype html", "GET %s must not return the SPA shell", path)
+	}
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/library", nil))
+	require.Equal(t, http.StatusNotFound, w.Code, "an unmatched POST must not answer with the SPA shell")
 }

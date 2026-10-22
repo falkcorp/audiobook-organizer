@@ -1,5 +1,5 @@
 // file: internal/server/redirect_hardening_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b0e3c52-91d4-4f68-a5c7-2e8d41f60b13
 // last-edited: 2026-10-21
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -63,8 +64,9 @@ func TestRedirectHardening_BaseRouterNeverRedirects(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/probe/"},  // missing-slash route asked with a slash
 		{http.MethodGet, "/slashed"}, // slash route asked without
-		{http.MethodGet, "/PROBE"},   // fixed-path (case) variant
-		{http.MethodGet, "/./probe"}, // fixed-path (clean) variant
+		{http.MethodGet, "/Probe"},   // case variant: RedirectFixedPath would have redirected it
+		{http.MethodGet, "//probe"},  // fixed-path (clean) variant
+		{http.MethodGet, "/./probe"}, // ditto
 		{http.MethodPost, "/probe/"}, // non-GET would be a 307
 		{http.MethodPut, "/slashed"}, // ditto
 	} {
@@ -83,14 +85,23 @@ func TestRedirectHardening_BaseRouterNeverRedirects(t *testing.T) {
 // must not redirect or reflect the header. The probe set is built from
 // router.Routes(), so a route this test never named is covered too.
 func TestRedirectHardening_FullRouterNeverRedirects(t *testing.T) {
-	f := setupCredGuardServer(t)
+	// ABS enabled, so its top-level routes (/ping, /status, /login ...) are in
+	// the router and covered by the probe set.
+	f := setupCredGuardServerWith(t, func(c *config.Config) {
+		c.ABSAPIEnabled = true
+		c.ABSJWTSecret = "synthetic-throttle-test-secret-0123456789abcdef"
+	})
 	routes := f.srv.router.Routes()
 	require.Greater(t, len(routes), 300, "the fixture router is missing most routes")
 
 	probed := 0
+	sawABS := false
 	for _, rt := range routes {
 		if rt.Method != http.MethodGet || strings.ContainsAny(rt.Path, ":*") || rt.Path == "/" {
 			continue
+		}
+		if rt.Path == "/ping" {
+			sawABS = true
 		}
 		other := rt.Path + "/"
 		if strings.HasSuffix(rt.Path, "/") {
@@ -101,4 +112,5 @@ func TestRedirectHardening_FullRouterNeverRedirects(t *testing.T) {
 		probed++
 	}
 	require.Greater(t, probed, 100, "too few routes probed for the test to mean anything")
+	require.True(t, sawABS, "the ABS surface (/ping) was not in the router, so it was not probed")
 }

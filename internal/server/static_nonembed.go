@@ -1,8 +1,8 @@
 //go:build !embed_frontend
 
-// version: 1.2.0
+// version: 1.3.0
 // file: internal/server/static_nonembed.go
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-05-01
 
@@ -106,7 +106,7 @@ func (s *Server) setupPlaceholder() {
 		// Server-side paths must 404 rather than render the SPA shell. Serving
 		// the React index for an unimplemented protocol endpoint tells a client
 		// the feature exists — see isNonSPAPath for the AudioBooth OIDC case.
-		if isNonSPAPath(c.Request.URL.Path) {
+		if spaWillNotServe(c.Request) {
 			httputil.RespondWithNotFound(c, "endpoint", "")
 			return
 		}
