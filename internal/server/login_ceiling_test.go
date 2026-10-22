@@ -1,5 +1,5 @@
 // file: internal/server/login_ceiling_test.go
-// version: 4.2.0
+// version: 4.3.0
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
 // last-edited: 2026-10-22
 
@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -518,7 +519,8 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 			start := time.Now()
 			fx.srv.router.ServeHTTP(w, req)
 			require.Equal(t, http.StatusTooManyRequests, w.Code, "%s %s: saturated admission is refused once the bucket is empty", path, name)
-			require.Equal(t, "5", w.Header().Get("Retry-After"), "%s %s", path, name)
+			// rate 0.0001/s: the computed wait is far past the window, so it is capped there
+			require.Equal(t, strconv.Itoa(int(loginCeilingWindow/time.Second)), w.Header().Get("Retry-After"), "%s %s", path, name)
 			require.Less(t, time.Since(start), minDelay, "%s %s: refused without the saturation delay", path, name)
 		}
 	}
@@ -829,7 +831,7 @@ func TestLoginCeiling_SaturatedAdmissionIsBoundedServiceWide(t *testing.T) {
 		code, retry := post(i)
 		if code == http.StatusTooManyRequests {
 			refused++
-			require.Equal(t, "5", retry)
+			require.Equal(t, "1", retry, "an empty bucket at 2/s holds a token again within a second")
 		}
 	}
 	require.Equal(t, burst, reached, "a flood of fresh visitors derives at most the burst")
@@ -952,7 +954,7 @@ func TestLoginCeiling_SweepKeepsVisitorsWithSaturatedRequestsInFlight(t *testing
 	l.setSaturatedBound(rate.Inf, 1)
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	l.now = func() time.Time { return now }
-	release, verdict := l.admitSaturated("sat")
+	release, verdict, _ := l.admitSaturated("sat")
 	require.Equal(t, satAdmitted, verdict)
 	now = now.Add(loginCeilingWindow + time.Second)
 	leave, ok := l.enter("fresh") // triggers the sweep
@@ -991,4 +993,173 @@ func TestStartupLoginSaturated_RefusesUnusableSettings(t *testing.T) {
 	l.mu.Unlock()
 	require.Equal(t, rate.Limit(0.5), lim)
 	require.Equal(t, 3, burst)
+}
+
+// SF-C: each saturated refusal tells the caller how long to wait for ITS reason,
+// not one hard-coded number. A visitor that failed while saturated waits out the
+// rest of its window; one with its saturated requests in flight waits the short
+// fixed time they take; a caller refused for want of a service-wide token waits
+// until the bucket holds one. Direct, on a fake clock, so the arithmetic is exact.
+func TestLoginCeiling_SaturatedRefusalRetryAfterMatchesTheReason(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	l.setSaturatedBound(rate.Inf, 1)
+
+	// satRefusedFailed: ceil(satFailedAt + window - now), at least 1.
+	l.saturatedFailed("failed")
+	now = now.Add(10 * time.Second)
+	_, verdict, retry := l.admitSaturated("failed")
+	require.Equal(t, satRefusedFailed, verdict)
+	require.Equal(t, int((loginCeilingWindow-10*time.Second)/time.Second), retry, "the rest of the visitor's window")
+	now = now.Add(loginCeilingWindow - 10*time.Second - 400*time.Millisecond)
+	_, verdict, retry = l.admitSaturated("failed")
+	require.Equal(t, satRefusedFailed, verdict)
+	require.Equal(t, 1, retry, "a fraction of a second left rounds up to 1, never 0")
+
+	// satRefusedBusy: its own saturated requests are in flight; the fixed short wait.
+	var releases []func()
+	for i := 0; i < maxSaturatedPerVisitor; i++ {
+		release, verdict, _ := l.admitSaturated("busy")
+		require.Equal(t, satAdmitted, verdict)
+		releases = append(releases, release)
+	}
+	_, verdict, retry = l.admitSaturated("busy")
+	require.Equal(t, satRefusedBusy, verdict)
+	require.Equal(t, satBusyRetryAfter, retry)
+	require.Equal(t, 5, retry)
+	for _, release := range releases {
+		release()
+	}
+
+	// satRefusedCapacity: max(1, ceil((1 - tokens) / rate)).
+	c := newLoginCeiling()
+	c.now = func() time.Time { return now }
+	c.setSaturatedBound(rate.Limit(0.5), 1)
+	release, verdict, _ := c.admitSaturated("a")
+	require.Equal(t, satAdmitted, verdict)
+	release()
+	_, verdict, retry = c.admitSaturated("b")
+	require.Equal(t, satRefusedCapacity, verdict)
+	require.Equal(t, 2, retry, "an empty bucket at 0.5/s needs 2s for one token")
+	now = now.Add(1200 * time.Millisecond) // 0.6 tokens: 0.4 more at 0.5/s is 0.8s
+	_, verdict, retry = c.admitSaturated("b")
+	require.Equal(t, satRefusedCapacity, verdict)
+	require.Equal(t, 1, retry, "a partly refilled bucket rounds up to 1")
+	now = now.Add(time.Second)
+	release, verdict, _ = c.admitSaturated("b")
+	require.Equal(t, satAdmitted, verdict, "and the advertised wait was enough")
+	release()
+
+	// A slower bucket advertises a longer wait (the old hard-coded 5 would be wrong
+	// in both directions), capped at the window.
+	slow := newLoginCeiling()
+	slow.now = func() time.Time { return now }
+	slow.setSaturatedBound(rate.Limit(0.1), 1)
+	release, _, _ = slow.admitSaturated("a")
+	release()
+	_, verdict, retry = slow.admitSaturated("b")
+	require.Equal(t, satRefusedCapacity, verdict)
+	require.Equal(t, 10, retry)
+	slow.setSaturatedBound(rate.Limit(0.0001), 1)
+	release, _, _ = slow.admitSaturated("c")
+	release()
+	_, _, retry = slow.admitSaturated("d")
+	require.Equal(t, int(loginCeilingWindow/time.Second), retry, "never advertised past the window")
+
+	// The hard bound (goroutine safety) waits out the longest saturation delay.
+	h := newLoginCeiling()
+	h.now = func() time.Time { return now }
+	h.setSaturatedBound(rate.Inf, 1)
+	h.mu.Lock()
+	h.saturated = maxSaturatedHard
+	h.mu.Unlock()
+	_, verdict, retry = h.admitSaturated("e")
+	require.Equal(t, satRefusedCapacity, verdict)
+	require.Equal(t, int(absauth.SaturationDelayMax/time.Second), retry)
+}
+
+// SF-C through the router: the header and the wording per refusal kind.
+func TestLoginCeiling_SaturatedRefusalsAnswerWithTheirOwnRetryAfterAndWording(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	l.setSaturatedBound(rate.Limit(0.5), 2)
+	for i := 0; i < loginGlobalCeiling; i++ {
+		l.reserve("")
+	}
+	code := http.StatusUnauthorized
+	r := ceilingRouter(l, &code, nil)
+	serve := func(remote string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/login", nil)
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	// First attempt fails while saturated (spends one of two tokens).
+	require.Equal(t, http.StatusUnauthorized, serve("192.0.2.5:4000").Code)
+	now = now.Add(30 * time.Second)
+	// Same visitor again: refused for its own failure, with the rest of its window.
+	w := serve("192.0.2.5:4000")
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	require.Equal(t, strconv.Itoa(int((loginCeilingWindow-30*time.Second)/time.Second)), w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), "too many failed login attempts")
+	// Drain the bucket (30s refilled it to its burst of 2: one admission leaves one).
+	code = http.StatusOK
+	require.Equal(t, http.StatusOK, serve("192.0.2.6:4000").Code)
+	require.Equal(t, http.StatusOK, serve("192.0.2.7:4000").Code)
+	w = serve("192.0.2.8:4000")
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	require.Equal(t, "2", w.Header().Get("Retry-After"), "an empty bucket at 0.5/s")
+	require.Contains(t, w.Body.String(), "too many login attempts right now")
+}
+
+// SF-C: the per-visitor in-flight refusal has its own wording and the short fixed
+// wait. Handlers are parked, so the visitor's saturated requests stay in flight.
+func TestLoginCeiling_SaturatedBusyRefusalWordingAndRetryAfter(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	l.setSaturatedBound(rate.Inf, 1)
+	for i := 0; i < loginGlobalCeiling; i++ {
+		l.reserve("")
+	}
+	gin.SetMode(gin.TestMode)
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 8)
+	r := gin.New()
+	r.POST("/login", l.middleware(nil, nil), func(c *gin.Context) {
+		entered <- struct{}{}
+		<-hold
+		c.Status(http.StatusOK)
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < maxSaturatedPerVisitor; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); postWithin(t, r, "192.0.2.5:4000", 20*time.Second) }()
+	}
+	for i := 0; i < maxSaturatedPerVisitor; i++ {
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a saturated login under the per-visitor cap was not admitted")
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/login", nil)
+	req.RemoteAddr = "192.0.2.5:4001"
+	w := httptest.NewRecorder()
+	refused := make(chan struct{})
+	go func() { r.ServeHTTP(w, req); close(refused) }()
+	select {
+	case <-refused:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a third saturated login of one visitor was admitted, not refused")
+	}
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	require.Equal(t, "5", w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), "too many simultaneous login attempts")
+	close(hold)
+	wg.Wait()
 }

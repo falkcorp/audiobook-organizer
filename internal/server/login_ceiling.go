@@ -1,5 +1,5 @@
 // file: internal/server/login_ceiling.go
-// version: 4.2.0
+// version: 4.3.0
 // guid: bbbd655c-e45d-48ca-badb-d7b48a4d69e0
 // last-edited: 2026-10-22
 
@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -90,10 +92,12 @@ import (
 //     was a free derivation. A visitor refused by its own limits spends no token.
 //     The trade-off is deliberate: while saturated, a fresh visitor's attempt is
 //     NOT always admitted, because the bucket can be empty, and that visitor is
-//     told to retry shortly (429, Retry-After). Requests with a verified
-//     Cloudflare Access identity are exempt from all of it (they carry no
-//     password work for the bucket to bound, and an Audiobookshelf login through
-//     Cloudflare Access is unaffected).
+//     told to retry shortly (429, Retry-After, the time the bucket needs to hold
+//     one token). Requests with a verified Cloudflare Access identity are exempt
+//     from all of it. They still run the password check; what bounds them is the
+//     per-visitor throttle and the allow-listed identity Cloudflare Access
+//     vouches for, not this bucket, and an Audiobookshelf login through
+//     Cloudflare Access is unaffected.
 //
 // The cost that remains: while a ceiling is spent, a stranger's guesses at one
 // account can push that account over its soft threshold, which then refuses even
@@ -195,9 +199,14 @@ type satVerdict int
 
 const (
 	satAdmitted        satVerdict = iota
-	satRefusedVisitor             // the visitor's own limits: failed this window, or too many in flight
+	satRefusedFailed              // the visitor already failed while saturated in this window
+	satRefusedBusy                // the visitor already has its saturated requests in flight
 	satRefusedCapacity            // the service-wide bucket or the hard bound
 )
+
+// satBusyRetryAfter is the Retry-After (seconds) for a visitor whose own
+// saturated requests are still in flight: they end within the saturation delay.
+const satBusyRetryAfter = 5
 
 // startupLoginSaturated is the startup half of the saturated-admission bucket:
 // it refuses to start on an unusable LOGIN_SATURATED_RATE / LOGIN_SATURATED_BURST
@@ -437,37 +446,41 @@ func (l *loginCeiling) enter(visitor string) (leave func(), ok bool) {
 // admitSaturated decides whether a saturated request from visitor (the
 // saturated key, loginSaturatedKey; already counted by enter under its own key)
 // may go on to be delayed in the handlers. It refuses a visitor that already
-// failed while saturated in this window (satRefusedVisitor), one with
+// failed while saturated in this window (satRefusedFailed), one with
 // maxSaturatedPerVisitor already in flight (one when the service-wide count is
-// at or above maxSaturatedSoft; satRefusedVisitor), anything past
-// maxSaturatedHard (satRefusedCapacity, goroutine safety) and, once the visitor
-// passed its own limits, a request that finds the service-wide bucket empty
+// at or above maxSaturatedSoft; satRefusedBusy), anything past maxSaturatedHard
+// (satRefusedCapacity, goroutine safety) and, once the visitor passed its own
+// limits, a request that finds the service-wide bucket empty
 // (satRefusedCapacity). The token is taken last and only for an admission, so a
 // refused visitor never spends one, and a caller flooding from many addresses
-// is held to the bucket's rate however many fresh keys it has. The returned func
-// must be called when the request ends.
-func (l *loginCeiling) admitSaturated(visitor string) (release func(), verdict satVerdict) {
+// is held to the bucket's rate however many fresh keys it has. On a refusal,
+// retryAfter is the seconds the caller should wait (at least 1), computed under
+// the lock from the state that refused it: the rest of the visitor's window, the
+// time the bucket needs to hold one token, or the longest saturation delay. The
+// returned func must be called when the request ends.
+func (l *loginCeiling) admitSaturated(visitor string) (release func(), verdict satVerdict, retryAfter int) {
 	if visitor == "" {
 		visitor = "?"
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := l.now()
 	if l.saturated >= maxSaturatedHard {
-		return nil, satRefusedCapacity
+		return nil, satRefusedCapacity, ceilSeconds(absauth.SaturationDelayMax)
 	}
 	v := l.visitorLocked(visitor)
-	if !v.satFailedAt.IsZero() && l.now().Sub(v.satFailedAt) <= loginCeilingWindow {
-		return nil, satRefusedVisitor
+	if !v.satFailedAt.IsZero() && now.Sub(v.satFailedAt) <= loginCeilingWindow {
+		return nil, satRefusedFailed, ceilSeconds(v.satFailedAt.Add(loginCeilingWindow).Sub(now))
 	}
 	limit := maxSaturatedPerVisitor
 	if l.saturated >= maxSaturatedSoft {
 		limit = 1
 	}
 	if v.satInFlight >= limit {
-		return nil, satRefusedVisitor
+		return nil, satRefusedBusy, satBusyRetryAfter
 	}
-	if !l.satBound.AllowN(l.now(), 1) {
-		return nil, satRefusedCapacity
+	if !l.satBound.AllowN(now, 1) {
+		return nil, satRefusedCapacity, l.bucketRetryAfterLocked(now)
 	}
 	v.satInFlight++
 	l.saturated++
@@ -480,7 +493,24 @@ func (l *loginCeiling) admitSaturated(visitor string) (release func(), verdict s
 			v.satInFlight--
 			l.touchLocked(visitor, v)
 		}
-	}, satAdmitted
+	}, satAdmitted, 0
+}
+
+// bucketRetryAfterLocked is how many seconds until the saturated bucket holds one
+// token again: max(1, ceil((1 - tokens) / rate)), never more than the window.
+// Caller holds l.mu.
+func (l *loginCeiling) bucketRetryAfterLocked(now time.Time) int {
+	rps := float64(l.satBound.Limit())
+	if rps <= 0 {
+		return int(loginCeilingWindow / time.Second)
+	}
+	need := (1 - l.satBound.TokensAt(now)) / rps
+	return min(max(1, int(math.Ceil(need))), int(loginCeilingWindow/time.Second))
+}
+
+// ceilSeconds is d in whole seconds, rounded up, at least 1.
+func ceilSeconds(d time.Duration) int {
+	return max(1, int((d+time.Second-1)/time.Second))
 }
 
 // saturatedFailed records that visitor failed a login while saturated.
@@ -602,15 +632,20 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool, respond loginRe
 			// (a public IPv6 visitor per /48) and decided HERE, before any handler
 			// looks up the submitted user, so every name gets the same answer.
 			satKey := loginSaturatedKey(c)
-			done, verdict := l.admitSaturated(satKey)
+			done, verdict, retryAfter := l.admitSaturated(satKey)
 			switch verdict {
-			case satRefusedVisitor:
-				c.Header("Retry-After", absauth.RetryAfterSeconds)
+			case satRefusedFailed:
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
 				respond(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
 				c.Abort()
 				return
+			case satRefusedBusy:
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				respond(c, http.StatusTooManyRequests, "too many simultaneous login attempts — try again shortly", "TOO_MANY_REQUESTS")
+				c.Abort()
+				return
 			case satRefusedCapacity:
-				c.Header("Retry-After", "5")
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
 				respond(c, http.StatusTooManyRequests, "too many login attempts right now — try again shortly", "TOO_MANY_REQUESTS")
 				c.Abort()
 				return
