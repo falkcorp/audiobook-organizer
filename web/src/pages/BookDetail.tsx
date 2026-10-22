@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.67.0
+// version: 1.68.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-10-10
+// last-edited: 2026-10-22
 
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -39,7 +39,7 @@ import {
   type MetadataRejection,
 } from '../components/bookdetail/BookDetailDialogs';
 import { sanitizeReturn } from '../utils/safeReturn';
-import { describeDeleteBookError } from '../utils/deleteBookError';
+import { describeBlockOutcome, describeDeleteBookError } from '../utils/deleteBookError';
 import { apiFetch } from '../utils/apiFetch';
 import { unwrapData } from '../utils/apiResponse';
 
@@ -144,7 +144,9 @@ export const BookDetail = () => {
   const [playlistDialogOpen, setPlaylistDialogOpen] = useState(false);
   const [deleteOptions, setDeleteOptions] = useState({
     softDelete: true,
-    blockHash: true,
+    // Off by default: a blocked hash makes the scanner skip the file for
+    // good, wrong when another book still uses it. The user opts in.
+    blockHash: false,
   });
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
   const [pendingUpdate, setPendingUpdate] = useState<Partial<Book> | null>(null);
@@ -459,13 +461,8 @@ export const BookDetail = () => {
       const baseMessage = deleteOptions.softDelete
         ? 'Audiobook marked for deletion.'
         : 'Audiobook deleted permanently.';
-      const blockNotice = deleteOptions.blockHash
-        ? result.blocked
-          ? ' Hash blocked.'
-          : ' Hash could not be blocked.'
-        : '';
-      const severity = deleteOptions.blockHash && !result.blocked ? 'warning' : 'success';
-      toast(`${baseMessage}${blockNotice}`, severity);
+      const { notice, severity } = describeBlockOutcome(deleteOptions.blockHash, result);
+      toast(`${baseMessage}${notice}`, severity);
       setDeleteDialogOpen(false);
       await loadBook();
     } catch (error) {
@@ -1194,7 +1191,7 @@ export const BookDetail = () => {
         onPreviewOrganize={handlePreviewOrganize}
         onOpenWriteBack={() => setWriteBackDialogOpen(true)}
         onOpenDelete={() => {
-          setDeleteOptions({ softDelete: true, blockHash: true });
+          setDeleteOptions({ softDelete: true, blockHash: false });
           setDeleteDialogOpen(true);
         }}
         onRestore={handleRestore}

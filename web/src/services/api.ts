@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.197.0
+// version: 2.198.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -106,7 +106,9 @@ export interface DeleteBookResponse {
   progress_moved?: boolean;
   // Hard delete of a live book: the copy its listening progress moved to.
   progress_moved_to?: string;
-  // Purge of a trashed book: problems after the book was purged.
+  // Problems that did not stop the delete: after a purge of a trashed book, or
+  // a block_hash request that was NOT honoured (a live book still holds the
+  // hash, or the holders could not be checked) with the reason.
   warnings?: string[];
 }
 
@@ -1503,7 +1505,7 @@ export async function getSoftDeletedBooks(
   limit = 100,
   offset = 0,
   olderThanDays?: number
-): Promise<{ items: Book[]; count: number }> {
+): Promise<{ items: Book[]; count: number; purgeBreakdown: PurgeBreakdown | null }> {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
@@ -1520,41 +1522,152 @@ export async function getSoftDeletedBooks(
   return {
     items: data.items || [],
     count: data.total ?? data.count ?? (data.items ? data.items.length : 0),
+    // null until a purge or preview has run since the server started.
+    purgeBreakdown: data.purge_breakdown ?? null,
   };
 }
 
-export async function purgeSoftDeletedBooks(
-  deleteFiles = false,
-  olderThanDays?: number
-): Promise<{
+/**
+ * The trash's purgeable-versus-blocked split as the last purge pass or preview
+ * measured it (GET /audiobooks/soft-deleted `purge_breakdown`). After a real
+ * pass the figures are what REMAINED in the trash.
+ */
+export interface PurgeBreakdown {
+  computed_at: string;
+  /** true when a preview produced it, false when a real pass did */
+  from_preview: boolean;
+  total: number;
+  /** how many a purge would remove now */
+  purgeable: number;
+  /** kept: the book still owns book_file rows */
+  owns_files: number;
+  /** kept: the retired shell of a combine that can still be undone */
+  undo_possible: number;
+  /** kept: a user has listening state and there is no live version to carry it to */
+  has_listening_state: number;
+  failed: number;
+}
+
+/**
+ * The result of the library.purge-soft-deleted operation (a preview or a real
+ * pass), read from GET /operations/:id/result. The counts are exact; the id
+ * lists are capped and `truncated` says when they were.
+ */
+export interface PurgeResult {
+  dry_run?: boolean;
   attempted: number;
+  /** books removed (always 0 for a preview) */
   purged: number;
+  /** preview only: how many a real pass would purge now */
+  purgeable?: number;
   files_deleted: number;
   skipped_owns_files?: number;
-  // Books holding users' listening progress: carried to a live version and
-  // purged, kept for lack of one, or kept because the carry failed.
-  carried_to_sibling?: number;
+  kept_undo_possible?: number;
   kept_has_progress?: number;
+  carried_to_sibling?: number;
   carry_failed?: number;
+  failed?: number;
+  truncated?: boolean;
   errors: string[];
-}> {
+}
+
+/** 202 answer of the purge and preview endpoints: the operation to follow. */
+export interface PurgeOperationHandle {
+  id: string;
+  type: string;
+  status: string;
+  dry_run: boolean;
+}
+
+async function startPurgeOperation(
+  path: string,
+  method: 'DELETE' | 'POST',
+  deleteFiles: boolean,
+  olderThanDays: number | undefined,
+  failure: string
+): Promise<PurgeOperationHandle> {
   const params = new URLSearchParams({
     delete_files: String(deleteFiles),
   });
   if (olderThanDays && olderThanDays > 0) {
     params.set('older_than_days', String(olderThanDays));
   }
-  const response = await apiFetch(
-    `${API_BASE}/audiobooks/purge-soft-deleted?${params.toString()}`,
-    {
-      method: 'DELETE',
-    }
-  );
+  const response = await apiFetch(`${API_BASE}${path}?${params.toString()}`, { method });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to purge soft-deleted books');
+    throw await buildApiError(response, failure);
   }
   const body = await response.json();
   return body.data;
+}
+
+/**
+ * Starts the purge of the soft-deleted books. The server queues the
+ * library.purge-soft-deleted operation and answers 202 with its id; the purge
+ * runs there. Follow it with awaitPurgeResult. (It used to run inside the
+ * request and return the counts.)
+ */
+export function purgeSoftDeletedBooks(
+  deleteFiles = false,
+  olderThanDays?: number
+): Promise<PurgeOperationHandle> {
+  return startPurgeOperation(
+    '/audiobooks/purge-soft-deleted',
+    'DELETE',
+    deleteFiles,
+    olderThanDays,
+    'Failed to purge soft-deleted books'
+  );
+}
+
+/**
+ * Starts a dry run of the purge: it classifies every trashed book exactly as
+ * the purge would and changes nothing. Follow it with awaitPurgeResult.
+ */
+export function previewPurgeSoftDeleted(
+  deleteFiles = false,
+  olderThanDays?: number
+): Promise<PurgeOperationHandle> {
+  return startPurgeOperation(
+    '/audiobooks/purge-soft-deleted/preview',
+    'POST',
+    deleteFiles,
+    olderThanDays,
+    'Failed to preview the purge'
+  );
+}
+
+/**
+ * Waits for a purge or preview operation and returns its result. `onProgress`
+ * receives the operation's progress message and counts while it runs. Rejects
+ * with the operation's own error text when it failed, and with an AbortError
+ * when `signal` aborts (the caller went away).
+ */
+export async function awaitPurgeResult(
+  operationId: string,
+  onProgress?: (p: { done: number; total: number; message: string }) => void,
+  opts?: { signal?: AbortSignal; intervalMs?: number }
+): Promise<PurgeResult> {
+  const op = await pollOperationV2(
+    operationId,
+    (o) =>
+      onProgress?.({
+        done: o.progress_current ?? 0,
+        total: o.progress_total ?? 0,
+        message: o.progress_message ?? '',
+      }),
+    opts?.intervalMs ?? 1000,
+    { signal: opts?.signal }
+  );
+  if (op.status !== 'completed') {
+    throw new Error(
+      op.error_message || `The purge operation ended as ${op.status}, without a result.`
+    );
+  }
+  const { result_data } = await getOperationResult(operationId);
+  if (result_data === null || typeof result_data !== 'object') {
+    throw new Error('The purge finished but stored no result.');
+  }
+  return result_data as PurgeResult;
 }
 
 export async function quarantineBook(bookId: string, reason?: string): Promise<void> {
