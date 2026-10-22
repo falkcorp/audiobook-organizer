@@ -3,9 +3,9 @@ name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-21 -->
 
 # Server Bootstrap
 
@@ -162,6 +162,7 @@ See [references/bootstrap-api.md](references/bootstrap-api.md) for full API deta
 - **"Token expired"**: Server restart required. The bootstrap token has a fixed 10-minute TTL from service startup.
 - **SSH connection fails**: Check server IP and network connectivity.
 - **Rate limited**: If you fail the token exchange 5 times in an hour, you'll be rate-limited. Wait or restart the service for a fresh token.
+- **Rate limited with only a few failures of your own**: the bootstrap exchange also has a service-wide ceiling shared by every caller, and loopback and local-network callers count toward it like anyone else (they used to be exempt). Other callers' failed attempts can use it up. The limiter is in memory, so restarting the service clears it; the fresh token the restart issues is what you need anyway.
 
 ## When to Use This Skill
 
