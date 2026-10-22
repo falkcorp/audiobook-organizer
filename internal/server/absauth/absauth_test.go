@@ -1,7 +1,7 @@
 // file: internal/server/absauth/absauth_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6e1b47a3-0d85-4c92-a731-58f0c3b6d9e2
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package absauth
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -505,7 +506,9 @@ func TestThrottle_SoftDelayIsProgressiveAndCapped(t *testing.T) {
 	}
 }
 
-func TestThrottle_ClearResetsBothCounters(t *testing.T) {
+// A success clears the account's own counter, and takes back from the source only
+// that source's failures against THAT account, at most SoftThreshold of them.
+func TestThrottle_ClearRefundsOnlyTheSameAccountsFailuresCapped(t *testing.T) {
 	tr := NewThrottle()
 	tr.SetSleep(func(time.Duration) {})
 	for range MaxFailuresPerIP {
@@ -515,11 +518,93 @@ func TestThrottle_ClearResetsBothCounters(t *testing.T) {
 		t.Fatal("expected block")
 	}
 	tr.Clear("acct", "3.3.3.3")
+	// 15 failures, at most SoftThreshold (5) taken back: 10 remain, so the source is
+	// no longer at its budget but has NOT been reset.
 	if tr.IPBlocked("3.3.3.3") {
-		t.Fatal("a successful login must clear the source IP's failure budget")
+		t.Fatal("5 refunded failures should take the source below its budget of 15")
 	}
-	if d := tr.RecordFailure("acct", "3.3.3.3"); d != 0 {
-		t.Fatalf("account soft counter should have been cleared, got delay %v", d)
+	for range MaxFailuresPerIP - (MaxFailuresPerIP - SoftThreshold) - 1 {
+		tr.RecordFailure("other", "3.3.3.3")
+	}
+	if tr.IPBlocked("3.3.3.3") {
+		t.Fatal("10 remaining + 4 more is still under 15")
+	}
+	tr.RecordFailure("other", "3.3.3.3")
+	if !tr.IPBlocked("3.3.3.3") {
+		t.Fatal("the source was reset by a success: it should be at 15 again (10 + 5)")
+	}
+	if tr.AccountFailures("acct") != 0 {
+		t.Fatal("the account's own counter must be cleared")
+	}
+}
+
+// The reported abuse: one valid account must not buy unlimited guesses at others
+// from one address. Failures against other accounts survive a success, however
+// many times the success is repeated.
+func TestThrottle_SuccessOnOneAccountDoesNotResetGuessesAtOthers(t *testing.T) {
+	tr := NewThrottle()
+	tr.SetSleep(func(time.Duration) {})
+	const src = "3.3.3.3"
+	for round := 0; ; round++ {
+		if round > 100 {
+			t.Fatal("the source was never blocked: a success keeps resetting it")
+		}
+		tr.RecordFailure("victim", src)
+		tr.RecordFailure("own", src)
+		tr.Clear("own", src) // log in to the attacker's own account
+		if tr.IPBlocked(src) {
+			break
+		}
+	}
+}
+
+// A mistyped password on the account you then log in to costs nothing in the end.
+func TestThrottle_ClearTakesBackOwnMistypes(t *testing.T) {
+	tr := NewThrottle()
+	tr.SetSleep(func(time.Duration) {})
+	for range 3 {
+		tr.RecordFailure("own", "5.5.5.5")
+	}
+	tr.Clear("own", "5.5.5.5")
+	tr.mu.Lock()
+	_, ok := tr.byIP.Get("5.5.5.5")
+	tr.mu.Unlock()
+	if ok {
+		t.Fatal("nothing but the account's own failures were counted, so the source entry should be gone")
+	}
+}
+
+// Failures in a source window that has since rolled over are not refunded into
+// the new window.
+func TestThrottle_ClearDoesNotRefundAnExpiredWindow(t *testing.T) {
+	tr := NewThrottle()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	tr.SetClock(func() time.Time { return now })
+	for range 4 {
+		tr.RecordFailure("own", "6.6.6.6")
+	}
+	now = now.Add(Window + time.Second)
+	tr.RecordFailure("other", "6.6.6.6") // a new window with one failure
+	tr.Clear("own", "6.6.6.6")
+	tr.mu.Lock()
+	c, _ := tr.byIP.Get("6.6.6.6")
+	tr.mu.Unlock()
+	if c == nil || c.count != 1 {
+		t.Fatalf("the new window's one failure must survive, got %+v", c)
+	}
+}
+
+func TestAccountKey_NormalisesAndBounds(t *testing.T) {
+	if got := AccountKey("  Alice "); got != "alice" {
+		t.Fatalf("got %q", got)
+	}
+	long := strings.Repeat("é", 200) // 2 bytes each
+	k := AccountKey(long)
+	if len(k) > 128 || !utf8.ValidString(k) {
+		t.Fatalf("len=%d valid=%v", len(k), utf8.ValidString(k))
+	}
+	if AccountKey("   ") != "" {
+		t.Fatal("blank stays blank")
 	}
 }
 

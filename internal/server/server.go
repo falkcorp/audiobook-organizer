@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.110.0
+// version: 2.111.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -47,6 +47,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
@@ -389,9 +390,13 @@ type Server struct {
 	// guestPolicy is the ONE shared client, built once on first accept;
 	// guestPolicyOverride, when set before the first accept, replaces it
 	// (tests only).
-	loginCeilingOnce    sync.Once
-	loginCeilingState   *loginCeiling           // shared by the web and ABS password logins (login_ceiling.go)
-	loginCeilingExempt  func(*gin.Context) bool // verified Access identity test, set by buildOAuthWiring
+	loginCeilingOnce   sync.Once
+	loginCeilingState  *loginCeiling           // shared by the web and ABS password logins (login_ceiling.go)
+	loginCeilingExempt func(*gin.Context) bool // verified Access identity test, set by buildOAuthWiring
+	// loginThrottleState is the ONE failed-login throttle (per-source budget,
+	// per-account soft delay) the web and ABS password logins share.
+	loginThrottleOnce   sync.Once
+	loginThrottleState  *absauth.Throttle
 	guestPolicyOnce     sync.Once
 	guestPolicy         guestPolicyEnsurer
 	guestPolicyErr      error

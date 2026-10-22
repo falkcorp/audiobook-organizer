@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -373,6 +373,10 @@ type Options struct {
 	// Nil, or an empty answer, keys on c.ClientIP() as before. It decides only the
 	// throttle bucket: audit events and sessions still record c.ClientIP().
 	ThrottleKey func(*gin.Context) string
+	// Throttle is the failed-login throttle. The server passes the one it also
+	// gives the web login, so both share their per-account and per-source
+	// counters. Nil builds a private one.
+	Throttle *absauth.Throttle
 }
 
 // itemsCountEntry is one cached filtered count and when it was computed.
@@ -578,12 +582,16 @@ func New(o Options) (*Handler, error) {
 	if name == "" {
 		name = "Books"
 	}
+	throttle := o.Throttle
+	if throttle == nil {
+		throttle = absauth.NewThrottle()
+	}
 	h := &Handler{
 		cfg:           o.Config,
 		store:         o.Store,
 		resolver:      o.Resolver,
 		userData:      o.UserData,
-		throttle:      absauth.NewThrottle(),
+		throttle:      throttle,
 		throttleKeyFn: o.ThrottleKey,
 		library:       o.Library,
 		identity:      o.Identity,

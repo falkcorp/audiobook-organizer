@@ -1,12 +1,16 @@
 // file: internal/server/login_ceiling.go
-// version: 3.0.0
+// version: 4.0.0
 // guid: bbbd655c-e45d-48ca-badb-d7b48a4d69e0
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -20,7 +24,7 @@ import (
 // Aggregate ceilings for password login (the web POST /api/v1/auth/login and
 // the Audiobookshelf-compatible POST /login).
 //
-// The per-visitor failure throttle (handlers.AuthHandler, absauth.Throttle) is
+// The per-visitor failure throttle (absauth.Throttle, shared by both logins) is
 // keyed on the visitor address (a public IPv6 visitor per /64), which is what
 // stops one caller locking out everyone behind a tunnel connector. It does
 // nothing against a caller with many addresses (a botnet): each address brings a
@@ -31,6 +35,13 @@ import (
 //     budget, and
 //   - global: failures through the whole service.
 //
+// Before anything is counted the middleware reads the login body itself, under
+// loginBodyLimit and a read deadline (loginBodyReadTimeout), and hands the
+// handler a buffered copy: a caller that opens a login and then stalls its body
+// holds a connection for a few seconds, not a ceiling slot, and never reaches the
+// handler's JSON decoding. Each visitor key may also have at most
+// maxLoginInFlightPerVisitor logins in the handlers at once.
+//
 // What a spent ceiling does is the part that matters, because a ceiling that
 // refused every login would hand an anonymous flood the power to lock out every
 // user, the owner included. So:
@@ -38,13 +49,14 @@ import (
 //   - Only FAILED logins (401) count. A slot is taken on entry, so parallel
 //     guesses cannot all pass a check made before any has failed, and is handed
 //     back for anything but a 401. A successful login (2xx) refunds only the
-//     failures the same visitor made against the SAME account (the handlers
-//     report the account with absauth.NoteLoginAccount), from the last 15
-//     minutes, at most absauth.SoftThreshold of them: someone who mistyped and
-//     got in does not leave their misses counting against everyone, but a caller
-//     with one valid account cannot log in to clear the count and keep guessing
-//     other accounts, whose failures stay counted at the visitor, connector and
-//     global levels.
+//     failures that SAME visitor made against the SAME account (the handlers
+//     report the account with absauth.NoteLoginAccount: the normalised submitted
+//     username), from the last 15 minutes, at most absauth.SoftThreshold of them.
+//     Someone who mistyped and got in does not leave their misses counting
+//     against everyone; a caller with one valid account cannot log in to clear
+//     the count and keep guessing at other accounts, whose failures stay counted
+//     at the visitor, connector and global levels. absauth.Throttle's per-source
+//     budget follows the same rule.
 //   - A request carrying a VERIFIED Cloudflare Access identity (a JWT verified
 //     against the team's JWKS and AUD, for an allow-listed verified email, the
 //     same checks CloudflareAccessAuth applies) is exempt: Cloudflare has
@@ -54,16 +66,18 @@ import (
 //   - Once a ceiling is spent, any other login is not refused here. It is
 //     admitted marked saturated (absauth.MarkLoginSaturated), and the handlers
 //     delay it before password work, progressively with the failures already on
-//     its account, up to a few seconds (the delay holds no lock). Only an account
-//     that has already failed absauth.SoftThreshold times, or a visitor past its
-//     own budget, is refused with 429. Admission of saturated requests is bounded
-//     PER VISITOR, never by one shared pool a flood could fill: a visitor holds at
-//     most maxSaturatedPerVisitor at once (one when the service-wide count is high),
-//     and a visitor that has already failed while saturated is refused outright
-//     (429, no delay) until the window ends. A fresh visitor's first attempt is
-//     therefore always admitted, whatever other visitors are doing. The only
-//     shared bound is maxSaturatedHard, which protects goroutines and is far above
-//     anything legitimate.
+//     the submitted username, up to a few seconds (the delay holds no lock). Only
+//     a username that has already failed absauth.SoftThreshold times, or a visitor
+//     past its own budget, is refused with 429, and the decision is the same
+//     whether or not the username exists. Admission of saturated requests is
+//     bounded PER VISITOR, never by one shared pool a flood could fill: a visitor
+//     holds at most maxSaturatedPerVisitor at once (one while the service holds
+//     maxSaturatedSoft saturated requests or more), and a visitor that has already
+//     failed while saturated, by a 401 or by the account refusal, is refused
+//     outright (429, no delay) until the window ends. A fresh visitor's first
+//     attempt is therefore always admitted, whatever other visitors are doing.
+//     The only shared bound is maxSaturatedHard, which protects goroutines and is
+//     far above anything legitimate.
 //
 // The cost that remains: while a ceiling is spent, a stranger's guesses at one
 // account can push that account over its soft threshold, which then refuses even
@@ -72,17 +86,23 @@ import (
 // is in memory, so a restart clears it. POST /auth/refresh is deliberately
 // outside the ceilings: it does no password work, and a server restart that
 // invalidates every refresh token makes every client fail once, which must not
-// read as an attack.
+// read as an attack. HTTP Basic auth on the API is a separate path and is not
+// throttled here.
 const (
 	loginConnectorCeiling = 10 * absauth.MaxFailuresPerIP
 	loginGlobalCeiling    = 500
 	loginCeilingWindow    = absauth.Window
+	// loginBodyLimit caps a login body (the real one is a few hundred bytes).
+	loginBodyLimit = 4 << 10
+	// maxLoginInFlightPerVisitor is how many logins one visitor key may have in the
+	// handlers at once, saturated or not.
+	maxLoginInFlightPerVisitor = 4
 	// maxSaturatedPerVisitor is how many saturated (delayed) requests one visitor
 	// key may have in the handlers at once.
 	maxSaturatedPerVisitor = 2
-	// maxSaturatedSoft is the service-wide saturated count above which a visitor
-	// is held to one request at a time. A fresh visitor (none in flight) is still
-	// admitted.
+	// maxSaturatedSoft is the service-wide saturated count at or above which a
+	// visitor is held to one saturated request at a time. A fresh visitor (none in
+	// flight) is still admitted.
 	maxSaturatedSoft = 256
 	// maxSaturatedHard bounds the saturated requests held at once, for goroutine
 	// safety only.
@@ -92,6 +112,10 @@ const (
 	// maxLoginVisitorAccounts bounds the accounts tracked per visitor.
 	maxLoginVisitorAccounts = 16
 )
+
+// loginBodyReadTimeout bounds how long the middleware waits for a login body. A
+// variable so tests can shorten it.
+var loginBodyReadTimeout = 5 * time.Second
 
 type loginCeilingBucket struct {
 	count  int
@@ -120,15 +144,16 @@ type loginFailure struct {
 
 // loginVisitor is what the ceiling remembers about one visitor key.
 type loginVisitor struct {
-	first time.Time
-	// byAccount are the refundable failures per account id, newest last, at
-	// most absauth.SoftThreshold each. Failures against an unknown username are
-	// not recorded: no success can be "the same account".
+	// lastSeen is the last write; the table is in write order, so it decides expiry.
+	lastSeen time.Time
+	// byAccount are the refundable failures per account key, newest last, at most
+	// absauth.SoftThreshold each. A failure with no account key is not recorded.
 	byAccount map[string][]loginFailure
 	// satFailedAt is when the visitor last failed a login while saturated.
 	satFailedAt time.Time
-	// satInFlight is how many saturated requests of the visitor are in the handlers.
-	satInFlight int
+	// inFlight is how many logins of the visitor are in the handlers;
+	// satInFlight how many of those are saturated.
+	inFlight, satInFlight int
 }
 
 type loginCeiling struct {
@@ -136,11 +161,19 @@ type loginCeiling struct {
 	now      func() time.Time
 	global   loginCeilingBucket
 	conns    map[string]*loginCeilingBucket
-	visitors map[string]*loginVisitor
+	visitors *absauth.LRU[*loginVisitor]
 	// exempt reports whether a request carries a verified, allow-listed Cloudflare
-	// Access identity. nil: nothing is exempt.
+	// Access identity. nil: nothing is exempt. Read on every request.
 	exempt    func(*gin.Context) bool
 	saturated int // saturated requests currently in the handlers; under mu
+}
+
+// loginThrottle returns the one failed-login throttle both password logins share,
+// so a guess at an account through either door counts toward the same
+// per-account counter and the same per-source budget.
+func (s *Server) loginThrottle() *absauth.Throttle {
+	s.loginThrottleOnce.Do(func() { s.loginThrottleState = absauth.NewThrottle() })
+	return s.loginThrottleState
 }
 
 // loginCeiling returns the one ceiling both password logins share, so the global
@@ -148,13 +181,18 @@ type loginCeiling struct {
 func (s *Server) loginCeiling() *loginCeiling {
 	s.loginCeilingOnce.Do(func() {
 		s.loginCeilingState = newLoginCeiling()
-		s.loginCeilingState.exempt = s.loginCeilingExempt
+		// Looked up per request, not copied here: buildOAuthWiring sets
+		// loginCeilingExempt, and this may run first.
+		s.loginCeilingState.exempt = func(c *gin.Context) bool {
+			fn := s.loginCeilingExempt
+			return fn != nil && fn(c)
+		}
 	})
 	return s.loginCeilingState
 }
 
 func newLoginCeiling() *loginCeiling {
-	return &loginCeiling{now: time.Now, conns: map[string]*loginCeilingBucket{}, visitors: map[string]*loginVisitor{}}
+	return &loginCeiling{now: time.Now, conns: map[string]*loginCeilingBucket{}, visitors: absauth.NewLRU[*loginVisitor](maxLoginVisitors)}
 }
 
 // reserve takes a slot in the global bucket and, when connKey is not empty, in
@@ -224,31 +262,28 @@ func (l *loginCeiling) release(t loginCeilingTicket) {
 	l.releaseLocked(t, 1)
 }
 
-// visitorLocked returns the state of visitor, creating it (and evicting the
-// oldest visitor at the bound). Caller holds l.mu.
+// visitorLocked returns the state of visitor, creating it, and marks it the most
+// recently written entry. Entries nobody has written for a whole window (and
+// with nothing in flight) are swept from the cold end first, so the table holds
+// what is live rather than filling to the bound and evicting; at the bound the
+// least recently written entry goes, in O(1). Caller holds l.mu.
 func (l *loginCeiling) visitorLocked(visitor string) *loginVisitor {
-	v := l.visitors[visitor]
-	if v == nil {
-		if len(l.visitors) >= maxLoginVisitors {
-			var oldestKey string
-			var oldest time.Time
-			for k, o := range l.visitors {
-				if oldestKey == "" || o.first.Before(oldest) {
-					oldestKey, oldest = k, o.first
-				}
-			}
-			delete(l.visitors, oldestKey)
-		}
-		v = &loginVisitor{first: l.now(), byAccount: map[string][]loginFailure{}}
-		l.visitors[visitor] = v
+	now := l.now()
+	l.visitors.Sweep(func(v *loginVisitor) bool {
+		return v.inFlight == 0 && now.Sub(v.lastSeen) > loginCeilingWindow
+	})
+	v, ok := l.visitors.Get(visitor)
+	if !ok {
+		v = &loginVisitor{byAccount: map[string][]loginFailure{}}
 	}
+	v.lastSeen = now
+	l.visitors.Put(visitor, v)
 	return v
 }
 
 // failed records that the request holding t was a failed login by visitor
-// against account (an id; "" for an unknown username): its slot stays spent and,
-// for a known account, is remembered so a later success on that same account can
-// take it back.
+// against account (the normalised submitted username): its slot stays spent and
+// is remembered so a later success on that same account can take it back.
 func (l *loginCeiling) failed(visitor, account string, t loginCeilingTicket) {
 	if visitor == "" || account == "" || !t.held {
 		return
@@ -274,8 +309,11 @@ func (l *loginCeiling) succeeded(visitor, account string, t loginCeilingTicket) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.releaseLocked(t, 1)
-	v := l.visitors[visitor]
-	if v == nil || account == "" {
+	if account == "" {
+		return
+	}
+	v, ok := l.visitors.Get(visitor)
+	if !ok {
 		return
 	}
 	now := l.now()
@@ -287,16 +325,39 @@ func (l *loginCeiling) succeeded(visitor, account string, t loginCeilingTicket) 
 	delete(v.byAccount, account)
 }
 
-// admitSaturated decides whether a saturated request from visitor may enter the
-// handlers (where it will be delayed). It refuses a visitor that already failed
-// while saturated in this window, one with maxSaturatedPerVisitor already in
-// flight (one when the service-wide count is above maxSaturatedSoft), and,
-// for goroutine safety only, anything past maxSaturatedHard. A fresh visitor
-// is refused only by the hard bound. The returned func must be called when the
-// request ends.
-func (l *loginCeiling) admitSaturated(visitor string) (release func(), ok bool) {
+// enter admits one login from visitor into the handlers, refusing the visitor's
+// fifth concurrent one (maxLoginInFlightPerVisitor). The returned func must be
+// called when the request ends.
+func (l *loginCeiling) enter(visitor string) (leave func(), ok bool) {
 	if visitor == "" {
 		visitor = "?" // no parseable address: one shared key
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	v := l.visitorLocked(visitor)
+	if v.inFlight >= maxLoginInFlightPerVisitor {
+		return nil, false
+	}
+	v.inFlight++
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if cur, ok := l.visitors.Get(visitor); ok && cur == v {
+			v.inFlight--
+		}
+	}, true
+}
+
+// admitSaturated decides whether a saturated request from visitor (already
+// counted by enter) may go on to be delayed in the handlers. It refuses a
+// visitor that already failed while saturated in this window, one with
+// maxSaturatedPerVisitor already in flight (one when the service-wide count is
+// at or above maxSaturatedSoft), and, for goroutine safety only, anything past
+// maxSaturatedHard. A fresh visitor is refused only by the hard bound. The
+// returned func must be called when the request ends.
+func (l *loginCeiling) admitSaturated(visitor string) (release func(), ok bool) {
+	if visitor == "" {
+		visitor = "?"
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -320,7 +381,7 @@ func (l *loginCeiling) admitSaturated(visitor string) (release func(), ok bool) 
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		l.saturated--
-		if cur := l.visitors[visitor]; cur == v {
+		if cur, ok := l.visitors.Get(visitor); ok && cur == v {
 			v.satInFlight--
 		}
 	}, true
@@ -349,6 +410,44 @@ func loginCeilingConnectorKey(c *gin.Context) string {
 	return ""
 }
 
+// readLoginBody reads the request body under loginBodyLimit and
+// loginBodyReadTimeout and puts a buffered copy back, so what the handler decodes
+// is bytes already in memory. It answers and aborts itself when the body is too
+// large (413), not delivered in time (408) or unreadable (400), and reports
+// whether the request may go on.
+func readLoginBody(c *gin.Context) bool {
+	if c.Request.Body == nil || c.Request.Body == http.NoBody {
+		return true
+	}
+	fail := func(status int, msg, code string) bool {
+		// The body did not reach EOF, so the read deadline stays in force (it also
+		// bounds the drain net/http does before answering). HTTP/1 closes the
+		// connection after the answer; HTTP/2 and HTTP/3 reset just the stream.
+		if c.Request.ProtoMajor == 1 {
+			c.Header("Connection", "close")
+		}
+		httputil.RespondWithError(c, status, msg, code)
+		c.Abort()
+		return false
+	}
+	if c.Request.ContentLength > loginBodyLimit {
+		return fail(http.StatusRequestEntityTooLarge, "request body too large", "PAYLOAD_TOO_LARGE")
+	}
+	restore := setBodyReadDeadline(c, loginBodyReadTimeout)
+	buf, err := io.ReadAll(io.LimitReader(c.Request.Body, loginBodyLimit+1))
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return fail(http.StatusRequestTimeout, "timed out reading the request body", "REQUEST_TIMEOUT")
+	case err != nil:
+		return fail(http.StatusBadRequest, "could not read the request body", "BAD_REQUEST")
+	case len(buf) > loginBodyLimit:
+		return fail(http.StatusRequestEntityTooLarge, "request body too large", "PAYLOAD_TOO_LARGE")
+	}
+	restore() // EOF reached: a keep-alive connection's next request is unaffected
+	c.Request.Body = io.NopCloser(bytes.NewReader(buf))
+	return true
+}
+
 // middleware applies the ceilings to the requests match accepts (all of them
 // when match is nil).
 func (l *loginCeiling) middleware(match func(*gin.Context) bool) gin.HandlerFunc {
@@ -357,15 +456,28 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool) gin.HandlerFunc
 			c.Next()
 			return
 		}
+		// Body first, before anything is reserved or counted: a stalled or oversized
+		// body must not hold a ceiling slot or reach the handler.
+		if !readLoginBody(c) {
+			return
+		}
 		if l.exempt != nil && l.exempt(c) {
 			c.Next()
 			return
 		}
 		visitor := loginThrottleKey(c)
+		leave, entered := l.enter(visitor)
+		if !entered {
+			c.Header("Retry-After", "5")
+			httputil.RespondWithError(c, http.StatusTooManyRequests, "too many simultaneous login attempts — try again shortly", "TOO_MANY_REQUESTS")
+			c.Abort()
+			return
+		}
+		defer leave()
 		ticket, ok, warn := l.reserve(loginCeilingConnectorKey(c))
 		if !ok {
 			if warn != "" {
-				clientTrustLog.Warn("login failure ceiling reached (%s): further password logins are delayed, and refused for an account past %d failures of its own, until its window ends", warn, absauth.SoftThreshold)
+				clientTrustLog.Warn("login failure ceiling reached (%s): further password logins are delayed, and refused for a username past %d failures of its own, until its window ends", warn, absauth.SoftThreshold)
 			}
 			done, admitted := l.admitSaturated(visitor)
 			if !admitted {
@@ -377,7 +489,9 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool) gin.HandlerFunc
 			defer done()
 			absauth.MarkLoginSaturated(c)
 			c.Next()
-			if c.Writer.Status() == http.StatusUnauthorized {
+			// A 401 and the handler's account refusal are both failures while
+			// saturated: either way this visitor gets no further attempt this window.
+			if c.Writer.Status() == http.StatusUnauthorized || absauth.LoginSaturationRefused(c) {
 				l.saturatedFailed(visitor)
 			}
 			return

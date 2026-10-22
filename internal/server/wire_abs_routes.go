@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -573,6 +573,8 @@ func (s *Server) wireABSRoutes() {
 		Bookmarks: bookmarkStore,
 		// The failure throttle's bucket is the tunnel visitor, not the connector.
 		ThrottleKey: loginThrottleKey,
+		// One throttle for both password logins (see s.loginThrottle).
+		Throttle:    s.loginThrottle(),
 		AliasUses:   aliasUses,
 		CoverRoot:   config.AppConfig.RootDir,
 		LibraryName: "Books",
