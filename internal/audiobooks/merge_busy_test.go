@@ -1,5 +1,5 @@
 // file: internal/audiobooks/merge_busy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c4f7a19-3e8d-4b52-a6d1-7e92b5c08f34
 // last-edited: 2026-10-22
 
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -81,4 +82,38 @@ func TestInteractiveActions_AnswerMergeBusyWhileACombineRuns(t *testing.T) {
 	b, _ = store.GetBookByID("trashed")
 	require.NotNil(t, b)
 	assert.False(t, b.IsSoftDeleted())
+}
+
+// The batch endpoint is a synchronous request too: its restores and hard
+// deletes wait once (not once per item) for a running combine, then every
+// lock-taking item answers merge.ErrMergeBusy and nothing is changed.
+func TestBatchOperations_AnswerMergeBusyOncePerBatchWhileACombineRuns(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	for _, id := range []string{"t1", "t2", "t3", "t4"} {
+		softDeleted(t, store, id, "")
+	}
+	_, err := store.CreateBook(&database.Book{ID: "live", Title: "live"})
+	require.NoError(t, err)
+	bs := batch.NewBatchService(store, batch.WithTrashPurger(svc))
+	holdMergeLock(t)
+	merge.InteractiveMergeLockWait = 300 * time.Millisecond
+
+	start := time.Now()
+	resp := bs.ExecuteOperations(&batch.BatchOperationsRequest{Operations: []batch.BatchOperationItem{
+		{ID: "t1", Action: "delete", HardDelete: true},
+		{ID: "t2", Action: "delete", HardDelete: true},
+		{ID: "t3", Action: "restore"},
+		{ID: "live", Action: "delete", HardDelete: true},
+		{ID: "t4", Action: "update", Updates: map[string]any{"marked_for_deletion": false}},
+	}})
+	elapsed := time.Since(start)
+	require.Len(t, resp.Results, 5)
+	assert.Equal(t, 0, resp.Success, "%+v", resp)
+	for _, r := range resp.Results {
+		assert.Contains(t, r.Error, "merge or combine is running", "%+v", r)
+	}
+	assert.Less(t, elapsed, 800*time.Millisecond, "one bounded wait for the batch, not one per item")
+	for _, id := range []string{"t1", "t2", "t3", "t4", "live"} {
+		assert.False(t, bookGone(t, store, id), id)
+	}
 }
