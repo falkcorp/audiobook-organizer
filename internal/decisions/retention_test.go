@@ -1,7 +1,7 @@
 // file: internal/decisions/retention_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c8e5b17-94d0-4f63-a1b2-7e03d6c58a49
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package decisions_test
 
@@ -358,6 +358,10 @@ func otherSweepEntries(ctx context.Context) []retentionEntry {
 			run: func(t *testing.T, kv *database.PebbleStore) (int, error) {
 				// The purge's book_file check is fail-closed until memdb serves.
 				kv.WaitForWarmup()
+				// The undo hold refuses a purge until the by-book index is trusted.
+				res0, err := kv.EnsureOpChangeByBookIndex(ctx, nil)
+				require.NoError(t, err)
+				require.True(t, res0.Trusted, "ledger index not trusted: %+v", res0)
 				prev := config.AppConfig.RootDir
 				t.Cleanup(func() { config.AppConfig.RootDir = prev })
 				config.AppConfig.RootDir = t.TempDir()

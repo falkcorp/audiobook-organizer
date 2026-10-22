@@ -1,5 +1,5 @@
 // file: internal/server/purge_soft_deleted_op_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a1c8e53-0d72-4f9b-b3e4-9c5a2d7f1e08
 // last-edited: 2026-10-22
 
@@ -58,6 +58,7 @@ func purgeOpWorld(t *testing.T, trashed ...string) (*Server, *database.PebbleSto
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	st.WaitForWarmup()
+	ensureLedgerIndexTrusted(t, st)
 	t.Cleanup(func() { _ = st.Close() })
 	for _, title := range trashed {
 		marked := true
@@ -125,7 +126,7 @@ func TestPurgeSoftDeletedOp_LivePurgeStoresResultAndLogsSummary(t *testing.T) {
 	line := rep.logs[0]
 	assert.True(t, strings.HasPrefix(line, "Purged 1 of 2 soft-deleted books"), line)
 	assert.Contains(t, line, "kept 1: still own book_file rows")
-	assert.Contains(t, line, "undo of a combine still possible")
+	assert.Contains(t, line, "an undo (combine, operation or auto-merge) can still run")
 
 	require.NotEmpty(t, rep.progress)
 	assert.Equal(t, [2]int{2, 2}, rep.progress[len(rep.progress)-1])
@@ -151,4 +152,13 @@ func TestPurgeResult_CappedKeepsCountsAndMarksTruncation(t *testing.T) {
 	assert.Equal(t, 500, c.SkippedOwnsFiles)
 	assert.Len(t, r.SkippedOwnsFilesIDs, 500, "the original is not modified")
 	assert.False(t, (&audiobookspkg.PurgeResult{SkippedOwnsFilesIDs: []string{"x"}}).Capped(5).Truncated)
+}
+
+// ensureLedgerIndexTrusted does what the boot ensure does, so a test that
+// purges on a real store is not refused by the fail-closed undo hold.
+func ensureLedgerIndexTrusted(t testing.TB, st *database.PebbleStore) {
+	t.Helper()
+	res, err := st.EnsureOpChangeByBookIndex(context.Background(), nil)
+	require.NoError(t, err)
+	require.True(t, res.Trusted, "ledger index not trusted after ensure: %+v", res)
 }

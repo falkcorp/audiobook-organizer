@@ -49,12 +49,12 @@ type recorders struct {
 }
 
 type testDeps struct {
-	store    *duplicatesmocks.MockDuplicatesStore
-	reg      *duplicatesmocks.MockOperationsRegistry
-	merge    *duplicatesmocks.MockMergeService
-	metaSvc  *duplicatesmocks.MockMetadataFetchService
-	cache    *cache.Cache[gin.H]
-	rec      *recorders
+	store   *duplicatesmocks.MockDuplicatesStore
+	reg     *duplicatesmocks.MockOperationsRegistry
+	merge   *duplicatesmocks.MockMergeService
+	metaSvc *duplicatesmocks.MockMetadataFetchService
+	cache   *cache.Cache[gin.H]
+	rec     *recorders
 }
 
 type cfg struct {
