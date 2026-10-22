@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.57.0
+// version: 4.58.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -896,9 +896,12 @@ func (s *Server) startCacheWarmers() {
 // already accepts connections (the kernel queues them before the first
 // Accept), which is when Start sends READY=1 to systemd.
 func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
+	// Every listener's handler is wrapped by the peer allow-list, outside gin,
+	// so a peer that is not allowed never reaches routing (peer_allowlist.go).
+	warnPeerAllowListOpen()
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
-		Handler:           s.router,
+		Handler:           s.peerGatedHandler(),
 		ReadHeaderTimeout: cfg.ReadTimeout, // Only limit header read, not body (allows large uploads)
 		WriteTimeout:      cfg.WriteTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
@@ -988,7 +991,7 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 		if cfg.HTTP3Port != "" {
 			s.http3Server = &http3.Server{
 				Addr:      fmt.Sprintf("%s:%s", cfg.Host, cfg.HTTP3Port),
-				Handler:   s.router,
+				Handler:   s.peerGatedHandler(),
 				TLSConfig: tlsConfig,
 			}
 			lifecycleLog.Info("Starting HTTP/3 (QUIC) server on UDP %s:%s", cfg.Host, cfg.HTTP3Port)
@@ -1014,7 +1017,7 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 			lifecycleLog.Info("Serving HTTP->HTTPS redirect on %s (to port %s)", redirectLn.Addr(), httpsPort)
 			redirectServer := &http.Server{
 				Addr:    redirectAddr,
-				Handler: newHTTPSRedirectHandler(cfg.Host, httpsPort),
+				Handler: newPeerAllowListHandler(newHTTPSRedirectHandler(cfg.Host, httpsPort)),
 			}
 			s.httpRedirectServer = redirectServer
 			go func() {
@@ -1039,6 +1042,12 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 		}()
 	}
 	return nil
+}
+
+// peerGatedHandler is the handler every serving listener uses: the router
+// behind the peer allow-list.
+func (s *Server) peerGatedHandler() http.Handler {
+	return newPeerAllowListHandler(s.router)
 }
 
 // bindMainListener binds s.httpServer.Addr and records the bound address in

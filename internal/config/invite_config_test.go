@@ -1,7 +1,7 @@
 // file: internal/config/invite_config_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package config
 
@@ -36,6 +36,7 @@ func setInviteEnv(t *testing.T) {
 	t.Setenv("CF_GUESTS_POLICY_ID", "11111111-2222-3333-4444-555555555555")
 	t.Setenv("CF_POLICY_API_TOKEN", testCFPolicyToken)
 	t.Setenv("TUNNEL_CONNECTOR_ADDRS", " 192.0.2.10, 198.51.100.7 ")
+	t.Setenv("ALLOWED_PEER_CIDRS", " 192.0.2.0/24, 198.51.100.7 ")
 }
 
 func TestInviteConfig_DefaultsAreInert(t *testing.T) {
@@ -51,6 +52,9 @@ func TestInviteConfig_DefaultsAreInert(t *testing.T) {
 	}
 	if c.TunnelConnectorAddrs != "" {
 		t.Fatalf("tunnel_connector_addrs default = %q, want empty (no trusted connector)", c.TunnelConnectorAddrs)
+	}
+	if c.AllowedPeerCIDRs != "" {
+		t.Fatalf("allowed_peer_cidrs default = %q, want empty (allow every peer, with a startup warning)", c.AllowedPeerCIDRs)
 	}
 }
 
@@ -73,6 +77,9 @@ func TestInviteConfig_EnvReachesConfigAndSurvivesBlobOverlay(t *testing.T) {
 	}
 	if c.TunnelConnectorAddrs != "192.0.2.10, 198.51.100.7" {
 		t.Fatalf("TunnelConnectorAddrs = %q, want the trimmed env value", c.TunnelConnectorAddrs)
+	}
+	if c.AllowedPeerCIDRs != "192.0.2.0/24, 198.51.100.7" {
+		t.Fatalf("AllowedPeerCIDRs = %q, want the trimmed env value", c.AllowedPeerCIDRs)
 	}
 }
 
@@ -140,7 +147,7 @@ func TestInviteConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "invite_cf_access_client_secret", "tunnel_connector_addrs"} {
+	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "invite_cf_access_client_secret", "tunnel_connector_addrs", "allowed_peer_cidrs"} {
 		status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 			key:         "x",
 			"log_level": "warn",
