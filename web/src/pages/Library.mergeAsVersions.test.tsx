@@ -1,12 +1,14 @@
 // file: web/src/pages/Library.mergeAsVersions.test.tsx
-// version: 1.0.0
+// version: 1.2.0
 // guid: 4d8b2e61-0a73-4f95-b1c6-9e3f7a5d2c08
 // last-edited: 2026-10-22
 
 /**
  * Library "Merge as Versions": the dialog states which copy is kept, trashed
- * rows in the selection are left out of the request, and the toast reports
- * what the merge OPERATION did (it used to say "Merged" when the request was
+ * rows in the selection are left out of the request, the click returns once the
+ * merge is queued (the dialog closes, the user keeps working, the books are
+ * locked against a second submit), and the toast reports what the merge
+ * OPERATION did when it ends (it used to say "Merged" when the request was
  * merely queued, so a failed merge or one that skipped a trashed loser looked
  * like a success).
  */
@@ -156,6 +158,25 @@ const lastToast = () => {
   return list[list.length - 1];
 };
 
+/** The merge runs in the background: wait for its outcome toast, not the "started" one. */
+async function waitForOutcome() {
+  await waitFor(() => expect(lastToast()?.message).toBeDefined());
+  await waitFor(() => expect(lastToast().message).not.toMatch(/started/));
+}
+
+/** The poll of the merge operation, settled by the test. */
+function deferPoll() {
+  const ctl = { finish: (_status: string) => {}, fail: (_e: Error) => {} };
+  vi.mocked(api.pollOperationV2).mockImplementation(
+    () =>
+      new Promise((resolve, reject) => {
+        ctl.finish = (status) => resolve({ id: 'op-m', status } as never);
+        ctl.fail = reject;
+      })
+  );
+  return ctl;
+}
+
 describe('merge as versions', () => {
   beforeEach(() => {
     useAppStore.setState({ notifications: [] });
@@ -176,19 +197,66 @@ describe('merge as versions', () => {
     );
   });
 
-  it('reports a failed merge operation with its reason, not "Merged"', async () => {
+  it('a failed merge with no readable result never says "Nothing was merged"', async () => {
     vi.mocked(api.pollOperationV2).mockResolvedValue({
       id: 'op-m',
       status: 'failed',
       error_message: 'keep book is soft-deleted',
     } as never);
+    vi.mocked(api.getOperationResult).mockRejectedValue(new Error('no result'));
     const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
     await clickMerge(user, dialog);
-    await waitFor(() => expect(lastToast()).toBeDefined());
+    await waitForOutcome();
     expect(lastToast().severity).toBe('error');
     expect(lastToast().message).toContain('keep book is soft-deleted');
+    expect(lastToast().message).toContain('Check the operation to see what it did.');
     expect(lastToast().message).not.toMatch(/^Merged/);
-    expect(vi.mocked(api.getOperationResult)).not.toHaveBeenCalled();
+    expect(lastToast().message).not.toContain('Nothing was merged');
+    // The result is fetched for a failed op too.
+    expect(vi.mocked(api.getOperationResult)).toHaveBeenCalledWith('op-m');
+  });
+
+  it('a partial failure toast says the merge may have partly applied', async () => {
+    vi.mocked(api.pollOperationV2).mockResolvedValue({
+      id: 'op-m',
+      status: 'failed',
+      error_message: 'clean-up failed',
+    } as never);
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: {
+        keep_id: 'id-1',
+        merged: 0,
+        failed: true,
+        partial: true,
+        error: 'clean-up of Second Book failed',
+      },
+    });
+    const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
+    await clickMerge(user, dialog);
+    await waitForOutcome();
+    expect(lastToast().severity).toBe('error');
+    expect(lastToast().message).toContain('failed part-way and may have partly applied');
+    expect(lastToast().message).toContain('clean-up of Second Book failed');
+  });
+
+  it('a merge refused before any write says nothing was merged, with the reason', async () => {
+    vi.mocked(api.pollOperationV2).mockResolvedValue({ id: 'op-m', status: 'failed' } as never);
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: {
+        keep_id: 'id-1',
+        merged: 0,
+        failed: true,
+        partial: false,
+        error: 'keep book is soft-deleted',
+      },
+    });
+    const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
+    await clickMerge(user, dialog);
+    await waitForOutcome();
+    expect(lastToast().severity).toBe('error');
+    expect(lastToast().message).toBe(
+      'The merge was refused before changing anything: keep book is soft-deleted. Nothing was merged.'
+    );
   });
 
   it('names the skipped loser and why when the operation skipped one', async () => {
@@ -205,7 +273,7 @@ describe('merge as versions', () => {
     });
     const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
     await clickMerge(user, dialog);
-    await waitFor(() => expect(lastToast()).toBeDefined());
+    await waitForOutcome();
     expect(lastToast().severity).toBe('info');
     expect(lastToast().message).toContain('Nothing was merged');
     expect(lastToast().message).toContain('"Second Book"');
@@ -226,5 +294,89 @@ describe('merge as versions', () => {
     await waitFor(() => expect(vi.mocked(api.linkBooks)).toHaveBeenCalledWith('id-1', ['id-2']));
     await waitFor(() => expect(lastToast().message).toBe('Merged 1 book as versions.'));
     expect(lastToast().severity).toBe('success');
+  });
+  it('closes the dialog on the 202 before the operation ends, then reports the real outcome', async () => {
+    const poll = deferPoll();
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: { keep_id: 'id-1', merged: 1, no_op: false },
+    });
+    const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
+    const loadsBefore = vi.mocked(api.getBooks).mock.calls.length;
+    await clickMerge(user, dialog);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /merge as versions/i })).toBeNull()
+    );
+    expect(lastToast().message).toContain('Merge started');
+    expect(lastToast().message).toContain('in the background');
+    expect(lastToast().severity).toBe('info');
+    expect(lastToast().action?.label).toBe('View operation');
+    expect(vi.mocked(api.getOperationResult)).not.toHaveBeenCalled();
+
+    // Selection kept; the same books cannot be submitted again meanwhile.
+    const mergeBtn = screen.getByRole('button', { name: /merge as versions/i });
+    expect(mergeBtn).toBeDisabled();
+    expect(screen.getByRole('button', { name: /combine into one book/i })).toBeDisabled();
+    expect(mergeBtn.closest('span')).toHaveAttribute(
+      'title',
+      expect.stringMatching(/still running/)
+    );
+
+    poll.finish('completed');
+    await waitFor(() => expect(lastToast().message).toBe('Merged 1 book as versions.'));
+    expect(lastToast().severity).toBe('success');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /merge as versions/i })).toBeNull()
+    );
+    expect(vi.mocked(api.getBooks).mock.calls.length).toBeGreaterThan(loadsBefore);
+  });
+
+  it('a failed operation is toasted as an error and leaves the selection for a retry', async () => {
+    vi.mocked(api.pollOperationV2).mockResolvedValue({ id: 'op-m', status: 'failed' } as never);
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: { keep_id: 'id-1', merged: 0, failed: true, partial: false, error: 'refused' },
+    });
+    const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
+    await clickMerge(user, dialog);
+    await waitForOutcome();
+    expect(lastToast().severity).toBe('error');
+    expect(lastToast().message).not.toMatch(/^Merged/);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /merge as versions/i })).toBeEnabled()
+    );
+  });
+
+  it('when the operation cannot be followed it says the outcome is unknown and frees the books', async () => {
+    const poll = deferPoll();
+    const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
+    await clickMerge(user, dialog);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /merge as versions/i })).toBeDisabled()
+    );
+    poll.fail(new Error('network down'));
+    await waitFor(() => expect(lastToast().message).toContain('what it did is unknown'));
+    expect(lastToast().severity).toBe('warning');
+    expect(lastToast().message).toContain('op-m');
+    expect(lastToast().message).not.toMatch(/Merged/);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /merge as versions/i })).toBeEnabled()
+    );
+  });
+
+  it('a refusal from the request (409) keeps the dialog open with the reason', async () => {
+    vi.mocked(api.linkBooks).mockRejectedValue(
+      new api.ApiError('keep book "Test Book" is in the trash', 409)
+    );
+    const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
+    await clickMerge(user, dialog);
+    await waitFor(() => expect(lastToast()?.severity).toBe('error'));
+    expect(lastToast().message).toContain('is in the trash');
+    expect(screen.getByRole('dialog', { name: /merge as versions/i })).toBeInTheDocument();
+    expect(vi.mocked(api.pollOperationV2)).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === 'Merge')
+      ).toBeEnabled()
+    );
   });
 });

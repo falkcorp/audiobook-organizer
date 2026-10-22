@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e2f7a1c4-6b90-4d38-8a5e-1c3f9d2b7e60
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 //
 // READ-ONLY book_file iTunes-PID integrity census. A PID is minted unique per
 // book_file (TrackProvisioner.Provision → GeneratePIDHex → crypto/rand), so the
@@ -29,6 +29,7 @@
 package itunes
 
 import (
+	"fmt"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -48,6 +49,10 @@ type PIDIntegrityStore interface {
 	// GetBookByID resolves a book by id, INCLUDING soft-deleted books (needed to
 	// read a merge-loser's IsPrimaryVersion / MarkedForDeletion / MergedIntoBookID).
 	GetBookByID(id string) (*database.Book, error)
+	// GetBooksByVersionGroup returns the members of a version group (including
+	// soft-deleted ones). The census uses it to tell a grouped version, whose
+	// group has a live primary, from a version/merge leftover.
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 }
 
 // pidOwner is one book_file that carries a given PID, plus its book's status.
@@ -207,11 +212,14 @@ func ComputePIDIntegrity(store PIDIntegrityStore, itlPath string) (*PIDIntegrity
 type OrphanBucket string
 
 const (
-	// BucketHealthy: the track's PID is owned by a live PRIMARY book_file. Fine.
+	// BucketHealthy: the track's PID is owned by a live PRIMARY book_file, or by
+	// a live non-primary version whose version group's primary is live (a
+	// grouped version: the group still lists the track's book). Fine.
 	BucketHealthy OrphanBucket = "healthy"
-	// BucketStaleOwner: owned by a book_file whose book is soft-deleted or
-	// non-primary — a version/merge leftover, but only an orphan if provenance
-	// attributes it to a merge loser.
+	// BucketStaleOwner: owned by a book_file whose book is soft-deleted, or is
+	// non-primary and outside any version group with a live primary — a
+	// version/merge leftover, but only an orphan if provenance attributes it to
+	// a merge loser.
 	BucketStaleOwner OrphanBucket = "stale_owner"
 	// BucketNoLiveOwner: NO live book_file carries the PID. Unattributable — this
 	// is EITHER a user's directly-imported non-audiobook track (hands-off) OR a
@@ -371,6 +379,50 @@ func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journal
 		return primary && !softDeleted
 	}
 
+	// A live non-primary owner is a grouped version, not a leftover, when its
+	// version group still has a live primary: a merge that crowns an organized
+	// member over an iTunes-linked survivor leaves exactly this shape. Resolve
+	// each distinct group once, concurrently (a per-group store read).
+	groupIDs := make(map[string]struct{})
+	for _, b := range books {
+		if b != nil && !b.IsSoftDeleted() && !isLivePrimary(b) && b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			groupIDs[*b.VersionGroupID] = struct{}{}
+		}
+	}
+	groupLivePrimary := make(map[string]bool, len(groupIDs))
+	var groupMu sync.Mutex
+	gg := new(errgroup.Group)
+	gg.SetLimit(runtime.NumCPU())
+	for gid := range groupIDs {
+		gg.Go(func() error {
+			members, gerr := store.GetBooksByVersionGroup(gid)
+			if gerr != nil {
+				return fmt.Errorf("read version group %s: %w", gid, gerr)
+			}
+			live := false
+			for i := range members {
+				if isLivePrimary(&members[i]) {
+					live = true
+					break
+				}
+			}
+			groupMu.Lock()
+			groupLivePrimary[gid] = live
+			groupMu.Unlock()
+			return nil
+		})
+	}
+	if err := gg.Wait(); err != nil {
+		return nil, err
+	}
+	// isHealthyOwner: a live primary, or a live grouped version under one.
+	isHealthyOwner := func(b *database.Book) bool {
+		if isLivePrimary(b) {
+			return true
+		}
+		return b != nil && !b.IsSoftDeleted() && b.VersionGroupID != nil && groupLivePrimary[*b.VersionGroupID]
+	}
+
 	// Set of FileHashes owned by at least one LIVE PRIMARY book_file — the SHA gate
 	// target. Resolving these books reuses the already-fetched .itl-owner cache
 	// where possible; misses are looked up lazily below only for candidate orphans.
@@ -398,14 +450,20 @@ func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journal
 			c.addSample(OrphanSample{PID: pid, Bucket: BucketNoLiveOwner})
 			continue
 		}
-		// Prefer a live-primary owner if any; else take the first (stale) owner.
+		// Prefer a live-primary owner, then a healthy grouped version; else take
+		// the first (stale) owner.
 		var owner database.BookFileCore
 		var ownerBook *database.Book
 		picked := false
-		for _, f := range owners {
-			b := books[f.BookID]
-			if isLivePrimary(b) {
-				owner, ownerBook, picked = f, b, true
+		for _, healthy := range []func(*database.Book) bool{isLivePrimary, isHealthyOwner} {
+			for _, f := range owners {
+				b := books[f.BookID]
+				if healthy(b) {
+					owner, ownerBook, picked = f, b, true
+					break
+				}
+			}
+			if picked {
 				break
 			}
 		}
@@ -414,12 +472,12 @@ func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journal
 			ownerBook = books[owner.BookID]
 		}
 
-		if isLivePrimary(ownerBook) {
+		if isHealthyOwner(ownerBook) {
 			c.Healthy++
 			continue
 		}
 
-		// Stale owner (soft-deleted or non-primary). Attribute by provenance.
+		// Stale owner (soft-deleted, or non-primary with no live group primary). Attribute by provenance.
 		c.StaleOwner++
 		inJournal := ownerBook != nil && journalSet[ownerBook.ID]
 		mergedInto := ownerBook != nil && ownerBook.MergedIntoBookID != nil

@@ -1,5 +1,5 @@
 // file: internal/server/purge_soft_deleted_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7a9c41-5d08-4b63-8f1a-6c3d0b9e4a72
 // last-edited: 2026-10-22
 
@@ -107,6 +107,14 @@ func (s *Server) runPurgeSoftDeletedOp(ctx context.Context, raw json.RawMessage,
 		},
 	})
 	if err != nil {
+		// A pass that was refused before it began still returns its result
+		// (StoppedEarly, StopReason). Store it so GET /operations/:id/result
+		// says why; the op fails with the error either way.
+		if res != nil {
+			if serr := opsregistry.ReporterSetResult(reporter, res.Capped(purgeResultCap)); serr != nil {
+				purgeOpLog.Warn("%s opID=%s: result of the refused pass not stored: %s", purgeSoftDeletedOpID, logger.SanitizeLogValue(opID), logger.SanitizeLogValue(serr.Error()))
+			}
+		}
 		return fmt.Errorf("%s: %w", purgeSoftDeletedOpID, err)
 	}
 
@@ -124,10 +132,27 @@ func (s *Server) runPurgeSoftDeletedOp(ctx context.Context, raw json.RawMessage,
 		}
 		activity.FlushOperation(s.activityWriter, opID)
 	}
-	_ = reporter.UpdateProgress(res.Attempted, res.Attempted, msg)
+	if res.StoppedEarly {
+		// RunPurge's last callback reported how many it decided; do not
+		// overwrite that with "all of them".
+		_ = reporter.UpdateProgress(res.Decided(), res.Attempted, msg)
+	} else {
+		_ = reporter.UpdateProgress(res.Attempted, res.Attempted, msg)
+	}
 
+	// Stored even when the pass stopped early: the counts of the books it did
+	// decide, and stopped_early/stop_reason, are what the operator reads.
 	if err := opsregistry.ReporterSetResult(reporter, res.Capped(purgeResultCap)); err != nil {
 		return fmt.Errorf("%s: store the result: %w", purgeSoftDeletedOpID, err)
+	}
+	if res.StoppedEarly {
+		// Not a completed run: a cancel or a timeout must not end "completed".
+		// The context's own error is wrapped so the registry records a cancel as
+		// a cancel and a timeout as a failure.
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("%s: %s: %w", purgeSoftDeletedOpID, res.StopReason, cerr)
+		}
+		return fmt.Errorf("%s: %s", purgeSoftDeletedOpID, res.StopReason)
 	}
 	return nil
 }

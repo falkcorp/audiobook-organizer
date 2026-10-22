@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package server
 
@@ -20,7 +20,7 @@ import (
 // holding only a journal id finds the operation id on the kept book's change
 // list (GET /audiobooks/:id/changes) or in that job's results.
 const (
-	combineUndoGone = "POST /api/v1/operations/:id/revert with the combine's operation id (operation_id in the combine response; GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older combine gets one from the backfill-merge-undo-pointers job)"
+	combineUndoGone = "POST /api/v1/operations/:id/revert with the combine's operation id (the id POST /api/v1/audiobooks/combine answered with, also operation_id in its result; GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older combine gets one from the backfill-merge-undo-pointers job)"
 	siblingUndoGone = "POST /api/v1/operations/:id/revert with the merge's operation id (GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older merge gets one from the backfill-merge-undo-pointers job)"
 )
 
@@ -103,6 +103,7 @@ func (s *Server) wireDedupRoutes(
 	protected.GET("/authors/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListDuplicateAuthors)
 	protected.POST("/authors/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshDuplicateAuthors)
 	protected.POST("/audiobooks/link", s.perm(auth.PermLibraryEditMetadata), duplicatesH.LinkBooks)
+	// 202: queues the dedup.book-combine operation (the combine is its result).
 	protected.POST("/audiobooks/combine", s.perm(auth.PermLibraryEditMetadata), duplicatesH.CombineBooks)
 	// Merge journals. Every combine (manual or review-queue combine/duplicate-of)
 	// and every merge that carries a loser's version siblings into its group is

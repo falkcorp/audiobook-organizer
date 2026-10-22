@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-17
+// last-edited: 2026-10-22
 
 package audiobooks
 
@@ -71,11 +71,12 @@ type PurgeResult struct {
 	// back on the book and it stays in the trash; the reason is in Errors.
 	CarryFailed    int      `json:"carry_failed"`
 	CarryFailedIDs []string `json:"carry_failed_ids,omitempty"`
-	// KeptUndoPossible counts retired shells of a combine whose undo can still
-	// run (merge.UndoShellIndex): UndoCombine restores only a shell that is
-	// still in the trash with the journal's stamp, so purging one makes the
-	// combine un-revertable. The book stays in the trash until the combine is
-	// undone or its journal stops being undoable. This is the one blocker the
+	// KeptUndoPossible counts trashed books an undo that can still run needs
+	// (undoHold): the retired shell of a combine (merge.UndoShellIndex), the
+	// shell a maintenance operation soft-deleted and journaled in the
+	// operation ledger, or the loser of an auto-merge that was not undone.
+	// Purging one would make that undo refuse or stop part way. The book stays
+	// in the trash until the undo runs or is retired. This is the blocker the
 	// purge gained on 2026-10-22; it never applies to a book that owns files
 	// (those are SkippedOwnsFiles first).
 	KeptUndoPossible    int      `json:"kept_undo_possible"`
@@ -93,6 +94,13 @@ type PurgeResult struct {
 	// small enough to store as an operation result; the counts are exact.
 	Truncated bool     `json:"truncated,omitempty"`
 	Errors    []string `json:"errors"`
+	// StoppedEarly is set when the pass ended before it decided every book:
+	// it was cancelled, ran past its time limit, or was refused before it
+	// began (StopReason says which). The counts then cover only the books
+	// decided, so a reader must not take them for the whole trash. It is a
+	// flag and not a line in Errors, which Capped cuts.
+	StoppedEarly bool   `json:"stopped_early,omitempty"`
+	StopReason   string `json:"stop_reason,omitempty"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook

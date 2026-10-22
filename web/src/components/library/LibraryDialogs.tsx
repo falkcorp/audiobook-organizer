@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.9.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-22
 import React from 'react';
@@ -39,6 +39,7 @@ import { BulkRatingDialog } from '../audiobooks/BulkRatingDialog';
 import { VersionManagement } from '../audiobooks/VersionManagement';
 import AddToPlaylistDialog from '../audiobooks/AddToPlaylistDialog';
 import { ServerFileBrowser } from '../common/ServerFileBrowser';
+import type { PurgeRunController } from '../../hooks/usePurgeRun';
 import { PurgeSoftDeletedDialog } from './PurgeSoftDeletedDialog';
 import { MergeKeeperPicker } from './MergeKeeperPicker';
 import type { Audiobook } from '../../types';
@@ -93,6 +94,8 @@ interface LibraryDialogsProps {
   mergePrimaryId: string;
   setMergePrimaryId: (id: string) => void;
   mergeInProgress: boolean;
+  /** Set while a running merge or combine covers some of the selected books. */
+  bookOpBlockedReason?: string | null;
   handleMergeAsVersions: () => void;
   combineDialogOpen: boolean;
   setCombineDialogOpen: (open: boolean) => void;
@@ -193,10 +196,9 @@ interface LibraryDialogsProps {
   // Purge dialog
   purgeDialogOpen: boolean;
   setPurgeDialogOpen: (open: boolean) => void;
-  // The dialog runs the preview and the purge itself; the page only hears
-  // when a purge ended (to reload its lists) and while one is running.
-  onPurgeFinished: (result: api.PurgeResult) => void;
-  onPurgeRunningChange: (running: boolean) => void;
+  // The purge run is owned by the page (usePurgeRun) so it keeps going, and
+  // reports its outcome, when this dialog is closed mid-run.
+  purgeRun: PurgeRunController;
 
   // Add path dialog
   addPathDialogOpen: boolean;
@@ -251,6 +253,7 @@ export const LibraryDialogs = ({
   mergePrimaryId,
   setMergePrimaryId,
   mergeInProgress,
+  bookOpBlockedReason = null,
   handleMergeAsVersions,
   combineDialogOpen,
   setCombineDialogOpen,
@@ -327,8 +330,7 @@ export const LibraryDialogs = ({
   handleConfirmDelete,
   purgeDialogOpen,
   setPurgeDialogOpen,
-  onPurgeFinished,
-  onPurgeRunningChange,
+  purgeRun,
   addPathDialogOpen,
   setAddPathDialogOpen,
   showServerBrowser,
@@ -406,6 +408,11 @@ export const LibraryDialogs = ({
             in the trash and will not be merged.
           </Alert>
         )}
+        {bookOpBlockedReason && (
+          <Alert severity="info" sx={{ mb: 1 }} data-testid="merge-in-flight">
+            {bookOpBlockedReason}
+          </Alert>
+        )}
         <Box sx={{ mt: 1 }}>
           <MergeKeeperPicker
             books={liveOnly(selectedAudiobooks)}
@@ -423,6 +430,7 @@ export const LibraryDialogs = ({
           onClick={handleMergeAsVersions}
           disabled={
             mergeInProgress ||
+            bookOpBlockedReason !== null ||
             liveOnly(selectedAudiobooks).length < 2 ||
             !liveOnly(selectedAudiobooks).some((b) => b.id === mergePrimaryId)
           }
@@ -464,6 +472,11 @@ export const LibraryDialogs = ({
             />
           ))}
         </Box>
+        {bookOpBlockedReason && (
+          <Alert severity="info" sx={{ mt: 1 }} data-testid="combine-in-flight">
+            {bookOpBlockedReason}
+          </Alert>
+        )}
         <Alert severity="warning" sx={{ mt: 1 }}>
           The other {Math.max(selectedAudiobooks.length - 1, 0)} entries will be deleted and their
           files attached to the survivor. Unlike &quot;Merge as Versions&quot;, this produces ONE
@@ -506,7 +519,7 @@ export const LibraryDialogs = ({
         <Button
           variant="contained"
           onClick={handleCombineIntoOneBook}
-          disabled={combineInProgress || !mergePrimaryId}
+          disabled={combineInProgress || bookOpBlockedReason !== null || !mergePrimaryId}
         >
           {combineInProgress ? 'Combining...' : 'Combine'}
         </Button>
@@ -1015,8 +1028,7 @@ export const LibraryDialogs = ({
     <PurgeSoftDeletedDialog
       open={purgeDialogOpen}
       onClose={() => setPurgeDialogOpen(false)}
-      onFinished={onPurgeFinished}
-      onRunningChange={onPurgeRunningChange}
+      run={purgeRun}
     />
 
     {/* Import Path Management Dialog */}

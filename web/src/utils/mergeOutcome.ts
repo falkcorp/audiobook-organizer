@@ -1,5 +1,5 @@
 // file: web/src/utils/mergeOutcome.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e6b4d92-8a37-4c05-b9f1-3d7a2c5e0f84
 // last-edited: 2026-10-22
 
@@ -14,7 +14,15 @@ export interface BookMergeOpResult {
   keep_id: string;
   merged: number;
   skipped?: SkippedMergeLoser[];
-  no_op: boolean;
+  no_op?: boolean;
+  /** the operation failed; the server stores {keep_id, merged: 0, failed, partial, error} */
+  failed?: boolean;
+  /**
+   * with `failed`: the merge changed something before failing (a partial
+   * merge or a loser clean-up failure). false: it was refused before any write.
+   */
+  partial?: boolean;
+  error?: string;
 }
 
 export interface MergeOutcomePlan {
@@ -41,9 +49,24 @@ export function describeMergeOutcome(args: {
 }): MergeOutcomePlan {
   const { status, errorMessage, result, requested, titles = {} } = args;
   if (status !== 'completed') {
+    const reason = result?.error || errorMessage || '';
+    if (result?.partial) {
+      return {
+        severity: 'error',
+        message: `The merge failed part-way and may have partly applied; see the operation for what changed.${reason ? ` ${reason}` : ''}`,
+      };
+    }
+    if (result?.failed) {
+      return {
+        severity: 'error',
+        message: `The merge was refused before changing anything${reason ? `: ${reason}` : ''}. Nothing was merged.`,
+      };
+    }
+    // No stored result: the operation may have written before it stopped, so
+    // never claim nothing was merged.
     return {
       severity: 'error',
-      message: `The merge did not complete${errorMessage ? `: ${errorMessage}` : ` (${status})`}. Nothing was merged.`,
+      message: `The merge did not complete (${status})${errorMessage ? `: ${errorMessage}` : ''}. Check the operation to see what it did.`,
     };
   }
   if (!result) {

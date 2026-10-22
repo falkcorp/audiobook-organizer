@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.108.0
+// version: 1.110.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-22
 
@@ -42,7 +42,6 @@ import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
 import {
   describeCombineFailure,
-  describeCombineResult,
   describeUndoFailure,
   describeUndoResult,
   type CombineToastPlan,
@@ -80,7 +79,11 @@ import {
   isHasProgressRefusal,
 } from '../utils/deleteBookError';
 import { describeMergeOutcome, type BookMergeOpResult } from '../utils/mergeOutcome';
+import { describeCombineOutcome, type BookCombineOpResult } from '../utils/combineOutcome';
+import { isAbortError } from '../utils/apiFetch';
+import { BOOK_OP_PENDING_REASON, usePendingBookOps } from '../hooks/usePendingBookOps';
 import { outcomeHeadline, outcomeSeverity } from '../utils/purgeSummary';
+import { usePurgeRun, type PurgeRunEnd } from '../hooks/usePurgeRun';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
 // DuplicateDialogState, OrganizeErrorState imported from './libraryTypes'
@@ -398,7 +401,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   });
   const [deleteInProgress, setDeleteInProgress] = useState(false);
   const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
-  const [purgeInProgress, setPurgeInProgress] = useState(false);
   const [purgingBookId, setPurgingBookId] = useState<string | null>(null);
   // A trashed book whose "Purge now" was refused for its listening progress:
   // the trash section opens the discard confirmation for it.
@@ -1498,6 +1500,79 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
+  // The books a merge or combine is working on in the background. Their
+  // buttons stay disabled until the operation ends, so the same books cannot be
+  // submitted twice.
+  const bookOps = usePendingBookOps();
+  const selectedIdsForBookOps = useMemo(
+    () => selectedAudiobooks.map((b) => b.id),
+    [selectedAudiobooks]
+  );
+  const bookOpBlockedReason = bookOps.anyPending(selectedIdsForBookOps)
+    ? BOOK_OP_PENDING_REASON
+    : null;
+
+  // The toast action that opens a background operation in the Activity view.
+  const viewOperationAction = (operationId: string) => ({
+    label: 'View operation',
+    onClick: () => navigate(`/activity?op=${encodeURIComponent(operationId)}`),
+  });
+
+  // What to reload once a background merge or combine ended. A ref, so an
+  // operation that outlives many renders refreshes with the current filters
+  // and page, not the ones from when it started.
+  const refreshAfterBookOpRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    refreshAfterBookOpRef.current = async () => {
+      clearLibraryCache();
+      await loadAudiobooks();
+    };
+  });
+
+  // Waits (in the background, never inside a click handler) for a merge or
+  // combine operation to end and reads its stored result. Returns null when
+  // the page went away (nothing to report), or after saying the outcome is
+  // unknown because the operation could not be followed. A failed or cancelled
+  // operation stores its result too, so it is fetched for every ended status;
+  // a fetch error leaves it null and the outcome wording then says what is
+  // unknown, never that it succeeded.
+  const awaitBookOp = async <T extends object>(
+    operationId: string,
+    label: 'merge' | 'combine',
+    signal: AbortSignal
+  ): Promise<{ status: string; errorMessage?: string | null; result: T | null } | null> => {
+    let done: api.OperationV2;
+    try {
+      done = await api.pollOperationV2(operationId, undefined, 1000, { signal });
+    } catch (e) {
+      if (signal.aborted || isAbortError(e)) return null;
+      console.error(`Could not follow the ${label} operation`, e);
+      toast(
+        `Could not follow the ${label}, so what it did is unknown. Check the operation (${operationId}) for the outcome.`,
+        'warning',
+        viewOperationAction(operationId)
+      );
+      await refreshAfterBookOpRef.current();
+      return null;
+    }
+    let result: T | null = null;
+    try {
+      const { result_data } = await api.getOperationResult(operationId);
+      result = result_data && typeof result_data === 'object' ? (result_data as T) : null;
+    } catch (e) {
+      console.warn(`Could not read the ${label} operation result`, e);
+    }
+    return { status: done.status, errorMessage: done.error_message, result };
+  };
+
+  // Drops the finished operation's books from the selection (the user may
+  // have picked others meanwhile) and its cross-page selection.
+  const clearSelectionOf = (ids: readonly string[]) => {
+    const gone = new Set(ids);
+    setSelectedAudiobooks((prev) => prev.filter((b) => !gone.has(b.id)));
+    setCrossPageFilter(null);
+  };
+
   const handleMergeAsVersions = async () => {
     // A trashed book cannot be merged: the server skips it as a loser and
     // refuses it as the keep book. Drop them here so the request is what the
@@ -1510,6 +1585,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       );
       return;
     }
+    if (bookOps.anyPending(candidates.map((b) => b.id))) {
+      toast(BOOK_OP_PENDING_REASON, 'warning');
+      return;
+    }
     setMergeInProgress(true);
     try {
       const keepId = candidates.some((b) => b.id === mergePrimaryId)
@@ -1517,35 +1596,31 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         : candidates[0].id;
       const mergeIds = candidates.filter((b) => b.id !== keepId).map((b) => b.id);
       const op = await api.linkBooks(keepId, mergeIds);
-      // Queueing is not merging: wait for the operation and report what it did.
-      const done = await api.pollOperationV2(op.id, undefined, 1000);
-      let result: BookMergeOpResult | null = null;
-      if (done.status === 'completed') {
-        const { result_data } = await api.getOperationResult(op.id);
-        result =
-          result_data && typeof result_data === 'object'
-            ? (result_data as BookMergeOpResult)
-            : null;
-      }
-      const plan = describeMergeOutcome({
-        status: done.status,
-        errorMessage: done.error_message,
-        result,
-        requested: mergeIds.length,
-        titles: Object.fromEntries(candidates.map((b) => [b.id, b.title])),
+      // The merge runs on the server. Close the dialog now and report the
+      // outcome when the operation ends; the user keeps working meanwhile.
+      setMergeDialogOpen(false);
+      toast('Merge started - running in the background.', 'info', viewOperationAction(op.id));
+      const titles = Object.fromEntries(candidates.map((b) => [b.id, b.title]));
+      const bookIds = [keepId, ...mergeIds];
+      bookOps.track(op.id, bookIds, async (signal) => {
+        const ended = await awaitBookOp<BookMergeOpResult>(op.id, 'merge', signal);
+        if (!ended) return;
+        const plan = describeMergeOutcome({
+          status: ended.status,
+          errorMessage: ended.errorMessage,
+          result: ended.result,
+          requested: mergeIds.length,
+          titles,
+        });
+        toast(plan.message, plan.severity, viewOperationAction(op.id));
+        if (ended.status === 'completed') clearSelectionOf(bookIds);
+        await refreshAfterBookOpRef.current();
       });
-      toast(plan.message, plan.severity);
-      if (done.status === 'completed') {
-        setSelectedAudiobooks([]);
-        setCrossPageFilter(null);
-        setMergeDialogOpen(false);
-      }
-      clearLibraryCache();
-      await loadAudiobooks();
     } catch (error) {
       console.error('Failed to merge books:', error);
       // A refused request (409 from the server's pre-check) carries the
-      // reason in its message.
+      // reason in its message; the dialog stays open so the selection can be
+      // fixed.
       toast(describeDeleteBookError(error, 'Failed to merge books.'), 'error');
     } finally {
       setMergeInProgress(false);
@@ -1580,9 +1655,15 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   // handleCombineIntoOneBook combines the selected single-file books into ONE
   // multi-file book on the chosen survivor (mergePrimaryId), hard-deleting the
-  // absorbed shells (soft-deleted, undoable). Distinct from handleMergeAsVersions (version-group merge).
+  // absorbed shells (soft-deleted, undoable). Distinct from handleMergeAsVersions
+  // (version-group merge). The combine runs as a background operation: this
+  // handler returns once the server has queued it.
   const handleCombineIntoOneBook = async () => {
     if (selectedAudiobooks.length < 2) return;
+    if (bookOps.anyPending(selectedAudiobooks.map((b) => b.id))) {
+      toast(BOOK_OP_PENDING_REASON, 'warning');
+      return;
+    }
     setCombineInProgress(true);
     try {
       const keepId = mergePrimaryId || selectedAudiobooks[0].id;
@@ -1595,26 +1676,44 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
               narrator: combineOverrideNarrator || undefined,
             }
           : undefined;
-      const result = await api.combineBooks(keepId, mergeIds, override);
-      const plan = describeCombineResult(result);
-      toast(plan.message, plan.severity, combineUndoAction(plan));
-      setSelectedAudiobooks([]);
-      setCrossPageFilter(null);
+      const started = await api.combineBooks(keepId, mergeIds, override);
       setCombineOverrideTitle('');
       setCombineOverrideAuthor('');
       setCombineOverrideNarrator('');
       setCombineDialogOpen(false);
-      clearLibraryCache();
-      await loadAudiobooks();
+      toast(
+        'Combine started - running in the background.',
+        'info',
+        viewOperationAction(started.id)
+      );
+      const bookIds = [keepId, ...mergeIds];
+      bookOps.track(started.id, bookIds, async (signal) => {
+        const ended = await awaitBookOp<BookCombineOpResult>(started.id, 'combine', signal);
+        if (!ended) return;
+        const plan = describeCombineOutcome({
+          status: ended.status,
+          errorMessage: ended.errorMessage,
+          result: ended.result,
+          operationId: started.id,
+        });
+        // One action per toast: Undo when there is something to revert,
+        // otherwise a link to the operation.
+        toast(
+          plan.message,
+          plan.severity,
+          combineUndoAction(plan) ?? viewOperationAction(started.id)
+        );
+        // A refused combine changed nothing, so the selection stays for a
+        // retry; anything else (including a part-way stop) changed rows.
+        if (ended.status === 'completed' && !ended.result?.failed) clearSelectionOf(bookIds);
+        await refreshAfterBookOpRef.current();
+      });
     } catch (error) {
+      // Refused before it was queued (400, 404, or 409 for a trashed or
+      // iTunes-protected book): the reason is in the message, and the dialog
+      // stays open so the selection can be fixed.
       console.error('Failed to combine books:', error);
-      const plan = describeCombineFailure(error);
-      toast(plan.message, plan.severity, combineUndoAction(plan));
-      if (plan.undoOperationId) {
-        // The combine stopped part-way: some rows changed, so refresh.
-        clearLibraryCache();
-        await loadAudiobooks();
-      }
+      toast(describeCombineFailure(error).message, 'error');
     } finally {
       setCombineInProgress(false);
     }
@@ -1693,12 +1792,27 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   // The purge dialog runs the preview and the purge itself; this is its
   // "a purge ended" hook: say what it did and reload what it changed.
-  const handlePurgeFinished = async (result: api.PurgeResult) => {
-    toast(outcomeHeadline(result), outcomeSeverity(result));
+  // The run lives here, not in the dialog: it keeps polling, keeps the row
+  // actions disabled (purgeInProgress) and fires this handler even when the
+  // dialog was closed mid-run.
+  const handlePurgeFinished = async (end: PurgeRunEnd) => {
+    if (end.result) {
+      toast(
+        outcomeHeadline(end.result),
+        outcomeSeverity(end.result),
+        viewOperationAction(end.operationId)
+      );
+    } else {
+      toast(end.error, 'error', end.operationId ? viewOperationAction(end.operationId) : undefined);
+    }
     clearLibraryCache();
     await loadAudiobooks();
     await refreshSoftDeleted();
   };
+  const handlePurgeStarted = (operationId: string) =>
+    toast('Purge started - running in the background.', 'info', viewOperationAction(operationId));
+  const purgeRun = usePurgeRun(handlePurgeFinished, handlePurgeStarted);
+  const purgeInProgress = purgeRun.running;
 
   const handleBatchSave = async (updates: Partial<Audiobook>) => {
     try {
@@ -2414,6 +2528,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           setBulkWriteBackDialogOpen(true);
         }}
         onOrganizeSelected={() => setBulkOrganizeDialogOpen(true)}
+        bookOpBlockedReason={bookOpBlockedReason}
         onMergeAsVersions={() => {
           setMergePrimaryId(selectedAudiobooks[0]?.id || '');
           setMergeDialogOpen(true);
@@ -2605,6 +2720,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           mergePrimaryId={mergePrimaryId}
           setMergePrimaryId={setMergePrimaryId}
           mergeInProgress={mergeInProgress}
+          bookOpBlockedReason={bookOpBlockedReason}
           handleMergeAsVersions={handleMergeAsVersions}
           combineDialogOpen={combineDialogOpen}
           setCombineDialogOpen={setCombineDialogOpen}
@@ -2681,8 +2797,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           handleConfirmDelete={handleConfirmDelete}
           purgeDialogOpen={purgeDialogOpen}
           setPurgeDialogOpen={setPurgeDialogOpen}
-          onPurgeFinished={handlePurgeFinished}
-          onPurgeRunningChange={setPurgeInProgress}
+          purgeRun={purgeRun}
           addPathDialogOpen={addPathDialogOpen}
           setAddPathDialogOpen={setAddPathDialogOpen}
           showServerBrowser={showServerBrowser}
