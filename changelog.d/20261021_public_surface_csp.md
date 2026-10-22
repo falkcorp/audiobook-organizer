@@ -1,0 +1,5 @@
+### Security
+
+#### Content-Security-Policy and Permissions-Policy on every response
+
+The web app was served with no Content-Security-Policy, so any injected script would have run unrestricted. Responses now carry a policy that allows scripts only from the app's own origin plus the one inline pre-paint theme script, allowed by hash (computed at startup from the `index.html` the binary actually serves, so it cannot drift from the build). Other sources are limited to same-origin, with images also allowed from `data:`, `blob:` and `https:` (metadata search shows provider cover URLs), `object-src 'none'`, `base-uri 'none'`, and `frame-ancestors 'self'`. Styles keep `'unsafe-inline'` because the UI library injects them at runtime. A handler that sets its own policy (the OpenID browser page, the Cloudflare recovery page) keeps it. A `Permissions-Policy` turns off camera, microphone, geolocation, payment and USB. Checked in a real browser against the embedded build: no violations on the app's main routes.
