@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-22
 
@@ -322,6 +322,14 @@ type inviteRateLimits struct {
 
 var inviteLimitLog = logger.New("server.invite-rate-limit")
 
+// inviteRetryAfterSeconds is the Retry-After of every refusal of the invite
+// limiter. It is one fixed value for all layers on purpose: a per-layer wait
+// (the per-token bucket refills in ten seconds, the global one in under one)
+// would tell a caller which layer refused it, which the identical status and
+// body are there to hide. A minute is longer than any single layer needs and
+// short enough for a legitimate guest to simply try again.
+const inviteRetryAfterSeconds = "60"
+
 // newInviteRateLimits builds the limiters and starts their idle sweepers on ctx.
 func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 	l := &inviteRateLimits{
@@ -484,6 +492,7 @@ func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, 
 		steps = append(steps, servermiddleware.KeyStep{Limiter: l.global, Key: inviteGlobalKey})
 		held, ok := servermiddleware.ReserveKeys(steps...)
 		if !ok {
+			c.Header("Retry-After", inviteRetryAfterSeconds)
 			httputil.RespondWithError(c, http.StatusTooManyRequests, "rate limit exceeded", "TOO_MANY_REQUESTS")
 			c.Abort()
 			return
