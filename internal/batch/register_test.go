@@ -1,11 +1,15 @@
 // file: internal/batch/register_test.go
-// version: 1.0.0
+// version: 1.1.0
+// last-edited: 2026-10-22
 
 package batch_test
 
 import (
 	"testing"
 
+	// The batch service needs the audiobook service: its hard delete of a
+	// trashed book goes through the purge path (batch.WithTrashPurger).
+	_ "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -14,7 +18,7 @@ import (
 func TestBatchRegistration(t *testing.T) {
 	c := serviceregistry.NewContainer().
 		Override("store", mocks.NewMockStore(t)).
-		Include("batch")
+		Include("audiobook", "batch")
 	if err := c.Resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/undo_hold.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3e1c94-5a28-4d60-9f17-c2d84e60a3b5
 // last-edited: 2026-10-22
 
@@ -30,8 +30,22 @@ import (
 //     rows moved onto the survivor by such an op name the shell too, so the
 //     shell has to be there for the whole revert, not only its own row;
 //  3. an auto-merge (database.AutoMergeJournalEntry): Engine.UnmergeAuto
-//     reverts the loser from its pre-merge snapshot and a purged loser makes
-//     it stop after it already moved the siblings.
+//     reverts the loser from its pre-merge snapshot, and the winner from its
+//     own when the entry recorded one, and refuses (writing nothing) when
+//     either row is gone. A purged loser or winner therefore makes the undo
+//     impossible, so both are held while the entry is open (a provisional
+//     entry cannot be undone: only its loser, which is restored from the
+//     trash, is held).
+//
+// What a hold does NOT keep, and what a purge of a held-then-released book
+// costs: a purged auto-merge loser or combine shell takes its listening state
+// (read status, progress, positions) with it. The combine journal and the
+// auto-merge snapshot restore the BOOK RECORD and the user state they
+// captured at merge time (CombineUserProgress); anything the listener did on
+// that book after the merge is on the survivor, and a purge after the undo can
+// no longer run does not bring it back. The hold exists so the undo, while it
+// can run, is never made to refuse or half-apply; it does not make a purged
+// book's later listening history recoverable.
 //
 // Holds fails CLOSED: any record it cannot read is an error, and the caller
 // keeps the book. An unfinished by-book ledger index is the same: see
@@ -45,10 +59,12 @@ import (
 // whose revert is what brings the book back.
 //
 // Every writer of the records above holds the merge lock across the write
-// (fs-regroup's retire runs under merge.LockMergeRMW; the combine, retire-into
-// and folder-books writers journal before they soft-delete; the auto-merge
-// journal entry is written before the merge, with a generation counter), so a
-// Holds called under the merge lock is exact.
+// and records BEFORE it soft-deletes: fs-regroup's retire (under
+// merge.LockMergeRMW) journals its book_soft_delete row first and keeps the
+// shell live when that row cannot be written, as the combine, retire-into and
+// folder-books writers do; the auto-merge journal entry is written before the
+// merge, with a generation counter. So a Holds called under the merge lock is
+// exact.
 //
 // A hold is permanent until the undo runs or is retired: the operation ledger
 // and the combine journals are never pruned by the log retention. That is the
@@ -156,11 +172,11 @@ func (h *undoHold) Holds(b *database.Book) (reason string, held bool, err error)
 		}
 		return "combine journal " + id, true, nil
 	}
-	if key, held, err := h.autoHolds(b.ID); err != nil || held {
+	if key, role, held, err := h.autoHolds(b.ID); err != nil || held {
 		if err != nil {
 			return "", false, err
 		}
-		return "auto-merge journal entry " + key, true, nil
+		return "auto-merge journal entry " + key + " (" + role + ")", true, nil
 	}
 	if opID, held, err := h.ledgerHolds(b); err != nil || held {
 		if err != nil {
@@ -171,21 +187,27 @@ func (h *undoHold) Holds(b *database.Book) (reason string, held bool, err error)
 	return "", false, nil
 }
 
-// autoHolds reports whether id is the loser of an auto-merge that has not been
-// undone, rebuilding its snapshot first when an entry was written since.
-func (h *undoHold) autoHolds(id string) (key string, held bool, err error) {
+// autoHolds reports whether id is the loser (or the snapshot-restored winner)
+// of an auto-merge that has not been undone, rebuilding its snapshot first when
+// an entry was written since. role is "loser" or "winner".
+func (h *undoHold) autoHolds(id string) (key, role string, held bool, err error) {
 	if h.emb == nil {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	h.autoMu.Lock()
 	defer h.autoMu.Unlock()
 	if h.auto == nil || h.auto.Gen != database.AutoMergeJournalGeneration() {
 		if err := h.refreshAuto(); err != nil {
-			return "", false, fmt.Errorf("an auto-merge was journaled since this pass began and the journal cannot be re-read: %w", err)
+			return "", "", false, fmt.Errorf("an auto-merge was journaled since this pass began and the journal cannot be re-read: %w", err)
 		}
 	}
-	key, held = h.auto.Losers[id]
-	return key, held, nil
+	if key, held = h.auto.Losers[id]; held {
+		return key, "loser", true, nil
+	}
+	if key, held = h.auto.Winners[id]; held {
+		return key, "winner", true, nil
+	}
+	return "", "", false, nil
 }
 
 // ledgerHolds reports whether an operation's ledger still holds b: an

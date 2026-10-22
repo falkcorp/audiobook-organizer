@@ -1,5 +1,5 @@
 // file: internal/merge/undo_shell_index_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e4b1d60-7a35-4c82-b0f9-2d6e8a3c5b17
 // last-edited: 2026-10-22
 
@@ -99,19 +99,35 @@ func TestUndoShellIndex_OnlyTheStampedShellIsHeld(t *testing.T) {
 	assert.False(t, held, "a nil index holds nothing")
 }
 
-func TestUndoShellIndex_LeftLiveAndUnstampedAbsorbedAreNotHeld(t *testing.T) {
+func TestUndoShellIndex_UnstampedAbsorbedIsNotHeld(t *testing.T) {
 	kv := &kvFake{m: map[string][]byte{}}
-	stamp := time.Date(2026, 10, 21, 22, 0, 0, 0, time.UTC)
 	j := NewCombineJournal("survivor")
 	j.Status = CombineJournalApplied
-	j.Absorbed = []CombineAbsorbed{
-		{BookID: "left-live", MarkedForDeletionAt: &stamp, LeftLive: true},
-		{BookID: "unstamped"},
-	}
+	j.Absorbed = []CombineAbsorbed{{BookID: "unstamped"}}
 	require.NoError(t, WriteCombineJournal(kv, j))
 	idx, err := NewUndoShellIndex(kv)
 	require.NoError(t, err)
 	assert.Zero(t, idx.Len())
+}
+
+// A LeftLive absorbed book whose retire write landed anyway carries exactly
+// the journal's stamp: it is the shell UndoCombine restores, so it is held. One
+// whose write missed (still live, or stamped otherwise) is not.
+func TestUndoShellIndex_LeftLiveWithMatchingStampIsHeld(t *testing.T) {
+	kv := &kvFake{m: map[string][]byte{}}
+	stamp := time.Date(2026, 10, 21, 22, 0, 0, 0, time.UTC)
+	j := NewCombineJournal("survivor")
+	j.Status = CombineJournalApplied
+	j.Absorbed = []CombineAbsorbed{{BookID: "left-live", MarkedForDeletionAt: &stamp, LeftLive: true}}
+	require.NoError(t, WriteCombineJournal(kv, j))
+	idx, err := NewUndoShellIndex(kv)
+	require.NoError(t, err)
+	_, held := idx.Holds(shellRow("left-live", stamp))
+	assert.True(t, held, "the retire write landed: this is the journal's shell")
+	_, held = idx.Holds(shellRow("left-live", stamp.Add(time.Hour)))
+	assert.False(t, held, "another stamp is another event")
+	_, held = idx.Holds(&database.Book{ID: "left-live"})
+	assert.False(t, held, "a live book is not a shell")
 }
 
 // A snapshot goes stale exactly when a combine journal is written after its

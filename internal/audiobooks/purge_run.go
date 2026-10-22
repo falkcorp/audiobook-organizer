@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-22
 
@@ -143,7 +143,7 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 	_, held, err := env.undo.Holds(book)
 	switch {
 	case err != nil:
-		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell whether an undo still needs it: %v", book.ID, err)}}, true
+		return purgeOutcome{kind: purgeFailed, abort: purgeAbortOf(err), errs: []string{fmt.Sprintf("%s: not purged: cannot tell whether an undo still needs it: %v", book.ID, err)}}, true
 	case held:
 		return purgeOutcome{kind: purgeKeptUndo}, true
 	}
@@ -249,15 +249,21 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		lastReported = n
 		opts.Progress(n, total)
 	}
+	// A failure that repeats for every remaining book (the ledger index lost
+	// its trust mid-pass) stops the pass with its reason, instead of failing
+	// each remaining book one at a time.
+	passCtx, stopPass := context.WithCancel(ctx)
+	defer stopPass()
+	var abortErr error
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
 	for _, part := range purgePartitions(books) {
-		if ctx.Err() != nil {
+		if passCtx.Err() != nil {
 			break
 		}
 		g.Go(func() error {
 			for i := range part {
-				if ctx.Err() != nil {
+				if passCtx.Err() != nil {
 					return nil
 				}
 				var out purgeOutcome
@@ -268,6 +274,10 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 				}
 				mu.Lock()
 				result.add(part[i].ID, out)
+				if out.abort != nil && abortErr == nil {
+					abortErr = out.abort
+					stopPass()
+				}
 				mu.Unlock()
 				if n := int(decided.Add(1)); n%purgeProgressEvery == 0 {
 					report(n, false)
@@ -281,7 +291,11 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		// an error here is a bug, reported rather than dropped.
 		result.Errors = append(result.Errors, fmt.Sprintf("purge worker failed: %v", err))
 	}
-	if err := ctx.Err(); err != nil {
+	if abortErr != nil {
+		// The pass-wide failure is the reason; the parent ctx may also be done.
+		result.StoppedEarly = true
+		result.StopReason = fmt.Sprintf("purge stopped: %v", abortErr)
+	} else if err := ctx.Err(); err != nil {
 		// A flag, not a line in Errors: Capped cuts Errors, and a stored result
 		// that lost this line would read as a pass that finished.
 		result.StoppedEarly = true
