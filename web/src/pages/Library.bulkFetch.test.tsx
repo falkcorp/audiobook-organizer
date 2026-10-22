@@ -1,13 +1,14 @@
 // file: web/src/pages/Library.bulkFetch.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5b7b0d6f-5c2b-4d57-9b6c-8dbb7a9e9e2c
-// last-edited: 2026-08-27
+// last-edited: 2026-10-22
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 
 vi.mock('../services/api', () => {
@@ -98,7 +99,9 @@ describe('Library bulk metadata fetch', () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter initialEntries={entry ? [entry] : undefined}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -122,7 +125,9 @@ describe('Library bulk metadata fetch', () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -161,7 +166,9 @@ describe('Library bulk metadata fetch', () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 

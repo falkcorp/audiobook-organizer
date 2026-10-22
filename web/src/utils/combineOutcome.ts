@@ -1,5 +1,5 @@
 // file: web/src/utils/combineOutcome.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b8e2d71-c0a4-4f36-9e18-7a3d6f1b9c42
 // last-edited: 2026-10-22
 
@@ -95,18 +95,25 @@ export function describeCombineOutcome(args: {
     };
   }
 
+  // No stored result (or one that does not describe a finished combine): the
+  // operation may have moved files or trashed books before it stopped, and the
+  // journal names the operation by its own id, so Undo is offered with that id.
+  // If nothing was journalled the revert answers 409 and the undo toast says so.
   if (status !== 'completed') {
-    // No stored result: the operation may have written before it stopped, so
-    // never claim nothing was combined.
+    const undoOperationId = result?.operation_id || operationId;
     return {
       severity: 'error',
-      message: `The combine did not complete (${status})${errorMessage ? `: ${errorMessage}` : ''}. Check the operation to see what it did${operationRef(operationId)}.`,
+      message: `The combine did not complete (${status})${errorMessage ? `: ${errorMessage}` : ''}. It may already have changed some books; Undo puts back whatever it changed${operationRef(operationId)}.`,
+      undoOperationId,
+      actionLabel: 'Undo',
     };
   }
   if (!result) {
     return {
       severity: 'warning',
-      message: `The combine finished but reported no result, so what it did is unknown${operationRef(operationId)}.`,
+      message: `The combine finished but reported no result, so what it did is unknown. Undo puts back whatever it changed${operationRef(operationId)}.`,
+      undoOperationId: operationId,
+      actionLabel: 'Undo',
     };
   }
 

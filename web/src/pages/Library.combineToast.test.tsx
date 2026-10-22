@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.combineToast.test.tsx
-// version: 1.3.0
+// version: 1.5.0
 // guid: b7c3d543-d1c8-4e7a-8782-7a65d6d29167
 // last-edited: 2026-10-22
 
@@ -19,6 +19,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { ToastProvider } from '../components/toast/ToastProvider';
 import { useAppStore } from '../stores/useAppStore';
@@ -118,7 +119,9 @@ async function openCombineDialog() {
   render(
     <MemoryRouter>
       <ToastProvider>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </ToastProvider>
     </MemoryRouter>
   );
@@ -288,6 +291,8 @@ describe('combine into one book', () => {
     expect(lastToast().severity).toBe('error');
     expect(lastToast().message).toContain('did not complete (failed): boom');
     expect(lastToast().message).not.toMatch(/^Combined/);
+    // N-c: it may have written before it stopped, so Undo is offered with the op id.
+    expect(lastToast().action?.label).toBe('Undo');
   });
 
   it('a failed poll is not a failed combine: it says "still checking", keeps the books in flight and keeps polling', async () => {

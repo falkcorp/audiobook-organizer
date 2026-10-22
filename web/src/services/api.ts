@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.201.3
+// version: 2.202.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-23
 
@@ -1663,6 +1663,8 @@ export async function awaitPurgeResult(
   opts?: {
     signal?: AbortSignal;
     intervalMs?: number;
+    /** Deadline of each poll request; a poll that takes longer counts as a failed poll. */
+    requestTimeoutMs?: number;
     /**
      * Opt in to "a failed poll is not a failed purge": instead of rejecting,
      * keep polling with backoff until the operation ends, calling this once
@@ -1682,7 +1684,7 @@ export async function awaitPurgeResult(
           message: o.progress_message ?? '',
         }),
       opts?.intervalMs ?? 1000,
-      { signal }
+      { signal, requestTimeoutMs: opts?.requestTimeoutMs }
     );
   const op = opts?.onTrouble
     ? await followOperation(pollOnce, { signal: opts.signal, onTrouble: opts.onTrouble })

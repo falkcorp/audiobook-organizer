@@ -1,5 +1,5 @@
 // file: web/src/utils/purgeSummary.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c3a9e15-2d84-4b60-a1f7-5e0d8b4c6a29
 // last-edited: 2026-10-22
 
@@ -116,6 +116,9 @@ export function outcomeHeadline(r: PurgeResult): string {
 export function outcomeSeverity(r: PurgeResult): 'success' | 'warning' | 'error' {
   if (r.stopped_early) return stopReason(r) === 'cancelled' ? 'warning' : 'error';
   if ((r.failed ?? 0) > 0 || (r.carry_failed ?? 0) > 0 || r.errors.length > 0) return 'warning';
+  // "Purged none of N" is not a success: the owner asked for books to go and
+  // none did (every one was kept for a reason). Same rule as the headline.
+  if (r.attempted > 0 && r.purged === 0) return 'warning';
   return 'success';
 }
 

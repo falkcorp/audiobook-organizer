@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.fetchOpToast.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c2f4e71-3a5d-4b8e-b0c6-7d1e2f3a4b5c
-// last-edited: 2026-08-20
+// last-edited: 2026-10-22
 
 /**
  * Regression tests for the effect that watches a pending metadata-fetch op.
@@ -23,6 +23,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { ToastProvider } from '../components/toast/ToastProvider';
 import { useAppStore } from '../stores/useAppStore';
@@ -131,7 +132,9 @@ async function startFetch() {
   render(
     <MemoryRouter>
       <ToastProvider>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </ToastProvider>
     </MemoryRouter>
   );

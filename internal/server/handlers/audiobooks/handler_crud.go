@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-22
 
@@ -224,6 +224,10 @@ const (
 	// CodeUndoPossible: 409, the book is the retired shell of a combine that
 	// can still be undone; purging it would make that undo impossible.
 	CodeUndoPossible = "UNDO_POSSIBLE"
+	// CodeMergeBusy: 409, a merge or combine is running and holds the merge
+	// lock; the action (restore, purge now, discard progress and purge, hard
+	// delete) was not started. Try again once it finishes.
+	CodeMergeBusy = "MERGE_BUSY"
 )
 
 // DeleteAudiobook handles DELETE /audiobooks/:id.
@@ -260,6 +264,10 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 		}
 		if errors.Is(err, audiobookspkg.ErrPurgeUndoPossible) {
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
+			return
+		}
+		if errors.Is(err, merge.ErrMergeBusy) {
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
 			return
 		}
 		// A carry of the listening state that did not complete (the state is
