@@ -1,5 +1,5 @@
 // file: internal/server/csp_report.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d896d6d8-b883-482d-8e34-d41a4abd52df
 // last-edited: 2026-10-22
 
@@ -49,9 +49,9 @@ var cspReportLog = logger.New("server.csp")
 // caller cannot fill the log or burn CPU with them: one for the whole service and
 // one per visitor key, so a single caller cannot spend the service's budget and
 // leave a real browser's reports unlogged. The limits count REPORTS, not
-// requests: a request carries up to cspReportMaxPerRequest of them. Reports over
-// a limit are dropped and counted; the count is added to the next line that is
-// let through.
+// requests: a request carries up to cspReportMaxPerRequest of them, of which at
+// most one burst's worth is charged and logged. Reports over a limit are dropped
+// and counted; the count is added to the next line that is let through.
 type cspReporter struct {
 	limiter *rate.Limiter
 	dropped atomic.Int64
@@ -80,12 +80,13 @@ const (
 )
 
 // newCSPReporter takes the service-wide limiter. The per-visitor limiter allows a
-// burst of 5 reports and one more every 10 seconds.
+// burst of cspReportMaxPerRequest reports, so one full report-to batch fits, and
+// one more every 10 seconds.
 func newCSPReporter(limiter *rate.Limiter) *cspReporter {
 	return &cspReporter{
 		limiter:    limiter,
 		visitors:   absauth.NewLRU[*cspVisitor](maxCSPVisitors),
-		newVisitor: func() *rate.Limiter { return rate.NewLimiter(rate.Every(10*time.Second), 5) },
+		newVisitor: func() *rate.Limiter { return rate.NewLimiter(rate.Every(10*time.Second), cspReportMaxPerRequest) },
 		now:        time.Now,
 	}
 }
@@ -95,9 +96,26 @@ func newCSPReporter(limiter *rate.Limiter) *cspReporter {
 // load, far less than a flood.
 var defaultCSPReporter = newCSPReporter(rate.NewLimiter(rate.Every(2*time.Second), 10))
 
-// allow charges n reports to the visitor's limiter and then the service's, and
-// reports whether they may be logged.
-func (r *cspReporter) allow(visitor string, n int) bool {
+// burstCap is the most reports l can ever admit at once: its burst, or anything
+// when it has no limit.
+func burstCap(l *rate.Limiter, n int) int {
+	if l.Limit() == rate.Inf {
+		return n
+	}
+	return min(n, l.Burst())
+}
+
+// admit decides how many of n reports from visitor may be logged: all of them up
+// to the smaller of the two bursts, or none when either budget cannot cover that
+// many right now. (Capping at the burst, rather than refusing a batch larger than
+// it, keeps a full report-to batch from being dropped forever.) The service
+// limiter is charged first and the visitor's tokens are only spent when it agrees,
+// and a refusal by the second hands the first back, so a refused request costs
+// neither budget.
+func (r *cspReporter) admit(visitor string, n int) int {
+	if n <= 0 {
+		return 0
+	}
 	if visitor == "" {
 		visitor = "?"
 	}
@@ -111,7 +129,19 @@ func (r *cspReporter) allow(visitor string, n int) bool {
 	v.lastSeen = now
 	r.visitors.Put(visitor, v)
 	r.mu.Unlock()
-	return v.limiter.AllowN(now, n) && r.limiter.AllowN(now, n)
+	k := min(burstCap(r.limiter, n), burstCap(v.limiter, n))
+	svc := r.limiter.ReserveN(now, k)
+	if !svc.OK() || svc.DelayFrom(now) > 0 {
+		svc.CancelAt(now)
+		return 0
+	}
+	vis := v.limiter.ReserveN(now, k)
+	if !vis.OK() || vis.DelayFrom(now) > 0 {
+		vis.CancelAt(now)
+		svc.CancelAt(now)
+		return 0
+	}
+	return k
 }
 
 // handle answers 204 for any well-formed request, logged or not (a browser does
@@ -130,16 +160,20 @@ func (r *cspReporter) handle(c *gin.Context) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
-	reports := parseCSPReports(body, c.Request.Host)
+	reports := parseCSPReports(body)
 	if len(reports) == 0 {
 		c.Status(http.StatusNoContent)
 		return
 	}
-	if !r.allow(loginThrottleKey(c), len(reports)) {
-		r.dropped.Add(int64(len(reports)))
+	admitted := r.admit(loginThrottleKey(c), len(reports))
+	if rest := len(reports) - admitted; rest > 0 {
+		r.dropped.Add(int64(rest))
+	}
+	if admitted == 0 {
 		c.Status(http.StatusNoContent)
 		return
 	}
+	reports = reports[:admitted]
 	if n := r.dropped.Swap(0); n > 0 {
 		cspReportLog.Warn("CSP: %d violation report(s) were dropped while rate limited", n)
 	}
@@ -157,14 +191,15 @@ type cspViolation struct{ directive, blocked, page, source, line string }
 
 // parseCSPReports reads both wire formats: report-uri's
 // {"csp-report": {...}} and report-to's [{"type": "csp-violation", "body": {...}}].
-// Anything else yields nothing. host is the request's Host, which decides which
-// reported URLs are same-origin (cspLogURL).
-func parseCSPReports(body []byte, host string) []cspViolation {
+// Anything else yields nothing. Which reported URLs are same-origin is decided
+// against the REPORTED document's host (cspViolationFrom), never the request's
+// Host, which a proxy may rewrite.
+func parseCSPReports(body []byte) []cspViolation {
 	var legacy struct {
 		Report map[string]any `json:"csp-report"`
 	}
 	if json.Unmarshal(body, &legacy) == nil && legacy.Report != nil {
-		return []cspViolation{cspViolationFrom(legacy.Report, host, "violated-directive", "blocked-uri", "document-uri", "source-file", "line-number", "effective-directive")}
+		return []cspViolation{cspViolationFrom(legacy.Report, "violated-directive", "blocked-uri", "document-uri", "source-file", "line-number", "effective-directive")}
 	}
 	var batch []struct {
 		Type string         `json:"type"`
@@ -181,12 +216,12 @@ func parseCSPReports(body []byte, host string) []cspViolation {
 		if len(out) >= cspReportMaxPerRequest {
 			break
 		}
-		out = append(out, cspViolationFrom(e.Body, host, "effectiveDirective", "blockedURL", "documentURL", "sourceFile", "lineNumber", ""))
+		out = append(out, cspViolationFrom(e.Body, "effectiveDirective", "blockedURL", "documentURL", "sourceFile", "lineNumber", ""))
 	}
 	return out
 }
 
-func cspViolationFrom(m map[string]any, host, directive, blocked, page, source, line, directiveAlt string) cspViolation {
+func cspViolationFrom(m map[string]any, directive, blocked, page, source, line, directiveAlt string) cspViolation {
 	str := func(k string) string {
 		if k == "" {
 			return ""
@@ -203,13 +238,27 @@ func cspViolationFrom(m map[string]any, host, directive, blocked, page, source, 
 	if alt := str(directiveAlt); alt != "" {
 		d = alt
 	}
+	docHost := cspURLHost(str(page))
 	return cspViolation{
 		directive: cspLogField(d),
-		blocked:   cspLogField(cspLogURL(str(blocked), host)),
-		page:      cspLogField(cspLogURL(str(page), host)),
-		source:    cspLogField(cspLogURL(str(source), host)),
+		blocked:   cspLogField(cspLogURL(str(blocked), docHost, false)),
+		page:      cspLogField(cspLogURL(str(page), docHost, true)),
+		source:    cspLogField(cspLogURL(str(source), docHost, false)),
 		line:      cspLogField(str(line)),
 	}
+}
+
+// cspURLHost is the host of a reported document URL ("" when it has none: a
+// relative or schemeless URL, or one that does not parse).
+func cspURLHost(raw string) string {
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		raw = raw[:i]
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
 }
 
 // cspLogURL is the ONE reduction every reported URL (the page, the source file,
@@ -221,13 +270,18 @@ func cspViolationFrom(m map[string]any, host, directive, blocked, page, source, 
 //   - a URL with a scheme but no host (data:, blob:, about:) is reduced to its
 //     scheme, so no payload is logged;
 //   - the path goes through servermiddleware.RedactLogPath (invite tokens live in
-//     the path: /invite/<token>);
-//   - a SAME-ORIGIN path (host equal to the request's, or no host at all, as in a
-//     relative or schemeless URL) is then cut to its first segment, because the
-//     redaction knows only the routes it was taught and the app's own pages put
-//     secrets in the path. A cross-origin URL keeps its redacted path, which is
-//     what makes a blocked third-party script identifiable.
-func cspLogURL(raw, requestHost string) string {
+//     the path: /invite/<token>), which matches without regard to case and skips
+//     empty segments;
+//   - the path is then cut to its first segment when cut is set (the DOCUMENT URL
+//     always is: it is a page of this app) or when the URL is SAME-ORIGIN as the
+//     reported document (same host, or no host at all, as in a relative or
+//     schemeless URL), because the redaction knows only the routes it was taught
+//     and the app's own pages put secrets in the path. docHost is the host of the
+//     reported document, not of the request: a proxy may rewrite Host, and the
+//     browser's own report is the authority on what origin the page was. A
+//     cross-origin URL keeps its redacted path, which is what makes a blocked
+//     third-party script identifiable.
+func cspLogURL(raw, docHost string, cut bool) string {
 	if i := strings.IndexAny(raw, "?#"); i >= 0 {
 		raw = raw[:i]
 	}
@@ -245,16 +299,12 @@ func cspLogURL(raw, requestHost string) string {
 	if u.Host == "" {
 		return firstSegment(redacted)
 	}
-	if strings.EqualFold(u.Host, requestHost) {
-		scheme := u.Scheme
-		if scheme == "" {
-			scheme = "https"
-		}
-		return scheme + "://" + u.Host + firstSegment(redacted)
-	}
 	scheme := u.Scheme
 	if scheme == "" {
 		scheme = "https"
+	}
+	if cut || (docHost != "" && strings.EqualFold(u.Host, docHost)) {
+		return scheme + "://" + u.Host + firstSegment(redacted)
 	}
 	return scheme + "://" + u.Host + redacted
 }

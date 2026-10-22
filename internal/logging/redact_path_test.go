@@ -1,7 +1,7 @@
 // file: internal/logging/redact_path_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 232b593d-cfbd-4e4f-9898-8ff6d47e5768
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package logging
 
@@ -27,6 +27,14 @@ func TestRedactInvitePath(t *testing.T) {
 		{"resend trailing slash and query", "/api/v1/users/invites/" + tok + "/resend/?x=1", "/api/v1/users/invites/[REDACTED]/resend/?x=1"},
 		{"legacy unversioned resend", "/api/users/invites/" + tok + "/resend", "/api/users/invites/[REDACTED]/resend"},
 		{"escaped prefix segment", "/%69nvite/" + tok, "/%69nvite/[REDACTED]"},
+		{"doubled leading slash", "//invite/" + tok, "//invite/[REDACTED]"},
+		{"doubled slash before the token", "/invite//" + tok, "/invite//[REDACTED]"},
+		{"doubled slash inside an api prefix", "/api//v1/auth/invite/" + tok, "/api//v1/auth/invite/[REDACTED]"},
+		{"upper case", "/INVITE/" + tok, "/INVITE/[REDACTED]"},
+		{"mixed case", "/Invite/" + tok, "/Invite/[REDACTED]"},
+		{"mixed case api prefix", "/API/V1/Auth/Invite/" + tok, "/API/V1/Auth/Invite/[REDACTED]"},
+		{"doubled slash and case", "//Invite//" + tok + "/", "//Invite//[REDACTED]/"},
+		{"bare invite with doubled slashes", "//invite//", "//invite//"},
 
 		// Unrelated paths and the token-less forms stay untouched.
 		{"invite list", "/api/v1/users/invites", "/api/v1/users/invites"},
