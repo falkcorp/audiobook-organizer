@@ -1,5 +1,5 @@
 // file: internal/server/csp_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a8dee6b8-6533-4d26-9f2c-34437fd9caa3
 // last-edited: 2026-10-21
 
@@ -51,7 +51,8 @@ func TestSecurityHeaders_SendCSPAndPermissionsPolicy(t *testing.T) {
 	require.Equal(t, "object-src 'none'", cspDirective(csp, "object-src"))
 	require.Equal(t, "base-uri 'none'", cspDirective(csp, "base-uri"))
 	require.Equal(t, "frame-ancestors 'self'", cspDirective(csp, "frame-ancestors"))
-	require.Equal(t, "connect-src 'self'", cspDirective(csp, "connect-src"))
+	require.Equal(t, "connect-src 'self' https://*.cloudflareaccess.com", cspDirective(csp, "connect-src"),
+		"apiFetch detects an expired Access session by following the redirect to cloudflareaccess.com")
 	require.Contains(t, cspDirective(csp, "img-src"), "https:", "metadata search shows provider cover URLs")
 	require.Contains(t, cspDirective(csp, "img-src"), "data:")
 
