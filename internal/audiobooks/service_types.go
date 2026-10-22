@@ -71,7 +71,28 @@ type PurgeResult struct {
 	// back on the book and it stays in the trash; the reason is in Errors.
 	CarryFailed    int      `json:"carry_failed"`
 	CarryFailedIDs []string `json:"carry_failed_ids,omitempty"`
-	Errors         []string `json:"errors"`
+	// KeptUndoPossible counts retired shells of a combine whose undo can still
+	// run (merge.UndoShellIndex): UndoCombine restores only a shell that is
+	// still in the trash with the journal's stamp, so purging one makes the
+	// combine un-revertable. The book stays in the trash until the combine is
+	// undone or its journal stops being undoable. This is the one blocker the
+	// purge gained on 2026-10-22; it never applies to a book that owns files
+	// (those are SkippedOwnsFiles first).
+	KeptUndoPossible    int      `json:"kept_undo_possible"`
+	KeptUndoPossibleIDs []string `json:"kept_undo_possible_ids,omitempty"`
+	// Failed counts books the purge could not decide or finish (unreadable
+	// file rows, a store error on the delete); each has a line in Errors.
+	Failed int `json:"failed"`
+	// DryRun is set on a preview: nothing was deleted or moved. Purged is then
+	// 0 and Purgeable is the number a real run would purge right now, the
+	// books that would carry listening state to a sibling included
+	// (CarriedToSibling counts those "would carry").
+	DryRun    bool `json:"dry_run"`
+	Purgeable int  `json:"purgeable"`
+	// Truncated is set when the ID lists and Errors were cut to keep the result
+	// small enough to store as an operation result; the counts are exact.
+	Truncated bool     `json:"truncated,omitempty"`
+	Errors    []string `json:"errors"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook

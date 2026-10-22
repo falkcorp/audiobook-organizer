@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package audiobooks
 
@@ -42,6 +42,10 @@ const (
 	// listing and the purge's hold of the merge lock. Nothing was done, and
 	// it is not an error.
 	purgeNotInTrash
+	// purgeKeptUndo: the book is the retired shell of a combine whose undo can
+	// still run (merge.UndoShellIndex); purging it would make that combine
+	// un-revertable.
+	purgeKeptUndo
 )
 
 // purgeOutcome is one book's result in a purge pass.
@@ -52,19 +56,33 @@ type purgeOutcome struct {
 }
 
 // add folds one book's outcome into r. The caller serializes calls.
+//
+// On a dry run (r.DryRun) a book that WOULD be purged counts in Purgeable, not
+// Purged: nothing was deleted. Every blocker counts the same on a preview and
+// a real run, which is the point of sharing this one function.
 func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	r.FilesDeleted += o.filesDeleted
 	r.Errors = append(r.Errors, o.errs...)
+	purged := func() {
+		if r.DryRun {
+			r.Purgeable++
+		} else {
+			r.Purged++
+		}
+	}
 	switch o.kind {
 	case purgePurged:
-		r.Purged++
+		purged()
 	case purgeCarried:
-		r.Purged++
+		purged()
 		r.CarriedToSibling++
 		r.CarriedToSiblingIDs = append(r.CarriedToSiblingIDs, bookID)
 	case purgeOwnsFiles:
 		r.SkippedOwnsFiles++
 		r.SkippedOwnsFilesIDs = append(r.SkippedOwnsFilesIDs, bookID)
+	case purgeKeptUndo:
+		r.KeptUndoPossible++
+		r.KeptUndoPossibleIDs = append(r.KeptUndoPossibleIDs, bookID)
 	case purgeKeptHasProgress:
 		r.KeptHasProgress++
 		r.KeptHasProgressIDs = append(r.KeptHasProgressIDs, bookID)
@@ -72,7 +90,7 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 		r.CarryFailed++
 		r.CarryFailedIDs = append(r.CarryFailedIDs, bookID)
 	case purgeFailed:
-		// counted by its Errors lines
+		r.Failed++
 	case purgeNotInTrash:
 		// restored or purged meanwhile: nothing to count
 	}
@@ -84,6 +102,7 @@ func (r *PurgeResult) sortIDs() {
 	slices.Sort(r.SkippedOwnsFilesIDs)
 	slices.Sort(r.CarriedToSiblingIDs)
 	slices.Sort(r.KeptHasProgressIDs)
+	slices.Sort(r.KeptUndoPossibleIDs)
 	slices.Sort(r.CarryFailedIDs)
 	slices.Sort(r.Errors)
 }
@@ -389,11 +408,11 @@ var ErrPurgeCarryFailed = errors.New("the listening progress could not be moved 
 // only after the state is carried to a version Audiobookshelf lists, and
 // is otherwise refused with ErrBookHasProgress.
 func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, error) {
-	probe, err := merge.NewUserStateProbe(svc.store)
+	env, err := svc.newPurgeEnv()
 	if err != nil {
-		return nil, fmt.Errorf("purge %s refused: cannot list users to check their listening state: %w", book.ID, err)
+		return nil, fmt.Errorf("purge %s refused: %w", book.ID, err)
 	}
-	out := svc.purgeOne(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, probe)
+	out := svc.purgeOne(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, env)
 	detail := strings.Join(out.errs, "; ")
 	switch out.kind {
 	case purgePurged, purgeCarried:
@@ -413,6 +432,8 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 			detail = "the purge never deletes a book that owns file rows"
 		}
 		return nil, fmt.Errorf("purge %s: %w: %s", book.ID, database.ErrBookOwnsFiles, detail)
+	case purgeKeptUndo:
+		return nil, fmt.Errorf("purge %s: %w", book.ID, ErrPurgeUndoPossible)
 	case purgeKeptHasProgress:
 		return nil, fmt.Errorf("purge %s: %w. Restore it, or use Discard progress and purge to delete it together with its progress", book.ID, ErrBookHasProgress)
 	case purgeCarryFailed:
@@ -423,6 +444,11 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 		return nil, fmt.Errorf("purge %s failed: %s", book.ID, detail)
 	}
 }
+
+// ErrPurgeUndoPossible is returned by "Purge now" for the retired shell of a
+// combine that can still be undone: deleting it would make UndoCombine refuse.
+// Undo the combine (or restore the book) instead. Nothing was changed.
+var ErrPurgeUndoPossible = errors.New("this book is the retired shell of a combine that can still be undone, and purging it would make that combine un-revertable; undo the combine first")
 
 // ErrNotInTrash is returned by DiscardProgressAndPurge for a book that is
 // not soft-deleted. Nothing was changed.
@@ -559,6 +585,16 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		}
 		if len(owned) > 0 {
 			return fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
+		}
+		// The retired shell of a combine whose undo can still run is not
+		// deleted by any purge, and discarding progress must not be the way
+		// around that: UndoCombine restores the survivor's rows from it.
+		undo, uerr := svc.newUndoShellIndex()
+		if uerr != nil {
+			return fmt.Errorf("discard progress and purge %s refused: %w", id, uerr)
+		}
+		if _, held := undo.Holds(cur); held {
+			return fmt.Errorf("discard progress and purge %s: %w", id, ErrPurgeUndoPossible)
 		}
 		book = cur
 		return nil
