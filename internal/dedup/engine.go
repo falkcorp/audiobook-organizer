@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.95.3
+// version: 1.95.4
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package dedup
 
@@ -1403,10 +1403,11 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		}
 	}
 
-	// The book:hash: index is single-valued and last-writer-wins, and
-	// GetBookByFileHash does not filter soft-deleted rows. So after ANY merge
-	// whose winner was not the index owner, the next full scan visits the
-	// live winner and the index hands back its own soft-deleted loser. Before
+	// GetBookByFileHash does not filter soft-deleted rows (it answers with a
+	// trashed holder when no live one exists). The book:hash: index it used to
+	// read was single-valued and last-writer-wins, so after ANY merge whose
+	// winner was not the index owner, the next full scan visited the live
+	// winner and the index handed back its own soft-deleted loser. Before
 	// this guard that pair was merged again, in the opposite direction:
 	// winner soft-deleted into a deleted primary, zero live rows for the
 	// title, both hard-deleted by the purge 30 days later (dedup bug hunt
