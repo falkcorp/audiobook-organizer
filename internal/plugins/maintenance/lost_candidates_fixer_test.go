@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -106,10 +106,7 @@ func (l *lcLib) plan() (*repairs.PlanResult, map[string]repairs.Row) {
 	require.NoError(l.t, err)
 	res, err := repairs.RunPlan(context.Background(), l.fixer, nil, l.p.repairsPlanDeps(l.st, series), &fakeReporter{})
 	require.NoError(l.t, err)
-	raw, err := json.Marshal(res)
-	require.NoError(l.t, err)
-	var stored repairs.PlanResult
-	require.NoError(l.t, json.Unmarshal(raw, &stored))
+	stored := roundTripPlan(l.t, res)
 	byKey := map[string]repairs.Row{}
 	for key, id := range l.ids {
 		for _, r := range stored.Rows {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-10-22
 
@@ -352,8 +352,16 @@ func (h *Handler) ListPlanRows(c *gin.Context) {
 		return
 	}
 	page, err := plan.Page(opID, c.Query("filter"), c.Query("class"), offset, limit)
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, repairs.ErrUnknownFilter):
 		httputil.RespondWithValidationError(c, "filter", err.Error())
+		return
+	case errors.Is(err, repairs.ErrPlanRowsIncomplete):
+		httputil.RespondWithConflict(c, err.Error())
+		return
+	default:
+		httputil.InternalError(c, "failed to read repair plan rows", err)
 		return
 	}
 	httputil.RespondWithOK(c, page)
@@ -477,12 +485,16 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 	if !ok {
 		return
 	}
-	idx := slices.IndexFunc(plan.Rows, func(r repairs.Row) bool { return r.RowID == req.RowID })
-	if idx < 0 {
+	chosen, err := plan.Select([]string{req.RowID})
+	if err != nil {
+		httputil.InternalError(c, "failed to read repair plan row", err)
+		return
+	}
+	if len(chosen.Rows) == 0 {
 		httputil.RespondWithNotFound(c, "repair plan row", req.RowID)
 		return
 	}
-	if row := plan.Rows[idx]; row.Applicable() || !row.OwnerApplicable {
+	if row := chosen.Rows[0]; row.Applicable() || !row.OwnerApplicable {
 		httputil.RespondWithBadRequest(c, "the plan does not list row "+req.RowID+" as one the owner may apply")
 		return
 	}
@@ -543,13 +555,22 @@ func (h *Handler) loadPlan(c *gin.Context, opID, fixerID string) (*repairs.PlanR
 		httputil.RespondWithServiceUnavailable(c, "operations store not initialized")
 		return nil, false
 	}
-	plan, err := repairs.LoadPlan(h.ops, opID, fixerID)
+	rows, err := repairs.PlanRowStoreOf(h.ops)
+	if err != nil {
+		httputil.RespondWithServiceUnavailable(c, err.Error())
+		return nil, false
+	}
+	plan, err := repairs.LoadPlan(h.ops, rows, opID, fixerID)
 	switch {
 	case err == nil:
 		return plan, true
 	case errors.Is(err, repairs.ErrPlanNotFound):
 		httputil.RespondWithNotFound(c, "repair plan", opID)
-	case errors.Is(err, repairs.ErrPlanNotComplete):
+	case errors.Is(err, repairs.ErrPlanNotComplete), errors.Is(err, repairs.ErrPlanLegacyFormat),
+		errors.Is(err, repairs.ErrPlanRowsIncomplete):
+		// A plan stored the old way, or whose rows do not match its summary,
+		// cannot be read: the answer is to run it again, which is a conflict
+		// with the state of that plan, not a server fault.
 		httputil.RespondWithConflict(c, err.Error())
 	case errors.Is(err, repairs.ErrNotAPlan), errors.Is(err, repairs.ErrPlanOtherFixer):
 		httputil.RespondWithBadRequest(c, err.Error())

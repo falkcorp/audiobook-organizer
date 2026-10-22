@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -22,12 +22,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // ---- fakes ----
 
 type memStore struct {
+	// MemOpRows makes the store a database.OpRowStore, the plan row store.
+	*dbtest.MemOpRows
 	mu      sync.Mutex
 	books   map[string]*database.Book
 	files   map[string][]database.BookFile
@@ -46,7 +49,7 @@ type memStore struct {
 }
 
 func newMemStore() *memStore {
-	return &memStore{books: map[string]*database.Book{}, files: map[string][]database.BookFile{},
+	return &memStore{MemOpRows: dbtest.NewMemOpRows(), books: map[string]*database.Book{}, files: map[string][]database.BookFile{},
 		ops: map[string]*database.OperationV2Row{}}
 }
 
@@ -805,25 +808,31 @@ func TestLoadPlan_ChecksDefStatusAndFixer(t *testing.T) {
 	s := newMemStore()
 	seed(s)
 	res := planFor(t, s, &trimFixer{s: s})
+	require.NoError(t, SavePlan(s, "op-plan", res))
 	data, err := json.Marshal(res)
 	require.NoError(t, err)
 	str := string(data)
+	require.NotContains(t, str, `"rows"`, "the stored result is the summary: no rows inside it")
 	s.ops["op-plan"] = &database.OperationV2Row{ID: "op-plan", DefID: PlanOpID, Status: "completed", ResultData: &str}
 	s.ops["op-running"] = &database.OperationV2Row{ID: "op-running", DefID: PlanOpID, Status: "running"}
 	s.ops["op-other"] = &database.OperationV2Row{ID: "op-other", DefID: "library.scan", Status: "completed", ResultData: &str}
 
-	plan, err := LoadPlan(s, "op-plan", "trim-titles")
+	plan, err := LoadPlan(s, s, "op-plan", "trim-titles")
 	require.NoError(t, err)
-	require.Len(t, plan.Rows, 6)
-	require.Equal(t, res.Rows[0].Fingerprint, plan.Rows[0].Fingerprint)
+	require.Empty(t, plan.Rows, "LoadPlan reads the summary only; rows are read by Page and Select")
+	require.Equal(t, len(res.Rows), plan.Total)
+	sel, err := plan.Select([]string{res.Rows[0].RowID})
+	require.NoError(t, err)
+	require.Len(t, sel.Rows, 1)
+	require.Equal(t, res.Rows[0].Fingerprint, sel.Rows[0].Fingerprint)
 
-	_, err = LoadPlan(s, "op-plan", "other-fixer")
+	_, err = LoadPlan(s, s, "op-plan", "other-fixer")
 	require.ErrorIs(t, err, ErrPlanOtherFixer)
-	_, err = LoadPlan(s, "op-running", "trim-titles")
+	_, err = LoadPlan(s, s, "op-running", "trim-titles")
 	require.ErrorIs(t, err, ErrPlanNotComplete)
-	_, err = LoadPlan(s, "op-other", "trim-titles")
+	_, err = LoadPlan(s, s, "op-other", "trim-titles")
 	require.ErrorIs(t, err, ErrNotAPlan)
-	_, err = LoadPlan(s, "op-missing", "trim-titles")
+	_, err = LoadPlan(s, s, "op-missing", "trim-titles")
 	require.ErrorIs(t, err, ErrPlanNotFound)
 }
 

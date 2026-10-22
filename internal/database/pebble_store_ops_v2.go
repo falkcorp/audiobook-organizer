@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.32.1
+// version: 3.33.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -16,6 +16,8 @@
 //	opv2:strike:{def_id}:{ts_nano:020d}:{op_id}     → JSON(OpStrikeV2Row)
 //	opv2:open:{op_id}                               → ""      (timeline: CompletedAt == nil)
 //	opv2:done:{completed_nanos:020d}:{op_id}        → ""      (timeline: CompletedAt != nil)
+//	opv2:row:{op_id}:{row_id}                       → bytes   (OpRowStore: a plan row; pebble_store_op_rows.go)
+//	opv2:rowix:{op_id}:{row_id}                     → bytes   (OpRowStore: that row's small index entry)
 //
 // The open/done timeline index (pebble_store_ops_v2_timeline.go) is staged by
 // every opv2:op: writer in the row's own batch (stageOpRow), and is read by
@@ -607,6 +609,14 @@ func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
 				return 0, err
 			}
 		}
+		// A hollow row never had rows of its own, but a row set under its id
+		// (a plan whose summary write was lost) is unreachable once the row is
+		// gone, so it goes with it.
+		for _, prefix := range [][]byte{opv2RowRunPrefix(id), opv2RowIxRunPrefix(id)} {
+			if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
+				return 0, err
+			}
+		}
 	}
 	for _, key := range doneKeys {
 		if err := batch.Delete(key, nil); err != nil {
@@ -884,10 +894,7 @@ func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (st
 			return status, false, err
 		}
 	}
-	for _, prefix := range [][]byte{
-		[]byte("opv2:log:" + id + ":"),
-		[]byte("opv2:err:" + id + ":"),
-	} {
+	for _, prefix := range opv2RunScopedPrefixes(id) {
 		if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
 			return status, false, err
 		}
@@ -1005,10 +1012,7 @@ func stageOpV2RowDelete(b *GatedBatch, row *OperationV2Row) error {
 	if err := stageOpRow(b, row, nil); err != nil {
 		return err
 	}
-	for _, prefix := range [][]byte{
-		[]byte("opv2:log:" + id + ":"),
-		[]byte("opv2:err:" + id + ":"),
-	} {
+	for _, prefix := range opv2RunScopedPrefixes(id) {
 		if err := b.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
 			return err
 		}

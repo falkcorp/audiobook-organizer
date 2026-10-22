@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
 // last-edited: 2026-10-22
 
@@ -355,8 +355,19 @@ func TestRetiredVersions_NoWritesAndApplyRefuses(t *testing.T) {
 	const opID = "op-retired-preview"
 	w := repairs.NewWriter(rf.st, rf.st, rf.f.ID(), "bulk_update", "repairs-").WithJournal(rf.st, rf.st, opID).WithFieldStates(rf.st)
 	sd := &countingStandDown{}
+	// The engine refuses a plan-only fixer before it reads a row, takes the
+	// stand-down or touches the writer.
 	out, err := repairs.RunApply(context.Background(), rf.f, res, "plan-1", ids, false,
 		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID, StandDown: sd}, &fakeReporter{})
+	require.ErrorIs(t, err, repairs.ErrPlanOnly)
+	require.Zero(t, out.Requested)
+	require.Zero(t, out.Applied)
+	require.Zero(t, sd.acquires.Load(), "a fixer that writes nothing never parks the library scan")
+
+	// Past the engine's refusal, Apply refuses every row itself: the wrapper
+	// hides PlanOnly, so RunApply reaches the fixer.
+	out, err = repairs.RunApply(context.Background(), plainFixer{rf.f}, res, "plan-1", ids, false,
+		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID, StandDown: &countingStandDown{}}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Zero(t, out.Applied, "%v", out.ByOutcome)
 	require.Equal(t, len(ids), out.Failed, "%v", out.ByOutcome)
@@ -366,7 +377,6 @@ func TestRetiredVersions_NoWritesAndApplyRefuses(t *testing.T) {
 	}
 	require.Zero(t, out.BookWrites)
 	require.Zero(t, out.JournalRows)
-	require.Zero(t, sd.acquires.Load(), "a fixer that writes nothing never parks the library scan")
 
 	// Calling Apply directly refuses too.
 	err = rf.f.Apply(context.Background(), nil, res.Rows[0])

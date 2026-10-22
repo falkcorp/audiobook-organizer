@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_window.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a9d2e71-6c35-4f08-b1d7-8e3a5c20f946
 // last-edited: 2026-10-22
 
@@ -21,11 +21,13 @@ type combineJournalScanner interface {
 
 // UnreversedCombineShells maps every book a combine journal names as absorbed
 // to the ids of the journals that name it, counting only journals that are
-// NOT undone: applied, pending and undo_failed ones can all still be undone
-// (UndoCombine accepts each), so the shell they name is still the thing an
-// undo would restore. A caller that wants to retire or purge a trashed book
-// must leave these alone, or it makes the combine silently non-undoable (the
-// 2026-10-21 purge did that to 21 combines).
+// NOT undone: applied, pending and undo_failed ones are each accepted by
+// UndoCombine, so the shell they name is what an undo would restore (whether
+// that undo would succeed today is for UndoCombine to say; this lists the
+// journals that have not been reversed). A caller that retires or purges a
+// trashed book must either leave these alone or make its change reversible by
+// that undo, or it makes the combine silently non-undoable (the 2026-10-21
+// purge did that to 21 combines).
 //
 // It reads every journal once and decodes only the three fields it needs, so
 // a journal's progress snapshots are skipped, not materialised. A row that

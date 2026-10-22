@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
 // last-edited: 2026-10-22
 
@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -139,8 +141,9 @@ func TestRetiredVersions_OwnerVetoGate(t *testing.T) {
 }
 
 // A veto read that fails is an error row, never a would-retire row; a server
-// that cannot read vetoes at all refuses to plan; and a no-target row never
-// needs the veto or the journal read.
+// that cannot read vetoes at all refuses to plan; a no-target row never needs
+// the veto lookup; and the combine journals are read for every row, because
+// the combine_undo_aware flag of every row depends on them.
 func TestRetiredVersions_GuardReadsFailClosed(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
@@ -153,8 +156,9 @@ func TestRetiredVersions_GuardReadsFailClosed(t *testing.T) {
 	require.Contains(t, rows[rf.ids["targeted"]].Reason, "vetoes unavailable")
 	require.Equal(t, retCatNoTargetPresent, rows[rf.ids["orphan"]].Class, "no target, no veto lookup")
 
-	// Every row's category depends on the combine journals, so an unreadable
-	// journal fails the plan instead of producing a plan of error rows.
+	// Which rows carry the combine_undo_aware flag depends on the combine
+	// journals, so an unreadable journal fails the plan (and a re-plan of even
+	// a no-target row) instead of producing a plan of error rows.
 	rf.withDeps(fakeDeps{store: rf.st, journals: errJournals{}})
 	_, err := rf.f.Plan(context.Background(), nil, &fakeReporter{})
 	require.ErrorIs(t, err, errRetiredUndoRead)
@@ -168,9 +172,11 @@ func TestRetiredVersions_GuardReadsFailClosed(t *testing.T) {
 	require.ErrorContains(t, err, "refusing to plan")
 }
 
-// A book an unreversed combine journal names as absorbed is held; an undone
-// journal releases it.
-func TestRetiredVersions_UndoWindowGate(t *testing.T) {
+// A book an unreversed combine journal names as absorbed keeps the class the
+// normal rules give it and carries the combine_undo_aware flag (the owner's
+// decision of 2026-10-22: the cleanup is undo-aware, not held); an undone
+// journal releases the flag.
+func TestRetiredVersions_CombineUndoAwareFlag(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
 	rf.trashed("absorbed", "g", 30, rf.file("g/a.mp3"))
@@ -188,21 +194,30 @@ func TestRetiredVersions_UndoWindowGate(t *testing.T) {
 	journal("J-undone", merge.CombineJournalUndone, "released")
 
 	rows := rf.plan()
-	for _, n := range []string{"absorbed", "recent"} {
-		r := rows[rf.ids[n]]
-		require.Equal(t, retCatUndoWindow, r.Class, "%s: %s", n, r.Reason)
-		require.Equal(t, retCatUndoWindow, r.Skipped, n)
-		require.Contains(t, r.Reason, "J-live", n)
+	absorbed := rows[rf.ids["absorbed"]]
+	require.Equal(t, retCatWouldRetire, absorbed.Class, absorbed.Reason)
+	require.True(t, absorbed.Applicable(), "an undo-aware row is still a would-retire row")
+	require.Equal(t, "true", absorbed.Current["combine_undo_aware"])
+	require.NotEmpty(t, absorbed.Evidence)
+	require.Contains(t, strings.Join(absorbed.Evidence, "\n"), "J-live")
+	require.Contains(t, strings.Join(absorbed.Evidence, "\n"), "unreversed combine journal")
+
+	recent := rows[rf.ids["recent"]]
+	require.Equal(t, retCatTooRecent, recent.Class, "the other gates still decide an absorbed book")
+	require.Equal(t, "true", recent.Current["combine_undo_aware"])
+
+	for _, n := range []string{"released", "plain"} {
+		require.Equal(t, retCatWouldRetire, rows[rf.ids[n]].Class, n)
+		require.Empty(t, rows[rf.ids[n]].Current["combine_undo_aware"], n)
 	}
-	require.Equal(t, retCatWouldRetire, rows[rf.ids["released"]].Class)
-	require.Equal(t, retCatWouldRetire, rows[rf.ids["plain"]].Class)
+	// The flag is part of what the row was decided from.
+	require.NotEqual(t, rows[rf.ids["plain"]].Fingerprint, absorbed.Fingerprint)
 }
 
-// The undo window outranks every other category: a combine-absorbed shell is
-// usually labelled deleted, may have no group, and may own no file rows any
-// more, and each of those must still read as "undo possible", not as a book a
-// purge may take.
-func TestRetiredVersions_UndoWindowOutranksEveryOtherCategory(t *testing.T) {
+// The flag rides on every category: a combine-absorbed shell is usually
+// labelled deleted, may have no group and may own no file rows, and each keeps
+// the class the normal rules give it.
+func TestRetiredVersions_CombineUndoAwareRidesEveryCategory(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
 	rf.trashed("labelled", "g", 30, rf.file("g/a.mp3"))
@@ -216,17 +231,51 @@ func TestRetiredVersions_UndoWindowOutranksEveryOtherCategory(t *testing.T) {
 	rf.trashed("no-group-missing", "", 30, rf.absent("m.mp3"))
 	rf.trashed("free-orphan", "", 30, rf.file("o/free.mp3"))
 	j := &merge.CombineJournal{ID: "J-all", Status: merge.CombineJournalApplied, SurvivorID: rf.ids["primary"]}
-	for _, n := range []string{"labelled", "no-files", "no-group", "no-group-missing"} {
+	want := map[string]string{
+		"labelled":         retCatTrashLabelled,
+		"no-files":         retCatNoFiles,
+		"no-group":         retCatNoTargetPresent,
+		"no-group-missing": retCatNoTargetMissing,
+	}
+	for n := range want {
 		j.Absorbed = append(j.Absorbed, merge.CombineAbsorbed{BookID: rf.ids[n]})
 	}
 	require.NoError(t, merge.WriteCombineJournal(rf.st, j))
 
 	rows := rf.plan()
-	for _, n := range []string{"labelled", "no-files", "no-group", "no-group-missing"} {
-		require.Equal(t, retCatUndoWindow, rows[rf.ids[n]].Class, "%s: %s", n, rows[rf.ids[n]].Reason)
-		require.Equal(t, retCatUndoWindow, rows[rf.ids[n]].Skipped, n)
+	for n, class := range want {
+		r := rows[rf.ids[n]]
+		require.Equal(t, class, r.Class, "%s: %s", n, r.Reason)
+		require.False(t, r.Applicable(), n)
+		require.Equal(t, "true", r.Current["combine_undo_aware"], n)
 	}
-	require.Equal(t, retCatNoTargetPresent, rows[rf.ids["free-orphan"]].Class, "a book no journal names is unaffected")
+	require.Equal(t, retCatNoTargetPresent, rows[rf.ids["free-orphan"]].Class)
+	require.Empty(t, rows[rf.ids["free-orphan"]].Current["combine_undo_aware"], "a book no journal names carries no flag")
+}
+
+// The plan's summary counts the rows that come from a combine that can still
+// be undone, apart from every other count.
+func TestRetiredVersions_SummaryCountsCombineUndoAwareRows(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	rf.trashed("a", "g", 30, rf.file("g/a.mp3"))
+	rf.trashed("b", "g", 3, rf.file("g/b.mp3"))
+	rf.trashed("c", "g", 30, rf.file("g/c.mp3"))
+	j := &merge.CombineJournal{ID: "J-1", Status: merge.CombineJournalApplied, SurvivorID: rf.ids["primary"]}
+	for _, n := range []string{"a", "b"} {
+		j.Absorbed = append(j.Absorbed, merge.CombineAbsorbed{BookID: rf.ids[n]})
+	}
+	require.NoError(t, merge.WriteCombineJournal(rf.st, j))
+	rep := &fakeReporter{}
+	_, err := rf.f.Plan(context.Background(), nil, rep)
+	require.NoError(t, err)
+	var line string
+	for _, l := range rep.logs {
+		if strings.Contains(l, "retired-versions preview:") {
+			line = l
+		}
+	}
+	require.Contains(t, line, "2 row(s) come from a combine that can still be undone (1 of them would be retired")
 }
 
 // EACCES, a timeout and ENOTDIR on a no-target row: only "does not exist" and
@@ -543,10 +592,20 @@ func TestRetiredVersions_SummaryLogsNoTargetEvidence(t *testing.T) {
 	require.True(t, found, "summary line missing: %v", rep.logs)
 }
 
+// optedOutFixer keeps the wrapped fixer's Plan, Replan and Apply and adds only
+// the stand-down opt-out, hiding PlanOnly: RunApply refuses a plan-only fixer
+// before it ever reaches the stand-down, so the engine's honouring of the
+// opt-out is shown on a wrapper that is not plan-only.
+type optedOutFixer struct{ repairs.Fixer }
+
+func (optedOutFixer) NoScanStandDown() bool { return true }
+
 // RunApply takes a scan stand-down for a fixer that did not opt out and none
-// for this one; the control proves the assertion can fail.
+// for one that did; the control proves the assertion can fail. The fixer's own
+// opt-out is asserted directly.
 func TestRetiredVersions_NoScanStandDown(t *testing.T) {
 	rf := newRetiredFixture(t)
+	require.True(t, rf.f.NoScanStandDown(), "the preview opts out of the scan stand-down")
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
 	rf.trashed("loser", "g", 30, rf.file("g/a.mp3"))
 	res, err := repairs.RunPlan(context.Background(), rf.f, nil, repairs.PlanDeps{Guard: rf.st}, &fakeReporter{})
@@ -561,32 +620,45 @@ func TestRetiredVersions_NoScanStandDown(t *testing.T) {
 		require.NoError(t, err)
 		return sd.acquired()
 	}
-	require.Zero(t, apply(rf.f))
+	require.Zero(t, apply(optedOutFixer{plainFixer{rf.f}}))
 	require.Positive(t, apply(plainFixer{rf.f}), "without the opt-out the run does take the stand-down")
 }
 
 func TestRetiredVersions_DescriptionNamesItsLimits(t *testing.T) {
 	rf := newRetiredFixture(t)
 	d := rf.f.Description()
-	for _, want := range []string{"min_age_days", "rule 5", "owner veto", "undone", "no Apply"} {
+	for _, want := range []string{"min_age_days", "rule 5", "owner veto", "combine_undo_aware", "not yet undone", "Doctor Who", "no Apply"} {
 		require.Contains(t, d, want)
 	}
 }
 
-// One stored row per trashed book, tens of thousands of them in one
-// operation's result: keep each row small, and say how small it is.
+// A plan stores one small row per trashed book (tens of thousands of them) beside
+// the operation, and the operation's own stored result stays a summary whatever
+// the plan's size. The rows here are what production's are: 26-character ids, a
+// title of real length, twelve file rows sharing paths with a live target.
 func TestRetiredVersions_StoredRowSize(t *testing.T) {
 	rf := newRetiredFixture(t)
-	rf.live("primary", "g", rf.file("g/primary.mp3"))
-	for i := range 30 {
-		rf.trashed("would-"+string(rune('a'+i%26))+string(rune('a'+i/26)), "g", 30, rf.file("g/w"+string(rune('a'+i%26))+string(rune('a'+i/26))+".mp3"))
+	shared := make([]string, 12)
+	for i := range shared {
+		shared[i] = rf.absent(fmt.Sprintf("shared/Part %02d of a Long Chapter Name.mp3", i))
 	}
-	for i := range 30 {
-		rf.trashed("orphan-"+string(rune('a'+i%26))+string(rune('a'+i/26)), "", 30, rf.absent("o"+string(rune('a'+i%26))+string(rune('a'+i/26))+".mp3"))
+	rf.live("primary", "g", shared...)
+	addShells := func(from, n int) {
+		for i := from; i < from+n; i++ {
+			title := fmt.Sprintf("The Long Title of Audiobook Number %d: A Novel", i)
+			rf.trashed("same-"+title, "g", 30, shared...)
+			rf.trashed("would-"+title, "g", 30, rf.absent(fmt.Sprintf("w/%d.mp3", i)))
+			rf.trashed("orphan-"+title, "", 30, rf.absent(fmt.Sprintf("o/%d.mp3", i)))
+		}
 	}
+	const batch = 8
+	addShells(0, batch)
 	rows := rf.plan()
+	classes := map[string]int{}
 	total, largest := 0, 0
 	for _, r := range rows {
+		classes[r.Class]++
+		require.Len(t, r.RowID, 26, "a production id is a ULID")
 		b, err := json.Marshal(r)
 		require.NoError(t, err)
 		total += len(b)
@@ -598,8 +670,95 @@ func TestRetiredVersions_StoredRowSize(t *testing.T) {
 			}
 		}
 	}
+	require.Equal(t, batch, classes[retCatSamePath], "%v", classes)
+	require.Equal(t, batch, classes[retCatWouldRetire], "%v", classes)
 	avg := total / len(rows)
 	t.Logf("stored plan rows: %d rows, average %d bytes, largest %d bytes; 51,000 rows would be about %.1f MB",
 		len(rows), avg, largest, float64(avg)*51000/1e6)
-	require.Less(t, avg, 900, "a plan row grew; 51,000 of them are one operation's result")
+	require.Less(t, avg, 1100, "a plan row grew; 51,000 of them are stored per plan")
+	require.Less(t, largest, 1500, "the largest plan row grew")
+
+	// The operation's stored result is the summary: small, and not growing with
+	// the number of rows.
+	summary := func() int {
+		res := rf.runPlan()
+		b, err := json.Marshal(res)
+		require.NoError(t, err)
+		require.NotContains(t, string(b), res.Rows[0].RowID, "a row leaked into the stored summary")
+		return len(b)
+	}
+	small := summary()
+	require.Less(t, small, 64*1024)
+	addShells(batch, 3*batch)
+	large := summary()
+	require.Less(t, large, 64*1024)
+	require.Less(t, large-small, 128, "the stored summary grew with the plan: %d -> %d bytes", small, large)
+}
+
+// gatedOps is the fixture's store with one read that holds each caller until
+// a second one is in flight alongside it (or two seconds pass), recording the
+// peak number of concurrent callers.
+type gatedOps struct {
+	*database.PebbleStore
+	inflight, peak atomic.Int32
+}
+
+func (g *gatedOps) GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error) {
+	n := g.inflight.Add(1)
+	defer g.inflight.Add(-1)
+	for p := g.peak.Load(); n > p && !g.peak.CompareAndSwap(p, n); p = g.peak.Load() {
+	}
+	for deadline := time.Now().Add(2 * time.Second); g.peak.Load() < 2 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	return g.PebbleStore.GetBookFilesForIDsCore(ids)
+}
+
+type gatedDeps struct {
+	fakeDeps
+	ops *gatedOps
+}
+
+func (d gatedDeps) OpsStore() OpsStore { return d.ops }
+
+// The plan's classification runs on a worker pool of more than one worker:
+// registry.RunItems clamps a zero Concurrency to one, so a call that leaves the
+// field out is a sequential loop. Two shells must be read at the same moment.
+func TestRetiredVersions_PlanClassifiesConcurrently(t *testing.T) {
+	if runtime.NumCPU() < 2 {
+		t.Skip("one CPU: the plan's pool is one worker")
+	}
+	rf := newRetiredFixture(t)
+	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	for i := range 6 {
+		rf.trashed(fmt.Sprintf("shell-%d", i), "g", 30, rf.file(fmt.Sprintf("g/%d.mp3", i)))
+	}
+	g := &gatedOps{PebbleStore: rf.st}
+	rf.withDeps(gatedDeps{fakeDeps: fakeDeps{store: rf.st}, ops: g})
+	rows := rf.plan()
+	require.Len(t, rows, 6)
+	require.GreaterOrEqual(t, g.peak.Load(), int32(2), "the plan read one book at a time")
+}
+
+// A plan is refused while the stats of earlier runs are still hung past the
+// cap: each is a blocked OS thread, and another plan on the same dead mount
+// would add more. Below the cap it only warns.
+func TestRetiredVersions_PlanRefusedWhileStatsStillHung(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	rf.trashed("shell", "g", 30, rf.file("g/a.mp3"))
+	below := retiredStatMaxAbandoned - 1
+	retiredStatsAbandoned.Add(below)
+	t.Cleanup(func() { retiredStatsAbandoned.Add(-below) })
+
+	rep := &fakeReporter{}
+	_, err := rf.f.Plan(context.Background(), nil, rep)
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(rep.logs, "\n"), "still hung")
+
+	retiredStatsAbandoned.Add(1)
+	t.Cleanup(func() { retiredStatsAbandoned.Add(-1) })
+	_, err = rf.f.Plan(context.Background(), nil, &fakeReporter{})
+	require.ErrorIs(t, err, errRetiredStatCap)
+	require.ErrorContains(t, err, "earlier runs")
 }

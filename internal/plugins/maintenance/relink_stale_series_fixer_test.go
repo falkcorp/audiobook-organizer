@@ -1,13 +1,12 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: edaf6525-dcbd-426d-b672-c3293aff05f5
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package maintenance
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -246,10 +245,7 @@ func TestRelinkStaleSeries_ApplyRefusesALockAddedAfterReplan(t *testing.T) {
 func TestRelinkStaleSeries_ApplyRelinksAndUndoUnlinks(t *testing.T) {
 	lib := newRelinkLib(t)
 	f, res, rows := lib.plan(t)
-	raw, err := json.Marshal(res)
-	require.NoError(t, err)
-	var plan repairs.PlanResult
-	require.NoError(t, json.Unmarshal(raw, &plan)) // apply reads the stored plan
+	plan := roundTripPlan(t, res) // apply reads the stored plan
 
 	before, err := lib.store.GetBookByID(lib.ids["relink"])
 	require.NoError(t, err)
@@ -406,10 +402,7 @@ func TestRelinkStaleSeries_GuardExclusion(t *testing.T) {
 func TestRelinkStaleSeries_UserClearAfterTheFixersRelinkHolds(t *testing.T) {
 	lib := newRelinkLib(t)
 	f, res, rows := lib.plan(t)
-	raw, err := json.Marshal(res)
-	require.NoError(t, err)
-	var plan repairs.PlanResult
-	require.NoError(t, json.Unmarshal(raw, &plan))
+	plan := roundTripPlan(t, res)
 	out, err := repairs.RunApply(context.Background(), f, &plan, "plan-1", []string{rows["relink"].RowID}, false,
 		lib.applyDeps(t, f), &fakeReporter{})
 	require.NoError(t, err)

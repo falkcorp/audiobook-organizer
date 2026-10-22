@@ -1,7 +1,7 @@
 // file: internal/repairs/wire_null_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9a4e1d62-3b85-4c07-8d19-f26c0e7a5b43
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -41,20 +41,27 @@ func TestRunPlan_NilBookIDsAndNoRowsMarshalAsEmptyArrays(t *testing.T) {
 	f := &noBookIDsFixer{s: s, rows: []Row{{RowID: "r1", Title: "t", Reason: "x",
 		Risk: RiskLow, Fingerprint: "fp"}}}
 	res := planFor(t, s, f)
+	// The rows reach the SPA through the rows endpoint (RowsPage).
+	page, err := res.Page("op", FilterAll, "", 0, 10)
+	require.NoError(t, err)
 	var rows []map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(marshalMap(t, res)["rows"], &rows))
+	require.NoError(t, json.Unmarshal(marshalMap(t, page)["rows"], &rows))
 	require.JSONEq(t, `[]`, string(rows[0]["book_ids"]), "a row built without BookIDs must not marshal null")
 
 	f.rows = nil
 	res = planFor(t, s, f)
 	m := marshalMap(t, res)
-	require.JSONEq(t, `[]`, string(m["rows"]))
 	require.JSONEq(t, `{}`, string(m["skipped_by_kind"]))
+	require.NotContains(t, m, "rows", "the stored summary carries no rows")
+	page, err = res.Page("op", FilterAll, "", 0, 10)
+	require.NoError(t, err)
+	require.JSONEq(t, `[]`, string(marshalMap(t, page)["rows"]))
 }
 
 func TestPlanResult_NormalizeCoversStoredNulls(t *testing.T) {
 	var p PlanResult
-	require.NoError(t, json.Unmarshal([]byte(`{"fixer_id":"x","skipped_by_kind":null,"rows":[{"row_id":"r","book_ids":null}]}`), &p))
+	require.NoError(t, json.Unmarshal([]byte(`{"fixer_id":"x","skipped_by_kind":null}`), &p))
+	p.Rows = []Row{{RowID: "r"}} // a row with no book_ids
 	p.normalize()
 	page, err := p.Page("op", FilterAll, "", 0, 10)
 	require.NoError(t, err)
@@ -77,27 +84,31 @@ func TestRunApply_EarlyReturnsKeepRowsAnArray(t *testing.T) {
 	require.JSONEq(t, `{}`, string(m["by_outcome"]))
 }
 
-// LoadPlan is the one place a plan stored before normalize existed re-enters
-// the wire path, so a stored null must come back as an empty collection.
+// LoadPlan is the one place a stored plan re-enters the wire path, so a stored
+// null must come back as an empty collection: a summary written with null
+// collections, and a stored row written with a null book_ids.
 func TestLoadPlan_NormalizesStoredNulls(t *testing.T) {
-	for name, stored := range map[string]string{
-		"rows null":     `{"fixer_id":"fx","skipped_by_kind":null,"rows":null}`,
-		"book_ids null": `{"fixer_id":"fx","rows":[{"row_id":"r","book_ids":null}]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			s := newMemStore()
-			data := stored
-			s.ops["plan-1"] = &database.OperationV2Row{ID: "plan-1", DefID: PlanOpID, Status: "completed", ResultData: &data}
-			plan, err := LoadPlan(s, "plan-1", "fx")
-			require.NoError(t, err)
-			require.NotNil(t, plan.Rows)
-			require.NotNil(t, plan.SkippedByKind)
-			for _, r := range plan.Rows {
-				require.NotNil(t, r.BookIDs)
-			}
-			m := marshalMap(t, plan)
-			require.JSONEq(t, `{}`, string(m["skipped_by_kind"]))
-			require.NotEqual(t, "null", string(m["rows"]))
-		})
-	}
+	s := newMemStore()
+	data := `{"fixer_id":"fx","row_store":"` + PlanRowStoreV1 + `","total":1,"skipped_by_kind":null}`
+	s.ops["plan-1"] = &database.OperationV2Row{ID: "plan-1", DefID: PlanOpID, Status: "completed", ResultData: &data}
+	require.NoError(t, s.ReplaceOpRows("plan-1", 1, func(int) (database.OpRow, error) {
+		return database.OpRow{ID: "r", Index: []byte("\x00\x000"), Data: []byte(`{"row_id":"r","book_ids":null}`)}, nil
+	}))
+	plan, err := LoadPlan(s, s, "plan-1", "fx")
+	require.NoError(t, err)
+	require.NotNil(t, plan.Rows)
+	require.NotNil(t, plan.SkippedByKind)
+	page, err := plan.Page("plan-1", FilterAll, "", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, page.Rows, 1)
+	require.NotNil(t, page.Rows[0].BookIDs)
+	m := marshalMap(t, plan)
+	require.JSONEq(t, `{}`, string(m["skipped_by_kind"]))
+	require.NotContains(t, m, "rows", "a plan summary carries no rows")
+	pm := marshalMap(t, page)
+	require.JSONEq(t, `[]`, string(func() []byte {
+		var rows []map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(pm["rows"], &rows))
+		return rows[0]["book_ids"]
+	}()))
 }

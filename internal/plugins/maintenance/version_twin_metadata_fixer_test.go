@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -130,10 +130,7 @@ func (l *vtLib) plan() (*repairs.PlanResult, map[string]repairs.Row) {
 	require.NoError(l.t, err)
 	res, err := repairs.RunPlan(context.Background(), l.fixer, nil, l.p.repairsPlanDeps(l.st, series), &fakeReporter{})
 	require.NoError(l.t, err)
-	raw, err := json.Marshal(res)
-	require.NoError(l.t, err)
-	var stored repairs.PlanResult
-	require.NoError(l.t, json.Unmarshal(raw, &stored))
+	stored := roundTripPlan(l.t, res)
 	byGroup := map[string]repairs.Row{}
 	for _, r := range stored.Rows {
 		byGroup[r.RowID] = r

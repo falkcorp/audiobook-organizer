@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-12
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -382,10 +382,7 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 func TestJunkTitleFixer_ApplyWritesTitleOnlyAndUndoRestoresIt(t *testing.T) {
 	lib := newJunkLib(t)
 	f, res, rows := lib.plan(t)
-	raw, err := json.Marshal(res)
-	require.NoError(t, err)
-	var plan repairs.PlanResult
-	require.NoError(t, json.Unmarshal(raw, &plan)) // apply reads the stored plan
+	plan := roundTripPlan(t, res) // apply reads the stored plan
 
 	before, err := lib.store.GetBookByID(lib.ids["folder"])
 	require.NoError(t, err)
@@ -937,10 +934,7 @@ func TestJunkTitleFixer_CandidateReadIsTheFilteredRow(t *testing.T) {
 func TestJunkTitleFixer_ProviderRecordedRowApplies(t *testing.T) {
 	lib := newJunkLib(t)
 	f, res, rows := lib.plan(t)
-	raw, err := json.Marshal(res)
-	require.NoError(t, err)
-	var plan repairs.PlanResult
-	require.NoError(t, json.Unmarshal(raw, &plan))
+	plan := roundTripPlan(t, res)
 	id := lib.ids["provider-agrees"]
 	fetchedBefore := titleFetched(t, lib.store, id)
 	require.NotNil(t, fetchedBefore)

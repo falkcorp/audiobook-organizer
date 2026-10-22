@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -150,6 +151,8 @@ func (s *scriptedScan) ScanStandDownValid(string) bool {
 
 // planOps serves stored op rows to repairs.apply.
 type planOps struct {
+	// MemOpRows is the plan row store: a plan's rows live beside its op row.
+	*dbtest.MemOpRows
 	mu   sync.Mutex
 	rows map[string]*database.OperationV2Row
 }
@@ -350,7 +353,7 @@ func newRepairsFixture(t *testing.T, scan *scriptedScan) (*vgRepairFixture, *Plu
 	f := newVGRepairFixture(t)
 	f.seed(t)
 	withRoot(t, f.root)
-	ops := &planOps{rows: map[string]*database.OperationV2Row{}}
+	ops := &planOps{MemOpRows: dbtest.NewMemOpRows(), rows: map[string]*database.OperationV2Row{}}
 	p := f.plugin(scanDeps{store: f.s, scan: scan, ops: ops})
 	fx := p.Repairs()
 	vf, _ := fx.Get(vgPrimaryFixerID)

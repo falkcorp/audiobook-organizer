@@ -1,11 +1,12 @@
 // file: internal/repairs/guards.go
-// version: 1.12.1
+// version: 1.14.1
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-10-13
+// last-edited: 2026-10-22
 
 package repairs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,9 +14,12 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -133,13 +137,53 @@ func guardBookPaths(res *PathResolver, bookID string, paths []string, seriesName
 // use.
 //
 // It fails closed: whenever it cannot tell where a path lives (a folder or
-// link it cannot read, a link it cannot read the text of, or a chain longer
-// than maxLinkHops) it reports doubt, and the guard skips the row
-// (SkipGuardUnreadable) instead of clearing it.
+// link it cannot read, a link it cannot read the text of, a chain longer
+// than maxLinkHops, or a mount that does not answer within the bound) it
+// reports doubt, and the guard skips the row (SkipGuardUnreadable) instead of
+// clearing it.
+//
+// Every filesystem call it makes is bounded (ResolverBound). A call on a
+// hung mount cannot be interrupted, only abandoned (boundedcall.Call), so the
+// resolver limits what a dead mount can cost: a folder that timed out once is
+// remembered as doubt and not tried again, and once ResolverMaxAbandoned of
+// its abandoned calls are still stuck it answers doubt at once instead of
+// stacking more blocked threads (ResolverMaxAbandonedTotal does the same
+// across every resolver in the process).
 type PathResolver struct {
 	mu   sync.Mutex
 	dirs map[string]resolvedDir
+	// stuck: folder -> the doubt of a path in it that timed out.
+	stuck map[string]error
+
+	// bound, maxAbandoned and the three calls are read once, at construction,
+	// so an abandoned call never reads a package variable a test restores.
+	bound        time.Duration
+	maxAbandoned int64
+	lstat        func(string) (os.FileInfo, error)
+	eval         func(string) (string, error)
+	readlink     func(string) (string, error)
+	// abandoned counts this resolver's timed-out calls that have not returned.
+	abandoned atomic.Int64
 }
+
+// ResolverBound bounds how long the resolver waits for the filesystem while
+// settling one path (every Lstat, EvalSymlinks and Readlink of its walk). A
+// var for tests; a resolver reads it when it is built.
+var ResolverBound = 15 * time.Second
+
+// ResolverMaxAbandoned caps how many of ONE resolver's timed-out calls may
+// still be hung before it answers doubt without trying (each blocked call
+// holds an OS thread; the runtime aborts at 10,000). A var for tests; read
+// when the resolver is built.
+var ResolverMaxAbandoned int64 = 8
+
+// ResolverMaxAbandonedTotal is the same cap across every resolver in the
+// process: runs are short and many, and a dead mount outlives all of them.
+const ResolverMaxAbandonedTotal = 64
+
+// resolverAbandoned is the process-wide gauge of resolver calls abandoned and
+// not yet returned; a resolver consults it against ResolverMaxAbandonedTotal.
+var resolverAbandoned atomic.Int64
 
 type resolvedDir struct {
 	path string
@@ -152,7 +196,11 @@ type resolvedDir struct {
 }
 
 // NewPathResolver returns an empty resolver.
-func NewPathResolver() *PathResolver { return &PathResolver{dirs: map[string]resolvedDir{}} }
+func NewPathResolver() *PathResolver {
+	return &PathResolver{dirs: map[string]resolvedDir{}, stuck: map[string]error{},
+		bound: ResolverBound, maxAbandoned: ResolverMaxAbandoned,
+		lstat: os.Lstat, eval: evalSymlinks, readlink: os.Readlink}
+}
 
 // missing reports an error that means a path component does not exist, which
 // is an answer, not doubt. ENAMETOOLONG counts: a path with a component (or a
@@ -162,7 +210,7 @@ func missing(err error) bool {
 		errors.Is(err, syscall.ENAMETOOLONG)
 }
 
-// evalSymlinks is filepath.EvalSymlinks; a test counts the calls through it.
+// evalSymlinks is filepath.EvalSymlinks, the resolver's default.
 var evalSymlinks = filepath.EvalSymlinks
 
 func (r *PathResolver) dir(d string) resolvedDir {
@@ -172,7 +220,7 @@ func (r *PathResolver) dir(d string) resolvedDir {
 	if hit {
 		return got
 	}
-	p, err := evalSymlinks(d)
+	p, err := r.eval(d)
 	switch {
 	case err == nil:
 		got = resolvedDir{path: p, ok: true}
@@ -208,15 +256,39 @@ type resolveWalk struct {
 // spellings returns the paths p resolves to, besides p: the resolved path of
 // a live path, and for a dangling link or a missing path every path its link
 // texts name, each resolved through its longest existing ancestor. doubt is
-// non-nil when some step could not be read; the spellings found so far are
-// still returned.
+// non-nil when some step could not be read, or did not answer within the
+// bound (the whole path is then doubt, no spelling returned); the spellings
+// found so far are otherwise still returned.
 func (r *PathResolver) spellings(p string) (out []string, doubt error) {
-	w := &resolveWalk{hops: maxLinkHops, visited: map[string]bool{}}
-	return r.walk(p, w)
+	folder := filepath.Dir(p)
+	r.mu.Lock()
+	known := r.stuck[folder]
+	r.mu.Unlock()
+	if known != nil {
+		return nil, fmt.Errorf("resolve %s: %w", p, known)
+	}
+	if n := r.abandoned.Load(); n >= r.maxAbandoned {
+		return nil, fmt.Errorf("resolve %s: %d of this run's filesystem calls are still hung (cap %d); not trying more, check the mount", p, n, r.maxAbandoned)
+	}
+	if n := resolverAbandoned.Load(); n >= ResolverMaxAbandonedTotal {
+		return nil, fmt.Errorf("resolve %s: %d filesystem calls of earlier runs are still hung (cap %d); not trying more, check the mount", p, n, ResolverMaxAbandonedTotal)
+	}
+	out, err := boundedcall.Call(context.Background(), r.bound, func() ([]string, error) {
+		w := &resolveWalk{hops: maxLinkHops, visited: map[string]bool{}}
+		return r.walk(p, w)
+	}, &r.abandoned, &resolverAbandoned)
+	if errors.Is(err, boundedcall.ErrTimeout) {
+		doubt = fmt.Errorf("no answer from the filesystem within %v (the mount may be hung)", r.bound)
+		r.mu.Lock()
+		r.stuck[folder] = doubt
+		r.mu.Unlock()
+		return nil, fmt.Errorf("resolve %s: %w", p, doubt)
+	}
+	return out, err
 }
 
 func (r *PathResolver) walk(p string, w *resolveWalk) ([]string, error) {
-	fi, err := os.Lstat(p)
+	fi, err := r.lstat(p)
 	if err != nil {
 		if !missing(err) {
 			return nil, fmt.Errorf("read %s: %w", p, err)
@@ -224,7 +296,7 @@ func (r *PathResolver) walk(p string, w *resolveWalk) ([]string, error) {
 		return r.walkMissing(p, w)
 	}
 	if fi.Mode()&os.ModeSymlink != 0 && !w.byHand {
-		if rp, err := evalSymlinks(p); err == nil {
+		if rp, err := r.eval(p); err == nil {
 			return []string{rp}, nil
 		}
 	}
@@ -261,7 +333,7 @@ func (r *PathResolver) walkMissing(p string, w *resolveWalk) ([]string, error) {
 		}
 		if d.ok {
 			first := filepath.Join(d.path, c)
-			if fi, err := os.Lstat(first); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			if fi, err := r.lstat(first); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 				targets, doubt := r.follow(first, w)
 				out := []string{filepath.Join(first, rest)}
 				for _, t := range targets {
@@ -295,7 +367,7 @@ func (r *PathResolver) follow(link string, w *resolveWalk) ([]string, error) {
 		return nil, fmt.Errorf("resolve %s: more than %d links", link, maxLinkHops)
 	}
 	w.hops--
-	text, err := os.Readlink(link)
+	text, err := r.readlink(link)
 	if err != nil {
 		return nil, fmt.Errorf("read link %s: %w", link, err)
 	}
@@ -586,6 +658,24 @@ func guardBooks(r GuardReader, tags GuardTagReader, series SeriesNamer, res *Pat
 // guardBooksWith is guardBooks lifting the books/itunes path check for the
 // books in dbOnly as well (GuardRowBooksFor).
 func guardBooksWith(r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string, allowITunes bool, dbOnly map[string]bool) (kind, reason string, err error) {
+	return guardBooksCore(r, tags, series, res, bookIDs, allowITunes, dbOnly, false)
+}
+
+// GuardOwnerManualBooks is the owner-manual half of the framework guard
+// (path, series, title, credits, transcribed fields, franchise tag) over
+// bookIDs, trashed books INCLUDED, with the books/itunes path check lifted: a
+// fixer that has its own iTunes gate asks it which of the owner's hands-off
+// rules a book trips. A fixer that decides what to do with trashed books
+// needs the trashed ones checked, because the guard RunPlan and RunApply run
+// passes over a soft-deleted book (it has nothing left to protect). A path
+// that cannot be settled still returns SkipGuardUnreadable, and a read error
+// is returned: neither may be read as clear.
+func GuardOwnerManualBooks(r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
+	return guardBooksCore(r, tags, series, res, bookIDs, true, nil, true)
+}
+
+// guardBooksCore is guardBooksWith, optionally checking soft-deleted books.
+func guardBooksCore(r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string, allowITunes bool, dbOnly map[string]bool, includeTrashed bool) (kind, reason string, err error) {
 	ids := append([]string(nil), bookIDs...)
 	sort.Strings(ids)
 	for _, id := range ids {
@@ -593,7 +683,7 @@ func guardBooksWith(r GuardReader, tags GuardTagReader, series SeriesNamer, res 
 		if err != nil {
 			return "", "", fmt.Errorf("guard: read book %s: %w", id, err)
 		}
-		if b == nil || b.IsSoftDeleted() {
+		if b == nil || (b.IsSoftDeleted() && !includeTrashed) {
 			continue
 		}
 		files, err := r.GetBookFiles(id)

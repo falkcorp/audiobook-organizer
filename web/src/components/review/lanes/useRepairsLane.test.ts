@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -358,6 +358,44 @@ describe('useRepairsLane: selection and apply', () => {
       'Applied 1 · changed since trial 0 · failed 0',
       'success'
     );
+  });
+
+  it('drops an apply dispatched for a preview-only fixer: no confirm, no request', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([{ ...FIXER, plan_only: true }]);
+    const { result } = await renderLane();
+    stubApply();
+    act(() =>
+      result.current.dispatch({
+        lane: 'repairs',
+        type: 'applyRows',
+        fixerId: 'vg-primary',
+        planOpId: 'plan-1',
+        rowIds: ['g1'],
+      })
+    );
+    act(() =>
+      result.current.dispatch({ lane: 'repairs', type: 'applyAllApplicable', fixerId: 'vg-primary', planOpId: 'plan-1' })
+    );
+    // Let any (wrongly) started apply reach the API before asserting it did not.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(api.startRepairApply).not.toHaveBeenCalled();
+  });
+
+  it('still runs a trial for a preview-only fixer', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([{ ...FIXER, plan_only: true }]);
+    const { result } = await renderLane();
+    vi.mocked(api.startRepairPlan).mockResolvedValue({
+      operation_id: 'plan-2',
+      def_id: 'repairs.plan',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockResolvedValue(op('plan-2', 'completed'));
+    act(() => result.current.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: 'vg-primary' }));
+    await waitFor(() => expect(api.startRepairPlan).toHaveBeenCalledTimes(1));
   });
 
   it('sends nothing when the confirm is cancelled', async () => {

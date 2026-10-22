@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.10.4
+// version: 2.10.5
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -82,6 +82,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
@@ -187,10 +188,10 @@ const extractTimeout = 30 * time.Second
 // if it does not complete within extractTimeout. It also respects ctx so the op
 // can be cancelled between files.
 func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaInfo, error) {
-	info, err := boundedCall(ctx, extractTimeout, func() (*mediainfo.MediaInfo, error) {
+	info, err := boundedcall.Call(ctx, extractTimeout, func() (*mediainfo.MediaInfo, error) {
 		return mediainfo.Extract(filePath)
 	})
-	if errors.Is(err, errBoundedCallTimeout) {
+	if errors.Is(err, boundedcall.ErrTimeout) {
 		return nil, fmt.Errorf("extract: %w", err)
 	}
 	return info, err

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-10-22
 
@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -75,6 +76,8 @@ func (e *fakeEnqueuer) EnqueueOp(_ context.Context, defID string, params any, op
 }
 
 type fakeOps struct {
+	// MemOpRows makes the fake an OpRowStore: plan rows live beside the op rows.
+	*dbtest.MemOpRows
 	mu       sync.Mutex
 	rows     map[string]*database.OperationV2Row
 	settings map[string]string
@@ -125,9 +128,11 @@ func planRows(n int) []repairs.Row {
 	return rows
 }
 
-func storedPlan(t *testing.T, fixerID string, rows []repairs.Row) *string {
+// addPlan stores a completed repairs.plan op the way the plan op does: its rows
+// beside the op (repairs.SavePlan), its summary as the op result.
+func (o *fakeOps) addPlan(t *testing.T, opID, fixerID string, queued time.Time, rows []repairs.Row) {
 	t.Helper()
-	res := repairs.PlanResult{FixerID: fixerID, PlannedAt: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC),
+	res := &repairs.PlanResult{FixerID: fixerID, PlannedAt: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC),
 		Total: len(rows), SkippedByKind: map[string]int{}, Rows: rows}
 	for _, r := range rows {
 		if r.Applicable() {
@@ -136,10 +141,18 @@ func storedPlan(t *testing.T, fixerID string, rows []repairs.Row) *string {
 			res.SkippedByKind[r.Skipped]++
 		}
 	}
+	require.NoError(t, repairs.SavePlan(o, opID, res))
 	data, err := json.Marshal(res)
 	require.NoError(t, err)
 	s := string(data)
-	return &s
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.rows[opID] = &database.OperationV2Row{ID: opID, DefID: repairs.PlanOpID, Status: "completed", QueuedAt: queued,
+		Params: `{"fixer_id":"` + fixerID + `"}`, ResultData: &s}
+}
+
+func newFakeOps(settings map[string]string) *fakeOps {
+	return &fakeOps{MemOpRows: dbtest.NewMemOpRows(), rows: map[string]*database.OperationV2Row{}, settings: settings}
 }
 
 func setup(t *testing.T) (*gin.Engine, *fakeEnqueuer, *fakeOps) {
@@ -149,18 +162,15 @@ func setup(t *testing.T) (*gin.Engine, *fakeEnqueuer, *fakeOps) {
 	require.NoError(t, reg.Register(stubFixer{id: "other"}))
 	enq := &fakeEnqueuer{}
 	queued := time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)
-	ops := &fakeOps{rows: map[string]*database.OperationV2Row{
-		"op-plan": {ID: "op-plan", DefID: repairs.PlanOpID, Status: "completed", QueuedAt: queued,
-			Params: `{"fixer_id":"version-group-primary-repair"}`, ResultData: storedPlan(t, "version-group-primary-repair", planRows(10))},
-		"op-old-plan": {ID: "op-old-plan", DefID: repairs.PlanOpID, Status: "completed", QueuedAt: queued.Add(-time.Hour),
-			Params: `{"fixer_id":"version-group-primary-repair"}`, ResultData: storedPlan(t, "version-group-primary-repair", planRows(1))},
-		"op-running": {ID: "op-running", DefID: repairs.PlanOpID, Status: "running", QueuedAt: queued.Add(-2 * time.Hour),
-			Params: `{"fixer_id":"other"}`},
-		"op-scan": {ID: "op-scan", DefID: "library.scan", Status: "completed", QueuedAt: queued},
-	}, settings: map[string]string{
+	ops := newFakeOps(map[string]string{
 		"repairs_last_plan_op:version-group-primary-repair": "op-plan",
 		"repairs_last_plan_op:other":                        "op-running",
-	}}
+	})
+	ops.addPlan(t, "op-plan", "version-group-primary-repair", queued, planRows(10))
+	ops.addPlan(t, "op-old-plan", "version-group-primary-repair", queued.Add(-time.Hour), planRows(1))
+	ops.rows["op-running"] = &database.OperationV2Row{ID: "op-running", DefID: repairs.PlanOpID, Status: "running",
+		QueuedAt: queued.Add(-2 * time.Hour), Params: `{"fixer_id":"other"}`}
+	ops.rows["op-scan"] = &database.OperationV2Row{ID: "op-scan", DefID: "library.scan", Status: "completed", QueuedAt: queued}
 	h := New(reg, enq, ops)
 	r := gin.New()
 	r.Use(callerWith(&database.User{ID: "u-editor", Username: "editor"}, auth.PermLibraryEditMetadata))
@@ -298,6 +308,34 @@ func TestListPlanRows_Pages(t *testing.T) {
 	require.Empty(t, page.Rows)
 }
 
+// A plan stored the old way (rows inside the op result) is a 409 that says to
+// run it again, on the rows route and on apply alike; a store that cannot keep
+// plan rows is a 503.
+func TestPlanStoredTheOldWayIsAConflict(t *testing.T) {
+	r, _, ops := setup(t)
+	legacy := `{"fixer_id":"version-group-primary-repair","total":1,"applicable":1,"skipped_by_kind":{},"rows":[{"row_id":"r","book_ids":["b"]}]}`
+	ops.rows["op-legacy"] = &database.OperationV2Row{ID: "op-legacy", DefID: repairs.PlanOpID, Status: "completed", ResultData: &legacy}
+	w := do(r, http.MethodGet, "/api/v1/repairs/version-group-primary-repair/plan/op-legacy/rows", "")
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "run the plan again")
+	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply", `{"plan_op_id":"op-legacy","row_ids":["r"]}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+}
+
+// opsWithoutRows is an op store with no plan-row capability.
+type opsWithoutRows struct{ OpStore }
+
+func TestPlanRowsRoute_StoreWithoutRowCapabilityIs503(t *testing.T) {
+	reg := repairs.NewRegistry()
+	require.NoError(t, reg.Register(stubFixer{id: "other"}))
+	h := New(reg, nil, opsWithoutRows{newFakeOps(map[string]string{})})
+	r := gin.New()
+	r.Use(callerWith(&database.User{ID: "u-editor", Username: "editor"}, auth.PermLibraryEditMetadata))
+	r.GET("/api/v1/repairs/:fixer/plan/:op_id/rows", h.ListPlanRows)
+	w := do(r, http.MethodGet, "/api/v1/repairs/other/plan/op-x/rows", "")
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+}
+
 func TestListPlanRows_Errors(t *testing.T) {
 	r, _, _ := setup(t)
 	base := "/api/v1/repairs/"
@@ -352,7 +390,7 @@ func TestStartApply(t *testing.T) {
 func TestPlanAndApply_NoRegistryIs503(t *testing.T) {
 	reg := repairs.NewRegistry()
 	require.NoError(t, reg.Register(stubFixer{id: "x"}))
-	h := New(reg, nil, &fakeOps{rows: map[string]*database.OperationV2Row{}, settings: map[string]string{}})
+	h := New(reg, nil, newFakeOps(map[string]string{}))
 	r := gin.New()
 	r.Use(callerWith(&database.User{ID: "u-editor"}, auth.PermLibraryEditMetadata))
 	r.POST("/repairs/:fixer/plan", h.StartPlan)
@@ -382,10 +420,8 @@ func TestFixerPermissions_ScopedFixerNeedsItsPermission(t *testing.T) {
 		require.NoError(t, reg.Register(scopedFixer{stubFixer{id: "scoped"}}))
 		require.NoError(t, reg.Register(stubFixer{id: "plain"}))
 		enq := &fakeEnqueuer{}
-		ops := &fakeOps{rows: map[string]*database.OperationV2Row{
-			"op-scoped-plan": {ID: "op-scoped-plan", DefID: repairs.PlanOpID, Status: "completed",
-				Params: `{"fixer_id":"scoped"}`, ResultData: storedPlan(t, "scoped", planRows(2))},
-		}, settings: map[string]string{}}
+		ops := newFakeOps(map[string]string{})
+		ops.addPlan(t, "op-scoped-plan", "scoped", time.Time{}, planRows(2))
 		h := New(reg, enq, ops)
 		h.ownerEmail = func() string { return testOwnerEmail }
 		r := gin.New()
@@ -437,7 +473,7 @@ func TestFixerPermissions_ScopedFixerNeedsItsPermission(t *testing.T) {
 	reg := repairs.NewRegistry()
 	require.NoError(t, reg.Register(scopedFixer{stubFixer{id: "scoped"}}))
 	enq2 := &fakeEnqueuer{}
-	h := New(reg, enq2, &fakeOps{rows: map[string]*database.OperationV2Row{}, settings: map[string]string{}}).
+	h := New(reg, enq2, newFakeOps(map[string]string{})).
 		WithPermissionCheck(func(_ *gin.Context, p auth.Permission) bool { allow++; return p == auth.PermSettingsManage })
 	r2 := gin.New()
 	r2.POST("/repairs/:fixer/plan", h.StartPlan)
@@ -457,10 +493,8 @@ func TestPlanOnlyFixer_ApplyRoutesRefuse(t *testing.T) {
 	require.NoError(t, reg.Register(previewFixer{stubFixer{id: "previewer"}}))
 	require.NoError(t, reg.Register(stubFixer{id: "writer"}))
 	enq := &fakeEnqueuer{}
-	ops := &fakeOps{rows: map[string]*database.OperationV2Row{
-		"op-plan": {ID: "op-plan", DefID: repairs.PlanOpID, Status: "completed", QueuedAt: time.Now(),
-			Params: `{"fixer_id":"previewer"}`, ResultData: storedPlan(t, "previewer", planRows(3))},
-	}, settings: map[string]string{}}
+	ops := newFakeOps(map[string]string{})
+	ops.addPlan(t, "op-plan", "previewer", time.Now(), planRows(3))
 	h := New(reg, enq, ops)
 	r := gin.New()
 	r.Use(callerWith(&database.User{ID: "u-editor", Username: "editor"}, auth.PermLibraryEditMetadata))
