@@ -1,5 +1,5 @@
 // file: internal/undo/membership_rowlevel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e98c6d5-ae02-4209-a3b4-306133edd303
 // last-edited: 2026-10-22
 
@@ -60,8 +60,10 @@ func (s *rowSim) retire(op, retired, survivor string) string {
 	id := fmt.Sprintf("%s/%s/%d", op, retired, now.Unix())
 	m := &database.OperationChange{ID: id + "/m", OperationID: op, BookID: survivor,
 		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(kind, "L"), OldValue: val, NewValue: retired, CreatedAt: now}
+	// Production journals the marker, then the row, as two writes that each take
+	// their own time.Now(): the row is never at the marker's instant.
 	r := &database.OperationChange{ID: id + "/r", OperationID: op, BookID: retired,
-		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(UserContentCollection, "L"), OldValue: val, NewValue: survivor, CreatedAt: now}
+		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(UserContentCollection, "L"), OldValue: val, NewValue: survivor, CreatedAt: now.Add(time.Microsecond)}
 	s.journals[survivor] = append(s.journals[survivor], m)
 	s.journals[retired] = append(s.journals[retired], r)
 	s.rows[r.ID], s.markers[r.ID] = r, m
@@ -329,25 +331,65 @@ func TestRowSim_CrashMidOperationExact(t *testing.T) {
 }
 
 // A survivor may itself be retired into another survivor (the duplicate-copies
-// fixer does), listed on borrowed account or not. Reverting such a history out
-// of order can refuse (a survivor that stands in a slot and was retired since
-// cannot be swapped back) or fall back to the recorded index and say so; it
-// must never leave a wrong list without saying so.
-func TestRowSim_SurvivorChainsNeverSilent(t *testing.T) {
+// fixer does), listed on borrowed account or not, and the operations may be
+// undone in any order, older ones first included. Every revert goes through,
+// and the order is exact: the graph places a returning book among the books the
+// records do not order against it (a survivor that stood in a slot and was
+// retired since is followed to the stand-in that took the slot).
+func TestRowSim_SurvivorChainsExact(t *testing.T) {
 	t.Parallel()
-	reportRowSim(t, "3 survivors, chains", runRowSim(t, 505, 6000, rowSimCfg{survivors: 3, steps: 10, chain: true}), false)
+	reportRowSim(t, "3 survivors, chains", runRowSim(t, 505, 6000, rowSimCfg{survivors: 3, steps: 10, chain: true}), true)
 }
 
-func TestRowSim_ChainsAndCrashesNeverSilent(t *testing.T) {
+func TestRowSim_ChainsAndCrashesExact(t *testing.T) {
 	t.Parallel()
-	reportRowSim(t, "chains and crashes", runRowSim(t, 606, 6000, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}), false)
+	reportRowSim(t, "chains and crashes", runRowSim(t, 606, 6000, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}), true)
 }
 
-func TestRowSim_SmallChainCasesNeverSilent(t *testing.T) {
+// Further seeds of the same chain shapes (long histories, many survivors).
+func TestRowSim_ChainsMoreSeedsExact(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		seed uint64
+		cfg  rowSimCfg
+	}{
+		{707, rowSimCfg{survivors: 3, steps: 12, chain: true}},
+		{808, rowSimCfg{survivors: 3, steps: 12, chain: true}},
+		{2606, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}},
+	} {
+		reportRowSim(t, fmt.Sprintf("3 survivors, chains, seed %d", c.seed), runRowSim(t, c.seed, 6000, c.cfg), true)
+	}
+}
+
+// Two seeds still leave a handful of histories (3 of 12,000) where, after a long
+// run of retires of survivors into survivors, the books beside a returning book
+// cannot be ordered against a stand-in listed for another retire. Those fall
+// back to the recorded index and say so in the result's note; the claim pinned
+// here is that none refuses and none is silent, and that no more than that many
+// fall back.
+func TestRowSim_ChainResidualReportedNeverRefusedOrSilent(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		seed        uint64
+		cfg         rowSimCfg
+		maxReported int
+	}{
+		{909, rowSimCfg{survivors: 3, steps: 12, chain: true}, 1},
+		{1606, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}, 2},
+	} {
+		st := runRowSim(t, c.seed, 6000, c.cfg)
+		reportRowSim(t, fmt.Sprintf("3 survivors, chains, seed %d", c.seed), st, false)
+		if st.refused > 0 || st.reported > c.maxReported {
+			t.Errorf("seed %d: %d refused, %d reported by index (allowed: 0 refused, %d reported)", c.seed, st.refused, st.reported, c.maxReported)
+		}
+	}
+}
+
+func TestRowSim_SmallChainCasesExact(t *testing.T) {
 	t.Parallel()
 	for _, steps := range []int{4, 5, 6, 8} {
 		reportRowSim(t, fmt.Sprintf("2 survivors, chains and crashes, steps=%d", steps),
-			runRowSim(t, uint64(900+steps), 20000, rowSimCfg{survivors: 2, steps: steps, chain: true, crashMid: 2}), false)
+			runRowSim(t, uint64(900+steps), 20000, rowSimCfg{survivors: 2, steps: steps, chain: true, crashMid: 2}), true)
 	}
 }
 
@@ -427,9 +469,11 @@ func TestSurvivorChain_SurvivorListedByATookOfItsOwn(t *testing.T) {
 	}
 }
 
-// A row whose own stamp was lost (a death before it) is retried after a newer
-// retire took the same book out again: it is stale, and putting the book back
-// would list a book a standing retire removed.
+// A row left standing with its marker already stamped (the state a refused
+// carry whose row void failed leaves, next to its voided marker; the model
+// stamps the marker alone) is retried after a newer retire took the same book
+// out again: it is stale, and putting the book back would list a book a
+// standing retire removed.
 func TestStaleRowIsNotRetriedAgainstANewerRetire(t *testing.T) {
 	t.Parallel()
 	l0 := []string{"a", "X", "S3", "b"}
@@ -438,7 +482,7 @@ func TestStaleRowIsNotRetriedAgainstANewerRetire(t *testing.T) {
 	if err := s.revertRow(old); err != nil {
 		t.Fatal(err)
 	}
-	// The process died before the row's own stamp: the row stands again.
+	// The row's own stamp did not land: the row stands again.
 	s.rows[old].RevertedAt, s.markers[old].RevertedAt = nil, nil
 	s.markers[old].RevertedAt = new(time.Time)
 	*s.markers[old].RevertedAt = s.tick()

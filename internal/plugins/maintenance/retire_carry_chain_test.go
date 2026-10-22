@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_chain_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3db16f2-7f5a-4c3e-a348-dea96c5942d4
 // last-edited: 2026-10-22
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // chainFixture is a collection of named books, with a name for every id, the
@@ -120,14 +121,10 @@ func TestRetireCarry_ARetiredSurvivorStillStoodOnReturnsAndLeavesWithTheLast(t *
 }
 
 // finalMarkFails fails the next multi-id MarkOperationChangesReverted (the
-// end-of-run stamp of RevertOperation), once, and with oldBuild also rewrites
-// the atomic list-and-stamp call to stamp only the first id (the survivor-side
-// marker), as a build that stamped the row apart from the list did. Everything
-// else goes through.
+// end-of-run stamp of RevertOperation), once. Everything else goes through.
 type finalMarkFails struct {
 	*database.PebbleStore
-	armed    atomic.Bool
-	oldBuild bool
+	armed atomic.Bool
 }
 
 func (s *finalMarkFails) Unwrap() database.Store { return s.PebbleStore }
@@ -137,13 +134,6 @@ func (s *finalMarkFails) MarkOperationChangesReverted(op string, ids []string) e
 		return errors.New("injected: process died before the end-of-run stamp")
 	}
 	return s.PebbleStore.MarkOperationChangesReverted(op, ids)
-}
-
-func (s *finalMarkFails) UpdateCollectionBooksAndMark(id string, fn func([]string) ([]string, error), mark database.OperationMark) (*database.Collection, error) {
-	if s.oldBuild && len(mark.ChangeIDs) > 1 {
-		mark.ChangeIDs = mark.ChangeIDs[:1]
-	}
-	return s.PebbleStore.UpdateCollectionBooksAndMark(id, fn, mark)
 }
 
 // The list write stamps the row with its marker, so a revert whose end-of-run
@@ -172,22 +162,57 @@ func TestRetireCarry_ARevertWhoseEndOfRunStampWasLostIsNotRetriedAgainstANewerRe
 	require.Zero(t, rr.Superseded, "%+v", rr)
 }
 
-// A row that an older build left standing with its marker stamped (it stamped
-// the marker with the list and the row apart, and died between) is stale once a
-// newer retire takes the book out again: the retry writes nothing, marks the
-// row done and says so in Kept.
-func TestRetireCarry_AStaleRowLeftByAnOlderBuildIsSupersededNotRetried(t *testing.T) {
+// voidFails fails, once, the void of a retire's collection row (the retired
+// book's row, not the survivor-side marker next to it): the carry that was
+// refused cannot take its own row back.
+type voidFails struct {
+	database.Store
+	armed atomic.Bool
+}
+
+func (s *voidFails) CreateOperationChange(c *database.OperationChange) error {
+	if kind, _, ok := undo.UserContentFromField(c.FieldName); ok && kind == undo.UserContentCollection && c.Voided && s.armed.CompareAndSwap(true, false) {
+		return errors.New("injected: void of the row failed")
+	}
+	return s.Store.CreateOperationChange(c)
+}
+
+// A carry whose write is refused voids its row and its marker. When the void
+// of the row fails and the void of the marker lands, the row stands for a
+// retire that never happened, with no marker. It is stale once a newer retire
+// takes the book out for real: the revert of the stale row must not put the
+// book back over the newer retire; it writes nothing, marks the row done and
+// says so in Kept. This is the one state in which a row stands with no marker,
+// and why the guard (undo.NewerCarryStands) is kept: without it the revert
+// lists a book that a standing retire removed.
+func TestRetireCarry_ARowLeftByAPartiallyVoidedCarryIsSupersededNotRetried(t *testing.T) {
 	t.Parallel()
 	c := newChainFixture(t, []string{"a", "X", "S3", "b", "S1"}, []string{"a", "X", "S3", "b"})
-	st := &finalMarkFails{PebbleStore: c.f.s, oldBuild: true}
-	c.st = st
-	c.carry("op2", "X", "S3") // held
-	st.armed.Store(true)
-	_, err := audiobooks.NewRevertService(st).RevertOperation("op2")
-	require.Error(t, err)
-	require.Equal(t, []string{"a", "X", "S3", "b"}, c.members())
+	cs, err := resolveCarryStores(c.f.s)
+	require.NoError(t, err)
+	// A record taken from a list that is not the one now written: the carry's
+	// write finds the list changed and refuses.
+	l := c.f.rcMembers(t, c.col)
+	_, rec, ok := undo.CarryMembership(append([]string{"unrelated"}, l...), c.id["X"], c.id["S3"])
+	require.True(t, ok)
+	vs := &voidFails{Store: c.f.s}
+	vs.armed.Store(true)
+	w := repairs.NewWriter(c.f.s, c.f.s, "chain", "bulk_update", "repairs-").WithJournal(c.f.s, vs, "op2")
+	err = carryMembership(w, undo.UserContentCollection, c.col, c.id["S3"], c.id["X"], rec, func(carry func([]string) ([]string, error)) error {
+		_, e := cs.members.UpdateCollectionBooks(c.col, carry)
+		return e
+	})
+	require.ErrorIs(t, err, errCarryStale)
+	require.ErrorContains(t, err, "void of the row failed")
+	require.Equal(t, []string{"a", "X", "S3", "b"}, c.members(), "the refused carry wrote nothing")
+
 	c.carry("op5", "X", "S1")
 	require.Equal(t, []string{"a", "S1", "S3", "b"}, c.members())
+
+	rep, err := undo.PreflightUndoConflicts(c.f.s, "op2")
+	require.NoError(t, err)
+	require.Empty(t, rep.CheckFailed, "%+v", rep)
+	require.Equal(t, 1, rep.AlreadyRestored, "the revert writes nothing for this row, and the preflight says so: %+v", rep)
 
 	rr := c.revert("op2")
 	require.Equal(t, 1, rr.Superseded, "%+v", rr)
@@ -197,4 +222,80 @@ func TestRetireCarry_AStaleRowLeftByAnOlderBuildIsSupersededNotRetried(t *testin
 	require.Equal(t, []string{"a", "S1", "S3", "b"}, c.members(), "op5 stands: nothing was put back")
 	c.revert("op5")
 	require.Equal(t, []string{"a", "X", "S3", "b"}, c.members())
+}
+
+// X is retired into S2 (R, took S2 into X's slot) and S2 into S3 (D). R is
+// reverted while D still stands, then D: the retired survivor is not listed, so
+// X goes back beside its neighbours instead of into S2's slot, and S2 comes back
+// only if it belonged to the list (it did not: it stays out and D reports a book
+// left out). Every row restores exactly whichever of S3's two histories it is
+// (S3 an original member, held; S3 listed by D, took).
+func TestRetireCarry_OlderRetireFirstInASurvivorChain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		listed []string
+		after  []string // after R and D
+		midR   []string // after reverting R
+	}{
+		{"D held (S3 an original member)", []string{"a", "X", "b", "S3"}, []string{"a", "b", "S3"}, []string{"a", "X", "b", "S3"}},
+		{"D took (S3 not listed)", []string{"a", "X", "b"}, []string{"a", "S3", "b"}, []string{"a", "X", "S3", "b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newChainFixture(t, []string{"a", "X", "b", "S2", "S3"}, tc.listed)
+			c.carry("opR", "X", "S2")
+			c.carry("opD", "S2", "S3")
+			require.Equal(t, tc.after, c.members())
+
+			rep, err := undo.PreflightUndoConflicts(c.f.s, "opR")
+			require.NoError(t, err)
+			require.Empty(t, rep.CheckFailed, "the revert restores this row exactly, so the preflight must not refuse it: %+v", rep)
+			require.Zero(t, rep.NotRestorable, "%+v", rep)
+
+			rr := c.revert("opR")
+			require.Equal(t, tc.midR, c.members())
+			require.Zero(t, rr.ChangedSince, "%+v", rr)
+			require.Zero(t, rr.RestoredByIndex, "the books beside X order it: %+v", rr)
+
+			rep, err = undo.PreflightUndoConflicts(c.f.s, "opD")
+			require.NoError(t, err)
+			require.Empty(t, rep.CheckFailed, "%+v", rep)
+			rr = c.revert("opD")
+			require.Equal(t, tc.listed, c.members())
+			require.Equal(t, 1, rr.BooksLeftOut, "S2 was listed only for R, which is reverted: %+v", rr)
+		})
+	}
+}
+
+// A survivor S2 that is still borrowed (op1 took X's slot, op2 stands on it for
+// Y) is retired into S3 (op3, held). Reverting op3 newest first puts S2 back in
+// its place by its neighbours, not by its recorded index. The journal writes a
+// retire's marker and its row at two instants (CreateOperationChange stamps each
+// write), so this also pins that the graph matches a row to its own operation
+// and not to a shared timestamp.
+func TestRetireCarry_AReturningSurvivorIsPlacedByTheGraph(t *testing.T) {
+	t.Parallel()
+	c := newChainFixture(t, []string{"a", "X", "Y", "b", "S2", "S3"}, []string{"a", "X", "Y", "b", "S3"})
+	c.carry("op1", "X", "S2")
+	c.carry("op2", "Y", "S2")
+	c.carry("op3", "S2", "S3")
+	require.Equal(t, []string{"a", "b", "S3"}, c.members())
+	rr := c.revert("op3")
+	require.Equal(t, []string{"a", "S2", "b", "S3"}, c.members())
+	require.Zero(t, rr.RestoredByIndex, "placed by index, not by the graph: %v", rr.Kept)
+}
+
+// The same history reverted with the older operations after the newest.
+func TestRetireCarry_AReturningSurvivorOutOfOrder(t *testing.T) {
+	t.Parallel()
+	c := newChainFixture(t, []string{"a", "X", "Y", "b", "S2", "S3"}, []string{"a", "X", "Y", "b", "S3"})
+	c.carry("op1", "X", "S2")
+	c.carry("op2", "Y", "S2")
+	c.carry("op3", "S2", "S3")
+	for _, op := range []string{"op3", "op1", "op2"} {
+		rr := c.revert(op)
+		require.Zero(t, rr.RestoredByIndex, "%s placed by index: %v", op, rr.Kept)
+	}
+	require.Equal(t, []string{"a", "X", "Y", "b", "S3"}, c.members())
 }
