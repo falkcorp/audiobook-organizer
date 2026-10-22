@@ -1,13 +1,15 @@
 // file: web/src/pages/AcceptInvite.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e5c1a47-2d93-4b6f-a0e8-3f7b9d2c6a15
 // last-edited: 2026-10-21
 
 // Public page an invitee opens from their invitation link: /invite/:token.
 // It shows who the invitation is for and when it expires, lets them choose a
-// password, and repeats the AudioBooth setup steps. A guest gets through
-// Cloudflare by email login (accepting adds their address to the guest Access
-// policy), so there is no shared header or token to copy. The invitation comes
+// password, and says how to sign in from a browser. Guests are browser-only for
+// now (phone-app access is added per guest later). A guest gets through
+// Cloudflare by email login when accepting adds their address to the guest
+// Access policy (the lookup's email_login), so there is no shared header or
+// token to copy. The invitation comes
 // from GET /api/v1/auth/invite/:token, which only answers for a valid,
 // unexpired, unused token.
 
@@ -29,6 +31,9 @@ import { describeRequestError, responseErrorMessage, unwrapData } from '../utils
 interface PublicInvite {
   username: string;
   expires_at: string;
+  // email_login: accepting adds the invited address to the Cloudflare guest
+  // policy, so the guest signs in to Cloudflare with that address first.
+  email_login?: boolean;
 }
 
 type LoadState =
@@ -39,30 +44,31 @@ type LoadState =
 
 const MIN_PASSWORD = 8;
 
-export function AudioBoothSteps({ username }: { username: string }) {
+export function SignInSteps({ username, emailLogin }: { username: string; emailLogin: boolean }) {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   return (
     <Box>
       <Typography variant="h6" sx={{ mt: 2 }}>
-        Set up AudioBooth on your phone
+        Signing in
       </Typography>
       <Box component="ol" sx={{ pl: 3, '& li': { mb: 1 } }}>
         <li>
-          Open AudioBooth and go to <strong>Servers</strong>. Tap <strong>+</strong> to add a
-          server.
+          Open <code>{origin}</code> in your browser.
         </li>
-        <li>
-          Server address: <code>{origin}</code>
-        </li>
-        <li>
-          If Cloudflare asks you to sign in, enter the email address this invitation was sent to.
-          Cloudflare emails you a one-time code; type it in. This works once you have created your
-          account below.
-        </li>
+        {emailLogin && (
+          <li>
+            If Cloudflare asks you to sign in, enter the email address this invitation was sent to.
+            Cloudflare emails you a one-time code; type it in. This works once you have created your
+            account below.
+          </li>
+        )}
         <li>
           Sign in with your username (<strong>{username}</strong>) and your password.
         </li>
       </Box>
+      <Typography variant="body2" color="text.secondary">
+        Phone app access will be added to your account soon.
+      </Typography>
     </Box>
   );
 }
@@ -205,7 +211,7 @@ export function AcceptInvite() {
             </Box>
           </>
         )}
-        <AudioBoothSteps username={invite.username} />
+        <SignInSteps username={invite.username} emailLogin={!!invite.email_login} />
       </Stack>
     );
   }

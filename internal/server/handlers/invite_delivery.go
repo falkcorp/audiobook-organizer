@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-10-21
 
@@ -153,19 +153,16 @@ You have been invited to Audiobook Organizer.
 
    The link works once and expires {{.ExpiresAt}}.
 
-2. Set up the AudioBooth app on your phone:
-
-   a. Open AudioBooth and go to Servers. Tap + to add a server.
-   b. Server address: {{.ServerURL}}
+2. Then open {{.ServerURL}} in your browser and sign in with your username ({{.Username}}) and the password you chose.
 {{- if .EmailLogin}}
-   c. If Cloudflare asks you to sign in, enter this email address:
-      {{.Email}}
-      Cloudflare emails you a one-time code; type it in. This works once you
-      have chosen your password in step 1.
-   d. Sign in with your username ({{.Username}}) and the password you chose.
-{{- else}}
-   c. Sign in with your username ({{.Username}}) and the password you chose.
+
+   If Cloudflare asks you to sign in first, enter this email address:
+   {{.Email}}
+   Cloudflare emails you a one-time code; type it in. This works once you
+   have chosen your password in step 1.
 {{- end}}
+
+Phone app access will be added to your account soon.
 
 If you were not expecting this invitation, you can ignore this email.
 `))
@@ -179,13 +176,10 @@ var inviteHTMLTmpl = htmltemplate.Must(htmltemplate.New("html").Parse(`<!doctype
 If the link does not open, copy this address into your browser:<br>
 <code>{{.InviteURL}}</code></p>
 <p>The link works once and expires {{.ExpiresAt}}.</p>
-<h3>2. Set up AudioBooth on your phone</h3>
-<ol>
-<li>Open AudioBooth and go to <strong>Servers</strong>. Tap <strong>+</strong> to add a server.</li>
-<li>Server address: <code>{{.ServerURL}}</code></li>
-{{if .EmailLogin}}<li>If Cloudflare asks you to sign in, enter this email address: <code>{{.Email}}</code>. Cloudflare emails you a one-time code; type it in. This works once you have chosen your password in step 1.</li>
-{{end}}<li>Sign in with your username (<strong>{{.Username}}</strong>) and the password you chose.</li>
-</ol>
+<h3>2. Sign in</h3>
+<p>Then open <a href="{{.ServerURL}}">{{.ServerURL}}</a> in your browser and sign in with your username (<strong>{{.Username}}</strong>) and the password you chose.</p>
+{{if .EmailLogin}}<p>If Cloudflare asks you to sign in first, enter this email address: <code>{{.Email}}</code>. Cloudflare emails you a one-time code; type it in. This works once you have chosen your password in step 1.</p>
+{{end}}<p>Phone app access will be added to your account soon.</p>
 <p style="color:#666">If you were not expecting this invitation, you can ignore this email.</p>
 </body></html>`))
 
@@ -294,6 +288,23 @@ func currentUserID(c *gin.Context) string {
 
 // ── Sending ────────────────────────────────────────────────────────────────
 
+// inviteEmailLogin reports whether the email may tell the guest to sign in to
+// Cloudflare with their address: policy sync is configured and the invite's
+// creator may grant access (an active admin), the two conditions under which
+// accept adds the address to the guest policy. A lookup error leaves the step
+// out, because promising a login that does not exist sends the guest nowhere.
+func (h *UserHandler) inviteEmailLogin(inv *database.Invite) bool {
+	if !h.delivery.policySync() || inv.Email == "" {
+		return false
+	}
+	creator, err := h.store.GetUserByID(inv.CreatedByUserID)
+	if err != nil {
+		inviteLog.Warn("invite email: could not look up the creator of the invite for %s: %v", logger.SanitizeLogValue(inv.Username), err)
+		return false
+	}
+	return database.InviteCreatorMayGrant(creator)
+}
+
 // sendInviteEmail renders and sends the invitation for inv and records the
 // send. It returns a message safe to show an admin: never the body.
 func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite) (sentAt *time.Time, errMsg string) {
@@ -305,7 +316,7 @@ func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite)
 		return nil, "this invitation has no email address"
 	}
 	base := h.delivery.baseURL()
-	msg, err := renderInviteEmail(inv, InviteURL(base, inv.Token), base, h.delivery.policySync())
+	msg, err := renderInviteEmail(inv, InviteURL(base, inv.Token), base, h.inviteEmailLogin(inv))
 	if err != nil {
 		inviteLog.Error("invite email: render failed for invite of %s: %v", logger.SanitizeLogValue(inv.Username), err)
 		return nil, "could not build the invitation email"
@@ -394,16 +405,27 @@ func (h *UserHandler) PublicInvite(c *gin.Context) {
 		notFound()
 		return
 	}
+	grantsSSO := false
 	if h.acceptChecker != nil {
-		if err := h.acceptChecker.CheckInviteAcceptable(token); database.IsInviteRefusal(err) {
+		preview, err := h.acceptChecker.CheckInviteAcceptable(token)
+		if database.IsInviteRefusal(err) {
 			notFound()
 			return
 		} else if err != nil {
 			httputil.InternalError(c, "failed to check invite", err)
 			return
 		}
+		grantsSSO = preview.GrantsSSO
 	}
-	httputil.RespondWithOK(c, gin.H{"username": inv.Username, "expires_at": inv.ExpiresAt})
+	// email_login: accepting will add this address to the Cloudflare guest
+	// policy, so the page may tell the guest to sign in to Cloudflare with it.
+	// It is the email's own condition (inviteEmailLogin), so the page and the
+	// email cannot disagree, and it is a bool: no address is revealed.
+	httputil.RespondWithOK(c, gin.H{
+		"username":    inv.Username,
+		"expires_at":  inv.ExpiresAt,
+		"email_login": h.delivery.policySync() && grantsSSO,
+	})
 }
 
 // acceptedInviteView is the admin's view of an accepted invite: no token.

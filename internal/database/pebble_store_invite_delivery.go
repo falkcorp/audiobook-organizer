@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_invite_delivery.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package database
 
@@ -92,10 +92,10 @@ func inviteEmailDelivered(inv *Invite) bool {
 		util.SameEmail(inv.EmailSentTo, inv.Email)
 }
 
-// inviteCreatorMayGrant reports whether an invite's creator may give the
+// InviteCreatorMayGrant reports whether an invite's creator may give the
 // invitee SSO sign-in: the creator must still exist, be active and hold the
 // admin role at accept time (a demotion after inviting counts).
-func inviteCreatorMayGrant(creator *User) bool {
+func InviteCreatorMayGrant(creator *User) bool {
 	return creator != nil && creator.ID != "" && creator.Status == "active" &&
 		slices.Contains(creator.Roles, inviteAdminRole)
 }
