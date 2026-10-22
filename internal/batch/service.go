@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-22
 
 package batch
 
@@ -52,13 +52,35 @@ type batchBookStore interface {
 	versionprimary.EnsureStore
 }
 
-// BatchService handles bulk operations on audiobooks.
-type BatchService struct {
-	db batchBookStore
+// TrashPurger purges one book that is in the trash through the purge's own
+// path (the nightly purge and the trash page's "Purge now"): the undo hold,
+// the listening-state carry, the file-row refusal. *audiobooks.AudiobookService
+// implements it (PurgeTrashedBook).
+type TrashPurger interface {
+	PurgeTrashedBook(book *database.Book) error
 }
 
-func NewBatchService(db batchBookStore) *BatchService {
-	return &BatchService{db: db}
+// BatchService handles bulk operations on audiobooks.
+type BatchService struct {
+	db     batchBookStore
+	purger TrashPurger
+}
+
+// Option configures a BatchService.
+type Option func(*BatchService)
+
+// WithTrashPurger wires the purge path a hard delete of a trashed book takes.
+// Without it a batch hard delete of a trashed book is refused.
+func WithTrashPurger(p TrashPurger) Option {
+	return func(bs *BatchService) { bs.purger = p }
+}
+
+func NewBatchService(db batchBookStore, opts ...Option) *BatchService {
+	bs := &BatchService{db: db}
+	for _, o := range opts {
+		o(bs)
+	}
+	return bs
 }
 
 // ---------------------------------------------------------------------------
@@ -595,7 +617,19 @@ func groupOf(b *database.Book) string {
 // The batch runs its operations one after another, and so this: each carry
 // holds the global merge lock for its whole check-carry-delete, so a worker
 // pool would only queue on that lock.
+//
+// A book that is already in the trash is not deleted here at all: it goes
+// through the purge's own path (TrashPurger), exactly as the single delete
+// does, so a combine's shell, a maintenance operation's soft-deleted shell and
+// an auto-merge's loser (undoHold) are refused instead of hard-deleted out from
+// under an undo that can still run. Without a wired purger the book is refused.
 func (bs *BatchService) hardDelete(book *database.Book) error {
+	if database.IsInTrash(book) {
+		if bs.purger == nil {
+			return errors.New("hard delete of a trashed book refused: the purge path is not wired, so an undo that still needs the book cannot be checked")
+		}
+		return bs.purger.PurgeTrashedBook(book)
+	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
 	if !ok {
 		return errors.New("hard delete refused: the store cannot check or carry users' listening state")
