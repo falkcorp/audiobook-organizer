@@ -1,5 +1,5 @@
 // file: internal/server/middleware/recovery_redact_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fac23317-790b-49a1-b9f3-81b598014604
 // last-edited: 2026-10-22
 
@@ -111,6 +111,11 @@ func TestRedactingRecovery_LogsNoEncodedSlashInviteToken(t *testing.T) {
 		{"/api/v1/auth/invite%2f" + tok + "?x=1", "/api/v1/auth/invite/[REDACTED]?x=1 "},
 		{"/invite%2F" + tok, "/invite/[REDACTED] "},
 		{"/api/v1/users/invites%2F" + tok + "/resend", "/api/v1/users/invites/[REDACTED]/resend "},
+		// A decoy segment does not hide the token: everything after the prefix goes.
+		{"/invite/%2F/" + tok, "/invite/[REDACTED]/[REDACTED] "},
+		{"/invite%2F%2E%2F" + tok, "/invite/[REDACTED] "},
+		{"/invite/./" + tok, "/invite/[REDACTED]/[REDACTED] "},
+		{"/invite%252F" + tok, "/invite/[REDACTED] "},
 	} {
 		for name, panicWith := range map[string]any{"panic": "boom", "broken pipe": syscall.EPIPE} {
 			t.Run(tc.target+" "+name, func(t *testing.T) {
