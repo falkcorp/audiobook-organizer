@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.82.0
+// version: 1.83.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-21
 
@@ -333,6 +333,12 @@ type RevertResult struct {
 	// survivor stands in a list for a retired book, for another operation's
 	// revert to read, and restore nothing themselves. Not counted in Restored.
 	Markers int `json:"markers,omitempty"`
+	// RestoredByIndex counts Restored collection and playlist rows of a
+	// retire's carry that went back to their recorded index because the
+	// neighbours recorded beside them could not be found in the list (or the
+	// row predates the neighbour anchors). The position is a best guess for
+	// those, not the exact original slot, so Kept names each one.
+	RestoredByIndex int `json:"restored_by_index,omitempty"`
 	// HandOffFailed lists the version groups the settle pass after the rows
 	// (settleGroups) could not leave with one primary: group, the
 	// operation's originals and the error, and whether the retry was
@@ -377,6 +383,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.Markers > 0 {
 		fmt.Fprintf(&b, "; %d marker row(s) cleared (nothing to restore)", r.Markers)
+	}
+	if r.RestoredByIndex > 0 {
+		fmt.Fprintf(&b, "; %d list position(s) put back by recorded index, not by neighbours (see kept)", r.RestoredByIndex)
 	}
 	if r.Superseded > 0 {
 		fmt.Fprintf(&b, "; %d superseded and left as they are (%s)", r.Superseded, strings.Join(r.SupersededDetail, "; "))
@@ -590,6 +599,14 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			plan.Record(c, nil)
 			markedIDs = append(markedIDs, c.ID)
 			continue
+		}
+		if byIndex, ok := errors.AsType[*indexRestore](err); ok {
+			// The row is restored: the book is back in its list, at the
+			// slot its recorded index names. Said so, never silently.
+			result.RestoredByIndex++
+			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, byIndex.detail))
+			revertLog.Warn("revert of change %s restored by index: %s", c.ID, byIndex.detail)
+			err = nil
 		}
 		if partial, ok := errors.AsType[*partialTagRestore](err); ok {
 			// Every tag that still held what the operation wrote was put
@@ -970,38 +987,56 @@ func (rs *RevertService) revertUserContentFollow(c *database.OperationChange) er
 	}
 }
 
-// survivorStand decides the survivor's part in reverting this collection or
-// playlist row from the survivor's journal (undo.SurvivorStand): a replaced
-// slot (the survivor was not listed before) keeps the survivor listed when
-// another standing retire also folded into it (undo.SurvivorStandsIn); a
-// removal (the survivor was already listed) takes the survivor out again when
-// it is there only because a replace that was reverted since left it for this
-// row (undo.SurvivorOnlyStandsByReplace).
-func (rs *RevertService) survivorStand(c *database.OperationChange, rec undo.MembershipRecord, kind, listID string) (undo.SurvivorStand, error) {
-	// Resolved as a capability, not added to revertServiceStore: the revert
-	// reads the journal of one book only here.
-	journal, ok := database.AsCapability[interface {
-		GetBookChanges(bookID string) ([]*database.OperationChange, error)
-	}](rs.db)
+// bookJournal reads the journal of one book. Resolved as a capability, not
+// added to revertServiceStore: the retire's carry revert reads the journals
+// of a handful of books only.
+type bookJournal interface {
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+}
+
+// membershipContext decides, for one collection or playlist row of a
+// retire's carry, the survivor's part in the revert (undo.SurvivorStand) and
+// the recorded neighbours that place the book (undo.MembershipGraph), from
+// the survivor's journal:
+//
+//   - A replaced slot (the survivor was not listed before) keeps the survivor
+//     listed when another standing retire also folded into it
+//     (undo.SurvivorStandsIn); a removal (the survivor was already listed)
+//     takes the survivor out again when it is there only because a replace
+//     that was reverted since left it for this row
+//     (undo.SurvivorOnlyStandsByReplace).
+//   - The graph holds every carry into this survivor's slot of this list (the
+//     survivor's journal holds a marker for each) plus the row itself. A row
+//     journaled before the anchors existed gets no graph.
+func (rs *RevertService) membershipContext(c *database.OperationChange, rec undo.MembershipRecord, kind, listID string) (undo.SurvivorStand, *undo.MembershipGraph, error) {
+	journal, ok := database.AsCapability[bookJournal](rs.db)
 	if !ok {
-		return undo.SurvivorDefault, fmt.Errorf("store cannot read the journal of survivor %s", c.NewValue)
+		return undo.SurvivorDefault, nil, fmt.Errorf("store cannot read the journal of survivor %s", c.NewValue)
 	}
 	rows, err := journal.GetBookChanges(c.NewValue)
 	if err != nil {
-		return undo.SurvivorDefault, fmt.Errorf("read the journal of survivor %s: %w", c.NewValue, err)
+		return undo.SurvivorDefault, nil, fmt.Errorf("read the journal of survivor %s: %w", c.NewValue, err)
 	}
+	stand := undo.SurvivorDefault
 	switch {
 	case !rec.SurvivorWasMember && undo.SurvivorStandsIn(rows, c.OperationID, kind, listID):
-		return undo.SurvivorStays, nil
+		stand = undo.SurvivorStays
 	case rec.SurvivorWasMember && undo.SurvivorOnlyStandsByReplace(rows, c, kind, listID):
-		return undo.SurvivorLeaves, nil
+		stand = undo.SurvivorLeaves
 	}
-	return undo.SurvivorDefault, nil
+	if !rec.Anchored {
+		return stand, nil, nil
+	}
+	g := undo.NewMembershipGraph(c.NewValue, kind, listID)
+	g.AddRows(rows)
+	g.AddRows([]*database.OperationChange{c})
+	return stand, g, nil
 }
 
 // revertCollectionFollow puts the retired book back in static collection id.
 // A collection deleted since, or one that is no longer static, has no member
-// list to restore into and counts restored.
+// list to restore into and counts restored. A book placed by its recorded
+// index, not its neighbours, is reported (indexRestore).
 func (rs *RevertService) revertCollectionFollow(c *database.OperationChange, collectionID string) error {
 	rec, err := undo.DecodeMembership(c.OldValue)
 	if err != nil {
@@ -1011,21 +1046,29 @@ func (rs *RevertService) revertCollectionFollow(c *database.OperationChange, col
 	if !ok {
 		return fmt.Errorf("store cannot edit collection members; book %s left out of collection %s", c.BookID, collectionID)
 	}
-	stand, err := rs.survivorStand(c, rec, undo.UserContentCollection, collectionID)
+	stand, g, err := rs.membershipContext(c, rec, undo.UserContentCollection, collectionID)
 	if err != nil {
 		return err
 	}
+	var note string
 	_, err = members.UpdateCollectionBooks(collectionID, func(cur []string) ([]string, error) {
-		return undo.RestoreMembership(cur, c.BookID, c.NewValue, rec, stand)
+		next, n, err := undo.RestoreMembership(cur, c.BookID, c.NewValue, rec, stand, g)
+		note = n
+		return next, err
 	})
 	if errors.Is(err, database.ErrCollectionNotFound) || errors.Is(err, database.ErrCollectionNotStatic) {
 		return undo.ErrAlreadyRestored
+	}
+	if err == nil && note != "" {
+		return &indexRestore{detail: fmt.Sprintf("collection %s: %s", collectionID, note)}
 	}
 	return err
 }
 
 // revertPlaylistFollow puts the retired book back in static playlist id,
-// retrying on a version conflict. A playlist deleted since counts restored.
+// retrying on a version conflict. A playlist deleted since counts restored. A
+// book placed by its recorded index, not its neighbours, is reported
+// (indexRestore).
 func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playlistID string) error {
 	rec, err := undo.DecodeMembership(c.OldValue)
 	if err != nil {
@@ -1035,7 +1078,7 @@ func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playl
 	if !ok {
 		return fmt.Errorf("store cannot edit playlists; book %s left out of playlist %s", c.BookID, playlistID)
 	}
-	stand, err := rs.survivorStand(c, rec, undo.UserContentPlaylist, playlistID)
+	stand, g, err := rs.membershipContext(c, rec, undo.UserContentPlaylist, playlistID)
 	if err != nil {
 		return err
 	}
@@ -1047,7 +1090,7 @@ func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playl
 		if pl == nil || pl.Type != database.UserPlaylistTypeStatic {
 			return undo.ErrAlreadyRestored
 		}
-		next, err := undo.RestoreMembership(pl.BookIDs, c.BookID, c.NewValue, rec, stand)
+		next, note, err := undo.RestoreMembership(pl.BookIDs, c.BookID, c.NewValue, rec, stand, g)
 		if err != nil {
 			return err
 		}
@@ -1055,6 +1098,9 @@ func (rs *RevertService) revertPlaylistFollow(c *database.OperationChange, playl
 		err = pls.UpdateUserPlaylist(pl)
 		if errors.Is(err, database.ErrUserPlaylistVersionConflict) {
 			continue
+		}
+		if err == nil && note != "" {
+			return &indexRestore{detail: fmt.Sprintf("playlist %s: %s", playlistID, note)}
 		}
 		return err
 	}
@@ -1459,6 +1505,15 @@ type supersededRestore struct{ detail string }
 // the row is marked reverted and counted in RevertResult.Markers, not in
 // Restored.
 type markerRestore struct{}
+
+// indexRestore is what the revert of a collection or playlist row of a
+// retire's carry returns AFTER it wrote the book back, when it could not find
+// the slot by the recorded neighbours and used the recorded index. The row is
+// restored; RevertOperation counts it in RevertResult.RestoredByIndex and
+// names it in Kept.
+type indexRestore struct{ detail string }
+
+func (i *indexRestore) Error() string { return "restored by index: " + i.detail }
 
 func (*markerRestore) Error() string { return "marker: nothing to restore" }
 
