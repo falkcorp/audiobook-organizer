@@ -1,5 +1,5 @@
 // file: internal/merge/undo_shell_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a8c5e72-1f94-4b06-9d3e-6c7a2b0f8e51
 // last-edited: 2026-10-22
 
@@ -29,9 +29,10 @@ import (
 // nothing: their shells were restored, or are the trash's to purge.
 //
 // Combine journals never expire, so a shell held here stays in the trash until
-// its combine is undone or its journal is retired by a decision outside the
-// purge. That is the intended cost of "purge must not make a revertible
-// operation un-revertable".
+// its combine is undone. That is the intended cost of "purge must not make a
+// revertible operation un-revertable". (This index covers combine journals
+// only; the purge's hold also covers operation-ledger soft-deletes and
+// auto-merge losers, see audiobooks.undoHold.)
 //
 // The index is a snapshot of one prefix scan of the journals and is read-only,
 // so workers share it without a lock. A snapshot goes stale when a combine

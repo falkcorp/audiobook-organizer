@@ -15,6 +15,4 @@ primary flag only, instead of refusing the whole merge; its file path, tags,
 book_file rows and file are untouched. Books the caller selects are still
 refused when they are in the iTunes library, and a combine (which moves files)
 still refuses iTunes inputs. `PreflightLink` matches: it no longer refuses
-because of a non-selected iTunes copy. The comment citing the removed
-`itunes.ComputeMergedTrackCleanup` is rewritten to the actual reason a survivor
-holding an iTunes persistent ID keeps the primary flag (the PID integrity audit).
+because of a non-selected iTunes copy. The comment citing the removed `itunes.ComputeMergedTrackCleanup` is rewritten: a survivor holding an iTunes persistent ID still keeps the primary flag as a deliberate preference, and the PID integrity audit no longer depends on it (see the PID audit entry).

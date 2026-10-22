@@ -7,5 +7,4 @@ book_file hash indexes, never a library scan, and a lookup that cannot be
 completed also skips the block and says so. The web delete dialogs no longer
 default "block hash" to on. Known gap: two books whose only hash record is
 `Book.FileHash` with no book_file row are not both visible to the index; only
-its owner is. Separately, the hard delete of a book removes the `book:hash:`
-row even when another live book is the one that row names (not changed here).
+its owner is. The hard delete of a book now removes the hash-index rows only while they still name that book (see the hash-index entry).

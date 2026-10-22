@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-22
 
@@ -1429,8 +1429,10 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// (purgeNow): the trash page's "Purge now" must behave like the nightly
 	// purge (owner decision 2026-10-05).
 	if database.IsInTrash(book) {
-		// Decide the hash block BEFORE the purge: the purge's DeleteBook drops
-		// the book:hash: index row, which is how a live holder is found.
+		// Decide the hash block BEFORE the purge, on the indexes as the user
+		// saw them: DeleteBook removes this book's own hash index rows (never
+		// another book's: each is deleted only while it still names this
+		// book), so deciding afterwards would read a state the delete changed.
 		var blockHashOK bool
 		var blockWarn string
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {

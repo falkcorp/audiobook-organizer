@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-22
 
@@ -385,7 +385,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 	case r.keptUndo:
 		return purgeOutcome{kind: purgeKeptUndo}
 	case r.undoErr != nil:
-		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell under the merge lock whether a combine's undo still needs it: %v", book.ID, r.undoErr)}}
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell under the merge lock whether an undo still needs it: %v", book.ID, r.undoErr)}}
 	case r.stateErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(r.stateErr), r.stateErr)}}
 	case r.hasState:
@@ -410,11 +410,12 @@ type statelessPurge struct {
 	fresh *database.Book
 	// notInTrash: restored, or already gone, by the time the lock was held.
 	notInTrash bool
-	// keptUndo: the row, as re-read under the lock, is the retired shell of a
-	// combine whose undo can still run (merge.UndoShellIndex).
+	// keptUndo: the row, as re-read under the lock, is needed by an undo that
+	// can still run (undoHold: a combine's shell, an operation's journaled
+	// soft-delete, an auto-merge's loser).
 	keptUndo bool
-	// undoErr: the combine journals could not be re-read under the lock, so
-	// whether the book is held is unknown. The book is kept (fail closed).
+	// undoErr: the undo records could not be read under the lock, so whether
+	// the book is held is unknown. The book is kept (fail closed).
 	undoErr                      error
 	hasState                     bool
 	readErr, stateErr, deleteErr error
@@ -457,10 +458,11 @@ func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv)
 	r.fresh = cur
 	// The undo hold is decided on the row as it is NOW, not on the listing's
 	// copy: a shell restored or re-deleted since carries another stamp and is
-	// not held (merge.UndoShellIndex.Holds). env.undo also re-reads the
-	// journals when a combine journaled since the pass began: every journal
-	// writer holds this lock, so the answer here is exact. A failed re-read
-	// keeps the book.
+	// not held (undoHold.Holds). env.undo also re-reads the combine and
+	// auto-merge journals when one was written since the pass began, and
+	// reads the operation ledger for this book: every writer of those holds
+	// this lock across the write (or journals before it deletes), so the
+	// answer here is exact. A failed read keeps the book.
 	_, held, uerr := env.undo.Holds(cur)
 	switch {
 	case uerr != nil:
@@ -532,12 +534,13 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		}
 		doomed = cur
 		// The merge lock is held here, so this is the same exact undo-hold
-		// decision purgeIfStateless made: a combine can have journaled this
-		// shell in the gap since. Refused before anything moves.
+		// decision purgeIfStateless made: a combine, an operation or an
+		// auto-merge can have journaled this book in the gap since. Refused
+		// before anything moves.
 		_, held, uerr := env.undo.Holds(cur)
 		switch {
 		case uerr != nil:
-			return fmt.Errorf("cannot tell whether a combine's undo still needs %s: %w", book.ID, uerr)
+			return fmt.Errorf("cannot tell whether an undo still needs %s: %w", book.ID, uerr)
 		case held:
 			return fmt.Errorf("%w: %s", errUndoHeldUnderLock, book.ID)
 		}
@@ -575,9 +578,9 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 }
 
 // errUndoHeldUnderLock is what the carry's precheck returns when the book turns
-// out, under the merge lock, to be the shell of a combine whose undo can still
-// run. purgeCarryingState reports it as kept-undo.
-var errUndoHeldUnderLock = errors.New("is the retired shell of a combine whose undo can still run")
+// out, under the merge lock, to be needed by an undo that can still run (see
+// undoHold). purgeCarryingState reports it as kept-undo.
+var errUndoHeldUnderLock = errors.New("is needed by an undo that can still run")
 
 // purgeDeleteRow is the purge's row delete: the tombstone snapshot, the row,
 // and then the side effects that must happen only to a book that is really

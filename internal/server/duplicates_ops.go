@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.31.0
+// version: 2.33.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-22
 
@@ -198,6 +198,16 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "book merge failed", "err", err)
+				// Store what the page needs to say about a failed merge: the
+				// op result is read by the same client that reads a finished
+				// one, and a bare "failed" cannot tell a merge that changed
+				// nothing from one that moved siblings or soft-deleted some
+				// losers before it stopped (a PartialMergeError).
+				_, partial := errors.AsType[*merge.PartialMergeError](err)
+				failed := BookMergeOpResult{KeepID: p.KeepID, Skipped: skipped, Failed: true, Partial: partial, Error: err.Error()}
+				if serr := opsregistry.ReporterSetResult(reporter, failed); serr != nil {
+					logging.Warn(ctx, "book merge: failure payload not stored", "err", serr)
+				}
 				return err
 			}
 			for _, sk := range skipped {
@@ -232,7 +242,9 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 
 			s.dedupCache.InvalidateAll()
 			if s.dedupEngine != nil {
-				s.dedupEngine.CleanupCandidatesAfterMerge(p.MergeIDs)
+				// Only the losers that were folded in: a skipped (trashed)
+				// loser was not merged, so its candidate rows are not stale.
+				s.dedupEngine.CleanupCandidatesAfterMerge(mergedLoserIDs(p.KeepID, p.MergeIDs, skipped, mergeRes))
 			}
 			op.SetStatus("success")
 			logging.Info(ctx, "book merge complete", "kept_id", p.KeepID, "merged_count", merged, "skipped_count", len(skipped))
@@ -246,6 +258,189 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			return nil
 		},
 	})
+}
+
+// RegisterBookCombineOp registers the "dedup.book-combine" v2 OperationDef:
+// POST /audiobooks/combine ("Merge into one book") runs here instead of inside
+// the HTTP request. A combine moves every selected book's files onto the
+// survivor and journals each step; on a library of thousands of multi-file
+// books that took long enough to hang the page, which is why the handler only
+// checks the request (merge.PreflightCombine) and queues this op.
+//
+// ConcurrencyKey is dedup.book-merge's: a combine and a merge that name the
+// same books queue behind each other instead of interleaving (the service's
+// own merge lock serializes the writes either way; the key keeps the queued
+// ops from racing on the pre-checks).
+//
+// The op's own id is the combine's undo operation: reverting it
+// (POST /operations/:id/revert) undoes the combine, and the result payload
+// carries that id.
+func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(opsregistry.OperationDef{
+		ID:              "dedup.book-combine",
+		Liveness:        opsregistry.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Book Combine",
+		Description:     "Combine several single-file books into one multi-file book on the kept book; the absorbed books go to the trash and the combine can be undone.",
+		DefaultPriority: opsregistry.PriorityNormal,
+		Cancellable:     false,
+		Isolate:         false,
+		Timeout:         1 * time.Hour,
+		ResumePolicy:    opsregistry.ResumeDrop,
+		ConcurrencyKey:  "dedup.book-merge",
+		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			var p dedup.BookCombineParams
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("dedup.book-combine: decode params: %w", err)
+				}
+			}
+			if p.KeepID == "" || len(p.MergeIDs) == 0 {
+				return fmt.Errorf("dedup.book-combine: keep_id and at least one merge_id are required")
+			}
+			store := s.storeForWiring()
+			if store == nil {
+				return fmt.Errorf("dedup.book-combine: database not initialized")
+			}
+			opID := opsregistry.ReporterOpID(reporter)
+			op := &logging.OpContext{ID: opID, Type: "dedup.book-combine", Status: "pending"}
+			ctx = logging.WithOp(ctx, op)
+			op.AddEntity("books", p.KeepID)
+			op.AddEntity("books", p.MergeIDs...)
+			logging.Info(ctx, "book combine starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
+
+			ms := s.mergeService
+			if ms == nil {
+				ms = merge.NewService(store)
+			}
+			// ALL ids (the absorbed books plus the survivor) and the survivor id.
+			// OperationID: the combine's undo pointer is journaled under this
+			// op, so reverting the op undoes the combine.
+			res, err := ms.CombineBooksWithOptions(append(append([]string{}, p.MergeIDs...), p.KeepID), p.KeepID, p.Override,
+				merge.CombineOptions{OperationID: opID})
+			if err != nil {
+				op.SetStatus("failed")
+				failed := BookCombineOpResult{PrimaryID: p.KeepID, Failed: true, Error: err.Error()}
+				if incomplete, ok := errors.AsType[*merge.CombineIncompleteError](err); ok {
+					// It may have moved files or retired books before it stopped.
+					// The result names the ids that undo it and says so; the
+					// store error itself stays in the log.
+					logging.Error(ctx, "book combine stopped part-way", "journal_id", incomplete.JournalID, "err", incomplete.Err)
+					failed.Incomplete = true
+					failed.JournalID = incomplete.JournalID
+					failed.OperationID = incomplete.OperationID
+					failed.Error = fmt.Sprintf("The combine stopped part-way and may already have moved some files or put some books in the trash. Revert operation %s to undo what it did.", incomplete.OperationID)
+				} else {
+					logging.Error(ctx, "book combine failed", "err", err)
+				}
+				if serr := opsregistry.ReporterSetResult(reporter, failed); serr != nil {
+					logging.Warn(ctx, "book combine: failure payload not stored", "err", serr)
+				}
+				return err
+			}
+
+			payload := newBookCombineOpResult(res)
+			if serr := opsregistry.ReporterSetResult(reporter, payload); serr != nil {
+				// The combine is done; only its report is lost.
+				logging.Warn(ctx, "book combine: result payload not stored", "err", serr)
+			}
+			s.dedupCache.InvalidateAll()
+			if s.dedupEngine != nil {
+				s.dedupEngine.CleanupCandidatesAfterMerge(combinedAwayIDs(p.MergeIDs, res.PrimaryID))
+			}
+			op.SetStatus("success")
+			logging.Info(ctx, "book combine complete", "primary_id", res.PrimaryID, "files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
+			if s.activityWriter != nil && opID != "" {
+				activity.FlushOperation(s.activityWriter, opID)
+				activity.EmitInfo(s.activityWriter, opID, "dedup.book-combine", "dedup", payload.Message, activity.AlwaysShow)
+			}
+			return nil
+		},
+	})
+}
+
+// BookCombineOpResult is the dedup.book-combine op's result payload
+// (GET /operations/:id/result). On success it is what the synchronous
+// POST /audiobooks/combine used to answer with. Failed is set on the payload
+// stored when the combine returned an error; Incomplete is set with it when the
+// combine had journaled its undo pointer first (merge.CombineIncompleteError):
+// it may have changed the library, and OperationID / JournalID undo that.
+type BookCombineOpResult struct {
+	PrimaryID    string `json:"primary_id"`
+	FilesMoved   int    `json:"files_moved"`
+	BooksDeleted int    `json:"books_deleted"`
+	// JournalID and OperationID: POST /operations/:id/revert with
+	// OperationID undoes the combine.
+	JournalID   string `json:"journal_id,omitempty"`
+	OperationID string `json:"operation_id,omitempty"`
+	// JournalPending is why the journal could not be marked applied; it
+	// stays pending and the revert replays it.
+	JournalPending string   `json:"journal_pending,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
+	Message        string   `json:"message,omitempty"`
+	Failed         bool     `json:"failed,omitempty"`
+	Incomplete     bool     `json:"incomplete,omitempty"`
+	Error          string   `json:"error,omitempty"`
+}
+
+// newBookCombineOpResult builds the success payload from the combine's result,
+// with the message the synchronous endpoint used to return.
+func newBookCombineOpResult(res *merge.CombineResult) BookCombineOpResult {
+	out := BookCombineOpResult{
+		PrimaryID:      res.PrimaryID,
+		FilesMoved:     res.FilesMoved,
+		BooksDeleted:   res.BooksDeleted,
+		JournalID:      res.JournalID,
+		OperationID:    res.OperationID,
+		JournalPending: res.JournalPending,
+		Warnings:       res.Warnings,
+	}
+	done := fmt.Sprintf("Combined %d files onto book; moved %d absorbed entries to trash", res.FilesMoved, res.BooksDeleted)
+	if res.JournalPending != "" {
+		// The combine applied but its journal could not be marked applied.
+		// It stays pending and still names every step that ran, so the
+		// revert replays it (the split-book merge's rule).
+		out.Message = fmt.Sprintf("%s; its undo journal could not be finalized and is still pending: reverting operation %s replays what it recorded", done, res.OperationID)
+	} else {
+		out.Message = fmt.Sprintf("%s; revert operation %s to undo it", done, res.OperationID)
+	}
+	return out
+}
+
+// combinedAwayIDs is ids without the survivor: the books a combine absorbed,
+// for DedupEngine.CleanupCandidatesAfterMerge.
+func combinedAwayIDs(ids []string, primaryID string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != primaryID {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// mergedLoserIDs is the ids a finished dedup.book-merge op actually folded into
+// keepID: the request's ids without the keep book, duplicates, or the losers
+// the op skipped. Nothing was merged (a nil Result) means none.
+func mergedLoserIDs(keepID string, mergeIDs []string, skipped []SkippedMergeLoser, res *merge.Result) []string {
+	if res == nil {
+		return nil
+	}
+	skip := map[string]bool{keepID: true}
+	for _, sk := range skipped {
+		skip[sk.BookID] = true
+	}
+	out := make([]string, 0, len(mergeIDs))
+	for _, id := range mergeIDs {
+		if skip[id] {
+			continue
+		}
+		skip[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // bookMergeSummary is the activity line of a finished dedup.book-merge op.
@@ -374,6 +569,16 @@ type BookMergeOpResult struct {
 	// NoOp is set when nothing was merged (every loser was skipped, or the
 	// request named only the keep book).
 	NoOp bool `json:"no_op"`
+	// Failed is set on the payload stored when the merge returned an error
+	// (the op then also ends failed). Merged is 0 in it: what was or was not
+	// folded in is what Partial says.
+	Failed bool `json:"failed,omitempty"`
+	// Partial is set with Failed when the merge changed something before it
+	// stopped (merge.PartialMergeError: a sibling moved, a loser was
+	// soft-deleted, or a loser's clean-up failed and it stayed live).
+	Partial bool `json:"partial,omitempty"`
+	// Error is the failure's text, with Failed.
+	Error string `json:"error,omitempty"`
 }
 
 // RegisterAuthorDedupScanOp registers the "dedup.author-scan" v2 OperationDef.
@@ -1136,7 +1341,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			// The message points at the per-book warnings instead of naming one cause,
 			// because the causes differ (a store failure, a vanished row, a missing
 			// source file) and a summary that asserts one of them would be false for
-			// the others. A PR about honest reporting does not get to round its own
+			// the others. A PR about accurate reporting does not get to round its own
 			// summary off.
 			if organizeFailed > 0 {
 				organizeErr := fmt.Errorf("%d of %d affected books were not organized; their series rows changed, "+
@@ -1189,6 +1394,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 func init() {
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterBookDedupScanOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterBookMergeOp(reg) })
+	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterBookCombineOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterAuthorDedupScanOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterSeriesDedupScanOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterSeriesDedupOp(reg) })

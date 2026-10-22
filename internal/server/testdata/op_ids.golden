@@ -1,5 +1,5 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.19.1
+# version: 1.20.1
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
 # last-edited: 2026-10-23
 #
@@ -31,6 +31,7 @@ ai.author-scan
 ai.author-scan-apply
 dedup.author-scan
 dedup.auto-resolve
+dedup.book-combine
 dedup.book-merge
 dedup.book-scan
 dedup.book-signature-scan
@@ -279,3 +280,4 @@ identification.advance
 maintenance.backfill-merge-undo-pointers
 collections.refresh-relative-dynamic
 library.purge-soft-deleted
+maintenance.book-hash-index-repair

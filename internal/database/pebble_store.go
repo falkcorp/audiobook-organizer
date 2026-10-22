@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.0
+// version: 1.233.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-23
 
@@ -4187,20 +4187,23 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// class as the work index above: without these, book:hash / book:originalhash
 	// / book:organizedhash lookups resolve to a hard-deleted book ID. Guards
 	// mirror CreateBook's (nil / empty-string skipped).
-	if book.FileHash != nil && *book.FileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:hash:%s", *book.FileHash)), nil); err != nil {
-			batch.Close()
-			return err
+	//
+	// Each key is single-valued (last writer wins), so two books holding the
+	// same file share one: it is deleted only while it still names THIS book
+	// (deleteKeyIfValueIs), like the path key above. An unconditional delete
+	// erased the lookup key of the live book that owned it.
+	for _, h := range []struct {
+		prefix string
+		hash   *string
+	}{
+		{"book:hash:", book.FileHash},
+		{"book:originalhash:", book.OriginalFileHash},
+		{"book:organizedhash:", book.OrganizedFileHash},
+	} {
+		if h.hash == nil || *h.hash == "" {
+			continue
 		}
-	}
-	if book.OriginalFileHash != nil && *book.OriginalFileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:originalhash:%s", *book.OriginalFileHash)), nil); err != nil {
-			batch.Close()
-			return err
-		}
-	}
-	if book.OrganizedFileHash != nil && *book.OrganizedFileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:organizedhash:%s", *book.OrganizedFileHash)), nil); err != nil {
+		if err := p.deleteKeyIfValueIs(batch, []byte(h.prefix+*h.hash), id); err != nil {
 			batch.Close()
 			return err
 		}

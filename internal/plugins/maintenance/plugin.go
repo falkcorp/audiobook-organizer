@@ -236,6 +236,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.bookAtPathIndexBackfillDef(),
 		// opchange_by_book: index: rollback-runbook rebuild.
 		p.opChangeBookIndexRebuildDef(),
+		// book:hash:/originalhash:/organizedhash: indexes: check + repair.
+		p.bookHashIndexRepairDef(),
 		p.identIndexRebuildDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),

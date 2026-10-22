@@ -1,8 +1,9 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.0.0
+// version: 1.2.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
 // last-edited: 2026-10-22
 
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -19,6 +20,26 @@ vi.mock('../../services/api', async (orig) => ({
 }));
 
 import { PurgeSoftDeletedDialog } from './PurgeSoftDeletedDialog';
+import { usePurgeRun, type PurgeRunEnd } from '../../hooks/usePurgeRun';
+
+/** The page's role: owns the run, renders the dialog, can close and reopen it. */
+function Harness({
+  onFinished,
+  onStarted,
+}: {
+  onFinished: (end: PurgeRunEnd) => void;
+  onStarted?: (operationId: string) => void;
+}) {
+  const run = usePurgeRun(onFinished, onStarted);
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <button onClick={() => setOpen(true)}>reopen</button>
+      <span data-testid="in-progress">{String(run.running)}</span>
+      <PurgeSoftDeletedDialog open={open} onClose={() => setOpen(false)} run={run} />
+    </>
+  );
+}
 
 const preview: PurgeResult = {
   dry_run: true,
@@ -32,11 +53,43 @@ const preview: PurgeResult = {
   errors: [],
 };
 
-function setup(onFinished = vi.fn()) {
+function setup(onFinished = vi.fn(), onStarted = vi.fn()) {
   api.previewPurgeSoftDeleted.mockResolvedValue({ id: 'op-prev', dry_run: true });
   api.purgeSoftDeletedBooks.mockResolvedValue({ id: 'op-run', dry_run: false });
-  renderWithProviders(<PurgeSoftDeletedDialog open onClose={vi.fn()} onFinished={onFinished} />);
+  renderWithProviders(<Harness onFinished={onFinished} onStarted={onStarted} />);
   return onFinished;
+}
+
+/**
+ * Makes the purge operation (the second awaitPurgeResult call, after the
+ * preview) hang until the test settles it, reporting `progress` first.
+ */
+function deferRun(progress?: { done: number; total: number; message: string }) {
+  const ctl = {
+    resolve: (_r: PurgeResult) => {},
+    reject: (_e: Error) => {},
+  };
+  api.awaitPurgeResult.mockImplementationOnce(
+    (_id: string, onProgress: (p: { done: number; total: number; message: string }) => void) => {
+      if (progress) onProgress(progress);
+      return new Promise<PurgeResult>((resolve, reject) => {
+        ctl.resolve = resolve;
+        ctl.reject = reject;
+      });
+    }
+  );
+  return ctl;
+}
+
+/**
+ * Clicks Purge: the dialog closes as soon as the server has queued the purge,
+ * so the run is then only reachable by reopening the dialog.
+ */
+async function purgeThenReopen() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Purge 3 books' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  fireEvent.click(screen.getByText('reopen'));
+  await screen.findByTestId('purge-progress');
 }
 
 describe('PurgeSoftDeletedDialog', () => {
@@ -54,7 +107,7 @@ describe('PurgeSoftDeletedDialog', () => {
     expect(api.purgeSoftDeletedBooks).not.toHaveBeenCalled();
     expect(screen.getByTestId('purge-kept-owns_files')).toHaveTextContent('30');
     expect(screen.getByTestId('purge-kept-undo_possible')).toHaveTextContent(
-      '5 are the leftover copies of a combine that can still be undone'
+      '5 are the leftover copies of a combine, merge or other change that can still be undone'
     );
     expect(screen.getByTestId('purge-kept-has_progress')).toHaveTextContent('2');
     expect(screen.queryByText(/permanently remove 40/i)).toBeNull();
@@ -70,7 +123,7 @@ describe('PurgeSoftDeletedDialog', () => {
     expect(screen.getByRole('button', { name: 'Nothing to purge' })).toBeDisabled();
   });
 
-  it('runs the purge as an operation, shows progress, then the full breakdown', async () => {
+  it('closes right after the purge is queued, then reports the outcome from the background run', async () => {
     const result: PurgeResult = {
       attempted: 40,
       purged: 3,
@@ -82,36 +135,82 @@ describe('PurgeSoftDeletedDialog', () => {
       errors: [],
     };
     api.awaitPurgeResult.mockResolvedValueOnce(preview);
-    let finish: (r: PurgeResult) => void = () => {};
-    api.awaitPurgeResult.mockImplementationOnce(
-      (_id: string, onProgress: (p: { done: number; total: number; message: string }) => void) => {
-        onProgress({
-          done: 20,
-          total: 40,
-          message: 'Purging soft-deleted books: 20 of 40 decided',
-        });
-        return new Promise<PurgeResult>((resolve) => {
-          finish = resolve;
-        });
-      }
-    );
-    const onFinished = setup();
+    const run = deferRun({
+      done: 20,
+      total: 40,
+      message: 'Purging soft-deleted books: 20 of 40 decided',
+    });
+    const onStarted = vi.fn();
+    const onFinished = setup(vi.fn(), onStarted);
     fireEvent.click(await screen.findByRole('button', { name: 'Purge 3 books' }));
 
-    expect(await screen.findByTestId('purge-progress')).toHaveTextContent(
-      'Purging soft-deleted books: 20 of 40 decided'
-    );
+    // The dialog does not wait for the purge.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(false);
+    expect(onStarted).toHaveBeenCalledWith('op-run');
+    expect(screen.getByTestId('in-progress')).toHaveTextContent('true');
     expect(onFinished).not.toHaveBeenCalled();
 
-    finish(result);
+    run.resolve(result);
+    await waitFor(() =>
+      expect(onFinished).toHaveBeenCalledWith({ result, error: null, operationId: 'op-run' })
+    );
+    expect(screen.getByTestId('in-progress')).toHaveTextContent('false');
+  });
+
+  it('reopened mid-run it shows progress with the purge button disabled, then the full breakdown', async () => {
+    const result: PurgeResult = {
+      attempted: 40,
+      purged: 3,
+      files_deleted: 2,
+      skipped_owns_files: 30,
+      kept_undo_possible: 5,
+      kept_has_progress: 2,
+      carried_to_sibling: 1,
+      errors: [],
+    };
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    const run = deferRun({
+      done: 20,
+      total: 40,
+      message: 'Purging soft-deleted books: 20 of 40 decided',
+    });
+    setup();
+    await purgeThenReopen();
+    expect(screen.getByTestId('purge-progress')).toHaveTextContent(
+      'Purging soft-deleted books: 20 of 40 decided'
+    );
+    expect(screen.getByRole('button', { name: 'Purging...' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Purge 3 books' })).toBeNull();
+
+    run.resolve(result);
     expect(await screen.findByTestId('purge-result-headline')).toHaveTextContent(
       'Purged 3 of 40 soft-deleted books, and deleted 2 files from disk.'
     );
     expect(screen.getByTestId('purge-kept-owns_files')).toHaveTextContent('30');
     expect(screen.getByTestId('purge-kept-undo_possible')).toHaveTextContent('5');
     expect(screen.getByText(/1 book had listening progress, which was moved/)).toBeInTheDocument();
-    await waitFor(() => expect(onFinished).toHaveBeenCalledWith(result));
+  });
+
+  it('stays open and shows the server reason when the purge is refused', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    const onFinished = setup();
+    api.purgeSoftDeletedBooks.mockRejectedValueOnce(
+      new Error('a purge is already running (operation op-nightly)')
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Purge 3 books' }));
+    expect(await screen.findByTestId('purge-error')).toHaveTextContent(
+      'a purge is already running (operation op-nightly)'
+    );
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('in-progress')).toHaveTextContent('false');
+    await waitFor(() =>
+      expect(onFinished).toHaveBeenCalledWith({
+        result: null,
+        error: expect.stringContaining('already running'),
+        operationId: null,
+      })
+    );
   });
 
   it('passes the delete-files choice to the purge', async () => {
@@ -122,15 +221,15 @@ describe('PurgeSoftDeletedDialog', () => {
       files_deleted: 3,
       errors: [],
     });
-    setup();
+    const onFinished = setup();
     await screen.findByTestId('purge-preview-headline');
     fireEvent.click(screen.getByLabelText('Also delete files from disk (if they still exist)'));
     fireEvent.click(screen.getByRole('button', { name: 'Purge 3 books' }));
-    await screen.findByTestId('purge-result-headline');
+    await waitFor(() => expect(onFinished).toHaveBeenCalled());
     expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(true);
   });
 
-  it('shows the failure reason when the operation failed, and offers to try again', async () => {
+  it('shows the failure reason when the preview failed, and offers to try again', async () => {
     api.awaitPurgeResult.mockRejectedValueOnce(new Error('purge refused: cannot list users'));
     setup();
     expect(await screen.findByTestId('purge-error')).toHaveTextContent(
@@ -143,18 +242,135 @@ describe('PurgeSoftDeletedDialog', () => {
 
   it('lists the details of a purge that had errors, capped, as a warning', async () => {
     api.awaitPurgeResult.mockResolvedValueOnce(preview);
-    api.awaitPurgeResult.mockResolvedValueOnce({
+    const run = deferRun();
+    setup();
+    await purgeThenReopen();
+    run.resolve({
       attempted: 40,
       purged: 1,
       files_deleted: 0,
       failed: 7,
       errors: Array.from({ length: 7 }, (_, i) => `b${i}: could not read`),
     });
-    setup();
-    fireEvent.click(await screen.findByRole('button', { name: 'Purge 3 books' }));
     const errors = await screen.findByTestId('purge-result-errors');
     expect(errors).toHaveTextContent('b0: could not read');
     expect(errors).toHaveTextContent('and 2 more');
-    expect(screen.getByText(/7 books could not be processed/)).toBeInTheDocument();
+    expect(screen.getByText(/7 books could not be decided/)).toBeInTheDocument();
+  });
+
+  it('keeps running after the dialog closed, and reopening shows the running state, not a new preview', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    deferRun({ done: 5, total: 40, message: 'Purging: 5 of 40 decided' });
+    setup();
+    await purgeThenReopen();
+    expect(screen.getByTestId('purge-progress')).toHaveTextContent('Purging: 5 of 40 decided');
+    expect(api.previewPurgeSoftDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('reopening after the run ended starts a fresh preview, not a stale outcome', async () => {
+    const result: PurgeResult = { attempted: 40, purged: 3, files_deleted: 0, errors: [] };
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    const run = deferRun();
+    const onFinished = setup();
+    fireEvent.click(await screen.findByRole('button', { name: 'Purge 3 books' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    run.resolve(result);
+    await waitFor(() => expect(onFinished).toHaveBeenCalled());
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    fireEvent.click(screen.getByText('reopen'));
+    expect(await screen.findByTestId('purge-preview-headline')).toBeInTheDocument();
+  });
+
+  it('never moves the progress backwards', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    api.awaitPurgeResult.mockImplementationOnce(
+      (_id: string, onProgress: (p: { done: number; total: number; message: string }) => void) => {
+        onProgress({ done: 30, total: 40, message: 'step 30' });
+        onProgress({ done: 12, total: 40, message: 'step 12 (stale)' });
+        return new Promise<PurgeResult>(() => {});
+      }
+    );
+    setup();
+    await purgeThenReopen();
+    const progress = screen.getByTestId('purge-progress');
+    await waitFor(() => expect(progress).toHaveTextContent('step 12 (stale)'));
+    expect(progress.querySelector('[role="progressbar"]')).toHaveAttribute('aria-valuenow', '75');
+  });
+
+  it('shows a stopped-early banner with the exact counts decided so far', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    const run = deferRun();
+    const onFinished = setup();
+    await purgeThenReopen();
+    run.resolve({
+      attempted: 40,
+      purged: 3,
+      files_deleted: 0,
+      skipped_owns_files: 10,
+      errors: [],
+      stopped_early: true,
+      stop_reason: 'cancelled',
+    });
+    const banner = await screen.findByTestId('purge-result-headline');
+    expect(banner).toHaveTextContent('Stopped early (cancelled)');
+    expect(banner).toHaveTextContent('13 of 40 books in the trash were decided');
+    expect(screen.getByTestId('purge-kept-owns_files')).toHaveTextContent('10');
+    await waitFor(() => expect(onFinished).toHaveBeenCalled());
+  });
+
+  it('says the outcome is unknown, pointing at the operation, when no result can be fetched', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    const run = deferRun();
+    const onFinished = setup();
+    await purgeThenReopen();
+    run.reject(
+      new Error(
+        'The purge operation ended as failed and no result was stored, so what it did is unknown. Check operation op-run in the Operations page'
+      )
+    );
+    const err = await screen.findByTestId('purge-error');
+    expect(err).toHaveTextContent('what it did is unknown');
+    expect(err).toHaveTextContent('Check operation op-run');
+    await waitFor(() =>
+      expect(onFinished).toHaveBeenCalledWith({
+        result: null,
+        error: expect.stringContaining('unknown'),
+        operationId: 'op-run',
+      })
+    );
+    expect(screen.getByTestId('in-progress')).toHaveTextContent('false');
+  });
+
+  it('a preview with undecided books says so, with capped details, so the numbers add up', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({
+      dry_run: true,
+      attempted: 20,
+      purged: 0,
+      purgeable: 5,
+      files_deleted: 0,
+      skipped_owns_files: 4,
+      failed: 11,
+      errors: Array.from({ length: 7 }, (_, i) => `b${i}: could not read`),
+    });
+    setup();
+    expect(await screen.findByTestId('purge-preview-note')).toHaveTextContent(
+      '11 books could not be decided'
+    );
+    const details = screen.getByTestId('purge-result-errors');
+    expect(details).toHaveTextContent('b4: could not read');
+    expect(details).not.toHaveTextContent('b5: could not read');
+    expect(details).toHaveTextContent('and 2 more');
+  });
+
+  it('a stopped preview is flagged as covering only part of the trash', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({
+      ...preview,
+      stopped_early: true,
+      stop_reason: 'timed out',
+    });
+    setup();
+    expect(await screen.findByTestId('purge-preview-headline')).toHaveTextContent(
+      'Stopped early (timed out)'
+    );
   });
 });
