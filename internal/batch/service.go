@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-22
 
@@ -218,6 +218,23 @@ type BatchOperationsRequest struct {
 
 func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchResponse {
 	resp := newBatchResponse(len(req.Operations))
+	// A restore and a hard delete take the merge lock, which a running combine
+	// holds for its whole run, and this is a synchronous request: each such
+	// item first waits (merge.WaitMergeIdle, bounded) for it to be free, and
+	// once one has found a merge running the rest of the batch's lock-taking
+	// items fail at once with the same error instead of waiting again, so the
+	// request costs one bounded wait however many items it holds.
+	mergeBusy := false
+	mergeGate := func() error {
+		if mergeBusy {
+			return merge.ErrMergeBusy
+		}
+		if err := merge.WaitMergeIdle(merge.InteractiveMergeLockWait); err != nil {
+			mergeBusy = true
+			return err
+		}
+		return nil
+	}
 	for _, op := range req.Operations {
 		switch op.Action {
 		case "update":
@@ -228,6 +245,10 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			}
 			var updated *database.Book
 			if isRestore(op.Updates) {
+				if gerr := mergeGate(); gerr != nil {
+					resp.addError(op.ID, gerr.Error())
+					continue
+				}
 				var res merge.TrashRestoreResult
 				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
 					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)
@@ -265,6 +286,10 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				continue
 			}
 			if op.HardDelete {
+				if gerr := mergeGate(); gerr != nil {
+					resp.addError(op.ID, gerr.Error())
+					continue
+				}
 				if err := bs.hardDelete(book); err != nil {
 					resp.addError(op.ID, err.Error())
 				} else {
@@ -310,6 +335,10 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			// primary went through the restore and yielded its flag.
 			// It hands off the group's primary itself, before it decides the
 			// restored row's merge redirect.
+			if gerr := mergeGate(); gerr != nil {
+				resp.addError(op.ID, gerr.Error())
+				continue
+			}
 			res, err := merge.RestoreFromTrash(bs.db, op.ID, nil, nil)
 			switch {
 			case err != nil:
