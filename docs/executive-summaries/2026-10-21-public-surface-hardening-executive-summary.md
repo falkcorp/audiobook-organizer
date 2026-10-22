@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-21-public-surface-hardening-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: f48321db-42a2-44f8-a617-4c75ee6ae1ff -->
 <!-- last-edited: 2026-10-21 -->
 
@@ -39,7 +39,7 @@ Branch `fix/public-surface-hardening`. No separate spec. Drawn from an internal 
 
 **Why it mattered.** A single attacker could use up the budget and block every real user behind that relay, and a user could not be told apart from an attacker.
 
-**The fix.** The counter uses the visitor's real address, believed only when it comes from a listed relay or a verified Cloudflare sign-in. A request from anywhere else is counted by its own address, so a forged header cannot pick a counter.
+**The fix.** The counter uses the visitor's real address, believed only when it comes from a listed relay or a verified Cloudflare sign-in. A request from anywhere else is counted by its own address, so a forged header cannot pick a counter. Because one visitor with many addresses would still get a fresh allowance per address, password login also has overall limits: failures through one relay and across the whole service are capped per 15 minutes, and the counting tables are bounded. The cost is that a flood that uses up an overall limit also refuses the owner's password login until the window ends; people already signed in are not affected, and a restart clears it.
 
 ## Allowed-peer list
 
