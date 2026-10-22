@@ -1,7 +1,7 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package undo
 
@@ -431,5 +431,90 @@ func TestPairedRow(t *testing.T) {
 	m.FieldName = "bogus"
 	if got := PairedRow(all, m); got != nil {
 		t.Fatalf("unparsable marker paired with %v, want nil", got)
+	}
+}
+
+// SurvivorStandFor says whether the row borrowed the survivor: a took marker,
+// or a held marker written while a borrowing marker stood. A row without a
+// marker, or with a non-borrowing held marker, borrowed nothing.
+func TestSurvivorStandFor_ReportsBorrowing(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(1_700_000_000, 0)
+	at := func(sec int) time.Time { return base.Add(time.Duration(sec) * time.Second) }
+	took := UserContentField(UserContentCollectionTook, "c1")
+	held := UserContentField(UserContentCollectionHeld, "c1")
+	mk := func(op, retired, field string, created int) *database.OperationChange {
+		return &database.OperationChange{ID: op + "/" + retired, ChangeType: ChangeTypeUserContentFollow, OperationID: op, BookID: "s",
+			FieldName: field, NewValue: retired, CreatedAt: at(created)}
+	}
+	row := func(op, retired string) *database.OperationChange {
+		return &database.OperationChange{ChangeType: ChangeTypeUserContentFollow, OperationID: op, BookID: retired, NewValue: "s"}
+	}
+	cases := []struct {
+		name         string
+		rows         []*database.OperationChange
+		row          *database.OperationChange
+		want         SurvivorStand
+		wantBorrowed bool
+	}{
+		{"a took row borrows the survivor and, alone, swaps it back", []*database.OperationChange{mk("op0", "a", took, 1)}, row("op0", "a"), SurvivorDefault, true},
+		{"a took row with another borrower standing keeps it", []*database.OperationChange{mk("op0", "a", took, 1), mk("op1", "b", held, 2)}, row("op0", "a"), SurvivorStays, true},
+		{"a held row borrows when a took marker stood", []*database.OperationChange{mk("op0", "a", took, 1), mk("op1", "b", held, 2)}, row("op1", "b"), SurvivorStays, true},
+		{"a held row of an original member borrows nothing", []*database.OperationChange{mk("op0", "a", held, 1)}, row("op0", "a"), SurvivorDefault, false},
+		{"a row with no marker borrows nothing", nil, row("op0", "a"), SurvivorDefault, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stand, borrowed := SurvivorStandFor(tc.rows, tc.row, UserContentCollection, "c1")
+			if stand != tc.want || borrowed != tc.wantBorrowed {
+				t.Fatalf("got stand %v borrowed %v, want %v %v", stand, borrowed, tc.want, tc.wantBorrowed)
+			}
+		})
+	}
+}
+
+// RestoreMember is RestoreMembership plus the repair of a revert that wrote the
+// list and died before stamping: the book is already listed, the row borrowed
+// the survivor, nothing else stands on it, so the survivor is taken out.
+func TestRestoreMember(t *testing.T) {
+	t.Parallel()
+	tookRec := MembershipRecord{Index: 0, SurvivorWasMember: false}
+	heldRec := MembershipRecord{Index: 0, SurvivorWasMember: true}
+	cases := []struct {
+		name         string
+		cur          []string
+		rec          MembershipRecord
+		stand        SurvivorStand
+		borrowed     bool
+		want         []string
+		wantReleased bool
+		wantAlready  bool
+	}{
+		{"book listed again, borrowed survivor still listed: released", []string{"r", "s", "x"}, tookRec, SurvivorDefault, true, []string{"r", "x"}, true, false},
+		{"a held row's borrowed survivor is released too", []string{"r", "s", "x"}, heldRec, SurvivorLeaves, true, []string{"r", "x"}, true, false},
+		{"something else stands on the survivor: kept", []string{"r", "s", "x"}, tookRec, SurvivorStays, true, nil, false, true},
+		{"the row borrowed nothing: kept", []string{"r", "s", "x"}, heldRec, SurvivorDefault, false, nil, false, true},
+		{"the survivor is not listed: nothing to release", []string{"r", "x"}, tookRec, SurvivorDefault, true, nil, false, true},
+		{"book not listed: the ordinary restore, no release", []string{"s", "x"}, tookRec, SurvivorDefault, true, []string{"r", "x"}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			next, _, released, err := RestoreMember(tc.cur, "r", "s", tc.rec, tc.stand, tc.borrowed, nil)
+			if tc.wantAlready {
+				if !errors.Is(err, ErrAlreadyRestored) || released {
+					t.Fatalf("got released=%v err=%v, want ErrAlreadyRestored", released, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if released != tc.wantReleased {
+				t.Fatalf("released=%v, want %v", released, tc.wantReleased)
+			}
+			ucEq(t, next, tc.want)
+		})
 	}
 }

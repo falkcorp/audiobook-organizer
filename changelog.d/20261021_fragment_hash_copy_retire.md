@@ -57,21 +57,40 @@ survivor a later retire borrowed from an earlier one is counted the same way.
 Each carry also records the books right before and after the retired one, and
 the survivor keeps a record for every retire it took part in, including a
 second retire of the same pair after the first was reverted. The revert puts
-the book back by those neighbours (walking through other retires' records, and
-treating a survivor that took a book's slot as that book), so operations
+the book back by those neighbours: it builds an order graph from the records of
+every retire into the list, walking through the books other retires took out
+(and treating a survivor that took a book's slot as that book), so operations
 undone in any order, including oldest first, restore every book to its exact
-original position in every collection and playlist. A marker is stamped
-reverted only together with the row it belongs to: a row that failed or was
-refused leaves its marker standing for the retry, so the retry is not refused
-and the reverts in between see the truth. Reverts of operations that share a
-survivor run one list write at a time (a lock keyed by the survivor), so two
-operations undone at once cannot each see the other still standing. When no
-recorded neighbour can be found in the list (the owner reordered or emptied it
-since), or the row was journaled before neighbours were recorded, the recorded
-index is used instead and the revert reports it, never silently: the revert
-result counts these in `restored_by_index`, names each in `kept`, and the
-summary says so. A list that has more than one survivor in it relies on the
-same rules and falls back to the reported index when they cannot place a book.
+original position in every collection and playlist. When several survivors
+share one list the graph reads the journals of the other books it reaches
+(`GetBookChanges`, at most 128 reads per book placed) and follows each
+survivor's own stand-in and ghost. A book is placed by the graph only when both
+of its neighbours are found in the list now and nothing but the survivor (or
+another survivor's ghost) sits between them; a read that fails, or a book that
+cannot be bounded that way, is never guessed: the recorded index is used and
+reported. In randomised tests of two survivors sharing a list (48,000 retire and
+revert orders) every order was exact with the journals readable, and with the
+journal reads failing nothing was silently wrong (the books were reported by
+index instead).
+
+A marker is stamped reverted only together with the row it belongs to: a row
+that failed or was refused leaves its marker standing for the retry, so the
+retry is not refused and the reverts in between see the truth. The list write
+and the marker stamp are one batch where the store has it (collections and
+playlists on the Pebble store), so a death between them cannot leave the book
+back in the list with its marker still standing. On a store without that batch,
+the retry finds the book already listed and, when the row had borrowed the
+survivor and nothing else stands on it, takes the survivor out of the list and
+says so in `kept`; otherwise it only stamps the marker. Everything that reads a
+survivor's journal to decide a list write and then makes it holds one lock per
+list: the reverts of collection and playlist rows, and the retire's own marker
+journaling and list write, so two operations undone at once cannot each see the
+other still standing, and an undo cannot read the journal between a retire's
+marker and its write. When no recorded neighbour can be found in the list (the
+owner reordered or emptied it since), or the row was journaled before
+neighbours were recorded, the recorded index is used instead and the revert
+reports it, never silently: the revert result counts these in
+`restored_by_index`, names each in `kept`, and the summary says so.
 Marker rows restore nothing, so the revert result counts them in a
 separate `markers` figure, not in `restored`. The undo preflight predicts a
 refusal for a carried collection, playlist or rating that was edited since (it
