@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_chain_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f3db16f2-7f5a-4c3e-a348-dea96c5942d4
 // last-edited: 2026-10-22
 
@@ -162,66 +162,87 @@ func TestRetireCarry_ARevertWhoseEndOfRunStampWasLostIsNotRetriedAgainstANewerRe
 	require.Zero(t, rr.Superseded, "%+v", rr)
 }
 
-// voidFails fails, once, the void of a retire's collection row (the retired
-// book's row, not the survivor-side marker next to it): the carry that was
-// refused cannot take its own row back.
-type voidFails struct {
-	database.Store
-	armed atomic.Bool
+// batchVoidFails is a journal whose one-commit void of several rows fails once
+// (CreateOperationChanges is the capability a refused carry voids its marker and
+// its row with); a single-row write and every other call go through.
+type batchVoidFails struct {
+	*database.PebbleStore
+	armed  atomic.Bool
+	batchN atomic.Int64
 }
 
-func (s *voidFails) CreateOperationChange(c *database.OperationChange) error {
-	if kind, _, ok := undo.UserContentFromField(c.FieldName); ok && kind == undo.UserContentCollection && c.Voided && s.armed.CompareAndSwap(true, false) {
-		return errors.New("injected: void of the row failed")
+func (s *batchVoidFails) Unwrap() database.Store { return s.PebbleStore }
+
+func (s *batchVoidFails) CreateOperationChanges(cs []*database.OperationChange) error {
+	s.batchN.Add(1)
+	if s.armed.CompareAndSwap(true, false) {
+		return errors.New("injected: void commit failed")
 	}
-	return s.Store.CreateOperationChange(c)
+	return s.PebbleStore.CreateOperationChanges(cs)
 }
 
-// A carry whose write is refused voids its row and its marker. When the void
-// of the row fails and the void of the marker lands, the row stands for a
-// retire that never happened, with no marker. It is stale once a newer retire
-// takes the book out for real: the revert of the stale row must not put the
-// book back over the newer retire; it writes nothing, marks the row done and
-// says so in Kept. This is the one state in which a row stands with no marker,
-// and why the guard (undo.NewerCarryStands) is kept: without it the revert
-// lists a book that a standing retire removed.
-func TestRetireCarry_ARowLeftByAPartiallyVoidedCarryIsSupersededNotRetried(t *testing.T) {
-	t.Parallel()
-	c := newChainFixture(t, []string{"a", "X", "S3", "b", "S1"}, []string{"a", "X", "S3", "b"})
+// refusedCarry runs a carry of X into S3 whose write is refused (its record was
+// taken from a list that is not the one now written), journaled through j.
+func (c *chainFixture) refusedCarry(j repairs.ChangeJournal, op string) error {
+	c.t.Helper()
 	cs, err := resolveCarryStores(c.f.s)
-	require.NoError(t, err)
-	// A record taken from a list that is not the one now written: the carry's
-	// write finds the list changed and refuses.
-	l := c.f.rcMembers(t, c.col)
+	require.NoError(c.t, err)
+	l := c.f.rcMembers(c.t, c.col)
 	_, rec, ok := undo.CarryMembership(append([]string{"unrelated"}, l...), c.id["X"], c.id["S3"])
-	require.True(t, ok)
-	vs := &voidFails{Store: c.f.s}
-	vs.armed.Store(true)
-	w := repairs.NewWriter(c.f.s, c.f.s, "chain", "bulk_update", "repairs-").WithJournal(c.f.s, vs, "op2")
-	err = carryMembership(w, undo.UserContentCollection, c.col, c.id["S3"], c.id["X"], rec, func(carry func([]string) ([]string, error)) error {
+	require.True(c.t, ok)
+	w := repairs.NewWriter(c.f.s, c.f.s, "chain", "bulk_update", "repairs-").WithJournal(c.f.s, j, op)
+	return carryMembership(w, undo.UserContentCollection, c.col, c.id["S3"], c.id["X"], rec, func(carry func([]string) ([]string, error)) error {
 		_, e := cs.members.UpdateCollectionBooks(c.col, carry)
 		return e
 	})
-	require.ErrorIs(t, err, errCarryStale)
-	require.ErrorContains(t, err, "void of the row failed")
-	require.Equal(t, []string{"a", "X", "S3", "b"}, c.members(), "the refused carry wrote nothing")
+}
 
-	c.carry("op5", "X", "S1")
-	require.Equal(t, []string{"a", "S1", "S3", "b"}, c.members())
+func (c *chainFixture) liveAndVoided(op string) (live, voided int) {
+	c.t.Helper()
+	rows, err := c.f.s.GetOperationChanges(op)
+	require.NoError(c.t, err)
+	for _, r := range rows {
+		if r.Voided {
+			voided++
+		} else {
+			live++
+		}
+	}
+	return live, voided
+}
 
-	rep, err := undo.PreflightUndoConflicts(c.f.s, "op2")
-	require.NoError(t, err)
-	require.Empty(t, rep.CheckFailed, "%+v", rep)
-	require.Equal(t, 1, rep.AlreadyRestored, "the revert writes nothing for this row, and the preflight says so: %+v", rep)
-
-	rr := c.revert("op2")
-	require.Equal(t, 1, rr.Superseded, "%+v", rr)
-	require.Equal(t, 0, rr.Restored, "%+v", rr)
-	require.Len(t, rr.Kept, 1, "%+v", rr)
-	require.Contains(t, rr.Kept[0], "retired again")
-	require.Equal(t, []string{"a", "S1", "S3", "b"}, c.members(), "op5 stands: nothing was put back")
-	c.revert("op5")
-	require.Equal(t, []string{"a", "X", "S3", "b"}, c.members())
+// A carry whose write is refused voids its row and its marker in ONE commit:
+// the two belong together, so a failure of that commit leaves both standing
+// (the crash window of journal-first) and never one voided beside one live. The
+// state "a row with no marker" that a per-row void could leave, and the guard it
+// needed, cannot arise: when the commit lands, both are voided.
+func TestRetireCarry_ARefusedCarryVoidsItsRowAndItsMarkerTogether(t *testing.T) {
+	t.Parallel()
+	t.Run("the commit lands: both voided", func(t *testing.T) {
+		t.Parallel()
+		c := newChainFixture(t, []string{"a", "X", "S3", "b"}, []string{"a", "X", "S3", "b"})
+		vs := &batchVoidFails{PebbleStore: c.f.s}
+		err := c.refusedCarry(vs, "op2")
+		require.ErrorIs(t, err, errCarryStale)
+		require.Equal(t, []string{"a", "X", "S3", "b"}, c.members(), "the refused carry wrote nothing")
+		live, voided := c.liveAndVoided("op2")
+		require.Equal(t, 0, live)
+		require.Equal(t, 2, voided, "the row and the marker")
+		require.EqualValues(t, 1, vs.batchN.Load(), "in one commit")
+	})
+	t.Run("the commit fails: neither is voided, and the failure is reported", func(t *testing.T) {
+		t.Parallel()
+		c := newChainFixture(t, []string{"a", "X", "S3", "b"}, []string{"a", "X", "S3", "b"})
+		vs := &batchVoidFails{PebbleStore: c.f.s}
+		vs.armed.Store(true)
+		err := c.refusedCarry(vs, "op2")
+		require.ErrorIs(t, err, errCarryStale)
+		require.ErrorContains(t, err, "void commit failed")
+		live, voided := c.liveAndVoided("op2")
+		require.Equal(t, 2, live, "both rows stand, as the journal-first crash window leaves them")
+		require.Equal(t, 0, voided, "never one voided beside one live")
+		require.Equal(t, []string{"a", "X", "S3", "b"}, c.members())
+	})
 }
 
 // X is retired into S2 (R, took S2 into X's slot) and S2 into S3 (D). R is

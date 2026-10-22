@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-22
 //
@@ -224,34 +224,32 @@ type rowVerdict struct {
 	already  bool
 }
 
-// bookJournalReader is the optional preflight store surface for the journal of
-// one book (database.Store GetBookChanges).
-type bookJournalReader interface {
-	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+// ListJournalReader reads the journal of one collection or playlist: every row
+// any retire into the list wrote (database GetListChanges). The membership
+// graph and the roles are decided from it alone. Resolve it with
+// database.AsCapability; it is not on Store.
+type ListJournalReader interface {
+	GetListChanges(kind, listID string) ([]*database.OperationChange, error)
 }
 
 // membershipVerdict predicts the revert of a collection or playlist row of a
 // retire's carry (CheckMembershipFollow) from the list as it is now and the
-// journals the revert reads: the survivor's and the retired book's. A row the
-// revert restores by the survivor's standing, the retired book's, or a survivor
-// retired out of the list since is therefore not filed under CheckFailed (an
-// unrestorable row never counts toward offering Undo, so a wrong refusal here
-// would hide an Undo the revert performs exactly). A store that cannot read
-// journals gets no prediction.
+// list's journal the revert reads. A row the revert restores by the survivor's
+// standing, the retired book's, or a survivor retired out of the list since is
+// therefore not filed under CheckFailed (an unrestorable row never counts toward
+// offering Undo, so a wrong refusal here would hide an Undo the revert performs
+// exactly). A store that cannot read the journal still has the list checked, as
+// far as the row alone decides it.
 func membershipVerdict(store ConflictChecker, cur []string, c *database.OperationChange, kind, listID string) rowVerdict {
-	j, ok := database.AsCapability[bookJournalReader](store)
+	j, ok := database.AsCapability[ListJournalReader](store)
 	if !ok {
-		return rowVerdict{}
+		return verdictOf(CheckMembershipFollow(cur, c, kind, listID, nil))
 	}
-	survivorRows, err := j.GetBookChanges(c.NewValue)
+	rows, err := j.GetListChanges(kind, listID)
 	if err != nil {
-		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read the journal of survivor %s: %v", c.NewValue, err)}
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read the journal of %s %s: %v", kind, listID, err)}
 	}
-	retiredRows, err := j.GetBookChanges(c.BookID)
-	if err != nil {
-		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read the journal of book %s: %v", c.BookID, err)}
-	}
-	return verdictOf(CheckMembershipFollow(cur, c, kind, listID, survivorRows, retiredRows))
+	return verdictOf(CheckMembershipFollow(cur, c, kind, listID, rows))
 }
 
 // verdictOf reads a compare-and-set answer: ErrAlreadyRestored is safe (the
