@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -115,6 +115,9 @@ func (p *Plugin) Repairs() *repairs.Registry {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newReconcileFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
+		if err := p.repairsReg.Register(newRetiredVersionsFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
