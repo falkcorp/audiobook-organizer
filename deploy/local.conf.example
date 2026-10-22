@@ -1,5 +1,5 @@
 # file: deploy/local.conf.example
-# version: 1.3.0
+# version: 1.4.0
 # guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
 # last-edited: 2026-10-22
 #
@@ -52,9 +52,10 @@ Environment=OLLAMA_BASE_URL=http://192.168.0.20:11434/v1
 
 # Password logins admitted while the login failure ceilings are spent each cost
 # an argon2id derivation (a name that does not exist too), so they are admitted
-# at a service-wide rate: LOGIN_SATURATED_RATE logins per second (above 0, at
-# most 50; default 2) with a burst of LOGIN_SATURATED_BURST (1 to 200; default
+# at a service-wide rate: LOGIN_SATURATED_RATE logins per second (0.01 to
+# 50; default 2) with a burst of LOGIN_SATURATED_BURST (1 to 200; default
 # 8). Beyond it a login is answered 429 with Retry-After. Cloudflare Access
-# logins are not counted. An unusable value stops the service starting.
+# logins are not counted (they still run the password check, under the
+# per-visitor throttle). An unusable value stops the service starting.
 #Environment=LOGIN_SATURATED_RATE=2
 #Environment=LOGIN_SATURATED_BURST=8

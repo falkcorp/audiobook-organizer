@@ -1,5 +1,5 @@
 // file: internal/config/invite_config_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
 // last-edited: 2026-10-22
 
@@ -253,6 +253,8 @@ func TestLoginSaturatedLimits_RejectsUnusableValues(t *testing.T) {
 		{"Inf", "", "LOGIN_SATURATED_RATE"},
 		{"1e9", "", "LOGIN_SATURATED_RATE"},
 		{"50.5", "", "LOGIN_SATURATED_RATE"},
+		{"0.009", "", "LOGIN_SATURATED_RATE"}, // below the floor: a refused caller would wait minutes
+		{"0.0001", "", "LOGIN_SATURATED_RATE"},
 		{"", "0", "LOGIN_SATURATED_BURST"},
 		{"", "-3", "LOGIN_SATURATED_BURST"},
 		{"", "2.5", "LOGIN_SATURATED_BURST"},
@@ -261,6 +263,19 @@ func TestLoginSaturatedLimits_RejectsUnusableValues(t *testing.T) {
 	} {
 		if _, _, err := parseLoginSaturatedLimits(tc.rate, tc.burst); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("rate=%q burst=%q: err=%v, want an error naming %s", tc.rate, tc.burst, err, tc.want)
+		}
+	}
+	// The raw value is operator input read from the environment: the error names
+	// the setting and the accepted range, and never echoes what was typed.
+	for _, tc := range []struct{ rate, burst string }{{"zz-7.31-rate", ""}, {"", "zz-7.31-burst"}, {"0.0049999", ""}, {"", "4242424"}} {
+		_, _, err := parseLoginSaturatedLimits(tc.rate, tc.burst)
+		if err == nil {
+			t.Fatalf("rate=%q burst=%q: expected an error", tc.rate, tc.burst)
+		}
+		for _, raw := range []string{tc.rate, tc.burst} {
+			if raw != "" && strings.Contains(err.Error(), raw) {
+				t.Errorf("error %q echoes the raw value %q", err, raw)
+			}
 		}
 	}
 	for _, tc := range []struct {

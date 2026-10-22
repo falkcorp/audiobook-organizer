@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-22
 
@@ -58,7 +58,9 @@ var inviteEnvOnlySettings = []struct {
 // reveal whether the name exists), and this token bucket caps how many the
 // service takes on per second, whatever the number of visitors. Unset keys
 // mean the defaults. Cloudflare Access logins (a verified Access identity) are
-// outside the bucket: they carry no password work.
+// outside the bucket. They still run the password check; they are bounded by
+// the per-visitor throttle and by the allow-listed identity Cloudflare Access
+// vouches for, not by this bucket.
 const (
 	// DefaultLoginSaturatedRate is the sustained rate, in logins per second.
 	DefaultLoginSaturatedRate = 2.0
@@ -69,15 +71,21 @@ const (
 	// and 64 MiB, so beyond these the setting no longer bounds anything.
 	MaxLoginSaturatedRate  = 50.0
 	MaxLoginSaturatedBurst = 200
+	// MinLoginSaturatedRate is the slowest sustained rate an operator may set.
+	// Below it a refused caller would wait minutes for one token (the 429
+	// Retry-After is the time to the next token), which is a lockout in all but
+	// name, not a bound on derivations.
+	MinLoginSaturatedRate = 0.01
 )
 
 // LoginSaturatedLimits returns the effective saturated-login rate (per second)
 // and burst: the defaults for an unset key, the parsed values otherwise. An
-// unusable value (not a number, NaN/Inf, a rate of zero or below or above
-// MaxLoginSaturatedRate, a burst that is not an integer in 1..
+// unusable value (not a number, NaN/Inf, a rate below MinLoginSaturatedRate or
+// above MaxLoginSaturatedRate, a burst that is not an integer in 1..
 // MaxLoginSaturatedBurst) is an error, never a silent default: the server
 // refuses to start on it, because a typo here must neither remove nor tighten
-// the bound unnoticed. The error names the setting, never anything else.
+// the bound unnoticed. The error names the setting and the accepted range, and
+// never echoes the value it was given.
 func LoginSaturatedLimits() (rate float64, burst int, err error) {
 	mu.RLock()
 	rawRate, rawBurst := AppConfig.LoginSaturatedRate, AppConfig.LoginSaturatedBurst
@@ -89,15 +97,15 @@ func parseLoginSaturatedLimits(rawRate, rawBurst string) (rate float64, burst in
 	rate, burst = DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst
 	if rawRate = strings.TrimSpace(rawRate); rawRate != "" {
 		r, perr := strconv.ParseFloat(rawRate, 64)
-		if perr != nil || math.IsNaN(r) || math.IsInf(r, 0) || r <= 0 || r > MaxLoginSaturatedRate {
-			return 0, 0, fmt.Errorf("LOGIN_SATURATED_RATE must be a number of logins per second above 0 and at most %v, got %q", MaxLoginSaturatedRate, rawRate)
+		if perr != nil || math.IsNaN(r) || math.IsInf(r, 0) || r < MinLoginSaturatedRate || r > MaxLoginSaturatedRate {
+			return 0, 0, fmt.Errorf("LOGIN_SATURATED_RATE must be a number of logins per second from %v to %v", MinLoginSaturatedRate, MaxLoginSaturatedRate)
 		}
 		rate = r
 	}
 	if rawBurst = strings.TrimSpace(rawBurst); rawBurst != "" {
 		b, perr := strconv.Atoi(rawBurst)
 		if perr != nil || b < 1 || b > MaxLoginSaturatedBurst {
-			return 0, 0, fmt.Errorf("LOGIN_SATURATED_BURST must be a whole number from 1 to %d, got %q", MaxLoginSaturatedBurst, rawBurst)
+			return 0, 0, fmt.Errorf("LOGIN_SATURATED_BURST must be a whole number from 1 to %d", MaxLoginSaturatedBurst)
 		}
 		burst = b
 	}
