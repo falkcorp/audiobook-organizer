@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.60.0
+// version: 4.61.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -900,6 +900,9 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 	// Every listener's handler is wrapped by the peer allow-list, outside gin,
 	// so a peer that is not allowed never reaches routing (peer_allowlist.go).
 	if err := startupPeerAllowList(); err != nil {
+		return err
+	}
+	if err := startupLoginSaturated(); err != nil {
 		return err
 	}
 	gate := s.peerGatedHandler()
