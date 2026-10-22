@@ -1,5 +1,5 @@
 // file: internal/server/csp_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a8dee6b8-6533-4d26-9f2c-34437fd9caa3
 // last-edited: 2026-10-21
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -20,8 +21,15 @@ import (
 // restoreCSP puts the process-wide policy back after a test that changes it.
 func restoreCSP(t *testing.T) {
 	t.Helper()
-	prev := *cspHeader.Load()
-	t.Cleanup(func() { cspHeader.Store(&prev) })
+	prev := cspHeader.Load()
+	t.Cleanup(func() { cspHeader.Store(prev) })
+}
+
+func setAccessTeam(t *testing.T, team string) {
+	t.Helper()
+	prev := config.CFAccessTeam()
+	config.Mutate(func(c *config.Config) { c.CFAccessTeamDomain = team })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CFAccessTeamDomain = prev }) })
 }
 
 func cspDirective(policy, name string) string {
@@ -35,6 +43,7 @@ func cspDirective(policy, name string) string {
 }
 
 func TestSecurityHeaders_SendCSPAndPermissionsPolicy(t *testing.T) {
+	setAccessTeam(t, "")
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(securityHeadersMiddleware())
@@ -51,8 +60,11 @@ func TestSecurityHeaders_SendCSPAndPermissionsPolicy(t *testing.T) {
 	require.Equal(t, "object-src 'none'", cspDirective(csp, "object-src"))
 	require.Equal(t, "base-uri 'none'", cspDirective(csp, "base-uri"))
 	require.Equal(t, "frame-ancestors 'self'", cspDirective(csp, "frame-ancestors"))
-	require.Equal(t, "connect-src 'self' https://*.cloudflareaccess.com", cspDirective(csp, "connect-src"),
-		"apiFetch detects an expired Access session by following the redirect to cloudflareaccess.com")
+	require.Equal(t, "connect-src 'self'", cspDirective(csp, "connect-src"),
+		"with no Access team configured nothing beyond the origin is allowed, and never a wildcard")
+	require.Equal(t, "report-uri "+cspReportPath, cspDirective(csp, "report-uri"))
+	require.Equal(t, "report-to "+cspReportGroup, cspDirective(csp, "report-to"))
+	require.Equal(t, cspReportGroup+`="`+cspReportPath+`"`, w.Header().Get("Reporting-Endpoints"))
 	require.Contains(t, cspDirective(csp, "img-src"), "https:", "metadata search shows provider cover URLs")
 	require.Contains(t, cspDirective(csp, "img-src"), "data:")
 
@@ -123,4 +135,37 @@ func TestSetSPAInlineScripts_AllowsExactlyThoseHashes(t *testing.T) {
 	// A different index replaces the hashes rather than adding to them.
 	require.Equal(t, 0, setSPAInlineScripts([]byte("<html></html>")))
 	require.Equal(t, "script-src 'self'", cspDirective(contentSecurityPolicy(), "script-src"))
+}
+
+// apiFetch recognises an expired Access session by following the edge's
+// redirect to the team's login host, so connect-src names exactly that host,
+// read from config on every response, and never a wildcard.
+func TestCSP_ConnectSrcNamesOnlyTheConfiguredAccessTeam(t *testing.T) {
+	restoreCSP(t)
+	setAccessTeam(t, "team-x.cloudflareaccess.com")
+	require.Equal(t, "connect-src 'self' https://team-x.cloudflareaccess.com", cspDirective(contentSecurityPolicy(), "connect-src"))
+	require.NotContains(t, contentSecurityPolicy(), "*", "no wildcard anywhere in the policy")
+
+	// A change takes effect without a restart, and an installed hash survives it.
+	setSPAInlineScripts([]byte("<script>boot()</script>"))
+	setAccessTeam(t, "  HTTPS://Other-Team.example.test/ ")
+	require.Equal(t, "connect-src 'self' https://other-team.example.test", cspDirective(contentSecurityPolicy(), "connect-src"),
+		"trimmed, lowercased, scheme and trailing slash tolerated")
+	require.Contains(t, cspDirective(contentSecurityPolicy(), "script-src"), "'sha256-")
+	setAccessTeam(t, "")
+	require.Equal(t, "connect-src 'self'", cspDirective(contentSecurityPolicy(), "connect-src"), "unset: nothing added")
+}
+
+// A malformed team can neither widen nor corrupt the header.
+func TestCSP_MalformedAccessTeamIsDropped(t *testing.T) {
+	restoreCSP(t)
+	for _, bad := range []string{
+		"*.cloudflareaccess.com", "team.example.test; script-src *", "team.example.test other.test",
+		"https://team.example.test/path", "team", "-bad.example.test", "team..example.test",
+		"team.example.test:8443", "team.example.test'", "evil.test\r\nX-Injected: 1",
+	} {
+		setAccessTeam(t, bad)
+		require.Equal(t, "connect-src 'self'", cspDirective(contentSecurityPolicy(), "connect-src"), "%q", bad)
+		require.NotContains(t, contentSecurityPolicy(), "X-Injected")
+	}
 }

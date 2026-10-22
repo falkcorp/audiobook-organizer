@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-21
 
@@ -114,6 +114,15 @@ func TunnelConnectorAddrs() string {
 	mu.RLock()
 	defer mu.RUnlock()
 	return AppConfig.TunnelConnectorAddrs
+}
+
+// CFAccessTeam returns cf_access_team_domain under the read lock: one field, not
+// a Snapshot copy, because the Content-Security-Policy builder reads it on every
+// response.
+func CFAccessTeam() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.CFAccessTeamDomain
 }
 
 // AllowedPeerCIDRs returns allowed_peer_cidrs under the read lock: one field,
