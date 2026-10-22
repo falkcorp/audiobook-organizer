@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.107.0
+// version: 2.108.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -585,6 +585,26 @@ func opRegistryRunStateGate(ps *database.PebbleStore, reg *opsregistry.Registry)
 		"so stopping runs, the boot sweep and requeue successors would silently be recorded v2-only")
 }
 
+// newBaseRouter returns the bare gin engine NewServer builds the router on.
+//
+// Gin's trailing-slash and fixed-path redirects are OFF. When a request misses
+// a route that exists with or without a trailing slash (or in another case),
+// gin answers 301/307 with a Location it builds from the request path
+// prefixed by the X-Forwarded-Prefix header, and that header is chosen by the
+// caller: the service sits behind a tunnel and reads no such header itself,
+// yet the redirect echoed it back (/auth/openid/callback/ with
+// X-Forwarded-Prefix: /x answered Location: /x/auth/openid/callback, on a path
+// that bypasses Cloudflare Access). Nothing here depends on the redirect: the
+// SPA is served from NoRoute, the web client and the ABS surface call exact
+// paths, and a slash variant that must resolve is registered explicitly. A
+// request that misses now gets the ordinary NoRoute answer.
+func newBaseRouter() *gin.Engine {
+	router := gin.New() // don't use gin.Default() — we add our own middleware
+	router.RedirectTrailingSlash = false
+	router.RedirectFixedPath = false
+	return router
+}
+
 // NewServer constructs a Server with an explicit Store dependency.
 // s.Ops() is still assigned at startup for code that hasn't
 // been migrated to use s.Ops() yet (see DI migration plan 4.4).
@@ -602,7 +622,7 @@ func NewServer(store database.Store) *Server {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	router := gin.New() // don't use gin.Default() — we add our own middleware
+	router := newBaseRouter()
 
 	// Trust no proxy headers. Without this, Gin honors X-Forwarded-For from any
 	// source, so c.ClientIP() can be spoofed — bypassing every per-IP rate
