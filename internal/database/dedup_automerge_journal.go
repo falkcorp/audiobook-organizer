@@ -1,5 +1,5 @@
 // file: internal/database/dedup_automerge_journal.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
 // last-edited: 2026-10-22
 
@@ -199,9 +199,18 @@ func (s *EmbeddingStore) ListAutoMergeJournalEntries(limit int) ([]AutoMergeJour
 // soft-deleted while the entry is still provisional, and UnmergeAuto's own
 // refusal for one tells the operator to restore the loser from the trash.
 // Dropping the loser then would leave nothing to restore.
+//
+// Winners is the other book UnmergeAuto needs: an entry that recorded a
+// pre-merge snapshot of its winner (WinnerPreMergeTS != 0) makes UnmergeAuto
+// refuse, before it touches anything, when the winner row no longer exists. A
+// winner that was soft-deleted later and then purged would make the whole undo
+// impossible, so a trashed winner of an open, finalized entry is held too. A
+// provisional entry cannot be undone (UnmergeAuto refuses it), so its winner is
+// not held.
 type AutoMergeOpenLosers struct {
-	Gen    uint64
-	Losers map[string]string
+	Gen     uint64
+	Losers  map[string]string
+	Winners map[string]string
 }
 
 // OpenAutoMergeLosers scans the auto-merge journal once. Unlike
@@ -213,7 +222,7 @@ func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
-	out := &AutoMergeOpenLosers{Gen: AutoMergeJournalGeneration(), Losers: map[string]string{}}
+	out := &AutoMergeOpenLosers{Gen: AutoMergeJournalGeneration(), Losers: map[string]string{}, Winners: map[string]string{}}
 	prefix := []byte(dedupAutoMergeJournalPfx)
 	upper := append([]byte(dedupAutoMergeJournalPfx), 0xff)
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
@@ -230,6 +239,9 @@ func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
 			continue
 		}
 		out.Losers[entry.LoserID] = string(iter.Key())
+		if !entry.Provisional && entry.WinnerPreMergeTS != 0 && entry.WinnerID != "" {
+			out.Winners[entry.WinnerID] = string(iter.Key())
+		}
 	}
 	if err := iter.Error(); err != nil {
 		return nil, fmt.Errorf("scan automerge journal: %w", err)

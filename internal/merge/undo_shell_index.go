@@ -1,5 +1,5 @@
 // file: internal/merge/undo_shell_index.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3a8c5e72-1f94-4b06-9d3e-6c7a2b0f8e51
 // last-edited: 2026-10-22
 
@@ -83,8 +83,13 @@ func NewUndoShellIndex(db journalKVReader) (*UndoShellIndex, error) {
 			continue
 		}
 		for _, a := range j.Absorbed {
-			if a.LeftLive || a.MarkedForDeletionAt == nil {
-				continue // never retired, or not stamped: undo restores nothing for it
+			// LeftLive is NOT a reason to skip: a retire write that failed can still
+			// have landed, and a shell carrying exactly the journal's stamp is the
+			// one UndoCombine restores. Holds compares the stamp, which tells a
+			// write that landed (equal) from one that missed (the row is live or
+			// stamped otherwise), so holding on the stamp alone is exact.
+			if a.MarkedForDeletionAt == nil {
+				continue // not stamped: undo has no shell to match for it
 			}
 			idx.stamps[a.BookID] = append(idx.stamps[a.BookID], stampedShell{stamp: *a.MarkedForDeletionAt, journalID: j.ID})
 		}

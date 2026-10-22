@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-22
 
@@ -385,7 +385,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 	case r.keptUndo:
 		return purgeOutcome{kind: purgeKeptUndo}
 	case r.undoErr != nil:
-		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell under the merge lock whether an undo still needs it: %v", book.ID, r.undoErr)}}
+		return purgeOutcome{kind: purgeFailed, abort: purgeAbortOf(r.undoErr), errs: []string{fmt.Sprintf("%s: not purged: cannot tell under the merge lock whether an undo still needs it: %v", book.ID, r.undoErr)}}
 	case r.stateErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(r.stateErr), r.stateErr)}}
 	case r.hasState:
@@ -571,7 +571,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		// landed between the pre-check and the delete.
 		return purgeOutcome{kind: purgeOwnsFiles, errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
 	case err != nil:
-		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
+		return purgeOutcome{kind: purgeFailed, abort: purgeAbortOf(err), errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
 	}
 	n, errs := svc.purgeFinish(doomed, deleteFiles)
 	return purgeOutcome{kind: purgeCarried, filesDeleted: n, errs: errs}

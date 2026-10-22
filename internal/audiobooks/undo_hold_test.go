@@ -1,5 +1,5 @@
 // file: internal/audiobooks/undo_hold_test.go
-// version: 1.1.0
+// version: 1.4.0
 // guid: 3c9e5a17-8d42-4b60-a1f3-7e0b6d2c9a48
 // last-edited: 2026-10-22
 
@@ -8,6 +8,8 @@ package audiobooks
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -42,6 +45,21 @@ func journalAutoMerge(t *testing.T, store *database.PebbleStore, loserID string,
 	require.NotNil(t, emb)
 	key, err := emb.PutAutoMergeJournalEntry(database.AutoMergeJournalEntry{
 		WinnerID: "winner", LoserID: loserID, Provisional: provisional, UndoneAt: undoneAt,
+		MergedAt: time.Now().UnixNano() + autoMergeSeq.Add(1),
+	})
+	require.NoError(t, err)
+	return key
+}
+
+// journalAutoMergeWinner journals an open, finalized auto-merge of loserID into
+// winnerID with a pre-merge snapshot of the winner (preTS), which is what makes
+// UnmergeAuto need the winner's row.
+func journalAutoMergeWinner(t *testing.T, store *database.PebbleStore, winnerID, loserID string, preTS, undoneAt int64) string {
+	t.Helper()
+	emb := database.NewEmbeddingStoreFromStore(store)
+	require.NotNil(t, emb)
+	key, err := emb.PutAutoMergeJournalEntry(database.AutoMergeJournalEntry{
+		WinnerID: winnerID, LoserID: loserID, WinnerPreMergeTS: preTS, LoserPreMergeTS: 1, UndoneAt: undoneAt,
 		MergedAt: time.Now().UnixNano() + autoMergeSeq.Add(1),
 	})
 	require.NoError(t, err)
@@ -385,4 +403,78 @@ func TestPurge_RepairedCombineJournalRowPurgesNormally(t *testing.T) {
 	assert.Equal(t, []string{"shell"}, res.KeptUndoPossibleIDs)
 	assert.True(t, bookGone(t, store, "plain"))
 	assert.False(t, bookGone(t, store, "shell"))
+}
+
+// UnmergeAuto refuses (writing nothing) when the winner row it has a pre-merge
+// snapshot for no longer exists, so a trashed winner of an open entry is held
+// like its loser. Without a winner snapshot, or once undone, it is not.
+func TestRunPurge_AutoMergeWinnerIsHeldWhileTheUndoNeedsIt(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "w-open", "")
+	softDeleted(t, store, "w-nosnap", "")
+	softDeleted(t, store, "w-undone", "")
+	journalAutoMergeWinner(t, store, "w-open", "l1", 5, 0)
+	journalAutoMergeWinner(t, store, "w-nosnap", "l2", 0, 0)
+	journalAutoMergeWinner(t, store, "w-undone", "l3", 5, time.Now().UnixNano())
+
+	res := purgeOnce(t, svc)
+	assert.Equal(t, []string{"w-open"}, res.KeptUndoPossibleIDs, "%+v", res)
+	assert.False(t, bookGone(t, store, "w-open"))
+	assert.True(t, bookGone(t, store, "w-nosnap"), "no winner snapshot: UnmergeAuto does not need the winner row")
+	assert.True(t, bookGone(t, store, "w-undone"))
+}
+
+// distrustAfterStore reports the by-book ledger index usable for its first
+// `trusted` questions and unusable after: a rebuild that started mid-pass.
+type distrustAfterStore struct {
+	*database.PebbleStore
+	asked   atomic.Int64
+	trusted int64
+}
+
+func (s *distrustAfterStore) OpChangeByBookIndexUsable() bool {
+	return s.asked.Add(1) <= s.trusted
+}
+
+// When the ledger index loses its trust mid-pass, every remaining book would
+// fail the same way: the pass stops with the reason instead, so the result
+// says "purge stopped: ... index" rather than carrying one failure per book.
+func TestRunPurge_LostLedgerTrustMidPassStopsThePassWithAReason(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	const n = 400
+	for i := 0; i < n; i++ {
+		softDeleted(t, store, fmt.Sprintf("b%03d", i), "")
+	}
+	svc.store = &distrustAfterStore{PebbleStore: store, trusted: 60}
+
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	require.NoError(t, err)
+	assert.True(t, res.StoppedEarly, "%+v", res)
+	assert.Contains(t, res.StopReason, "purge stopped")
+	assert.Contains(t, res.StopReason, "by-book index")
+	assert.LessOrEqual(t, res.Failed, runtime.NumCPU(), "at most one in-flight book per worker may fail: %d failed of %d", res.Failed, n)
+	assert.Less(t, res.Decided(), res.Attempted)
+	assert.Greater(t, res.Purged, 0, "books decided while the index was trusted are purged")
+}
+
+// The batch hard delete used to DeleteBook a trashed book directly, skipping
+// the undo hold: a combine's shell was hard-deleted and its undo broke. It now
+// goes through the purge's own path.
+func TestBatchHardDelete_TrashedBookIsHeldByTheUndoHold(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "shell", "")
+	softDeleted(t, store, "plain", "")
+	holdByCombine(t, store, "shell")
+	bs := batch.NewBatchService(store, batch.WithTrashPurger(svc))
+
+	resp := bs.ExecuteOperations(&batch.BatchOperationsRequest{Operations: []batch.BatchOperationItem{
+		{ID: "shell", Action: "delete", HardDelete: true},
+		{ID: "plain", Action: "delete", HardDelete: true},
+	}})
+	require.Len(t, resp.Results, 2)
+	assert.Equal(t, 1, resp.Success, "%+v", resp)
+	assert.Equal(t, 1, resp.Failed, "%+v", resp)
+	assert.Contains(t, resp.Results[0].Error, "still needed by an undo that can run", "%+v", resp.Results[0])
+	assert.False(t, bookGone(t, store, "shell"), "the held shell must survive the batch hard delete")
+	assert.True(t, bookGone(t, store, "plain"))
 }
