@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.28.0
+// version: 1.30.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-22
 
@@ -65,7 +65,7 @@ import {
   type RepairsLane,
 } from './lanes/useRepairsLane';
 import type { SpineViewMode } from './spine/viewMode';
-import { classLabel, isSkippedFilter } from './repairs/rowHelpers';
+import { classLabel, flagFilter, flagLabel, isFlagFilter, isSkippedFilter } from './repairs/rowHelpers';
 import { RepairsCompactView } from './repairs/RepairsCompactView';
 import { RepairsDetailsView } from './repairs/RepairsDetailsView';
 import { RepairsGroupedView } from './repairs/RepairsGroupedView';
@@ -417,6 +417,44 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
 };
 
 /**
+ * One chip per row flag with its count. A flag rides alongside a row's class
+ * and skip kind, so its count spans both tabs; clicking the chip pages exactly
+ * the rows it counts (filter `flag:<name>`; "every count opens its books"),
+ * and clicking it again goes back to the applicable rows. The count is the
+ * whole plan's, so the chips are offered only when no class narrows the list.
+ */
+function FlagChips({ repairs }: RepairsPanelProps) {
+  const counts = repairs.page?.by_flag;
+  const flags = Object.keys(counts ?? {}).sort((a, b) => a.localeCompare(b));
+  if (!counts || flags.length === 0 || repairs.rowClass) return null;
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      useFlexGap
+      sx={{ px: 2, py: 1, flexWrap: 'wrap', alignItems: 'center' }}
+      data-testid="repairs-flag-chips"
+    >
+      {flags.map((f) => {
+        const active = repairs.filter === flagFilter(f);
+        return (
+          <Chip
+            key={f}
+            size="small"
+            clickable
+            label={`${flagLabel(f)} (${counts[f]})`}
+            color={active ? 'primary' : 'default'}
+            variant={active ? 'filled' : 'outlined'}
+            onClick={() => repairs.setFilter(active ? 'applicable' : flagFilter(f))}
+            data-testid={`repairs-flag-${f}`}
+          />
+        );
+      })}
+    </Stack>
+  );
+}
+
+/**
  * One chip per skip kind with its count. Each chip pages exactly the rows it
  * counts ("every count opens its books"); "All skipped" goes back. Under a
  * selected row class the counts are that class's (skipped_by_kind_in_class),
@@ -598,7 +636,9 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
             sx={{ px: 2, pt: 1, flexWrap: 'wrap', alignItems: 'center' }}
           >
             <Tabs
-              value={isSkippedFilter(repairs.filter) ? 'skipped' : 'applicable'}
+              value={
+                isFlagFilter(repairs.filter) ? false : isSkippedFilter(repairs.filter) ? 'skipped' : 'applicable'
+              }
               onChange={(_, v: 'applicable' | 'skipped') => repairs.setFilter(v)}
               aria-label="Trial rows"
               sx={{ minHeight: 40 }}
@@ -623,6 +663,7 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
             </Button>
           </Stack>
           <ClassChips repairs={repairs} />
+          <FlagChips repairs={repairs} />
 
           {repairs.filter === 'applicable' && fixer.plan_only && (
             <Alert severity="info" sx={{ mx: 2, my: 1 }} data-testid="repairs-plan-only">
@@ -734,13 +775,25 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
           <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             {repairs.rowsError && (
               <Alert
-                severity="error"
+                severity={repairs.rowsNeedRerun ? 'warning' : 'error'}
                 sx={{ m: 2 }}
                 data-testid="repairs-rows-error"
                 action={
-                  <Button color="inherit" size="small" onClick={repairs.reloadRows}>
-                    Retry
-                  </Button>
+                  repairs.rowsNeedRerun ? (
+                    <Button
+                      color="inherit"
+                      size="small"
+                      onClick={runTrial}
+                      disabled={running}
+                      data-testid="repairs-rows-rerun"
+                    >
+                      Run plan again
+                    </Button>
+                  ) : (
+                    <Button color="inherit" size="small" onClick={repairs.reloadRows}>
+                      Retry
+                    </Button>
+                  )
                 }
               >
                 {repairs.rowsError}

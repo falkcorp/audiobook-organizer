@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-10-22
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
@@ -184,6 +185,16 @@ const ResolverMaxAbandonedTotal = 64
 // resolverAbandoned is the process-wide gauge of resolver calls abandoned and
 // not yet returned; a resolver consults it against ResolverMaxAbandonedTotal.
 var resolverAbandoned atomic.Int64
+
+// The gauge is exported as audiobook_organizer_ops_abandoned_calls{source=
+// "repairs_resolver"}, registered at load so the series reads 0 from boot and
+// an alert on it never waits for the first plan.
+func init() { registerAbandonedGauge(opsmetrics.Default()) }
+
+// registerAbandonedGauge puts resolverAbandoned on rec's ops.abandoned_calls.
+func registerAbandonedGauge(rec *opsmetrics.Recorder) {
+	rec.RegisterAbandoned(opsmetrics.SourceRepairsResolver, &resolverAbandoned)
+}
 
 type resolvedDir struct {
 	path string
@@ -393,16 +404,30 @@ func (r *PathResolver) follow(link string, w *resolveWalk) ([]string, error) {
 // could not settle.
 func (r *PathResolver) withResolved(paths []string) (out []string, doubt error) {
 	out = make([]string, 0, len(paths))
+	// Each distinct spelling is returned (and so matched against the franchise
+	// regexes by the caller) once, first occurrence first: a book's own
+	// file_path is usually also its first book_file row, and a library with no
+	// symlinks resolves every path to itself. The franchise match is the
+	// guard's dominant cost at library scale (a 51,000-book benchmark spent
+	// most of its CPU there), and a repeated string cannot change its verdict.
+	seen := make(map[string]bool, len(paths)*2)
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
 	for _, p := range paths {
-		out = append(out, p)
+		if p != "" && seen[p] {
+			continue // already resolved with its spellings
+		}
+		add(p)
 		if p == "" {
 			continue
 		}
 		more, err := r.spellings(p)
 		for _, m := range more {
-			if m != p {
-				out = append(out, m)
-			}
+			add(m)
 		}
 		if err != nil && doubt == nil {
 			doubt = err

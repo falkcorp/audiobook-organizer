@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-22
 
@@ -49,6 +49,15 @@ import type { RepairsAction } from '../reviewActions';
 type Toast = (message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void;
 
 /** Page sizes offered under the rows table. The server caps a page at 500. */
+
+/** The server's error code for a stored plan that can only be re-run (handlers/repairs PlanNeedsRerunCode). */
+const PLAN_NEEDS_RERUN_CODE = 'REPAIR_PLAN_NEEDS_RERUN';
+
+function isPlanNeedsRerun(err: unknown): boolean {
+  const e = err as { status?: number; data?: { code?: unknown } } | null;
+  return e?.status === 409 && e.data?.code === PLAN_NEEDS_RERUN_CODE;
+}
+
 export const REPAIRS_PAGE_SIZES = [25, 50, 100, 250, 500] as const;
 export const REPAIRS_DEFAULT_PAGE_SIZE = 50;
 
@@ -308,6 +317,13 @@ export interface RepairsLane {
   rows: RepairRow[];
   rowsLoading: boolean;
   rowsError: string | null;
+  /**
+   * The rows error is the server saying the stored plan cannot be read any
+   * more (an old-format plan, or rows that do not match its summary) and that
+   * only running the plan again helps: the panel offers "Run plan again", not
+   * a Retry that would read the same plan.
+   */
+  rowsNeedRerun: boolean;
   reloadRows: () => void;
 
   selectedRowIds: ReadonlySet<string>;
@@ -375,6 +391,7 @@ export function useRepairsLane(
   const [page, setPage] = useState<RepairRowsPage | null>(null);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [rowsError, setRowsError] = useState<string | null>(null);
+  const [rowsNeedRerun, setRowsNeedRerun] = useState(false);
   const [rowsNonce, setRowsNonce] = useState(0);
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
@@ -613,6 +630,7 @@ export function useRepairsLane(
     const ctrl = new AbortController();
     setRowsLoading(true);
     setRowsError(null);
+    setRowsNeedRerun(false);
     api
       .getRepairPlanRows(
         selectedFixerId,
@@ -629,6 +647,7 @@ export function useRepairsLane(
         if (ctrl.signal.aborted) return;
         setPage(null);
         setRowsError(errorMessage(err, 'Failed to load the trial rows.'));
+        setRowsNeedRerun(isPlanNeedsRerun(err));
       })
       .finally(() => {
         if (!ctrl.signal.aborted) setRowsLoading(false);
@@ -1066,6 +1085,7 @@ export function useRepairsLane(
     // switch to a fixer with no plan would otherwise leave the flag stuck.
     rowsLoading: rowsLoading && planOpId !== null,
     rowsError: planOpId !== null ? rowsError : null,
+    rowsNeedRerun: planOpId !== null && rowsNeedRerun,
     reloadRows,
     selectedRowIds,
     toggleRow,

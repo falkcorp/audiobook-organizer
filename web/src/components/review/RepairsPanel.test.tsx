@@ -1,12 +1,12 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.20.0
+// version: 1.22.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-22
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
 
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -366,6 +366,39 @@ describe('RepairsPanel', () => {
     renderPanel();
     expect(await screen.findByTestId('repairs-rows-empty')).toHaveTextContent(/nothing to repair/);
     expect(screen.getByTestId('repairs-apply-all')).toBeDisabled();
+  });
+
+  it('offers Run plan again, not Retry, for a stored plan the server says must be re-run', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getRepairPlanRows).mockRejectedValue(
+      Object.assign(new Error('repairs: this plan was stored in the old format; run the plan again'), {
+        status: 409,
+        data: { code: 'REPAIR_PLAN_NEEDS_RERUN' },
+      })
+    );
+    vi.mocked(api.startRepairPlan).mockResolvedValue({
+      operation_id: 'plan-3',
+      def_id: 'repairs.plan',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.pollOperationV2).mockReturnValue(new Promise(() => {}));
+    renderPanel();
+    const alert = await screen.findByTestId('repairs-rows-error');
+    expect(alert).toHaveTextContent(/run the plan again/);
+    expect(within(alert).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    await user.click(within(alert).getByTestId('repairs-rows-rerun'));
+    await waitFor(() => expect(api.startRepairPlan).toHaveBeenCalledWith('vg-primary'));
+  });
+
+  it('keeps Retry for any other rows failure, including a 409 without the re-run code', async () => {
+    vi.mocked(api.getRepairPlanRows).mockRejectedValue(
+      Object.assign(new Error('plan op is not completed'), { status: 409, data: { code: 'CONFLICT' } })
+    );
+    renderPanel();
+    const alert = await screen.findByTestId('repairs-rows-error');
+    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).queryByTestId('repairs-rows-rerun')).not.toBeInTheDocument();
   });
 
   it('offers Run trial when the fixer has no trial yet', async () => {
@@ -1315,5 +1348,71 @@ describe('RepairsPanel — missing files', () => {
       expect.objectContaining({ filter: 'skipped:no_candidate' }),
       expect.anything()
     );
+  });
+});
+
+// A row flag (Row.flags) rides alongside class and skip kind, so its count
+// spans both tabs; the chip must open exactly the rows it counts.
+describe('RepairsPanel — flagged rows', () => {
+  const FLAGGED = row('flagged:1', { title: 'Absorbed', flags: ['combine_undo_aware'] });
+  const FLAGGED_SKIPPED = row('flagged:2', {
+    title: 'Absorbed too recent',
+    flags: ['combine_undo_aware'],
+    skipped: 'too_recent',
+    skip_reason: 'recent',
+  });
+  const PLAIN = row('plain:1', { title: 'Plain' });
+
+  beforeEach(() => {
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (
+        fixerId: string,
+        planOpId: string,
+        q: { filter: RepairRowsFilter; offset: number; limit: number; rowClass?: string }
+      ) => {
+        const rows =
+          q.filter === 'flag:combine_undo_aware'
+            ? [FLAGGED, FLAGGED_SKIPPED]
+            : q.filter === 'applicable'
+              ? [FLAGGED, PLAIN]
+              : [];
+        return repairsRowsPage({
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-09-28T10:01:00Z',
+          filter: q.filter,
+          offset: q.offset,
+          limit: q.limit,
+          total: rows.length,
+          applicable: 2,
+          skipped_by_kind: { too_recent: 1 },
+          by_flag: { combine_undo_aware: 2 },
+          rows,
+        });
+      }
+    );
+  });
+
+  it('shows a chip per flag with its whole-plan count, and a click lists exactly the flagged rows of both tabs', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-flagged:1');
+    const chip = screen.getByTestId('repairs-flag-combine_undo_aware');
+    expect(chip).toHaveTextContent('From a combine that can still be undone (2)');
+
+    await user.click(chip);
+    expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+      'vg-primary',
+      'plan-1',
+      expect.objectContaining({ filter: 'flag:combine_undo_aware' }),
+      expect.anything()
+    );
+    expect(await screen.findByTestId('repairs-row-flagged:2')).toBeInTheDocument();
+    expect(screen.getByTestId('repairs-row-flagged:1')).toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-row-plain:1')).not.toBeInTheDocument();
+
+    // Clicking the active chip goes back to the applicable rows.
+    await user.click(screen.getByTestId('repairs-flag-combine_undo_aware'));
+    expect(await screen.findByTestId('repairs-row-plain:1')).toBeInTheDocument();
   });
 });

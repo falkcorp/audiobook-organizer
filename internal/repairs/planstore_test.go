@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
 // last-edited: 2026-10-22
 
@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"sync"
 	"testing"
 
@@ -64,6 +66,12 @@ func variedRows(n int) []Row {
 		if r.Skipped == "held" && i%2 == 0 {
 			r.OwnerApplicable = true
 		}
+		switch {
+		case i%5 == 0:
+			r.Flags = []string{"zeta", "alpha"} // unsorted on purpose: RunPlan sorts
+		case i%7 == 0:
+			r.Flags = []string{"alpha", "alpha"} // duplicated on purpose: RunPlan de-duplicates
+		}
 		rows = append(rows, r)
 	}
 	return rows
@@ -93,7 +101,8 @@ func TestStoredPlan_PageEqualsInMemoryPage(t *testing.T) {
 	stored := storeSummary(t, s, s, res, "op-plan")
 	require.Empty(t, stored.Rows)
 	for _, filter := range []string{FilterAll, FilterApplicable, FilterSkipped, FilterOwnerApplicable,
-		FilterSkippedKindPrefix + SkipITunes, FilterSkippedKindPrefix + "held", FilterSkippedKindPrefix + "nope"} {
+		FilterSkippedKindPrefix + SkipITunes, FilterSkippedKindPrefix + "held", FilterSkippedKindPrefix + "nope",
+		FilterFlagPrefix + "alpha", FilterFlagPrefix + "zeta", FilterFlagPrefix + "nope"} {
 		for _, class := range []string{"", "moved", "copy", "nope"} {
 			for _, win := range [][2]int{{0, 7}, {5, 7}, {50, 7}, {0, 500}, {999, 5}} {
 				want, err := res.Page("op-plan", filter, class, win[0], win[1])
@@ -143,6 +152,18 @@ func TestLoadPlan_LegacyFormatIsRefused(t *testing.T) {
 	_, err := LoadPlan(s, s, "old", "fx")
 	require.ErrorIs(t, err, ErrPlanLegacyFormat)
 	require.Contains(t, err.Error(), "run the plan again")
+}
+
+// TestLegacyPlanMigrationMatchesThePlanOp pins the def id migration 66 looks
+// for to the one the engine stores plans under, and that a plan result with
+// its inline rows stripped (what the migration leaves) is read as a legacy plan.
+func TestLegacyPlanMigrationMatchesThePlanOp(t *testing.T) {
+	require.Equal(t, PlanOpID, database.LegacyPlanOpDefID)
+	s := newMemStore()
+	stripped := `{"fixer_id":"fx","total":1,"applicable":1,"skipped_by_kind":{}}`
+	s.ops["old"] = &database.OperationV2Row{ID: "old", DefID: PlanOpID, Status: "completed", ResultData: &stripped}
+	_, err := LoadPlan(s, s, "old", "fx")
+	require.ErrorIs(t, err, ErrPlanLegacyFormat)
 }
 
 // TestStoredPlan_IncompleteRowsFailClosed: a summary whose rows are not all
@@ -227,4 +248,51 @@ func TestRunApply_RefusesAPlanOnlyFixerEvenWhenItsApplyWouldSucceed(t *testing.T
 	require.Empty(t, res.Rows)
 	require.Empty(t, s.history, "nothing was written")
 	require.Equal(t, " One ", s.title("b1"))
+}
+
+// TestPage_FlagFilterListsExactlyTheFlaggedRows: ByFlag tallies the flags once
+// per row (sorted, de-duplicated by RunPlan), "flag:<name>" pages exactly those
+// rows in memory and from the stored index, whatever their class or skip kind,
+// and a malformed flag filter is an unknown filter.
+func TestPage_FlagFilterListsExactlyTheFlaggedRows(t *testing.T) {
+	s := newMemStore()
+	f := &noBookIDsFixer{s: s, rows: variedRows(60)}
+	res := planFor(t, s, f)
+	wantAlpha, wantZeta := 0, 0
+	for i := range res.Rows {
+		require.True(t, sort.StringsAreSorted(res.Rows[i].Flags))
+		if slices.Contains(res.Rows[i].Flags, "alpha") {
+			wantAlpha++
+		}
+		if slices.Contains(res.Rows[i].Flags, "zeta") {
+			wantZeta++
+		}
+	}
+	require.Positive(t, wantAlpha)
+	require.Equal(t, map[string]int{"alpha": wantAlpha, "zeta": wantZeta}, res.ByFlag)
+	stored := storeSummary(t, s, s, res, "op-plan")
+	for _, p := range []*PlanResult{res, stored} {
+		page, err := p.Page("op-plan", FilterFlagPrefix+"alpha", "", 0, 500)
+		require.NoError(t, err)
+		require.Equal(t, wantAlpha, page.Total, "the chip count is the rows it opens")
+		require.Len(t, page.Rows, wantAlpha)
+		for _, r := range page.Rows {
+			require.Contains(t, r.Flags, "alpha")
+		}
+		require.Equal(t, res.ByFlag, page.ByFlag)
+		_, err = p.Page("op-plan", FilterFlagPrefix, "", 0, 5)
+		require.ErrorIs(t, err, ErrUnknownFilter)
+	}
+}
+
+func TestRunPlan_RefusesAFlagTheIndexCannotCarry(t *testing.T) {
+	for _, bad := range []string{"", "a,b", "a b", "a\x00b", "tab\there"} {
+		s := newMemStore()
+		rows := variedRows(3)
+		rows[1].Flags = []string{bad}
+		f := &noBookIDsFixer{s: s, rows: rows}
+		_, err := RunPlan(context.Background(), f, nil, PlanDeps{Guard: s, Series: seriesNamer}, nopReporter{})
+		require.Error(t, err, "flag %q", bad)
+		require.Contains(t, err.Error(), "invalid row flag")
+	}
 }

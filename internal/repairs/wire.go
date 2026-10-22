@@ -1,5 +1,5 @@
 // file: internal/repairs/wire.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
 // last-edited: 2026-10-22
 
@@ -35,6 +35,9 @@ type PlanResult struct {
 	// ByClass counts every row (applicable and skipped) by Row.Class, for a
 	// fixer that sets one. Each count is a filter of the rows endpoint.
 	ByClass map[string]int `json:"by_class,omitempty"`
+	// ByFlag counts every row carrying a flag (Row.Flags) by flag. Each count
+	// is the "flag:<name>" filter of the rows endpoint.
+	ByFlag map[string]int `json:"by_flag,omitempty"`
 	// OwnerApplicable counts the skipped rows the owner may apply himself
 	// (Row.OwnerApplicable); the owner_applicable filter pages them.
 	OwnerApplicable int `json:"owner_applicable,omitempty"`
@@ -72,6 +75,9 @@ type RowsPage struct {
 	OwnerApplicable int `json:"owner_applicable,omitempty"`
 	// ByClass is the whole plan's per-class tally, whatever the filter.
 	ByClass map[string]int `json:"by_class,omitempty"`
+	// ByFlag is the whole plan's per-flag tally, whatever the filter: each
+	// count is what the "flag:<name>" filter pages.
+	ByFlag map[string]int `json:"by_flag,omitempty"`
 	// ByClassInFilter tallies by class only the rows matching filter (class
 	// aside): exactly the rows a class chip on this tab lists.
 	ByClassInFilter map[string]int `json:"by_class_in_filter,omitempty"`
@@ -163,6 +169,14 @@ type Row struct {
 	// The plan tallies rows by it (PlanResult.ByClass) and the rows endpoint
 	// filters on it, so every per-class count in the lane lists its rows.
 	Class string `json:"class,omitempty"`
+	// Flags are fixer-defined facts a row carries ALONGSIDE its class and skip
+	// kind ("combine_undo_aware"): a class is exclusive, a flag is not, so a
+	// flag counts rows across every class. The plan tallies them
+	// (PlanResult.ByFlag) and the rows endpoint filters on "flag:<name>", so
+	// every per-flag count in the lane lists its rows. RunPlan sorts and
+	// de-duplicates them; a name is non-empty and holds no NUL, comma or
+	// whitespace.
+	Flags []string `json:"flags,omitempty"`
 	// Members optionally describes every book of the row (its role in the
 	// row and its file counts), so the lane can list and link each of them
 	// rather than show a bare "N books" count.

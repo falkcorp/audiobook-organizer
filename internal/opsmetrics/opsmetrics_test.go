@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
-// last-edited: 2026-10-17
+// last-edited: 2026-10-22
 
 package opsmetrics
 
@@ -413,5 +413,68 @@ func TestScheduleInstruments(t *testing.T) {
 	c, ok := m["audiobook_organizer.ops.schedule_missed"].Data.(metricdata.Sum[int64])
 	if !ok || len(c.DataPoints) != 1 || c.DataPoints[0].Value != 3 {
 		t.Fatalf("schedule_missed = %+v, want one point of 3", m["audiobook_organizer.ops.schedule_missed"].Data)
+	}
+}
+
+// abandonedPoints returns source -> value for ops.abandoned_calls.
+func abandonedPoints(t *testing.T, m map[string]metricdata.Metrics) map[string]int64 {
+	t.Helper()
+	out := map[string]int64{}
+	g, ok := m["audiobook_organizer.ops.abandoned_calls"].Data.(metricdata.Gauge[int64])
+	if !ok {
+		return out
+	}
+	for _, dp := range g.DataPoints {
+		src, _ := dp.Attributes.Value(telemetry.Source)
+		out[src.AsString()] += dp.Value
+	}
+	return out
+}
+
+// TestAbandonedCalls_ReportsEachSource: a registered counter is on the gauge
+// from registration (0), follows the counter, is labeled by its source name,
+// sums counters that share a name, and disappears once unregistered
+// (idempotently). Run with -race: the counters change while collecting.
+func TestAbandonedCalls_ReportsEachSource(t *testing.T) {
+	rec, collect := newRig(t)
+	if got := abandonedPoints(t, collect()); len(got) != 0 {
+		t.Fatalf("no source registered, got points %v", got)
+	}
+	var resolver, stat, stat2 atomic.Int64
+	unregResolver := rec.RegisterAbandoned(SourceRepairsResolver, &resolver)
+	unregStat := rec.RegisterAbandoned(SourceRetiredVersionsStat, &stat)
+	rec.RegisterAbandoned(SourceRetiredVersionsStat, &stat2)
+	if got := abandonedPoints(t, collect()); got[SourceRepairsResolver] != 0 || got[SourceRetiredVersionsStat] != 0 || len(got) != 2 {
+		t.Fatalf("registered sources must read 0 from registration, got %v", got)
+	}
+	resolver.Store(3)
+	stat.Store(2)
+	stat2.Store(4)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Go(func() {
+			for j := 0; j < 50; j++ {
+				resolver.Add(1)
+				resolver.Add(-1)
+			}
+		})
+	}
+	for i := 0; i < 10; i++ {
+		collect()
+	}
+	wg.Wait()
+	got := abandonedPoints(t, collect())
+	if got[SourceRepairsResolver] != 3 || got[SourceRetiredVersionsStat] != 6 {
+		t.Errorf("points = %v, want repairs_resolver 3 and retired_versions_stat 2+4=6", got)
+	}
+	unregResolver()
+	unregResolver() // idempotent
+	got = abandonedPoints(t, collect())
+	if _, still := got[SourceRepairsResolver]; still || got[SourceRetiredVersionsStat] != 6 {
+		t.Errorf("after unregistering the resolver, points = %v", got)
+	}
+	unregStat()
+	if got := abandonedPoints(t, collect()); got[SourceRetiredVersionsStat] != 4 {
+		t.Errorf("after unregistering one stat counter, points = %v, want 4 left", got)
 	}
 }

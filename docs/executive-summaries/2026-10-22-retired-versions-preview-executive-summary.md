@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-retired-versions-preview-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 86d93130-4e35-4fb9-a614-b81c80b79bc9 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -34,12 +34,16 @@ it, so the owner can review the groups before any real clean-up is built.
 - **Every Review repair plan is now stored differently.** A plan used to be one
   very large record (about 39 MB for this one); it is now a small summary plus
   one record per row, so opening a plan reads only the page of rows on screen.
-  The old plan records are not converted. **After this update is deployed, each
-  repair plan has to be run once more.** Until then, opening an old plan shows
-  the message "run the plan again". Nothing is lost by this; plans are only
-  previews.
-- Old plan records that are already stored stay in the database (the very
-  large ones are tens of megabytes) until they are deleted.
+  **After this update is deployed, each repair plan has to be run once more.**
+  The first start after the update empties out the very large old plan records
+  by itself (it keeps each plan's summary and logs how many it cleaned and how
+  much space it freed; the disk space comes back when the database compacts).
+  Opening an old plan then shows "run the plan again" with a **Run plan again**
+  button that starts it. Nothing is lost by this; plans are only previews.
+- In the plan, the books flagged because a combine that can still be undone
+  absorbed them now have a clickable count that opens exactly those books.
+- A new gauge, `ops_abandoned_calls`, shows how many file checks gave up on a
+  dead network drive and are still stuck; it should read 0.
 - The checks that decide whether a file sits under the iTunes folder can no
   longer hang a run on a dead network drive. A path that gets no answer in 15
   seconds counts as "could not tell", and the book is skipped rather than

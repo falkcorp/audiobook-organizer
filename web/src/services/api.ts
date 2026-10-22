@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.198.0
+// version: 2.199.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-22
 
@@ -7883,7 +7883,8 @@ export type RepairRowsFilter =
   | 'applicable'
   | 'skipped'
   | 'owner_applicable'
-  | `skipped:${string}`;
+  | `skipped:${string}`
+  | `flag:${string}`;
 
 // The row/plan/apply shapes are generated from the Go structs in
 // internal/repairs/wire.go (tygo; `make generate-types`), so a renamed json tag

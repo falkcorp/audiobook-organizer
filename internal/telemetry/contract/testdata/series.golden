@@ -43,6 +43,7 @@ audiobook_organizer_ops_inflight	gauge	def_id,plugin	otel
 audiobook_organizer_ops_progress_age_seconds	gauge	def_id,plugin	otel
 audiobook_organizer_ops_progress_timeout_seconds	gauge	def_id,plugin	otel
 audiobook_organizer_ops_zombies	gauge		otel
+audiobook_organizer_ops_abandoned_calls	gauge	source	otel
 audiobook_organizer_ops_schedule_lag_seconds	histogram	def_id	otel
 audiobook_organizer_ops_schedule_missed_total	counter	def_id	otel
 ai_dispatch_requests_total	counter	capability,endpoint,outcome	otel
