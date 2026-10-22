@@ -1,5 +1,5 @@
 // file: internal/logging/redact_path_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 232b593d-cfbd-4e4f-9898-8ff6d47e5768
 // last-edited: 2026-10-22
 
@@ -35,6 +35,18 @@ func TestRedactInvitePath(t *testing.T) {
 		{"mixed case api prefix", "/API/V1/Auth/Invite/" + tok, "/API/V1/Auth/Invite/[REDACTED]"},
 		{"doubled slash and case", "//Invite//" + tok + "/", "//Invite//[REDACTED]/"},
 		{"bare invite with doubled slashes", "//invite//", "//invite//"},
+
+		// An encoded slash is the slash it decodes to (the request line is logged
+		// as RequestURI, which keeps %2F escaped).
+		{"encoded slash before the token", "/api/v1/auth/invite%2F" + tok, "/api/v1/auth/invite/[REDACTED]"},
+		{"encoded slash, lower-case hex", "/api/v1/auth/invite%2f" + tok, "/api/v1/auth/invite/[REDACTED]"},
+		{"encoded slash on the spa page", "/invite%2F" + tok, "/invite/[REDACTED]"},
+		{"encoded slash, query kept", "/invite%2F" + tok + "?a=1", "/invite/[REDACTED]?a=1"},
+		{"encoded slash then resend", "/api/v1/users/invites%2F" + tok + "/resend", "/api/v1/users/invites/[REDACTED]/resend"},
+		{"every slash encoded", "/api%2Fv1%2Fauth%2Finvite%2F" + tok, "/api/v1/auth/invite/[REDACTED]"},
+		{"encoded slash and a malformed escape after it", "/invite%2F" + tok + "%zz", "/invite/[REDACTED]"},
+		{"malformed escape before the encoded slash", "/%zz/../invite%2F" + tok, "/%zz/../invite%2F" + tok},
+		{"encoded slash on an unrelated path", "/books%2Finvite", "/books%2Finvite"},
 
 		// Unrelated paths and the token-less forms stay untouched.
 		{"invite list", "/api/v1/users/invites", "/api/v1/users/invites"},
