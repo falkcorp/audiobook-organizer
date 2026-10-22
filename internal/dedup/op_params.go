@@ -1,7 +1,7 @@
 // file: internal/dedup/op_params.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-13
+// last-edited: 2026-10-22
 
 // Package dedup: op_params.go defines the JSON-unmarshal parameter structs for
 // each of the 8 async dedup OperationDef Run functions. They are kept here so
@@ -20,6 +20,8 @@
 // nothing to unmarshal into. Do not delete those decodes.
 package dedup
 
+import "github.com/falkcorp/audiobook-organizer/internal/merge"
+
 // BookDedupScanParams are the parameters for the "dedup.book-scan" operation.
 type BookDedupScanParams struct{}
 
@@ -28,6 +30,16 @@ type BookMergeParams struct {
 	KeepID   string   `json:"keep_id"`
 	MergeIDs []string `json:"merge_ids"`
 	Detail   string   `json:"detail"`
+}
+
+// BookCombineParams are the parameters for the "dedup.book-combine" operation:
+// combine MergeIDs into one multi-file book on KeepID (merge.Service.CombineBooks).
+// Override is optional: its non-empty fields overwrite the survivor's metadata.
+type BookCombineParams struct {
+	KeepID   string                 `json:"keep_id"`
+	MergeIDs []string               `json:"merge_ids"`
+	Override *merge.CombineOverride `json:"override,omitempty"`
+	Detail   string                 `json:"detail"`
 }
 
 // AuthorDedupScanParams are the parameters for the "dedup.author-scan" operation.

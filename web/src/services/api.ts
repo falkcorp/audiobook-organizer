@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.198.0
+// version: 2.200.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-22
 
@@ -1541,7 +1541,7 @@ export interface PurgeBreakdown {
   purgeable: number;
   /** kept: the book still owns book_file rows */
   owns_files: number;
-  /** kept: the retired shell of a combine that can still be undone */
+  /** kept: a trashed book an undo journal still needs (combine, operation-ledger soft-delete or auto-merge loser) */
   undo_possible: number;
   /** kept: a user has listening state and there is no live version to carry it to */
   has_listening_state: number;
@@ -1568,6 +1568,14 @@ export interface PurgeResult {
   carry_failed?: number;
   failed?: number;
   truncated?: boolean;
+  /**
+   * The operation ended before it decided every book (cancelled, timed out or
+   * failed). The counts are still exact for the books decided so far; the
+   * server stores the result on the operation even then.
+   */
+  stopped_early?: boolean;
+  /** why it stopped: "cancelled", "timed out", or other short text */
+  stop_reason?: string;
   errors: string[];
 }
 
@@ -1638,9 +1646,15 @@ export function previewPurgeSoftDeleted(
 
 /**
  * Waits for a purge or preview operation and returns its result. `onProgress`
- * receives the operation's progress message and counts while it runs. Rejects
- * with the operation's own error text when it failed, and with an AbortError
- * when `signal` aborts (the caller went away).
+ * receives the operation's progress message and counts while it runs.
+ *
+ * An operation that ended cancelled, failed or timed out still has a stored
+ * result (exact counts for the books decided so far), so it is fetched here
+ * too and returned with `stopped_early` set (and `stop_reason` filled from the
+ * operation's status when the server did not say). When no result can be
+ * fetched for such an operation, this rejects with an error that says the
+ * outcome is unknown and names the operation. Rejects with an AbortError when
+ * `signal` aborts (the caller went away).
  */
 export async function awaitPurgeResult(
   operationId: string,
@@ -1658,16 +1672,41 @@ export async function awaitPurgeResult(
     opts?.intervalMs ?? 1000,
     { signal: opts?.signal }
   );
-  if (op.status !== 'completed') {
-    throw new Error(
-      op.error_message || `The purge operation ended as ${op.status}, without a result.`
-    );
+  let stored: unknown = null;
+  let fetchError: unknown = null;
+  try {
+    stored = (await getOperationResult(operationId)).result_data;
+  } catch (e) {
+    fetchError = e;
   }
-  const { result_data } = await getOperationResult(operationId);
-  if (result_data === null || typeof result_data !== 'object') {
-    throw new Error('The purge finished but stored no result.');
+  const hasResult = stored !== null && typeof stored === 'object';
+  if (op.status === 'completed') {
+    if (!hasResult) {
+      throw fetchError instanceof Error
+        ? fetchError
+        : new Error('The purge finished but stored no result.');
+    }
+    return stored as PurgeResult;
   }
-  return result_data as PurgeResult;
+  if (hasResult) {
+    const r = stored as PurgeResult;
+    return {
+      ...r,
+      stopped_early: true,
+      stop_reason: r.stop_reason || stopReasonOfStatus(op.status, op.error_message),
+    };
+  }
+  throw new Error(
+    `The purge operation ended as ${op.status}${op.error_message ? ` (${op.error_message})` : ''} ` +
+      `and no result was stored, so what it did is unknown. Check operation ${operationId} ` +
+      'in the Operations page to see how far it got.'
+  );
+}
+
+function stopReasonOfStatus(status: string, errorMessage?: string | null): string {
+  if (status === 'cancelled' || status === 'canceled') return 'cancelled';
+  if (status === 'failed') return errorMessage || 'failed';
+  return errorMessage || status;
 }
 
 export async function quarantineBook(bookId: string, reason?: string): Promise<void> {
@@ -2222,26 +2261,19 @@ export async function linkBooks(keepId: string, mergeIds: string[]): Promise<Ope
   return body.data;
 }
 
-export interface CombineBooksResult {
-  primary_id: string;
-  files_moved: number;
-  books_deleted: number;
-  // Combine journal id (GET /merge/combine-journal lists it). POST
-  // /merge/undo/:journal_id, which used to take it, answers 410 Gone
-  // (01-P81h); revert operation_id instead.
-  journal_id?: string;
-  // Undo key: POST /operations/:id/revert with it reverses this combine. The
-  // combine journals its undo pointer under this id (a correlation id of its
-  // own: a manual combine runs in no operation).
-  operation_id?: string;
-  // Set when the combine applied but its undo journal could not be marked
-  // applied. It stays pending and names every step that ran, so reverting
-  // operation_id still replays it.
-  journal_pending?: string;
-  // What the combine did not do that was asked (an override it could not
-  // journal is not applied).
-  warnings?: string[];
-  message?: string;
+/**
+ * What POST /audiobooks/combine answers (202): the queued book-combine
+ * operation. The combine's outcome is the operation's result
+ * (BookCombineOpResult, src/utils/combineOutcome.ts), read with
+ * getOperationResult once the operation ends.
+ */
+export interface CombineBooksStarted {
+  /** the v2 operation id; follow it with pollOperationV2 */
+  id: string;
+  type: string;
+  status: string;
+  detail?: string;
+  created_at?: string;
 }
 
 export interface CombineOverride {
@@ -2250,16 +2282,21 @@ export interface CombineOverride {
   narrator?: string;
 }
 
-// combineBooks combines several single-file books into ONE multi-file book on the
-// survivor (keepId), soft-deleting the absorbed shells (undoable). Distinct from linkBooks,
-// which links them as alternate versions in a version group. Synchronous.
+// combineBooks queues a combine of several single-file books into ONE multi-file
+// book on the survivor (keepId), soft-deleting the absorbed shells (undoable).
+// Distinct from linkBooks, which links them as alternate versions in a version
+// group. It answers 202 with the operation descriptor; the combine runs there
+// (it used to run inside the request and answer 200 with the finished result).
+// Refusals made before queueing are ordinary errors: 400 (empty or repeated
+// ids), 404 (missing book), 409 (a soft-deleted or iTunes-protected book, with
+// the reason in the message).
 // override is optional: non-empty fields overwrite the survivor's metadata after
 // the combine (useful when all source books have per-chapter titles).
 export async function combineBooks(
   keepId: string,
   mergeIds: string[],
   override?: CombineOverride
-): Promise<CombineBooksResult> {
+): Promise<CombineBooksStarted> {
   const response = await apiFetch(`${API_BASE}/audiobooks/combine`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2269,7 +2306,7 @@ export async function combineBooks(
     throw await buildApiError(response, 'Failed to combine books');
   }
   const body = await response.json();
-  return body.data ?? body;
+  return body.data;
 }
 
 // Series
@@ -4561,9 +4598,7 @@ export type ReviewBucket = 'reviewable' | 'unreviewable';
  * caller, so they are not parameters; the page of rows is getReviewPage, and
  * the full-index view of this endpoint is retired (410 Gone, `view=index`).
  */
-export async function getCachedReviewResults(
-  ids: string[]
-): Promise<{
+export async function getCachedReviewResults(ids: string[]): Promise<{
   results: CandidateResult[];
   total_count: number;
   /**
@@ -5691,7 +5726,10 @@ export async function getAIScanResults(id: number, agreement?: string): Promise<
  * marked applied only once its merge succeeded. Refusals are 409 (superseded or
  * unfinished scan, result already applied) and 400 (not a merge, no keep author).
  */
-export async function applyAIScanResults(scanID: number, resultIDs: number[]): Promise<AIScanApplyStarted> {
+export async function applyAIScanResults(
+  scanID: number,
+  resultIDs: number[]
+): Promise<AIScanApplyStarted> {
   const response = await apiFetch(`${API_BASE}/ai/scans/${scanID}/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -7990,23 +8028,13 @@ export type RepairRisk = 'low' | 'review';
  * one, or the skipped rows of one kind (`skipped:<kind>`, a key of
  * `skipped_by_kind`) so each per-kind count opens the rows behind it.
  */
-export type RepairRowsFilter =
-  | 'applicable'
-  | 'skipped'
-  | 'owner_applicable'
-  | `skipped:${string}`;
+export type RepairRowsFilter = 'applicable' | 'skipped' | 'owner_applicable' | `skipped:${string}`;
 
 // The row/plan/apply shapes are generated from the Go structs in
 // internal/repairs/wire.go (tygo; `make generate-types`), so a renamed json tag
 // is a compile error here rather than a runtime surprise. Aliased to the names
 // the lane already imports.
-export type {
-  RepairApplyResult,
-  RepairRow,
-  RepairRowMember,
-  RepairRowResult,
-  RepairRowsPage,
-};
+export type { RepairApplyResult, RepairRow, RepairRowMember, RepairRowResult, RepairRowsPage };
 
 export interface RepairOpStarted {
   operation_id: string;

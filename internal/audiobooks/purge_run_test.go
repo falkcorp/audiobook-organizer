@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d2e6a41-5f07-4b93-a1c8-3e9b7d04f5a2
 // last-edited: 2026-10-22
 
@@ -188,7 +188,11 @@ func TestRunPurge_CancelledPassIsNotRemembered(t *testing.T) {
 	cancel()
 	res, err := svc.RunPurge(ctx, PurgeOptions{DryRun: true})
 	require.NoError(t, err)
-	require.NotEmpty(t, res.Errors)
+	assert.True(t, res.StoppedEarly, "%+v", res)
+	assert.Contains(t, res.StopReason, "context canceled")
+	assert.Contains(t, res.Summary(), "STOPPED EARLY")
+	// The flag survives Capped, which cuts Errors.
+	assert.True(t, res.Capped(0).StoppedEarly)
 	assert.Nil(t, svc.LastPurgeBreakdown())
 }
 
@@ -285,7 +289,7 @@ func TestPurgeOne_UnreadableJournalsMidPassKeepTheBook(t *testing.T) {
 	require.NoError(t, err)
 
 	holdByCombine(t, store, "other") // any journal write makes the index stale
-	env.undo.build = func() (*merge.UndoShellIndex, error) { return nil, errors.New("journals unreadable") }
+	env.undo.combine.build = func() (*merge.UndoShellIndex, error) { return nil, errors.New("journals unreadable") }
 
 	out := svc.purgeOne(row, false, env)
 	assert.Equal(t, purgeFailed, out.kind, "%+v", out)

@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.60.6
+// version: 1.60.8
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-22
 
@@ -932,14 +932,17 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	//
 	// Not when the survivor's files carry an iTunes persistent ID. Nothing
 	// writes the iTunes library any more (the ITL writers, and with them
-	// itunes.ComputeMergedTrackCleanup, were removed), so this is no longer
-	// about a clean-up taking the track out of iTunes. It keeps the PID
-	// integrity audit (itunes.pid_integrity) truthful: it counts a PID owned
-	// by a non-primary book as a stale owner (BucketStaleOwner, "a merge
-	// leftover"), so demoting a survivor that holds a live iTunes track would
-	// misfile that track as a merge orphan. The participant iTunes guard does
-	// not cover this: it refuses files under the iTunes root, and a PID can
-	// sit on a file outside it.
+	// itunes.ComputeMergedTrackCleanup, were removed), so this is not about a
+	// clean-up taking the track out of iTunes. It is a deliberate preference,
+	// kept as it was: the book that owns a live iTunes track stays the one
+	// the group lists. It is no longer needed to keep the PID integrity audit
+	// (itunes.pid_integrity) truthful: the audit files a PID on a live
+	// non-primary version as healthy when its version group has a live primary
+	// (a grouped version), and only calls it a stale owner when the group has
+	// none, so crowning an organized member over a PID-holding survivor does
+	// not misfile that track as a merge orphan. The participant iTunes guard
+	// does not cover this either: it refuses files under the iTunes root, and a
+	// PID can sit on a file outside it.
 	flagHolderID := resolvedPrimaryID
 	survivorHasPID := anyITunesPID(filesByID[books[bestIdx].ID])
 	if primaryID == "" && !isOrganized(books[bestIdx]) && !survivorHasPID {
@@ -1814,8 +1817,9 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 
 	// Serialize the entire read-modify-write against every other merge-family
 	// path (MergeBooks / CombineBooks / UndoCombine / split-book merge).
-	// CombineBooks is a synchronous HTTP handler with no concurrency key, so two
-	// combines — or a combine racing a MergeBooks on a shared book — can
+	// CombineBooks has callers outside any one op's concurrency key (the review
+	// queue calls it directly), so two combines — or a combine racing a
+	// MergeBooks on a shared book — can
 	// otherwise interleave GetBookByID -> MoveBookFilesToBook ->
 	// ReassignExternalIDs -> soft-delete -> UpdateBook and corrupt the same way
 	// #1930 fixed for MergeBooks. Scoped to the combine itself; only local DB

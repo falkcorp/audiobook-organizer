@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 48522977-5b92-481c-896b-a80b826f7b2e
 // last-edited: 2026-10-22
 
@@ -202,7 +202,7 @@ describe('LibrarySoftDeletedSection purge breakdown', () => {
       '30 kept: own files'
     );
     expect(screen.getByTestId('purge-breakdown-undo_possible')).toHaveTextContent(
-      '5 kept: combine undo possible'
+      '5 kept: undo possible'
     );
     expect(screen.getByTestId('purge-breakdown-has_progress')).toHaveTextContent(
       '2 kept: listening progress'

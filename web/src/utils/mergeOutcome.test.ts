@@ -1,5 +1,5 @@
 // file: web/src/utils/mergeOutcome.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c7d3a58-4e91-4b26-8f05-2a9e6d1b3c70
 // last-edited: 2026-10-22
 
@@ -9,7 +9,7 @@ import { describeMergeOutcome } from './mergeOutcome';
 const titles = { a: 'Dune', b: 'Dune (2nd copy)' };
 
 describe('describeMergeOutcome', () => {
-  it('reports a failed operation with its reason, not "Merged"', () => {
+  it('a failed op with no stored result never claims nothing was merged', () => {
     const p = describeMergeOutcome({
       status: 'failed',
       errorMessage: 'book b is soft-deleted',
@@ -17,9 +17,56 @@ describe('describeMergeOutcome', () => {
       requested: 1,
     });
     expect(p.severity).toBe('error');
-    expect(p.message).toContain('did not complete');
-    expect(p.message).toContain('book b is soft-deleted');
-    expect(p.message).toContain('Nothing was merged');
+    expect(p.message).toContain('did not complete (failed): book b is soft-deleted');
+    expect(p.message).toContain('Check the operation to see what it did.');
+    expect(p.message).not.toContain('Nothing was merged');
+  });
+
+  it('a cancelled op without a result is the same neutral outcome', () => {
+    const p = describeMergeOutcome({ status: 'cancelled', result: null, requested: 2 });
+    expect(p.severity).toBe('error');
+    expect(p.message).toBe(
+      'The merge did not complete (cancelled). Check the operation to see what it did.'
+    );
+  });
+
+  it('a partial failure says it may have partly applied', () => {
+    const p = describeMergeOutcome({
+      status: 'failed',
+      errorMessage: 'op error',
+      result: {
+        keep_id: 'a',
+        merged: 0,
+        failed: true,
+        partial: true,
+        error: 'clean-up of b failed',
+      },
+      requested: 2,
+    });
+    expect(p.severity).toBe('error');
+    expect(p.message).toContain(
+      'The merge failed part-way and may have partly applied; see the operation for what changed.'
+    );
+    expect(p.message).toContain('clean-up of b failed');
+    expect(p.message).not.toContain('Nothing was merged');
+  });
+
+  it('a refusal before any write says nothing was merged, with the reason', () => {
+    const p = describeMergeOutcome({
+      status: 'failed',
+      result: {
+        keep_id: 'a',
+        merged: 0,
+        failed: true,
+        partial: false,
+        error: 'keep book is trashed',
+      },
+      requested: 1,
+    });
+    expect(p.severity).toBe('error');
+    expect(p.message).toBe(
+      'The merge was refused before changing anything: keep book is trashed. Nothing was merged.'
+    );
   });
 
   it('names the skipped losers and their reason when some merged', () => {
