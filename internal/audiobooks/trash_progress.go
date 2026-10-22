@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.9.0
+// version: 1.11.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-22
 
@@ -54,6 +54,20 @@ type purgeOutcome struct {
 	kind         purgeKind
 	filesDeleted int
 	errs         []string
+	// abort, when set, is a failure that will repeat for every remaining book
+	// (the by-book ledger index lost its trust mid-pass: ErrUndoLedgerNotReady).
+	// RunPurge stops the pass with it as the StopReason instead of failing each
+	// remaining book one by one.
+	abort error
+}
+
+// purgeAbortOf returns err when it is a pass-wide failure (see
+// purgeOutcome.abort), else nil.
+func purgeAbortOf(err error) error {
+	if errors.Is(err, ErrUndoLedgerNotReady) {
+		return err
+	}
+	return nil
 }
 
 // add folds one book's outcome into r. The caller serializes calls.
@@ -444,6 +458,16 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 	default:
 		return nil, fmt.Errorf("purge %s failed: %s", book.ID, detail)
 	}
+}
+
+// PurgeTrashedBook is purgeNow for callers outside the package that delete a
+// book already in the trash (the batch hard delete): the same path, with the
+// result map dropped and the error kept. The errors are the single delete's
+// (ErrPurgeUndoPossible, ErrBookHasProgress, ErrPurgeCarryFailed,
+// database.ErrBookOwnsFiles, ErrNotInTrash).
+func (svc *AudiobookService) PurgeTrashedBook(book *database.Book) error {
+	_, err := svc.purgeNow(book)
+	return err
 }
 
 // ErrPurgeUndoPossible is returned by "Purge now" for a trashed book an undo
