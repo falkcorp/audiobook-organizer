@@ -1,12 +1,12 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.22.0
+// version: 1.22.1
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-22
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1354,14 +1354,15 @@ describe('RepairsPanel — missing files', () => {
 // A row flag (Row.flags) rides alongside class and skip kind, so its count
 // spans both tabs; the chip must open exactly the rows it counts.
 describe('RepairsPanel — flagged rows', () => {
-  const FLAGGED = row('flagged:1', { title: 'Absorbed', flags: ['combine_undo_aware'] });
+  const FLAGGED = row('flagged:1', { title: 'Absorbed', class: 'moved', flags: ['combine_undo_aware'] });
   const FLAGGED_SKIPPED = row('flagged:2', {
     title: 'Absorbed too recent',
+    class: 'moved',
     flags: ['combine_undo_aware'],
     skipped: 'too_recent',
     skip_reason: 'recent',
   });
-  const PLAIN = row('plain:1', { title: 'Plain' });
+  const PLAIN = row('plain:1', { title: 'Plain', class: 'moved' });
 
   beforeEach(() => {
     vi.mocked(api.getRepairPlanRows).mockImplementation(
@@ -1381,16 +1382,47 @@ describe('RepairsPanel — flagged rows', () => {
           fixer_id: fixerId,
           planned_at: '2026-09-28T10:01:00Z',
           filter: q.filter,
+          class: q.rowClass,
           offset: q.offset,
           limit: q.limit,
           total: rows.length,
           applicable: 2,
           skipped_by_kind: { too_recent: 1 },
           by_flag: { combine_undo_aware: 2 },
+          by_class: { moved: 2 },
+          by_class_in_filter: { moved: 2 } as Record<string, number>,
           rows,
         });
       }
     );
+  });
+
+  it('hides the flag chips while a row class is selected, since a flag filter pages every class', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-flagged:1');
+    expect(screen.getByTestId('repairs-flag-combine_undo_aware')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('repairs-class-moved'));
+    // Wait for the class-scoped page itself, so a chip missing only while the
+    // page loads cannot pass this.
+    await waitFor(() =>
+      expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+        'vg-primary',
+        'plan-1',
+        expect.objectContaining({ rowClass: 'moved' }),
+        expect.anything()
+      )
+    );
+    // Let the mocked page resolve and render before looking for the chip.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.getByTestId('repairs-class-moved')).toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-flag-combine_undo_aware')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('repairs-class-all'));
+    expect(await screen.findByTestId('repairs-flag-combine_undo_aware')).toBeInTheDocument();
   });
 
   it('shows a chip per flag with its whole-plan count, and a click lists exactly the flagged rows of both tabs', async () => {
