@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_stack_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b2d7e91-3c46-4a08-9f15-e6a0d83c7b24
 // last-edited: 2026-10-22
 
@@ -353,16 +353,17 @@ func TestRetireCarry_MultiRowOperationsRevertInAnyOrder(t *testing.T) {
 		[][]string{{"k0", "x", "k3", "k1", "y", "k2"}})
 }
 
-// A journal written before retires recorded their neighbours has no anchors:
-// each such row is put back by its recorded index, as before, and the revert
-// says which rows were (RevertResult.RestoredByIndex, Kept), never silently.
-func TestRetireCarry_RowsWithoutAnchorsAreRestoredByIndexAndReported(t *testing.T) {
+// A journal written before retires recorded their neighbours has no anchors,
+// and there is no second restore path for it: the revert would have to guess a
+// position from an index that later edits made meaningless, so it refuses such a
+// row, writes nothing for it and says so (NotRestorable, with the reason), never
+// silently. The lists stay as they are.
+func TestRetireCarry_RowsWithoutAnchorsAreReportedNotRestorableAndWriteNothing(t *testing.T) {
 	t.Parallel()
 	o := seedTwoOps(t)
 	f := o.f
 	// Rewrite the journal as it was before the anchors: same rows, same ids,
-	// the records without Prev, Next and the anchored flag. Rewritten in
-	// journal order, so their creation order is kept.
+	// the records without Prev, Next and the anchored flag.
 	var rows []*database.OperationChange
 	for _, op := range []string{"op-apply-1", "op-apply-2"} {
 		changes, err := f.s.GetOperationChanges(op)
@@ -383,24 +384,18 @@ func TestRetireCarry_RowsWithoutAnchorsAreRestoredByIndexAndReported(t *testing.
 		c.OldValue, err = undo.EncodeMembership(rec)
 		require.NoError(t, err)
 		require.NoError(t, f.s.CreateOperationChange(c))
-		time.Sleep(2 * time.Millisecond)
 	}
+	colBefore, plBefore := f.rcMembers(t, o.colX), f.rcPlaylistMembers(t, o.plX)
 
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply-2")
 	require.NoError(t, err)
 	require.Zero(t, rr.Failed, "%+v", rr)
-	require.Positive(t, rr.RestoredByIndex, "the removal rows of op 2 had no anchors: %+v", rr)
-	require.NotEmpty(t, rr.Kept)
-	for _, k := range rr.Kept {
-		require.Contains(t, k, "records no neighbour anchors")
-	}
-	require.Contains(t, rr.Summary(), "put back by recorded index")
-	rr, err = audiobooks.NewRevertService(f.s).RevertOperation("op-apply-1")
-	require.NoError(t, err)
-	require.Zero(t, rr.Failed, "%+v", rr)
-	require.Equal(t, []string{o.c3, o.c4, "y"}, f.rcMembers(t, o.colX), "two operations restore exactly by index")
-	require.Equal(t, []string{o.c3, "y", o.c4}, f.rcPlaylistMembers(t, o.plX))
-	require.Zero(t, countOf(f.rcMembers(t, o.colX), o.parent))
+	require.Zero(t, rr.RestoredByIndex, "there is no restore by index any more: %+v", rr)
+	require.Positive(t, rr.NotRestorable, "the unanchored rows are reported: %+v", rr)
+	require.Equal(t, colBefore, f.rcMembers(t, o.colX), "nothing was written for a row that cannot be restored exactly")
+	require.Equal(t, plBefore, f.rcPlaylistMembers(t, o.plX))
+	require.Contains(t, rr.Summary(), "cannot be undone automatically")
+	require.Contains(t, rr.Summary(), "user_content_follow:(unparsable)")
 }
 
 // Reverting in reverse order restores the original lists exactly.

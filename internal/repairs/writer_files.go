@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -256,32 +256,79 @@ func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journ
 // (another operation's write included). A row that was already in the journal
 // (a resumed run) is left alone.
 func (w *Writer) voidRow(row journaledRow) error {
-	if row.id == "" {
+	return w.voidRows([]journaledRow{row})
+}
+
+// ChangeBatchJournal is the optional journal capability voidRows uses to take
+// back several rows in one commit (database.PebbleStore CreateOperationChanges):
+// every row lands or none does. It is resolved with database.AsCapability on the
+// ChangeJournal, so ChangeJournal does not grow.
+type ChangeBatchJournal interface {
+	CreateOperationChanges(changes []*database.OperationChange) error
+}
+
+// voidRows is voidRow for the rows of one step, taken back together: rows that
+// belong to each other (a survivor's marker and the retired book's row of one
+// carry) must not be seen apart, so a failure cannot leave one voided and the
+// other standing. A journal that cannot write several rows in one commit
+// (ChangeBatchJournal) voids them one by one, and a failure part-way can leave
+// some standing.
+func (w *Writer) voidRows(rows []journaledRow) error {
+	var voided []*database.OperationChange
+	var todo []journaledRow
+	now := time.Now()
+	for _, row := range rows {
+		if row.id == "" {
+			continue
+		}
+		v := *row.row
+		v.RevertedAt, v.Voided = &now, true
+		voided, todo = append(voided, &v), append(todo, row)
+	}
+	if len(voided) == 0 {
 		return nil
 	}
-	voided := *row.row
-	now := time.Now()
-	voided.RevertedAt, voided.Voided = &now, true
-	if err := w.journal.CreateOperationChange(&voided); err != nil {
-		return fmt.Errorf("void undo row %s of a refused write: %w", row.id, err)
+	if batch, ok := database.AsCapability[ChangeBatchJournal](w.journal); ok && len(voided) > 1 {
+		if err := batch.CreateOperationChanges(voided); err != nil {
+			return fmt.Errorf("void undo rows of a refused write: %w", err)
+		}
+		w.forgetVoided(todo)
+		return nil
 	}
+	var errs []error
+	var landed []journaledRow
+	for i, v := range voided {
+		if err := w.journal.CreateOperationChange(v); err != nil {
+			errs = append(errs, fmt.Errorf("void undo row %s of a refused write: %w", todo[i].id, err))
+			continue
+		}
+		landed = append(landed, todo[i])
+	}
+	w.forgetVoided(landed)
+	return errors.Join(errs...)
+}
+
+// forgetVoided takes rows the journal no longer holds as live out of the
+// writer's own index.
+func (w *Writer) forgetVoided(rows []journaledRow) {
 	ix := w.index
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	delete(ix.keys, row.key)
-	// A book whose only row was voided has nothing journaled: its history
-	// batches are undone field by field again, not marked apply_op_journaled.
-	b := row.row.BookID
-	if ix.created[b]--; ix.created[b] <= 0 && !ix.found[b] {
-		delete(ix.books, b)
+	for _, row := range rows {
+		delete(ix.keys, row.key)
+		// A book whose only row was voided has nothing journaled: its history
+		// batches are undone field by field again, not marked apply_op_journaled.
+		b := row.row.BookID
+		if ix.created[b]--; ix.created[b] <= 0 && !ix.found[b] {
+			delete(ix.books, b)
+		}
+		if row.hadLatest {
+			ix.latest[row.valueKey] = row.prevLatest
+		} else {
+			delete(ix.latest, row.valueKey)
+		}
+		w.journaled.Add(-1)
 	}
-	if row.hadLatest {
-		ix.latest[row.valueKey] = row.prevLatest
-	} else {
-		delete(ix.latest, row.valueKey)
-	}
-	w.journaled.Add(-1)
-	return nil
 }
 
 // JournalStep journals e and then makes the write it describes, like Step,
@@ -325,13 +372,17 @@ func (w *Writer) JournalSteps(steps []BookStep, write func() (done []bool, err e
 	rows := make([]journaledRow, 0, len(steps))
 	voidUndone := func(done []bool, cause error) error {
 		errs := []error{cause}
+		var undone []journaledRow
 		for i, row := range slices.Backward(rows) {
 			if i < len(done) && done[i] {
 				continue
 			}
-			if verr := w.voidRow(row); verr != nil {
-				errs = append(errs, verr)
-			}
+			undone = append(undone, row)
+		}
+		// Together: rows of one step that belong to each other (a carry's marker
+		// and its row) are voided in one commit when the journal can.
+		if verr := w.voidRows(undone); verr != nil {
+			errs = append(errs, verr)
 		}
 		return errors.Join(errs...)
 	}

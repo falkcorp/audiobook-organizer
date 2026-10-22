@@ -60,17 +60,26 @@ second retire of the same pair after the first was reverted. The revert puts
 the book back by those neighbours: it builds an order graph from the records of
 every retire into the list, walking through the books other retires took out
 (and treating a survivor that took a book's slot as that book), so operations
-undone in any order, including oldest first, restore every book to its exact
-original position in every collection and playlist, survivors that are
-themselves retired later included (below). When several survivors share one list the graph
-reads the journals of the other books it reaches, of every book named by a
-record it uses, and of every listed book left between the bounds it found
-(`GetBookChanges`, at most 128 reads per book placed) and follows each
-survivor's own stand-in and ghost. A book is placed by the graph only when both
-of its neighbours are found in the list now and nothing but the survivor (or
-another survivor's ghost) sits between them; a read that fails, a history that
-needs more than 128 reads (the report names the cap), or a book that cannot be
-bounded that way is never guessed: the recorded index is used and reported.
+undone in any order, including oldest first, put every book back in its exact
+position in every collection and playlist, survivors that are themselves
+retired later included (below). The records of a list are read from one place:
+a new index over the journal, `opchange_by_list:<kind>:<list id>:<op>:<change>`,
+written in the same batch as each user-content row and removed with it by
+journal pruning, so one call (`GetListChanges`) returns every row any retire
+into the list wrote, whichever survivor or retired book it names. There is no
+per-book journal walk and no read cap any more, so no history can need more
+reads than the cap allowed. The index is written for rows written from now on; the
+carry is new in this release, so there is nothing to backfill.
+
+A book is placed by the graph only when both of its neighbours are found in the
+list now and nothing but the survivor (or another survivor's ghost) sits between
+them. The records also have to agree with the list: two books they order must be
+listed in that order, or the owner has rearranged the list since and nothing
+found from the records is trusted. A book that cannot be bounded that way is
+never placed by a guess: the recorded index is used and reported. A record
+without neighbour anchors (from an earlier build of this feature, or damaged) is not restored by
+index any more: the revert refuses that row with a reason, the undo preflight
+shows it as not restorable automatically, and nothing is written.
 
 A survivor can itself be retired into another survivor (the duplicate-copies
 fixer does), and the operations can be undone in any order, the older ones
@@ -80,54 +89,71 @@ stands; once they have all been reverted it never belonged to the list on its
 own, so it stays out and the revert says so (`books_left_out`, named in `kept`).
 When a book's retire is reverted while the survivor that took its slot has been
 retired out of the list since, the slot is not the survivor's to give back: the
-book goes back beside its neighbours, found through the survivor's stand-in (the
-survivor that took the slot in turn), and the revert of the survivor's own retire
-places it later. No such history refuses any more. The books beside a returning
-book are ordered against the books the records do not order (a survivor listed
-only for other retires, whose place may be anywhere in the gap) by the graph
-too, so the order is exact in every history the simulations produce but a
-handful: a revert that still cannot bound a book falls back to the recorded
-index and says so (`restored_by_index`, named in `kept`); it never refuses and
-never leaves a wrong list unreported. Over 140,000 simulated histories (two and
-three survivors, crashes part way through an operation's revert, survivors
-retired into survivors, with and without crashes, marker and row journaled at
-distinct instants as the journal does), 139,997 end exact, 3 are reported by
-index (two of them end with the exact list anyway) and none refuses or goes
-wrong silently.
+book goes back beside its neighbours, found through the survivor's stand-in, and
+the revert of the survivor's own retire places it later.
+
+A survivor is in a list on a retire's account from the retire that put it there
+(a "took" marker) until the last retire of that epoch is reverted. A later "took"
+marker ends every earlier epoch, so a standing marker of an earlier epoch (the
+survivor left the list by hand, or a revert removed it and died before stamping
+the marker) no longer counts: its rows have no say over the survivor, in the
+revert, the preflight, and the order graph.
+
+Journal rows are ordered by a store-level clock that never steps back: each row
+is stamped with the larger of the wall clock and one nanosecond past the last
+stamp, the mark is saved with the rows (`system:journal_clock`) and re-read at
+open with one second of margin, so a wall clock that steps back (NTP, a restore,
+a VM resume) between two retires cannot reorder the journal and so cannot change
+how a later undo reads it.
+
+Lists the owner arranged by hand since the retire are reported, not silently
+rewritten. A survivor found listed somewhere other than the slot the retire gave
+it is left where it was put and the book goes back by the records; the revert
+names it (`kept`: "left where you placed it"). A slot the records cannot confirm
+(a book they do not order sits beside it, or the list was rearranged) is given
+back as recorded and named too. Both count in `lists_edited_by_hand`, and the
+summary says "list position(s) restored beside books arranged by hand since".
+A position placed by the recorded index counts in `restored_by_index`. These
+reports are what the revert says; it does not claim to know the owner's intent,
+and a list the owner never touched is never reported.
+
+Verified by simulation (the real revert code against a model of the journal,
+random histories, "exact" meaning every list ends as it was before the retires):
+140,000 histories (two and three survivors, crashes part way through an
+operation's revert, survivors retired into survivors, undone in any order) all
+exact, none reported, refused or silent. A further 47,000 adversarial histories
+(shared timestamps, a wall clock stepping back, one step back, a row journaled
+before its marker, deep chains with crashes) all exact, none reported, refused or
+silent. 12,000 histories in which the owner added, removed or reordered list
+entries by hand since the retires: 0 silent wrong lists (final or
+intermediate); 5,716 exact, 5,544 reported (named in `kept`), 740 refused for
+manual review with a reason (nothing written for a refused row).
 
 A row is stamped reverted together with its survivor-side marker, in the same
 batch as the list. A marker stands until its row is restored, so a row that
 failed or was refused leaves it standing for the retry, so the retry is not
 refused and the reverts in between see the truth; and a row stamped with its
-list is never retried against a list a newer retire has changed since. A row
-that stands with no marker (only a refused carry whose void of its row failed
-while the void of its marker landed leaves one) and whose book a newer retire
-has taken out again is stale: the revert writes nothing, marks it done and
-counts it in `superseded`, naming it in `kept`. The
-revert of a collection or playlist row requires a store that writes the list
-and the stamp in one batch (`database.CollectionMembershipMarkStore`,
-`database.UserPlaylistMarkStore`; the Pebble store has both) and refuses one
-that does not, rather than fall back to two writes. A revert that finds the book
-already listed (the owner put it back by hand while the retire stood) takes the
-survivor out when the row had borrowed it and nothing else stands on it, counts
-it in `survivors_released` and says so in `kept`; otherwise it only stamps the
-marker. Everything that reads a survivor's journal to decide a list write and
-then makes it holds one lock per list: the reverts of collection and playlist
-rows, and the retire's own marker journaling and list write, so two operations
-undone at once cannot each see the other still standing, and an undo cannot
-read the journal between a retire's marker and its write. The carry's
+list is never retried against a list a newer retire has changed since. A refused
+carry takes its row and its marker back in ONE batch (`CreateOperationChanges`,
+used when the store has it), so a failure can no longer leave one of them stale;
+a store without it voids them one by one as before. The revert of a collection
+or playlist row requires a store that writes the list and the stamp in one batch
+(`database.CollectionMembershipMarkStore`, `database.UserPlaylistMarkStore`; the
+Pebble store has both) and refuses one that does not. A revert that finds the
+book already listed (the owner put it back by hand while the retire stood) takes
+the survivor out when the row had borrowed it and nothing else stands on it,
+counts it in `survivors_released` and says so in `kept`; otherwise it only
+stamps the marker. Everything that reads a list's journal to decide a list write
+and then makes it holds one lock per list: the reverts of collection and
+playlist rows, and the retire's own marker journaling and list write, so two
+operations undone at once cannot each see the other still standing. The carry's
 `user_content_follow` rows are kept by journal pruning like the other rows an
-undo cannot be decided without, since the order graph reads every record,
-reverted or not. When no recorded neighbour can be found in the list (the owner
-reordered or emptied it since, or a record carries no neighbours), the recorded
-index is used instead and the revert reports it, never
-silently: the revert result counts these in `restored_by_index`, names each in
-`kept`, and the summary says so. Marker rows restore nothing, so the revert
-result counts them in a separate `markers` figure, not in `restored`. The undo
-preflight predicts a refusal for a carried collection, playlist or rating that
-was edited since (it gives no prediction when the store cannot read lists or
-journals). It decides a collection or playlist row from the same journals the
-revert reads (the survivor's and the retired book's), so a row the revert
-restores exactly, a retire into a survivor that has been retired out of the
-list since included, is predicted restorable and never filed under
-`check_failed`, which never counts toward offering Undo.
+undo cannot be decided without. Marker rows restore nothing, so the revert
+result counts them in a separate `markers` figure, not in `restored`.
+
+The undo preflight decides a collection or playlist row from the same list
+journal the revert reads, so a row the revert restores exactly is predicted
+restorable. A journal read that fails refuses the row as unreadable
+(`field_unreadable`) and never as restorable; a store that cannot read the list
+journal at all still has the list itself checked. Rows that fail the check are
+never filed under `check_failed`, which never counts toward offering Undo.

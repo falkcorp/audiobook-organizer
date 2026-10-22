@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
 // last-edited: 2026-10-22
 
@@ -529,8 +529,11 @@ func (p *PebbleStore) GetRecentCompletedOperations(limit int) ([]Operation, erro
 }
 
 // CreateOperationChange stores an operation change in PebbleDB, together with
-// its opchange_by_book: index entry in the same batch
-// (pebble_store_opchange_index.go), committed with pebble.Sync. When the
+// its opchange_by_book: index entry and, for a user-content row, its
+// opchange_by_list: entry in the same batch (pebble_store_opchange_index.go,
+// pebble_store_opchange_list_index.go), committed with pebble.Sync. CreatedAt is
+// the journal clock's (pebble_store_journal_clock.go), strictly increasing per
+// store whatever the wall clock does. When the
 // caller supplies an id, the call may rewrite an existing row: if that row
 // named a different book, its old entry is deleted in the same batch, so the
 // entry moves with the BookID. The new entry is Set unconditionally, so a
@@ -543,39 +546,78 @@ func (p *PebbleStore) GetRecentCompletedOperations(limit int) ([]Operation, erro
 // sees either the old row or the rewritten one, never deletes the rewrite
 // from a stale view. Writers do not exclude each other.
 func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
-	supplied := change.ID != ""
-	if !supplied {
-		change.ID = ulid.Make().String()
+	return p.CreateOperationChanges([]*OperationChange{change})
+}
+
+// CreateOperationChanges is CreateOperationChange for several rows committed in
+// ONE batch: every row, its index entries and the journal clock land together or
+// not at all. It is for a write whose rows must not be seen apart (the carry
+// voids a survivor's marker and the retired book's row together, so a failure
+// cannot leave one stale). Each row is stamped as CreateOperationChange stamps
+// it, in the order given; the ids must be distinct. It is not on Store: resolve
+// it with database.AsCapability.
+func (p *PebbleStore) CreateOperationChanges(changes []*OperationChange) error {
+	if len(changes) == 0 {
+		return nil
 	}
-	change.CreatedAt = time.Now()
-	data, err := json.Marshal(change)
-	if err != nil {
-		return err
-	}
-	key := opChangeKey(change.OperationID, change.ID)
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	p.opChangeJournalMu.RLock()
 	defer p.opChangeJournalMu.RUnlock()
-	// An id minted here cannot name a stored row, so it skips the read. Almost
-	// every caller in the tree supplies its own id (usually a fresh ULID), and
-	// the store cannot tell a fresh id from a reused one, so in practice
-	// nearly every call pays one point read; for a fresh id it is a miss.
-	if supplied {
-		oldBook, found, err := p.storedOpChangeBookID(key)
+	var last time.Time
+	for _, change := range changes {
+		supplied := change.ID != ""
+		if !supplied {
+			change.ID = ulid.Make().String()
+		}
+		// The journal clock, not the wall clock: the order of the journal's rows
+		// is the order of their times (pebble_store_journal_clock.go).
+		change.CreatedAt = p.journalNow()
+		last = change.CreatedAt
+		data, err := json.Marshal(change)
 		if err != nil {
 			return err
 		}
-		if found && oldBook != change.BookID {
-			if err := unstageOpChangeIndex(batch, oldBook, key); err != nil {
+		key := opChangeKey(change.OperationID, change.ID)
+		// An id minted here cannot name a stored row, so it skips the read.
+		// Almost every caller in the tree supplies its own id (usually a fresh
+		// ULID), and the store cannot tell a fresh id from a reused one, so in
+		// practice nearly every call pays one point read; for a fresh id it is a
+		// miss.
+		if supplied {
+			old, found, err := p.storedOpChange(key)
+			if err != nil {
 				return err
 			}
+			if found && old.BookID != change.BookID {
+				if err := unstageOpChangeIndex(batch, old.BookID, key); err != nil {
+					return err
+				}
+			}
+			// A rewrite that moves the row to another list (or out of lists)
+			// takes its old list entry with it; one that stays re-Sets the same
+			// key below.
+			if found {
+				oldKind, oldList, oldOK := opChangeListRef(old)
+				newKind, newList, newOK := opChangeListRef(change)
+				if oldOK && (!newOK || oldKind != newKind || oldList != newList) {
+					if err := unstageOpChangeListIndex(batch, old, key); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if err := batch.Set(key, data, nil); err != nil {
+			return err
+		}
+		if err := stageOpChangeIndex(batch, change.BookID, key); err != nil {
+			return err
+		}
+		if err := stageOpChangeListIndex(batch, change, key); err != nil {
+			return err
 		}
 	}
-	if err := batch.Set(key, data, nil); err != nil {
-		return err
-	}
-	if err := stageOpChangeIndex(batch, change.BookID, key); err != nil {
+	if err := stageJournalClock(batch, last); err != nil {
 		return err
 	}
 	return batch.Commit(pebble.Sync)
@@ -728,7 +770,9 @@ func (p *PebbleStore) markOperationChangesRevertedWith(operationID string, chang
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	staged := 0
-	now := time.Now()
+	// One journal-clock value stamps every row of the batch (and is persisted
+	// with it), later than every value the journal has recorded.
+	now := p.journalNow()
 	for _, key := range keys {
 		v, closer, err := p.db.Get(key)
 		if errors.Is(err, pebble.ErrNotFound) {
@@ -757,7 +801,15 @@ func (p *PebbleStore) markOperationChangesRevertedWith(operationID string, chang
 		if err := stageOpChangeIndex(batch, c.BookID, key); err != nil {
 			return err
 		}
+		if err := stageOpChangeListIndex(batch, &c, key); err != nil {
+			return err
+		}
 		staged++
+	}
+	if staged > 0 {
+		if err := stageJournalClock(batch, now); err != nil {
+			return err
+		}
 	}
 	if extra != nil {
 		if err := extra(batch); err != nil {
