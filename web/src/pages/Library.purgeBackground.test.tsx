@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.purgeBackground.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e1c4b92-3a68-4d05-9f27-b84d0c6a1e53
 // last-edited: 2026-10-22
 
@@ -16,6 +16,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { ToastProvider } from '../components/toast/ToastProvider';
 import { useAppStore } from '../stores/useAppStore';
@@ -138,7 +139,9 @@ describe('purge deleted in the background', () => {
     render(
       <MemoryRouter>
         <ToastProvider>
-          <Library />
+          <OperationTrackerProvider>
+            <Library />
+          </OperationTrackerProvider>
         </ToastProvider>
       </MemoryRouter>
     );
@@ -176,7 +179,9 @@ describe('purge deleted in the background', () => {
     render(
       <MemoryRouter>
         <ToastProvider>
-          <Library />
+          <OperationTrackerProvider>
+            <Library />
+          </OperationTrackerProvider>
         </ToastProvider>
       </MemoryRouter>
     );

@@ -1,6 +1,6 @@
 // file: web/src/main.tsx
-// version: 2.0.0
-// last-edited: 2026-08-20
+// version: 2.1.0
+// last-edited: 2026-10-22
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import React from 'react';
@@ -11,6 +11,7 @@ import App from './App';
 import { appTheme } from './theme';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/toast/ToastProvider';
+import { OperationTrackerProvider } from './components/operations/OperationTrackerProvider';
 import { AuthProvider } from './contexts/AuthContext';
 import { STORAGE_KEYS } from './lib/storageKeys';
 
@@ -35,7 +36,11 @@ function AppRoot() {
           <CssBaseline />
           <AuthProvider>
             <ToastProvider>
-              <App />
+              {/* Follows merge/combine/purge operations for the whole app, so
+                  leaving the Library mid-run keeps the outcome toast and the locks. */}
+              <OperationTrackerProvider>
+                <App />
+              </OperationTrackerProvider>
             </ToastProvider>
           </AuthProvider>
         </ThemeProvider>

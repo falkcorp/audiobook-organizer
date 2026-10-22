@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.mergeAsVersions.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d8b2e61-0a73-4f95-b1c6-9e3f7a5d2c08
 // last-edited: 2026-10-22
 
@@ -18,6 +18,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { ToastProvider } from '../components/toast/ToastProvider';
 import { useAppStore } from '../stores/useAppStore';
@@ -112,7 +113,9 @@ async function openMergeDialog(selectIds: string[]) {
   render(
     <MemoryRouter>
       <ToastProvider>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </ToastProvider>
     </MemoryRouter>
   );
