@@ -1,5 +1,5 @@
 // file: internal/audiobooks/block_hash_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7d3f68-4c19-4e85-a2d6-9f1c5e8a3b74
 // last-edited: 2026-10-22
 
@@ -47,11 +47,13 @@ func firstWarning(t *testing.T, res map[string]any) string {
 
 // A delete that asks to block a hash a live book still holds proceeds, does
 // not block, and says which live book holds it. The holder here is found
-// through the book:hash: index (the last writer owns it).
+// through the book hash index, which lists EVERY holder: the book being
+// deleted sorts first, so a lookup that answered with one holder would answer
+// with the book itself and miss "keeper".
 func TestDeleteAudiobook_BlockHashSkippedWhileLiveBookHoldsIt(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	hashedBook(t, store, "gone", sharedTestHash, false)
-	hashedBook(t, store, "keeper", sharedTestHash, false) // now owns the index
+	hashedBook(t, store, "keeper", sharedTestHash, false)
 
 	res, err := svc.DeleteAudiobook(context.Background(), "gone", &DeleteAudiobookOptions{SoftDelete: true, BlockHash: true})
 	require.NoError(t, err)
@@ -66,13 +68,13 @@ func TestDeleteAudiobook_BlockHashSkippedWhileLiveBookHoldsIt(t *testing.T) {
 	assert.False(t, keeper.IsSoftDeleted())
 }
 
-// The second holder is found even when the index points at the deleted book:
-// through the multi-valued book_file hash index.
+// The second holder is found through the multi-valued book_file hash index
+// even when the book hash index lists only the deleted book.
 func TestDeleteAudiobook_BlockHashSkippedWhenHolderIsOnlyInBookFileIndex(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	hashedBook(t, store, "keeper", sharedTestHash, false)
 	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: "keeper", FilePath: "/x/keeper.m4b", Format: "m4b", FileHash: sharedTestHash}))
-	hashedBook(t, store, "gone", sharedTestHash, false) // owns the index
+	hashedBook(t, store, "gone", sharedTestHash, false)
 
 	res, err := svc.DeleteAudiobook(context.Background(), "gone", &DeleteAudiobookOptions{SoftDelete: true, BlockHash: true})
 	require.NoError(t, err)

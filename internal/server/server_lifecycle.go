@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.57.0
+// version: 4.58.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package server
 
@@ -1394,6 +1394,13 @@ type opStatusLookup interface {
 //     the sentinel cannot know, so the verify is the check. Until it trusts
 //     the index, GetBookChanges serves from the full journal scan. Without
 //     params the op previews.
+//   - book-hash-index-repair {"ensure": true}: writes every missing key of the
+//     multi-valued file-hash indexes (book_hash:, book_originalhash:,
+//     book_organizedhash:), then, when every book row decoded, sets the index's
+//     sentinel and deletes the retired single-valued keys. Enqueued on EVERY
+//     boot, like the opchange ensure: a rollback to a build that predates the
+//     index writes books with no keys and the sentinel cannot know. Until it
+//     finishes, GetBookByFileHash and its twins also consult the legacy keys.
 //   - book-atpath-index-backfill {"if_needed": true} (04-P6 part 2, was the
 //     book-atpath-backfill goroutine): the sentinel-gated BackfillBookAtPathIndex
 //     instead of the operator's forced RebuildBookAtPathIndex. Until it
@@ -1465,6 +1472,7 @@ var bootOps = []bootOp{
 	},
 	{id: "maintenance.opchange-book-index-rebuild", params: map[string]any{"ensure": true}},
 	{id: "maintenance.book-atpath-index-backfill", params: map[string]any{"if_needed": true}},
+	{id: "maintenance.book-hash-index-repair", params: map[string]any{"ensure": true}},
 	{
 		id: "maintenance.activity-filter-index-backfill", params: map[string]any{"reconcile": true},
 		paramsFor: activityFilterIndexBootParams,
