@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-10-21
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 // Compile-time proof that the production store satisfies the Phase 6 capability the
@@ -628,6 +629,11 @@ func (s *Server) wireABSRoutes() {
 			"Credential VALUES are never logged (booleans and lengths only), but this is verbose; " +
 			"unset " + servermiddleware.ABSAuthProbeEnvVar + " when the diagnostic window is over")
 	}
+	// Aggregate password-guessing ceilings (login_ceiling.go) in front of the ABS
+	// password login only; /auth/refresh does no password work.
+	absGroup.Use(s.loginCeiling().middleware(func(c *gin.Context) bool {
+		return c.Request.Method == http.MethodPost && c.FullPath() == "/login"
+	}))
 	handler.Register(absGroup)
 
 	if !handler.HasUserDataProvider() {

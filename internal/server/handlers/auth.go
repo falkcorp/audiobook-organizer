@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-21
 
@@ -98,6 +98,15 @@ const (
 	maxFailedLoginsPerIP = 15
 	loginThrottleWindow  = 15 * time.Minute
 
+	// maxThrottleKeys bounds each failure table (per source, per account). At the
+	// bound a new key evicts the entry whose window started longest ago, so a
+	// caller rotating addresses cannot grow the table without limit; the
+	// aggregate ceilings (server.loginCeiling) cap what rotation can buy.
+	maxThrottleKeys = 10000
+	// throttlePurgeEvery is how often expired entries are swept: periodically,
+	// not on every failure (a sweep walks the whole table).
+	throttlePurgeEvery = time.Minute
+
 	// Per-account soft slowdown. After accountSoftThreshold failures a small
 	// progressive delay (capped at accountSoftMaxDelay) is added to each *failed*
 	// attempt. The account is never hard-locked: a correct password always
@@ -127,6 +136,7 @@ type AuthHandler struct {
 	acctFails  map[string]*failedAttempt // keyed by user ID — drives the soft delay
 	ipFails    map[string]*failedAttempt // keyed by client IP — drives the hard throttle
 	failMu     sync.Mutex
+	lastPurge  time.Time // last expired-entry sweep of both tables; under failMu
 	// failureDelay performs the soft per-account slowdown. Defaults to time.Sleep;
 	// tests override it to keep the suite fast and deterministic.
 	failureDelay func(time.Duration)
@@ -193,6 +203,9 @@ func (h *AuthHandler) SetFailureDelay(fn func(time.Duration)) {
 func bumpFailureLocked(m map[string]*failedAttempt, key string) int {
 	a, ok := m[key]
 	if !ok || time.Since(a.firstAt) > loginThrottleWindow {
+		if !ok && len(m) >= maxThrottleKeys {
+			evictOldestLocked(m)
+		}
 		m[key] = &failedAttempt{count: 1, firstAt: time.Now()}
 		return 1
 	}
@@ -219,6 +232,19 @@ func (h *AuthHandler) ipThrottled(ip string) bool {
 	return a.count >= maxFailedLoginsPerIP
 }
 
+// evictOldestLocked drops the entry whose window started longest ago. Caller
+// must hold failMu.
+func evictOldestLocked(m map[string]*failedAttempt) {
+	var oldestKey string
+	var oldest time.Time
+	for k, a := range m {
+		if oldestKey == "" || a.firstAt.Before(oldest) {
+			oldestKey, oldest = k, a.firstAt
+		}
+	}
+	delete(m, oldestKey)
+}
+
 // purgeExpiredLocked removes entries whose throttle window has elapsed so the
 // maps don't grow without bound when attackers rotate source IPs. Caller must
 // hold failMu.
@@ -237,8 +263,11 @@ func purgeExpiredLocked(m map[string]*failedAttempt) {
 func (h *AuthHandler) recordFailure(userID, ip string) time.Duration {
 	h.failMu.Lock()
 	defer h.failMu.Unlock()
-	purgeExpiredLocked(h.ipFails)
-	purgeExpiredLocked(h.acctFails)
+	if time.Since(h.lastPurge) >= throttlePurgeEvery {
+		h.lastPurge = time.Now()
+		purgeExpiredLocked(h.ipFails)
+		purgeExpiredLocked(h.acctFails)
+	}
 	if ip != "" {
 		bumpFailureLocked(h.ipFails, ip)
 	}

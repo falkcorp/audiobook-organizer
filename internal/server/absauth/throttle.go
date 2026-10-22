@@ -1,7 +1,7 @@
 // file: internal/server/absauth/throttle.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f9a1c86-2d57-4e0b-b843-9c60e5a7f218
-// last-edited: 2026-09-02
+// last-edited: 2026-10-21
 
 package absauth
 
@@ -43,6 +43,10 @@ const (
 	SoftMaxDelay = 2 * time.Second
 	// idleTTL bounds the maps: entries untouched for this long are dropped.
 	idleTTL = 30 * time.Minute
+	// MaxKeys bounds each table. At the bound a new key evicts the entry whose
+	// window started longest ago, so rotating source addresses cannot grow the
+	// table without limit.
+	MaxKeys = 10000
 )
 
 type failureCounter struct {
@@ -160,6 +164,9 @@ func (t *Throttle) Clear(accountID, ip string) {
 func bump(m map[string]*failureCounter, key string, now time.Time) int {
 	c, ok := m[key]
 	if !ok || now.Sub(c.firstAt) > Window {
+		if !ok && len(m) >= MaxKeys {
+			evictOldest(m)
+		}
 		m[key] = &failureCounter{count: 1, firstAt: now, lastSeen: now}
 		return 1
 	}
@@ -168,7 +175,19 @@ func bump(m map[string]*failureCounter, key string, now time.Time) int {
 	return c.count
 }
 
-// gcGlocked drops entries nobody has touched for idleTTL so the maps cannot grow
+// evictOldest drops the entry whose window started longest ago.
+func evictOldest(m map[string]*failureCounter) {
+	var oldestKey string
+	var oldest time.Time
+	for k, c := range m {
+		if oldestKey == "" || c.firstAt.Before(oldest) {
+			oldestKey, oldest = k, c.firstAt
+		}
+	}
+	delete(m, oldestKey)
+}
+
+// gcLocked drops entries nobody has touched for idleTTL so the maps cannot grow
 // without bound under a distributed probe. Runs at most once a minute.
 func (t *Throttle) gcLocked(now time.Time) {
 	if now.Sub(t.lastGC) < time.Minute {
