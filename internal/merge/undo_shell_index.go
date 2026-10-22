@@ -1,5 +1,5 @@
 // file: internal/merge/undo_shell_index.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a8c5e72-1f94-4b06-9d3e-6c7a2b0f8e51
 // last-edited: 2026-10-22
 
@@ -7,6 +7,7 @@ package merge
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -55,19 +56,25 @@ type stampedShell struct {
 }
 
 // NewUndoShellIndex scans the combine journals once and indexes the shells of
-// every journal whose undo can still run. A read error (the scan itself
-// failing) is returned: the purge must fail closed rather than treat "cannot
-// tell" as "nothing is held". A journal ROW that cannot be decoded is different:
-// listCombineJournals skips it with a warning, because a row it cannot read
-// cannot name its shell, so nothing is held on its account and it does NOT fail
-// the purge. (The auto-merge journal is stricter: OpenAutoMergeLosers refuses on
-// an undecodable entry. Making this one strict too would let one corrupt row
-// block every purge until it is repaired.)
+// every journal whose undo can still run. It fails CLOSED, so the purge refuses
+// rather than treat "cannot tell" as "nothing is held", in two cases: the scan
+// itself failing, and a journal row that cannot be decoded
+// (*UnreadableCombineJournalsError, naming the keys and the
+// maintenance.combine-journal-check operation that lists them). A row that
+// cannot be read cannot say which shell its undo needs, and journals never
+// expire, so one corrupt row blocks every purge until it is repaired; that is
+// the owner's decision (2026-10-22) and matches the auto-merge journal
+// (OpenAutoMergeLosers). The lenient lister, listCombineJournals, still skips
+// such rows for listings that only inform a reader.
 func NewUndoShellIndex(db journalKVReader) (*UndoShellIndex, error) {
 	gen := CombineJournalGeneration()
-	journals, err := listCombineJournals(db, 0)
+	journals, unreadable, err := scanCombineJournals(db)
 	if err != nil {
 		return nil, fmt.Errorf("list combine journals to find shells whose undo is still possible: %w", err)
+	}
+	if len(unreadable) > 0 {
+		sort.Slice(unreadable, func(i, k int) bool { return unreadable[i].Key < unreadable[k].Key })
+		return nil, &UnreadableCombineJournalsError{Rows: unreadable}
 	}
 	idx := &UndoShellIndex{gen: gen, stamps: map[string][]stampedShell{}}
 	for i := range journals {
