@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-22
 
@@ -45,8 +45,51 @@ type purgeEnv struct {
 	// probe answers "does a user have listening state on this book" with the
 	// users listed once per pass.
 	probe *merge.UserStateProbe
-	// undo holds the retired shells of combines that can still be undone.
-	undo *merge.UndoShellIndex
+	// undo answers "is this book the retired shell of a combine that can still
+	// be undone", refreshing itself when a combine journals mid-pass.
+	undo *undoShells
+}
+
+// undoShells is the pass's shared, self-refreshing view of
+// merge.UndoShellIndex. The index is a snapshot, and a combine can journal
+// while a pass runs (the soft-deleted listing was read before it): a snapshot
+// taken at the start would not hold that shell and the purge would delete it,
+// making the combine un-revertable. So every Holds call first checks whether a
+// journal was written since the snapshot (merge.UndoShellIndex.Stale) and, if
+// so, rebuilds it. Called under the merge lock (every journal writer holds it
+// across the write), the answer is exact. It fails CLOSED: when the rebuild
+// cannot read the journals, Holds returns the error and the caller keeps the
+// book, never "nothing is held".
+type undoShells struct {
+	mu    sync.Mutex
+	idx   *merge.UndoShellIndex
+	build func() (*merge.UndoShellIndex, error)
+}
+
+func (svc *AudiobookService) newUndoShells() (*undoShells, error) {
+	u := &undoShells{build: svc.newUndoShellIndex}
+	idx, err := u.build()
+	if err != nil {
+		return nil, err
+	}
+	u.idx = idx
+	return u, nil
+}
+
+// Holds reports whether b is the retired shell of a combine whose undo can
+// still run. A non-nil error means it could not be decided: keep the book.
+func (u *undoShells) Holds(b *database.Book) (journalID string, held bool, err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.idx.Stale() {
+		idx, berr := u.build()
+		if berr != nil {
+			return "", false, fmt.Errorf("a combine journaled since this pass began and the journals cannot be re-read: %w", berr)
+		}
+		u.idx = idx
+	}
+	journalID, held = u.idx.Holds(b)
+	return journalID, held, nil
 }
 
 // newPurgeEnv builds a pass's shared read state. Both reads fail closed: a
@@ -57,7 +100,7 @@ func (svc *AudiobookService) newPurgeEnv() (purgeEnv, error) {
 	if err != nil {
 		return purgeEnv{}, fmt.Errorf("cannot list users to check their listening state: %w", err)
 	}
-	undo, err := svc.newUndoShellIndex()
+	undo, err := svc.newUndoShells()
 	if err != nil {
 		return purgeEnv{}, err
 	}
@@ -95,7 +138,11 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 	if len(ownedFiles) > 0 {
 		return purgeOutcome{kind: purgeOwnsFiles}, true
 	}
-	if _, held := env.undo.Holds(book); held {
+	_, held, err := env.undo.Holds(book)
+	switch {
+	case err != nil:
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell whether a combine's undo still needs it: %v", book.ID, err)}}, true
+	case held:
 		return purgeOutcome{kind: purgeKeptUndo}, true
 	}
 	return purgeOutcome{}, false

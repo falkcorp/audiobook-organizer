@@ -1,5 +1,5 @@
 // file: internal/merge/undo_shell_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a8c5e72-1f94-4b06-9d3e-6c7a2b0f8e51
 // last-edited: 2026-10-22
 
@@ -33,9 +33,16 @@ import (
 // purge. That is the intended cost of "purge must not make a revertible
 // operation un-revertable".
 //
-// The index is built once per purge pass from one prefix scan of the journals
-// and then read-only, so workers share it without a lock.
+// The index is a snapshot of one prefix scan of the journals and is read-only,
+// so workers share it without a lock. A snapshot goes stale when a combine
+// journals afterwards: Stale reports that (CombineJournalGeneration moved since
+// the scan began), and a caller that decides under the merge lock rebuilds
+// before trusting it. A purge that trusted a stale snapshot would delete the
+// shell of a combine journaled during the pass.
 type UndoShellIndex struct {
+	// gen is CombineJournalGeneration read BEFORE the scan began, so a journal
+	// written while or after the scan ran changes it.
+	gen uint64
 	// stamps maps an absorbed book id to the soft-delete stamps open journals
 	// recorded for it (more than one when it was retired by several combines).
 	stamps map[string][]stampedShell
@@ -50,11 +57,12 @@ type stampedShell struct {
 // every journal whose undo can still run. A read error is returned: the purge
 // must fail closed rather than treat "cannot tell" as "nothing is held".
 func NewUndoShellIndex(db journalKVReader) (*UndoShellIndex, error) {
+	gen := CombineJournalGeneration()
 	journals, err := listCombineJournals(db, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list combine journals to find shells whose undo is still possible: %w", err)
 	}
-	idx := &UndoShellIndex{stamps: map[string][]stampedShell{}}
+	idx := &UndoShellIndex{gen: gen, stamps: map[string][]stampedShell{}}
 	for i := range journals {
 		j := &journals[i]
 		if !combineJournalUndoable(j) {
@@ -97,6 +105,12 @@ func (x *UndoShellIndex) Holds(b *database.Book) (journalID string, held bool) {
 		}
 	}
 	return "", false
+}
+
+// Stale reports whether a combine journal was written after this snapshot's
+// scan began, so it may be missing a held shell. A nil index is stale.
+func (x *UndoShellIndex) Stale() bool {
+	return x == nil || x.gen != CombineJournalGeneration()
 }
 
 // Len is how many books the index holds.

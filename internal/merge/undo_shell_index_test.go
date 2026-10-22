@@ -1,5 +1,5 @@
 // file: internal/merge/undo_shell_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e4b1d60-7a35-4c82-b0f9-2d6e8a3c5b17
 // last-edited: 2026-10-22
 
@@ -111,4 +111,30 @@ func TestUndoShellIndex_LeftLiveAndUnstampedAbsorbedAreNotHeld(t *testing.T) {
 	idx, err := NewUndoShellIndex(kv)
 	require.NoError(t, err)
 	assert.Zero(t, idx.Len())
+}
+
+// A snapshot goes stale exactly when a combine journal is written after its
+// scan began, so a purge deciding under the merge lock knows to rebuild it.
+func TestUndoShellIndex_StaleAfterAJournalWrite(t *testing.T) {
+	kv := &kvFake{m: map[string][]byte{}}
+	stamp := time.Date(2026, 10, 21, 22, 0, 0, 0, time.UTC)
+	idx, err := NewUndoShellIndex(kv)
+	require.NoError(t, err)
+	assert.False(t, idx.Stale(), "nothing was written since the scan")
+	_, held := idx.Holds(shellRow("late", stamp))
+	assert.False(t, held)
+
+	journalWith(t, kv, CombineJournalApplied, true, "late", stamp)
+	assert.True(t, idx.Stale(), "a journal written after the scan makes the snapshot stale")
+	_, held = idx.Holds(shellRow("late", stamp))
+	assert.False(t, held, "the stale snapshot does not know the new journal; callers must rebuild")
+
+	fresh, err := NewUndoShellIndex(kv)
+	require.NoError(t, err)
+	assert.False(t, fresh.Stale())
+	_, held = fresh.Holds(shellRow("late", stamp))
+	assert.True(t, held)
+
+	var nilIdx *UndoShellIndex
+	assert.True(t, nilIdx.Stale(), "no index at all is never current")
 }
