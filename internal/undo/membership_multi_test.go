@@ -1,5 +1,5 @@
 // file: internal/undo/membership_multi_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d4f2a61-7c35-4b90-a1e8-5f3c9b0d7e42
 // last-edited: 2026-10-22
 
@@ -251,7 +251,8 @@ func TestMembershipHistory_CrashBetweenWriteAndStampLeavesNoSurvivorBehind(t *te
 		sim := newCarrySim(t, "S", l0)
 		sim.retire("opA", pool[0])
 		sim.retire("opB", pool[1])
-		// opA's first pass: the list is written, the stamp is lost.
+		// opA's book is back in the list with its row and marker still standing (as if
+		// the owner put it back by hand).
 		if err := sim.revertStamping(pool[0], false); err != nil {
 			t.Fatalf("case%d l0=%v: %v", caseN, l0, err)
 		}

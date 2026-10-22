@@ -61,8 +61,8 @@ the book back by those neighbours: it builds an order graph from the records of
 every retire into the list, walking through the books other retires took out
 (and treating a survivor that took a book's slot as that book), so operations
 undone in any order, including oldest first, restore every book to its exact
-original position in every collection and playlist, as long as the survivors
-are not themselves retired. When several survivors share one list the graph
+original position in every collection and playlist, survivors that are
+themselves retired later included (below). When several survivors share one list the graph
 reads the journals of the other books it reaches, of every book named by a
 record it uses, and of every listed book left between the bounds it found
 (`GetBookChanges`, at most 128 reads per book placed) and follows each
@@ -73,28 +73,42 @@ needs more than 128 reads (the report names the cap), or a book that cannot be
 bounded that way is never guessed: the recorded index is used and reported.
 
 A survivor can itself be retired into another survivor (the duplicate-copies
-fixer does). A survivor that was listed only because retires stood on it is
+fixer does), and the operations can be undone in any order, the older ones
+first included. A survivor that was listed only because retires stood on it is
 put back by the revert of its own retire only while one of those retires still
 stands; once they have all been reverted it never belonged to the list on its
 own, so it stays out and the revert says so (`books_left_out`, named in `kept`).
-Reverting such a history out of order can also refuse, when a survivor that
-stands in a book's slot has been retired since and cannot be swapped back, or
-fall back to the recorded index and say so; it never leaves a wrong list
-unreported.
+When a book's retire is reverted while the survivor that took its slot has been
+retired out of the list since, the slot is not the survivor's to give back: the
+book goes back beside its neighbours, found through the survivor's stand-in (the
+survivor that took the slot in turn), and the revert of the survivor's own retire
+places it later. No such history refuses any more. The books beside a returning
+book are ordered against the books the records do not order (a survivor listed
+only for other retires, whose place may be anywhere in the gap) by the graph
+too, so the order is exact in every history the simulations produce but a
+handful: a revert that still cannot bound a book falls back to the recorded
+index and says so (`restored_by_index`, named in `kept`); it never refuses and
+never leaves a wrong list unreported. Over 140,000 simulated histories (two and
+three survivors, crashes part way through an operation's revert, survivors
+retired into survivors, with and without crashes, marker and row journaled at
+distinct instants as the journal does), 139,997 end exact, 3 are reported by
+index (two of them end with the exact list anyway) and none refuses or goes
+wrong silently.
 
 A row is stamped reverted together with its survivor-side marker, in the same
 batch as the list. A marker stands until its row is restored, so a row that
 failed or was refused leaves it standing for the retry, so the retry is not
 refused and the reverts in between see the truth; and a row stamped with its
 list is never retried against a list a newer retire has changed since. A row
-left standing with its marker already stamped (an older build wrote them apart)
-whose book a newer retire has taken out again is stale: the revert writes
-nothing, marks it done and counts it in `superseded`, naming it in `kept`. The
+that stands with no marker (only a refused carry whose void of its row failed
+while the void of its marker landed leaves one) and whose book a newer retire
+has taken out again is stale: the revert writes nothing, marks it done and
+counts it in `superseded`, naming it in `kept`. The
 revert of a collection or playlist row requires a store that writes the list
 and the stamp in one batch (`database.CollectionMembershipMarkStore`,
 `database.UserPlaylistMarkStore`; the Pebble store has both) and refuses one
-that does not, rather than fall back to two writes. A retry that finds the book
-already listed (a list an older build wrote without its stamp) takes the
+that does not, rather than fall back to two writes. A revert that finds the book
+already listed (the owner put it back by hand while the retire stood) takes the
 survivor out when the row had borrowed it and nothing else stands on it, counts
 it in `survivors_released` and says so in `kept`; otherwise it only stamps the
 marker. Everything that reads a survivor's journal to decide a list write and
@@ -105,10 +119,15 @@ read the journal between a retire's marker and its write. The carry's
 `user_content_follow` rows are kept by journal pruning like the other rows an
 undo cannot be decided without, since the order graph reads every record,
 reverted or not. When no recorded neighbour can be found in the list (the owner
-reordered or emptied it since), or the row was journaled before neighbours were
-recorded, the recorded index is used instead and the revert reports it, never
+reordered or emptied it since, or a record carries no neighbours), the recorded
+index is used instead and the revert reports it, never
 silently: the revert result counts these in `restored_by_index`, names each in
 `kept`, and the summary says so. Marker rows restore nothing, so the revert
 result counts them in a separate `markers` figure, not in `restored`. The undo
 preflight predicts a refusal for a carried collection, playlist or rating that
-was edited since (it gives no prediction when the store cannot read lists).
+was edited since (it gives no prediction when the store cannot read lists or
+journals). It decides a collection or playlist row from the same journals the
+revert reads (the survivor's and the retired book's), so a row the revert
+restores exactly, a retire into a survivor that has been retired out of the
+list since included, is predicted restorable and never filed under
+`check_failed`, which never counts toward offering Undo.

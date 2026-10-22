@@ -1,5 +1,5 @@
 // file: internal/undo/membership_anchor.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 7c2e9a40-5b1d-4f86-a3d7-e0b8c4f19a65
 // last-edited: 2026-10-22
 
@@ -7,6 +7,7 @@ package undo
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -228,6 +229,7 @@ func (h *markerHistory) epochNow() (root *carryMarker, alive bool) {
 
 // anchored is one carry's record, as the graph keeps it.
 type anchored struct {
+	op       string
 	id       string
 	retired  string
 	survivor string
@@ -292,7 +294,7 @@ func (g *MembershipGraph) Err() error { return g.err }
 // AddRows takes rows into the graph (a later row with the same id replaces the
 // earlier one). Only the carry rows of this list count: the survivors' markers
 // and the rows of retired books. Voided rows, rows of another list and rows
-// with no anchors (journaled before they were recorded) are left out of the
+// with no anchors (a hand-written or truncated record) are left out of the
 // adjacencies; unparsable ones too. AddRows does not mark any journal read:
 // use AddJournal for a book's whole journal.
 func (g *MembershipGraph) AddRows(rows []*database.OperationChange) {
@@ -369,7 +371,7 @@ func (g *MembershipGraph) build() {
 				continue
 			}
 			seen[key(m.op, m.retired)] = true
-			g.recs = append(g.recs, anchored{id: m.id, retired: m.retired, survivor: sv, prev: m.rec.Prev, next: m.rec.Next, created: m.created, took: m.took})
+			g.recs = append(g.recs, anchored{op: m.op, id: m.id, retired: m.retired, survivor: sv, prev: m.rec.Prev, next: m.rec.Next, created: m.created, took: m.took})
 		}
 	}
 	main := UserContentField(g.kind, g.listID)
@@ -382,7 +384,7 @@ func (g *MembershipGraph) build() {
 			continue
 		}
 		seen[key(r.OperationID, r.BookID)] = true
-		g.recs = append(g.recs, anchored{id: r.ID, retired: r.BookID, survivor: r.NewValue, prev: rec.Prev, next: rec.Next, created: r.CreatedAt.UnixNano()})
+		g.recs = append(g.recs, anchored{op: r.OperationID, id: r.ID, retired: r.BookID, survivor: r.NewValue, prev: rec.Prev, next: rec.Next, created: r.CreatedAt.UnixNano()})
 	}
 }
 
@@ -394,12 +396,37 @@ func (g *MembershipGraph) node(id, empty string, a anchored) string {
 	if id == "" {
 		return empty
 	}
-	if h := g.hists[id]; h != nil {
-		if x := h.survivorNodeAt(a.created, a.id); x != "" {
-			return x
-		}
+	return g.resolve(id, a.created, a.id, 0)
+}
+
+// resolve is node for an anchor written at time created (ns) after marker aid.
+func (g *MembershipGraph) resolve(id string, created int64, aid string, depth int) string {
+	return g.slotNode(id, created, aid, created, depth)
+}
+
+// slotNode is the node survivor id was at time t0 (after marker aid0), viewed
+// at time t (ns, t >= t0): a survivor standing in a retired book's slot is that
+// book while the book is out, and the book's epoch ghost once it is back. The
+// book it stood in for may itself have been a survivor then (a survivor retired
+// into a survivor that took its slot): the slot it held at the time it was
+// taken is followed down the chain, looked at as of t, so it is the ghost of
+// the first level whose book is back by t, outermost first.
+func (g *MembershipGraph) slotNode(id string, t0 int64, aid0 string, t int64, depth int) string {
+	h := g.hists[id]
+	if h == nil || depth >= 16 {
+		return id
 	}
-	return id
+	x, root := h.survivorEpochAt(t0, aid0)
+	if x == "" {
+		return id
+	}
+	if root == nil || x != root.retired {
+		return x // its own epoch's ghost
+	}
+	if !root.standingAt(t) {
+		return ghostID(root)
+	}
+	return g.slotNode(x, root.created, root.id, t, depth+1)
 }
 
 // retiredNode maps the retired book of a record to its graph node: a book that
@@ -408,6 +435,14 @@ func (g *MembershipGraph) node(id, empty string, a anchored) string {
 // exactly as when it is named as an anchor (node); any other book is itself.
 func (g *MembershipGraph) retiredNode(a anchored) string {
 	return g.node(a.retired, a.retired, a)
+}
+
+// startNode is the node a survivor goes back into the list as, when the row
+// being reverted is its retire a: the slot it held when it was retired, as of
+// now (slotNode): the book it stood in for, or the ghost right after that book
+// if the book has been restored since.
+func (g *MembershipGraph) startNode(a anchored) string {
+	return g.slotNode(a.retired, a.created, a.id, math.MaxInt64, 0)
 }
 
 // edges returns, per node, the nodes recorded right before it (preds) and
@@ -468,8 +503,11 @@ func (g *MembershipGraph) slot(cur []string, retired string) (at int, ok bool) {
 		start := retired
 		if g.row != nil && g.row.BookID == retired {
 			for _, a := range g.recs {
-				if a.id == g.row.ID || a.retired == retired && a.survivor == g.row.NewValue && a.created == g.row.CreatedAt.UnixNano() {
-					start = g.retiredNode(a)
+				// The record is the marker's when there is one (its id and time,
+				// not the row's: the journal writes the two at two instants), so
+				// it is matched by its retire: operation, book and survivor.
+				if a.id == g.row.ID || a.retired == retired && a.survivor == g.row.NewValue && a.op == g.row.OperationID {
+					start = g.startNode(a)
 					break
 				}
 			}
@@ -492,6 +530,33 @@ func (g *MembershipGraph) slot(cur []string, retired string) (at int, ok bool) {
 				onlyGhost[sv] = true
 			}
 		}
+		// A survivor that took the slot of another survivor which then stood in
+		// a book's slot since restored stands in for that survivor's ghost: it
+		// too is listed only for the retires standing on it and leaves by value.
+		for sv, h := range g.hists {
+			root, alive := h.epochNow()
+			if !alive || !root.standing() || onlyGhost[sv] {
+				continue
+			}
+			if inner := g.hists[root.retired]; inner != nil {
+				if node, iroot := inner.survivorEpochAt(root.created, root.id); iroot != nil && node == iroot.retired && !iroot.standing() {
+					onlyGhost[sv] = true
+					standsFor[ghostID(iroot)] = sv
+				}
+			}
+		}
+		// A survivor retired out of the list since, into a survivor that took
+		// its slot (and so on), is where that stand-in is.
+		standInOf := map[string]string{}
+		mainField := UserContentField(g.kind, g.listID)
+		for _, r := range g.rows {
+			if r.ChangeType != ChangeTypeUserContentFollow || r.Voided || r.RevertedAt != nil || r.FieldName != mainField {
+				continue
+			}
+			if rec, err := DecodeMembership(r.OldValue); err == nil && !rec.SurvivorWasMember {
+				standInOf[r.BookID] = r.NewValue
+			}
+		}
 		// pos is the index of node n in cur, -2 when n is not listed.
 		pos := func(n string) int {
 			switch n {
@@ -507,8 +572,15 @@ func (g *MembershipGraph) slot(cur []string, retired string) (at int, ok bool) {
 				return i
 			}
 			if sv, ok := standsFor[n]; ok {
-				if i := slices.Index(cur, sv); i >= 0 {
-					return i
+				for hop := 0; hop <= len(standInOf); hop++ {
+					if i := slices.Index(cur, sv); i >= 0 {
+						return i
+					}
+					next, ok := standInOf[sv]
+					if !ok {
+						break
+					}
+					sv = next
 				}
 			}
 			return -2
@@ -556,6 +628,15 @@ func (g *MembershipGraph) slot(cur []string, retired string) (at int, ok bool) {
 					}
 				}
 			}
+		}
+
+		if len(before) > 0 && len(after) > 0 && lo <= hi && len(gap) > 0 && onlyGhost[retired] {
+			resolved = true
+			// The book being put back is itself a survivor listed only for the
+			// retires that stand on it: it leaves by value with the last of
+			// them, so where it sits among books the records never ordered
+			// against it changes no book's place.
+			gap = nil
 		}
 		// Everything the decision rests on must be read: the books reached,
 		// the books named by the records between them (a book named in a

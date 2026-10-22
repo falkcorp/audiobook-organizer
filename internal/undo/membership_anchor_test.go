@@ -1,5 +1,5 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
 // last-edited: 2026-10-22
 
@@ -70,9 +70,9 @@ func (s *carrySim) retire(op, retired string) {
 // the neighbour graph, and the marker stamped reverted together with the row.
 func (s *carrySim) revert(retired string) error { return s.revertStamping(retired, true) }
 
-// revertStamping is revert, with stamp false for a revert whose process dies
-// after the list write and before the stamp (the row and its marker stay
-// standing). A book already listed is stamped and reported ErrAlreadyRestored
+// revertStamping is revert, with stamp false for a list that holds the book
+// with its row and marker still standing (the owner put the book back by hand;
+// the model writes the list and leaves the stamp for the retry). A book already listed is stamped and reported ErrAlreadyRestored
 // unless the survivor it borrowed is still listed and nothing else stands on
 // it, which RestoreMember takes out.
 func (s *carrySim) revertStamping(retired string, stamp bool) error {
@@ -207,8 +207,8 @@ func TestMembershipAnchors_CarryRecordsNeighbours(t *testing.T) {
 	}
 }
 
-// A row journaled before the anchors existed has none: it is put back by its
-// index, and the revert says so.
+// A record without anchors (hand-written or truncated; every carry records
+// them) is put back by its index, and the revert says so.
 func TestMembershipAnchors_OldRowUsesIndexAndSaysSo(t *testing.T) {
 	t.Parallel()
 	rec := MembershipRecord{Index: 1} // not Anchored
@@ -225,7 +225,7 @@ func TestMembershipAnchors_OldRowUsesIndexAndSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	ucEq(t, got, []string{"a", "s", "r", "c"})
-	if !strings.Contains(note, "predates neighbour anchors") {
+	if !strings.Contains(note, "records no neighbour anchors") {
 		t.Fatalf("note %q", note)
 	}
 }
