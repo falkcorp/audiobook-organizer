@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -224,6 +224,36 @@ type rowVerdict struct {
 	already  bool
 }
 
+// bookJournalReader is the optional preflight store surface for the journal of
+// one book (database.Store GetBookChanges).
+type bookJournalReader interface {
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+}
+
+// membershipVerdict predicts the revert of a collection or playlist row of a
+// retire's carry (CheckMembershipFollow) from the list as it is now and the
+// journals the revert reads: the survivor's and the retired book's. A row the
+// revert restores by the survivor's standing, the retired book's, or a survivor
+// retired out of the list since is therefore not filed under CheckFailed (an
+// unrestorable row never counts toward offering Undo, so a wrong refusal here
+// would hide an Undo the revert performs exactly). A store that cannot read
+// journals gets no prediction.
+func membershipVerdict(store ConflictChecker, cur []string, c *database.OperationChange, kind, listID string) rowVerdict {
+	j, ok := database.AsCapability[bookJournalReader](store)
+	if !ok {
+		return rowVerdict{}
+	}
+	survivorRows, err := j.GetBookChanges(c.NewValue)
+	if err != nil {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read the journal of survivor %s: %v", c.NewValue, err)}
+	}
+	retiredRows, err := j.GetBookChanges(c.BookID)
+	if err != nil {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read the journal of book %s: %v", c.BookID, err)}
+	}
+	return verdictOf(CheckMembershipFollow(cur, c, kind, listID, survivorRows, retiredRows))
+}
+
 // verdictOf reads a compare-and-set answer: ErrAlreadyRestored is safe (the
 // revert counts that row restored without writing), any other error refuses.
 func verdictOf(err error) rowVerdict {
@@ -401,10 +431,11 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 	case ChangeTypeUserContentFollow:
 		// Every kind is checked as the revert will check it: a rating row
 		// against the survivor's ratings (RestoreRating), a collection or
-		// playlist row against the list as it is now (CheckMembershipFollow;
-		// a list deleted or no longer static counts restored, as in the
-		// revert). A store that cannot read lists gets no prediction; the
-		// revert still runs the compare-and-set under the list's lock. The
+		// playlist row against the list as it is now and the journals of the
+		// survivor and the retired book (membershipVerdict; a list deleted or
+		// no longer static counts restored, as in the revert). A store that
+		// cannot read lists or journals gets no prediction; the revert still
+		// runs the compare-and-set under the list's lock. The
 		// survivor-side markers restore nothing and always pass.
 		kind, id, _ := UserContentFromField(c.FieldName)
 		switch kind {
@@ -426,7 +457,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 			if col == nil || col.Type != database.CollectionTypeStatic {
 				return rowVerdict{already: true}
 			}
-			return verdictOf(CheckMembershipFollow(col.BookIDs, c))
+			return membershipVerdict(store, col.BookIDs, c, UserContentCollection, id)
 		case UserContentPlaylist:
 			pls, ok := database.AsCapability[database.UserPlaylistReader](store)
 			if !ok {
@@ -439,7 +470,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 			if pl == nil || pl.Type != database.UserPlaylistTypeStatic {
 				return rowVerdict{already: true}
 			}
-			return verdictOf(CheckMembershipFollow(pl.BookIDs, c))
+			return membershipVerdict(store, pl.BookIDs, c, UserContentPlaylist, id)
 		}
 		return rowVerdict{}
 	case ChangeTypeUserBookStateSet:
