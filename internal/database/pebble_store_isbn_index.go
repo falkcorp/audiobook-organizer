@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_isbn_index.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-22
 
 // ISBN/ASIN secondary index for PebbleStore.
 //
@@ -13,8 +13,9 @@
 //
 // This is a set-layout index (bookID in the key, not the value) because
 // multiple books can legitimately share the same ISBN/ASIN — that is precisely
-// the dedup signal. Compare with the single-value book:hash: index where the
-// value is the bookID.
+// the dedup signal. The file-hash indexes (book_hash: and friends) use the same
+// set layout for the same reason (pebble_store_book_hash_index.go); the
+// single-value book:hash: index they replaced had to pick one book per hash.
 //
 // # Maintenance
 //
@@ -118,7 +119,8 @@ func deleteISBNIndexRows(batch *GatedBatch, bookID, isbn10, isbn13, asin string)
 
 // updateISBNIndex is the UPDATE helper: deletes stale rows for old values and
 // writes fresh rows for new values, only when a value has actually changed.
-// Mirrors the updateHashIndex closure in UpdateBook.
+// Mirrors stageBookHashKeys (pebble_store_book_hash_index.go), which UpdateBook
+// uses for the file-hash indexes.
 func updateISBNIndex(batch *GatedBatch, bookID string, oldISBN10, newISBN10, oldISBN13, newISBN13, oldASIN, newASIN string) error {
 	updateField := func(keyspace, oldVal, newVal string) error {
 		if oldVal == newVal {
