@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_followups_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3e8c5a71-0d2b-4f69-9a14-7b6e2c8d1f53
-// last-edited: 2026-10-05
+// last-edited: 2026-10-22
 
 package merge
 
@@ -416,7 +416,7 @@ func TestMergeBooks_GuardsDemotedReusedGroupMembers(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, r)
 	})
-	t.Run("iTunes member", func(t *testing.T) {
+	t.Run("iTunes member is demoted database-only, not refused", func(t *testing.T) {
 		f := siblingFixture(t)
 		withITunesConfig(t, func(c *config.ITunesConfig) {
 			c.LibraryReadPath = testITunesLibFolder + "/iTunes Library.itl"
@@ -430,11 +430,12 @@ func TestMergeBooks_GuardsDemotedReusedGroupMembers(t *testing.T) {
 		})
 		require.NoError(t, err)
 		l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "true"})
-		before := snapshotBooks(t, f, k, p, l)
 		_, err = NewService(f.S).MergeBooks([]string{l, k}, k)
-		var prot *ITunesProtectedError
-		require.True(t, errors.As(err, &prot), "want ITunesProtectedError, got %v", err)
-		require.Equal(t, before, snapshotBooks(t, f, k, p, l))
+		require.NoError(t, err)
+		got, err := f.S.GetBookByID(p)
+		require.NoError(t, err)
+		require.Equal(t, testITunesMedia+"/Author/Book/p.m4b", got.FilePath, "only the flag may change")
+		require.Equal(t, "H", f.GroupOf(t, p))
 	})
 	t.Run("member already explicit false is not guarded", func(t *testing.T) {
 		f := siblingFixture(t)
