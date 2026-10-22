@@ -49,19 +49,30 @@ carry journals a marker row on the survivor (`collection-took` or
 `playlist-took` when the survivor took the retired book's slot,
 `collection-held` or `playlist-held` when the book was only removed because the
 survivor was already listed). Reverting one of several retires into the same
-survivor reads the others' markers: the survivor stays in the list until the
-last of them is reverted, then leaves it, so retires reverted in any
-order end with the original list and no survivor left behind. Each carry also
-records the books right before and after the retired one, and the revert puts
-the book back by those neighbours (walking through other retires' records,
-and treating a survivor that took a book's slot as that book), so operations
+survivor reads the markers other retires left on it. A survivor that one
+retire borrowed (it was already listed, so the retired book was only removed)
+stays in the list while any retire that put it there is still standing, and
+leaves with the last of them, whichever order the operations are undone in; a
+survivor a later retire borrowed from an earlier one is counted the same way.
+Each carry also records the books right before and after the retired one, and
+the survivor keeps a record for every retire it took part in, including a
+second retire of the same pair after the first was reverted. The revert puts
+the book back by those neighbours (walking through other retires' records, and
+treating a survivor that took a book's slot as that book), so operations
 undone in any order, including oldest first, restore every book to its exact
-original position in every collection and playlist. When no recorded
-neighbour can be found in the list (the owner reordered or emptied it since),
-or the row was journaled before neighbours were recorded, the recorded index
-is used instead and the revert reports it, never silently: the revert result
-counts these in `restored_by_index`, names each in `kept`, and the summary
-says so. Marker rows restore nothing, so the revert result counts them in a
+original position in every collection and playlist. A marker is stamped
+reverted only together with the row it belongs to: a row that failed or was
+refused leaves its marker standing for the retry, so the retry is not refused
+and the reverts in between see the truth. Reverts of operations that share a
+survivor run one list write at a time (a lock keyed by the survivor), so two
+operations undone at once cannot each see the other still standing. When no
+recorded neighbour can be found in the list (the owner reordered or emptied it
+since), or the row was journaled before neighbours were recorded, the recorded
+index is used instead and the revert reports it, never silently: the revert
+result counts these in `restored_by_index`, names each in `kept`, and the
+summary says so. A list that has more than one survivor in it relies on the
+same rules and falls back to the reported index when they cannot place a book.
+Marker rows restore nothing, so the revert result counts them in a
 separate `markers` figure, not in `restored`. The undo preflight predicts a
 refusal for a carried collection, playlist or rating that was edited since (it
 gives no prediction when the store cannot read lists).
