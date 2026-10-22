@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.30.0
+// version: 1.31.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-22
 
@@ -421,12 +421,17 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
  * and skip kind, so its count spans both tabs; clicking the chip pages exactly
  * the rows it counts (filter `flag:<name>`; "every count opens its books"),
  * and clicking it again goes back to the applicable rows. The count is the
- * whole plan's, so the chips are offered only when no class narrows the list.
+ * whole plan's, so the full set of chips is offered only when no class
+ * narrows the list. A class selected AFTER a flag leaves the flag filter
+ * applied (the list is that flag's rows of the class), so the active flag's
+ * chip stays, without a count that would not be what the list shows, and
+ * clicking it clears the flag while keeping the class.
  */
 function FlagChips({ repairs }: RepairsPanelProps) {
   const counts = repairs.page?.by_flag;
   const flags = Object.keys(counts ?? {}).sort((a, b) => a.localeCompare(b));
-  if (!counts || flags.length === 0 || repairs.rowClass) return null;
+  const shown = repairs.rowClass ? flags.filter((f) => repairs.filter === flagFilter(f)) : flags;
+  if (!counts || shown.length === 0) return null;
   return (
     <Stack
       direction="row"
@@ -435,14 +440,14 @@ function FlagChips({ repairs }: RepairsPanelProps) {
       sx={{ px: 2, py: 1, flexWrap: 'wrap', alignItems: 'center' }}
       data-testid="repairs-flag-chips"
     >
-      {flags.map((f) => {
+      {shown.map((f) => {
         const active = repairs.filter === flagFilter(f);
         return (
           <Chip
             key={f}
             size="small"
             clickable
-            label={`${flagLabel(f)} (${counts[f]})`}
+            label={repairs.rowClass ? flagLabel(f) : `${flagLabel(f)} (${counts[f]})`}
             color={active ? 'primary' : 'default'}
             variant={active ? 'filled' : 'outlined'}
             onClick={() => repairs.setFilter(active ? 'applicable' : flagFilter(f))}

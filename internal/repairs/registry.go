@@ -1,7 +1,7 @@
 // file: internal/repairs/registry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d4f2a61-0b7c-4e93-a5d8-1c6e9f3b2a70
-// last-edited: 2026-09-27
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -18,7 +18,12 @@ type Registry struct {
 }
 
 // NewRegistry returns an empty registry.
-func NewRegistry() *Registry { return &Registry{fixers: map[string]Fixer{}} }
+func NewRegistry() *Registry {
+	// Built once at server start: the point the abandoned-calls gauge is put on
+	// the meter (see registerAbandonedGaugeOnce for why not from init).
+	registerAbandonedGaugeOnce()
+	return &Registry{fixers: map[string]Fixer{}}
+}
 
 // Register adds f. A nil fixer, an empty id or a duplicate id is an error.
 func (r *Registry) Register(f Fixer) error {

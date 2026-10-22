@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_plan_legacy.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d13d697-8014-4ff8-83c0-766ee1b5acd8
 // last-edited: 2026-10-22
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -33,6 +34,10 @@ type LegacyPlanStrip struct {
 	Stripped int
 	// Unreadable is how many results were not JSON objects, left untouched.
 	Unreadable int
+	// UnreadableOps is how many operation records could not be decoded at all
+	// (a value that is not valid JSON for an operation row). They are counted
+	// and skipped: one corrupt record must not stop the boot that runs this.
+	UnreadableOps int
 	// BytesBefore and BytesAfter are the total size of the stripped results.
 	BytesBefore, BytesAfter int64
 }
@@ -50,6 +55,9 @@ type LegacyPlanStrip struct {
 // format, whose result has none) writes nothing. Each rewrite goes through
 // SetOperationV2Result, so the opv2 row, its timeline index and the opv3 run
 // record change together.
+//
+// An operation record that cannot be decoded is counted in UnreadableOps and
+// skipped; a listing, iterator or write error is returned.
 func (p *PebbleStore) StripLegacyPlanRows() (LegacyPlanStrip, error) {
 	var rep LegacyPlanStrip
 	after := ""
@@ -65,6 +73,15 @@ func (p *PebbleStore) StripLegacyPlanRows() (LegacyPlanStrip, error) {
 		for _, id := range ids {
 			row, err := p.GetOperationV2(id)
 			if err != nil {
+				if isOpRowDecodeError(err) {
+					// Migration 66 runs at boot and a failure here refuses to
+					// start the server, forever, over a record this strip has no
+					// business with: it can only touch plan results, and an
+					// undecodable record is not one it can read. Skip it loudly.
+					rep.UnreadableOps++
+					legacyPlanLog.Warn("legacy plan strip: operation %s is not a decodable record; skipped: %v", id, err)
+					continue
+				}
 				return rep, fmt.Errorf("read operation %s: %w", id, err)
 			}
 			if row == nil || row.DefID != LegacyPlanOpDefID || row.ResultData == nil {
@@ -89,6 +106,15 @@ func (p *PebbleStore) StripLegacyPlanRows() (LegacyPlanStrip, error) {
 			rep.BytesAfter += int64(len(out))
 		}
 	}
+}
+
+// isOpRowDecodeError reports whether err is the stored bytes failing to decode
+// (as opposed to the store failing to read them, which stays fatal).
+// pebbleGetJSON returns json.Unmarshal's error unwrapped.
+func isOpRowDecodeError(err error) bool {
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	return errors.As(err, &syn) || errors.As(err, &typ)
 }
 
 // stripLegacyPlanRows returns result without its top-level "rows" member, and

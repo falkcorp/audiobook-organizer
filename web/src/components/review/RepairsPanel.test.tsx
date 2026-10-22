@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.22.1
+// version: 1.23.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-22
 //
@@ -1397,32 +1397,85 @@ describe('RepairsPanel — flagged rows', () => {
     );
   });
 
-  it('hides the flag chips while a row class is selected, since a flag filter pages every class', async () => {
+  // Waits for the class-scoped page itself and lets it render, so a chip that
+  // is only transiently absent (or present) while the page loads cannot pass.
+  async function settledOnClass(rowClass: string) {
+    await waitFor(() =>
+      expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+        'vg-primary',
+        'plan-1',
+        expect.objectContaining({ rowClass }),
+        expect.anything()
+      )
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+  }
+
+  it('hides the flag chips while a row class is selected and no flag is active', async () => {
     const user = userEvent.setup();
     renderPanel();
     await screen.findByTestId('repairs-row-flagged:1');
     expect(screen.getByTestId('repairs-flag-combine_undo_aware')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('repairs-class-moved'));
-    // Wait for the class-scoped page itself, so a chip missing only while the
-    // page loads cannot pass this.
-    await waitFor(() =>
-      expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
-        'vg-primary',
-        'plan-1',
-        expect.objectContaining({ rowClass: 'moved' }),
-        expect.anything()
-      )
-    );
-    // Let the mocked page resolve and render before looking for the chip.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
+    await settledOnClass('moved');
     expect(screen.getByTestId('repairs-class-moved')).toBeInTheDocument();
     expect(screen.queryByTestId('repairs-flag-combine_undo_aware')).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId('repairs-class-all'));
     expect(await screen.findByTestId('repairs-flag-combine_undo_aware')).toBeInTheDocument();
+  });
+
+  it('keeps the active flag chip, and only it, when a class is picked after the flag; clicking it clears the flag', async () => {
+    const user = userEvent.setup();
+    // A second flag, so "only the active one" is something the page can fail.
+    const base = vi.mocked(api.getRepairPlanRows).getMockImplementation();
+    vi.mocked(api.getRepairPlanRows).mockImplementation(async (...args) => {
+      const page = await base!(...args);
+      return { ...page, by_flag: { combine_undo_aware: 2, other_flag: 1 } };
+    });
+    renderPanel();
+    await screen.findByTestId('repairs-row-flagged:1');
+    expect(screen.getByTestId('repairs-flag-other_flag')).toBeInTheDocument();
+    await user.click(screen.getByTestId('repairs-flag-combine_undo_aware'));
+    await waitFor(() =>
+      expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+        'vg-primary',
+        'plan-1',
+        expect.objectContaining({ filter: 'flag:combine_undo_aware' }),
+        expect.anything()
+      )
+    );
+
+    await user.click(screen.getByTestId('repairs-class-moved'));
+    await settledOnClass('moved');
+    // The flag filter is still applied to the class-scoped page ...
+    expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+      'vg-primary',
+      'plan-1',
+      expect.objectContaining({ filter: 'flag:combine_undo_aware', rowClass: 'moved' }),
+      expect.anything()
+    );
+    // ... so its chip stays, marked active, without the whole-plan count that
+    // is not what this list shows.
+    const chip = screen.getByTestId('repairs-flag-combine_undo_aware');
+    expect(chip).toHaveTextContent('From a combine that can still be undone');
+    expect(chip).not.toHaveTextContent('(2)');
+    expect(screen.queryByTestId('repairs-flag-other_flag')).not.toBeInTheDocument();
+
+    await user.click(chip);
+    await waitFor(() =>
+      expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+        'vg-primary',
+        'plan-1',
+        expect.objectContaining({ filter: 'applicable', rowClass: 'moved' }),
+        expect.anything()
+      )
+    );
+    await settledOnClass('moved');
+    expect(screen.queryByTestId('repairs-flag-combine_undo_aware')).not.toBeInTheDocument();
   });
 
   it('shows a chip per flag with its whole-plan count, and a click lists exactly the flagged rows of both tabs', async () => {

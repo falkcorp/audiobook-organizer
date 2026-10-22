@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-22
 
@@ -184,9 +184,13 @@ var retiredStatMaxAbandoned int64 = 8
 // logs it at start when non-zero.
 var retiredStatsAbandoned atomic.Int64
 
-// Exported as audiobook_organizer_ops_abandoned_calls{source="retired_versions_stat"}
-// from load, so the series reads 0 until a stat is abandoned.
-func init() { registerAbandonedGauge(opsmetrics.Default()) }
+// Exported as audiobook_organizer_ops_abandoned_calls{source="retired_versions_stat"},
+// registered when the fixer is built at server start (newRetiredVersionsFixer),
+// so the series reads 0 until a stat is abandoned. Not from init(): see
+// repairs.registerAbandonedGaugeOnce (the meter's instrumentation version is
+// read when opsmetrics.Default() first runs, and package init is before
+// telemetry.SetVersion).
+var retiredAbandonedGaugeOnce sync.Once
 
 // registerAbandonedGauge puts retiredStatsAbandoned on rec's ops.abandoned_calls.
 func registerAbandonedGauge(rec *opsmetrics.Recorder) {
@@ -240,6 +244,7 @@ type retiredVersionsFixer struct {
 }
 
 func newRetiredVersionsFixer(p *Plugin) *retiredVersionsFixer {
+	retiredAbandonedGaugeOnce.Do(func() { registerAbandonedGauge(opsmetrics.Default()) })
 	return &retiredVersionsFixer{p: p, now: time.Now, statTimeout: 15 * time.Second, stat: os.Stat}
 }
 

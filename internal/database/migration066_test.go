@@ -1,5 +1,5 @@
 // file: internal/database/migration066_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9c16a990-2d0e-4278-b18a-1d20d6bfe3ea
 // last-edited: 2026-10-22
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,7 +52,11 @@ func TestMigration066StripsInlineRowsFromLegacyPlans(t *testing.T) {
 		"by_outcome": map[string]int{"would_retire": 3},
 	})
 	require.NoError(t, err)
-	current := `{"fixer_id":"retired-versions","applicable":3,"row_store":"v1"}`
+	// planRowStoreV1 is repairs.PlanRowStoreV1. repairs imports this package, so
+	// a test here cannot import it; TestStripLegacyPlanRowsLeavesCurrentPlans in
+	// repairs runs the strip over a plan SavePlan really wrote.
+	const planRowStoreV1 = "op_rows.v1"
+	current := `{"fixer_id":"retired-versions","applicable":3,"row_store":"` + planRowStoreV1 + `"}`
 	otherOp := `{"rows":[1,2,3]}`
 	malformed := `not json`
 
@@ -127,4 +132,28 @@ func compactJSON(t *testing.T, s string) string {
 	var v json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(s), &v))
 	return string(v)
+}
+
+// TestMigration066SkipsUndecodableOperationRecords: migration 66 runs at boot,
+// and an error out of it refuses to start the server on every restart. One
+// operation record whose bytes are not an operation (a torn or hand-edited
+// value) used to be exactly such an error. It is counted, logged and skipped,
+// the legacy plan beside it is still stripped, and the migration succeeds.
+func TestMigration066SkipsUndecodableOperationRecords(t *testing.T) {
+	st, cleanup := setupTestDB(t)
+	defer cleanup()
+	p := st.(*PebbleStore)
+
+	legacy := `{"fixer_id":"retired-versions","applicable":3,"rows":[{"row_id":"a"}]}`
+	insertPlanLikeOp(t, p, "plan-legacy", LegacyPlanOpDefID, legacy)
+	require.NoError(t, p.db.Set(opv2OpKey("junk"), []byte("{not json"), pebble.Sync))
+	require.NoError(t, p.db.Set(opv2OpKey("wrong-shape"), []byte(`{"id":["not","a","string"]}`), pebble.Sync))
+
+	rep, err := p.StripLegacyPlanRows()
+	require.NoError(t, err, "an undecodable operation record must not fail the strip")
+	require.Equal(t, 2, rep.UnreadableOps, "the syntax-error record and the wrong-type record")
+	require.Equal(t, 1, rep.Stripped, "the plan next to them is still stripped")
+	require.NotContains(t, resultOf(t, p, "plan-legacy"), `"rows"`)
+
+	require.NoError(t, migration066Up(p), "the registered Up must succeed over the same store")
 }

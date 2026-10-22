@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-10-22
 
@@ -322,6 +322,67 @@ func TestPlanStoredTheOldWayIsAConflict(t *testing.T) {
 	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply", `{"plan_op_id":"op-legacy","row_ids":["r"]}`)
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+}
+
+// damagePlanRows rewrites the stored rows of plan opID through edit, which is
+// given each row's id, index entry and body and returns what to store in their
+// place (keep=false drops the row). The plan's summary op row is not touched,
+// so its Total keeps saying how many rows the plan had.
+func damagePlanRows(t *testing.T, ops *fakeOps, opID string, edit func(id string, index, data []byte) (newIndex, newData []byte, keep bool)) {
+	t.Helper()
+	var ids []string
+	idx := map[string][]byte{}
+	require.NoError(t, ops.ScanOpRowIndex(opID, func(id string, index []byte) error {
+		ids = append(ids, id)
+		idx[id] = append([]byte(nil), index...)
+		return nil
+	}))
+	bodies, err := ops.GetOpRows(opID, ids)
+	require.NoError(t, err)
+	var kept []database.OpRow
+	for i, id := range ids {
+		ni, nd, keep := edit(id, idx[id], bodies[i])
+		if keep {
+			kept = append(kept, database.OpRow{ID: id, Index: ni, Data: nd})
+		}
+	}
+	require.NoError(t, ops.ReplaceOpRows(opID, len(kept), func(i int) (database.OpRow, error) { return kept[i], nil }))
+}
+
+// A stored plan whose rows are not the plan its summary describes is the same
+// answer as the old format: a 409 carrying PlanNeedsRerunCode, so the lane
+// offers Run plan again (a plain 409 or a 500 offers only a Retry that re-reads
+// the same damaged plan). Three damages: an index holding fewer rows than the
+// summary's total, an index entry with the wrong number of fields, and a row
+// body that does not decode.
+func TestPlanRowsRoute_UnreadableStoredPlanAsksForARerun(t *testing.T) {
+	const rowsPath = "/api/v1/repairs/version-group-primary-repair/plan/op-plan/rows"
+	for name, edit := range map[string]func(id string, index, data []byte) ([]byte, []byte, bool){
+		"fewer rows than the total": func(id string, index, data []byte) ([]byte, []byte, bool) {
+			return index, data, id != "vg-004"
+		},
+		"three-field index entry": func(id string, index, data []byte) ([]byte, []byte, bool) {
+			if id == "vg-004" {
+				return []byte("moved\x00\x001"), data, true
+			}
+			return index, data, true
+		},
+		"undecodable row": func(id string, index, data []byte) ([]byte, []byte, bool) {
+			if id == "vg-001" {
+				return index, []byte("{not json"), true
+			}
+			return index, data, true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, _, ops := setup(t)
+			damagePlanRows(t, ops, "op-plan", edit)
+			w := do(r, http.MethodGet, rowsPath+"?offset=0&limit=5", "")
+			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+			require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+			require.Contains(t, w.Body.String(), "run the plan again")
+		})
+	}
 }
 
 // opsWithoutRows is an op store with no plan-row capability.

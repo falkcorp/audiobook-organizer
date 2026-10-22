@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-22
 
@@ -568,7 +568,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 	// Only the rows the run names are read from the plan: a stored plan keeps
 	// its rows beside the operation, and an apply of three rows must not decode
-	// a 50 MB plan to find them. A row the plan does not hold is simply absent
+	// a 39 MB plan to find them. A row the plan does not hold is simply absent
 	// from byID and reported in NotInPlan.
 	chosen, err := plan.Select(append(slices.Clone(ids), ownerIDs...))
 	if err != nil {

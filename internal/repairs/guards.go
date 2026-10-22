@@ -1,5 +1,5 @@
 // file: internal/repairs/guards.go
-// version: 1.14.2
+// version: 1.15.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
 // last-edited: 2026-10-22
 
@@ -187,9 +187,22 @@ const ResolverMaxAbandonedTotal = 64
 var resolverAbandoned atomic.Int64
 
 // The gauge is exported as audiobook_organizer_ops_abandoned_calls{source=
-// "repairs_resolver"}, registered at load so the series reads 0 from boot and
-// an alert on it never waits for the first plan.
-func init() { registerAbandonedGauge(opsmetrics.Default()) }
+// "repairs_resolver"}. It is registered when the repairs registry is built at
+// server start (NewRegistry) and, for a resolver built without one,
+// at the first NewPathResolver, so the series reads 0 from boot and an alert on
+// it never waits for the first plan.
+//
+// Not from init(): opsmetrics.Default() creates the "operations" meter, and
+// the meter's instrumentation version is read from telemetry.Version() at that
+// moment. Package init runs before main hands the link-time version to
+// telemetry.SetVersion, so an init-time registration would stamp every
+// operations instrument "unknown". (TestAbandonedGaugeIsRegisteredLazily
+// holds this.)
+var abandonedGaugeOnce sync.Once
+
+func registerAbandonedGaugeOnce() {
+	abandonedGaugeOnce.Do(func() { registerAbandonedGauge(opsmetrics.Default()) })
+}
 
 // registerAbandonedGauge puts resolverAbandoned on rec's ops.abandoned_calls.
 func registerAbandonedGauge(rec *opsmetrics.Recorder) {
@@ -208,6 +221,7 @@ type resolvedDir struct {
 
 // NewPathResolver returns an empty resolver.
 func NewPathResolver() *PathResolver {
+	registerAbandonedGaugeOnce()
 	return &PathResolver{dirs: map[string]resolvedDir{}, stuck: map[string]error{},
 		bound: ResolverBound, maxAbandoned: ResolverMaxAbandoned,
 		lstat: os.Lstat, eval: evalSymlinks, readlink: os.Readlink}
@@ -419,7 +433,7 @@ func (r *PathResolver) withResolved(paths []string) (out []string, doubt error) 
 	}
 	for _, p := range paths {
 		if p != "" && seen[p] {
-			continue // already resolved with its spellings
+			continue // already returned (as a path or a spelling of one)
 		}
 		add(p)
 		if p == "" {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-10-22
 
@@ -357,8 +357,8 @@ func (h *Handler) ListPlanRows(c *gin.Context) {
 	case errors.Is(err, repairs.ErrUnknownFilter):
 		httputil.RespondWithValidationError(c, "filter", err.Error())
 		return
-	case errors.Is(err, repairs.ErrPlanRowsIncomplete):
-		httputil.RespondWithConflict(c, err.Error())
+	case repairs.PlanNeedsRerun(err):
+		respondPlanNeedsRerun(c, err)
 		return
 	default:
 		httputil.InternalError(c, "failed to read repair plan rows", err)
@@ -367,12 +367,21 @@ func (h *Handler) ListPlanRows(c *gin.Context) {
 	httputil.RespondWithOK(c, page)
 }
 
-// planOnlyMessage is the 409 body of an apply of a fixer that only previews.
 // PlanNeedsRerunCode is the error code of the 409 answered for a stored plan
-// that cannot be read any more (legacy format, or rows that do not match its
-// summary): the only remedy is to run the plan again. The Repairs lane reads it.
+// that cannot be read any more (legacy format, rows that do not match its
+// summary, or a row that does not decode): the only remedy is to run the plan
+// again. The Repairs lane reads it.
 const PlanNeedsRerunCode = "REPAIR_PLAN_NEEDS_RERUN"
 
+// respondPlanNeedsRerun answers err (repairs.PlanNeedsRerun(err) is true) with
+// a 409 carrying PlanNeedsRerunCode. It is a conflict with the state of that
+// plan, not a server fault; the code lets the lane offer "Run plan again"
+// instead of a Retry that re-reads the same plan.
+func respondPlanNeedsRerun(c *gin.Context, err error) {
+	httputil.RespondWithError(c, http.StatusConflict, err.Error(), PlanNeedsRerunCode)
+}
+
+// planOnlyMessage is the 409 body of an apply of a fixer that only previews.
 func planOnlyMessage(f repairs.Fixer) string {
 	return "repair fixer " + f.ID() + " only previews; " + repairs.ErrPlanOnly.Error()
 }
@@ -491,6 +500,10 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 		return
 	}
 	chosen, err := plan.Select([]string{req.RowID})
+	if repairs.PlanNeedsRerun(err) {
+		respondPlanNeedsRerun(c, err)
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to read repair plan row", err)
 		return
@@ -571,13 +584,11 @@ func (h *Handler) loadPlan(c *gin.Context, opID, fixerID string) (*repairs.PlanR
 		return plan, true
 	case errors.Is(err, repairs.ErrPlanNotFound):
 		httputil.RespondWithNotFound(c, "repair plan", opID)
-	case errors.Is(err, repairs.ErrPlanLegacyFormat), errors.Is(err, repairs.ErrPlanRowsIncomplete):
-		// A plan stored the old way, or whose rows do not match its summary,
-		// cannot be read: the answer is to run it again, which is a conflict
-		// with the state of that plan, not a server fault. The code lets the
-		// lane offer "Run plan again" instead of a Retry that re-reads the
-		// same plan.
-		httputil.RespondWithError(c, http.StatusConflict, err.Error(), PlanNeedsRerunCode)
+	case errors.Is(err, repairs.ErrPlanLegacyFormat):
+		// LoadPlan reads only the summary, so the only unreadable-plan answer
+		// it can give is the old format; the row-level ones surface from
+		// Page and Select, which map them through respondPlanNeedsRerun.
+		respondPlanNeedsRerun(c, err)
 	case errors.Is(err, repairs.ErrPlanNotComplete):
 		httputil.RespondWithConflict(c, err.Error())
 	case errors.Is(err, repairs.ErrNotAPlan), errors.Is(err, repairs.ErrPlanOtherFixer):

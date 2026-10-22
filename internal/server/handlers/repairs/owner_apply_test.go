@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
 // last-edited: 2026-10-22
 
@@ -62,6 +62,14 @@ func ownerSetup(t *testing.T, caller ownerCaller) (*gin.Engine, *fakeEnqueuer, *
 
 func ownerSetupWithEmail(t *testing.T, caller ownerCaller, ownerEmail string) (*gin.Engine, *fakeEnqueuer, *repairs.OwnerGrants) {
 	t.Helper()
+	r, enq, grants, _ := ownerSetupWithOps(t, caller, ownerEmail)
+	return r, enq, grants
+}
+
+// ownerSetupWithOps is ownerSetupWithEmail that also returns the op store, for
+// a test that damages a stored plan.
+func ownerSetupWithOps(t *testing.T, caller ownerCaller, ownerEmail string) (*gin.Engine, *fakeEnqueuer, *repairs.OwnerGrants, *fakeOps) {
+	t.Helper()
 	if caller.user == nil && caller.method == auth.MethodCFAccess {
 		caller.user = ownerUser
 	}
@@ -93,7 +101,7 @@ func ownerSetupWithEmail(t *testing.T, caller ownerCaller, ownerEmail string) (*
 	g := r.Group("/api/v1")
 	g.POST("/repairs/:fixer/owner-apply", h.OwnerApply)
 	g.POST("/repairs/:fixer/apply", h.StartApply)
-	return r, enq, h.grants
+	return r, enq, h.grants, ops
 }
 
 const ownerPath = "/api/v1/repairs/version-group-primary-repair/owner-apply"
@@ -300,4 +308,24 @@ func TestStartApply_RefusesOwnerRowIDs(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, ownerPost(r2, path, body, browserHdrs).Code)
 	require.Empty(t, enq.calls)
 	require.Empty(t, enq2.calls)
+}
+
+// Owner-apply reads the one row it was asked to apply. When that row's stored
+// body does not decode the plan cannot be trusted any more: the answer is the
+// same 409 and PlanNeedsRerunCode as for the rows route, not a 500, and no
+// grant is minted and nothing is enqueued. (A damaged INDEX is not read by
+// owner-apply, which reads only the named row; the rows route is where an
+// index that does not match the summary is reported.)
+func TestOwnerApply_UndecodableRowAsksForARerun(t *testing.T) {
+	r, enq, _, ops := ownerSetupWithOps(t, cfOwner, testOwnerEmail)
+	damagePlanRows(t, ops, "op-owner-plan", func(id string, index, data []byte) ([]byte, []byte, bool) {
+		if id == "own" {
+			return index, []byte("{not json"), true
+		}
+		return index, data, true
+	})
+	w := ownerPost(r, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`, browserHdrs)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+	require.Empty(t, enq.calls)
 }

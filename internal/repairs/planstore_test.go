@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
 // last-edited: 2026-10-22
 
@@ -14,6 +14,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -192,11 +193,76 @@ func TestStoredPlan_IncompleteRowsFailClosed(t *testing.T) {
 		}
 		return database.OpRow{ID: r.RowID, Index: encodeRowIndex(&r), Data: data}, nil
 	}))
-	// An empty (not absent) body decodes as an error, a page past it is fine.
+	// A row with no body (an empty body reads as absent) is an index entry
+	// without its row; a page past it is fine.
 	_, err = stored.Page("op-plan", FilterAll, "", 0, 5)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrPlanRowsIncomplete)
+	require.True(t, PlanNeedsRerun(err))
 	_, err = stored.Page("op-plan", FilterAll, "", 5, 5)
 	require.NoError(t, err)
+
+	// An index entry with the wrong number of fields is unreadable too, and so
+	// is a selection that reads a body that does not decode.
+	require.NoError(t, s.ReplaceOpRows("op-plan", 10, func(i int) (database.OpRow, error) {
+		r := res.Rows[i]
+		data, _ := json.Marshal(r)
+		ix := encodeRowIndex(&r)
+		if i == 3 {
+			ix = []byte("moved\x00\x001")
+			data = []byte("{not json")
+		}
+		return database.OpRow{ID: r.RowID, Index: ix, Data: data}, nil
+	}))
+	_, err = stored.Page("op-plan", FilterAll, "", 0, 5)
+	require.ErrorIs(t, err, ErrPlanRowsUnreadable)
+	require.True(t, PlanNeedsRerun(err))
+	_, err = stored.Select([]string{res.Rows[3].RowID})
+	require.ErrorIs(t, err, ErrPlanRowsUnreadable, "the body of the named row does not decode")
+	require.True(t, PlanNeedsRerun(err))
+}
+
+// TestPlanNeedsRerun lists exactly the three errors that mean "run the plan
+// again"; a plan that is simply not complete, or another fixer's, is not one.
+func TestPlanNeedsRerun(t *testing.T) {
+	for _, err := range []error{ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable,
+		fmt.Errorf("wrapped: %w", ErrPlanRowsUnreadable)} {
+		require.True(t, PlanNeedsRerun(err), err.Error())
+	}
+	for _, err := range []error{nil, ErrPlanNotComplete, ErrPlanNotFound, ErrPlanOtherFixer, ErrNoPlanRowStore, errors.New("boom")} {
+		require.False(t, PlanNeedsRerun(err), fmt.Sprint(err))
+	}
+}
+
+// TestStripLegacyPlanRowsLeavesCurrentPlans runs migration 66's strip over a
+// plan SavePlan really wrote, in a real Pebble store: the marker SavePlan puts
+// on the plan (PlanRowStoreV1) is not a legacy plan, so the strip writes
+// nothing and LoadPlan still reads the plan. database's own test cannot import
+// this package, so this is where the marker the strip must respect is real.
+func TestStripLegacyPlanRowsLeavesCurrentPlans(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	s := newMemStore()
+	res := planFor(t, s, &noBookIDsFixer{s: s, rows: variedRows(6)})
+	require.NoError(t, SavePlan(st, "op-plan", res))
+	require.Equal(t, PlanRowStoreV1, res.RowStore)
+	data, err := json.Marshal(res)
+	require.NoError(t, err)
+	// The plan's summary as the plan op stores it: inline rows are not part of
+	// the wire shape, and the row-store marker is.
+	require.NotContains(t, string(data), `"rows"`)
+	now := time.Now().UTC()
+	str := string(data)
+	require.NoError(t, st.InsertOperationV2(database.OperationV2Row{ID: "op-plan", DefID: PlanOpID, Status: "completed",
+		QueuedAt: now, CompletedAt: &now, ResultData: &str}))
+
+	rep, err := st.StripLegacyPlanRows()
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.Plans)
+	require.Zero(t, rep.Stripped, "a plan in the current format has nothing to strip")
+	plan, err := LoadPlan(st, st, "op-plan", res.FixerID)
+	require.NoError(t, err, "the strip must not turn a current plan into a legacy one")
+	require.Equal(t, res.Total, plan.Total)
 }
 
 // TestSavePlan_FailureClearsRowsAndLeavesPlanUnmarked: a write that fails

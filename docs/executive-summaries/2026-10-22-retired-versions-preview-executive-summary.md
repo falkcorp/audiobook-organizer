@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-retired-versions-preview-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 86d93130-4e35-4fb9-a614-b81c80b79bc9 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -37,7 +37,11 @@ it, so the owner can review the groups before any real clean-up is built.
   **After this update is deployed, each repair plan has to be run once more.**
   The first start after the update empties out the very large old plan records
   by itself (it keeps each plan's summary and logs how many it cleaned and how
-  much space it freed; the disk space comes back when the database compacts).
+  much space it freed). The freed disk space comes back after the database
+  compacts and after the old ZFS snapshots of the data folder are purged; until
+  both have happened the disk looks as full as before. A damaged or unreadable
+  old record is skipped and noted in the log rather than stopping the server
+  from starting.
   Opening an old plan then shows "run the plan again" with a **Run plan again**
   button that starts it. Nothing is lost by this; plans are only previews.
 - In the plan, the books flagged because a combine that can still be undone
