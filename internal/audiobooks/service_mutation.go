@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-22
 
 package audiobooks
 
@@ -1400,22 +1400,27 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		// A soft-deleted primary hands its group's flag on.
 		svc.handOffPrimary(updated)
 
-		// Optionally block the hash
+		// Optionally block the hash (not while a live book holds the file).
 		blocked := false
+		var warnings []string
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
-			if err := svc.store.AddBlockedHash(*book.FileHash, "User deleted - soft delete"); err != nil {
-				slog.Warn("failed to block hash during soft delete", "err", err)
-			} else {
-				blocked = true
+			var warn string
+			blocked, warn = svc.blockHashUnlessShared(book, "User deleted - soft delete")
+			if warn != "" {
+				warnings = append(warnings, warn)
 			}
 		}
 
 		svc.InvalidateListCache()
-		return map[string]any{
+		res := map[string]any{
 			"message":     "audiobook soft deleted",
 			"blocked":     blocked,
 			"soft_delete": true,
-		}, nil
+		}
+		if len(warnings) > 0 {
+			res["warnings"] = warnings
+		}
+		return res, nil
 	}
 
 	// Hard delete path.
@@ -1424,17 +1429,29 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// (purgeNow): the trash page's "Purge now" must behave like the nightly
 	// purge (owner decision 2026-10-05).
 	if database.IsInTrash(book) {
+		// Decide the hash block BEFORE the purge: the purge's DeleteBook drops
+		// the book:hash: index row, which is how a live holder is found.
+		var blockHashOK bool
+		var blockWarn string
+		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
+			blockHashOK, blockWarn = svc.planHashBlock(book)
+		}
 		res, err := svc.purgeNow(book)
 		if err != nil {
 			return nil, err
 		}
 		// block_hash is honoured as before, once the book is really gone.
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
-			if berr := svc.store.AddBlockedHash(*book.FileHash, "User deleted - prevent reimport"); berr != nil {
-				singleLog.Warn("purge %s: hash not blocked after the purge: %s",
-					logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(berr.Error()))
-			} else {
+			blocked, warn := false, blockWarn
+			if blockHashOK {
+				blocked, warn = svc.blockHash(book, "User deleted - prevent reimport")
+			}
+			if blocked {
 				res["blocked"] = true
+			}
+			if warn != "" {
+				singleLog.Warn("purge %s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(warn))
+				res["warnings"] = append(stringsOf(res["warnings"]), warn)
 			}
 		}
 		return res, nil
@@ -1461,15 +1478,13 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		return nil, fmt.Errorf("hard delete %s: the store cannot check or carry users' listening state, so the delete is refused", id)
 	}
 	blocked := false
+	var blockWarning string
 	del := func() error {
-		// Optionally block the hash right before deleting.
+		// Optionally block the hash right before deleting (not while a live
+		// book holds the file). A hash that cannot be blocked never stops the
+		// delete.
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
-			if err := svc.store.AddBlockedHash(*book.FileHash, "User deleted - prevent reimport"); err != nil {
-				slog.Warn("failed to block hash before delete", "err", err)
-				// Continue with delete even if blocking fails
-			} else {
-				blocked = true
-			}
+			blocked, blockWarning = svc.blockHashUnlessShared(book, "User deleted - prevent reimport")
 		}
 		return svc.store.DeleteBook(id)
 	}
@@ -1495,7 +1510,16 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	if carriedTo != "" {
 		res["progress_moved_to"] = carriedTo
 	}
+	if blockWarning != "" {
+		res["warnings"] = []string{blockWarning}
+	}
 	return res, nil
+}
+
+// stringsOf reads a result's "warnings" value back as a slice.
+func stringsOf(v any) []string {
+	s, _ := v.([]string)
+	return s
 }
 
 // userEditFieldExtractors is the WRITER side of the field-lock vocabulary. Each
