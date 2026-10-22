@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
 // last-edited: 2026-10-22
 
@@ -153,14 +153,16 @@ func TestRetiredVersions_GuardReadsFailClosed(t *testing.T) {
 	require.Contains(t, rows[rf.ids["targeted"]].Reason, "vetoes unavailable")
 	require.Equal(t, retCatNoTargetPresent, rows[rf.ids["orphan"]].Class, "no target, no veto lookup")
 
+	// Every row's category depends on the combine journals, so an unreadable
+	// journal fails the plan instead of producing a plan of error rows.
 	rf.withDeps(fakeDeps{store: rf.st, journals: errJournals{}})
-	rows = rf.plan()
-	require.Equal(t, retCatError, rows[rf.ids["targeted"]].Class)
-	require.Contains(t, rows[rf.ids["targeted"]].Reason, "journals unavailable")
-	require.Equal(t, retCatNoTargetPresent, rows[rf.ids["orphan"]].Class)
+	_, err := rf.f.Plan(context.Background(), nil, &fakeReporter{})
+	require.ErrorIs(t, err, errRetiredUndoRead)
+	_, err = rf.f.Replan(context.Background(), nil, repairs.Row{RowID: rf.ids["orphan"]}, &fakeReporter{})
+	require.ErrorIs(t, err, errRetiredUndoRead)
 
 	rf.withDeps(noVetoDeps{fakeDeps{store: rf.st}})
-	_, err := rf.f.Plan(context.Background(), nil, &fakeReporter{})
+	_, err = rf.f.Plan(context.Background(), nil, &fakeReporter{})
 	require.ErrorContains(t, err, "refusing to plan")
 	_, err = rf.f.Replan(context.Background(), nil, repairs.Row{RowID: rf.ids["targeted"]}, &fakeReporter{})
 	require.ErrorContains(t, err, "refusing to plan")
@@ -194,6 +196,37 @@ func TestRetiredVersions_UndoWindowGate(t *testing.T) {
 	}
 	require.Equal(t, retCatWouldRetire, rows[rf.ids["released"]].Class)
 	require.Equal(t, retCatWouldRetire, rows[rf.ids["plain"]].Class)
+}
+
+// The undo window outranks every other category: a combine-absorbed shell is
+// usually labelled deleted, may have no group, and may own no file rows any
+// more, and each of those must still read as "undo possible", not as a book a
+// purge may take.
+func TestRetiredVersions_UndoWindowOutranksEveryOtherCategory(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	rf.trashed("labelled", "g", 30, rf.file("g/a.mp3"))
+	b, err := rf.st.GetBookByID(rf.ids["labelled"])
+	require.NoError(t, err)
+	b.LibraryState = retiredPtr("deleted")
+	_, err = rf.st.UpdateBook(b.ID, b)
+	require.NoError(t, err)
+	rf.trashed("no-files", "g", 30)
+	rf.trashed("no-group", "", 30, rf.file("o/a.mp3"))
+	rf.trashed("no-group-missing", "", 30, rf.absent("m.mp3"))
+	rf.trashed("free-orphan", "", 30, rf.file("o/free.mp3"))
+	j := &merge.CombineJournal{ID: "J-all", Status: merge.CombineJournalApplied, SurvivorID: rf.ids["primary"]}
+	for _, n := range []string{"labelled", "no-files", "no-group", "no-group-missing"} {
+		j.Absorbed = append(j.Absorbed, merge.CombineAbsorbed{BookID: rf.ids[n]})
+	}
+	require.NoError(t, merge.WriteCombineJournal(rf.st, j))
+
+	rows := rf.plan()
+	for _, n := range []string{"labelled", "no-files", "no-group", "no-group-missing"} {
+		require.Equal(t, retCatUndoWindow, rows[rf.ids[n]].Class, "%s: %s", n, rows[rf.ids[n]].Reason)
+		require.Equal(t, retCatUndoWindow, rows[rf.ids[n]].Skipped, n)
+	}
+	require.Equal(t, retCatNoTargetPresent, rows[rf.ids["free-orphan"]].Class, "a book no journal names is unaffected")
 }
 
 // EACCES, a timeout and ENOTDIR on a no-target row: only "does not exist" and
@@ -274,6 +307,9 @@ func TestRetiredVersions_StatTimeoutIsUnknownAndGauged(t *testing.T) {
 	setStatCap(t, 100)
 	rf.trashed("hung", "", 30, filepath.Join(rf.root, "hang", "a.mp3"))
 	rf.trashed("fine", "", 30, rf.absent("b.mp3"))
+	// Stats abandoned by an earlier test decrement the process-wide gauge when
+	// their cleanup releases them; start from a quiet gauge.
+	require.Eventually(t, func() bool { return retiredStatsAbandoned.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
 	base := retiredStatsAbandoned.Load()
 
 	rows := rf.plan()

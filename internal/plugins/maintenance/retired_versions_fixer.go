@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-22
 
@@ -55,27 +55,33 @@ const retiredMinAgeDaysDefault = 14
 // gathered for every row, so a row carries its target and its evidence
 // whatever category it lands in. The reads that cost a store or disk round
 // trip (the stat of a no-target row's files, the owner-veto lookup, the
-// combine-journal read, the symlink-resolved iTunes check) happen at their own
+// combine-journal index, the symlink-resolved iTunes check) happen at their own
 // gate, so a row that an earlier gate decided never pays for them.
 //
-//  1. trash_labelled_deleted: library_state is "deleted". Three paths write
+//  1. undo_still_possible: an unreversed combine-journal entry names this
+//     book as absorbed, so purging or retiring it would make that combine
+//     non-undoable. First, because it holds whatever else is true of the
+//     book: a combine-absorbed shell is usually labelled "deleted", often
+//     has no version group, and may own no file rows any more, and every one
+//     of those would otherwise file it under a category a purge reads as
+//     safe (the 2026-10-21 purge made 21 combines non-undoable that way).
+//     The journal index is read once per run; a read that fails fails the
+//     plan, because no row can be classified without it.
+//  2. trash_labelled_deleted: library_state is "deleted". Three paths write
 //     that label (a merge, a manual delete, a bulk delete), so it does not
 //     say the owner deleted the book on purpose; the row is left alone.
-//  2. no_book_files: the book owns no book_file row, so there is nothing to
+//  3. no_book_files: the book owns no book_file row, so there is nothing to
 //     retire. It needs no retire to be purged.
-//  3. target_ambiguous: the version group has live members but no single
+//  4. target_ambiguous: the version group has live members but no single
 //     primary (versionprimary.Incumbent returns nil). Never guessed.
-//  4. no_target_files_missing / no_target_files_present: no live target (no
+//  5. no_target_files_missing / no_target_files_present: no live target (no
 //     live group member, no group, and no live book at the end of its
 //     merged-into chain). NOT retired: the book stays in the trash. Split by
 //     whether any of its files is still on disk (an os.Stat per file; a stat
 //     that cannot be answered counts the file as present and is reported as
 //     rows_stat_unknown).
-//  5. owner_vetoed: the owner rejected joining this book and its target
+//  6. owner_vetoed: the owner rejected joining this book and its target
 //     (decisions.PairVetoed, same_work or same_copy).
-//  6. undo_still_possible: an unreversed combine-journal entry names this
-//     book as absorbed, so purging or retiring it would make that combine
-//     non-undoable.
 //  7. itunes_needs_owner_approval: a file of the book OR of its target sits
 //     under the frozen books/itunes/** tree, symlinks resolved. The owner
 //     approves these separately.
@@ -153,6 +159,10 @@ var retiredStatMaxAbandoned int64 = 8
 // goroutine has not yet returned, across every run. It gates nothing; a plan
 // logs it at start when non-zero.
 var retiredStatsAbandoned atomic.Int64
+
+// errRetiredUndoRead fails a plan whose combine journals cannot be read: every
+// row's category depends on them, so there is no honest partial preview.
+var errRetiredUndoRead = errors.New("retired-versions: the combine journals cannot be read")
 
 // errRetiredStatCap fails a plan whose file stats are hanging in bulk.
 var errRetiredStatCap = errors.New("retired-versions: too many file stats are hung")
@@ -421,7 +431,11 @@ func (r *retiredRun) itunesVerdict(id string, paths []string) (bool, string) {
 // the unreversed journals that name it.
 func (r *retiredRun) undoShells() (map[string][]string, error) {
 	return cachedOnce(&r.undo, "journals", func() (map[string][]string, error) {
-		return merge.UnreversedCombineShells(r.journals)
+		idx, err := merge.UnreversedCombineShells(r.journals)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errRetiredUndoRead, err)
+		}
+		return idx, nil
 	})
 }
 
@@ -714,6 +728,14 @@ func (r *retiredRun) shellITunes(fa *retiredFacts) (bool, string) {
 
 // decide applies the category precedence documented on the retCat constants.
 func (r *retiredRun) decide(ctx context.Context, fa *retiredFacts) (cat, why string, err error) {
+	idx, err := r.undoShells()
+	if err != nil {
+		return "", "", err
+	}
+	if js := idx[fa.shell.ID]; len(js) > 0 {
+		fa.undoJournal = js
+		return retCatUndoWindow, "a merge that absorbed this book can still be undone (combine journal " + retiredJoinCapped(js, 3) + ")", nil
+	}
 	if strings.EqualFold(strings.TrimSpace(retiredDeref(fa.shell.LibraryState)), "deleted") {
 		return retCatTrashLabelled, "labelled \"deleted\" (the trash label; a merge, a manual delete and a bulk delete all write it), so it cannot be told from a deliberate delete", nil
 	}
@@ -743,14 +765,6 @@ func (r *retiredRun) decide(ctx context.Context, fa *retiredFacts) (cat, why str
 	if fam != "" {
 		fa.vetoFamily = fam
 		return retCatVetoed, "the owner rejected joining this book and its target (" + fam + ")", nil
-	}
-	idx, err := r.undoShells()
-	if err != nil {
-		return "", "", err
-	}
-	if js := idx[fa.shell.ID]; len(js) > 0 {
-		fa.undoJournal = js
-		return retCatUndoWindow, "a merge that absorbed this book can still be undone (combine journal " + retiredJoinCapped(js, 3) + ")", nil
 	}
 	if hit, w := r.shellITunes(fa); hit {
 		fa.itunesSide, fa.itunesWhy = "shell", w
@@ -1034,6 +1048,10 @@ func (f *retiredVersionsFixer) Plan(ctx context.Context, params json.RawMessage,
 			// The ownership lookup is not complete (memdb warming up): every
 			// row would fail the same way, and a plan of 51,000 error rows
 			// is no preview. Fail the plan; it can be run again.
+			return err
+		case errors.Is(err, errRetiredUndoRead):
+			// Every row needs the journal index; one unreadable journal row
+			// would make 51,000 error rows. Fail the plan.
 			return err
 		case errors.Is(err, errRetiredStatCap):
 			// A hung mount: every further stat would stack another blocked
