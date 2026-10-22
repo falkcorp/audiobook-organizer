@@ -1,7 +1,7 @@
 // file: internal/logging/redact_path.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package logging
 
@@ -44,9 +44,11 @@ var inviteTokenPrefixes = [][]string{
 // preserved, and every other path (including the invite list endpoint
 // /api/v1/users/invites, which has no token) is returned unchanged.
 //
-// Segments are compared after percent-decoding, because the request line (as
-// opposed to the decoded URL.Path gin routes on) may spell "invite" with
-// escapes and still reach the same route.
+// A segment matches after percent-decoding and without regard to case, and empty
+// segments (a doubled slash) are skipped, because the request line, or a URL a
+// browser reports, may spell the route as /%69nvite/TOK, /INVITE/TOK or
+// //invite/TOK and a lenient front end or proxy can still send it to the same
+// page. The token is the next non-empty segment after the prefix.
 func RedactInvitePath(pathWithQuery string) string {
 	path, query, hasQuery := strings.Cut(pathWithQuery, "?")
 	segs := strings.Split(path, "/")
@@ -67,22 +69,29 @@ func RedactInvitePath(pathWithQuery string) string {
 }
 
 // inviteTokenIndex returns the index in segs of the invite token segment, or -1
-// when segs is not an invite route or the token segment is empty.
+// when segs is not an invite route or has no token segment.
 func inviteTokenIndex(segs []string) int {
+	// The non-empty segments, with their positions in segs.
+	nonEmpty := make([]int, 0, len(segs))
+	for i, s := range segs {
+		if s != "" {
+			nonEmpty = append(nonEmpty, i)
+		}
+	}
 	for _, prefix := range inviteTokenPrefixes {
 		n := len(prefix)
-		if len(segs) <= n || segs[n] == "" {
+		if len(nonEmpty) <= n {
 			continue
 		}
 		match := true
 		for i, want := range prefix {
-			if decodeSegment(segs[i]) != want {
+			if !strings.EqualFold(decodeSegment(segs[nonEmpty[i]]), want) {
 				match = false
 				break
 			}
 		}
 		if match {
-			return n
+			return nonEmpty[n]
 		}
 	}
 	return -1
