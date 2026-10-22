@@ -1,7 +1,7 @@
 // file: internal/database/iface_user.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: ca96abf5-5353-428c-aa7f-903b91a481e8
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -89,6 +89,13 @@ type UserPlaylistWriter interface {
 type UserPlaylistStore interface {
 	UserPlaylistReader
 	UserPlaylistWriter
+}
+
+// UserPlaylistMarkStore is UpdateUserPlaylist that also marks rows of an
+// operation's journal reverted in the same batch as the playlist row (see
+// CollectionMembershipMarkStore). A version conflict writes and marks nothing.
+type UserPlaylistMarkStore interface {
+	UpdateUserPlaylistAndMark(pl *UserPlaylist, mark OperationMark) error
 }
 
 // PlaylistStore covers the legacy series-playlist auto-generator.

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_collections.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c9e2b71-6f83-4a15-9d02-7e5b1a83c064
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package database
 
@@ -356,6 +356,20 @@ func (p *PebbleStore) DeleteCollection(id string) error {
 // on the current list (the ABS remove maps a survivor id to the stored merge
 // loser) use this directly; the common cases are the two wrappers below.
 func (p *PebbleStore) UpdateCollectionBooks(id string, fn func(current []string) ([]string, error)) (*Collection, error) {
+	return p.updateCollectionBooks(id, fn, OperationMark{})
+}
+
+// UpdateCollectionBooksAndMark is UpdateCollectionBooks that also marks the
+// listed rows of an operation reverted, in the SAME batch as the member list:
+// the list and the marks land together or not at all (a process that dies
+// between the two can no longer leave the list written and the rows standing).
+// When fn leaves the membership unchanged the marks are still made. Lock
+// order: collMu, then opChangeJournalMu's read side.
+func (p *PebbleStore) UpdateCollectionBooksAndMark(id string, fn func(current []string) ([]string, error), mark OperationMark) (*Collection, error) {
+	return p.updateCollectionBooks(id, fn, mark)
+}
+
+func (p *PebbleStore) updateCollectionBooks(id string, fn func(current []string) ([]string, error), mark OperationMark) (*Collection, error) {
 	if id == "" {
 		return nil, fmt.Errorf("collection: id required")
 	}
@@ -382,6 +396,11 @@ func (p *PebbleStore) UpdateCollectionBooks(id string, fn func(current []string)
 		return nil, err
 	}
 	if slices.Equal(next, cur.BookIDs) {
+		if len(mark.ChangeIDs) > 0 {
+			if err := p.MarkOperationChangesReverted(mark.OperationID, mark.ChangeIDs); err != nil {
+				return nil, err
+			}
+		}
 		return cur, nil
 	}
 
@@ -392,6 +411,15 @@ func (p *PebbleStore) UpdateCollectionBooks(id string, fn func(current []string)
 	data, err := json.Marshal(cur)
 	if err != nil {
 		return nil, err
+	}
+	if len(mark.ChangeIDs) > 0 {
+		err := p.markOperationChangesRevertedWith(mark.OperationID, mark.ChangeIDs, func(b *GatedBatch) error {
+			return b.Set([]byte(collKeyPrefix+cur.ID), data, nil)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return cur, nil
 	}
 	b := p.db.NewBatch()
 	if err := b.Set([]byte(collKeyPrefix+cur.ID), data, nil); err != nil {
@@ -437,3 +465,5 @@ func (p *PebbleStore) RemoveBookFromCollection(id, bookID string) (*Collection, 
 		return slices.Delete(current, i, i+1), nil
 	})
 }
+
+var _ CollectionMembershipMarkStore = (*PebbleStore)(nil)

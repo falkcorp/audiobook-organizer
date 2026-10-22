@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playlists.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b93ba897-1377-4cf7-9aea-ca57f135893e
-// last-edited: 2026-09-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -326,6 +326,18 @@ func (p *PebbleStore) listUserPlaylists(playlistType, userFilter string, matchUs
 }
 
 func (p *PebbleStore) UpdateUserPlaylist(pl *UserPlaylist) error {
+	return p.updateUserPlaylist(pl, OperationMark{})
+}
+
+// UpdateUserPlaylistAndMark is UpdateUserPlaylist that also marks the listed
+// rows of an operation reverted in the SAME batch as the playlist row (see
+// UpdateCollectionBooksAndMark). The version check is the same, so a conflict
+// writes and marks nothing.
+func (p *PebbleStore) UpdateUserPlaylistAndMark(pl *UserPlaylist, mark OperationMark) error {
+	return p.updateUserPlaylist(pl, mark)
+}
+
+func (p *PebbleStore) updateUserPlaylist(pl *UserPlaylist, mark OperationMark) error {
 	if pl == nil || pl.ID == "" {
 		return fmt.Errorf("playlist id required")
 	}
@@ -364,45 +376,48 @@ func (p *PebbleStore) UpdateUserPlaylist(pl *UserPlaylist) error {
 	if err != nil {
 		return err
 	}
+	stage := func(b *GatedBatch) error {
+		if err := b.Set([]byte("upl:"+pl.ID), data, nil); err != nil {
+			return err
+		}
+		if !strings.EqualFold(prev.Name, pl.Name) {
+			if err := b.Delete([]byte("idx:upl:name:"+util.NormalizeString(prev.Name)), nil); err != nil {
+				return err
+			}
+			if err := b.Set([]byte("idx:upl:name:"+util.NormalizeString(pl.Name)), []byte(pl.ID), nil); err != nil {
+				return err
+			}
+		}
+		if prev.ITunesPersistentID != pl.ITunesPersistentID {
+			if prev.ITunesPersistentID != "" {
+				if err := b.Delete([]byte("idx:upl:itunes:"+prev.ITunesPersistentID), nil); err != nil {
+					return err
+				}
+			}
+			if pl.ITunesPersistentID != "" {
+				if err := b.Set([]byte("idx:upl:itunes:"+pl.ITunesPersistentID), []byte(pl.ID), nil); err != nil {
+					return err
+				}
+			}
+		}
+		if pl.Dirty {
+			if err := b.Set([]byte("idx:upl:dirty:"+pl.ID), []byte("1"), nil); err != nil {
+				return err
+			}
+		} else if prev.Dirty {
+			if err := b.Delete([]byte("idx:upl:dirty:"+pl.ID), nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(mark.ChangeIDs) > 0 {
+		return p.markOperationChangesRevertedWith(mark.OperationID, mark.ChangeIDs, stage)
+	}
 	b := p.db.NewBatch()
-	if err := b.Set([]byte("upl:"+pl.ID), data, nil); err != nil {
+	if err := stage(b); err != nil {
 		b.Close()
 		return err
-	}
-	if !strings.EqualFold(prev.Name, pl.Name) {
-		if err := b.Delete([]byte("idx:upl:name:"+util.NormalizeString(prev.Name)), nil); err != nil {
-			b.Close()
-			return err
-		}
-		if err := b.Set([]byte("idx:upl:name:"+util.NormalizeString(pl.Name)), []byte(pl.ID), nil); err != nil {
-			b.Close()
-			return err
-		}
-	}
-	if prev.ITunesPersistentID != pl.ITunesPersistentID {
-		if prev.ITunesPersistentID != "" {
-			if err := b.Delete([]byte("idx:upl:itunes:"+prev.ITunesPersistentID), nil); err != nil {
-				b.Close()
-				return err
-			}
-		}
-		if pl.ITunesPersistentID != "" {
-			if err := b.Set([]byte("idx:upl:itunes:"+pl.ITunesPersistentID), []byte(pl.ID), nil); err != nil {
-				b.Close()
-				return err
-			}
-		}
-	}
-	if pl.Dirty {
-		if err := b.Set([]byte("idx:upl:dirty:"+pl.ID), []byte("1"), nil); err != nil {
-			b.Close()
-			return err
-		}
-	} else if prev.Dirty {
-		if err := b.Delete([]byte("idx:upl:dirty:"+pl.ID), nil); err != nil {
-			b.Close()
-			return err
-		}
 	}
 	return b.Commit(pebble.Sync)
 }
@@ -463,3 +478,5 @@ func (p *PebbleStore) ListDirtyUserPlaylists() ([]UserPlaylist, error) {
 	}
 	return out, nil
 }
+
+var _ UserPlaylistMarkStore = (*PebbleStore)(nil)
