@@ -1,7 +1,7 @@
 // file: web/src/pages/Users.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 26b39541-b8d3-4fc8-b131-190f15f5a5ab
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -255,6 +255,48 @@ describe('Users', () => {
       role_id: 'viewer',
       expires_at: '2026-10-22T12:00:00Z',
     };
+
+    describe('guest access not configured', () => {
+      const stub = (configured: boolean) =>
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(async (url: string) => {
+            if (url.endsWith('/users/invites'))
+              return envelope({
+                invites: [pending],
+                count: 1,
+                mail_configured: true,
+                guest_policy_sync_configured: configured,
+              });
+            return envelope({ users: [activeUser], count: 1 });
+          })
+        );
+
+      it('warns in the pending list and the create dialog when guest policy sync is off', async () => {
+        stub(false);
+        const user = userEvent.setup();
+        renderWithProviders(<Users />);
+        await screen.findByText('pending-guest');
+        expect(screen.getAllByText(/Cloudflare guest access is not configured/)).toHaveLength(1);
+        await user.click(screen.getByRole('button', { name: /create invite/i }));
+        await waitFor(() =>
+          expect(screen.getAllByText(/Cloudflare guest access is not configured/)).toHaveLength(2)
+        );
+        expect(screen.getAllByText(/CF_GUESTS_POLICY_ID/).length).toBeGreaterThan(0);
+      });
+
+      it('shows no warning when guest policy sync is configured', async () => {
+        stub(true);
+        const user = userEvent.setup();
+        renderWithProviders(<Users />);
+        await screen.findByText('pending-guest');
+        await user.click(screen.getByRole('button', { name: /create invite/i }));
+        await screen.findByLabelText(/username/i);
+        expect(
+          screen.queryByText(/Cloudflare guest access is not configured/)
+        ).not.toBeInTheDocument();
+      });
+    });
 
     it('creates an emailed invite with the email and send flag, and shows the result', async () => {
       const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {

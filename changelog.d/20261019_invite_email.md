@@ -277,3 +277,7 @@ The startup key now uses an existing active admin only and is skipped, with a
 log line, when there is none: a fresh install gets no startup read-only key
 until first-run setup or bootstrap has made an admin, and the next start mints
 it.
+
+#### Admins are warned when invited guests have no way through Cloudflare
+
+When the Cloudflare guest-policy sync is not configured (CF_ACCOUNT_ID, CF_GUESTS_POLICY_ID and CF_POLICY_API_TOKEN), an invited guest outside the local network cannot reach the server through Cloudflare whatever the email says. The server now logs a warning at startup, and the Users page shows a warning in the invite dialog and above the pending invites.

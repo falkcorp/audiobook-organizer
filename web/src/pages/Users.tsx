@@ -1,7 +1,7 @@
 // file: web/src/pages/Users.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { apiFetch } from '../utils/apiFetch';
@@ -354,6 +354,11 @@ export default function Users() {
           <Typography variant="h5" sx={{ mb: 1 }}>
             Pending Invites
           </Typography>
+          {!settings.guestPolicySyncConfigured && (
+            <Alert severity="warning" sx={{ mb: 1 }}>
+              {GUEST_ACCESS_NOT_CONFIGURED}
+            </Alert>
+          )}
           <TableContainer component={Paper}>
             <Table size="small">
               <TableHead>
@@ -458,6 +463,7 @@ export default function Users() {
         open={inviteOpen}
         mailConfigured={settings.mailConfigured}
         mailUnavailableReason={settings.mailUnavailableReason}
+        guestPolicySyncConfigured={settings.guestPolicySyncConfigured}
         onClose={() => setInviteOpen(false)}
         onCreated={load}
       />
@@ -565,16 +571,24 @@ interface CreateInviteResult {
   email_error?: string;
 }
 
+// Shown when the Cloudflare guest-policy sync is not configured: an invited guest
+// then has no way through Cloudflare, whatever the email says.
+const GUEST_ACCESS_NOT_CONFIGURED =
+  'Cloudflare guest access is not configured on this server (CF_ACCOUNT_ID, CF_GUESTS_POLICY_ID and CF_POLICY_API_TOKEN). ' +
+  'A guest invited from outside the local network cannot get through Cloudflare until their address is added to the guest policy by hand.';
+
 function CreateInviteDialog({
   open,
   mailConfigured,
   mailUnavailableReason,
+  guestPolicySyncConfigured,
   onClose,
   onCreated,
 }: {
   open: boolean;
   mailConfigured: boolean;
   mailUnavailableReason?: string;
+  guestPolicySyncConfigured: boolean;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -675,6 +689,11 @@ function CreateInviteDialog({
           </Box>
         ) : (
           <>
+            {!guestPolicySyncConfigured && (
+              <Alert severity="warning" sx={{ mb: 1 }}>
+                {GUEST_ACCESS_NOT_CONFIGURED}
+              </Alert>
+            )}
             <TextField
               fullWidth
               label="Username"
