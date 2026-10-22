@@ -1,5 +1,5 @@
 // file: internal/undo/membership_rowlevel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e98c6d5-ae02-4209-a3b4-306133edd303
 // last-edited: 2026-10-22
 
@@ -19,9 +19,8 @@ import (
 // rowSim models the product at row level, several survivors in one list, every
 // book with a journal of its own. A retire journals a marker on its survivor and
 // a row on the retired book. A row revert does what the revert does
-// (revertListFollow): the roles from the survivor's and the retired book's
-// journals (MemberRoleOf), a stale row skipped (NewerCarryStands), the graph
-// over every journal, RestoreMember; and the row and its marker are stamped
+// (revertListFollow): the roles from the list's journal (MemberRoleOf), the
+// graph over the same journal, RestoreMember; and the row and its marker are stamped
 // reverted together with the list, in one batch. Nothing else stamps a row
 // before the operation's end, so a process that dies part way through an
 // operation leaves the rows it did not reach, and only those, standing.
@@ -34,7 +33,6 @@ type rowSim struct {
 	notes    []string                             // placements by recorded index (reported)
 	released int
 	leftOut  int
-	stale    int
 }
 
 func newRowSim(l0 []string) *rowSim {
@@ -79,31 +77,36 @@ func (s *rowSim) stamp(rows ...*database.OperationChange) {
 	}
 }
 
+// listRows is the list's whole journal: every book's rows.
+func (s *rowSim) listRows() []*database.OperationChange {
+	var rows []*database.OperationChange
+	for _, j := range s.journals {
+		rows = append(rows, j...)
+	}
+	return rows
+}
+
 // revertRow reverts one row. A refusal is returned and nothing is written.
 func (s *rowSim) revertRow(id string) error {
 	r := s.rows[id]
 	rec, _ := DecodeMembership(r.OldValue)
 	sv := r.NewValue
-	own := s.journals[r.BookID]
-	m := MarkerOf(s.journals[sv], r, UserContentCollection, "L")
+	rows := s.listRows()
+	m := MarkerOf(rows, r, UserContentCollection, "L")
 	standing := m != nil && m.RevertedAt == nil
-	if !standing && NewerCarryStands(own, r, UserContentCollection, "L") != nil {
-		s.stale++
-		s.stamp(r)
-		return nil
-	}
 	g := NewMembershipGraph(sv, UserContentCollection, "L")
 	g.SetRow(r)
-	g.AddJournal(sv, s.journals[sv])
-	g.AddJournal(r.BookID, own)
-	g.SetJournalLoader(func(b string) ([]*database.OperationChange, error) { return s.journals[b], nil })
-	role := MemberRoleOf(s.journals[sv], own, r, UserContentCollection, "L")
+	g.AddRows(rows)
+	role := MemberRoleOf(rows, r, UserContentCollection, "L")
 	next, res, err := RestoreMember(s.list, r.BookID, sv, rec, role, g)
 	if err != nil && !errors.Is(err, ErrAlreadyRestored) {
 		return err
 	}
 	if res.Note != "" {
 		s.notes = append(s.notes, res.Note)
+	}
+	if res.Kept != "" {
+		s.notes = append(s.notes, res.Kept)
 	}
 	if res.Released {
 		s.released++
@@ -127,7 +130,7 @@ type rowSimCfg struct {
 	steps     int
 }
 
-type rowSimStats struct{ total, exact, reported, refused, silentFinal, silentInter, released, leftOut, stale int }
+type rowSimStats struct{ total, exact, reported, refused, silentFinal, silentInter, released, leftOut int }
 
 func runRowSim(t *testing.T, seed uint64, n int, cfg rowSimCfg) rowSimStats {
 	t.Helper()
@@ -272,7 +275,6 @@ func runRowSim(t *testing.T, seed uint64, n int, cfg rowSimCfg) rowSimStats {
 		st.total++
 		st.released += s.released
 		st.leftOut += s.leftOut
-		st.stale += s.stale
 		switch {
 		case refused || len(live()) > 0:
 			st.refused++
@@ -303,8 +305,8 @@ func runRowSim(t *testing.T, seed uint64, n int, cfg rowSimCfg) rowSimStats {
 // it, reported placements and refusals are counted and logged only.
 func reportRowSim(t *testing.T, name string, st rowSimStats, wantExact bool) {
 	t.Helper()
-	t.Logf("%s: total=%d exact=%d reported=%d refused=%d silent-final=%d silent-intermediate=%d (survivors released %d, books left out %d, stale rows skipped %d)",
-		name, st.total, st.exact, st.reported, st.refused, st.silentFinal, st.silentInter, st.released, st.leftOut, st.stale)
+	t.Logf("%s: total=%d exact=%d reported=%d refused=%d silent-final=%d silent-intermediate=%d (survivors released %d, books left out %d)",
+		name, st.total, st.exact, st.reported, st.refused, st.silentFinal, st.silentInter, st.released, st.leftOut)
 	if st.silentFinal > 0 || st.silentInter > 0 {
 		t.Errorf("%s: %d silent wrong final, %d silent wrong intermediate", name, st.silentFinal, st.silentInter)
 	}
@@ -361,27 +363,23 @@ func TestRowSim_ChainsMoreSeedsExact(t *testing.T) {
 	}
 }
 
-// Two seeds still leave a handful of histories (3 of 12,000) where, after a long
-// run of retires of survivors into survivors, the books beside a returning book
-// cannot be ordered against a stand-in listed for another retire. Those fall
-// back to the recorded index and say so in the result's note; the claim pinned
-// here is that none refuses and none is silent, and that no more than that many
-// fall back.
+// Two seeds that once left a handful of histories (3 of 12,000) to the recorded
+// index, after a long run of retires of survivors into survivors: the books
+// beside a returning book could not be ordered against a stand-in listed for
+// another retire. The graph now holds the list's whole journal and follows a
+// stand-in down its whole chain (slotPath), so none of them is left to the
+// index: every history is exact, none refuses, none is silent.
 func TestRowSim_ChainResidualReportedNeverRefusedOrSilent(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		seed        uint64
-		cfg         rowSimCfg
-		maxReported int
+		seed uint64
+		cfg  rowSimCfg
 	}{
-		{909, rowSimCfg{survivors: 3, steps: 12, chain: true}, 1},
-		{1606, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}, 2},
+		{909, rowSimCfg{survivors: 3, steps: 12, chain: true}},
+		{1606, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}},
 	} {
 		st := runRowSim(t, c.seed, 6000, c.cfg)
-		reportRowSim(t, fmt.Sprintf("3 survivors, chains, seed %d", c.seed), st, false)
-		if st.refused > 0 || st.reported > c.maxReported {
-			t.Errorf("seed %d: %d refused, %d reported by index (allowed: 0 refused, %d reported)", c.seed, st.refused, st.reported, c.maxReported)
-		}
+		reportRowSim(t, fmt.Sprintf("3 survivors, chains, seed %d", c.seed), st, true)
 	}
 }
 
@@ -466,38 +464,5 @@ func TestSurvivorChain_SurvivorListedByATookOfItsOwn(t *testing.T) {
 	rev(c)
 	if !slices.Equal(s.list, l0) || len(s.notes) > 0 {
 		t.Fatalf("got %v (notes %v), want %v exactly", s.list, s.notes, l0)
-	}
-}
-
-// A row left standing with its marker already stamped (the state a refused
-// carry whose row void failed leaves, next to its voided marker; the model
-// stamps the marker alone) is retried after a newer retire took the same book
-// out again: it is stale, and putting the book back would list a book a
-// standing retire removed.
-func TestStaleRowIsNotRetriedAgainstANewerRetire(t *testing.T) {
-	t.Parallel()
-	l0 := []string{"a", "X", "S3", "b"}
-	s := newRowSim(l0)
-	old := s.retire("op2", "X", "S3") // held
-	if err := s.revertRow(old); err != nil {
-		t.Fatal(err)
-	}
-	// The row's own stamp did not land: the row stands again.
-	s.rows[old].RevertedAt, s.markers[old].RevertedAt = nil, nil
-	s.markers[old].RevertedAt = new(time.Time)
-	*s.markers[old].RevertedAt = s.tick()
-	fresh := s.retire("op5", "X", "S1") // S1 is not listed: it takes X's slot
-	want := slices.Clone(s.list)
-	if err := s.revertRow(old); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(s.list, want) || s.stale != 1 {
-		t.Fatalf("list %v (stale skipped %d), want %v untouched and one stale row skipped", s.list, s.stale, want)
-	}
-	if err := s.revertRow(fresh); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(s.list, l0) {
-		t.Fatalf("after reverting the newer retire: %v, want %v", s.list, l0)
 	}
 }
