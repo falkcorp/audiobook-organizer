@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.61.0
+// version: 1.61.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-22
 
@@ -595,7 +595,7 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 
 	// Refuse soft-deleted participants. GetBookByID returns soft-deleted rows,
-	// and every stale index in the system (book:hash:, a review candidate
+	// and every stale index in the system (a file-hash index key, a review candidate
 	// written before a manual merge, a queued op) can hand one in. Merging INTO
 	// one produces a group whose primary is a deleted row; merging one AS a
 	// loser into a DIFFERENT group re-routes its external IDs a second time

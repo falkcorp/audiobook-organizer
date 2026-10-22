@@ -2,7 +2,7 @@
 book still holds. The delete proceeds, the hash is left unblocked, and the
 response carries `warnings` naming the live books (a blocked hash makes the
 scanner skip that book's own file; prod had one blocked hash shared by two live
-books). Holders are found through the `book:hash:` index plus the multi-valued
+books). Holders are found through the book hash index plus the multi-valued
 book_file hash indexes, never a library scan, and a lookup that cannot be
 completed also skips the block and says so. The web delete dialogs no longer
 default "block hash" to on. Known gap: two books whose only hash record is

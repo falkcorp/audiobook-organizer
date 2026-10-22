@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_hash_index.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 9a4d7e21-3b86-4c05-8f19-e5c2a7d0b634
 // last-edited: 2026-10-22
 
@@ -18,73 +18,304 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
-// The three single-valued file-hash indexes, book:hash:<h>, book:originalhash:<h>
-// and book:organizedhash:<h>, each hold ONE book id per hash (last writer wins;
-// GetBookByFileHash, GetBookByOriginalHash and GetBookByOrganizedHash read
-// them). DeleteBook used to delete them unconditionally, so removing a book
-// erased the entry of the live book that owned the same hash. The purge of
-// about 2,520 combine shells on 2026-10-21 may have done exactly that, and a
-// missing entry is silent: the scanner and importers asking "is this file
-// already in the library" get "no".
+// The file-hash indexes are MULTI-valued: one key per (hash, book),
 //
-// CheckBookHashIndex reports, and RepairBookHashIndex repairs, every entry a
-// LIVE book's hash should have and does not:
+//	book_hash:<h>\x00<id>   book_originalhash:<h>\x00<id>   book_organizedhash:<h>\x00<id>
 //
-//   - missing: no key at all;
-//   - dangling: the key names a book whose row is gone;
-//   - wrong holder: the key names a book that exists but does not hold that
-//     hash (it was changed since) ;
-//   - trashed owner: the key names a trashed book that holds the hash while a
-//     live book also holds it.
+// with an empty value, the shape of book_atpath:. They replace the single-valued
+// book:hash:<h> / book:originalhash:<h> / book:organizedhash:<h> keys, which held
+// ONE book id per hash (last writer wins). Two books holding the same file
+// (a combine's shell and its keeper, a duplicate import) shared that key, and
+// whichever writer touched it last decided who a lookup found. Every guard bolted
+// onto it (compare-and-delete in DeleteBook and UpdateBook) only narrowed the
+// damage: the purge of about 2,520 combine shells on 2026-10-21 erased live
+// books' entries, and a missing entry is silent, since the scanner and the
+// importers asking "is this file already in the library" get "no". With one key
+// per book each writer touches only its own keys, so no writer can erase
+// another's entry and there is nothing to compare.
 //
-// A repair points the key at the live holder with the smallest id (a stable
-// choice, so two runs agree). It never touches a key that already names a live
-// holder, never deletes a key, and never writes a book row. A key naming a row
-// that cannot be decoded is counted Unreadable and left alone: overwriting it
-// would be a guess. A key that changed between the check and the write is left
-// as it is and counted Raced; the next run sees it.
+// The new family lives OUTSIDE the book: range (like book_atpath:), so a scan of
+// book rows never walks it.
 //
-// A key with NO live holder (a dangling entry for a hash nobody holds) is not
-// examined: the pass is driven by the live books' hashes, which is where the
-// damage is.
+// Writers (all in the same batch as the book row): CreateBook sets its keys,
+// UpdateBook deletes the old pair when a hash changed and sets the current pair
+// every time (a self-heal), DeleteBook deletes its own keys. Trashed books keep
+// theirs.
+//
+// Readers (GetBookByFileHash and its two twins) scan the keys for the hash and
+// POINT-VERIFY every candidate: the row must exist, decode and still hold the
+// hash. An extra key (a writer that lost a race with a delete, a stale key from
+// an old binary) is therefore harmless. The choice among holders is
+// deterministic: the live holder with the smallest id, else the trashed holder
+// with the smallest id.
+//
+// Trust. Until the index is known complete (the sentinel bookHashIndexSentinel)
+// readers return the UNION of the new keys and the legacy single-valued key, so
+// a book not yet backfilled is still found the way it always was. The legacy key
+// is no longer written, so it only ever names books that held the hash when the
+// binary changed; the verification step drops the stale ones. RepairBookHashIndex
+// (the maintenance.book-hash-index-repair op, enqueued with ensure=true on every
+// boot) writes every missing key, then, if every book row decoded, sets the
+// sentinel and deletes the legacy keys. The order is the invariant: new keys
+// complete, then sentinel, then legacy deletion. A book row that cannot be
+// decoded keeps the sentinel unset (its hashes cannot be indexed), so lookups
+// stay on the union and the op fails until the row is rewritten or removed.
+//
+// Rollback: a binary from before this change neither writes nor reads the new
+// keys, so books it creates or re-hashes have none, and the legacy keys it
+// would read were deleted by the sweep. After rolling FORWARD again the boot
+// ensure re-runs the repair and writes what is missing; until it finishes a
+// lookup can miss such a book.
+
+var bookHashIndexLog = logger.New("database.book-hash-index")
+
+const (
+	// bookHashIndexSentinel is set once every book row's hash keys exist.
+	bookHashIndexSentinel = "system:backfill:book_hash_index_v1_done"
+
+	bookHashSampleCap = 20
+	// bookHashUnreadableSampleCap bounds the ids named for undecodable rows.
+	bookHashUnreadableSampleCap = 5
+)
+
+// bookHashKinds are the three indexes, in report order.
+var bookHashKinds = [...]struct {
+	name         string
+	prefix       string // the multi-valued family
+	legacyPrefix string // the retired single-valued family
+	ofRow        func(*bookHashRow) string
+	ofBook       func(*Book) string
+}{
+	{"hash", "book_hash:", "book:hash:",
+		func(r *bookHashRow) string { return derefStr(r.FileHash) },
+		func(b *Book) string { return derefStr(b.FileHash) }},
+	{"originalhash", "book_originalhash:", "book:originalhash:",
+		func(r *bookHashRow) string { return derefStr(r.OriginalFileHash) },
+		func(b *Book) string { return derefStr(b.OriginalFileHash) }},
+	{"organizedhash", "book_organizedhash:", "book:organizedhash:",
+		func(r *bookHashRow) string { return derefStr(r.OrganizedFileHash) },
+		func(b *Book) string { return derefStr(b.OrganizedFileHash) }},
+}
+
+const (
+	bookHashKindFile = iota
+	bookHashKindOriginal
+	bookHashKindOrganized
+)
+
+// bookHashRow is the part of a book row the hash indexes depend on.
+type bookHashRow struct {
+	FileHash          *string `json:"file_hash"`
+	OriginalFileHash  *string `json:"original_file_hash"`
+	OrganizedFileHash *string `json:"organized_file_hash"`
+	MarkedForDeletion *bool   `json:"marked_for_deletion"`
+}
+
+// bookHashKey is the index key for one (hash, book) pair of an index kind.
+func bookHashKey(kind int, hash, id string) []byte {
+	prefix := bookHashKinds[kind].prefix
+	k := make([]byte, 0, len(prefix)+len(hash)+1+len(id))
+	k = append(k, prefix...)
+	k = append(k, hash...)
+	k = append(k, 0)
+	k = append(k, id...)
+	return k
+}
+
+// bookHashBounds is the scan range holding exactly hash's keys:
+// [prefix<h>\x00, prefix<h>\x01). A file hash is hex and cannot contain NUL.
+func bookHashBounds(kind int, hash string) (lower, upper []byte) {
+	prefix := bookHashKinds[kind].prefix
+	lower = make([]byte, 0, len(prefix)+len(hash)+1)
+	lower = append(lower, prefix...)
+	lower = append(lower, hash...)
+	upper = append(append([]byte{}, lower...), 1)
+	lower = append(lower, 0)
+	return lower, upper
+}
+
+// stageBookHashKeys stages the hash keys of book into batch: the set of keys
+// for the hashes it holds now and, when old is non-nil, the delete of the keys
+// for hashes it held and no longer does. UpdateBook passes the row it read,
+// CreateBook passes nil. The Set is unconditional, so a row whose key went
+// missing heals on its next update.
+func stageBookHashKeys(batch *GatedBatch, old, book *Book) error {
+	for i := range bookHashKinds {
+		cur := bookHashKinds[i].ofBook(book)
+		if old != nil {
+			if prev := bookHashKinds[i].ofBook(old); prev != "" && prev != cur {
+				if err := batch.Delete(bookHashKey(i, prev, book.ID), nil); err != nil {
+					return err
+				}
+			}
+		}
+		if cur != "" {
+			if err := batch.Set(bookHashKey(i, cur, book.ID), []byte{}, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// stageBookHashKeyDeletes stages the delete of every hash key book owns.
+func stageBookHashKeyDeletes(batch *GatedBatch, book *Book) error {
+	for i := range bookHashKinds {
+		if h := bookHashKinds[i].ofBook(book); h != "" {
+			if err := batch.Delete(bookHashKey(i, h, book.ID), nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// bookHashIndexTrusted reports whether the sentinel exists. Only true is
+// cached, so a long-lived process picks up a completion without a restart. A
+// read error other than not-found is returned, never read as "not built".
+func (p *PebbleStore) bookHashIndexTrusted() (bool, error) {
+	if p.bookHashTrusted.Load() {
+		return true, nil
+	}
+	_, closer, err := p.db.Get([]byte(bookHashIndexSentinel))
+	switch {
+	case err == nil:
+		closer.Close()
+		p.bookHashTrusted.Store(true)
+		return true, nil
+	case errors.Is(err, pebble.ErrNotFound):
+		return false, nil
+	default:
+		return false, fmt.Errorf("read %s: %w", bookHashIndexSentinel, err)
+	}
+}
+
+// holdersOfHash returns every book that verifiably holds hash through index
+// kind, ascending by id, live and trashed alike. unreadable is the first error
+// from a candidate whose row could not be read or decoded: the list then may
+// not be complete, and the callers decide what that means.
+func (p *PebbleStore) holdersOfHash(kind int, hash string) (holders []*Book, unreadable error, err error) {
+	ids, err := p.bookHashCandidates(kind, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	trusted, err := p.bookHashIndexTrusted()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !trusted {
+		legacy, found, err := p.readBookHashKey([]byte(bookHashKinds[kind].legacyPrefix + hash))
+		if err != nil {
+			return nil, nil, err
+		}
+		if found {
+			ids = append(ids, legacy)
+		}
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	for _, id := range ids {
+		b, err := p.GetBookByID(id)
+		if err != nil {
+			if unreadable == nil {
+				unreadable = fmt.Errorf("book %s holds the %s index key for %s: %w", id, bookHashKinds[kind].name, hash, err)
+			}
+			continue
+		}
+		if b != nil && bookHashKinds[kind].ofBook(b) == hash {
+			holders = append(holders, b)
+		}
+	}
+	return holders, unreadable, nil
+}
+
+// bookByHash resolves hash through index kind: the live holder with the
+// smallest id, else the trashed holder with the smallest id, else nil. A
+// candidate that cannot be read is skipped unless nothing else resolves, in
+// which case its error is returned (a lookup that cannot tell must not answer
+// "no such book").
+func (p *PebbleStore) bookByHash(kind int, hash string) (*Book, error) {
+	if hash == "" {
+		return nil, nil
+	}
+	holders, unreadable, err := p.holdersOfHash(kind, hash)
+	if err != nil {
+		return nil, err
+	}
+	var trashed *Book
+	for _, b := range holders {
+		if !markedForDeletionFlag(b.MarkedForDeletion) {
+			return b, nil
+		}
+		if trashed == nil {
+			trashed = b
+		}
+	}
+	if trashed != nil {
+		return trashed, nil
+	}
+	return nil, unreadable
+}
+
+// BooksByFileHash returns every book that holds file hash hash (live and
+// trashed), ascending by id. Unlike GetBookByFileHash, which answers with ONE
+// holder, this is for callers that must see all of them (is there a holder
+// other than this book). A holder that cannot be read is an error: the list
+// would be incomplete.
+func (p *PebbleStore) BooksByFileHash(hash string) ([]*Book, error) {
+	if hash == "" {
+		return nil, nil
+	}
+	holders, unreadable, err := p.holdersOfHash(bookHashKindFile, hash)
+	if err != nil {
+		return nil, err
+	}
+	if unreadable != nil {
+		return nil, unreadable
+	}
+	return holders, nil
+}
+
+// bookHashCandidates is the ids of the keys stored for hash (unverified).
+func (p *PebbleStore) bookHashCandidates(kind int, hash string) ([]string, error) {
+	lower, upper := bookHashBounds(kind, hash)
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	var ids []string
+	for ok := iter.First(); ok; ok = iter.Next() {
+		if id := iter.Key()[len(lower):]; len(id) > 0 {
+			ids = append(ids, string(id))
+		}
+	}
+	return ids, iter.Error()
+}
 
 // BookHashKindReport is one index's figures.
 type BookHashKindReport struct {
 	// Kind is "hash", "originalhash" or "organizedhash".
 	Kind string `json:"kind"`
-	// Checked is how many distinct hashes live books hold under this index.
+	// Checked is how many (book, hash) pairs the book rows hold under this
+	// index: one per book that holds a hash, trashed books included.
 	Checked int `json:"checked"`
 	OK      int `json:"ok"`
+	// Missing: the book holds the hash but its key is absent.
 	Missing int `json:"missing"`
-	// Dangling: the key names a book that no longer exists.
-	Dangling int `json:"dangling"`
-	// WrongHolder: the key names a book that does not hold the hash.
-	WrongHolder int `json:"wrong_holder"`
-	// TrashedOwner: the key names a trashed book while a live one holds it too.
-	TrashedOwner int `json:"trashed_owner"`
-	// Unreadable: the key names a row that cannot be decoded; left alone.
-	Unreadable int `json:"unreadable"`
-	// Repointed: keys written (a repair only).
-	Repointed int `json:"repointed"`
-	// Raced: keys that changed between the check and the write; left alone.
-	Raced int `json:"raced"`
+	// Written: keys written (a repair only).
+	Written int `json:"written"`
 }
 
-func (k BookHashKindReport) broken() int {
-	return k.Missing + k.Dangling + k.WrongHolder + k.TrashedOwner
-}
-
-// BookHashIndexIssue is one broken entry, for the sample in a report.
+// BookHashIndexIssue is one missing key, for the sample in a report.
 type BookHashIndexIssue struct {
-	Kind  string `json:"kind"`
-	Hash  string `json:"hash"`
-	Class string `json:"class"`
-	// Names is what the key held ("" when it was absent).
-	Names string `json:"names,omitempty"`
-	// LiveHolder is the book the key is (or would be) pointed at.
-	LiveHolder string `json:"live_holder"`
+	Kind   string `json:"kind"`
+	Hash   string `json:"hash"`
+	BookID string `json:"book_id"`
 }
 
 // BookHashIndexReport is the outcome of one check or repair.
@@ -95,76 +326,53 @@ type BookHashIndexReport struct {
 	LiveBooks int  `json:"live_books"`
 	// Kinds has one entry per index, in the order hash, originalhash, organizedhash.
 	Kinds []BookHashKindReport `json:"kinds"`
-	// Samples is the first few broken entries (bookHashSampleCap).
+	// Samples is the first few missing keys (bookHashSampleCap).
 	Samples []BookHashIndexIssue `json:"samples,omitempty"`
+	// Unreadable is how many book rows could not be decoded; their hashes are
+	// not indexed and, while any exist, the sentinel is not set.
+	Unreadable       int      `json:"unreadable"`
+	SampleUnreadable []string `json:"sample_unreadable,omitempty"`
+	// Trusted is whether the sentinel is set when the run ends.
+	Trusted bool `json:"trusted"`
+	// LegacySwept is true when a repair deleted the legacy single-valued keys.
+	LegacySwept bool `json:"legacy_swept"`
 }
 
-// Broken is how many entries are (or, before a repair, were) broken, over all
-// three indexes. Unreadable is not counted: those are left alone.
-func (r BookHashIndexReport) Broken() int {
+// Missing is how many keys were absent, over all three indexes.
+func (r BookHashIndexReport) Missing() int {
 	n := 0
 	for _, k := range r.Kinds {
-		n += k.broken()
+		n += k.Missing
 	}
 	return n
 }
 
-// Repointed is how many keys a repair wrote.
-func (r BookHashIndexReport) Repointed() int {
+// Written is how many keys a repair wrote.
+func (r BookHashIndexReport) Written() int {
 	n := 0
 	for _, k := range r.Kinds {
-		n += k.Repointed
+		n += k.Written
 	}
 	return n
 }
 
-const bookHashSampleCap = 20
-
-// BookHashIndexProgress is called with the phase ("scanning books", "checking
-// entries") and how many items of it are done and how many there are (0 when
-// unknown). It runs inside worker goroutines, concurrently, and may be nil.
+// BookHashIndexProgress is called with the phase ("scanning books") and how
+// many items of it are done and how many there are (0 when unknown). It runs
+// inside worker goroutines, concurrently, and may be nil.
 type BookHashIndexProgress func(phase string, done, total int)
 
-var bookHashKinds = [...]struct {
-	name   string
-	prefix string
-	of     func(*bookHashRow) string
-}{
-	{"hash", "book:hash:", func(r *bookHashRow) string { return derefStr(r.FileHash) }},
-	{"originalhash", "book:originalhash:", func(r *bookHashRow) string { return derefStr(r.OriginalFileHash) }},
-	{"organizedhash", "book:organizedhash:", func(r *bookHashRow) string { return derefStr(r.OrganizedFileHash) }},
-}
-
-// bookHashRow is the part of a book row the hash indexes depend on.
-type bookHashRow struct {
-	FileHash          *string `json:"file_hash"`
-	OriginalFileHash  *string `json:"original_file_hash"`
-	OrganizedFileHash *string `json:"organized_file_hash"`
-	MarkedForDeletion *bool   `json:"marked_for_deletion"`
-}
-
-// CheckBookHashIndex reads the whole library and reports which entries of the
-// three file-hash indexes are broken. It writes nothing.
+// CheckBookHashIndex reads the whole library and reports which keys of the
+// three file-hash indexes are missing. It writes nothing.
 func (p *PebbleStore) CheckBookHashIndex(ctx context.Context, progress BookHashIndexProgress) (BookHashIndexReport, error) {
-	return p.runBookHashIndex(ctx, false, progress)
+	return p.reconcileBookHashIndex(ctx, false, progress)
 }
 
-// RepairBookHashIndex is CheckBookHashIndex that also points each broken key
-// at its live holder (see the file comment for what it does and never does).
-// The report carries the figures as they were found, plus what was written.
+// RepairBookHashIndex is CheckBookHashIndex that also writes every missing key.
+// When every book row decoded it then sets the sentinel and deletes the legacy
+// single-valued keys, in that order (see the file comment). It never deletes a
+// new-family key and never writes a book row. Idempotent.
 func (p *PebbleStore) RepairBookHashIndex(ctx context.Context, progress BookHashIndexProgress) (BookHashIndexReport, error) {
-	return p.runBookHashIndex(ctx, true, progress)
-}
-
-// bookHashHolders maps, per index, a hash to the ids of the live books holding it.
-type bookHashHolders [len(bookHashKinds)]map[string][]string
-
-func newBookHashHolders() *bookHashHolders {
-	var h bookHashHolders
-	for i := range h {
-		h[i] = map[string][]string{}
-	}
-	return &h
+	return p.reconcileBookHashIndex(ctx, true, progress)
 }
 
 type bookHashRowBatch []struct {
@@ -174,50 +382,133 @@ type bookHashRowBatch []struct {
 
 const (
 	bookHashBatchRows  = 512
-	bookHashTaskChunk  = 1000
 	bookHashProgressEv = 5000
 )
 
-// collectLiveBookHashes reads every book row once and returns the live books'
-// holders. The iterator is one sequential read; the JSON decoding, which is
-// the CPU cost, is spread over the workers.
-func (p *PebbleStore) collectLiveBookHashes(ctx context.Context, progress BookHashIndexProgress) (holders *bookHashHolders, books, live int, err error) {
+// bookHashLocal is one worker's tally.
+type bookHashLocal struct {
+	kinds         [len(bookHashKinds)]BookHashKindReport
+	live          int
+	unreadable    int
+	unreadableIDs []string
+	samples       []BookHashIndexIssue
+}
+
+// reconcileBookHashIndex reads every book row once and makes sure each hash a
+// row holds has its key. The iterator is one sequential read; the decoding and
+// the point reads and writes, which are the cost, are spread over the workers.
+// Workers touch disjoint rows, and a key is a pure function of (hash, id), so
+// no two workers write the same key. A row changed or deleted after it was read
+// can leave an extra key behind, which readers verify and ignore.
+func (p *PebbleStore) reconcileBookHashIndex(ctx context.Context, apply bool, progress BookHashIndexProgress) (BookHashIndexReport, error) {
+	rep := BookHashIndexReport{Apply: apply, Kinds: make([]BookHashKindReport, len(bookHashKinds))}
+	for i := range bookHashKinds {
+		rep.Kinds[i].Kind = bookHashKinds[i].name
+	}
+
 	workers := runtime.NumCPU()
 	g, gctx := errgroup.WithContext(ctx)
 	batches := make(chan bookHashRowBatch, workers)
-
-	var scanned, liveN atomic.Int64
-	merged := newBookHashHolders()
+	var scanned atomic.Int64
 	var mergeMu sync.Mutex
 
 	for range workers {
 		g.Go(func() error {
-			local := newBookHashHolders()
+			var local bookHashLocal
+			var wb *GatedBatch
+			pending := 0
+			flush := func() error {
+				if wb == nil {
+					return nil
+				}
+				defer func() { wb.Close(); wb, pending = nil, 0 }()
+				if err := wb.Commit(pebble.Sync); err != nil {
+					return fmt.Errorf("write book hash index keys: %w", err)
+				}
+				return nil
+			}
+			defer func() {
+				if wb != nil {
+					wb.Close()
+				}
+			}()
 			for b := range batches {
 				for _, r := range b {
+					if err := gctx.Err(); err != nil {
+						return err
+					}
 					var row bookHashRow
 					if err := json.Unmarshal(r.value, &row); err != nil {
-						// An undecodable book row holds no hash we can read; the
-						// other book scans fail on it loudly, this one must not
-						// turn a repair of the rest into a failure.
+						local.unreadable++
+						if len(local.unreadableIDs) < bookHashUnreadableSampleCap {
+							local.unreadableIDs = append(local.unreadableIDs, r.id)
+						}
 						continue
 					}
-					if markedForDeletionFlag(row.MarkedForDeletion) {
-						continue
+					if !markedForDeletionFlag(row.MarkedForDeletion) {
+						local.live++
 					}
-					liveN.Add(1)
 					for i := range bookHashKinds {
-						if h := bookHashKinds[i].of(&row); h != "" {
-							local[i][h] = append(local[i][h], r.id)
+						h := bookHashKinds[i].ofRow(&row)
+						if h == "" {
+							continue
+						}
+						k := &local.kinds[i]
+						k.Checked++
+						key := bookHashKey(i, h, r.id)
+						_, closer, err := p.db.Get(key)
+						if err == nil {
+							closer.Close()
+							k.OK++
+							continue
+						}
+						if !errors.Is(err, pebble.ErrNotFound) {
+							return fmt.Errorf("read index key %q: %w", key, err)
+						}
+						k.Missing++
+						if len(local.samples) < bookHashSampleCap {
+							local.samples = append(local.samples, BookHashIndexIssue{Kind: bookHashKinds[i].name, Hash: h, BookID: r.id})
+						}
+						if !apply {
+							continue
+						}
+						if wb == nil {
+							wb = p.db.NewBatch()
+						}
+						if err := wb.Set(key, []byte{}, nil); err != nil {
+							return err
+						}
+						k.Written++
+						if pending++; pending >= bookHashBatchRows {
+							if err := flush(); err != nil {
+								return err
+							}
 						}
 					}
 				}
 			}
+			if err := flush(); err != nil {
+				return err
+			}
 			mergeMu.Lock()
 			defer mergeMu.Unlock()
-			for i := range local {
-				for h, ids := range local[i] {
-					merged[i][h] = append(merged[i][h], ids...)
+			rep.LiveBooks += local.live
+			rep.Unreadable += local.unreadable
+			for _, id := range local.unreadableIDs {
+				if len(rep.SampleUnreadable) < bookHashUnreadableSampleCap {
+					rep.SampleUnreadable = append(rep.SampleUnreadable, id)
+				}
+			}
+			for i := range local.kinds {
+				k := &rep.Kinds[i]
+				k.Checked += local.kinds[i].Checked
+				k.OK += local.kinds[i].OK
+				k.Missing += local.kinds[i].Missing
+				k.Written += local.kinds[i].Written
+			}
+			for _, s := range local.samples {
+				if len(rep.Samples) < bookHashSampleCap {
+					rep.Samples = append(rep.Samples, s)
 				}
 			}
 			return nil
@@ -262,163 +553,71 @@ func (p *PebbleStore) collectLiveBookHashes(ctx context.Context, progress BookHa
 	})
 
 	if err := g.Wait(); err != nil {
-		return nil, 0, 0, err
+		return rep, err
 	}
-	for i := range merged {
-		for _, ids := range merged[i] {
-			slices.Sort(ids)
-		}
-	}
-	return merged, int(scanned.Load()), int(liveN.Load()), nil
-}
+	rep.Books = int(scanned.Load())
+	slices.SortFunc(rep.Samples, func(a, b BookHashIndexIssue) int {
+		return cmpStrings(a.Kind+"\x00"+a.Hash+"\x00"+a.BookID, b.Kind+"\x00"+b.Hash+"\x00"+b.BookID)
+	})
+	slices.Sort(rep.SampleUnreadable)
 
-// bookHashTask is one (index, hash) pair a live book holds.
-type bookHashTask struct {
-	kind    int
-	hash    string
-	holders []string
-}
-
-func (p *PebbleStore) runBookHashIndex(ctx context.Context, apply bool, progress BookHashIndexProgress) (BookHashIndexReport, error) {
-	rep := BookHashIndexReport{Apply: apply, Kinds: make([]BookHashKindReport, len(bookHashKinds))}
-	for i := range bookHashKinds {
-		rep.Kinds[i].Kind = bookHashKinds[i].name
-	}
-	holders, books, live, err := p.collectLiveBookHashes(ctx, progress)
+	trusted, err := p.bookHashIndexTrusted()
 	if err != nil {
 		return rep, err
 	}
-	rep.Books, rep.LiveBooks = books, live
-
-	var tasks []bookHashTask
-	for i := range holders {
-		rep.Kinds[i].Checked = len(holders[i])
-		for h, ids := range holders[i] {
-			tasks = append(tasks, bookHashTask{kind: i, hash: h, holders: ids})
+	if apply && rep.Unreadable == 0 {
+		// New keys complete (every batch above committed with Sync), then the
+		// sentinel, then the legacy deletion. Never in another order.
+		if !trusted {
+			if err := p.db.Set([]byte(bookHashIndexSentinel), []byte("1"), pebble.Sync); err != nil {
+				return rep, fmt.Errorf("set %s: %w", bookHashIndexSentinel, err)
+			}
+			p.bookHashTrusted.Store(true)
+			trusted = true
 		}
-	}
-	// A stable order, so the sample and the progress read the same run to run.
-	slices.SortFunc(tasks, func(a, b bookHashTask) int {
-		if a.kind != b.kind {
-			return a.kind - b.kind
+		swept, err := p.sweepLegacyBookHashKeys()
+		if err != nil {
+			return rep, err
 		}
-		return bytes.Compare([]byte(a.hash), []byte(b.hash))
-	})
-
-	var mu sync.Mutex
-	var done atomic.Int64
-	total := len(tasks)
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(runtime.NumCPU())
-	for start := 0; start < total; start += bookHashTaskChunk {
-		chunk := tasks[start:min(start+bookHashTaskChunk, total)]
-		g.Go(func() error {
-			local := make([]BookHashKindReport, len(bookHashKinds))
-			var samples []BookHashIndexIssue
-			for _, t := range chunk {
-				if err := gctx.Err(); err != nil {
-					return err
-				}
-				issue, err := p.checkOrRepairBookHash(t, apply, &local[t.kind])
-				if err != nil {
-					return err
-				}
-				if issue != nil && len(samples) < bookHashSampleCap {
-					samples = append(samples, *issue)
-				}
-			}
-			mu.Lock()
-			for i := range local {
-				k := &rep.Kinds[i]
-				k.OK += local[i].OK
-				k.Missing += local[i].Missing
-				k.Dangling += local[i].Dangling
-				k.WrongHolder += local[i].WrongHolder
-				k.TrashedOwner += local[i].TrashedOwner
-				k.Unreadable += local[i].Unreadable
-				k.Repointed += local[i].Repointed
-				k.Raced += local[i].Raced
-			}
-			for _, s := range samples {
-				if len(rep.Samples) < bookHashSampleCap {
-					rep.Samples = append(rep.Samples, s)
-				}
-			}
-			mu.Unlock()
-			if n := int(done.Add(int64(len(chunk)))); progress != nil {
-				progress("checking entries", n, total)
-			}
-			return nil
-		})
+		rep.LegacySwept = swept
 	}
-	if err := g.Wait(); err != nil {
-		return rep, err
-	}
-	slices.SortFunc(rep.Samples, func(a, b BookHashIndexIssue) int {
-		if c := bytes.Compare([]byte(a.Kind), []byte(b.Kind)); c != 0 {
-			return c
-		}
-		return bytes.Compare([]byte(a.Hash), []byte(b.Hash))
-	})
+	rep.Trusted = trusted
 	return rep, nil
 }
 
-// checkOrRepairBookHash classifies one entry into out and, when apply is set
-// and it is broken, points the key at the live holder with the smallest id.
-// It returns the issue for the sample (nil when the entry is fine or left
-// alone).
-func (p *PebbleStore) checkOrRepairBookHash(t bookHashTask, apply bool, out *BookHashKindReport) (*BookHashIndexIssue, error) {
-	kind := bookHashKinds[t.kind]
-	key := []byte(kind.prefix + t.hash)
-	names, present, err := p.readBookHashKey(key)
-	if err != nil {
-		return nil, err
-	}
-	class := ""
-	switch {
-	case !present:
-		class = "missing"
-		out.Missing++
-	case slices.Contains(t.holders, names):
-		out.OK++
-		return nil, nil
-	default:
-		row, found, rerr := p.readBookHashRow(names)
-		switch {
-		case rerr != nil:
-			// Cannot decode what the key names: a guess would overwrite
-			// someone's entry. Counted, left alone.
-			out.Unreadable++
-			return nil, nil
-		case !found:
-			class = "dangling"
-			out.Dangling++
-		case markedForDeletionFlag(row.MarkedForDeletion) && kind.of(row) == t.hash:
-			class = "trashed_owner"
-			out.TrashedOwner++
-		default:
-			class = "wrong_holder"
-			out.WrongHolder++
+func cmpStrings(a, b string) int { return bytes.Compare([]byte(a), []byte(b)) }
+
+// sweepLegacyBookHashKeys deletes the retired single-valued keys. It only
+// writes when one exists, so the boot ensure does not add range tombstones on
+// every start. Callers must have set the sentinel first.
+func (p *PebbleStore) sweepLegacyBookHashKeys() (bool, error) {
+	swept := false
+	for i := range bookHashKinds {
+		lower := []byte(bookHashKinds[i].legacyPrefix)
+		upper := bareRowUpperBound(bookHashKinds[i].legacyPrefix)
+		iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+		if err != nil {
+			return swept, err
 		}
+		found := iter.First()
+		ierr := iter.Error()
+		iter.Close()
+		if ierr != nil {
+			return swept, ierr
+		}
+		if !found {
+			continue
+		}
+		if err := p.db.DeleteRange(lower, upper, pebble.Sync); err != nil {
+			return swept, fmt.Errorf("delete legacy %s keys: %w", bookHashKinds[i].legacyPrefix, err)
+		}
+		swept = true
+		bookHashIndexLog.Info("deleted the legacy single-valued keys %s", bookHashKinds[i].legacyPrefix)
 	}
-	chosen := t.holders[0]
-	issue := &BookHashIndexIssue{Kind: kind.name, Hash: t.hash, Class: class, Names: names, LiveHolder: chosen}
-	if !apply {
-		return issue, nil
-	}
-	raced, err := p.repointBookHashKey(key, names, present, chosen)
-	if err != nil {
-		return nil, err
-	}
-	if raced {
-		out.Raced++
-	} else {
-		out.Repointed++
-	}
-	return issue, nil
+	return swept, nil
 }
 
-// readBookHashKey returns what a hash index key holds.
+// readBookHashKey returns what a legacy single-valued index key holds.
 func (p *PebbleStore) readBookHashKey(key []byte) (value string, present bool, err error) {
 	v, closer, err := p.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
@@ -429,44 +628,4 @@ func (p *PebbleStore) readBookHashKey(key []byte) (value string, present bool, e
 	}
 	defer closer.Close()
 	return string(v), true, nil
-}
-
-// readBookHashRow reads the hash-relevant part of book id's row. found is
-// false when there is no row; err is a decode failure only.
-func (p *PebbleStore) readBookHashRow(id string) (row *bookHashRow, found bool, err error) {
-	v, closer, gerr := p.db.Get([]byte("book:" + id))
-	if errors.Is(gerr, pebble.ErrNotFound) {
-		return nil, false, nil
-	}
-	if gerr != nil {
-		return nil, false, gerr
-	}
-	defer closer.Close()
-	var r bookHashRow
-	if err := json.Unmarshal(v, &r); err != nil {
-		return nil, true, err
-	}
-	return &r, true, nil
-}
-
-// repointBookHashKey sets key to chosen if it still holds what the check read
-// (observed, or nothing when it was absent). raced is true, and nothing is
-// written, when it changed meanwhile.
-func (p *PebbleStore) repointBookHashKey(key []byte, observed string, wasPresent bool, chosen string) (raced bool, err error) {
-	cur, present, err := p.readBookHashKey(key)
-	if err != nil {
-		return false, err
-	}
-	if present != wasPresent || cur != observed {
-		return true, nil
-	}
-	batch := p.db.NewBatch()
-	defer batch.Close()
-	if err := batch.Set(key, []byte(chosen), nil); err != nil {
-		return false, err
-	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return false, fmt.Errorf("repoint index key %q: %w", key, err)
-	}
-	return false, nil
 }

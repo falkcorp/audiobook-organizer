@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.2
+// version: 1.234.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-23
 
@@ -158,6 +158,11 @@ type PebbleStore struct {
 	// bookAtPathBuilt caches a positive read of the book_atpath: backfill
 	// sentinel. Only true is ever stored; see bookAtPathIndexBuilt.
 	bookAtPathBuilt atomic.Bool
+
+	// bookHashTrusted caches a positive read of the file-hash index sentinel
+	// (pebble_store_book_hash_index.go): once true, lookups ignore the legacy
+	// single-valued keys.
+	bookHashTrusted atomic.Bool
 	// opChangeByBookGen and opChangeByBookBuiltAt cache a positive read of the
 	// opchange_by_book: backfill sentinel. The cache is valid only while
 	// opChangeByBookBuiltAt == opChangeByBookGen+1; the rebuild and Reset bump
@@ -1918,50 +1923,20 @@ func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 	return books, nil
 }
 
+// GetBookByFileHash, GetBookByOriginalHash and GetBookByOrganizedHash resolve a
+// file hash through the multi-valued book_hash: family (see
+// pebble_store_book_hash_index.go): the live holder with the smallest id, else
+// the trashed holder with the smallest id, else nil.
 func (p *PebbleStore) GetBookByFileHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:hash:%s", hash))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer closer.Close()
-
-	id := string(value) // ULID string
-
-	return p.GetBookByID(id)
+	return p.bookByHash(bookHashKindFile, hash)
 }
 
 func (p *PebbleStore) GetBookByOriginalHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:originalhash:%s", hash))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer closer.Close()
-
-	id := string(value)
-	return p.GetBookByID(id)
+	return p.bookByHash(bookHashKindOriginal, hash)
 }
 
 func (p *PebbleStore) GetBookByOrganizedHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:organizedhash:%s", hash))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer closer.Close()
-
-	id := string(value)
-	return p.GetBookByID(id)
+	return p.bookByHash(bookHashKindOrganized, hash)
 }
 
 // GetBookBySegmentFileHash returns the parent Book of the first book_file whose
@@ -3126,29 +3101,12 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 		return nil, err
 	}
 
-	// Hash index (if hash provided)
-	if book.FileHash != nil && *book.FileHash != "" {
-		hashKey := []byte(fmt.Sprintf("book:hash:%s", *book.FileHash))
-		if err := batch.Set(hashKey, []byte(book.ID), nil); err != nil {
-			batch.Close()
-			return nil, err
-		}
-	}
-
-	if book.OriginalFileHash != nil && *book.OriginalFileHash != "" {
-		origKey := []byte(fmt.Sprintf("book:originalhash:%s", *book.OriginalFileHash))
-		if err := batch.Set(origKey, []byte(book.ID), nil); err != nil {
-			batch.Close()
-			return nil, err
-		}
-	}
-
-	if book.OrganizedFileHash != nil && *book.OrganizedFileHash != "" {
-		orgKey := []byte(fmt.Sprintf("book:organizedhash:%s", *book.OrganizedFileHash))
-		if err := batch.Set(orgKey, []byte(book.ID), nil); err != nil {
-			batch.Close()
-			return nil, err
-		}
+	// Multi-valued file-hash indexes, same batch as the row: one key per
+	// (hash, book), so no other book's write can erase it
+	// (pebble_store_book_hash_index.go).
+	if err := stageBookHashKeys(batch, nil, book); err != nil {
+		batch.Close()
+		return nil, err
 	}
 
 	// Version-group index (PERF-VERSIONS): O(N) full-scan in
@@ -3511,48 +3469,10 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		}
 	}
 
-	updateHashIndex := func(oldVal, newVal *string, prefix string) error {
-		var oldStr, newStr string
-		if oldVal != nil {
-			oldStr = *oldVal
-		}
-		if newVal != nil {
-			newStr = *newVal
-		}
-		if oldStr == newStr {
-			return nil
-		}
-		if oldStr != "" {
-			// Compare-and-delete: each of these indexes keeps ONE owner per
-			// hash (last writer wins), so a book that shares the hash with
-			// another may not own the row. Deleting it unconditionally
-			// erased the other live book's lookup, the same bug DeleteBook
-			// had (pebble_store_book_path_owner.go). A row this book owned
-			// while a sibling still holds the hash is left missing for the
-			// sibling; maintenance.book-hash-index-repair restores it.
-			oldKey := []byte(fmt.Sprintf("book:%s:%s", prefix, oldStr))
-			if err := p.deleteKeyIfValueIs(batch, oldKey, id); err != nil {
-				return err
-			}
-		}
-		if newStr != "" {
-			newKey := []byte(fmt.Sprintf("book:%s:%s", prefix, newStr))
-			if err := batch.Set(newKey, []byte(id), nil); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	if err := updateHashIndex(oldBook.FileHash, book.FileHash, "hash"); err != nil {
-		batch.Close()
-		return nil, err
-	}
-	if err := updateHashIndex(oldBook.OriginalFileHash, book.OriginalFileHash, "originalhash"); err != nil {
-		batch.Close()
-		return nil, err
-	}
-	if err := updateHashIndex(oldBook.OrganizedFileHash, book.OrganizedFileHash, "organizedhash"); err != nil {
+	// File-hash indexes: delete the keys of hashes this book gave up, set the
+	// keys of the hashes it holds (unconditionally, so a missing key heals).
+	// Each key belongs to this book alone (pebble_store_book_hash_index.go).
+	if err := stageBookHashKeys(batch, oldBook, book); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -4190,30 +4110,12 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		}
 	}
 
-	// Delete the three file-hash index rows CreateBook writes. Same dangling-row
-	// class as the work index above: without these, book:hash / book:originalhash
-	// / book:organizedhash lookups resolve to a hard-deleted book ID. Guards
-	// mirror CreateBook's (nil / empty-string skipped).
-	//
-	// Each key is single-valued (last writer wins), so two books holding the
-	// same file share one: it is deleted only while it still names THIS book
-	// (deleteKeyIfValueIs), like the path key above. An unconditional delete
-	// erased the lookup key of the live book that owned it.
-	for _, h := range []struct {
-		prefix string
-		hash   *string
-	}{
-		{"book:hash:", book.FileHash},
-		{"book:originalhash:", book.OriginalFileHash},
-		{"book:organizedhash:", book.OrganizedFileHash},
-	} {
-		if h.hash == nil || *h.hash == "" {
-			continue
-		}
-		if err := p.deleteKeyIfValueIs(batch, []byte(h.prefix+*h.hash), id); err != nil {
-			batch.Close()
-			return err
-		}
+	// Delete the file-hash index keys CreateBook writes. Each is per (hash,
+	// book), so this removes only this book's own keys and can never erase the
+	// lookup of another book that holds the same file.
+	if err := stageBookHashKeyDeletes(batch, book); err != nil {
+		batch.Close()
+		return err
 	}
 
 	statePrefix := []byte(fmt.Sprintf("metadata_state:%s:", id))
