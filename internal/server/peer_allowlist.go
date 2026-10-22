@@ -167,7 +167,9 @@ type peerAllowParsed struct {
 // value, read lock-free on every request. The value is environment-only and
 // fixed for the life of the process, so a second distinct value only happens
 // in tests.
-type peerAllowCache struct{ cur atomic.Pointer[peerAllowParsed] }
+type peerAllowCache struct {
+	cur atomic.Pointer[peerAllowParsed]
+}
 
 var peerAllowed peerAllowCache
 
