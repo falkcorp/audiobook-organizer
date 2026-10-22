@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
 // last-edited: 2026-10-21
 
@@ -118,6 +118,27 @@ func (h *Handler) Login(c *gin.Context) {
 		})
 		respondError(c, http.StatusInternalServerError, "could not verify credentials")
 		return
+	}
+	// While the aggregate login ceilings are spent (absauth.MarkLoginSaturated) an
+	// account with few failures of its own is delayed, not refused, before any
+	// password work; one that has already failed SoftThreshold times is refused. An
+	// unknown username is delayed like any other.
+	if absauth.LoginSaturated(c) {
+		accountID := ""
+		if user != nil {
+			accountID = user.ID
+		}
+		delay, refuse := absauth.SaturationPolicy(h.throttle.AccountFailures(accountID))
+		if refuse {
+			absauth.Audit(absauth.AuditEvent{
+				Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
+				Username: username, UserID: accountID, Reason: "login-ceiling-account-failures",
+				Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
+			})
+			respondError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later")
+			return
+		}
+		h.throttle.Delay(delay)
 	}
 	if user == nil {
 		// Charge the IP even for an unknown username so guessing cannot dodge the

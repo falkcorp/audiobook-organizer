@@ -1,5 +1,5 @@
 // file: internal/server/absauth/throttle.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9a1c86-2d57-4e0b-b843-9c60e5a7f218
 // last-edited: 2026-10-21
 
@@ -113,6 +113,21 @@ func (t *Throttle) IPBlocked(ip string) bool {
 		return false
 	}
 	return c.count >= MaxFailuresPerIP
+}
+
+// AccountFailures is the number of failures counted against accountID in the
+// current window (0 for an unknown or expired account). It only reads.
+func (t *Throttle) AccountFailures(accountID string) int {
+	if accountID == "" {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, ok := t.byAcct[accountID]
+	if !ok || t.now().Sub(c.firstAt) > Window {
+		return 0
+	}
+	return c.count
 }
 
 // RecordFailure counts one failed attempt against both the account (soft) and the
