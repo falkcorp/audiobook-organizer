@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.9.4
+// version: 1.9.5
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
 // last-edited: 2026-10-22
 
@@ -1444,6 +1444,17 @@ func opv2CheckRole(fset *token.FileSet, key, role string, fd *ast.FuncDecl, allo
 		if !opv2Calls(fd.Body, "doneKeysForIDs") || !usesOpen {
 			add("(role sweep) must delete opv2OpenKey and the doneKeysForIDs keys of the rows it removes")
 		}
+		// The sweep removes a hollow operation's plan rows through the
+		// row-range helper only. A DeleteRange written in the sweep itself is
+		// flagged whatever prefix it names: the key-flow rule follows only
+		// opv2:op: keys, so it would let a range over another family (or one
+		// whose end bound reaches opv2:op:) through.
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok && opv2CalleeName(c) == "DeleteRange" {
+				add("(role sweep) calls DeleteRange at %s; range-delete plan rows only through stageOpRowsDelete", pos(c))
+			}
+			return true
+		})
 	case "read":
 		allowedDB := map[ast.Node]bool{}
 		ast.Inspect(fd.Body, func(n ast.Node) bool {
@@ -1765,8 +1776,9 @@ func TestOpsV2Timeline_CloseClearsTrust(t *testing.T) {
 // TestOpv2KeyRatchet_SweepRangeDeleteIsNarrow pins how far the sweep role was
 // loosened: a hollow id (derived from an opv2:op: key) may reach the row-range
 // helper stageOpRowsDelete, and nothing else that deletes a range. A
-// DeleteRange of any other prefix built from that id, including one that
-// would cover opv2:op: itself, is still flagged.
+// DeleteRange written in the sweep itself is flagged whatever prefix it names:
+// one derived from the walked key, one covering opv2:op:, the op key itself,
+// another family's prefix built from the id, and a fixed prefix.
 func TestOpv2KeyRatchet_SweepRangeDeleteIsNarrow(t *testing.T) {
 	const head = `package p
 func (p *PebbleStore) Sweep(it iter, batch b) error {
@@ -1794,9 +1806,11 @@ func (p *PebbleStore) Sweep(it iter, batch b) error {
 		t.Fatalf("the row-range helper must be accepted in the sweep role, got:\n%s", joined(v))
 	}
 	for name, body := range map[string]string{
-		"a range delete of a prefix derived from the walked key": "\t\tq := append([]byte(nil), prefix...)\n\t\t_ = batch.DeleteRange(q, prefixEnd(q), nil)\n",
-		"a range delete of the whole opv2:op: family":            "\t\t_ = batch.DeleteRange(prefix, prefixEnd(prefix), nil)\n",
-		"a range delete of the op row and what follows it":       "\t\t_ = batch.DeleteRange(opv2OpKey(id), prefixEnd(opv2OpKey(id)), nil)\n",
+		"a range delete of a prefix derived from the walked key":      "\t\tq := append([]byte(nil), prefix...)\n\t\t_ = batch.DeleteRange(q, prefixEnd(q), nil)\n",
+		"a range delete of the whole opv2:op: family":                 "\t\t_ = batch.DeleteRange(prefix, prefixEnd(prefix), nil)\n",
+		"a range delete of the op row and what follows it":            "\t\t_ = batch.DeleteRange(opv2OpKey(id), prefixEnd(opv2OpKey(id)), nil)\n",
+		"a range delete of another family's prefix built from the id": "\t\t_ = batch.DeleteRange([]byte(\"opv2:log:\"+id), prefixEnd([]byte(\"opv2:log:\"+id)), nil)\n",
+		"a range delete of a fixed prefix unrelated to the id":        "\t\t_ = batch.DeleteRange([]byte(\"opv2:open:\"), prefixEnd([]byte(\"opv2:open:\")), nil)\n",
 	} {
 		v := check(body)
 		if len(v) == 0 {

@@ -22,7 +22,7 @@ A new `PlanOnly` capability marks a fixer that has no Apply. The fixer list repo
 
 #### Repairs lane — filter a plan's rows by a flag
 
-A row can now carry flags, a second dimension next to its class. The plan's rows page reports `by_flag` counts and accepts the filter `flag:<name>`, answered from the stored row index without reading every row. The retired-versions plan sets `combine_undo_aware` this way, and the plan view shows it as a clickable chip ("From a combine that can still be undone") that opens exactly those rows. A flag name must be a single word without commas or whitespace; a plan whose rows carry one the index cannot hold fails instead of storing a count that would not match its rows. The stored row-index entry gained a fourth field for the flags; plans stored in the previous entry format by the unreleased earlier build are refused the same way as legacy plans.
+A row can now carry flags, a second dimension next to its class. The plan's rows page reports `by_flag` counts and accepts the filter `flag:<name>`, answered from the stored row index without reading every row. The retired-versions plan sets `combine_undo_aware` this way, and the plan view shows it as a clickable chip ("From a combine that can still be undone") that opens exactly those rows. A flag name must be a single word without commas or whitespace; a plan whose rows carry one the index cannot hold fails instead of storing a count that would not match its rows. The stored row-index entry gained a fourth field for the flags; there is no compatibility with the entry format of the unreleased earlier build, which was never deployed.
 
 #### Abandoned-call gauge
 
@@ -45,7 +45,7 @@ The on-disk check of files for books with no target is bounded per file, checks 
 
 #### Repairs guard — each distinct file path is matched once
 
-The owner-manual and iTunes checks matched a book's own `file_path` again when it was also one of its book-file rows, and again for a resolved spelling equal to the path. Each distinct spelling is now resolved and matched once, in first-seen order, so the reasons are unchanged. On a synthetic 51,000-book fixture (ordinary titles, two files, two authors, a narrator and three tags per book, no franchise match) the guard over every book took 46 s on one core and 12 s on ten before this, and 29 s and 4.8 s after; the franchise regexes dominate what is left.
+The owner-manual and iTunes checks matched a book's own `file_path` again when it was also one of its book-file rows, and again for a resolved spelling equal to the path. Each distinct spelling is now resolved and matched once, in first-seen order, so the reasons are unchanged. A benchmark of the owner-manual check over 51,000 synthetic books (ordinary titles, two files, two authors, a narrator and three tags per book, nothing matching a franchise, in-memory reads, real files on disk) measured, on one developer machine, 39 s with one worker and 5.8 s with ten before this, and 28 s and 4.4 s after (about 0.55 ms and 0.09 ms per book). The numbers are noisy and exclude the store reads a real plan adds. The franchise regexes (already compiled once per process, and each book checked once per run) dominate what is left; a literal-keyword prefilter in front of them would be the next saving but changes the shared Doctor Who gate, so it is not part of this change.
 
 #### Hollow-operation sweep removes plan rows by a narrow helper
 

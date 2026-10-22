@@ -1,5 +1,5 @@
 // file: internal/repairs/guards_owner_manual_bench_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2f9d83-1c75-4e08-b4a6-3d91e7f05c28
 // last-edited: 2026-10-22
 
@@ -65,8 +65,16 @@ func newBenchGuardLibrary(tb testing.TB, root string, n int) (*benchGuardLibrary
 	}
 	const folders = 600
 	for f := 0; f < folders; f++ {
-		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("a%03d", f%400), fmt.Sprintf("book-%03d", f)), 0o755); err != nil {
+		dir := filepath.Join(root, fmt.Sprintf("a%03d", f%400), fmt.Sprintf("book-%03d", f))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			tb.Fatal(err)
+		}
+		// The files exist (a shared pair per folder), so the resolver's
+		// present-file branch is what is measured, as for most library rows.
+		for _, name := range []string{"part1.m4b", "part2.m4b"} {
+			if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+				tb.Fatal(err)
+			}
 		}
 	}
 	ids := make([]string, 0, n)
