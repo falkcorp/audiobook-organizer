@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-10-22
 
@@ -635,7 +635,7 @@ func (s *Server) wireABSRoutes() {
 	// password login only; /auth/refresh does no password work.
 	absGroup.Use(s.loginCeiling().middleware(func(c *gin.Context) bool {
 		return c.Request.Method == http.MethodPost && c.FullPath() == "/login"
-	}))
+	}, respondABSLoginError)) // ABS clients parse {"error": msg}, not the web envelope
 	handler.Register(absGroup)
 
 	if !handler.HasUserDataProvider() {

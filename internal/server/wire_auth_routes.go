@@ -1,7 +1,7 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -32,7 +32,7 @@ func (s *Server) wireAuthRoutes(
 	{
 		authGroup.GET("/status", authH.GetStatus)
 		authGroup.POST("/setup", authH.SetupInitialAdmin)
-		authGroup.POST("/login", s.loginCeiling().middleware(nil), authH.Login)
+		authGroup.POST("/login", s.loginCeiling().middleware(nil, respondWebLoginError), authH.Login)
 		authGroup.POST("/accept-invite", inviteLimits.middleware(inviteTokenFromBody), s.handleAcceptInvite)
 		authGroup.GET("/invite/:token", inviteLimits.middleware(inviteTokenFromParam), userH.PublicInvite)
 		authGroup.POST("/bootstrap", s.handleBootstrap)
