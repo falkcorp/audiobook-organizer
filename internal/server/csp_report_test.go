@@ -1,5 +1,5 @@
 // file: internal/server/csp_report_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b0cfe71e-4a49-4714-bc3b-9cbae5c214f5
 // last-edited: 2026-10-22
 
@@ -135,7 +135,7 @@ func TestCSPLogURL_Reduction(t *testing.T) {
 		"/invite/" + cspTestToken:                   "/invite/...",
 		"example.test/invite/" + cspTestToken:       "example.test/...",
 	} {
-		require.Equal(t, want, cspLogURL(raw, host, false), "%q", raw)
+		require.Equal(t, want, cspLogURL(raw, host), "%q", raw)
 	}
 	// The document URL is always cut to its first segment, whatever its host.
 	for raw, want := range map[string]string{
@@ -143,7 +143,31 @@ func TestCSPLogURL_Reduction(t *testing.T) {
 		"https://other.example/a/b":             "https://other.example/a/...",
 		"https://example.test/library":          "https://example.test/library",
 	} {
-		require.Equal(t, want, cspLogURL(raw, "", true), "document %q", raw)
+		require.Equal(t, want, cspLogURL(raw, cspURLHost(raw)), "document %q", raw)
+	}
+}
+
+// N: which host is "the same site" is compared normalised (case, trailing dot, a
+// port), and when the reported document has no host at all nothing is called
+// third-party: the path is cut. Only a different host keeps its redacted path.
+func TestCSPLogURL_SameSiteComparisonIsNormalised(t *testing.T) {
+	const tok = cspTestToken
+	for _, tc := range []struct{ page, blocked, want string }{
+		{"https://Public.Example/x", "https://public.example/secretpage/" + tok, "https://public.example/secretpage/..."},
+		{"https://public.example./x", "https://public.example/secretpage/" + tok, "https://public.example/secretpage/..."},
+		{"https://public.example/x", "https://public.example./secretpage/" + tok, "https://public.example./secretpage/..."},
+		{"https://public.example/x", "https://public.example:443/secretpage/" + tok, "https://public.example:443/secretpage/..."},
+		{"https://public.example:8484/x", "https://public.example/secretpage/" + tok, "https://public.example/secretpage/..."},
+		{"https://public.example/x", "HTTPS://PUBLIC.EXAMPLE/secretpage/" + tok, "https://PUBLIC.EXAMPLE/secretpage/..."},
+		{"", "https://public.example/secretpage/" + tok, "https://public.example/secretpage/..."},
+		{"/relative/doc", "https://public.example/secretpage/" + tok, "https://public.example/secretpage/..."},
+		{"https://[::1]/x", "https://[::1]/secretpage/" + tok, "https://[::1]/secretpage/..."},
+		{"https://public.example/x", "https://cdn.other/lib/app.js", "https://cdn.other/lib/app.js"},
+	} {
+		got := parseCSPReports([]byte(`[{"type":"csp-violation","body":{"documentURL":"` + tc.page + `","blockedURL":"` + tc.blocked + `"}}]`))
+		require.Len(t, got, 1)
+		require.Equal(t, tc.want, got[0].blocked, "page %q blocked %q", tc.page, tc.blocked)
+		require.NotContains(t, got[0].blocked+got[0].page, tok)
 	}
 }
 
@@ -164,6 +188,8 @@ func TestCSPReportHandler_SameOriginIsTheReportedDocumentsNotTheRequestHost(t *t
 		"https://public.example/invite/" + cspTestToken + "/",
 		"https://public.example/api/v1/auth/invite/" + cspTestToken,
 		"https://public.example/api/v1/Auth//invite/" + cspTestToken,
+		"https://public.example/api/v1/auth/invite%2F" + cspTestToken,
+		"https://cdn.example/api/v1/auth/invite%2F" + cspTestToken,
 		"https://public.example/some/unknown/" + cspTestToken,
 	}
 	for _, host := range []string{"public.example", "127.0.0.1:8484", "Public.Example", ""} {
@@ -327,7 +353,7 @@ func TestCSPReportHandler_LimitCountsReportsNotRequests(t *testing.T) {
 func TestCSPReportHandler_FullBatchIsLoggedWithProductionLimits(t *testing.T) {
 	for _, n := range []int{1, 5, 6, 8, 10} {
 		buf := captureSlog(t)
-		rep := newCSPReporter(rate.NewLimiter(rate.Every(2*time.Second), 10))
+		rep := newCSPReporter(rate.NewLimiter(rate.Every(2*time.Second), 30)) // the production limits
 		r := cspReportRouter(rep)
 		var items []string
 		for i := 0; i < n; i++ {
@@ -407,4 +433,59 @@ func TestCSPReporter_VisitorTableIsBoundedAndSwept(t *testing.T) {
 	now = now.Add(cspVisitorIdle + time.Second)
 	rep.admit("fresh", 1)
 	require.Equal(t, 1, rep.visitors.Len(), "idle visitors are swept")
+}
+
+// B4-1: with 7 whole tokens left in the service budget a batch of 10 logs 7 and
+// the other 3 are dropped (and counted by the handler), not all 10 dropped.
+func TestCSPReporter_PartialBudgetAdmitsWhatIsLeft(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	svc := rate.NewLimiter(rate.Every(time.Hour), 30)
+	rep := newCSPReporter(svc)
+	rep.now = func() time.Time { return now }
+	svc.AllowN(now, 23)
+	require.Equal(t, 7, rep.admit("198.51.100.1", 10))
+	require.Equal(t, 0, rep.admit("198.51.100.2", 1), "and the budget is exactly spent, not overdrawn")
+	require.InDelta(t, 0, svc.TokensAt(now), 0.001)
+}
+
+// B4-1: the library's CancelAt loses tokens when reservations interleave, which
+// let concurrent REFUSED requests push the service limiter into debt (and so
+// silence CSP logging for everyone for a long time). admit decides and charges
+// under one lock and charges nothing for a refusal, so under -race:
+//   - a visitor whose own budget is spent never moves the service tokens, and
+//   - a drained service stays at exactly zero, never negative.
+func TestCSPReporter_ConcurrentRefusalsNeverMoveTheServiceBudget(t *testing.T) {
+	now := time.Unix(3_000_000, 0)
+	hammer := func(rep *cspReporter, visitor func(g, i int) string) {
+		var wg sync.WaitGroup
+		for g := 0; g < 32; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				for i := 0; i < 200; i++ {
+					if got := rep.admit(visitor(g, i), 1+i%10); got != 0 {
+						t.Errorf("a refused visitor was admitted %d", got)
+					}
+				}
+			}(g)
+		}
+		wg.Wait()
+	}
+	t.Run("spent visitor", func(t *testing.T) {
+		svc := rate.NewLimiter(rate.Every(time.Hour), 30)
+		rep := newCSPReporter(svc)
+		rep.now = func() time.Time { return now }
+		require.Equal(t, 10, rep.admit("attacker", 10)) // spends the visitor's whole burst
+		hammer(rep, func(int, int) string { return "attacker" })
+		require.InDelta(t, 20, svc.TokensAt(now), 0.001, "the refusals did not touch the service budget")
+	})
+	t.Run("drained service", func(t *testing.T) {
+		svc := rate.NewLimiter(rate.Every(time.Hour), 30)
+		rep := newCSPReporter(svc)
+		rep.now = func() time.Time { return now }
+		svc.AllowN(now, 30)
+		hammer(rep, func(g, i int) string { return fmt.Sprintf("v-%d-%d", g, i%20) })
+		require.GreaterOrEqual(t, svc.TokensAt(now), 0.0, "never in debt")
+		require.InDelta(t, 0, svc.TokensAt(now), 0.001)
+	})
 }

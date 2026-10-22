@@ -1,5 +1,5 @@
 // file: internal/server/csp_report.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d896d6d8-b883-482d-8e34-d41a4abd52df
 // last-edited: 2026-10-22
 
@@ -50,7 +50,7 @@ var cspReportLog = logger.New("server.csp")
 // one per visitor key, so a single caller cannot spend the service's budget and
 // leave a real browser's reports unlogged. The limits count REPORTS, not
 // requests: a request carries up to cspReportMaxPerRequest of them, of which at
-// most one burst's worth is charged and logged. Reports over a limit are dropped
+// most as many as both budgets hold are charged and logged. Reports over a limit are dropped
 // and counted; the count is added to the next line that is let through.
 type cspReporter struct {
 	limiter *rate.Limiter
@@ -91,27 +91,22 @@ func newCSPReporter(limiter *rate.Limiter) *cspReporter {
 	}
 }
 
-// The service-wide limit: a burst of 10 reports and one more every two seconds
-// (30 a minute sustained): enough to see every distinct violation of a page
-// load, far less than a flood.
-var defaultCSPReporter = newCSPReporter(rate.NewLimiter(rate.Every(2*time.Second), 10))
+// The service-wide limit: a burst of 30 reports (three full batches, so one
+// visitor's full batch can never use up the whole burst) and one more every two
+// seconds (30 a minute sustained): enough to see every distinct violation of a
+// page load, far less than a flood.
+var defaultCSPReporter = newCSPReporter(rate.NewLimiter(rate.Every(2*time.Second), 30))
 
-// burstCap is the most reports l can ever admit at once: its burst, or anything
-// when it has no limit.
-func burstCap(l *rate.Limiter, n int) int {
-	if l.Limit() == rate.Inf {
-		return n
-	}
-	return min(n, l.Burst())
-}
-
-// admit decides how many of n reports from visitor may be logged: all of them up
-// to the smaller of the two bursts, or none when either budget cannot cover that
-// many right now. (Capping at the burst, rather than refusing a batch larger than
-// it, keeps a full report-to batch from being dropped forever.) The service
-// limiter is charged first and the visitor's tokens are only spent when it agrees,
-// and a refusal by the second hands the first back, so a refused request costs
-// neither budget.
+// admit decides how many of n reports from visitor may be logged: as many as
+// BOTH budgets hold whole tokens for right now, up to n (a batch larger than the
+// smaller burst is capped at it rather than refused, so a full report-to batch is
+// not dropped forever), or none. The whole decision is made under r.mu, the only
+// path to either limiter: the tokens are read and then charged with AllowN at the
+// same instant, so concurrent requests cannot interleave a check and a charge, and
+// a request that is refused charges nothing at all. (An earlier version reserved
+// from the service limiter and handed the reservation back on refusal; the
+// library's CancelAt does not restore tokens when another reservation was taken in
+// between, so concurrent refusals left the service limiter in debt.)
 func (r *cspReporter) admit(visitor string, n int) int {
 	if n <= 0 {
 		return 0
@@ -119,8 +114,9 @@ func (r *cspReporter) admit(visitor string, n int) int {
 	if visitor == "" {
 		visitor = "?"
 	}
-	now := r.now()
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
 	r.visitors.Sweep(func(v *cspVisitor) bool { return now.Sub(v.lastSeen) > cspVisitorIdle })
 	v, ok := r.visitors.Get(visitor)
 	if !ok {
@@ -128,20 +124,22 @@ func (r *cspReporter) admit(visitor string, n int) int {
 	}
 	v.lastSeen = now
 	r.visitors.Put(visitor, v)
-	r.mu.Unlock()
-	k := min(burstCap(r.limiter, n), burstCap(v.limiter, n))
-	svc := r.limiter.ReserveN(now, k)
-	if !svc.OK() || svc.DelayFrom(now) > 0 {
-		svc.CancelAt(now)
+	k := min(n, tokensAvailable(r.limiter, now, n), tokensAvailable(v.limiter, now, n))
+	if k <= 0 {
 		return 0
 	}
-	vis := v.limiter.ReserveN(now, k)
-	if !vis.OK() || vis.DelayFrom(now) > 0 {
-		vis.CancelAt(now)
-		svc.CancelAt(now)
-		return 0
-	}
+	r.limiter.AllowN(now, k)
+	v.limiter.AllowN(now, k)
 	return k
+}
+
+// tokensAvailable is how many whole tokens l holds at now (n when it has no limit),
+// never more than its burst.
+func tokensAvailable(l *rate.Limiter, now time.Time, n int) int {
+	if l.Limit() == rate.Inf {
+		return n
+	}
+	return max(0, int(l.TokensAt(now)))
 }
 
 // handle answers 204 for any well-formed request, logged or not (a browser does
@@ -241,15 +239,15 @@ func cspViolationFrom(m map[string]any, directive, blocked, page, source, line, 
 	docHost := cspURLHost(str(page))
 	return cspViolation{
 		directive: cspLogField(d),
-		blocked:   cspLogField(cspLogURL(str(blocked), docHost, false)),
-		page:      cspLogField(cspLogURL(str(page), docHost, true)),
-		source:    cspLogField(cspLogURL(str(source), docHost, false)),
+		blocked:   cspLogField(cspLogURL(str(blocked), docHost)),
+		page:      cspLogField(cspLogURL(str(page), docHost)),
+		source:    cspLogField(cspLogURL(str(source), docHost)),
 		line:      cspLogField(str(line)),
 	}
 }
 
-// cspURLHost is the host of a reported document URL ("" when it has none: a
-// relative or schemeless URL, or one that does not parse).
+// cspURLHost is the normalised host of a reported document URL ("" when it has
+// none: a relative or schemeless URL, or one that does not parse).
 func cspURLHost(raw string) string {
 	if i := strings.IndexAny(raw, "?#"); i >= 0 {
 		raw = raw[:i]
@@ -258,7 +256,14 @@ func cspURLHost(raw string) string {
 	if err != nil {
 		return ""
 	}
-	return u.Host
+	return cspHostName(u)
+}
+
+// cspHostName is the host of u reduced to what decides "the same site": lower
+// case, no port (so :443 and :8443 on one name are not told apart, which can only
+// cut more, never less) and no trailing dot (example.test. is example.test).
+func cspHostName(u *url.URL) string {
+	return strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 }
 
 // cspLogURL is the ONE reduction every reported URL (the page, the source file,
@@ -272,16 +277,17 @@ func cspURLHost(raw string) string {
 //   - the path goes through servermiddleware.RedactLogPath (invite tokens live in
 //     the path: /invite/<token>), which matches without regard to case and skips
 //     empty segments;
-//   - the path is then cut to its first segment when cut is set (the DOCUMENT URL
-//     always is: it is a page of this app) or when the URL is SAME-ORIGIN as the
-//     reported document (same host, or no host at all, as in a relative or
-//     schemeless URL), because the redaction knows only the routes it was taught
-//     and the app's own pages put secrets in the path. docHost is the host of the
-//     reported document, not of the request: a proxy may rewrite Host, and the
-//     browser's own report is the authority on what origin the page was. A
-//     cross-origin URL keeps its redacted path, which is what makes a blocked
-//     third-party script identifiable.
-func cspLogURL(raw, docHost string, cut bool) string {
+//   - the path is then cut to its first segment when the URL is SAME-SITE as the
+//     reported document (same normalised host, see cspHostName; or no host at all,
+//     as in a relative or schemeless URL), or when the document's host is not
+//     known (nothing can be said to be third-party then), because the redaction
+//     knows only the routes it was taught and the app's own pages put secrets in
+//     the path. The document's own URL is always cut by this rule: its host is
+//     docHost. docHost is the host of the reported document, not of the request: a
+//     proxy may rewrite Host, and the browser's own report is the authority on
+//     what origin the page was. A cross-origin URL keeps its redacted path, which
+//     is what makes a blocked third-party script identifiable.
+func cspLogURL(raw, docHost string) string {
 	if i := strings.IndexAny(raw, "?#"); i >= 0 {
 		raw = raw[:i]
 	}
@@ -303,7 +309,7 @@ func cspLogURL(raw, docHost string, cut bool) string {
 	if scheme == "" {
 		scheme = "https"
 	}
-	if cut || (docHost != "" && strings.EqualFold(u.Host, docHost)) {
+	if docHost == "" || cspHostName(u) == docHost {
 		return scheme + "://" + u.Host + firstSegment(redacted)
 	}
 	return scheme + "://" + u.Host + redacted
