@@ -1,5 +1,5 @@
 // file: internal/undo/membership_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 352f989b-8de0-44c0-b537-7e18620e3abf
 // last-edited: 2026-10-22
 
@@ -10,36 +10,31 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// l0 = [S, L, X]. L was retired into S by a record without anchors
-// (Anchored false), X is retired into S with anchors (prev L). Reverting X: the
-// backward walk dead-ends at L (no record names its place), so the slot is
-// unbounded on one side and must not be guessed; the head is not a bound the
-// walk reached.
+// l0 = [S, L, X]. L left the list without a record that names its place (the
+// owner took it out by hand, say), X is retired into S with the anchor prev L.
+// Reverting X: the backward walk dead-ends at L (no record names its place), so
+// the slot is unbounded on one side and must not be guessed; the head is not a
+// bound the walk reached.
 func TestSlot_DeadEndBackwardWalkIsNotGuessed(t *testing.T) {
 	t.Parallel()
 	t0 := time.Unix(1_700_000_000, 0)
 	enc := func(r MembershipRecord) string { v, _ := EncodeMembership(r); return v }
-	recL := MembershipRecord{Index: 1, SurvivorWasMember: true} // legacy, no anchors
 	recX := MembershipRecord{Index: 1, SurvivorWasMember: true, Anchored: true, Prev: "L"}
 	held := UserContentField(HeldKind(UserContentCollection), "L1")
 	main := UserContentField(UserContentCollection, "L1")
-	mL := &database.OperationChange{ID: "op1/m", OperationID: "op1", BookID: "S", ChangeType: ChangeTypeUserContentFollow, FieldName: held, OldValue: enc(recL), NewValue: "L", CreatedAt: t0}
-	rL := &database.OperationChange{ID: "op1/r", OperationID: "op1", BookID: "L", ChangeType: ChangeTypeUserContentFollow, FieldName: main, OldValue: enc(recL), NewValue: "S", CreatedAt: t0}
 	mX := &database.OperationChange{ID: "op2/m", OperationID: "op2", BookID: "S", ChangeType: ChangeTypeUserContentFollow, FieldName: held, OldValue: enc(recX), NewValue: "X", CreatedAt: t0.Add(time.Second)}
 	rX := &database.OperationChange{ID: "op2/r", OperationID: "op2", BookID: "X", ChangeType: ChangeTypeUserContentFollow, FieldName: main, OldValue: enc(recX), NewValue: "S", CreatedAt: t0.Add(time.Second)}
-	j := map[string][]*database.OperationChange{"S": {mL, mX}, "L": {rL}, "X": {rX}}
+	rows := []*database.OperationChange{mX, rX}
 	g := NewMembershipGraph("S", UserContentCollection, "L1")
 	g.SetRow(rX)
-	g.AddJournal("S", j["S"])
-	g.SetJournalLoader(func(b string) ([]*database.OperationChange, error) { return j[b], nil })
-	stand, _ := SurvivorStandFor(j["S"], rX, UserContentCollection, "L1")
+	g.AddRows(rows)
+	stand, _ := SurvivorStandFor(rows, rX, UserContentCollection, "L1")
 	next, note, err := RestoreMembership([]string{"S"}, "X", "S", recX, stand, g)
 	if err != nil {
 		t.Fatal(err)
@@ -51,11 +46,10 @@ func TestSlot_DeadEndBackwardWalkIsNotGuessed(t *testing.T) {
 
 // longHistory is a list [z] and a book p0 whose place rests on a chain of n
 // further retired books p1..pn, each recorded right after the next one and the
-// last right after the listed book z, every record in the journal of its own
-// book only (so the graph has to read them one by one).
-func longHistory(n int) (g *MembershipGraph, loads func() int) {
+// last right after the listed book z.
+func longHistory(n int) (g *MembershipGraph) {
 	t0 := time.Unix(1_700_000_000, 0)
-	journals := map[string][]*database.OperationChange{}
+	var rows []*database.OperationChange
 	var row0 *database.OperationChange
 	for i := 0; i <= n; i++ {
 		prev := "z"
@@ -66,67 +60,28 @@ func longHistory(n int) (g *MembershipGraph, loads func() int) {
 		row := &database.OperationChange{ID: fmt.Sprintf("r%d", i), OperationID: fmt.Sprintf("op%d", i), BookID: fmt.Sprintf("p%d", i),
 			ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(UserContentCollection, "L"),
 			OldValue: rec, NewValue: "S", CreatedAt: t0.Add(time.Duration(i) * time.Second)}
-		journals[row.BookID] = []*database.OperationChange{row}
+		rows = append(rows, row)
 		if i == 0 {
 			row0 = row
 		}
 	}
 	g = NewMembershipGraph("S", UserContentCollection, "L")
 	g.SetRow(row0)
-	reads := 0
-	g.SetJournalLoader(func(b string) ([]*database.OperationChange, error) { reads++; return journals[b], nil })
-	return g, func() int { return reads }
+	g.AddRows(rows)
+	return g
 }
 
-// The most journals one placement reads is maxJournalLoads: a history that needs
-// exactly that many is placed, one that needs one more is not, and says it is
-// the cap that stopped it (so the report names the cause).
-func TestSlot_JournalReadCap(t *testing.T) {
+// The graph holds the whole journal of the list, so a history of any length is
+// placed: there is no read cap to stop it (the earlier per-book loader stopped
+// past 128 journals and fell back to the index).
+func TestSlot_LongHistoriesAreAlwaysPlaced(t *testing.T) {
 	t.Parallel()
-	lastOK := -1
-	for n := 1; n <= maxJournalLoads+10; n++ {
-		g, reads := longHistory(n)
+	for _, n := range []int{1, 2, 127, 128, 129, 130, 400} {
+		g := longHistory(n)
 		at, ok := g.slot([]string{"z"}, "p0")
-		switch {
-		case ok:
-			lastOK = n
-			if at != 1 {
-				t.Fatalf("n=%d: placed at %d, want 1 (right after z)", n, at)
-			}
-			if reads() > maxJournalLoads {
-				t.Fatalf("n=%d: %d journals read, cap %d", n, reads(), maxJournalLoads)
-			}
-		case g.Err() == nil:
-			t.Fatalf("n=%d: not placed and no reason given", n)
-		case !strings.Contains(g.Err().Error(), fmt.Sprint(maxJournalLoads)):
-			t.Fatalf("n=%d: the reason does not name the cap: %v", n, g.Err())
-		default:
-			if reads() > maxJournalLoads {
-				t.Fatalf("n=%d: %d journals read past the cap %d", n, reads(), maxJournalLoads)
-			}
+		if !ok || at != 1 {
+			t.Fatalf("n=%d: placed at %d ok=%v, want 1 (right after z)", n, at, ok)
 		}
-	}
-	if lastOK < 0 {
-		t.Fatal("no history within the cap was placed")
-	}
-	g, reads := longHistory(lastOK)
-	if _, ok := g.slot([]string{"z"}, "p0"); !ok || reads() != maxJournalLoads {
-		t.Fatalf("the longest placed history reads %d journals (ok=%v), want exactly the cap %d", reads(), ok, maxJournalLoads)
-	}
-	if g, _ := longHistory(lastOK + 1); func() bool { _, ok := g.slot([]string{"z"}, "p0"); return ok }() {
-		t.Fatalf("a history one journal past the cap was placed")
-	}
-}
-
-// A graph with no loader places a book only when every journal its place rests
-// on was handed in; a book whose journal was not handed in may hold the record
-// that moves the answer.
-func TestSlot_NoLoaderPlacesOnlyWhatWasHandedIn(t *testing.T) {
-	t.Parallel()
-	g, _ := longHistory(3)
-	g.SetJournalLoader(nil)
-	if _, ok := g.slot([]string{"z"}, "p0"); ok {
-		t.Fatal("placed from one journal, the rest of the chain not handed in")
 	}
 }
 

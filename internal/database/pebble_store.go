@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.231.4
+// version: 1.232.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package database
 
@@ -192,6 +192,9 @@ type PebbleStore struct {
 	// PruneOperationChanges chunk the write side (LOCKS in
 	// pebble_store_opchange_index.go).
 	opChangeJournalMu sync.RWMutex
+	// journalClock stamps every CreatedAt and RevertedAt of the operation-change
+	// journal with a strictly increasing time (pebble_store_journal_clock.go).
+	journalClock journalClock
 	// worksGen is the works generation counter (see WorksGeneration in
 	// pebble_store_works.go). Every writer of a work: key bumps it after its
 	// commit, so a cache of the works table can tell whether it is still current.
@@ -684,6 +687,10 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 		closingCancel: closingCancel,
 	}
 	store.seedWorksGeneration()
+	if err := store.seedJournalClock(); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	// Load the undecodable-marker set before any write can stage (or skip) a
 	// marker delete (pebble_store_atpath_markers.go).
