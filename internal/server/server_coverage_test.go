@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package server
 
@@ -1204,24 +1204,18 @@ func TestCoveragePurgeSoftDeleted(t *testing.T) {
 	defer cleanup()
 
 	t.Run("purge with no soft-deleted books", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted", nil)
-		w := httptest.NewRecorder()
-		server.router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
+		res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted")
+		assert.Equal(t, 0, res.Purged)
 	})
 
 	t.Run("purge with older_than_days", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?older_than_days=30", nil)
-		w := httptest.NewRecorder()
-		server.router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
+		res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?older_than_days=30")
+		assert.Equal(t, 0, res.Purged)
 	})
 
 	t.Run("purge with delete_files", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true", nil)
-		w := httptest.NewRecorder()
-		server.router.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
+		res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true")
+		assert.Equal(t, 0, res.Purged)
 	})
 }
 

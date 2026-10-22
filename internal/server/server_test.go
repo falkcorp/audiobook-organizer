@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.15.4
+// version: 2.16.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -1815,10 +1815,8 @@ func TestPurgeSoftDeletedBooks(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted")
+	assert.Equal(t, 0, res.Purged)
 }
 
 // TestLinkAudiobookVersion tests linking two audiobooks as versions
@@ -2650,10 +2648,8 @@ func TestListSoftDeletedAudiobooks(t *testing.T) {
 func TestPurgeSoftDeletedAudiobooks(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?older_than_days=30", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?older_than_days=30")
+	assert.Equal(t, 0, res.Purged)
 }
 
 func TestRestoreAudiobookNotFound(t *testing.T) {

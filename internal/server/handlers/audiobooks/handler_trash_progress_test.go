@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
-// last-edited: 2026-10-06
+// last-edited: 2026-10-22
 
 package audiobookshandler_test
 
@@ -26,6 +26,7 @@ func TestListSoftDeletedAudiobooks_FlagsProgress(t *testing.T) {
 	d.svc.EXPECT().GetSoftDeletedBooks(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return([]database.Book{{ID: "held", Title: "Held"}, {ID: "clean"}, {ID: "unread"}}, nil)
 	d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(3, nil)
+	d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
 	d.svc.EXPECT().TrashProgress(mock.Anything, []string{"held", "clean", "unread"}).
 		Return(map[string]audiobookspkg.TrashProgressInfo{
 			"held":  {HasProgress: true, Summary: "reader: finished"},
@@ -74,6 +75,7 @@ func TestDiscardProgressAndPurge_StatusMapping(t *testing.T) {
 		{"not in trash", fmt.Errorf("%w: b1", audiobookspkg.ErrNotInTrash), http.StatusConflict, "CONFLICT"},
 		{"owns files", fmt.Errorf("%w: b1", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},
 		{"refused", fmt.Errorf("%w: pending repair", audiobookspkg.ErrDiscardRefused), http.StatusConflict, "CONFLICT"},
+		{"undo possible", fmt.Errorf("discard progress and purge b1: %w", audiobookspkg.ErrPurgeUndoPossible), http.StatusConflict, "UNDO_POSSIBLE"},
 		{"no audit", audiobookspkg.ErrAuditUnavailable, http.StatusServiceUnavailable, ""},
 		{"other", errString("pebble closed"), http.StatusInternalServerError, ""},
 	}
@@ -119,6 +121,7 @@ func TestDeleteAudiobook_StatusMapping(t *testing.T) {
 	}{
 		{"ok", nil, http.StatusOK, ""},
 		{"has progress", fmt.Errorf("purge b1: %w. Restore it", audiobookspkg.ErrBookHasProgress), http.StatusConflict, "HAS_PROGRESS"},
+		{"undo possible", fmt.Errorf("purge b1: %w", audiobookspkg.ErrPurgeUndoPossible), http.StatusConflict, "UNDO_POSSIBLE"},
 		{"carry failed", fmt.Errorf("purge b1: %w: boom", audiobookspkg.ErrPurgeCarryFailed), http.StatusInternalServerError, "CARRY_FAILED"},
 		// #3777 review: the live hard delete returns the merge carry errors
 		// themselves (merge.HardDeleteKeepingUserState), wrapped.

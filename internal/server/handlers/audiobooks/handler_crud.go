@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-22
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -221,6 +221,9 @@ const (
 	// Audiobookshelf lists did not complete; the book was kept with its
 	// state.
 	CodeCarryFailed = "CARRY_FAILED"
+	// CodeUndoPossible: 409, the book is the retired shell of a combine that
+	// can still be undone; purging it would make that undo impossible.
+	CodeUndoPossible = "UNDO_POSSIBLE"
 )
 
 // DeleteAudiobook handles DELETE /audiobooks/:id.
@@ -253,6 +256,10 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 		// code lets the trash page offer "Discard progress and purge".
 		if errors.Is(err, audiobookspkg.ErrBookHasProgress) {
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), "HAS_PROGRESS")
+			return
+		}
+		if errors.Is(err, audiobookspkg.ErrPurgeUndoPossible) {
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
 			return
 		}
 		// A carry of the listening state that did not complete (the state is

@@ -6,6 +6,9 @@
 package server
 
 import (
+	"context"
+	"fmt"
+
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -595,6 +598,12 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		},
 		s.publishEvent,
 	)
+	audiobooksH.SetPurgeEnqueuer(func(ctx context.Context, params any) (string, error) {
+		if s.opRegistry == nil {
+			return "", fmt.Errorf("operation registry not initialized")
+		}
+		return s.opRegistry.EnqueueOp(ctx, purgeSoftDeletedOpID, params)
+	})
 	audiobooksH.SetSearchResultCached(func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool {
 		return s.audiobookService != nil && s.audiobookService.SearchIsCached(search, authorID, seriesID, f)
 	})
