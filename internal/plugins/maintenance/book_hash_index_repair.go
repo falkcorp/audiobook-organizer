@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_hash_index_repair.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6f2a8c15-4d93-4e70-b1a6-3c9e0d7b5a28
 // last-edited: 2026-10-22
 
@@ -35,18 +35,22 @@ import (
 // legacy sweep) are in internal/database/pebble_store_book_hash_index.go.
 //
 // Modes:
-//   - preview (default, owner rule 2026-09-25): counts the missing keys and
+//   - preview (default, owner rule 2026-09-25): counts the missing keys and the
+//     extra ones (a key whose book is gone or no longer holds the hash) and
 //     samples them; writes nothing.
 //   - dry_run=false: writes every missing key; when every book row decoded it
-//     then sets the index's sentinel and deletes the legacy single-valued keys.
+//     then sets the index's sentinel and deletes the legacy single-valued keys;
+//     last it deletes the extra keys, each after a fresh read of its row under
+//     the book's write stripe.
 //   - ensure=true (boot enqueues this on every start): the same as dry_run=false,
 //     for the server itself. Every boot, because a rollback to a build that
 //     predates the index writes books with no keys and the sentinel cannot
 //     know. Until it finishes, lookups also consult the legacy keys. A run that
 //     finds a book row it cannot decode fails, and the sentinel stays unset.
 //
-// It never deletes a new-family key and never writes a book row, so it is safe
-// to run beside the library. Idempotent, so ResumeRestart. It reads every book
+// It deletes a new-family key only when its book is gone or no longer holds the
+// hash (re-read under the book's write stripe), and never writes a book row, so
+// it is safe to run beside the library. Idempotent, so ResumeRestart. It reads every book
 // row once with the decoding and the key reads and writes spread across the
 // CPUs; the store's methods are resolved through database.AsCapability because
 // OpsStore() can be a decorator that hides *PebbleStore's methods.
@@ -166,18 +170,21 @@ func (p *Plugin) runBookHashIndexRepair(ctx context.Context, raw json.RawMessage
 	}
 
 	for _, k := range rep.Kinds {
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("%s: checked=%d ok=%d missing=%d written=%d",
-			k.Kind, k.Checked, k.OK, k.Missing, k.Written))
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("%s: checked=%d ok=%d missing=%d written=%d extra=%d removed=%d",
+			k.Kind, k.Checked, k.OK, k.Missing, k.Written, k.Extra, k.Removed))
 	}
 	for _, s := range rep.Samples {
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("sample %s %s: no key for book %s", s.Kind, s.Hash, s.BookID))
 	}
-	msg := fmt.Sprintf("book hash index: %d books (%d live); %d missing keys", rep.Books, rep.LiveBooks, rep.Missing())
+	for _, s := range rep.ExtraSamples {
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("sample %s %s: extra key for book %s (gone, or its row no longer holds the hash)", s.Kind, s.Hash, s.BookID))
+	}
+	msg := fmt.Sprintf("book hash index: %d books (%d live); %d missing keys, %d extra keys", rep.Books, rep.LiveBooks, rep.Missing(), rep.Extra())
 	switch {
 	case dryRun:
 		msg += "; preview, nothing written (run with dry_run=false to repair)"
 	default:
-		msg += fmt.Sprintf("; %d written; index complete=%t; legacy keys deleted=%t", rep.Written(), rep.Trusted, rep.LegacySwept)
+		msg += fmt.Sprintf("; %d written, %d extra removed; index complete=%t; legacy keys deleted=%t", rep.Written(), rep.Removed(), rep.Trusted, rep.LegacySwept)
 	}
 	if rep.Unreadable > 0 {
 		msg += fmt.Sprintf("; %d book row(s) cannot be decoded", rep.Unreadable)
@@ -187,7 +194,7 @@ func (p *Plugin) runBookHashIndexRepair(ctx context.Context, raw json.RawMessage
 			"index is not marked complete; lookups also consult the legacy keys until each row is rewritten or removed "+
 			"and this op runs again", bookHashIndexRepairID, rep.Unreadable, rep.SampleUnreadable)
 	}
-	if params.Ensure && rep.Written() == 0 && !rep.LegacySwept {
+	if params.Ensure && rep.Written() == 0 && rep.Removed() == 0 && !rep.LegacySwept {
 		// The usual boot outcome once built: nothing to do, hidden from the
 		// default activity feed.
 		_ = reporter.Log(slog.LevelInfo, msg, opsregistry.NoOpAttr())
