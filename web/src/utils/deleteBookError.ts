@@ -1,7 +1,7 @@
 // file: web/src/utils/deleteBookError.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0050bdd1-b903-4562-8a05-997c48a46fbf
-// last-edited: 2026-10-06
+// last-edited: 2026-10-22
 
 import { ApiError } from '../services/api';
 
@@ -58,4 +58,20 @@ export function describeDeleteBookError(error: unknown, fallback: string): strin
     }
   }
   return fallback;
+}
+
+/**
+ * What to say about the "block this file's hash" part of a delete. Only when a
+ * block was asked for: a hash the server did not block says why (its
+ * `warnings`, e.g. a live book still holds the file), instead of a bare
+ * "could not be blocked". The delete itself succeeded either way.
+ */
+export function describeBlockOutcome(
+  requested: boolean,
+  result: { blocked?: boolean; warnings?: string[] }
+): { notice: string; severity: 'success' | 'warning' } {
+  if (!requested) return { notice: '', severity: 'success' };
+  if (result.blocked) return { notice: ' Hash blocked.', severity: 'success' };
+  const why = result.warnings && result.warnings.length > 0 ? ` ${result.warnings.join(' ')}` : '';
+  return { notice: why || ' Hash could not be blocked.', severity: 'warning' };
 }
