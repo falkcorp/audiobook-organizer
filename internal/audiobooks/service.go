@@ -19,6 +19,7 @@ package audiobooks
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -216,6 +217,11 @@ type AudiobookService struct {
 	// out of here, because InvalidateListCache skips listCache unless
 	// config.CacheInvalidateOnBookUpdate is on — and it is off by default.
 	libGen *cache.Generation
+	// purgeBreakdown is the last purge pass's purgeable-versus-blocked split
+	// (purge_run.go), for the trash listing. In memory only: it is a
+	// measurement, rebuilt by the next pass.
+	purgeBreakdownMu sync.Mutex
+	purgeBreakdown   *PurgeBreakdown
 	// runtimeIdx caches canonical book runtimes for the duration: list
 	// filter (runtime_index.go). Nil-safe: a nil index falls back to the
 	// stored Book.Duration aggregate.

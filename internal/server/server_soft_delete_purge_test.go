@@ -1,7 +1,7 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-22
 
 package server
 
@@ -38,10 +38,8 @@ func TestSoftDeleteAndPurge_WithFileDeletion(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// Purge with file deletion.
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true", nil)
-	w = httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true")
+	require.Equal(t, 1, res.Purged)
 
 	_, err = os.Stat(filePath)
 	assert.Error(t, err)
