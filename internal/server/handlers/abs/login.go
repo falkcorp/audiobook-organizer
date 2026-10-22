@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package abs
 
@@ -17,6 +17,17 @@ import (
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
+
+// throttleKey is the bucket the failure throttle charges this request to:
+// Options.ThrottleKey's answer, else the peer address (c.ClientIP()).
+func (h *Handler) throttleKey(c *gin.Context) string {
+	if h.throttleKeyFn != nil {
+		if k := strings.TrimSpace(h.throttleKeyFn(c)); k != "" {
+			return k
+		}
+	}
+	return strings.TrimSpace(c.ClientIP())
+}
 
 // loginRequest is the ABS login body. deviceInfo is optional and echoed back on
 // GET /api/me/sessions.
@@ -79,7 +90,8 @@ func (h *Handler) Login(c *gin.Context) {
 	// The hard limit is checked BEFORE any credential work so a spent source cannot
 	// keep probing. It is 429, never 401/403 — a 4xx-auth answer would tell a client
 	// its credential is dead.
-	if h.throttle.IPBlocked(ip) {
+	throttleKey := h.throttleKey(c)
+	if h.throttle.IPBlocked(throttleKey) {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
 			Username: req.Username, Reason: "ip-failure-budget-exhausted",
@@ -91,7 +103,7 @@ func (h *Handler) Login(c *gin.Context) {
 
 	username := strings.TrimSpace(req.Username)
 	if username == "" || req.Password == "" {
-		h.throttle.Delay(h.throttle.RecordFailure("", ip))
+		h.throttle.Delay(h.throttle.RecordFailure("", throttleKey))
 		h.auditLoginFailure(c, ip, username, "", "missing-credentials")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -110,7 +122,7 @@ func (h *Handler) Login(c *gin.Context) {
 	if user == nil {
 		// Charge the IP even for an unknown username so guessing cannot dodge the
 		// hard limit.
-		h.throttle.Delay(h.throttle.RecordFailure("", ip))
+		h.throttle.Delay(h.throttle.RecordFailure("", throttleKey))
 		h.auditLoginFailure(c, ip, username, "", "unknown-user")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -118,7 +130,7 @@ func (h *Handler) Login(c *gin.Context) {
 
 	ok, needsRehash := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password)
 	if !ok {
-		h.throttle.Delay(h.throttle.RecordFailure(user.ID, ip))
+		h.throttle.Delay(h.throttle.RecordFailure(user.ID, throttleKey))
 		h.auditLoginFailure(c, ip, username, user.ID, "bad-password")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -135,7 +147,7 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	h.throttle.Clear(user.ID, ip)
+	h.throttle.Clear(user.ID, throttleKey)
 
 	// spec §3.5: rehash-on-successful-login migrates bcrypt users to argon2id with no
 	// flag day. It is best-effort — a store hiccup here must never deny a correct
