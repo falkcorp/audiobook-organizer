@@ -1,5 +1,5 @@
 // file: internal/server/login_ceiling_test.go
-// version: 4.1.0
+// version: 4.2.0
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
 // last-edited: 2026-10-22
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 // ceilingRouter is a router whose one route answers with *code, behind the
@@ -266,12 +267,14 @@ func TestLoginCeiling_InFlightAttemptsCountAgainstTheCeiling(t *testing.T) {
 	require.Equal(t, loginGlobalCeiling, admitted)
 }
 
-// Saturated requests are bounded per visitor, not by one shared pool: a visitor
-// holds at most maxSaturatedPerVisitor, and a flood from many visitors does not
-// make a fresh visitor's first attempt fail.
+// Saturated requests are bounded per visitor: a visitor holds at most
+// maxSaturatedPerVisitor, and above maxSaturatedSoft one. The service-wide
+// admission bucket (TestLoginCeiling_SaturatedAdmissionIsBoundedServiceWide) is
+// switched off here so the per-visitor rules are what is measured.
 func TestLoginCeiling_SaturatedInFlightIsBoundedPerVisitor(t *testing.T) {
 	setTunnelConnectors(t, "")
 	l := newLoginCeiling()
+	l.setSaturatedBound(rate.Inf, 1)
 	for i := 0; i < loginGlobalCeiling; i++ {
 		l.reserve("")
 	}
@@ -299,7 +302,8 @@ func TestLoginCeiling_SaturatedInFlightIsBoundedPerVisitor(t *testing.T) {
 		<-entered
 	}
 	require.Equal(t, http.StatusTooManyRequests, post("192.0.2.5:4000"), "past the per-visitor bound")
-	// A flood from many fresh visitors is all admitted (one each)...
+	// A flood from many fresh visitors is all admitted (one each) while the
+	// service-wide bucket is off...
 	const flood = maxSaturatedSoft + 44
 	for i := 0; i < flood; i++ {
 		spawn(fmt.Sprintf("198.51.%d.%d:4000", 100+i/250, i%250+1))
@@ -308,17 +312,17 @@ func TestLoginCeiling_SaturatedInFlightIsBoundedPerVisitor(t *testing.T) {
 		select {
 		case <-entered:
 		case <-time.After(10 * time.Second):
-			t.Fatal("a fresh visitor's first attempt was not admitted while others flood")
+			t.Fatal("a fresh visitor was not admitted by the per-visitor rules while others flood")
 		}
 	}
 	// ...and with the service-wide count high, a visitor already in flight is held
-	// to one, while a brand-new visitor still gets its first attempt.
+	// to one, while a brand-new visitor is still admitted by the per-visitor rules.
 	require.Equal(t, http.StatusTooManyRequests, post("198.51.100.1:4000"), "above the soft bound a visitor with one in flight is refused")
 	spawn("203.0.113.77:4000")
 	select {
 	case <-entered:
 	case <-time.After(10 * time.Second):
-		t.Fatal("a fresh visitor's first attempt was refused while others flood")
+		t.Fatal("a fresh visitor was refused by the per-visitor rules while others flood")
 	}
 	close(hold)
 	wg.Wait()
@@ -396,9 +400,16 @@ func TestLoginCeiling_ExemptionNeedsAVerifiedAllowListedIdentity(t *testing.T) {
 
 // Real router end to end: a flood spends the global ceiling, then
 //   - a Cloudflare-verified request is neither delayed nor refused (it still
-//     fails on its password, normally);
-//   - the first attempt for an untouched account is delayed, not refused;
-//   - an account that has failed SoftThreshold times is refused.
+//     fails on its password, normally), on both logins, and is exempt from the
+//     saturated-admission bucket too;
+//   - the attempt for an untouched account is delayed, not refused, while the
+//     service-wide saturated-admission bucket has a token;
+//   - an account that has failed SoftThreshold times is refused;
+//   - once the bucket is empty a fresh visitor is refused 429 (Retry-After)
+//     BEFORE any user lookup, with the same answer and no delay whether the
+//     name exists or not. The bucket is pinned to exactly the admissions this
+//     test makes (8: 2 untouched + 4 refused-by-account + 2 delayed) and a
+//     negligible refill rate, so the count is deterministic.
 func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t *testing.T) {
 	cfAccessVerifierOverride = fakeAccessVerifier{
 		"jwt-owner": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: ownerRouteEmail, EmailVerified: true},
@@ -446,6 +457,8 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 		require.True(t, ok)
 	}
 	const minDelay = absauth.SaturationDelayBase - 100*time.Millisecond
+	const satAdmissions = 8
+	ceiling.setSaturatedBound(rate.Limit(0.0001), satAdmissions)
 
 	// An untouched account (the fixture's admin), first attempt, on both logins.
 	// (a different visitor per login: one that fails while saturated is refused
@@ -491,6 +504,28 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 		code, took := post("/api/v1/auth/login", fmt.Sprintf("198.51.100.%d:4000", visitor), name, nil)
 		require.Equal(t, http.StatusUnauthorized, code, name)
 		require.GreaterOrEqual(t, took, minDelay, "%s: delayed the same way", name)
+	}
+	// The bucket is now empty: a fresh visitor is refused before any user lookup,
+	// the same for a name that exists and one that does not, with no delay.
+	for _, name := range []string{"synthetic-target", "synthetic-admin", "yet-another-ghost"} {
+		for _, path := range []string{"/api/v1/auth/login", "/login"} {
+			visitor++
+			w := httptest.NewRecorder()
+			body, _ := json.Marshal(map[string]string{"username": name, "password": "wrong"})
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = fmt.Sprintf("198.51.100.%d:4000", visitor)
+			start := time.Now()
+			fx.srv.router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusTooManyRequests, w.Code, "%s %s: saturated admission is refused once the bucket is empty", path, name)
+			require.Equal(t, "5", w.Header().Get("Retry-After"), "%s %s", path, name)
+			require.Less(t, time.Since(start), minDelay, "%s %s: refused without the saturation delay", path, name)
+		}
+	}
+	// A Cloudflare Access login (verified identity) is unaffected by the empty bucket.
+	for _, path := range []string{"/api/v1/auth/login", "/login"} {
+		code, _ := post(path, "198.51.100.12:4000", "synthetic-target", map[string]string{"Cf-Access-Jwt-Assertion": "jwt-owner"})
+		require.Equal(t, http.StatusUnauthorized, code, "%s: a verified Cloudflare Access login is not refused by the saturated bucket", path)
 	}
 }
 
@@ -761,4 +796,199 @@ func TestLoginCeiling_ExemptionIsReadLazily(t *testing.T) {
 	require.False(t, saturated, "an exemption installed after the ceiling was built applies")
 	require.Same(t, l, s.loginCeiling(), "web and ABS logins share one ceiling")
 	require.Same(t, s.loginThrottle(), s.loginThrottle(), "...and one failed-login throttle")
+}
+
+// B4-2: saturated admission has a service-wide rate bound, however many fresh
+// visitors ask. Each admitted saturated login costs one argon2id derivation in
+// the handlers (an unknown name too), so admissions per second are the bound on
+// derivations per second. A fake clock makes the arithmetic exact.
+func TestLoginCeiling_SaturatedAdmissionIsBoundedServiceWide(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	const burst, perSecond = 8, 2
+	l.setSaturatedBound(rate.Limit(perSecond), burst)
+	for i := 0; i < loginGlobalCeiling; i++ {
+		l.reserve("")
+	}
+	gin.SetMode(gin.TestMode)
+	reached := 0 // the counting stand-in for the password verifier
+	r := gin.New()
+	r.POST("/login", l.middleware(nil, nil), func(c *gin.Context) { reached++; c.Status(http.StatusOK) })
+	post := func(i int) (int, string) {
+		req := httptest.NewRequest(http.MethodPost, "/login", nil)
+		req.RemoteAddr = fmt.Sprintf("198.51.%d.%d:4000", 100+i/250, i%250+1)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code, w.Header().Get("Retry-After")
+	}
+	// 100 fresh visitors at one instant: exactly the burst gets through.
+	refused := 0
+	for i := 0; i < 100; i++ {
+		code, retry := post(i)
+		if code == http.StatusTooManyRequests {
+			refused++
+			require.Equal(t, "5", retry)
+		}
+	}
+	require.Equal(t, burst, reached, "a flood of fresh visitors derives at most the burst")
+	require.Equal(t, 100-burst, refused)
+	// Over the next 10 seconds a fresh visitor tries every 100 ms (a flood).
+	total := reached
+	for step := 1; step <= 100; step++ {
+		now = now.Add(100 * time.Millisecond)
+		post(1000 + step)
+	}
+	require.LessOrEqual(t, reached, burst+perSecond*10, "admissions never exceed burst + rate x elapsed")
+	require.GreaterOrEqual(t, reached-total, perSecond*10-1, "and the bucket does refill at the rate")
+}
+
+// A visitor refused by its OWN limits spends no service-wide token, and a visitor
+// refused for want of a token is not marked as having failed: it can ask again as
+// soon as the bucket refills.
+func TestLoginCeiling_RefusedVisitorsSpendNoServiceTokens(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	l.setSaturatedBound(rate.Limit(1), 3)
+	for i := 0; i < loginGlobalCeiling; i++ {
+		l.reserve("")
+	}
+	code, saturated := http.StatusUnauthorized, false
+	r := ceilingRouter(l, &code, &saturated)
+	require.Equal(t, http.StatusUnauthorized, ceilingPost(r, "192.0.2.5:4000", nil)) // spends 1 of 3, fails
+	tokens := func() float64 { l.mu.Lock(); defer l.mu.Unlock(); return l.satBound.TokensAt(now) }
+	require.InDelta(t, 2, tokens(), 0.001)
+	for i := 0; i < 50; i++ { // the failed visitor keeps asking
+		require.Equal(t, http.StatusTooManyRequests, ceilingPost(r, "192.0.2.5:4000", nil))
+	}
+	require.InDelta(t, 2, tokens(), 0.001, "a visitor refused by its own failure spends no token")
+	code = http.StatusOK
+	require.Equal(t, http.StatusOK, ceilingPost(r, "192.0.2.6:4000", nil))
+	require.Equal(t, http.StatusOK, ceilingPost(r, "192.0.2.7:4000", nil))
+	require.Equal(t, http.StatusTooManyRequests, ceilingPost(r, "192.0.2.8:4000", nil), "bucket empty")
+	now = now.Add(1100 * time.Millisecond)
+	require.Equal(t, http.StatusOK, ceilingPost(r, "192.0.2.8:4000", nil), "refused for want of a token only: admitted once one refills")
+}
+
+// B4-2: saturated admission is keyed per public IPv6 /48, not /64, so a caller
+// that owns a /48 cannot mint a fresh "first attempt" per /64. IPv4 and a
+// different /48 are separate.
+func TestLoginCeiling_SaturatedAdmissionIsKeyedPerIPv6Slash48(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	l.setSaturatedBound(rate.Inf, 1)
+	for i := 0; i < loginGlobalCeiling; i++ {
+		l.reserve("")
+	}
+	code := http.StatusUnauthorized
+	r := ceilingRouter(l, &code, nil)
+	require.Equal(t, http.StatusUnauthorized, ceilingPost(r, "[2001:db8:aaaa:1::1]:4000", nil), "first attempt reaches the handler")
+	require.Equal(t, http.StatusTooManyRequests, ceilingPost(r, "[2001:db8:aaaa:2::1]:4000", nil), "another /64 of the same /48 shares the refusal")
+	require.Equal(t, http.StatusTooManyRequests, ceilingPost(r, "[2001:db8:aaaa:ffff::9]:4000", nil))
+	require.Equal(t, http.StatusUnauthorized, ceilingPost(r, "[2001:db8:bbbb:1::1]:4000", nil), "a different /48 is its own visitor")
+	require.Equal(t, http.StatusUnauthorized, ceilingPost(r, "192.0.2.5:4000", nil), "IPv4 keyed per address")
+	require.Equal(t, http.StatusUnauthorized, ceilingPost(r, "192.0.2.6:4000", nil))
+}
+
+func TestClientSaturatedKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"2001:db8:aaaa:1::1":    "2001:db8:aaaa::/48",
+		"2001:db8:aaaa:ffff::9": "2001:db8:aaaa::/48",
+		"::ffff:192.0.2.5":      "192.0.2.5",
+		"192.0.2.5":             "192.0.2.5",
+		"fe80::1%eth0":          "fe80::1", // link-local LAN: its own key, as clientPrefixKey
+	} {
+		got, ok := clientSaturatedKey(in)
+		require.True(t, ok, in)
+		require.Equal(t, want, got, in)
+	}
+	_, ok := clientSaturatedKey("not-an-ip")
+	require.False(t, ok)
+}
+
+// The pin on a visitor refused for the rest of the window ends with the window:
+// a refused visitor touched after it ended is an ordinary, evictable entry.
+func TestLoginCeiling_SaturatedFailurePinExpiresWithTheWindow(t *testing.T) {
+	l := newLoginCeiling()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	l.saturatedFailed("refused")
+	now = now.Add(loginCeilingWindow - time.Minute)
+	leave, ok := l.enter("refused") // written inside the window: the refusal still pins it
+	require.True(t, ok)
+	leave()
+	for i := 0; i < maxLoginVisitors+25; i++ {
+		leave, ok := l.enter(fmt.Sprintf("a-%d", i))
+		require.True(t, ok)
+		leave()
+	}
+	_, kept := l.visitors.Get("refused")
+	require.True(t, kept, "inside its window the refusal still pins the entry against eviction")
+	// Two minutes later the refusal (made 16 minutes ago) has expired but the
+	// entry was written only two minutes ago, so it is not swept: it is re-filed
+	// by this write and must no longer count as pinned.
+	now = now.Add(2 * time.Minute)
+	leave, ok = l.enter("refused")
+	require.True(t, ok)
+	leave()
+	for i := 0; i < maxLoginVisitors+25; i++ {
+		leave, ok := l.enter(fmt.Sprintf("b-%d", i))
+		require.True(t, ok)
+		leave()
+	}
+	require.Equal(t, maxLoginVisitors, l.visitors.Len())
+	_, kept = l.visitors.Get("refused")
+	require.False(t, kept, "an expired refusal no longer pins the entry against eviction")
+}
+
+// A visitor with saturated requests in flight is never swept, however old its
+// last write: dropping it would let the release find no entry and a fresh
+// admission start from zero.
+func TestLoginCeiling_SweepKeepsVisitorsWithSaturatedRequestsInFlight(t *testing.T) {
+	l := newLoginCeiling()
+	l.setSaturatedBound(rate.Inf, 1)
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	release, verdict := l.admitSaturated("sat")
+	require.Equal(t, satAdmitted, verdict)
+	now = now.Add(loginCeilingWindow + time.Second)
+	leave, ok := l.enter("fresh") // triggers the sweep
+	require.True(t, ok)
+	leave()
+	v, kept := l.visitors.Get("sat")
+	require.True(t, kept, "a visitor with a saturated request in flight survives the sweep")
+	require.Equal(t, 1, v.satInFlight)
+	release()
+	require.Equal(t, 0, v.satInFlight)
+	require.Equal(t, 0, l.saturated)
+}
+
+// An unusable saturated-admission setting stops the service starting; a usable
+// one (or none) does not, and reaches the ceiling the server builds.
+func TestStartupLoginSaturated_RefusesUnusableSettings(t *testing.T) {
+	prevRate, prevBurst := config.Snapshot().LoginSaturatedRate, config.Snapshot().LoginSaturatedBurst
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.LoginSaturatedRate, c.LoginSaturatedBurst = prevRate, prevBurst })
+	})
+	set := func(r, b string) {
+		config.Mutate(func(c *config.Config) { c.LoginSaturatedRate, c.LoginSaturatedBurst = r, b })
+	}
+	set("", "")
+	require.NoError(t, startupLoginSaturated())
+	set("0", "")
+	require.ErrorContains(t, startupLoginSaturated(), "LOGIN_SATURATED_RATE")
+	set("2", "0")
+	require.ErrorContains(t, startupLoginSaturated(), "LOGIN_SATURATED_BURST")
+	set("0.5", "3")
+	require.NoError(t, startupLoginSaturated())
+	s := &Server{}
+	l := s.loginCeiling()
+	l.mu.Lock()
+	lim, burst := l.satBound.Limit(), l.satBound.Burst()
+	l.mu.Unlock()
+	require.Equal(t, rate.Limit(0.5), lim)
+	require.Equal(t, 3, burst)
 }

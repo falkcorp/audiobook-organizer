@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.171.0
+// version: 1.172.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package config
 
@@ -1674,6 +1674,15 @@ type Config struct {
 	// cover the LAN, including this host's own LAN address, and any Prometheus
 	// scraper or LAN client that talks to it directly.
 	AllowedPeerCIDRs string `json:"-" mapstructure:"allowed_peer_cidrs"`
+	// LoginSaturatedRate and LoginSaturatedBurst (LOGIN_SATURATED_RATE logins
+	// per second, LOGIN_SATURATED_BURST) are the service-wide token bucket on
+	// password logins admitted while the aggregate login ceilings are spent.
+	// Empty means DefaultLoginSaturatedRate / DefaultLoginSaturatedBurst; use
+	// LoginSaturatedLimits, which validates them (the server refuses to start
+	// on an unusable value). Kept as the raw text so a typo is an error, not a
+	// silent zero.
+	LoginSaturatedRate  string `json:"-" mapstructure:"login_saturated_rate"`
+	LoginSaturatedBurst string `json:"-" mapstructure:"login_saturated_burst"`
 
 	// Memory management
 	// CacheInvalidateOnBookUpdate controls whether updating a book's metadata

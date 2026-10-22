@@ -1,11 +1,14 @@
 // file: internal/config/invite_config.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package config
 
 import (
+	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -45,6 +48,60 @@ var inviteEnvOnlySettings = []struct {
 	{"cf_policy_api_token", "CF_POLICY_API_TOKEN"},
 	{"tunnel_connector_addrs", "TUNNEL_CONNECTOR_ADDRS"},
 	{"allowed_peer_cidrs", "ALLOWED_PEER_CIDRS"},
+	{"login_saturated_rate", "LOGIN_SATURATED_RATE"},
+	{"login_saturated_burst", "LOGIN_SATURATED_BURST"},
+}
+
+// The service-wide bound on password logins admitted while the aggregate login
+// ceilings are spent ("saturated"): every one of them still costs a real
+// argon2id derivation (an unknown name spends one too, so the answer does not
+// reveal whether the name exists), and this token bucket caps how many the
+// service takes on per second, whatever the number of visitors. Unset keys
+// mean the defaults. Cloudflare Access logins (a verified Access identity) are
+// outside the bucket: they carry no password work.
+const (
+	// DefaultLoginSaturatedRate is the sustained rate, in logins per second.
+	DefaultLoginSaturatedRate = 2.0
+	// DefaultLoginSaturatedBurst is the bucket size.
+	DefaultLoginSaturatedBurst = 8
+	// MaxLoginSaturatedRate and MaxLoginSaturatedBurst bound what an operator
+	// may set. The argon2id derivation costs on the order of 70 ms of one core
+	// and 64 MiB, so beyond these the setting no longer bounds anything.
+	MaxLoginSaturatedRate  = 50.0
+	MaxLoginSaturatedBurst = 200
+)
+
+// LoginSaturatedLimits returns the effective saturated-login rate (per second)
+// and burst: the defaults for an unset key, the parsed values otherwise. An
+// unusable value (not a number, NaN/Inf, a rate of zero or below or above
+// MaxLoginSaturatedRate, a burst that is not an integer in 1..
+// MaxLoginSaturatedBurst) is an error, never a silent default: the server
+// refuses to start on it, because a typo here must neither remove nor tighten
+// the bound unnoticed. The error names the setting, never anything else.
+func LoginSaturatedLimits() (rate float64, burst int, err error) {
+	mu.RLock()
+	rawRate, rawBurst := AppConfig.LoginSaturatedRate, AppConfig.LoginSaturatedBurst
+	mu.RUnlock()
+	return parseLoginSaturatedLimits(rawRate, rawBurst)
+}
+
+func parseLoginSaturatedLimits(rawRate, rawBurst string) (rate float64, burst int, err error) {
+	rate, burst = DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst
+	if rawRate = strings.TrimSpace(rawRate); rawRate != "" {
+		r, perr := strconv.ParseFloat(rawRate, 64)
+		if perr != nil || math.IsNaN(r) || math.IsInf(r, 0) || r <= 0 || r > MaxLoginSaturatedRate {
+			return 0, 0, fmt.Errorf("LOGIN_SATURATED_RATE must be a number of logins per second above 0 and at most %v, got %q", MaxLoginSaturatedRate, rawRate)
+		}
+		rate = r
+	}
+	if rawBurst = strings.TrimSpace(rawBurst); rawBurst != "" {
+		b, perr := strconv.Atoi(rawBurst)
+		if perr != nil || b < 1 || b > MaxLoginSaturatedBurst {
+			return 0, 0, fmt.Errorf("LOGIN_SATURATED_BURST must be a whole number from 1 to %d, got %q", MaxLoginSaturatedBurst, rawBurst)
+		}
+		burst = b
+	}
+	return rate, burst, nil
 }
 
 // DefaultSMTPPort is used when SMTP_HOST is set and SMTP_PORT is not.
@@ -80,6 +137,8 @@ func applyInviteEnv(c *Config) {
 	c.CFPolicyAPIToken = strings.TrimSpace(viper.GetString("cf_policy_api_token"))
 	c.TunnelConnectorAddrs = strings.TrimSpace(viper.GetString("tunnel_connector_addrs"))
 	c.AllowedPeerCIDRs = strings.TrimSpace(viper.GetString("allowed_peer_cidrs"))
+	c.LoginSaturatedRate = strings.TrimSpace(viper.GetString("login_saturated_rate"))
+	c.LoginSaturatedBurst = strings.TrimSpace(viper.GetString("login_saturated_burst"))
 }
 
 // inviteEnvOnlyKeyInUpdate returns the refusal for a PUT /config payload that

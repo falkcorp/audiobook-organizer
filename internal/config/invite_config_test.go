@@ -1,7 +1,7 @@
 // file: internal/config/invite_config_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package config
 
@@ -142,7 +142,7 @@ func TestInviteConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "tunnel_connector_addrs", "allowed_peer_cidrs"} {
+	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "tunnel_connector_addrs", "allowed_peer_cidrs", "login_saturated_rate", "LOGIN_SATURATED_BURST"} {
 		status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 			key:         "x",
 			"log_level": "warn",
@@ -212,5 +212,67 @@ func TestInitConfig_StaleGuestServiceTokenEnvWarns(t *testing.T) {
 	}
 	if strings.Contains(out, "stale-secret-SENTINEL") || strings.Contains(out, "stale-id.access") {
 		t.Errorf("the warning must name the key, never log its value:\n%s", out)
+	}
+}
+
+func TestLoginSaturatedLimits_DefaultsAndEnv(t *testing.T) {
+	resetViper(t)
+	registerInviteDefaults()
+	var c Config
+	applyInviteEnv(&c)
+	rate, burst, err := parseLoginSaturatedLimits(c.LoginSaturatedRate, c.LoginSaturatedBurst)
+	if err != nil || rate != DefaultLoginSaturatedRate || burst != DefaultLoginSaturatedBurst {
+		t.Fatalf("unset keys: rate=%v burst=%d err=%v, want the defaults %v/%d", rate, burst, err, DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst)
+	}
+	if DefaultLoginSaturatedRate != 2 || DefaultLoginSaturatedBurst != 8 {
+		t.Fatalf("defaults are documented as 2/s burst 8, got %v/%d", DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst)
+	}
+
+	t.Setenv("LOGIN_SATURATED_RATE", " 0.5 ")
+	t.Setenv("LOGIN_SATURATED_BURST", " 3 ")
+	resetViper(t)
+	registerInviteDefaults()
+	restoreAppConfig(t)
+	var c2 Config
+	applyInviteEnv(&c2)
+	Mutate(func(cfg *Config) {
+		cfg.LoginSaturatedRate, cfg.LoginSaturatedBurst = c2.LoginSaturatedRate, c2.LoginSaturatedBurst
+	})
+	rate, burst, err = LoginSaturatedLimits()
+	if err != nil || rate != 0.5 || burst != 3 {
+		t.Fatalf("env values: rate=%v burst=%d err=%v, want 0.5/3", rate, burst, err)
+	}
+}
+
+func TestLoginSaturatedLimits_RejectsUnusableValues(t *testing.T) {
+	for _, tc := range []struct{ rate, burst, want string }{
+		{"abc", "", "LOGIN_SATURATED_RATE"},
+		{"0", "", "LOGIN_SATURATED_RATE"},
+		{"-1", "", "LOGIN_SATURATED_RATE"},
+		{"NaN", "", "LOGIN_SATURATED_RATE"},
+		{"Inf", "", "LOGIN_SATURATED_RATE"},
+		{"1e9", "", "LOGIN_SATURATED_RATE"},
+		{"50.5", "", "LOGIN_SATURATED_RATE"},
+		{"", "0", "LOGIN_SATURATED_BURST"},
+		{"", "-3", "LOGIN_SATURATED_BURST"},
+		{"", "2.5", "LOGIN_SATURATED_BURST"},
+		{"", "lots", "LOGIN_SATURATED_BURST"},
+		{"", "201", "LOGIN_SATURATED_BURST"},
+	} {
+		if _, _, err := parseLoginSaturatedLimits(tc.rate, tc.burst); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("rate=%q burst=%q: err=%v, want an error naming %s", tc.rate, tc.burst, err, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		rate, burst string
+		wantRate    float64
+		wantBurst   int
+	}{
+		{"50", "200", 50, 200}, {"0.01", "1", 0.01, 1}, {"", "", 2, 8},
+	} {
+		r, b, err := parseLoginSaturatedLimits(tc.rate, tc.burst)
+		if err != nil || r != tc.wantRate || b != tc.wantBurst {
+			t.Errorf("rate=%q burst=%q: %v/%d err=%v, want %v/%d", tc.rate, tc.burst, r, b, err, tc.wantRate, tc.wantBurst)
+		}
 	}
 }

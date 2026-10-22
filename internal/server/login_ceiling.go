@@ -1,5 +1,5 @@
 // file: internal/server/login_ceiling.go
-// version: 4.1.0
+// version: 4.2.0
 // guid: bbbd655c-e45d-48ca-badb-d7b48a4d69e0
 // last-edited: 2026-10-22
 
@@ -8,17 +8,20 @@ package server
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 )
 
 // Aggregate ceilings for password login (the web POST /api/v1/auth/login and
@@ -63,21 +66,34 @@ import (
 //     authenticated that person, so an anonymous flood cannot starve them. It is
 //     still subject to the per-visitor and per-account limits in the handlers,
 //     and its failures do not count here.
-//   - Once a ceiling is spent, any other login is not refused here. It is
-//     admitted marked saturated (absauth.MarkLoginSaturated), and the handlers
-//     delay it before password work, progressively with the failures already on
-//     the submitted username, up to a few seconds (the delay holds no lock). Only
-//     a username that has already failed absauth.SoftThreshold times, or a visitor
-//     past its own budget, is refused with 429, and the decision is the same
-//     whether or not the username exists. Admission of saturated requests is
-//     bounded PER VISITOR, never by one shared pool a flood could fill: a visitor
-//     holds at most maxSaturatedPerVisitor at once (one while the service holds
-//     maxSaturatedSoft saturated requests or more), and a visitor that has already
-//     failed while saturated, by a 401 or by the account refusal, is refused
-//     outright (429, no delay) until the window ends. A fresh visitor's first
-//     attempt is therefore always admitted, whatever other visitors are doing.
-//     The only shared bound is maxSaturatedHard, which protects goroutines and is
-//     far above anything legitimate.
+//   - Once a ceiling is spent, any other login is not refused here by the
+//     ceiling itself. It is admitted marked saturated (absauth.MarkLoginSaturated),
+//     and the handlers delay it before password work, progressively with the
+//     failures already on the submitted username, up to a few seconds (the delay
+//     holds no lock). Only a username that has already failed
+//     absauth.SoftThreshold times, or a visitor past its own budget, is refused
+//     with 429 by the handlers, and the decision is the same whether or not the
+//     username exists. Admission of saturated requests is bounded in three ways:
+//     PER VISITOR (keyed on the visitor's address, a public IPv6 visitor per /48,
+//     see clientSaturatedKey): a visitor holds at most maxSaturatedPerVisitor at
+//     once (one while the service holds maxSaturatedSoft saturated requests or
+//     more), and a visitor that has already failed while saturated, by a 401 or
+//     by the account refusal, is refused outright (429, no delay) until the
+//     window ends; SERVICE-WIDE RATE: a token bucket (config.LoginSaturatedLimits,
+//     2 logins per second with a burst of 8 unless LOGIN_SATURATED_RATE and
+//     LOGIN_SATURATED_BURST say otherwise) that every admitted saturated login
+//     spends one token of, checked here BEFORE any user lookup, so a name that
+//     exists and one that does not get the same answer; and a hard count
+//     (maxSaturatedHard) that protects goroutines. The bucket is what bounds the
+//     argon2id derivations a flood of fresh visitors can force (every admitted
+//     login, even for an unknown name, costs one): without it each new address
+//     was a free derivation. A visitor refused by its own limits spends no token.
+//     The trade-off is deliberate: while saturated, a fresh visitor's attempt is
+//     NOT always admitted, because the bucket can be empty, and that visitor is
+//     told to retry shortly (429, Retry-After). Requests with a verified
+//     Cloudflare Access identity are exempt from all of it (they carry no
+//     password work for the bucket to bound, and an Audiobookshelf login through
+//     Cloudflare Access is unaffected).
 //
 // The cost that remains: while a ceiling is spent, a stranger's guesses at one
 // account can push that account over its soft threshold, which then refuses even
@@ -168,6 +184,32 @@ type loginCeiling struct {
 	// Access identity. nil: nothing is exempt. Read on every request.
 	exempt    func(*gin.Context) bool
 	saturated int // saturated requests currently in the handlers; under mu
+	// satBound is the service-wide token bucket on saturated admission. Spent
+	// only by an admission (admitSaturated, under mu) so a refused visitor never
+	// takes a token.
+	satBound *rate.Limiter
+}
+
+// satVerdict is admitSaturated's answer.
+type satVerdict int
+
+const (
+	satAdmitted        satVerdict = iota
+	satRefusedVisitor             // the visitor's own limits: failed this window, or too many in flight
+	satRefusedCapacity            // the service-wide bucket or the hard bound
+)
+
+// startupLoginSaturated is the startup half of the saturated-admission bucket:
+// it refuses to start on an unusable LOGIN_SATURATED_RATE / LOGIN_SATURATED_BURST
+// (a typo must neither remove nor tighten the bound unnoticed) and logs the
+// effective limits.
+func startupLoginSaturated() error {
+	r, b, err := config.LoginSaturatedLimits()
+	if err != nil {
+		return fmt.Errorf("login saturation limits: %w", err)
+	}
+	lifecycleLog.Info("saturated password logins (while the login failure ceilings are spent) are admitted at %v per second, burst %d", r, b)
+	return nil
 }
 
 // loginThrottle returns the one failed-login throttle both password logins share,
@@ -183,6 +225,11 @@ func (s *Server) loginThrottle() *absauth.Throttle {
 func (s *Server) loginCeiling() *loginCeiling {
 	s.loginCeilingOnce.Do(func() {
 		s.loginCeilingState = newLoginCeiling()
+		// An unusable setting stops the service starting (startupLoginSaturated);
+		// the defaults here only cover a ceiling built without that check.
+		if r, b, err := config.LoginSaturatedLimits(); err == nil {
+			s.loginCeilingState.setSaturatedBound(rate.Limit(r), b)
+		}
 		// Looked up per request, not copied here: buildOAuthWiring sets
 		// loginCeilingExempt, and this may run first.
 		s.loginCeilingState.exempt = func(c *gin.Context) bool {
@@ -194,6 +241,8 @@ func (s *Server) loginCeiling() *loginCeiling {
 }
 
 func newLoginCeiling() *loginCeiling {
+	l := &loginCeiling{now: time.Now, conns: map[string]*loginCeilingBucket{}}
+	l.setSaturatedBound(rate.Limit(config.DefaultLoginSaturatedRate), config.DefaultLoginSaturatedBurst)
 	visitors := absauth.NewLRU[*loginVisitor](maxLoginVisitors)
 	// A visitor with a login in the handlers, or one refused for the rest of the
 	// window, is state the bound must not evict in favour of a stream of new
@@ -201,10 +250,22 @@ func newLoginCeiling() *loginCeiling {
 	// second would hand a refused visitor a fresh start), and an entry that cannot
 	// be swept yet must not stand in front of the ones that can. Such entries live
 	// on the LRU's pinned list; the bound evicts idle entries first.
+	// The refusal pins only for its window: after it the visitor is admitted
+	// again, so the entry is ordinary and must be evictable.
 	visitors.SetPinned(func(v *loginVisitor) bool {
-		return v.inFlight > 0 || v.satInFlight > 0 || !v.satFailedAt.IsZero()
+		return v.inFlight > 0 || v.satInFlight > 0 ||
+			(!v.satFailedAt.IsZero() && l.now().Sub(v.satFailedAt) <= loginCeilingWindow)
 	})
-	return &loginCeiling{now: time.Now, conns: map[string]*loginCeilingBucket{}, visitors: visitors}
+	l.visitors = visitors
+	return l
+}
+
+// setSaturatedBound replaces the service-wide saturated-admission bucket. Call
+// before the ceiling serves requests. rate.Inf disables the bound.
+func (l *loginCeiling) setSaturatedBound(limit rate.Limit, burst int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.satBound = rate.NewLimiter(limit, burst)
 }
 
 // reserve takes a slot in the global bucket and, when connKey is not empty, in
@@ -373,32 +434,40 @@ func (l *loginCeiling) enter(visitor string) (leave func(), ok bool) {
 	}, true
 }
 
-// admitSaturated decides whether a saturated request from visitor (already
-// counted by enter) may go on to be delayed in the handlers. It refuses a
-// visitor that already failed while saturated in this window, one with
+// admitSaturated decides whether a saturated request from visitor (the
+// saturated key, loginSaturatedKey; already counted by enter under its own key)
+// may go on to be delayed in the handlers. It refuses a visitor that already
+// failed while saturated in this window (satRefusedVisitor), one with
 // maxSaturatedPerVisitor already in flight (one when the service-wide count is
-// at or above maxSaturatedSoft), and, for goroutine safety only, anything past
-// maxSaturatedHard. A fresh visitor is refused only by the hard bound. The
-// returned func must be called when the request ends.
-func (l *loginCeiling) admitSaturated(visitor string) (release func(), ok bool) {
+// at or above maxSaturatedSoft; satRefusedVisitor), anything past
+// maxSaturatedHard (satRefusedCapacity, goroutine safety) and, once the visitor
+// passed its own limits, a request that finds the service-wide bucket empty
+// (satRefusedCapacity). The token is taken last and only for an admission, so a
+// refused visitor never spends one, and a caller flooding from many addresses
+// is held to the bucket's rate however many fresh keys it has. The returned func
+// must be called when the request ends.
+func (l *loginCeiling) admitSaturated(visitor string) (release func(), verdict satVerdict) {
 	if visitor == "" {
 		visitor = "?"
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.saturated >= maxSaturatedHard {
-		return nil, false
+		return nil, satRefusedCapacity
 	}
 	v := l.visitorLocked(visitor)
 	if !v.satFailedAt.IsZero() && l.now().Sub(v.satFailedAt) <= loginCeilingWindow {
-		return nil, false
+		return nil, satRefusedVisitor
 	}
 	limit := maxSaturatedPerVisitor
 	if l.saturated >= maxSaturatedSoft {
 		limit = 1
 	}
 	if v.satInFlight >= limit {
-		return nil, false
+		return nil, satRefusedVisitor
+	}
+	if !l.satBound.AllowN(l.now(), 1) {
+		return nil, satRefusedCapacity
 	}
 	v.satInFlight++
 	l.saturated++
@@ -411,7 +480,7 @@ func (l *loginCeiling) admitSaturated(visitor string) (release func(), ok bool) 
 			v.satInFlight--
 			l.touchLocked(visitor, v)
 		}
-	}, true
+	}, satAdmitted
 }
 
 // saturatedFailed records that visitor failed a login while saturated.
@@ -529,10 +598,20 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool, respond loginRe
 			if warn != "" {
 				clientTrustLog.Warn("login failure ceiling reached (%s): further password logins are delayed, and refused for a username past %d failures of its own, until its window ends", warn, absauth.SoftThreshold)
 			}
-			done, admitted := l.admitSaturated(visitor)
-			if !admitted {
-				c.Header("Retry-After", "60")
+			// Saturated admission is keyed coarser than the per-visitor throttle
+			// (a public IPv6 visitor per /48) and decided HERE, before any handler
+			// looks up the submitted user, so every name gets the same answer.
+			satKey := loginSaturatedKey(c)
+			done, verdict := l.admitSaturated(satKey)
+			switch verdict {
+			case satRefusedVisitor:
+				c.Header("Retry-After", absauth.RetryAfterSeconds)
 				respond(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
+				c.Abort()
+				return
+			case satRefusedCapacity:
+				c.Header("Retry-After", "5")
+				respond(c, http.StatusTooManyRequests, "too many login attempts right now — try again shortly", "TOO_MANY_REQUESTS")
 				c.Abort()
 				return
 			}
@@ -542,7 +621,7 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool, respond loginRe
 			// A 401 and the handler's account refusal are both failures while
 			// saturated: either way this visitor gets no further attempt this window.
 			if c.Writer.Status() == http.StatusUnauthorized || absauth.LoginSaturationRefused(c) {
-				l.saturatedFailed(visitor)
+				l.saturatedFailed(satKey)
 			}
 			return
 		}
