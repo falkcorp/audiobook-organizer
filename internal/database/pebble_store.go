@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.1
+// version: 1.234.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-22
 
@@ -1728,8 +1728,15 @@ func bookToSummary(b *Book) BookSummary {
 }
 
 func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
+	return getBookByIDFrom(p.db, id)
+}
+
+// getBookByIDFrom is GetBookByID reading from r: the live database, or one
+// snapshot when a caller must read several rows (and index keys) as of one
+// instant (holdersOfHash).
+func getBookByIDFrom(r gatedReader, id string) (*Book, error) {
 	key := []byte(fmt.Sprintf("book:%s", id))
-	value, closer, err := p.db.Get(key)
+	value, closer, err := r.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}
@@ -1749,7 +1756,7 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 	// booksig_recovery_audit's reads, UpdateBook's own oldBook fetch, and
 	// GetAllBooksFullFrom's memdb branch, which point-gets each ID through this
 	// function). See pebble_store_booksig.go.
-	if err := p.hydrateBookSig(&book); err != nil {
+	if err := hydrateBookSigFrom(r, &book); err != nil {
 		return nil, err
 	}
 	return &book, nil

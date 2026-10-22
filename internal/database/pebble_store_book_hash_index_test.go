@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_hash_index_test.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 4e8b2d63-9a17-4c50-b3f6-1d7a0c5e9b82
 // last-edited: 2026-10-22
 
@@ -417,6 +417,7 @@ func TestRepairBookHashIndex_RacingLiveWriters(t *testing.T) {
 	after, err := s.CheckBookHashIndex(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Zero(t, after.Missing(), "%+v", after)
+	assert.Zero(t, after.Extra(), "the final repair removed every key the racing writers left extra: %+v", after)
 	for i := range books {
 		b, err := s.GetBookByID(id(i))
 		require.NoError(t, err)
@@ -466,4 +467,112 @@ func TestBookHashIndex_ResetClearsTheCachedTrust(t *testing.T) {
 	trusted, err = s.bookHashIndexTrusted()
 	require.NoError(t, err)
 	assert.False(t, trusted)
+}
+
+// A lookup reads the candidate keys, the sentinel, the legacy key and the rows
+// as of ONE instant. The boot repair ends by writing the missing keys, setting
+// the sentinel and deleting the legacy keys; if a lookup read the keys before
+// that and the sentinel after it, it would skip the legacy key as "trusted"
+// and answer "no such book" for a book that was findable at every instant.
+// Here the whole repair completes after the lookup began, and the lookup must
+// still find the book that only had a legacy key when it began.
+func TestBookHashIndex_LookupReadsOneSnapshotAcrossTheEndOfTheRepair(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	hashBook(t, s, "old", "H", false)
+	for i, h := range []string{"H", "o-H", "g-H"} {
+		require.NoError(t, s.db.Delete(bookHashKey(i, h, "old"), pebble.Sync))
+	}
+	setRawKey(t, s, "book:hash:H", "old")
+	setRawKey(t, s, "book:originalhash:o-H", "old")
+	setRawKey(t, s, "book:organizedhash:g-H", "old")
+
+	var repaired BookHashIndexReport
+	var repairErr error
+	fired := 0
+	bookHashSnapshotHook = func() {
+		fired++
+		bookHashSnapshotHook = nil
+		repaired, repairErr = s.RepairBookHashIndex(context.Background(), nil)
+	}
+	t.Cleanup(func() { bookHashSnapshotHook = nil })
+
+	got, err := s.GetBookByFileHash("H")
+	require.NoError(t, err)
+	require.Equal(t, 1, fired, "the hook ran inside the lookup")
+	require.NoError(t, repairErr)
+	require.True(t, repaired.Trusted && repaired.LegacySwept, "the repair completed while the lookup was open: %+v", repaired)
+	require.NotNil(t, got, "the lookup began before the repair; it must answer from that instant, not miss the book")
+	assert.Equal(t, "old", got.ID)
+
+	// And a lookup that begins afterwards is served by the new keys.
+	got, err = s.GetBookByFileHash("H")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "old", got.ID)
+}
+
+// Keys whose book is gone or no longer holds the hash are counted by the check
+// and deleted by the repair; a key of a row that cannot be decoded is left
+// alone (what that row holds cannot be told), and every key a live row backs
+// stays.
+func TestBookHashIndex_ExtraKeysAreCountedAndRemovedByTheRepair(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	hashBook(t, s, "a", "H", false)
+	hashBook(t, s, "b", "H", true) // trashed holders keep their keys
+	// Extra 1: a key naming a book that does not exist.
+	setRawKey(t, s, string(bookHashKey(bookHashKindFile, "H", "ghost")), "")
+	// Extra 2: a key naming a book whose row holds another hash now.
+	setRawKey(t, s, string(bookHashKey(bookHashKindOriginal, "o-OLD", "a")), "")
+	// Not extra: the row cannot be decoded.
+	setRawKey(t, s, "book:zz-bad", "{not json")
+	setRawKey(t, s, string(bookHashKey(bookHashKindFile, "Z", "zz-bad")), "")
+
+	rep, err := s.CheckBookHashIndex(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, rep.Extra(), "%+v", rep)
+	assert.Equal(t, 1, kindOf(rep, "hash").Extra)
+	assert.Equal(t, 1, kindOf(rep, "originalhash").Extra)
+	assert.Zero(t, rep.Removed(), "a check removes nothing")
+	assert.Len(t, rep.ExtraSamples, 2)
+	assert.True(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H", "ghost")))
+
+	rep, err = s.RepairBookHashIndex(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, rep.Extra())
+	assert.Equal(t, 2, rep.Removed())
+	assert.False(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H", "ghost")))
+	assert.False(t, rawKeyExists(t, s, bookHashKey(bookHashKindOriginal, "o-OLD", "a")))
+	assert.True(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "Z", "zz-bad")), "the key of an undecodable row is left alone")
+	for _, id := range []string{"a", "b"} {
+		assert.True(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H", id)), "backed key of %s stays", id)
+		assert.True(t, rawKeyExists(t, s, bookHashKey(bookHashKindOriginal, "o-H", id)))
+		assert.True(t, rawKeyExists(t, s, bookHashKey(bookHashKindOrganized, "g-H", id)))
+	}
+
+	again, err := s.RepairBookHashIndex(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Zero(t, again.Extra())
+	assert.Zero(t, again.Removed())
+}
+
+// The repair's scan may be stale by the time it reaches a key: a writer can set
+// the key between the scan and the delete. The delete reads the row again under
+// the book's write stripe and keeps a key the row now backs.
+func TestBookHashIndex_ExtraKeyDeleteRechecksTheRowUnderTheStripe(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	hashBook(t, s, "a", "H", false)
+	backed := bookHashKeyRef{kind: bookHashKindFile, hash: "H", id: "a"}
+
+	// The scan classified this key as extra; the row now holds H.
+	del, err := s.deleteExtraBookHashKey(backed, s.bookRowHoldsHash)
+	require.NoError(t, err)
+	assert.False(t, del, "a key the row backs is never deleted")
+	assert.True(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H", "a")))
+
+	stray := bookHashKeyRef{kind: bookHashKindFile, hash: "gone", id: "a"}
+	setRawKey(t, s, string(bookHashKey(bookHashKindFile, "gone", "a")), "")
+	del, err = s.deleteExtraBookHashKey(stray, s.bookRowHoldsHash)
+	require.NoError(t, err)
+	assert.True(t, del)
+	assert.False(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "gone", "a")))
 }
