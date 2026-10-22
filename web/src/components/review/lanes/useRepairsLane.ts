@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.12.1
+// version: 1.13.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -932,8 +932,17 @@ export function useRepairsLane(
     [noteRowClasses]
   );
 
+  const isPlanOnly = useCallback(
+    (id: string) => fixers.find((f) => f.id === id)?.plan_only === true,
+    [fixers]
+  );
+
   const dispatch = useCallback(
     (action: RepairsAction) => {
+      // A fixer that only previews has no apply: the server answers 409, and
+      // the lane shows no control that would send one. A stray dispatch is
+      // dropped here too, so no confirm dialog opens for a run that cannot be.
+      if (action.type !== 'runTrial' && isPlanOnly(action.fixerId)) return;
       switch (action.type) {
         case 'runTrial':
           void runTrial(action.fixerId);
@@ -1009,6 +1018,7 @@ export function useRepairsLane(
     [
       collectApplicableIds,
       fixerTitle,
+      isPlanOnly,
       previewApplicable,
       remainingApplicable,
       runApply,

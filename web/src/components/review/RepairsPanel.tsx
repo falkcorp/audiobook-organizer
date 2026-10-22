@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.27.0
+// version: 1.28.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -624,7 +624,13 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
           </Stack>
           <ClassChips repairs={repairs} />
 
-          {repairs.filter === 'applicable' && (
+          {repairs.filter === 'applicable' && fixer.plan_only && (
+            <Alert severity="info" sx={{ mx: 2, my: 1 }} data-testid="repairs-plan-only">
+              Preview only: this repair has no Apply yet. The rows show what it would do; nothing is written.
+            </Alert>
+          )}
+
+          {repairs.filter === 'applicable' && !fixer.plan_only && (
             <Stack
               direction="row"
               spacing={1}

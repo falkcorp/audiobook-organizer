@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -171,6 +171,9 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 	f, ok := p.Repairs().Get(params.FixerID)
 	if !ok {
 		return fmt.Errorf("%s: unknown fixer %q", repairs.ApplyOpID, params.FixerID)
+	}
+	if repairs.IsPlanOnly(f) {
+		return fmt.Errorf("%s: fixer %q: %w", repairs.ApplyOpID, f.ID(), repairs.ErrPlanOnly)
 	}
 	store := p.deps.OpsStore()
 	vps := p.deps.VersionPrimaryStore()

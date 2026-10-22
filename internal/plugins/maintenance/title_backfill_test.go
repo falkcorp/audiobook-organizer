@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.51.4
+// version: 1.52.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -73,6 +74,35 @@ type fakeDeps struct {
 	splitCands SplitBookCandidateRows
 	// reconcileScan backs LatestReconcileScan; nil means no scan has run.
 	reconcileScan func() (ReconcileScan, error)
+	// vetoes and journals override RetiredVersionGuards; nil means the way the
+	// server resolves them from the store (decisions over the raw KV, and the
+	// store's own prefix scan).
+	vetoes   OwnerVetoReader
+	journals CombineJournalScanner
+}
+
+// OwnerVetoes (RetiredVersionGuards): the fixture's reader, else the decisions
+// store over the fixture store's raw KV, as Server's does.
+func (d fakeDeps) OwnerVetoes() OwnerVetoReader {
+	if d.vetoes != nil {
+		return d.vetoes
+	}
+	kv, ok := database.AsCapability[decisions.KV](d.store)
+	if !ok {
+		return nil
+	}
+	return decisions.New(kv)
+}
+
+// CombineJournals (RetiredVersionGuards): the fixture's scanner, else the store.
+func (d fakeDeps) CombineJournals() CombineJournalScanner {
+	if d.journals != nil {
+		return d.journals
+	}
+	if d.store == nil {
+		return nil
+	}
+	return d.store
 }
 
 // LatestReconcileScan (ReconcileScanReader): the fixture's scan, or none.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -443,4 +443,55 @@ func TestFixerPermissions_ScopedFixerNeedsItsPermission(t *testing.T) {
 	r2.POST("/repairs/:fixer/plan", h.StartPlan)
 	require.Equal(t, http.StatusAccepted, do(r2, http.MethodPost, "/repairs/scoped/plan", "").Code)
 	require.Equal(t, 1, allow)
+}
+
+// previewFixer only previews: it implements repairs.PlanOnly.
+type previewFixer struct{ stubFixer }
+
+func (previewFixer) PlanOnly() bool { return true }
+
+// A PlanOnly fixer is listed as plan_only, and both apply routes refuse it
+// with 409 without enqueueing anything. A planning run is still allowed.
+func TestPlanOnlyFixer_ApplyRoutesRefuse(t *testing.T) {
+	reg := repairs.NewRegistry()
+	require.NoError(t, reg.Register(previewFixer{stubFixer{id: "previewer"}}))
+	require.NoError(t, reg.Register(stubFixer{id: "writer"}))
+	enq := &fakeEnqueuer{}
+	ops := &fakeOps{rows: map[string]*database.OperationV2Row{
+		"op-plan": {ID: "op-plan", DefID: repairs.PlanOpID, Status: "completed", QueuedAt: time.Now(),
+			Params: `{"fixer_id":"previewer"}`, ResultData: storedPlan(t, "previewer", planRows(3))},
+	}, settings: map[string]string{}}
+	h := New(reg, enq, ops)
+	r := gin.New()
+	r.Use(callerWith(&database.User{ID: "u-editor", Username: "editor"}, auth.PermLibraryEditMetadata))
+	g := r.Group("/api/v1")
+	g.GET("/repairs", h.ListFixers)
+	g.POST("/repairs/:fixer/plan", h.StartPlan)
+	g.POST("/repairs/:fixer/apply", h.StartApply)
+	g.POST("/repairs/:fixer/owner-apply", h.OwnerApply)
+
+	w := do(r, http.MethodGet, "/api/v1/repairs", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	raw := data[struct {
+		Fixers []map[string]any `json:"fixers"`
+	}](t, w)
+	byID := map[string]map[string]any{}
+	for _, f := range raw.Fixers {
+		byID[f["id"].(string)] = f
+	}
+	require.Equal(t, true, byID["previewer"]["plan_only"])
+	_, has := byID["writer"]["plan_only"]
+	require.False(t, has, "a fixer that applies carries no plan_only key")
+
+	w = do(r, http.MethodPost, "/api/v1/repairs/previewer/apply", `{"plan_op_id":"op-plan","row_ids":["vg-000"],"dry_run":false}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "only previews")
+	w = do(r, http.MethodPost, "/api/v1/repairs/previewer/owner-apply", `{"plan_op_id":"op-plan","row_id":"vg-000"}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Empty(t, enq.calls, "a refused apply enqueues nothing")
+
+	w = do(r, http.MethodPost, "/api/v1/repairs/previewer/plan", "")
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	require.Len(t, enq.calls, 1)
+	require.Equal(t, repairs.PlanOpID, enq.calls[0].defID)
 }

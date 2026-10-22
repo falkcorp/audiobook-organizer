@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.95.1
+// version: 1.96.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -106,6 +106,10 @@ type opsFileAndPathReader interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFilesForIDsCore is the Core projection of the files of a few
+	// books; the retired-versions preview reads a shell's and a target's rows
+	// through it (no raw tags or metadata blobs).
+	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
 	// GetBookFileByID is the Repairs writer's read-before-journal for a
 	// book_file compare-and-set (repairs.BookFileWriter).
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
@@ -973,6 +977,30 @@ type ReconcileScanReader interface {
 	LatestReconcileScan() (ReconcileScan, error)
 }
 
+// OwnerVetoReader is the one read of the owner's rejects the retired-versions
+// preview makes: whether an active reject vetoes joining two entities in an op
+// family. *decisions.Store satisfies it (PairVetoed); the plugin cannot import
+// the store's constructor path, so the server composes it.
+type OwnerVetoReader interface {
+	PairVetoed(entityType, a, b, family string) (bool, error)
+}
+
+// CombineJournalScanner is the raw-key prefix scan the combine undo journal
+// (merge:combine-journal:) is read through. database.Store carries it.
+type CombineJournalScanner interface {
+	ScanPrefix(prefix string) ([]database.KVPair, error)
+}
+
+// RetiredVersionGuards serves the retired-versions fixer the two reads that
+// keep a retire from contradicting the owner or from making a merge
+// non-undoable: his rejects and the combine undo journal. Implemented on
+// *server.Server. Either answer is nil when the store cannot serve it; the
+// fixer then refuses to plan rather than guess.
+type RetiredVersionGuards interface {
+	OwnerVetoes() OwnerVetoReader
+	CombineJournals() CombineJournalScanner
+}
+
 // CandidateRefetcher serves the lost-candidates fixer
 // (maintenance.refetch-lost-candidates). Implemented on *server.Server, which
 // owns the candidate-fetch op's per-book path and its provider rate gate.
@@ -1071,6 +1099,7 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	CandidateRefetcher
 	VersionTwinMetadata
 	ReconcileScanReader
+	RetiredVersionGuards
 }
 
 // ----- reporter adapter -----

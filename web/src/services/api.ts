@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.197.0
+// version: 2.198.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -7867,6 +7867,8 @@ export interface RepairFixer {
   description: string;
   last_plan?: RepairOpRef;
   last_apply?: RepairOpRef;
+  /** The fixer only previews: the server refuses its apply (409) and the lane shows no Apply control. */
+  plan_only?: boolean;
 }
 
 /** Plan-row risk. The server writes `low` or `review`; anything else is shown as-is. */

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
 // last-edited: 2026-10-22
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,7 +136,7 @@ func (rf *retiredFixture) seedEveryCategory() int {
 	rf.trashed("itunes", "g1", 30, "/lib/books/itunes/Author/itunes-only.m4b")
 	rf.trashed("too-recent", "g1", 3, rf.file("g1/recent.mp3"))
 	rf.trashed("no-files", "g1", 30)
-	deleted := rf.trashed("user-deleted", "g1", 30, rf.file("g1/deleted.mp3"))
+	deleted := rf.trashed("trash-labelled", "g1", 30, rf.file("g1/deleted.mp3"))
 	b, err := rf.st.GetBookByID(deleted)
 	require.NoError(t, err)
 	b.LibraryState = retiredPtr("deleted")
@@ -178,7 +179,7 @@ func (rf *retiredFixture) seedEveryCategory() int {
 	rf.trashed("ambiguous", "g3", 30, rf.file("g3/own.mp3"))
 
 	// Group g4: the live primary has a file under the frozen iTunes tree, so
-	// the framework guard turns a would-retire row into skipped_itunes.
+	// the iTunes gate holds a would-retire row (the TARGET side of the check).
 	rf.live("g4-primary", "g4", "/lib/books/itunes/Author/g4-primary.m4b")
 	rf.trashed("target-in-itunes", "g4", 30, rf.file("g4/own.mp3"))
 	return 17
@@ -197,12 +198,12 @@ func TestRetiredVersions_EveryCategory(t *testing.T) {
 		{"would-retire", retCatWouldRetire, "", retMethodGroupPrimary, "g1-primary"},
 		{"same-path", retCatSamePath, "", retMethodGroupPrimary, "g1-primary"},
 		{"merged-into", retCatWouldRetire, "", retMethodMergedInto, "g1-primary"},
-		{"target-in-itunes", retCatWouldRetire, "", retMethodGroupPrimary, "g4-primary"},
+		{"target-in-itunes", retCatITunes, retCatITunes, retMethodGroupPrimary, "g4-primary"},
 		{"itunes", retCatITunes, retCatITunes, retMethodGroupPrimary, "g1-primary"},
 		{"too-recent", retCatTooRecent, retCatTooRecent, retMethodGroupPrimary, "g1-primary"},
 		{"age-unknown", retCatAgeUnknown, retCatAgeUnknown, retMethodGroupPrimary, "g1-primary"},
 		{"listening", retCatListening, retCatListening, retMethodGroupPrimary, "g1-primary"},
-		{"user-deleted", retCatUserDeleted, retCatUserDeleted, retMethodGroupPrimary, "g1-primary"},
+		{"trash-labelled", retCatTrashLabelled, retCatTrashLabelled, retMethodGroupPrimary, "g1-primary"},
 		{"no-files", retCatNoFiles, retCatNoFiles, retMethodGroupPrimary, "g1-primary"},
 		{"dead-group-present", retCatNoTargetPresent, retCatNoTargetPresent, "", ""},
 		{"dead-group-missing", retCatNoTargetMissing, retCatNoTargetMissing, "", ""},
@@ -242,6 +243,12 @@ func TestRetiredVersions_EveryCategory(t *testing.T) {
 	require.Equal(t, "2", rows[rf.ids["dead-group-missing"]].Current["rows_absent_on_disk"])
 	require.Equal(t, "1", rows[rf.ids["no-group-present"]].Current["rows_absent_on_disk"], "one of its two files is gone, one is present")
 	require.Equal(t, repairs.RiskReview, rows[rf.ids["itunes"]].Risk)
+	require.Equal(t, "shell", rows[rf.ids["itunes"]].Current["itunes_side"])
+	tin := rows[rf.ids["target-in-itunes"]]
+	require.Equal(t, "target", tin.Current["itunes_side"], "the target's iTunes file holds the row, by the row's own class")
+	require.Equal(t, repairs.RiskReview, tin.Risk)
+	require.Contains(t, tin.Reason, "its target")
+	require.Equal(t, rf.ids["g4-primary"], tin.Proposed["retired_version_of"])
 	require.Equal(t, "g2", rows[rf.ids["dead-group-present"]].Current["group_id"])
 	// A merged-into chain without a live group member is evidence, not a target.
 	for _, n := range []string{"merged-no-group", "merged-dead-group"} {
@@ -278,13 +285,13 @@ func TestRetiredVersions_RunPlanCounts(t *testing.T) {
 	require.Equal(t, n, res.Total)
 
 	wantClass := map[string]int{
-		retCatWouldRetire:     3, // would-retire, merged-into, target-in-itunes (the last is guarded below)
+		retCatWouldRetire:     2, // would-retire, merged-into
 		retCatSamePath:        1,
-		retCatITunes:          1,
+		retCatITunes:          2, // a shell under iTunes, and a shell whose target is
+		retCatTrashLabelled:   1,
 		retCatTooRecent:       1,
 		retCatAgeUnknown:      1,
 		retCatListening:       1,
-		retCatUserDeleted:     1,
 		retCatNoFiles:         1,
 		retCatNoTargetPresent: 4,
 		retCatNoTargetMissing: 2,
@@ -292,20 +299,22 @@ func TestRetiredVersions_RunPlanCounts(t *testing.T) {
 	}
 	require.Equal(t, wantClass, res.ByClass)
 
+	// No framework guard kind appears: the fixer's own iTunes gate has already
+	// labelled the target-in-iTunes row, so it is not a would_retire row that
+	// the guard then skips.
 	wantSkipped := map[string]int{
-		retCatITunes:          1,
+		retCatITunes:          2,
 		retCatTooRecent:       1,
 		retCatAgeUnknown:      1,
 		retCatListening:       1,
-		retCatUserDeleted:     1,
+		retCatTrashLabelled:   1,
 		retCatNoFiles:         1,
 		retCatNoTargetPresent: 4,
 		retCatNoTargetMissing: 2,
 		retCatAmbiguous:       1,
-		repairs.SkipITunes:    1, // target-in-itunes, by the framework guard
 	}
 	require.Equal(t, wantSkipped, res.SkippedByKind)
-	require.Equal(t, 3, res.Applicable, "would-retire, merged-into and same-path are applicable; target-in-itunes is skipped by the guard")
+	require.Equal(t, 3, res.Applicable, "would-retire, merged-into and same-path are applicable")
 	require.Equal(t, n, res.Applicable+sumInts(res.SkippedByKind))
 }
 
@@ -345,8 +354,9 @@ func TestRetiredVersions_NoWritesAndApplyRefuses(t *testing.T) {
 	}
 	const opID = "op-retired-preview"
 	w := repairs.NewWriter(rf.st, rf.st, rf.f.ID(), "bulk_update", "repairs-").WithJournal(rf.st, rf.st, opID).WithFieldStates(rf.st)
+	sd := &countingStandDown{}
 	out, err := repairs.RunApply(context.Background(), rf.f, res, "plan-1", ids, false,
-		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID}, &fakeReporter{})
+		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID, StandDown: sd}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Zero(t, out.Applied, "%v", out.ByOutcome)
 	require.Equal(t, len(ids), out.Failed, "%v", out.ByOutcome)
@@ -356,6 +366,7 @@ func TestRetiredVersions_NoWritesAndApplyRefuses(t *testing.T) {
 	}
 	require.Zero(t, out.BookWrites)
 	require.Zero(t, out.JournalRows)
+	require.Zero(t, sd.acquires.Load(), "a fixer that writes nothing never parks the library scan")
 
 	// Calling Apply directly refuses too.
 	err = rf.f.Apply(context.Background(), nil, res.Rows[0])
@@ -425,20 +436,47 @@ func TestRetiredVersions_MinAgeParam(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Many more books than workers, all sharing one group, with the ownership
-// lookup and the group cache hit from every worker: run under -race.
+// Many more books than workers, sharing one group, one shared path and
+// merged-into chains, with the ownership lookup, the group cache, the book
+// cache and the target cache hit from every worker: run under -race.
 func TestRetiredVersions_ConcurrentPlan(t *testing.T) {
 	rf := newRetiredFixture(t)
-	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	shared := rf.file("g/shared.mp3")
+	primary := rf.live("primary", "g", rf.file("g/primary.mp3"))
+	require.NoError(t, rf.st.CreateBookFile(&database.BookFile{BookID: primary, FilePath: shared, Format: "mp3"}))
 	n := runtime.NumCPU()*6 + 7
 	for i := range n {
 		rf.trashed(fmt.Sprintf("loser-%d", i), "g", 30, rf.file(fmt.Sprintf("g/%d.mp3", i)))
 	}
+	// Every one of these shares a path with the target. The sharers and the
+	// chains are fewer than the plain losers: they hit the same caches, and
+	// each row costs a file and two writes.
+	m := runtime.NumCPU() + 3
+	for i := range m {
+		rf.trashed(fmt.Sprintf("sp-%d", i), "g", 30, shared, rf.file(fmt.Sprintf("g/sp-%d.mp3", i)))
+	}
+	// Merged-into chains: shell -> trashed middle -> live primary.
+	rf.trashed("mid", "g", 30, rf.file("g/mid.mp3"))
+	rf.mergedInto("mid", "primary")
+	for i := range m {
+		name := fmt.Sprintf("chain-%d", i)
+		rf.trashed(name, "g", 30, rf.file("g/"+name+".mp3"))
+		rf.mergedInto(name, "mid")
+	}
 	rows := rf.plan()
-	require.Len(t, rows, n)
+	require.Len(t, rows, n+2*m+1)
 	for _, r := range rows {
-		require.Equal(t, retCatWouldRetire, r.Class, r.Title)
-		require.Equal(t, rf.ids["primary"], r.Current["target_book_id"])
+		require.Equal(t, rf.ids["primary"], r.Current["target_book_id"], r.Title)
+		switch {
+		case strings.HasPrefix(r.Title, "sp-"):
+			require.Equal(t, retCatSamePath, r.Class, r.Title)
+			require.Equal(t, "1", r.Current["rows_same_path"], r.Title)
+		case strings.HasPrefix(r.Title, "chain-"), r.Title == "mid":
+			require.Equal(t, retCatWouldRetire, r.Class, r.Title)
+			require.Equal(t, retMethodMergedInto, r.Current["target_method"], r.Title)
+		default:
+			require.Equal(t, retCatWouldRetire, r.Class, r.Title)
+		}
 	}
 }
 
@@ -475,4 +513,6 @@ func TestRetiredVersions_Registered(t *testing.T) {
 	fx, ok := p.Repairs().Get("retired-versions")
 	require.True(t, ok)
 	require.Equal(t, retiredVersionsFixerID, fx.ID())
+	require.True(t, repairs.IsPlanOnly(fx), "the preview has no Apply, so the lane must not offer one")
+	require.True(t, repairs.SkipsScanStandDown(fx), "the preview writes nothing a scan writes")
 }

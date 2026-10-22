@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-10-14
+// last-edited: 2026-10-22
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -11,7 +11,8 @@
 // history, scan stand-down) lives in internal/repairs and the ops, not here.
 //
 // Status codes: 202 with the operation id for plan/apply; 404 for an unknown
-// fixer or plan op; 409 for a plan op that has not completed; 400 for a plan
+// fixer or plan op; 409 for a plan op that has not completed or an apply of a
+// fixer that only previews (repairs.PlanOnly); 400 for a plan
 // op that is not a plan of this fixer, a bad page request or an empty row
 // selection; 503 without an operations registry.
 //
@@ -185,6 +186,9 @@ type FixerInfo struct {
 	Description string `json:"description"`
 	LastPlan    *OpRef `json:"last_plan,omitempty"`
 	LastApply   *OpRef `json:"last_apply,omitempty"`
+	// PlanOnly: the fixer only previews (repairs.PlanOnly). Its apply routes
+	// answer 409 and the lane shows no Apply control for it.
+	PlanOnly bool `json:"plan_only,omitempty"`
 }
 
 // StartedResponse answers plan/apply.
@@ -227,7 +231,8 @@ func (h *Handler) ListFixers(c *gin.Context) {
 	out := make([]FixerInfo, 0, len(fixers))
 	for _, f := range fixers {
 		out = append(out, FixerInfo{ID: f.ID(), Title: f.Title(), Description: f.Description(),
-			LastPlan: h.lastRun(lastPlanKey(f.ID())), LastApply: h.lastRun(lastApplyKey(f.ID()))})
+			LastPlan: h.lastRun(lastPlanKey(f.ID())), LastApply: h.lastRun(lastApplyKey(f.ID())),
+			PlanOnly: repairs.IsPlanOnly(f)})
 	}
 	httputil.RespondWithOK(c, gin.H{"fixers": out})
 }
@@ -354,6 +359,11 @@ func (h *Handler) ListPlanRows(c *gin.Context) {
 	httputil.RespondWithOK(c, page)
 }
 
+// planOnlyMessage is the 409 body of an apply of a fixer that only previews.
+func planOnlyMessage(f repairs.Fixer) string {
+	return "repair fixer " + f.ID() + " only previews; " + repairs.ErrPlanOnly.Error()
+}
+
 // StartApply implements POST /repairs/:fixer/apply {plan_op_id, row_ids}.
 func (h *Handler) StartApply(c *gin.Context) {
 	f, ok := h.fixer(c)
@@ -361,6 +371,10 @@ func (h *Handler) StartApply(c *gin.Context) {
 		return
 	}
 	if !h.fixerPermitted(c, f) {
+		return
+	}
+	if repairs.IsPlanOnly(f) {
+		httputil.RespondWithConflict(c, planOnlyMessage(f))
 		return
 	}
 	if h.enqueuer == nil {
@@ -413,6 +427,10 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 		return
 	}
 	if !h.fixerPermitted(c, f) {
+		return
+	}
+	if repairs.IsPlanOnly(f) {
+		httputil.RespondWithConflict(c, planOnlyMessage(f))
 		return
 	}
 	ctx := c.Request.Context()
