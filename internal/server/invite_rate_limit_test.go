@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -537,17 +537,20 @@ func TestInviteRateLimit_IdenticalRefusals(t *testing.T) {
 		},
 	}
 	type refusal struct {
-		code        int
-		body, ctype string
+		code                    int
+		body, ctype, retryAfter string
 	}
 	got := map[string]refusal{}
 	for name, f := range trip {
 		w := f(newInviteLimitHarness(t, false))
-		got[name] = refusal{w.Code, w.Body.String(), w.Header().Get("Content-Type")}
+		got[name] = refusal{w.Code, w.Body.String(), w.Header().Get("Content-Type"), w.Header().Get("Retry-After")}
 	}
 	ref := got["per client"]
 	if ref.code != http.StatusTooManyRequests || !strings.Contains(ref.body, "TOO_MANY_REQUESTS") {
 		t.Fatalf("refusal = %+v, want a 429 TOO_MANY_REQUESTS body", ref)
+	}
+	if ref.retryAfter != "60" {
+		t.Fatalf("refusal Retry-After = %q, want the fixed \"60\" (the same for every layer)", ref.retryAfter)
 	}
 	for name, r := range got {
 		if r != ref {
