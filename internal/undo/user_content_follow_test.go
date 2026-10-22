@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
 // last-edited: 2026-10-22
 
@@ -254,16 +254,16 @@ func TestCheckMembershipFollow(t *testing.T) {
 		v, _ := EncodeMembership(rec)
 		return &database.OperationChange{BookID: "r", NewValue: "s", OldValue: v}
 	}
-	if err := CheckMembershipFollow([]string{"a", "s"}, rowOf(MembershipRecord{Index: 1})); err != nil {
+	if err := CheckMembershipFollow([]string{"a", "s"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil, nil); err != nil {
 		t.Fatalf("restorable: %v", err)
 	}
-	if err := CheckMembershipFollow([]string{"a", "r"}, rowOf(MembershipRecord{Index: 1})); !errors.Is(err, ErrAlreadyRestored) {
+	if err := CheckMembershipFollow([]string{"a", "r"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil, nil); !errors.Is(err, ErrAlreadyRestored) {
 		t.Fatalf("already: %v", err)
 	}
-	if RefusalReason(CheckMembershipFollow([]string{"a"}, rowOf(MembershipRecord{Index: 1}))) != ReasonChangedSince {
+	if RefusalReason(CheckMembershipFollow([]string{"a"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil, nil)) != ReasonChangedSince {
 		t.Fatal("a slot the owner emptied must refuse")
 	}
-	if RefusalReason(CheckMembershipFollow(nil, &database.OperationChange{BookID: "r", NewValue: "s", OldValue: "x"})) != ReasonOldValueUnparsable {
+	if RefusalReason(CheckMembershipFollow(nil, &database.OperationChange{BookID: "r", NewValue: "s", OldValue: "x"}, UserContentCollection, "L", nil, nil)) != ReasonOldValueUnparsable {
 		t.Fatal("a malformed record must refuse")
 	}
 }
@@ -312,7 +312,7 @@ func TestSurvivorStandOf(t *testing.T) {
 			[]*database.OperationChange{mk("op0", "a", took, 1, nil), mk("op1", "b", UserContentField(UserContentCollectionHeld, "c9"), 2, nil)}, row("op0", "a"), SurvivorDefault},
 		{"a playlist marker does not count for a collection",
 			[]*database.OperationChange{mk("op0", "a", took, 1, nil), mk("op1", "b", UserContentField(UserContentPlaylistHeld, "c1"), 2, nil)}, row("op0", "a"), SurvivorDefault},
-		{"no marker for the row (journaled before markers)",
+		{"no marker for the row (its carry's marker was voided)",
 			[]*database.OperationChange{mk("op1", "b", took, 1, nil)}, row("op0", "a"), SurvivorDefault},
 		{"no rows", nil, row("op0", "a"), SurvivorDefault},
 	}

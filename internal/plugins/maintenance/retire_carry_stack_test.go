@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_stack_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b2d7e91-3c46-4a08-9f15-e6a0d83c7b24
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -392,7 +392,7 @@ func TestRetireCarry_RowsWithoutAnchorsAreRestoredByIndexAndReported(t *testing.
 	require.Positive(t, rr.RestoredByIndex, "the removal rows of op 2 had no anchors: %+v", rr)
 	require.NotEmpty(t, rr.Kept)
 	for _, k := range rr.Kept {
-		require.Contains(t, k, "predates neighbour anchors")
+		require.Contains(t, k, "records no neighbour anchors")
 	}
 	require.Contains(t, rr.Summary(), "put back by recorded index")
 	rr, err = audiobooks.NewRevertService(f.s).RevertOperation("op-apply-1")

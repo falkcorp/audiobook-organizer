@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_shared_list_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d2f6b19-4c07-4e53-a1d8-7b95e03c6f42
 // last-edited: 2026-10-22
 
@@ -29,10 +29,6 @@ import (
 
 // hookStore wraps the fixture's store and injects, per test:
 //
-//   - nonAtomic: UpdateCollectionBooksAndMark is the list write followed by a
-//     separate MarkOperationChangesReverted, the window a build that wrote the
-//     two apart left behind when the process died between them (the revert no
-//     longer writes that way; a list in that state is what the retry repairs);
 //   - failMarkOp: the next marker stamp of that operation fails, once. On the
 //     atomic path it fails the whole call before anything is written, on the
 //     playlist's atomic path too;
@@ -51,7 +47,6 @@ type hookStore struct {
 	members database.CollectionMembershipStore
 	atomic  database.CollectionMembershipMarkStore
 
-	nonAtomic  bool
 	failMarkOp atomic.Value // string
 
 	armRetire     atomic.Bool
@@ -113,18 +108,11 @@ func (s *hookStore) UpdateUserPlaylistAndMark(pl *database.UserPlaylist, mark da
 }
 
 func (s *hookStore) UpdateCollectionBooksAndMark(id string, fn func([]string) ([]string, error), mark database.OperationMark) (*database.Collection, error) {
-	if !s.nonAtomic {
-		if v, _ := s.failMarkOp.Load().(string); v == mark.OperationID {
-			s.failMarkOp.Store("")
-			return nil, errors.New("injected atomic list-and-stamp failure")
-		}
-		return s.atomic.UpdateCollectionBooksAndMark(id, fn, mark)
+	if v, _ := s.failMarkOp.Load().(string); v == mark.OperationID {
+		s.failMarkOp.Store("")
+		return nil, errors.New("injected atomic list-and-stamp failure")
 	}
-	col, err := s.members.UpdateCollectionBooks(id, fn)
-	if err != nil {
-		return col, err
-	}
-	return col, s.MarkOperationChangesReverted(mark.OperationID, mark.ChangeIDs)
+	return s.atomic.UpdateCollectionBooksAndMark(id, fn, mark)
 }
 
 func (s *hookStore) MarkOperationChangesReverted(op string, ids []string) error {
@@ -223,44 +211,43 @@ func TestRetireCarry_TwoSurvivorsSharingAListRevertExactly(t *testing.T) {
 	}
 }
 
-// A list written by an older build whose stamp was lost (it wrote the list and
-// the stamp apart and died between them; nonAtomic stands for that build). The
-// second operation is reverted, then the first is retried by the current
-// build: it finds its book already listed, sees the survivor was borrowed by it
-// and by nothing standing now, and takes the survivor out, naming the repair.
-// Without it the survivor stayed in the list for good.
-func TestRetireCarry_ListWrittenWithoutItsStampIsRepairedByTheRetry(t *testing.T) {
+// The owner puts the retired book back in the list by hand while the retire
+// still stands (the survivor holds its slot). The revert then finds its book
+// already listed. The survivor is in the list only because of this retire, and
+// nothing else stands on it, so it is taken out with the row (and named in
+// Kept): left in, it would stay for good beside the book it stood in for.
+// While another operation's marker still stands on the survivor it stays.
+func TestRetireCarry_ARetiredBookReAddedByHandReleasesTheSurvivor(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	parent := f.ids["parent"]
 	k0 := f.hcChild(t, "c1", "Stray 1", "hash-p01")
 	k1 := f.hcChild(t, "c2", "Stray 2", "hash-p02")
-	want := []string{k0, k1, "x"}
-	col := f.rcCollection(t, "Shared", want...)
+	col := f.rcCollection(t, "Shared", k0, k1, "x")
 	f.plan(t, "plan")
 	for i, kid := range []string{k0, k1} {
 		out := f.apply(t, "plan", fmt.Sprintf("op%d", i), []string{hcRowID(parent, kid)}, nil)
 		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 	}
 	require.Equal(t, []string{parent, "x"}, f.rcMembers(t, col))
-
-	st := newHookStore(f.s)
-	st.nonAtomic = true
-	st.failMarkOp.Store("op0")
-	rr, err := audiobooks.NewRevertService(st).RevertOperation("op0")
-	require.Error(t, err)
-	require.Equal(t, 1, rr.Failed, "%+v", rr)
-	require.Equal(t, []string{k0, parent, "x"}, f.rcMembers(t, col), "the list write landed, the survivor stays for op1")
-	require.Equal(t, 1, f.markersStanding(t, "op0"), "the stamp was lost")
-
-	st.nonAtomic = false // the current build from here on
-	rs := audiobooks.NewRevertService(st)
-	rr, err = rs.RevertOperation("op1")
+	_, err := f.s.AddBooksToCollection(col, []string{k0})
 	require.NoError(t, err)
-	require.Zero(t, rr.Failed, "%+v", rr)
-	require.Equal(t, []string{k0, parent, k1, "x"}, f.rcMembers(t, col), "op0's marker stands, so the survivor stays")
+	require.Equal(t, []string{parent, "x", k0}, f.rcMembers(t, col))
 
-	rr, err = rs.RevertOperation("op0")
+	// op1's marker stands on the survivor: it stays when op0 is reverted.
+	rs := audiobooks.NewRevertService(f.s)
+	rr, err := rs.RevertOperation("op0")
+	require.NoError(t, err, "%+v", rr)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	require.Equal(t, 1, rr.AlreadyRestored, "%+v", rr)
+	require.Zero(t, rr.SurvivorsReleased, "%+v", rr)
+	require.Equal(t, []string{parent, "x", k0}, f.rcMembers(t, col))
+
+	// The owner re-adds the second book too; reverting its retire, the last
+	// that stands on the survivor, takes the survivor out.
+	_, err = f.s.AddBooksToCollection(col, []string{k1})
+	require.NoError(t, err)
+	rr, err = rs.RevertOperation("op1")
 	require.NoError(t, err, "%+v", rr)
 	require.Zero(t, rr.Failed, "%+v", rr)
 	require.Equal(t, 1, rr.AlreadyRestored, "%+v", rr)
@@ -268,8 +255,8 @@ func TestRetireCarry_ListWrittenWithoutItsStampIsRepairedByTheRetry(t *testing.T
 	require.Len(t, rr.Kept, 1, "the survivor's release is named: %+v", rr)
 	require.Contains(t, rr.Kept[0], "taken out of the list")
 	require.Contains(t, rr.Summary(), "1 survivor(s) taken out of a list they were left in")
-	require.Equal(t, want, f.rcMembers(t, col), "the survivor leaves with the last borrower")
-	require.Zero(t, f.markersStanding(t, "op0"))
+	require.Equal(t, []string{"x", k0, k1}, f.rcMembers(t, col), "the survivor leaves with the last borrower")
+	require.Zero(t, f.markersStanding(t, "op0")+f.markersStanding(t, "op1"))
 }
 
 // With the atomic batch a failing stamp fails the list write too: nothing is
