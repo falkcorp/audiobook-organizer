@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_shared_list_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d2f6b19-4c07-4e53-a1d8-7b95e03c6f42
 // last-edited: 2026-10-22
 
@@ -30,10 +30,15 @@ import (
 // hookStore wraps the fixture's store and injects, per test:
 //
 //   - nonAtomic: UpdateCollectionBooksAndMark is the list write followed by a
-//     separate MarkOperationChangesReverted, the window a process death between
-//     two writes leaves (a store without the atomic batch behaves this way);
+//     separate MarkOperationChangesReverted, the window a build that wrote the
+//     two apart left behind when the process died between them (the revert no
+//     longer writes that way; a list in that state is what the retry repairs);
 //   - failMarkOp: the next marker stamp of that operation fails, once. On the
-//     atomic path it fails the whole call before anything is written;
+//     atomic path it fails the whole call before anything is written, on the
+//     playlist's atomic path too;
+//   - armRetire: from then on the first GetCollection (retireEntered) and the
+//     first UpdateCollectionBooks (retireWrote) are signalled; the reverts under
+//     test write through the atomic call, so only a retire's carry reaches them;
 //   - pauseAfterRead: the first GetBookChanges of pauseBook returns its rows
 //     only after pauseAfterRead.resume is closed, having signalled
 //     pauseAfterRead.read once it has read them, so the reader decides from a
@@ -48,6 +53,12 @@ type hookStore struct {
 
 	nonAtomic  bool
 	failMarkOp atomic.Value // string
+
+	armRetire     atomic.Bool
+	retireEntered chan struct{}
+	retireWrote   chan struct{}
+	enteredOnce   sync.Once
+	wroteOnce     sync.Once
 
 	pauseBook      string
 	pauseAfterRead *readPause
@@ -65,7 +76,15 @@ type readPause struct {
 }
 
 func newHookStore(s *database.PebbleStore) *hookStore {
-	return &hookStore{Store: s, members: s, atomic: s, released: make(chan struct{})}
+	return &hookStore{Store: s, members: s, atomic: s, released: make(chan struct{}),
+		retireEntered: make(chan struct{}), retireWrote: make(chan struct{})}
+}
+
+func (s *hookStore) GetCollection(id string) (*database.Collection, error) {
+	if s.armRetire.Load() {
+		s.enteredOnce.Do(func() { close(s.retireEntered) })
+	}
+	return s.Store.GetCollection(id)
 }
 
 func (s *hookStore) Unwrap() database.Store { return s.Store }
@@ -79,7 +98,18 @@ func (s *hookStore) RemoveBookFromCollection(id, bookID string) (*database.Colle
 }
 
 func (s *hookStore) UpdateCollectionBooks(id string, fn func([]string) ([]string, error)) (*database.Collection, error) {
+	if s.armRetire.Load() {
+		s.wroteOnce.Do(func() { close(s.retireWrote) })
+	}
 	return s.members.UpdateCollectionBooks(id, fn)
+}
+
+func (s *hookStore) UpdateUserPlaylistAndMark(pl *database.UserPlaylist, mark database.OperationMark) error {
+	if v, _ := s.failMarkOp.Load().(string); v == mark.OperationID {
+		s.failMarkOp.Store("")
+		return errors.New("injected atomic playlist-and-stamp failure")
+	}
+	return s.Store.(database.UserPlaylistMarkStore).UpdateUserPlaylistAndMark(pl, mark)
 }
 
 func (s *hookStore) UpdateCollectionBooksAndMark(id string, fn func([]string) ([]string, error), mark database.OperationMark) (*database.Collection, error) {
@@ -98,7 +128,7 @@ func (s *hookStore) UpdateCollectionBooksAndMark(id string, fn func([]string) ([
 }
 
 func (s *hookStore) MarkOperationChangesReverted(op string, ids []string) error {
-	if v, _ := s.failMarkOp.Load().(string); v == op && len(ids) == 1 {
+	if v, _ := s.failMarkOp.Load().(string); v == op {
 		s.failMarkOp.Store("")
 		return errors.New("injected marker stamp failure")
 	}
@@ -193,12 +223,13 @@ func TestRetireCarry_TwoSurvivorsSharingAListRevertExactly(t *testing.T) {
 	}
 }
 
-// The list write lands and the marker stamp is lost (a store without the atomic
-// batch, a death between two writes). The second operation is reverted, then
-// the first is retried: it finds its book already listed, sees the survivor
-// was borrowed by it and by nothing standing now, and takes the survivor out.
-// Without that repair the survivor stayed in the list for good.
-func TestRetireCarry_LostMarkerStampIsRepairedByTheRetry(t *testing.T) {
+// A list written by an older build whose stamp was lost (it wrote the list and
+// the stamp apart and died between them; nonAtomic stands for that build). The
+// second operation is reverted, then the first is retried by the current
+// build: it finds its book already listed, sees the survivor was borrowed by it
+// and by nothing standing now, and takes the survivor out, naming the repair.
+// Without it the survivor stayed in the list for good.
+func TestRetireCarry_ListWrittenWithoutItsStampIsRepairedByTheRetry(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	parent := f.ids["parent"]
@@ -216,13 +247,14 @@ func TestRetireCarry_LostMarkerStampIsRepairedByTheRetry(t *testing.T) {
 	st := newHookStore(f.s)
 	st.nonAtomic = true
 	st.failMarkOp.Store("op0")
-	rs := audiobooks.NewRevertService(st)
-	rr, err := rs.RevertOperation("op0")
+	rr, err := audiobooks.NewRevertService(st).RevertOperation("op0")
 	require.Error(t, err)
 	require.Equal(t, 1, rr.Failed, "%+v", rr)
 	require.Equal(t, []string{k0, parent, "x"}, f.rcMembers(t, col), "the list write landed, the survivor stays for op1")
 	require.Equal(t, 1, f.markersStanding(t, "op0"), "the stamp was lost")
 
+	st.nonAtomic = false // the current build from here on
+	rs := audiobooks.NewRevertService(st)
 	rr, err = rs.RevertOperation("op1")
 	require.NoError(t, err)
 	require.Zero(t, rr.Failed, "%+v", rr)
@@ -232,8 +264,10 @@ func TestRetireCarry_LostMarkerStampIsRepairedByTheRetry(t *testing.T) {
 	require.NoError(t, err, "%+v", rr)
 	require.Zero(t, rr.Failed, "%+v", rr)
 	require.Equal(t, 1, rr.AlreadyRestored, "%+v", rr)
+	require.Equal(t, 1, rr.SurvivorsReleased, "%+v", rr)
 	require.Len(t, rr.Kept, 1, "the survivor's release is named: %+v", rr)
-	require.Contains(t, rr.Kept[0], "left in the list by an interrupted earlier revert")
+	require.Contains(t, rr.Kept[0], "taken out of the list")
+	require.Contains(t, rr.Summary(), "1 survivor(s) taken out of a list they were left in")
 	require.Equal(t, want, f.rcMembers(t, col), "the survivor leaves with the last borrower")
 	require.Zero(t, f.markersStanding(t, "op0"))
 }
@@ -270,6 +304,43 @@ func TestRetireCarry_AtomicListAndStampFailureWritesNothing(t *testing.T) {
 	require.Zero(t, rr.AlreadyRestored, "%+v", rr)
 	require.Empty(t, rr.Kept)
 	require.Equal(t, want, f.rcMembers(t, col))
+	require.Zero(t, f.markersStanding(t, "op0"))
+	require.Zero(t, f.markersStanding(t, "op1"))
+}
+
+// The same for a playlist: the playlist and the stamp are one write.
+func TestRetireCarry_AtomicPlaylistAndStampFailureWritesNothing(t *testing.T) {
+	t.Parallel()
+	f := hcSeed(t)
+	parent := f.ids["parent"]
+	k0 := f.hcChild(t, "c1", "Stray 1", "hash-p01")
+	k1 := f.hcChild(t, "c2", "Stray 2", "hash-p02")
+	want := []string{k0, k1, "x"}
+	pl := f.rcPlaylist(t, "Shared list", want...)
+	f.plan(t, "plan")
+	for i, kid := range []string{k0, k1} {
+		out := f.apply(t, "plan", fmt.Sprintf("op%d", i), []string{hcRowID(parent, kid)}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	}
+
+	st := newHookStore(f.s)
+	st.failMarkOp.Store("op0")
+	rs := audiobooks.NewRevertService(st)
+	rr, err := rs.RevertOperation("op0")
+	require.Error(t, err)
+	require.Equal(t, 1, rr.Failed, "%+v", rr)
+	require.Equal(t, []string{parent, "x"}, f.rcPlaylistMembers(t, pl), "playlist and stamp are one write: nothing landed")
+	require.Equal(t, 1, f.markersStanding(t, "op0"))
+
+	_, err = rs.RevertOperation("op1")
+	require.NoError(t, err)
+	rr, err = rs.RevertOperation("op0")
+	require.NoError(t, err, "%+v", rr)
+	require.Zero(t, rr.AlreadyRestored, "%+v", rr)
+	require.Empty(t, rr.Kept)
+	require.Equal(t, want, f.rcPlaylistMembers(t, pl))
+	require.Zero(t, f.markersStanding(t, "op0"))
+	require.Zero(t, f.markersStanding(t, "op1"))
 }
 
 // Two operations sharing a survivor are reverted at the same moment, and the
@@ -352,11 +423,24 @@ func TestRetireCarry_ARetireWaitsForARevertIntoTheSameSurvivor(t *testing.T) {
 		t.Fatal("the revert never read the survivor's journal")
 	}
 	var applied *repairs.ApplyResult
+	st.armRetire.Store(true)
 	wg.Go(func() {
 		applied = f.apply(t, "plan", "op1", []string{hcRowID(parent, k1)}, nil)
 	})
-	// Long enough for an unlocked retire to run to completion.
-	time.Sleep(300 * time.Millisecond)
+	// The retire is known to be in its carry once it reads the collection, a
+	// moment before it takes the list lock. Without the lock it goes on to
+	// write the list at once; with it, it waits for the revert, which is held
+	// until the retire has shown which.
+	select {
+	case <-st.retireEntered:
+	case <-time.After(10 * time.Second):
+		close(st.pauseAfterRead.resume)
+		t.Fatal("the retire never reached its carry")
+	}
+	select {
+	case <-st.retireWrote:
+	case <-time.After(250 * time.Millisecond):
+	}
 	close(st.pauseAfterRead.resume)
 	wg.Wait()
 

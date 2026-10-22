@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -245,7 +245,7 @@ func TestOpchangeIndex_PruneKeepsTheKeptTypes(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	mustTrustOpChange(t, p)
 	old := time.Now().Add(-400 * 24 * time.Hour)
-	for _, ct := range []string{"repair_plan_record", "repair_owner_apply", "merge_combine_journal"} {
+	for _, ct := range []string{"repair_plan_record", "repair_owner_apply", "merge_combine_journal", "user_content_follow"} {
 		if !OpChangeTypesKeptByPrune[ct] {
 			t.Errorf("%s is not in OpChangeTypesKeptByPrune", ct)
 		}
@@ -258,11 +258,11 @@ func TestOpchangeIndex_PruneKeepsTheKeptTypes(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v; want 1 (only the ordinary row), nil", n, err)
 	}
-	if got := countPrefix(t, p, opChangeKeyPrefix, ""); got != 3 {
-		t.Fatalf("opchange rows = %d, want the 3 kept ones", got)
+	if got := countPrefix(t, p, opChangeKeyPrefix, ""); got != 4 {
+		t.Fatalf("opchange rows = %d, want the 4 kept ones", got)
 	}
-	if got := countOpChangeIndexKeys(t, p); got != 3 {
-		t.Fatalf("opchange_by_book entries = %d, want the 3 kept ones", got)
+	if got := countOpChangeIndexKeys(t, p); got != 4 {
+		t.Fatalf("opchange_by_book entries = %d, want the 4 kept ones", got)
 	}
 }
 

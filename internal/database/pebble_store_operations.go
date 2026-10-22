@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
 // last-edited: 2026-10-22
 
@@ -659,6 +659,13 @@ func (p *PebbleStore) GetBookChanges(bookID string) ([]*OperationChange, error) 
 // production.
 var opChangeMarkAfterScan func()
 
+// opChangeMarkAfterCommit, when non-nil, runs in markOperationChangesRevertedWith
+// right after its batch committed (the marks and, for the list-and-mark writes,
+// the list staged with them). Test-only; nil in production. A test that makes it
+// panic stands for a process that died between that commit and whatever write
+// the caller would have made next.
+var opChangeMarkAfterCommit func()
+
 // MarkOperationChangesReverted marks the listed changes of an operation as
 // reverted. IDs that are not changes of this operation are ignored; rows not
 // listed are left untouched. Every rewritten row and its re-Set
@@ -759,5 +766,11 @@ func (p *PebbleStore) markOperationChangesRevertedWith(operationID string, chang
 	} else if staged == 0 {
 		return nil
 	}
-	return batch.Commit(pebble.Sync)
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+	if opChangeMarkAfterCommit != nil {
+		opChangeMarkAfterCommit()
+	}
+	return nil
 }
