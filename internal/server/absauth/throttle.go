@@ -1,5 +1,5 @@
 // file: internal/server/absauth/throttle.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3f9a1c86-2d57-4e0b-b843-9c60e5a7f218
 // last-edited: 2026-10-22
 
@@ -32,6 +32,10 @@ import (
 //     most SoftThreshold (Clear). It does not reset the source: a caller holding
 //     one valid account would otherwise get unlimited guesses at every other account
 //     from one address by logging in between rounds.
+//   - Refresh failures (a dead ABS refresh token) are a budget of their own under
+//     RefreshKey(source). The ABS login honours a spent refresh budget as well as
+//     its own; the web login only its own; no success path hands refresh failures
+//     back.
 //
 // §1.9.4 item 3 makes this non-optional: AudioBooth issue #326 records a post-403
 // request storm of 959 requests in 44 s that got a real user CrowdSec-banned. Both
@@ -56,6 +60,11 @@ const (
 	// MaxKeys bounds each table. At the bound a new key evicts the least recently
 	// written entry (O(1)), so rotating source addresses or usernames cannot grow
 	// the table without limit; the aggregate login ceilings cap what rotation buys.
+	// A counter that has reached its refusal threshold (SoftThreshold for a
+	// username, MaxFailuresPerIP for a source) is pinned: the bound evicts any
+	// counter below its threshold first, and a refused one only when every counter
+	// in the table is refused, so a stream of distinct names cannot wash a refused
+	// account's counter out.
 	MaxKeys = 10000
 	// maxAccountsPerSource bounds how many accounts one source's failures are
 	// remembered for (they are what a success may take back).
@@ -63,6 +72,18 @@ const (
 	// maxAccountKeyLen bounds a submitted username used as a table key.
 	maxAccountKeyLen = 128
 )
+
+// RefreshKey is the source key under which ABS refresh-token failures are
+// counted. Refresh has its own budget, apart from the password logins': a client
+// storming /auth/refresh with a dead token must not spend the visitor's password
+// budget (and a mistyped password must not stop a token refresh). The ABS login
+// checks both its own key and this one; the web login only its own.
+func RefreshKey(sourceKey string) string {
+	if sourceKey == "" {
+		return ""
+	}
+	return "refresh:" + sourceKey
+}
 
 // AccountKey is the per-account throttle key for a submitted username: trimmed,
 // lowercased, at most maxAccountKeyLen bytes (cut on a rune boundary).
@@ -104,12 +125,11 @@ type Throttle struct {
 
 // NewThrottle returns an empty Throttle.
 func NewThrottle() *Throttle {
-	return &Throttle{
-		byIP:   NewLRU[*failureCounter](MaxKeys),
-		byAcct: NewLRU[*failureCounter](MaxKeys),
-		now:    time.Now,
-		sleep:  time.Sleep,
-	}
+	byIP := NewLRU[*failureCounter](MaxKeys)
+	byIP.SetPinned(func(c *failureCounter) bool { return c.count >= MaxFailuresPerIP })
+	byAcct := NewLRU[*failureCounter](MaxKeys)
+	byAcct.SetPinned(func(c *failureCounter) bool { return c.count >= SoftThreshold })
+	return &Throttle{byIP: byIP, byAcct: byAcct, now: time.Now, sleep: time.Sleep}
 }
 
 // SetSleep replaces the delay function. Tests inject a no-op to stay fast.
@@ -238,7 +258,9 @@ func (t *Throttle) Clear(accountKey, ip string) {
 	c.count -= n
 	if c.count <= 0 {
 		t.byIP.Delete(ip)
+		return
 	}
+	t.byIP.Touch(ip) // the count changed: file it under its new pin state
 }
 
 // bump adds one failure to key's counter, starting a new window when there is none

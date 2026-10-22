@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-22
 
@@ -122,6 +122,7 @@ type AuthHandler struct {
 // NewAuthHandler constructs an AuthHandler.
 // enableAuth should be set from config.AppConfig.EnableAuth at wire time.
 func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
+	absauth.WarmLoginDummy() // so the first login for an unknown name costs what any other does
 	return &AuthHandler{
 		store:       store,
 		enableAuth:  enableAuth,
@@ -344,17 +345,26 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	user, err := h.store.GetUserByUsername(req.Username)
-	if err != nil || user == nil {
+	if err != nil {
+		// A store failure is not a credential verdict: nothing is charged to the
+		// source or the name, and the caller is told it was our fault.
+		httputil.RespondWithInternalError(c, "could not verify credentials")
+		return
+	}
+	if user == nil {
 		// Counted against the source AND the submitted name even when the user
 		// does not exist, so username guessing can't dodge the throttle and an
-		// unknown name slows down exactly like a real one.
+		// unknown name slows down exactly like a real one. The same password work
+		// is spent first, so the response time does not give the name away either.
+		absauth.SpendVerification(req.Password)
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, ip))
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
 	}
-	if ok, _ := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
+	if ok, _ := absauth.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
 		// Soft, progressive per-account slowdown — never a hard lock, so the
-		// real user with the correct password is never denied (HIGH-3).
+		// real user with the correct password is never denied (HIGH-3). An account
+		// with no password credential at all spends the same verification work.
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, ip))
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
