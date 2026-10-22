@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d2e6a41-5f07-4b93-a1c8-3e9b7d04f5a2
 // last-edited: 2026-10-22
 
@@ -223,4 +223,105 @@ func TestDiscardProgressAndPurge_RefusesUndoHeldShell(t *testing.T) {
 	assert.False(t, bookGone(t, store, "shell"))
 	assert.Equal(t, 40, userPct(t, store, u.ID, "shell"), "no state was cleared")
 	assert.Empty(t, rec.entries)
+}
+
+// A combine that journals AFTER the pass built its shell index (the pass reads
+// the trash listing and the journals once, up front) must still hold its shell:
+// the decision is re-made under the merge lock against a refreshed index. This
+// is the fail-open the first version had: the snapshot was never refreshed, so
+// the purge deleted a shell whose combine had journaled mid-pass.
+func TestPurgeOne_CombineJournaledMidPassKeepsItsShell(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "shell", "")
+	softDeleted(t, store, "plain", "")
+
+	env, err := svc.newPurgeEnv() // the pass's one up-front read: no journal yet
+	require.NoError(t, err)
+	row, err := store.GetBookByID("shell")
+	require.NoError(t, err)
+
+	holdByCombine(t, store, "shell") // the combine journals while the pass runs
+
+	out := svc.purgeOne(row, false, env)
+	assert.Equal(t, purgeKeptUndo, out.kind, "%+v", out)
+	assert.False(t, bookGone(t, store, "shell"), "the shell of a combine journaled mid-pass must survive the purge")
+
+	// An unrelated trashed book is still purged by the same, refreshed env.
+	plain, err := store.GetBookByID("plain")
+	require.NoError(t, err)
+	assert.Equal(t, purgePurged, svc.purgeOne(plain, false, env).kind)
+	assert.True(t, bookGone(t, store, "plain"))
+}
+
+// The same race on the carry path: a shell with listening state and a live
+// sibling goes through purgeCarryingState, whose precheck must also keep it.
+func TestPurgeOne_CombineJournaledMidPassKeepsShellWithProgress(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "shell", "")
+	purgeSeedProgress(t, store, "shell")
+
+	env, err := svc.newPurgeEnv()
+	require.NoError(t, err)
+	row, err := store.GetBookByID("shell")
+	require.NoError(t, err)
+	holdByCombine(t, store, "shell")
+
+	out := svc.purgeOne(row, false, env)
+	assert.Equal(t, purgeKeptUndo, out.kind, "%+v", out)
+	assert.False(t, bookGone(t, store, "shell"))
+}
+
+// Fail closed: when a combine journaled since the pass began and the journals
+// cannot be re-read, the book is kept and reported as failed with the reason,
+// never purged on the strength of an index known to be stale.
+func TestPurgeOne_UnreadableJournalsMidPassKeepTheBook(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "victim", "")
+	softDeleted(t, store, "other", "")
+
+	env, err := svc.newPurgeEnv()
+	require.NoError(t, err)
+	row, err := store.GetBookByID("victim")
+	require.NoError(t, err)
+
+	holdByCombine(t, store, "other") // any journal write makes the index stale
+	env.undo.build = func() (*merge.UndoShellIndex, error) { return nil, errors.New("journals unreadable") }
+
+	out := svc.purgeOne(row, false, env)
+	assert.Equal(t, purgeFailed, out.kind, "%+v", out)
+	require.Len(t, out.errs, 1)
+	assert.Contains(t, out.errs[0], "victim")
+	assert.Contains(t, out.errs[0], "journals unreadable")
+	assert.False(t, bookGone(t, store, "victim"), "an undecidable book must be kept")
+}
+
+// A journal written for a different book still refreshes the index but must not
+// hold this one, and with no new journal the index is not rebuilt per book.
+func TestUndoShells_RebuildsOnlyWhenAJournalWasWritten(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "a", "")
+	softDeleted(t, store, "b", "")
+	u, err := svc.newUndoShells()
+	require.NoError(t, err)
+	builds := 0
+	inner := u.build
+	u.build = func() (*merge.UndoShellIndex, error) { builds++; return inner() }
+
+	rowA, _ := store.GetBookByID("a")
+	rowB, _ := store.GetBookByID("b")
+	for i := 0; i < 3; i++ {
+		_, held, err := u.Holds(rowA)
+		require.NoError(t, err)
+		assert.False(t, held)
+	}
+	assert.Zero(t, builds, "no journal was written, so the snapshot is current")
+
+	holdByCombine(t, store, "b")
+	_, held, err := u.Holds(rowA)
+	require.NoError(t, err)
+	assert.False(t, held)
+	_, held, err = u.Holds(rowB)
+	require.NoError(t, err)
+	assert.True(t, held)
+	assert.Equal(t, 1, builds, "one rebuild serves every later check")
 }
