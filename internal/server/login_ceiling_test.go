@@ -1,16 +1,20 @@
 // file: internal/server/login_ceiling_test.go
-// version: 3.0.0
+// version: 4.0.0
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -49,6 +53,28 @@ func ceilingPost(r *gin.Engine, remote string, hdr map[string]string) int {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w.Code
+}
+
+// postWithin serves a bodiless POST /login through r and fails the test when it
+// is not answered within d. The handler may be parked by the test itself; those
+// callers run it in a goroutine instead.
+func postWithin(t *testing.T, r *gin.Engine, remote string, d time.Duration) int {
+	t.Helper()
+	done := make(chan int, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/login", nil)
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		done <- w.Code
+	}()
+	select {
+	case code := <-done:
+		return code
+	case <-time.After(d):
+		t.Fatalf("POST /login from %s was not answered within %v", remote, d)
+		return 0
+	}
 }
 
 // A spent ceiling does not refuse: the request reaches the handler marked
@@ -172,7 +198,8 @@ func TestLoginCeiling_RefundIsCappedAndAgeLimited(t *testing.T) {
 		l2.failed("v", "acct-a", tk)
 	}
 	l2.mu.Lock()
-	fs := l2.visitors["v"].byAccount["acct-a"]
+	vis, _ := l2.visitors.Get("v")
+	fs := vis.byAccount["acct-a"]
 	for i := range 3 {
 		fs[i].at = now.Add(-loginCeilingWindow - time.Minute)
 	}
@@ -254,12 +281,11 @@ func TestLoginCeiling_SaturatedInFlightIsBoundedPerVisitor(t *testing.T) {
 	r := gin.New()
 	r.POST("/login", l.middleware(nil), func(c *gin.Context) { entered <- struct{}{}; <-hold; c.Status(http.StatusOK) })
 	var wg sync.WaitGroup
+	// post fails the test, rather than hanging it, when the request is neither
+	// answered nor admitted within the deadline (a regression that parks the
+	// request would otherwise stall the suite until the package timeout).
 	post := func(remote string) int {
-		req := httptest.NewRequest(http.MethodPost, "/login", nil)
-		req.RemoteAddr = remote
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		return w.Code
+		return postWithin(t, r, remote, 10*time.Second)
 	}
 	spawn := func(remote string) {
 		wg.Add(1)
@@ -423,11 +449,251 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 		require.Equal(t, http.StatusUnauthorized, code, "%s: a verified identity still fails on its password, normally", path)
 		require.Less(t, took, minDelay, "%s: and is not delayed", path)
 	}
-	// An account already past its soft threshold is refused while saturated.
-	for i := 0; i < absauth.SoftThreshold; i++ {
-		post("/api/v1/auth/login", fmt.Sprintf("203.0.113.%d:4000", i+1), "synthetic-admin", map[string]string{"Cf-Access-Jwt-Assertion": "jwt-owner"})
+	// An account already past its soft threshold is refused while saturated. The
+	// failures arrive through BOTH logins (they share one per-account counter), and
+	// the same is done to a name that does not exist: while saturated the answer
+	// must not tell the two apart.
+	for _, name := range []string{"synthetic-admin", "no-such-account"} {
+		for i := 0; i < absauth.SoftThreshold; i++ {
+			path := "/api/v1/auth/login"
+			if i%2 == 1 {
+				path = "/login"
+			}
+			post(path, fmt.Sprintf("203.0.113.%d:4000", i+1), name, map[string]string{"Cf-Access-Jwt-Assertion": "jwt-owner"})
+		}
 	}
-	code, took := post("/api/v1/auth/login", "198.51.100.12:4000", "synthetic-admin", nil)
-	require.Equal(t, http.StatusTooManyRequests, code, "an account past %d failures of its own is refused", absauth.SoftThreshold)
-	require.Less(t, took, minDelay, "a refusal is not delayed")
+	// (a visitor of its own each time: a refusal is itself a failure while
+	// saturated, after which the visitor is refused outright whatever it asks)
+	visitor := 40
+	for _, name := range []string{"synthetic-admin", "no-such-account"} {
+		for _, path := range []string{"/api/v1/auth/login", "/login"} {
+			visitor++
+			code, took := post(path, fmt.Sprintf("198.51.100.%d:4000", visitor), name, nil)
+			require.Equal(t, http.StatusTooManyRequests, code, "%s %s: a name past %d failures of its own is refused, whether or not it exists", path, name, absauth.SoftThreshold)
+			require.Less(t, took, minDelay, "a refusal is not delayed")
+		}
+	}
+	// A name with fewer failures is delayed, exists or not.
+	for _, name := range []string{"synthetic-target", "another-ghost"} {
+		visitor++
+		code, took := post("/api/v1/auth/login", fmt.Sprintf("198.51.100.%d:4000", visitor), name, nil)
+		require.Equal(t, http.StatusUnauthorized, code, name)
+		require.GreaterOrEqual(t, took, minDelay, "%s: delayed the same way", name)
+	}
+}
+
+// B-3: the body is read FIRST, under a size cap, and the handler gets the bytes
+// back from memory.
+func TestLoginCeiling_BodyIsReadFirstAndHandedBackBuffered(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	var got string
+	reached := false
+	r.POST("/login", l.middleware(nil), func(c *gin.Context) {
+		reached = true
+		b, _ := io.ReadAll(c.Request.Body)
+		got = string(b)
+		c.Status(http.StatusUnauthorized)
+	})
+	post := func(body string, declare int64) int {
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+		req.ContentLength = declare
+		req.RemoteAddr = "192.0.2.5:4000"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	const ok = `{"username":"a","password":"b"}`
+	require.Equal(t, http.StatusUnauthorized, post(ok, int64(len(ok))))
+	require.Equal(t, ok, got, "the handler reads what was sent")
+	require.Equal(t, 1, ceilingGlobalCount(l))
+
+	reached = false
+	big := strings.Repeat("a", loginBodyLimit+1)
+	require.Equal(t, http.StatusRequestEntityTooLarge, post(big, -1), "an undeclared oversize body is cut at the cap")
+	require.Equal(t, http.StatusRequestEntityTooLarge, post("x", loginBodyLimit+1), "a declared oversize body is refused before it is read")
+	require.False(t, reached, "an oversize body never reaches the handler")
+	require.Equal(t, 1, ceilingGlobalCount(l), "...and holds no ceiling slot")
+
+	atCap := strings.Repeat(" ", loginBodyLimit-len(ok)) + ok
+	require.Equal(t, http.StatusUnauthorized, post(atCap, int64(len(atCap))), "exactly at the cap is fine")
+}
+
+// B-3: a caller that opens a login and stalls its body is answered 408 within the
+// read deadline, holds no ceiling slot and no in-flight slot, and never reaches
+// the handler.
+func TestLoginCeiling_StalledBodyHoldsNoSlotAndTimesOut(t *testing.T) {
+	setTunnelConnectors(t, "")
+	saved := loginBodyReadTimeout
+	loginBodyReadTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { loginBodyReadTimeout = saved })
+	l := newLoginCeiling()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	reached := make(chan struct{}, 1)
+	// The production writer chain: raw controller captured, then gzip.
+	r.Use(captureRawResponseController(), compressionMiddleware())
+	r.POST("/login", l.middleware(nil), func(c *gin.Context) { reached <- struct{}{}; c.Status(http.StatusUnauthorized) })
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	require.NoError(t, err)
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST /login HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"us")
+	start := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	require.NoError(t, err, "a stalled body must be answered, not left hanging")
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	require.Equal(t, http.StatusRequestTimeout, resp.StatusCode)
+	require.Less(t, time.Since(start), 3*time.Second)
+	select {
+	case <-reached:
+		t.Fatal("a stalled body reached the handler")
+	default:
+	}
+	require.Zero(t, ceilingGlobalCount(l), "no ceiling slot was ever taken")
+	l.mu.Lock()
+	for _, v := range []string{"127.0.0.1"} {
+		if vis, ok := l.visitors.Get(v); ok {
+			require.Zero(t, vis.inFlight, "no in-flight slot is held")
+		}
+	}
+	l.mu.Unlock()
+}
+
+// B-3: one visitor may have maxLoginInFlightPerVisitor logins in the handlers at
+// once, saturated or not; the next is refused, others are unaffected, and the
+// slot comes back when a request ends.
+func TestLoginCeiling_PerVisitorInFlightCap(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	gin.SetMode(gin.TestMode)
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 64)
+	r := gin.New()
+	r.POST("/login", l.middleware(nil), func(c *gin.Context) {
+		entered <- struct{}{}
+		<-hold
+		c.Status(http.StatusOK)
+	})
+	var wg sync.WaitGroup
+	spawn := func(remote string) {
+		wg.Add(1)
+		go func() { defer wg.Done(); postWithin(t, r, remote, 20*time.Second) }()
+	}
+	wait := func(why string) {
+		t.Helper()
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal(why)
+		}
+	}
+	for range maxLoginInFlightPerVisitor {
+		spawn("192.0.2.5:4000")
+	}
+	for range maxLoginInFlightPerVisitor {
+		wait("a visitor's login under the cap was not admitted")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/login", nil)
+	req.RemoteAddr = "192.0.2.5:4001"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusTooManyRequests, w.Code, "past the per-visitor in-flight cap")
+	require.Equal(t, "5", w.Header().Get("Retry-After"))
+	require.Equal(t, maxLoginInFlightPerVisitor, ceilingGlobalCount(l), "the refused request took no ceiling slot")
+
+	spawn("192.0.2.6:4000")
+	wait("another visitor was refused because of the first one")
+	close(hold)
+	wg.Wait()
+	// Slots came back.
+	require.Equal(t, http.StatusOK, postWithin(t, r, "192.0.2.5:4000", 10*time.Second))
+}
+
+// S-1: a handler that refuses a saturated login because the account is past its
+// threshold has failed that visitor too: it gets no further attempt this window,
+// exactly like one whose attempt answered 401.
+func TestLoginCeiling_SaturationRefusalCountsAsASaturatedFailure(t *testing.T) {
+	setTunnelConnectors(t, "")
+	l := newLoginCeiling()
+	for i := 0; i < loginGlobalCeiling; i++ {
+		l.reserve("")
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	reached := 0
+	r.POST("/login", l.middleware(nil), func(c *gin.Context) {
+		reached++
+		absauth.NoteLoginAccount(c, "acct-a")
+		if absauth.RefuseSaturatedLogin(c, absauth.SoftThreshold, func(time.Duration) {}) {
+			c.Status(http.StatusTooManyRequests)
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+	require.Equal(t, http.StatusTooManyRequests, postWithin(t, r, "192.0.2.5:4000", 5*time.Second))
+	require.Equal(t, 1, reached)
+	require.Equal(t, http.StatusTooManyRequests, postWithin(t, r, "192.0.2.5:4000", 5*time.Second))
+	require.Equal(t, 1, reached, "the refusal counted: the visitor's next login is refused without reaching the handler")
+	require.Equal(t, http.StatusTooManyRequests, postWithin(t, r, "192.0.2.6:4000", 5*time.Second))
+	require.Equal(t, 2, reached, "a different visitor is admitted to the handler")
+}
+
+// S-3: idle visitors are swept from the cold end, ones with a login in flight are
+// kept, and the table never passes its bound.
+func TestLoginCeiling_VisitorTableIsSweptAndBounded(t *testing.T) {
+	l := newLoginCeiling()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	for i := 0; i < 50; i++ {
+		leave, ok := l.enter(fmt.Sprintf("idle-%d", i))
+		require.True(t, ok)
+		leave()
+	}
+	_, ok := l.enter("busy") // never left: a login still in the handlers
+	require.True(t, ok)
+	require.Equal(t, 51, l.visitors.Len())
+	now = now.Add(loginCeilingWindow + time.Second)
+	leave, ok := l.enter("fresh")
+	require.True(t, ok)
+	leave()
+	require.Equal(t, 2, l.visitors.Len(), "the 50 idle visitors are gone; the busy one and the fresh one remain")
+	_, kept := l.visitors.Get("busy")
+	require.True(t, kept, "a visitor with a login in flight is not swept")
+
+	l2 := newLoginCeiling()
+	for i := 0; i < maxLoginVisitors+25; i++ {
+		leave, ok := l2.enter(fmt.Sprintf("v-%d", i))
+		require.True(t, ok)
+		leave()
+	}
+	require.Equal(t, maxLoginVisitors, l2.visitors.Len(), "bounded; the oldest entries are evicted one at a time")
+	_, first := l2.visitors.Get("v-0")
+	require.False(t, first)
+	_, last := l2.visitors.Get(fmt.Sprintf("v-%d", maxLoginVisitors+24))
+	require.True(t, last)
+}
+
+// N6: the exemption is read when a request arrives, so a loginCeilingExempt set
+// after the ceiling was first built is still honoured.
+func TestLoginCeiling_ExemptionIsReadLazily(t *testing.T) {
+	setTunnelConnectors(t, "")
+	s := &Server{}
+	l := s.loginCeiling() // built first, as wire_handlers does
+	s.loginCeilingExempt = func(*gin.Context) bool { return true }
+	for i := 0; i < loginGlobalCeiling; i++ {
+		l.reserve("")
+	}
+	code, saturated := http.StatusUnauthorized, true
+	r := ceilingRouter(l, &code, &saturated)
+	ceilingPost(r, "192.0.2.5:4000", nil)
+	require.False(t, saturated, "an exemption installed after the ceiling was built applies")
+	require.Same(t, l, s.loginCeiling(), "web and ABS logins share one ceiling")
+	require.Same(t, s.loginThrottle(), s.loginThrottle(), "...and one failed-login throttle")
 }

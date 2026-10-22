@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d5e6f7a8-b9c0-1234-5678-90abcdef0123
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package handlers_test
 
@@ -198,6 +198,9 @@ func TestAuthHandler_Login_PerIPThrottle(t *testing.T) {
 	store.EXPECT().GetUserByUsername("ghost").Return(nil, nil).Times(15)
 
 	h := handlers.NewAuthHandler(store, true)
+	// An unknown name is slowed like a real one once it has failed 5 times; keep
+	// the test fast.
+	h.SetFailureDelay(func(time.Duration) {})
 
 	for i := range 15 {
 		c, w := newAuthCtx("POST", "/auth/login", map[string]any{

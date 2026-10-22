@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 660fd56e-7850-420a-8302-5290684460cf
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -251,7 +251,7 @@ const rawResponseControllerKey = "server.rawResponseController"
 // middleware that replaces c.Writer with a wrapper lacking Unwrap: the gzip
 // middleware (compressionMiddleware) does, and a ResponseController built on
 // its writer cannot set connection deadlines (http.ErrNotSupported), which
-// silently disabled the accept-invite body read deadline for every client
+// silently disabled the body read deadline (accept-invite, password login) for every client
 // sending Accept-Encoding: gzip (every browser).
 func captureRawResponseController() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -281,10 +281,10 @@ func setBodyReadDeadline(c *gin.Context, d time.Duration) (restore func()) {
 	if err := rc.SetReadDeadline(time.Now().Add(d)); err != nil {
 		if errors.Is(err, http.ErrNotSupported) {
 			bodyDeadlineUnsupported.Do(func() {
-				inviteLimitLog.Warn("accept-invite: the connection does not support read deadlines, so the body read is bounded only in size; check that captureRawResponseController runs before any response-writer wrapper")
+				inviteLimitLog.Warn("body read: the connection does not support read deadlines, so the body read is bounded only in size; check that captureRawResponseController runs before any response-writer wrapper")
 			})
 		} else {
-			inviteLimitLog.Debug("accept-invite: could not set a body read deadline: %v", err)
+			inviteLimitLog.Debug("body read: could not set a body read deadline: %v", err)
 		}
 		return func() {}
 	}
