@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_list_mark_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7b9d41-6a85-4c30-b1f7-9d03e5a8c264
 // last-edited: 2026-10-22
 
@@ -150,4 +150,75 @@ func TestUpdateUserPlaylistAndMark_VersionConflictStampsNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "w"}, stored.BookIDs)
 	require.Equal(t, map[string]bool{ids[0]: false}, revertedStates(t, s, "op1"))
+}
+
+// errDeath stands for a process dying at a hook.
+var errDeath = errors.New("process died")
+
+// diesAt runs fn with *hook set to a function that panics errDeath, and reports
+// whether fn died there.
+func diesAt(t *testing.T, hook *func(), fn func()) (died bool) {
+	t.Helper()
+	*hook = func() { panic(errDeath) }
+	t.Cleanup(func() { *hook = nil })
+	defer func() {
+		*hook = nil
+		if r := recover(); r != nil {
+			if r != errDeath {
+				panic(r)
+			}
+			died = true
+		}
+	}()
+	fn()
+	return false
+}
+
+// One batch, not two: a process that dies at either moment a split write would
+// have a gap in (before anything was committed, and right after the first
+// commit) leaves the list and the stamp both written or both not.
+func TestUpdateCollectionBooksAndMark_NoDeathLeavesOneWithoutTheOther(t *testing.T) {
+	for name, hook := range map[string]*func(){"before the commit": &opChangeMarkAfterScan, "after the commit": &opChangeMarkAfterCommit} {
+		t.Run(name, func(t *testing.T) {
+			s := newTestCollectionsStore(t)
+			col, err := s.CreateCollection(&Collection{Name: "c", Type: CollectionTypeStatic, BookIDs: []string{"a"}})
+			require.NoError(t, err)
+			ids := seedMarkRows(t, s, "op1", 1)
+
+			died := diesAt(t, hook, func() {
+				_, _ = s.UpdateCollectionBooksAndMark(col.ID, func(cur []string) ([]string, error) { return append(cur, "b"), nil },
+					OperationMark{OperationID: "op1", ChangeIDs: ids})
+			})
+			require.True(t, died, "the hook never ran")
+			stored, err := s.GetCollection(col.ID)
+			require.NoError(t, err)
+			listWritten := len(stored.BookIDs) == 2
+			stamped := revertedStates(t, s, "op1")[ids[0]]
+			require.Equal(t, listWritten, stamped, "list written=%v stamped=%v: a death left one without the other", listWritten, stamped)
+		})
+	}
+}
+
+func TestUpdateUserPlaylistAndMark_NoDeathLeavesOneWithoutTheOther(t *testing.T) {
+	for name, hook := range map[string]*func(){"before the commit": &opChangeMarkAfterScan, "after the commit": &opChangeMarkAfterCommit} {
+		t.Run(name, func(t *testing.T) {
+			s := newTestCollectionsStore(t)
+			pl, err := s.CreateUserPlaylist(&UserPlaylist{Name: "p", Type: UserPlaylistTypeStatic, BookIDs: []string{"a"}})
+			require.NoError(t, err)
+			ids := seedMarkRows(t, s, "op1", 1)
+			cur, err := s.GetUserPlaylist(pl.ID)
+			require.NoError(t, err)
+			cur.BookIDs = []string{"a", "b"}
+
+			died := diesAt(t, hook, func() {
+				_ = s.UpdateUserPlaylistAndMark(cur, OperationMark{OperationID: "op1", ChangeIDs: ids})
+			})
+			require.True(t, died, "the hook never ran")
+			stored, err := s.GetUserPlaylist(pl.ID)
+			require.NoError(t, err)
+			listWritten := len(stored.BookIDs) == 2
+			stamped := revertedStates(t, s, "op1")[ids[0]]
+			require.Equal(t, listWritten, stamped, "list written=%v stamped=%v: a death left one without the other", listWritten, stamped)
+		})
+	}
 }
