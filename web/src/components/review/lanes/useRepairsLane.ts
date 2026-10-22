@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.14.0
+// version: 1.14.1
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-22
 
@@ -48,8 +48,6 @@ import type { RepairsAction } from '../reviewActions';
 
 type Toast = (message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void;
 
-/** Page sizes offered under the rows table. The server caps a page at 500. */
-
 /** The server's error code for a stored plan that can only be re-run (handlers/repairs PlanNeedsRerunCode). */
 const PLAN_NEEDS_RERUN_CODE = 'REPAIR_PLAN_NEEDS_RERUN';
 
@@ -58,6 +56,7 @@ function isPlanNeedsRerun(err: unknown): boolean {
   return e?.status === 409 && e.data?.code === PLAN_NEEDS_RERUN_CODE;
 }
 
+/** Page sizes offered under the rows table. The server caps a page at 500. */
 export const REPAIRS_PAGE_SIZES = [25, 50, 100, 250, 500] as const;
 export const REPAIRS_DEFAULT_PAGE_SIZE = 50;
 

@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.54.0
+// version: 1.54.2
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-10-22
 
@@ -1400,8 +1400,8 @@ func (p *PebbleStore) BackfillDedupEntityIndexes() (CandidateIndexBackfill, Labe
 
 // migration066Up removes the inline rows from every stored Repairs plan result
 // (StripLegacyPlanRows). Plans used to hold every row inside the operation's
-// result, about 760 bytes each; the retired-versions plan alone was 40 to 57
-// MB, and every read of the operation (the fixer list, the boot scan,
+// result, about 760 bytes each; the retired-versions plan alone was about 39
+// MB (51,000 rows), and every read of the operation (the fixer list, the boot scan,
 // diagnostics) decoded all of it. Plans keep their rows beside the operation
 // now and a plan of the old format is refused, so the rows in those results
 // can never be read again. The operation record and its summary stay; the
@@ -1419,7 +1419,7 @@ func migration066Up(store migrationStore) error {
 	if err != nil {
 		return fmt.Errorf("migration 66: strip legacy plan rows: %w", err)
 	}
-	legacyPlanLog.Info("migration 66: legacy plan rows stripped: plans=%d stripped=%d unreadable=%d bytes_before=%d bytes_after=%d bytes_freed=%d",
-		rep.Plans, rep.Stripped, rep.Unreadable, rep.BytesBefore, rep.BytesAfter, rep.BytesBefore-rep.BytesAfter)
+	legacyPlanLog.Info("migration 66: legacy plan rows stripped: plans=%d stripped=%d unreadable=%d unreadable_ops=%d bytes_before=%d bytes_after=%d bytes_freed=%d",
+		rep.Plans, rep.Stripped, rep.Unreadable, rep.UnreadableOps, rep.BytesBefore, rep.BytesAfter, rep.BytesBefore-rep.BytesAfter)
 	return nil
 }

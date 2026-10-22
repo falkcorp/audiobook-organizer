@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.33.1
+// version: 3.33.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-22
 
@@ -612,6 +612,11 @@ func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
 		// A hollow row never had rows of its own, but a row set under its id
 		// (a plan whose summary write was lost) is unreachable once the row is
 		// gone, so it goes with it.
+		// An id a row set cannot be keyed by has no rows to remove (ReplaceOpRows
+		// refuses it); skipping it keeps one such record from failing the sweep.
+		if validOpRowsID(id) != nil {
+			continue
+		}
 		if err := stageOpRowsDelete(batch, id); err != nil {
 			return 0, err
 		}

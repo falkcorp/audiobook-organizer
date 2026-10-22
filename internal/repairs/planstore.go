@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore.go
-// version: 1.1.0
+// version: 1.2.1
 // guid: 8885f927-1097-4448-a36b-4a903c887c6d
 // last-edited: 2026-10-22
 
@@ -17,8 +17,8 @@ import (
 
 // Where a plan's rows live.
 //
-// A plan used to be one JSON value inside the plan operation's own result: 40
-// to 57 MB for the retired-versions fixer. Every reader of an operation row
+// A plan used to be one JSON value inside the plan operation's own result:
+// about 39 MB for the retired-versions fixer (51,000 rows of about 760 bytes). Every reader of an operation row
 // (GetOperationV2, the /system/status poll, the boot scan, the diagnostics
 // bundle) decoded all of it, the v3 mirror stored it a second time, and every
 // page click in the lane decoded it again.
@@ -39,6 +39,16 @@ import (
 // beside the operation.
 const PlanRowStoreV1 = "op_rows.v1"
 
+// PlanNeedsRerun reports whether err means the stored plan cannot be read
+// (any of ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable)
+// and the only remedy is to run the plan again. The HTTP layer answers all of
+// them with one 409 and one code so the lane can offer exactly that.
+func PlanNeedsRerun(err error) bool {
+	return errors.Is(err, ErrPlanLegacyFormat) ||
+		errors.Is(err, ErrPlanRowsIncomplete) ||
+		errors.Is(err, ErrPlanRowsUnreadable)
+}
+
 // Errors of reading a stored plan's rows.
 var (
 	// ErrPlanLegacyFormat: the plan was stored before plans kept their rows
@@ -47,6 +57,10 @@ var (
 	// ErrPlanRowsIncomplete: the rows found under the plan op's id are not the
 	// rows its summary says it has.
 	ErrPlanRowsIncomplete = errors.New("repairs: the stored plan rows do not match the plan summary; run the plan again")
+	// ErrPlanRowsUnreadable: a stored row, or the index entry that describes
+	// it, cannot be decoded. Like ErrPlanRowsIncomplete the stored rows are not
+	// the plan the summary describes, and the remedy is the same.
+	ErrPlanRowsUnreadable = errors.New("repairs: a stored plan row cannot be read; run the plan again")
 	// ErrNoPlanRowStore: the store behind the plan operations cannot keep plan rows.
 	ErrNoPlanRowStore = errors.New("repairs: the operation store cannot keep plan rows")
 )
@@ -125,7 +139,7 @@ func (r *rowRef) applicable() bool { return r.skipped == "" }
 func decodeRowIndex(id string, ix []byte) (rowRef, error) {
 	parts := strings.Split(string(ix), "\x00")
 	if len(parts) != 4 {
-		return rowRef{}, fmt.Errorf("repairs: row %q has a malformed index entry", id)
+		return rowRef{}, fmt.Errorf("%w: row %q has a malformed index entry", ErrPlanRowsUnreadable, id)
 	}
 	ref := rowRef{id: id, class: parts[0], skipped: parts[1], owner: parts[2] == "1"}
 	if parts[3] != "" {
@@ -137,7 +151,7 @@ func decodeRowIndex(id string, ix []byte) (rowRef, error) {
 func decodeRow(id string, data []byte) (Row, error) {
 	var r Row
 	if err := json.Unmarshal(data, &r); err != nil {
-		return Row{}, fmt.Errorf("repairs: decode plan row %q: %w", id, err)
+		return Row{}, fmt.Errorf("%w: decode row %q: %w", ErrPlanRowsUnreadable, id, err)
 	}
 	if r.BookIDs == nil {
 		r.BookIDs = []string{}
