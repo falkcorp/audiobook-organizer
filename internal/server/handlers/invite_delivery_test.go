@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-21
 
@@ -36,8 +36,20 @@ type inviteFixture struct {
 	rec    *mailtest.Recorder
 	h      *handlers.UserHandler
 	mailOn bool
-	syncOn bool   // GuestPolicySyncConfigured: accept adds the invitee to the Access guest policy
-	base   string // the link base BaseURL returns
+	syncOn bool           // GuestPolicySyncConfigured: accept adds the invitee to the Access guest policy
+	base   string         // the link base BaseURL returns
+	actor  *database.User // the signed-in caller (auth_user) for routes that read it
+}
+
+// asUser makes the next requests arrive from a stored user with roles.
+func (f *inviteFixture) asUser(t *testing.T, name string, roles ...string) *database.User {
+	t.Helper()
+	u, err := f.store.CreateUser(name, name+"@example.org", "bcrypt", "h", roles, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.actor = u
+	return u
 }
 
 func newInviteFixture(t *testing.T) *inviteFixture {
@@ -61,6 +73,11 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 		GuestPolicySyncConfigured: func() bool { return f.syncOn },
 	})
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		if f.actor != nil {
+			c.Set("auth_user", f.actor)
+		}
+	})
 	r.POST("/users/invite", f.h.CreateInvite)
 	r.GET("/users/invites", f.h.ListInvites)
 	r.POST("/users/invites/:id/resend", f.h.ResendInvite)
@@ -102,6 +119,7 @@ func assertNoGuestHeaderInstructions(t *testing.T, label, body string) {
 func TestCreateInvite_SendsEmailWithLinkAndEmailLoginSteps(t *testing.T) {
 	f := newInviteFixture(t)
 	f.syncOn = true
+	f.asUser(t, "boss", "admin")
 	w, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{
 		"username": "guest", "role_id": "viewer", "email": " Guest@Example.com ", "send_email": true,
 	})
@@ -125,11 +143,12 @@ func TestCreateInvite_SendsEmailWithLinkAndEmailLoginSteps(t *testing.T) {
 		t.Fatalf("To = %q", m.To)
 	}
 	for _, part := range []string{m.Text, m.HTML} {
-		for _, want := range []string{testBase + "/invite/" + token, "AudioBooth", "one-time code", "guest@example.com"} {
+		for _, want := range []string{testBase + "/invite/" + token, "one-time code", "guest@example.com", "Phone app access will be added to your account soon"} {
 			if !strings.Contains(part, want) {
 				t.Fatalf("email part missing %q", want)
 			}
 		}
+		assertBrowserOnlyEmail(t, part)
 		assertNoGuestHeaderInstructions(t, "invitation email", part)
 	}
 	inv, _ := f.store.GetInvite(token)
@@ -154,10 +173,42 @@ func TestCreateInvite_EmailLoginStepOmittedWithoutPolicySync(t *testing.T) {
 		if strings.Contains(part, "one-time code") {
 			t.Fatal("email-login step sent although the policy sync is not configured")
 		}
-		if !strings.Contains(part, "AudioBooth") || !strings.Contains(part, "guest") {
-			t.Fatalf("the AudioBooth steps are missing: %s", part)
+		if !strings.Contains(part, "guest") || !strings.Contains(part, "Phone app access will be added to your account soon") {
+			t.Fatalf("the sign-in step or the phone-app line is missing: %s", part)
 		}
+		assertBrowserOnlyEmail(t, part)
 		assertNoGuestHeaderInstructions(t, "invitation email", part)
+	}
+}
+
+// Guests are browser-only for now: no phone-app setup steps, in the email or
+// anywhere else, until per-guest tokens ship.
+func assertBrowserOnlyEmail(t *testing.T, part string) {
+	t.Helper()
+	for _, banned := range []string{"AudioBooth", "Servers", "Tap "} {
+		if strings.Contains(part, banned) {
+			t.Fatalf("invitation email still carries phone-app setup (%q): %s", banned, part)
+		}
+	}
+}
+
+// The Cloudflare email-login step needs accept to add the address to the
+// guest policy, which it does only for an invite created by an active admin.
+func TestCreateInvite_EmailLoginStepOmittedWhenCreatorIsNotAdmin(t *testing.T) {
+	f := newInviteFixture(t)
+	f.syncOn = true
+	f.asUser(t, "helper", "viewer")
+	w, _ := f.do(t, http.MethodPost, "/users/invite", map[string]any{
+		"username": "guest", "role_id": "viewer", "email": "guest@example.com", "send_email": true,
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	m := f.rec.Sent()[0]
+	for _, part := range []string{m.Text, m.HTML} {
+		if strings.Contains(part, "one-time code") {
+			t.Fatal("email-login step sent although accept will not add the address to the guest policy")
+		}
 	}
 }
 
@@ -302,12 +353,12 @@ func TestPublicInvite_OnlyLiveTokensAndOnlyAllowedFields(t *testing.T) {
 		t.Fatal("public invite response must not be cached")
 	}
 	for k := range pub {
-		if k != "username" && k != "expires_at" {
+		if k != "username" && k != "expires_at" && k != "email_login" {
 			t.Fatalf("public invite returned extra field %q", k)
 		}
 	}
-	if pub["username"] != "guest" {
-		t.Fatalf("public invite = %v", pub)
+	if pub["username"] != "guest" || pub["email_login"] != false {
+		t.Fatalf("public invite = %v (email_login must be false without a policy sync)", pub)
 	}
 	assertNoGuestHeaderInstructions(t, "public invite lookup", w.Body.String())
 	if strings.Contains(w.Body.String(), "guest@example.com") {
@@ -697,5 +748,59 @@ func TestDeleteInvite_ByIDNotToken(t *testing.T) {
 	}
 	if w, _ := f.do(t, http.MethodDelete, "/users/invites/"+id, nil); w.Code != http.StatusNotFound {
 		t.Fatalf("delete again: %d, want 404", w.Code)
+	}
+}
+
+// email_login on the public lookup is exactly the condition under which accept
+// will add the address to the Cloudflare guest policy, so the page and the
+// email agree: policy sync configured, the invite emailed to its address, and
+// an active admin as creator.
+func TestPublicInvite_EmailLoginMatchesWhatAcceptWillGrant(t *testing.T) {
+	f := newInviteFixture(t)
+	admin, err := f.store.CreateUser("boss", "boss@example.org", "bcrypt", "h", []string{"admin"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer, err := f.store.CreateUser("viewer1", "viewer1@example.org", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(tok, username, email, creator string, emailed bool) string {
+		token := strings.Repeat(tok, 64)
+		if _, err := f.store.CreateInvite(&database.Invite{Token: token, Username: username, Email: email, RoleID: "viewer",
+			CreatedByUserID: creator, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		if emailed {
+			if _, err := f.store.MarkInviteEmailSent(token, email, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return token
+	}
+	tests := []struct {
+		name  string
+		token string
+		sync  bool
+		want  bool
+	}{
+		{"admin, emailed, sync on", mk("1", "g1", "g1@example.com", admin.ID, true), true, true},
+		{"admin, emailed, sync off", mk("2", "g2", "g2@example.com", admin.ID, true), false, false},
+		{"admin, copy-link (not emailed), sync on", mk("3", "g3", "g3@example.com", admin.ID, false), true, false},
+		{"non-admin creator, emailed, sync on", mk("4", "g4", "g4@example.com", viewer.ID, true), true, false},
+		{"no email on the invite, sync on", mk("5", "g5", "", admin.ID, false), true, false},
+	}
+	for _, tt := range tests {
+		f.syncOn = tt.sync
+		w, pub := f.do(t, http.MethodGet, "/auth/invite/"+tt.token, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", tt.name, w.Code, w.Body.String())
+		}
+		if pub["email_login"] != tt.want {
+			t.Errorf("%s: email_login = %v, want %v", tt.name, pub["email_login"], tt.want)
+		}
+		if strings.Contains(w.Body.String(), "@example.com") {
+			t.Errorf("%s: the lookup revealed the address", tt.name)
+		}
 	}
 }

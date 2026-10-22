@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-21
 
@@ -179,7 +179,7 @@ func (h *UserHandler) CreateInvite(c *gin.Context) {
 	}
 	// The creator sees the token: the route is a credential route (no API
 	// key reaches it), and an emailed invite from a creator who is not an
-	// admin binds no address and grants nothing (inviteCreatorMayGrant), so
+	// admin binds no address and grants nothing (InviteCreatorMayGrant), so
 	// accepting it themselves gains them nothing.
 	view := newPendingInviteView(created, true)
 	resp := gin.H{

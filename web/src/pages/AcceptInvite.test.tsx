@@ -1,5 +1,5 @@
 // file: web/src/pages/AcceptInvite.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c9e5a17-8b42-4d6f-a1e0-7f2b8d4c9e53
 // last-edited: 2026-10-21
 
@@ -32,15 +32,37 @@ afterEach(() => {
 });
 
 describe('AcceptInvite', () => {
-  it('shows the invitation and the email-login AudioBooth steps for a valid token', async () => {
+  it('shows the invitation, the Cloudflare email step when email_login is set, and no phone-app steps', async () => {
     const fetchMock = vi.fn(async (_url: string) =>
-      jsonResponse({ data: { username: 'guest', expires_at: '2026-10-22T12:00:00Z' } })
+      jsonResponse({
+        data: { username: 'guest', expires_at: '2026-10-22T12:00:00Z', email_login: true },
+      })
     );
     vi.stubGlobal('fetch', fetchMock);
     renderPage();
     expect((await screen.findAllByText('guest', { selector: 'strong' })).length).toBeGreaterThan(0);
     expect(screen.getByText(/one-time code/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/phone app access will be added to your account soon/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/audiobooth/i)).not.toBeInTheDocument();
     expect(String(fetchMock.mock.calls[0][0])).toBe(`/api/v1/auth/invite/${TOKEN}`);
+  });
+
+  it('leaves out the Cloudflare email step when the invite will not be added to the guest policy', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          data: { username: 'guest', expires_at: '2026-10-22T12:00:00Z', email_login: false },
+        })
+      )
+    );
+    renderPage();
+    await screen.findByLabelText(/choose a password/i);
+    expect(screen.queryByText(/one-time code/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/sign in with your username/i)).toBeInTheDocument();
+    expect(screen.getByText(/phone app access will be added/i)).toBeInTheDocument();
   });
 
   it('never tells a guest to install headers or copy a shared credential', async () => {

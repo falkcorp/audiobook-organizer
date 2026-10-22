@@ -1,17 +1,19 @@
 ### Added
 
-#### Emailed invitations with the guest Cloudflare headers and an accept page
+#### Emailed invitations and an accept page
 
 The Users page can now email an invitation. **Create invite** takes an optional
 email address and a "Send email" checkbox, and pending invites can be resent
 (at most once a minute per invite, with a per-admin cap). The email carries the
-guest's own invite link, the shared guest Cloudflare service-token header pair
-when one is configured, and the AudioBooth setup steps. If sending fails, the
-admin still gets the link to hand over.
+guest's own invite link and the sign-in steps (including a Cloudflare email-login
+step when the guest access policy sync is configured and the invite's creator is
+an admin). Guests are browser-only for now: the email says that phone app access
+will be added to their account soon. If sending fails, the admin still gets the
+link to hand over.
 
 The link opens a new public page, `/invite/:token`, backed by
-`GET /api/v1/auth/invite/:token`. It shows the username, expiry and header
-steps only for a token accept would take. `POST /auth/accept-invite` answers a
+`GET /api/v1/auth/invite/:token`. It shows the username, the expiry and whether the Cloudflare
+email-login step applies (`email_login`), only for a token accept would take. `POST /auth/accept-invite` answers a
 missing, used or expired token, a username taken since the invite was made,
 and an invited address another account already holds verified with one
 identical 400 (the detail is logged), and the lookup answers every one of
@@ -61,12 +63,10 @@ per /64 for IPv6, so rotation cannot fill it, and once per /64 per interface
 for link-local) at warning level (a bounded set) so a missing entry is visible. A listed connector, or a local
 peer, with no usable header identifies no client: the per-client layer is
 skipped rather than shared, and the per-token and global layers still apply.
-A direct LAN peer is exempt from the global layer, so a flood from the
-internet cannot lock out a guest on the LAN; all direct LAN traffic shares
-one total of half the global limit instead (50 at once, 150 a minute),
-which also keeps the per-client and per-token tables bounded (a LAN device
-can spend that total and lock out other direct callers, as the internet
-could spend the global limit before). All LAN traffic with Cloudflare
+A direct LAN peer counts against the global layer like any other caller;
+all direct LAN traffic also shares one total of half the global limit (50 at
+once, 150 a minute), which keeps the per-client and per-token tables bounded
+(a LAN device can spend that total and lock out other direct callers). All LAN traffic with Cloudflare
 markers from unlisted peers shares a second total of a quarter of the
 global limit (25 at once, 75 a minute), under the global layer, so one LAN host rotating
 across many /64s or /24s cannot drain the global layer for everyone else;
@@ -109,8 +109,7 @@ one is missing as `mail_unavailable_reason`.
 
 Settings are environment-only, refused by PUT /config and never returned by
 GET /config: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
-`SMTP_FROM`, `PUBLIC_BASE_URL`, `INVITE_CF_ACCESS_CLIENT_ID`,
-`INVITE_CF_ACCESS_CLIENT_SECRET`, `CF_ACCOUNT_ID`, `CF_GUESTS_POLICY_ID`,
+`SMTP_FROM`, `PUBLIC_BASE_URL`, `CF_ACCOUNT_ID`, `CF_GUESTS_POLICY_ID`,
 `CF_POLICY_API_TOKEN`, `TUNNEL_CONNECTOR_ADDRS` (comma-separated addresses the
 Cloudflare tunnel connectors reach this service from; list every connector,
 which this deploy does, so tunnel traffic gets per-visitor limits).
@@ -251,23 +250,23 @@ trusted client address as the invite limiter (public IPv6 by /64), shares one bu
 for callers whose address cannot be established (including a listed
 connector with no `CF-Connecting-IP`), drops ended windows, caps
 tracked addresses at 10,000 and allows at most 100 attempts an hour across
-all callers; a direct LAN or loopback caller with no Cloudflare markers keeps
-its own 5-an-hour bucket outside that ceiling, keyed on its full address (LAN
-devices on IPv6 share one /64); every address of a direct LAN IPv6 /64 also
-shares one aggregate window of 20 attempts an hour, which is what caps a LAN host
-rotating through its /64, since direct callers skip the global ceiling.
+all callers, loopback and direct LAN callers included. A direct LAN or
+loopback caller with no Cloudflare markers also keeps its own 5-an-hour
+bucket, keyed on its full address (LAN devices on IPv6 share one /64); every
+address of a direct LAN IPv6 /64 also shares one aggregate window of 20
+attempts an hour, which is what caps a LAN host rotating through its /64.
 Tunnel traffic, including connectors on LAN addresses in the same /64, never
-counts against that window, so it cannot lock out the owner's recovery. All
-direct LAN callers except loopback also share one window of 50 attempts an
-hour (half the global ceiling, as the invite direct total is half its global
-limit), so a LAN host cannot rotate IPv4 aliases, which have no prefix
-window, or /64s for fresh windows; a LAN device can spend it and lock out
-other direct LAN callers for up to an hour, but loopback is left out of it,
-so recovery from the server itself still works. A LAN
-host sending Cloudflare markers without being a listed connector has its own
-20-an-hour window per IPv6 /64 or IPv4 /24, and all such traffic shares one
-25-an-hour window, both on top of the global ceiling, so it cannot spend the
-global budget by rotating addresses.
+counts against that window. All direct LAN callers except loopback also share
+one window of 50 attempts an hour (half the global ceiling, as the invite
+direct total is half its global limit), so a LAN host cannot rotate IPv4
+aliases, which have no prefix window, or /64s for fresh windows; loopback is
+left out of that window. A LAN host sending Cloudflare markers without being
+a listed connector has its own 20-an-hour window per IPv6 /64 or IPv4 /24, and
+all such traffic shares one 25-an-hour window, both on top of the global
+ceiling, so it cannot spend the global budget by rotating addresses. Every one
+of these counts against the global ceiling, so a flood that spends it can
+refuse the owner's recovery until the window ends; the bootstrap limiter is in
+memory, so restarting the service clears it.
 
 #### The startup read-only key no longer creates an admin
 
