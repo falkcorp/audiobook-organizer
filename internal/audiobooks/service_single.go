@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package audiobooks
 
@@ -384,10 +384,12 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 		return purgeOutcome{kind: purgeNotInTrash}
 	case r.keptUndo:
 		return purgeOutcome{kind: purgeKeptUndo}
+	case r.undoErr != nil:
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell under the merge lock whether a combine's undo still needs it: %v", book.ID, r.undoErr)}}
 	case r.stateErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(r.stateErr), r.stateErr)}}
 	case r.hasState:
-		return svc.purgeCarryingState(book, deleteFiles)
+		return svc.purgeCarryingState(book, deleteFiles, env)
 	}
 	book = r.fresh
 	if err := r.deleteErr; err != nil {
@@ -410,7 +412,10 @@ type statelessPurge struct {
 	notInTrash bool
 	// keptUndo: the row, as re-read under the lock, is the retired shell of a
 	// combine whose undo can still run (merge.UndoShellIndex).
-	keptUndo                     bool
+	keptUndo bool
+	// undoErr: the combine journals could not be re-read under the lock, so
+	// whether the book is held is unknown. The book is kept (fail closed).
+	undoErr                      error
 	hasState                     bool
 	readErr, stateErr, deleteErr error
 }
@@ -452,8 +457,16 @@ func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv)
 	r.fresh = cur
 	// The undo hold is decided on the row as it is NOW, not on the listing's
 	// copy: a shell restored or re-deleted since carries another stamp and is
-	// not held (merge.UndoShellIndex.Holds).
-	if _, held := env.undo.Holds(cur); held {
+	// not held (merge.UndoShellIndex.Holds). env.undo also re-reads the
+	// journals when a combine journaled since the pass began: every journal
+	// writer holds this lock, so the answer here is exact. A failed re-read
+	// keeps the book.
+	_, held, uerr := env.undo.Holds(cur)
+	switch {
+	case uerr != nil:
+		r.undoErr = uerr
+		return r
+	case held:
 		r.keptUndo = true
 		return r
 	}
@@ -485,7 +498,7 @@ func stateCheckFailureReason(err error) string {
 // in the same hold of the merge lock. No live sibling keeps the book
 // (purgeKeptHasProgress); a carry that does not complete keeps it too
 // (purgeCarryFailed) with every user's state put back on it.
-func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles bool) purgeOutcome {
+func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles bool, env purgeEnv) purgeOutcome {
 	sibling, err := svc.liveSiblingFor(book)
 	if err != nil {
 		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: cannot look for a live version to carry it to: %v", book.ID, err)}}
@@ -518,6 +531,16 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 			return fmt.Errorf("%w: %s was restored meanwhile", ErrNotInTrash, book.ID)
 		}
 		doomed = cur
+		// The merge lock is held here, so this is the same exact undo-hold
+		// decision purgeIfStateless made: a combine can have journaled this
+		// shell in the gap since. Refused before anything moves.
+		_, held, uerr := env.undo.Holds(cur)
+		switch {
+		case uerr != nil:
+			return fmt.Errorf("cannot tell whether a combine's undo still needs %s: %w", book.ID, uerr)
+		case held:
+			return fmt.Errorf("%w: %s", errUndoHeldUnderLock, book.ID)
+		}
 		return targetCheck()
 	}
 	err = merge.CarryStateThenHardDelete(merger, sibling, book.ID, precheck, func() error {
@@ -526,6 +549,8 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 	switch {
 	case errors.Is(err, ErrNotInTrash):
 		return purgeOutcome{kind: purgeNotInTrash}
+	case errors.Is(err, errUndoHeldUnderLock):
+		return purgeOutcome{kind: purgeKeptUndo}
 	case errors.Is(err, merge.ErrCarryTargetUnreadable):
 		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: %v", book.ID, err)}}
 	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, merge.ErrBookHasListeningState):
@@ -548,6 +573,11 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 	n, errs := svc.purgeFinish(doomed, deleteFiles)
 	return purgeOutcome{kind: purgeCarried, filesDeleted: n, errs: errs}
 }
+
+// errUndoHeldUnderLock is what the carry's precheck returns when the book turns
+// out, under the merge lock, to be the shell of a combine whose undo can still
+// run. purgeCarryingState reports it as kept-undo.
+var errUndoHeldUnderLock = errors.New("is the retired shell of a combine whose undo can still run")
 
 // purgeDeleteRow is the purge's row delete: the tombstone snapshot, the row,
 // and then the side effects that must happen only to a book that is really
