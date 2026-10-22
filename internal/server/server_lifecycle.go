@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.58.0
+// version: 4.59.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-21
 
@@ -43,6 +43,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/watcher"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
 
@@ -898,10 +899,13 @@ func (s *Server) startCacheWarmers() {
 func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 	// Every listener's handler is wrapped by the peer allow-list, outside gin,
 	// so a peer that is not allowed never reaches routing (peer_allowlist.go).
-	warnPeerAllowListOpen()
+	if err := startupPeerAllowList(); err != nil {
+		return err
+	}
+	gate := s.peerGatedHandler()
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
-		Handler:           s.peerGatedHandler(),
+		Handler:           gate,
 		ReadHeaderTimeout: cfg.ReadTimeout, // Only limit header read, not body (allows large uploads)
 		WriteTimeout:      cfg.WriteTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
@@ -991,8 +995,11 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 		if cfg.HTTP3Port != "" {
 			s.http3Server = &http3.Server{
 				Addr:      fmt.Sprintf("%s:%s", cfg.Host, cfg.HTTP3Port),
-				Handler:   s.peerGatedHandler(),
+				Handler:   gate,
 				TLSConfig: tlsConfig,
+				// quic-go defaults http3 to 0-RTT, which is accepted before the
+				// peer's address is validated (peer_allowlist.go).
+				QUICConfig: http3ServerQUICConfig(),
 			}
 			lifecycleLog.Info("Starting HTTP/3 (QUIC) server on UDP %s:%s", cfg.Host, cfg.HTTP3Port)
 			go func() {
@@ -1017,7 +1024,7 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 			lifecycleLog.Info("Serving HTTP->HTTPS redirect on %s (to port %s)", redirectLn.Addr(), httpsPort)
 			redirectServer := &http.Server{
 				Addr:    redirectAddr,
-				Handler: newPeerAllowListHandler(newHTTPSRedirectHandler(cfg.Host, httpsPort)),
+				Handler: redirectServerHandler(cfg.Host, httpsPort),
 			}
 			s.httpRedirectServer = redirectServer
 			go func() {
@@ -1042,6 +1049,21 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 		}()
 	}
 	return nil
+}
+
+// http3ServerQUICConfig is the QUIC configuration of the HTTP/3 server: 0-RTT
+// off. With it on, a refused peer could obtain a session ticket and then send
+// early data with a spoofed source address that the peer gate and
+// trustedClientIP would believe.
+func http3ServerQUICConfig() *quic.Config {
+	return &quic.Config{Allow0RTT: false}
+}
+
+// redirectServerHandler is the port-80 listener's handler: the HTTPS redirect
+// behind the peer allow-list. A function of its own so a test can drive it
+// without binding port 80.
+func redirectServerHandler(host, httpsPort string) http.Handler {
+	return newPeerAllowListHandler(newHTTPSRedirectHandler(host, httpsPort))
 }
 
 // peerGatedHandler is the handler every serving listener uses: the router
