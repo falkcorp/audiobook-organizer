@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
@@ -624,8 +624,10 @@ func classifyLANPeer(c *gin.Context, ip string, connectors connectorPeers) lanPe
 // (hasCloudflareMarkers). Cloudflare's edge adds those to everything it
 // proxies and the connector passes them through, so tunnel traffic is never
 // direct even though the connectors reach this service from private LAN
-// addresses. Both limiters exempt a direct caller from their global ceiling
-// and give it LAN aggregates no other traffic can spend (classifyLANPeer).
+// addresses. Both limiters give a direct caller LAN aggregates no other
+// traffic can spend (classifyLANPeer); neither exempts it from the global
+// ceiling (it was exempt until 2026-10-21; anything that can reach the port
+// off-tunnel is "direct", so the exemption was budget for any such caller).
 // With TUNNEL_CONNECTOR_ADDRS unset, a
 // connector request stripped of every Cloudflare header on the way would
 // count as direct too (see trustedClientIP).

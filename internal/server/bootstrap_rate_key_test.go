@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
 // last-edited: 2026-10-21
 
@@ -201,18 +201,18 @@ func bootstrapLimiterSize(l *bootstrapLimiter) int {
 func TestBootstrapLimiter_PerKeyWindow(t *testing.T) {
 	l, now := testBootstrapLimiter(100, 1000)
 	for i := range bootstrapMaxAttempts {
-		if !l.allow("k", false) {
+		if !l.allow("k") {
 			t.Fatalf("attempt %d refused early", i)
 		}
 	}
-	if l.allow("k", false) {
+	if l.allow("k") {
 		t.Fatal("attempt past the per-key cap admitted")
 	}
-	if !l.allow("other", false) {
+	if !l.allow("other") {
 		t.Fatal("another key was refused")
 	}
 	*now = now.Add(bootstrapWindowDuration + time.Second)
-	if !l.allow("k", false) {
+	if !l.allow("k") {
 		t.Fatal("the key's window ended but it is still refused")
 	}
 }
@@ -222,15 +222,15 @@ func TestBootstrapLimiter_PerKeyWindow(t *testing.T) {
 func TestBootstrapLimiter_SweepsExpiredEntries(t *testing.T) {
 	l, now := testBootstrapLimiter(1000, 1000)
 	for i := range 50 {
-		l.allow(fmt.Sprintf("k%d", i), false)
+		l.allow(fmt.Sprintf("k%d", i))
 	}
 	if bootstrapLimiterSize(l) != 50 {
 		t.Fatalf("size = %d, want 50", bootstrapLimiterSize(l))
 	}
 	*now = now.Add(bootstrapWindowDuration/2 + time.Second)
-	l.allow("late", false) // a younger window that must survive the sweep below
+	l.allow("late") // a younger window that must survive the sweep below
 	*now = now.Add(bootstrapWindowDuration/2 + time.Second)
-	l.allow("trigger", false)
+	l.allow("trigger")
 	if bootstrapLimiterSize(l) != 2 {
 		t.Fatalf("size after the first 50 windows ended = %d, want 2 (late, trigger)", bootstrapLimiterSize(l))
 	}
@@ -243,7 +243,7 @@ func TestBootstrapLimiter_HardCapEvictsOldest(t *testing.T) {
 	l, now := testBootstrapLimiter(maxKeys, 1_000_000)
 	for i := range 10 * maxKeys {
 		*now = now.Add(time.Second)
-		l.allow(fmt.Sprintf("k%d", i), false)
+		l.allow(fmt.Sprintf("k%d", i))
 		if bootstrapLimiterSize(l) > maxKeys {
 			t.Fatalf("size = %d after %d keys, cap is %d", bootstrapLimiterSize(l), i+1, maxKeys)
 		}
@@ -266,71 +266,73 @@ func TestBootstrapLimiter_GlobalCeiling(t *testing.T) {
 	const globalMax = 12
 	l, now := testBootstrapLimiter(1000, globalMax)
 	for i := range globalMax {
-		if !l.allow(fmt.Sprintf("k%d", i), false) {
+		if !l.allow(fmt.Sprintf("k%d", i)) {
 			t.Fatalf("distinct key %d refused under the ceiling", i)
 		}
 	}
-	if l.allow("fresh", false) {
+	if l.allow("fresh") {
 		t.Fatal("a fresh key was admitted past the global ceiling")
 	}
 	if bootstrapLimiterSize(l) != globalMax {
 		t.Fatalf("a refused attempt created an entry: size = %d, want %d", bootstrapLimiterSize(l), globalMax)
 	}
 	*now = now.Add(bootstrapWindowDuration + time.Second)
-	if !l.allow("fresh", false) {
+	if !l.allow("fresh") {
 		t.Fatal("the window ended but the global ceiling still refuses")
 	}
 
 	// A key refused by its OWN cap does not spend the global budget.
 	l, _ = testBootstrapLimiter(1000, bootstrapMaxAttempts+1)
 	for range bootstrapMaxAttempts {
-		l.allow("k", false)
+		l.allow("k")
 	}
 	for range 50 {
-		l.allow("k", false) // refused per key
+		l.allow("k") // refused per key
 	}
-	if !l.allow("other", false) {
+	if !l.allow("other") {
 		t.Fatal("per-key refusals spent the global budget")
 	}
 }
 
-// TestBootstrapLimiter_ExemptSkipsGlobalCeiling: an exempt (direct LAN) attempt
-// is neither refused by the global ceiling nor counted against it.
-func TestBootstrapLimiter_ExemptSkipsGlobalCeiling(t *testing.T) {
+// TestBootstrapLimiter_EveryKeyCountsAgainstTheGlobalCeiling: the global
+// ceiling has no exempt key. Until 2026-10-21 allow took an exemption flag for
+// a direct LAN peer that skipped the ceiling; "direct" only means a private
+// peer address with no Cloudflare header, which anything reaching the port
+// off-tunnel satisfies, so every key is refused once the ceiling is spent and
+// every admitted attempt spends it.
+func TestBootstrapLimiter_EveryKeyCountsAgainstTheGlobalCeiling(t *testing.T) {
 	const globalMax = 3
 	l, _ := testBootstrapLimiter(1000, globalMax)
 	for i := range globalMax {
-		if !l.allow(fmt.Sprintf("tunnel%d", i), false) {
-			t.Fatalf("tunnel key %d refused under the ceiling", i)
+		if !l.allow(fmt.Sprintf("tunnel%d", i)) {
+			t.Fatalf("key %d refused under the ceiling", i)
 		}
 	}
-	if l.allow("tunnel-extra", false) {
-		t.Fatal("a tunnel key was admitted past the global ceiling")
+	if l.allow("tunnel-extra") {
+		t.Fatal("a key was admitted past the global ceiling")
 	}
-	for i := range bootstrapMaxAttempts {
-		if !l.allow("lan", true) {
-			t.Fatalf("exempt attempt %d refused by the global ceiling", i)
-		}
+	// A key that has never been seen, with its whole per-key budget unspent
+	// (the shape of a direct LAN peer), is refused all the same.
+	if l.allow("direct:10.0.0.50") {
+		t.Fatal("a fresh direct-peer key escaped the global ceiling")
 	}
-	if l.allow("lan", true) {
-		t.Fatal("an exempt key escaped its own per-key cap")
-	}
-	// Exempt attempts did not spend the global budget: a fresh window's worth
-	// is still exactly globalMax once the tunnel window ends.
+
+	// And a direct peer's admitted attempts spend the budget everyone shares.
 	l2, _ := testBootstrapLimiter(1000, globalMax)
-	for range 50 {
-		l2.allow("lan", true)
-	}
 	for i := range globalMax {
-		if !l2.allow(fmt.Sprintf("tunnel%d", i), false) {
-			t.Fatalf("exempt attempts spent the global budget: tunnel key %d refused", i)
+		if !l2.allow("direct:10.0.0.50", bootstrapAgg{key: bootstrapDirectLANTotalKey, factor: bootstrapDirectLANTotalFactor}) {
+			t.Fatalf("direct attempt %d refused under the ceiling", i)
 		}
+	}
+	if l2.allow("tunnel0") {
+		t.Fatal("direct attempts did not spend the global budget: a tunnel key was admitted after globalMax direct attempts")
 	}
 }
 
-// TestHandleBootstrap_TunnelFloodExhaustsGlobalButDirectPeerCanAttempt: tunnel
-// traffic is bounded by the global ceiling; a direct LAN peer is not.
-func TestHandleBootstrap_TunnelFloodExhaustsGlobalButDirectPeerCanAttempt(t *testing.T) {
+// TestHandleBootstrap_DirectPeerCountsAgainstTheGlobalCeiling: a flood from
+// the tunnel spends the global ceiling for direct LAN peers too (they were
+// exempt until 2026-10-21), and direct attempts spend it for the tunnel.
+func TestHandleBootstrap_DirectPeerCountsAgainstTheGlobalCeiling(t *testing.T) {
 	resetBootstrapRate(t)
 	const globalMax = 6
 	bootstrapLimits.globalMax = globalMax
@@ -345,22 +347,31 @@ func TestHandleBootstrap_TunnelFloodExhaustsGlobalButDirectPeerCanAttempt(t *tes
 		t.Fatalf("tunnel client past the global ceiling: %d, want 429", code)
 	}
 	// Direct LAN peers (loopback with no Cloudflare marker, and a ULA address)
-	// can still attempt, each bounded only by its own per-address bucket.
+	// are refused too, each with its per-address bucket untouched.
 	for _, direct := range []string{"127.0.0.1:5000", "[fd00::5]:5000"} {
-		for i := range bootstrapMaxAttempts {
-			if code := bootstrapAttemptStatus(t, direct, "", false); code == http.StatusTooManyRequests {
-				t.Fatalf("direct peer %s attempt %d refused while the tunnel is flooded", direct, i)
-			}
-		}
 		if code := bootstrapAttemptStatus(t, direct, "", false); code != http.StatusTooManyRequests {
-			t.Fatalf("direct peer %s escaped its own per-address cap: %d", direct, code)
+			t.Fatalf("direct peer %s past the global ceiling: %d, want 429", direct, code)
 		}
+	}
+
+	// The other way round: direct attempts spend the budget tunnel clients share.
+	resetBootstrapRate(t)
+	bootstrapLimits.globalMax = globalMax
+	setTunnelConnectors(t, bootstrapTestConnector)
+	for i := range globalMax {
+		direct := fmt.Sprintf("10.0.0.%d:5000", 50+i)
+		if code := bootstrapAttemptStatus(t, direct, "", false); code == http.StatusTooManyRequests {
+			t.Fatalf("direct peer %s refused under the ceiling", direct)
+		}
+	}
+	if code := bootstrapAttemptStatus(t, remote, "203.0.113.1", false); code != http.StatusTooManyRequests {
+		t.Fatalf("tunnel client after %d direct attempts: %d, want 429 (direct attempts spend the global ceiling)", globalMax, code)
 	}
 }
 
 // TestHandleBootstrap_LoopbackWithCFHeaderCountsAgainstGlobal: a loopback peer
-// is exempt only when it carries no Cloudflare marker. Tunnel traffic arriving
-// from a local connector is never exempt.
+// carrying a Cloudflare marker is tunnel traffic, keyed on the visitor's
+// address, and the global ceiling refuses it past the budget.
 func TestHandleBootstrap_LoopbackWithCFHeaderCountsAgainstGlobal(t *testing.T) {
 	for name, connectors := range map[string]string{"no connector configured": "", "loopback connector configured": "127.0.0.1"} {
 		t.Run(name, func(t *testing.T) {
@@ -450,7 +461,7 @@ func TestBootstrapDirectLANPeer(t *testing.T) {
 // this host, so a 10.x connector address is a LAN peer as in production (a CI
 // runner may own 10.x addresses itself, so the real remoteAddrIsLocal is not
 // used).
-func bootstrapKeyFor(t *testing.T, connectorsCSV, remote string, hdr map[string]string) (string, bool) {
+func bootstrapKeyFor(t *testing.T, connectorsCSV, remote string, hdr map[string]string) string {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	connectors, bad := parseConnectorPeers(connectorsCSV)
@@ -464,8 +475,8 @@ func bootstrapKeyFor(t *testing.T, connectorsCSV, remote string, hdr map[string]
 	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	key, _, _, exempt := bootstrapClientKey(c, connectors, func(string) bool { return false })
-	return key, exempt
+	key, _, _ := bootstrapClientKey(c, connectors, func(string) bool { return false })
+	return key
 }
 
 // SF1: the production shape, three tunnel connectors on LAN hosts.
@@ -478,28 +489,26 @@ func TestBootstrapClientKey_PiConnectors(t *testing.T) {
 		remote     string
 		hdr        map[string]string
 		wantKey    string
-		wantExempt bool
 	}{
-		{"set: a visitor through a Pi is keyed on the visitor", pis, "10.0.0.12:4000", tunnel, "203.0.113.5", false},
-		{"set: a Pi with no CF-Connecting-IP is untrusted-local, not exempt", pis, "10.0.0.13:4000", map[string]string{"Cf-Ray": "x"}, untrustedLocalClientKey, false},
-		{"set: a Pi with no headers at all is untrusted-local, not exempt", pis, "10.0.0.11:4000", nil, untrustedLocalClientKey, false},
-		{"unset: a Pi carrying markers is keyed on its own address, not exempt", "", "10.0.0.11:4000", tunnel, "10.0.0.11", false},
-		{"a public peer with forged Cloudflare headers is keyed on its own address", pis, "198.51.100.9:4000", tunnel, "198.51.100.9", false},
+		{"set: a visitor through a Pi is keyed on the visitor", pis, "10.0.0.12:4000", tunnel, "203.0.113.5"},
+		{"set: a Pi with no CF-Connecting-IP is untrusted-local", pis, "10.0.0.13:4000", map[string]string{"Cf-Ray": "x"}, untrustedLocalClientKey},
+		{"set: a Pi with no headers at all is untrusted-local", pis, "10.0.0.11:4000", nil, untrustedLocalClientKey},
+		{"unset: a Pi carrying markers is keyed on its own address", "", "10.0.0.11:4000", tunnel, "10.0.0.11"},
+		{"a public peer with forged Cloudflare headers is keyed on its own address", pis, "198.51.100.9:4000", tunnel, "198.51.100.9"},
 		// NIT1: documented, not prevented: with the setting unset, a Pi request
 		// stripped of every Cloudflare header looks like a direct LAN caller.
-		{"unset: a Pi with every Cloudflare header stripped counts as direct", "", "10.0.0.11:4000", nil, "direct:10.0.0.11", true},
-		{"a direct LAN caller keeps its own exempt bucket", pis, "10.0.0.50:4000", nil, "direct:10.0.0.50", true},
+		{"unset: a Pi with every Cloudflare header stripped counts as direct", "", "10.0.0.11:4000", nil, "direct:10.0.0.11"},
+		{"a direct LAN caller keeps its own bucket", pis, "10.0.0.50:4000", nil, "direct:10.0.0.50"},
 		// NIT7: on an IPv6 ULA LAN every device shares one /64, so a direct
 		// peer is keyed on its full address.
-		{"a direct ULA caller is keyed on its full address", pis, "[fd12:3456:789a:1::50]:4000", nil, "direct:fd12:3456:789a:1::50", true},
-		{"another ULA caller in the same /64 has its own bucket", pis, "[fd12:3456:789a:1::51]:4000", nil, "direct:fd12:3456:789a:1::51", true},
-		{"a v4-mapped direct caller is keyed on its IPv4 address", pis, "[::ffff:10.0.0.50]:4000", nil, "direct:10.0.0.50", true},
+		{"a direct ULA caller is keyed on its full address", pis, "[fd12:3456:789a:1::50]:4000", nil, "direct:fd12:3456:789a:1::50"},
+		{"another ULA caller in the same /64 has its own bucket", pis, "[fd12:3456:789a:1::51]:4000", nil, "direct:fd12:3456:789a:1::51"},
+		{"a v4-mapped direct caller is keyed on its IPv4 address", pis, "[::ffff:10.0.0.50]:4000", nil, "direct:10.0.0.50"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key, exempt := bootstrapKeyFor(t, tt.connectors, tt.remote, tt.hdr)
-			if key != tt.wantKey || exempt != tt.wantExempt {
-				t.Fatalf("bootstrapClientKey = (%q, exempt %v), want (%q, exempt %v)", key, exempt, tt.wantKey, tt.wantExempt)
+			if key := bootstrapKeyFor(t, tt.connectors, tt.remote, tt.hdr); key != tt.wantKey {
+				t.Fatalf("bootstrapClientKey key = %q, want %q", key, tt.wantKey)
 			}
 		})
 	}
@@ -521,14 +530,13 @@ func bootstrapAttemptVia(l *bootstrapLimiter, remote string, connectors connecto
 	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
-	key, aggs, _, exempt := bootstrapClientKey(c, connectors, func(string) bool { return false })
-	return l.allow(key, exempt, aggs...)
+	key, aggs, _ := bootstrapClientKey(c, connectors, func(string) bool { return false })
+	return l.allow(key, aggs...)
 }
 
 // LAN /64 aggregate (review MEDIUM): a direct LAN host rotating through 50
-// addresses of its /64 gets a fresh per-address window each time, and is
-// exempt from the global ceiling, but every address shares the /64's
-// aggregate window, which caps it.
+// addresses of its /64 gets a fresh per-address window each time, but every
+// address shares the /64's aggregate window, which caps it.
 func TestBootstrapLimiter_LANSlash64RotationIsCappedByTheAggregate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
@@ -604,9 +612,8 @@ func TestBootstrapLimiter_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t
 // N1: a zoned link-local peer is a direct LAN caller (link-local is only
 // reachable on-link), keyed on its address without the zone.
 func TestBootstrapClientKey_ZonedLinkLocalIsDirect(t *testing.T) {
-	key, exempt := bootstrapKeyFor(t, "", "[fe80::1%en0]:4000", nil)
-	if key != "direct:fe80::1" || !exempt {
-		t.Fatalf("zoned link-local peer: key %q exempt %v, want direct:fe80::1 and exempt", key, exempt)
+	if key := bootstrapKeyFor(t, "", "[fe80::1%en0]:4000", nil); key != "direct:fe80::1" {
+		t.Fatalf("zoned link-local peer: key %q, want direct:fe80::1", key)
 	}
 }
 
@@ -684,11 +691,11 @@ func TestBootstrapLimiter_RefusedByAnAggregateSpendsNothing(t *testing.T) {
 	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, 1000)
 	total := bootstrapAgg{key: bootstrapUnlistedLANTotalKey, factor: 1}
 	for i := range bootstrapMaxAttempts {
-		if !l.allow(fmt.Sprintf("k%d", i), false, total) {
+		if !l.allow(fmt.Sprintf("k%d", i), total) {
 			t.Fatalf("attempt %d refused before the total was reached", i)
 		}
 	}
-	if l.allow("fresh", false, total) {
+	if l.allow("fresh", total) {
 		t.Fatal("attempt past the total admitted")
 	}
 	l.mu.Lock()
@@ -704,9 +711,10 @@ func TestBootstrapLimiter_RefusedByAnAggregateSpendsNothing(t *testing.T) {
 // Round 8: the bootstrap direct path has a total, as the invite one does.
 // One direct LAN host rotating 100 IPv4 aliases (no prefix window for IPv4)
 // gets a fresh 5-attempt window per alias, but all direct traffic shares
-// the direct total, so it stops there; it never touched the global ceiling,
-// and loopback (the owner's recovery from the server itself) is outside the
-// total, so it still gets its full window.
+// the direct total, so it stops there, having spent that much of the global
+// ceiling (a direct peer counts against it, like everyone else), and loopback
+// (the owner's recovery from the server itself) is outside the direct total,
+// so it still gets its full window from what is left of the ceiling.
 func TestBootstrapLimiter_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
@@ -722,8 +730,8 @@ func TestBootstrapLimiter_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *tes
 	l.mu.Lock()
 	global := l.global.count
 	l.mu.Unlock()
-	if global != 0 {
-		t.Fatalf("direct attempts spent %d of the global ceiling, want 0", global)
+	if global != admitted {
+		t.Fatalf("direct attempts spent %d of the global ceiling, want the %d admitted", global, admitted)
 	}
 	for _, lo := range []string{"127.0.0.1:4000", "[::1]:4000"} {
 		n := 0

@@ -1,5 +1,5 @@
 // file: internal/server/bootstrap_rate_limit.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: df3037e5-6d7d-452f-9474-a8d0b051a31b
 // last-edited: 2026-10-21
 
@@ -47,13 +47,21 @@ import (
 //     admitted attempts create entries, and the global ceiling is far below
 //     the key cap, so the cap is a backstop that normal operation never hits.
 //
-// The global ceiling is also a way for an attacker to lock someone out, so it
-// applies only to requests that came through the tunnel or a proxy
-// (directLANPeer says which do not). The owner runs bootstrap
-// directly from the LAN, so unauthenticated internet traffic can spend the
-// global budget but cannot touch the owner's path, which keeps only its own
-// per-address bucket. It takes bootstrapGlobalMaxAttempts/bootstrapMaxAttempts
-// distinct tunnel clients (20) to spend the global budget. The tunnel
+// The global ceiling applies to EVERY request, a direct LAN peer included. Until
+// 2026-10-21 a direct LAN peer (directLANPeer) was exempt from it, so that
+// internet traffic spending the global budget could not lock the owner out of
+// recovery. That exemption was a hole rather than a convenience: "direct LAN
+// peer" is only a statement about the TCP peer's address and the absence of
+// Cloudflare headers, and anything that can reach the port without going
+// through the tunnel qualifies (any LAN host, any container bridge, as long
+// as the host firewall lets it), so an off-tunnel caller got an attempt budget
+// the tunnel's visitors could not touch, bounded only by its own aggregates.
+// A direct peer still has its own per-address bucket and its aggregates below;
+// they are now additional to the ceiling, not instead of it. It takes
+// bootstrapGlobalMaxAttempts/bootstrapMaxAttempts distinct clients (20) to
+// spend the global budget. What the owner loses is the guarantee that the
+// recovery path survives that: the limiter is in memory, so restarting the
+// service (the first step of the server-bootstrap flow) clears it. The tunnel
 // connectors are themselves LAN hosts with private addresses, so "private
 // peer" alone does not mean direct: a configured connector, or any request
 // with Cloudflare markers, is tunnel traffic.
@@ -64,9 +72,9 @@ const (
 	// bootstrapLANPrefixFactor sizes the aggregate window every address of a
 	// direct LAN IPv6 /64 shares (bootstrapDirectLANKey): a direct LAN peer
 	// is keyed on its full address, so without it one LAN host could rotate
-	// through its /64 for fresh per-address windows, and direct peers are
-	// exempt from the global ceiling, so this aggregate is the only cap on
-	// that rotation. The limiter counts every admitted attempt, not only
+	// through its /64 for fresh per-address windows; this aggregate is the
+	// cap on that rotation that is tighter than the global ceiling. The
+	// limiter counts every admitted attempt, not only
 	// failures (it runs before the token is checked), so the window is four
 	// times the per-key cap: room for several real devices on the LAN.
 	bootstrapLANPrefixFactor = 4
@@ -74,10 +82,10 @@ const (
 	// bootstrapDirectLANTotalFactor sizes the one window all direct LAN
 	// traffic except loopback shares (bootstrapDirectLANTotalKey): 50
 	// attempts an hour, half the global ceiling, as the invite limiter's
-	// direct total is half its global layer. Direct peers are exempt from
-	// the global ceiling, so without it a LAN host could rotate IPv4 aliases
-	// (which have no prefix window) or /64s for fresh windows without limit,
-	// and the key table would churn. It is larger than the /64 window (20),
+	// direct total is half its global layer. Without it a LAN host could
+	// rotate IPv4 aliases (which have no prefix window) or /64s for fresh
+	// windows until it had spent the whole global ceiling by itself, so it
+	// leaves the other half to everyone else. It is larger than the /64 window (20),
 	// so either can be the one that refuses. A LAN device can spend it and
 	// lock out other direct LAN callers for up to an hour; loopback is left
 	// out of it, so the owner's recovery from the server itself
@@ -174,18 +182,17 @@ type bootstrapAgg struct {
 }
 
 // bootstrapClientKey returns the bootstrap limiter key for the request, the
-// aggregate windows it also counts against, the address to log, and whether
-// the request is exempt from the global ceiling (a direct LAN peer,
-// directLANPeer). The aggregates are, for a direct LAN peer, its IPv6 /64's
+// aggregate windows it also counts against, and the address to log. Every
+// request also counts against the global ceiling (bootstrapLimiter.allow),
+// a direct LAN peer (directLANPeer) included. The aggregates are, for a direct LAN peer, its IPv6 /64's
 // window (bootstrapDirectLANKey) and, unless it is loopback, the direct total
 // (bootstrapDirectLANTotalKey); for an unlisted LAN host (Cloudflare markers, keyed on its own
 // address, classifyLANPeer) its "unlisted-lan:" /64 or /24 window and the
 // unlisted LAN total; none for anything else. Every request that is not
 // direct is keyed through trustedClientIP: a visitor's own address when it
 // can be believed, otherwise the shared untrustedLocalClientKey. A connector
-// request with no usable CF-Connecting-IP is therefore untrusted-local and
-// NOT exempt.
-func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key string, aggs []bootstrapAgg, logIP string, exempt bool) {
+// request with no usable CF-Connecting-IP is therefore untrusted-local.
+func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer func(string) bool) (key string, aggs []bootstrapAgg, logIP string) {
 	if directLANPeer(c, connectors) {
 		a, _ := peerKeyAddr(c) // directLANPeer already parsed it
 		ip := a.String()
@@ -195,7 +202,7 @@ func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer f
 		if !a.IsLoopback() {
 			aggs = append(aggs, bootstrapAgg{key: bootstrapDirectLANTotalKey, factor: bootstrapDirectLANTotalFactor})
 		}
-		return bootstrapDirectKey(ip), aggs, ip, true
+		return bootstrapDirectKey(ip), aggs, ip
 	}
 	ip, attributed := trustedClientIP(c, clientTrust{isLocalPeer: isLocalPeer, connectors: connectors})
 	ip = strings.TrimSpace(ip)
@@ -211,7 +218,7 @@ func bootstrapClientKey(c *gin.Context, connectors connectorPeers, isLocalPeer f
 			aggs = append(aggs, bootstrapAgg{key: bootstrapUnlistedLANTotalKey, factor: bootstrapUnlistedLANTotalFactor})
 		}
 	}
-	return key, aggs, ip, false
+	return key, aggs, ip
 }
 
 // bootstrapDirectLANKey is the aggregate window key of a DIRECT LAN IPv6
@@ -248,10 +255,9 @@ func (l *bootstrapLimiter) removeLocked(el *list.Element) {
 // and reports whether it may proceed. Every window must admit the attempt,
 // and the checks and the increments happen under one lock, all checks first,
 // so they are atomic: a refused attempt is not recorded anywhere, so it
-// spends no window and no global budget. exemptFromGlobal (a direct LAN peer)
-// skips the global ceiling entirely: it is neither refused by it nor counted
-// against it; its aggregates still apply to it.
-func (l *bootstrapLimiter) allow(key string, exemptFromGlobal bool, aggs ...bootstrapAgg) bool {
+// spends no window and no global budget. The global ceiling applies to every
+// key, direct LAN peers included.
+func (l *bootstrapLimiter) allow(key string, aggs ...bootstrapAgg) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -265,15 +271,13 @@ func (l *bootstrapLimiter) allow(key string, exemptFromGlobal bool, aggs ...boot
 			return false
 		}
 	}
-	if !exemptFromGlobal {
-		if l.global.count == 0 || now.Sub(l.global.firstAt) > l.window {
-			l.global = bootstrapAttempt{firstAt: now}
-		}
-		if l.global.count >= l.globalMax {
-			return false
-		}
-		l.global.count++
+	if l.global.count == 0 || now.Sub(l.global.firstAt) > l.window {
+		l.global = bootstrapAttempt{firstAt: now}
 	}
+	if l.global.count >= l.globalMax {
+		return false
+	}
+	l.global.count++
 	l.incrementLocked(key, now)
 	for _, a := range aggs {
 		l.incrementLocked(a.key, now)

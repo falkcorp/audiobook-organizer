@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
 // last-edited: 2026-10-21
 
@@ -68,12 +68,16 @@ import (
 //     start-up when the setting is empty).
 //  3. global: a generous ceiling across every token and client, so
 //     enumeration spread over many tokens or many clients is still bounded.
-//     A direct LAN peer is EXEMPT from it (it has the direct LAN total
-//     instead), so a flood from the internet cannot lock out a caller on
-//     this network; the price is that a LAN device can spend the direct
-//     total and lock out other direct callers, as the internet could spend
-//     the global layer before. A request whose client is unattributed, a tunnel
-//     visitor and an unlisted LAN host all stay under it.
+//     EVERY request is under it: a request whose client is unattributed, a
+//     tunnel visitor, an unlisted LAN host and a direct LAN peer alike. A
+//     direct LAN peer was exempt from it until 2026-10-21 (it had the direct
+//     LAN total instead). It is not any more, because "direct" only means
+//     the TCP peer is on a private address and sent no Cloudflare header, which
+//     anything that reaches the port off-tunnel can satisfy, so the exemption
+//     was request budget for any such caller. The direct LAN total below is
+//     still a separate, tighter layer for it. The price is that a flood
+//     (from the tunnel or from a LAN device) can spend the layer and refuse
+//     the owner until the tokens refill.
 //
 // Real use is one page load and one accept per guest.
 //
@@ -84,15 +88,14 @@ import (
 // IPRateLimiter.insertLocked). A request the middleware refuses inserts no
 // key anywhere (an unseen key's entry is created only when the request is
 // admitted, ReserveKey/Commit), so every new per-client, per-token or LAN
-// aggregate entry belongs to a request that the global layer or, for a
-// direct LAN peer exempt from it, the direct LAN total admitted (unlisted
-// LAN traffic stays under the global layer): each of those limiters gains at
-// most inviteGlobalRateBurst + 15 * inviteGlobalRatePerMinute = 4,600 keys
-// from the first and inviteDirectLANTotalRateBurst +
-// 15 * inviteDirectLANTotalRatePerMinute = 2,300 from the second per idle
-// TTL, 6,900 in all, and the global and LAN total limiters hold one key
-// each. That is why neither ceiling is larger, and why the global exemption
-// comes with a total of its own.
+// aggregate entry belongs to a request that the global layer admitted (every
+// request takes a global slot): each of those limiters gains at most
+// inviteGlobalRateBurst + 15 * inviteGlobalRatePerMinute = 4,600 keys per idle
+// TTL, and the global and LAN total limiters hold one key each. That is why
+// the global ceiling is not larger. (Until 2026-10-21 a direct LAN peer
+// skipped the global layer and a second bound, the direct LAN total, added up
+// to 2,300 more keys; with the exemption gone that second bound is not needed
+// for this constraint.)
 const (
 	// Per client (layer 2). Name kept from the single shared limiter this
 	// replaced.
@@ -112,8 +115,7 @@ const (
 	// have separate limiters, so neither can spend the other's. The layers
 	// nest, each larger than the one before, so each can be the one that
 	// refuses (bursts; per-minute rates likewise):
-	//   - direct: per client 10 < /64 40 < direct total 50 (exempt from
-	//     the global layer);
+	//   - direct: per client 10 < /64 40 < direct total 50 < global 100;
 	//   - unlisted: per client 10 < /64 or /24 20 < unlisted total 25 <
 	//     global 100.
 
@@ -122,9 +124,8 @@ const (
 	inviteDirectLANPrefixRatePerMinute = 4 * inviteAuthRatePerMinute
 	inviteDirectLANPrefixRateBurst     = 4 * inviteAuthRateBurst
 
-	// Direct LAN total: half the global layer. It bounds the traffic the
-	// global exemption lets through, so the per-client and per-token tables
-	// stay within the tuning constraint above, and an IPv4 LAN host (which
+	// Direct LAN total: half the global layer, so direct LAN traffic as a
+	// whole can never spend more than half of it, and an IPv4 LAN host (which
 	// has no prefix aggregate) cannot rotate aliases without limit.
 	inviteDirectLANTotalRatePerMinute = inviteGlobalRatePerMinute / 2
 	inviteDirectLANTotalRateBurst     = inviteGlobalRateBurst / 2
@@ -366,7 +367,8 @@ type inviteClient struct {
 	prefixKey string
 	// totalKey is the LAN total, "" for none.
 	totalKey string
-	// direct: a direct LAN peer (direct limiters; skips the global layer);
+	// direct: a direct LAN peer (direct limiters; the global layer still
+	// applies to it);
 	// unlisted: an unlisted Cf-marked LAN peer (unlisted limiters). Both
 	// false for any other request.
 	direct, unlisted bool
@@ -384,7 +386,7 @@ type inviteClient struct {
 // own address also gets its LAN aggregates (classifyLANPeer):
 //   - direct: "invite-direct-lan64:<its /64>" for IPv6 (none for IPv4: a /24
 //     bucket would be shared by every device on the home network), the
-//     direct LAN total, and the global exemption;
+//     direct LAN total;
 //   - unlisted (Cloudflare markers, not a listed connector):
 //     "invite-unlisted-lan:<its /64 or /24>" and the unlisted LAN total.
 //
@@ -449,8 +451,8 @@ func (l *inviteRateLimits) inviteClientKey(c *gin.Context) (inviteClient, bool) 
 // tables, so it cannot evict anyone's bucket.
 //
 // A request with no trusted client address skips the client layer (see
-// inviteClientKey), and a direct LAN peer skips the global layer (its LAN
-// total stands in for it). Every layer refuses with the same status and body, so a
+// inviteClientKey); every request, a direct LAN peer included, is also under
+// the global layer. Every layer refuses with the same status and body, so a
 // caller cannot tell which layer tripped.
 func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, ok bool)) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -479,9 +481,7 @@ func (l *inviteRateLimits) middleware(tokenOf func(*gin.Context) (token string, 
 			}
 		}
 		steps = append(steps, servermiddleware.KeyStep{Limiter: l.perToken, Key: tokenKey})
-		if !ic.direct {
-			steps = append(steps, servermiddleware.KeyStep{Limiter: l.global, Key: inviteGlobalKey})
-		}
+		steps = append(steps, servermiddleware.KeyStep{Limiter: l.global, Key: inviteGlobalKey})
 		held, ok := servermiddleware.ReserveKeys(steps...)
 		if !ok {
 			httputil.RespondWithError(c, http.StatusTooManyRequests, "rate limit exceeded", "TOO_MANY_REQUESTS")
