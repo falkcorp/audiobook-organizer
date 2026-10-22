@@ -3104,7 +3104,7 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	// Multi-valued file-hash indexes, same batch as the row: one key per
 	// (hash, book), so no other book's write can erase it
 	// (pebble_store_book_hash_index.go).
-	if err := stageBookHashKeys(batch, nil, book); err != nil {
+	if err := stageBookHashKeys(batch, book.ID, nil, book); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -3472,7 +3472,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// File-hash indexes: delete the keys of hashes this book gave up, set the
 	// keys of the hashes it holds (unconditionally, so a missing key heals).
 	// Each key belongs to this book alone (pebble_store_book_hash_index.go).
-	if err := stageBookHashKeys(batch, oldBook, book); err != nil {
+	if err := stageBookHashKeys(batch, id, oldBook, book); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -4113,7 +4113,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// Delete the file-hash index keys CreateBook writes. Each is per (hash,
 	// book), so this removes only this book's own keys and can never erase the
 	// lookup of another book that holds the same file.
-	if err := stageBookHashKeyDeletes(batch, book); err != nil {
+	if err := stageBookHashKeyDeletes(batch, id, book); err != nil {
 		batch.Close()
 		return err
 	}
@@ -5953,6 +5953,10 @@ func (p *PebbleStore) Reset() error {
 	// liveBookIDsAtPathIndex can snapshot after the wipe and return an empty
 	// set. Reset is a factory-reset path with no concurrent library work.
 	p.bookAtPathBuilt.Store(false)
+	// Same for the file-hash index sentinel: a wiped store has no index, and a
+	// cached true would make lookups ignore the legacy keys of whatever is
+	// written back.
+	p.bookHashTrusted.Store(false)
 
 	// Use DeleteRange to wipe the entire keyspace in one operation.
 	// The range ["\x00", "\xff\xff") covers all possible keys.

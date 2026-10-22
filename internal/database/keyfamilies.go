@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-23
 
@@ -107,8 +107,8 @@ var keyFamilies = []KeyFamily{
 	{"book_authors:", "book to author links", "internal/database/pebble_store.go"},
 	{"book_hash:", "book index by file hash (multi-value, one key per hash and book)", "internal/database/pebble_store_book_hash_index.go"},
 	{"book_narrators:", "book to narrator links", "internal/database/pebble_store.go"},
-	{"book_originalhash:", "book index by original file hash (multi-value)", "internal/database/pebble_store_book_hash_index.go"},
 	{"book_organizedhash:", "book index by organized file hash (multi-value)", "internal/database/pebble_store_book_hash_index.go"},
+	{"book_originalhash:", "book index by original file hash (multi-value)", "internal/database/pebble_store_book_hash_index.go"},
 	{"book_sig:", "book signatures", "internal/database/pebble_store_booksig.go"},
 	{"book_tag:", "book tags", "internal/database/pebble_store.go"},
 	{"book_ver:", "book version history snapshots (book_ver:<id>:<nanos>)", "internal/database/pebble_store.go"},
