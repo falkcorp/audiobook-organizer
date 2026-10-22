@@ -1,5 +1,5 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
 // last-edited: 2026-10-22
 
@@ -65,6 +65,16 @@ func (s *carrySim) retire(op, retired string) {
 	s.byRetired[retired] = [2]*database.OperationChange{row, marker}
 }
 
+// listRows is the list's whole journal: the survivor's markers and every retired
+// book's row.
+func (s *carrySim) listRows() []*database.OperationChange {
+	rows := slices.Clone(s.survivorJ)
+	for _, pair := range s.byRetired {
+		rows = append(rows, pair[0])
+	}
+	return rows
+}
+
 // revert undoes the retire of one book the way RevertOperation does for a
 // row: the survivor's part from its journal (SurvivorStandFor), the slot from
 // the neighbour graph, and the marker stamped reverted together with the row.
@@ -84,11 +94,8 @@ func (s *carrySim) revertStamping(retired string, stamp bool) error {
 	}
 	stand, borrowed := SurvivorStandFor(s.survivorJ, row, UserContentCollection, s.listID)
 	g := NewMembershipGraph(s.survivor, UserContentCollection, s.listID)
-	g.AddRows([]*database.OperationChange{row})
-	g.AddJournal(s.survivor, s.survivorJ)
-	// Every book other than the survivor has no journal rows besides the
-	// retire rows already in the pool.
-	g.SetJournalLoader(func(string) ([]*database.OperationChange, error) { return nil, nil })
+	g.SetRow(row)
+	g.AddRows(s.listRows())
 	next, res, err := RestoreMember(s.list, retired, s.survivor, rec, MemberRole{Stand: stand, Borrowed: borrowed}, g)
 	note := res.Note
 	if err != nil && !errors.Is(err, ErrAlreadyRestored) {
@@ -207,26 +214,23 @@ func TestMembershipAnchors_CarryRecordsNeighbours(t *testing.T) {
 	}
 }
 
-// A record without anchors (hand-written or truncated; every carry records
-// them) is put back by its index, and the revert says so.
-func TestMembershipAnchors_OldRowUsesIndexAndSaysSo(t *testing.T) {
+// A record without anchors is not one a carry wrote (every carry records them,
+// and no build ever wrote one without): it is refused as unparsable, by the
+// decode and by the preflight, instead of being put back by an index nothing
+// can vouch for.
+func TestMembershipAnchors_UnanchoredRecordIsRefused(t *testing.T) {
 	t.Parallel()
-	rec := MembershipRecord{Index: 1} // not Anchored
-	got, note, err := RestoreMembership([]string{"a", "s", "c"}, "r", "s", rec, SurvivorDefault, nil)
-	if err != nil {
-		t.Fatal(err)
+	for _, v := range []string{`{"index":1}`, `{"index":2,"survivor_was_member":true}`, `{"index":0,"anchored":false}`} {
+		if _, err := DecodeMembership(v); err == nil || !strings.Contains(err.Error(), "no neighbour anchors") {
+			t.Fatalf("%s decoded: %v", v, err)
+		}
+		row := &database.OperationChange{BookID: "r", NewValue: "s", OldValue: v}
+		if got := RefusalReason(CheckMembershipFollow([]string{"a", "s"}, row, UserContentCollection, "L", nil)); got != ReasonOldValueUnparsable {
+			t.Fatalf("%s: preflight reason %q", v, got)
+		}
 	}
-	ucEq(t, got, []string{"a", "r", "c"}) // replaced slot: the survivor swaps back
-	if note != "" {
-		t.Fatalf("a replaced slot needs no position: note %q", note)
-	}
-	got, note, err = RestoreMembership([]string{"a", "s", "c"}, "r", "s", MembershipRecord{Index: 2, SurvivorWasMember: true}, SurvivorDefault, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ucEq(t, got, []string{"a", "s", "r", "c"})
-	if !strings.Contains(note, "records no neighbour anchors") {
-		t.Fatalf("note %q", note)
+	if _, err := DecodeMembership(`{"index":0,"anchored":true}`); err != nil {
+		t.Fatalf("a head-and-tail record is anchored: %v", err)
 	}
 }
 

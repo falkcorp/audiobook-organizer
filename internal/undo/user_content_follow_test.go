@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
 // last-edited: 2026-10-22
 
@@ -251,19 +251,20 @@ func TestRestoreRating_And_CheckRatingFollowCurrent(t *testing.T) {
 func TestCheckMembershipFollow(t *testing.T) {
 	t.Parallel()
 	rowOf := func(rec MembershipRecord) *database.OperationChange {
+		rec.Anchored = true // a carry always records its anchors; DecodeMembership refuses a record without
 		v, _ := EncodeMembership(rec)
 		return &database.OperationChange{BookID: "r", NewValue: "s", OldValue: v}
 	}
-	if err := CheckMembershipFollow([]string{"a", "s"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil, nil); err != nil {
+	if err := CheckMembershipFollow([]string{"a", "s"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil); err != nil {
 		t.Fatalf("restorable: %v", err)
 	}
-	if err := CheckMembershipFollow([]string{"a", "r"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil, nil); !errors.Is(err, ErrAlreadyRestored) {
+	if err := CheckMembershipFollow([]string{"a", "r"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil); !errors.Is(err, ErrAlreadyRestored) {
 		t.Fatalf("already: %v", err)
 	}
-	if RefusalReason(CheckMembershipFollow([]string{"a"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil, nil)) != ReasonChangedSince {
+	if RefusalReason(CheckMembershipFollow([]string{"a"}, rowOf(MembershipRecord{Index: 1}), UserContentCollection, "L", nil)) != ReasonChangedSince {
 		t.Fatal("a slot the owner emptied must refuse")
 	}
-	if RefusalReason(CheckMembershipFollow(nil, &database.OperationChange{BookID: "r", NewValue: "s", OldValue: "x"}, UserContentCollection, "L", nil, nil)) != ReasonOldValueUnparsable {
+	if RefusalReason(CheckMembershipFollow(nil, &database.OperationChange{BookID: "r", NewValue: "s", OldValue: "x"}, UserContentCollection, "L", nil)) != ReasonOldValueUnparsable {
 		t.Fatal("a malformed record must refuse")
 	}
 }
@@ -370,7 +371,7 @@ func TestUserContentFollow_FieldsAndValidity(t *testing.T) {
 			t.Fatalf("%q parsed", bad)
 		}
 	}
-	rec, _ := EncodeMembership(MembershipRecord{Index: 2})
+	rec, _ := EncodeMembership(MembershipRecord{Index: 2, Anchored: true})
 	good := []*database.OperationChange{
 		{FieldName: "rating:s", OldValue: "{}", NewValue: `{"overall":4}`},
 		{FieldName: "collection:c1", OldValue: rec, NewValue: "s"},
@@ -387,6 +388,7 @@ func TestUserContentFollow_FieldsAndValidity(t *testing.T) {
 	for _, c := range []*database.OperationChange{
 		{FieldName: "rating:s", OldValue: "{", NewValue: "{}"},
 		{FieldName: "collection:c1", OldValue: "x", NewValue: "s"},
+		{FieldName: "collection:c1", OldValue: `{"index":2}`, NewValue: "s"}, // no anchors: not a carry's record
 		{FieldName: "collection:c1", OldValue: rec, NewValue: ""},
 		{FieldName: "collection-held:c1", OldValue: rec, NewValue: ""},
 		{FieldName: "bogus:c1", OldValue: rec, NewValue: "s"},
@@ -604,50 +606,6 @@ func TestRetiredStaysOut(t *testing.T) {
 			t.Parallel()
 			if got := RetiredStaysOut(tc.rows, row, UserContentCollection, "c1"); got != tc.want {
 				t.Fatalf("RetiredStaysOut = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// NewerCarryStands: the standing carry of the same book into the same list that
-// was journaled after the row, and none other.
-func TestNewerCarryStands(t *testing.T) {
-	t.Parallel()
-	base := time.Unix(1_700_000_000, 0)
-	at := func(sec int) time.Time { return base.Add(time.Duration(sec) * time.Second) }
-	mk := func(id, book, field string, created int) *database.OperationChange {
-		return &database.OperationChange{ID: id, ChangeType: ChangeTypeUserContentFollow, OperationID: "op-" + id, BookID: book, FieldName: field, CreatedAt: at(created)}
-	}
-	main := UserContentField(UserContentCollection, "c1")
-	row := mk("old", "r", main, 5)
-	done := mk("done", "r", main, 9)
-	t0 := at(10)
-	done.RevertedAt = &t0
-	voided := mk("voided", "r", main, 9)
-	voided.Voided = true
-	cases := []struct {
-		name string
-		rows []*database.OperationChange
-		want string
-	}{
-		{"nothing newer", []*database.OperationChange{row}, ""},
-		{"a newer standing row", []*database.OperationChange{row, mk("new", "r", main, 8)}, "new"},
-		{"the newest of several", []*database.OperationChange{row, mk("new", "r", main, 8), mk("newer", "r", main, 9)}, "newer"},
-		{"an older row is not newer", []*database.OperationChange{row, mk("older", "r", main, 2)}, ""},
-		{"a newer row already reverted does not stand", []*database.OperationChange{row, done}, ""},
-		{"a voided row does not stand", []*database.OperationChange{row, voided}, ""},
-		{"another list is not this one", []*database.OperationChange{row, mk("other", "r", UserContentField(UserContentCollection, "c2"), 8)}, ""},
-		{"another kind of list is not this one", []*database.OperationChange{row, mk("pl", "r", UserContentField(UserContentPlaylist, "c1"), 8)}, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := NewerCarryStands(tc.rows, row, UserContentCollection, "c1")
-			switch {
-			case tc.want == "" && got != nil:
-				t.Fatalf("got %s, want none", got.ID)
-			case tc.want != "" && (got == nil || got.ID != tc.want):
-				t.Fatalf("got %v, want %s", got, tc.want)
 			}
 		})
 	}

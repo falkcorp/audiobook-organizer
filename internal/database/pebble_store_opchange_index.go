@@ -1,9 +1,11 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
-// The opchange_by_book: secondary index over the operation-change journal.
+// The opchange_by_book: secondary index over the operation-change journal. Its
+// sibling opchange_by_list: indexes the user-content rows by the collection or
+// playlist they touch (pebble_store_opchange_list_index.go).
 //
 //	opchange:<opID>:<changeID>                      -> OperationChange JSON (primary row)
 //	opchange_by_book:<bookID>:<opID>:<changeID>     -> (empty value)
@@ -208,25 +210,6 @@ func unstageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) erro
 		return fmt.Errorf("stage opchange_by_book delete: %w", err)
 	}
 	return nil
-}
-
-// storedOpChangeBookID reads the BookID of the row at primary. found is false
-// when the row does not exist or does not decode (an undecodable row has no
-// readable book, so there is no entry to move).
-func (p *PebbleStore) storedOpChangeBookID(primary []byte) (bookID string, found bool, err error) {
-	v, closer, err := p.db.Get(primary)
-	if errors.Is(err, pebble.ErrNotFound) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("read existing opchange row: %w", err)
-	}
-	defer closer.Close()
-	var old OperationChange
-	if json.Unmarshal(v, &old) != nil {
-		return "", false, nil
-	}
-	return old.BookID, true, nil
 }
 
 // opChangeByBookIndexBuilt reports whether the backfill sentinel exists. A

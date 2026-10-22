@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
 // last-edited: 2026-10-22
 
@@ -393,6 +393,9 @@ func (p *PebbleStore) pruneOpChangeChunk(keys [][]byte, olderThan time.Time) (in
 		// The row's opchange_by_book: entry goes in the same batch
 		// (pebble_store_opchange_index.go).
 		if err := unstageOpChangeIndex(batch, change.BookID, k); err != nil {
+			return 0, err
+		}
+		if err := unstageOpChangeListIndex(batch, &change, k); err != nil {
 			return 0, err
 		}
 		n++

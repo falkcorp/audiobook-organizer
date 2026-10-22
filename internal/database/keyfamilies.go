@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package database
 
@@ -246,6 +246,7 @@ var keyFamilies = []KeyFamily{
 	{"op_result:", "per-book operation results", "internal/database/pebble_store_operations.go"},
 	{"opchange:", "operation change journal", "internal/database/pebble_store_operations.go"},
 	{"opchange_by_book:", "operation change index by book", "internal/database/pebble_store_opchange_index.go"},
+	{"opchange_by_list:", "operation change index by list (carry rows of collections and playlists)", "internal/database/pebble_store_opchange_list_index.go"},
 	{"opchange_undecodable:", "undecodable operation change markers", "internal/database/pebble_store_opchange_index.go"},
 	{"operation:", "v1 operation rows", "internal/database/pebble_store_operations.go"},
 	{"operationlog:", "v1 operation logs", "internal/database/pebble_store_operations.go"},

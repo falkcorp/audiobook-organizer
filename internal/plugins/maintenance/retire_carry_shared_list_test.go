@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_shared_list_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d2f6b19-4c07-4e53-a1d8-7b95e03c6f42
 // last-edited: 2026-10-22
 
@@ -35,13 +35,16 @@ import (
 //   - armRetire: from then on the first GetCollection (retireEntered) and the
 //     first UpdateCollectionBooks (retireWrote) are signalled; the reverts under
 //     test write through the atomic call, so only a retire's carry reaches them;
-//   - pauseAfterRead: the first GetBookChanges of pauseBook returns its rows
-//     only after pauseAfterRead.resume is closed, having signalled
+//   - pauseAfterRead: the first GetListChanges of pauseList (listKey) returns
+//     its rows only after pauseAfterRead.resume is closed, having signalled
 //     pauseAfterRead.read once it has read them, so the reader decides from a
 //     journal that is stale by the time it acts;
-//   - barrierBook: the first two GetBookChanges of that book wait until both
+//   - barrierList: the first two GetListChanges of that list wait until both
 //     have arrived (or 600 ms pass), then read, so two concurrent readers both
 //     see the journal as it was before either wrote.
+//
+// A revert reads a list's journal with GetListChanges (undo.ListJournalReader),
+// which the wrapper forwards to the store under it.
 type hookStore struct {
 	database.Store
 	members database.CollectionMembershipStore
@@ -55,11 +58,11 @@ type hookStore struct {
 	enteredOnce   sync.Once
 	wroteOnce     sync.Once
 
-	pauseBook      string
+	pauseList      string
 	pauseAfterRead *readPause
 	pauseOnce      sync.Once
 
-	barrierBook string
+	barrierList string
 	arrived     atomic.Int32
 	released    chan struct{}
 	releaseOnce sync.Once
@@ -123,8 +126,12 @@ func (s *hookStore) MarkOperationChangesReverted(op string, ids []string) error 
 	return s.Store.MarkOperationChangesReverted(op, ids)
 }
 
-func (s *hookStore) GetBookChanges(bookID string) ([]*database.OperationChange, error) {
-	if s.barrierBook != "" && bookID == s.barrierBook && s.arrived.Add(1) <= 2 {
+// listKey names a list for the pause and barrier hooks.
+func listKey(kind, listID string) string { return kind + "/" + listID }
+
+func (s *hookStore) GetListChanges(kind, listID string) ([]*database.OperationChange, error) {
+	key := listKey(kind, listID)
+	if s.barrierList != "" && key == s.barrierList && s.arrived.Add(1) <= 2 {
 		if s.arrived.Load() >= 2 {
 			s.releaseOnce.Do(func() { close(s.released) })
 		}
@@ -133,8 +140,12 @@ func (s *hookStore) GetBookChanges(bookID string) ([]*database.OperationChange, 
 		case <-time.After(600 * time.Millisecond):
 		}
 	}
-	rows, err := s.Store.GetBookChanges(bookID)
-	if s.pauseAfterRead != nil && bookID == s.pauseBook {
+	rd, ok := database.AsCapability[undo.ListJournalReader](s.Store)
+	if !ok {
+		return nil, errors.New("hookStore: the store under it cannot read a list journal")
+	}
+	rows, err := rd.GetListChanges(kind, listID)
+	if s.pauseAfterRead != nil && key == s.pauseList {
 		s.pauseOnce.Do(func() {
 			close(s.pauseAfterRead.read)
 			<-s.pauseAfterRead.resume
@@ -353,7 +364,7 @@ func TestRetireCarry_ConcurrentRevertsReadTheJournalAfterTheOtherWrote(t *testin
 	}
 
 	st := newHookStore(f.s)
-	st.barrierBook = parent
+	st.barrierList = listKey(undo.UserContentCollection, col)
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	results := make([]*audiobooks.RevertResult, 2)
@@ -393,7 +404,7 @@ func TestRetireCarry_ARetireWaitsForARevertIntoTheSameSurvivor(t *testing.T) {
 	require.Equal(t, []string{parent, k1, "x"}, f.rcMembers(t, col))
 
 	st := newHookStore(f.s)
-	st.pauseBook = parent
+	st.pauseList = listKey(undo.UserContentCollection, col)
 	st.pauseAfterRead = &readPause{read: make(chan struct{}), resume: make(chan struct{})}
 	f.useStore(t, st)
 
@@ -407,7 +418,7 @@ func TestRetireCarry_ARetireWaitsForARevertIntoTheSameSurvivor(t *testing.T) {
 	case <-st.pauseAfterRead.read:
 	case <-time.After(10 * time.Second):
 		close(st.pauseAfterRead.resume)
-		t.Fatal("the revert never read the survivor's journal")
+		t.Fatal("the revert never read the list's journal")
 	}
 	var applied *repairs.ApplyResult
 	st.armRetire.Store(true)

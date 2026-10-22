@@ -1,5 +1,5 @@
 // file: internal/undo/membership_multi_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d4f2a61-7c35-4b90-a1e8-5f3c9b0d7e42
 // last-edited: 2026-10-22
 
@@ -18,22 +18,28 @@ import (
 
 // multiSim: several survivors share ONE list. Each retire journals a marker on
 // its survivor and a row on the retired book, as the Repairs writer does; a
-// revert reads the survivor's journal, and any other book's journal through the
-// graph's loader (GetBookChanges in the product); with withLoader unset the
-// loader fails after two reads.
+// revert reads the list's whole journal (GetListChanges in the product).
 type multiSim struct {
-	t          *testing.T
-	list       []string
-	clock      time.Time
-	withLoader bool
-	journals   map[string][]*database.OperationChange // book -> its journal rows
-	pair       map[string][2]*database.OperationChange
-	notes      []string
+	t        *testing.T
+	list     []string
+	clock    time.Time
+	journals map[string][]*database.OperationChange // book -> its journal rows
+	pair     map[string][2]*database.OperationChange
+	notes    []string
 }
 
-func newMultiSim(t *testing.T, l0 []string, withLoader bool) *multiSim {
-	return &multiSim{t: t, list: slices.Clone(l0), clock: time.Unix(1_700_000_000, 0), withLoader: withLoader,
+func newMultiSim(t *testing.T, l0 []string) *multiSim {
+	return &multiSim{t: t, list: slices.Clone(l0), clock: time.Unix(1_700_000_000, 0),
 		journals: map[string][]*database.OperationChange{}, pair: map[string][2]*database.OperationChange{}}
+}
+
+// listRows is the list's whole journal: every book's rows.
+func (s *multiSim) listRows() []*database.OperationChange {
+	var rows []*database.OperationChange
+	for _, j := range s.journals {
+		rows = append(rows, j...)
+	}
+	return rows
 }
 
 func (s *multiSim) tick() time.Time { s.clock = s.clock.Add(time.Second); return s.clock }
@@ -68,19 +74,8 @@ func (s *multiSim) revertStamping(retired string, stamp bool) error {
 	sv := r.NewValue
 	stand, borrowed := SurvivorStandFor(s.journals[sv], r, UserContentCollection, "L")
 	g := NewMembershipGraph(sv, UserContentCollection, "L")
-	g.AddRows([]*database.OperationChange{r})
-	g.AddJournal(sv, s.journals[sv])
-	// A degraded loader (withLoader false) serves two journals and then fails,
-	// as a store error or the per-slot read cap would: the graph must then
-	// place nothing it has not fully read, and the caller reports the index.
-	reads := 0
-	g.SetJournalLoader(func(book string) ([]*database.OperationChange, error) {
-		reads++
-		if !s.withLoader && reads > 2 {
-			return nil, errors.New("journal read failed")
-		}
-		return s.journals[book], nil
-	})
+	g.SetRow(r)
+	g.AddRows(s.listRows())
 	next, res, err := RestoreMember(s.list, retired, sv, rec, MemberRole{Stand: stand, Borrowed: borrowed}, g)
 	note := res.Note
 	if err != nil && !errors.Is(err, ErrAlreadyRestored) {
@@ -101,29 +96,22 @@ func (s *multiSim) revertStamping(retired string, stamp bool) error {
 
 // Two survivors share a list, books next to each other go into different
 // survivors, and the operations are reverted oldest first: the book of the
-// first operation is back before the second's, exactly, because the walk reads
-// the other survivor's journal.
+// first operation is back before the second's, exactly, because the graph holds
+// the other survivor's records too.
 func TestMembershipMulti_TwoSurvivorsShareAList(t *testing.T) {
 	t.Parallel()
 	l0 := []string{"S1", "a", "X", "Y", "b", "S2"}
-	for _, withLoader := range []bool{true, false} {
-		s := newMultiSim(t, l0, withLoader)
-		s.retire("op1", "X", "S1")
-		s.retire("op2", "Y", "S2")
-		for _, b := range []string{"X", "Y"} {
-			if err := s.revert(b); err != nil {
-				t.Fatal(err)
-			}
+	s := newMultiSim(t, l0)
+	s.retire("op1", "X", "S1")
+	s.retire("op2", "Y", "S2")
+	for _, b := range []string{"X", "Y"} {
+		if err := s.revert(b); err != nil {
+			t.Fatal(err)
 		}
-		switch {
-		case withLoader:
-			ucEq(t, s.list, l0)
-			if len(s.notes) != 0 {
-				t.Fatalf("with the journals readable the order is exact, notes %v", s.notes)
-			}
-		case !slices.Equal(s.list, l0) && len(s.notes) == 0:
-			t.Fatalf("SILENT wrong order without the journals: got %v want %v", s.list, l0)
-		}
+	}
+	ucEq(t, s.list, l0)
+	if len(s.notes) != 0 {
+		t.Fatalf("the order is exact, notes %v", s.notes)
 	}
 }
 
@@ -164,12 +152,12 @@ func multiCases(seed1, seed2 uint64, n int) (out []struct {
 // runMultiFuzz reverts the four operations in every order and counts how each
 // ends: exact, reported (an index fallback said so), refused, or silently
 // wrong (the thing that must never happen).
-func runMultiFuzz(t *testing.T, withLoader bool) (total, exact, noted, refused, silent int) {
+func runMultiFuzz(t *testing.T) (total, exact, noted, refused, silent int) {
 	t.Helper()
 	for _, c := range multiCases(3, 9, 2000) {
 		for _, order := range permutations([]int{0, 1, 2, 3}) {
 			total++
-			s := newMultiSim(t, c.l0, withLoader)
+			s := newMultiSim(t, c.l0)
 			for _, o := range c.ops {
 				for _, b := range o.books {
 					s.retire(o.id, b, o.survivor)
@@ -203,28 +191,11 @@ func runMultiFuzz(t *testing.T, withLoader bool) (total, exact, noted, refused, 
 	return
 }
 
-// With a loader that fails after two reads (a store error, or the per-slot
-// read cap): a slot is used only when every journal it rests on was read, so
-// whatever cannot be ordered is reported by index and nothing is silently
-// wrong.
-func TestMembershipMulti_GuardNeverLeavesASilentWrongOrder(t *testing.T) {
-	t.Parallel()
-	total, exact, noted, refused, silent := runMultiFuzz(t, false)
-	t.Logf("two survivors, journal reads failing after two: total=%d exact=%d reported=%d refused=%d silent-wrong=%d", total, exact, noted, refused, silent)
-	if silent != 0 {
-		t.Fatalf("%d silent wrong results", silent)
-	}
-	if refused != 0 {
-		t.Fatalf("%d refused", refused)
-	}
-}
-
-// With every journal the walk reaches readable, two survivors in one list are
-// exact in every operation order: nothing silent, and nothing left to the
-// index either.
+// Two survivors in one list are exact in every operation order: nothing silent,
+// and nothing left to the index either.
 func TestMembershipMulti_ExactWithTheOtherSurvivorsJournals(t *testing.T) {
 	t.Parallel()
-	total, exact, noted, refused, silent := runMultiFuzz(t, true)
+	total, exact, noted, refused, silent := runMultiFuzz(t)
 	t.Logf("two survivors, journals read: total=%d exact=%d reported=%d refused=%d silent-wrong=%d", total, exact, noted, refused, silent)
 	if silent != 0 {
 		t.Fatalf("%d silent wrong results", silent)
@@ -378,7 +349,7 @@ func relativeOrderOK(cur, l0 []string, isSurvivor func(string) bool) bool {
 // nothing is left to the index.
 func TestMembershipMulti_InterleavedTimelines(t *testing.T) {
 	t.Parallel()
-	for _, withLoader := range []bool{true, false} {
+	{
 		rng := rand.New(rand.NewPCG(21, 22))
 		var exact, reported, interWrong, refused, silent, total int
 		for caseN := range 4000 {
@@ -394,7 +365,7 @@ func TestMembershipMulti_InterleavedTimelines(t *testing.T) {
 				}
 			}
 			isSurvivor := func(b string) bool { return slices.Contains(survivors, b) }
-			sim := newMultiSim(t, l0, withLoader)
+			sim := newMultiSim(t, l0)
 			type op struct {
 				id    string
 				books []string
@@ -415,7 +386,7 @@ func TestMembershipMulti_InterleavedTimelines(t *testing.T) {
 				if !relativeOrderOK(sim.list, l0, isSurvivor) && len(sim.notes) == 0 { // once an index fallback was reported the order is the report's to carry
 					interWrong++
 					if interWrong < 4 {
-						t.Logf("INTER loader=%v case%d l0=%v log=%v list=%v notes=%v", withLoader, caseN, l0, log, sim.list, sim.notes)
+						t.Logf("INTER case%d l0=%v log=%v list=%v notes=%v", caseN, l0, log, sim.list, sim.notes)
 					}
 				}
 			}
@@ -473,17 +444,17 @@ func TestMembershipMulti_InterleavedTimelines(t *testing.T) {
 			default:
 				silent++
 				if silent < 4 {
-					t.Logf("FINAL loader=%v case%d l0=%v log=%v list=%v", withLoader, caseN, l0, log, sim.list)
+					t.Logf("FINAL case%d l0=%v log=%v list=%v", caseN, l0, log, sim.list)
 				}
 			}
 		}
-		t.Logf("interleaved timelines, loader=%v: total=%d exact=%d reported=%d refused=%d silent-wrong=%d intermediate-wrong=%d",
-			withLoader, total, exact, reported, refused, silent, interWrong)
+		t.Logf("interleaved timelines: total=%d exact=%d reported=%d refused=%d silent-wrong=%d intermediate-wrong=%d",
+			total, exact, reported, refused, silent, interWrong)
 		if silent != 0 || refused != 0 {
-			t.Errorf("loader=%v: %d silent wrong, %d refused", withLoader, silent, refused)
+			t.Errorf("%d silent wrong, %d refused", silent, refused)
 		}
-		if withLoader && (reported != 0 || interWrong != 0) {
-			t.Errorf("with the journals readable: %d reported, %d wrong in between; want 0", reported, interWrong)
+		if reported != 0 || interWrong != 0 {
+			t.Errorf("%d reported, %d wrong in between; want 0", reported, interWrong)
 		}
 	}
 }
