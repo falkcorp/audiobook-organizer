@@ -242,3 +242,60 @@ func (_c *MockMergeService_ListSiblingMoveJournals_Call) RunAndReturn(run func(l
 	_c.Call.Return(run)
 	return _c
 }
+
+// PreflightLink provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) PreflightLink(keepID string, mergeIDs []string) error {
+	ret := _mock.Called(keepID, mergeIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PreflightLink")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []string) error); ok {
+		r0 = returnFunc(keepID, mergeIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMergeService_PreflightLink_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PreflightLink'
+type MockMergeService_PreflightLink_Call struct {
+	*mock.Call
+}
+
+// PreflightLink is a helper method to define mock.On call
+//   - keepID string
+//   - mergeIDs []string
+func (_e *MockMergeService_Expecter) PreflightLink(keepID any, mergeIDs any) *MockMergeService_PreflightLink_Call {
+	return &MockMergeService_PreflightLink_Call{Call: _e.mock.On("PreflightLink", keepID, mergeIDs)}
+}
+
+func (_c *MockMergeService_PreflightLink_Call) Run(run func(keepID string, mergeIDs []string)) *MockMergeService_PreflightLink_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_PreflightLink_Call) Return(err error) *MockMergeService_PreflightLink_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMergeService_PreflightLink_Call) RunAndReturn(run func(keepID string, mergeIDs []string) error) *MockMergeService_PreflightLink_Call {
+	_c.Call.Return(run)
+	return _c
+}
