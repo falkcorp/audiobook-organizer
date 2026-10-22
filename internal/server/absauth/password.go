@@ -1,5 +1,5 @@
 // file: internal/server/absauth/password.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
 // last-edited: 2026-10-22
 
@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
@@ -181,8 +182,9 @@ func verifyArgon2id(encoded, plain string) bool {
 // argon2id derivation, until their first successful login rehashes them) are the
 // one place a timing difference could remain.
 var (
-	dummyOnce sync.Once
-	dummyHash string
+	dummyOnce  sync.Once
+	dummyHash  string
+	dummyBuilt atomic.Bool // set once dummyHash holds a usable hash; read by LoginDummyReady
 )
 
 func dummyArgon2idHash() string {
@@ -196,6 +198,7 @@ func dummyArgon2idHash() string {
 			return
 		}
 		dummyHash = h
+		dummyBuilt.Store(true)
 	})
 	return dummyHash
 }
@@ -204,6 +207,10 @@ func dummyArgon2idHash() string {
 // name does not pay for building it as well. Constructors of the login handlers
 // call it; it is idempotent.
 func WarmLoginDummy() { _ = dummyArgon2idHash() }
+
+// LoginDummyReady reports whether the dummy hash has been built; it exists for
+// the constructor-warm tests and exposes nothing but that fact.
+func LoginDummyReady() bool { return dummyBuilt.Load() }
 
 // SpendVerification does the work of one password verification against the dummy
 // hash and discards the result. A login for a name that does not exist calls it.
