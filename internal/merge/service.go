@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.60.8
+// version: 1.61.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-22
 
@@ -1755,6 +1755,15 @@ type CombineOptions struct {
 	// combine it made. Empty: a correlation id of its own, returned in
 	// CombineResult.OperationID.
 	OperationID string
+	// Context, when set, is checked between the absorbed books: once it is
+	// done (the op's timeout, or the server shutting down) the combine stops
+	// before the next book instead of holding the merge lock until the whole
+	// run ends. The stop is the part-way stop the journal already handles: a
+	// *CombineIncompleteError wrapping the context's error, the journal left
+	// Pending and naming every step that ran, so reverting the operation
+	// puts back exactly that. nil never stops. The bulk file move before the
+	// per-book steps is one write and is not interruptible.
+	Context context.Context
 }
 
 // CombineOverride holds optional metadata fields to apply to the survivor book
@@ -2040,6 +2049,14 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		return nil
 	}
 	for _, id := range absorbedOrder {
+		// The only point where stopping is safe and cheap: the previous
+		// absorbed book is complete (files attached, progress followed,
+		// retired, each journaled), the next has not been touched.
+		if opts.Context != nil {
+			if err := opts.Context.Err(); err != nil {
+				return nil, fmt.Errorf("combine stopped before %s: %w (journal %s left %s)", id, err, journal.ID, CombineJournalPending)
+			}
+		}
 		a := entryOf(id)
 
 		// A book deleted by something else between validation and here is

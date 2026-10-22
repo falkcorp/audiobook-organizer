@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.34.0
+// version: 2.35.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-22
 
@@ -276,6 +276,14 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 // The op's own id is the combine's undo operation: reverting it
 // (POST /operations/:id/revert) undoes the combine, and the result payload
 // carries that id.
+//
+// The run honours its context between the absorbed books (CombineOptions.Context):
+// the 1h Timeout (or a server shutdown) stops the combine before the next book
+// rather than leaving it running, with the merge lock held, after the operation
+// was reported timed out. The stop is stored as a failed, incomplete result
+// carrying the undo ids, which the page words as "stopped part-way, Undo puts
+// back what it changed". The op stays Cancellable:false: a user cancel would be
+// the same part-way stop, which is not something to offer on a button.
 func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.book-combine",
@@ -320,7 +328,7 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 			// OperationID: the combine's undo pointer is journaled under this
 			// op, so reverting the op undoes the combine.
 			res, err := ms.CombineBooksWithOptions(append(append([]string{}, p.MergeIDs...), p.KeepID), p.KeepID, p.Override,
-				merge.CombineOptions{OperationID: opID})
+				merge.CombineOptions{OperationID: opID, Context: ctx})
 			if err != nil {
 				op.SetStatus("failed")
 				failed := BookCombineOpResult{PrimaryID: p.KeepID, Failed: true, Error: err.Error()}
