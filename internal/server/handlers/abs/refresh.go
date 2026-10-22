@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 package abs
 
@@ -63,7 +63,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 		})
 		return
 	}
-	if h.throttle.IPBlocked(ip) {
+	if h.throttle.IPBlocked(h.throttleKey(c)) {
 		// 429, not 401: a rate-limit answer must not be mistaken for a dead token.
 		absauth.Audit(absauth.AuditEvent{
 			Action: "refresh", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
@@ -309,7 +309,7 @@ func (h *Handler) completeRefresh(c *gin.Context, user *database.User, session *
 		UserID: user.ID, Username: user.Username, Email: email, SessionID: session.ID,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
-	h.throttle.Clear(user.ID, ip)
+	h.throttle.Clear(user.ID, h.throttleKey(c))
 
 	respondJSON(c, http.StatusOK, h.buildAuthResponse(user, accessToken, refreshToken, progress, bookmarks))
 }
@@ -317,7 +317,7 @@ func (h *Handler) completeRefresh(c *gin.Context, user *database.User, session *
 // failRefresh answers 401 for a genuinely dead refresh token and charges the source
 // IP's failure budget.
 func (h *Handler) failRefresh(c *gin.Context, ip, sessionID, reason string) {
-	h.throttle.RecordFailure("", ip)
+	h.throttle.RecordFailure("", h.throttleKey(c))
 	absauth.Audit(absauth.AuditEvent{
 		Action: "refresh", Outcome: absauth.OutcomeFailure, Mode: servermiddleware.ABSModeJWT,
 		SourceIP: ip, SessionID: sessionID, Reason: reason,

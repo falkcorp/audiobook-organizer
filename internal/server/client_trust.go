@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-21
 
@@ -578,6 +578,42 @@ func requestClientIP(c *gin.Context) string {
 	ip, _ := trustedClientIP(c, clientTrust{isLocalPeer: remoteAddrIsLocal, connectors: tunnelConnectorPeers()})
 	return ip
 }
+
+// loginThrottleKey is the bucket the password-login failure throttles (the web
+// POST /api/v1/auth/login and the ABS POST /login and /auth/refresh) charge a
+// request to. Behind the tunnel c.ClientIP() is the connector's address, so a
+// throttle keyed on it is one bucket per connector shared by every visitor: a
+// single caller failing 15 times locks everyone out through that connector.
+// This keys on trustedClientIP instead, the visitor's CF-Connecting-IP
+// when the peer is a configured tunnel connector (or this host behind a
+// verified Access assertion), and otherwise the peer's own address, whatever
+// headers the caller sends, so a header a caller made up never picks its
+// bucket. Where the visitor cannot be established (a connector request with
+// no usable CF-Connecting-IP) that is the connector's address, the old shared
+// bucket. The address goes through clientPrefixKey, so a public IPv6 visitor
+// is one bucket per /64, as the bootstrap and invite limiters key it: now that
+// the visitor's own address is believed, an unkeyed one would let a caller who
+// owns a /64 rotate for a fresh failure budget per attempt. "" only when no
+// address parses, and the callers then fall back to c.ClientIP().
+//
+// The answer is kept on the request: one login asks several times, and the
+// answer involves a kernel lookup.
+func loginThrottleKey(c *gin.Context) string {
+	if v, ok := c.Get(loginThrottleKeyCtx); ok {
+		if k, ok := v.(string); ok {
+			return k
+		}
+	}
+	key := ""
+	if ip := requestClientIP(c); ip != "" {
+		key, _ = clientPrefixKey(ip)
+	}
+	c.Set(loginThrottleKeyCtx, key)
+	return key
+}
+
+// loginThrottleKeyCtx is the gin context key loginThrottleKey keeps its answer under.
+const loginThrottleKeyCtx = "login_throttle_key"
 
 // lanPeer classifies a request keyed on ip whose ip is the request's own
 // peer (not a visitor address taken from CF-Connecting-IP) and not a listed

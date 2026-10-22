@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-21
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -365,6 +365,14 @@ type Options struct {
 	// not once here, because the server's ExternalURL is set after routes are
 	// wired. Nil, empty or unusable means "use the request's Host".
 	PublicOrigin func() string
+	// ThrottleKey returns the bucket the POST /login and POST /auth/refresh failure
+	// throttle charges a request to. wireABSRoutes passes loginThrottleKey, which
+	// keys a tunnel visitor on its own address (CF-Connecting-IP, believed only from
+	// a configured tunnel connector) instead of the connector's, so one visitor
+	// cannot spend the budget every other visitor through that connector shares.
+	// Nil, or an empty answer, keys on c.ClientIP() as before. It decides only the
+	// throttle bucket: audit events and sessions still record c.ClientIP().
+	ThrottleKey func(*gin.Context) string
 }
 
 // itemsCountEntry is one cached filtered count and when it was computed.
@@ -380,6 +388,8 @@ type Handler struct {
 	resolver *servermiddleware.ABSIdentityResolver
 	userData UserDataProvider
 	throttle *absauth.Throttle
+	// throttleKeyFn is Options.ThrottleKey; read through throttleKey.
+	throttleKeyFn func(*gin.Context) string
 
 	library     LibraryStore
 	identity    IdentityStore
@@ -569,25 +579,26 @@ func New(o Options) (*Handler, error) {
 		name = "Books"
 	}
 	h := &Handler{
-		cfg:         o.Config,
-		store:       o.Store,
-		resolver:    o.Resolver,
-		userData:    o.UserData,
-		throttle:    absauth.NewThrottle(),
-		library:     o.Library,
-		identity:    o.Identity,
-		chapters:    o.Chapters,
-		playlists:   o.Playlists,
-		collections: o.Collections,
-		bookSearch:  o.SearchResults,
-		progress:    o.Progress,
-		bookmarks:   o.Bookmarks,
-		aliasUses:   o.AliasUses,
-		coverRoot:   o.CoverRoot,
-		libraryName: name,
-		itemsCount:  map[string]itemsCountEntry{},
-		now:         time.Now,
-		newID:       func() string { return ulid.Make().String() },
+		cfg:           o.Config,
+		store:         o.Store,
+		resolver:      o.Resolver,
+		userData:      o.UserData,
+		throttle:      absauth.NewThrottle(),
+		throttleKeyFn: o.ThrottleKey,
+		library:       o.Library,
+		identity:      o.Identity,
+		chapters:      o.Chapters,
+		playlists:     o.Playlists,
+		collections:   o.Collections,
+		bookSearch:    o.SearchResults,
+		progress:      o.Progress,
+		bookmarks:     o.Bookmarks,
+		aliasUses:     o.AliasUses,
+		coverRoot:     o.CoverRoot,
+		libraryName:   name,
+		itemsCount:    map[string]itemsCountEntry{},
+		now:           time.Now,
+		newID:         func() string { return ulid.Make().String() },
 	}
 	h.sessions = newSessionRegistry(h.nowFn)
 	// The resolver judges bearer requests on the handler's clock, so a session

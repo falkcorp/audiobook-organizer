@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.19.1
+// version: 2.20.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package handlers
 
@@ -92,7 +92,9 @@ const (
 	// with 429 until the window rolls over. Keyed on the *attacker's* source —
 	// not the target account — so it cannot be used to lock a victim out
 	// (pen-test finding HIGH-3). This is meaningful now that X-Forwarded-For is
-	// no longer trusted for ClientIP (HIGH-2).
+	// no longer trusted for ClientIP (HIGH-2). "Source" is the tunnel visitor
+	// where the service can establish one (throttleKey), not the tunnel
+	// connector every visitor shares.
 	maxFailedLoginsPerIP = 15
 	loginThrottleWindow  = 15 * time.Minute
 
@@ -138,6 +140,9 @@ type AuthHandler struct {
 	// revokeGuestAccess ends invite-granted SSO / Cloudflare access for an
 	// email the user gave up in UpdateMe; nil = nothing to revoke.
 	revokeGuestAccess GuestAccessRevoker
+	// throttleKeyFn names the bucket of the per-IP failure throttle for a
+	// request (SetThrottleKeyFunc); nil keys on c.ClientIP().
+	throttleKeyFn func(*gin.Context) string
 }
 
 // NewAuthHandler constructs an AuthHandler.
@@ -152,6 +157,28 @@ func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
 		absSessions:  ResolveABSSessionRevoker(store),
 		creds:        ResolveUserCredentialWriter(store),
 	}
+}
+
+// SetThrottleKeyFunc sets how the per-IP failed-login throttle keys a request.
+// The router trusts no proxy headers, so behind the Cloudflare tunnel c.ClientIP()
+// is the connector's address, shared by every visitor: three buckets for the
+// whole site, and one caller spending one of them locks out everyone behind
+// that connector. The server wires a function that returns the visitor's own
+// address when that can be believed (see server.loginThrottleKey) and the peer's
+// address otherwise. nil, or an empty answer, keeps c.ClientIP(). It decides
+// only the throttle bucket; sessions still record c.ClientIP().
+func (h *AuthHandler) SetThrottleKeyFunc(fn func(*gin.Context) string) {
+	h.throttleKeyFn = fn
+}
+
+// throttleKey is the bucket the failed-login throttle charges this request to.
+func (h *AuthHandler) throttleKey(c *gin.Context) string {
+	if h.throttleKeyFn != nil {
+		if k := strings.TrimSpace(h.throttleKeyFn(c)); k != "" {
+			return k
+		}
+	}
+	return strings.TrimSpace(c.ClientIP())
 }
 
 // SetFailureDelay replaces the per-account soft-delay function. The only
@@ -388,7 +415,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "username and password are required")
 		return
 	}
-	ip := strings.TrimSpace(c.ClientIP())
+	ip := h.throttleKey(c)
 	// Per-IP throttle first: a source that has burned through its failure budget
 	// is rejected before any credential work, so it can't keep probing (HIGH-3).
 	if h.ipThrottled(ip) {
