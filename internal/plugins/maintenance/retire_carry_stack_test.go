@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_stack_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2d7e91-3c46-4a08-9f15-e6a0d83c7b24
 // last-edited: 2026-10-21
 
@@ -216,52 +216,191 @@ func TestRetireCarry_RevertingTheEarlierOperationFirstEndsWithTheOriginalLists(t
 	require.Nil(t, p.UserRatingNotes)
 }
 
-// Three operations retire three children into one survivor (the first replaces
-// a slot, the other two are removed because the survivor is listed). Whatever
-// order they are reverted in, every retired book is back and the survivor is
-// out of the lists. A removal is put back by the index it had, so the order
-// within the list is exact when the newest operation is reverted first and can
-// be a slot off when an older one goes first (the index was counted before the
-// others' removals); no book is lost or left behind either way.
-func TestRetireCarry_ThreeOperationsRevertInAnyOrder(t *testing.T) {
-	t.Parallel()
-	perms := [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
-	for _, perm := range perms {
+// layoutOf resolves a list layout written with placeholders: "k0".."k9" are
+// the retired children, "P" is the survivor, anything else is a plain book.
+func layoutOf(layout []string, kids []string, parent string) []string {
+	out := make([]string, len(layout))
+	for i, e := range layout {
+		switch {
+		case e == "P":
+			out[i] = parent
+		case len(e) == 2 && e[0] == 'k':
+			out[i] = kids[e[1]-'0']
+		default:
+			out[i] = e
+		}
+	}
+	return out
+}
+
+func permsOf(n int) [][]int {
+	if n <= 1 {
+		return [][]int{{0}}
+	}
+	var out [][]int
+	for _, p := range permsOf(n - 1) {
+		for at := 0; at <= len(p); at++ {
+			q := append(append(append([]int{}, p[:at]...), n-1), p[at:]...)
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// revertInEveryOrder retires the children into the survivor in operations of
+// the given shape (opKids[i] are the children retired by operation i, in
+// order), then reverts the operations in every order: each time every list, in
+// its exact original order, must come back, the survivor must be out of the
+// lists it was not in, and nothing may be reported as a guess
+// (RevertResult.RestoredByIndex, Kept).
+func revertInEveryOrder(t *testing.T, opKids [][]int, colLayouts, plLayouts [][]string) {
+	t.Helper()
+	nKids := 0
+	for _, ks := range opKids {
+		nKids += len(ks)
+	}
+	for _, perm := range permsOf(len(opKids)) {
 		t.Run(fmt.Sprint(perm), func(t *testing.T) {
 			t.Parallel()
 			f := hcSeed(t)
 			parent := f.ids["parent"]
-			kids := []string{
-				f.hcChild(t, "c3", "Stray Three", "hash-p03"),
-				f.hcChild(t, "c4", "Stray Four", "hash-p04"),
-				f.hcChild(t, "c5", "Stray Five", "hash-p05"),
+			kids := make([]string, nKids)
+			for i := range kids {
+				n := fmt.Sprint(i + 1)
+				kids[i] = f.hcChild(t, "c"+n, "Stray "+n, "hash-p0"+n)
 			}
-			colX := f.rcCollection(t, "Shared", kids[0], kids[1], "x", kids[2])
-			plX := f.rcPlaylist(t, "Shared list", "x", kids[0], kids[2], kids[1])
-			wantCol := []string{kids[0], kids[1], "x", kids[2]}
-			wantPl := []string{"x", kids[0], kids[2], kids[1]}
+			var cols, pls []string
+			var wantCols, wantPls [][]string
+			for i, l := range colLayouts {
+				want := layoutOf(l, kids, parent)
+				cols = append(cols, f.rcCollection(t, fmt.Sprintf("Shared %d", i), want...))
+				wantCols = append(wantCols, want)
+			}
+			for i, l := range plLayouts {
+				want := layoutOf(l, kids, parent)
+				pls = append(pls, f.rcPlaylist(t, fmt.Sprintf("Shared list %d", i), want...))
+				wantPls = append(wantPls, want)
+			}
 			f.plan(t, "op-plan")
-			for i, k := range kids {
-				out := f.apply(t, "op-plan", fmt.Sprintf("op-apply-%d", i), []string{hcRowID(parent, k)}, nil)
-				require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			for i, ks := range opKids {
+				rows := make([]string, len(ks))
+				for j, k := range ks {
+					rows[j] = hcRowID(parent, kids[k])
+				}
+				out := f.apply(t, "op-plan", fmt.Sprintf("op-apply-%d", i), rows, nil)
+				require.Equal(t, len(ks), out.Applied, "%+v", out.Rows)
 			}
-			require.Equal(t, []string{parent, "x"}, f.rcMembers(t, colX))
 			for _, i := range perm {
 				rr, err := audiobooks.NewRevertService(f.s).RevertOperation(fmt.Sprintf("op-apply-%d", i))
 				require.NoError(t, err)
 				require.Zero(t, rr.Failed, "op %d: %+v", i, rr)
+				require.Zero(t, rr.RestoredByIndex, "op %d: %+v", i, rr)
+				require.Empty(t, rr.Kept, "op %d", i)
 			}
-			require.ElementsMatch(t, wantCol, f.rcMembers(t, colX), "revert order %v", perm)
-			require.ElementsMatch(t, wantPl, f.rcPlaylistMembers(t, plX), "revert order %v", perm)
-			if perm[0] == 2 && perm[1] == 1 {
-				require.Equal(t, wantCol, f.rcMembers(t, colX), "newest first is exact")
-				require.Equal(t, wantPl, f.rcPlaylistMembers(t, plX), "newest first is exact")
+			for i, c := range cols {
+				require.Equal(t, wantCols[i], f.rcMembers(t, c), "collection %d, revert order %v", i, perm)
+			}
+			for i, p := range pls {
+				require.Equal(t, wantPls[i], f.rcPlaylistMembers(t, p), "playlist %d, revert order %v", i, perm)
 			}
 			for _, k := range kids {
 				require.True(t, f.liveID(t, k))
 			}
 		})
 	}
+}
+
+// Three operations retire three children into one survivor (the first replaces
+// a slot, the other two are removed because the survivor is listed). Whatever
+// order they are reverted in, every retired book is back in its exact original
+// position and the survivor is out of the lists. A retire records the books
+// beside the retired one, and the revert finds the slot by them, so the order
+// the operations are undone in does not matter.
+func TestRetireCarry_ThreeOperationsRevertInAnyOrder(t *testing.T) {
+	t.Parallel()
+	revertInEveryOrder(t, [][]int{{0}, {1}, {2}},
+		[][]string{{"k0", "k1", "x", "k2"}},
+		[][]string{{"x", "k0", "k2", "k1"}})
+}
+
+// Four operations, a survivor that is a member of some of the lists and not
+// of others, children scattered and adjacent in different lists: every one of
+// the 24 revert orders (the worst cases include oldest first, newest first and
+// interleaved) restores every list exactly.
+func TestRetireCarry_FourOperationsRevertInAnyOrder(t *testing.T) {
+	t.Parallel()
+	revertInEveryOrder(t, [][]int{{0}, {1}, {2}, {3}},
+		[][]string{
+			{"k2", "x", "k0", "k1", "y", "k3"},
+			{"x", "k0", "P", "k1", "k3", "k2"},
+			{"k3", "k2", "k1", "k0"},
+		},
+		[][]string{
+			{"k3", "k1", "x", "k0", "y", "k2"},
+			{"P", "k2", "k0", "y", "k3", "k1"},
+		})
+}
+
+// Operations that retire several children each: the rows of one operation are
+// undone together, the operations in any order.
+func TestRetireCarry_MultiRowOperationsRevertInAnyOrder(t *testing.T) {
+	t.Parallel()
+	revertInEveryOrder(t, [][]int{{0, 1}, {2}, {3}},
+		[][]string{
+			{"y", "k1", "k0", "x", "k3", "k2"},
+			{"k3", "P", "k2", "k0", "x", "k1"},
+		},
+		[][]string{{"k0", "x", "k3", "k1", "y", "k2"}})
+}
+
+// A journal written before retires recorded their neighbours has no anchors:
+// each such row is put back by its recorded index, as before, and the revert
+// says which rows were (RevertResult.RestoredByIndex, Kept), never silently.
+func TestRetireCarry_RowsWithoutAnchorsAreRestoredByIndexAndReported(t *testing.T) {
+	t.Parallel()
+	o := seedTwoOps(t)
+	f := o.f
+	// Rewrite the journal as it was before the anchors: same rows, same ids,
+	// the records without Prev, Next and the anchored flag. Rewritten in
+	// journal order, so their creation order is kept.
+	var rows []*database.OperationChange
+	for _, op := range []string{"op-apply-1", "op-apply-2"} {
+		changes, err := f.s.GetOperationChanges(op)
+		require.NoError(t, err)
+		for _, c := range changes {
+			kind, _, ok := undo.UserContentFromField(c.FieldName)
+			if !ok || kind == undo.UserContentRating {
+				continue
+			}
+			rows = append(rows, c)
+		}
+	}
+	for _, c := range rows {
+		rec, err := undo.DecodeMembership(c.OldValue)
+		require.NoError(t, err)
+		require.True(t, rec.Anchored, "a fresh retire records its neighbours")
+		rec.Anchored, rec.Prev, rec.Next = false, "", ""
+		c.OldValue, err = undo.EncodeMembership(rec)
+		require.NoError(t, err)
+		require.NoError(t, f.s.CreateOperationChange(c))
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply-2")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	require.Positive(t, rr.RestoredByIndex, "the removal rows of op 2 had no anchors: %+v", rr)
+	require.NotEmpty(t, rr.Kept)
+	for _, k := range rr.Kept {
+		require.Contains(t, k, "predates neighbour anchors")
+	}
+	require.Contains(t, rr.Summary(), "put back by recorded index")
+	rr, err = audiobooks.NewRevertService(f.s).RevertOperation("op-apply-1")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	require.Equal(t, []string{o.c3, o.c4, "y"}, f.rcMembers(t, o.colX), "two operations restore exactly by index")
+	require.Equal(t, []string{o.c3, "y", o.c4}, f.rcPlaylistMembers(t, o.plX))
+	require.Zero(t, countOf(f.rcMembers(t, o.colX), o.parent))
 }
 
 // Reverting in reverse order restores the original lists exactly.
