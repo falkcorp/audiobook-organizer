@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -70,8 +70,11 @@ nothing.
   ahead, the fingerprint is not blocked, and the message names the other books:
   a blocked fingerprint makes the scanner skip that other book's own file.
   Deleting a book also no longer erases the lookup entry of another book that
-  shares its file; a new repair operation checks those entries and, only when
-  you start it with apply on, fixes the broken ones.
+  shares its file. This is now fixed at the root: the library keeps one
+  "is this file already here" entry per book instead of one shared entry per
+  file, so no book's change can erase another's. A repair operation (a preview
+  by default, and run automatically on every start) writes any entry that is
+  missing, including the ones the 21 October purge may have removed.
 - Merging no longer refuses just because a version group contains an iTunes
   copy you did not select. The merge changes only that copy's group and
   "primary" marker in the database; its file, location and tags are never
@@ -95,9 +98,22 @@ undo above. Books that own files are still never purged.
   show as "kept: undo possible".
 - Deleting or editing a book used to be able to erase another book's "is this
   file already in the library" lookup entry when the two shared a file
-  fingerprint. Both now leave an entry alone unless it still points at the book
-  being changed, and a new repair operation (a preview by default) restores
-  any entry that was already lost.
+  fingerprint. The lookup now keeps a separate entry for every book. On the
+  first start after this change the server writes the missing entries and then
+  removes the old shared ones; until that finishes, lookups also consult the old
+  entries, so nothing is missed. If one book record is damaged and cannot be
+  read, the entries are not marked complete and the old ones stay: the repair
+  operation reports the damaged record and fails until it is fixed or removed.
+  Going back to an older build and forward again needs the repair to run once
+  more (it does on start).
+- Restoring a book, or deleting one permanently, while a combine or merge is
+  running used to wait on it for as long as the combine took. It now waits at
+  most a few seconds and then answers "a merge or combine is running, try again
+  in a moment" (and the same for batch restores and deletes). The page keeps
+  following merge, combine and purge operations while you move between pages
+  or reload, and says so when it loses track of one instead of hanging.
+- A combine that runs out of time or is stopped by a server shutdown now stops
+  between books and offers Undo for what it had already moved.
 - If a record of a past combine is damaged and cannot be read, the purge now
   stops and deletes nothing, because that record might be an undo that still
   needs one of the trashed books. The message names the damaged record, and a

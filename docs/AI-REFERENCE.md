@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -61,7 +61,7 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 
 ### `internal/database` — Data layer
 - **store.go** — `Store` interface (composite of ~36 role interfaces: `BookStore`, `AuthorStore`, `MetadataCacheStore`, …; PebbleStore is the ONLY implementation), ALL entity struct definitions (Book, Author, Series, Work, Narrator, BookSegment, Operation, etc.)
-- **pebble_store.go** — Primary implementation. Key schema: `book:<ulid>`, `book:path:<filepath>`, `book:hash:<hash>`, `author:<id>`, `series:<id>`, etc.
+- **pebble_store.go** — Primary implementation. Key schema: `book:<ulid>`, `book:path:<filepath>`, `book_hash:<hash>\x00<ulid>` (multi-valued; `pebble_store_book_hash_index.go`), `author:<id>`, `series:<id>`, etc.
 - **embedding_store.go** — `EmbeddingStore` wrapping the main audiobooks.pebble DB for embeddings + dedup candidates + labeled dataset. Key-space: `emb:v:*`, `emb:c:*`, `dedup:r:*`, `dedup:p:*`, `dedup:e:*` (entity index), `dedup:s:*` (status index), `dedup:seq`, `dedup:label:*`.
 - **dedup_automerge_journal.go** — `dedup:automerge:<unixNano16hex>` journal entries written by the `dedup.auto-resolve` apply path; each merge records the book_ver snapshot timestamps so `Engine.UnmergeAuto` can reverse it.
 - **review_store.go** — generic human-review queue on `*PebbleStore` (`review_item:r:*` records, `review_item:status:*` index, `review_item:dedupkey:*` idempotency index). v1 producer is the regroup op; `UpsertReviewItem` upserts by stable DedupKey and never resurfaces an already-decided (approved/rejected/applied) item.
@@ -379,7 +379,8 @@ export async function getBooks(limit: number, offset: number): Promise<{ items: 
 ```
 book:<ulid>                    → Book JSON
 book:path:<filepath>           → ULID (index)
-book:hash:<sha256>             → ULID (index)
+book_hash:<sha256>\x00<ulid>   → (empty) one key per hash and book; also book_originalhash:, book_organizedhash:
+                                 (replaced the single-valued book:hash:<sha256> → ULID, deleted by maintenance.book-hash-index-repair)
 book:author:<author_id>:<ulid> → ULID (index)
 book:series:<series_id>:<ulid> → ULID (index)
 book_ver:<ulid>:<unix_nano>    → Book JSON snapshot (COW)

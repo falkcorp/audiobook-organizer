@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-23
 
@@ -92,11 +92,11 @@ var keyFamilies = []KeyFamily{
 	{"book:", "book rows (book:<ULID>) and the book:<index>: sub-families", "internal/database/pebble_store.go"},
 	{"book:asin:", "book index by ASIN (multi-value)", "internal/database/pebble_store_isbn_index.go"},
 	{"book:author:", "dead legacy index, swept by retention", "internal/maintenance/jobs/retention_and_hygiene.go"},
-	{"book:hash:", "book index by file hash", "internal/database/pebble_store.go"},
+	{"book:hash:", "retired single-valued book index by file hash (deleted by the book-hash-index repair)", "internal/database/pebble_store_book_hash_index.go"},
 	{"book:isbn10:", "book index by ISBN-10 (multi-value)", "internal/database/pebble_store_isbn_index.go"},
 	{"book:isbn13:", "book index by ISBN-13 (multi-value)", "internal/database/pebble_store_isbn_index.go"},
-	{"book:organizedhash:", "book index by organized file hash", "internal/database/pebble_store.go"},
-	{"book:originalhash:", "book index by original file hash", "internal/database/pebble_store.go"},
+	{"book:organizedhash:", "retired single-valued book index by organized file hash", "internal/database/pebble_store_book_hash_index.go"},
+	{"book:originalhash:", "retired single-valued book index by original file hash", "internal/database/pebble_store_book_hash_index.go"},
 	{"book:path:", "book index by file path", "internal/database/pebble_store.go"},
 	{"book:series:", "dead legacy index, swept by retention", "internal/maintenance/jobs/retention_and_hygiene.go"},
 	{"book:versiongroup:", "book index by version group", "internal/database/pebble_store.go"},
@@ -104,7 +104,10 @@ var keyFamilies = []KeyFamily{
 	{"book_atpath:", "books-at-path index", "internal/database/pebble_store_atpath_index.go"},
 	{"book_atpath_undecodable:", "undecodable books-at-path markers", "internal/database/pebble_store_atpath_index.go"},
 	{"book_authors:", "book to author links", "internal/database/pebble_store.go"},
+	{"book_hash:", "book index by file hash (multi-value, one key per hash and book)", "internal/database/pebble_store_book_hash_index.go"},
 	{"book_narrators:", "book to narrator links", "internal/database/pebble_store.go"},
+	{"book_originalhash:", "book index by original file hash (multi-value)", "internal/database/pebble_store_book_hash_index.go"},
+	{"book_organizedhash:", "book index by organized file hash (multi-value)", "internal/database/pebble_store_book_hash_index.go"},
 	{"book_sig:", "book signatures", "internal/database/pebble_store_booksig.go"},
 	{"book_tag:", "book tags", "internal/database/pebble_store.go"},
 	{"book_ver:", "book version history snapshots (book_ver:<id>:<nanos>)", "internal/database/pebble_store.go"},
