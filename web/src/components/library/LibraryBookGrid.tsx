@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.17.0
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 import {
   Typography,
@@ -28,6 +28,7 @@ import {
 import { FilterPanel } from '../FilterPanel';
 import { BookGrid } from '../BookGrid';
 import { FilterSidebar } from '../audiobooks/FilterSidebar';
+import type { PurgeBreakdown } from '../../services/api';
 import type { LibrarySoftDeletedSectionProps } from './LibrarySoftDeletedSection';
 import { LibrarySoftDeletedSection } from './LibrarySoftDeletedSection';
 import { TagCloud } from './TagCloud';
@@ -117,6 +118,7 @@ interface LibraryBookGridProps {
   visibleColumnIds?: string[];
   onToggleColumn?: (columnId: string) => void;
   softDeletedCount: number;
+  softDeletedBreakdown?: PurgeBreakdown | null;
   softDeletedBooks: Audiobook[];
   softDeletedLoading: boolean;
   softDeletedExpanded: boolean;
@@ -207,6 +209,7 @@ export const LibraryBookGrid = ({
   visibleColumnIds,
   onToggleColumn,
   softDeletedCount,
+  softDeletedBreakdown,
   softDeletedBooks,
   softDeletedLoading,
   softDeletedExpanded,
@@ -543,6 +546,7 @@ export const LibraryBookGrid = ({
 
     <LibrarySoftDeletedSection
       softDeletedCount={softDeletedCount}
+      purgeBreakdown={softDeletedBreakdown}
       softDeletedBooks={softDeletedBooks}
       softDeletedLoading={softDeletedLoading}
       softDeletedExpanded={softDeletedExpanded}

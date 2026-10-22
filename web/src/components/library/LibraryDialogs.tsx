@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-12
+// last-edited: 2026-10-22
 import React from 'react';
 import {
   Typography,
@@ -39,6 +39,8 @@ import { BulkRatingDialog } from '../audiobooks/BulkRatingDialog';
 import { VersionManagement } from '../audiobooks/VersionManagement';
 import AddToPlaylistDialog from '../audiobooks/AddToPlaylistDialog';
 import { ServerFileBrowser } from '../common/ServerFileBrowser';
+import { PurgeSoftDeletedDialog } from './PurgeSoftDeletedDialog';
+import { MergeKeeperPicker } from './MergeKeeperPicker';
 import type { Audiobook } from '../../types';
 import * as api from '../../services/api';
 import type {
@@ -191,11 +193,10 @@ interface LibraryDialogsProps {
   // Purge dialog
   purgeDialogOpen: boolean;
   setPurgeDialogOpen: (open: boolean) => void;
-  purgeDeleteFiles: boolean;
-  setPurgeDeleteFiles: (v: boolean) => void;
-  softDeletedCount: number;
-  purgeInProgress: boolean;
-  handleConfirmPurge: () => void;
+  // The dialog runs the preview and the purge itself; the page only hears
+  // when a purge ended (to reload its lists) and while one is running.
+  onPurgeFinished: (result: api.PurgeResult) => void;
+  onPurgeRunningChange: (running: boolean) => void;
 
   // Add path dialog
   addPathDialogOpen: boolean;
@@ -222,6 +223,9 @@ interface LibraryDialogsProps {
   batchPlaylistOpen: boolean;
   setBatchPlaylistOpen: (open: boolean) => void;
 }
+
+// The selected books that are not in the trash: the only ones a merge can use.
+const liveOnly = (books: Audiobook[]) => books.filter((b) => !b.marked_for_deletion);
 
 export const LibraryDialogs = ({
   selectedAudiobooks,
@@ -323,11 +327,8 @@ export const LibraryDialogs = ({
   handleConfirmDelete,
   purgeDialogOpen,
   setPurgeDialogOpen,
-  purgeDeleteFiles,
-  setPurgeDeleteFiles,
-  softDeletedCount,
-  purgeInProgress,
-  handleConfirmPurge,
+  onPurgeFinished,
+  onPurgeRunningChange,
   addPathDialogOpen,
   setAddPathDialogOpen,
   showServerBrowser,
@@ -393,32 +394,25 @@ export const LibraryDialogs = ({
       <DialogTitle>Merge as Versions</DialogTitle>
       <DialogContent>
         <Typography variant="body2" gutterBottom>
-          Merge {selectedAudiobooks.length} books into a version group. Pick which book to keep as
-          the primary version:
+          Merge {liveOnly(selectedAudiobooks).length} books into a version group. Pick the one copy
+          to keep; the others are linked to it as alternate versions:
         </Typography>
+        {liveOnly(selectedAudiobooks).length < selectedAudiobooks.length && (
+          <Alert severity="warning" sx={{ mb: 1 }} data-testid="merge-trashed-excluded">
+            {selectedAudiobooks.length - liveOnly(selectedAudiobooks).length} selected{' '}
+            {selectedAudiobooks.length - liveOnly(selectedAudiobooks).length === 1
+              ? 'book is'
+              : 'books are'}{' '}
+            in the trash and will not be merged.
+          </Alert>
+        )}
         <Box sx={{ mt: 1 }}>
-          {selectedAudiobooks.map((book) => (
-            <FormControlLabel
-              key={book.id}
-              control={
-                <Checkbox
-                  checked={mergePrimaryId === book.id}
-                  onChange={() => setMergePrimaryId(book.id)}
-                />
-              }
-              label={
-                <Typography variant="body2">
-                  <strong>{book.title}</strong>
-                  {book.author ? ` by ${book.author}` : ''}
-                  {book.file_path ? ` (${book.file_path.split('/').pop()})` : ''}
-                </Typography>
-              }
-            />
-          ))}
+          <MergeKeeperPicker
+            books={liveOnly(selectedAudiobooks)}
+            keepId={mergePrimaryId}
+            onChange={setMergePrimaryId}
+          />
         </Box>
-        <Alert severity="info" sx={{ mt: 1 }}>
-          Non-primary versions will be linked as alternate formats. Files stay in place.
-        </Alert>
       </DialogContent>
       <DialogActions>
         <Button onClick={() => setMergeDialogOpen(false)} disabled={mergeInProgress}>
@@ -427,7 +421,11 @@ export const LibraryDialogs = ({
         <Button
           variant="contained"
           onClick={handleMergeAsVersions}
-          disabled={mergeInProgress || !mergePrimaryId}
+          disabled={
+            mergeInProgress ||
+            liveOnly(selectedAudiobooks).length < 2 ||
+            !liveOnly(selectedAudiobooks).some((b) => b.id === mergePrimaryId)
+          }
         >
           {mergeInProgress ? 'Merging...' : 'Merge'}
         </Button>
@@ -1014,54 +1012,12 @@ export const LibraryDialogs = ({
       </DialogActions>
     </Dialog>
 
-    <Dialog
+    <PurgeSoftDeletedDialog
       open={purgeDialogOpen}
-      onClose={() => {
-        setPurgeDialogOpen(false);
-        setPurgeDeleteFiles(false);
-      }}
-    >
-      <DialogTitle>Purge Soft-Deleted Books</DialogTitle>
-      <DialogContent>
-        <Typography variant="body1" gutterBottom>
-          {softDeletedCount === 0
-            ? 'There are no soft-deleted books to purge.'
-            : `This will permanently remove ${softDeletedCount} soft-deleted ${
-                softDeletedCount === 1 ? 'book' : 'books'
-              } from the library.`}
-        </Typography>
-        <FormControlLabel
-          control={
-            <Checkbox
-              checked={purgeDeleteFiles}
-              onChange={(e) => setPurgeDeleteFiles(e.target.checked)}
-            />
-          }
-          label="Also delete files from disk (if they still exist)"
-        />
-        <Alert severity="warning" sx={{ mt: 2 }}>
-          This cannot be undone. Purge removes the records entirely and deletes files when selected.
-        </Alert>
-      </DialogContent>
-      <DialogActions>
-        <Button
-          onClick={() => {
-            setPurgeDialogOpen(false);
-            setPurgeDeleteFiles(false);
-          }}
-        >
-          Cancel
-        </Button>
-        <Button
-          onClick={handleConfirmPurge}
-          color="error"
-          variant="contained"
-          disabled={purgeInProgress || softDeletedCount === 0}
-        >
-          {purgeInProgress ? 'Purging...' : 'Purge Now'}
-        </Button>
-      </DialogActions>
-    </Dialog>
+      onClose={() => setPurgeDialogOpen(false)}
+      onFinished={onPurgeFinished}
+      onRunningChange={onPurgeRunningChange}
+    />
 
     {/* Import Path Management Dialog */}
     <Dialog
