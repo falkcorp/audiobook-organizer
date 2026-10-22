@@ -1,5 +1,5 @@
 // file: internal/server/absauth/lru_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1fc15002-a2c5-4b9e-b399-c7a3b7c4b6ac
 // last-edited: 2026-10-22
 
@@ -122,5 +122,23 @@ func TestLRU_SweepIsNotBlockedByAPinnedColdEntry(t *testing.T) {
 	n := l.Sweep(func(x *v) bool { return x.stale && !x.busy })
 	if n != 20 || l.Len() != 1 {
 		t.Fatalf("removed %d, len %d; the busy entry must stay and not shield the rest", n, l.Len())
+	}
+}
+
+// An expired PINNED entry (a refused counter whose window has gone by) is swept
+// too: pinning decides what the bound evicts first, not what lives for ever.
+func TestLRU_SweepRemovesExpiredPinnedEntries(t *testing.T) {
+	type v struct{ pinned, expired bool }
+	l := NewLRU[*v](100)
+	l.SetPinned(func(x *v) bool { return x.pinned })
+	l.Put("hot-old", &v{pinned: true, expired: true})
+	l.Put("hot-live", &v{pinned: true})
+	l.Put("cold-old", &v{expired: true})
+	n := l.Sweep(func(x *v) bool { return x.expired })
+	if n != 2 || l.Len() != 1 {
+		t.Fatalf("removed %d, len %d: both expired entries go, pinned or not", n, l.Len())
+	}
+	if _, ok := l.Get("hot-live"); !ok {
+		t.Fatal("the live pinned entry stays")
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/login_budget_isolation_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d59a407-dbd7-4beb-9b1b-344f246c9fbd
 // last-edited: 2026-10-22
 
@@ -98,16 +98,18 @@ func TestLoginBudget_WebTyposDoNotSpendTheRefreshBudget(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, budgetRefresh(fx, v, 0), "refresh by a visitor whose web login budget is spent: a 401 for the dead token, not a 429")
 }
 
-// S1: an exhausted refresh budget refuses the ABS password login too (a caller
-// hammering dead tokens), still a different visitor is untouched.
-func TestLoginBudget_SpentRefreshBudgetRefusesAbsLoginOnly(t *testing.T) {
+// S1: an exhausted refresh budget refuses the refresh endpoint only. Neither
+// password login (ABS or web) reads it, so a client with a stale token can
+// still sign in to obtain a fresh one.
+func TestLoginBudget_SpentRefreshBudgetRefusesRefreshOnly(t *testing.T) {
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.92:4000"
 	for i := 0; i < absauth.MaxFailuresPerIP; i++ {
 		budgetRefresh(fx, v, i)
 	}
-	require.Equal(t, http.StatusTooManyRequests, budgetLogin(fx, "/login", v, "budget-eve", "eve-pw"))
+	require.Equal(t, http.StatusTooManyRequests, budgetRefresh(fx, v, 99), "the refresh budget is really spent")
+	require.Equal(t, http.StatusOK, budgetLogin(fx, "/login", v, "budget-eve", "eve-pw"), "ABS login is not refused for a spent refresh budget")
 	require.Equal(t, http.StatusOK, budgetLogin(fx, "/login", "192.0.2.93:4000", "budget-eve", "eve-pw"))
 }
 
