@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // metadata-fetch-service / operations-registry deps are generated mocks; the
@@ -329,6 +329,7 @@ func TestCombineBooks_ProvisionalIs409(t *testing.T) {
 func TestLinkBooks_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("keep").Return(&database.Book{ID: "keep"}, nil)
+	d.merge.EXPECT().PreflightLink("keep", []string{"m1"}).Return(nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.book-merge", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.LinkBooks, http.MethodPost, "/audiobooks/link",
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
@@ -345,6 +346,31 @@ func TestLinkBooks_KeepNotFound(t *testing.T) {
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A merge the operation would refuse after running is refused here with a 409
+// carrying the reason, and nothing is queued (no EnqueueOp expectation: an
+// unexpected call fails the test).
+func TestLinkBooks_PreflightRefusalIs409AndQueuesNothing(t *testing.T) {
+	cases := map[string]error{
+		"trashed keep":   &merge.SoftDeletedInputError{BookID: "keep", AsPrimary: true},
+		"iTunes sibling": &merge.ITunesProtectedError{BookID: "sibling", Reason: "its file is inside the iTunes library"},
+	}
+	for name, refusal := range cases {
+		t.Run(name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.store.EXPECT().GetBookByID("keep").Return(&database.Book{ID: "keep"}, nil)
+			d.merge.EXPECT().PreflightLink("keep", []string{"m1"}).Return(refusal)
+			w := doReq(t, h.LinkBooks, http.MethodPost, "/audiobooks/link",
+				map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
+			if w.Code != http.StatusConflict {
+				t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), refusal.Error()) {
+				t.Fatalf("409 must carry the reason %q, got %s", refusal.Error(), w.Body.String())
+			}
+		})
 	}
 }
 

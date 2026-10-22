@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.30.0
+// version: 2.31.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -193,11 +194,25 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				// are skipped in that mode (tests / iTunes write-back disabled).
 				ms = merge.NewService(store)
 			}
-			mergeRes, err := applyBookMergeReroute(ms, opID, p.KeepID, p.MergeIDs)
+			mergeRes, skipped, err := applyBookMergeReroute(ms, opID, p.KeepID, p.MergeIDs)
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "book merge failed", "err", err)
 				return err
+			}
+			for _, sk := range skipped {
+				op.AddEntity("skipped_books", sk.BookID)
+				logging.Warn(ctx, "book merge skipped a loser", "book_id", sk.BookID, "reason", sk.Reason)
+			}
+			merged := 0
+			if mergeRes != nil {
+				merged = mergeRes.SoftDeleted
+			}
+			payload := BookMergeOpResult{KeepID: p.KeepID, Merged: merged, Skipped: skipped, NoOp: mergeRes == nil}
+			if err := opsregistry.ReporterSetResult(reporter, payload); err != nil {
+				// The merge is done; only its report is lost. Say so rather than
+				// failing an op that changed the library.
+				logging.Warn(ctx, "book merge: result payload not stored", "err", err)
 			}
 			// The async twin of the link endpoints' response: which book holds
 			// the group's flag and the losers' user state, and whether
@@ -208,7 +223,9 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				slog.String("primary_id", out.PrimaryID),
 				slog.String("group_primary_id", out.GroupPrimaryID),
 				slog.String("hidden_from_abs", out.HiddenFromABS),
-				slog.String("state_holder_id", out.StateHolderID))
+				slog.String("state_holder_id", out.StateHolderID),
+				slog.Int("merged", merged),
+				slog.Int("skipped", len(skipped)))
 			// Service takes no ProgressReporter; emit a final 100% so the op UI
 			// completes cleanly.
 			_ = progress.UpdateProgress(len(p.MergeIDs), len(p.MergeIDs), "Book merge complete")
@@ -218,23 +235,41 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				s.dedupEngine.CleanupCandidatesAfterMerge(p.MergeIDs)
 			}
 			op.SetStatus("success")
-			logging.Info(ctx, "book merge complete", "kept_id", p.KeepID, "merged_count", len(p.MergeIDs))
+			logging.Info(ctx, "book merge complete", "kept_id", p.KeepID, "merged_count", merged, "skipped_count", len(skipped))
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
-				msg := fmt.Sprintf("Book merge completed: merged %d books into %s", len(p.MergeIDs), p.KeepID)
-				if out.GroupPrimaryID != "" {
-					msg += fmt.Sprintf("; %s holds the group's primary flag and the listening state", out.GroupPrimaryID)
-				}
-				if out.HiddenFromABS != "" {
-					msg += fmt.Sprintf("; Audiobookshelf will not list it (%s)", out.HiddenFromABS)
-				}
+				msg := bookMergeSummary(p.KeepID, payload, out)
 				activity.EmitInfo(s.activityWriter, opID, "dedup.book-merge", "dedup", msg,
 					activity.AlwaysShow)
 			}
 			return nil
 		},
 	})
+}
+
+// bookMergeSummary is the activity line of a finished dedup.book-merge op.
+func bookMergeSummary(keepID string, r BookMergeOpResult, out merge.FlagOutcome) string {
+	var msg string
+	if r.NoOp {
+		msg = fmt.Sprintf("Book merge did nothing: no live book was left to merge into %s", keepID)
+	} else {
+		msg = fmt.Sprintf("Book merge completed: merged %d books into %s", r.Merged, keepID)
+	}
+	if len(r.Skipped) > 0 {
+		ids := make([]string, 0, len(r.Skipped))
+		for _, sk := range r.Skipped {
+			ids = append(ids, sk.BookID)
+		}
+		msg += fmt.Sprintf("; skipped %d already in the trash (%s)", len(r.Skipped), strings.Join(ids, ", "))
+	}
+	if out.GroupPrimaryID != "" {
+		msg += fmt.Sprintf("; %s holds the group's primary flag and the listening state", out.GroupPrimaryID)
+	}
+	if out.HiddenFromABS != "" {
+		msg += fmt.Sprintf("; Audiobookshelf will not list it (%s)", out.HiddenFromABS)
+	}
+	return msg
 }
 
 // applyBookMergeReroute performs the F6-rerouted book merge for the
@@ -261,8 +296,26 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 // opID is the dedup.book-merge operation: a sibling move's undo pointer is
 // journaled under it, so reverting the op puts the siblings back.
 //
-// It returns the merge's Result (nil when there was nothing to merge).
-func applyBookMergeReroute(ms *merge.Service, opID, keepID string, mergeIDs []string) (*merge.Result, error) {
+// An already-soft-deleted LOSER is skipped, not fatal. A merge group is built
+// from a view of the library that can be minutes old (a review candidate, the
+// 30-minute dedup scan cache, a selection a user made before trashing one of
+// the books), and on 2026-10-21 one trashed copy failed a five-book merge
+// outright ("book ... is soft-deleted and cannot be merged as loser"). The skip
+// is driven by the Service's own refusal rather than a pre-read of the rows, so
+// the Service's rules stay the only ones (a soft-deleted loser that already
+// belongs to the group this merge resolves to is a replayed merge and is still
+// admitted, untouched) and a book trashed between a read here and the Service's
+// lock is caught too. The Service refuses before it writes anything, so each
+// retry starts from unchanged rows, and every retry drops a loser, so the loop
+// ends after at most len(losers) of them. A soft-deleted SURVIVOR is still an
+// error.
+//
+// When no live loser is left the merge is a no-op: a nil Result and a nil
+// error, with every dropped id in the skipped list so the caller can say why.
+//
+// It returns the merge's Result (nil when there was nothing to merge) and the
+// losers it skipped.
+func applyBookMergeReroute(ms *merge.Service, opID, keepID string, mergeIDs []string) (*merge.Result, []SkippedMergeLoser, error) {
 	// Build the loser set once, excluding the keep book and de-duping. Callers
 	// (the handler binds keep_id/merge_ids without validation) may include the
 	// keep book in mergeIDs; legacy dedup.MergeBooks guarded this with a
@@ -280,13 +333,47 @@ func applyBookMergeReroute(ms *merge.Service, opID, keepID string, mergeIDs []st
 		seen[mid] = true
 		losers = append(losers, mid)
 	}
-	if len(losers) == 0 {
-		return nil, nil // nothing to merge (every id was the keep book / duplicate)
-	}
 
-	// Service takes ALL ids (losers + winner) and the winner id.
-	return ms.MergeBooksWithOptions(append(append([]string{}, losers...), keepID), keepID,
-		merge.MergeOptions{CarryITunesFields: true, OperationID: opID})
+	var skipped []SkippedMergeLoser
+	for len(losers) > 0 {
+		// Service takes ALL ids (losers + winner) and the winner id.
+		res, err := ms.MergeBooksWithOptions(append(append([]string{}, losers...), keepID), keepID,
+			merge.MergeOptions{CarryITunesFields: true, OperationID: opID})
+		if err == nil {
+			return res, skipped, nil
+		}
+		sd, ok := errors.AsType[*merge.SoftDeletedInputError](err)
+		if !ok || sd.AsPrimary || sd.BookID == keepID || !slices.Contains(losers, sd.BookID) {
+			return nil, skipped, err
+		}
+		skipped = append(skipped, SkippedMergeLoser{BookID: sd.BookID, Reason: SkipReasonAlreadyTrashed})
+		losers = slices.DeleteFunc(losers, func(id string) bool { return id == sd.BookID })
+	}
+	// Nothing to merge: every id was the keep book / a duplicate, or every
+	// loser was already in the trash.
+	return nil, skipped, nil
+}
+
+// SkipReasonAlreadyTrashed is why a loser was left out of a book merge.
+const SkipReasonAlreadyTrashed = "already in the trash (soft-deleted), so it was not merged"
+
+// SkippedMergeLoser is one loser a book merge left out, and why. It is part of
+// the dedup.book-merge op's result payload.
+type SkippedMergeLoser struct {
+	BookID string `json:"book_id"`
+	Reason string `json:"reason"`
+}
+
+// BookMergeOpResult is the dedup.book-merge op's result payload
+// (GET /operations/:id/result). Merged is the number of losers actually folded
+// into KeepID; it is smaller than the request when losers were skipped.
+type BookMergeOpResult struct {
+	KeepID  string              `json:"keep_id"`
+	Merged  int                 `json:"merged"`
+	Skipped []SkippedMergeLoser `json:"skipped,omitempty"`
+	// NoOp is set when nothing was merged (every loser was skipped, or the
+	// request named only the keep book).
+	NoOp bool `json:"no_op"`
 }
 
 // RegisterAuthorDedupScanOp registers the "dedup.author-scan" v2 OperationDef.
