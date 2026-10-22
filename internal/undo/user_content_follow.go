@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
 // last-edited: 2026-10-22
 
@@ -361,27 +361,125 @@ func RestoreMembership(cur []string, retired, survivor string, rec MembershipRec
 	return slices.Insert(next, min(rec.Index, len(next)), retired), note, nil
 }
 
-// RestoreMember is RestoreMembership for the revert of one row that also
-// repairs what an interrupted earlier revert left: when the retired book is
-// already listed again and the row borrowed the survivor (borrowed, from
-// SurvivorStandFor) with nothing else standing on it (stand is not
-// SurvivorStays), the survivor is still in the list only because that earlier
-// revert wrote the list and died before it stamped the row's marker, and it is
-// taken out now (released). A book already listed with nothing to release is
-// ErrAlreadyRestored, as in RestoreMembership.
-func RestoreMember(cur []string, retired, survivor string, rec MembershipRecord, stand SurvivorStand, borrowed bool, g *MembershipGraph) (next []string, note string, released bool, err error) {
-	next, note, err = RestoreMembership(cur, retired, survivor, rec, stand, g)
-	if !errors.Is(err, ErrAlreadyRestored) {
-		return next, note, false, err
+// MemberRole is the part one row's retire played in the list, as decided from
+// the journals (MemberRoleOf), for RestoreMember.
+type MemberRole struct {
+	// Stand is the survivor's part (SurvivorStandFor).
+	Stand SurvivorStand
+	// Borrowed: the row borrowed the survivor, whose marker is a borrowing one
+	// (SurvivorStandFor).
+	Borrowed bool
+	// RetiredStaysOut: the retired book was itself a survivor listed only on
+	// other retires' account when it was retired, and none of them stands any
+	// more, so it does not belong in the list now (RetiredStaysOut).
+	RetiredStaysOut bool
+}
+
+// MemberRoleOf decides the role of row, one collection or playlist row of a
+// retire's carry into list listID of kind, from the journal of its survivor
+// (survivorRows) and of the retired book itself (retiredRows).
+func MemberRoleOf(survivorRows, retiredRows []*database.OperationChange, row *database.OperationChange, kind, listID string) MemberRole {
+	stand, borrowed := SurvivorStandFor(survivorRows, row, kind, listID)
+	return MemberRole{Stand: stand, Borrowed: borrowed, RetiredStaysOut: RetiredStaysOut(retiredRows, row, kind, listID)}
+}
+
+// MemberResult is what RestoreMember did besides writing the list.
+type MemberResult struct {
+	// Note is non-empty when the book was placed by its recorded index
+	// (RestoreMembership); the caller reports it.
+	Note string
+	// Released: the retired book was already listed and the survivor was taken
+	// out of the list because nothing stands on it any more.
+	Released bool
+	// LeftOut: the retired book was not put back (MemberRole.RetiredStaysOut);
+	// the caller reports it.
+	LeftOut bool
+}
+
+// RestoreMember is RestoreMembership for the revert of one row, which also
+// repairs two things the other retires leave behind.
+//
+// A retired book that was a survivor itself (role.RetiredStaysOut) is not put
+// back: it was listed only for retires that have all been reverted since, so
+// putting it back would list a book that was never in the list. The survivor's
+// part is still played (it leaves with the row, or stays, as for any row).
+//
+// When the retired book is already listed again and the row borrowed the
+// survivor (role.Borrowed) with nothing else standing on it (role.Stand is not
+// SurvivorStays), the survivor is still in the list only because an earlier,
+// interrupted revert of the row wrote the list and died before it stamped the
+// row's marker, and it is taken out now (Released). A book already listed with
+// nothing to release is ErrAlreadyRestored, as in RestoreMembership.
+func RestoreMember(cur []string, retired, survivor string, rec MembershipRecord, role MemberRole, g *MembershipGraph) (next []string, res MemberResult, err error) {
+	if role.RetiredStaysOut && !slices.Contains(cur, retired) {
+		next = slices.Clone(cur)
+		switch {
+		case !rec.SurvivorWasMember && role.Stand != SurvivorStays:
+			// The survivor took the retired book's slot, and the book is not
+			// coming back to it: the survivor leaves the list.
+			if j := slices.Index(next, survivor); j >= 0 {
+				next = slices.Delete(next, j, j+1)
+			}
+		case rec.SurvivorWasMember && role.Stand == SurvivorLeaves:
+			if j := slices.Index(next, survivor); j >= 0 {
+				next = slices.Delete(next, j, j+1)
+			}
+		}
+		return next, MemberResult{LeftOut: true}, nil
 	}
-	if !borrowed || stand == SurvivorStays {
-		return nil, "", false, err
+	next, note, err := RestoreMembership(cur, retired, survivor, rec, role.Stand, g)
+	if !errors.Is(err, ErrAlreadyRestored) {
+		return next, MemberResult{Note: note}, err
+	}
+	if !role.Borrowed || role.Stand == SurvivorStays {
+		return nil, MemberResult{}, err
 	}
 	j := slices.Index(cur, survivor)
 	if j < 0 {
-		return nil, "", false, err
+		return nil, MemberResult{}, err
 	}
-	return slices.Delete(slices.Clone(cur), j, j+1), "", true, nil
+	return slices.Delete(slices.Clone(cur), j, j+1), MemberResult{Released: true}, nil
+}
+
+// RetiredStaysOut says whether the retired book of row, a collection or
+// playlist row of a retire's carry into list listID of kind, is to stay out of
+// the list when the row is reverted, from the book's own journal (retiredRows).
+//
+// A book that was itself a survivor of this list can be in it only on other
+// retires' account: they put it there in a retired book's slot and it stays
+// for as long as one of them stands (SurvivorStandOf). Retired into another
+// survivor while it was there, it comes back only if one of those retires still
+// stands; if they have all been reverted since, it left the list for good the
+// moment the last one was, and restoring this row must not list it again. A
+// book that was an original member of the list (no borrowing marker of its own
+// when it was retired) always comes back.
+func RetiredStaysOut(retiredRows []*database.OperationChange, row *database.OperationChange, kind, listID string) bool {
+	h := newMarkerHistory(row.BookID, kind, listID, retiredRows)
+	if _, root := h.survivorEpochAt(row.CreatedAt.UnixNano(), row.ID); root == nil {
+		return false
+	}
+	_, alive := h.epochNow()
+	return !alive
+}
+
+// NewerCarryStands returns the carry of row's book into the same list that was
+// journaled after row and has not been reverted, from the book's own journal
+// (retiredRows): nil when there is none. When there is one, the book has been
+// retired again since row, and row is stale: putting the book back for it would
+// list a book a standing retire removed.
+func NewerCarryStands(retiredRows []*database.OperationChange, row *database.OperationChange, kind, listID string) *database.OperationChange {
+	field := UserContentField(kind, listID)
+	var newest *database.OperationChange
+	for _, r := range retiredRows {
+		if r == nil || r.ID == row.ID || r.ChangeType != ChangeTypeUserContentFollow || r.Voided || r.RevertedAt != nil ||
+			r.BookID != row.BookID || r.FieldName != field {
+			continue
+		}
+		if latestRow(row, r) == r {
+			newest = latestRow(newest, r)
+		}
+	}
+	return newest
 }
 
 // CheckMembershipFollow is what the revert of a collection or playlist row
