@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
 // last-edited: 2026-10-21
 
@@ -118,6 +118,9 @@ func (h *Handler) Login(c *gin.Context) {
 		})
 		respondError(c, http.StatusInternalServerError, "could not verify credentials")
 		return
+	}
+	if user != nil {
+		absauth.NoteLoginAccount(c, user.ID) // for the login ceilings' same-account refund
 	}
 	// While the aggregate login ceilings are spent (absauth.MarkLoginSaturated) an
 	// account with few failures of its own is delayed, not refused, before any
