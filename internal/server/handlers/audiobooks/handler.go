@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-22
 
@@ -63,6 +63,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -975,6 +976,8 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
 	case errors.Is(err, audiobookspkg.ErrPurgeUndoPossible):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
+	case errors.Is(err, merge.ErrMergeBusy):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
 	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, audiobookspkg.ErrDiscardRefused):
 		httputil.RespondWithConflict(c, err.Error())
 	case errors.Is(err, audiobookspkg.ErrAuditUnavailable):
@@ -1209,6 +1212,11 @@ func (h *Handler) RestoreAudiobook(c *gin.Context) {
 	id := c.Param("id")
 	updated, err := h.audiobookService.RestoreAudiobook(c.Request.Context(), id)
 	if err != nil {
+		if errors.Is(err, merge.ErrMergeBusy) {
+			// A running combine holds the merge lock; nothing was restored.
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
+			return
+		}
 		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}

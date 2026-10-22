@@ -1,13 +1,15 @@
 // file: internal/merge/serialize.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b1e7d4a9-2c63-4f81-9a05-6d3e2f0c7b48
 // last-edited: 2026-10-22
 
 package merge
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // mergeSerializeMu serializes EVERY merge-family read-modify-write across the
@@ -125,3 +127,39 @@ func LockMergeRMWBookRowsOnly() { mergeSerializeMu.lockUncounted() }
 // UnlockMergeRMW releases the lock taken by LockMergeRMW or
 // LockMergeRMWBookRowsOnly.
 func UnlockMergeRMW() { mergeSerializeMu.Unlock() }
+
+// ErrMergeBusy is what an interactive action answers when a merge or combine
+// held the merge lock for the whole of InteractiveMergeLockWait: the action
+// was not started. (A combine holds the lock for its whole run, so an HTTP
+// handler that simply took it hung for as long as the combine ran: the
+// "it hangs" report of 2026-10-22.)
+var ErrMergeBusy = errors.New("a merge or combine is running, try again in a moment")
+
+// InteractiveMergeLockWait is how long an interactive handler (trash restore,
+// "Purge now", "Discard progress and purge", the hard delete of one book)
+// waits for a running merge or combine before it answers ErrMergeBusy. A var
+// only so tests can shorten it; never reassign in production code.
+var InteractiveMergeLockWait = 3 * time.Second
+
+// WaitMergeIdle reports whether the merge lock is free, waiting at most d for
+// it (a bounded TryLock loop). It returns nil as soon as the lock could be
+// taken and RELEASES it again at once: it is a gate in front of an action that
+// takes the lock itself (the merge package's own functions are non-reentrant),
+// so a combine that is already running is turned into a prompt ErrMergeBusy
+// instead of a request that blocks for the combine's whole run. The check is
+// not an exclusion: a merge that starts between the gate and the action's own
+// acquisition makes the action wait for it, as it would have before. The hold
+// is not counted (MergeLockAcquisitions): it writes nothing.
+func WaitMergeIdle(d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for {
+		if mergeSerializeMu.mu.TryLock() {
+			mergeSerializeMu.mu.Unlock()
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return ErrMergeBusy
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

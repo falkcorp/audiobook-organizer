@@ -1,12 +1,13 @@
 // file: web/src/pages/Library.seriesIdLink.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8dabbf78-942b-49cc-a8a6-224e6697a42f
-// last-edited: 2026-09-12
+// last-edited: 2026-10-22
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { useLibraryCache } from '../stores/useLibraryCache';
 
@@ -85,7 +86,9 @@ describe('Library series_id URL round-trip (TASK-167)', () => {
   it('narrows the books query to series_id from the URL and keeps it in the URL it writes back', async () => {
     render(
       <MemoryRouter initialEntries={['/library?series_id=7']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
         <LocationProbe />
       </MemoryRouter>
     );
@@ -106,7 +109,9 @@ describe('Library series_id URL round-trip (TASK-167)', () => {
   it('sends no series filter when the URL has none', async () => {
     render(
       <MemoryRouter initialEntries={['/library']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 

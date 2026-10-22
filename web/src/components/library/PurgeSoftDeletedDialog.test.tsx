@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
 // last-edited: 2026-10-22
 
@@ -20,6 +20,7 @@ vi.mock('../../services/api', async (orig) => ({
 }));
 
 import { PurgeSoftDeletedDialog } from './PurgeSoftDeletedDialog';
+import { OperationTrackerProvider } from '../operations/OperationTrackerProvider';
 import { usePurgeRun, type PurgeRunEnd } from '../../hooks/usePurgeRun';
 
 /** The page's role: owns the run, renders the dialog, can close and reopen it. */
@@ -56,7 +57,11 @@ const preview: PurgeResult = {
 function setup(onFinished = vi.fn(), onStarted = vi.fn()) {
   api.previewPurgeSoftDeleted.mockResolvedValue({ id: 'op-prev', dry_run: true });
   api.purgeSoftDeletedBooks.mockResolvedValue({ id: 'op-run', dry_run: false });
-  renderWithProviders(<Harness onFinished={onFinished} onStarted={onStarted} />);
+  renderWithProviders(
+    <OperationTrackerProvider>
+      <Harness onFinished={onFinished} onStarted={onStarted} />
+    </OperationTrackerProvider>
+  );
   return onFinished;
 }
 

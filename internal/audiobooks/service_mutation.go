@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-22
 
@@ -1425,6 +1425,13 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 
 	// Hard delete path.
 	//
+	// Every hard delete takes the merge lock (the purge's per-book hold, the
+	// listening-state carry), which a running combine holds for its whole
+	// run: answer merge.ErrMergeBusy promptly instead of hanging the request.
+	if err := merge.WaitMergeIdle(merge.InteractiveMergeLockWait); err != nil {
+		return nil, err
+	}
+
 	// A book in the trash goes through the nightly purge's own path
 	// (purgeNow): the trash page's "Purge now" must behave like the nightly
 	// purge (owner decision 2026-10-05).

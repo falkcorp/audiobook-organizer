@@ -1,5 +1,5 @@
 // file: web/src/utils/combineOutcome.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: a2d94f60-8b17-4c3e-b5d9-1e7c0a6f3b85
 // last-edited: 2026-10-22
 
@@ -122,8 +122,11 @@ describe('describeCombineOutcome', () => {
     });
     expect(p.severity).toBe('error');
     expect(p.message).toContain('did not complete (failed): boom');
-    expect(p.message).toContain('Check the operation');
+    expect(p.message).toContain('Undo puts back whatever it changed');
     expect(p.message).not.toContain('Nothing was combined');
+    // The undo journal is keyed by the combine's own operation id.
+    expect(p.undoOperationId).toBe('op-c');
+    expect(p.actionLabel).toBe('Undo');
     expect(p.message).not.toMatch(/^Combined/);
   });
 
@@ -138,5 +141,7 @@ describe('describeCombineOutcome', () => {
     expect(p.severity).toBe('warning');
     expect(p.message).toContain('what it did is unknown');
     expect(p.message).toContain('operation op-c');
+    expect(p.undoOperationId).toBe('op-c');
+    expect(p.actionLabel).toBe('Undo');
   });
 });

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-10-22
 
@@ -36,6 +36,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
@@ -513,6 +514,21 @@ func TestRestoreAudiobook_NotFound(t *testing.T) {
 	h.RestoreAudiobook(c)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// A restore that finds a merge or combine running answers 409 MERGE_BUSY so
+// the page can say "try again" (it used to hang for the combine's whole run).
+func TestRestoreAudiobook_MergeBusyIs409(t *testing.T) {
+	h, d := newHandler(t)
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "b1").Return(nil, merge.ErrMergeBusy)
+	c, w := newCtx("POST", "/audiobooks/b1/restore", nil, p("id", "b1"))
+	h.RestoreAudiobook(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "MERGE_BUSY") {
+		t.Fatalf("want MERGE_BUSY code, got %s", w.Body.String())
 	}
 }
 

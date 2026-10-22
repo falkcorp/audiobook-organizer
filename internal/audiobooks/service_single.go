@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-22
 
@@ -776,6 +776,11 @@ func removeEmptyParentsUpToRoot(path, root string) {
 func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*database.Book, error) {
 	if svc.store == nil {
 		return nil, fmt.Errorf("database not initialized")
+	}
+	// Restore takes the merge lock, which a running combine holds for its
+	// whole run: answer ErrMergeBusy promptly instead of hanging the request.
+	if err := merge.WaitMergeIdle(merge.InteractiveMergeLockWait); err != nil {
+		return nil, err
 	}
 
 	// The shared user restore (merge.RestoreFromTrash): back to the state
