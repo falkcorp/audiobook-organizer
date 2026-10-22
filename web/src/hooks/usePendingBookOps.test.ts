@@ -1,11 +1,12 @@
 // file: web/src/hooks/usePendingBookOps.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b9d7e14-a052-4c68-b1f3-8e6a0d2c5f97
 // last-edited: 2026-10-22
 
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { usePendingBookOps } from './usePendingBookOps';
+import { followOperation } from '../utils/followOperation';
 
 describe('usePendingBookOps', () => {
   it('holds the books of a running operation and releases them when its work settles', async () => {
@@ -56,5 +57,55 @@ describe('usePendingBookOps', () => {
     expect(signals.map((s) => s.aborted)).toEqual([false, false]);
     unmount();
     expect(signals[1].aborted).toBe(true);
+  });
+
+  it('keeps the books in flight through failed polls and releases them only at the terminal state', async () => {
+    const { result } = renderHook(() => usePendingBookOps());
+    let failNext = 3;
+    let ended = false;
+    const poll = vi.fn(async () => {
+      if (failNext > 0) {
+        failNext -= 1;
+        throw new Error('network down');
+      }
+      return ended ? 'completed' : 'running';
+    });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const troubles: unknown[] = [];
+    let work: Promise<void> = Promise.resolve();
+    act(() => {
+      result.current.track('op-1', ['book-a', 'book-b'], async (signal) => {
+        work = (async () => {
+          let status = '';
+          while (status !== 'completed') {
+            status = await followOperation(poll, {
+              signal,
+              onTrouble: (e) => troubles.push(e),
+              sleep: () => Promise.resolve(),
+            });
+            if (status === 'running') await gate;
+          }
+        })();
+        await work;
+      });
+    });
+    // Let the three failures and the first "running" answer go by.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(poll).toHaveBeenCalledTimes(4);
+    expect(troubles).toHaveLength(1);
+    // Contact was lost three times and the operation is not terminal: the
+    // buttons for these books must still be disabled.
+    expect(result.current.anyPending(['book-a'])).toBe(true);
+    expect(result.current.anyPending(['book-b'])).toBe(true);
+
+    ended = true;
+    await act(async () => {
+      release();
+      await work;
+    });
+    expect(result.current.anyPending(['book-a', 'book-b'])).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 // file: web/src/utils/combineOutcome.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: a2d94f60-8b17-4c3e-b5d9-1e7c0a6f3b85
 // last-edited: 2026-10-22
 
@@ -9,15 +9,31 @@ import { describeCombineOutcome } from './combineOutcome';
 const ok = { primary_id: 'book-a', files_moved: 3, books_deleted: 2 };
 
 describe('describeCombineOutcome', () => {
-  it('a plain success says how many files moved and books were trashed, with no undo promise', () => {
+  it('a plain success says how many files moved and books were trashed, with Undo on the result id', () => {
+    const p = describeCombineOutcome({
+      status: 'completed',
+      result: { ...ok, operation_id: 'op-c' },
+      operationId: 'op-c',
+    });
+    expect(p.severity).toBe('success');
+    expect(p.message).toBe('Combined 3 files into one book; moved 2 entries to trash.');
+    expect(p.undoOperationId).toBe('op-c');
+    expect(p.actionLabel).toBe('Undo');
+  });
+
+  it('a success whose result has no operation_id says "undo id unavailable" and where to look, never just loses Undo', () => {
     const p = describeCombineOutcome({
       status: 'completed',
       result: ok,
       operationId: 'op-c',
     });
-    expect(p.severity).toBe('success');
-    expect(p.message).toBe('Combined 3 files into one book; moved 2 entries to trash.');
+    expect(p.severity).toBe('warning');
+    expect(p.message).toContain('Combined 3 files into one book');
+    expect(p.message).toContain('Undo id unavailable');
+    expect(p.message).toContain('Files & History');
+    expect(p.message).toContain('operation op-c');
     expect(p.undoOperationId).toBeUndefined();
+    expect(p.actionLabel).toBeUndefined();
   });
 
   it('offers Undo on the result operation id, and keeps journal-pending text and warnings', () => {
@@ -40,7 +56,8 @@ describe('describeCombineOutcome', () => {
       operationId: 'op-c',
     });
     expect(p.undoOperationId).toBeUndefined();
-    expect(p.message).not.toMatch(/Undo|revert/);
+    expect(p.message).not.toMatch(/Undo still puts/);
+    expect(p.message).toContain('Undo id unavailable');
   });
 
   it('a failed combine that stopped part-way is an error naming the undo, never "Combined"', () => {
@@ -74,6 +91,7 @@ describe('describeCombineOutcome', () => {
     });
     expect(p.severity).toBe('error');
     expect(p.undoOperationId).toBeUndefined();
+    expect(p.message).toContain('Undo id unavailable');
     expect(p.message).toContain('operation op-c');
   });
 

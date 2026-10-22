@@ -1,5 +1,5 @@
 // file: internal/audiobooks/block_hash_guard.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e8c1b94-3a60-4d27-9f4e-7b2d0a6c8e13
 // last-edited: 2026-10-22
 
@@ -66,8 +66,9 @@ func (svc *AudiobookService) liveHashHolders(book *database.Book, hash string) (
 }
 
 // planHashBlock decides, BEFORE the delete, whether the book's hash may be
-// (naming the live books that hold the file). It runs before a hard delete so
-// it reads the hash indexes as they were when the user chose to delete:
+// blocked: it may not while a live book still holds the file, and the warning
+// then names those books. It runs before a hard delete so it reads the hash
+// indexes as they were when the user chose to delete:
 // DeleteBook removes this book's own book:hash: index rows (and never
 // another book's: each is deleted only while it still names this book), so a
 // decision taken afterwards would read a state the delete changed.

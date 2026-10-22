@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.33.0
+// version: 2.34.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-22
 
@@ -24,6 +24,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -341,7 +342,7 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 				return err
 			}
 
-			payload := newBookCombineOpResult(res)
+			payload := newBookCombineOpResult(res, opID)
 			if serr := opsregistry.ReporterSetResult(reporter, payload); serr != nil {
 				// The combine is done; only its report is lost.
 				logging.Warn(ctx, "book combine: result payload not stored", "err", serr)
@@ -387,13 +388,18 @@ type BookCombineOpResult struct {
 
 // newBookCombineOpResult builds the success payload from the combine's result,
 // with the message the synchronous endpoint used to return.
-func newBookCombineOpResult(res *merge.CombineResult) BookCombineOpResult {
+//
+// OperationID is ALWAYS set on success: it is the id POST
+// /operations/:id/revert takes, and the Undo action on the combine's outcome
+// toast is built from it. The merge service journals under opID, so the two are
+// the same id; opID backs it up when the service reports none.
+func newBookCombineOpResult(res *merge.CombineResult, opID string) BookCombineOpResult {
 	out := BookCombineOpResult{
 		PrimaryID:      res.PrimaryID,
 		FilesMoved:     res.FilesMoved,
 		BooksDeleted:   res.BooksDeleted,
 		JournalID:      res.JournalID,
-		OperationID:    res.OperationID,
+		OperationID:    cmp.Or(res.OperationID, opID),
 		JournalPending: res.JournalPending,
 		Warnings:       res.Warnings,
 	}
@@ -402,9 +408,9 @@ func newBookCombineOpResult(res *merge.CombineResult) BookCombineOpResult {
 		// The combine applied but its journal could not be marked applied.
 		// It stays pending and still names every step that ran, so the
 		// revert replays it (the split-book merge's rule).
-		out.Message = fmt.Sprintf("%s; its undo journal could not be finalized and is still pending: reverting operation %s replays what it recorded", done, res.OperationID)
+		out.Message = fmt.Sprintf("%s; its undo journal could not be finalized and is still pending: reverting operation %s replays what it recorded", done, out.OperationID)
 	} else {
-		out.Message = fmt.Sprintf("%s; revert operation %s to undo it", done, res.OperationID)
+		out.Message = fmt.Sprintf("%s; revert operation %s to undo it", done, out.OperationID)
 	}
 	return out
 }

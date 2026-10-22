@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -54,7 +54,9 @@ nothing.
   links to the operation, and the real outcome is shown when it ends (merged N,
   skipped M already in the trash, or failed with the reason). A failed merge is
   never reported as done. Books that have an operation running cannot be
-  submitted again. Requests that cannot succeed (a book that is gone, in the
+  submitted again, and if the page loses contact with the server meanwhile it
+  says it is still checking and keeps them locked instead of calling the work
+  failed. Requests that cannot succeed (a book that is gone, in the
   trash, or in the iTunes library) are refused up front with the reason.
 - Purge shows a **preview first** ("N can be purged, M are kept and why"), then
   runs with a progress bar, then shows the full breakdown, including whether it
@@ -91,6 +93,8 @@ undo above. Books that own files are still never purged.
 - Because the undo records never expire, kept leftover books stay in the trash
   permanently until their undo is run. Older folder-regroup leftovers will now
   show as "kept: undo possible".
-- One related problem was found and not fixed here: editing a book's file
-  fingerprint can still erase another book's lookup entry. It is filed in the
-  TODO.
+- Deleting or editing a book used to be able to erase another book's "is this
+  file already in the library" lookup entry when the two shared a file
+  fingerprint. Both now leave an entry alone unless it still points at the book
+  being changed, and a new repair operation (a preview by default) restores
+  any entry that was already lost.
