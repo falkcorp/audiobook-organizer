@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b8d3f64-72a1-4c5e-8f19-6e4a9d2c7b35
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -113,7 +113,7 @@ func listsNaming(cs carryStores, id string) (collections, playlists []string, er
 //     the list in that book's slot). Another operation's revert reads both so
 //     that, whichever of two retires into the survivor is reverted first, the
 //     survivor leaves the list with the last of them and never before or after
-//     (undo.SurvivorStandsIn, undo.SurvivorOnlyStandsByReplace).
+//     (undo.SurvivorStandOf).
 func carryUserContentInto(store OpsStore, cs carryStores, w *repairs.Writer, target, id string) (int, error) {
 	steps := 0
 	n, err := carryRatingsInto(store, w, target, id)
@@ -187,8 +187,7 @@ func carryRatingsInto(store OpsStore, w *repairs.Writer, target, id string) (int
 // listed and now also stands in for the retired book) and a "took" marker on a
 // replace (the survivor entered the list in the retired book's slot). The
 // markers write nothing; a later operation's revert reads them to decide
-// whether the survivor stays in the list (undo.SurvivorStandsIn,
-// undo.SurvivorOnlyStandsByReplace).
+// whether the survivor stays in the list (undo.SurvivorStandOf).
 func carryMembership(w *repairs.Writer, kind, listID, target, id string, rec undo.MembershipRecord, write func(carry func(cur []string) ([]string, error)) error) error {
 	oldV, err := undo.EncodeMembership(rec)
 	if err != nil {
@@ -209,6 +208,11 @@ func carryMembership(w *repairs.Writer, kind, listID, target, id string, rec und
 	marker := repairs.UndoEntry{ChangeType: undo.ChangeTypeUserContentFollow, Field: undo.UserContentField(markerKind, listID), Old: oldV, New: id}
 	// The restore of the retired book's row runs first (newest first), then
 	// the marker's, so the marker is journaled first.
+	//
+	// The list lock covers journal and write together (undo.LockList): a
+	// revert of another operation reading the survivor's journal must not see
+	// this marker before the write it describes, nor the write before it.
+	defer undo.LockList(kind, listID)()
 	return w.JournalSteps([]repairs.BookStep{{BookID: target, Entry: marker}, {BookID: id, Entry: entry}}, func() ([]bool, error) {
 		if err := write(carry); err != nil {
 			return nil, err

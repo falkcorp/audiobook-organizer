@@ -1,12 +1,14 @@
 // file: internal/undo/membership_anchor.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 7c2e9a40-5b1d-4f86-a3d7-e0b8c4f19a65
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package undo
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -45,13 +47,28 @@ import (
 //
 // A survivor that stands in a retired book's slot, while that book is not
 // restored, is that book for this purpose (the records that name the survivor
-// are mapped to it, see markerHistory.identityAt); once the book is restored
+// are mapped to it, see markerHistory.survivorNodeAt); once the book is restored
 // the survivor is a book of its own (it sits right after the restored one), so
-// the records that name it then keep naming it. A neighbour that is not listed and that no
-// retire into this survivor explains (another survivor absorbed it, or the
-// owner deleted it) is a dead end, never stepped through: the journal of such
-// a book places it in the slot of its own neighbours, where another book may
-// now stand.
+// the records that name it then keep naming it.
+//
+// More than one survivor in a list. The records of a retire live in two
+// journals, the survivor's marker and the retired book's row, so a list that
+// two survivors share has its records split between them, and the records that
+// say how a book of one survivor stands to a book of the other are in neither
+// survivor's journal alone. The graph therefore reads, through a loader
+// (SetJournalLoader), the journal of every book it reaches while walking, of
+// every book named by a record it uses (to know whether that book is a survivor
+// of this list, and so which book it stood in for at that time), and of every
+// listed book that lies between the bounds the walks found. It stops when
+// every one of them is read.
+//
+// And it never guesses. A slot is used only when both walks reach a listed book
+// (the head and the tail count) and nothing is listed between the two bounds
+// but the survivor itself: any other book there is one the records do not order
+// against the retired book, and putting the book beside the bounds would be a
+// guess. In that case, and when a journal cannot be read or the reading would
+// pass maxJournalLoads, slot reports not-ok and the caller falls back to the
+// recorded index and says so (RestoreMembership's note).
 
 // Sentinel anchors: the book was first (head) or last (tail) in the list.
 const (
@@ -164,8 +181,15 @@ func ghostID(root *carryMarker) string { return "\x00ghost:" + root.id }
 // still stands for other retires, just after it). The marker itself is not
 // before itself.
 func (h *markerHistory) survivorNodeAt(created int64, id string) string {
+	node, _ := h.survivorEpochAt(created, id)
+	return node
+}
+
+// survivorEpochAt is survivorNodeAt that also returns the epoch's root marker
+// when the survivor was in the list on a retire's account (nil when it was an
+// original member).
+func (h *markerHistory) survivorEpochAt(created int64, id string) (node string, root *carryMarker) {
 	probe := &carryMarker{created: created, id: id}
-	var root *carryMarker
 	alive := false
 	for _, m := range h.ms {
 		if !m.before(probe) {
@@ -180,11 +204,11 @@ func (h *markerHistory) survivorNodeAt(created int64, id string) string {
 	}
 	switch {
 	case !alive || root == nil:
-		return ""
+		return "", nil
 	case root.standingAt(created):
-		return root.retired
+		return root.retired, root
 	}
-	return ghostID(root)
+	return ghostID(root), root
 }
 
 // epochNow is the epoch the list is in now: the latest "took" marker, and
@@ -204,65 +228,143 @@ func (h *markerHistory) epochNow() (root *carryMarker, alive bool) {
 
 // anchored is one carry's record, as the graph keeps it.
 type anchored struct {
-	id      string
-	retired string
-	prev    string
-	next    string
-	created int64 // CreatedAt, ns
+	id       string
+	retired  string
+	survivor string
+	prev     string
+	next     string
+	created  int64 // CreatedAt, ns
+	took     bool  // a marker-derived record of a retire where the survivor took the retired book's slot
 }
 
+// JournalLoader reads the journal of one book (database GetBookChanges).
+type JournalLoader func(bookID string) ([]*database.OperationChange, error)
+
+// maxJournalLoads bounds the journals one slot lookup reads. The books a walk
+// reaches are the neighbours of one book in one list, a handful; a lookup that
+// would read more is a list whose history cannot be followed, and it is
+// reported and placed by index instead.
+const maxJournalLoads = 128
+
 // MembershipGraph is the recorded adjacencies of the carries of retired books
-// into one survivor's slot of one list (a collection or playlist). It is
-// built from the survivor's journal (every carry journals a marker there) and
-// the row being reverted, and keeps EVERY record, reverted or not, of every
-// retire: a book retired, restored and retired again contributes all of them.
-// A neighbour that is not listed and that no carry into this survivor explains
-// is deliberately a dead end (see the top of this file); the walk then uses
-// the neighbours it can trust, and falls back to the index (reported) when
-// there are none.
+// into survivors' slots of one list (a collection or playlist). It is built
+// from the journals it is given (AddRows, AddJournal) and the ones it reads
+// through its loader (SetJournalLoader), and keeps EVERY record, reverted or
+// not, of every retire into any survivor: a book retired, restored and retired
+// again contributes all of them, and two survivors in one list each
+// contribute theirs. The survivor it was made for (NewMembershipGraph) is the
+// one whose slot is being reverted; the others are known only by their journals.
 type MembershipGraph struct {
 	survivor string
 	kind     string
 	listID   string
-	rows     []*database.OperationChange
-	hist     *markerHistory
-	recs     []anchored
+
+	rows   []*database.OperationChange
+	byID   map[string]int // row id -> index in rows
+	loaded map[string]bool
+	load   JournalLoader
+	loads  int
+	err    error
+
+	built bool
+	hists map[string]*markerHistory
+	recs  []anchored
 }
 
 // NewMembershipGraph is an empty graph for kind (UserContentCollection or
 // UserContentPlaylist) list listID and the survivor.
 func NewMembershipGraph(survivor, kind, listID string) *MembershipGraph {
-	return &MembershipGraph{survivor: survivor, kind: kind, listID: listID}
+	return &MembershipGraph{survivor: survivor, kind: kind, listID: listID,
+		byID: map[string]int{}, loaded: map[string]bool{}}
 }
 
-// AddRows takes the carry rows of this list among rows (a book's journal): the
-// survivor's markers, and rows on retired books of a retire into this
-// survivor (used for a carry whose marker is missing). Voided rows, rows of
-// another list or survivor and rows with no anchors (journaled before they
-// were recorded) are left out of the adjacencies; unparsable ones too.
+// SetJournalLoader lets the graph read the journals of the books it reaches.
+// Without one it places a book only when every journal its place rests on was
+// handed in (AddRows / AddJournal), and otherwise reports not-ok so the caller
+// falls back to the recorded index and says so.
+func (g *MembershipGraph) SetJournalLoader(load JournalLoader) { g.load = load }
+
+// Err is the first journal read error the graph met, if any. A graph that met
+// one places nothing (slot reports not-ok).
+func (g *MembershipGraph) Err() error { return g.err }
+
+// AddRows takes rows into the graph (a later row with the same id replaces the
+// earlier one). Only the carry rows of this list count: the survivors' markers
+// and the rows of retired books. Voided rows, rows of another list and rows
+// with no anchors (journaled before they were recorded) are left out of the
+// adjacencies; unparsable ones too. AddRows does not mark any journal read:
+// use AddJournal for a book's whole journal.
 func (g *MembershipGraph) AddRows(rows []*database.OperationChange) {
-	g.rows = append(g.rows, rows...)
-	g.hist, g.recs = nil, nil
+	for _, r := range rows {
+		if r == nil {
+			continue
+		}
+		if i, ok := g.byID[r.ID]; ok {
+			g.rows[i] = r
+			continue
+		}
+		g.byID[r.ID] = len(g.rows)
+		g.rows = append(g.rows, r)
+	}
+	g.built = false
+}
+
+// AddJournal is AddRows for the whole journal of book bookID, which counts as
+// read.
+func (g *MembershipGraph) AddJournal(bookID string, rows []*database.OperationChange) {
+	g.AddRows(rows)
+	g.loaded[bookID] = true
+}
+
+// ensure reads the journal of book id through the loader, once. It reports
+// whether a journal was read now.
+func (g *MembershipGraph) ensure(id string) bool {
+	if id == "" || g.load == nil || g.loaded[id] || g.err != nil {
+		return false
+	}
+	g.loaded[id] = true
+	g.loads++
+	rows, err := g.load(id)
+	if err != nil {
+		g.err = fmt.Errorf("read the journal of book %s: %w", id, err)
+		return false
+	}
+	g.AddRows(rows)
+	return true
 }
 
 func (g *MembershipGraph) build() {
-	if g.hist != nil {
+	if g.built {
 		return
 	}
-	g.hist = newMarkerHistory(g.survivor, g.kind, g.listID, g.rows)
+	g.built = true
+	g.hists, g.recs = map[string]*markerHistory{}, nil
+	took := UserContentField(TookKind(g.kind), g.listID)
+	held := UserContentField(HeldKind(g.kind), g.listID)
+	var survivors []string
+	for _, r := range g.rows {
+		if r.ChangeType == ChangeTypeUserContentFollow && !r.Voided && (r.FieldName == took || r.FieldName == held) &&
+			!slices.Contains(survivors, r.BookID) {
+			survivors = append(survivors, r.BookID)
+		}
+	}
+	slices.Sort(survivors)
 	seen := map[string]bool{}
 	key := func(op, retired string) string { return op + "\x00" + retired }
-	for _, m := range g.hist.ms {
-		if !m.recOK || !m.rec.Anchored || seen[key(m.op, m.retired)] {
-			continue
+	for _, sv := range survivors {
+		h := newMarkerHistory(sv, g.kind, g.listID, g.rows)
+		g.hists[sv] = h
+		for _, m := range h.ms {
+			if !m.recOK || !m.rec.Anchored || seen[key(m.op, m.retired)] {
+				continue
+			}
+			seen[key(m.op, m.retired)] = true
+			g.recs = append(g.recs, anchored{id: m.id, retired: m.retired, survivor: sv, prev: m.rec.Prev, next: m.rec.Next, created: m.created, took: m.took})
 		}
-		seen[key(m.op, m.retired)] = true
-		g.recs = append(g.recs, anchored{id: m.id, retired: m.retired, prev: m.rec.Prev, next: m.rec.Next, created: m.created})
 	}
 	main := UserContentField(g.kind, g.listID)
 	for _, r := range g.rows {
-		if r == nil || r.ChangeType != ChangeTypeUserContentFollow || r.Voided || r.FieldName != main ||
-			r.NewValue != g.survivor || seen[key(r.OperationID, r.BookID)] {
+		if r.ChangeType != ChangeTypeUserContentFollow || r.Voided || r.FieldName != main || seen[key(r.OperationID, r.BookID)] {
 			continue
 		}
 		rec, err := DecodeMembership(r.OldValue)
@@ -270,19 +372,20 @@ func (g *MembershipGraph) build() {
 			continue
 		}
 		seen[key(r.OperationID, r.BookID)] = true
-		g.recs = append(g.recs, anchored{id: r.ID, retired: r.BookID, prev: rec.Prev, next: rec.Next, created: r.CreatedAt.UnixNano()})
+		g.recs = append(g.recs, anchored{id: r.ID, retired: r.BookID, survivor: r.NewValue, prev: rec.Prev, next: rec.Next, created: r.CreatedAt.UnixNano()})
 	}
 }
 
 // node maps an anchor recorded at a's time to its graph node: "" is the head
-// or the tail (empty), the survivor is the book it stood in for, any other id
-// is itself.
+// or the tail (empty); a survivor of this list is the book it stood in for at
+// that time (or its epoch's ghost), see markerHistory.survivorNodeAt; any other
+// id is itself.
 func (g *MembershipGraph) node(id, empty string, a anchored) string {
-	switch {
-	case id == "":
+	if id == "" {
 		return empty
-	case id == g.survivor:
-		if x := g.hist.survivorNodeAt(a.created, a.id); x != "" {
+	}
+	if h := g.hists[id]; h != nil {
+		if x := h.survivorNodeAt(a.created, a.id); x != "" {
 			return x
 		}
 	}
@@ -304,82 +407,179 @@ func (g *MembershipGraph) edges() (preds, succs map[string][]string) {
 	for _, a := range g.recs {
 		add(g.node(a.prev, anchorHead, a), a.retired)
 		add(a.retired, g.node(a.next, anchorTail, a))
+		// A survivor standing in a retired book's slot is that book while the
+		// book is out, and the book plus the survivor after it once the book is
+		// back (its epoch's ghost). A book recorded right AFTER such a survivor
+		// is after both; one recorded right before it is before both.
+		// The survivor that took the retired book's slot is, once the book is
+		// back, a book of its own (its epoch's ghost) right after it and before
+		// whatever followed the slot.
+		if a.took {
+			add(a.retired, ghostPrefix+a.id)
+			add(ghostPrefix+a.id, g.node(a.next, anchorTail, a))
+		}
+		if h := g.hists[a.prev]; h != nil && a.prev != "" {
+			if node, root := h.survivorEpochAt(a.created, a.id); root != nil && node == root.retired {
+				add(ghostID(root), a.retired)
+			}
+		}
 	}
 	return preds, succs
 }
 
+const ghostPrefix = "\x00ghost:"
+
 // slot finds where retired goes back into cur by walking the records, as
 // described at the top of the file: right after the last listed book among
-// those reached walking backwards (the head counts as listed), else right
-// before the first listed book reached walking forwards. ok is false when
-// neither reaches a listed book, so the caller falls back to the index.
+// those reached walking backwards (the head counts as listed), provided both
+// walks reach a listed book and nothing but the survivor is listed between the
+// two bounds. ok is false when that does not hold, so the caller falls back to
+// the index and says so.
 func (g *MembershipGraph) slot(cur []string, retired string) (at int, ok bool) {
 	if g == nil {
 		return 0, false
 	}
-	g.build()
-	preds, succs := g.edges()
-	root, alive := g.hist.epochNow()
-	var standIn, ghost string // the nodes the survivor is in the list as, now
-	if alive {
-		ghost = ghostID(root)
-		if root.standing() {
-			standIn = root.retired
+	g.ensure(retired)
+	for {
+		g.build()
+		preds, succs := g.edges()
+		// The survivors in the list now: a survivor whose epoch is alive is in
+		// the list as the book it stands in for, or as its epoch's ghost.
+		aliveSurvivor := map[string]bool{}
+		onlyGhost := map[string]bool{}   // survivors listed as a ghost: their slot's book is back
+		standsFor := map[string]string{} // node -> the survivor listed as it
+		for sv, h := range g.hists {
+			root, alive := h.epochNow()
+			if !alive {
+				continue
+			}
+			aliveSurvivor[sv] = true
+			standsFor[ghostID(root)] = sv
+			if root.standing() {
+				standsFor[root.retired] = sv
+			} else {
+				onlyGhost[sv] = true
+			}
 		}
-	}
-	// pos is the index of node n in cur, -2 when n is not listed. The survivor
-	// is listed as the book it stands in for, or as its epoch's ghost.
-	pos := func(n string) int {
-		switch n {
-		case anchorHead:
-			return -1
-		case anchorTail:
-			return len(cur)
-		}
-		if n == g.survivor {
-			if alive {
-				return -2 // the survivor in the list now is the epoch's, not an original member
+		// pos is the index of node n in cur, -2 when n is not listed.
+		pos := func(n string) int {
+			switch n {
+			case anchorHead:
+				return -1
+			case anchorTail:
+				return len(cur)
+			}
+			if aliveSurvivor[n] {
+				return -2 // the survivor in the list now is its epoch's, not an original member
 			}
 			if i := slices.Index(cur, n); i >= 0 {
 				return i
 			}
+			if sv, ok := standsFor[n]; ok {
+				if i := slices.Index(cur, sv); i >= 0 {
+					return i
+				}
+			}
 			return -2
 		}
-		if i := slices.Index(cur, n); i >= 0 {
-			return i
+		// walk collects the listed nodes reached from retired through absent
+		// ones, and every node it visited.
+		visited := map[string]bool{retired: true}
+		walk := func(next map[string][]string) (found []int) {
+			seen := map[string]bool{retired: true}
+			queue := slices.Clone(next[retired])
+			for len(queue) > 0 {
+				n := queue[0]
+				queue = queue[1:]
+				if seen[n] {
+					continue
+				}
+				seen[n] = true
+				visited[n] = true
+				if p := pos(n); p > -2 {
+					found = append(found, p)
+					continue
+				}
+				queue = append(queue, next[n]...)
+			}
+			return found
 		}
-		if n == standIn || n == ghost {
-			if i := slices.Index(cur, g.survivor); i >= 0 {
-				return i
+		before, after := walk(preds), walk(succs)
+		resolved, lo, hi := false, 0, 0
+		var gap []string
+		if len(before) > 0 && len(after) > 0 {
+			lo = min(slices.Max(before)+1, len(cur))
+			hi = min(max(slices.Min(after), 0), len(cur))
+			if lo <= hi {
+				resolved = true
+				for _, e := range cur[lo:hi] {
+					// The survivor being reverted may stand between the
+					// bounds (the book goes right before it). So may another
+					// survivor's ghost: its slot's book is back, it is listed
+					// only for the retires that still stand on it and leaves
+					// by value, so where it sits among books it was never
+					// recorded against changes no book's place.
+					if e != g.survivor && !onlyGhost[e] {
+						resolved = false
+						gap = append(gap, e)
+					}
+				}
 			}
 		}
-		return -2
-	}
-	// walk collects the listed nodes reached from retired through absent ones.
-	walk := func(next map[string][]string) []int {
-		var found []int
-		seen := map[string]bool{retired: true}
-		queue := slices.Clone(next[retired])
-		for len(queue) > 0 {
-			n := queue[0]
-			queue = queue[1:]
-			if seen[n] {
-				continue
+		// Everything the decision rests on must be read: the books reached,
+		// the books named by the records between them (a book named in a
+		// record may be a survivor of this list, and then it stood for another
+		// book at that time), and the books left in the gap.
+		var need []string
+		want := func(id string) {
+			if id != "" && !strings.HasPrefix(id, ghostPrefix) && id != anchorHead && id != anchorTail &&
+				!g.loaded[id] && !slices.Contains(need, id) {
+				need = append(need, id)
 			}
-			seen[n] = true
-			if p := pos(n); p > -2 {
-				found = append(found, p)
-				continue
-			}
-			queue = append(queue, next[n]...)
 		}
-		return found
+		for n := range visited {
+			want(n)
+		}
+		for _, e := range gap {
+			want(e)
+		}
+		for _, a := range g.recs {
+			p, q := g.node(a.prev, anchorHead, a), g.node(a.next, anchorTail, a)
+			if visited[a.retired] || visited[p] || visited[q] {
+				want(a.retired)
+				want(a.prev)
+				want(a.next)
+				want(a.survivor)
+			}
+		}
+		if g.load == nil {
+			// Nothing can be read: the decision rests only on what was
+			// handed in, and a book whose journal was not handed in may hold
+			// the record that moves the answer. Place only when everything
+			// the decision rests on is in already.
+			if len(need) > 0 {
+				return 0, false
+			}
+			return lo, resolved
+		}
+		if g.err != nil || g.loads >= maxJournalLoads {
+			return 0, false
+		}
+		slices.Sort(need)
+		read := false
+		for _, id := range need {
+			if g.loads >= maxJournalLoads {
+				return 0, false
+			}
+			if g.ensure(id) {
+				read = true
+			}
+			if g.err != nil {
+				return 0, false
+			}
+		}
+		if !read {
+			return lo, resolved
+		}
 	}
-	if found := walk(preds); len(found) > 0 {
-		return min(slices.Max(found)+1, len(cur)), true
-	}
-	if found := walk(succs); len(found) > 0 {
-		return max(slices.Min(found), 0), true
-	}
-	return 0, false
 }

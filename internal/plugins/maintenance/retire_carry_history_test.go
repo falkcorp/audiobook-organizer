@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_history_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b1c74-9a52-4d06-b7f1-c20d5a96e183
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -26,10 +26,14 @@ import (
 // synthetic.
 
 // historyStep is one step of a history: a retire of the listed children under
-// operation op, or (kids nil) the revert of operation op.
+// operation op, or (kids nil) the revert of operation op. after, when set, is
+// the layout (layoutOf) both lists must have right after the step: it checks
+// that the survivor is listed exactly while a retire still stands on it, not
+// only that the lists end right.
 type historyStep struct {
-	op   string
-	kids []int
+	op    string
+	kids  []int
+	after []string
 }
 
 // runHistory seeds nKids children and a collection and a playlist laid out as
@@ -57,6 +61,11 @@ func runHistory(t *testing.T, layout []string, nKids int, steps []historyStep) (
 			require.Zero(t, rr.Failed, "revert %s: %+v", s.op, rr)
 			require.Zero(t, rr.RestoredByIndex, "revert %s: %+v", s.op, rr)
 			require.Empty(t, rr.Kept, "revert %s", s.op)
+			if s.after != nil {
+				exp := layoutOf(s.after, kids, parent)
+				require.Equal(t, exp, f.rcMembers(t, col), "collection after reverting %s", s.op)
+				require.Equal(t, exp, f.rcPlaylistMembers(t, pl), "playlist after reverting %s", s.op)
+			}
 			continue
 		}
 		plans++
@@ -68,6 +77,11 @@ func runHistory(t *testing.T, layout []string, nKids int, steps []historyStep) (
 		}
 		out := f.apply(t, plan, s.op, rows, nil)
 		require.Equal(t, len(rows), out.Applied, "retire %s: %+v", s.op, out.Rows)
+		if s.after != nil {
+			exp := layoutOf(s.after, kids, parent)
+			require.Equal(t, exp, f.rcMembers(t, col), "collection after retiring %s", s.op)
+			require.Equal(t, exp, f.rcPlaylistMembers(t, pl), "playlist after retiring %s", s.op)
+		}
 	}
 	return f.rcMembers(t, col), f.rcPlaylistMembers(t, pl), want
 }
@@ -79,8 +93,8 @@ func runHistory(t *testing.T, layout []string, nKids int, steps []historyStep) (
 func TestRetireCarry_ReRetireAfterRevertEndToEnd(t *testing.T) {
 	t.Parallel()
 	gotCol, gotPl, want := runHistory(t, []string{"k0", "k1", "k2", "k3", "P", "k4"}, 5, []historyStep{
-		{"op0", []int{2}}, {"op1", []int{3, 1}}, {"op2", []int{4, 0}}, {"op1", nil},
-		{"op3", []int{3, 1}}, {"op2", nil}, {"op3", nil}, {"op0", nil},
+		{"op0", []int{2}, nil}, {"op1", []int{3, 1}, nil}, {"op2", []int{4, 0}, nil}, {"op1", nil, nil},
+		{"op3", []int{3, 1}, nil}, {"op2", nil, nil}, {"op3", nil, nil}, {"op0", nil, nil},
 	})
 	require.Equal(t, want, gotCol)
 	require.Equal(t, want, gotPl)
@@ -93,8 +107,15 @@ func TestRetireCarry_ReRetireAfterRevertEndToEnd(t *testing.T) {
 func TestRetireCarry_BorrowedSurvivorEndToEnd(t *testing.T) {
 	t.Parallel()
 	gotCol, gotPl, want := runHistory(t, []string{"k0", "k1", "k2", "k3"}, 4, []historyStep{
-		{"op0", []int{0}}, {"op1", []int{1, 2}}, {"op0", nil},
-		{"op2", []int{0, 3}}, {"op1", nil}, {"op2", nil},
+		{"op0", []int{0}, []string{"P", "k1", "k2", "k3"}},
+		{"op1", []int{1, 2}, []string{"P", "k3"}},
+		// op0 is reverted while op1 stands on the survivor: it stays.
+		{"op0", nil, []string{"k0", "P", "k3"}},
+		{"op2", []int{0, 3}, []string{"P"}},
+		// op1 is reverted while op2 stands on it, and the survivor stays
+		// again; it leaves only with the last borrower, op2.
+		{"op1", nil, []string{"P", "k1", "k2"}},
+		{"op2", nil, []string{"k0", "k1", "k2", "k3"}},
 	})
 	require.Equal(t, want, gotCol)
 	require.Equal(t, want, gotPl)
@@ -105,11 +126,22 @@ func TestRetireCarry_BorrowedSurvivorEndToEnd(t *testing.T) {
 type flakyListStore struct {
 	database.Store
 	members database.CollectionMembershipStore
+	atomic  database.CollectionMembershipMarkStore
 	failOn  atomic.Value // string
 }
 
 func newFlakyListStore(s *database.PebbleStore) *flakyListStore {
-	return &flakyListStore{Store: s, members: s}
+	return &flakyListStore{Store: s, members: s, atomic: s}
+}
+
+// UpdateCollectionBooksAndMark is the atomic list-and-stamp write the revert
+// prefers; it fails the same way UpdateCollectionBooks does.
+func (s *flakyListStore) UpdateCollectionBooksAndMark(id string, fn func([]string) ([]string, error), mark database.OperationMark) (*database.Collection, error) {
+	if v, _ := s.failOn.Load().(string); v == id {
+		s.failOn.Store("")
+		return nil, fmt.Errorf("injected write failure for collection %s", id)
+	}
+	return s.atomic.UpdateCollectionBooksAndMark(id, fn, mark)
 }
 
 func (s *flakyListStore) Unwrap() database.Store { return s.Store }

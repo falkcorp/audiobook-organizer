@@ -1,12 +1,13 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package undo
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -351,9 +352,36 @@ func RestoreMembership(cur []string, retired, survivor string, rec MembershipRec
 		if at, ok := g.slot(next, retired); ok {
 			return slices.Insert(next, at, retired), "", nil
 		}
-		note = fmt.Sprintf("book %s was put back by its recorded index %d: none of its neighbours could be found in the list", retired, rec.Index)
+		why := "the books beside it could not be ordered against the books listed now"
+		if g != nil && g.Err() != nil {
+			why = g.Err().Error()
+		}
+		note = fmt.Sprintf("book %s was put back by its recorded index %d: %s", retired, rec.Index, why)
 	}
 	return slices.Insert(next, min(rec.Index, len(next)), retired), note, nil
+}
+
+// RestoreMember is RestoreMembership for the revert of one row that also
+// repairs what an interrupted earlier revert left: when the retired book is
+// already listed again and the row borrowed the survivor (borrowed, from
+// SurvivorStandFor) with nothing else standing on it (stand is not
+// SurvivorStays), the survivor is still in the list only because that earlier
+// revert wrote the list and died before it stamped the row's marker, and it is
+// taken out now (released). A book already listed with nothing to release is
+// ErrAlreadyRestored, as in RestoreMembership.
+func RestoreMember(cur []string, retired, survivor string, rec MembershipRecord, stand SurvivorStand, borrowed bool, g *MembershipGraph) (next []string, note string, released bool, err error) {
+	next, note, err = RestoreMembership(cur, retired, survivor, rec, stand, g)
+	if !errors.Is(err, ErrAlreadyRestored) {
+		return next, note, false, err
+	}
+	if !borrowed || stand == SurvivorStays {
+		return nil, "", false, err
+	}
+	j := slices.Index(cur, survivor)
+	if j < 0 {
+		return nil, "", false, err
+	}
+	return slices.Delete(slices.Clone(cur), j, j+1), "", true, nil
 }
 
 // CheckMembershipFollow is what the revert of a collection or playlist row
@@ -398,20 +426,27 @@ func TookKind(kind string) string { return kind + "-took" }
 // that does not borrow, or has no marker (journaled before markers), leaves
 // the survivor alone (SurvivorDefault).
 func SurvivorStandOf(survivorRows []*database.OperationChange, row *database.OperationChange, kind, listID string) SurvivorStand {
+	stand, _ := SurvivorStandFor(survivorRows, row, kind, listID)
+	return stand
+}
+
+// SurvivorStandFor is SurvivorStandOf that also says whether the row borrowed
+// the survivor (its marker is a borrowing one, see SurvivorStandOf).
+func SurvivorStandFor(survivorRows []*database.OperationChange, row *database.OperationChange, kind, listID string) (stand SurvivorStand, borrowed bool) {
 	h := newMarkerHistory(row.NewValue, kind, listID, survivorRows)
 	mc := h.markerOf(row.OperationID, row.BookID)
 	if mc == nil || !mc.borrowing {
-		return SurvivorDefault
+		return SurvivorDefault, false
 	}
 	for _, m := range h.ms {
 		if m != mc && m.borrowing && m.standing() {
-			return SurvivorStays
+			return SurvivorStays, true
 		}
 	}
 	if mc.took {
-		return SurvivorDefault
+		return SurvivorDefault, true
 	}
-	return SurvivorLeaves
+	return SurvivorLeaves, true
 }
 
 // PairedRow returns the collection or playlist row of a retire's carry that a
@@ -428,13 +463,27 @@ func PairedRow(all []*database.OperationChange, marker *database.OperationChange
 		main = UserContentPlaylist
 	}
 	want := UserContentField(main, listID)
+	var best *database.OperationChange
 	for _, r := range all {
 		if r.ChangeType == ChangeTypeUserContentFollow && !r.Voided && r.OperationID == marker.OperationID &&
 			r.FieldName == want && r.BookID == marker.NewValue && r.NewValue == marker.BookID {
-			return r
+			best = latestRow(best, r)
 		}
 	}
-	return nil
+	return best
+}
+
+// latestRow is the later of two rows by CreatedAt, ties to the greater id: the
+// rule PairedRow and MarkerOf share (and markerHistory sorts by), so a marker
+// and its row are always the same retire's.
+func latestRow(a, b *database.OperationChange) *database.OperationChange {
+	switch {
+	case a == nil:
+		return b
+	case b.CreatedAt.After(a.CreatedAt), b.CreatedAt.Equal(a.CreatedAt) && b.ID > a.ID:
+		return b
+	}
+	return a
 }
 
 // MarkerOf returns the survivor-side marker row of row, a collection or
@@ -451,9 +500,7 @@ func MarkerOf(survivorRows []*database.OperationChange, row *database.OperationC
 		if r.FieldName != UserContentField(TookKind(kind), listID) && r.FieldName != UserContentField(HeldKind(kind), listID) {
 			continue
 		}
-		if best == nil || r.CreatedAt.After(best.CreatedAt) {
-			best = r
-		}
+		best = latestRow(best, r)
 	}
 	return best
 }

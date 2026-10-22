@@ -1,11 +1,12 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package undo
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -65,30 +66,44 @@ func (s *carrySim) retire(op, retired string) {
 }
 
 // revert undoes the retire of one book the way RevertOperation does for a
-// row: the survivor's part from its journal (SurvivorStandOf), the slot from
+// row: the survivor's part from its journal (SurvivorStandFor), the slot from
 // the neighbour graph, and the marker stamped reverted together with the row.
-func (s *carrySim) revert(retired string) error {
+func (s *carrySim) revert(retired string) error { return s.revertStamping(retired, true) }
+
+// revertStamping is revert, with stamp false for a revert whose process dies
+// after the list write and before the stamp (the row and its marker stay
+// standing). A book already listed is stamped and reported ErrAlreadyRestored
+// unless the survivor it borrowed is still listed and nothing else stands on
+// it, which RestoreMember takes out.
+func (s *carrySim) revertStamping(retired string, stamp bool) error {
 	pair := s.byRetired[retired]
 	row, marker := pair[0], pair[1]
 	rec, err := DecodeMembership(row.OldValue)
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	stand := SurvivorStandOf(s.survivorJ, row, UserContentCollection, s.listID)
+	stand, borrowed := SurvivorStandFor(s.survivorJ, row, UserContentCollection, s.listID)
 	g := NewMembershipGraph(s.survivor, UserContentCollection, s.listID)
-	g.AddRows(s.survivorJ)
 	g.AddRows([]*database.OperationChange{row})
-	next, note, err := RestoreMembership(s.list, retired, s.survivor, rec, stand, g)
-	if err != nil {
+	g.AddJournal(s.survivor, s.survivorJ)
+	// Every book other than the survivor has no journal rows besides the
+	// retire rows already in the pool.
+	g.SetJournalLoader(func(string) ([]*database.OperationChange, error) { return nil, nil })
+	next, note, _, err := RestoreMember(s.list, retired, s.survivor, rec, stand, borrowed, g)
+	if err != nil && !errors.Is(err, ErrAlreadyRestored) {
 		return err
 	}
 	if note != "" {
 		s.notes = append(s.notes, note)
 	}
-	s.list = next
-	at := s.tick()
-	row.RevertedAt, marker.RevertedAt = &at, &at
-	return nil
+	if err == nil {
+		s.list = next
+	}
+	if stamp {
+		at := s.tick()
+		row.RevertedAt, marker.RevertedAt = &at, &at
+	}
+	return err
 }
 
 // revertOp undoes every row of an operation, newest first, as one pass.
@@ -225,7 +240,7 @@ func TestMembershipAnchors_NoNeighbourResolvesFallsBackAndSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	ucEq(t, got, []string{"x", "r", "s", "y"})
-	if !strings.Contains(note, "none of its neighbours") {
+	if !strings.Contains(note, "could not be ordered") {
 		t.Fatalf("note %q", note)
 	}
 	// An anchored record with no graph at all is the same fallback.
@@ -297,27 +312,29 @@ func TestMembershipAnchors_ExactInAnyRowOrderWithinOperations(t *testing.T) {
 }
 
 // A neighbour another survivor absorbed (or the owner deleted) after the
-// retire is a dead end of the walk, never a place to step through: the other
-// route, through the neighbour on the other side, still puts the book back
-// exactly.
+// retire is a dead end of the walk, never a place to step through: the records
+// then order the book against the books listed on one side only, which is not
+// enough to place it (a book of the other side may belong between), so the
+// recorded index is used and the revert says so. (With the journals of the
+// other survivors readable the walk can go on, see
+// TestMembershipHistory_TwoSurvivorsShareAList.)
 func TestMembershipAnchors_NeighbourGoneToAnotherSurvivorIsADeadEnd(t *testing.T) {
 	t.Parallel()
-	for name, replacement := range map[string][]string{
-		"absorbed by another survivor": {"a", "T", "S"},
-		"deleted":                      {"a", "S"},
+	for name, c := range map[string]struct{ replacement, want []string }{
+		"absorbed by another survivor": {[]string{"a", "T", "S"}, []string{"a", "T", "r", "S"}},
+		"deleted":                      {[]string{"a", "S"}, []string{"a", "S", "r"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			sim := newCarrySim(t, "S", []string{"a", "q", "r", "S"})
 			sim.retire("op1", "r") // r's recorded neighbours: q before, S after
-			sim.list = slices.Clone(replacement)
+			sim.list = slices.Clone(c.replacement)
 			if err := sim.revert("r"); err != nil {
 				t.Fatal(err)
 			}
-			want := slices.Insert(slices.Clone(replacement), len(replacement)-1, "r")
-			ucEq(t, sim.list, want)
-			if len(sim.notes) > 0 {
-				t.Fatalf("notes %v", sim.notes)
+			ucEq(t, sim.list, c.want)
+			if len(sim.notes) != 1 || !strings.Contains(sim.notes[0], "recorded index") {
+				t.Fatalf("the index fallback must be reported, notes %v", sim.notes)
 			}
 		})
 	}

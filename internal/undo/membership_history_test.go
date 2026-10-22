@@ -1,7 +1,7 @@
 // file: internal/undo/membership_history_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: b4d17e62-0c9a-4f35-8e71-52a6d0f3c918
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package undo
 
@@ -101,19 +101,32 @@ func TestMembershipHistory_BorrowedSurvivorLeavesWithTheLastBorrower(t *testing.
 	t.Parallel()
 	l0 := []string{"b0", "b1", "b2", "b3"}
 	sim := newCarrySim(t, "S", l0)
+	listed := func(step string, want bool) {
+		t.Helper()
+		if got := slices.Contains(sim.list, "S"); got != want {
+			t.Fatalf("after %s the survivor listed=%v, want %v (list %v)", step, got, want, sim.list)
+		}
+	}
 	sim.retire("op0", "b0")
+	listed("retire op0", true)
 	sim.retire("op1", "b1")
 	sim.retire("op1", "b2")
+	listed("retire op1", true)
 	if err := sim.revertOp([]string{"b0"}); err != nil {
 		t.Fatal(err)
 	}
+	listed("revert op0", true) // op1 stands on it
 	sim.retire("op2", "b0")
 	sim.retire("op2", "b3")
-	for _, books := range [][]string{{"b1", "b2"}, {"b0", "b3"}} {
-		if err := sim.revertOp(books); err != nil {
-			t.Fatal(err)
-		}
+	listed("retire op2", true)
+	if err := sim.revertOp([]string{"b1", "b2"}); err != nil {
+		t.Fatal(err)
 	}
+	listed("revert op1", true) // op2 stands on it
+	if err := sim.revertOp([]string{"b0", "b3"}); err != nil {
+		t.Fatal(err)
+	}
+	listed("revert op2", false)
 	requireExact(t, "transitive borrow", sim, l0)
 }
 
