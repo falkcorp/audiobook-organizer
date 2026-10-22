@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.deleteSelection.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0a6e2d94-7b31-4c58-8f1d-5e9c3b7a2d60
 // last-edited: 2026-10-22
 
@@ -14,6 +14,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { ToastProvider } from '../components/toast/ToastProvider';
 import { useAppStore } from '../stores/useAppStore';
@@ -105,7 +106,9 @@ async function renderAndSelect(titles: string[]) {
   render(
     <MemoryRouter>
       <ToastProvider>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </ToastProvider>
     </MemoryRouter>
   );

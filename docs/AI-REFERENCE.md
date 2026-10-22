@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -198,7 +198,7 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 | GET | `/audiobooks/:id` | `getAudiobook` | Full book with enrichment |
 | PUT | `/audiobooks/:id` | `updateAudiobook` | **FULL replacement** — always pass complete object. Supports `overrides` for field provenance. |
 | DELETE | `/audiobooks/:id` | `deleteAudiobook` | `?block_hash=true` to also block the hash |
-| POST | `/audiobooks/:id/restore` | `restoreAudiobook` | Restore soft-deleted |
+| POST | `/audiobooks/:id/restore` | `restoreAudiobook` | Restore soft-deleted (409 `MERGE_BUSY` while a merge or combine holds the merge lock; also on the hard delete, purge-now and discard-progress-and-purge routes) |
 | GET | `/audiobooks/:id/tags` | `getBookTags` | Per-field provenance (file/fetched/override/effective) |
 | GET | `/audiobooks/:id/segments` | `getBookSegments` | Physical file segments |
 | GET | `/audiobooks/:id/segments/:segId/tags` | `getSegmentTags` | Tags for one segment file |

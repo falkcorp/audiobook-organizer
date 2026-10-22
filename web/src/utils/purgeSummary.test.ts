@@ -1,5 +1,5 @@
 // file: web/src/utils/purgeSummary.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2e8f13-9c47-4d60-a3e1-8f0d6b4a7c25
 // last-edited: 2026-10-22
 
@@ -84,6 +84,11 @@ describe('outcome severity and notes', () => {
     expect(outcomeSeverity({ ...base, failed: 1 })).toBe('warning');
     expect(outcomeSeverity({ ...base, carry_failed: 1 })).toBe('warning');
     expect(outcomeSeverity({ ...base, errors: ['x'] })).toBe('warning');
+  });
+  it('"purged none of N" is a warning, not a success (N-d)', () => {
+    expect(outcomeSeverity({ ...base, attempted: 10, purged: 0 })).toBe('warning');
+    expect(outcomeSeverity({ ...base, attempted: 10, purged: 1 })).toBe('success');
+    expect(outcomeSeverity({ ...base, attempted: 0, purged: 0 })).toBe('success');
   });
   it('notes carried progress and failures', () => {
     const notes = outcomeNotes({ ...base, carried_to_sibling: 2, carry_failed: 1, failed: 3 });

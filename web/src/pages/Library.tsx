@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.111.0
+// version: 1.112.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-22
 
@@ -40,12 +40,7 @@ import { appendTagTerm, removeTagTerm } from '../utils/tagQuery';
 import { useLibraryScrollKeeper } from '../hooks/useLibraryScrollKeeper';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
-import {
-  describeCombineFailure,
-  describeUndoFailure,
-  describeUndoResult,
-  type CombineToastPlan,
-} from './libraryCombineToast';
+import { describeCombineFailure } from './libraryCombineToast';
 import type { Audiobook } from '../types';
 import { runOrganizeRollback } from './organizeRollback';
 import { SortField, SortOrder } from '../types';
@@ -78,12 +73,11 @@ import {
   describeDeleteBookError,
   isHasProgressRefusal,
 } from '../utils/deleteBookError';
-import { describeMergeOutcome, type BookMergeOpResult } from '../utils/mergeOutcome';
-import { describeCombineOutcome, type BookCombineOpResult } from '../utils/combineOutcome';
-import { isAbortError } from '../utils/apiFetch';
-import { followOperation } from '../utils/followOperation';
-import { BOOK_OP_PENDING_REASON, usePendingBookOps } from '../hooks/usePendingBookOps';
-import { outcomeHeadline, outcomeSeverity } from '../utils/purgeSummary';
+import {
+  BOOK_OP_PENDING_REASON,
+  useOperationTracker,
+  type TrackedOpEnd,
+} from '../components/operations/OperationTrackerProvider';
 import { usePurgeRun, type PurgeRunEnd } from '../hooks/usePurgeRun';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
@@ -1508,8 +1502,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   // The books a merge or combine is working on in the background. Their
   // buttons stay disabled until the operation ends, so the same books cannot be
-  // submitted twice.
-  const bookOps = usePendingBookOps();
+  // submitted twice. The tracker is app-level: it follows the operation, toasts
+  // its outcome and keeps these ids across navigation and a reload; this page
+  // only reacts to an end (below).
+  const bookOps = useOperationTracker();
   const selectedIdsForBookOps = useMemo(
     () => selectedAudiobooks.map((b) => b.id),
     [selectedAudiobooks]
@@ -1535,51 +1531,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     };
   });
 
-  // Waits (in the background, never inside a click handler) for a merge or
-  // combine operation to end and reads its stored result. Returns null only
-  // when the page went away (nothing to report). A failed poll is NOT the
-  // operation failing: it keeps polling with backoff until the operation
-  // reaches a terminal state, says once that it is still checking, and the
-  // books stay in flight meanwhile (the server may well still be working on
-  // them, and a second submit would queue behind it). A failed or cancelled
-  // operation stores its result too, so it is fetched for every ended status;
-  // a fetch error leaves it null and the outcome wording then says what is
-  // unknown, never that it succeeded.
-  const awaitBookOp = async <T extends object>(
-    operationId: string,
-    label: 'merge' | 'combine',
-    signal: AbortSignal
-  ): Promise<{ status: string; errorMessage?: string | null; result: T | null } | null> => {
-    let done: api.OperationV2;
-    try {
-      done = await followOperation(
-        (sig) => api.pollOperationV2(operationId, undefined, 1000, { signal: sig }),
-        {
-          signal,
-          onTrouble: (e) => {
-            console.error(`Lost contact while following the ${label} operation`, e);
-            toast(
-              `Still checking on the ${label}: the server could not be reached. It may still be running, so its books stay locked until it ends.`,
-              'warning',
-              viewOperationAction(operationId)
-            );
-          },
-        }
-      );
-    } catch (e) {
-      if (signal.aborted || isAbortError(e)) return null;
-      throw e;
-    }
-    let result: T | null = null;
-    try {
-      const { result_data } = await api.getOperationResult(operationId);
-      result = result_data && typeof result_data === 'object' ? (result_data as T) : null;
-    } catch (e) {
-      console.warn(`Could not read the ${label} operation result`, e);
-    }
-    return { status: done.status, errorMessage: done.error_message, result };
-  };
-
   // Drops the finished operation's books from the selection (the user may
   // have picked others meanwhile) and its cross-page selection.
   const clearSelectionOf = (ids: readonly string[]) => {
@@ -1587,6 +1538,29 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     setSelectedAudiobooks((prev) => prev.filter((b) => !gone.has(b.id)));
     setCrossPageFilter(null);
   };
+
+  // A merge or combine ended (or a combine was undone) while this page is
+  // showing: drop its books from the selection when it changed them, and reload.
+  // The tracker already toasted the outcome; it does so even when this page is
+  // not mounted (then there is nothing here to refresh: the next visit loads).
+  const onBookOpEndRef = useRef<(end: TrackedOpEnd) => void>(() => {});
+  useEffect(() => {
+    onBookOpEndRef.current = (end) => {
+      if (end.kind === 'purge') return;
+      if (end.kind === 'merge' && end.status === 'completed') {
+        clearSelectionOf(end.descriptor.bookIds);
+      }
+      if (end.kind === 'combine') {
+        const r = end.result as { failed?: boolean } | null;
+        // A refused combine changed nothing, so the selection stays for a
+        // retry; anything else (including a part-way stop) changed rows.
+        if (end.status === 'completed' && !r?.failed) clearSelectionOf(end.descriptor.bookIds);
+      }
+      void refreshAfterBookOpRef.current();
+    };
+  });
+  const { subscribe: subscribeToOps } = bookOps;
+  useEffect(() => subscribeToOps((end) => onBookOpEndRef.current(end)), [subscribeToOps]);
 
   const handleMergeAsVersions = async () => {
     // A trashed book cannot be merged: the server skips it as a loser and
@@ -1617,19 +1591,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       toast('Merge started - running in the background.', 'info', viewOperationAction(op.id));
       const titles = Object.fromEntries(candidates.map((b) => [b.id, b.title]));
       const bookIds = [keepId, ...mergeIds];
-      bookOps.track(op.id, bookIds, async (signal) => {
-        const ended = await awaitBookOp<BookMergeOpResult>(op.id, 'merge', signal);
-        if (!ended) return;
-        const plan = describeMergeOutcome({
-          status: ended.status,
-          errorMessage: ended.errorMessage,
-          result: ended.result,
-          requested: mergeIds.length,
-          titles,
-        });
-        toast(plan.message, plan.severity, viewOperationAction(op.id));
-        if (ended.status === 'completed') clearSelectionOf(bookIds);
-        await refreshAfterBookOpRef.current();
+      bookOps.track({
+        operationId: op.id,
+        kind: 'merge',
+        bookIds,
+        titles,
+        requested: mergeIds.length,
       });
     } catch (error) {
       console.error('Failed to merge books:', error);
@@ -1641,32 +1608,6 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setMergeInProgress(false);
     }
   };
-
-  // undoCombine reverts a combine through POST /operations/:id/revert and
-  // toasts the outcome. Reached from the Undo action on the combine toasts.
-  const undoCombine = async (operationId: string) => {
-    try {
-      const result = await api.revertOperation(operationId);
-      const plan = describeUndoResult(result, operationId);
-      toast(plan.message, plan.severity, combineUndoAction(plan));
-      clearLibraryCache();
-      await loadAudiobooks();
-    } catch (error) {
-      console.error('Failed to undo combine:', error);
-      const plan = describeUndoFailure(error, operationId);
-      toast(plan.message, plan.severity, combineUndoAction(plan));
-    }
-  };
-
-  // The action that reverts plan's operation: Undo on a combine toast, Retry
-  // on a partial or failed undo. A function declaration, so undoCombine above
-  // can use it before this line runs.
-  function combineUndoAction(plan: CombineToastPlan) {
-    const id = plan.undoOperationId;
-    return id
-      ? { label: plan.actionLabel ?? 'Undo', onClick: () => void undoCombine(id) }
-      : undefined;
-  }
 
   // handleCombineIntoOneBook combines the selected single-file books into ONE
   // multi-file book on the chosen survivor (mergePrimaryId), hard-deleting the
@@ -1701,28 +1642,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         'info',
         viewOperationAction(started.id)
       );
-      const bookIds = [keepId, ...mergeIds];
-      bookOps.track(started.id, bookIds, async (signal) => {
-        const ended = await awaitBookOp<BookCombineOpResult>(started.id, 'combine', signal);
-        if (!ended) return;
-        const plan = describeCombineOutcome({
-          status: ended.status,
-          errorMessage: ended.errorMessage,
-          result: ended.result,
-          operationId: started.id,
-        });
-        // One action per toast: Undo when there is something to revert,
-        // otherwise a link to the operation.
-        toast(
-          plan.message,
-          plan.severity,
-          combineUndoAction(plan) ?? viewOperationAction(started.id)
-        );
-        // A refused combine changed nothing, so the selection stays for a
-        // retry; anything else (including a part-way stop) changed rows.
-        if (ended.status === 'completed' && !ended.result?.failed) clearSelectionOf(bookIds);
-        await refreshAfterBookOpRef.current();
-      });
+      bookOps.track({ operationId: started.id, kind: 'combine', bookIds: [keepId, ...mergeIds] });
     } catch (error) {
       // Refused before it was queued (400, 404, or 409 for a trashed or
       // iTunes-protected book): the reason is in the message, and the dialog
@@ -1799,7 +1719,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to restore audiobook', error);
-      toast('Failed to restore audiobook.', 'error');
+      // A 409 MERGE_BUSY says a merge or combine is running; show the server's text.
+      toast(describeDeleteBookError(error, 'Failed to restore audiobook.'), 'error');
     } finally {
       setRestoringBookId(null);
     }
@@ -1810,18 +1731,13 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // The run lives here, not in the dialog: it keeps polling, keeps the row
   // actions disabled (purgeInProgress) and fires this handler even when the
   // dialog was closed mid-run.
+  // The operation tracker toasts the outcome of a queued purge (even after a
+  // navigation or reload); this page only reloads what it changed. A purge the
+  // server refused before queueing has no operation, so no tracker toast: say
+  // it here, once (the dialog says it when it is open).
   const handlePurgeFinished = async (end: PurgeRunEnd) => {
-    if (end.result) {
-      toast(
-        outcomeHeadline(end.result),
-        outcomeSeverity(end.result),
-        viewOperationAction(end.operationId)
-      );
-    } else if (!purgeDialogOpenRef.current) {
-      // A refusal or an unreadable outcome is shown ONCE: the dialog says it
-      // when it is open (it keeps its own copy), and only when it is closed
-      // does it need a toast.
-      toast(end.error, 'error', end.operationId ? viewOperationAction(end.operationId) : undefined);
+    if (!end.result && !end.operationId && !purgeDialogOpenRef.current) {
+      toast(end.error, 'error');
     }
     clearLibraryCache();
     await loadAudiobooks();
@@ -1829,13 +1745,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   };
   const handlePurgeStarted = (operationId: string) =>
     toast('Purge started - running in the background.', 'info', viewOperationAction(operationId));
-  const handlePurgeTrouble = (operationId: string) =>
-    toast(
-      'Still checking on the purge: the server could not be reached. It may still be running.',
-      'warning',
-      viewOperationAction(operationId)
-    );
-  const purgeRun = usePurgeRun(handlePurgeFinished, handlePurgeStarted, handlePurgeTrouble);
+  const purgeRun = usePurgeRun(
+    handlePurgeFinished,
+    handlePurgeStarted,
+    () => purgeDialogOpenRef.current
+  );
   const purgeInProgress = purgeRun.running;
 
   const handleBatchSave = async (updates: Partial<Audiobook>) => {

@@ -1,13 +1,14 @@
 // file: web/src/pages/Library.resetNavigation.test.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: 4c8b1a2d-9e3f-4a7b-8c1d-2e3f4a5b6c7d
-// last-edited: 2026-08-19
+// last-edited: 2026-10-22
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 
 vi.mock('../services/api', () => {
@@ -77,7 +78,9 @@ describe('Library reset navigation (/library?reset=1)', () => {
     render(
       <MemoryRouter initialEntries={['/library?tag=metadata']}>
         <ResetNavButton />
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -110,7 +113,9 @@ describe('Library reset navigation (/library?reset=1)', () => {
     render(
       <MemoryRouter initialEntries={['/library?search=foo']}>
         <ResetNavButton />
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 

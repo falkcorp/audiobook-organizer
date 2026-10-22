@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-22
 
@@ -573,6 +573,12 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	rec := svc.recorder()
 	if rec == nil {
 		return nil, ErrAuditUnavailable
+	}
+	// Discarding clears every user's state under the merge lock, which a
+	// running combine holds for its whole run: answer merge.ErrMergeBusy
+	// promptly instead of hanging the request.
+	if err := merge.WaitMergeIdle(merge.InteractiveMergeLockWait); err != nil {
+		return nil, err
 	}
 	owned, err := svc.store.GetBookFiles(id)
 	if err != nil {

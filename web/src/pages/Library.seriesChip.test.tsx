@@ -1,12 +1,13 @@
 // file: web/src/pages/Library.seriesChip.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c84a2f6e-1b3d-4e97-8a50-6f2d9b1c7e03
-// last-edited: 2026-09-12
+// last-edited: 2026-10-22
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { useLibraryCache } from '../stores/useLibraryCache';
 
@@ -91,7 +92,9 @@ describe('Library series_id chip and default sort', () => {
   it('shows the series name on a chip whose delete clears only series_id', async () => {
     render(
       <MemoryRouter initialEntries={['/library?series_id=42&genre=Fantasy']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
         <LocationProbe />
       </MemoryRouter>
     );
@@ -115,7 +118,9 @@ describe('Library series_id chip and default sort', () => {
   it('falls back to "Series #N" when the series list has no such id', async () => {
     render(
       <MemoryRouter initialEntries={['/library?series_id=99']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -125,7 +130,9 @@ describe('Library series_id chip and default sort', () => {
   it('defaults a series_id view to series-position order', async () => {
     render(
       <MemoryRouter initialEntries={['/library?series_id=42']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -137,7 +144,9 @@ describe('Library series_id chip and default sort', () => {
   it('keeps an explicit sort on a series_id view', async () => {
     render(
       <MemoryRouter initialEntries={['/library?series_id=42&sort=title']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
         <LocationProbe />
       </MemoryRouter>
     );
@@ -153,7 +162,9 @@ describe('Library series_id chip and default sort', () => {
   it('offers Series position in the sort menu only in a series view', async () => {
     const { unmount } = render(
       <MemoryRouter initialEntries={['/library']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
     fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Sort by' }));
@@ -163,7 +174,9 @@ describe('Library series_id chip and default sort', () => {
 
     render(
       <MemoryRouter initialEntries={['/library?series_id=42']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
     fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Sort by' }));
@@ -173,7 +186,9 @@ describe('Library series_id chip and default sort', () => {
   it('does not send sort=series_position without a series filter', async () => {
     render(
       <MemoryRouter initialEntries={['/library?sort=series_position']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
         <LocationProbe />
       </MemoryRouter>
     );
@@ -189,7 +204,9 @@ describe('Library series_id chip and default sort', () => {
   it('does not default a searched series view to series-position order', async () => {
     render(
       <MemoryRouter initialEntries={['/library?series_id=42&search=dune']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
         <LocationProbe />
       </MemoryRouter>
     );

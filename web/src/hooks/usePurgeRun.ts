@@ -1,11 +1,12 @@
 // file: web/src/hooks/usePurgeRun.ts
-// version: 1.2.0
+// version: 2.0.0
 // guid: c41e7a92-5b08-4d3f-9a6e-2f8d0b7c1e35
 // last-edited: 2026-10-22
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../services/api';
-import { monotonicProgress, type PurgeProgress } from '../utils/purgeSummary';
+import { useOperationTracker } from '../components/operations/OperationTrackerProvider';
+import type { PurgeProgress } from '../utils/purgeSummary';
 
 export interface PurgeRunState {
   phase: 'idle' | 'running' | 'done' | 'error';
@@ -50,89 +51,111 @@ function messageOf(e: unknown): string {
 }
 
 /**
- * Owns one purge run, independent of the dialog that started it. The page
- * calls this hook, so closing (unmounting) the dialog mid-run neither stops the
- * polling nor loses the outcome: `running` stays true until the operation
- * ends, and `onFinished` fires then, whether or not the dialog is open. The
- * progress counters only ever move forward.
+ * The purge run as the page sees it, independent of the dialog that started
+ * it AND of the page itself: the operation is followed by the app-level
+ * operation tracker (OperationTrackerProvider), so closing the dialog,
+ * navigating away from the Library, or reloading the tab neither stops the
+ * polling nor loses the outcome toast, and a run that is still going when this
+ * hook mounts is picked up (`running` is true). `onFinished` fires when a purge
+ * ends while this hook is mounted, whether or not the dialog is open. The
+ * progress counters only ever move forward (the tracker keeps them monotonic).
+ *
+ * The tracker toasts the outcome (and a lost or unreadable one); `suppressErrorToast`
+ * lets the page say that an open dialog already shows an unreadable outcome.
  */
 export function usePurgeRun(
   onFinished: (end: PurgeRunEnd) => void,
   /** fires once the server has queued the purge (it is then running in the background) */
   onStarted?: (operationId: string) => void,
-  /** fires once when contact with the running purge is first lost; the run keeps polling */
-  onTrouble?: (operationId: string) => void
+  /** true while something already shows a failed outcome, so no toast repeats it */
+  suppressErrorToast?: () => boolean
 ): PurgeRunController {
-  const [state, setState] = useState<PurgeRunState>(IDLE);
-  const abortRef = useRef<AbortController | null>(null);
-  const runningRef = useRef(false);
+  const tracker = useOperationTracker();
+  const [local, setLocal] = useState<PurgeRunState>(IDLE);
+  const startingRef = useRef(false);
   const onFinishedRef = useRef(onFinished);
   const onStartedRef = useRef(onStarted);
-  const onTroubleRef = useRef(onTrouble);
+  const suppressRef = useRef(suppressErrorToast);
   useEffect(() => {
     onFinishedRef.current = onFinished;
     onStartedRef.current = onStarted;
-    onTroubleRef.current = onTrouble;
+    suppressRef.current = suppressErrorToast;
   });
 
-  // Only the page going away stops the polling.
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  const start = useCallback(async (deleteFiles: boolean) => {
-    if (runningRef.current) return;
-    runningRef.current = true;
-    const ac = new AbortController();
-    abortRef.current = ac;
-    let operationId: string | null = null;
-    setState({ ...IDLE, phase: 'running' });
-    try {
-      const handle = await api.purgeSoftDeletedBooks(deleteFiles);
-      operationId = handle.id;
-      setState((s) => (s.phase === 'running' ? { ...s, operationId: handle.id } : s));
-      onStartedRef.current?.(handle.id);
-      const result = await api.awaitPurgeResult(
-        handle.id,
-        (p) => {
-          if (ac.signal.aborted) return;
-          setState((s) =>
-            s.phase === 'running'
-              ? { ...s, progress: monotonicProgress(s.progress, p), stillChecking: false }
-              : s
-          );
-        },
-        {
-          signal: ac.signal,
-          // A failed poll is not a failed purge: keep the run in progress
-          // (the buttons stay disabled) and keep polling until it ends.
-          onTrouble: () => {
-            if (ac.signal.aborted) return;
-            setState((s) => (s.phase === 'running' ? { ...s, stillChecking: true } : s));
-            onTroubleRef.current?.(handle.id);
-          },
-        }
-      );
-      if (ac.signal.aborted) return;
-      setState({
-        ...IDLE,
-        phase: 'done',
-        result,
-        operationId: handle.id,
-      });
-      onFinishedRef.current({ result, error: null, operationId: handle.id });
-    } catch (e) {
-      if (ac.signal.aborted) return;
-      const error = messageOf(e);
-      setState({ ...IDLE, phase: 'error', error, operationId });
-      onFinishedRef.current({ result: null, error, operationId });
-    } finally {
-      runningRef.current = false;
+  // The purge the tracker is following (started here or before a reload).
+  let tracked: { operationId: string; progress: PurgeProgress | null; stillChecking: boolean } | null =
+    null;
+  for (const v of tracker.ops.values()) {
+    if (v.descriptor.kind === 'purge') {
+      tracked = {
+        operationId: v.descriptor.operationId,
+        progress: v.progress,
+        stillChecking: v.stillChecking,
+      };
+      break;
     }
-  }, []);
+  }
+
+  // How a purge ended while this hook is mounted.
+  const { subscribe } = tracker;
+  useEffect(
+    () =>
+      subscribe((end) => {
+        if (end.kind !== 'purge') return;
+        const operationId = end.descriptor.operationId;
+        const result = end.result as api.PurgeResult | null;
+        if (result && !end.lost) {
+          setLocal({ ...IDLE, phase: 'done', result, operationId });
+          onFinishedRef.current({ result, error: null, operationId });
+          return;
+        }
+        const error = end.error ?? 'The purge ended without a readable result.';
+        setLocal({ ...IDLE, phase: 'error', error, operationId });
+        onFinishedRef.current({ result: null, error, operationId });
+      }),
+    [subscribe]
+  );
+
+  const start = useCallback(
+    async (deleteFiles: boolean) => {
+      if (startingRef.current) return;
+      startingRef.current = true;
+      setLocal({ ...IDLE, phase: 'running' });
+      try {
+        const handle = await api.purgeSoftDeletedBooks(deleteFiles);
+        setLocal((s) => (s.phase === 'running' ? { ...s, operationId: handle.id } : s));
+        // Say it started before the tracker starts following (its first poll
+        // can already toast "still checking", which must come after).
+        onStartedRef.current?.(handle.id);
+        tracker.track(
+          { operationId: handle.id, kind: 'purge', bookIds: [] },
+          { suppressErrorToast: () => suppressRef.current?.() ?? false }
+        );
+      } catch (e) {
+        const error = messageOf(e);
+        setLocal({ ...IDLE, phase: 'error', error, operationId: null });
+        onFinishedRef.current({ result: null, error, operationId: null });
+      } finally {
+        startingRef.current = false;
+      }
+    },
+    [tracker]
+  );
 
   const reset = useCallback(() => {
-    if (runningRef.current) return;
-    setState(IDLE);
-  }, []);
+    if (tracked) return;
+    setLocal(IDLE);
+  }, [tracked]);
+
+  const state: PurgeRunState = tracked
+    ? {
+        ...IDLE,
+        phase: 'running',
+        operationId: tracked.operationId,
+        progress: tracked.progress,
+        stillChecking: tracked.stillChecking,
+      }
+    : local;
 
   return { state, running: state.phase === 'running', start, reset };
 }
