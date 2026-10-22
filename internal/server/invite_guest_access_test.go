@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -497,11 +497,10 @@ func TestConfigGET_NeverReturnsInviteSecrets(t *testing.T) {
 	srv, _ := setupUserHandlerServer(t)
 	saved := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
-	secrets := []string{"smtp-pw-SENTINEL-41", "guest-secret-SENTINEL-42", "guest-id-SENTINEL-43.access", "cf-token-SENTINEL-44", "mailer-SENTINEL@example.com"}
+	secrets := []string{"smtp-pw-SENTINEL-41", "cf-token-SENTINEL-44", "mailer-SENTINEL@example.com"}
 	config.Mutate(func(c *config.Config) {
 		c.SMTPHost, c.SMTPFrom = "127.0.0.1", "books@example.com"
-		c.SMTPPassword, c.InviteCFAccessClientSecret, c.InviteCFAccessClientID, c.CFPolicyAPIToken, c.SMTPUsername =
-			secrets[0], secrets[1], secrets[2], secrets[3], secrets[4]
+		c.SMTPPassword, c.CFPolicyAPIToken, c.SMTPUsername = secrets[0], secrets[1], secrets[2]
 	})
 	for _, path := range []string{"/api/v1/config", "/api/v1/users/invites"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)

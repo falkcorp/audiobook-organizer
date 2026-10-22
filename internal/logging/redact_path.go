@@ -1,7 +1,7 @@
 // file: internal/logging/redact_path.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package logging
 
@@ -15,7 +15,7 @@ const InviteTokenRedacted = "[REDACTED]"
 
 // inviteTokenPrefixes are the leading path segments (after the root) that are
 // immediately followed by an invite token. An invite token is a bearer secret
-// (the public lookup returns the guest header pair for a live one), so it must
+// (the public lookup confirms a live one and names its username), so it must
 // not reach the access log, the panic-recovery dump, error logs or a span.
 //
 // The un-versioned /api/... forms are not registered routes: the router

@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-21-public-surface-hardening-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f48321db-42a2-44f8-a617-4c75ee6ae1ff -->
 <!-- last-edited: 2026-10-21 -->
 
 # The public-facing server is harder to abuse
 
-Branch `fix/public-surface-hardening`, PR not yet opened. No separate spec. Drawn from an internal review of everything an outsider can reach through the Cloudflare tunnel; the Cloudflare-side findings from that review are handled separately and are not part of this change.
+Branch `fix/public-surface-hardening`, PR not yet opened. No separate spec. Drawn from an internal review of everything an outsider can reach through the Cloudflare tunnel; the Other Cloudflare-side findings from that review are handled separately and are not part of this change.
 
 ## Executive Summary
 
@@ -14,6 +14,7 @@ Branch `fix/public-surface-hardening`, PR not yet opened. No separate spec. Draw
 - **One person's failed logins no longer lock out everybody.** Behind the tunnel every visitor appeared to come from one of three relay machines, so the failed-login counter was shared. Now it counts each real visitor separately (and groups an IPv6 visitor by their /64 block so rotating addresses does not reset it).
 - **The server can refuse strangers outright.** A new setting lists the networks allowed to connect directly. Anyone else gets "forbidden" before the server looks at what they asked for. Left empty, nothing changes and the server logs a warning that it accepts anyone.
 - **The web app now has a browser-enforced script policy.** Browsers are told to run only the app's own scripts, plus one small theme script allowed by its fingerprint. Injected script would be refused. A second header turns off camera, microphone, location, payment and USB access.
+- **The shared guest key is gone.** Invitations used to hand every guest the same Cloudflare pass, in the email and on the invitation page. Anyone holding a live invitation link could read it. It is removed. Guests now get through Cloudflare by signing in with their own email address, which is added to the guest list when they accept.
 - **Checked against the real thing.** The web app was loaded in a real browser against the finished program, and no policy violations appeared on the main pages.
 
 ## Redirects
@@ -47,6 +48,14 @@ Branch `fix/public-surface-hardening`, PR not yet opened. No separate spec. Draw
 **Why it mattered.** One mistaken port forward or firewall rule would have exposed the whole interface to the internet.
 
 **The fix.** A new setting names the allowed networks. This computer itself and the tunnel relays are always allowed. Anything else is refused before routing, on every listener, including the secure, HTTP/3 and port-80 ones. The HTTP/3 secure handshake still completes before the refusal, since the refusal is an answer to a request.
+
+## Shared guest pass
+
+**What it was.** Every invitation carried the same pair of Cloudflare credentials (a service token) that let a phone app past Cloudflare's front door. The invitation page showed them and the email repeated them.
+
+**Why it mattered.** The pair was identical for every guest and lived as long as the token did, so one forwarded email or one leaked invitation link exposed a standing way past the front door for everyone.
+
+**The fix.** The pair is removed from the page, the email, the admin views and the settings, with no fallback. Accepting an invitation adds the guest's email address to Cloudflare's guest list, and the page and email tell the guest to sign in to Cloudflare with that address and the one-time code it sends. A server still carrying the old settings logs a warning and ignores them. The old token should be revoked in Cloudflare.
 
 ## Browser script policy
 

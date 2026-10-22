@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package handlers_test
 
@@ -27,9 +27,7 @@ import (
 )
 
 const (
-	testGuestID     = "guest-client-id-SENTINEL.access"
-	testGuestSecret = "guest-client-secret-SENTINEL-0a1b2c"
-	testBase        = "https://books.example.com"
+	testBase = "https://books.example.com"
 )
 
 type inviteFixture struct {
@@ -38,7 +36,7 @@ type inviteFixture struct {
 	rec    *mailtest.Recorder
 	h      *handlers.UserHandler
 	mailOn bool
-	hdrOn  bool
+	syncOn bool   // GuestPolicySyncConfigured: accept adds the invitee to the Access guest policy
 	base   string // the link base BaseURL returns
 }
 
@@ -50,7 +48,7 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	f := &inviteFixture{store: store, rec: &mailtest.Recorder{}, mailOn: true, hdrOn: true, base: testBase + "/"}
+	f := &inviteFixture{store: store, rec: &mailtest.Recorder{}, mailOn: true, base: testBase + "/"}
 	f.h = handlers.NewUserHandler(store)
 	f.h.SetInviteDelivery(&handlers.InviteDelivery{
 		Sender: func() imail.Sender {
@@ -59,11 +57,8 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 			}
 			return f.rec
 		},
-		BaseURL: func() string { return f.base },
-		GuestHeaders: func() (handlers.GuestHeaders, bool) {
-			return handlers.GuestHeaders{ClientID: testGuestID, ClientSecret: testGuestSecret}, f.hdrOn
-		},
-		GuestPolicySyncConfigured: func() bool { return false },
+		BaseURL:                   func() string { return f.base },
+		GuestPolicySyncConfigured: func() bool { return f.syncOn },
 	})
 	r := gin.New()
 	r.POST("/users/invite", f.h.CreateInvite)
@@ -93,24 +88,27 @@ func (f *inviteFixture) do(t *testing.T, method, path string, body any) (*httpte
 	return w, data
 }
 
-// assertNoGuestSecrets fails when an admin-facing response carries either
-// half of the shared guest header pair.
-func assertNoGuestSecrets(t *testing.T, body string) {
+// The shared guest service token is gone (2026-10-21): no response and no email
+// may carry the header names or tell a guest to install custom headers.
+func assertNoGuestHeaderInstructions(t *testing.T, label, body string) {
 	t.Helper()
-	if strings.Contains(body, testGuestSecret) || strings.Contains(body, testGuestID) {
-		t.Fatalf("admin response leaked the guest header pair: %s", body)
+	for _, banned := range []string{"CF-Access-Client", "Custom Headers", "guest_headers"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("%s mentions %q", label, banned)
+		}
 	}
 }
 
-func TestCreateInvite_SendsEmailWithLinkAndHeaders(t *testing.T) {
+func TestCreateInvite_SendsEmailWithLinkAndEmailLoginSteps(t *testing.T) {
 	f := newInviteFixture(t)
+	f.syncOn = true
 	w, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{
 		"username": "guest", "role_id": "viewer", "email": " Guest@Example.com ", "send_email": true,
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	assertNoGuestSecrets(t, w.Body.String())
+	assertNoGuestHeaderInstructions(t, "admin response", w.Body.String())
 	if data["email_sent"] != true {
 		t.Fatalf("email_sent = %v, error = %v", data["email_sent"], data["email_error"])
 	}
@@ -127,11 +125,12 @@ func TestCreateInvite_SendsEmailWithLinkAndHeaders(t *testing.T) {
 		t.Fatalf("To = %q", m.To)
 	}
 	for _, part := range []string{m.Text, m.HTML} {
-		for _, want := range []string{testBase + "/invite/" + token, testGuestID, testGuestSecret, "CF-Access-Client-Id", "CF-Access-Client-Secret", "AudioBooth"} {
+		for _, want := range []string{testBase + "/invite/" + token, "AudioBooth", "one-time code", "guest@example.com"} {
 			if !strings.Contains(part, want) {
 				t.Fatalf("email part missing %q", want)
 			}
 		}
+		assertNoGuestHeaderInstructions(t, "invitation email", part)
 	}
 	inv, _ := f.store.GetInvite(token)
 	if inv.Email != "guest@example.com" || inv.EmailSentAt == nil {
@@ -139,9 +138,11 @@ func TestCreateInvite_SendsEmailWithLinkAndHeaders(t *testing.T) {
 	}
 }
 
-func TestCreateInvite_HeadersOmittedWhenUnconfigured(t *testing.T) {
+// Without the policy sync the invitee is not on the Access policy, so the email
+// must not send them to a Cloudflare login that does not know them.
+func TestCreateInvite_EmailLoginStepOmittedWithoutPolicySync(t *testing.T) {
 	f := newInviteFixture(t)
-	f.hdrOn = false
+	f.syncOn = false
 	w, _ := f.do(t, http.MethodPost, "/users/invite", map[string]any{
 		"username": "guest", "role_id": "viewer", "email": "guest@example.com", "send_email": true,
 	})
@@ -149,8 +150,14 @@ func TestCreateInvite_HeadersOmittedWhenUnconfigured(t *testing.T) {
 		t.Fatalf("status %d", w.Code)
 	}
 	m := f.rec.Sent()[0]
-	if strings.Contains(m.Text, "CF-Access-Client-Id") || strings.Contains(m.HTML, testGuestSecret) {
-		t.Fatal("header instructions sent although the header pair is not configured")
+	for _, part := range []string{m.Text, m.HTML} {
+		if strings.Contains(part, "one-time code") {
+			t.Fatal("email-login step sent although the policy sync is not configured")
+		}
+		if !strings.Contains(part, "AudioBooth") || !strings.Contains(part, "guest") {
+			t.Fatalf("the AudioBooth steps are missing: %s", part)
+		}
+		assertNoGuestHeaderInstructions(t, "invitation email", part)
 	}
 }
 
@@ -180,7 +187,7 @@ func TestCreateInvite_SendFailureIsReportedNotFatal(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status %d", w.Code)
 	}
-	assertNoGuestSecrets(t, w.Body.String())
+	assertNoGuestHeaderInstructions(t, "admin response", w.Body.String())
 	if data["email_sent"] != false || !strings.Contains(fmt.Sprint(data["email_error"]), "550") {
 		t.Fatalf("send failure not reported: %v", data)
 	}
@@ -230,7 +237,7 @@ func TestResendInvite_RateLimitedPerInvite(t *testing.T) {
 	if w.Code != http.StatusOK || rd["email_sent"] != true {
 		t.Fatalf("first resend: %d %s", w.Code, w.Body.String())
 	}
-	assertNoGuestSecrets(t, w.Body.String())
+	assertNoGuestHeaderInstructions(t, "admin response", w.Body.String())
 	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+database.InviteID(token)+"/resend", nil); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("second resend within a minute: %d, want 429", w.Code)
 	}
@@ -295,23 +302,17 @@ func TestPublicInvite_OnlyLiveTokensAndOnlyAllowedFields(t *testing.T) {
 		t.Fatal("public invite response must not be cached")
 	}
 	for k := range pub {
-		if k != "username" && k != "expires_at" && k != "guest_headers" {
+		if k != "username" && k != "expires_at" {
 			t.Fatalf("public invite returned extra field %q", k)
 		}
 	}
-	gh, _ := pub["guest_headers"].(map[string]any)
-	if pub["username"] != "guest" || gh["client_id"] != testGuestID || gh["client_secret"] != testGuestSecret {
+	if pub["username"] != "guest" {
 		t.Fatalf("public invite = %v", pub)
 	}
+	assertNoGuestHeaderInstructions(t, "public invite lookup", w.Body.String())
 	if strings.Contains(w.Body.String(), "guest@example.com") {
 		t.Fatal("public invite must not reveal the email")
 	}
-
-	f.hdrOn = false
-	if _, pub := f.do(t, http.MethodGet, "/auth/invite/"+token, nil); pub["guest_headers"] != nil {
-		t.Fatal("header pair returned while unconfigured")
-	}
-	f.hdrOn = true
 
 	// Missing, used and expired answer identically.
 	missing, _ := f.do(t, http.MethodGet, "/auth/invite/"+strings.Repeat("0", 64), nil)
@@ -328,7 +329,7 @@ func TestPublicInvite_OnlyLiveTokensAndOnlyAllowedFields(t *testing.T) {
 		if r.Code != http.StatusNotFound || r.Body.String() != missing.Body.String() {
 			t.Fatalf("%s: %d %s, want the same 404 as missing", name, r.Code, r.Body.String())
 		}
-		assertNoGuestSecrets(t, r.Body.String())
+		assertNoGuestHeaderInstructions(t, "admin response", r.Body.String())
 	}
 }
 
@@ -371,7 +372,7 @@ func TestPublicInvite_NotFoundWhenAcceptWouldRefuse(t *testing.T) {
 		if w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
 			t.Fatalf("%s: %d %s, want the same 404 as a missing token", name, w.Code, w.Body.String())
 		}
-		assertNoGuestSecrets(t, w.Body.String())
+		assertNoGuestHeaderInstructions(t, "admin response", w.Body.String())
 		if _, err := f.store.ConsumeInvite(tok, "bcrypt", "h"); !database.IsInviteRefusal(err) {
 			t.Fatalf("%s: accept = %v, want a refusal (the lookup and accept must agree)", name, err)
 		}
@@ -392,9 +393,12 @@ func TestListInvites_StatusFlagsAndAcceptedWithoutTokens(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d", w.Code)
 	}
-	assertNoGuestSecrets(t, w.Body.String())
-	if list["mail_configured"] != true || list["guest_headers_configured"] != true || list["guest_policy_sync_configured"] != false {
+	assertNoGuestHeaderInstructions(t, "admin response", w.Body.String())
+	if list["mail_configured"] != true || list["guest_policy_sync_configured"] != false {
 		t.Fatalf("flags = %v", list)
+	}
+	if _, present := list["guest_headers_configured"]; present {
+		t.Fatal("the invite list still reports guest_headers_configured")
 	}
 	acc, _ := list["accepted"].([]any)
 	if len(acc) != 1 {

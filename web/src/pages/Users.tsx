@@ -1,5 +1,5 @@
 // file: web/src/pages/Users.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-20
 
@@ -75,7 +75,6 @@ interface InviteSettings {
   mailConfigured: boolean;
   /** Why an invitation email cannot go out, when it cannot. */
   mailUnavailableReason: string;
-  guestHeadersConfigured: boolean;
   guestPolicySyncConfigured: boolean;
 }
 
@@ -84,7 +83,6 @@ interface InvitesBody {
   accepted?: AcceptedInvite[];
   mail_configured?: boolean;
   mail_unavailable_reason?: string;
-  guest_headers_configured?: boolean;
   guest_policy_sync_configured?: boolean;
 }
 
@@ -124,7 +122,6 @@ export default function Users() {
   const [settings, setSettings] = useState<InviteSettings>({
     mailConfigured: false,
     mailUnavailableReason: '',
-    guestHeadersConfigured: false,
     guestPolicySyncConfigured: false,
   });
   const [notice, setNotice] = useState('');
@@ -152,7 +149,6 @@ export default function Users() {
       setSettings({
         mailConfigured: !!iBody.mail_configured,
         mailUnavailableReason: iBody.mail_unavailable_reason || '',
-        guestHeadersConfigured: !!iBody.guest_headers_configured,
         guestPolicySyncConfigured: !!iBody.guest_policy_sync_configured,
       });
       setError('');

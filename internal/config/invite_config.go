@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-21
 
@@ -16,17 +16,12 @@ import (
 // Every key here is ENVIRONMENT-ONLY and carries `json:"-"` on Config, which
 // buys three properties at once:
 //
-//   - GET /api/v1/config can never return one. Three of them are secrets (the
-//     SMTP password, the guest service token's client secret and the Cloudflare
-//     policy API token), and the others are deliberately hidden too: the guest
-//     service token's client id is half of a credential, and the SMTP username
-//     is usually a person's mailbox. Settings screens and admin API responses
-//     report only whether each feature is configured (InviteMailConfigured
-//     and friends), never the values. The guest client id and secret are the
-//     exception by design: they are what a guest needs, so the invitation
-//     email carries them and the public accept page returns them for a live,
-//     unused token, and anyone holding a live invite link, including the
-//     admin who created it, can read them there.
+//   - GET /api/v1/config can never return one. Two of them are secrets (the
+//     SMTP password and the Cloudflare policy API token), and the others are
+//     deliberately hidden too: the SMTP username is usually a person's
+//     mailbox. Settings screens and admin API responses report only whether
+//     each feature is configured (InviteMailConfigured and friends), never
+//     the values.
 //   - The config blob never stores one, so a value can only come from the
 //     operator's environment and a database dump carries none of them.
 //   - PUT /api/v1/config refuses a payload naming any of them, with the same
@@ -45,8 +40,6 @@ var inviteEnvOnlySettings = []struct {
 	{"smtp_password", "SMTP_PASSWORD"},
 	{"smtp_from", "SMTP_FROM"},
 	{"public_base_url", "PUBLIC_BASE_URL"},
-	{"invite_cf_access_client_id", "INVITE_CF_ACCESS_CLIENT_ID"},
-	{"invite_cf_access_client_secret", "INVITE_CF_ACCESS_CLIENT_SECRET"},
 	{"cf_account_id", "CF_ACCOUNT_ID"},
 	{"cf_guests_policy_id", "CF_GUESTS_POLICY_ID"},
 	{"cf_policy_api_token", "CF_POLICY_API_TOKEN"},
@@ -82,8 +75,6 @@ func applyInviteEnv(c *Config) {
 	c.SMTPPassword = viper.GetString("smtp_password")
 	c.SMTPFrom = strings.TrimSpace(viper.GetString("smtp_from"))
 	c.PublicBaseURL = strings.TrimSpace(viper.GetString("public_base_url"))
-	c.InviteCFAccessClientID = strings.TrimSpace(viper.GetString("invite_cf_access_client_id"))
-	c.InviteCFAccessClientSecret = strings.TrimSpace(viper.GetString("invite_cf_access_client_secret"))
 	c.CFAccountID = strings.TrimSpace(viper.GetString("cf_account_id"))
 	c.CFGuestsPolicyID = strings.TrimSpace(viper.GetString("cf_guests_policy_id"))
 	c.CFPolicyAPIToken = strings.TrimSpace(viper.GetString("cf_policy_api_token"))
@@ -139,13 +130,6 @@ func AllowedPeerCIDRs() string {
 // a From address are the minimum (no AUTH is a supported setup).
 func (c *Config) InviteMailConfigured() bool {
 	return c.SMTPHost != "" && c.SMTPFrom != ""
-}
-
-// InviteHeadersConfigured reports whether the shared guest service-token header
-// pair is configured. Both halves or nothing: one half alone is useless to a
-// guest and is treated as unconfigured.
-func (c *Config) InviteHeadersConfigured() bool {
-	return c.InviteCFAccessClientID != "" && c.InviteCFAccessClientSecret != ""
 }
 
 // GuestPolicySyncConfigured reports whether accepted invitees are added to the

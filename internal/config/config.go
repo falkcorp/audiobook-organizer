@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.169.0
+// version: 1.170.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-21
 
@@ -1649,11 +1649,6 @@ type Config struct {
 	// PublicBaseURL is the origin invitation links point at; falls back to
 	// OAuthRedirectBaseURL, then the server's external URL (InviteBaseURL).
 	PublicBaseURL string `json:"-" mapstructure:"public_base_url"`
-	// The SHARED guest Cloudflare Access service token handed to invitees as
-	// the CF-Access-Client-Id / CF-Access-Client-Secret header pair. It carries
-	// no identity; every guest still signs in as themselves.
-	InviteCFAccessClientID     string `json:"-" mapstructure:"invite_cf_access_client_id"`
-	InviteCFAccessClientSecret string `json:"-" mapstructure:"invite_cf_access_client_secret"`
 	// Optional Cloudflare Access guest-policy sync: on accept, the invitee's
 	// email is appended to the include list of this ONE reusable Access policy.
 	// Inert unless all three are set (GuestPolicySyncConfigured).
