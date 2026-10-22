@@ -1,15 +1,16 @@
 // file: internal/server/peer_allowlist.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f1c1ef0-2117-4b31-88a6-7c7a04767f3b
 // last-edited: 2026-10-21
 
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/netip"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
@@ -24,16 +25,26 @@ import (
 // on the connection's peer address before any routing, so no route, however
 // it was registered, can answer a peer that is not listed.
 //
-// A peer is allowed when it is loopback, a TUNNEL_CONNECTOR_ADDRS entry, or
-// inside an ALLOWED_PEER_CIDRS entry. Loopback is always allowed so the local
+// A peer is allowed when it is loopback, one of this host's own interface
+// addresses, a TUNNEL_CONNECTOR_ADDRS entry, or inside an ALLOWED_PEER_CIDRS
+// entry. Loopback is always allowed so the local
 // health check, the server-bootstrap flow and an operator on the host keep
 // working with a wrong list; the connectors are always allowed because the
 // tunnel is the production path and listing them twice is a trap.
 //
+// Loopback trust: anything on this host reaches the service as loopback and is
+// allowed, so a reverse proxy, port forwarder (socat, ssh -L, a container with
+// host networking) or any local process that relays other clients re-exposes
+// the origin to those clients, and this gate cannot tell them apart. Run no
+// such relay on the host, or give it its own authentication.
+//
 // The peer is the socket's remote address (Request.RemoteAddr), never a
 // header: X-Forwarded-For and CF-Connecting-IP are the caller's own claims.
-// That also means this host's OWN non-loopback addresses must be listed if
-// anything on the host reaches the service through them.
+// A container on a bridge arrives from the bridge subnet, not from one of the
+// host's own addresses, so it must be covered by a CIDR if it needs access.
+//
+// HTTP/3 0-RTT is off: early data is accepted before the peer's address is
+// validated, which would let a refused peer present a spoofed source.
 //
 // The gate wraps the handler of every listener (HTTPS/HTTP2, HTTP/3, plain
 // HTTP and the port-80 redirect), so it is outermost rather than a gin
@@ -41,15 +52,23 @@ import (
 // completes before the 403; the gate refuses requests, it does not hide the
 // UDP port.
 
-// peerAllowList is the parsed ALLOWED_PEER_CIDRS: CIDR prefixes, a bare
-// address being a full-length one.
-type peerAllowList []netip.Prefix
+// peerAllowList is the parsed ALLOWED_PEER_CIDRS: CIDR prefixes (a bare address
+// being a full-length one) and zoned IPv6 link-local addresses, which are only
+// unique per interface and so are matched exactly, zone included, like
+// TUNNEL_CONNECTOR_ADDRS entries.
+type peerAllowList struct {
+	prefixes []netip.Prefix
+	zoned    []netip.Addr
+}
 
 // parsePeerAllowList parses a comma-separated list of CIDR networks and bare
-// addresses. Entries that are neither are returned in invalid, never trusted.
-// IPv4-mapped forms are unmapped (::ffff:192.0.2.0/120 is 192.0.2.0/24) and a
-// zone is dropped, so fe80::/10 admits link-local peers on any interface.
+// addresses. Entries that cannot be used are returned in invalid with the
+// reason, never trusted. IPv4-mapped forms are unmapped (::ffff:192.0.2.0/120
+// is 192.0.2.0/24). A CIDR carries no zone, so fe80::/10 admits link-local
+// peers on any interface; a bare IPv6 link-local address must carry its zone
+// (fe80::5%eth0) that names an interface of this host.
 func parsePeerAllowList(raw string) (list peerAllowList, invalid []string) {
+	bad := func(e, why string) { invalid = append(invalid, e+" ("+why+")") }
 	for _, e := range strings.Split(raw, ",") {
 		e = strings.TrimSpace(e)
 		if e == "" {
@@ -58,7 +77,7 @@ func parsePeerAllowList(raw string) (list peerAllowList, invalid []string) {
 		if strings.Contains(e, "/") {
 			p, err := netip.ParsePrefix(e)
 			if err != nil {
-				invalid = append(invalid, e)
+				bad(e, "not a CIDR network")
 				continue
 			}
 			a, bits := p.Addr().WithZone(""), p.Bits()
@@ -66,30 +85,48 @@ func parsePeerAllowList(raw string) (list peerAllowList, invalid []string) {
 				if bits < 96 {
 					// A prefix shorter than the mapped block cannot be written
 					// as an IPv4 prefix; refuse rather than guess.
-					invalid = append(invalid, e)
+					bad(e, "IPv4-mapped prefix shorter than /96")
 					continue
 				}
 				a, bits = a.Unmap(), bits-96
 			}
-			list = append(list, netip.PrefixFrom(a, bits).Masked())
+			list.prefixes = append(list.prefixes, netip.PrefixFrom(a, bits).Masked())
 			continue
 		}
 		a, err := netip.ParseAddr(e)
 		if err != nil {
-			invalid = append(invalid, e)
+			bad(e, "not an IP address")
 			continue
 		}
-		a = a.WithZone("").Unmap()
-		list = append(list, netip.PrefixFrom(a, a.BitLen()))
+		a = a.Unmap()
+		if needsZone(a) {
+			if a.Zone() == "" {
+				bad(e, "IPv6 link-local address without a zone; write it as fe80::5%eth0")
+				continue
+			}
+			name, m := resolveZone(a.Zone())
+			if m != zoneFound {
+				bad(e, "zone is not an interface of this host, or is ambiguous")
+				continue
+			}
+			list.zoned = append(list.zoned, a.WithZone(name))
+			continue
+		}
+		a = a.WithZone("")
+		list.prefixes = append(list.prefixes, netip.PrefixFrom(a, a.BitLen()))
 	}
 	return list, invalid
 }
 
-// contains reports whether a is inside any entry. An address with a zone is
-// compared without it (netip never matches a zoned address).
+// contains reports whether a (in trust form, parseTrustAddr) is allowed.
 func (l peerAllowList) contains(a netip.Addr) bool {
+	for _, z := range l.zoned {
+		if z == a {
+			return true
+		}
+	}
 	a = a.WithZone("").Unmap()
-	for _, p := range l {
+	for _, p := range l.prefixes {
 		if p.Contains(a) {
 			return true
 		}
@@ -97,38 +134,81 @@ func (l peerAllowList) contains(a netip.Addr) bool {
 	return false
 }
 
-// peerAllowCache is the parsed ALLOWED_PEER_CIDRS, parsed once per distinct
-// value (the connectorCache pattern, minus the retry: nothing here depends on
-// an interface appearing later).
-type peerAllowCache struct {
-	mu   sync.Mutex
-	set  bool
+// openPrefixes returns the entries that match every address (0.0.0.0/0, ::/0).
+func (l peerAllowList) openPrefixes() []string {
+	var out []string
+	for _, p := range l.prefixes {
+		if p.Bits() == 0 {
+			out = append(out, p.String())
+		}
+	}
+	return out
+}
+
+// String is the effective list, for the startup log.
+func (l peerAllowList) String() string {
+	parts := make([]string, 0, len(l.prefixes)+len(l.zoned))
+	for _, p := range l.prefixes {
+		parts = append(parts, p.String())
+	}
+	for _, z := range l.zoned {
+		parts = append(parts, z.String())
+	}
+	return strings.Join(parts, ", ")
+}
+
+// peerAllowParsed is one parse of one ALLOWED_PEER_CIDRS value.
+type peerAllowParsed struct {
 	raw  string
 	list peerAllowList
 }
 
+// peerAllowCache holds the parse of the current value: parsed once per distinct
+// value, read lock-free on every request. The value is environment-only and
+// fixed for the life of the process, so a second distinct value only happens
+// in tests.
+type peerAllowCache struct{ cur atomic.Pointer[peerAllowParsed] }
+
 var peerAllowed peerAllowCache
 
 func (pc *peerAllowCache) get(raw string) peerAllowList {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	if pc.set && raw == pc.raw {
-		return pc.list
+	if p := pc.cur.Load(); p != nil && p.raw == raw {
+		return p.list
 	}
 	list, invalid := parsePeerAllowList(raw)
-	pc.set, pc.raw, pc.list = true, raw, list
-	for _, e := range invalid {
-		clientTrustLog.Warn("ALLOWED_PEER_CIDRS entry %q is not a CIDR network or an IP address; ignored", e)
-	}
-	if raw != "" && len(list) == 0 {
-		clientTrustLog.Warn("ALLOWED_PEER_CIDRS is set but has no valid entry: only loopback and TUNNEL_CONNECTOR_ADDRS peers are allowed")
+	next := &peerAllowParsed{raw: raw, list: list}
+	// Only the goroutine whose store wins reports, so a burst of first
+	// requests logs once.
+	if old := pc.cur.Load(); pc.cur.CompareAndSwap(old, next) {
+		for _, e := range invalid {
+			clientTrustLog.Warn("ALLOWED_PEER_CIDRS entry %s; ignored", e)
+		}
 	}
 	return list
+}
+
+// validatePeerAllowList is the startup check: any entry that cannot be used is
+// an error, so a typo stops the service instead of silently narrowing (or, with
+// the empty fallback, widening) who may connect. An empty value is valid (allow
+// all, with a warning).
+func validatePeerAllowList(raw string) error {
+	_, invalid := parsePeerAllowList(raw)
+	if len(invalid) > 0 {
+		return fmt.Errorf("ALLOWED_PEER_CIDRS has %d unusable entr(ies): %s", len(invalid), strings.Join(invalid, "; "))
+	}
+	return nil
 }
 
 // peerAllowedNow reports whether the connection peer remoteAddr may talk to this
 // service. enforced is false when ALLOWED_PEER_CIDRS is empty (allow all). An
 // unparseable peer address is refused when enforcing.
+//
+// Allowed: loopback, a TUNNEL_CONNECTOR_ADDRS entry, an ALLOWED_PEER_CIDRS
+// entry, or one of this host's own interface addresses (remoteAddrIsLocal: a
+// process on this host that connects to the host's LAN address arrives from
+// that address; a container on a bridge arrives from the bridge subnet and is
+// NOT admitted by this). The own-address check runs last, so only a peer that
+// matched nothing else pays for the kernel lookup.
 func peerAllowedNow(remoteAddr string) (allowed, enforced bool) {
 	raw := config.AllowedPeerCIDRs()
 	if raw == "" {
@@ -141,7 +221,10 @@ func peerAllowedNow(remoteAddr string) (allowed, enforced bool) {
 	if a.IsLoopback() || tunnelConnectorPeers().contains(remoteAddr) {
 		return true, true
 	}
-	return peerAllowed.get(raw).contains(a), true
+	if peerAllowed.get(raw).contains(a) {
+		return true, true
+	}
+	return remoteAddrIsLocal(remoteAddr), true
 }
 
 // deniedPeerLogCap bounds the peers remembered for logging: once per peer, never
@@ -155,6 +238,15 @@ const deniedPeerLogCap = 1024
 func newPeerAllowListHandler(next http.Handler) http.Handler {
 	logged := newOnceSet(deniedPeerLogCap)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Defence in depth for HTTP/3 0-RTT: early data arrives before the
+		// handshake finishes and, in quic-go, before the peer's address is
+		// validated, so RemoteAddr could be spoofed. The HTTP/3 server turns
+		// 0-RTT off (http3ServerQUICConfig); this refuses any request that
+		// still arrives early, whatever its peer address says.
+		if r.TLS != nil && !r.TLS.HandshakeComplete {
+			http.Error(w, "too early", http.StatusTooEarly)
+			return
+		}
 		allowed, _ := peerAllowedNow(r.RemoteAddr)
 		if allowed {
 			next.ServeHTTP(w, r)
@@ -179,9 +271,23 @@ func newPeerAllowListHandler(next http.Handler) http.Handler {
 	})
 }
 
-// warnPeerAllowListOpen logs, once at startup, that every peer is accepted.
-func warnPeerAllowListOpen() {
-	if config.AllowedPeerCIDRs() == "" {
-		lifecycleLog.Warn("ALLOWED_PEER_CIDRS is not set: this origin accepts a connection from any peer. Set it to the networks that should reach it (the tunnel connectors in TUNNEL_CONNECTOR_ADDRS and loopback are always allowed)")
+// startupPeerAllowList is the startup half: it refuses to start on an unusable
+// entry and logs the effective list. An empty value is valid and warns that
+// every peer is accepted; a match-everything entry (0.0.0.0/0, ::/0) warns that
+// the list restricts nothing.
+func startupPeerAllowList() error {
+	raw := config.AllowedPeerCIDRs()
+	if raw == "" {
+		lifecycleLog.Warn("ALLOWED_PEER_CIDRS is not set: this origin accepts a connection from any peer. Set it to the networks that should reach it (the tunnel connectors in TUNNEL_CONNECTOR_ADDRS, this host's own addresses and loopback are always allowed)")
+		return nil
 	}
+	if err := validatePeerAllowList(raw); err != nil {
+		return err
+	}
+	list := peerAllowed.get(raw)
+	lifecycleLog.Info("ALLOWED_PEER_CIDRS: only loopback, this host's own addresses, TUNNEL_CONNECTOR_ADDRS and [%s] may connect", list)
+	if open := list.openPrefixes(); len(open) > 0 {
+		lifecycleLog.Warn("ALLOWED_PEER_CIDRS contains %s, which matches every peer: the allow-list restricts nothing", strings.Join(open, ", "))
+	}
+	return nil
 }

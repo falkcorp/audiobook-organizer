@@ -1,14 +1,16 @@
 // file: internal/server/peer_allowlist_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 89583aea-53c7-4ab3-9f35-dea7d459f40f
 // last-edited: 2026-10-21
 
 package server
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -127,16 +129,116 @@ func TestPeerAllowList_InvalidEntryDoesNotDropItsNeighbours(t *testing.T) {
 }
 
 func TestParsePeerAllowList(t *testing.T) {
-	list, invalid := parsePeerAllowList("192.0.2.17/24, 203.0.113.9, ::ffff:198.51.100.0/120, ::ffff:0:0/80, fe80::1%eth0, 2001:db8::/32, , x")
+	list, invalid := parsePeerAllowList("192.0.2.17/24, 203.0.113.9, ::ffff:198.51.100.0/120, ::ffff:0:0/80, 2001:db8::/32, , x, fe80::5, fe80::6%nonexistent-if0")
 	require.Equal(t, []netip.Prefix{
 		netip.MustParsePrefix("192.0.2.0/24"),    // host bits masked
 		netip.MustParsePrefix("203.0.113.9/32"),  // bare address
 		netip.MustParsePrefix("198.51.100.0/24"), // mapped prefix written as IPv4
-		netip.MustParsePrefix("fe80::1/128"),     // zone dropped
 		netip.MustParsePrefix("2001:db8::/32"),
-	}, []netip.Prefix(list))
-	require.Equal(t, []string{"::ffff:0:0/80", "x"}, invalid, "a prefix shorter than the mapped block is refused, not guessed")
-	require.True(t, list.contains(netip.MustParseAddr("fe80::1%en7")), "a zoned peer matches its address")
+	}, list.prefixes)
+	require.Len(t, invalid, 4)
+	joined := strings.Join(invalid, "|")
+	for _, want := range []string{"::ffff:0:0/80", "x (", "fe80::5 (IPv6 link-local address without a zone", "fe80::6%nonexistent-if0"} {
+		require.Contains(t, joined, want)
+	}
+}
+
+// A zoned link-local entry is matched exactly, zone included, like a connector.
+func TestParsePeerAllowList_ZonedLinkLocalMatchesItsInterfaceOnly(t *testing.T) {
+	prev := resolveZone
+	resolveZone = func(z string) (string, zoneMatch) { return z, zoneFound }
+	t.Cleanup(func() { resolveZone = prev })
+	list, invalid := parsePeerAllowList("fe80::5%en7, fe80::/10")
+	require.Empty(t, invalid)
+	require.True(t, list.contains(netip.MustParseAddr("fe80::5%en7")))
+	require.True(t, list.contains(netip.MustParseAddr("fe80::99%en3")), "the /10 CIDR admits link-local on any interface")
+	only, _ := parsePeerAllowList("fe80::5%en7")
+	require.False(t, only.contains(netip.MustParseAddr("fe80::5%en3")), "same address, other interface")
+}
+
+func TestValidatePeerAllowList(t *testing.T) {
+	require.NoError(t, validatePeerAllowList(""))
+	require.NoError(t, validatePeerAllowList("192.0.2.0/24, 203.0.113.9"))
+	err := validatePeerAllowList("192.0.2.0/24, 192.0.2.0/33")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "192.0.2.0/33")
+}
+
+// A bad ALLOWED_PEER_CIDRS must stop the service starting, not be skipped.
+func TestConfigureAndStartHTTP_RefusesToStartOnABadAllowList(t *testing.T) {
+	setAllowedPeerCIDRs(t, "192.0.2.0/24, 10.0.0.0/99")
+	s := listenTestServer()
+	err := s.configureAndStartHTTP(listenTestConfig("0"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ALLOWED_PEER_CIDRS")
+	require.Contains(t, err.Error(), "10.0.0.0/99")
+	require.Nil(t, s.httpBoundAddr.Load(), "nothing may be bound")
+}
+
+func TestPeerAllowList_OpenPrefixesAreFlagged(t *testing.T) {
+	list, _ := parsePeerAllowList("0.0.0.0/0, ::/0, 192.0.2.0/24")
+	require.Equal(t, []string{"0.0.0.0/0", "::/0"}, list.openPrefixes())
+	require.Contains(t, list.String(), "192.0.2.0/24")
+}
+
+// This host's own interface addresses are allowed (a local process using the
+// LAN address), a bridge-subnet peer is not.
+func TestPeerAllowList_OwnInterfaceAddressIsAllowed(t *testing.T) {
+	setAllowedPeerCIDRs(t, "198.51.100.0/24")
+	prev := hostInterfaceAddrs
+	hostInterfaceAddrs = func() ([]netip.Addr, error) { return []netip.Addr{netip.MustParseAddr("192.0.2.77")}, nil }
+	t.Cleanup(func() { hostInterfaceAddrs = prev })
+	status, _ := peerGateStatus("192.0.2.77:5000")
+	require.Equal(t, http.StatusNoContent, status, "the host's own address")
+	status, reached := peerGateStatus("192.0.2.78:5000")
+	require.Equal(t, http.StatusForbidden, status, "a neighbour on the same subnet, e.g. a bridge container")
+	require.False(t, reached)
+}
+
+// HTTP/3 0-RTT: off in the QUIC config, and a request that still arrives before
+// the handshake completes is refused whatever its peer address.
+func TestHTTP3ServerQUICConfig_ZeroRTTIsOff(t *testing.T) {
+	require.False(t, http3ServerQUICConfig().Allow0RTT)
+}
+
+func TestPeerAllowList_EarlyDataIsRefused(t *testing.T) {
+	setAllowedPeerCIDRs(t, "192.0.2.0/24")
+	reached := false
+	h := newPeerAllowListHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	for _, tt := range []struct {
+		name     string
+		complete bool
+		want     int
+	}{{"handshake incomplete", false, http.StatusTooEarly}, {"handshake complete", true, http.StatusOK}} {
+		reached = false
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "192.0.2.5:5000" // an allowed peer: the early check is independent of the address
+		req.TLS = &tls.ConnectionState{HandshakeComplete: tt.complete}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		require.Equal(t, tt.want, w.Code, tt.name)
+		require.Equal(t, tt.complete, reached, tt.name)
+	}
+}
+
+// The port-80 listener is gated: tested through its handler because CI cannot
+// bind :80.
+func TestRedirectServerHandler_IsGatedAndRedirects(t *testing.T) {
+	setAllowedPeerCIDRs(t, "192.0.2.0/24")
+	h := redirectServerHandler("192.0.2.1", "8484")
+	req := httptest.NewRequest(http.MethodGet, "/library?x=1", nil)
+	req.RemoteAddr = "8.8.8.8:5000"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code, "an unlisted peer gets no redirect")
+	require.Empty(t, w.Header().Get("Location"))
+
+	req = httptest.NewRequest(http.MethodGet, "/library?x=1", nil)
+	req.RemoteAddr = "192.0.2.9:5000"
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	require.Equal(t, http.StatusMovedPermanently, w.Code)
+	require.Equal(t, "https://192.0.2.1:8484/library?x=1", w.Header().Get("Location"))
 }
 
 // The gate replaces gin's handler on EVERY serving listener. Each is driven
@@ -177,6 +279,8 @@ func TestConfigureAndStartHTTP_EveryListenerIsGatedByThePeerAllowList(t *testing
 	for name, h := range handlers {
 		require.Equal(t, http.StatusForbidden, probe(h, "8.8.8.8:5000"), name+": an unlisted peer must be refused")
 	}
+	require.NotNil(t, s.http3Server.QUICConfig, "HTTP/3 must not fall back to quic-go's 0-RTT default")
+	require.False(t, s.http3Server.QUICConfig.Allow0RTT)
 	require.Equal(t, http.StatusOK, probe(s.httpServer.Handler, "192.0.2.5:5000"), "an allowed peer reaches the router")
 	require.Equal(t, http.StatusOK, probe(s.http3Server.Handler, "127.0.0.1:5000"))
 }
