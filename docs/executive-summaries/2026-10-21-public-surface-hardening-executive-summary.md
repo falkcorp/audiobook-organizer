@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-21-public-surface-hardening-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: f48321db-42a2-44f8-a617-4c75ee6ae1ff -->
 <!-- last-edited: 2026-10-21 -->
 
@@ -63,4 +63,4 @@ Branch `fix/public-surface-hardening`. No separate spec. Drawn from an internal 
 
 **Why it mattered.** If a bug ever let an attacker slip a script into a page, the browser would have run it with the user's login.
 
-**The fix.** The server sends a content security policy. The one inline script in the page is allowed by a fingerprint worked out from the exact page being served, so editing it cannot leave the policy out of date. Styles still need to be allowed inline because the interface library creates them while running, and images may come from any secure address because metadata search shows cover pictures from outside providers.
+**The fix.** The server sends a content security policy. The one inline script in the page is allowed by a fingerprint worked out from the exact page being served, so editing it cannot leave the policy out of date. Styles still need to be allowed inline because the interface library creates them while running, and images may come from any secure address because metadata search shows cover pictures from outside providers. The page may also talk to one outside host, the organisation's own Cloudflare sign-in address, so it can tell an expired sign-in from an outage; no other outside address is allowed. When a browser blocks something, it sends a short report to the server, which keeps a rate-limited log line (with any secrets in the page address removed) so a broken page can be diagnosed.

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.59.0
+// version: 4.60.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-21
 
@@ -1641,6 +1641,11 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
 	s.router.GET("/api/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
 	s.router.GET("/api/v1/health", func(c *gin.Context) { s.systemHandler.HealthCheck(c) })
+
+	// Content-Security-Policy violation reports (csp.go points the policy here).
+	// Unauthenticated, rate limited and size capped (csp_report.go); registered
+	// before the /api/* redirect below so it keeps its /api/v1 path.
+	s.router.POST(cspReportPath, defaultCSPReporter.handle)
 
 	// Real-time events (SSE). Same pre-middleware-ordering rationale as /health.
 	// Gated behind auth (pen-test finding MED-2): the stream carries library

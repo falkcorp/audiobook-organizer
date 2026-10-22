@@ -1,5 +1,5 @@
 // file: internal/server/server_middleware.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
 // last-edited: 2026-10-21
 
@@ -103,6 +103,7 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		c.Header("X-XSS-Protection", "0") // tell browsers to use built-in XSS filters, not legacy mode
 		c.Header("Content-Security-Policy", contentSecurityPolicy())
+		c.Header("Reporting-Endpoints", cspReportGroup+"=\""+cspReportPath+"\"") // report-to target for the CSP's report-to directive
 		c.Header("Permissions-Policy", permissionsPolicy)
 
 		if c.Request.TLS != nil || strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https") {
