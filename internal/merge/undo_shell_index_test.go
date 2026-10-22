@@ -1,11 +1,12 @@
 // file: internal/merge/undo_shell_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e4b1d60-7a35-4c82-b0f9-2d6e8a3c5b17
 // last-edited: 2026-10-22
 
 package merge
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -137,4 +138,92 @@ func TestUndoShellIndex_StaleAfterAJournalWrite(t *testing.T) {
 
 	var nilIdx *UndoShellIndex
 	assert.True(t, nilIdx.Stale(), "no index at all is never current")
+}
+
+// An undecodable combine-journal row may be an undo that still needs a trashed
+// book, and it cannot say which: building the index fails closed (owner
+// decision 2026-10-22, like OpenAutoMergeLosers) and the error names the key
+// and the op that lists such rows. Skipping the row instead would let the
+// purge delete a shell the undo needs.
+func TestUndoShellIndex_UnreadableJournalRowFailsClosedNamingTheKey(t *testing.T) {
+	kv := &kvFake{m: map[string][]byte{}}
+	stamp := time.Date(2026, 10, 21, 22, 0, 0, 0, time.UTC)
+	journalWith(t, kv, CombineJournalApplied, true, "shell-ok", stamp)
+	const badKey = combineJournalPrefix + "01CORRUPT"
+	kv.m[badKey] = []byte("{not json")
+
+	idx, err := NewUndoShellIndex(kv)
+	require.Error(t, err)
+	assert.Nil(t, idx)
+	var ue *UnreadableCombineJournalsError
+	require.True(t, errors.As(err, &ue), "%v", err)
+	require.Len(t, ue.Rows, 1)
+	assert.Equal(t, badKey, ue.Rows[0].Key)
+	assert.Contains(t, err.Error(), badKey)
+	assert.Contains(t, err.Error(), CombineJournalCheckOp)
+	assert.Contains(t, err.Error(), "every purge is refused")
+
+	// Repairing (removing) the row restores normal behaviour.
+	delete(kv.m, badKey)
+	idx, err = NewUndoShellIndex(kv)
+	require.NoError(t, err)
+	_, held := idx.Holds(shellRow("shell-ok", stamp))
+	assert.True(t, held)
+}
+
+// With no corrupt rows the index behaves as before, including a store that
+// holds unrelated undecodable keys outside the combine-journal prefix.
+func TestUndoShellIndex_NoUnreadableRowsBehavesNormally(t *testing.T) {
+	kv := &kvFake{m: map[string][]byte{"merge:other:x": []byte("{not json")}}
+	stamp := time.Date(2026, 10, 21, 22, 0, 0, 0, time.UTC)
+	journalWith(t, kv, CombineJournalApplied, true, "shell", stamp)
+	idx, err := NewUndoShellIndex(kv)
+	require.NoError(t, err)
+	_, held := idx.Holds(shellRow("shell", stamp))
+	assert.True(t, held)
+}
+
+// Many bad rows: the message names the first few and counts the rest.
+func TestUnreadableCombineJournalsError_CapsTheKeysItNames(t *testing.T) {
+	var rows []UnreadableCombineJournal
+	for i := 0; i < 8; i++ {
+		rows = append(rows, UnreadableCombineJournal{Key: combineJournalPrefix + string(rune('a'+i))})
+	}
+	msg := (&UnreadableCombineJournalsError{Rows: rows}).Error()
+	assert.Contains(t, msg, "8 combine journal row(s)")
+	assert.Contains(t, msg, `"`+combineJournalPrefix+`a"`)
+	assert.NotContains(t, msg, `"`+combineJournalPrefix+`h"`)
+	assert.Contains(t, msg, "and 3 more")
+}
+
+// CheckCombineJournals lists the unreadable rows by key, sorted, and counts
+// every row; the lenient lister (informational listings, pointer backfill)
+// still skips them. If NewUndoShellIndex were changed to use the lenient
+// lister, TestUndoShellIndex_UnreadableJournalRowFailsClosedNamingTheKey fails.
+func TestCheckCombineJournals_ListsUnreadableRowsAndLenientListerStillSkips(t *testing.T) {
+	kv := &kvFake{m: map[string][]byte{}}
+	stamp := time.Date(2026, 10, 21, 22, 0, 0, 0, time.UTC)
+	journalWith(t, kv, CombineJournalApplied, true, "shell", stamp)
+	kv.m[combineJournalPrefix+"02B"] = []byte("[]")
+	kv.m[combineJournalPrefix+"01A"] = []byte("{not json")
+
+	check, err := CheckCombineJournals(kv)
+	require.NoError(t, err)
+	assert.Equal(t, 3, check.Rows)
+	require.Len(t, check.Unreadable, 2)
+	assert.Equal(t, combineJournalPrefix+"01A", check.Unreadable[0].Key)
+	assert.Equal(t, combineJournalPrefix+"02B", check.Unreadable[1].Key)
+	assert.NotEmpty(t, check.Unreadable[0].Err)
+
+	listed, err := listCombineJournals(kv, 0)
+	require.NoError(t, err)
+	assert.Len(t, listed, 1, "the lenient lister skips undecodable rows (warning only)")
+}
+
+func TestCheckCombineJournals_CleanStoreReportsNone(t *testing.T) {
+	kv := &kvFake{m: map[string][]byte{}}
+	check, err := CheckCombineJournals(kv)
+	require.NoError(t, err)
+	assert.Zero(t, check.Rows)
+	assert.Empty(t, check.Unreadable)
 }
