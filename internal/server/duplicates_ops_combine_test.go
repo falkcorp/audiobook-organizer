@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops_combine_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d2e6b14-3a87-4c50-b1f9-7e0a5c3d8f26
 // last-edited: 2026-10-22
 
@@ -113,4 +113,19 @@ func TestBookCombineOpRun_RequiresKeepAndMergeIDs(t *testing.T) {
 
 func TestCombinedAwayIDs(t *testing.T) {
 	require.Equal(t, []string{"b", "c"}, combinedAwayIDs([]string{"b", "a", "c"}, "a"))
+}
+
+// The Undo action on the outcome toast is built from operation_id, so a
+// success payload must never lack it: the service's id when it reports one,
+// the op's own id otherwise (the service journals under the op's id).
+func TestNewBookCombineOpResult_AlwaysCarriesTheUndoOperationID(t *testing.T) {
+	got := newBookCombineOpResult(&merge.CombineResult{PrimaryID: "a", FilesMoved: 3, BooksDeleted: 2}, "op-self")
+	require.Equal(t, "op-self", got.OperationID)
+	require.Contains(t, got.Message, "revert operation op-self")
+
+	got = newBookCombineOpResult(&merge.CombineResult{PrimaryID: "a", OperationID: "op-svc"}, "op-self")
+	require.Equal(t, "op-svc", got.OperationID)
+
+	got = newBookCombineOpResult(&merge.CombineResult{PrimaryID: "a", OperationID: "op-svc", JournalPending: "j"}, "op-self")
+	require.Contains(t, got.Message, "reverting operation op-svc")
 }

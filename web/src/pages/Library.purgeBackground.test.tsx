@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.purgeBackground.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e1c4b92-3a68-4d05-9f27-b84d0c6a1e53
 // last-edited: 2026-10-22
 
@@ -170,5 +170,85 @@ describe('purge deleted in the background', () => {
     await waitFor(() =>
       expect(vi.mocked(api.getSoftDeletedBooks).mock.calls.length).toBeGreaterThan(trashLoads)
     );
+  });
+
+  const openPurgeDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+    render(
+      <MemoryRouter>
+        <ToastProvider>
+          <Library />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+    await user.click(await screen.findByRole('button', { name: /purge deleted/i }));
+    return screen.findByRole('button', { name: 'Purge 2 books' });
+  };
+
+  it('shows a refusal once, in the dialog while it is open, with no toast repeating it', async () => {
+    vi.mocked(api.awaitPurgeResult).mockResolvedValueOnce(preview as never);
+    vi.mocked(api.purgeSoftDeletedBooks).mockRejectedValue(
+      new api.ApiError('The undo ledger index is not ready yet.', 409)
+    );
+    const user = userEvent.setup();
+    await user.click(await openPurgeDialog(user));
+
+    const alert = await screen.findByTestId('purge-error');
+    expect(alert).toHaveTextContent('The undo ledger index is not ready yet.');
+    // The dialog is open and says it; no toast says it again.
+    expect(
+      useAppStore.getState().notifications.filter((n) => n.message.includes('undo ledger index'))
+    ).toHaveLength(0);
+    expect(screen.getByRole('dialog', { name: /purge soft-deleted/i })).toBeInTheDocument();
+  });
+
+  it('toasts a failed outcome when the dialog is closed', async () => {
+    vi.mocked(api.awaitPurgeResult).mockResolvedValueOnce(preview as never);
+    let fail: (e: Error) => void = () => {};
+    vi.mocked(api.awaitPurgeResult).mockImplementationOnce(
+      () =>
+        new Promise<api.PurgeResult>((_resolve, reject) => {
+          fail = reject;
+        })
+    );
+    const user = userEvent.setup();
+    await user.click(await openPurgeDialog(user));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /purge soft-deleted/i })).toBeNull()
+    );
+    fail(new Error('The purge ended as failed and no result was stored (operation op-purge).'));
+    await waitFor(() => expect(lastToast().message).toContain('no result was stored'));
+    expect(lastToast().severity).toBe('error');
+  });
+
+  it('a lost connection is not a failed purge: it says "still checking" and keeps the run in progress', async () => {
+    vi.mocked(api.awaitPurgeResult).mockResolvedValueOnce(preview as never);
+    let finish: (r: api.PurgeResult) => void = () => {};
+    vi.mocked(api.awaitPurgeResult).mockImplementationOnce(
+      (_id, _onProgress, opts) =>
+        new Promise<api.PurgeResult>((resolve) => {
+          finish = resolve;
+          // What the real awaitPurgeResult does when a poll fails: say so
+          // once and keep polling.
+          opts?.onTrouble?.(new Error('network down'));
+        })
+    );
+    const user = userEvent.setup();
+    await user.click(await openPurgeDialog(user));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /purge soft-deleted/i })).toBeNull()
+    );
+    await waitFor(() => expect(lastToast().message).toContain('Still checking on the purge'));
+    expect(lastToast().severity).toBe('warning');
+    expect(lastToast().message).not.toMatch(/failed/);
+
+    // Still running: the reopened dialog cannot start another purge and says
+    // it is still checking.
+    await user.click(screen.getByRole('button', { name: /purge deleted/i }));
+    expect(await screen.findByRole('button', { name: 'Purging...' })).toBeDisabled();
+    expect(screen.getByTestId('purge-still-checking')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    finish({ attempted: 3, purged: 2, files_deleted: 0, kept_undo_possible: 1, errors: [] });
+    await waitFor(() => expect(lastToast().message).toMatch(/Purged 2 of 3/));
   });
 });

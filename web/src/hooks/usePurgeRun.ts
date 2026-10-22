@@ -1,5 +1,5 @@
 // file: web/src/hooks/usePurgeRun.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: c41e7a92-5b08-4d3f-9a6e-2f8d0b7c1e35
 // last-edited: 2026-10-22
 
@@ -16,6 +16,11 @@ export interface PurgeRunState {
   error: string | null;
   /** the purge operation's id, once the server has queued it (null before, and when it refused) */
   operationId: string | null;
+  /**
+   * True while polls are failing: the purge may well still be running, so the
+   * run stays in progress and keeps polling (it is not an error).
+   */
+  stillChecking: boolean;
 }
 
 /** How a run ended: with a result (possibly stopped early), or without one. */
@@ -37,6 +42,7 @@ const IDLE: PurgeRunState = {
   result: null,
   error: null,
   operationId: null,
+  stillChecking: false,
 };
 
 function messageOf(e: unknown): string {
@@ -53,16 +59,20 @@ function messageOf(e: unknown): string {
 export function usePurgeRun(
   onFinished: (end: PurgeRunEnd) => void,
   /** fires once the server has queued the purge (it is then running in the background) */
-  onStarted?: (operationId: string) => void
+  onStarted?: (operationId: string) => void,
+  /** fires once when contact with the running purge is first lost; the run keeps polling */
+  onTrouble?: (operationId: string) => void
 ): PurgeRunController {
   const [state, setState] = useState<PurgeRunState>(IDLE);
   const abortRef = useRef<AbortController | null>(null);
   const runningRef = useRef(false);
   const onFinishedRef = useRef(onFinished);
   const onStartedRef = useRef(onStarted);
+  const onTroubleRef = useRef(onTrouble);
   useEffect(() => {
     onFinishedRef.current = onFinished;
     onStartedRef.current = onStarted;
+    onTroubleRef.current = onTrouble;
   });
 
   // Only the page going away stops the polling.
@@ -85,18 +95,34 @@ export function usePurgeRun(
         (p) => {
           if (ac.signal.aborted) return;
           setState((s) =>
-            s.phase === 'running' ? { ...s, progress: monotonicProgress(s.progress, p) } : s
+            s.phase === 'running'
+              ? { ...s, progress: monotonicProgress(s.progress, p), stillChecking: false }
+              : s
           );
         },
-        { signal: ac.signal }
+        {
+          signal: ac.signal,
+          // A failed poll is not a failed purge: keep the run in progress
+          // (the buttons stay disabled) and keep polling until it ends.
+          onTrouble: () => {
+            if (ac.signal.aborted) return;
+            setState((s) => (s.phase === 'running' ? { ...s, stillChecking: true } : s));
+            onTroubleRef.current?.(handle.id);
+          },
+        }
       );
       if (ac.signal.aborted) return;
-      setState({ phase: 'done', progress: null, result, error: null, operationId: handle.id });
+      setState({
+        ...IDLE,
+        phase: 'done',
+        result,
+        operationId: handle.id,
+      });
       onFinishedRef.current({ result, error: null, operationId: handle.id });
     } catch (e) {
       if (ac.signal.aborted) return;
       const error = messageOf(e);
-      setState({ phase: 'error', progress: null, result: null, error, operationId });
+      setState({ ...IDLE, phase: 'error', error, operationId });
       onFinishedRef.current({ result: null, error, operationId });
     } finally {
       runningRef.current = false;

@@ -7,7 +7,7 @@ The request is checked first, so a request that cannot succeed fails the call:
 400 for a repeated id or empty `merge_ids`, 404 for a missing book, 409 for a
 soft-deleted or iTunes-protected book (`merge.PreflightCombine`). The combine's
 outcome is the operation result (`GET /operations/:id/result`): `primary_id`,
-`files_moved`, `books_deleted`, `journal_id`, `operation_id` (the operation's
+`files_moved`, `books_deleted`, `journal_id`, `operation_id` (always set on success; the operation's
 own id: `POST /operations/:id/revert` undoes the combine), `journal_pending`,
 `warnings`, `message`, and on failure `failed`, `error` and, for a combine that
 stopped part-way, `incomplete`. The candidate clean-up after a combine moved

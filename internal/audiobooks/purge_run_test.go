@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d2e6a41-5f07-4b93-a1c8-3e9b7d04f5a2
 // last-edited: 2026-10-22
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -165,10 +166,12 @@ func TestRunPurge_ProgressIsCalledConcurrentlySafely(t *testing.T) {
 	var calls atomic.Int64
 	var mu sync.Mutex
 	var last [2]int
+	var seen []int
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{Progress: func(done, total int) {
 		calls.Add(1)
 		mu.Lock()
 		last = [2]int{done, total}
+		seen = append(seen, done)
 		mu.Unlock()
 	}})
 	require.NoError(t, err)
@@ -177,6 +180,8 @@ func TestRunPurge_ProgressIsCalledConcurrentlySafely(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, [2]int{n, n}, last)
+	// Workers finish books concurrently, but the figure only ever moves forward.
+	assert.True(t, sort.IntsAreSorted(seen), "progress went backwards: %v", seen)
 }
 
 // A cancelled pass says it stopped early and does not overwrite the remembered
@@ -328,4 +333,34 @@ func TestUndoShells_RebuildsOnlyWhenAJournalWasWritten(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, held)
 	assert.Equal(t, 1, builds, "one rebuild serves every later check")
+}
+
+// A book that failed is "could not be decided": it counts in Failed only, never
+// in Purgeable, on a preview or after a real pass, and the breakdown after a
+// real pass says nothing is purgeable (a preview, not a failed run, says what a
+// next pass would purge).
+func TestPurgeResult_FailedBooksAreNeverPurgeable(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		r := &PurgeResult{DryRun: dry, Attempted: 3}
+		r.add("ok", purgeOutcome{kind: purgePurged})
+		r.add("bad", purgeOutcome{kind: purgeFailed, errs: []string{"bad: boom"}})
+		r.add("carry", purgeOutcome{kind: purgeCarryFailed})
+		if dry {
+			assert.Equal(t, 1, r.Purgeable)
+			assert.Zero(t, r.Purged)
+		} else {
+			assert.Equal(t, 1, r.Purged)
+			assert.Zero(t, r.Purgeable, "a real pass counts nothing as purgeable")
+		}
+		assert.Equal(t, 1, r.Failed)
+		assert.Equal(t, 1, r.CarryFailed)
+		b := breakdownOf(r, time.Now())
+		assert.Equal(t, 2, b.Failed)
+		if dry {
+			assert.Equal(t, 1, b.Purgeable, "the failed books are not in the purgeable figure")
+		} else {
+			assert.Zero(t, b.Purgeable)
+			assert.Equal(t, 2, b.Total, "what remains: the two that could not be decided")
+		}
+	}
 }
