@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -32,6 +32,11 @@ two made merges and purges look like they did nothing.
   "Discard progress and purge". It is counted as "kept: combine undo possible".
   These books stay in the trash until the combine is undone, because undo
   records never expire.
+- The undo hold is checked again for each book at the moment it would be
+  deleted, not only once when the purge starts. A combine that finished while
+  a purge was running used to slip past the start-of-run check and lose its
+  leftover books. If the undo records cannot be read at that moment, the book is
+  kept and reported with the reason.
 - Purge now shows a **preview first** ("N can be purged, M are kept and why"),
   then runs in the background with a progress bar, then shows the full
   breakdown. The trash list also shows how many books are purgeable now versus
@@ -43,6 +48,13 @@ two made merges and purges look like they did nothing.
   do ask for that and another live book still has the same file, the delete
   goes ahead, the fingerprint is not blocked, and the message names the other
   books. Blocking it would have stopped that other book from being re-imported.
+
+- Merging no longer refuses just because a version group contains an iTunes
+  copy you did not select. The merge changes only that copy's group and
+  "primary" marker in the database; its file, location and tags are never
+  touched. An iTunes book you do select is still refused, and combining books
+  (which moves files) still refuses iTunes inputs. The owner approved this on
+  22 October.
 
 ## What did not change
 
