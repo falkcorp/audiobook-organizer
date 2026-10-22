@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-21
 
@@ -51,6 +51,7 @@ var inviteEnvOnlySettings = []struct {
 	{"cf_guests_policy_id", "CF_GUESTS_POLICY_ID"},
 	{"cf_policy_api_token", "CF_POLICY_API_TOKEN"},
 	{"tunnel_connector_addrs", "TUNNEL_CONNECTOR_ADDRS"},
+	{"allowed_peer_cidrs", "ALLOWED_PEER_CIDRS"},
 }
 
 // DefaultSMTPPort is used when SMTP_HOST is set and SMTP_PORT is not.
@@ -87,6 +88,7 @@ func applyInviteEnv(c *Config) {
 	c.CFGuestsPolicyID = strings.TrimSpace(viper.GetString("cf_guests_policy_id"))
 	c.CFPolicyAPIToken = strings.TrimSpace(viper.GetString("cf_policy_api_token"))
 	c.TunnelConnectorAddrs = strings.TrimSpace(viper.GetString("tunnel_connector_addrs"))
+	c.AllowedPeerCIDRs = strings.TrimSpace(viper.GetString("allowed_peer_cidrs"))
 }
 
 // inviteEnvOnlyKeyInUpdate returns the refusal for a PUT /config payload that
@@ -121,6 +123,16 @@ func TunnelConnectorAddrs() string {
 	mu.RLock()
 	defer mu.RUnlock()
 	return AppConfig.TunnelConnectorAddrs
+}
+
+// AllowedPeerCIDRs returns allowed_peer_cidrs under the read lock: one field,
+// not a Snapshot copy, because the peer allow-list reads it on every request.
+// The value is a comma-separated list of CIDR networks and bare IP addresses;
+// see Config.AllowedPeerCIDRs for the empty and all-invalid cases.
+func AllowedPeerCIDRs() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.AllowedPeerCIDRs
 }
 
 // InviteMailConfigured reports whether invitation email can be sent: a host and
