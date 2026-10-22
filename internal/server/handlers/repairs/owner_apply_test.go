@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -65,8 +66,7 @@ func ownerSetupWithEmail(t *testing.T, caller ownerCaller, ownerEmail string) (*
 		caller.user = ownerUser
 	}
 	_, enq, ops := setup(t)
-	ops.rows["op-owner-plan"] = &database.OperationV2Row{ID: "op-owner-plan", DefID: repairs.PlanOpID, Status: "completed",
-		Params: `{"fixer_id":"version-group-primary-repair"}`, ResultData: storedPlan(t, "version-group-primary-repair", ownerPlanRows())}
+	ops.addPlan(t, "op-owner-plan", "version-group-primary-repair", time.Time{}, ownerPlanRows())
 	reg := repairs.NewRegistry()
 	require.NoError(t, reg.Register(stubFixer{id: "version-group-primary-repair"}))
 	h := New(reg, enq, ops)

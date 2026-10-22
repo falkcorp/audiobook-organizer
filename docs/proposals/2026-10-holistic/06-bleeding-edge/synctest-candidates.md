@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/06-bleeding-edge/synctest-candidates.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: e7f30c58-2b9d-4a61-a4c2-90d5b8e1f6a3 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-22 -->
 
 # synctest candidates (appendix to 06, PRs P14+)
 
@@ -55,7 +55,7 @@ Command: `grep -rcE --include=*_test.go 'time\.Sleep\(' .` at HEAD, 2026-10-08. 
 | 2 | `internal/server/file_io_pool_shutdown_test.go` |
 | 2 | `internal/scanner/process_file_timeout_test.go` |
 | 2 | `internal/plugins/maintenance/fragment_attribution_test.go` |
-| 2 | `internal/plugins/maintenance/bounded_call_test.go` |
+| 2 | `internal/boundedcall/boundedcall_test.go` |
 | 2 | `internal/organizer/organize_scan_lock_test.go` |
 | 2 | `internal/organizer/backup_progress_test.go` |
 | 2 | `internal/operations/registry/writeset_gate_test.go` |

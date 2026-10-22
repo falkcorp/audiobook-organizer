@@ -1,7 +1,7 @@
 // file: internal/repairs/wire.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -22,7 +22,8 @@ type PlanParams struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// PlanResult is the stored result of repairs.plan: every row, uncapped.
+// PlanResult is the result of repairs.plan: its summary is the stored op result
+// and every row (uncapped) is stored beside it.
 type PlanResult struct {
 	FixerID    string          `json:"fixer_id"`
 	Params     json.RawMessage `json:"params,omitempty"`
@@ -36,8 +37,21 @@ type PlanResult struct {
 	ByClass map[string]int `json:"by_class,omitempty"`
 	// OwnerApplicable counts the skipped rows the owner may apply himself
 	// (Row.OwnerApplicable); the owner_applicable filter pages them.
-	OwnerApplicable int   `json:"owner_applicable,omitempty"`
-	Rows            []Row `json:"rows"`
+	OwnerApplicable int `json:"owner_applicable,omitempty"`
+	// RowStore names where the plan's rows are stored: PlanRowStoreV1 means
+	// beside the operation (SavePlan), one key per row. A stored plan without
+	// it is the older shape (every row inside the operation's result) and is
+	// refused with ErrPlanLegacyFormat: run the plan again.
+	RowStore string `json:"row_store,omitempty"`
+	// Rows are every row of the plan, in RowID order. They are NOT part of the
+	// stored result (json:"-"): RunPlan returns them in memory, SavePlan writes
+	// them under the plan op's id, and a plan read back by LoadPlan carries
+	// none of them, reading a page (Page) or a selection (Select) from the
+	// store on demand.
+	Rows []Row `json:"-"`
+	// stored reads the rows of a plan loaded from the store; nil for the plan
+	// RunPlan just built, whose Rows are in memory.
+	stored *storedRows
 }
 
 // RowsPage is one page of a stored plan.

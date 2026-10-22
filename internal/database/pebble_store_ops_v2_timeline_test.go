@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package database
 
@@ -1042,6 +1042,11 @@ func init() {
 		}
 		opv2KeySinks[role] = m
 	}
+	// The sweep removes a hollow row's per-run row ranges (opv2:row: and
+	// opv2:rowix:, built from the hollow id) with a range delete. The hollow
+	// id derives from the opv2:op: key it walked, so the key-flow rule sees
+	// it reach DeleteRange; it is the same deletion DeleteOperationV2 makes.
+	opv2KeySinks["sweep"]["DeleteRange"] = true
 }
 
 func opv2CalleeName(call *ast.CallExpr) string {

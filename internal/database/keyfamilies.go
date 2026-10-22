@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package database
 
@@ -260,6 +260,8 @@ var keyFamilies = []KeyFamily{
 	{"opv2:op:", "operations v2 rows", "internal/database/pebble_store_ops_v2.go"},
 	{"opv2:open:", "timeline index: op not completed (TASK-A5)", "internal/database/pebble_store_ops_v2.go"},
 	{"opv2:q:", "operations v2 queue", "internal/database/pebble_store_ops_v2.go"},
+	{"opv2:row:", "blob rows owned by an operation (a repairs plan's rows), OpRowStore", "internal/database/pebble_store_op_rows.go"},
+	{"opv2:rowix:", "per-row index of the opv2:row: set (class, skip kind), scanned without the rows", "internal/database/pebble_store_op_rows.go"},
 	{"opv2:state:", "operations v2 resume state", "internal/database/pebble_store_ops_v2.go"},
 	{"opv2:strike:", "operations v2 failure strikes", "internal/database/pebble_store_ops_v2.go"},
 	{"opv3:", "operations v3 (05-PR4): runs, indexes, audit trail, chunk ledger", "internal/database/pebble_store_ops_v3.go"},

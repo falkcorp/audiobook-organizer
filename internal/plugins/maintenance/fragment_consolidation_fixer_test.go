@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.31.3
+// version: 1.31.4
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -69,7 +70,7 @@ func newFragFixture(t *testing.T) *fragFixture {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	f := &fragFixture{s: newFragStore(t), root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
-	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
+	f.ops = &planOps{MemOpRows: dbtest.NewMemOpRows(), rows: map[string]*database.OperationV2Row{}}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: f.s, root: f.root}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	return f
 }
@@ -3564,7 +3565,7 @@ func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, fun
 	t.Cleanup(closeStore)
 	s.WaitForWarmup()
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
-	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
+	f.ops = &planOps{MemOpRows: dbtest.NewMemOpRows(), rows: map[string]*database.OperationV2Row{}}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s, root: root}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	orig, copies := f.seedChapterCopies(t, folder, nil)
 	f.organizeCopiesFixture(t, org, orig, copies)
@@ -3931,7 +3932,7 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
-	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
+	f.ops = &planOps{MemOpRows: dbtest.NewMemOpRows(), rows: map[string]*database.OperationV2Row{}}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s, root: root}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	const n, cut, noise = 346, 300, 300000
 	var ids []string

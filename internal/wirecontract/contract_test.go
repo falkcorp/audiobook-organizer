@@ -1,7 +1,7 @@
 // file: internal/wirecontract/contract_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8e3a6b14-0c5d-4f72-9a81-d2b7e4c6f039
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // Package wirecontract pins the JSON the generated TypeScript types describe
 // (07-F1). For each type tygo generates (tygo.yaml) it marshals a fully
@@ -189,7 +189,6 @@ var wireTypes = []reflect.Type{
 var nilableWithoutOmit = map[string]string{
 	"repairs.Row.BookIDs":                   "RunPlan and LoadPlan (PlanResult.normalize) replace nil with []",
 	"repairs.PlanResult.SkippedByKind":      "RunPlan builds it non-nil; normalize covers stored plans",
-	"repairs.PlanResult.Rows":               "RunPlan and normalize replace nil with []",
 	"repairs.RowsPage.SkippedByKind":        "copied from a normalized PlanResult",
 	"repairs.RowsPage.SkippedByKindInClass": "may be null: tstype tag on the field says so",
 	"repairs.RowsPage.Rows":                 "Page initialises []Row{}",

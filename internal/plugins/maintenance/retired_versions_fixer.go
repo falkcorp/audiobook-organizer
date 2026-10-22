@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-22
 
@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -39,9 +40,12 @@ import (
 const retiredVersionsFixerID = "retired-versions"
 
 // retiredMinAgeDaysDefault is the owner's minimum age (2026-10-22): a trashed
-// book is not a candidate until it has sat in the trash this many days, which
-// keeps the merge that trashed it inside its own undo window. The min_age_days
-// param overrides it (0 turns the gate off).
+// book is not a candidate until it has sat in the trash this many days, a
+// waiting period in which a mistaken delete is likely to be noticed. It says
+// nothing about merge undo: a combine journal does not expire, so a book can be
+// absorbed by a combine that is still undoable long after this age passes (see
+// the combine_undo_aware flag). The min_age_days param overrides it (0 turns the
+// gate off).
 const retiredMinAgeDaysDefault = 14
 
 // Categories of a retired-versions row. Each row carries exactly one, as its
@@ -55,36 +59,50 @@ const retiredMinAgeDaysDefault = 14
 // gathered for every row, so a row carries its target and its evidence
 // whatever category it lands in. The reads that cost a store or disk round
 // trip (the stat of a no-target row's files, the owner-veto lookup, the
-// combine-journal index, the symlink-resolved iTunes check) happen at their own
+// symlink-resolved iTunes check, the owner-manual check) happen at their own
 // gate, so a row that an earlier gate decided never pays for them.
 //
-//  1. undo_still_possible: an unreversed combine-journal entry names this
-//     book as absorbed, so purging or retiring it would make that combine
-//     non-undoable. First, because it holds whatever else is true of the
-//     book: a combine-absorbed shell is usually labelled "deleted", often
-//     has no version group, and may own no file rows any more, and every one
-//     of those would otherwise file it under a category a purge reads as
-//     safe (the 2026-10-21 purge made 21 combines non-undoable that way).
-//     The journal index is read once per run; a read that fails fails the
-//     plan, because no row can be classified without it.
-//  2. trash_labelled_deleted: library_state is "deleted". Three paths write
+// A book that an unreversed combine journal names as absorbed is NOT a
+// category: it is classified by the rules below like any other book and
+// carries the flag combine_undo_aware (Current, plus an evidence line naming
+// the journal), because the owner's decision of 2026-10-22 is to make the
+// cleanup undo-aware rather than to hold those books. Retiring one is meant to
+// be reversible by undoing the combine (the apply side, a later PR, journals
+// the retire against the combine journal and UndoCombine reverses it first).
+// The journal index is read once per run; a read that fails fails the plan,
+// because no row can be flagged without it. Only combine journals
+// ("merge:combine-journal:") are read: dedup auto-merge journals
+// ("dedup:automerge:") live in the embedding store, which the plugin's deps do
+// not expose, and carry their own undo (UnmergeAuto restores both book rows
+// from their book_ver snapshots); the apply PR must read them too, and until
+// then the minimum age is all that stands between a book they name and a
+// retire.
+//
+//  1. trash_labelled_deleted: library_state is "deleted". Three paths write
 //     that label (a merge, a manual delete, a bulk delete), so it does not
 //     say the owner deleted the book on purpose; the row is left alone.
-//  3. no_book_files: the book owns no book_file row, so there is nothing to
+//  2. no_book_files: the book owns no book_file row, so there is nothing to
 //     retire. It needs no retire to be purged.
-//  4. target_ambiguous: the version group has live members but no single
+//  3. target_ambiguous: the version group has live members but no single
 //     primary (versionprimary.Incumbent returns nil). Never guessed.
-//  5. no_target_files_missing / no_target_files_present: no live target (no
+//  4. no_target_files_missing / no_target_files_present: no live target (no
 //     live group member, no group, and no live book at the end of its
 //     merged-into chain). NOT retired: the book stays in the trash. Split by
 //     whether any of its files is still on disk (an os.Stat per file; a stat
 //     that cannot be answered counts the file as present and is reported as
 //     rows_stat_unknown).
-//  6. owner_vetoed: the owner rejected joining this book and its target
+//  5. owner_vetoed: the owner rejected joining this book and its target
 //     (decisions.PairVetoed, same_work or same_copy).
-//  7. itunes_needs_owner_approval: a file of the book OR of its target sits
+//  6. itunes_needs_owner_approval: a file of the book OR of its target sits
 //     under the frozen books/itunes/** tree, symlinks resolved. The owner
 //     approves these separately.
+//  7. owner_manual_only: the book OR its target is Doctor Who / Big Finish /
+//     Torchwood by path, series, title, credits, transcribed fields or a
+//     franchise tag (repairs.GuardOwnerManualBooks, the framework guard's own
+//     check, trashed books included: the guard RunPlan runs passes over a
+//     trashed book, so the fixer asks it itself). The owner applies these by
+//     hand; without this category such a row would be counted would_retire and
+//     then skipped by the framework's guard.
 //  8. age_unknown / too_recent: soft-deleted less than min_age_days ago, or no
 //     soft-delete time on the row.
 //  9. has_listening_state / listening_state_unknown: any user has listening
@@ -103,7 +121,7 @@ const (
 	retCatNoTargetMissing  = "no_target_files_missing"
 	retCatNoTargetPresent  = "no_target_files_present"
 	retCatVetoed           = "owner_vetoed"
-	retCatUndoWindow       = "undo_still_possible"
+	retCatOwnerManual      = "owner_manual_only"
 	retCatITunes           = "itunes_needs_owner_approval"
 	retCatAgeUnknown       = "age_unknown"
 	retCatTooRecent        = "too_recent"
@@ -144,7 +162,7 @@ var errRetiredApplyNotBuilt = errors.New("retired-versions: apply is not impleme
 const retiredMergedHops = 10
 
 // retiredStatMaxAbandoned caps how many of ONE run's timed-out file stats may
-// still be hung. A stat that times out is abandoned, not stopped (boundedCall):
+// still be hung. A stat that times out is abandoned, not stopped (boundedcall.Call):
 // its goroutine, and the OS thread blocked in the syscall, lasts until the
 // mount answers. Past this many at once the mount is dead and continuing would
 // only stack threads (48 workers on a dead share would pass the runtime's 10k
@@ -160,8 +178,9 @@ var retiredStatMaxAbandoned int64 = 8
 // logs it at start when non-zero.
 var retiredStatsAbandoned atomic.Int64
 
-// errRetiredUndoRead fails a plan whose combine journals cannot be read: every
-// row's category depends on them, so there is no honest partial preview.
+// errRetiredUndoRead fails a plan whose combine journals cannot be read: which
+// rows carry the combine_undo_aware flag depends on them, so a partial preview
+// would show some combine-absorbed rows without it.
 var errRetiredUndoRead = errors.New("retired-versions: the combine journals cannot be read")
 
 // errRetiredStatCap fails a plan whose file stats are hanging in bulk.
@@ -224,8 +243,11 @@ func (f *retiredVersionsFixer) Description() string {
 		"moved onto the live book it lost to, as a hidden retired version, never deleted. Each row names its " +
 		"target and says why a book would NOT be retired: no live target, trashed under min_age_days ago " +
 		"(14 by default; the min_age_days param overrides it, 0 turns the gate off), has listening state, " +
-		"files under the iTunes library on either side, labelled deleted, an owner veto on the pair, or a " +
-		"merge that can still be undone. The plan's rule 5 (a content-hash match between the book and its " +
+		"files under the iTunes library on either side, Doctor Who / Big Finish / Torchwood on either side " +
+		"(the owner applies those by hand), labelled deleted, or an owner veto on the pair. A book that a " +
+		"combine journal not yet undone names as absorbed is classified like any other and flagged " +
+		"combine_undo_aware: its retire is meant to be reversible by undoing that combine, and the plan " +
+		"counts those rows separately. The plan's rule 5 (a content-hash match between the book and its " +
 		"target) is not applied yet. Nothing is written; Apply is not built, so this fixer has no Apply " +
 		"control."
 }
@@ -290,8 +312,13 @@ type retiredRun struct {
 	// resolver settles symlinks for the iTunes check; its cache is shared by
 	// every worker and is safe for that.
 	resolver *repairs.PathResolver
-	minAge   time.Duration
-	now      time.Time
+	// guard, tags and series are the framework guard's inputs, the ones
+	// runRepairsPlan hands RunPlan, for the owner-manual check.
+	guard  repairs.GuardReader
+	tags   repairs.GuardTagReader
+	series repairs.SeriesNamer
+	minAge time.Duration
+	now    time.Time
 
 	// stat, bound and maxAbandoned are read once, so an abandoned stat never
 	// reads a field a test is restoring.
@@ -312,11 +339,18 @@ func (f *retiredVersionsFixer) newRun(params json.RawMessage) (*retiredRun, erro
 	if err != nil {
 		return nil, err
 	}
-	store := f.p.deps.OpsStore()
+	ops := f.p.deps.OpsStore()
 	paths := f.p.deps.FragmentRepairReader()
 	users := f.p.deps.MergeUserStateStore()
-	if store == nil || paths == nil || users == nil {
+	if ops == nil || paths == nil || users == nil {
 		return nil, fmt.Errorf("database not initialized")
+	}
+	// Without the series names the owner-manual check cannot see a Doctor Who
+	// book whose path does not say so, so a failed read fails the run (the
+	// plan op does the same).
+	all, err := ops.GetAllSeries()
+	if err != nil {
+		return nil, fmt.Errorf("%s: list series for the owner-manual check: %w", retiredVersionsFixerID, err)
 	}
 	vetoes, journals := f.p.deps.OwnerVetoes(), f.p.deps.CombineJournals()
 	if vetoes == nil || journals == nil {
@@ -338,8 +372,9 @@ func (f *retiredVersionsFixer) newRun(params json.RawMessage) (*retiredRun, erro
 	if bound <= 0 {
 		bound = 15 * time.Second
 	}
-	return &retiredRun{f: f, store: store, paths: paths, probe: probe, vetoes: vetoes, journals: journals,
-		resolver: repairs.NewPathResolver(), minAge: minAge, now: now(),
+	return &retiredRun{f: f, store: ops, paths: paths, probe: probe, vetoes: vetoes, journals: journals,
+		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.repairsGuardTags(), series: repairs.SeriesNamesFrom(all),
+		minAge: minAge, now: now(),
 		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}, nil
 }
 
@@ -384,6 +419,9 @@ type retiredTarget struct {
 	// tree (or its location could not be settled); itunesWhy says which.
 	itunes    bool
 	itunesWhy string
+	// manualWhy is non-empty when the target is Doctor Who / Big Finish /
+	// Torchwood (or the check could not settle it); the owner applies those.
+	manualWhy string
 }
 
 func (r *retiredRun) target(id string) (*retiredTarget, error) {
@@ -408,6 +446,9 @@ func (r *retiredRun) target(id string) (*retiredTarget, error) {
 			paths = append(paths, files[i].FilePath, files[i].ITunesPath)
 		}
 		t.itunes, t.itunesWhy = r.itunesVerdict(id, paths)
+		if t.manualWhy, err = r.ownerManual(id); err != nil {
+			return nil, fmt.Errorf("owner-manual check of target %s: %w", id, err)
+		}
 		return t, nil
 	})
 }
@@ -425,6 +466,23 @@ func (r *retiredRun) itunesVerdict(id string, paths []string) (bool, string) {
 		return true, "could not tell whether a file is under the iTunes library (a path would not resolve)"
 	}
 	return false, ""
+}
+
+// ownerManual runs the framework guard's owner-manual check over one book,
+// trashed or not, with the same inputs RunPlan's guard gets (paths, series,
+// title, credits, transcribed fields, franchise tags), and returns why the
+// owner applies it by hand ("" when it is clear). A path the guard could not
+// settle comes back as a reason too: it may name a Doctor Who folder behind a
+// link, and a preview does not guess it does not. A read error is returned.
+func (r *retiredRun) ownerManual(id string) (string, error) {
+	kind, why, err := repairs.GuardOwnerManualBooks(r.guard, r.tags, r.series, r.resolver, []string{id})
+	if err != nil {
+		return "", err
+	}
+	if kind == "" {
+		return "", nil
+	}
+	return why, nil
 }
 
 // undoShells reads the combine-journal index once per run: absorbed book id ->
@@ -498,8 +556,14 @@ type retiredFacts struct {
 	absentOnDisk int
 	statUnknown  int
 
-	vetoFamily  string
+	vetoFamily string
+	// undoJournal lists the combine journals, not undone, that name the shell
+	// as absorbed; a non-empty list is the combine_undo_aware flag.
 	undoJournal []string
+	// ownerManualSide and ownerManualWhy say which side tripped the
+	// owner-manual check ("shell" or "target"; "" when neither did).
+	ownerManualSide string
+	ownerManualWhy  string
 }
 
 func retiredDeref(s *string) string {
@@ -519,6 +583,11 @@ func (r *retiredRun) classify(ctx context.Context, shell database.BookCore) (rep
 		return repairs.Row{}, fmt.Errorf("read book_file rows of %s: %w", shell.ID, err)
 	}
 	fa := retiredFacts{shell: shell, files: files, groupClass: retGroupNone, absentOnDisk: -1, statUnknown: -1}
+	idx, err := r.undoShells()
+	if err != nil {
+		return repairs.Row{}, err
+	}
+	fa.undoJournal = idx[shell.ID]
 	for i := range files {
 		if files[i].Missing {
 			fa.missingFlag++
@@ -728,14 +797,6 @@ func (r *retiredRun) shellITunes(fa *retiredFacts) (bool, string) {
 
 // decide applies the category precedence documented on the retCat constants.
 func (r *retiredRun) decide(ctx context.Context, fa *retiredFacts) (cat, why string, err error) {
-	idx, err := r.undoShells()
-	if err != nil {
-		return "", "", err
-	}
-	if js := idx[fa.shell.ID]; len(js) > 0 {
-		fa.undoJournal = js
-		return retCatUndoWindow, "a merge that absorbed this book can still be undone (combine journal " + retiredJoinCapped(js, 3) + ")", nil
-	}
 	if strings.EqualFold(strings.TrimSpace(retiredDeref(fa.shell.LibraryState)), "deleted") {
 		return retCatTrashLabelled, "labelled \"deleted\" (the trash label; a merge, a manual delete and a bulk delete all write it), so it cannot be told from a deliberate delete", nil
 	}
@@ -773,6 +834,16 @@ func (r *retiredRun) decide(ctx context.Context, fa *retiredFacts) (cat, why str
 	if fa.target.itunes {
 		fa.itunesSide, fa.itunesWhy = "target", fa.target.itunesWhy
 		return retCatITunes, "its target " + fa.target.itunesWhy + "; retiring onto it needs the owner's approval", nil
+	}
+	if why, err := r.ownerManual(fa.shell.ID); err != nil {
+		return "", "", fmt.Errorf("owner-manual check of %s: %w", fa.shell.ID, err)
+	} else if why != "" {
+		fa.ownerManualSide, fa.ownerManualWhy = "shell", why
+		return retCatOwnerManual, "the book is Doctor Who / Big Finish / Torchwood; the owner applies these by hand (" + why + ")", nil
+	}
+	if fa.target.manualWhy != "" {
+		fa.ownerManualSide, fa.ownerManualWhy = "target", fa.target.manualWhy
+		return retCatOwnerManual, "its target is Doctor Who / Big Finish / Torchwood; the owner applies these by hand (" + fa.target.manualWhy + ")", nil
 	}
 	at := fa.shell.MarkedForDeletionAt
 	switch {
@@ -847,7 +918,7 @@ func (r *retiredRun) countAbsent(ctx context.Context, files []database.BookFileC
 			continue
 		}
 		stat := r.stat
-		got, cerr := boundedCall(ctx, r.bound, func() (retiredStat, error) {
+		got, cerr := boundedcall.Call(ctx, r.bound, func() (retiredStat, error) {
 			_, serr := stat(p)
 			switch {
 			case serr == nil:
@@ -919,6 +990,10 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 	}
 	cur.put("owner_veto_family", fa.vetoFamily)
 	cur.put("itunes_side", fa.itunesSide)
+	cur.put("owner_manual_side", fa.ownerManualSide)
+	if len(fa.undoJournal) > 0 {
+		cur["combine_undo_aware"] = "true"
+	}
 
 	row := repairs.Row{
 		RowID:   sh.ID,
@@ -942,10 +1017,14 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		row.Evidence = append(row.Evidence, fmt.Sprintf("%d file(s) could not be checked on disk (timeout or error); counted as present", fa.statUnknown))
 	}
 	if len(fa.undoJournal) > 0 {
-		row.Evidence = append(row.Evidence, "unreversed combine journal(s): "+retiredJoinCapped(fa.undoJournal, 3))
+		row.Evidence = append(row.Evidence, "an unreversed combine journal names this book as absorbed ("+retiredJoinCapped(fa.undoJournal, 3)+
+			"); undoing that combine would restore it, so a retire is meant to be reversible by that undo (combine_undo_aware)")
 	}
 	if fa.itunesSide != "" {
 		row.Evidence = append(row.Evidence, "iTunes check tripped on the "+fa.itunesSide+": "+fa.itunesWhy)
+	}
+	if fa.ownerManualSide != "" {
+		row.Evidence = append(row.Evidence, "owner-manual check tripped on the "+fa.ownerManualSide+": "+fa.ownerManualWhy)
 	}
 	if fa.targetID != "" {
 		row.BookIDs = append(row.BookIDs, fa.targetID)
@@ -956,7 +1035,7 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		row.Risk = repairs.RiskReview
 		row.Evidence = append(row.Evidence, "shares a path with a live book that is not the target")
 	}
-	if fa.itunesSide != "" || (fa.targetID == "" && fa.ambiguous != "") {
+	if fa.itunesSide != "" || fa.ownerManualSide != "" || (fa.targetID == "" && fa.ambiguous != "") {
 		row.Risk = repairs.RiskReview
 	}
 
@@ -969,7 +1048,7 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 			row.Reason = "preview: " + why + "; its file records would move onto " + fa.targetID + " as a hidden retired version"
 		}
 	default:
-		if cat == retCatITunes && fa.targetID != "" {
+		if (cat == retCatITunes || cat == retCatOwnerManual) && fa.targetID != "" {
 			row.Proposed = map[string]string{"retired_version_of": fa.targetID}
 		}
 		row.Skipped, row.SkipReason = cat, why
@@ -983,10 +1062,10 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 func retiredFingerprint(fa *retiredFacts, cat string) string {
 	parts := []string{cat, fa.shell.ID, fa.groupID, fa.groupClass, fa.targetID, fa.targetMethod, fa.ambiguous,
 		retiredDeref(fa.shell.LibraryState), strconv.Itoa(fa.sharedRows), strings.Join(fa.sharedWith, ","),
-		fa.rule4, fa.mergedLive, fa.itunesSide, fa.itunesWhy, strconv.Itoa(fa.absentOnDisk), strconv.Itoa(fa.statUnknown),
+		fa.rule4, fa.mergedLive, fa.itunesSide, fa.itunesWhy, fa.ownerManualSide, fa.ownerManualWhy, strconv.Itoa(fa.absentOnDisk), strconv.Itoa(fa.statUnknown),
 		fa.vetoFamily, strings.Join(fa.undoJournal, ",")}
 	if fa.target != nil {
-		parts = append(parts, strconv.Itoa(fa.target.files), strconv.Itoa(fa.target.missing), strconv.FormatBool(fa.target.itunes))
+		parts = append(parts, strconv.Itoa(fa.target.files), strconv.Itoa(fa.target.missing), strconv.FormatBool(fa.target.itunes), fa.target.manualWhy)
 	}
 	if at := fa.shell.MarkedForDeletionAt; at != nil {
 		parts = append(parts, strconv.FormatInt(at.Unix(), 10))
@@ -1019,7 +1098,12 @@ func (f *retiredVersionsFixer) Plan(ctx context.Context, params json.RawMessage,
 	if err != nil {
 		return nil, err
 	}
-	if n := retiredStatsAbandoned.Load(); n > 0 {
+	// Stragglers of earlier runs still hold OS threads. A few are only worth a
+	// warning; at the cap the mount is dead, and another plan would stack more
+	// blocked threads on it, so the plan is refused until they return.
+	if n := retiredStatsAbandoned.Load(); n >= run.maxAbandoned {
+		return nil, fmt.Errorf("%w: %d file stat(s) of earlier runs are still hung (cap %d); not starting another plan, check the mount", errRetiredStatCap, n, run.maxAbandoned)
+	} else if n > 0 {
 		_ = rep.Log(slog.LevelWarn, fmt.Sprintf("%d file stat(s) abandoned by earlier runs are still hung; check the mount", n))
 	}
 	// The trash is listed by its own reader: the memdb core listings leave
@@ -1082,9 +1166,10 @@ func (f *retiredVersionsFixer) Plan(ctx context.Context, params json.RawMessage,
 }
 
 // retiredSummary is the end-of-plan log line: what a no-target row knew that
-// the plan did not use as a target.
+// the plan did not use as a target, and how many rows come from a combine that
+// can still be undone.
 func retiredSummary(rows []repairs.Row) string {
-	var noTarget, merged, holder, statUnknown int
+	var noTarget, merged, holder, statUnknown, undoAware, undoAwareRetire int
 	for i := range rows {
 		switch rows[i].Class {
 		case retCatNoTargetMissing, retCatNoTargetPresent:
@@ -1099,9 +1184,16 @@ func retiredSummary(rows []repairs.Row) string {
 		if rows[i].Current["rows_stat_unknown"] != "" {
 			statUnknown++
 		}
+		if rows[i].Current["combine_undo_aware"] == "true" {
+			undoAware++
+			if rows[i].Applicable() {
+				undoAwareRetire++
+			}
+		}
 	}
-	return fmt.Sprintf("retired-versions preview: %d trashed book(s); %d have no target, of which %d have a merged-into chain ending at a live book and %d have a live book at every path (neither used as a target); %d row(s) had files whose state on disk could not be settled",
-		len(rows), noTarget, merged, holder, statUnknown)
+	return fmt.Sprintf("retired-versions preview: %d trashed book(s); %d have no target, of which %d have a merged-into chain ending at a live book and %d have a live book at every path (neither used as a target); %d row(s) had files whose state on disk could not be settled; "+
+		"%d row(s) come from a combine that can still be undone (%d of them would be retired: that retire will be reversible by undoing the combine)",
+		len(rows), noTarget, merged, holder, statUnknown, undoAware, undoAwareRetire)
 }
 
 // Replan classifies one book again from fresh reads, by the same code Plan

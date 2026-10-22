@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -208,11 +208,16 @@ var (
 	ErrNotAPlan        = errors.New("repairs: operation is not a repairs.plan run")
 	ErrPlanOtherFixer  = errors.New("repairs: plan belongs to another fixer")
 	ErrPlanNotComplete = errors.New("repairs: plan operation has not completed")
+	// ErrUnknownFilter: Page was asked for a filter it does not know.
+	ErrUnknownFilter = errors.New("repairs: unknown filter")
 )
 
-// LoadPlan reads a completed repairs.plan op's stored result and checks that
-// it belongs to fixerID.
-func LoadPlan(r OpReader, planOpID, fixerID string) (*PlanResult, error) {
+// LoadPlan reads a completed repairs.plan op's stored summary, checks that it
+// belongs to fixerID and was stored in the current format, and returns the plan
+// with its rows still in the store: Page reads a page of them, Select the rows
+// an apply names. It never decodes more than the summary. A plan stored the
+// old way (rows inside the op result) is ErrPlanLegacyFormat.
+func LoadPlan(r OpReader, rs database.OpRowStore, planOpID, fixerID string) (*PlanResult, error) {
 	row, err := r.GetOperationV2(planOpID)
 	if err != nil {
 		return nil, fmt.Errorf("repairs: read plan op %s: %w", planOpID, err)
@@ -233,6 +238,13 @@ func LoadPlan(r OpReader, planOpID, fixerID string) (*PlanResult, error) {
 	if plan.FixerID != fixerID {
 		return nil, fmt.Errorf("%w: %s was planned for %s", ErrPlanOtherFixer, planOpID, plan.FixerID)
 	}
+	if plan.RowStore != PlanRowStoreV1 {
+		return nil, fmt.Errorf("%w: %s", ErrPlanLegacyFormat, planOpID)
+	}
+	if rs == nil {
+		return nil, ErrNoPlanRowStore
+	}
+	plan.stored = &storedRows{rs: rs, opID: planOpID}
 	plan.normalize()
 	return &plan, nil
 }
@@ -255,51 +267,58 @@ const (
 // filter (all, applicable, skipped, or "skipped:<kind>" for the skipped rows
 // of one kind) and, when class is not empty, of that Row.Class. An unknown
 // filter is an error. Rows is never nil.
+//
+// Filtering, counting and slicing run over the rows' index entries only
+// (refs); a stored plan then reads just the rows of the returned page.
 func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*RowsPage, error) {
-	inScope := func(r *Row) bool { return true }
+	inScope := func(r *rowRef) bool { return true }
 	switch filter {
 	case FilterAll:
 	case FilterApplicable:
-		inScope = func(r *Row) bool { return r.Applicable() }
+		inScope = func(r *rowRef) bool { return r.applicable() }
 	case FilterSkipped:
-		inScope = func(r *Row) bool { return !r.Applicable() }
+		inScope = func(r *rowRef) bool { return !r.applicable() }
 	case FilterOwnerApplicable:
-		inScope = func(r *Row) bool { return r.OwnerApplicable && !r.Applicable() }
+		inScope = func(r *rowRef) bool { return r.owner && !r.applicable() }
 	default:
 		kind, ok := strings.CutPrefix(filter, FilterSkippedKindPrefix)
 		if !ok || kind == "" {
-			return nil, fmt.Errorf("repairs: unknown filter %q (want applicable, skipped, owner_applicable or skipped:<kind>)", filter)
+			return nil, fmt.Errorf("%w %q (want applicable, skipped, owner_applicable or skipped:<kind>)", ErrUnknownFilter, filter)
 		}
-		inScope = func(r *Row) bool { return r.Skipped == kind }
+		inScope = func(r *rowRef) bool { return r.skipped == kind }
 	}
-	var match []Row
+	refs, err := p.refs()
+	if err != nil {
+		return nil, err
+	}
+	var match []int // indexes into refs
 	var inFilter, kindsInClass map[string]int
 	var applicableInClass *int
 	if class != "" {
 		kindsInClass = map[string]int{}
 		applicableInClass = new(int)
 	}
-	for i := range p.Rows {
-		if class != "" && p.Rows[i].Class == class {
-			if p.Rows[i].Applicable() {
+	for i := range refs {
+		if class != "" && refs[i].class == class {
+			if refs[i].applicable() {
 				*applicableInClass++
 			} else {
-				kindsInClass[p.Rows[i].Skipped]++
+				kindsInClass[refs[i].skipped]++
 			}
 		}
-		if !inScope(&p.Rows[i]) {
+		if !inScope(&refs[i]) {
 			continue
 		}
-		if c := p.Rows[i].Class; c != "" {
+		if c := refs[i].class; c != "" {
 			if inFilter == nil {
 				inFilter = map[string]int{}
 			}
 			inFilter[c]++
 		}
-		if class != "" && p.Rows[i].Class != class {
+		if class != "" && refs[i].class != class {
 			continue
 		}
-		match = append(match, p.Rows[i])
+		match = append(match, i)
 	}
 	if offset < 0 {
 		offset = 0
@@ -310,7 +329,26 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 		SkippedByKindInClass: kindsInClass, ApplicableInClass: applicableInClass, Rows: []Row{}}
 	if offset < len(match) {
 		end := min(offset+limit, len(match))
-		out.Rows = append(out.Rows, match[offset:end]...)
+		page := match[offset:end]
+		if p.stored == nil {
+			for _, i := range page {
+				out.Rows = append(out.Rows, p.Rows[i])
+			}
+		} else {
+			ids := make([]string, len(page))
+			for k, i := range page {
+				ids[k] = refs[i].id
+			}
+			rows, err := p.stored.readRows(ids)
+			if err != nil {
+				return nil, err
+			}
+			if len(rows) != len(ids) {
+				return nil, fmt.Errorf("%w: %s lacks %d of the %d rows its index lists for this page",
+					ErrPlanRowsIncomplete, p.stored.opID, len(ids)-len(rows), len(ids))
+			}
+			out.Rows = rows
+		}
 	}
 	return out, nil
 }
@@ -424,6 +462,12 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}(time.Now())
 	res := &ApplyResult{FixerID: f.ID(), PlanOpID: planOpID, DryRun: dryRun, ByOutcome: map[string]int{},
 		Rows: []RowResult{}}
+	// A preview-only fixer never applies, dry run or not: the handler and the
+	// apply op already refuse it, and this is the backstop for any caller that
+	// reaches the engine another way.
+	if IsPlanOnly(f) {
+		return res, fmt.Errorf("repairs: apply %s: %w", f.ID(), ErrPlanOnly)
+	}
 	if deps.Guard == nil {
 		return res, fmt.Errorf("repairs: apply %s: no guard reader", f.ID())
 	}
@@ -437,10 +481,6 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 	// One resolver for the run (the guard's per-folder symlink memo).
 	deps.paths = NewPathResolver()
-	byID := make(map[string]*Row, len(plan.Rows))
-	for i := range plan.Rows {
-		byID[plan.Rows[i].RowID] = &plan.Rows[i]
-	}
 	// Owner rows (owner.go) come only from deps.Owner, the run's consumed
 	// grant; a row named in both lists runs as an owner row.
 	var ownerIDs []string
@@ -485,6 +525,19 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 				record(r)
 			}
 		}
+	}
+	// Only the rows the run names are read from the plan: a stored plan keeps
+	// its rows beside the operation, and an apply of three rows must not decode
+	// a 50 MB plan to find them. A row the plan does not hold is simply absent
+	// from byID and reported in NotInPlan.
+	chosen, err := plan.Select(append(slices.Clone(ids), ownerIDs...))
+	if err != nil {
+		return res, fmt.Errorf("repairs: apply %s: read plan rows: %w", f.ID(), err)
+	}
+	plan = chosen
+	byID := make(map[string]*Row, len(plan.Rows))
+	for i := range plan.Rows {
+		byID[plan.Rows[i].RowID] = &plan.Rows[i]
 	}
 	var selected []Row
 	for _, id := range ids {

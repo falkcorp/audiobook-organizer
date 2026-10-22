@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.9.3
+// version: 1.10.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
 // last-edited: 2026-10-22
 
@@ -37,8 +37,8 @@ func (p *Plugin) repairsPlanDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repairs: plan",
-		Description: "Plans one Repairs-lane fixer (params: fixer_id, params) and stores every row in the op " +
-			"result for paging. Read-only: runs during a library.scan, takes no stand-down. Rows touching " +
+		Description: "Plans one Repairs-lane fixer (params: fixer_id, params). The op result is the summary; every row is " +
+			"stored beside the op (one key per row) and paged from there. Read-only: runs during a library.scan, takes no stand-down. Rows touching " +
 			"books/itunes/** or Doctor Who / Big Finish / Torchwood are marked skipped.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
@@ -117,11 +117,30 @@ func (p *Plugin) runRepairsPlan(ctx context.Context, raw json.RawMessage, report
 		// path does not say so: fail rather than plan past it.
 		return fmt.Errorf("%s: list series: %w", repairs.PlanOpID, err)
 	}
+	// The plan's rows are stored beside this op, not in its result (see
+	// repairs.SavePlan), so the store must be able to keep them: found out
+	// before the plan runs, not after an hour of planning.
+	rows, err := repairs.PlanRowStoreOf(p.deps.OperationQueueStore())
+	if err != nil {
+		return fmt.Errorf("%s: %w", repairs.PlanOpID, err)
+	}
+	opID := registry.ReporterOpID(reporter)
+	if opID == "" {
+		return fmt.Errorf("%s: no operation id to store the plan rows under", repairs.PlanOpID)
+	}
 	res, err := repairs.RunPlan(ctx, f, params.Params, p.repairsPlanDeps(store, all), reporter)
 	if err != nil {
 		return err
 	}
+	// Rows first, then the summary: a completed plan whose summary names the
+	// row store therefore has every one of its rows.
+	if err := repairs.SavePlan(rows, opID, res); err != nil {
+		return fmt.Errorf("%s: plan not persisted: %w", repairs.PlanOpID, err)
+	}
 	if err := registry.ReporterSetResult(reporter, res); err != nil {
+		if cerr := repairs.ClearPlanRows(rows, opID); cerr != nil {
+			reporter.Logger().Warn("repairs.plan: plan rows not cleared after a failed summary write", "err", cerr)
+		}
 		return fmt.Errorf("%s: plan not persisted: %w", repairs.PlanOpID, err)
 	}
 	_ = reporter.UpdateProgress(res.Total, res.Total, fmt.Sprintf("PLANNED %s — rows=%d applicable=%d skipped=%v",
@@ -186,7 +205,11 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 	if !ok {
 		return fmt.Errorf("%s: operation store cannot read the plan op", repairs.ApplyOpID)
 	}
-	plan, err := repairs.LoadPlan(opReader, params.PlanOpID, f.ID())
+	planRows, err := repairs.PlanRowStoreOf(p.deps.OperationQueueStore())
+	if err != nil {
+		return fmt.Errorf("%s: %w", repairs.ApplyOpID, err)
+	}
+	plan, err := repairs.LoadPlan(opReader, planRows, params.PlanOpID, f.ID())
 	if err != nil {
 		return err
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.8.3
+// version: 2.8.4
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -38,6 +38,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -65,7 +66,7 @@ var tagReadTimeout = 60 * time.Second
 
 // tagReadMaxAbandoned caps how many of ONE run's timed-out tag reads may still
 // be running. A read that times out is abandoned, not stopped (see
-// boundedCall): its goroutine finishes whenever the parser or the kernel lets
+// boundedcall.Call): its goroutine finishes whenever the parser or the kernel lets
 // go, or leaks for the life of the process. Past this many at once, something
 // systemic is wrong (a dead mount, a parser bug hit by a whole class of files)
 // and continuing would only pile up goroutines, so the run fails loudly instead.
@@ -375,7 +376,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			// waits on every worker (run_items.go wg.Wait), so the op would never
 			// return at all.
 			path, stat := f.FilePath, tagStat
-			meta, merr := boundedCall(ctx, tagReadTimeout, func() (metadata.Metadata, error) {
+			meta, merr := boundedcall.Call(ctx, tagReadTimeout, func() (metadata.Metadata, error) {
 				if _, statErr := stat(path); statErr != nil {
 					return metadata.Metadata{}, fmt.Errorf("%w: %v", errTagFileMissing, statErr)
 				}
@@ -387,7 +388,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				continue
 			}
 			if merr != nil {
-				timedOut := errors.Is(merr, errBoundedCallTimeout)
+				timedOut := errors.Is(merr, boundedcall.ErrTimeout)
 				if !timedOut && ctx.Err() != nil {
 					// Canceled mid-read: same as the cancel check above.
 					countBook()

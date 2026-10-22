@@ -1,9 +1,13 @@
-// file: internal/plugins/maintenance/bounded_call.go
-// version: 1.0.2
+// file: internal/boundedcall/boundedcall.go
+// version: 1.1.0
 // guid: 2593968b-b7d3-4939-9ff5-351fd51fbf7b
-// last-edited: 2026-09-13
+// last-edited: 2026-10-22
 
-package maintenance
+// Package boundedcall runs a call that cannot be interrupted (a blocking
+// syscall on a stuck mount, a WASM tag parser) with a time bound, abandoning
+// it on timeout and counting the goroutines left behind. It is a leaf package
+// so the maintenance plugin and the repairs framework share one copy.
+package boundedcall
 
 import (
 	"context"
@@ -13,11 +17,11 @@ import (
 	"time"
 )
 
-// errBoundedCallTimeout is wrapped by boundedCall's error when the bound
+// ErrTimeout is wrapped by Call's error when the bound
 // elapsed before fn returned. Test with errors.Is.
-var errBoundedCallTimeout = errors.New("timed out")
+var ErrTimeout = errors.New("timed out")
 
-// Call states for boundedCall. The goroutine and the waiter race to move the
+// Call states for Call. The goroutine and the waiter race to move the
 // state out of running; whoever wins decides who accounts for the goroutine.
 const (
 	boundedRunning int32 = iota
@@ -25,14 +29,14 @@ const (
 	boundedAbandoned
 )
 
-// boundedCall runs fn in a goroutine and waits at most bound for it, or until
+// Call runs fn in a goroutine and waits at most bound for it, or until
 // ctx is done. It exists for calls that cannot be interrupted: a tag parser
 // running in TagLib WASM, a blocking read on a stuck filesystem. The call is
 // not canceled when the wait ends, because it cannot be; the goroutine is
 // abandoned and either finishes on its own later or leaks for the life of the
 // process.
 //
-// On timeout the error wraps errBoundedCallTimeout; on cancellation it is
+// On timeout the error wraps ErrTimeout; on cancellation it is
 // ctx.Err(). Each counter in abandoned counts goroutines given up on that have
 // not yet returned: it is incremented when the wait gives up and decremented
 // when the abandoned fn finally returns, so a caller can cap how many pile up.
@@ -43,8 +47,8 @@ const (
 // Two private copies of this shape existed before it: extractWithTimeout
 // (duration_reextract.go, now built on this) and processFileBounded in
 // internal/scanner/process_file.go.
-func boundedCall[T any](ctx context.Context, bound time.Duration, fn func() (T, error), abandoned ...*atomic.Int64) (T, error) {
-	return boundedCallHooked(ctx, bound, nil, fn, abandoned...)
+func Call[T any](ctx context.Context, bound time.Duration, fn func() (T, error), abandoned ...*atomic.Int64) (T, error) {
+	return callHooked(ctx, bound, nil, fn, abandoned...)
 }
 
 // boundedHooks are test-only interleaving points. They are a parameter, not
@@ -55,7 +59,7 @@ type boundedHooks struct {
 	onGiveUp  func() // waiter: timer or ctx fired, result not yet re-checked
 }
 
-func boundedCallHooked[T any](ctx context.Context, bound time.Duration, hooks *boundedHooks, fn func() (T, error), abandoned ...*atomic.Int64) (T, error) {
+func callHooked[T any](ctx context.Context, bound time.Duration, hooks *boundedHooks, fn func() (T, error), abandoned ...*atomic.Int64) (T, error) {
 	add := func(d int64) {
 		for _, c := range abandoned {
 			c.Add(d)
@@ -86,7 +90,7 @@ func boundedCallHooked[T any](ctx context.Context, bound time.Duration, hooks *b
 	case r := <-ch:
 		return r.v, r.err
 	case <-timer.C:
-		giveUp = fmt.Errorf("%w after %v (uncancellable call abandoned)", errBoundedCallTimeout, bound)
+		giveUp = fmt.Errorf("%w after %v (uncancellable call abandoned)", ErrTimeout, bound)
 	case <-ctx.Done():
 		giveUp = ctx.Err()
 	}

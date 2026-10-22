@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.19.0
+// version: 1.20.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-22
 //
@@ -1117,6 +1117,22 @@ describe('RepairsPanel — view modes', () => {
     // The finished apply clears the selection, as Apply selected does.
     await screen.findByTestId('repairs-apply-result');
     expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('0 selected');
+  });
+
+  it('grouped: a preview-only fixer has no group checkbox and no Apply group', async () => {
+    const control = renderPanel('candidates');
+    await screen.findByTestId('repairs-group-0');
+    expect(screen.getByTestId('repairs-group-0-select')).toBeInTheDocument();
+    expect(screen.getByTestId('repairs-group-0-apply')).toBeInTheDocument();
+    control.unmount();
+
+    vi.mocked(api.listRepairFixers).mockResolvedValue([{ ...FIXER, plan_only: true }]);
+    renderPanel('candidates');
+    await screen.findByTestId('repairs-group-0');
+    expect(screen.getByTestId('repairs-group-0-count')).toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-group-0-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-group-0-apply')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Select group: same fix' })).not.toBeInTheDocument();
   });
 });
 

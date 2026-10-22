@@ -1,13 +1,12 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9f3a6c28-1e74-4b5d-8c02-7a6e4d9b1f35
-// last-edited: 2026-10-05
+// last-edited: 2026-10-22
 
 package maintenance
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
 	"testing"
 
@@ -67,10 +66,7 @@ func (l *tfLib) plan() (*repairs.PlanResult, map[string]repairs.Row) {
 	require.NoError(l.t, err)
 	res, err := repairs.RunPlan(context.Background(), l.fixer, nil, l.p.repairsPlanDeps(l.store, series), &fakeReporter{})
 	require.NoError(l.t, err)
-	raw, err := json.Marshal(res)
-	require.NoError(l.t, err)
-	var stored repairs.PlanResult
-	require.NoError(l.t, json.Unmarshal(raw, &stored))
+	stored := roundTripPlan(l.t, res)
 	byKey := map[string]repairs.Row{}
 	for key, id := range l.ids {
 		for _, r := range stored.Rows {

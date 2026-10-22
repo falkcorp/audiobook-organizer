@@ -18,7 +18,8 @@ export interface PlanParams {
   params?: unknown;
 }
 /**
- * PlanResult is the stored result of repairs.plan: every row, uncapped.
+ * PlanResult is the result of repairs.plan: its summary is the stored op result
+ * and every row (uncapped) is stored beside it.
  */
 export interface PlanResult {
   fixer_id: string;
@@ -40,7 +41,13 @@ export interface PlanResult {
    * (Row.OwnerApplicable); the owner_applicable filter pages them.
    */
   owner_applicable?: number /* int */;
-  rows: Row[];
+  /**
+   * RowStore names where the plan's rows are stored: PlanRowStoreV1 means
+   * beside the operation (SavePlan), one key per row. A stored plan without
+   * it is the older shape (every row inside the operation's result) and is
+   * refused with ErrPlanLegacyFormat: run the plan again.
+   */
+  row_store?: string;
 }
 /**
  * RowsPage is one page of a stored plan.

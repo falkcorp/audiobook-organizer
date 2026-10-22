@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
-// last-edited: 2026-10-13
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -84,10 +84,7 @@ func (l *combinedLib) plan() (*repairs.PlanResult, map[string]repairs.Row) {
 	res, err := repairs.RunPlan(context.Background(), l.fixer, nil,
 		repairs.PlanDeps{Guard: l.store, Series: repairs.SeriesNamesFrom(series)}, &fakeReporter{})
 	require.NoError(l.t, err)
-	raw, err := json.Marshal(res)
-	require.NoError(l.t, err)
-	var stored repairs.PlanResult
-	require.NoError(l.t, json.Unmarshal(raw, &stored))
+	stored := roundTripPlan(l.t, res)
 	byKey := map[string]repairs.Row{}
 	for key, id := range l.ids {
 		for _, r := range stored.Rows {

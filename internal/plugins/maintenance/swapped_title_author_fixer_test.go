@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -139,10 +139,7 @@ func (l *swapLib) plan() (*repairs.PlanResult, map[string]repairs.Row) {
 		repairs.PlanDeps{Guard: l.store, Series: repairs.SeriesNamesFrom(series)}, &fakeReporter{})
 	require.NoError(l.t, err)
 	// Apply reads the stored plan: round-trip it as the op result does.
-	raw, err := json.Marshal(res)
-	require.NoError(l.t, err)
-	var stored repairs.PlanResult
-	require.NoError(l.t, json.Unmarshal(raw, &stored))
+	stored := roundTripPlan(l.t, res)
 	byName := map[string]repairs.Row{}
 	for name, id := range l.ids {
 		for _, r := range stored.Rows {
