@@ -1,7 +1,7 @@
 // file: pprof_debug_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b0c7e1a-3d42-4f86-9a17-c2e8d6f4b913
-// last-edited: 2026-10-11
+// last-edited: 2026-10-21
 
 //go:build pprof
 
@@ -70,25 +70,60 @@ func TestPprofMuxServesGoroutineProfile(t *testing.T) {
 	}
 }
 
-func TestStartPprofFromEnv_WarnsOnUnspecifiedHost(t *testing.T) {
+func TestPprofAddrIsLoopback(t *testing.T) {
+	for in, want := range map[string]bool{
+		"127.0.0.1:6060":              true,
+		"127.8.9.10:6060":             true,
+		"[::1]:6060":                  true,
+		"localhost:6060":              true,
+		"LOCALHOST:6060":              true,
+		"0.0.0.0:6060":                false,
+		"[::]:6060":                   false,
+		"192.0.2.10:6060":             false,
+		"[2001:db8::1]:80":            false,
+		"example.com:6060":            false, // never resolved
+		"localhost.example.test:6060": false,
+		"6060":                        false,
+		"":                            false,
+	} {
+		if got := pprofAddrIsLoopback(in); got != want {
+			t.Errorf("pprofAddrIsLoopback(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// A non-loopback address (the listener is unauthenticated) stops the listener
+// from starting at all, with an error that says why; loopback addresses start.
+func TestStartPprofFromEnv_RefusesNonLoopback(t *testing.T) {
 	var buf bytes.Buffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	defer slog.SetDefault(old)
 
-	for in, wantWarn := range map[string]bool{
-		"0.0.0.0:6060":   true,
-		"[::]:6060":      true,
-		"127.0.0.1:6060": false,
-		"localhost:6060": false,
+	for in, wantStart := range map[string]bool{
+		"0.0.0.0:6060":     false,
+		"[::]:6060":        false,
+		"192.0.2.10:6060":  false,
+		"example.com:6060": false,
+		"127.0.0.1:6060":   true,
+		"localhost:6060":   true,
+		":6060":            true, // pinned to 127.0.0.1 first
 	} {
 		buf.Reset()
-		var wg sync.WaitGroup
-		wg.Add(1)
-		startPprofFromEnv(func(string) string { return in }, func(string, http.Handler) { wg.Done() })
-		wg.Wait()
-		if got := strings.Contains(buf.String(), "binds every interface"); got != wantWarn {
-			t.Errorf("%q: warned=%v want %v; log=%s", in, got, wantWarn, buf.String())
+		served := make(chan struct{}, 1)
+		addr, started := startPprofFromEnv(func(string) string { return in }, func(string, http.Handler) { served <- struct{}{} })
+		if started != wantStart {
+			t.Errorf("%q: started=%v want %v", in, started, wantStart)
+		}
+		if wantStart {
+			<-served
+			continue
+		}
+		if addr != "" || len(served) != 0 {
+			t.Errorf("%q: refused but addr=%q served=%d", in, addr, len(served))
+		}
+		if !strings.Contains(buf.String(), "REFUSED") {
+			t.Errorf("%q: no REFUSED log; log=%s", in, buf.String())
 		}
 	}
 }
