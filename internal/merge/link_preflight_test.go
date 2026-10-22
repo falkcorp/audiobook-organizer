@@ -1,5 +1,5 @@
 // file: internal/merge/link_preflight_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1c9e03-4a6d-4d58-8f2a-0e3b5c8d1f46
 // last-edited: 2026-10-22
 
@@ -89,17 +89,28 @@ func TestPreflightLink_ITunesLoserIsRefused(t *testing.T) {
 }
 
 // 2026-10-21 prod: the refused book was an iTunes copy in the LOSER's version
-// group that nobody selected; the service re-homes it into the survivor's group.
-func TestPreflightLink_ITunesSiblingOfLoserGroupIsRefused(t *testing.T) {
+// group that nobody selected. The service re-homes it into the survivor's
+// group, which changes its group id only; the owner approved that
+// database-only change on 2026-10-22, so the preflight no longer refuses it.
+func TestPreflightLink_ITunesSiblingOfLoserGroupIsAllowed(t *testing.T) {
 	withITunesConfig(t, func(c *config.ITunesConfig) { c.MediaRoot = testITunesMedia })
 	st := newPreflightStore(
 		preflightBook("keep", "/srv/managed/a.m4b", "G1", false),
 		preflightBook("loser", "/srv/managed/b.m4b", "G2", false),
 		preflightBook("itunes-sibling", testITunesMedia+"/Author/c.m4b", "G2", false))
-	err := PreflightLink(st, "keep", []string{"loser"})
+	require.NoError(t, PreflightLink(st, "keep", []string{"loser"}))
+}
+
+// The same copy as a SELECTED book is still refused: it would be merged away.
+func TestPreflightLink_SelectedITunesBookInAGroupIsStillRefused(t *testing.T) {
+	withITunesConfig(t, func(c *config.ITunesConfig) { c.MediaRoot = testITunesMedia })
+	st := newPreflightStore(
+		preflightBook("keep", "/srv/managed/a.m4b", "G1", false),
+		preflightBook("itunes-loser", testITunesMedia+"/Author/c.m4b", "G2", false))
+	err := PreflightLink(st, "keep", []string{"itunes-loser"})
 	var prot *ITunesProtectedError
 	require.ErrorAs(t, err, &prot)
-	assert.Equal(t, "itunes-sibling", prot.BookID)
+	assert.Equal(t, "itunes-loser", prot.BookID)
 }
 
 func TestPreflightLink_CleanRequestPasses(t *testing.T) {

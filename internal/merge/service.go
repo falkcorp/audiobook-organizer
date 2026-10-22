@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.60.5
+// version: 1.60.6
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package merge
 
@@ -832,16 +832,19 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// so a read failure aborts the merge with nothing written. Sorted by group
 	// then book ID so the writes (and Result.MovedSiblings) are deterministic.
 	//
-	// A sibling is a book this merge rewrites, so it gets the same pre-write
-	// guards as a participant: the scan-state refusal (ProvisionalScanError)
-	// and the iTunes-library refusal (GuardITunesProtectedLoaded; its doc
-	// requires it for every book a merge-family entry point mutates). This is
-	// not hypothetical: the organizer puts an iTunes organized_source original
-	// in the same group as its organized copy, so a merge whose loser is that
-	// copy would otherwise rewrite the iTunes row's group and demote it, and a
-	// later ITL rebuild drops non-primary PIDs. Each sibling is re-read with
-	// GetBookByID: GetBooksByVersionGroup may serve a slim projection, and the
-	// guard reads FilePath and the journal records the stored flag.
+	// A sibling is a book this merge rewrites, so it gets the pre-write guard
+	// for a book whose scan state could be provisional (ProvisionalScanError).
+	// It does NOT get the iTunes-library refusal (GuardITunesProtectedLoaded)
+	// that a participant gets: the merge writes a sibling's version_group_id
+	// and primary flag only (through ModifyBook, below), never a file, a path
+	// or a tag, so an iTunes sibling is a database-only change. The owner
+	// approved that on 2026-10-22; until then it refused the merge, which is
+	// how an iTunes organized_source original sharing a group with its
+	// organized copy (the organizer puts them in one group) blocked every
+	// merge whose loser was that copy. Each sibling is re-read with
+	// GetBookByID: GetBooksByVersionGroup may serve a slim projection, and
+	// the journal records the stored flag. Anything added later that moves,
+	// renames, retags or deletes a sibling's file must restore the guard.
 	var siblings []MovedSibling
 	var siblingBooks []*database.Book
 	siblingFiles := map[string][]database.BookFile{}
@@ -886,8 +889,9 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// The reused group's other live members (not participants). The demotion
 	// loop below rewrites every one whose flag is not already an explicit
 	// false, and the flag election next may crown one, so each one written
-	// gets the same pre-write guards as a sibling (scan state, iTunes
-	// library). Re-read with GetBookByID for the same reason as the siblings.
+	// gets the same pre-write guard as a sibling (scan state; no iTunes
+	// refusal, for the reason given there). Re-read with GetBookByID for the
+	// same reason as the siblings.
 	// Read and guarded BEFORE the journal write, so a refusal leaves no
 	// journal behind.
 	var memberBooks []*database.Book
@@ -926,12 +930,16 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// organized members; an organized copy with no audio route does not take
 	// the flag from a survivor that has one.
 	//
-	// Not when the survivor's files carry an iTunes persistent ID: the ITL
-	// clean-up (itunes.ComputeMergedTrackCleanup) removes every non-primary
-	// book_file's PID from the iTunes library unless a primary also owns it,
-	// so demoting such a survivor would take its live track out of iTunes.
-	// The participant iTunes guard does not cover this: it refuses files
-	// under the iTunes root, and a PID can sit on a file outside it.
+	// Not when the survivor's files carry an iTunes persistent ID. Nothing
+	// writes the iTunes library any more (the ITL writers, and with them
+	// itunes.ComputeMergedTrackCleanup, were removed), so this is no longer
+	// about a clean-up taking the track out of iTunes. It keeps the PID
+	// integrity audit (itunes.pid_integrity) truthful: it counts a PID owned
+	// by a non-primary book as a stale owner (BucketStaleOwner, "a merge
+	// leftover"), so demoting a survivor that holds a live iTunes track would
+	// misfile that track as a merge orphan. The participant iTunes guard does
+	// not cover this: it refuses files under the iTunes root, and a PID can
+	// sit on a file outside it.
 	flagHolderID := resolvedPrimaryID
 	survivorHasPID := anyITunesPID(filesByID[books[bestIdx].ID])
 	if primaryID == "" && !isOrganized(books[bestIdx]) && !survivorHasPID {
@@ -970,8 +978,9 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		hiddenWhy = HiddenFromABSITunesSurvivor
 	}
 
-	guarded := slices.Clone(siblingBooks)
-	guardFiles := maps.Clone(siblingFiles)
+	// The members the merge would write get the scan-state guard too (no iTunes
+	// refusal: see the siblings above). A member already an explicit non-primary
+	// that is not crowned is not written, so it is skipped.
 	for _, mb := range memberBooks {
 		if mb.ID != flagHolderID && mb.IsPrimaryVersion != nil && !*mb.IsPrimaryVersion {
 			continue // not written: already an explicit false, and not crowned
@@ -979,11 +988,6 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		if database.AnyProvisional(memberFiles[mb.ID]) {
 			return nil, &ProvisionalScanError{BookID: mb.ID}
 		}
-		guarded = append(guarded, mb)
-		guardFiles[mb.ID] = memberFiles[mb.ID]
-	}
-	if err := GuardITunesProtectedLoaded(guarded, guardFiles); err != nil {
-		return nil, err
 	}
 
 	// Journal the sibling move before the first write (see sibling_journal.go):
