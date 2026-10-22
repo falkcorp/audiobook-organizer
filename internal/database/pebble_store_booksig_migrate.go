@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig_migrate.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6a4e2f18-7d05-4b93-8c61-9f2a0e75d3b8
-// last-edited: 2026-10-13
+// last-edited: 2026-10-22
 
 package database
 
@@ -221,26 +221,34 @@ func mergeBookSigSidecar(existing []byte, inline bookSigSidecar) (out []byte, fi
 //
 // CONCURRENCY / LOST-UPDATE
 //
-// PebbleStore has no per-book write serialization — none of its mutexes guard
-// the book read-modify-write, and UpdateBook already races with itself. A naive
-// read-then-write here would be worse than losing a signature: read the row at
-// T0, a concurrent UpdateBook lands at T1, our batch at T2 reverts the ENTIRE
-// T1 update (title, path, everything).
+// The whole read-strip-write runs under the book's write stripe (lockBook), the
+// one UpdateBook, ModifyBook and DeleteBook hold across their own read and
+// commit. Until 2026-10-22 it did not, on the belief that nothing serialized
+// book writers (it predates the stripes): it read the row at T0, a concurrent
+// UpdateBook landed at T1, and the batch at T2 wrote the T0 row back over it.
+// That reverted the whole update, and when the update had changed a file hash
+// it left the row holding the old hash while UpdateBook had already deleted
+// the old hash key and set the new one: the book was no longer found under the
+// hash its own row names. Under the stripe no stripe-taking writer can land
+// between the read and the commit, so nothing is reverted and no index key is
+// dropped; a writer that arrives meanwhile waits and then applies on top of
+// the stripped row.
 //
-// The reframe that makes this tractable: every UpdateBook already strips the
-// row it writes, so the library migrates organically and this op only
-// accelerates it. Skipping any individual book is therefore always acceptable.
-// So we re-read the raw row immediately before committing and write only if it
-// is byte-identical to what we read; otherwise we report
-// BookSigMigrateSkippedRaced and move on. Pebble offers no true CAS, so the
-// window is not zero — but it is a byte compare rather than the whole
-// unmarshal/strip/marshal span, and a skip costs nothing because a later run
-// (or any UpdateBook) picks the book up.
+// Every UpdateBook also strips the row it writes, so the library migrates
+// organically and this op only accelerates it: skipping any individual book is
+// always acceptable. The byte compare of the row immediately before the commit
+// stays as a second line of defence against a writer that does not take the
+// stripe, reporting BookSigMigrateSkippedRaced.
 func (p *PebbleStore) MigrateBookSigToSidecar(id string, dryRun bool) (BookSigMigrateOutcome, error) {
 	if id == "" {
 		return BookSigMigrateNotCandidate, fmt.Errorf("empty book id")
 	}
 	rowKey := []byte("book:" + id)
+
+	// Held for the whole read-strip-write; see CONCURRENCY / LOST-UPDATE. The
+	// store calls below take no book stripe (the stripes are not reentrant).
+	unlock := p.lockBook(id)
+	defer unlock()
 
 	before, err := p.getRowCopy(rowKey)
 	if err != nil {
