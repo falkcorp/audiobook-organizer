@@ -1,5 +1,5 @@
 // file: internal/server/login_ceiling.go
-// version: 4.0.0
+// version: 4.1.0
 // guid: bbbd655c-e45d-48ca-badb-d7b48a4d69e0
 // last-edited: 2026-10-22
 
@@ -83,7 +83,9 @@ import (
 // account can push that account over its soft threshold, which then refuses even
 // its owner's password login until the 15-minute window ends (the Cloudflare
 // Access path is exempt). Sessions already issued are unaffected, and the state
-// is in memory, so a restart clears it. POST /auth/refresh is deliberately
+// is in memory, so a restart clears it. The middleware's own refusals (413, 408,
+// 400, 429) are written in the error shape of the door it guards (see
+// loginResponder). POST /auth/refresh is deliberately
 // outside the ceilings: it does no password work, and a server restart that
 // invalidates every refresh token makes every client fail once, which must not
 // read as an attack. HTTP Basic auth on the API is a separate path and is not
@@ -192,7 +194,17 @@ func (s *Server) loginCeiling() *loginCeiling {
 }
 
 func newLoginCeiling() *loginCeiling {
-	return &loginCeiling{now: time.Now, conns: map[string]*loginCeilingBucket{}, visitors: absauth.NewLRU[*loginVisitor](maxLoginVisitors)}
+	visitors := absauth.NewLRU[*loginVisitor](maxLoginVisitors)
+	// A visitor with a login in the handlers, or one refused for the rest of the
+	// window, is state the bound must not evict in favour of a stream of new
+	// addresses (evicting the first would let leave() find no entry; evicting the
+	// second would hand a refused visitor a fresh start), and an entry that cannot
+	// be swept yet must not stand in front of the ones that can. Such entries live
+	// on the LRU's pinned list; the bound evicts idle entries first.
+	visitors.SetPinned(func(v *loginVisitor) bool {
+		return v.inFlight > 0 || v.satInFlight > 0 || !v.satFailedAt.IsZero()
+	})
+	return &loginCeiling{now: time.Now, conns: map[string]*loginCeilingBucket{}, visitors: visitors}
 }
 
 // reserve takes a slot in the global bucket and, when connKey is not empty, in
@@ -264,13 +276,16 @@ func (l *loginCeiling) release(t loginCeilingTicket) {
 
 // visitorLocked returns the state of visitor, creating it, and marks it the most
 // recently written entry. Entries nobody has written for a whole window (and
-// with nothing in flight) are swept from the cold end first, so the table holds
-// what is live rather than filling to the bound and evicting; at the bound the
-// least recently written entry goes, in O(1). Caller holds l.mu.
+// with nothing in flight) are swept from the cold end of each of the table's
+// lists first, so the table holds what is live rather than filling to the bound
+// and evicting, and an entry with a login in flight (on the pinned list) never
+// stops the sweep reaching the idle ones; at the bound the least recently
+// written idle entry goes, in O(1). Every in-place change to an entry is
+// followed by touchLocked, which re-files it. Caller holds l.mu.
 func (l *loginCeiling) visitorLocked(visitor string) *loginVisitor {
 	now := l.now()
 	l.visitors.Sweep(func(v *loginVisitor) bool {
-		return v.inFlight == 0 && now.Sub(v.lastSeen) > loginCeilingWindow
+		return v.inFlight == 0 && v.satInFlight == 0 && now.Sub(v.lastSeen) > loginCeilingWindow
 	})
 	v, ok := l.visitors.Get(visitor)
 	if !ok {
@@ -279,6 +294,14 @@ func (l *loginCeiling) visitorLocked(visitor string) *loginVisitor {
 	v.lastSeen = now
 	l.visitors.Put(visitor, v)
 	return v
+}
+
+// touchLocked re-files visitor's entry after an in-place change to the fields the
+// pin predicate reads (in flight, saturated in flight, refused), and marks it
+// written. Caller holds l.mu.
+func (l *loginCeiling) touchLocked(visitor string, v *loginVisitor) {
+	v.lastSeen = l.now()
+	l.visitors.Touch(visitor)
 }
 
 // failed records that the request holding t was a failed login by visitor
@@ -339,11 +362,13 @@ func (l *loginCeiling) enter(visitor string) (leave func(), ok bool) {
 		return nil, false
 	}
 	v.inFlight++
+	l.touchLocked(visitor, v)
 	return func() {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		if cur, ok := l.visitors.Get(visitor); ok && cur == v {
 			v.inFlight--
+			l.touchLocked(visitor, v)
 		}
 	}, true
 }
@@ -377,12 +402,14 @@ func (l *loginCeiling) admitSaturated(visitor string) (release func(), ok bool) 
 	}
 	v.satInFlight++
 	l.saturated++
+	l.touchLocked(visitor, v)
 	return func() {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		l.saturated--
 		if cur, ok := l.visitors.Get(visitor); ok && cur == v {
 			v.satInFlight--
+			l.touchLocked(visitor, v)
 		}
 	}, true
 }
@@ -394,7 +421,9 @@ func (l *loginCeiling) saturatedFailed(visitor string) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.visitorLocked(visitor).satFailedAt = l.now()
+	v := l.visitorLocked(visitor)
+	v.satFailedAt = l.now()
+	l.touchLocked(visitor, v)
 }
 
 // loginCeilingConnectorKey is the bucket key for a request that arrived through
@@ -410,12 +439,29 @@ func loginCeilingConnectorKey(c *gin.Context) string {
 	return ""
 }
 
+// loginResponder writes the middleware's own refusals (413, 408, 400, 429) in
+// the error shape of the door it guards: the web API's envelope, or the
+// Audiobookshelf-compatible {"error": msg} that ABS clients parse. code is the
+// web envelope's machine code and is ignored by shapes without one.
+type loginResponder func(c *gin.Context, status int, msg, code string)
+
+// respondWebLoginError is the web API's error envelope.
+func respondWebLoginError(c *gin.Context, status int, msg, code string) {
+	httputil.RespondWithError(c, status, msg, code)
+}
+
+// respondABSLoginError is the Audiobookshelf error shape, the one the ABS
+// handlers themselves answer with.
+func respondABSLoginError(c *gin.Context, status int, msg, _ string) {
+	c.AbortWithStatusJSON(status, gin.H{"error": msg})
+}
+
 // readLoginBody reads the request body under loginBodyLimit and
 // loginBodyReadTimeout and puts a buffered copy back, so what the handler decodes
-// is bytes already in memory. It answers and aborts itself when the body is too
-// large (413), not delivered in time (408) or unreadable (400), and reports
-// whether the request may go on.
-func readLoginBody(c *gin.Context) bool {
+// is bytes already in memory. It answers (through respond) and aborts itself when
+// the body is too large (413), not delivered in time (408) or unreadable (400),
+// and reports whether the request may go on.
+func readLoginBody(c *gin.Context, respond loginResponder) bool {
 	if c.Request.Body == nil || c.Request.Body == http.NoBody {
 		return true
 	}
@@ -426,7 +472,7 @@ func readLoginBody(c *gin.Context) bool {
 		if c.Request.ProtoMajor == 1 {
 			c.Header("Connection", "close")
 		}
-		httputil.RespondWithError(c, status, msg, code)
+		respond(c, status, msg, code)
 		c.Abort()
 		return false
 	}
@@ -449,8 +495,12 @@ func readLoginBody(c *gin.Context) bool {
 }
 
 // middleware applies the ceilings to the requests match accepts (all of them
-// when match is nil).
-func (l *loginCeiling) middleware(match func(*gin.Context) bool) gin.HandlerFunc {
+// when match is nil). respond writes the middleware's own refusals; nil means the
+// web API's envelope.
+func (l *loginCeiling) middleware(match func(*gin.Context) bool, respond loginResponder) gin.HandlerFunc {
+	if respond == nil {
+		respond = respondWebLoginError
+	}
 	return func(c *gin.Context) {
 		if match != nil && !match(c) {
 			c.Next()
@@ -458,7 +508,7 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool) gin.HandlerFunc
 		}
 		// Body first, before anything is reserved or counted: a stalled or oversized
 		// body must not hold a ceiling slot or reach the handler.
-		if !readLoginBody(c) {
+		if !readLoginBody(c, respond) {
 			return
 		}
 		if l.exempt != nil && l.exempt(c) {
@@ -469,7 +519,7 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool) gin.HandlerFunc
 		leave, entered := l.enter(visitor)
 		if !entered {
 			c.Header("Retry-After", "5")
-			httputil.RespondWithError(c, http.StatusTooManyRequests, "too many simultaneous login attempts — try again shortly", "TOO_MANY_REQUESTS")
+			respond(c, http.StatusTooManyRequests, "too many simultaneous login attempts — try again shortly", "TOO_MANY_REQUESTS")
 			c.Abort()
 			return
 		}
@@ -482,7 +532,7 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool) gin.HandlerFunc
 			done, admitted := l.admitSaturated(visitor)
 			if !admitted {
 				c.Header("Retry-After", "60")
-				httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
+				respond(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
 				c.Abort()
 				return
 			}
