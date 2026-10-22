@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.2 -->
+<!-- version: 10.78.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-21 -->
+<!-- last-edited: 2026-10-22 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,51 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **INVITE-FOLLOWUPS** Follow-ups from emailed invitations (`feat/invite-email`):
+      (1) reactivating a user does not restore an invitee's SSO grant or
+      Cloudflare policy entry: decide whether it should, or keep re-invite as
+      the path;
+      (2) Cloudflare Access bypass for `/invite/*`, `/api/v1/auth/invite/*`,
+      `/api/v1/auth/accept-invite` and the web assets, so a guest can accept in
+      a browser before the policy sync adds them;
+      (3) OAuth login and the Cloudflare Access middleware still do not refuse
+      a deactivated user (pre-existing);
+      (4) `UserHandler.AcceptInvite` (internal/server/handlers/user.go) is not
+      routed (the route uses `Server.handleAcceptInvite`) and still echoes
+      store errors as a 400: delete it or route through the generic refusal.
+
+- [ ] **DECISIONS-DEADCODE-PRUNE** PR1 of the Universal Reject plan (#4110) added the
+      `internal/decisions` package with no production caller yet, so its 75
+      identifiers sit in `scripts/deadcode-baseline.txt` under the "09-PR1
+      one-time addition" comment (every `internal/decisions.` line). The PR that
+      wires the first producer from `main` (PR2) must confirm every one of those
+      names drops out of `python3 scripts/deadcode-ratchet.py`'s unreachable set,
+      then run `--prune` (lower-only) so the block and its comment are removed.
+      Any name still unreachable after PR2 is dead code: delete it rather than
+      keep it baselined.
+
+- [ ] **SPLIT-BOOKS-RESCAN** After the split-books distinct-works veto and the
+      merge-time recheck deploy, re-run `dedup.split-book-scan` so the Split
+      Books tab and the Repairs lane are rebuilt without the vetoed clusters
+      (stored candidates keep their old contents until a scan replaces them;
+      the merge paths already refuse them). Then spot-check the 15 large
+      clusters (33+ members) that could not be classified offline: open each
+      in Repairs, confirm it is held or applicable for the right reason, and
+      confirm the bulk-merge dry run reports no unexpected refusals. Offline
+      estimate for the 49 checkable rows: 35 not applicable (the 29 wrong
+      rows plus about 6 genuine chapter splits), 14 applicable. The 6 genuine
+      rows are held by the 2h gate or unknown durations and the owner reviews
+      them by hand; the counts are an estimate, not a promise. Known
+      fail-safe false positives that also land here: a genuine split whose
+      folder is named "Series"/"Collection", whose chapter titles read "Name
+      N: Subtitle" without Chapter/Part, whose parts are labelled "Section N:"
+      or "Episode #N" in one work, whose sections are "Book One/Two" inside
+      one novel, whose rows carry different ASINs, or that has a chapter of
+      1900 or more. Known miss: short (under 2h) ASIN-less novellas with bare
+      numbered file names can still pass, so read each row before applying.
+      Done when the Split Books tab holds no cluster that a veto rule would
+      hold.
 
 - [ ] Optional: enable Cloudflare `strict_service_token_auth` after verifying AudioBooth streaming and the Watch app with it on. With it off, a service-token request is handed a `CF_Authorization` cookie, which is what poisoned Safari's cookie jar (recovered server-side since 2026-10-20, see `internal/server/middleware/cfbounce.go`). Turning it on would stop the cookie being issued, but the Access application covering `/auth/openid/browser` must then also accept the app's Service Auth policy.
 
