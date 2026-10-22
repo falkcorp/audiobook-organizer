@@ -1,5 +1,5 @@
 // file: internal/undo/membership_multi_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d4f2a61-7c35-4b90-a1e8-5f3c9b0d7e42
 // last-edited: 2026-10-22
 
@@ -81,7 +81,8 @@ func (s *multiSim) revertStamping(retired string, stamp bool) error {
 		}
 		return s.journals[book], nil
 	})
-	next, note, _, err := RestoreMember(s.list, retired, sv, rec, stand, borrowed, g)
+	next, res, err := RestoreMember(s.list, retired, sv, rec, MemberRole{Stand: stand, Borrowed: borrowed}, g)
+	note := res.Note
 	if err != nil && !errors.Is(err, ErrAlreadyRestored) {
 		return err
 	}

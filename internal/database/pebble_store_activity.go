@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -247,9 +247,19 @@ var opChangePruneBeforeCommit func()
 // "merge_sibling_journal" (undo.ChangeTypeMergeSiblingJournal) is the same
 // pointer for a merge's merge.SiblingMoveJournal (the version-group siblings
 // it carried into its group), kept for the same reason.
+//
+// "user_content_follow" (undo.ChangeTypeUserContentFollow) is what a retire's
+// carry journaled about a user's own content: the survivor's ratings, and, for
+// each static collection or playlist the retired book was in, the row on the
+// book and the marker on its survivor. A revert orders the books of a list from
+// ALL of those records, reverted or not (undo.MembershipGraph), and decides
+// whether a survivor stays in a list from the markers still standing, so a row
+// pruned for its age would change where a book goes back, or strand a survivor
+// in a list, long after the retire. They are small and one per carried list.
 var OpChangeTypesKeptByPrune = map[string]bool{
 	"repair_plan_record": true, "repair_owner_apply": true,
 	"merge_combine_journal": true, "merge_sibling_journal": true,
+	"user_content_follow": true,
 }
 
 // PruneOperationChanges deletes operation change entries older than the given

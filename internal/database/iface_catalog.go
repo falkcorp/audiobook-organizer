@@ -1,5 +1,5 @@
 // file: internal/database/iface_catalog.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
 // last-edited: 2026-10-22
 
@@ -68,9 +68,10 @@ type CollectionMembershipStore interface {
 // CollectionMembershipMarkStore is UpdateCollectionBooks that also marks rows of
 // an operation's journal reverted in the same batch as the member list (the
 // list and the marks land together or not at all). It is a separate capability,
-// not part of CollectionMembershipStore: a store without it still reverts, with
-// the list write and the marks as two writes (the revert then repairs the gap
-// on its retry). The marks are made also when fn leaves the list unchanged.
+// not part of CollectionMembershipStore, and the revert of a retire's carry
+// requires it (a store without it is refused: the revert's order guarantees rest
+// on the stamp landing with the list). The marks are made also when fn leaves
+// the list unchanged.
 type CollectionMembershipMarkStore interface {
 	UpdateCollectionBooksAndMark(id string, fn func(current []string) ([]string, error), mark OperationMark) (*Collection, error)
 }
