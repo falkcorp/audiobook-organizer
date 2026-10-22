@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.mergeAsVersions.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d8b2e61-0a73-4f95-b1c6-9e3f7a5d2c08
 // last-edited: 2026-10-22
 
@@ -346,22 +346,32 @@ describe('merge as versions', () => {
     );
   });
 
-  it('when the operation cannot be followed it says the outcome is unknown and frees the books', async () => {
+  it('a failed poll is not a failed merge: it says "still checking", keeps the books in flight and keeps polling', async () => {
     const poll = deferPoll();
+    vi.mocked(api.getOperationResult).mockResolvedValue({
+      result_data: { keep_id: 'id-1', merged: 1 },
+    });
     const { user, dialog } = await openMergeDialog(['id-1', 'id-2']);
     await clickMerge(user, dialog);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /merge as versions/i })).toBeDisabled()
     );
     poll.fail(new Error('network down'));
-    await waitFor(() => expect(lastToast().message).toContain('what it did is unknown'));
+    await waitFor(() => expect(lastToast().message).toContain('Still checking on the merge'));
     expect(lastToast().severity).toBe('warning');
-    expect(lastToast().message).toContain('op-m');
-    expect(lastToast().message).not.toMatch(/Merged/);
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /merge as versions/i })).toBeEnabled()
-    );
-  });
+    expect(lastToast().message).not.toMatch(/Merged|failed|unknown/);
+    // Not terminal: the books stay locked and the poll is retried with backoff.
+    expect(screen.getByRole('button', { name: /merge as versions/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /combine into one book/i })).toBeDisabled();
+    await waitFor(() => expect(vi.mocked(api.pollOperationV2)).toHaveBeenCalledTimes(2), {
+      timeout: 6000,
+    });
+    expect(screen.getByRole('button', { name: /merge as versions/i })).toBeDisabled();
+
+    poll.finish('completed');
+    await waitFor(() => expect(lastToast().message).toMatch(/^Merged/));
+    expect(lastToast().severity).not.toBe('error');
+  }, 20000);
 
   it('a refusal from the request (409) keeps the dialog open with the reason', async () => {
     vi.mocked(api.linkBooks).mockRejectedValue(

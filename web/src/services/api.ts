@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.201.2
+// version: 2.201.3
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-23
 
@@ -10,6 +10,7 @@ import type { FilterOptions } from '../types';
 
 import { withOptimisticOperation } from '../utils/withOptimisticOperation';
 import { apiFetch } from '../utils/apiFetch';
+import { followOperation } from '../utils/followOperation';
 import { isSettled } from '../generated/ops';
 import type { OperationV2Status } from '../generated/ops';
 import type {
@@ -1659,19 +1660,33 @@ export function previewPurgeSoftDeleted(
 export async function awaitPurgeResult(
   operationId: string,
   onProgress?: (p: { done: number; total: number; message: string }) => void,
-  opts?: { signal?: AbortSignal; intervalMs?: number }
+  opts?: {
+    signal?: AbortSignal;
+    intervalMs?: number;
+    /**
+     * Opt in to "a failed poll is not a failed purge": instead of rejecting,
+     * keep polling with backoff until the operation ends, calling this once
+     * when contact is first lost. Without it a poll error rejects (the
+     * preview, which has nothing to protect, uses that).
+     */
+    onTrouble?: (error: unknown) => void;
+  }
 ): Promise<PurgeResult> {
-  const op = await pollOperationV2(
-    operationId,
-    (o) =>
-      onProgress?.({
-        done: o.progress_current ?? 0,
-        total: o.progress_total ?? 0,
-        message: o.progress_message ?? '',
-      }),
-    opts?.intervalMs ?? 1000,
-    { signal: opts?.signal }
-  );
+  const pollOnce = (signal?: AbortSignal) =>
+    pollOperationV2(
+      operationId,
+      (o) =>
+        onProgress?.({
+          done: o.progress_current ?? 0,
+          total: o.progress_total ?? 0,
+          message: o.progress_message ?? '',
+        }),
+      opts?.intervalMs ?? 1000,
+      { signal }
+    );
+  const op = opts?.onTrouble
+    ? await followOperation(pollOnce, { signal: opts.signal, onTrouble: opts.onTrouble })
+    : await pollOnce(opts?.signal);
   let stored: unknown = null;
   let fetchError: unknown = null;
   try {

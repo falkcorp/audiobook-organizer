@@ -1,5 +1,5 @@
 // file: web/src/services/api.awaitPurgeResult.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f3c1b57-4a92-4d06-b5e8-0c7a9d2e6f13
 // last-edited: 2026-10-22
 
@@ -76,5 +76,34 @@ describe('awaitPurgeResult', () => {
     await expect(awaitPurgeResult('op-1', undefined, { intervalMs: 0 })).rejects.toThrow(
       'stored no result'
     );
+  });
+
+  it('without onTrouble a failed poll rejects (the preview has nothing to protect)', async () => {
+    global.fetch = vi.fn(async () => {
+      throw new TypeError('network down');
+    }) as unknown as typeof fetch;
+    await expect(awaitPurgeResult('op-1', undefined, { intervalMs: 0 })).rejects.toThrow();
+  });
+
+  it('with onTrouble a failed poll is not a failed purge: it says so once, keeps polling and returns the result', async () => {
+    vi.useFakeTimers();
+    try {
+      let polls = 0;
+      global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/result')) return json({ result_data: stored });
+        polls += 1;
+        if (polls <= 2) throw new TypeError('network down');
+        return json({ operation: { id: 'op-1', status: 'completed' } });
+      }) as unknown as typeof fetch;
+      const onTrouble = vi.fn();
+      const pending = awaitPurgeResult('op-1', undefined, { intervalMs: 0, onTrouble });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(pending).resolves.toMatchObject({ purged: 4 });
+      expect(polls).toBe(3);
+      expect(onTrouble).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

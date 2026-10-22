@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
 // last-edited: 2026-10-22
 
@@ -190,6 +190,12 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
               variant={percent !== null ? 'determinate' : 'indeterminate'}
               value={percent ?? 0}
             />
+            {run.state.stillChecking && (
+              <Alert severity="warning" sx={{ mt: 1, mb: 1 }} data-testid="purge-still-checking">
+                Still checking: the server could not be reached. The purge may still be running, so
+                this keeps trying instead of treating it as failed.
+              </Alert>
+            )}
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
               The purge runs on the server; closing this window does not stop it. You will get a
               notification when it ends.

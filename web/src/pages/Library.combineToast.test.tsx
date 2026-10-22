@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.combineToast.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: b7c3d543-d1c8-4e7a-8782-7a65d6d29167
 // last-edited: 2026-10-22
 
@@ -10,7 +10,8 @@
  * the override warnings, every outcome that has an operation id carries an Undo
  * action wired to api.revertOperation, a combine that stopped part-way offers
  * Undo, a failed one is never described as combined, and a result with no
- * operation id gets no Undo action.
+ * operation id says "undo id unavailable" instead of silently dropping Undo, and a
+ * failed poll keeps the books in flight and keeps polling.
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -168,7 +169,7 @@ describe('combine into one book', () => {
 
   it('closes the dialog on the 202 before the operation ends, then reports the real outcome', async () => {
     const poll = deferPoll();
-    vi.mocked(api.getOperationResult).mockResolvedValue(combined());
+    vi.mocked(api.getOperationResult).mockResolvedValue(combined({ operation_id: 'op-c' }));
     const { user, dialog } = await openCombineDialog();
     const loadsBefore = vi.mocked(api.getBooks).mock.calls.length;
     await clickCombine(user, dialog);
@@ -289,22 +290,35 @@ describe('combine into one book', () => {
     expect(lastToast().message).not.toMatch(/^Combined/);
   });
 
-  it('when the operation cannot be followed it says the outcome is unknown and frees the books', async () => {
+  it('a failed poll is not a failed combine: it says "still checking", keeps the books in flight and keeps polling', async () => {
     const poll = deferPoll();
+    vi.mocked(api.getOperationResult).mockResolvedValue(combined({ operation_id: 'op-c' }));
     const { user, dialog } = await openCombineDialog();
     await clickCombine(user, dialog);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /combine into one book/i })).toBeDisabled()
     );
     poll.fail(new Error('network down'));
-    await waitFor(() => expect(lastToast().message).toContain('what it did is unknown'));
+    await waitFor(() => expect(lastToast().message).toContain('Still checking on the combine'));
     expect(lastToast().severity).toBe('warning');
-    expect(lastToast().message).toContain('op-c');
-    expect(lastToast().message).not.toMatch(/Combined/);
+    expect(lastToast().message).not.toMatch(/Combined|failed|unknown/);
+    expect(lastToast().action?.label).toBe('View operation');
+    // Contact lost, operation not terminal: the buttons stay disabled, and the
+    // poll is retried (with backoff) rather than abandoned.
+    expect(screen.getByRole('button', { name: /combine into one book/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /merge as versions/i })).toBeDisabled();
+    await waitFor(() => expect(vi.mocked(api.pollOperationV2)).toHaveBeenCalledTimes(2), {
+      timeout: 6000,
+    });
+    expect(screen.getByRole('button', { name: /combine into one book/i })).toBeDisabled();
+
+    poll.finish('completed');
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /combine into one book/i })).toBeEnabled()
+      expect(lastToast().message).toBe('Combined 2 files into one book; moved 1 entries to trash.')
     );
-  });
+    expect(lastToast().severity).toBe('success');
+    expect(vi.mocked(api.getOperationResult)).toHaveBeenCalledWith('op-c');
+  }, 20000);
 
   it('a refusal from the request (409) keeps the dialog open with the reason', async () => {
     vi.mocked(api.combineBooks).mockRejectedValue(
@@ -345,10 +359,13 @@ describe('combine into one book', () => {
     await waitFor(() => expect(lastToast().message).toBe('Reverted.'));
   });
 
-  it('has no Undo action and promises none when the result carries no operation id', async () => {
+  it('says "undo id unavailable" and where to look when the result carries no operation id', async () => {
     vi.mocked(api.getOperationResult).mockResolvedValue(combined());
     await combineSelected();
-    expect(lastToast().action?.label).not.toBe('Undo');
-    expect(lastToast().message).not.toMatch(/undo/i);
+    expect(lastToast().action?.label).toBe('View operation');
+    expect(lastToast().severity).toBe('warning');
+    expect(lastToast().message).toContain('Combined 2 files into one book');
+    expect(lastToast().message).toContain('Undo id unavailable');
+    expect(lastToast().message).toContain('Files & History');
   });
 });

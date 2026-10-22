@@ -1,5 +1,5 @@
 // file: internal/merge/undo_shell_index.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a8c5e72-1f94-4b06-9d3e-6c7a2b0f8e51
 // last-edited: 2026-10-22
 
@@ -55,8 +55,14 @@ type stampedShell struct {
 }
 
 // NewUndoShellIndex scans the combine journals once and indexes the shells of
-// every journal whose undo can still run. A read error is returned: the purge
-// must fail closed rather than treat "cannot tell" as "nothing is held".
+// every journal whose undo can still run. A read error (the scan itself
+// failing) is returned: the purge must fail closed rather than treat "cannot
+// tell" as "nothing is held". A journal ROW that cannot be decoded is different:
+// listCombineJournals skips it with a warning, because a row it cannot read
+// cannot name its shell, so nothing is held on its account and it does NOT fail
+// the purge. (The auto-merge journal is stricter: OpenAutoMergeLosers refuses on
+// an undecodable entry. Making this one strict too would let one corrupt row
+// block every purge until it is repaired.)
 func NewUndoShellIndex(db journalKVReader) (*UndoShellIndex, error) {
 	gen := CombineJournalGeneration()
 	journals, err := listCombineJournals(db, 0)

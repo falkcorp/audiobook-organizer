@@ -1,5 +1,5 @@
 // file: web/src/hooks/usePendingBookOps.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3a7c915-4b02-4d68-8f1c-6a9d0b2e5f73
 // last-edited: 2026-10-22
 
@@ -16,9 +16,11 @@ export interface PendingBookOps {
   anyPending: (ids: readonly string[]) => boolean;
   /**
    * Marks `bookIds` in flight until `work` settles, then releases them
-   * whichever way it ends (outcome, failure or poll error). `work` owns the
-   * user-facing outcome; the signal aborts when the page goes away, which also
-   * releases the ids.
+   * whichever way it ends. `work` owns the user-facing outcome and must not
+   * settle on a failed poll: a lost connection is not the operation ending, so
+   * it keeps the ids in flight and keeps polling until the operation is
+   * terminal (see followOperation). The signal aborts when the page goes away,
+   * which also releases the ids.
    */
   track: (
     operationId: string,

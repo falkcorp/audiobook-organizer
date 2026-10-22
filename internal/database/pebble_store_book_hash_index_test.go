@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_hash_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e8b2d63-9a17-4c50-b3f6-1d7a0c5e9b82
 // last-edited: 2026-10-22
 
@@ -63,6 +63,63 @@ func TestDeleteBook_HashKeysAreDeletedOnlyWhileOwned(t *testing.T) {
 
 	require.NoError(t, s.DeleteBook("b"))
 	assert.Equal(t, [3]string{"", "", ""}, hashKeyOwners(t, s, "H"), "the owner's own delete removes its keys")
+}
+
+// UpdateBook ran the same unconditional delete: changing the hash of a book
+// that merely shares the old hash with the key's owner erased the owner's
+// lookup. Changing the owner's own hash still removes its key (the hash is no
+// longer held by the book the key names), and the by-hash repair restores the
+// entry for a sibling that still holds it.
+func TestUpdateBook_HashKeysAreDeletedOnlyWhileOwned(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	hashBook(t, s, "a", "H", false)
+	hashBook(t, s, "b", "H", false) // last writer: the keys name b
+	require.Equal(t, [3]string{"b", "b", "b"}, hashKeyOwners(t, s, "H"))
+
+	changeHash := func(id, hash string) {
+		t.Helper()
+		b, err := s.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, b)
+		b.FileHash, b.OriginalFileHash, b.OrganizedFileHash = &hash, new("o-"+hash), new("g-"+hash)
+		_, err = s.UpdateBook(id, b)
+		require.NoError(t, err)
+	}
+
+	changeHash("a", "H2") // a does not own the H keys
+	assert.Equal(t, [3]string{"b", "b", "b"}, hashKeyOwners(t, s, "H"), "updating a non-owner must not erase the owner's keys")
+	assert.Equal(t, [3]string{"a", "a", "a"}, hashKeyOwners(t, s, "H2"), "the new hash is indexed to a")
+
+	changeHash("b", "H3") // b owns the H keys
+	assert.Equal(t, [3]string{"", "", ""}, hashKeyOwners(t, s, "H"), "the owner's own update removes its old keys")
+	assert.Equal(t, [3]string{"b", "b", "b"}, hashKeyOwners(t, s, "H3"))
+}
+
+// The case compare-and-delete cannot settle: the key names the book that
+// changes its hash while a sibling still holds the old one. The key goes
+// missing for the sibling, which the repair reports and restores.
+func TestUpdateBook_SiblingEntryLostToTheOwnersChangeIsRepaired(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	hashBook(t, s, "a", "H", false)
+	hashBook(t, s, "b", "H", false)
+	setRawKey(t, s, "book:hash:H", "a") // the owner is a
+
+	b, err := s.GetBookByID("a")
+	require.NoError(t, err)
+	b.FileHash = new("H2")
+	_, err = s.UpdateBook("a", b)
+	require.NoError(t, err)
+
+	rep, err := s.CheckBookHashIndex(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, kindOf(rep, "hash").Missing, "b's lost entry is reported as missing")
+
+	_, err = s.RepairBookHashIndex(context.Background(), nil)
+	require.NoError(t, err)
+	got, err := s.GetBookByFileHash("H")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "b", got.ID)
 }
 
 func setRawKey(t *testing.T, s *PebbleStore, key, value string) {
