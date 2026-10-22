@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-22
 
@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
@@ -174,9 +175,38 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 			}
 			res.ByClass[c]++
 		}
+		flags, ferr := normalizeFlags(rows[i].Flags)
+		if ferr != nil {
+			return nil, fmt.Errorf("repairs: plan %s: row %q: %w", f.ID(), rows[i].RowID, ferr)
+		}
+		rows[i].Flags = flags
+		for _, fl := range flags {
+			if res.ByFlag == nil {
+				res.ByFlag = map[string]int{}
+			}
+			res.ByFlag[fl]++
+		}
 	}
 	res.normalize()
 	return res, nil
+}
+
+// normalizeFlags sorts and de-duplicates a row's flags and refuses a name the
+// row index or the "flag:<name>" filter could not carry (empty, or holding a
+// NUL, comma or whitespace). A nil result means no flags.
+func normalizeFlags(flags []string) ([]string, error) {
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	out := slices.Clone(flags)
+	slices.Sort(out)
+	out = slices.Compact(out)
+	for _, fl := range out {
+		if fl == "" || strings.ContainsFunc(fl, func(r rune) bool { return r == 0 || r == ',' || unicode.IsSpace(r) }) {
+			return nil, fmt.Errorf("invalid row flag %q (want a non-empty name without NUL, comma or whitespace)", fl)
+		}
+	}
+	return out, nil
 }
 
 // normalize makes every always-present collection of the plan non-nil, so it
@@ -261,6 +291,9 @@ const (
 	// FilterOwnerApplicable pages the rows the owner may apply himself
 	// (Row.OwnerApplicable).
 	FilterOwnerApplicable = "owner_applicable"
+	// FilterFlagPrefix + a flag ("flag:combine_undo_aware") pages the rows
+	// carrying that Row.Flags entry, whatever their class or skip kind.
+	FilterFlagPrefix = "flag:"
 )
 
 // Page returns rows [offset, offset+limit) of the plan's rows matching
@@ -281,9 +314,16 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 	case FilterOwnerApplicable:
 		inScope = func(r *rowRef) bool { return r.owner && !r.applicable() }
 	default:
+		if flag, ok := strings.CutPrefix(filter, FilterFlagPrefix); ok {
+			if flag == "" {
+				return nil, fmt.Errorf("%w %q (a flag filter names the flag)", ErrUnknownFilter, filter)
+			}
+			inScope = func(r *rowRef) bool { return r.hasFlag(flag) }
+			break
+		}
 		kind, ok := strings.CutPrefix(filter, FilterSkippedKindPrefix)
 		if !ok || kind == "" {
-			return nil, fmt.Errorf("%w %q (want applicable, skipped, owner_applicable or skipped:<kind>)", ErrUnknownFilter, filter)
+			return nil, fmt.Errorf("%w %q (want applicable, skipped, owner_applicable, skipped:<kind> or flag:<flag>)", ErrUnknownFilter, filter)
 		}
 		inScope = func(r *rowRef) bool { return r.skipped == kind }
 	}
@@ -325,7 +365,7 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 	}
 	out := &RowsPage{PlanOpID: planOpID, FixerID: p.FixerID, PlannedAt: p.PlannedAt, Filter: filter,
 		Class: class, Offset: offset, Limit: limit, Total: len(match), Applicable: p.Applicable,
-		SkippedByKind: p.SkippedByKind, OwnerApplicable: p.OwnerApplicable, ByClass: p.ByClass, ByClassInFilter: inFilter,
+		SkippedByKind: p.SkippedByKind, OwnerApplicable: p.OwnerApplicable, ByClass: p.ByClass, ByFlag: p.ByFlag, ByClassInFilter: inFilter,
 		SkippedByKindInClass: kindsInClass, ApplicableInClass: applicableInClass, Rows: []Row{}}
 	if offset < len(match) {
 		end := min(offset+limit, len(match))

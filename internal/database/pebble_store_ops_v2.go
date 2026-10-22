@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.33.0
+// version: 3.33.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-22
 
@@ -612,10 +612,8 @@ func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
 		// A hollow row never had rows of its own, but a row set under its id
 		// (a plan whose summary write was lost) is unreachable once the row is
 		// gone, so it goes with it.
-		for _, prefix := range [][]byte{opv2RowRunPrefix(id), opv2RowIxRunPrefix(id)} {
-			if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
-				return 0, err
-			}
+		if err := stageOpRowsDelete(batch, id); err != nil {
+			return 0, err
 		}
 	}
 	for _, key := range doneKeys {

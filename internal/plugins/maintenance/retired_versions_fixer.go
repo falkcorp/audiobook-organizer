@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.2.0
+// version: 1.2.2
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-22
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
@@ -134,6 +135,11 @@ const (
 	retCatGone = "gone"
 	// retCatError is a row whose reads failed; the reason says which.
 	retCatError = "error"
+
+	// retFlagCombineUndoAware is the row flag (Row.Flags) of a book an unreversed
+	// combine journal names as absorbed. It rides every category; the plan's
+	// by_flag count and the "flag:combine_undo_aware" filter list those rows.
+	retFlagCombineUndoAware = "combine_undo_aware"
 )
 
 // How a target was found.
@@ -177,6 +183,15 @@ var retiredStatMaxAbandoned int64 = 8
 // goroutine has not yet returned, across every run. It gates nothing; a plan
 // logs it at start when non-zero.
 var retiredStatsAbandoned atomic.Int64
+
+// Exported as audiobook_organizer_ops_abandoned_calls{source="retired_versions_stat"}
+// from load, so the series reads 0 until a stat is abandoned.
+func init() { registerAbandonedGauge(opsmetrics.Default()) }
+
+// registerAbandonedGauge puts retiredStatsAbandoned on rec's ops.abandoned_calls.
+func registerAbandonedGauge(rec *opsmetrics.Recorder) {
+	rec.RegisterAbandoned(opsmetrics.SourceRetiredVersionsStat, &retiredStatsAbandoned)
+}
 
 // errRetiredUndoRead fails a plan whose combine journals cannot be read: which
 // rows carry the combine_undo_aware flag depends on them, so a partial preview
@@ -1017,6 +1032,7 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		row.Evidence = append(row.Evidence, fmt.Sprintf("%d file(s) could not be checked on disk (timeout or error); counted as present", fa.statUnknown))
 	}
 	if len(fa.undoJournal) > 0 {
+		row.Flags = []string{retFlagCombineUndoAware}
 		row.Evidence = append(row.Evidence, "an unreversed combine journal names this book as absorbed ("+retiredJoinCapped(fa.undoJournal, 3)+
 			"); undoing that combine would restore it, so a retire is meant to be reversible by that undo (combine_undo_aware)")
 	}

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
 // last-edited: 2026-10-22
 //
@@ -187,6 +187,24 @@ describe('useRepairsLane: loading', () => {
     await waitFor(() => expect(result.current.rowsError).toBe('rows exploded'));
     expect(result.current.page).toBeNull();
     expect(result.current.rowsLoading).toBe(false);
+  });
+
+  it('flags a rows failure that only a re-run can cure', async () => {
+    vi.mocked(api.getRepairPlanRows).mockRejectedValue(
+      Object.assign(new Error('run the plan again'), { status: 409, data: { code: 'REPAIR_PLAN_NEEDS_RERUN' } })
+    );
+    const { result } = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(result.current.rowsError).toBe('run the plan again'));
+    expect(result.current.rowsNeedRerun).toBe(true);
+  });
+
+  it('does not flag an ordinary rows failure, or a 409 with another code, as needing a re-run', async () => {
+    vi.mocked(api.getRepairPlanRows).mockRejectedValue(
+      Object.assign(new Error('busy'), { status: 409, data: { code: 'CONFLICT' } })
+    );
+    const { result } = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(result.current.rowsError).toBe('busy'));
+    expect(result.current.rowsNeedRerun).toBe(false);
   });
 
   it('shows no plan for a fixer that has never run a trial', async () => {

@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
-// last-edited: 2026-10-17
+// last-edited: 2026-10-22
 
 // Package opsmetrics holds the OTel instruments for operation runs (spec 11
 // §3.5 and §3.7). One meter, telemetry.Meter("operations"); every instrument
@@ -16,6 +16,7 @@
 //	audiobook_organizer.ops.progress_age  obs. gauge {def_id, plugin}    -> audiobook_organizer_ops_progress_age_seconds
 //	audiobook_organizer.ops.progress_timeout obs. gauge {def_id, plugin} -> audiobook_organizer_ops_progress_timeout_seconds
 //	audiobook_organizer.ops.zombies       obs. gauge (no attributes)  -> audiobook_organizer_ops_zombies
+//	audiobook_organizer.ops.abandoned_calls obs. gauge {source}       -> audiobook_organizer_ops_abandoned_calls
 //
 // ops.inflight counts runs holding a worker slot. That includes a run the
 // dispatcher has claimed (its stub handle is in the registry's running map)
@@ -33,6 +34,11 @@
 // ops.zombies is the number of runs whose goroutine outlived the abandon
 // grace and has not returned (the registry's ZombieCount), summed over every
 // source registered with RegisterZombies.
+//
+// ops.abandoned_calls is the number of uncancellable calls (a stat on a stuck
+// mount, a tag parse) that boundedcall.Call gave up on and whose goroutine has
+// not returned, one point per source name registered with RegisterAbandoned.
+// A value that stays above zero is a dead mount holding OS threads.
 //
 // runs outcomes: started, completed, failed, canceled, timed_out, dropped.
 // started is counted when an attempt begins executing (Started); the other
@@ -181,6 +187,7 @@ type Recorder struct {
 	progAge   metric.Float64ObservableGauge
 	progTO    metric.Float64ObservableGauge
 	zombies   metric.Int64ObservableGauge
+	abandoned metric.Int64ObservableGauge
 	schedLag  metric.Float64Histogram
 	schedMiss metric.Int64Counter
 
@@ -190,6 +197,18 @@ type Recorder struct {
 	zombieMu   sync.Mutex
 	zombieSrc  map[uint64]func() int64
 	zombieNext uint64
+
+	// abandonedMu guards abandonedSrc, the RegisterAbandoned counters the one
+	// ops.abandoned_calls callback reads.
+	abandonedMu   sync.Mutex
+	abandonedSrc  map[uint64]abandonedSource
+	abandonedNext uint64
+}
+
+// abandonedSource is one counter behind ops.abandoned_calls.
+type abandonedSource struct {
+	name  string
+	count *atomic.Int64
 }
 
 // New creates the instruments on mp. The metric API returns a no-op instrument
@@ -218,6 +237,9 @@ func New(mp metric.MeterProvider) *Recorder {
 	r.zombies, _ = m.Int64ObservableGauge("audiobook_organizer.ops.zombies",
 		metric.WithUnit("{run}"),
 		metric.WithDescription("Operation runs whose goroutine outlived the abandon grace after being stopped and has not returned yet. They hold their concurrency key and write set until it does."))
+	r.abandoned, _ = m.Int64ObservableGauge("audiobook_organizer.ops.abandoned_calls",
+		metric.WithUnit("{call}"),
+		metric.WithDescription("Uncancellable calls (file stats on a stuck mount, tag parses) abandoned after their time bound whose goroutine has not returned yet, by source. Each holds an OS thread until the mount answers; a value that stays above zero is a dead mount."))
 	r.schedLag, _ = m.Float64Histogram("audiobook_organizer.ops.schedule_lag",
 		metric.WithUnit("s"),
 		metric.WithDescription("Seconds between a scheduled run's due time and the moment the scheduler enqueued it, by def_id."))
@@ -225,6 +247,8 @@ func New(mp metric.MeterProvider) *Recorder {
 		metric.WithUnit("{run}"),
 		metric.WithDescription("Scheduled fires that came due while the process was down or busy and were folded into one catch-up run, by def_id."))
 	r.zombieSrc = map[uint64]func() int64{}
+	r.abandonedSrc = map[uint64]abandonedSource{}
+	_, _ = m.RegisterCallback(r.observeAbandoned, r.abandoned)
 	// One callback for the recorder's lifetime, summing the registered
 	// sources: several registries on one provider (tests create many) then
 	// add up instead of racing for the single attribute-less point. The
@@ -246,6 +270,21 @@ func (r *Recorder) observeZombies(_ context.Context, o metric.Observer) error {
 		n += f()
 	}
 	o.ObserveInt64(r.zombies, n)
+	return nil
+}
+
+// observeAbandoned reports each registered source's counter, summing sources
+// that share a name (several resolvers or tests on one provider).
+func (r *Recorder) observeAbandoned(_ context.Context, o metric.Observer) error {
+	r.abandonedMu.Lock()
+	sums := map[string]int64{}
+	for _, src := range r.abandonedSrc {
+		sums[src.name] += src.count.Load()
+	}
+	r.abandonedMu.Unlock()
+	for name, n := range sums {
+		o.ObserveInt64(r.abandoned, n, metric.WithAttributes(telemetry.Source.String(name)))
+	}
 	return nil
 }
 
@@ -315,6 +354,34 @@ func (r *Recorder) Items(defID, outcome string, n int64) {
 	}
 	r.items.Add(context.Background(), n, metric.WithAttributes(
 		telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(outcome)))
+}
+
+// Source names for RegisterAbandoned. The set is closed: each is a call site
+// that owns a process-wide abandoned counter.
+const (
+	SourceRepairsResolver     = "repairs_resolver"
+	SourceRetiredVersionsStat = "retired_versions_stat"
+)
+
+// RegisterAbandoned adds count, the counter a boundedcall.Call feeds with its
+// abandoned-goroutine total, to ops.abandoned_calls under the closed source
+// name, and returns the function that removes it (idempotent). The series
+// exists at 0 from registration. name must come from a small fixed set (a
+// call site, never a path or a run id): it becomes a metric attribute.
+func (r *Recorder) RegisterAbandoned(name string, count *atomic.Int64) (unregister func()) {
+	r.abandonedMu.Lock()
+	r.abandonedNext++
+	id := r.abandonedNext
+	r.abandonedSrc[id] = abandonedSource{name: name, count: count}
+	r.abandonedMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.abandonedMu.Lock()
+			delete(r.abandonedSrc, id)
+			r.abandonedMu.Unlock()
+		})
+	}
 }
 
 var activeCallbacks atomic.Int64

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_op_rows.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d45025bc-200a-4342-a7e6-2d64d54a63fe
 // last-edited: 2026-10-22
 
@@ -38,6 +38,26 @@ func opv2RowIxRunPrefix(opID string) []byte { return []byte(opv2RowIxPrefix + op
 
 func opv2RowKey(opID, rowID string) []byte   { return []byte(opv2RowPrefix + opID + ":" + rowID) }
 func opv2RowIxKey(opID, rowID string) []byte { return []byte(opv2RowIxPrefix + opID + ":" + rowID) }
+
+// rangeDeleter is the one batch method stageOpRowsDelete needs.
+type rangeDeleter interface {
+	DeleteRange(start, end []byte, o *pebble.WriteOptions) error
+}
+
+// stageOpRowsDelete stages the removal of both row ranges (opv2:row: and
+// opv2:rowix:) of one operation id into b. It is the only range delete the
+// hollow-operation sweep may make: the sweep's ids come from the opv2:op: keys
+// it walked, so the key-flow ratchet (opv2OpKeyAllowlist) refuses a raw
+// DeleteRange there and accepts this helper by name, which can only ever build
+// the two row prefixes and so can never reach opv2:op:.
+func stageOpRowsDelete(b rangeDeleter, opID string) error {
+	for _, prefix := range [][]byte{opv2RowRunPrefix(opID), opv2RowIxRunPrefix(opID)} {
+		if err := b.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // opv2RunScopedPrefixes are the per-operation key ranges every delete of an
 // operation removes whole. DeleteOperationV2 and stageOpV2RowDelete (the v3

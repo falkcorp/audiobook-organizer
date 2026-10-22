@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
 // last-edited: 2026-10-22
 
@@ -1043,10 +1043,12 @@ func init() {
 		opv2KeySinks[role] = m
 	}
 	// The sweep removes a hollow row's per-run row ranges (opv2:row: and
-	// opv2:rowix:, built from the hollow id) with a range delete. The hollow
-	// id derives from the opv2:op: key it walked, so the key-flow rule sees
-	// it reach DeleteRange; it is the same deletion DeleteOperationV2 makes.
-	opv2KeySinks["sweep"]["DeleteRange"] = true
+	// opv2:rowix:, built from the hollow id) through stageOpRowsDelete. The
+	// hollow id derives from the opv2:op: key it walked, so the key-flow rule
+	// would see it reach a range delete; it accepts this one helper by name
+	// (it can only build the two row prefixes) and still refuses a DeleteRange
+	// of any other prefix in the sweep role.
+	opv2KeySinks["sweep"]["stageOpRowsDelete"] = true
 }
 
 func opv2CalleeName(call *ast.CallExpr) string {
@@ -1757,5 +1759,52 @@ func TestOpsV2Timeline_CloseClearsTrust(t *testing.T) {
 	}
 	if p.OpsV2TimelineIndexTrusted() {
 		t.Fatal("a closed store still reports the index trusted")
+	}
+}
+
+// TestOpv2KeyRatchet_SweepRangeDeleteIsNarrow pins how far the sweep role was
+// loosened: a hollow id (derived from an opv2:op: key) may reach the row-range
+// helper stageOpRowsDelete, and nothing else that deletes a range. A
+// DeleteRange of any other prefix built from that id, including one that
+// would cover opv2:op: itself, is still flagged.
+func TestOpv2KeyRatchet_SweepRangeDeleteIsNarrow(t *testing.T) {
+	const head = `package p
+func (p *PebbleStore) Sweep(it iter, batch b) error {
+	prefix := []byte("opv2:op:")
+	var hollow []string
+	for it.First(); it.Valid(); it.Next() {
+		hollow = append(hollow, strings.TrimPrefix(string(it.Key()), string(prefix)))
+	}
+	for _, id := range hollow {
+		_ = opv2OpenKey(id)
+		_, _ = p.doneKeysForIDs(nil)
+`
+	check := func(body string) []string {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "sweep.go", head+body+"\t}\n\treturn nil\n}\n", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fd := f.Decls[0].(*ast.FuncDecl)
+		return opv2CheckRole(fset, "sweep.go:(*PebbleStore).Sweep", "sweep", fd, func(string) bool { return false })
+	}
+	joined := func(v []string) string { return strings.Join(v, "\n") }
+
+	if v := check("\t\tif err := stageOpRowsDelete(batch, id); err != nil {\n\t\t\treturn err\n\t\t}\n"); len(v) != 0 {
+		t.Fatalf("the row-range helper must be accepted in the sweep role, got:\n%s", joined(v))
+	}
+	for name, body := range map[string]string{
+		"a range delete of a prefix derived from the walked key": "\t\tq := append([]byte(nil), prefix...)\n\t\t_ = batch.DeleteRange(q, prefixEnd(q), nil)\n",
+		"a range delete of the whole opv2:op: family":            "\t\t_ = batch.DeleteRange(prefix, prefixEnd(prefix), nil)\n",
+		"a range delete of the op row and what follows it":       "\t\t_ = batch.DeleteRange(opv2OpKey(id), prefixEnd(opv2OpKey(id)), nil)\n",
+	} {
+		v := check(body)
+		if len(v) == 0 {
+			t.Errorf("%s in the sweep role was not flagged", name)
+			continue
+		}
+		if !strings.Contains(joined(v), "DeleteRange") {
+			t.Errorf("%s: flagged, but not for DeleteRange:\n%s", name, joined(v))
+		}
 	}
 }

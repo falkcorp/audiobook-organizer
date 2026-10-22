@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8885f927-1097-4448-a36b-4a903c887c6d
 // last-edited: 2026-10-22
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -98,30 +99,39 @@ func ClearPlanRows(rs database.OpRowStore, opID string) error {
 	return rs.ReplaceOpRows(opID, 0, nil)
 }
 
-// A row's index entry is "class NUL skip-kind NUL 0|1" (the last field the
-// owner flag). Class and skip kind are fixer-defined identifiers, never NUL.
+// A row's index entry is "class NUL skip-kind NUL 0|1 NUL flags" (the third
+// field the owner flag, the last the row's Flags joined by commas). Class,
+// skip kind and flags are fixer-defined identifiers, never NUL.
 func encodeRowIndex(r *Row) []byte {
 	owner := "0"
 	if r.OwnerApplicable {
 		owner = "1"
 	}
-	return []byte(r.Class + "\x00" + r.Skipped + "\x00" + owner)
+	return []byte(r.Class + "\x00" + r.Skipped + "\x00" + owner + "\x00" + strings.Join(r.Flags, ","))
 }
 
-// rowRef is what Page needs of a row: its id, class, skip kind and owner flag.
+// rowRef is what Page needs of a row: its id, class, skip kind, owner flag and
+// Flags.
 type rowRef struct {
 	id, class, skipped string
 	owner              bool
+	flags              []string
 }
+
+func (r *rowRef) hasFlag(f string) bool { return slices.Contains(r.flags, f) }
 
 func (r *rowRef) applicable() bool { return r.skipped == "" }
 
 func decodeRowIndex(id string, ix []byte) (rowRef, error) {
 	parts := strings.Split(string(ix), "\x00")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return rowRef{}, fmt.Errorf("repairs: row %q has a malformed index entry", id)
 	}
-	return rowRef{id: id, class: parts[0], skipped: parts[1], owner: parts[2] == "1"}, nil
+	ref := rowRef{id: id, class: parts[0], skipped: parts[1], owner: parts[2] == "1"}
+	if parts[3] != "" {
+		ref.flags = strings.Split(parts[3], ",")
+	}
+	return ref, nil
 }
 
 func decodeRow(id string, data []byte) (Row, error) {
@@ -142,7 +152,7 @@ func (p *PlanResult) refs() ([]rowRef, error) {
 		out := make([]rowRef, len(p.Rows))
 		for i := range p.Rows {
 			r := &p.Rows[i]
-			out[i] = rowRef{id: r.RowID, class: r.Class, skipped: r.Skipped, owner: r.OwnerApplicable}
+			out[i] = rowRef{id: r.RowID, class: r.Class, skipped: r.Skipped, owner: r.OwnerApplicable, flags: r.Flags}
 		}
 		return out, nil
 	}

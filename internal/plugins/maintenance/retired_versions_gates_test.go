@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
 // last-edited: 2026-10-22
 
@@ -212,6 +212,39 @@ func TestRetiredVersions_CombineUndoAwareFlag(t *testing.T) {
 	}
 	// The flag is part of what the row was decided from.
 	require.NotEqual(t, rows[rf.ids["plain"]].Fingerprint, absorbed.Fingerprint)
+}
+
+// Every count must click through: the plan tallies the flag (by_flag) and the
+// "flag:combine_undo_aware" filter pages exactly the flagged rows, whatever
+// their category, from the stored plan's index.
+func TestRetiredVersions_CombineUndoAwareCountOpensItsRows(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	rf.trashed("absorbed", "g", 30, rf.file("g/a.mp3"))
+	rf.trashed("recent", "g", 3, rf.file("g/d.mp3"))
+	rf.trashed("plain", "g", 30, rf.file("g/c.mp3"))
+	j := &merge.CombineJournal{ID: "J-flag", Status: merge.CombineJournalApplied, SurvivorID: rf.ids["primary"]}
+	j.Absorbed = append(j.Absorbed, merge.CombineAbsorbed{BookID: rf.ids["absorbed"]}, merge.CombineAbsorbed{BookID: rf.ids["recent"]})
+	require.NoError(t, merge.WriteCombineJournal(rf.st, j))
+
+	res, err := repairs.RunPlan(context.Background(), rf.f, nil, repairs.PlanDeps{Guard: rf.st}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{retFlagCombineUndoAware: 2}, res.ByFlag)
+
+	page, err := res.Page("op", repairs.FilterFlagPrefix+retFlagCombineUndoAware, "", 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, 2, page.Total, "the count opens exactly the rows it counts")
+	var got []string
+	for _, r := range page.Rows {
+		got = append(got, r.RowID)
+		require.Equal(t, []string{retFlagCombineUndoAware}, r.Flags)
+	}
+	require.ElementsMatch(t, []string{rf.ids["absorbed"], rf.ids["recent"]}, got)
+	require.Equal(t, map[string]int{retFlagCombineUndoAware: 2}, page.ByFlag)
+
+	other, err := res.Page("op", repairs.FilterFlagPrefix+"nope", "", 0, 50)
+	require.NoError(t, err)
+	require.Zero(t, other.Total)
 }
 
 // The flag rides on every category: a combine-absorbed shell is usually

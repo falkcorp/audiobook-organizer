@@ -12,6 +12,9 @@
   "by_class": {
     "synthetic-key": 7
   },
+  "by_flag": {
+    "synthetic-key": 7
+  },
   "owner_applicable": 7,
   "row_store": "synthetic-RowStore"
 }

@@ -37,6 +37,11 @@ export interface PlanResult {
    */
   by_class?: { [key: string]: number /* int */};
   /**
+   * ByFlag counts every row carrying a flag (Row.Flags) by flag. Each count
+   * is the "flag:<name>" filter of the rows endpoint.
+   */
+  by_flag?: { [key: string]: number /* int */};
+  /**
    * OwnerApplicable counts the skipped rows the owner may apply himself
    * (Row.OwnerApplicable); the owner_applicable filter pages them.
    */
@@ -75,6 +80,11 @@ export interface RowsPage {
    * ByClass is the whole plan's per-class tally, whatever the filter.
    */
   by_class?: { [key: string]: number /* int */};
+  /**
+   * ByFlag is the whole plan's per-flag tally, whatever the filter: each
+   * count is what the "flag:<name>" filter pages.
+   */
+  by_flag?: { [key: string]: number /* int */};
   /**
    * ByClassInFilter tallies by class only the rows matching filter (class
    * aside): exactly the rows a class chip on this tab lists.
@@ -197,6 +207,16 @@ export interface Row {
    * filters on it, so every per-class count in the lane lists its rows.
    */
   class?: string;
+  /**
+   * Flags are fixer-defined facts a row carries ALONGSIDE its class and skip
+   * kind ("combine_undo_aware"): a class is exclusive, a flag is not, so a
+   * flag counts rows across every class. The plan tallies them
+   * (PlanResult.ByFlag) and the rows endpoint filters on "flag:<name>", so
+   * every per-flag count in the lane lists its rows. RunPlan sorts and
+   * de-duplicates them; a name is non-empty and holds no NUL, comma or
+   * whitespace.
+   */
+  flags?: string[];
   /**
    * Members optionally describes every book of the row (its role in the
    * row and its file counts), so the lane can list and link each of them

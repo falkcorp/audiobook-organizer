@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-10-22
 
@@ -318,8 +318,10 @@ func TestPlanStoredTheOldWayIsAConflict(t *testing.T) {
 	w := do(r, http.MethodGet, "/api/v1/repairs/version-group-primary-repair/plan/op-legacy/rows", "")
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), "run the plan again")
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`, "the lane keys its Run plan again button on this code")
 	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply", `{"plan_op_id":"op-legacy","row_ids":["r"]}`)
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
 }
 
 // opsWithoutRows is an op store with no plan-row capability.

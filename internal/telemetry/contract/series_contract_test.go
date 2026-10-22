@@ -1,7 +1,7 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // Package contract pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -219,6 +220,7 @@ func buildSeedingTable() []seedRow {
 		{"audiobook_organizer_ops_progress_age_seconds", "opsmetrics RegisterInflight", opsSeed},
 		{"audiobook_organizer_ops_progress_timeout_seconds", "opsmetrics RegisterInflight", opsSeed},
 		{"audiobook_organizer_ops_zombies", "opsmetrics RegisterZombies", opsSeed},
+		{"audiobook_organizer_ops_abandoned_calls", "opsmetrics RegisterAbandoned", opsSeed},
 		{"audiobook_organizer_ops_schedule_lag_seconds", "opsmetrics ScheduleLag", opsSeed},
 		{"audiobook_organizer_ops_schedule_missed_total", "opsmetrics ScheduleMissed", opsSeed},
 
@@ -389,6 +391,9 @@ func seedOpsMetrics() error {
 		}
 	})
 	r.RegisterZombies(func() int64 { return 1 })
+	var abandoned atomic.Int64
+	abandoned.Store(1)
+	r.RegisterAbandoned("contract", &abandoned)
 	r.ScheduleLag("contract", time.Second)
 	r.ScheduleMissed("contract", 1)
 	return nil
@@ -885,6 +890,7 @@ var ourInstruments = []instrumentSpec{
 	{name: "audiobook_organizer.ops.progress_age", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "audiobook_organizer.ops.progress_timeout", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "audiobook_organizer.ops.zombies", kind: kindGauge, unit: "{run}"},
+	{name: "audiobook_organizer.ops.abandoned_calls", kind: kindGauge, unit: "{call}", keys: []attribute.Key{telemetry.Source}},
 	{name: "audiobook_organizer.ops.schedule_lag", kind: kindHistogram, unit: "s", keys: []attribute.Key{telemetry.DefID}},
 	{name: "audiobook_organizer.ops.schedule_missed", kind: kindCounter, unit: "{run}", keys: []attribute.Key{telemetry.DefID}},
 	{name: "ai_dispatch.requests", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Outcome}},

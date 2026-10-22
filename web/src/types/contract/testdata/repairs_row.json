@@ -14,6 +14,9 @@
   "reason": "synthetic-Reason",
   "risk": "synthetic-Risk",
   "class": "synthetic-Class",
+  "flags": [
+    "synthetic-Flags"
+  ],
   "members": [
     {
       "book_id": "synthetic-BookID",

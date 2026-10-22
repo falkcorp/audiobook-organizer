@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.53.1
+// version: 1.54.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -61,6 +61,12 @@ type opsV3Migrator interface {
 // time for the same reason as hollowOpsSweeper.
 type junctionBookIDRepairer interface {
 	RepairJunctionBookIDs() (JunctionBookIDRepair, error)
+}
+
+// legacyPlanStripper is migration066Up's one capability, asserted at run time
+// for the same reason as hollowOpsSweeper.
+type legacyPlanStripper interface {
+	StripLegacyPlanRows() (LegacyPlanStrip, error)
 }
 
 // MigrationFunc represents a migration operation.
@@ -493,6 +499,12 @@ var migrations = []Migration{
 		Description: "Build opv3: run records and indexes from opv2: operation rows (v2 rows are kept and stay mirrored)",
 		Up:          migration065Up,
 		Down:        migration065Down,
+	},
+	{
+		Version:     66,
+		Description: "Strip the inline rows from stored Repairs plan results (plans keep their rows beside the operation now; a stored plan of the old format is refused and re-run)",
+		Up:          migration066Up,
+		Down:        nil,
 	},
 }
 
@@ -1384,4 +1396,30 @@ func (p *PebbleStore) BackfillDedupEntityIndexes() (CandidateIndexBackfill, Labe
 	}
 	labels, err := es.BackfillLabelEntityIndex()
 	return cands, labels, err
+}
+
+// migration066Up removes the inline rows from every stored Repairs plan result
+// (StripLegacyPlanRows). Plans used to hold every row inside the operation's
+// result, about 760 bytes each; the retired-versions plan alone was 40 to 57
+// MB, and every read of the operation (the fixer list, the boot scan,
+// diagnostics) decoded all of it. Plans keep their rows beside the operation
+// now and a plan of the old format is refused, so the rows in those results
+// can never be read again. The operation record and its summary stay; the
+// lane shows the owner that the plan has to be run again. It touches only the
+// result text of plan operations, never library data. Idempotent: a second
+// run finds no result with rows and writes nothing, and the applied-migration
+// record is the done-sentinel.
+func migration066Up(store migrationStore) error {
+	stripper, ok := store.(legacyPlanStripper)
+	if !ok {
+		legacyPlanLog.Warn("migration 66: store %T cannot strip legacy plan rows; nothing to do", store)
+		return nil
+	}
+	rep, err := stripper.StripLegacyPlanRows()
+	if err != nil {
+		return fmt.Errorf("migration 66: strip legacy plan rows: %w", err)
+	}
+	legacyPlanLog.Info("migration 66: legacy plan rows stripped: plans=%d stripped=%d unreadable=%d bytes_before=%d bytes_after=%d bytes_freed=%d",
+		rep.Plans, rep.Stripped, rep.Unreadable, rep.BytesBefore, rep.BytesAfter, rep.BytesBefore-rep.BytesAfter)
+	return nil
 }
