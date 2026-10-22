@@ -50,11 +50,18 @@ carry journals a marker row on the survivor (`collection-took` or
 `collection-held` or `playlist-held` when the book was only removed because the
 survivor was already listed). Reverting one of several retires into the same
 survivor reads the others' markers: the survivor stays in the list until the
-last of them is reverted, then leaves it, so two retires reverted in either
-order end with the original list and no survivor left behind (a removal is put
-back by its recorded index, so with three or more retires the position of a
-restored book can be one slot off unless the newest is reverted first; none is
-lost). Marker rows restore nothing, so the revert result counts them in a
+last of them is reverted, then leaves it, so retires reverted in any
+order end with the original list and no survivor left behind. Each carry also
+records the books right before and after the retired one, and the revert puts
+the book back by those neighbours (walking through other retires' records,
+and treating a survivor that took a book's slot as that book), so operations
+undone in any order, including oldest first, restore every book to its exact
+original position in every collection and playlist. When no recorded
+neighbour can be found in the list (the owner reordered or emptied it since),
+or the row was journaled before neighbours were recorded, the recorded index
+is used instead and the revert reports it, never silently: the revert result
+counts these in `restored_by_index`, names each in `kept`, and the summary
+says so. Marker rows restore nothing, so the revert result counts them in a
 separate `markers` figure, not in `restored`. The undo preflight predicts a
 refusal for a carried collection, playlist or rating that was edited since (it
 gives no prediction when the store cannot read lists).
