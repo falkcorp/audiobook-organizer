@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.232.0
+// version: 1.233.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-22
 
@@ -3509,8 +3509,15 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			return nil
 		}
 		if oldStr != "" {
+			// Compare-and-delete: each of these indexes keeps ONE owner per
+			// hash (last writer wins), so a book that shares the hash with
+			// another may not own the row. Deleting it unconditionally
+			// erased the other live book's lookup, the same bug DeleteBook
+			// had (pebble_store_book_path_owner.go). A row this book owned
+			// while a sibling still holds the hash is left missing for the
+			// sibling; maintenance.book-hash-index-repair restores it.
 			oldKey := []byte(fmt.Sprintf("book:%s:%s", prefix, oldStr))
-			if err := batch.Delete(oldKey, nil); err != nil {
+			if err := p.deleteKeyIfValueIs(batch, oldKey, id); err != nil {
 				return err
 			}
 		}

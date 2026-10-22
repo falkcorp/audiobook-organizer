@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.110.0
+// version: 1.111.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-22
 
@@ -81,6 +81,7 @@ import {
 import { describeMergeOutcome, type BookMergeOpResult } from '../utils/mergeOutcome';
 import { describeCombineOutcome, type BookCombineOpResult } from '../utils/combineOutcome';
 import { isAbortError } from '../utils/apiFetch';
+import { followOperation } from '../utils/followOperation';
 import { BOOK_OP_PENDING_REASON, usePendingBookOps } from '../hooks/usePendingBookOps';
 import { outcomeHeadline, outcomeSeverity } from '../utils/purgeSummary';
 import { usePurgeRun, type PurgeRunEnd } from '../hooks/usePurgeRun';
@@ -401,6 +402,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   });
   const [deleteInProgress, setDeleteInProgress] = useState(false);
   const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
+  // Read by the purge's "ended" handler, which outlives the dialog's renders.
+  const purgeDialogOpenRef = useRef(false);
+  useEffect(() => {
+    purgeDialogOpenRef.current = purgeDialogOpen;
+  }, [purgeDialogOpen]);
   const [purgingBookId, setPurgingBookId] = useState<string | null>(null);
   // A trashed book whose "Purge now" was refused for its listening progress:
   // the trash section opens the discard confirmation for it.
@@ -1530,9 +1536,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   });
 
   // Waits (in the background, never inside a click handler) for a merge or
-  // combine operation to end and reads its stored result. Returns null when
-  // the page went away (nothing to report), or after saying the outcome is
-  // unknown because the operation could not be followed. A failed or cancelled
+  // combine operation to end and reads its stored result. Returns null only
+  // when the page went away (nothing to report). A failed poll is NOT the
+  // operation failing: it keeps polling with backoff until the operation
+  // reaches a terminal state, says once that it is still checking, and the
+  // books stay in flight meanwhile (the server may well still be working on
+  // them, and a second submit would queue behind it). A failed or cancelled
   // operation stores its result too, so it is fetched for every ended status;
   // a fetch error leaves it null and the outcome wording then says what is
   // unknown, never that it succeeded.
@@ -1543,17 +1552,23 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   ): Promise<{ status: string; errorMessage?: string | null; result: T | null } | null> => {
     let done: api.OperationV2;
     try {
-      done = await api.pollOperationV2(operationId, undefined, 1000, { signal });
+      done = await followOperation(
+        (sig) => api.pollOperationV2(operationId, undefined, 1000, { signal: sig }),
+        {
+          signal,
+          onTrouble: (e) => {
+            console.error(`Lost contact while following the ${label} operation`, e);
+            toast(
+              `Still checking on the ${label}: the server could not be reached. It may still be running, so its books stay locked until it ends.`,
+              'warning',
+              viewOperationAction(operationId)
+            );
+          },
+        }
+      );
     } catch (e) {
       if (signal.aborted || isAbortError(e)) return null;
-      console.error(`Could not follow the ${label} operation`, e);
-      toast(
-        `Could not follow the ${label}, so what it did is unknown. Check the operation (${operationId}) for the outcome.`,
-        'warning',
-        viewOperationAction(operationId)
-      );
-      await refreshAfterBookOpRef.current();
-      return null;
+      throw e;
     }
     let result: T | null = null;
     try {
@@ -1802,7 +1817,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         outcomeSeverity(end.result),
         viewOperationAction(end.operationId)
       );
-    } else {
+    } else if (!purgeDialogOpenRef.current) {
+      // A refusal or an unreadable outcome is shown ONCE: the dialog says it
+      // when it is open (it keeps its own copy), and only when it is closed
+      // does it need a toast.
       toast(end.error, 'error', end.operationId ? viewOperationAction(end.operationId) : undefined);
     }
     clearLibraryCache();
@@ -1811,7 +1829,13 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   };
   const handlePurgeStarted = (operationId: string) =>
     toast('Purge started - running in the background.', 'info', viewOperationAction(operationId));
-  const purgeRun = usePurgeRun(handlePurgeFinished, handlePurgeStarted);
+  const handlePurgeTrouble = (operationId: string) =>
+    toast(
+      'Still checking on the purge: the server could not be reached. It may still be running.',
+      'warning',
+      viewOperationAction(operationId)
+    );
+  const purgeRun = usePurgeRun(handlePurgeFinished, handlePurgeStarted, handlePurgeTrouble);
   const purgeInProgress = purgeRun.running;
 
   const handleBatchSave = async (updates: Partial<Audiobook>) => {

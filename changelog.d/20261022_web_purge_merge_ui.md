@@ -12,3 +12,11 @@ into one book" does the same. A deleted book is dropped from the selection. The
 "block this file hash" checkbox is off by default in the Library single and
 bulk delete and on the book page, and the toast names the live books that kept
 the hash from being blocked.
+A failed status poll is not treated as a failed operation: the page says "still
+checking", keeps the books (or the purge) in flight and keeps polling with
+backoff until the operation ends, so the buttons are not re-enabled while the
+server may still be working. A purge that is refused or unreadable shows its
+reason once, in the dialog when it is open and in a toast only when it is not.
+A combine outcome whose result has no `operation_id` says "undo id unavailable"
+and where to look instead of silently dropping Undo; the server always stores
+`operation_id` on a successful combine.

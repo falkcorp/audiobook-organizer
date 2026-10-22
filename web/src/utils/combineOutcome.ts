@@ -1,5 +1,5 @@
 // file: web/src/utils/combineOutcome.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e2d71-c0a4-4f36-9e18-7a3d6f1b9c42
 // last-edited: 2026-10-22
 
@@ -44,6 +44,14 @@ export interface CombineOutcomePlan {
   actionLabel?: string;
 }
 
+/**
+ * Said when a combine that changed the library carries no undo id. The server
+ * always stores one, so this is a server fault or an older server; the toast
+ * must not just lose its Undo button without a word.
+ */
+export const UNDO_ID_UNAVAILABLE =
+  "Undo id unavailable: open the combined book's Files & History tab, or the operation, to find what to revert";
+
 /** " (operation <id>)", so a half-done combine can still be found and reverted after its toast is gone. */
 export function operationRef(operationId: string): string {
   return ` (operation ${operationId})`;
@@ -75,7 +83,7 @@ export function describeCombineOutcome(args: {
         severity: 'error',
         message: undoOperationId
           ? `The combine stopped part-way and may already have moved some files or put some books in the trash. Undo puts back what it changed${operationRef(undoOperationId)}.`
-          : `The combine stopped part-way and may already have moved some files or put some books in the trash. Check the operation to see what it did${operationRef(operationId)}.`,
+          : `The combine stopped part-way and may already have moved some files or put some books in the trash. ${UNDO_ID_UNAVAILABLE}${operationRef(operationId)}.`,
         undoOperationId,
         actionLabel: undoOperationId ? 'Undo' : undefined,
       };
@@ -111,6 +119,9 @@ export function describeCombineOutcome(args: {
         ? 'Its undo record could not be finalized, but it lists every step, so Undo still puts them back.'
         : 'Its undo record could not be finalized.'
     );
+  }
+  if (!undoOperationId) {
+    sentences.push(`${UNDO_ID_UNAVAILABLE}${operationRef(operationId)}.`);
   }
   if (result.warnings?.length) {
     sentences.push(result.warnings.join(' '));
