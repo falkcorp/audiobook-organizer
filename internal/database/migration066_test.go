@@ -1,5 +1,5 @@
 // file: internal/database/migration066_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c16a990-2d0e-4278-b18a-1d20d6bfe3ea
 // last-edited: 2026-10-22
 
@@ -97,6 +97,30 @@ func TestMigration066StripsInlineRowsFromLegacyPlans(t *testing.T) {
 	require.Equal(t, d1, d2, "second run must change no byte")
 
 	require.NoError(t, migration066Up(p), "the registered Up runs the same strip")
+}
+
+// TestMigration066_IsRegisteredAndStrips: the entry in the migrations list
+// (the one RunMigrations applies on boot) is version 66, is the last one, and
+// its Up strips a legacy plan's rows; so the cleanup actually runs on deploy,
+// not only when the helper is called directly.
+func TestMigration066_IsRegisteredAndStrips(t *testing.T) {
+	st, cleanup := setupTestDB(t)
+	defer cleanup()
+	p := st.(*PebbleStore)
+
+	var m *Migration
+	for i := range migrations {
+		if migrations[i].Version == 66 {
+			m = &migrations[i]
+		}
+	}
+	require.NotNil(t, m, "migration 66 is not in the migrations list")
+	require.Equal(t, 66, migrations[len(migrations)-1].Version, "66 is no longer the last migration; keep this test pointing at the plan-row strip")
+	require.NotNil(t, m.Up)
+
+	insertPlanLikeOp(t, p, "plan-legacy-2", LegacyPlanOpDefID, `{"fixer_id":"retired-versions","rows":[{"row_id":"a"},{"row_id":"b"}]}`)
+	require.NoError(t, m.Up(p))
+	require.JSONEq(t, `{"fixer_id":"retired-versions"}`, resultOf(t, p, "plan-legacy-2"))
 }
 
 func compactJSON(t *testing.T, s string) string {
