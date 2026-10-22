@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-22
 
@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,9 +44,10 @@ type purgeEnv struct {
 	// probe answers "does a user have listening state on this book" with the
 	// users listed once per pass.
 	probe *merge.UserStateProbe
-	// undo answers "is this book the retired shell of a combine that can still
-	// be undone", refreshing itself when a combine journals mid-pass.
-	undo *undoShells
+	// undo answers "does an undo that can still run need this trashed book":
+	// a combine, a maintenance operation's ledger, or an auto-merge. It
+	// refreshes the parts it snapshots when one is journaled mid-pass.
+	undo *undoHold
 }
 
 // undoShells is the pass's shared, self-refreshing view of
@@ -92,15 +92,17 @@ func (u *undoShells) Holds(b *database.Book) (journalID string, held bool, err e
 	return journalID, held, nil
 }
 
-// newPurgeEnv builds a pass's shared read state. Both reads fail closed: a
-// purge that cannot list users or the combine journals does not run, because
-// "cannot tell" must never read as "nothing is held".
+// newPurgeEnv builds a pass's shared read state. Every read fails closed: a
+// purge that cannot list users, read the undo records (combine journals,
+// auto-merge journal) or use the operation ledger's by-book index
+// (ErrUndoLedgerNotReady) does not run, because "cannot tell" must never read
+// as "nothing is held".
 func (svc *AudiobookService) newPurgeEnv() (purgeEnv, error) {
 	probe, err := merge.NewUserStateProbe(svc.store)
 	if err != nil {
 		return purgeEnv{}, fmt.Errorf("cannot list users to check their listening state: %w", err)
 	}
-	undo, err := svc.newUndoShells()
+	undo, err := svc.newUndoHold()
 	if err != nil {
 		return purgeEnv{}, err
 	}
@@ -141,7 +143,7 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 	_, held, err := env.undo.Holds(book)
 	switch {
 	case err != nil:
-		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell whether a combine's undo still needs it: %v", book.ID, err)}}, true
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot tell whether an undo still needs it: %v", book.ID, err)}}, true
 	case held:
 		return purgeOutcome{kind: purgeKeptUndo}, true
 	}
@@ -211,18 +213,42 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		DryRun:    opts.DryRun,
 		Errors:    []string{},
 	}
-	// Users and combine journals are read once per pass, not once per book.
+	// Users, combine journals and the other undo records are read once per
+	// pass, not once per book.
 	var env purgeEnv
 	if len(books) > 0 {
 		env, err = svc.newPurgeEnv()
 		if err != nil {
-			return nil, fmt.Errorf("purge refused: %w", err)
+			// Nothing was decided. The result goes back with the error so the
+			// operation can store it: a refusal is "did not run", and the
+			// caller must be able to read why from the stored result as well
+			// as from the failed operation.
+			result.StoppedEarly = true
+			result.StopReason = fmt.Sprintf("purge refused: %v", err)
+			return result, fmt.Errorf("purge refused: %w", err)
 		}
 	}
 
 	var mu sync.Mutex
 	var decided atomic.Int64
 	total := len(books)
+	// Progress is reported in order: the workers finish books concurrently,
+	// so a bare "n := decided.Add(1)" lets a later worker's callback run
+	// before an earlier one's and the figure goes backwards.
+	var progressMu sync.Mutex
+	lastReported := -1
+	report := func(n int, final bool) {
+		if opts.Progress == nil {
+			return
+		}
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		if n < lastReported || (n == lastReported && !final) {
+			return
+		}
+		lastReported = n
+		opts.Progress(n, total)
+	}
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
 	for _, part := range purgePartitions(books) {
@@ -243,8 +269,8 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 				mu.Lock()
 				result.add(part[i].ID, out)
 				mu.Unlock()
-				if n := int(decided.Add(1)); opts.Progress != nil && n%purgeProgressEvery == 0 {
-					opts.Progress(n, total)
+				if n := int(decided.Add(1)); n%purgeProgressEvery == 0 {
+					report(n, false)
 				}
 			}
 			return nil
@@ -256,12 +282,13 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		result.Errors = append(result.Errors, fmt.Sprintf("purge worker failed: %v", err))
 	}
 	if err := ctx.Err(); err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("purge stopped early: %v", err))
+		// A flag, not a line in Errors: Capped cuts Errors, and a stored result
+		// that lost this line would read as a pass that finished.
+		result.StoppedEarly = true
+		result.StopReason = fmt.Sprintf("stopped early: %v", err)
 	}
 	result.sortIDs()
-	if opts.Progress != nil {
-		opts.Progress(int(decided.Load()), total)
-	}
+	report(int(decided.Load()), true)
 
 	if result.Purged > 0 {
 		svc.InvalidateListCache()
@@ -273,12 +300,33 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 // Summary is the one-line account of a pass, for the log and the activity
 // entry: every outcome the pass counted.
 func (r *PurgeResult) Summary() string {
+	msg := r.summary()
+	if r.StoppedEarly {
+		return fmt.Sprintf("STOPPED EARLY (%s), the counts cover only the books decided before it stopped: %s", r.StopReason, msg)
+	}
+	return msg
+}
+
+func (r *PurgeResult) summary() string {
 	if r.DryRun {
-		return fmt.Sprintf("Purge preview of %d soft-deleted books: %d purgeable now (%d of them would carry listening state to a sibling), %d kept: still own book_file rows, %d kept: undo of a combine still possible, %d kept: listening state with no listed sibling, %d could not be decided (carry_failed=%d, failed=%d)",
+		return fmt.Sprintf("Purge preview of %d soft-deleted books: %d purgeable now (%d of them would carry listening state to a sibling), %d kept: still own book_file rows, %d kept: an undo (combine, operation or auto-merge) can still run, %d kept: listening state with no listed sibling, %d could not be decided (carry_failed=%d, failed=%d)",
 			r.Attempted, r.Purgeable, r.CarriedToSibling, r.SkippedOwnsFiles, r.KeptUndoPossible, r.KeptHasProgress, r.CarryFailed+r.Failed, r.CarryFailed, r.Failed)
 	}
-	return fmt.Sprintf("Purged %d of %d soft-deleted books (%d files deleted); kept %d: still own book_file rows, %d: undo of a combine still possible, %d: listening state with no listed sibling; carried listening state to a sibling for %d; %d carry failed, %d failed",
+	return fmt.Sprintf("Purged %d of %d soft-deleted books (%d files deleted); kept %d: still own book_file rows, %d: an undo (combine, operation or auto-merge) can still run, %d: listening state with no listed sibling; carried listening state to a sibling for %d; %d carry failed, %d failed",
 		r.Purged, r.Attempted, r.FilesDeleted, r.SkippedOwnsFiles, r.KeptUndoPossible, r.KeptHasProgress, r.CarriedToSibling, r.CarryFailed, r.Failed)
+}
+
+// Decided is how many books the pass reached a decision on: every outcome the
+// counts record. On a pass that stopped early it is below Attempted. A book
+// that was restored or purged meanwhile counts in none of them, so on a very
+// busy trash it can read a little low; it is a progress figure, not a ledger.
+func (r *PurgeResult) Decided() int {
+	n := r.Purged + r.Purgeable + r.SkippedOwnsFiles + r.KeptUndoPossible + r.KeptHasProgress + r.CarryFailed + r.Failed
+	// CarriedToSibling is also counted in Purged/Purgeable.
+	if n > r.Attempted {
+		return r.Attempted
+	}
+	return n
 }
 
 // Capped returns a copy of r with each ID list and Errors cut to at most n
@@ -325,9 +373,11 @@ type PurgeBreakdown struct {
 }
 
 // breakdownOf converts a pass's result into the listing's figures. After a real
-// pass the books it purged are gone, so the figures describe what is left: the
-// books that failed or were interrupted can be purged by the next pass, the
-// rest stay blocked.
+// pass the books it purged are gone, so the figures describe what is left. The
+// books that failed are counted in Failed and nowhere else: a failure is
+// "could not be decided", not "purgeable", so Purgeable is 0 after a real
+// pass (a preview, not a failed run, is what says what a next pass would
+// purge).
 func breakdownOf(r *PurgeResult, at time.Time) PurgeBreakdown {
 	b := PurgeBreakdown{
 		ComputedAt:        at,
@@ -342,7 +392,7 @@ func breakdownOf(r *PurgeResult, at time.Time) PurgeBreakdown {
 		b.Purgeable = r.Purgeable
 	} else {
 		b.Total = r.Attempted - r.Purged
-		b.Purgeable = r.Failed + r.CarryFailed
+		b.Purgeable = 0
 	}
 	return b
 }
@@ -351,24 +401,13 @@ func breakdownOf(r *PurgeResult, at time.Time) PurgeBreakdown {
 // that stopped early (cancelled, timed out) is not remembered: its figures
 // cover only part of the trash.
 func (svc *AudiobookService) rememberPurge(r *PurgeResult) {
-	if purgeStoppedEarly(r) {
+	if r.StoppedEarly {
 		return
 	}
 	b := breakdownOf(r, time.Now().UTC())
 	svc.purgeBreakdownMu.Lock()
 	svc.purgeBreakdown = &b
 	svc.purgeBreakdownMu.Unlock()
-}
-
-// purgeStoppedEarly reports whether r carries the "stopped early" error
-// RunPurge adds when its context ended mid-pass.
-func purgeStoppedEarly(r *PurgeResult) bool {
-	for _, e := range r.Errors {
-		if strings.HasPrefix(e, "purge stopped early") {
-			return true
-		}
-	}
-	return false
 }
 
 // LastPurgeBreakdown returns the most recent pass's breakdown, or nil when no

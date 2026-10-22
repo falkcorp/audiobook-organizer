@@ -442,10 +442,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.metadataFetchService != nil {
 		dupMetadataSvc = s.metadataFetchService
 	}
-	var dupDedupEng duplicates.DedupEngine
-	if s.dedupEngine != nil {
-		dupDedupEng = s.dedupEngine
-	}
 	duplicatesH := duplicates.New(
 		s.Ops(),
 		s.dedupCache,
@@ -457,7 +453,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			}
 			return merge.NewService(s.storeForWiring())
 		},
-		dupDedupEng,
 		func() (any, error) {
 			store := s.storeForWiring()
 			if store == nil {

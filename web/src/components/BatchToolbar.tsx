@@ -1,7 +1,7 @@
 // file: web/src/components/BatchToolbar.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b5c6d7e8f9a0b
-// last-edited: 2026-08-19
+// last-edited: 2026-10-22
 
 import { Button, Chip, Box, Stack } from '@mui/material';
 
@@ -13,6 +13,8 @@ export interface BatchToolbarProps {
   onSearchMetadataClick: () => void;
   onSaveToFilesClick: () => void;
   onOrganizeSelectedClick: () => void;
+  /** Why merge/combine is blocked for this selection (a running operation covers some of it), or null. */
+  bookOpBlockedReason?: string | null;
   onMergeAsVersionsClick: () => void;
   onCombineIntoOneBookClick: () => void;
   onTagClick: () => void;
@@ -34,6 +36,7 @@ export const BatchToolbar = ({
   onSearchMetadataClick,
   onSaveToFilesClick,
   onOrganizeSelectedClick,
+  bookOpBlockedReason = null,
   onMergeAsVersionsClick,
   onCombineIntoOneBookClick,
   onTagClick,
@@ -108,25 +111,33 @@ export const BatchToolbar = ({
         Organize Selected
       </Button>
       <Box sx={{ borderLeft: 1, borderColor: 'divider', height: 24 }} />
-      <Button
-        size="small"
-        variant="outlined"
-        color="primary"
-        onClick={onMergeAsVersionsClick}
-        disabled={selectedAudiobooksLength < 2}
-      >
-        Merge as Versions
-      </Button>
-      <Button
-        size="small"
-        variant="outlined"
-        color="primary"
-        onClick={onCombineIntoOneBookClick}
-        disabled={selectedAudiobooksLength < 2}
-        title="Combine the selected single-file books into ONE multi-file book (moves all files onto one survivor, deletes the rest). Distinct from Merge as Versions."
-      >
-        Combine into One Book
-      </Button>
+      {/* A disabled button swallows pointer events, so the reason rides on a wrapper. */}
+      <span title={bookOpBlockedReason ?? undefined}>
+        <Button
+          size="small"
+          variant="outlined"
+          color="primary"
+          onClick={onMergeAsVersionsClick}
+          disabled={selectedAudiobooksLength < 2 || bookOpBlockedReason !== null}
+        >
+          Merge as Versions
+        </Button>
+      </span>
+      <span title={bookOpBlockedReason ?? undefined}>
+        <Button
+          size="small"
+          variant="outlined"
+          color="primary"
+          onClick={onCombineIntoOneBookClick}
+          disabled={selectedAudiobooksLength < 2 || bookOpBlockedReason !== null}
+          title={
+            bookOpBlockedReason ??
+            'Combine the selected single-file books into ONE multi-file book (moves all files onto one survivor, deletes the rest). Distinct from Merge as Versions.'
+          }
+        >
+          Combine into One Book
+        </Button>
+      </span>
       <Button size="small" variant="outlined" onClick={onTagClick} disabled={!selectedCount}>
         Tag
       </Button>

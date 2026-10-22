@@ -1,5 +1,5 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.25.0
+# version: 1.26.0
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
 # last-edited: 2026-10-23
 #
@@ -58,6 +58,7 @@ ai.author-merge-apply	no-mode
 ai.author-review	no-mode
 ai.author-scan-apply	preview
 dedup.auto-resolve	preview
+dedup.book-combine	no-mode
 dedup.book-merge	no-mode
 dedup.book-signature-scan	no-mode
 dedup.bookfile-seg-drop	preview
@@ -124,6 +125,7 @@ maintenance.author-strip-merge	preview
 maintenance.authority-build	preview
 maintenance.auto-match-transcribed	preview
 maintenance.book-atpath-index-backfill	no-mode
+maintenance.book-hash-index-repair	preview
 maintenance.booksig-recovery-audit	preview
 maintenance.booksig-sidecar-migrate	preview
 maintenance.build-folder-book-files	preview

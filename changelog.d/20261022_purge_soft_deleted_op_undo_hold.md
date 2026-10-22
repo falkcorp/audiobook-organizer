@@ -18,6 +18,7 @@ run (an applied, undo_failed or fully journaled pending combine journal that
 still stamps the shell) is no longer purged by any path: the bulk purge and the
 nightly purge keep it and count it as `kept_undo_possible`, single "Purge now"
 and "Discard progress and purge" answer 409 `UNDO_POSSIBLE`. Purging such a
-shell used to make the combine un-revertable. This is the only change to which
-books are purgeable. Combine journals are never expired, so a held shell stays
-in the trash until its combine is undone.
+shell used to make the combine un-revertable. Combine journals are never
+expired, so a held shell stays in the trash until its combine is undone. Other
+undo records that need a trashed book (operation-ledger soft-deletes and
+auto-merge losers) hold it too; see the undo-hold coverage entry.

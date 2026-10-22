@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-22
 
 package audiobooks
 
@@ -26,6 +26,17 @@ import (
 
 func setupPurgeBoundary(t *testing.T) (*AudiobookService, *database.PebbleStore, string) {
 	t.Helper()
+	svc, store, base := setupPurgeBoundaryUntrusted(t)
+	// The purge fails closed until the operation ledger's by-book index is
+	// trusted (ErrUndoLedgerNotReady); production builds it at boot.
+	trustLedgerIndex(t, store)
+	return svc, store, base
+}
+
+// setupPurgeBoundaryUntrusted is setupPurgeBoundary with the ledger index left
+// as a fresh store has it: not built, so a purge refuses to run.
+func setupPurgeBoundaryUntrusted(t *testing.T) (*AudiobookService, *database.PebbleStore, string) {
+	t.Helper()
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +54,19 @@ func setupPurgeBoundary(t *testing.T) (*AudiobookService, *database.PebbleStore,
 		t.Fatal(err)
 	}
 	return NewAudiobookService(store), store, base
+}
+
+// trustLedgerIndex builds and verifies the by-book index of the operation
+// ledger, as the boot-time ensure does, so a purge may read it.
+func trustLedgerIndex(t *testing.T, store *database.PebbleStore) {
+	t.Helper()
+	res, err := store.EnsureOpChangeByBookIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Trusted {
+		t.Fatalf("ledger index not trusted after ensure: %+v", res)
+	}
 }
 
 func softDeleted(t *testing.T, store *database.PebbleStore, id, path string) {

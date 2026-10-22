@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-22
 
@@ -42,9 +42,10 @@ const (
 	// listing and the purge's hold of the merge lock. Nothing was done, and
 	// it is not an error.
 	purgeNotInTrash
-	// purgeKeptUndo: the book is the retired shell of a combine whose undo can
-	// still run (merge.UndoShellIndex); purging it would make that combine
-	// un-revertable.
+	// purgeKeptUndo: an undo that can still run needs the book (undoHold): the
+	// retired shell of a combine, the shell of a maintenance operation's
+	// journaled soft-delete, or an auto-merge's loser. Purging it would make
+	// that undo fail or apply only part of itself.
 	purgeKeptUndo
 )
 
@@ -445,10 +446,13 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 	}
 }
 
-// ErrPurgeUndoPossible is returned by "Purge now" for the retired shell of a
-// combine that can still be undone: deleting it would make UndoCombine refuse.
-// Undo the combine (or restore the book) instead. Nothing was changed.
-var ErrPurgeUndoPossible = errors.New("this book is the retired shell of a combine that can still be undone, and purging it would make that combine un-revertable; undo the combine first")
+// ErrPurgeUndoPossible is returned by "Purge now" for a trashed book an undo
+// that can still run needs (undoHold): the retired shell of a combine, the
+// shell a maintenance operation soft-deleted (journaled in the operation
+// ledger), or the loser of an auto-merge. Deleting it would make that undo
+// refuse or stop part way. Undo the operation (or restore the book) instead.
+// Nothing was changed.
+var ErrPurgeUndoPossible = errors.New("this book is still needed by an undo that can run (the retired shell of a combine, a book a maintenance operation soft-deleted, or the loser of an auto-merge), and purging it would make that undo fail or apply only part of itself; undo that operation first, or restore the book")
 
 // ErrNotInTrash is returned by DiscardProgressAndPurge for a book that is
 // not soft-deleted. Nothing was changed.
@@ -586,14 +590,20 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		if len(owned) > 0 {
 			return fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
 		}
-		// The retired shell of a combine whose undo can still run is not
-		// deleted by any purge, and discarding progress must not be the way
-		// around that: UndoCombine restores the survivor's rows from it.
-		undo, uerr := svc.newUndoShellIndex()
+		// A trashed book an undo that can still run needs (a combine's
+		// shell, an operation's journaled soft-delete, an auto-merge's loser)
+		// is not deleted by any purge, and discarding progress must not be the
+		// way around that: the undo restores rows from it. The merge lock is
+		// held here, so the answer is exact.
+		undo, uerr := svc.newUndoHold()
 		if uerr != nil {
 			return fmt.Errorf("discard progress and purge %s refused: %w", id, uerr)
 		}
-		if _, held := undo.Holds(cur); held {
+		_, held, herr := undo.Holds(cur)
+		if herr != nil {
+			return fmt.Errorf("discard progress and purge %s refused: cannot tell whether an undo still needs it: %w", id, herr)
+		}
+		if held {
 			return fmt.Errorf("discard progress and purge %s: %w", id, ErrPurgeUndoPossible)
 		}
 		book = cur

@@ -1,5 +1,5 @@
 // file: internal/merge/link_preflight.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d2e7a14-8c3b-4f90-a6e1-9b0c4d7f2a35
 // last-edited: 2026-10-22
 
@@ -7,7 +7,8 @@ package merge
 
 import (
 	"fmt"
-	"slices"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // linkPreflightStore is the read-only slice of the store PreflightLink uses.
@@ -28,7 +29,13 @@ type linkPreflightStore interface {
 //   - the keep book exists (BookNotFoundError) and is not soft-deleted
 //     (SoftDeletedInputError, AsPrimary);
 //   - a LOSER that is soft-deleted is not an error: the dedup.book-merge op
-//     skips it (applyBookMergeReroute), so it is left out of the rest;
+//     skips it (applyBookMergeReroute). It is left out of the rest unless it
+//     already belongs to a version group a live participant holds: the
+//     service admits such a loser (a completed merge replayed, or a version
+//     the user deleted) and then runs its iTunes guard on it like any
+//     participant, so the preflight does too. A trashed loser outside every
+//     live participant's group is refused by the service as a soft-deleted
+//     input, which the op skips before any iTunes check;
 //   - a loser that does not exist is BookNotFoundError;
 //   - the iTunes-library refusal (ITunesProtectedError) for the keep book and
 //     every live loser: the books the user selected.
@@ -56,10 +63,17 @@ func PreflightLink(store linkPreflightStore, keepID string, mergeIDs []string) e
 	}
 
 	participants := []string{keepID}
+	liveGroups := map[string]bool{}
+	if keep.VersionGroupID != nil && *keep.VersionGroupID != "" {
+		liveGroups[*keep.VersionGroupID] = true
+	}
+	var trashed []*database.Book
+	seen := map[string]bool{keepID: true}
 	for _, id := range mergeIDs {
-		if id == keepID || slices.Contains(participants, id) {
+		if seen[id] {
 			continue
 		}
+		seen[id] = true
 		b, err := store.GetBookByID(id)
 		if err != nil {
 			return fmt.Errorf("load book %s: %w", id, err)
@@ -68,9 +82,20 @@ func PreflightLink(store linkPreflightStore, keepID string, mergeIDs []string) e
 			return &BookNotFoundError{BookID: id}
 		}
 		if b.IsSoftDeleted() {
-			continue // skipped by the op, not an error
+			trashed = append(trashed, b) // the op skips it unless its group is a live one
+			continue
 		}
 		participants = append(participants, id)
+		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			liveGroups[*b.VersionGroupID] = true
+		}
+	}
+	// The service's own admission rule for a trashed loser (MergeBooksWithOptions,
+	// "necessary condition"): its group is one a live participant holds.
+	for _, b := range trashed {
+		if b.VersionGroupID != nil && liveGroups[*b.VersionGroupID] {
+			participants = append(participants, b.ID)
+		}
 	}
 	return GuardITunesProtected(store, participants)
 }

@@ -1,10 +1,10 @@
 // file: web/src/components/library/MergeKeeperPicker.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e1b5d72-3a09-4c64-9f27-6d0a4b8c1e53
 // last-edited: 2026-10-22
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import type { Audiobook } from '../../types';
 
@@ -30,20 +30,33 @@ const books = [
 describe('MergeKeeperPicker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getBookFiles.mockImplementation(async (id: string) => ({
-      files: [],
-      count: id === 'a' ? 12 : 1,
-    }));
+    api.getBookFiles.mockImplementation(async (id: string) =>
+      id === 'a'
+        ? {
+            files: Array.from({ length: 12 }, (_, n) => ({
+              file_path: `/lib/Dune/CD${(n % 2) + 1}/${n}.m4b`,
+            })),
+            count: 12,
+          }
+        : { files: [{ file_path: '/imp/dune.mp3' }], count: 1 }
+    );
   });
 
-  it('shows each copy with its path and file count, and exactly one kept', async () => {
+  it('shows each copy with its shared folder and file count, and exactly one kept', async () => {
     renderWithProviders(<MergeKeeperPicker books={books} keepId="a" onChange={vi.fn()} />);
     const rowA = screen.getByTestId('merge-row-a');
     const rowB = screen.getByTestId('merge-row-b');
+    // Before the files are read, the book's own path is the fallback.
     expect(within(rowA).getByText('/lib/Dune/dune.m4b')).toBeInTheDocument();
-    expect(within(rowB).getByText('/imp/dune.mp3')).toBeInTheDocument();
+    expect(within(rowA).getByTestId('merge-location-a')).toHaveTextContent(/^Path:/);
     expect(await within(rowA).findByText(/12 files/)).toBeInTheDocument();
     expect(await within(rowB).findByText(/1 file\b/)).toBeInTheDocument();
+    // Then the folder common to all the book's files, labelled as a folder.
+    await waitFor(() =>
+      expect(within(rowA).getByTestId('merge-location-a')).toHaveTextContent('Folder: /lib/Dune')
+    );
+    expect(within(rowA).queryByText('/lib/Dune/dune.m4b')).toBeNull();
+    expect(within(rowB).getByTestId('merge-location-b')).toHaveTextContent('Folder: /imp');
     expect(within(rowA).getByTestId('merge-kept-chip')).toHaveTextContent('Kept');
     expect(within(rowB).getByTestId('merge-linked-chip')).toHaveTextContent('Linked as a version');
     expect(screen.getAllByTestId('merge-kept-chip')).toHaveLength(1);
@@ -54,7 +67,7 @@ describe('MergeKeeperPicker', () => {
     );
     expect(api.getBookFiles).toHaveBeenCalledWith(
       'a',
-      expect.objectContaining({ limit: 1, skipDiskCheck: true })
+      expect.objectContaining({ limit: 500, skipDiskCheck: true })
     );
   });
 
@@ -70,5 +83,30 @@ describe('MergeKeeperPicker', () => {
     renderWithProviders(<MergeKeeperPicker books={books} keepId="a" onChange={vi.fn()} />);
     const rowA = screen.getByTestId('merge-row-a');
     expect(await within(rowA).findByText(/File count unavailable/)).toBeInTheDocument();
+  });
+});
+
+describe('MergeKeeperPicker location', () => {
+  it('falls back to the book path when the book has no file rows', async () => {
+    api.getBookFiles.mockResolvedValue({ files: [], count: 0 });
+    renderWithProviders(<MergeKeeperPicker books={books} keepId="a" onChange={vi.fn()} />);
+    const rowA = screen.getByTestId('merge-row-a');
+    expect(await within(rowA).findByText(/0 files/)).toBeInTheDocument();
+    expect(within(rowA).getByTestId('merge-location-a')).toHaveTextContent(
+      'Path: /lib/Dune/dune.m4b'
+    );
+  });
+
+  it('flags a folder computed from only the first files of a very large book', async () => {
+    api.getBookFiles.mockResolvedValue({
+      files: [{ file_path: '/lib/Big/a.mp3' }, { file_path: '/lib/Big/b.mp3' }],
+      count: 900,
+    });
+    renderWithProviders(<MergeKeeperPicker books={books} keepId="a" onChange={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('merge-location-a')).toHaveTextContent(
+        'Folder (of the first files): /lib/Big'
+      )
+    );
   });
 });

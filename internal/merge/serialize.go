@@ -1,7 +1,7 @@
 // file: internal/merge/serialize.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b1e7d4a9-2c63-4f81-9a05-6d3e2f0c7b48
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package merge
 
@@ -35,8 +35,9 @@ import (
 //
 // Why one shared lock, not one per path: each does an unguarded
 // GetBookByID -> mutate -> UpdateBook / DeleteBook / SoftDeleteBook / external-ID
-// reassignment with no transaction. They run concurrently — CombineBooks is a
-// synchronous HTTP handler with no concurrency key, and
+// reassignment with no transaction. They run concurrently — CombineBooks runs in
+// the dedup.book-combine op (sharing dedup.book-merge's concurrency key, but
+// the service is also called directly by the review queue), and
 // dedup.MergeSplitBookClusterWithOptions is reachable from both an async bulk-merge op
 // (whose ConcurrencyKey only serializes it against itself) and a synchronous
 // HTTP handler with no concurrency key at all — so two of them (or one racing
