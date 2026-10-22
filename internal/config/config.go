@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.170.0
+// version: 1.171.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-21
 
@@ -1669,10 +1669,10 @@ type Config struct {
 	// entry or listed here is answered 403 before any routing, so the origin is
 	// reachable only through the tunnel and the LAN you name even if a port is
 	// exposed by mistake. Empty (the default) allows every peer and logs a
-	// startup warning. A non-empty value with no valid entry still enforces
-	// (everything but loopback and the connectors is refused): a typo must not
-	// open the door. List this host's own non-loopback addresses and any
-	// Prometheus scraper or LAN client that talks to it directly.
+	// startup warning. An entry that cannot be parsed stops the service starting
+	// (a typo must neither narrow nor widen the list silently). The list must
+	// cover the LAN, including this host's own LAN address, and any Prometheus
+	// scraper or LAN client that talks to it directly.
 	AllowedPeerCIDRs string `json:"-" mapstructure:"allowed_peer_cidrs"`
 
 	// Memory management

@@ -181,18 +181,21 @@ func TestPeerAllowList_OpenPrefixesAreFlagged(t *testing.T) {
 	require.Contains(t, list.String(), "192.0.2.0/24")
 }
 
-// This host's own interface addresses are allowed (a local process using the
-// LAN address), a bridge-subnet peer is not.
-func TestPeerAllowList_OwnInterfaceAddressIsAllowed(t *testing.T) {
+// This host's own interface addresses are NOT admitted implicitly: a peer
+// that is one of them but outside the list is refused like any other. (The
+// list is what admits the LAN; the gate never widens it.)
+func TestPeerAllowList_OwnInterfaceAddressOutsideTheListIsRefused(t *testing.T) {
 	setAllowedPeerCIDRs(t, "198.51.100.0/24")
 	prev := hostInterfaceAddrs
 	hostInterfaceAddrs = func() ([]netip.Addr, error) { return []netip.Addr{netip.MustParseAddr("192.0.2.77")}, nil }
 	t.Cleanup(func() { hostInterfaceAddrs = prev })
-	status, _ := peerGateStatus("192.0.2.77:5000")
-	require.Equal(t, http.StatusNoContent, status, "the host's own address")
-	status, reached := peerGateStatus("192.0.2.78:5000")
-	require.Equal(t, http.StatusForbidden, status, "a neighbour on the same subnet, e.g. a bridge container")
+	status, reached := peerGateStatus("192.0.2.77:5000")
+	require.Equal(t, http.StatusForbidden, status, "the host's own address is not on the list")
 	require.False(t, reached)
+	// Once the list covers it, it is admitted by the list, not by being local.
+	setAllowedPeerCIDRs(t, "192.0.2.0/24")
+	status, _ = peerGateStatus("192.0.2.77:5000")
+	require.Equal(t, http.StatusNoContent, status)
 }
 
 // HTTP/3 0-RTT: off in the QUIC config, and a request that still arrives before

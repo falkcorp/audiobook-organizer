@@ -1,5 +1,5 @@
 // file: internal/server/peer_allowlist.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f1c1ef0-2117-4b31-88a6-7c7a04767f3b
 // last-edited: 2026-10-21
 
@@ -25,9 +25,8 @@ import (
 // on the connection's peer address before any routing, so no route, however
 // it was registered, can answer a peer that is not listed.
 //
-// A peer is allowed when it is loopback, one of this host's own interface
-// addresses, a TUNNEL_CONNECTOR_ADDRS entry, or inside an ALLOWED_PEER_CIDRS
-// entry. Loopback is always allowed so the local
+// A peer is allowed when it is loopback, a TUNNEL_CONNECTOR_ADDRS entry, or
+// inside an ALLOWED_PEER_CIDRS entry. Loopback is always allowed so the local
 // health check, the server-bootstrap flow and an operator on the host keep
 // working with a wrong list; the connectors are always allowed because the
 // tunnel is the production path and listing them twice is a trap.
@@ -40,8 +39,9 @@ import (
 //
 // The peer is the socket's remote address (Request.RemoteAddr), never a
 // header: X-Forwarded-For and CF-Connecting-IP are the caller's own claims.
-// A container on a bridge arrives from the bridge subnet, not from one of the
-// host's own addresses, so it must be covered by a CIDR if it needs access.
+// This host's own LAN address is not admitted implicitly: a local process that
+// connects to it, or a container on a bridge, arrives from that address or the
+// bridge subnet and must be covered by a CIDR like any other peer.
 //
 // HTTP/3 0-RTT is off: early data is accepted before the peer's address is
 // validated, which would let a refused peer present a spoofed source.
@@ -205,12 +205,12 @@ func validatePeerAllowList(raw string) error {
 // service. enforced is false when ALLOWED_PEER_CIDRS is empty (allow all). An
 // unparseable peer address is refused when enforcing.
 //
-// Allowed: loopback, a TUNNEL_CONNECTOR_ADDRS entry, an ALLOWED_PEER_CIDRS
-// entry, or one of this host's own interface addresses (remoteAddrIsLocal: a
-// process on this host that connects to the host's LAN address arrives from
-// that address; a container on a bridge arrives from the bridge subnet and is
-// NOT admitted by this). The own-address check runs last, so only a peer that
-// matched nothing else pays for the kernel lookup.
+// Allowed: loopback, a TUNNEL_CONNECTOR_ADDRS entry, or an ALLOWED_PEER_CIDRS
+// entry, and nothing else. This host's own interface addresses are deliberately
+// NOT admitted on their own: a process here that connects to the host's LAN
+// address arrives from that address, so the operator's list has to cover the
+// LAN subnet (it does for any list that lets the LAN in at all), and the gate
+// never widens the list implicitly.
 func peerAllowedNow(remoteAddr string) (allowed, enforced bool) {
 	raw := config.AllowedPeerCIDRs()
 	if raw == "" {
@@ -223,10 +223,7 @@ func peerAllowedNow(remoteAddr string) (allowed, enforced bool) {
 	if a.IsLoopback() || tunnelConnectorPeers().contains(remoteAddr) {
 		return true, true
 	}
-	if peerAllowed.get(raw).contains(a) {
-		return true, true
-	}
-	return remoteAddrIsLocal(remoteAddr), true
+	return peerAllowed.get(raw).contains(a), true
 }
 
 // deniedPeerLogCap bounds the peers remembered for logging: once per peer, never
@@ -280,14 +277,14 @@ func newPeerAllowListHandler(next http.Handler) http.Handler {
 func startupPeerAllowList() error {
 	raw := config.AllowedPeerCIDRs()
 	if raw == "" {
-		lifecycleLog.Warn("ALLOWED_PEER_CIDRS is not set: this origin accepts a connection from any peer. Set it to the networks that should reach it (the tunnel connectors in TUNNEL_CONNECTOR_ADDRS, this host's own addresses and loopback are always allowed)")
+		lifecycleLog.Warn("ALLOWED_PEER_CIDRS is not set: this origin accepts a connection from any peer. Set it to the networks that should reach it (TUNNEL_CONNECTOR_ADDRS and loopback are always allowed)")
 		return nil
 	}
 	if err := validatePeerAllowList(raw); err != nil {
 		return err
 	}
 	list := peerAllowed.get(raw)
-	lifecycleLog.Info("ALLOWED_PEER_CIDRS: only loopback, this host's own addresses, TUNNEL_CONNECTOR_ADDRS and [%s] may connect", list)
+	lifecycleLog.Info("ALLOWED_PEER_CIDRS: only loopback, TUNNEL_CONNECTOR_ADDRS and [%s] may connect", list)
 	if open := list.openPrefixes(); len(open) > 0 {
 		lifecycleLog.Warn("ALLOWED_PEER_CIDRS contains %s, which matches every peer: the allow-list restricts nothing", strings.Join(open, ", "))
 	}
