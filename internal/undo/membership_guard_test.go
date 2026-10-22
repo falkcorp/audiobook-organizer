@@ -1,5 +1,5 @@
 // file: internal/undo/membership_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 352f989b-8de0-44c0-b537-7e18620e3abf
 // last-edited: 2026-10-22
 
@@ -17,7 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// l0 = [S, L, X]. L was retired into S by a row journaled before the anchors
+// l0 = [S, L, X]. L was retired into S by a record without anchors
 // (Anchored false), X is retired into S with anchors (prev L). Reverting X: the
 // backward walk dead-ends at L (no record names its place), so the slot is
 // unbounded on one side and must not be guessed; the head is not a bound the

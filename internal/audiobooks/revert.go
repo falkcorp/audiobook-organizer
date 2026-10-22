@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.86.0
+// version: 1.87.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-22
 
@@ -338,7 +338,7 @@ type RevertResult struct {
 	// RestoredByIndex counts Restored collection and playlist rows of a
 	// retire's carry that went back to their recorded index because the
 	// neighbours recorded beside them could not be found in the list (or the
-	// row predates the neighbour anchors). The position is a best guess for
+	// row records no neighbour anchors). The position is a best guess for
 	// those, not the exact original slot, so Kept names each one.
 	RestoredByIndex int `json:"restored_by_index,omitempty"`
 	// SurvivorsReleased counts collection and playlist rows of a retire's carry
@@ -1092,9 +1092,11 @@ type listWritten struct {
 //     (a book that was itself a survivor, listed only for retires that have been
 //     reverted since, does not). The neighbours that place the book are resolved
 //     by undo.MembershipGraph, which reads the journals of the other books it
-//     needs through GetBookChanges; a row journaled before the anchors gets none.
+//     needs through GetBookChanges; a record without anchors gets none.
 //     A row with no marker standing whose book was retired again since
 //     (undo.NewerCarryStands) is stale and writes nothing (supersededRestore);
+//     that is reachable only after a carry's void of the row failed while the
+//     void of its marker landed;
 //  2. writes the list, and in the same batch stamps the row and its survivor-side
 //     marker reverted (database.CollectionMembershipMarkStore,
 //     database.UserPlaylistMarkStore, both required). A marker stands until its
@@ -1102,11 +1104,10 @@ type listWritten struct {
 //     for the retry and the next row of this run (or another operation's) sees
 //     the truth; and a row stamped with its list can never be retried against a
 //     list a newer retire has changed since;
-//  3. on a retry that finds the book already listed (a run that wrote the list
-//     and died before it stamped, from before the stamp was part of the write):
-//     when the row borrowed the survivor and nothing else stands on it, the
-//     survivor is in the list only because that run died, and it is taken out
-//     now (survivorReleased); otherwise the marker is stamped.
+//  3. on finding the book already listed (the owner put it back by hand while
+//     the retire stood): when the row borrowed the survivor and nothing else
+//     stands on it, the survivor is in the list only because of this retire and
+//     is taken out with it (survivorReleased); otherwise the marker is stamped.
 //
 // A book placed by its recorded index, not its neighbours, is reported
 // (indexRestore) after the write; so is a retired book left out of the list
