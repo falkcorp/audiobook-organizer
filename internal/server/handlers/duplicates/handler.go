@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series
@@ -328,6 +328,20 @@ func (h *Handler) LinkBooks(c *gin.Context) {
 	}
 	if keepBook == nil {
 		httputil.RespondWithNotFound(c, "book", req.KeepID)
+		return
+	}
+
+	// Refuse here what the operation would refuse after it ran, so a request
+	// that cannot succeed fails this call (409 with the reason) instead of
+	// queueing an operation whose failure shows only in the operations list.
+	// A trashed loser is not refused: the operation skips it.
+	ms := h.getMergeService()
+	if ms == nil {
+		httputil.RespondWithInternalError(c, "merge service not initialized")
+		return
+	}
+	if err := ms.PreflightLink(req.KeepID, req.MergeIDs); err != nil {
+		respondMergeError(c, err, "failed to check the merge")
 		return
 	}
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed author/series duplicate detection, async link / refresh
@@ -57,6 +57,11 @@ type DuplicatesStore interface {
 // POST /audiobooks/duplicates/link handler (03-PR12): version linking now runs
 // only as the dedup.book-merge op, which package server drives directly.
 type MergeService interface {
+	// PreflightLink is the read-only pre-check POST /audiobooks/link runs
+	// before it queues dedup.book-merge: the refusals the merge would give
+	// after running (soft-deleted keep book, iTunes-protected participant or
+	// re-homed sibling), answered as a 409 up front.
+	PreflightLink(keepID string, mergeIDs []string) error
 	// CombineBooks combines several single-file books into ONE multi-file book
 	// on the survivor (primaryID) and soft-deletes the absorbed shells, writing
 	// an undo journal. Distinct from MergeBooks, which links them as alternate
