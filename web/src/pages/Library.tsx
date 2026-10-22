@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.107.0
+// version: 1.108.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -74,7 +74,13 @@ import type {
   OrganizeErrorState,
 } from './libraryTypes';
 import { evictOldestOpLogKey, MAX_OPERATION_LOG_KEYS } from './libraryOperationLogs';
-import { describeDeleteBookError, isHasProgressRefusal } from '../utils/deleteBookError';
+import {
+  describeBlockOutcome,
+  describeDeleteBookError,
+  isHasProgressRefusal,
+} from '../utils/deleteBookError';
+import { describeMergeOutcome, type BookMergeOpResult } from '../utils/mergeOutcome';
+import { outcomeHeadline, outcomeSeverity } from '../utils/purgeSummary';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
 // DuplicateDialogState, OrganizeErrorState imported from './libraryTypes'
@@ -383,13 +389,15 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [softDeletedExpanded, setSoftDeletedExpanded] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [bookPendingDelete, setBookPendingDelete] = useState<Audiobook | null>(null);
+  // blockHash starts OFF: a blocked hash makes the scanner skip that file for
+  // good, which is wrong for a delete whose file another book still uses (a
+  // duplicate or a merge group). The user opts in.
   const [deleteOptions, setDeleteOptions] = useState({
     softDelete: true,
-    blockHash: true,
+    blockHash: false,
   });
   const [deleteInProgress, setDeleteInProgress] = useState(false);
   const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
-  const [purgeDeleteFiles, setPurgeDeleteFiles] = useState(false);
   const [purgeInProgress, setPurgeInProgress] = useState(false);
   const [purgingBookId, setPurgingBookId] = useState<string | null>(null);
   // A trashed book whose "Purge now" was refused for its listening progress:
@@ -911,6 +919,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     totalPages,
     softDeletedBooks,
     softDeletedCount,
+    softDeletedBreakdown,
     softDeletedLoading,
     loadAudiobooks,
     loadSoftDeleted,
@@ -1372,7 +1381,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   const handleDelete = useCallback((audiobook: Audiobook) => {
     setBookPendingDelete(audiobook);
-    setDeleteOptions({ softDelete: true, blockHash: true });
+    setDeleteOptions({ softDelete: true, blockHash: false });
     setDeleteDialogOpen(true);
   }, []);
 
@@ -1406,13 +1415,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       const baseMessage = deleteOptions.softDelete
         ? 'Audiobook was soft deleted and hidden from the library.'
         : 'Audiobook was deleted.';
-      const blockNotice = deleteOptions.blockHash
-        ? result.blocked
-          ? ' Hash blocked.'
-          : ' Hash could not be blocked.'
-        : '';
-      const severity = deleteOptions.blockHash && !result.blocked ? 'warning' : 'success';
-      toast(`${baseMessage}${blockNotice}`, severity);
+      const { notice, severity } = describeBlockOutcome(deleteOptions.blockHash, result);
+      toast(`${baseMessage}${notice}`, severity);
+      // The deleted book must leave the selection: it is persisted, and a
+      // trashed row left in it was offered to Merge as Versions as a loser.
+      const deletedId = bookPendingDelete.id;
+      setSelectedAudiobooks((prev) => prev.filter((b) => b.id !== deletedId));
       setDeleteDialogOpen(false);
       setBookPendingDelete(null);
       clearLibraryCache();
@@ -1450,19 +1458,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     try {
       const activeBooks = selectedAudiobooks.filter((book) => !book.marked_for_deletion);
       const idsToDelete = activeBooks.map((b) => b.id);
-      const results = await Promise.all(
-        idsToDelete.map((id) => api.deleteBook(id, { softDelete: true, blockHash: true }))
+      // No hash blocking in bulk: the selection is often a set of duplicates
+      // that share one file, and blocking that hash hides the copy that stays.
+      await Promise.all(
+        idsToDelete.map((id) => api.deleteBook(id, { softDelete: true, blockHash: false }))
       );
-      const blockedFailures = results.filter((result) => result.blocked !== true).length;
-      const baseMessage = `Soft deleted ${activeBooks.length} selected audiobooks.`;
-      if (blockedFailures > 0) {
-        toast(
-          `${baseMessage} ${blockedFailures} hash${blockedFailures === 1 ? '' : 'es'} could not be blocked.`,
-          'warning'
-        );
-      } else {
-        toast(baseMessage, 'success');
-      }
+      toast(`Soft deleted ${activeBooks.length} selected audiobooks.`, 'success');
       setCrossPageFilter(null);
       setSelectedAudiobooks([]);
       clearLibraryCache();
@@ -1498,21 +1499,54 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   };
 
   const handleMergeAsVersions = async () => {
-    if (selectedAudiobooks.length < 2) return;
+    // A trashed book cannot be merged: the server skips it as a loser and
+    // refuses it as the keep book. Drop them here so the request is what the
+    // dialog showed.
+    const candidates = selectedAudiobooks.filter((b) => !b.marked_for_deletion);
+    if (candidates.length < 2) {
+      toast(
+        'Merge needs at least two books that are not in the trash. The selection has fewer.',
+        'error'
+      );
+      return;
+    }
     setMergeInProgress(true);
     try {
-      const keepId = mergePrimaryId || selectedAudiobooks[0].id;
-      const mergeIds = selectedAudiobooks.filter((b) => b.id !== keepId).map((b) => b.id);
-      await api.linkBooks(keepId, mergeIds);
-      toast(`Merged ${selectedAudiobooks.length} books as versions.`, 'success');
-      setSelectedAudiobooks([]);
-      setCrossPageFilter(null);
-      setMergeDialogOpen(false);
+      const keepId = candidates.some((b) => b.id === mergePrimaryId)
+        ? mergePrimaryId
+        : candidates[0].id;
+      const mergeIds = candidates.filter((b) => b.id !== keepId).map((b) => b.id);
+      const op = await api.linkBooks(keepId, mergeIds);
+      // Queueing is not merging: wait for the operation and report what it did.
+      const done = await api.pollOperationV2(op.id, undefined, 1000);
+      let result: BookMergeOpResult | null = null;
+      if (done.status === 'completed') {
+        const { result_data } = await api.getOperationResult(op.id);
+        result =
+          result_data && typeof result_data === 'object'
+            ? (result_data as BookMergeOpResult)
+            : null;
+      }
+      const plan = describeMergeOutcome({
+        status: done.status,
+        errorMessage: done.error_message,
+        result,
+        requested: mergeIds.length,
+        titles: Object.fromEntries(candidates.map((b) => [b.id, b.title])),
+      });
+      toast(plan.message, plan.severity);
+      if (done.status === 'completed') {
+        setSelectedAudiobooks([]);
+        setCrossPageFilter(null);
+        setMergeDialogOpen(false);
+      }
       clearLibraryCache();
       await loadAudiobooks();
     } catch (error) {
       console.error('Failed to merge books:', error);
-      toast('Failed to merge books.', 'error');
+      // A refused request (409 from the server's pre-check) carries the
+      // reason in its message.
+      toast(describeDeleteBookError(error, 'Failed to merge books.'), 'error');
     } finally {
       setMergeInProgress(false);
     }
@@ -1657,25 +1691,13 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
-  const handleConfirmPurge = async () => {
-    setPurgeInProgress(true);
-    try {
-      const result = await api.purgeSoftDeletedBooks(purgeDeleteFiles);
-      toast(
-        `Purged ${result.purged} soft-deleted ${result.purged === 1 ? 'book' : 'books'}.`,
-        'success'
-      );
-      setPurgeDialogOpen(false);
-      setPurgeDeleteFiles(false);
-      clearLibraryCache();
-      await loadAudiobooks();
-      await refreshSoftDeleted();
-    } catch (error) {
-      console.error('Failed to purge soft-deleted books', error);
-      toast('Failed to purge soft-deleted books.', 'error');
-    } finally {
-      setPurgeInProgress(false);
-    }
+  // The purge dialog runs the preview and the purge itself; this is its
+  // "a purge ended" hook: say what it did and reload what it changed.
+  const handlePurgeFinished = async (result: api.PurgeResult) => {
+    toast(outcomeHeadline(result), outcomeSeverity(result));
+    clearLibraryCache();
+    await loadAudiobooks();
+    await refreshSoftDeleted();
   };
 
   const handleBatchSave = async (updates: Partial<Audiobook>) => {
@@ -2525,6 +2547,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           visibleColumnIds={visibleColumnIds}
           onToggleColumn={toggleColumn}
           softDeletedCount={softDeletedCount}
+          softDeletedBreakdown={softDeletedBreakdown}
           softDeletedBooks={softDeletedBooks}
           softDeletedLoading={softDeletedLoading}
           softDeletedExpanded={softDeletedExpanded}
@@ -2658,11 +2681,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           handleConfirmDelete={handleConfirmDelete}
           purgeDialogOpen={purgeDialogOpen}
           setPurgeDialogOpen={setPurgeDialogOpen}
-          purgeDeleteFiles={purgeDeleteFiles}
-          setPurgeDeleteFiles={setPurgeDeleteFiles}
-          softDeletedCount={softDeletedCount}
-          purgeInProgress={purgeInProgress}
-          handleConfirmPurge={handleConfirmPurge}
+          onPurgeFinished={handlePurgeFinished}
+          onPurgeRunningChange={setPurgeInProgress}
           addPathDialogOpen={addPathDialogOpen}
           setAddPathDialogOpen={setAddPathDialogOpen}
           showServerBrowser={showServerBrowser}
