@@ -1,7 +1,7 @@
 // file: internal/database/memdb_census.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e761a4e-5430-4277-ab3b-531d3b193ad1
-// last-edited: 2026-10-04
+// last-edited: 2026-10-23
 
 package database
 
@@ -47,6 +47,11 @@ func (m *MemStore) retiredAndSignalCensus() (RetiredCensus, SignalCensus, error)
 			return retired, signals, fmt.Errorf("memdb census files of %s: %w", b.ID, err)
 		}
 		for f := files.Next(); f != nil; f = files.Next() {
+			if f.(*BookFile).Retired {
+				// A retired version a trashed holder carries: counted once,
+				// as a RetiredVersionFiles row below.
+				continue
+			}
 			retired.RetiredBookFiles++
 		}
 	}
@@ -57,6 +62,9 @@ func (m *MemStore) retiredAndSignalCensus() (RetiredCensus, SignalCensus, error)
 	}
 	for obj := files.Next(); obj != nil; obj = files.Next() {
 		f := obj.(*BookFile)
+		if f.Retired {
+			retired.RetiredVersionFiles++
+		}
 		if f.AcoustIDFingerprintDurationSec > 0 {
 			signals.FilesWithFingerprint++
 		}

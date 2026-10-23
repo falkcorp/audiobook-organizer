@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package database
 
@@ -353,7 +353,10 @@ func CountBookFileSignalsFromCores(ctx context.Context, cores []BookFileCore, wo
 	}, false, workers, "core")
 }
 
-// bookFilePointers returns the live memdb row pointers. Callers must treat
+// bookFilePointers returns the memdb row pointers of every non-retired row. A
+// retired version's rows (BookFile.Retired) are left out of every signal count:
+// no fingerprint, hash or duration backfill touches them, so counting them
+// would show gaps nothing is going to fill. Callers must treat
 // them as READ-ONLY: memdb rows are replaced on write, never mutated in place,
 // so a pointer taken under a read txn stays a consistent snapshot of that row.
 // Collecting pointers (8 bytes each) rather than Core copies is what keeps a
@@ -367,7 +370,7 @@ func (m *MemStore) bookFilePointers() ([]*BookFile, error) {
 	}
 	var out []*BookFile
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
-		if bf, ok := obj.(*BookFile); ok {
+		if bf, ok := obj.(*BookFile); ok && !bf.Retired {
 			out = append(out, bf)
 		}
 	}
@@ -456,6 +459,7 @@ type bookFileSignalRow struct {
 	FailureReason    *string  `json:"fingerprint_failure_reason"`
 	Missing          bool     `json:"missing"`
 	SkipScan         bool     `json:"skip_scan"`
+	Retired          bool     `json:"retired"`
 }
 
 // deepBookFileSignalCoverage streams primary book_file rows out of one Pebble
@@ -479,6 +483,10 @@ func (p *PebbleStore) deepBookFileSignalCoverage(ctx context.Context, workers in
 					var row bookFileSignalRow
 					if err := json.Unmarshal(val, &row); err != nil {
 						return fmt.Errorf("decode book_file: %w", err)
+					}
+					if row.Retired {
+						// Not counted: see bookFilePointers.
+						continue
 					}
 					acc.add(row.asBookFile(), true)
 				}
