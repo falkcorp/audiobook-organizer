@@ -1,5 +1,5 @@
 // file: internal/database/file_intro_stats.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4d7e2a9-6c15-4f38-8e0b-5a1d9c3f7e62
 // last-edited: 2026-10-22
 
@@ -42,7 +42,8 @@ type FileIntroStats struct {
 
 	// Selected is the number of files this run set out to work on: Eligible
 	// minus those already done (under only_missing). At the end of a run that
-	// reached every batch, Attempted + Reused + Deferred + Stale == Selected.
+	// reached every batch, Attempted + Reused + Deferred + Stale + AlreadyHad +
+	// WriteErrors == Selected.
 	Selected int `json:"selected"`
 
 	// Outcomes. Attempted is the sum of the outcome buckets below it.
@@ -61,6 +62,13 @@ type FileIntroStats struct {
 	// Stale counts results dropped because the row's hash changed or the row
 	// vanished between selection and write.
 	Stale int `json:"stale"`
+	// AlreadyHad counts files that gained a result between selection and write
+	// (another run, a manual apply) and were left as they were: a fill never
+	// overwrites.
+	AlreadyHad int `json:"already_had"`
+	// WriteErrors counts files whose result could not be written (a store
+	// error); they are still undone and the next run retries them.
+	WriteErrors int `json:"write_errors"`
 	// BookFills counts empty book transcripts filled from an ordinal-0 file.
 	BookFills int `json:"book_fills"`
 
