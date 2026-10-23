@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-10-22
 
@@ -1466,8 +1466,27 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 	if err := merge.SoftDeleteBook(a.store, shellID); err != nil {
 		a.errs.Add(1)
 		a.log(slog.LevelWarn, "%s %q: soft-delete %s: %v", kind, folder, shellID, err)
-		if verr := a.store.MarkOperationChangesReverted(a.opID, []string{row.ID}); verr != nil {
-			a.log(slog.LevelWarn, "%s %q: void the unwritten soft-delete row %s for %s: %v", kind, folder, row.ID, shellID, verr)
+		// An error is not proof the write did not land (the store can commit
+		// and then fail to report it). The row is the only way back for a
+		// shell that IS trashed, and the purge's undo hold finds the shell by
+		// it, so it is voided only when the shell reads back live: a failed
+		// read, a missing row or a trashed one keeps the row (fail closed).
+		// The cost of keeping a row for a shell that stayed live is a revert
+		// that finds it already restored, which it handles; the cost of
+		// voiding one for a trashed shell is a book the purge may hard-delete
+		// with no revert path.
+		cur, rerr := a.store.GetBookByID(shellID)
+		switch {
+		case rerr != nil:
+			a.log(slog.LevelWarn, "%s %q: soft-delete row %s for %s kept: the shell could not be re-read after the error: %v", kind, folder, row.ID, shellID, rerr)
+		case cur == nil:
+			a.log(slog.LevelWarn, "%s %q: soft-delete row %s for %s kept: the shell is gone", kind, folder, row.ID, shellID)
+		case database.IsInTrash(cur):
+			a.log(slog.LevelWarn, "%s %q: soft-delete row %s for %s kept: the write landed although it returned an error", kind, folder, row.ID, shellID)
+		default:
+			if verr := a.store.MarkOperationChangesReverted(a.opID, []string{row.ID}); verr != nil {
+				a.log(slog.LevelWarn, "%s %q: void the unwritten soft-delete row %s for %s: %v", kind, folder, row.ID, shellID, verr)
+			}
 		}
 		return
 	}
