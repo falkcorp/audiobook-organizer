@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.95.1
+// version: 1.96.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -1071,6 +1072,14 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	CandidateRefetcher
 	VersionTwinMetadata
 	ReconcileScanReader
+	UserMergeProvider
+}
+
+// UserMergeProvider serves maintenance.user-merge.
+type UserMergeProvider interface {
+	// UserMerge returns the user-merge service (plan, apply, resume, undo), or nil
+	// when the store lacks the storage capability behind it; the op then refuses.
+	UserMerge() *usermerge.Service
 }
 
 // ----- reporter adapter -----

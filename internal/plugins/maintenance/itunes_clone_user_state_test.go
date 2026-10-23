@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_user_state_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 25096c43-be96-4bd4-8926-6b0af7861373
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 )
 
 // icFailingStateStore fails every user-state write onto one book (only
@@ -40,6 +41,9 @@ type icStateDeps struct {
 }
 
 func (d icStateDeps) MergeUserStateStore() merge.UserStateRepairStore { return d.userState }
+
+// UserMerge: no user-merge service in this fake.
+func (d icStateDeps) UserMerge() *usermerge.Service { return nil }
 
 // applyCloneWithProgress clones book T into the library, then gives a user
 // progress, a position and a status on the clone (the crowned primary ABS

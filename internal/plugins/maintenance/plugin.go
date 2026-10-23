@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -181,6 +181,11 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.repairsPlanDef(),
 		p.repairsApplyDef(),
 		p.itunesCloneIntoLibraryDef(),
+
+		// --- users ---
+		// user-merge is the admin merge-user tool (internal/usermerge): preview by
+		// default, live only with a grant minted by the Users page's merge routes.
+		p.userMergeDef(),
 
 		// --- author/series ---
 		// authority-build builds the ref_* authority lists (dry run by default;

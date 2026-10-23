@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.107.0
+// version: 2.108.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package server
 
@@ -83,6 +83,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/work"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -252,6 +253,10 @@ type Server struct {
 	diagnosticsService *diagnostics.Service
 	changelogService   *activity.ChangelogService
 	activityService    *activity.Service
+	// userMergeOnce builds userMerge on first use (UserMerge): the admin merge-user
+	// service shared by the Users handler and the maintenance.user-merge op.
+	userMergeOnce sync.Once
+	userMerge     *usermerge.Service
 	embeddingStore     *database.EmbeddingStore
 	embedClient        *ai.EmbeddingClient
 	metricsStore       database.MetricsStorer

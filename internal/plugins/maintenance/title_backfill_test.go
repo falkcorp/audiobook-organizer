@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.51.4
+// version: 1.51.5
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -198,6 +199,9 @@ func (d fakeDeps) OperationQueueStore() OpQueueReader { return d.store }
 
 // MergeUserStateStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) MergeUserStateStore() merge.UserStateRepairStore { return d.store }
+
+// UserMerge: these fakes have no user-merge service (the op refuses without one).
+func (d fakeDeps) UserMerge() *usermerge.Service { return nil }
 
 // IngestVersionStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) IngestVersionStore() versions.IngestStore { return d.store }
