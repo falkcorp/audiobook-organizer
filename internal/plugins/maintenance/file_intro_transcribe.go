@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-23
 
@@ -675,8 +675,8 @@ const fileIntroOutageMaxTries = 5
 var errFileIntroOutage = errors.New("whisper endpoints unreachable")
 
 // callWhisper sends one batch, retrying the SAME batch with a growing,
-// ctx-aware wait while every endpoint is unreachable (a transport error says
-// nothing about the files, so nothing is written meanwhile). It re-announces
+// ctx-aware wait while every endpoint is unreachable (a recognized network
+// failure says nothing about the files, so nothing is written meanwhile). It re-announces
 // itself in the progress line each wait so the watchdog sees the op alive. Any
 // other outcome, success or a per-batch error, is returned as is.
 func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileIntroJob) (map[string]fileIntroWhisperResult, error) {
@@ -684,7 +684,12 @@ func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileI
 	for try := 1; ; try++ {
 		out, err := fileIntroWhisperFn(ctx, jobs, nil)
 		var te *transcribe.TransportError
-		if !errors.As(err, &te) {
+		// Only a RECOGNIZED network failure (refused, reset, timeout, DNS) is an
+		// outage worth waiting out. An unrecognized batch failure (a 5xx, a
+		// decode error, a capability refusal) will not heal by itself, and
+		// re-sending it would bench the endpoints process-wide and stall the
+		// book op that shares them; it is returned as is and the batch defers.
+		if !errors.As(err, &te) || !te.Recognized {
 			return out, err
 		}
 		if try >= fileIntroOutageMaxTries {
@@ -753,6 +758,14 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 			return 0, err
 		case ctx.Err() != nil:
 			return 0, ctx.Err()
+		case transcribe.IsTransport(err):
+			// A batch-level failure that is not a recognized outage (so it was
+			// not retried): it says nothing about any file, so nothing is
+			// written and the files stay undone for the next run.
+			log.Warn("transcribe-file-intros: whisper batch failed at batch level, deferred (nothing written)", "jobs", len(jobs), "err", err)
+			for _, gi := range jobGroup {
+				results[gi] = groupResult{kind: "deferred", hasResult: true}
+			}
 		case err != nil:
 			log.Warn("transcribe-file-intros: whisper batch failed", "jobs", len(jobs), "err", err)
 			detail := truncateDetail(err.Error())

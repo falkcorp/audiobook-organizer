@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
 // last-edited: 2026-10-23
 
@@ -398,7 +398,7 @@ func TestFileIntroRun_ResumesFromTheMarkerAndNeverResendsDoneFiles(t *testing.T)
 
 	// An outage that outlasts every retry stops the run (it does not drain the
 	// library as deferred) and writes nothing for the batch.
-	fx.whisp.transErr = &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("connection refused")}
+	fx.whisp.transErr = &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("connection refused"), Recognized: true}
 	_, err := fx.run("")
 	if !errors.Is(err, errFileIntroOutage) {
 		t.Fatalf("a dead pool should fail the run with errFileIntroOutage, got %v", err)
@@ -1122,7 +1122,7 @@ func TestFileIntroRun_OutageThatRecoversRetriesTheSameBatch(t *testing.T) {
 	b := fx.book("Recovers")
 	id1, p1 := fx.file(b, "01.m4b", 1, "o1", false)
 	fx.whisp.texts[p1] = goodIntro
-	fx.whisp.transErr = &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("connection refused")}
+	fx.whisp.transErr = &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("connection refused"), Recognized: true}
 	fx.whisp.transErrFor = 2
 
 	rep, err := fx.run("")
@@ -1296,5 +1296,83 @@ func TestFileIntro_StatusConstantsMatchTheDatabasePackage(t *testing.T) {
 		if c[0] != c[1] {
 			t.Fatalf("maintenance status %q != database status %q", c[0], c[1])
 		}
+	}
+}
+
+// A batch failure that is not a recognized network failure (a 5xx, a decode
+// error, a capability refusal) is not an outage: it is not retried, it does not
+// fail the run, and it writes nothing.
+func TestFileIntroRun_UnrecognizedBatchFailureDefersWithoutRetry(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Unrecognized")
+	id1, p1 := fx.file(b, "01.m4b", 1, "u1", false)
+	fx.whisp.texts[p1] = goodIntro
+	fx.whisp.transErr = &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("no endpoint accepts path jobs")}
+
+	if _, err := fx.run(""); err != nil {
+		t.Fatalf("an unrecognized batch failure must not fail the run: %v", err)
+	}
+	if n := len(fx.whisp.calls); n != 1 {
+		t.Fatalf("an unrecognized failure was retried: %d calls", n)
+	}
+	if r := fx.row(b, id1); r.IntroSourceHash != "" || r.TranscribeStatus != nil || r.IntroTranscription != nil {
+		t.Fatalf("an unrecognized batch failure wrote: %+v", r)
+	}
+	if st, _ := fx.s.GetFileIntroStats(); st.Deferred != 1 || st.WhisperError != 0 {
+		t.Fatalf("stats: %+v", st)
+	}
+}
+
+// Rows the book op wrote carry text with no done marker. The store must not let
+// the per-file op overwrite or claim them.
+func TestFileIntroRun_MigratedTextUnderAFailureStatusIsLeftAlone(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Book op text")
+	id1, p1 := fx.file(b, "01.m4b", 1, "b1", false)
+	text := "Real text the book op kept."
+	st := statusWhisperError
+	row := fx.row(b, id1)
+	row.IntroTranscription = &text
+	row.TranscribeStatus = &st
+	if err := fx.s.UpdateBookFile(id1, row); err != nil {
+		t.Fatal(err)
+	}
+	fx.whisp.texts[p1] = "new words"
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+	r := fx.row(b, id1)
+	if r.IntroTranscription == nil || *r.IntroTranscription != text || r.IntroRunOpID != "" {
+		t.Fatalf("a fill-only run overwrote or claimed the book op's text: %+v", r)
+	}
+}
+
+// A silence sentinel the book op wrote (no marker, no status) is stamped once so
+// it becomes a done file instead of being re-sent every run.
+func TestFileIntroRun_MigratedSentinelIsStampedOnceAndNotResent(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Book op sentinel")
+	id1, p1 := fx.file(b, "01.m4b", 1, "z1", false)
+	sentinel := transcribe.SilenceSentinel
+	row := fx.row(b, id1)
+	row.IntroTranscription = &sentinel
+	if err := fx.s.UpdateBookFile(id1, row); err != nil {
+		t.Fatal(err)
+	}
+	fx.whisp.texts[p1] = "" // still silent
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+	r := fx.row(b, id1)
+	if r.IntroSourceHash != "z1" || r.TranscribeStatus == nil || *r.TranscribeStatus != statusEmpty ||
+		r.IntroTranscription == nil || *r.IntroTranscription != sentinel || r.IntroRunOpID != "" {
+		t.Fatalf("sentinel not stamped (and unclaimed): %+v", r)
+	}
+	fx.whisp.calls = nil
+	if _, err := fx.runAs(&fileIntroRep{id: "run-test-2"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(fx.whisp.calls) != 0 {
+		t.Fatalf("a stamped sentinel was re-sent: %v", fx.whisp.sentPaths())
 	}
 }
