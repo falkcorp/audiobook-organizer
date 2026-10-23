@@ -1,7 +1,7 @@
 // file: internal/usermerge/undo.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e2b94a57-0c31-4d86-b7f5-6a3d8c1f9e20
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package usermerge
 
