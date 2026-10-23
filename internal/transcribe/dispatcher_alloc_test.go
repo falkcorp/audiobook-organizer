@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher_alloc_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d2e9a41-5b3c-4f68-a1d7-3c8e0b6f9254
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package transcribe
 
@@ -114,6 +114,40 @@ func TestAllocateJobs_OverflowAssignsEveryJobOnce(t *testing.T) {
 		if c != 1 {
 			t.Fatalf("job %s assigned %d times", id, c)
 		}
+	}
+}
+
+// Under saturation (no free slot anywhere) a small batch still rotates across
+// the equal-priority endpoints of the preferred tier instead of always queueing
+// on the first one, and never spills to a lower tier.
+func TestAllocateJobs_SaturatedPoolRotatesWithinThePreferredTier(t *testing.T) {
+	eps := []Endpoint{
+		{URL: "http://a", Concurrency: 2, Priority: 1},
+		{URL: "http://b", Concurrency: 2, Priority: 1},
+		{URL: "http://c", Concurrency: 2, Priority: 1},
+		{URL: "http://slow", Concurrency: 2, Priority: 100},
+	}
+	free := func(Endpoint) int { return 0 }
+	hits := make([]int, len(eps))
+	for start := range 9 {
+		got := countJobs(allocateJobsWith(eps, jobSet(whisperBatchSize()), free, start))
+		for i, n := range got {
+			hits[i] += n
+		}
+	}
+	for i := range 3 {
+		if hits[i] == 0 {
+			t.Fatalf("preferred endpoint %d never received a saturated batch: %v", i, hits)
+		}
+	}
+	if hits[3] != 0 {
+		t.Fatalf("a saturated single batch spilled to the lower tier: %v", hits)
+	}
+	// Weighted queueing still holds: a big overflow gives each endpoint its
+	// Concurrency x batch share per pass.
+	got := countJobs(allocateJobsWith(eps, jobSet(6*whisperBatchSize()), free, 1))
+	if got[0] != 2*whisperBatchSize() || got[1] != 2*whisperBatchSize() || got[2] != 2*whisperBatchSize() || got[3] != 0 {
+		t.Fatalf("overflow pass shares: %v", got)
 	}
 }
 
