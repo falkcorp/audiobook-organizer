@@ -5,15 +5,22 @@ into..." previews the merge (counts, collisions, sign-ins, who holds the owner's
 Cloudflare Access / OAuth identity, refusals) before anything is written. The
 confirm step sends the previewed digest, so a merge only runs against the plan
 the admin read, and the owner's identity moving needs an explicit
-acknowledgement. The merge runs as the `maintenance.user-merge` operation, is
-journaled (`usermerge:journal:`), resumes after a crash, and undoes field by
-field without overwriting anything written since; undoing it signs the surviving
+acknowledgement, which is also required when the plan cannot tell whether it
+holds the owner's sign-in (no `owner_email`, or a sign-in with no address). The
+survivor keeps an address the merged-away account had verified, as verified. The
+merge runs as the `maintenance.user-merge` operation, is journaled
+(`usermerge:journal:`), and resumes after a crash by planning the work that is
+left again. It undoes from the journal without overwriting anything written
+since: a sign-in or API key goes back with only its owner changed (its use
+counters are kept), a book's listening state goes back whole or, if it changed
+since, stays whole with its status index rebuilt; undoing it signs the surviving
 account out when sign-ins or keys move back. Routes: `GET /users/:id/footprint`, `GET /users/merges`,
 `POST /users/:id/merge-into/:target/{preview,apply}` and
 `POST /users/merges/:jid/{resume,undo}`; every POST is a credential route behind
 the owner gate, so no API key or Audiobookshelf token can start one, and the
 operation refuses to write without a single-use grant those routes mint. The
-operation row carries only counts and ids, never usernames or emails. A
+operation row carries only counts and account ids, never usernames, emails or
+row keys. A
 merged-away account cannot be reactivated (undo the merge instead), and
 `ResolveMergedUser` lets book-merge undo journals and Audible read-status
 reverts that name a merged-away account act on the account that holds its data

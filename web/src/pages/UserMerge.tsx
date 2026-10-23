@@ -1,5 +1,5 @@
 // file: web/src/pages/UserMerge.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b6d2f48-7a31-4c95-9e84-c3a1d58f7e20
 // last-edited: 2026-10-23
 
@@ -226,7 +226,7 @@ export function UserMergeDialog({
     [absorbedId]
   );
 
-  const needsAck = !!plan && plan.owner_identity_on_absorbed;
+  const needsAck = !!plan && plan.owner_identity_ack_required;
   const canMerge =
     !!plan && plan.refusals.length === 0 && (!needsAck || acknowledged) && !loading && !starting;
 
@@ -335,13 +335,15 @@ export function UserMergeDialog({
                 Check the linked sign-ins below by hand.
               </Alert>
             )}
-            {plan.owner_identity_on_absorbed && (
+            {plan.owner_identity_ack_required && (
               <Alert severity="warning" sx={{ mb: 2 }}>
                 <Typography variant="body2">
                   {plan.owner_identity_holder === 'both'
                     ? 'Both accounts hold a sign-in for the owner address. '
-                    : 'The account being merged away holds the owner’s sign-in. '}
-                  After the merge that sign-in belongs to {plan.survivor.username}.
+                    : plan.owner_identity_on_absorbed
+                      ? 'The account being merged away holds the owner’s sign-in. '
+                      : 'The account being merged away has a sign-in that cannot be checked against the owner address. '}
+                  After the merge its sign-ins belong to {plan.survivor.username}.
                 </Typography>
                 <FormControlLabel
                   control={

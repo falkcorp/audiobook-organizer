@@ -1,5 +1,5 @@
 // file: internal/usermerge/service_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b17d4c90-3e62-4a85-9d0f-4c8a2e6b7153
 // last-edited: 2026-10-23
 
@@ -571,8 +571,8 @@ func TestResume_FinishesAnApplyThatStoppedBetweenChunks(t *testing.T) {
 	real := f.svc.merger
 	f.svc.merger = &failAfter{UserMerger: real, after: 2}
 	j, err := f.apply(true)
-	if err == nil || j == nil || j.Status != StatusApplying || j.Cursor != 10 {
-		t.Fatalf("apply = %v, journal %+v; want a stop at cursor 10 still applying", err, j)
+	if err == nil || j == nil || j.Status != StatusApplying || j.Cursor < 10 || j.Cursor >= len(j.Ops) {
+		t.Fatalf("apply = %v, journal %+v; want a stop after two chunks (a chunk stretches to the end of its unit) still applying", err, j)
 	}
 	if ub, _ := f.s.GetUserByID(f.b.ID); ub.MergedIntoUserID != "" {
 		t.Error("the absorbed account must not be retired before every op is written")
