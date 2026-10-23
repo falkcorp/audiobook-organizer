@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_intro_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d2f8b13-a7e4-4c90-96b1-e3c07a4d5f28
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -127,7 +127,7 @@ func TestSetBookFileIntro_FillOnlyNeverOverwrites(t *testing.T) {
 	// A forced (non-fill-only) result does replace, and clears stale parsed fields.
 	forced := introOK("hash-a", "run-3", "third")
 	forced.Title, forced.Author = "", ""
-	if res, err := s.SetBookFileIntro(f.BookID, f.ID, forced); err != nil || res != IntroWriteWrote {
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, forced); err != nil || res != IntroWriteReplaced {
 		t.Fatalf("forced: res=%v err=%v", res, err)
 	}
 	got = reread(t, s, f)
@@ -223,5 +223,77 @@ func TestFileIntroStats_RoundTripAndSeparateKey(t *testing.T) {
 	book, _ := s.GetTranscribeStats()
 	if book == nil || book.RunOpID != "book-run" {
 		t.Fatalf("book stats were overwritten: %+v", book)
+	}
+}
+
+func TestIntroResultPresent_Rules(t *testing.T) {
+	at := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	str := func(v string) *string { return &v }
+	cases := []struct {
+		name                 string
+		fileHash, sourceHash string
+		at                   *time.Time
+		status               *string
+		want                 bool
+	}{
+		{"marker matches", "h", "h", nil, nil, true},
+		{"marker for other bytes, no legacy result", "h", "old", nil, nil, false},
+		{"marker for other bytes, legacy ok", "h", "old", &at, str("ok"), true},
+		{"legacy unparsed", "h", "", &at, str("unparsed"), true},
+		{"legacy empty", "h", "", &at, str("empty"), true},
+		{"legacy failure is not a result", "h", "", &at, str("whisper_error"), false},
+		{"status without timestamp", "h", "", nil, str("ok"), false},
+		{"nothing", "h", "", nil, nil, false},
+	}
+	for _, c := range cases {
+		if got := IntroResultPresent(c.fileHash, c.sourceHash, c.at, c.status); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSetBookFileIntro_ReplacedWhenWritingOverAResult(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, introOK("hash-a", "run-1", "first")); err != nil || res != IntroWriteWrote {
+		t.Fatalf("first: res=%v err=%v", res, err)
+	}
+	res, err := s.SetBookFileIntro(f.BookID, f.ID, introOK("hash-a", "run-2", "second"))
+	if err != nil || res != IntroWriteReplaced {
+		t.Fatalf("overwrite: res=%v err=%v", res, err)
+	}
+	if got := reread(t, s, f); got.IntroTranscription == nil || *got.IntroTranscription != "second" || got.IntroRunOpID != "run-2" {
+		t.Fatalf("row after replace: %+v", got)
+	}
+}
+
+func TestSetBookFileIntro_SilenceNeverReplacesAStoredTranscript(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	if _, err := s.SetBookFileIntro(f.BookID, f.ID, introOK("hash-a", "run-1", "real words")); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := "[silence]"
+	r := BookFileIntroResult{SourceHash: "hash-a", RunOpID: "run-2", Status: "empty", Transcript: &sentinel, Silence: true,
+		At: time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC), Done: true}
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, r); err != nil || res != IntroWriteSkipped {
+		t.Fatalf("silence over text: res=%v err=%v", res, err)
+	}
+	if got := reread(t, s, f); got.IntroTranscription == nil || *got.IntroTranscription != "real words" || got.IntroRunOpID != "run-1" {
+		t.Fatalf("silence replaced text: %+v", got)
+	}
+}
+
+func TestSetBookFileIntro_FailureSkipsARowHoldingAResult(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	if _, err := s.SetBookFileIntro(f.BookID, f.ID, introOK("hash-a", "run-1", "real words")); err != nil {
+		t.Fatal(err)
+	}
+	fail := BookFileIntroResult{SourceHash: "hash-a", RunOpID: "run-2", Status: "whisper_error", Error: "boom",
+		At: time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)}
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, fail); err != nil || res != IntroWriteSkipped {
+		t.Fatalf("failure over a result: res=%v err=%v", res, err)
+	}
+	got := reread(t, s, f)
+	if got.TranscribeStatus == nil || *got.TranscribeStatus != "ok" || got.IntroRunOpID != "run-1" || got.TranscribeError != nil {
+		t.Fatalf("failure touched a result row: %+v", got)
 	}
 }

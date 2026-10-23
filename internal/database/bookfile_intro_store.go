@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -46,8 +46,12 @@ const (
 	// same thing (a repeated failure, an identical transcript) or, for a
 	// FillOnly result, because the row already carries a transcript.
 	IntroWriteSkipped BookFileIntroWrite = iota
-	// IntroWriteWrote: the row changed.
+	// IntroWriteWrote: the row changed and held no result before, so coverage
+	// grew by one.
 	IntroWriteWrote
+	// IntroWriteReplaced: the row changed and already held a result that this
+	// write replaced (a forced re-run). Coverage did not grow.
+	IntroWriteReplaced
 	// IntroWriteStale: the row is gone, or its FileHash is no longer the hash
 	// the result was made from. The result describes bytes the row no longer
 	// holds, so it is dropped.
@@ -79,15 +83,60 @@ type BookFileIntroResult struct {
 	// Done stamps IntroSourceHash = SourceHash, the op's done marker. Set it
 	// only for outcomes re-running cannot improve (a transcript, or silence).
 	Done bool
+	// Silence marks Transcript as the silence sentinel (an empty clip). A
+	// silence result never replaces a transcript the row already holds, even in
+	// a forced re-run: "nothing heard in 90 s" must not erase real text a
+	// longer clip or an earlier run found.
+	Silence bool
 	// FillOnly writes a transcript only into a file that has none. A file that
 	// gained one between selection and write (another op, a manual apply) keeps
 	// it.
 	FillOnly bool
 }
 
-// hasIntroTranscript reports whether a row already carries a per-file result.
-func hasIntroTranscript(f *BookFile) bool {
-	return f.IntroTranscribedAt != nil || (f.IntroSourceHash != "" && f.IntroSourceHash == f.FileHash)
+// Transcribe statuses a stored per-file result can carry. They mirror the
+// maintenance package's constants (it cannot be imported from here).
+const (
+	IntroStatusOK       = "ok"
+	IntroStatusUnparsed = "unparsed"
+	IntroStatusEmpty    = "empty"
+)
+
+// IntroResultPresent is THE definition of "this book_file already carries a
+// per-file intro result", shared by the op's selection (BookFileCore) and the
+// store's write rules (BookFile) so the two can never disagree about which rows
+// are done:
+//
+//   - the done marker matches the current hash (the op wrote it for exactly
+//     these bytes), or
+//   - a result written before the marker existed (the book op's single-file
+//     migration, an earlier apply): a transcript time and a status that says a
+//     transcript was stored (ok, unparsed, or the silence sentinel's empty).
+//     Trusted as done; never used as a donor because it names no hash.
+//
+// A failure status alone (whisper_error, source_file_missing, ...) is not a
+// result.
+func IntroResultPresent(fileHash, sourceHash string, transcribedAt *time.Time, status *string) bool {
+	if fileHash != "" && sourceHash == fileHash {
+		return true
+	}
+	if transcribedAt != nil && status != nil {
+		switch *status {
+		case IntroStatusOK, IntroStatusUnparsed, IntroStatusEmpty:
+			return true
+		}
+	}
+	return false
+}
+
+// HasIntroResult reports whether the row carries a per-file intro result.
+func (f *BookFile) HasIntroResult() bool {
+	return IntroResultPresent(f.FileHash, f.IntroSourceHash, f.IntroTranscribedAt, f.TranscribeStatus)
+}
+
+// HasIntroResult reports whether the projection carries a per-file intro result.
+func (f *BookFileCore) HasIntroResult() bool {
+	return IntroResultPresent(f.FileHash, f.IntroSourceHash, f.IntroTranscribedAt, f.TranscribeStatus)
 }
 
 func strPtrEqual(a, b *string) bool {
@@ -120,8 +169,14 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 		return IntroWriteStale, nil
 	}
 
+	had := row.HasIntroResult()
 	if r.Transcript != nil {
-		if r.FillOnly && hasIntroTranscript(row) {
+		if r.FillOnly && had {
+			return IntroWriteSkipped, nil
+		}
+		if r.Silence && row.IntroTranscription != nil {
+			// Silence never replaces a stored transcript (real text or an
+			// earlier sentinel), forced run or not.
 			return IntroWriteSkipped, nil
 		}
 		status := r.Status
@@ -140,16 +195,20 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 		row.IntroMeta = r.Meta
 		row.IntroRunOpID = r.RunOpID
 	} else {
+		// A failure never touches a row that holds a result: overwriting its
+		// status with whisper_error would leave a transcript labelled as a
+		// failure, and stamping this run on it would let clear_run_id erase a
+		// result this run never wrote (a migrated silence sentinel, for one).
+		if had {
+			return IntroWriteSkipped, nil
+		}
 		status, detail := r.Status, optString(r.Error)
 		if strPtrEqual(row.TranscribeStatus, &status) && strPtrEqual(row.TranscribeError, detail) {
 			return IntroWriteSkipped, nil
 		}
 		// A failure names this run on a row that has no result at all, so that
-		// clearing the run also removes the status noise it left. It never
-		// takes over a row that holds an earlier run's result.
-		if !hasIntroTranscript(row) {
-			row.IntroRunOpID = r.RunOpID
-		}
+		// clearing the run also removes the status noise it left.
+		row.IntroRunOpID = r.RunOpID
 	}
 	status := r.Status
 	row.TranscribeStatus = &status
@@ -159,7 +218,11 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 	if r.Done {
 		row.IntroSourceHash = r.SourceHash
 	}
-	return s.writeIntroRow(bookID, fileID, row, "SetBookFileIntro")
+	res, err := s.writeIntroRow(bookID, fileID, row, "SetBookFileIntro")
+	if res == IntroWriteWrote && had {
+		res = IntroWriteReplaced
+	}
+	return res, err
 }
 
 // ClearBookFileIntro erases the per-file intro result a run wrote: the
