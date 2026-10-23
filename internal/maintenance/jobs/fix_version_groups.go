@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-10-02
+// last-edited: 2026-10-23
 
 package jobs
 
@@ -434,11 +434,14 @@ func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgA
 			plan.keep++
 			continue
 		}
-		owner, err := store.GetBookFileByPath(fp)
+		// Unfiltered: a retired row keyed under this very book still claims the
+		// path, and planning a live row there (plan.create) would put two rows on
+		// one file. A retired row is occupancy, never "this book's own row".
+		owner, err := database.BookFileByPathIncludingRetired(store, fp)
 		if err != nil {
 			return nil, fmt.Errorf("look up row for %s: %w", fp, err)
 		}
-		if owner != nil && owner.BookID != bookID {
+		if owner != nil && (owner.BookID != bookID || owner.Retired) {
 			plan.ownedElsewhere = append(plan.ownedElsewhere, fp)
 			continue
 		}

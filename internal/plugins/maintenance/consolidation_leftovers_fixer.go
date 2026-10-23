@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-23
 
@@ -840,7 +840,9 @@ func leftoverWalkOwners(store OpsStore, scope string, size int64, seen map[strin
 		if info.Size() != size {
 			return nil
 		}
-		bf, err := store.GetBookFileByPath(p)
+		// Read unfiltered so the retired row is SEEN and skipped on purpose below,
+		// rather than being invisible to a getter that hides it.
+		bf, err := database.BookFileByPathIncludingRetired(store, p)
 		if err != nil {
 			return fmt.Errorf("read the row at %s: %w", p, err)
 		}

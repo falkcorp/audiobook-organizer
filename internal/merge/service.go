@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-23
 
@@ -2695,7 +2695,9 @@ func (ms *Service) planOwnFile(b *database.Book) virtualFilePlan {
 // can't be changed in place -- the primary key embeds it), never duplicated.
 // A new row's id is minted here, so the journal can name it before it exists.
 func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtualFilePlan {
-	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
+	// Unfiltered, so a retired row at the path is seen (and set aside below)
+	// instead of the filtered getter making the check dead code.
+	existing, _ := database.BookFileByPathIncludingRetired(ms.db, b.FilePath)
 	if existing != nil && existing.Retired {
 		// A retired version is not a file of the book it is keyed under, and the
 		// move below would refuse it (a retired row is only moved by the retire

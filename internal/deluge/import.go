@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -255,7 +255,9 @@ func ImportToLibraryWith(
 	// file. Adopting it would record two rows for one file, and a copy over
 	// it is refused anyway -- so refuse before touching the disk. This also
 	// covers a row whose file is missing: the path is still claimed.
-	owner, err := store.GetBookFileByPath(dest)
+	// Unfiltered: a retired version's row still names its file, so a destination
+	// only a retired row holds is claimed too.
+	owner, err := database.BookFileByPathIncludingRetired(store, dest)
 	if err != nil {
 		return "", fmt.Errorf("ImportToLibrary: look up the book file at %s: %w", dest, err)
 	}
