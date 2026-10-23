@@ -1,5 +1,5 @@
 // file: internal/database/iface_retired.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d6b0c1e-8f3a-4b57-9e21-6a7c52d9f0b3
 // last-edited: 2026-10-23
 
@@ -11,8 +11,22 @@ package database
 // "shell" book and was repointed to the live book that replaced it, so no row
 // is ever deleted: it is re-keyed under the live book (the holder), flagged
 // BookFile.Retired, and tied to a book_versions row of status
-// BookVersionStatusRetired. Every default book_file read skips it; these two
-// interfaces are the only ways to see or move one.
+// BookVersionStatusRetired. Which reads skip it:
+//
+//   - SKIP retired rows: GetBookFiles, GetAllBookFilesCore (and the Core and
+//     visitor variants, GetBookFilesForIDsCore), the counts and duplicate-hash
+//     stats, GetBookFileByPath, GetBookFileByPID, GetBookFileByAcoustID,
+//     GetBookFileByAcoustIDFuzzy and GetBookBySegmentFileHash (each answers
+//     "which live file has this identity", so an identity held only by a
+//     retired row answers nil).
+//   - RETURN retired rows by design, and the caller must decide what a retired
+//     row means: GetBookFileByID (an explicit identity), BookFilesAtPath and
+//     BookFilesWithHash (the complete "every row" claim lookups), and the
+//     ID-only LookupAcoustIDCandidates and LSHProbe (their callers read the row
+//     and must skip a Retired one; the fpidx: value still names the shell).
+//
+// These two interfaces, plus the include-retired readers below, are the only
+// ways to see or move a retired row through the default-skipping reads.
 //
 // They are capabilities, not part of Store (nothing here widens the Store
 // interface): resolve them with AsCapability[RetiredBookFileWriter](store).
@@ -31,6 +45,10 @@ type RetiredBookFileReader interface {
 	// GetRetiredVersionsFromBook returns the retired versions that were
 	// retired out of shellID, however many the book has.
 	GetRetiredVersionsFromBook(shellID string) ([]BookVersion, error)
+	// GetBookFileByPIDIncludingRetired is GetBookFileByPID that also answers a
+	// PID held only by a retired row (the iTunes importers use it to recognise a
+	// track whose version was retired into another book).
+	GetBookFileByPIDIncludingRetired(itunesPID string) (*BookFile, error)
 }
 
 // RetiredBookFileWriter retires, restores and re-homes book_file rows.
