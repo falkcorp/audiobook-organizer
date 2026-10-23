@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-05
+// last-edited: 2026-10-22
 
 package merge
 
@@ -122,7 +122,8 @@ type pendingRepairScanner interface {
 // afterwards: a flag change after the redirect decision is the gap this
 // closes.
 //
-// It takes LockMergeRMW, so it never interleaves with a merge or combine that
+// It takes LockMergeRMW (RestoreFromTrashLocked is the body, for a caller that
+// holds it), so it never interleaves with a merge or combine that
 // is recording a redirect on the same book. Then, in one
 // versionprimary.LockBookGroups acquisition, the version-group locks of the
 // row's current group (the no-group sentinel when it has none) and of every
@@ -134,9 +135,18 @@ type pendingRepairScanner interface {
 // There is no operation journal for a trash restore (there is none for the
 // trash either); the redirect removal and every dropped record are logged.
 func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book), joinGroups ...string) (TrashRestoreResult, error) {
-	var res TrashRestoreResult
 	LockMergeRMW()
 	defer UnlockMergeRMW()
+	return RestoreFromTrashLocked(store, id, apply, handOff, joinGroups...)
+}
+
+// RestoreFromTrashLocked is RestoreFromTrash for a caller that already holds
+// the merge lock (TryLockMergeRMWWithin: an interactive handler that bounds its
+// wait for a running combine and then runs the restore under that same hold).
+// Nothing in it takes the merge lock again; the version-group locks it takes
+// are the ones below the merge lock in the lock order.
+func RestoreFromTrashLocked(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book), joinGroups ...string) (TrashRestoreResult, error) {
+	var res TrashRestoreResult
 
 	// A row in a group a merge emptied is restored into the group that group
 	// went to (group_redirect.go), so it comes back with its family instead

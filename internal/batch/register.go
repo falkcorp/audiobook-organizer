@@ -1,5 +1,6 @@
 // file: internal/batch/register.go
-// version: 1.2.0
+// version: 1.3.0
+// guid: fa495c96-a75b-485a-add0-2c369aae3e9e
 // last-edited: 2026-10-22
 
 package batch
