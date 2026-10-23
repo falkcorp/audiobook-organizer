@@ -83,6 +83,12 @@ type PIDIntegrityReport struct {
 	DupDiffFile   int `json:"dup_diff_file"`  // owners point at different files
 	DupInITL      int `json:"dup_in_itl"`     // duplicate PIDs present in the library
 	FilesToClear  int `json:"files_to_clear"` // owner rows losing the PID (owners−1 per dup PID)
+
+	// RetiredFilesWithPID counts retired book_file rows that still carry a PID.
+	// They are provenance for undoing a retire, are never part of a duplicate
+	// group, and are never cleared; the count is reported so the totals above
+	// (live rows only) can be reconciled against the library.
+	RetiredFilesWithPID int `json:"retired_files_with_pid"`
 	// Relocate-correctness probe (findings §1.5): a PID on >1 PRIMARY, live
 	// book_file with differing paths makes relocate's first-wins order-dependent.
 	PIDsOnMultiplePrimariesDiffPath int `json:"pids_on_multiple_primaries_diff_path"`
@@ -110,7 +116,10 @@ func ComputePIDIntegrity(store PIDIntegrityStore, itlPath string) (*PIDIntegrity
 		}
 	}
 
-	files, err := store.GetAllBookFilesCore()
+	// Duplicate-PID logic runs over LIVE rows only: a retired row keeps its PID
+	// as undo provenance while the live row on the holder can carry the same
+	// one, which is not a duplicate. Retired rows are counted separately.
+	files, retiredRows, err := splitRetiredRows(store)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +135,11 @@ func ComputePIDIntegrity(store PIDIntegrityStore, itlPath string) (*PIDIntegrity
 	}
 
 	report := &PIDIntegrityReport{TracksInITL: tracksInITL, DistinctPIDs: len(byPID)}
+	for i := range retiredRows {
+		if strings.TrimSpace(retiredRows[i].ITunesPersistentID) != "" {
+			report.RetiredFilesWithPID++
+		}
+	}
 	bookCache := map[string]*database.Book{} // bounded: only dup-PID owners are looked up
 
 	for pid, owners := range byPID {
@@ -195,7 +209,8 @@ func ComputePIDIntegrity(store PIDIntegrityStore, itlPath string) (*PIDIntegrity
 		"distinctPIDs", report.DistinctPIDs, "duplicatePIDs", report.DuplicatePIDs,
 		"dupSameFile", report.DupSameFile, "dupDiffFile", report.DupDiffFile,
 		"dupInITL", report.DupInITL, "filesToClear", report.FilesToClear,
-		"pidsOnMultiplePrimariesDiffPath", report.PIDsOnMultiplePrimariesDiffPath)
+		"pidsOnMultiplePrimariesDiffPath", report.PIDsOnMultiplePrimariesDiffPath,
+		"retiredFilesWithPID", report.RetiredFilesWithPID)
 	return report, nil
 }
 
@@ -218,6 +233,11 @@ const (
 	// merge orphan whose book_file PID was cleared by the PID-uniqueness repair.
 	// Never bulk-removable: we cannot prove it is ours.
 	BucketNoLiveOwner OrphanBucket = "no_live_owner"
+	// BucketRetiredVersion: no LIVE book_file carries the PID, but a retired
+	// book_file does (a version the retire-versions repair moved onto its
+	// holder). The track is accounted for and must not be treated as an orphan:
+	// the retired row is the provenance the retire's undo restores from.
+	BucketRetiredVersion OrphanBucket = "retired_version"
 )
 
 // OrphanSample is one attributed AO-.itl track, kept for the JSON detail view.
@@ -234,7 +254,8 @@ type OrphanSample struct {
 }
 
 // MergeOrphanCensus is the decision-relevant output. The bucket counts partition
-// TracksInITL exactly (Healthy + StaleOwner + NoLiveOwner == TracksInITL).
+// TracksInITL exactly (Healthy + StaleOwner + NoLiveOwner + RetiredVersionOwner
+// == TracksInITL).
 type MergeOrphanCensus struct {
 	TracksInITL int `json:"tracks_in_itl"`
 
@@ -247,6 +268,8 @@ type MergeOrphanCensus struct {
 	Healthy     int `json:"healthy"`
 	StaleOwner  int `json:"stale_owner"`
 	NoLiveOwner int `json:"no_live_owner"`
+	// RetiredVersionOwner: no live owner, but a retired book_file holds the PID.
+	RetiredVersionOwner int `json:"retired_version_owner"`
 
 	// The P3 gating number: stale-owner tracks whose owner book is a provable
 	// merge loser (journal ∪ MergedIntoBookID). LOWER BOUND — see caveat.
@@ -306,9 +329,18 @@ func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journal
 	byPID := make(map[string][]database.BookFileCore)
 	// FileHash → book_files carrying it (for the SHA gate, no extra store reads).
 	byHash := make(map[string][]database.BookFileCore)
-	files, err := store.GetAllBookFilesCore()
+	files, retiredRows, err := splitRetiredRows(store)
 	if err != nil {
 		return nil, err
+	}
+	// PID → retired book_file rows. Kept apart from byPID so a retired row never
+	// makes a residual duplicate or a stale owner, but a track whose only holder
+	// is a retired row is not reported as having no owner at all.
+	retiredByPID := make(map[string]bool, len(retiredRows))
+	for i := range retiredRows {
+		if pid := strings.ToUpper(strings.TrimSpace(retiredRows[i].ITunesPersistentID)); pid != "" {
+			retiredByPID[pid] = true
+		}
 	}
 	for i := range files {
 		pid := strings.ToUpper(strings.TrimSpace(files[i].ITunesPersistentID))
@@ -393,6 +425,11 @@ func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journal
 		if len(owners) > 1 {
 			c.ResidualDuplicatePIDs++
 		}
+		if len(owners) == 0 && retiredByPID[pid] {
+			c.RetiredVersionOwner++
+			c.addSample(OrphanSample{PID: pid, Bucket: BucketRetiredVersion})
+			continue
+		}
 		if len(owners) == 0 {
 			c.NoLiveOwner++
 			c.addSample(OrphanSample{PID: pid, Bucket: BucketNoLiveOwner})
@@ -461,7 +498,7 @@ func computeMergeOrphanCensus(store PIDIntegrityStore, itlPIDs []string, journal
 
 	slog.Info("itunes merge-orphan census",
 		"tracksInITL", c.TracksInITL, "healthy", c.Healthy, "staleOwner", c.StaleOwner,
-		"noLiveOwner", c.NoLiveOwner, "journalLoserIDs", c.JournalLoserIDs,
+		"noLiveOwner", c.NoLiveOwner, "retiredVersionOwner", c.RetiredVersionOwner, "journalLoserIDs", c.JournalLoserIDs,
 		"mergedIntoLosers", c.MergedIntoLosers, "provableMergeOrphans", c.ProvableMergeOrphans,
 		"shaGatedRemovable", c.SHAGatedRemovable, "residualDuplicatePIDs", c.ResidualDuplicatePIDs)
 	return c, nil
