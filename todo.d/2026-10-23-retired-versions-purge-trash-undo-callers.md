@@ -16,3 +16,10 @@
       retires a row (the fixer's Apply is not built yet), and must land before
       the first prod retire. Also open from 3b: the two `AcoustIDScan` retired
       checks in `dedup/engine.go` have no unit test (the collectors do).
+      Open question for the owner: `deluge/discovery.go` decides whether a
+      torrent's intro fingerprint is "already tracked" through
+      `GetBookFileByAcoustID` and `GetBookFileByAcoustIDFuzzy`, which both skip
+      retired rows, so content the library holds only as a retired version would
+      be offered for import as new (the ingest path refuses it, see
+      `ErrHeldAsRetiredVersion`). Counting it as tracked needs an
+      include-retired fingerprint lookup that does not exist yet.

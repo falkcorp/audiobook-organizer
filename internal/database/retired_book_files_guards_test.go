@@ -91,13 +91,14 @@ func runTogether(fns ...func()) {
 	wg.Wait()
 }
 
-// A single-row writer racing RetireBookFiles must neither be lost nor
-// resurrect the row under the shell it left. PatchBookFileFields reads
-// book_file:<shell>:<id>; if it read before the retire deleted that key and
-// wrote after, it would put a second, live copy of the row back under the
-// shell. The row stripe RetireBookFiles holds from read to commit orders the
-// two, so afterwards the only copy is the retired one under the holder, and a
-// patch that landed first is kept on it. Run with -race.
+// A -race smoke test of a single-row writer racing RetireBookFiles: nothing
+// may be lost or resurrected under the shell the row left. PatchBookFileFields
+// reads book_file:<shell>:<id>; read before the retire's delete and written
+// after, it would put a second, live copy back under the shell. The window is
+// too narrow for the scheduler to hit reliably, so this test passes with the row
+// stripe removed too (checked); it is here for the race detector and for the
+// end-state invariants. The deterministic guard that the stripes are taken is
+// TestRetiredWriters_TakeVersionAndRowStripes.
 func TestRetireBookFiles_ConcurrentRowWriterNeverResurrectsTheShellCopy(t *testing.T) {
 	fx := newRetiredFixture(t)
 	const rounds = 12
@@ -137,9 +138,11 @@ func TestRetireBookFiles_ConcurrentRowWriterNeverResurrectsTheShellCopy(t *testi
 	}
 }
 
-// A caller holding a version loaded before RehomeRetiredVersion moved it must
-// not write the stale holder back: afterwards the version names the holder its
-// rows are under, whichever of the two got there first. Run with -race.
+// A -race smoke test of a caller holding a version loaded before
+// RehomeRetiredVersion moved it: afterwards the version names the holder its
+// rows are under, whichever got there first. Like the test above it cannot hit
+// the narrow window on demand; the stripe guard is
+// TestRetiredWriters_TakeVersionAndRowStripes.
 func TestRehomeRetiredVersion_ConcurrentStaleUpdateNeverMovesItBack(t *testing.T) {
 	fx := newRetiredFixture(t)
 	const rounds = 12
