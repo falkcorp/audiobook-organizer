@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_coverage.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bf7e672f-6693-455c-a992-d8b4aa4ca1d0
-// last-edited: 2026-09-11
+// last-edited: 2026-10-23
 //
 // READ-ONLY iTunes track Persistent ID coverage census (TASK-184,
 // ITUNES-SMARTCRIT-PARSE). Before anyone promises a "Playlist Items snapshot"
