@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.90.2
+// version: 1.90.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-23
+// last-edited: 2026-10-22
 
 package maintenance
 
