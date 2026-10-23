@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -318,6 +318,33 @@ var introMigratedFields = []string{
 	"TranscribeStatus",
 	"TranscribeError",
 	"TranscribeAttemptedAt",
+}
+
+// introNotMigratedFields are the BookFile intro-group fields this migration
+// deliberately does NOT carry. The per-file op (maintenance.transcribe-file-intros)
+// added them as provenance, and each one is a claim the migration cannot back:
+//
+//   - IntroSourceHash: "these exact bytes, at this hash, produced this
+//     transcript". The book-level transcript does not record which file made it
+//     (retry2 may have used file 2) or from which bytes, so stamping the file's
+//     current hash would assert something nobody verified. It would also make the
+//     row a valid donor for identical-hash files and let it pass the stale-write
+//     guard. Left empty, a migrated row is a result written before the marker
+//     existed, which the per-file op trusts under only_missing and never uses as
+//     a donor.
+//   - IntroRunOpID: what clear-by-run-id selects on. This migration is not a
+//     per-file run, and a run id here would let clearing some other run reach (or
+//     orphan) migrated rows. Left empty, no clear_run_id can touch them.
+//   - IntroMeta: model, language and clip length of the transcription. The book
+//     op's settings at the time are not recorded on the book, so there is nothing
+//     truthful to put here.
+//
+// A test fails if a new BookFile intro field is in neither list, and the
+// reflective diff test fails if this migration modifies any field in this one.
+var introNotMigratedFields = []string{
+	"IntroSourceHash",
+	"IntroRunOpID",
+	"IntroMeta",
 }
 
 // applyBookIntroFieldsToFile copies the ten-field intro-transcription group
