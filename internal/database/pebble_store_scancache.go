@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.6.1
+// version: 3.7.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 package database
 
@@ -78,6 +78,14 @@ func (p *PebbleStore) GetScanCacheMapContext(ctx context.Context) (map[string]Sc
 			return nil
 		}
 		if bf.FilePath == "" || bf.LastScanMtime == nil {
+			return nil
+		}
+		// A retired row keeps its own stamp, so an unchanged retired file is
+		// skipped like any other. It never displaces a live row's entry at the
+		// same path (a retired shell row can sit at the very path of the live
+		// target it was retired into): the live row's stamp is the one the
+		// scanner's skip decision is about.
+		if _, taken := result[bf.FilePath]; bf.Retired && taken {
 			return nil
 		}
 		result[bf.FilePath] = ScanCacheEntry{
@@ -186,7 +194,10 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 		if err := json.Unmarshal(value, &bf); err != nil {
 			return nil
 		}
-		if bf.BookID == "" {
+		// A retired row is not a file of the book it is keyed under: counting
+		// it here would make a holder look like it owns more files than it does
+		// and change which books the backfill seeds.
+		if bf.BookID == "" || bf.Retired {
 			return nil
 		}
 		byBook[bf.BookID] = append(byBook[bf.BookID], bf)

@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_preserve_test.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 65fa9323-39c2-4f89-a480-e74c18c02036
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package database
 
@@ -107,6 +107,13 @@ func TestBookFileFieldClasses_AgreeWithRescanContract(t *testing.T) {
 		// what the survival tests drive; the scanner's own path is tested below.
 		preserved := class == bfPreserveOnUpsert || class == bfPreserveAlways || class == bfScanObserved || class == bfWriteOnce
 		switch {
+		case class == bfStoredOwned:
+			// Owned by a dedicated operation: immune to every merge, so it is
+			// neither "preserved on zero" nor scanned content. It must be excluded
+			// from the survival check because a populated seed cannot carry it.
+			if !excluded {
+				t.Errorf("%s is bfStoredOwned but not excluded from the rescan survival check", name)
+			}
 		case preserved && excluded && !scannerAlwaysSupplies[name]:
 			t.Errorf("%s is preserved by the store but excluded from the rescan survival check "+
 				"(if the scanner always supplies it, add it to scannerAlwaysSupplies)", name)
@@ -125,6 +132,10 @@ var rescanNotCompared = map[string]string{
 	"BookID":    "identity: the store keeps the stored BookID",
 	"CreatedAt": "identity: the store keeps the stored CreatedAt",
 	"UpdatedAt": "bumped on every write",
+	// bfStoredOwned: only RetireBookFiles sets it, so a seed cannot be populated
+	// with it. Its survival (both directions) is TestRetiredFlagSurvivesGenericRewrites
+	// and TestBookFileMerge_StoredOwnedFieldsAreImmutable.
+	"Retired": "owned by RetireBookFiles/UnretireBookFiles; a populated seed is never retired",
 	// Dropped by marshalBookFileDropSegs on every write, so never persisted.
 	"AcoustIDSeg0": "not stored", "AcoustIDSeg1": "not stored", "AcoustIDSeg2": "not stored",
 	"AcoustIDSeg3": "not stored", "AcoustIDSeg4": "not stored", "AcoustIDSeg5": "not stored",
@@ -165,6 +176,9 @@ func seedFullyPopulatedBookFile(t *testing.T, s *PebbleStore) (*BookFile, string
 	fillBookFileNonZero(t, seed)
 	seed.ID = ""
 	seed.BookID = book.ID
+	// A new row cannot be born retired (refuseRetiredInsert), and a retired row
+	// is invisible to GetBookFiles, which would defeat every check below.
+	seed.Retired = false
 	seed.FilePath = "/lib/Rescan Preserve/01.m4b"
 	// A known-kind original: the filler's arbitrary kind string would read as a
 	// legacy value, which the merge lets a scan replace.
