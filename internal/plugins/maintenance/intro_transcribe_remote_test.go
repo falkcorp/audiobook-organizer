@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
 // last-edited: 2026-10-23
 
@@ -352,13 +352,19 @@ func TestRemotePage_WorkerMisconfiguredWritesNothingAndDefers(t *testing.T) {
 // A silence retry that FAILED (transport error, per-job error) proves nothing
 // about the book: the [SILENCE] sentinel makes only_missing skip a book forever,
 // so it must be written only when the retries came back as successful empty
-// results. A failed retry writes nothing and the book is counted deferred.
+// results. A retry that failed to say anything about the book (transport
+// error, no result, misconfigured worker) writes nothing and the book is
+// counted deferred.
 func TestRemotePage_FailedSilenceRetryNeverWritesTheSentinel(t *testing.T) {
 	transport := &transcribe.TransportError{
 		Endpoints: []string{"http://whisper-a.test"},
 		Err:       errors.New("all 1 whisper endpoint(s) refused: mapped root(s) [/mnt/lib] not readable on the worker (NFS mount lost?)"),
 	}
-	silent := map[string]transcribe.BatchResult{"b1": {Text: ""}}
+	// A constructor, not a shared map: the op stores retry results into the map
+	// the first pass returned, so a shared one would leak between cases.
+	silent := func() map[string]transcribe.BatchResult {
+		return map[string]transcribe.BatchResult{"b1": {Text: ""}}
+	}
 	cases := []struct {
 		name         string
 		twoFiles     bool
@@ -367,27 +373,27 @@ func TestRemotePage_FailedSilenceRetryNeverWritesTheSentinel(t *testing.T) {
 		wantDeferred int
 	}{
 		{"single file, retry1 transport error", false, func(int) (map[string]transcribe.BatchResult, error) { return nil, transport }, false, 1},
-		{"single file, retry1 per-job error", false, func(int) (map[string]transcribe.BatchResult, error) {
-			return map[string]transcribe.BatchResult{"b1": {Error: "path_unmapped: mapped root not readable"}}, nil
+		{"single file, retry1 worker_misconfigured", false, func(int) (map[string]transcribe.BatchResult, error) {
+			return map[string]transcribe.BatchResult{"b1": {Error: "worker_misconfigured: ffmpeg is not on PATH on this worker"}}, nil
 		}, false, 1},
 		{"single file, retry1 returns no result for the book", false, func(int) (map[string]transcribe.BatchResult, error) {
 			return map[string]transcribe.BatchResult{}, nil
 		}, false, 1},
 		{"two files, retry1 empty then retry2 transport error", true, func(call int) (map[string]transcribe.BatchResult, error) {
 			if call == 2 {
-				return silent, nil
+				return silent(), nil
 			}
 			return nil, transport
 		}, false, 1},
-		{"two files, retry1 empty then retry2 per-job error", true, func(call int) (map[string]transcribe.BatchResult, error) {
+		{"two files, retry1 empty then retry2 worker_misconfigured", true, func(call int) (map[string]transcribe.BatchResult, error) {
 			if call == 2 {
-				return silent, nil
+				return silent(), nil
 			}
-			return map[string]transcribe.BatchResult{"b1": {Error: "ffmpeg_timeout: x"}}, nil
+			return map[string]transcribe.BatchResult{"b1": {Error: "worker_misconfigured: x"}}, nil
 		}, false, 1},
 		// Positive control: every retry succeeds and is empty -> sentinel.
-		{"single file, retry1 successfully empty", false, func(int) (map[string]transcribe.BatchResult, error) { return silent, nil }, true, 0},
-		{"two files, both retries successfully empty", true, func(int) (map[string]transcribe.BatchResult, error) { return silent, nil }, true, 0},
+		{"single file, retry1 successfully empty", false, func(int) (map[string]transcribe.BatchResult, error) { return silent(), nil }, true, 0},
+		{"two files, both retries successfully empty", true, func(int) (map[string]transcribe.BatchResult, error) { return silent(), nil }, true, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -401,7 +407,7 @@ func TestRemotePage_FailedSilenceRetryNeverWritesTheSentinel(t *testing.T) {
 			swapPathSeams(t, true, "", func(context.Context, map[string]transcribe.PathJob, transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
 				calls++
 				if calls == 1 {
-					return silent, nil // first pass: the 90 s clip is silent
+					return silent(), nil // first pass: the 90 s clip is silent
 				}
 				return tc.retry(calls)
 			})
@@ -423,6 +429,76 @@ func TestRemotePage_FailedSilenceRetryNeverWritesTheSentinel(t *testing.T) {
 			}
 			if st := accum.snapshot(); st.Deferred != tc.wantDeferred {
 				t.Errorf("Deferred = %d, want %d", st.Deferred, tc.wantDeferred)
+			}
+			noWrites()
+		})
+	}
+}
+
+// A silence retry that returns a real per-book verdict is not "failed": the
+// verdict is kept and classified exactly like a first-pass worker error, so a
+// book whose 300 s clip cannot be decoded gets ffmpeg_error instead of being
+// deferred forever, and neither case writes the [SILENCE] marker.
+func TestRemotePage_SilenceRetryVerdictIsClassifiedNotDeferred(t *testing.T) {
+	// A constructor, not a shared map: the op stores retry results into the map
+	// the first pass returned, so a shared one would leak between cases.
+	silent := func() map[string]transcribe.BatchResult {
+		return map[string]transcribe.BatchResult{"b1": {Text: ""}}
+	}
+	cases := []struct {
+		name       string
+		twoFiles   bool
+		deleteSrc  bool // the server loses the file, so its own stat confirms not_found
+		retry      func(call int) map[string]transcribe.BatchResult
+		wantStatus string
+	}{
+		{"retry1 ffmpeg_error on the 300 s clip", false, false, func(int) map[string]transcribe.BatchResult {
+			return map[string]transcribe.BatchResult{"b1": {Error: "ffmpeg_error: Invalid data found when processing input"}}
+		}, statusFFmpegError},
+		{"retry1 not_found confirmed by the server's own stat", false, true, func(int) map[string]transcribe.BatchResult {
+			return map[string]transcribe.BatchResult{"b1": {Error: "not_found: file not found under the mapped root"}}
+		}, statusSourceMissing},
+		{"retry1 path_unmapped while the server can stat the file", false, false, func(int) map[string]transcribe.BatchResult {
+			return map[string]transcribe.BatchResult{"b1": {Error: "path_unmapped: mapped root is not readable (mount lost?)"}}
+		}, statusPathUnmapped},
+		{"retry2 ffmpeg_timeout after an empty retry1", true, false, func(call int) map[string]transcribe.BatchResult {
+			if call == 2 {
+				return silent()
+			}
+			return map[string]transcribe.BatchResult{"b1": {Error: "ffmpeg_timeout: ffmpeg exceeded 120s"}}
+		}, statusWhisperError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := []string{writeSource(t, "disc1.m4b")}
+			if tc.twoFiles {
+				files = append(files, writeSource(t, "disc2.m4b"))
+			}
+			store, written, books := remoteBookStore(t, map[string][]string{"b1": files})
+			rootDir, noWrites := noClipWrites(t)
+			var calls int
+			swapPathSeams(t, true, "", func(context.Context, map[string]transcribe.PathJob, transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+				calls++
+				if calls == 1 {
+					return silent(), nil
+				}
+				if tc.deleteSrc {
+					_ = os.Remove(files[0])
+				}
+				return tc.retry(calls), nil
+			})
+			n, accum := runRemotePage(t, store, books, rootDir)
+			if n != 0 {
+				t.Errorf("processed = %d, want 0", n)
+			}
+			if got := statusOf(t, written); got != tc.wantStatus {
+				t.Errorf("status = %q, want %q", got, tc.wantStatus)
+			}
+			if b := (*written)[0]; b.IntroTranscription != nil && *b.IntroTranscription == silenceSentinel {
+				t.Error("a retry verdict must not write the [SILENCE] sentinel")
+			}
+			if st := accum.snapshot(); st.Deferred != 0 {
+				t.Errorf("Deferred = %d, want 0: the retry returned a verdict, nothing to defer", st.Deferred)
 			}
 			noWrites()
 		})

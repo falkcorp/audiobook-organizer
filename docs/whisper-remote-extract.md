@@ -1,5 +1,5 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
 <!-- last-edited: 2026-10-23 -->
 
@@ -45,15 +45,28 @@ ls ~/mnt/bigdata | head          # must list the library
 mount is read-only on purpose: the worker never writes to the library.
 
 The timeout options are not optional. `soft` makes a read on an unreachable
-server fail with an I/O error instead of blocking forever; `timeo=10` (1 s, in
-tenths of a second), `retrans=3` and `deadtimeout=30` (seconds) bound how long
-that takes: a request against a dead server stalls on the order of
-`deadtimeout` (30 s), after which the mount is marked dead and further reads
-fail at once until the server answers again. Without them a dropped server
-leaves ffmpeg and the health check hanging on the mount. The 30 s figure is the
-documented meaning of those options; it has not been measured here by pulling
-the server away mid-read. The worker's own `WHISPER_EXTRACT_TIMEOUT` (120 s per
-clip) is the backstop either way.
+server fail with an I/O error instead of blocking forever, and `timeo=10` (1 s,
+in tenths of a second) and `retrans=3` bound each request's retries. `deadtimeout`
+(seconds; `man mount_nfs`) works differently from what "fails until the server
+answers" suggests: once the mount has stayed unresponsive that long, it is marked
+dead and **forcibly unmounted**. Soft read-only mounts get `deadtimeout=60` by
+default; `30` here shortens it. After that the mountpoint is an **empty local
+directory**, not a failing mount.
+
+The worker accounts for that: a mapped root only counts as readable while it is
+still a mount point (`os.path.ismount`), so a forcibly unmounted share shows as
+`readable: false` in `/health` and each job answers `path_unmapped`, instead of
+an empty listing turning every file into `not_found`. Consequences to know:
+
+- The mapped local root must be the mount point itself (`~/mnt/bigdata`), not a
+  subdirectory of it. A map that deliberately points at a plain directory needs
+  `WHISPER_PATH_REQUIRE_MOUNT=0` in the worker's environment.
+- Recovery after a forced unmount is the LaunchAgent below: it re-mounts within
+  its 5-minute interval, and the worker needs no restart.
+- Without these options a dropped server can leave ffmpeg and the health check
+  hanging on the mount. The 30 s figure is the documented meaning of the option;
+  it has not been measured here by pulling the server away mid-read. The worker's
+  own `WHISPER_EXTRACT_TIMEOUT` (120 s per clip) is the backstop either way.
 
 To mount it at every login and re-mount it if it drops, use a user LaunchAgent.
 Save as `~/Library/LaunchAgents/com.jdfalk.bigdata-nfs.plist` (replace
@@ -176,6 +189,11 @@ remote-mode run never decodes on the server.
   I/O fault or timeout (`Input/output error`, `Operation timed out`, `Stale file
   handle`) it answers `ffmpeg_timeout`. A *timeout* is not a decode verdict and
   is recorded as the retryable `whisper_error`.
+- **Container refused by the format whitelist** (an AIFF renamed `.m4b`, an
+  unusual file): the worker answers `container_rejected`, which is this worker's
+  policy and not a verdict about the file, so it is recorded as the retryable
+  `whisper_error` (never the durable `ffmpeg_error`). A corrupt file that is in a
+  whitelisted container is still `ffmpeg_error`.
 - **Worker has no ffmpeg on its PATH:** the worker answers
   `worker_misconfigured`. That is a fault of the worker, not of the book: the
   server writes no status and counts the book **deferred**.
@@ -184,8 +202,10 @@ remote-mode run never decodes on the server.
   the share cannot make ffmpeg's playlist demuxers open other paths on the Mac.
 - **A silence retry that fails:** the `[SILENCE]` marker, which makes
   `only_missing` skip a book for good, is written only when the retries came
-  back as successful empty results. A retry that hit a transport or per-book
-  error writes nothing and the book is deferred.
+  back as successful empty results. A retry that hit a transport error, got no
+  result, or met a misconfigured worker writes nothing and the book is deferred.
+  A retry that returned a real per-book verdict (for example `ffmpeg_error` on
+  the 300 s clip) is classified like any other worker error.
 - **Path outside every mapped prefix, containing `..`, or resolving outside its
   root through a symlink:** refused per job, same handling as above.
 

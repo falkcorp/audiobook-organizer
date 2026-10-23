@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.37.0
+// version: 3.38.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-23
 
@@ -1315,10 +1315,11 @@ func (p *Plugin) processTranscribePage(
 	// silencedBookIDs tracks books written with the sentinel so Step 4 skips them.
 	silencedBookIDs := map[string]bool{}
 
-	// retryFailed holds the books whose silence retry did NOT come back as a
-	// successful result (batch/transport error, per-job error, no result, or
-	// the local clip could not be cut). Such a book was never shown to be
-	// silent: writing the [SILENCE] sentinel for it would make only_missing skip
+	// retryFailed holds the books whose silence retry told us nothing about the
+	// book: a batch/transport error, no result, a misconfigured worker, or (local)
+	// a clip that could not be cut. A retry that returned a real per-job verdict
+	// is NOT in here; its error stays in batchResults for Step 4 to classify.
+	// A book in here was never shown to be silent: writing the [SILENCE] sentinel for it would make only_missing skip
 	// it forever on the strength of a mount drop or an endpoint outage. It gets
 	// no outcome this run and is counted deferred, so the next run retries it.
 	retryFailed := map[string]bool{}
@@ -1335,10 +1336,16 @@ func (p *Plugin) processTranscribePage(
 				failed[id] = true
 			}
 		}
-		// collect flags every submitted id that has no usable result.
+		// collect flags every submitted id whose retry says nothing about the
+		// book: no result at all, or (remote) a worker that is itself
+		// misconfigured. A per-job error that IS a verdict about the book
+		// (ffmpeg_error on the 300 s clip, a not_found the server's own stat
+		// confirms) is not a failure here: the caller keeps it in batchResults
+		// and Step 4's classifyTranscribeError decides what it means.
 		collect := func(res map[string]transcribe.BatchResult, sent map[string]string) {
 			for id := range sent {
-				if r, ok := res[id]; !ok || r.Error != "" {
+				r, ok := res[id]
+				if !ok || (remote && transcribe.PathErrorCode(r.Error) == transcribe.PathErrWorkerMisconfigured) {
 					failed[id] = true
 				}
 			}
@@ -1394,7 +1401,9 @@ func (p *Plugin) processTranscribePage(
 		}
 		r1, r1failed := retryRound("retry1", retry1Srcs, remoteRetryLongSeconds)
 		for id, res := range r1 {
-			if res.Text != "" {
+			// A transcript replaces the empty first pass; so does a per-job
+			// error, which Step 4 classifies (see retryRound's collect).
+			if res.Text != "" || res.Error != "" {
 				batchResults[id] = res
 			}
 		}
@@ -1426,7 +1435,7 @@ func (p *Plugin) processTranscribePage(
 			}
 			r2, r2failed := retryRound("retry2", retry2Srcs, remoteClipSeconds)
 			for id, res := range r2 {
-				if res.Text != "" {
+				if res.Text != "" || res.Error != "" {
 					batchResults[id] = res
 				}
 			}
@@ -1438,7 +1447,7 @@ func (p *Plugin) processTranscribePage(
 			sentinel := silenceSentinel
 			markedSilent := 0
 			for _, s := range stillSilent {
-				if batchResults[s.book.ID].Text != "" || retryFailed[s.book.ID] {
+				if br := batchResults[s.book.ID]; br.Text != "" || br.Error != "" || retryFailed[s.book.ID] {
 					continue
 				}
 				// s.book was copied before ffmpeg and two whisper passes ran.
@@ -1642,8 +1651,9 @@ func (p *Plugin) applyOutcome(
 //     and is retried next run.
 //   - worker_misconfigured never reaches this function: the caller defers the
 //     book (no status written), because the worker, not the book, is at fault.
-//   - ffmpeg_timeout, bad_request, whisper_error, or no code: not a verdict
-//     about the file (an NFS stall, a malformed request, inference trouble):
+//   - ffmpeg_timeout, container_rejected, bad_request, whisper_error, or no code:
+//     not a verdict about the file (an NFS stall, a refused container, a
+//     malformed request, inference trouble):
 //     whisper_error, retried next run. Burying a book as ffmpeg_error because an
 //     NFS read stalled would hide it until its mtime changed.
 func classifyTranscribeError(remote bool, src, errText string) (status, detail string) {

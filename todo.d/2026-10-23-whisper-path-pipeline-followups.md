@@ -6,4 +6,6 @@
       nonzero exit is tested today, with subprocess faked); (3) validate the
       worker's result ids against the chunk that was sent in
       `internal/transcribe/path.go`, so an unexpected or missing id is an error
-      rather than silently ignored.
+      rather than silently ignored; (4) add a local-mode failed-retry test: a silence retry whose local
+      ffmpeg clip cut fails must defer the book rather than write the
+      [SILENCE] sentinel (only the remote-mode retries are covered today).
