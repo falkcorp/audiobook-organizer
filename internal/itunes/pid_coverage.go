@@ -95,8 +95,12 @@ type PIDCoverageBucket struct {
 	ResolvedBookLevel        int     `json:"resolved_book_level"`
 	ResolvedBookLevelPercent float64 `json:"resolved_book_level_percent"`
 	ResolvedEither           int     `json:"resolved_either"`
-	ResolvedEitherPercent    float64 `json:"resolved_either_percent"`
-	Unresolved               int     `json:"unresolved"`
+	// ResolvedRetiredOnly counts tracks whose PID is held only by a retired
+	// book_file row (no live file row, no book-level PID). They count in
+	// ResolvedEither, not in the file-level or book-level figures.
+	ResolvedRetiredOnly   int     `json:"resolved_retired_only"`
+	ResolvedEitherPercent float64 `json:"resolved_either_percent"`
+	Unresolved            int     `json:"unresolved"`
 }
 
 // UnresolvedPIDSample is one track whose PID matched nothing in the DB, carried
@@ -284,7 +288,7 @@ func coveragePercent(n, d int) float64 {
 // per-track work is two map lookups, so it runs in one goroutine; the store is
 // read exactly twice, up front, regardless of library size.
 func computePIDCoverage(store PIDCoverageStore, tracks []coverageTrack, playlists []coveragePlaylist) (*PIDCoverageReport, error) {
-	files, err := store.GetAllBookFilesCore()
+	files, retiredRows, err := splitRetiredRows(store)
 	if err != nil {
 		return nil, fmt.Errorf("load book_file PIDs: %w", err)
 	}
@@ -292,6 +296,15 @@ func computePIDCoverage(store PIDCoverageStore, tracks []coverageTrack, playlist
 	for i := range files {
 		if pid := normalizeCoveragePID(files[i].ITunesPersistentID); pid != "" {
 			filePIDs[pid] = struct{}{}
+		}
+	}
+	// A PID held only by a retired row is known to the library (a version moved
+	// onto its holder), so it is not "unresolved", but it is not a live file-level
+	// resolution either; tracked in its own set and its own bucket counter.
+	retiredPIDs := make(map[string]struct{}, len(retiredRows))
+	for i := range retiredRows {
+		if pid := normalizeCoveragePID(retiredRows[i].ITunesPersistentID); pid != "" {
+			retiredPIDs[pid] = struct{}{}
 		}
 	}
 	books, err := store.ListBooksByITunesPID(0, 0)
@@ -358,11 +371,13 @@ func computePIDCoverage(store PIDCoverageStore, tracks []coverageTrack, playlist
 		}
 		_, inFile := filePIDs[t.PID]
 		_, inBook := bookPIDs[t.PID]
-		tally(&report.Library, inFile, inBook)
+		_, inRetired := retiredPIDs[t.PID]
+		inRetired = inRetired && !inFile && !inBook // retired-ONLY resolution
+		tally(&report.Library, inFile, inBook, inRetired)
 		if referenced {
-			tally(&report.SmartReferenced, inFile, inBook)
+			tally(&report.SmartReferenced, inFile, inBook, inRetired)
 		}
-		if inFile || inBook {
+		if inFile || inBook || inRetired {
 			continue
 		}
 		s := UnresolvedPIDSample(t) // identical field sets; conversion ignores tags
@@ -384,15 +399,18 @@ func computePIDCoverage(store PIDCoverageStore, tracks []coverageTrack, playlist
 	return report, nil
 }
 
-func tally(b *PIDCoverageBucket, inFile, inBook bool) {
+func tally(b *PIDCoverageBucket, inFile, inBook, inRetiredOnly bool) {
 	b.Tracks++
+	if inRetiredOnly {
+		b.ResolvedRetiredOnly++
+	}
 	if inFile {
 		b.ResolvedFileLevel++
 	}
 	if inBook {
 		b.ResolvedBookLevel++
 	}
-	if inFile || inBook {
+	if inFile || inBook || inRetiredOnly {
 		b.ResolvedEither++
 	}
 }

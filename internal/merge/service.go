@@ -2696,6 +2696,12 @@ func (ms *Service) planOwnFile(b *database.Book) virtualFilePlan {
 // A new row's id is minted here, so the journal can name it before it exists.
 func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtualFilePlan {
 	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
+	if existing != nil && existing.Retired {
+		// A retired version is not a file of the book it is keyed under, and the
+		// move below would refuse it (a retired row is only moved by the retire
+		// operations). The path stays shared with it; this book gets its own row.
+		existing = nil
+	}
 	if existing != nil {
 		if existing.BookID == targetBookID {
 			return virtualFilePlan{attached: true}
