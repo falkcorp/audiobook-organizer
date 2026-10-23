@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_journal_clock_test.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 7e2b94d1-35c8-4a60-9f17-d08a6b3c5e29
 // last-edited: 2026-10-23
 
@@ -558,6 +558,62 @@ func TestJournalClock_CloseSettlesTheCeilingToTheHighWaterMark(t *testing.T) {
 	}
 	if v, _ := persistedClock(t, re); v != row.CreatedSeq {
 		t.Fatalf("persisted %d after a clean close, want %d", v, row.CreatedSeq)
+	}
+}
+
+// Close while a writer sits between its stamp and its commit: the ceiling the
+// close settles to is the high-water mark, which includes the writer's
+// sequence, so whether that row went on to commit or not, a reopened store
+// stamps past it.
+func TestJournalClock_CloseWithAWriterBetweenStampAndCommitStampsPastItAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	p := openOnDisk(t, dir)
+	p.closeDrainTimeout = 100 * time.Millisecond
+	p.SetJournalWallClock((&steppingClock{t: time.Unix(1_800_000_000, 0)}).now)
+	before := listRow("op0", "z", "S", "collection:L")
+	if err := p.CreateOperationChange(before); err != nil {
+		t.Fatal(err)
+	}
+	stamped, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	journalAfterStamp = func() error {
+		once.Do(func() { close(stamped) })
+		<-release
+		return nil
+	}
+	defer func() { journalAfterStamp = nil }()
+	inflight := listRow("op1", "a", "S", "collection:L")
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- p.CreateOperationChange(inflight) }()
+	<-stamped
+	inflightSeq := inflight.CreatedSeq // set before the hook ran
+	if inflightSeq <= before.CreatedSeq {
+		t.Fatalf("the in-flight row's sequence %d is not past the earlier row's %d", inflightSeq, before.CreatedSeq)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- p.Close() }()
+	time.Sleep(50 * time.Millisecond) // let Close reach and pass the settle
+	close(release)
+	writeErr := <-writerDone // the row may commit or be refused by the closing store
+	if err := <-closeDone; err != nil {
+		t.Logf("close returned %v (the writer's outcome was %v)", err, writeErr)
+	}
+	journalAfterStamp = nil
+
+	re := openOnDisk(t, dir)
+	defer re.Close()
+	if got := re.journalClock.high(); got < inflightSeq {
+		t.Fatalf("the reopened clock starts at %d, below the in-flight sequence %d", got, inflightSeq)
+	}
+	_, next, err := re.stampJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next <= inflightSeq {
+		t.Fatalf("the first stamp after the reopen is %d, not past the in-flight sequence %d (the write's outcome: %v)", next, inflightSeq, writeErr)
+	}
+	if rows, err := re.GetOperationChanges("op1"); err == nil && len(rows) == 1 && rows[0].CreatedSeq != inflightSeq {
+		t.Fatalf("the committed row carries %d, want %d", rows[0].CreatedSeq, inflightSeq)
 	}
 }
 
