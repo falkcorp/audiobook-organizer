@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e2f7a1c4-6b90-4d38-8a5e-1c3f9d2b7e60
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 //
 // READ-ONLY book_file iTunes-PID integrity census. A PID is minted unique per
 // book_file (TrackProvisioner.Provision → GeneratePIDHex → crypto/rand), so the
