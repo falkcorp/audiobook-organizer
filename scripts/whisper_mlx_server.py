@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.6.0
+# version: 1.7.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-10-23
 #
@@ -253,6 +253,8 @@ EXTRACT_WORKERS = max(1, int(os.environ.get("WHISPER_EXTRACT_WORKERS", "4")))
 #   ffmpeg_timeout  ffmpeg exceeded the timeout: NOT a verdict (NFS stall), retryable
 #   bad_request     malformed job (bad seconds, missing path)
 #   whisper_error   inference raised
+#   container_rejected  ffmpeg refused the container (not on FORMAT_WHITELIST): a
+#                   policy of this worker, not a verdict about the file; non-durable
 #   worker_misconfigured  this worker cannot do the job at all (ffmpeg not on
 #                   PATH): a fault of the worker, never a verdict about a book;
 #                   the Go side defers the book and writes nothing
@@ -263,13 +265,15 @@ ERR_FFMPEG_TIMEOUT = "ffmpeg_timeout"
 ERR_BAD_REQUEST = "bad_request"
 ERR_WHISPER = "whisper_error"
 ERR_WORKER_MISCONFIGURED = "worker_misconfigured"
+ERR_CONTAINER_REJECTED = "container_rejected"
 
 # Demuxers ffmpeg may use on a library file. An allow-list, not a deny-list: the
 # share is writable by anyone who can drop a file in it, and a planted .m3u8 /
 # .sdp / .concat "audio file" would otherwise make ffmpeg's playlist demuxers
 # open arbitrary paths on this Mac. Names are ffmpeg demuxer names, covering
 # every container in intro_transcribe.go's transcribableExtSet (.wma is asf).
-FORMAT_WHITELIST = "mov,mp4,m4a,3gp,3g2,mj2,mp3,flac,ogg,wav,aac,matroska,webm,asf,opus"
+# There is no separate "opus" demuxer: Ogg Opus is read by "ogg".
+FORMAT_WHITELIST = "mov,mp4,m4a,3gp,3g2,mj2,mp3,flac,ogg,wav,aac,matroska,webm,asf"
 
 # Substrings of ffmpeg stderr that mean the READ failed (a dropped or stalling
 # NFS mount), not that the file cannot be decoded. Matched case-insensitively.
@@ -282,6 +286,14 @@ IO_FAULT_MARKERS = (
     "no such device",
     "transport endpoint",
 )
+
+# ffmpeg's text when -format_whitelist refuses the input's container.
+WHITELIST_REJECTION_MARKER = "not on whitelist"
+
+# WHISPER_PATH_REQUIRE_MOUNT=0 turns off the "mapped root must be a mount point"
+# check in _root_readable (tests, or a map that deliberately points at a plain
+# directory). Read live, default on.
+REQUIRE_MOUNT_ENV = "WHISPER_PATH_REQUIRE_MOUNT"
 
 # Every argument that changes the extracted WAV. Hashed into /health's
 # extract_fingerprint, which the Go client folds into path-job journal keys
@@ -358,7 +370,15 @@ def _root_readable(root: str) -> bool:
     lost NFS mount leaves the mountpoint directory behind, so isdir stays true
     while every read fails. scandir stopping at the first entry, not listdir:
     the root holds the whole library, and building that list on every /health
-    poll is wasted work on a mount that is already slow."""
+    poll is wasted work on a mount that is already slow.
+
+    The root must also still be a MOUNT POINT. A soft, read-only NFS mount that
+    stays unresponsive past its deadtimeout is forcibly unmounted (man
+    mount_nfs), which leaves the empty mountpoint directory behind: scandir on
+    it succeeds, and every job would then report not_found. ismount is False
+    there, so the root is correctly reported unreadable."""
+    if os.environ.get(REQUIRE_MOUNT_ENV, "1") != "0" and not os.path.ismount(root):
+        return False
     try:
         with os.scandir(root) as entries:
             next(entries, None)
@@ -435,6 +455,7 @@ def _raise_ffmpeg_failure(src: str, stderr: bytes) -> None:
 
       the mapped root is no longer listable, or the file is gone -> path_unmapped
       stderr names an I/O fault or timeout                       -> ffmpeg_timeout
+      ffmpeg refused the container (format whitelist)            -> container_rejected
       otherwise                                                  -> ffmpeg_error
     """
     root = _mapped_root_of(src)
@@ -445,6 +466,11 @@ def _raise_ffmpeg_failure(src: str, stderr: bytes) -> None:
     text = stderr.decode("utf-8", "replace").lower()
     if any(marker in text for marker in IO_FAULT_MARKERS):
         raise PathJobError(ERR_FFMPEG_TIMEOUT, f"read fault during decode: {_ffmpeg_tail(stderr)}")
+    if WHITELIST_REJECTION_MARKER in text:
+        raise PathJobError(
+            ERR_CONTAINER_REJECTED,
+            "container is not on this worker's format whitelist (renamed or unusual file)",
+        )
     raise PathJobError(ERR_FFMPEG, _ffmpeg_tail(stderr))
 
 

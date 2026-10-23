@@ -15,4 +15,4 @@ no status, when no endpoint qualifies or a mount is lost. Worker errors map to
 `ffmpeg_error`, `source_file_missing` (only when the server cannot stat the file
 either), a new non-durable `path_unmapped` status with its own
 `stats:transcribe` counter, or the retryable `whisper_error`. See
-`docs/whisper-remote-extract.md` for the mount and `WHISPER_PATH_MAP` setup.
+`docs/whisper-remote-extract.md` for the mount and `WHISPER_PATH_MAP` setup. A mapped root only counts as readable while it is still a mount point (a soft read-only NFS mount that stays dead is forcibly unmounted, leaving an empty directory), a silence retry that returns a real per-book verdict is classified like any worker error instead of being deferred, and a container refused by the worker's ffmpeg format whitelist is the retryable `container_rejected`, never the durable `ffmpeg_error`.

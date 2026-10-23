@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.6.0
+# version: 1.7.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-10-23
 #
@@ -66,6 +66,9 @@ def srv(monkeypatch):
     upload went to which result.
     """
     mod = _load_module()
+    # The fixtures map plain tmp dirs, which are not mount points; the mount
+    # check has its own tests that switch it back on.
+    monkeypatch.setenv("WHISPER_PATH_REQUIRE_MOUNT", "0")
 
     def fake(path: str) -> str:
         return f"text-for-{pathlib.Path(path).stat().st_size}-bytes"
@@ -644,6 +647,91 @@ def test_worker_misconfigured_reaches_the_client_as_a_prefixed_error(pathsrv, mo
         "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("worker_misconfigured:")
+
+
+# A soft, read-only mount that stays dead past deadtimeout is forcibly
+# unmounted, leaving an EMPTY mountpoint directory. It lists fine, so only the
+# mount-point check can tell it from a healthy share.
+def test_an_unmounted_empty_mountpoint_is_not_a_readable_root(srv, monkeypatch, tmp_path):
+    mod, _ = srv
+    monkeypatch.setenv("WHISPER_PATH_REQUIRE_MOUNT", "1")
+    mountpoint = tmp_path / "bigdata"
+    mountpoint.mkdir()
+    assert mod._root_readable(str(mountpoint)) is False  # plain dir: not a mount
+    monkeypatch.setattr(mod.os.path, "ismount", lambda p: True)
+    assert mod._root_readable(str(mountpoint)) is True  # the same dir, as a mount
+
+
+def test_a_forcibly_unmounted_root_fails_closed_per_job_and_in_health(srv, monkeypatch, tmp_path):
+    mod, client = srv
+    monkeypatch.setenv("WHISPER_PATH_REQUIRE_MOUNT", "1")
+    share = tmp_path / "share"
+    share.mkdir()  # empty leftover directory, not a mount
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    body = client.get("/health").json()
+    assert body["path_roots"] == [{"prefix": "/mnt/bigdata", "readable": False}]
+    res = client.post(
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
+    ).json()["results"]["k"]
+    assert res["error"].startswith("path_unmapped:")
+
+
+def test_the_mount_check_defaults_on(srv, monkeypatch, tmp_path):
+    mod, _ = srv
+    monkeypatch.delenv("WHISPER_PATH_REQUIRE_MOUNT", raising=False)
+    assert mod._root_readable(str(tmp_path)) is False
+
+
+def test_ffmpeg_whitelist_rejection_is_container_rejected_not_a_verdict(extract_env, monkeypatch):
+    mod, _, src = extract_env
+    _fake_run(
+        monkeypatch,
+        mod,
+        b"[in#0] Format not on whitelist 'mov,mp4'\n[in#0] Error opening input: Invalid argument\n",
+    )
+    code, _ = _extract_code(mod, src)
+    assert code == mod.ERR_CONTAINER_REJECTED
+
+
+def test_format_whitelist_names_only_real_demuxers(srv):
+    mod, _ = srv
+    assert "opus" not in mod.FORMAT_WHITELIST.split(",")  # Ogg Opus is read by "ogg"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed on this host")
+def test_real_ffmpeg_renamed_aiff_is_container_rejected(srv, tmp_path, monkeypatch):
+    """Real ffmpeg, real whitelist: an AIFF renamed .m4b is refused by the
+    whitelist and reported as container_rejected (non-durable on the Go side),
+    where a corrupt .m4b is still the durable ffmpeg_error."""
+    mod, _ = srv
+    share = tmp_path / "share"
+    share.mkdir()
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=2",
+            "-f",
+            "aiff",
+            str(share / "renamed.m4b"),
+        ],
+        check=True,
+    )
+    (share / "corrupt.m4b").write_bytes(b"not audio at all")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    for name, want in (
+        ("renamed.m4b", mod.ERR_CONTAINER_REJECTED),
+        ("corrupt.m4b", mod.ERR_FFMPEG),
+    ):
+        with pytest.raises(mod.PathJobError) as ei:
+            mod._extract_clip(str(share / name), 5)
+        assert ei.value.code == want, name
 
 
 # ── /health liveness with a hung mount ───────────────────────────────────────
