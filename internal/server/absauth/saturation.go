@@ -1,5 +1,5 @@
 // file: internal/server/absauth/saturation.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: f4881432-1772-4d8d-a653-33fde6815d7a
 // last-edited: 2026-10-22
 
@@ -32,8 +32,9 @@ const (
 
 // RetryAfterSeconds is the Retry-After value (seconds) every handler-level login
 // 429 carries (the saturated-admission refusals made in the ceiling middleware
-// compute their own wait): the failure windows the budgets refill over are measured in minutes,
-// so a shorter hint would only invite a client to hammer a refusal.
+// compute their own wait): the failure windows the budgets refill over are
+// measured in minutes, so a shorter hint would only invite a client to hammer a
+// refusal.
 const RetryAfterSeconds = "60"
 
 // SetRetryAfter adds the Retry-After header every handler-level 429 sends, so
