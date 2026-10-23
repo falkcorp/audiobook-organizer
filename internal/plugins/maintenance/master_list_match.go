@@ -55,6 +55,7 @@ const (
 // ...); these are the matcher's.
 const (
 	mlFlagViaTrashed     = "via_trashed"
+	mlFlagIDConflict     = "identifier_conflict"
 	mlFlagTrashedOnly    = "trashed_only"
 	mlFlagRuntime        = "runtime_mismatch"
 	mlFlagSeries         = "series_mismatch"
@@ -317,7 +318,8 @@ func (m *mlMatcher) classify(row masterlist.Row) (mlOutcome, error) {
 	c := &mlCall{m: m, row: row, listSec: float64(row.RuntimeMin) * 60, durations: map[string]float64{}}
 	var trashedOnly []string
 
-	for _, tier := range []string{mlTierASIN, mlTierISBN, mlTierSource} {
+	idTiers := []string{mlTierASIN, mlTierISBN, mlTierSource}
+	for ti, tier := range idTiers {
 		h, err := c.hits(tier)
 		if err != nil {
 			return mlOutcome{}, err
@@ -338,9 +340,42 @@ func (m *mlMatcher) classify(row masterlist.Row) (mlOutcome, error) {
 		if len(raw) == 0 {
 			continue
 		}
-		return c.resolveID(tier, h.note, raw, viaTrashed, shown)
+		o, err := c.resolveID(tier, h.note, raw, viaTrashed, shown)
+		if err != nil || o.target == "" {
+			return o, err
+		}
+		return o, c.checkAgreement(&o, idTiers[ti+1:])
 	}
 	return c.byTitle(trashedOnly)
+}
+
+// checkAgreement holds an identifier match for review when a LATER identifier
+// of the same row names a different live book: the ASIN says one book and the
+// ISBN another, so one of the list's identifiers (or the library's) is wrong.
+// Design: a sure match is "the same ASIN or ISBN as one book, and nothing
+// disagrees".
+func (c *mlCall) checkAgreement(o *mlOutcome, later []string) error {
+	for _, tier := range later {
+		h, err := c.hits(tier)
+		if err != nil {
+			return err
+		}
+		if len(h.live) == 0 {
+			continue
+		}
+		other := c.m.lib.targets(h.live)
+		if len(other) == 0 || slices.Contains(other, o.target) {
+			continue
+		}
+		why := fmt.Sprintf("the row's %s (%s) names a different book than the one matched by %s: %s",
+			strings.ReplaceAll(tier, "_", " "), h.note, strings.ReplaceAll(o.tier, "_", " "), strings.Join(other, ", "))
+		o.flag(mlFlagIDConflict)
+		o.evidence = append(o.evidence, why)
+		if o.class == mlMatchedHigh {
+			o.class, o.reason = mlMatchedReview, why
+		}
+	}
+	return nil
 }
 
 // resolveID turns an identifier tier's live hits into one outcome.
