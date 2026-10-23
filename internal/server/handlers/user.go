@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-23
 
@@ -121,7 +121,10 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 		safe = append(safe, gin.H{
 			"id": u.ID, "username": u.Username, "email": u.Email,
 			"roles": u.Roles, "status": u.Status,
-			"created_at": u.CreatedAt, "updated_at": u.UpdatedAt,
+			// Set once an admin merged the account into another: the Users page
+			// then offers no reactivate and shows where the account went.
+			"merged_into_user_id": u.MergedIntoUserID,
+			"created_at":          u.CreatedAt, "updated_at": u.UpdatedAt,
 		})
 	}
 	httputil.RespondWithOK(c, gin.H{"users": safe, "count": len(safe)})
