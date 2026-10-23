@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.121.3
+// version: 2.122.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -780,11 +780,20 @@ type BookVersion struct {
 	// CreatedAt. Rows trashed before this field existed decode as nil; the
 	// cleanup stamps them on first sight instead of purging them. Maintained
 	// by PebbleStore.UpdateBookVersion -- see the comment there.
-	TrashedAt    *time.Time `json:"trashed_at,omitempty"`
-	MetadataJSON string     `json:"metadata_json,omitempty"` // source-specific catch-all
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	Version      int        `json:"version"`
+	TrashedAt *time.Time `json:"trashed_at,omitempty"`
+	// RetiredFromBookID, RetireOpID and RetiredAt are set only on a version of
+	// Status BookVersionStatusRetired: the book whose files this version holds
+	// (its former owner, now a retired shell), the operation that retired them,
+	// and when. CreateBookVersion indexes RetiredFromBookID
+	// (idx:bv:from:<book id>) so GetRetiredVersionsFromBook answers "what was
+	// retired out of this book" without scanning every version.
+	RetiredFromBookID string     `json:"retired_from_book_id,omitempty"`
+	RetireOpID        string     `json:"retire_op_id,omitempty"`
+	RetiredAt         *time.Time `json:"retired_at,omitempty"`
+	MetadataJSON      string     `json:"metadata_json,omitempty"` // source-specific catch-all
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	Version           int        `json:"version"`
 }
 
 // BookVersionStatus values. See spec 3.1 for the full state
@@ -800,6 +809,13 @@ const (
 	BookVersionStatusTrash                = "trash"
 	BookVersionStatusInactivePurged       = "inactive_purged"
 	BookVersionStatusBlockedForRedownload = "blocked_for_redownload"
+	// BookVersionStatusRetired marks a version that holds the retired book_file
+	// rows of a book that was retired into the version's own book (see
+	// RetireBookFiles). It is NOT a state a user moves a version to, and it is
+	// excluded from every lifecycle that acts on versions: it is never
+	// auto-promoted, never trashed, never purged (purging deletes the files),
+	// and it leaves this status only through UnretireBookFiles.
+	BookVersionStatusRetired = "retired"
 )
 
 // Role is a named bundle of permissions for the multi-user model
@@ -953,7 +969,21 @@ type BookFile struct {
 	// library centralization (spec 3.1) is rolled out. NULL until
 	// migration runs; after migration, every file belongs to exactly
 	// one version. Cascaded delete with book_versions.
-	VersionID          string `json:"version_id,omitempty"`
+	VersionID string `json:"version_id,omitempty"`
+	// Retired marks a row that was once a live file of its book and now
+	// survives only as a retired book version held by another book (see
+	// BookVersionStatusRetired and RetireBookFiles). A retired row is NOT a file
+	// of the book it is keyed under: every default book_file read (GetBookFiles,
+	// the Core and visitor variants, the counts and duplicate-hash stats) skips
+	// it, so the holder's track list, runtime, size and ABS export never see it.
+	// The retired-aware readers (GetBookFilesIncludingRetired,
+	// GetRetiredBookFiles, GetAllBookFilesCoreIncludingRetired) return it.
+	//
+	// omitzero, never omitempty, for the same v1/v2 reason as Scan: a live row
+	// serializes byte-identically to a row written before the field existed.
+	// Only RetireBookFiles sets it and only UnretireBookFiles clears it; every
+	// other write path preserves it (bookFileFieldClasses, bfPreserveAlways).
+	Retired            bool   `json:"retired,omitzero"`
 	FilePath           string `json:"file_path"`
 	OriginalFilename   string `json:"original_filename,omitempty"`
 	ITunesPath         string `json:"itunes_path,omitempty"`

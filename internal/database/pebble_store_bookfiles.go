@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.45.1
+// version: 1.46.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-14
+// last-edited: 2026-10-23
 
 package database
 
@@ -56,7 +56,13 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *GatedBatch, f *BookF
 
 	if f.ITunesPersistentID != "" {
 		pidKey := []byte(fmt.Sprintf("book_file_pid:%s", f.ITunesPersistentID))
-		if err := batch.Delete(pidKey, nil); err != nil {
+		if f.Retired {
+			// A retired row must never delete the key of the live row that
+			// took over its PID: delete only an entry that is its own.
+			if err := s.deleteSingleOwnerIndexIfOwned(batch, pidKey, f); err != nil {
+				return err
+			}
+		} else if err := batch.Delete(pidKey, nil); err != nil {
 			return err
 		}
 	}
@@ -93,7 +99,11 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *GatedBatch, f *BookF
 		f.AcoustIDSeg4, f.AcoustIDSeg5, f.AcoustIDSeg6} {
 		if seg != "" {
 			acoustKey := []byte(fmt.Sprintf("book_file_acoustid:%s", seg))
-			if err := batch.Delete(acoustKey, nil); err != nil {
+			if f.Retired {
+				if err := s.deleteSingleOwnerIndexIfOwned(batch, acoustKey, f); err != nil {
+					return err
+				}
+			} else if err := batch.Delete(acoustKey, nil); err != nil {
 				return err
 			}
 		}
@@ -287,6 +297,13 @@ func (s *PebbleStore) stagePIDTransfer(batch *GatedBatch, file *BookFile) (*Book
 	if prior == nil || prior.ID == file.ID {
 		return nil, nil // unowned, or already owned by this same row
 	}
+	if prior.Retired {
+		// A retired row holds the PID key only because no live row carried the
+		// PID (RetireBookFiles hands the key to a live row when there is one).
+		// The row taking it now is live: it simply claims the key, and the
+		// retired row is left exactly as it was, PID field included.
+		return nil, nil
+	}
 
 	// Drop the prior owner's indexes (book_file_pid:<PID> among them) before its
 	// row is rewritten, exactly as UpdateBookFile does.
@@ -335,6 +352,9 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 }
 
 func (s *PebbleStore) createBookFileAttempt(file *BookFile) error {
+	if err := refuseRetiredInsert(file); err != nil {
+		return err
+	}
 	// CONS-18: repair millisecond-valued durations at the write chokepoint so no
 	// ingest path can re-create the ms/seconds corruption (CONS-16).
 	normalizeBookFileDuration(file)
@@ -491,6 +511,10 @@ func (s *PebbleStore) batchCreateBookFilesAttempt(files []*BookFile) (*stagedBoo
 	for _, file := range files {
 		if file == nil {
 			continue
+		}
+		if err := refuseRetiredInsert(file); err != nil {
+			batch.Close()
+			return nil, err
 		}
 
 		// CONS-18: repair millisecond-valued durations at the write chokepoint, as
@@ -850,7 +874,7 @@ func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, mergeStore
 		return false, err
 	}
 
-	if err := writeBookFileSecondaryIndexes(batch, file); err != nil {
+	if err := s.writeBookFileSecondaryIndexesFor(batch, file); err != nil {
 		batch.Close()
 		return false, err
 	}
@@ -871,15 +895,54 @@ func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, mergeStore
 	return recomputeAggregates || old.Duration != file.Duration || old.FileSize != file.FileSize || old.BookID != file.BookID, durErr
 }
 
-// GetBookFiles returns all BookFile records for the given bookID by iterating
-// the prefix book_file:<bookID>:.
+// GetBookFiles returns the BookFile records of the given bookID by iterating
+// the prefix book_file:<bookID>:, EXCLUDING retired rows (BookFile.Retired):
+// a retired row is keyed under its holder but is not a file of the holder.
+// GetBookFilesIncludingRetired and GetRetiredBookFiles are the readers that
+// see them.
 func (s *PebbleStore) GetBookFiles(bookID string) ([]BookFile, error) {
+	return s.bookFilesForBook(bookID, bookFilesLive)
+}
+
+// bookFileRetiredFilter selects which side of the Retired flag a book_file
+// read returns.
+type bookFileRetiredFilter uint8
+
+const (
+	// bookFilesLive is every row that is not retired: what GetBookFiles has
+	// always meant.
+	bookFilesLive bookFileRetiredFilter = iota
+	// bookFilesAll is every row under the key prefix, retired or not.
+	bookFilesAll
+	// bookFilesRetiredOnly is the retired rows only.
+	bookFilesRetiredOnly
+)
+
+// keeps reports whether a row with the given Retired flag passes the filter.
+func (f bookFileRetiredFilter) keeps(retired bool) bool {
+	switch f {
+	case bookFilesAll:
+		return true
+	case bookFilesRetiredOnly:
+		return retired
+	default:
+		return !retired
+	}
+}
+
+// bookFilesForBook is the one body of GetBookFiles,
+// GetBookFilesIncludingRetired and GetRetiredBookFiles: the same
+// book_file:<bookID>: range and the same disc, track, file_path order.
+func (s *PebbleStore) bookFilesForBook(bookID string, filter bookFileRetiredFilter) ([]BookFile, error) {
 	prefix := []byte(fmt.Sprintf("book_file:%s:", bookID))
 	var files []BookFile
 	if err := forEachKeyInRange(s.db, prefix, append(append([]byte(nil), prefix...), 0xFF), func(_, value []byte) error {
 		var f BookFile
 		if err := json.Unmarshal(value, &f); err != nil {
 			return err
+		}
+		if !filter.keeps(f.Retired) {
+			return nil
 		}
 		files = append(files, f)
 		return nil
@@ -968,7 +1031,7 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 		if err != nil {
 			return err
 		}
-		if idSet[f.BookID] {
+		if idSet[f.BookID] && !f.Retired {
 			result[f.BookID] = append(result[f.BookID], f)
 		}
 		return nil
@@ -993,8 +1056,9 @@ func decodeBookFileCore(value []byte) (BookFileCore, error) {
 }
 
 // getBookFilesCoreForBook is GetBookFiles(bookID) projected to BookFileCore
-// with the narrow decode: the same book_file:<id>: range and the same
-// disc, track, file_path order, minus the fingerprint decode.
+// with the narrow decode: the same book_file:<id>: range, the same retired-row
+// exclusion and the same disc, track, file_path order, minus the fingerprint
+// decode.
 func (s *PebbleStore) getBookFilesCoreForBook(bookID string) ([]BookFileCore, error) {
 	prefix := []byte(fmt.Sprintf("book_file:%s:", bookID))
 	var files []BookFileCore
@@ -1002,6 +1066,9 @@ func (s *PebbleStore) getBookFilesCoreForBook(bookID string) ([]BookFileCore, er
 		f, err := decodeBookFileCore(value)
 		if err != nil {
 			return err
+		}
+		if f.Retired {
+			return nil
 		}
 		files = append(files, f)
 		return nil
@@ -1102,7 +1169,13 @@ func (s *PebbleStore) VisitBookFiles(fn func(*BookFile)) error {
 	return nil
 }
 
+// getAllBookFilesPebbleScan is every non-retired book_file row, read straight
+// from Pebble. getAllBookFilesPebbleScanFiltered is its body.
 func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
+	return s.getAllBookFilesPebbleScanFiltered(bookFilesLive)
+}
+
+func (s *PebbleStore) getAllBookFilesPebbleScanFiltered(filter bookFileRetiredFilter) ([]BookFile, error) {
 	var files []BookFile
 	// ';' is one past ':' in ASCII, so this is exactly the book_file: prefix.
 	if err := forEachKeyInRange(s.db, []byte("book_file:"), []byte("book_file;"), func(k, value []byte) error {
@@ -1120,6 +1193,9 @@ func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
 		var f BookFile
 		if err := json.Unmarshal(value, &f); err != nil {
 			return err
+		}
+		if !filter.keeps(f.Retired) {
+			return nil
 		}
 		files = append(files, f)
 		return nil
@@ -1308,6 +1384,11 @@ func (s *PebbleStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float6
 		if err := json.Unmarshal(iter.Value(), &f); err != nil {
 			continue
 		}
+		// A retired row is not a file of the book it is keyed under; matching
+		// it would name the holder as the owner of a print it does not carry.
+		if f.Retired {
+			continue
+		}
 		// Check all 7 fingerprint segments for a fuzzy match.
 		segs := [7]string{f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2, f.AcoustIDSeg3,
 			f.AcoustIDSeg4, f.AcoustIDSeg5, f.AcoustIDSeg6}
@@ -1465,6 +1546,9 @@ func (s *PebbleStore) deleteBookFileFrom(id string, found *BookFile) error {
 // with its secondary indexes and fingerprint-window cascade.
 func (s *PebbleStore) deleteBookFileAt(found *BookFile) error {
 	id := found.ID
+	if found.Retired {
+		return fmt.Errorf("delete book_file %s: %w", id, ErrBookFileRetired)
+	}
 	batch := s.db.NewIndexedBatch()
 
 	// Delete primary key, and tombstone the ID (bookFileGoneKey).
@@ -1507,10 +1591,19 @@ func (s *PebbleStore) deleteBookFileAt(found *BookFile) error {
 
 // DeleteBookFilesForBook removes all BookFile records for a given bookID,
 // including their secondary indexes.
+//
+// It refuses (ErrBookFileRetired, nothing deleted) a book that holds a retired
+// row: those rows are held by a retired version and are never deleted, so a
+// "delete every file of this book" that left them behind would not be that.
 func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
-	files, err := s.GetBookFiles(bookID)
+	files, err := s.bookFilesForBook(bookID, bookFilesAll)
 	if err != nil {
 		return err
+	}
+	for i := range files {
+		if files[i].Retired {
+			return fmt.Errorf("delete book_files of %s: %s: %w", bookID, files[i].ID, ErrBookFileRetired)
+		}
 	}
 	if len(files) == 0 {
 		return nil
@@ -1691,6 +1784,11 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 			continue
 		}
 
+		if found.Retired {
+			// Fail closed before any mutation, like an unresolvable id: the
+			// caller's view of this row is wrong.
+			return fmt.Errorf("DeleteBookFilesByIDs: %s: %w", id, ErrBookFileRetired)
+		}
 		resolved = append(resolved, found)
 		resolvedIDs = append(resolvedIDs, id)
 		if _, ok := bookSeen[found.BookID]; !ok {
@@ -1761,10 +1859,19 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	var existing *BookFile
 	var err error
 
+	// A retired row is never what an upsert by PID or path means: it is not a
+	// file of the book it is keyed under, and rewriting it in place would put
+	// the caller's file into the holder as another retired row. The lookup
+	// treats it as no match, so the caller's row is created live (and claims the
+	// key; see writeBookFileSecondaryIndexesFor). Matching by an explicit ID
+	// below still reaches a retired row, which keeps Retired (bfStoredOwned).
 	if file.ITunesPersistentID != "" {
 		existing, err = s.GetBookFileByPID(file.ITunesPersistentID)
 		if err != nil {
 			return err
+		}
+		if existing != nil && existing.Retired {
+			existing = nil
 		}
 	}
 
@@ -1772,6 +1879,9 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 		existing, err = s.GetBookFileByPath(file.FilePath)
 		if err != nil {
 			return err
+		}
+		if existing != nil && existing.Retired {
+			existing = nil
 		}
 	}
 
@@ -1987,6 +2097,8 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 			// row supplies content.
 			existing = mergeTarget
 		} else {
+			// A retired row is never an upsert's match by PID or path (see
+			// UpsertBookFile): the caller's row is created live instead.
 			if file.ITunesPersistentID != "" {
 				existing, lookupErr = s.GetBookFileByPID(file.ITunesPersistentID)
 			}
@@ -1994,11 +2106,17 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 				batch.Close()
 				return nil, lookupErr
 			}
+			if existing != nil && existing.Retired {
+				existing = nil
+			}
 			if existing == nil && file.FilePath != "" {
 				existing, lookupErr = s.GetBookFileByPath(file.FilePath)
 				if lookupErr != nil {
 					batch.Close()
 					return nil, lookupErr
+				}
+				if existing != nil && existing.Retired {
+					existing = nil
 				}
 			}
 
@@ -2100,6 +2218,10 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 				*mergeTarget = *file
 			}
 		} else {
+			if err := refuseRetiredInsert(file); err != nil {
+				batch.Close()
+				return nil, err
+			}
 			if file.ID == "" {
 				id, err := newULID()
 				if err != nil {
@@ -2144,7 +2266,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 			return nil, err
 		}
 
-		if err := writeBookFileSecondaryIndexes(batch, file); err != nil {
+		if err := s.writeBookFileSecondaryIndexesFor(batch, file); err != nil {
 			batch.Close()
 			return nil, err
 		}
@@ -2297,6 +2419,12 @@ func (s *PebbleStore) moveBookFilesToBookBulkAttempt(moves []BookFileMove, targe
 			if f == nil {
 				batch.Close()
 				return fmt.Errorf("file not found: %s", fid)
+			}
+			// A retired row belongs to its retired version, not to a book: only
+			// UnretireBookFiles and RehomeRetiredVersion move it.
+			if f.Retired {
+				batch.Close()
+				return fmt.Errorf("move book_file %s: %w", fid, ErrBookFileRetired)
 			}
 
 			// Delete old primary key

@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-10-14
+// last-edited: 2026-10-23
 
 package database
 
@@ -113,6 +113,9 @@ func (m *MemStore) CountFiles() (int, error) {
 	bookFileCounts := make(map[string]int)
 	for obj := fileIter.Next(); obj != nil; obj = fileIter.Next() {
 		f := obj.(*BookFile)
+		if f.Retired {
+			continue // a retired row is not a file of the book it is keyed under
+		}
 		bookFileCounts[f.BookID]++
 	}
 
@@ -284,6 +287,9 @@ func (m *MemStore) GetAllSeriesFileCounts() (map[int]int, error) {
 	}
 	for obj := fIter.Next(); obj != nil; obj = fIter.Next() {
 		bf := obj.(*BookFile)
+		if bf.Retired {
+			continue
+		}
 		if _, ok := bookToSeries[bf.BookID]; ok {
 			bookFileCounts[bf.BookID]++
 		}
@@ -335,6 +341,9 @@ func (m *MemStore) GetAllAuthorFileCounts() (map[int]int, error) {
 	}
 	for obj := fIter.Next(); obj != nil; obj = fIter.Next() {
 		bf := obj.(*BookFile)
+		if bf.Retired {
+			continue
+		}
 		if _, ok := bookToAuthor[bf.BookID]; ok {
 			bookFileCounts[bf.BookID]++
 		}
@@ -390,7 +399,7 @@ func (m *MemStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 		}
 		var paths []string
 		for fo := fIter.Next(); fo != nil; fo = fIter.Next() {
-			if bf, ok := fo.(*BookFile); ok {
+			if bf, ok := fo.(*BookFile); ok && !bf.Retired {
 				paths = append(paths, bf.FilePath)
 			}
 		}
@@ -1183,6 +1192,9 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 	}
 	for obj := fIter.Next(); obj != nil; obj = fIter.Next() {
 		bf := obj.(*BookFile)
+		if bf.Retired {
+			continue
+		}
 		if _, ok := primaryBookIDs[bf.BookID]; !ok {
 			continue
 		}
@@ -1264,7 +1276,7 @@ func (m *MemStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFi
 		}
 		for obj := iter.Next(); obj != nil; obj = iter.Next() {
 			bf, ok := obj.(*BookFile)
-			if !ok {
+			if !ok || bf.Retired {
 				continue
 			}
 			result[id] = append(result[id], bf.Core())
@@ -1273,12 +1285,22 @@ func (m *MemStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFi
 	return result, nil
 }
 
-// GetAllBookFilesCore returns the BookFileCore projection of every BookFile
-// in the memdb book_files table by iterating the primary ID index. O(N)
-// pointer walk over the in-memory table — no JSON unmarshal, no Pebble disk
-// scan. For 308K book_files this is roughly two orders of magnitude faster
-// than the Pebble full-scan fallback.
+// GetAllBookFilesCore returns the BookFileCore projection of every
+// non-retired BookFile in the memdb book_files table by iterating the primary
+// ID index. O(N) pointer walk over the in-memory table — no JSON unmarshal, no
+// Pebble disk scan. For 308K book_files this is roughly two orders of
+// magnitude faster than the Pebble full-scan fallback.
 func (m *MemStore) GetAllBookFilesCore() ([]BookFileCore, error) {
+	return m.allBookFilesCore(bookFilesLive)
+}
+
+// GetAllBookFilesCoreIncludingRetired is GetAllBookFilesCore with the retired
+// rows kept; see PebbleStore.GetAllBookFilesCoreIncludingRetired.
+func (m *MemStore) GetAllBookFilesCoreIncludingRetired() ([]BookFileCore, error) {
+	return m.allBookFilesCore(bookFilesAll)
+}
+
+func (m *MemStore) allBookFilesCore(filter bookFileRetiredFilter) ([]BookFileCore, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	iter, err := txn.Get(memTableBookFiles, memIdxID)
@@ -1288,7 +1310,7 @@ func (m *MemStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 	var files []BookFileCore
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		bf, ok := obj.(*BookFile)
-		if !ok {
+		if !ok || !filter.keeps(bf.Retired) {
 			continue
 		}
 		files = append(files, bf.Core())
@@ -1320,7 +1342,7 @@ func (m *MemStore) VisitBookFiles(fn func(*BookFile)) error {
 		return fmt.Errorf("memdb book_files scan: %w", err)
 	}
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
-		if bf, ok := obj.(*BookFile); ok {
+		if bf, ok := obj.(*BookFile); ok && !bf.Retired {
 			fn(bf)
 		}
 	}
@@ -1350,7 +1372,7 @@ func (m *MemStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error)
 		if !ok {
 			continue
 		}
-		if bf.ImportedFromDelugeAt != nil {
+		if bf.ImportedFromDelugeAt != nil || bf.Retired {
 			continue
 		}
 		out = append(out, bf.Core())
@@ -1424,6 +1446,9 @@ func (m *MemStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float64) 
 	}
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		bf := obj.(*BookFile)
+		if bf.Retired {
+			continue
+		}
 		segs := [7]string{
 			bf.AcoustIDSeg0, bf.AcoustIDSeg1, bf.AcoustIDSeg2, bf.AcoustIDSeg3,
 			bf.AcoustIDSeg4, bf.AcoustIDSeg5, bf.AcoustIDSeg6,

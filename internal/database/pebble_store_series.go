@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-23
 
 package database
 
@@ -481,7 +481,7 @@ func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
 			if err := json.Unmarshal(value, &f); err != nil {
 				return nil
 			}
-			if !f.Missing {
+			if !f.Missing && !f.Retired {
 				bookFileCounts[bookID]++
 			}
 		}

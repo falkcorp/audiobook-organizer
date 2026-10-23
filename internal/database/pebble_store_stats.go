@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-10-10
+// last-edited: 2026-10-23
 
 package database
 
@@ -62,7 +62,7 @@ func (p *PebbleStore) CountFiles() (int, error) {
 		if err := json.Unmarshal(value, &f); err != nil {
 			return nil
 		}
-		if !f.Missing {
+		if !f.Missing && !f.Retired {
 			bookActiveFiles[bookID]++
 		}
 		return nil
@@ -402,11 +402,16 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 		if _, ok := primaryBookIDs[bookID]; !ok {
 			return nil
 		}
-		bookActiveFiles[bookID]++
 		var bf BookFile
 		if err := json.Unmarshal(value, &bf); err != nil {
+			// An undecodable row still counts as a file, as it always did.
+			bookActiveFiles[bookID]++
 			return nil
 		}
+		if bf.Retired {
+			return nil
+		}
+		bookActiveFiles[bookID]++
 		if bf.GetAcoustIDSeg0() != "" {
 			bookFingerprintedFiles[bookID]++
 		}
