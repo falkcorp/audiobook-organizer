@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/user_merge_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d9e3a5f0-7b14-4c82-8a6d-2f1c0b9e4573
 // last-edited: 2026-10-23
 
