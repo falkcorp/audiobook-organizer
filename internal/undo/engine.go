@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -482,12 +482,15 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		if !ok {
 			return rowVerdict{}
 		}
-		user, _ := UserFromStateField(c.FieldName)
+		user, rc, rerr := ResolveUserStateChange(store, c)
+		if rerr != nil {
+			return rowVerdict{refusal: refuse(ReasonOldValueUnparsable, "%v", rerr)}
+		}
 		cur, err := ReadUserStateSnapshot(r, user, c.BookID)
 		if err != nil {
 			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "%v", err)}
 		}
-		_, cerr := CheckUserBookStateSet(cur, c)
+		_, cerr := CheckUserBookStateSet(cur, rc)
 		return verdictOf(cerr)
 	case ChangeTypeMetadataApply:
 		// The revert undoes the apply's history batch field by field

@@ -1,7 +1,7 @@
 // file: internal/database/user_merge_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7b9c10-4e83-4a6d-b1f5-8c0d3e92a746
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -339,5 +339,31 @@ func TestUnretireMergedUser_ListsFieldsChangedSinceInsteadOfOverwriting(t *testi
 	}
 	if back, _ := s.GetUserByID(b.ID); back.MergedIntoUserID != "" {
 		t.Error("the merge stamp must clear even when a field conflicts")
+	}
+}
+
+type fakeUserLookup map[string]*User
+
+func (f fakeUserLookup) GetUserByID(id string) (*User, error) { return f[id], nil }
+
+func TestResolveMergedUser(t *testing.T) {
+	db := fakeUserLookup{
+		"a":    {ID: "a"},
+		"b":    {ID: "b", MergedIntoUserID: "a"},
+		"c":    {ID: "c", MergedIntoUserID: "b"},
+		"loop": {ID: "loop", MergedIntoUserID: "loop"},
+		"x":    {ID: "x", MergedIntoUserID: "y"},
+		"y":    {ID: "y", MergedIntoUserID: "x"},
+	}
+	for id, want := range map[string]string{"a": "a", "b": "a", "c": "a", "loop": "loop", "gone": "gone"} {
+		if got := ResolveMergedUser(db, id); got != want {
+			t.Errorf("ResolveMergedUser(%q) = %q, want %q", id, got, want)
+		}
+	}
+	if got := ResolveMergedUser(db, "x"); got != "x" && got != "y" {
+		t.Errorf("a corrupt cycle resolved to %q, want it to stop on one of its members", got)
+	}
+	if got := ResolveMergedUser(struct{}{}, "b"); got != "b" {
+		t.Errorf("a store that cannot look users up resolved to %q, want the id unchanged", got)
 	}
 }
