@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-22-whisper-mac-side-extraction-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: b8e27838-815c-4aaf-9ca2-edeff450cc9a -->
-<!-- last-edited: 2026-10-22 -->
+<!-- last-edited: 2026-10-23 -->
 
 # Listening to book openings works again, without the server touching audio
 
@@ -26,11 +26,14 @@ to it. The server only checks that the file exists.
   not allowed to process audio, and says so in its preview.
 - It will not quietly fall back to doing the work on the server. If no Mac
   helper is set up for this, it stops and tells you why.
-- If the Mac loses its connection to the library folder, the tool pauses that
-  batch and leaves every book untouched, instead of marking books as failed. A
-  book is only marked with the new "path unmapped" note if the helper could not
-  reach a file the server can see, and that note is retried on the next run,
-  never treated as permanent.
+- If the Mac loses its connection to the library folder before a batch starts,
+  the tool pauses that batch and leaves every book in it untouched. If the
+  connection drops partway through, a book the helper could not read is marked
+  with the new "path unmapped" note (retried on the next run, never treated as
+  permanent) rather than as unreadable audio. A helper that is itself set up
+  wrongly (for example, missing its audio program) leaves the book untouched.
+  A book is never recorded as silent just because the retry that was meant to
+  check it failed.
 - The longer retries for books that start with music or silence use the Mac
   route too.
 

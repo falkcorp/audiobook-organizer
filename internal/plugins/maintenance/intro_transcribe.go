@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.36.0
+// version: 3.37.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -1315,14 +1315,36 @@ func (p *Plugin) processTranscribePage(
 	// silencedBookIDs tracks books written with the sentinel so Step 4 skips them.
 	silencedBookIDs := map[string]bool{}
 
+	// retryFailed holds the books whose silence retry did NOT come back as a
+	// successful result (batch/transport error, per-job error, no result, or
+	// the local clip could not be cut). Such a book was never shown to be
+	// silent: writing the [SILENCE] sentinel for it would make only_missing skip
+	// it forever on the strength of a mount drop or an endpoint outage. It gets
+	// no outcome this run and is counted deferred, so the next run retries it.
+	retryFailed := map[string]bool{}
+
 	// retryRound re-transcribes a set of source files (book id -> path) with a
-	// clip of the given length and returns whatever came back (nil on a batch
-	// failure; a failed retry just leaves the book silent, as it always did).
+	// clip of the given length and returns whatever came back, with the ids
+	// whose retry failed (see retryFailed) in the second result.
 	// Local mode cuts the clips with ffmpeg here; remote mode sends the paths to
 	// a worker, so a remote-mode run's retries never decode on this server either.
-	retryRound := func(name string, srcs map[string]string, seconds int) map[string]transcribe.BatchResult {
+	retryRound := func(name string, srcs map[string]string, seconds int) (map[string]transcribe.BatchResult, map[string]bool) {
+		failed := map[string]bool{}
+		failAll := func() {
+			for id := range srcs {
+				failed[id] = true
+			}
+		}
+		// collect flags every submitted id that has no usable result.
+		collect := func(res map[string]transcribe.BatchResult, sent map[string]string) {
+			for id := range sent {
+				if r, ok := res[id]; !ok || r.Error != "" {
+					failed[id] = true
+				}
+			}
+		}
 		if len(srcs) == 0 {
-			return nil
+			return nil, failed
 		}
 		if remote {
 			jobs := make(map[string]transcribe.PathJob, len(srcs))
@@ -1332,9 +1354,11 @@ func (p *Plugin) processTranscribePage(
 			res, rerr := transcribePathBatchFn(ctx, jobs, batchOpts)
 			if rerr != nil {
 				log.Warn("transcribe: "+name+" path batch failed", "jobs", len(jobs), "err", rerr)
-				return nil
+				failAll()
+				return nil, failed
 			}
-			return res
+			collect(res, srcs)
+			return res, failed
 		}
 		wavs := make(map[string]string, len(srcs))
 		for id, src := range srcs {
@@ -1344,18 +1368,22 @@ func (p *Plugin) processTranscribePage(
 				"-vn", "-ar", "16000", "-ac", "1", "-f", "wav", wav)
 			if out, ferr := cmd.CombinedOutput(); ferr != nil {
 				log.Warn("transcribe: "+name+" ffmpeg failed", "book_id", id, "err", ferr, "out", strings.TrimSpace(string(out)))
+				failed[id] = true
 			} else {
 				wavs[id] = wav
 			}
 		}
 		if len(wavs) == 0 {
-			return nil
+			return nil, failed
 		}
 		res, rerr := transcribeBatchFn(ctx, wavs, batchOpts)
 		if rerr != nil {
-			return nil
+			log.Warn("transcribe: "+name+" batch failed", "jobs", len(wavs), "err", rerr)
+			failAll()
+			return nil, failed
 		}
-		return res
+		collect(res, wavs)
+		return res, failed
 	}
 
 	if len(silentQueue) > 0 {
@@ -1364,15 +1392,23 @@ func (p *Plugin) processTranscribePage(
 		for _, sb := range silentQueue {
 			retry1Srcs[sb.book.ID] = sb.src
 		}
-		for id, res := range retryRound("retry1", retry1Srcs, remoteRetryLongSeconds) {
+		r1, r1failed := retryRound("retry1", retry1Srcs, remoteRetryLongSeconds)
+		for id, res := range r1 {
 			if res.Text != "" {
 				batchResults[id] = res
 			}
 		}
+		for id := range r1failed {
+			retryFailed[id] = true
+		}
 
-		// Collect books still silent after retry1.
+		// Collect books still silent after retry1 (a failed retry is not
+		// "still silent": it is unknown, see retryFailed).
 		var stillSilent []silentBook
 		for _, s := range silentQueue {
+			if retryFailed[s.book.ID] {
+				continue
+			}
 			if res := batchResults[s.book.ID]; res.Text == "" && res.Error == "" {
 				stillSilent = append(stillSilent, s)
 			}
@@ -1388,17 +1424,21 @@ func (p *Plugin) processTranscribePage(
 				}
 				retry2Srcs[sb.book.ID] = ref2.Path
 			}
-			for id, res := range retryRound("retry2", retry2Srcs, remoteClipSeconds) {
+			r2, r2failed := retryRound("retry2", retry2Srcs, remoteClipSeconds)
+			for id, res := range r2 {
 				if res.Text != "" {
 					batchResults[id] = res
 				}
+			}
+			for id := range r2failed {
+				retryFailed[id] = true
 			}
 
 			// Mark books that exhausted all retries with the silence sentinel.
 			sentinel := silenceSentinel
 			markedSilent := 0
 			for _, s := range stillSilent {
-				if batchResults[s.book.ID].Text != "" {
+				if batchResults[s.book.ID].Text != "" || retryFailed[s.book.ID] {
 					continue
 				}
 				// s.book was copied before ffmpeg and two whisper passes ran.
@@ -1444,6 +1484,12 @@ func (p *Plugin) processTranscribePage(
 		book := bookByID[bookID]
 		result, ok := batchResults[bookID]
 		switch {
+		case remote && ok && transcribe.PathErrorCode(result.Error) == transcribe.PathErrWorkerMisconfigured:
+			// The worker, not the book, is broken (ffmpeg missing from its
+			// PATH). Storing it as a per-book verdict is the 2026-08-31 shape:
+			// write nothing and defer, like an unreachable endpoint.
+			log.Warn("transcribe: worker misconfigured, book deferred (no status written)", "book_id", bookID, "err", result.Error)
+			accum.recordDeferred(1)
 		case !ok || result.Error != "":
 			status, detail := statusWhisperError, "no whisper result"
 			if ok {
@@ -1454,6 +1500,14 @@ func (p *Plugin) processTranscribePage(
 		case result.Text == "":
 			if silencedBookIDs[bookID] {
 				continue // handled by Step 3b; sentinel already written
+			}
+			if retryFailed[bookID] {
+				// A silence retry failed, so the book is not known to be
+				// silent: write nothing (no sentinel, no empty verdict) and
+				// leave it for the next run.
+				log.Warn("transcribe: silence retry failed, book deferred (no status written)", "book_id", bookID)
+				accum.recordDeferred(1)
+				continue
 			}
 			p.applyOutcome(store, log, &book, statusEmpty, "whisper returned empty text", "", transcribe.IntroFields{}, now, accum)
 		default:
@@ -1586,6 +1640,8 @@ func (p *Plugin) applyOutcome(
 //     durable, self-heals when the file returns). If the server CAN, the fault
 //     is the worker's mapping or mount, so path_unmapped, which is not durable
 //     and is retried next run.
+//   - worker_misconfigured never reaches this function: the caller defers the
+//     book (no status written), because the worker, not the book, is at fault.
 //   - ffmpeg_timeout, bad_request, whisper_error, or no code: not a verdict
 //     about the file (an NFS stall, a malformed request, inference trouble):
 //     whisper_error, retried next run. Burying a book as ffmpeg_error because an

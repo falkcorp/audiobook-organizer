@@ -1,7 +1,7 @@
 // file: internal/transcribe/path.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package transcribe
 
@@ -47,11 +47,14 @@ const (
 	PathErrFFmpegTimeout = "ffmpeg_timeout" // NFS stall: not a verdict, retryable
 	PathErrBadRequest    = "bad_request"    // malformed job
 	PathErrWhisper       = "whisper_error"  // inference raised
-	pathErrSeparator     = ": "
+	// PathErrWorkerMisconfigured: the worker cannot do the job at all (ffmpeg
+	// missing from its PATH). A fault of the worker, never a verdict on a book.
+	PathErrWorkerMisconfigured = "worker_misconfigured"
+	pathErrSeparator           = ": "
 )
 
 var pathErrCodes = []string{
-	PathErrUnmapped, PathErrNotFound, PathErrFFmpeg, PathErrFFmpegTimeout, PathErrBadRequest, PathErrWhisper,
+	PathErrUnmapped, PathErrNotFound, PathErrFFmpeg, PathErrFFmpegTimeout, PathErrBadRequest, PathErrWhisper, PathErrWorkerMisconfigured,
 }
 
 // PathErrorCode returns the worker error code that prefixes a path job's error
