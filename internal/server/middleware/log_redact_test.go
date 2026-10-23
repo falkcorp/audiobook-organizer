@@ -1,5 +1,5 @@
 // file: internal/server/middleware/log_redact_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 67c415d9-c181-4b1c-9481-527366cb1090
 // last-edited: 2026-10-22
 
@@ -84,6 +84,24 @@ func TestRedactingLogFormatter_RequestLogOmitsInviteToken(t *testing.T) {
 	}
 }
 
+// The access-log line is built from the request's path as parsed (URL.Path, one
+// decoding of the request line), so /invite%252F<token>/.. reaches the formatter
+// as /invite%2F<token>/.. and must still be masked.
+func TestRedactingLogFormatter_DoublyEncodedTokenBeforeADotSegment(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const tok = "access-log-doubly-encoded-token"
+	for _, target := range []string{"/invite%252F" + tok + "/..", "/invite%2F" + tok + "/..", "/x/../invite/" + tok + "/.."} {
+		var buf bytes.Buffer
+		r := gin.New()
+		r.Use(gin.LoggerWithConfig(gin.LoggerConfig{Formatter: RedactingLogFormatter, Output: &buf}))
+		r.NoRoute(func(c *gin.Context) { c.Status(http.StatusOK) })
+		r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, target, nil))
+		if line := buf.String(); strings.Contains(line, tok) || !strings.Contains(line, "[REDACTED]") {
+			t.Fatalf("request line %q: log = %s", target, line)
+		}
+	}
+}
+
 // An unmatched path (the SPA /invite/<token> page is served by NoRoute) is
 // logged through the same formatter.
 func TestRedactingLogFormatter_NoRouteInvitePage(t *testing.T) {
@@ -113,6 +131,10 @@ func TestRedactLogPath_EncodedSlashBeforeTheInviteToken(t *testing.T) {
 		"/api/v1/auth/invite%2fsome-token?token=abc": "/api/v1/auth/invite/[REDACTED]?token=REDACTED",
 		"/api/v1/users/invites%2Fsome-token/resend":  "/api/v1/users/invites/[REDACTED]/resend",
 		"/invite%2Fsome-token?x=1":                   "/invite/[REDACTED]?x=1",
+		// A dot segment after the token must not walk the route away first.
+		"/invite%2Fsome-token/..":              "/invite/[REDACTED]/[REDACTED]",
+		"/x/../invite/some-token/..?token=abc": "/[REDACTED]?token=REDACTED",
+		"/invite%252Fsome-token%252F..":        "/invite/[REDACTED]/[REDACTED]",
 	} {
 		if got := RedactLogPath(in); got != want {
 			t.Fatalf("RedactLogPath(%q) = %q, want %q", in, got, want)

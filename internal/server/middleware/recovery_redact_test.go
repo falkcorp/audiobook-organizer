@@ -1,5 +1,5 @@
 // file: internal/server/middleware/recovery_redact_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: fac23317-790b-49a1-b9f3-81b598014604
 // last-edited: 2026-10-22
 
@@ -116,6 +116,9 @@ func TestRedactingRecovery_LogsNoEncodedSlashInviteToken(t *testing.T) {
 		{"/invite%2F%2E%2F" + tok, "/invite/[REDACTED] "},
 		{"/invite/./" + tok, "/invite/[REDACTED]/[REDACTED] "},
 		{"/invite%252F" + tok, "/invite/[REDACTED] "},
+		// A dot segment AFTER the token must not clean the route away first.
+		{"/invite%2F" + tok + "/..", "/invite/[REDACTED]/[REDACTED] "},
+		{"/x/../invite/" + tok + "/..", "/[REDACTED] "},
 	} {
 		for name, panicWith := range map[string]any{"panic": "boom", "broken pipe": syscall.EPIPE} {
 			t.Run(tc.target+" "+name, func(t *testing.T) {
