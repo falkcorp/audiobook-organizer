@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_journal_clock.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: b81c4f26-7a39-4d0e-95c2-6e1f0a3d8b57
 // last-edited: 2026-10-23
 
@@ -150,13 +150,6 @@ func (c *journalClock) high() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.hw
-}
-
-// ceiling is the persisted ceiling the clock believes in.
-func (c *journalClock) ceiling() int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.reserved
 }
 
 // settle lowers the persisted ceiling to the high-water mark (a clean Close),

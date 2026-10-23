@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-15
+// last-edited: 2026-10-23
 
 package undo
 
@@ -67,6 +67,15 @@ type RevertPlan struct {
 	// older row of the same book reads the primary a newer row restores, not
 	// the one stored now (PredictedPrimary).
 	primaries map[string]*int
+	// newerMain maps the id of an older main list row of a retire (collection
+	// or playlist row) to the newest live main row of the same retire: the same
+	// operation, retired book, survivor and list. A resumed carry journals a
+	// second pair for one retire, and only the newest row speaks for it
+	// (Gate).
+	newerMain map[string]*database.OperationChange
+	// unrestored: rows whose revert was recorded as not done (Record with an
+	// error), refusals and failures alike.
+	unrestored map[string]bool
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -81,7 +90,8 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
 		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
-		refusedAuthor: map[int]bool{}, primaries: map[string]*int{}}
+		refusedAuthor: map[int]bool{}, primaries: map[string]*int{},
+		newerMain: newerMainRows(rows), unrestored: map[string]bool{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -151,6 +161,16 @@ func (p *RevertPlan) retiredRow(c *database.OperationChange) bool {
 // restored its merged-into pointer, path and ids onto a book that stayed
 // retired, and the demote revert ran against the wrong group state.
 func (p *RevertPlan) Gate(c *database.OperationChange) error {
+	if newer := p.newerMain[c.ID]; newer != nil && p.unrestored[newer.ID] {
+		// A newer record of the same retire (a resumed carry journals a second
+		// pair) was not restored. This older record was written against a
+		// different list than the one now: applied alone it would swap the
+		// survivor out of whatever slot it holds, a survivor the owner may have
+		// listed by hand since. It is left standing, and said so: the retry,
+		// once the newer record is restored, finds the book listed.
+		return &ReferentError{Reason: ReasonDependentNotReverted,
+			Detail: fmt.Sprintf("change %s (the newest record of this retire of book %s into %s) was not restored, so this older record of the same retire is left standing, not applied", newer.ID, c.BookID, c.NewValue)}
+	}
 	if from, ok := creditsFromAuthor(c); ok && p.refusedAuthor[from] {
 		return &ReferentError{Reason: ReasonDependentNotReverted,
 			Detail: fmt.Sprintf("author %d was not restored, so its credit on book %s is not either", from, c.BookID)}
@@ -183,6 +203,9 @@ func (p *RevertPlan) Gate(c *database.OperationChange) error {
 // Record notes a row's outcome: err nil is restored (ErrAlreadyRestored
 // included).
 func (p *RevertPlan) Record(c *database.OperationChange, err error) {
+	if err != nil {
+		p.unrestored[c.ID] = true
+	}
 	if err == nil {
 		p.restored[c.ID] = true
 		if before, ok := primaryRestoredBy(c); ok {
@@ -197,6 +220,40 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 	if c.ChangeType == ChangeTypeBookSoftDelete {
 		p.refusedBook[c.BookID] = true
 	}
+}
+
+// newerMainRows maps each older main list row (collection or playlist) of a
+// retire in rows to the newest live main row of the same retire (operation,
+// retired book, survivor, field), by the journal's order (latestRow). A retire
+// with one row has no entry.
+func newerMainRows(rows []*database.OperationChange) map[string]*database.OperationChange {
+	groups := map[string][]*database.OperationChange{}
+	for _, c := range rows {
+		if c.ChangeType != ChangeTypeUserContentFollow || c.Voided {
+			continue
+		}
+		if kind, _, ok := UserContentFromField(c.FieldName); !ok || (kind != UserContentCollection && kind != UserContentPlaylist) {
+			continue
+		}
+		k := retireKey(c.OperationID, c.BookID, c.NewValue) + "\x00" + c.FieldName
+		groups[k] = append(groups[k], c)
+	}
+	out := map[string]*database.OperationChange{}
+	for _, g := range groups {
+		if len(g) < 2 {
+			continue
+		}
+		var latest *database.OperationChange
+		for _, c := range g {
+			latest = latestRow(latest, c)
+		}
+		for _, c := range g {
+			if c != latest {
+				out[c.ID] = latest
+			}
+		}
+	}
+	return out
 }
 
 // NoteHandOffs takes every row of the operation, reverted or not, and notes

@@ -1,11 +1,12 @@
 // file: internal/audiobooks/revert.go
-// version: 1.89.1
+// version: 1.89.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-23
 
 package audiobooks
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -805,7 +806,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		mark = append(mark, ledger...)
 	}
 	if len(mark) > 0 {
-		if err := rs.db.MarkOperationChangesReverted(operationID, mark); err != nil {
+		if err := rs.markRevertedUnderListLocks(operationID, mark, changes); err != nil {
 			return nil, fmt.Errorf("restored %d changes but failed to mark them reverted: %w", len(restoredIDs), err)
 		}
 	}
@@ -818,6 +819,57 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		return result, fmt.Errorf("partially reverted with %d errors: %s", len(errMsgs), joinRevertErrors(errMsgs))
 	}
 	return result, nil
+}
+
+// markRevertedUnderListLocks marks ids (rows of operation operationID, among
+// changes) reverted. The rows of a collection or playlist (a main row and its
+// survivor-side marker) are stamped under that list's lock (undo.LockList), one
+// list at a time in a fixed order: the journal clock's ordering of a list's rows
+// rests on every writer that stamps them holding the list lock
+// (pebble_store_journal_clock.go, SEQUENCE). Most of these rows are already
+// stamped by the list write that restored them (revertListFollow, in the same
+// batch), and the store skips a row that is stamped; this covers the ones that
+// were not (a row with no standing marker, a marker stamped here). The other
+// rows go last, with the plan record, so a failure on a list leaves the
+// operation not fully reverted.
+func (rs *RevertService) markRevertedUnderListLocks(operationID string, ids []string, changes []*database.OperationChange) error {
+	byID := make(map[string]*database.OperationChange, len(changes))
+	for _, c := range changes {
+		byID[c.ID] = c
+	}
+	type listRef struct{ kind, id string }
+	lists := map[listRef][]string{}
+	var rest []string
+	for _, id := range ids {
+		if c := byID[id]; c != nil {
+			if kind, listID, ok := undo.ListOf(c); ok {
+				ref := listRef{kind, listID}
+				lists[ref] = append(lists[ref], id)
+				continue
+			}
+		}
+		rest = append(rest, id)
+	}
+	refs := make([]listRef, 0, len(lists))
+	for ref := range lists {
+		refs = append(refs, ref)
+	}
+	slices.SortFunc(refs, func(a, b listRef) int {
+		return cmp.Or(cmp.Compare(a.kind, b.kind), cmp.Compare(a.id, b.id))
+	})
+	for _, ref := range refs {
+		err := func() error {
+			defer undo.LockList(ref.kind, ref.id)()
+			return rs.db.MarkOperationChangesReverted(operationID, lists[ref])
+		}()
+		if err != nil {
+			return err
+		}
+	}
+	if len(rest) == 0 {
+		return nil
+	}
+	return rs.db.MarkOperationChangesReverted(operationID, rest)
 }
 
 // revertErrorsShown is how many refusals a revert error spells out.
