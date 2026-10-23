@@ -1,5 +1,5 @@
 // file: internal/transcribe/path.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
 // last-edited: 2026-10-22
 
@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -23,7 +22,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var pathLog = logger.New("transcribe-path")
 
 // PathJob is one clip the WORKER extracts: the first Seconds of the audio file
 // at Path, a path on THIS server. The worker maps it through its own
@@ -289,8 +291,8 @@ func transcribePathChunks(ctx context.Context, remoteURL string, limit int, jobs
 		batchResults, err := sendPathBatch(ctx, client, remoteURL, chunk)
 		release()
 		if err != nil {
-			slog.Warn("transcribe: path chunk failed, discarding completed work from this endpoint",
-				"url", remoteURL, "completed", done, "total", total, "chunk_start", start)
+			pathLog.Warn("path chunk failed, discarding completed work from this endpoint: url=%s completed=%d total=%d chunk_start=%d",
+				remoteURL, done, total, start)
 			return nil, fmt.Errorf("transcribe-path-batch chunk %d-%d: %w", start, end, err)
 		}
 		ej.completePath(batchResults, sigs)

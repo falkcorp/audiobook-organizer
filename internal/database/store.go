@@ -393,7 +393,7 @@ type Book struct {
 	// TranscribeStatus records the outcome of the most recent transcription
 	// ATTEMPT for this book, written per-book by maintenance.transcribe-book-intros.
 	// One of: "ok", "source_file_missing", "no_audio", "ffmpeg_error",
-	// "whisper_error", "empty". This is the queryable drill-down field — count
+	// "whisper_error", "path_unmapped", "empty". This is the queryable drill-down field — count
 	// books by status to see exactly why transcription is/isn't producing data
 	// (e.g. how many books have stale FilePaths after an organize move).
 	TranscribeStatus *string `json:"transcribe_status,omitempty"`
@@ -1129,8 +1129,8 @@ type BookFile struct {
 	IntroTranscribedAt *time.Time `json:"intro_transcribed_at,omitempty"`
 	// TranscribeStatus records the outcome of the most recent transcription
 	// ATTEMPT for this file. One of: "ok", "source_file_missing", "no_audio",
-	// "ffmpeg_error", "whisper_error", "empty". This is the queryable drill-down
-	// field — count files by status to see exactly why transcription is or isn't
+	// "ffmpeg_error", "whisper_error", "path_unmapped", "empty". This is the
+	// queryable drill-down field — count files by status to see exactly why transcription is or isn't
 	// producing data.
 	TranscribeStatus *string `json:"transcribe_status,omitempty"`
 	// TranscribeError holds a short human-readable detail for a non-ok status —

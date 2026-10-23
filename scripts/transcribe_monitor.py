@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/transcribe_monitor.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 2f7c4a91-8b03-4d6e-9a52-1c6e8f0b3d47
-# last-edited: 2026-10-18
+# last-edited: 2026-10-22
 """Transcription progress monitor + alerter.
 
 Polls the audiobook-organizer transcribe-stats aggregate
@@ -267,6 +267,7 @@ def summarize(stats):
         f"attempted={s.get('attempted', 0)} ok={s.get('ok', 0)} "
         f"src_missing={s.get('source_file_missing', 0)} "
         f"ffmpeg_err={s.get('ffmpeg_error', 0)} whisper_err={s.get('whisper_error', 0)} "
+        f"path_unmapped={s.get('path_unmapped', 0)} "
         f"no_audio={s.get('no_audio', 0)} empty={s.get('empty', 0)} "
         f"skipped={s.get('skipped_existing', 0)} cache_hits={s.get('cache_hits', 0)} "
         f"done={s.get('done', False)} total_books={s.get('total_books', 0)}"
@@ -285,6 +286,7 @@ def progress_key(stats):
             "source_file_missing",
             "ffmpeg_error",
             "whisper_error",
+            "path_unmapped",
             "no_audio",
             "empty",
             "skipped_existing",
