@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user_merge.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e1c7a93-2b48-4d06-8f3a-c91d07e4b256
 // last-edited: 2026-10-23
 
@@ -46,10 +46,10 @@ func (h *UserHandler) SetUserMerge(svc UserMergeService, enq UserMergeEnqueuer, 
 
 // mergeParams is the maintenance.user-merge parameter shape (the JSON names of
 // the plugin's userMergeParams; user_merge_test.go pins them against a real
-// operation definition). dry_run is always sent so a live run never depends on
-// the omitted-means-preview default.
+// operation definition). dry_run is a *bool and always set (enqueueMerge), so a
+// live run never depends on the omitted-means-preview default.
 type mergeParams struct {
-	DryRun                   bool   `json:"dry_run"`
+	DryRun                   *bool  `json:"dry_run"`
 	Action                   string `json:"action"`
 	SurvivorID               string `json:"survivor_id,omitempty"`
 	AbsorbedID               string `json:"absorbed_id,omitempty"`
@@ -75,19 +75,50 @@ func (h *UserHandler) mergeActor(c *gin.Context) (id string, ok bool) {
 	return actor.ID, true
 }
 
+// accountID resolves a user id taken from the URL to the id of the stored
+// account, answering 404 when there is none. The merge services only ever see
+// the stored id, never the request's text: a path parameter is request input
+// and is not passed on as a key or a path fragment.
+func (h *UserHandler) accountID(c *gin.Context, raw string) (string, bool) {
+	u, err := h.store.GetUserByID(raw)
+	if err != nil {
+		httputil.InternalError(c, "read user", err)
+		return "", false
+	}
+	if u == nil {
+		httputil.RespondWithNotFound(c, "user", "")
+		return "", false
+	}
+	return u.ID, true
+}
+
 // UserFootprint handles GET /api/v1/users/:id/footprint: the account's sign-ins
 // (masked) and how much data hangs off it. Read-only.
 func (h *UserHandler) UserFootprint(c *gin.Context) {
 	if _, ok := h.mergeActor(c); !ok {
 		return
 	}
-	id := c.Param("id")
+	id, ok := h.accountID(c, c.Param("id"))
+	if !ok {
+		return
+	}
 	fp, err := h.merge.Footprint(id)
 	if err != nil {
 		h.mergeError(c, "user footprint", err)
 		return
 	}
 	httputil.RespondWithOK(c, fp)
+}
+
+// mergeAccounts resolves the :target (survivor) and :id (absorbed) accounts.
+func (h *UserHandler) mergeAccounts(c *gin.Context) (survivorID, absorbedID string, ok bool) {
+	if survivorID, ok = h.accountID(c, c.Param("target")); !ok {
+		return "", "", false
+	}
+	if absorbedID, ok = h.accountID(c, c.Param("id")); !ok {
+		return "", "", false
+	}
+	return survivorID, absorbedID, true
 }
 
 // PreviewUserMerge handles POST /api/v1/users/:id/merge-into/:target/preview:
@@ -98,8 +129,12 @@ func (h *UserHandler) PreviewUserMerge(c *gin.Context) {
 	if !ok {
 		return
 	}
+	survivorID, absorbedID, ok := h.mergeAccounts(c)
+	if !ok {
+		return
+	}
 	plan, err := h.merge.BuildPlan(c.Request.Context(), usermerge.PlanRequest{
-		ActorID: actorID, SurvivorID: c.Param("target"), AbsorbedID: c.Param("id")})
+		ActorID: actorID, SurvivorID: survivorID, AbsorbedID: absorbedID})
 	if err != nil {
 		h.mergeError(c, "preview user merge", err)
 		return
@@ -125,7 +160,10 @@ func (h *UserHandler) ApplyUserMerge(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, `body must be {"digest": "<digest from the preview>"}`)
 		return
 	}
-	survivorID, absorbedID := c.Param("target"), c.Param("id")
+	survivorID, absorbedID, ok := h.mergeAccounts(c)
+	if !ok {
+		return
+	}
 	plan, err := h.merge.BuildPlan(c.Request.Context(), usermerge.PlanRequest{
 		ActorID: actorID, SurvivorID: survivorID, AbsorbedID: absorbedID})
 	if err != nil {
@@ -194,7 +232,8 @@ func (h *UserHandler) journalAction(c *gin.Context, action usermerge.Action, all
 		httputil.RespondWithConflict(c, "an account cannot run a merge it was merged away by")
 		return
 	}
-	h.enqueueMerge(c, actorID, usermerge.Grant{Action: action, JournalID: jid})
+	// The stored journal's own id, not the request's text, goes into the grant.
+	h.enqueueMerge(c, actorID, usermerge.Grant{Action: action, JournalID: j.ID})
 }
 
 // enqueueMerge mints the single-use grant for g (bound to the actor) and
@@ -214,7 +253,8 @@ func (h *UserHandler) enqueueMerge(c *gin.Context, actorID string, g usermerge.G
 	}
 	// Dry-run is sent explicitly: omitted means preview, which would silently
 	// do nothing.
-	params := mergeParams{DryRun: false, Action: string(g.Action), SurvivorID: g.SurvivorID, AbsorbedID: g.AbsorbedID,
+	live := false
+	params := mergeParams{DryRun: &live, Action: string(g.Action), SurvivorID: g.SurvivorID, AbsorbedID: g.AbsorbedID,
 		Digest: g.Digest, JournalID: g.JournalID, AcknowledgeOwnerIdentity: g.AcknowledgeOwnerIdentity, Grant: tok}
 	opID, err := h.mergeEnqueuer.EnqueueOp(ctx, UserMergeOpID, params,
 		opsregistry.WithActor(actorID), opsregistry.WithActorAuthMethod(string(auth.MethodFromContext(ctx))))

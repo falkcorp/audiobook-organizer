@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user_merge_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91c4e7b2-5d38-4a60-a7f1-3b08d6e2c945
 // last-edited: 2026-10-23
 
@@ -262,5 +262,28 @@ func TestUserMergeRoutes_ReactivateRefusesAMergedAwayAccount(t *testing.T) {
 	}
 	if w, _ := r.do(t, http.MethodPost, "/users/merges/nope/undo", nil); w.Code != http.StatusNotFound {
 		t.Errorf("undo of an unknown merge: %d, want 404", w.Code)
+	}
+}
+
+// An id in the URL that names no stored account is a 404 before any merge
+// service sees it, and nothing is enqueued.
+func TestUserMergeRoutes_UnknownAccountIdsAre404(t *testing.T) {
+	r := newMergeRig(t)
+	body := map[string]any{"digest": "d"}
+	for _, c := range []struct {
+		name, method, path string
+		body               map[string]any
+	}{
+		{"footprint", http.MethodGet, "/users/no-such-user/footprint", nil},
+		{"preview, unknown absorbed", http.MethodPost, "/users/no-such-user/merge-into/" + r.admin.ID + "/preview", nil},
+		{"preview, unknown survivor", http.MethodPost, "/users/" + r.absorbed.ID + "/merge-into/no-such-user/preview", nil},
+		{"apply, unknown survivor", http.MethodPost, "/users/" + r.absorbed.ID + "/merge-into/no-such-user/apply", body},
+	} {
+		if w, _ := r.do(t, c.method, c.path, c.body); w.Code != http.StatusNotFound {
+			t.Errorf("%s: %d %s, want 404", c.name, w.Code, w.Body.String())
+		}
+	}
+	if n := len(r.enq.calls); n != 0 {
+		t.Errorf("%d operations enqueued for unknown accounts, want 0", n)
 	}
 }
