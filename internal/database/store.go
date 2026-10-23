@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.122.0
+// version: 2.123.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-23
 
@@ -755,6 +755,16 @@ type User struct {
 	// the next open (ReconcileVerifiedEmails) and treats it as unverified
 	// until then.
 	EmailSource string `json:"email_source,omitempty"`
+	// MergedIntoUserID is the id of the account this one was folded into by
+	// the admin "merge user" tool (internal/usermerge), and MergedAt when. Set
+	// only by PebbleStore.RetireMergedUser, cleared only by an undo
+	// (UnretireMergedUser); PebbleStore.UpdateUser refuses any change to either
+	// (ErrUserProtectedField), and ReactivateUser refuses an account that has
+	// one set ("undo the merge instead"). A merged account is locked, has no
+	// email and holds no sign-ins; its row stays so history written under its
+	// id (activity log, operation actors) still resolves to a name.
+	MergedIntoUserID string     `json:"merged_into_user_id,omitempty"`
+	MergedAt         *time.Time `json:"merged_at,omitempty"`
 }
 
 // User.EmailSource values.
