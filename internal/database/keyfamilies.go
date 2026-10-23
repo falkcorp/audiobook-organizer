@@ -68,6 +68,7 @@ var keyFamilies = []KeyFamily{
 	{"role:", "roles", "internal/database/pebble_store_auth.go"},
 	{"sess:", "web sessions", "internal/database/pebble_store_auth.go"},
 	{"u:", "users", "internal/database/pebble_store_auth.go"},
+	{"usermerge:journal:", "admin user-merge journals: every key written, with its before and after image (never pruned; the only way back)", "internal/database/user_merge.go"},
 
 	// ── Authors, narrators, series, works ──
 	{"author:", "author rows", "internal/database/pebble_store_authors.go"},
