@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.10.1
+// version: 3.11.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package jobs
 
@@ -585,7 +585,9 @@ func ddLivePathIndex(store maintenance.JobStore, allBooks []database.Book) (map[
 	if junk == 0 {
 		return paths, nil
 	}
-	files, err := store.GetAllBookFilesCore()
+	// Retired rows included: a live book's retired version still names its path,
+	// so a junk book owning that path shares it with the live book.
+	files, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return nil, err
 	}

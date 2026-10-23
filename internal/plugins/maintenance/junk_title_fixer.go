@@ -1828,6 +1828,11 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 			return "", "", fmt.Errorf("read owner of %s: %w", p, err)
 		}
 		if row != nil && row.BookID != "" && row.BookID != b.ID {
+			if row.Retired {
+				// Held only as a retired version: occupied, but not a live book that
+				// owns the file, so name it as what it is.
+				return junkSkipFragment, fmt.Sprintf("its file %s is held as a retired version of book %s", p, row.BookID), nil
+			}
 			return junkSkipFragment, fmt.Sprintf("its file %s is also a file of book %s", p, row.BookID), nil
 		}
 	}

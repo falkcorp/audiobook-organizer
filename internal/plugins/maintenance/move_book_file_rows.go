@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -420,7 +420,11 @@ func mbfResolveOwners(store mbfStore, moves []mbfMove) (map[string]string, error
 	if len(need) == 0 {
 		return owners, nil
 	}
-	all, err := store.GetAllBookFilesCore()
+	// Every row, retired included: a retired row is found (under its holder) and
+	// refused by name in mbfPlanOne, instead of resolving to "" and being
+	// reported as "row not found", which would send the operator hunting for a
+	// row that exists.
+	all, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return nil, fmt.Errorf("%s: list book_file rows: %w", mbfOpName, err)
 	}
@@ -457,6 +461,11 @@ func mbfPlanOne(env mbfEnv, mv mbfMove, owner string, seenRow map[string]bool, c
 		return refuse("row not found under book " + owner)
 	}
 	r.Path = row.FilePath
+	if row.Retired {
+		// MoveBookFilesToBookBulk refuses a retired row too; naming it here keeps
+		// the refusal a per-row result rather than a failed batch.
+		return refuse("row is a retired version (version " + row.VersionID + " of book " + owner + "); restore it instead of moving it")
+	}
 	r.OldTrack = row.TrackNumber
 	r.RowSeconds = row.Duration
 	r.FileHash = row.FileHash

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.13.3
+// version: 1.14.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -282,11 +282,15 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 		"apply", params.Apply, "path_prefix", params.PathPrefix,
 		"max", maxRewrites, "require_size_match", params.requireSize())
 
-	files, err := store.GetAllBookFilesCore()
+	// One list, two jobs. The rows to repair exclude retired rows (a retired
+	// version is never repaired), but the paths already claimed include them: a
+	// retired row still names its path, so a repoint target sitting on one would
+	// put two rows on one file.
+	files, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return repointPlan{}, fmt.Errorf("load book files: %w", err)
 	}
-	plan := repointPlan{Apply: params.Apply, ScannedRows: len(files)}
+	plan := repointPlan{Apply: params.Apply, ScannedRows: countLiveCores(files)}
 
 	// bookPathByID maps each book to its recorded FilePath, so a missing row can
 	// fall back to its owning single-file book's own location (see the second
@@ -323,6 +327,9 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	}
 	items := make([]candidateItem, 0, len(files))
 	for i := range files {
+		if files[i].Retired {
+			continue
+		}
 		path := strings.TrimSpace(files[i].FilePath)
 		if path == "" {
 			continue

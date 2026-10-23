@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -465,6 +465,9 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 		}
 	}
 	liveBooks := books.live
+	// The default list: retired rows are never repaired. Their claim on a path is
+	// honoured separately, by rfOtherOwner (which deliberately ignores them: a
+	// retired row is not a live owner).
 	files, err := env.store.GetAllBookFilesCore()
 	if err != nil {
 		return report, fmt.Errorf("%s: load book files: %w", rfOpName, err)
@@ -1012,6 +1015,13 @@ func rfOtherOwner(store rfStore, liveBooks map[string]bool, bookID, path string)
 		return "", err
 	}
 	for i := range rows {
+		// A retired row is keyed under its live holder, but it is a retired version
+		// of a book that left the library, not a second live book on this path.
+		// Counting it would report the holder as an owner of a path its sibling
+		// actively owns and send the repair away from a repoint that is safe.
+		if rows[i].Retired {
+			continue
+		}
 		if rows[i].BookID != bookID && liveBooks[rows[i].BookID] {
 			return rows[i].BookID, nil
 		}
