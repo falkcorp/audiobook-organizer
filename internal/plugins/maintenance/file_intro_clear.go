@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -66,6 +67,8 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 	cores = nil
 
 	var files, bookReverts, errs atomic.Int64
+	var chunksDone atomic.Int64
+	var progressMu sync.Mutex // the reporter is not required to be goroutine-safe
 	const chunk = 64
 	chunks := make([][]ref, 0, (len(refs)+chunk-1)/chunk)
 	for i := 0; i < len(refs); i += chunk {
@@ -79,7 +82,11 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 		if !dryRun {
 			// Immediately before this chunk's writes, not only at start: a
 			// clear over many chunks outlives a scan that begins mid-run.
-			if err := fileIntroWaitWhileBusy(ctx, queue, nil); err != nil {
+			if err := fileIntroWaitWhileBusy(ctx, queue, func(def string) {
+				progressMu.Lock()
+				defer progressMu.Unlock()
+				_ = reporter.UpdateProgress(int(chunksDone.Load()), max(len(chunks), 1), mark+"Clearing paused — "+def+" is running; resumes when it finishes")
+			}); err != nil {
 				return err
 			}
 		}
@@ -123,6 +130,7 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 				bookReverts.Add(1)
 			}
 		}
+		chunksDone.Add(1)
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency:   max(runtime.NumCPU(), 1),
