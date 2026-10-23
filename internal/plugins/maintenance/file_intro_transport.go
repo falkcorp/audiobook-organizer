@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transport.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e17c4a92-5b08-4d63-a1f7-92d3b6c80e45
 // last-edited: 2026-10-22
 
@@ -7,9 +7,10 @@ package maintenance
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 
 // The per-file intro op never decodes audio on the server: it hands each
@@ -39,18 +40,49 @@ type fileIntroWhisperResult struct {
 	Language string
 }
 
-// errFilePathTransportMissing is returned by the default transport. A live run
-// stops on it rather than recording a failure against every file: it is a
-// build problem, not a property of any file.
-var errFilePathTransportMissing = errors.New(
-	"transcribe-file-intros: this build has no path-based whisper transport (transcribe.TranscribeByPathBatch)")
-
 // fileIntroWhisperFn sends jobs (keyed by an id the op chooses) to the whisper
 // pool and returns one result per key. An endpoint-level outage is returned as
 // a *transcribe.TransportError so the op defers instead of failing files.
-// Production never reassigns it; tests substitute a stub.
-var fileIntroWhisperFn = func(ctx context.Context, jobs map[string]fileIntroJob, onProgress func(done, total int)) (map[string]fileIntroWhisperResult, error) {
-	return nil, errFilePathTransportMissing
+// Production uses transcribeFilesByPath; tests substitute a stub.
+var fileIntroWhisperFn = transcribeFilesByPath
+
+// transcribeFilesByPath is the production transport: transcribe.TranscribeByPathBatch,
+// which runs through the same endpoint pool as the book op (capability gate,
+// priority spill, cooldown, per-endpoint in-flight caps) restricted to workers
+// that advertise the path pipeline with every mapped root readable. It fails
+// closed: with no such worker the error is a TransportError and nothing is
+// decoded on the server.
+//
+// The op does not pass a result journal. Its resume state is the done marker
+// on each file row, written right after each batch returns, so a kill loses at
+// most the batches in flight.
+func transcribeFilesByPath(ctx context.Context, jobs map[string]fileIntroJob, onProgress func(done, total int)) (map[string]fileIntroWhisperResult, error) {
+	pj := make(map[string]transcribe.PathJob, len(jobs))
+	for k, j := range jobs {
+		pj[k] = transcribe.PathJob{Path: j.Path, Seconds: j.Seconds}
+	}
+	res, err := transcribe.TranscribeByPathBatch(ctx, pj, transcribe.BatchOptions{OnProgress: onProgress})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]fileIntroWhisperResult, len(res))
+	for k, r := range res {
+		// BatchResult carries no model or language; IntroMeta records them when
+		// the transport starts reporting them.
+		out[k] = fileIntroWhisperResult{Text: r.Text, Error: r.Error}
+	}
+	return out, nil
+}
+
+// fileIntroPreflight reports whether any configured worker can take path jobs
+// at all, with the per-endpoint reason when none can. A live run checks it once
+// up front so a run against workers that predate the path pipeline (or whose
+// mount map is unset) stops with the reason instead of deferring every batch.
+var fileIntroPreflight = func(ctx context.Context) error {
+	if ok, reason := transcribe.PathPipelineAvailable(ctx); !ok {
+		return fmt.Errorf("%s: no whisper worker can take path jobs: %s", fileIntroOpID, reason)
+	}
+	return nil
 }
 
 // fileIntroSlotCap bounds the number of batches in flight however many

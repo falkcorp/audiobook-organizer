@@ -9,6 +9,13 @@ row, not only each book's first file, and stores the result on the file row
 (`transcribe.TranscribeByPathBatch`, branch `feat/whisper-remote-extract`): the
 server decodes nothing, each file's path and a 90 second length go to the worker.
 
+- A live run first checks that some worker advertises the path pipeline
+  (`transcribe.PathPipelineAvailable`) and stops with the per-endpoint reason if
+  none does. The worker's per-file error code decides what is written:
+  `not_found` is `source_file_missing`, `ffmpeg_error` is held until
+  `retry_failed`, `path_unmapped` and `ffmpeg_timeout` (a lost mount or a stalled
+  share, not a verdict on the file) write nothing, anything else is a retryable
+  `whisper_error`.
 - Dry run by default; the preview counts the work by reason and estimates the
   time (the per-file time is unmeasured for worker-side extraction).
 - Ordinal 0 of every book is sent first, library-wide. Files with the same
