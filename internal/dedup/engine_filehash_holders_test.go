@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_filehash_holders_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e2d71-9c40-4f13-a6d8-3e7a0c1b9f52
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package dedup
 
@@ -94,6 +94,81 @@ func TestCheckExactFileHash_TrashedHolderDoesNotHideALiveOne(t *testing.T) {
 		if id == trashed.ID {
 			t.Fatalf("the trashed holder %s must not be paired", trashed.ID)
 		}
+	}
+}
+
+// A merge winner keeps its soft-deleted loser's FileHash for 30 days. That
+// trashed twin on the book-level hash is not another copy: it must not end the
+// check, or the per-file lookups never run and a live duplicate that matches
+// only a file hash is missed on every scan.
+func TestCheckExactFileHash_TrashedTwinOnBookHashDoesNotSkipThePerFileCheck(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	bookHash, fileHash := "HASH-BOOK-LEVEL", "HASH-ONE-FILE"
+	yes := true
+	winner := &database.Book{ID: "02-WINNER", Title: "Winner Title", FileHash: &bookHash}
+	loser := &database.Book{ID: "01-LOSER", Title: "Winner Title", FileHash: &bookHash, MarkedForDeletion: &yes}
+	other := &database.Book{ID: "03-OTHER", Title: "Unrelated Title"}
+	mock.BooksByFileHashFunc = func(h string) ([]*database.Book, error) {
+		switch h {
+		case bookHash:
+			return []*database.Book{loser, winner}, nil
+		case fileHash:
+			return []*database.Book{winner, other}, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		return []database.BookFile{{ID: "f1", BookID: id, FileHash: fileHash}}, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return winner, nil }
+
+	if _, err := engine.checkExactFileHash(winner, ""); err != nil {
+		t.Fatalf("checkExactFileHash: %v", err)
+	}
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("the per-file match with %s must still be detected behind a trashed twin; got %d candidates", other.ID, len(cands))
+	}
+	ids := map[string]bool{cands[0].EntityAID: true, cands[0].EntityBID: true}
+	if !ids[winner.ID] || !ids[other.ID] || ids[loser.ID] {
+		t.Fatalf("candidate names %s and %s, want the winner and the live other (never the trashed twin)", cands[0].EntityAID, cands[0].EntityBID)
+	}
+}
+
+// A live member of the book's own version group on the book-level hash is
+// already merged and does not end the check either.
+func TestCheckExactFileHash_SameGroupHolderDoesNotSkipThePerFileCheck(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	bookHash, fileHash, group := "HASH-BOOK-GROUP", "HASH-FILE-GROUP", "grp-1"
+	self := &database.Book{ID: "02-SELF", Title: "Self Title", FileHash: &bookHash, VersionGroupID: &group}
+	sibling := &database.Book{ID: "01-SIBLING", Title: "Self Title", FileHash: &bookHash, VersionGroupID: &group}
+	other := &database.Book{ID: "03-OTHER", Title: "Unrelated Title"}
+	mock.BooksByFileHashFunc = func(h string) ([]*database.Book, error) {
+		switch h {
+		case bookHash:
+			return []*database.Book{sibling, self}, nil
+		case fileHash:
+			return []*database.Book{self, other}, nil
+		}
+		return nil, nil
+	}
+	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		return []database.BookFile{{ID: "f1", BookID: id, FileHash: fileHash}}, nil
+	}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return self, nil }
+
+	if _, err := engine.checkExactFileHash(self, ""); err != nil {
+		t.Fatalf("checkExactFileHash: %v", err)
+	}
+	cands, _, err := es.ListCandidates(database.CandidateFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("the per-file match must still be detected behind a same-group holder; got %d candidates", len(cands))
 	}
 }
 

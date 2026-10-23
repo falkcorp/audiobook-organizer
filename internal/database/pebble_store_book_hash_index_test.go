@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_hash_index_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4e8b2d63-9a17-4c50-b3f6-1d7a0c5e9b82
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -206,6 +206,22 @@ func TestBookHashIndex_UndecodableCandidate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "good", got.ID)
+}
+
+// BooksByFileHash lists every holder, so a row it cannot read makes the list
+// incomplete and is an error, even when another holder reads fine; the error
+// names the corrupt row so an operator can find it.
+func TestBooksByFileHash_UnreadableRowIsAnErrorNamingTheRow(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	hashBook(t, s, "good", "H", false)
+	setRawKey(t, s, "book:bad-row-id", "{not json")
+	require.NoError(t, s.db.Set(bookHashKey(bookHashKindFile, "H", "bad-row-id"), []byte{}, pebble.Sync))
+
+	got, err := s.BooksByFileHash("H")
+	require.Error(t, err)
+	assert.Nil(t, got, "no partial list")
+	assert.Contains(t, err.Error(), "bad-row-id")
+	assert.NotContains(t, err.Error(), "good", "only the corrupt row is named")
 }
 
 // Until the index is trusted a lookup is the UNION of the new keys and the
