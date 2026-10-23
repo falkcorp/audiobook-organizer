@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8d2e6a41-5f07-4b93-a1c8-3e9b7d04f5a2
 // last-edited: 2026-10-22
 
@@ -210,7 +210,7 @@ func TestPurgeNow_RefusesUndoHeldShell(t *testing.T) {
 	row, err := store.GetBookByID("shell")
 	require.NoError(t, err)
 
-	_, err = svc.purgeNow(row)
+	_, err = purgeNowUnderHold(t, svc, row)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrPurgeUndoPossible), "%v", err)
 	assert.False(t, bookGone(t, store, "shell"))

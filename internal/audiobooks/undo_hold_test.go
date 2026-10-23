@@ -1,5 +1,5 @@
 // file: internal/audiobooks/undo_hold_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c9e5a17-8d42-4b60-a1f3-7e0b6d2c9a48
 // last-edited: 2026-10-22
 
@@ -242,7 +242,7 @@ func TestPurge_FailsClosedUntilTheLedgerIndexIsBuilt(t *testing.T) {
 	}
 	row, err := store.GetBookByID("shell")
 	require.NoError(t, err)
-	_, err = svc.purgeNow(row)
+	_, err = purgeNowUnderHold(t, svc, row)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUndoLedgerNotReady), "%v", err)
 	svc.auditOverride = &fakeRecorder{}
@@ -374,7 +374,7 @@ func TestPurge_UnreadableCombineJournalRowRefusesEveryPurgePath(t *testing.T) {
 	}
 	row, err := store.GetBookByID("plain")
 	require.NoError(t, err)
-	_, err = svc.purgeNow(row)
+	_, err = purgeNowUnderHold(t, svc, row)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), badKey)
 	svc.auditOverride = &fakeRecorder{}

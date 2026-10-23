@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-22
 
@@ -48,6 +48,12 @@ type purgeEnv struct {
 	// a combine, a maintenance operation's ledger, or an auto-merge. It
 	// refreshes the parts it snapshots when one is journaled mid-pass.
 	undo *undoHold
+	// lockHeld is set by an interactive caller that already holds the merge
+	// lock (merge.TryLockMergeRMWWithin, so it can answer ErrMergeBusy instead
+	// of hanging behind a combine): purgeIfStateless and purgeCarryingState
+	// then run under that hold and do not take the non-reentrant lock again.
+	// RunPurge never sets it.
+	lockHeld bool
 }
 
 // undoShells is the pass's shared, self-refreshing view of

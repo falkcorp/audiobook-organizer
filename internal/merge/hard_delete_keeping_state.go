@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_keeping_state.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 051a1636-d299-45a5-80d2-9b72255cffcf
-// last-edited: 2026-10-05
+// last-edited: 2026-10-22
 
 package merge
 
@@ -107,8 +107,22 @@ func CarryTargetPrecheck(books VersionGroupReader, targetID string) func() error
 // ErrStateCarryIncomplete (put back, del not run); del's own error is
 // returned wrapped (after a carry the state is on carriedTo by then).
 //
-// The caller must hold neither the merge lock nor a version-group lock.
+// The caller must hold neither the merge lock nor a version-group lock. It
+// takes the lock itself, unbounded; an interactive caller that must not hang
+// behind a running combine takes TryLockMergeRMWWithin and calls
+// HardDeleteKeepingUserStateLocked instead.
 func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader, book *database.Book, del func() error) (carriedTo string, err error) {
+	LockMergeRMW()
+	defer UnlockMergeRMW()
+	return HardDeleteKeepingUserStateLocked(db, books, book, del)
+}
+
+// HardDeleteKeepingUserStateLocked is HardDeleteKeepingUserState for a caller
+// that already holds the merge lock (TryLockMergeRMWWithin), so the whole
+// probe, carry and delete is ONE hold of it. Same contract and errors; the
+// probe is made under the lock rather than before it, and nothing here takes
+// the lock again (it calls only the ...Locked carry and delete).
+func HardDeleteKeepingUserStateLocked(db UserProgressMerger, books VersionGroupReader, book *database.Book, del func() error) (carriedTo string, err error) {
 	if book == nil || book.ID == "" {
 		return "", fmt.Errorf("%w: no book", ErrUserStateCheckFailed)
 	}
@@ -121,7 +135,7 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 		return "", fmt.Errorf("%w: %s: %w", ErrUserStateCheckFailed, book.ID, err)
 	}
 	if !has {
-		return "", HardDeleteWithoutUserState(db, book.ID, del)
+		return "", HardDeleteWithoutUserStateLocked(db, book.ID, del)
 	}
 	target, err := ListedLiveSibling(books, book)
 	if err != nil {
@@ -130,7 +144,7 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 	if target == "" {
 		return "", fmt.Errorf("%w (%s)", ErrBookHasListeningState, book.ID)
 	}
-	if err := CarryStateThenHardDelete(db, target, book.ID, CarryTargetPrecheck(books, target), del); err != nil {
+	if err := CarryStateThenHardDeleteLocked(db, target, book.ID, CarryTargetPrecheck(books, target), del); err != nil {
 		if errors.Is(err, ErrCarryPrecheckRefused) || errors.Is(err, ErrStateCarryIncomplete) {
 			return "", err
 		}

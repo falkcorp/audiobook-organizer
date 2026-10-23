@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-22
 
@@ -428,7 +428,8 @@ type statelessPurge struct {
 // revert (both take the lock) may have brought it back since. A book that is
 // no longer in the trash is left alone, and the delete and its tombstone use
 // the row as it is now. The lock is released before it returns, so
-// purgeCarryingState, which takes it itself, can follow. Lock order: the
+// purgeCarryingState, which takes it itself, can follow (unless env.lockHeld:
+// the caller holds it across both, and neither takes it). Lock order: the
 // merge lock is the outermost lock; nothing here takes it again, the store
 // calls underneath take only per-book locks, and no caller of the purge
 // (the purge handler, DELETE /audiobooks/:id's trash path, the auto-purge
@@ -444,8 +445,10 @@ type statelessPurge struct {
 // file row, or anything else such a snapshot reads unlogged, must switch it
 // back to merge.LockMergeRMW.
 func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv) (r statelessPurge) {
-	merge.LockMergeRMWBookRowsOnly()
-	defer merge.UnlockMergeRMW()
+	if !env.lockHeld {
+		merge.LockMergeRMWBookRowsOnly()
+		defer merge.UnlockMergeRMW()
+	}
 	cur, err := svc.store.GetBookByID(book.ID)
 	switch {
 	case err != nil:
@@ -546,7 +549,11 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		}
 		return targetCheck()
 	}
-	err = merge.CarryStateThenHardDelete(merger, sibling, book.ID, precheck, func() error {
+	carryThenDelete := merge.CarryStateThenHardDelete
+	if env.lockHeld {
+		carryThenDelete = merge.CarryStateThenHardDeleteLocked
+	}
+	err = carryThenDelete(merger, sibling, book.ID, precheck, func() error {
 		return svc.purgeDeleteRow(doomed)
 	})
 	switch {
@@ -777,11 +784,16 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	if svc.store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	// Restore takes the merge lock, which a running combine holds for its
-	// whole run: answer ErrMergeBusy promptly instead of hanging the request.
-	if err := merge.WaitMergeIdle(merge.InteractiveMergeLockWait); err != nil {
+	// Restore runs under the merge lock, which a running combine holds for its
+	// whole run: take it with a bound and answer ErrMergeBusy promptly instead
+	// of hanging the request. The lock is KEPT and the restore runs under that
+	// same hold (merge.RestoreFromTrashLocked), so a combine that starts after
+	// the wait cannot make the request hang either.
+	unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
+	if err != nil {
 		return nil, err
 	}
+	defer unlock()
 
 	// The shared user restore (merge.RestoreFromTrash): back to the state
 	// the book had before the trash, not "imported" (until 2026-10-01 this
@@ -791,7 +803,7 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	// flag since. A row that is not in the trash is returned unchanged.
 	// It also hands off the group's primary (EnsureSinglePrimary) before it
 	// decides the redirect, so no hand-off runs here.
-	res, err := merge.RestoreFromTrash(svc.store, id, nil, nil)
+	res, err := merge.RestoreFromTrashLocked(svc.store, id, nil, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,7 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package merge
 
@@ -55,14 +55,32 @@ type DiscardedUserState struct {
 // Bookmarks are cleared only under the book's own sync id. Bookmarks a merge
 // copied here from an alias stay under that alias's id with the alias's row.
 //
-// The caller must hold neither the merge lock nor a version-group lock.
+// The caller must hold neither the merge lock nor a version-group lock
+// (DiscardUserStateThenHardDeleteLocked is for one that holds the lock).
 func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, precheck, del func() error) (DiscardedUserState, error) {
-	var res DiscardedUserState
 	if bookID == "" {
-		return res, fmt.Errorf("%w: empty book id", ErrDiscardIncomplete)
+		return DiscardedUserState{}, fmt.Errorf("%w: empty book id", ErrDiscardIncomplete)
 	}
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
+	return discardThenHardDeleteLocked(db, bookID, precheck, del)
+}
+
+// DiscardUserStateThenHardDeleteLocked is DiscardUserStateThenHardDelete for a
+// caller that already holds the merge lock (TryLockMergeRMWWithin). Same
+// contract and errors; it does not take the lock, and a ...Locked caller may
+// run work of its own under the hold before it.
+func DiscardUserStateThenHardDeleteLocked(db UserProgressMerger, bookID string, precheck, del func() error) (DiscardedUserState, error) {
+	if bookID == "" {
+		return DiscardedUserState{}, fmt.Errorf("%w: empty book id", ErrDiscardIncomplete)
+	}
+	return discardThenHardDeleteLocked(db, bookID, precheck, del)
+}
+
+// discardThenHardDeleteLocked is the body of both. The caller holds
+// mergeSerializeMu and has checked bookID.
+func discardThenHardDeleteLocked(db UserProgressMerger, bookID string, precheck, del func() error) (DiscardedUserState, error) {
+	var res DiscardedUserState
 
 	if precheck != nil {
 		if err := precheck(); err != nil {
