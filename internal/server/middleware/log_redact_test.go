@@ -1,7 +1,7 @@
 // file: internal/server/middleware/log_redact_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 67c415d9-c181-4b1c-9481-527366cb1090
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package middleware
 
@@ -213,13 +213,14 @@ func TestRedactingLogFormatter_FailsClosedWhenThePathDoesNotEndInTheQuery(t *tes
 	}
 }
 
-// Without a request the target is read as a RequestURI (the first "?" cuts), and
-// the token is still masked.
-func TestRedactingLogFormatter_NoRequestReadsThePathAsARequestURI(t *testing.T) {
-	line := RedactingLogFormatter(gin.LogFormatterParams{Path: "/invite/SEKRET-no-request?token=abc", Method: http.MethodGet})
-	if strings.Contains(line, "SEKRET-no-request") || strings.Contains(line, "abc") ||
-		!strings.Contains(line, "/invite/[REDACTED]?token=REDACTED") {
-		t.Fatalf("formatter without a request: %s", line)
+// Without a request the target cannot be split from its query with certainty, so
+// nothing of it is logged.
+func TestRedactingLogFormatter_NoRequestFailsClosed(t *testing.T) {
+	for _, path := range []string{"/invite/SEKRET-no-request?token=abc", "/invite/%3FSEKRET-no-request", "/x?/../invite/SEKRET-no-request"} {
+		line := RedactingLogFormatter(gin.LogFormatterParams{Path: path, Method: http.MethodGet})
+		if strings.Contains(line, "SEKRET-no-request") || strings.Contains(line, "abc") || !strings.Contains(line, `"/[REDACTED]"`) {
+			t.Fatalf("formatter without a request for %q: %s", path, line)
+		}
 	}
 }
 
@@ -230,9 +231,30 @@ func TestRedactLogRequestPath(t *testing.T) {
 		{"/books?a=1", "token=SECRET", "/books%3Fa=1?token=REDACTED"},
 		{"/books", "q=1", "/books?q=1"},
 		{"/x?/../invite/SEKRET", "", "/invite/[REDACTED]"},
+		// A credential key after a "?" inside the path is masked although no query
+		// delimiter was sent (/x/cover%3Ftoken=...).
+		{"/x/cover?token=abk_example", "", "/x/cover%3Ftoken=REDACTED"},
+		{"/x/cover?width=4&token=abk_example", "w=1", "/x/cover%3Fwidth=4&token=REDACTED?w=1"},
+		{"/x/cover?q=1", "token=abk_example", "/x/cover%3Fq=1?token=REDACTED"},
 	} {
 		if got := RedactLogRequestPath(tc.path, tc.query); got != tc.want {
 			t.Errorf("RedactLogRequestPath(%q, %q) = %q, want %q", tc.path, tc.query, got, tc.want)
 		}
+	}
+}
+
+// The same through the real gin logger: /x/cover%3Ftoken=<credential> has no
+// query on the wire, and the credential must not be logged verbatim.
+func TestRedactingLogFormatter_CredentialAfterAnEncodedQuestionMark(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const secret = "credential-after-escaped-question-mark"
+	var buf bytes.Buffer
+	r := gin.New()
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{Formatter: RedactingLogFormatter, Output: &buf}))
+	r.NoRoute(func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x/cover%3Ftoken="+secret, nil))
+	line := buf.String()
+	if strings.Contains(line, secret) || !strings.Contains(line, `"/x/cover%3Ftoken=REDACTED"`) {
+		t.Fatalf("request log = %s", line)
 	}
 }
