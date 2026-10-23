@@ -2009,9 +2009,12 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 // without writing to the iTunes book.
 //
 // The row is the key's owner the repoint journaled (ownerBook/ownerRow),
-// while it is still at path, iTunes or not, live or retired since. A repoint
-// journaled before the owner was recorded, or an owner since gone or moved,
-// falls back to the rows at path: a live book's first, then a retired one's.
+// while it is still at path, iTunes or not, and whether its book is live or
+// soft-deleted since. A repoint journaled before the owner was recorded, or an
+// owner since gone or moved, falls back to the rows at path: a live book's
+// first, then a soft-deleted book's. A retired BOOK FILE ROW (a version held by
+// another book, database.BookFile.Retired) is never a candidate, owner or not:
+// the key is not handed to it (ClaimBookFilePathKey refuses it too).
 // The fallback never picks an iTunes row (a row or book iTunes id, a row
 // iTunes path), which it cannot tell was the owner; nor does anything act on
 // a path under books/itunes/**. With no eligible row the key stays dropped.
@@ -2040,7 +2043,7 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 	seen := map[string]bool{}
 	for i := range cands {
 		o := cands[i]
-		if o.ID == except || seen[o.ID] || o.FilePath != path {
+		if o.ID == except || seen[o.ID] || o.FilePath != path || o.Retired {
 			continue
 		}
 		seen[o.ID] = true
@@ -3207,7 +3210,9 @@ func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, 
 		// holding it, the "keeps the hidden row" case above: not an error.
 		for i := range others {
 			o := others[i]
-			if o.BookID == bookID {
+			// A retired row (a version held by another book) is not a live
+			// candidate: the key is never handed to it.
+			if o.BookID == bookID || o.Retired {
 				continue
 			}
 			b, err := rs.db.GetBookByID(o.BookID)
