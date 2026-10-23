@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.95.4
+// version: 1.95.5
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-10-22
 
@@ -1343,15 +1343,28 @@ func layerNameForKind(k unified.SignalKind) string {
 
 // checkExactFileHash checks if any other book shares a file hash.
 // Auto-merges if hashes match AND same normalized author AND same normalized title.
+//
+// Every holder of a hash other than this book is considered, not the one book a
+// single-answer lookup names. That lookup answers with the live holder with the
+// smallest id, so asking it about the OLDEST holder of a hash returns the book
+// itself: a check of the older book saw "yourself", found no duplicate, and the
+// pair was only ever noticed when the newer book happened to be checked
+// (round 4 of #4113). database.BooksHoldingFileHash lists them all, and fails
+// closed on a store that cannot.
 func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bool, error) {
 	// Check book-level file hash
 	if book.FileHash != nil && *book.FileHash != "" {
-		other, err := de.bookStore.GetBookByFileHash(*book.FileHash)
+		merged, sawOther, err := de.checkHashHolders(book, authorName, fileHashMatch{hash: *book.FileHash})
 		if err != nil {
 			return false, err
 		}
-		if other != nil && other.ID != book.ID {
-			return de.handleFileHashMatch(book, other, authorName, fileHashMatch{hash: *book.FileHash})
+		if merged {
+			return true, nil
+		}
+		if sawOther {
+			// The book-level path has always ended the check once another
+			// book shared the hash and was not merged.
+			return false, nil
 		}
 	}
 
@@ -1360,7 +1373,7 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 	if err != nil {
 		return false, err
 	}
-	// H1: GetBookByFileHash errors here used to be a bare `continue` — a
+	// H1: hash lookup errors here used to be a bare `continue` — a
 	// per-file hash lookup failure looked identical to "no match", silently
 	// dropping this file out of the exact-file-hash check. Track it and emit
 	// one summary Warn for this book so a store-level problem is visible.
@@ -1369,19 +1382,16 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 		if f.FileHash == "" {
 			continue
 		}
-		other, err := de.bookStore.GetBookByFileHash(f.FileHash)
+		merged, _, err := de.checkHashHolders(book, authorName, fileHashMatch{hash: f.FileHash, fileID: f.ID})
 		if err != nil {
-			fileHashLookupErrs++
-			continue
+			if errors.Is(err, errHashHolderLookup) {
+				fileHashLookupErrs++
+				continue
+			}
+			return false, err
 		}
-		if other != nil && other.ID != book.ID {
-			merged, err := de.handleFileHashMatch(book, other, authorName, fileHashMatch{hash: f.FileHash, fileID: f.ID})
-			if err != nil {
-				return false, err
-			}
-			if merged {
-				return true, nil
-			}
+		if merged {
+			return true, nil
 		}
 	}
 	if fileHashLookupErrs > 0 {
@@ -1389,6 +1399,35 @@ func (de *Engine) checkExactFileHash(book *database.Book, authorName string) (bo
 			"book", book.ID, "errors", fileHashLookupErrs, "total_files", len(files))
 	}
 	return false, nil
+}
+
+// errHashHolderLookup marks an error from listing the holders of a hash, as
+// opposed to one from acting on a match, so the per-file loop can count lookup
+// failures (H1) while still returning a failed merge.
+var errHashHolderLookup = errors.New("dedup: list the holders of a file hash")
+
+// checkHashHolders runs handleFileHashMatch against every book other than book
+// that holds match.hash, in id order, and stops at the first merge. sawOther
+// reports whether any such book existed, merged or not.
+func (de *Engine) checkHashHolders(book *database.Book, authorName string, match fileHashMatch) (merged, sawOther bool, err error) {
+	holders, err := database.BooksHoldingFileHash(de.bookStore, match.hash)
+	if err != nil {
+		return false, false, fmt.Errorf("%w: %w", errHashHolderLookup, err)
+	}
+	for _, other := range holders {
+		if other == nil || other.ID == book.ID {
+			continue
+		}
+		sawOther = true
+		merged, err := de.handleFileHashMatch(book, other, authorName, match)
+		if err != nil {
+			return false, sawOther, err
+		}
+		if merged {
+			return true, sawOther, nil
+		}
+	}
+	return false, sawOther, nil
 }
 
 // handleFileHashMatch decides whether to auto-merge or create a candidate for a file hash match.
@@ -1403,8 +1442,8 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		}
 	}
 
-	// GetBookByFileHash does not filter soft-deleted rows (it answers with a
-	// trashed holder when no live one exists). The book:hash: index it used to
+	// The hash lookup does not filter soft-deleted rows (it lists trashed
+	// holders too). The book:hash: index it used to
 	// read was single-valued and last-writer-wins, so after ANY merge whose
 	// winner was not the index owner, the next full scan visited the live
 	// winner and the index handed back its own soft-deleted loser. Before
