@@ -18,7 +18,7 @@ path-claim checks (regroup, junk-title, consolidation-leftovers, merge, version
 groups, Deluge import, repoint journaling) read the unfiltered path getter so a
 retired row counts as occupying its path. The signal coverage reports leave
 retired rows out of their population, and the database census reports them as
-`retired_version_files`. `ListBookFiles` and the admin debug view take
-`include_retired`. The include-retired helpers answer from the plain read only
+`retired_version_files`. `ListBookFiles` takes `include_retired`, and the admin
+debug view lists retired rows flagged. The include-retired helpers answer from the plain read only
 for a store that declares it never holds a retired row, and fail closed for
 any other. Nothing retires a row yet, so running behavior does not change.
