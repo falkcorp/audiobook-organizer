@@ -601,6 +601,9 @@ func (retiredReadingStore) GetRetiredVersionsFromBook(string) ([]database.BookVe
 func (retiredReadingStore) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
 	return nil, nil
 }
+func (retiredReadingStore) GetBookFileByPathIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
+}
 
 // TestListBookFiles_IncludeRetired: the default listing never shows a retired
 // row (the store's GetBookFiles is the only read); ?include_retired=true reads

@@ -1,5 +1,5 @@
 // file: internal/itunes/retired_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b6e92d4-5a17-4c3f-8d20-e4f1a7c93b58
 // last-edited: 2026-10-23
 
@@ -40,6 +40,10 @@ func (m *retiredAwareMock) GetRetiredVersionsFromBook(string) ([]database.BookVe
 }
 
 func (m *retiredAwareMock) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
+}
+
+func (m *retiredAwareMock) GetBookFileByPathIncludingRetired(string) (*database.BookFile, error) {
 	return nil, nil
 }
 

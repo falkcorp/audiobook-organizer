@@ -1,5 +1,5 @@
 // file: internal/database/retired_lookup.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
 // last-edited: 2026-10-23
 
@@ -64,4 +64,22 @@ func BookFileByPIDIncludingRetired(s any, itunesPID string) (*BookFile, error) {
 		return g.GetBookFileByPID(itunesPID)
 	}
 	return nil, fmt.Errorf("book_file by PID %s: %w", itunesPID, ErrRetiredReaderUnavailable)
+}
+
+// BookFileByPathIncludingRetired is GetBookFileByPath that also answers a path
+// held only by a retired row: the single-row path-index hit, for the "is this
+// path already claimed?" checks that cannot use the complete BookFilesAtPath
+// (a caller that wants only the one row, or the warmup fallback of
+// BookFileRowsAtPath). Same capability resolution and fallback as
+// BookFileByPIDIncludingRetired.
+func BookFileByPathIncludingRetired(s any, filePath string) (*BookFile, error) {
+	if r, ok := AsCapability[RetiredBookFileReader](s); ok {
+		return r.GetBookFileByPathIncludingRetired(filePath)
+	}
+	if g, ok := s.(interface {
+		GetBookFileByPath(filePath string) (*BookFile, error)
+	}); ok {
+		return g.GetBookFileByPath(filePath)
+	}
+	return nil, fmt.Errorf("book_file by path %s: %w", filePath, ErrRetiredReaderUnavailable)
 }

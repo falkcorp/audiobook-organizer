@@ -1,5 +1,5 @@
 // file: internal/database/iface_retired.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d6b0c1e-8f3a-4b57-9e21-6a7c52d9f0b3
 // last-edited: 2026-10-23
 
@@ -49,6 +49,11 @@ type RetiredBookFileReader interface {
 	// PID held only by a retired row (the iTunes importers use it to recognise a
 	// track whose version was retired into another book).
 	GetBookFileByPIDIncludingRetired(itunesPID string) (*BookFile, error)
+	// GetBookFileByPathIncludingRetired is GetBookFileByPath that also answers
+	// a path held only by a retired row (the single-row path-index hit). Every
+	// "is this path already claimed?" check uses it, or BookFilesAtPath, never
+	// GetBookFileByPath, which would read a retired version's path as free.
+	GetBookFileByPathIncludingRetired(filePath string) (*BookFile, error)
 }
 
 // RetiredBookFileWriter retires, restores and re-homes book_file rows.
