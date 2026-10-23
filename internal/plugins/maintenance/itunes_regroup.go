@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.29.2
+// version: 1.30.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -553,6 +553,15 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 	if err != nil {
 		return snap, fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
+	// Live rows only, on purpose. A retired row keeps its PID (provenance for the
+	// undo) and is keyed under its holder, so a PIDLoc entry for it would make the
+	// holder look like the current home of that track: the planner would pick the
+	// holder as a target, retitle it from the track's album and plan moves out of
+	// it. Left out, the PID reads as unresolved, and the planner never mints or
+	// retitles a book for it (an unresolved PID only counts toward the group's
+	// partial/complete tally). GetAllBookFilesCore already skips retired rows;
+	// the filter keeps this right for a reader that does not.
+	files = liveCores(files)
 	facts := make(map[string]*regroupFileFacts, len(books))
 	moFiles, err := newRegroupSnapshotFiles(files, len(books), func(id string) bool { return live[id] })
 	if err != nil {
