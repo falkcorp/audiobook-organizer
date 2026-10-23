@@ -8,7 +8,7 @@ the admin read, and the owner's identity moving needs an explicit
 acknowledgement. The merge runs as the `maintenance.user-merge` operation, is
 journaled (`usermerge:journal:`), resumes after a crash, and undoes field by
 field without overwriting anything written since; undoing it signs the surviving
-account out. Routes: `GET /users/:id/footprint`, `GET /users/merges`,
+account out when sign-ins or keys move back. Routes: `GET /users/:id/footprint`, `GET /users/merges`,
 `POST /users/:id/merge-into/:target/{preview,apply}` and
 `POST /users/merges/:jid/{resume,undo}`; every POST is a credential route behind
 the owner gate, so no API key or Audiobookshelf token can start one, and the

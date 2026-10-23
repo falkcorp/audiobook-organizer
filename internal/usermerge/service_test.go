@@ -1,7 +1,7 @@
 // file: internal/usermerge/service_test.go
 // version: 1.1.0
 // guid: b17d4c90-3e62-4a85-9d0f-4c8a2e6b7153
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package usermerge
 

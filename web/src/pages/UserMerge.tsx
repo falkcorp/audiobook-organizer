@@ -1,5 +1,5 @@
 // file: web/src/pages/UserMerge.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b6d2f48-7a31-4c95-9e84-c3a1d58f7e20
 // last-edited: 2026-10-23
 
@@ -269,7 +269,8 @@ export function UserMergeDialog({
         <Typography variant="body2" sx={{ mb: 2 }}>
           The account you pick stays. This account is locked, and its sign-ins, API keys and
           listening data move to it. The merge can be undone from the account merges list below;
-          undoing it signs the surviving account out of the web and Audiobookshelf clients.
+          undoing it signs the surviving account out of the web and Audiobookshelf clients when
+          sign-ins or keys move back.
         </Typography>
         <TextField
           select
@@ -542,8 +543,8 @@ export function UserMergesPanel({
         <DialogContent>
           <Typography variant="body2">
             The merged-away account gets its sign-ins, keys and data back. Anything either account
-            changed since the merge is left as it is and reported. The account that stayed is signed
-            out of the web and Audiobookshelf clients.
+            changed since the merge is left as it is and reported. If sign-ins or keys move back,
+            the account that stayed is signed out of the web and Audiobookshelf clients.
           </Typography>
         </DialogContent>
         <DialogActions>
