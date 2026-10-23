@@ -1,7 +1,7 @@
 // file: internal/config/invite_config.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package config
 
@@ -46,6 +46,9 @@ var inviteEnvOnlySettings = []struct {
 	{"cf_account_id", "CF_ACCOUNT_ID"},
 	{"cf_guests_policy_id", "CF_GUESTS_POLICY_ID"},
 	{"cf_policy_api_token", "CF_POLICY_API_TOKEN"},
+	{"cf_guest_service_tokens", "CF_GUEST_SERVICE_TOKENS"},
+	{"cf_service_auth_policy_id", "CF_SERVICE_AUTH_POLICY_ID"},
+	{"invite_email_service_token", "INVITE_EMAIL_SERVICE_TOKEN"},
 	{"tunnel_connector_addrs", "TUNNEL_CONNECTOR_ADDRS"},
 	{"allowed_peer_cidrs", "ALLOWED_PEER_CIDRS"},
 	{"login_saturated_rate", "LOGIN_SATURATED_RATE"},
@@ -143,6 +146,9 @@ func applyInviteEnv(c *Config) {
 	c.CFAccountID = strings.TrimSpace(viper.GetString("cf_account_id"))
 	c.CFGuestsPolicyID = strings.TrimSpace(viper.GetString("cf_guests_policy_id"))
 	c.CFPolicyAPIToken = strings.TrimSpace(viper.GetString("cf_policy_api_token"))
+	c.CFGuestServiceTokens = parseEnvBool(viper.GetString("cf_guest_service_tokens"))
+	c.CFServiceAuthPolicyID = strings.TrimSpace(viper.GetString("cf_service_auth_policy_id"))
+	c.InviteEmailServiceToken = parseEnvBool(viper.GetString("invite_email_service_token"))
 	c.TunnelConnectorAddrs = strings.TrimSpace(viper.GetString("tunnel_connector_addrs"))
 	c.AllowedPeerCIDRs = strings.TrimSpace(viper.GetString("allowed_peer_cidrs"))
 	c.LoginSaturatedRate = strings.TrimSpace(viper.GetString("login_saturated_rate"))
@@ -213,6 +219,30 @@ func (c *Config) InviteMailConfigured() bool {
 // missing the feature is inert.
 func (c *Config) GuestPolicySyncConfigured() bool {
 	return c.CFAccountID != "" && c.CFGuestsPolicyID != "" && c.CFPolicyAPIToken != ""
+}
+
+// parseEnvBool reads a boolean environment switch. Only an explicit true
+// ("true", "1", "yes", "on", any case) turns it on; empty or anything
+// unrecognised is off, so a typo can never enable a credential-minting feature.
+func parseEnvBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// GuestServiceTokensEnabled reports whether accepting an invitation mints a
+// per-guest Cloudflare service token: the flag is on and the three settings it
+// needs (account id, API token, the "books" policy id) are all present.
+func (c *Config) GuestServiceTokensEnabled() bool {
+	return c.CFGuestServiceTokens && c.CFAccountID != "" && c.CFPolicyAPIToken != "" && c.CFServiceAuthPolicyID != ""
+}
+
+// GuestServiceTokensMisconfigured reports the flag being on without everything
+// it needs, so startup can say so instead of the feature silently doing nothing.
+func (c *Config) GuestServiceTokensMisconfigured() bool {
+	return c.CFGuestServiceTokens && !c.GuestServiceTokensEnabled()
 }
 
 // InviteBaseURL is the public origin invitation links are built on:

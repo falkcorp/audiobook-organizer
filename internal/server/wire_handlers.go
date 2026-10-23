@@ -53,6 +53,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		userH.SetUserMerge(um, s.opRegistry, usermerge.DefaultGrants)
 	}
 	authH.SetGuestAccessRevoker(s.revokeGuestAccess)
+	// Per-guest service token: revoked on deactivation, not on an email change.
+	userH.SetGuestTokenRevoker(s.revokeGuestServiceTokenAsync)
 
 	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH, userH)
 

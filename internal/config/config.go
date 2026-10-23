@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.172.0
+// version: 1.173.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package config
 
@@ -1655,6 +1655,18 @@ type Config struct {
 	CFAccountID      string `json:"-" mapstructure:"cf_account_id"`
 	CFGuestsPolicyID string `json:"-" mapstructure:"cf_guests_policy_id"`
 	CFPolicyAPIToken string `json:"-" mapstructure:"cf_policy_api_token"`
+	// Optional per-guest phone-app credential (CF_GUEST_SERVICE_TOKENS, default
+	// off): accepting an emailed invitation mints that guest's OWN Cloudflare
+	// service token and adds that one token id to the non-identity "books"
+	// policy CFServiceAuthPolicyID. Needs CF_POLICY_API_TOKEN to also hold the
+	// "Access: Service Tokens Edit" permission; without it the API answers 403
+	// and the feature fails closed. Active only when GuestServiceTokensEnabled.
+	CFGuestServiceTokens  bool   `json:"-" mapstructure:"cf_guest_service_tokens"`
+	CFServiceAuthPolicyID string `json:"-" mapstructure:"cf_service_auth_policy_id"`
+	// InviteEmailServiceToken (INVITE_EMAIL_SERVICE_TOKEN, default off) also
+	// emails the minted credential to the guest's verified address right after
+	// the accept. Off means it is shown on the accept page only.
+	InviteEmailServiceToken bool `json:"-" mapstructure:"invite_email_service_token"`
 	// TunnelConnectorAddrs is a comma-separated list of the IP addresses the
 	// Cloudflare tunnel connectors (cloudflared, which in production run on
 	// other LAN hosts) connect to this service FROM; list every connector.

@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 // Rescued from user_handlers.go during Phase 2 handler extraction.
 // handleAcceptInvite remains a *Server method because it bridges auth
@@ -91,12 +91,23 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		return
 	}
 
+	// The response may carry the guest's one-time phone-app key: never cache it.
+	c.Header("Cache-Control", "no-store")
+	// Per-guest Cloudflare service token (CF_GUEST_SERVICE_TOKENS): minted here,
+	// not in the background, because the secret can only reach the guest in this
+	// response. It never fails the accept; nil when the feature does not apply.
+	phoneApp := s.mintGuestServiceToken(c.Request.Context(), req.Token, user)
+
 	handlers.SetSessionCookie(c, sess.ID, sess.ExpiresAt)
 	// Session token is delivered via the HttpOnly cookie only — never in the
 	// JSON body (would expose the bearer token to page JS, defeating HttpOnly).
 	// Return the safe user shape, not the raw *database.User, which would leak
 	// the password hash (pen-test finding CRIT-2).
-	httputil.RespondWithCreated(c, gin.H{"user": handlers.BuildAuthUserResponse(user), "expires_at": sess.ExpiresAt})
+	resp := gin.H{"user": handlers.BuildAuthUserResponse(user), "expires_at": sess.ExpiresAt}
+	if phoneApp != nil {
+		resp["phone_app"] = phoneApp.response()
+	}
+	httputil.RespondWithCreated(c, resp)
 }
 
 // recordAcceptDisplacement writes the audit entry and a warning when the

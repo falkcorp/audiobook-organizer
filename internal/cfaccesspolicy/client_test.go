@@ -1,7 +1,7 @@
 // file: internal/cfaccesspolicy/client_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b7e2d5a-91c4-4f38-8a6d-e3f15c2b9a70
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package cfaccesspolicy
 
@@ -90,6 +90,11 @@ func (f *fakeCF) handler(t *testing.T) http.Handler {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
+}
+
+// hasEmail is the test-side presence check for an email include rule.
+func hasEmail(include []any, email string) bool {
+	return hasRule(include, func(r any) bool { return isEmailRule(r, email) })
 }
 
 func newPolicy() map[string]any {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-23
 
@@ -57,6 +57,9 @@ type UserHandler struct {
 	// revokeGuestAccess ends invite-granted SSO / Cloudflare access on
 	// deactivation; nil = nothing to revoke (SetGuestAccessRevoker).
 	revokeGuestAccess GuestAccessRevoker
+	// revokeGuestToken revokes the user's per-guest Cloudflare service token on
+	// deactivation (not on an email change).
+	revokeGuestToken GuestTokenRevoker
 	// emailSetter sets another user's email as verified (SetUserEmail). nil
 	// when the store lacks the capability; SetUserEmail then refuses.
 	emailSetter database.AdminEmailSetter
@@ -411,6 +414,9 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 	RevokeAllABSSessions(h.absSessions, user.ID, "user-deactivated")
 	if h.revokeGuestAccess != nil {
 		h.revokeGuestAccess(user.ID, user.Email, "user deactivated")
+	}
+	if h.revokeGuestToken != nil {
+		h.revokeGuestToken(user.ID, "user deactivated")
 	}
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
