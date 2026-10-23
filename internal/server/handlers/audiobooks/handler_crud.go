@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -273,7 +273,7 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 		// A carry of the listening state that did not complete (the state is
 		// back on the book, which was kept). "Purge now" reports it as
 		// ErrPurgeCarryFailed; the hard delete of a live book returns the
-		// merge errors themselves (merge.HardDeleteKeepingUserState): an
+		// merge errors themselves (merge.HardDeleteKeepingUserStateLocked): an
 		// incomplete carry, or a target whose listing could not be re-read.
 		// Until 2026-10-06 those two answered DELETE_FAILED.
 		if errors.Is(err, audiobookspkg.ErrPurgeCarryFailed) || errors.Is(err, merge.ErrStateCarryIncomplete) ||

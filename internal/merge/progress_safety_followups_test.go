@@ -1,7 +1,7 @@
 // file: internal/merge/progress_safety_followups_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e82a272-8905-49f4-b073-a818dfc67963
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package merge
 
@@ -352,7 +352,7 @@ func TestUserStateProbe_RedirectedButUncopiedBookmarkIsOwed(t *testing.T) {
 func TestDiscardUserState_BookmarkOnly(t *testing.T) {
 	s, u, _, doomed, doomedSync := bookmarkOnly(t)
 	deleted := false
-	res, err := DiscardUserStateThenHardDelete(s, doomed, nil, func() error { deleted = true; return nil })
+	res, err := discardUserStateThenHardDelete(s, doomed, nil, func() error { deleted = true; return nil })
 	require.NoError(t, err)
 	require.True(t, deleted)
 	require.Equal(t, 1, res.Users, "the bookmark-only user is counted")

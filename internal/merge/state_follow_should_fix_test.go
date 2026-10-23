@@ -1,7 +1,7 @@
 // file: internal/merge/state_follow_should_fix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f3b7f8e-5a8c-4c71-9b3e-2d6a1c4e7b90
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package merge
 
@@ -136,7 +136,7 @@ func TestIsRefollow_InfersLegacyEntries(t *testing.T) {
 func TestResolveMergeSurvivor_RestoredAndRemergedLoser(t *testing.T) {
 	m := newFlagHolderMerge(t)
 	m.merge(t)
-	_, err := RestoreFromTrash(m.f.S, m.l, nil, nil)
+	_, err := restoreFromTrash(m.f.S, m.l, nil, nil)
 	require.NoError(t, err)
 	n2 := m.f.Book(t, vptest.Spec{ID: "n2", Group: "N", Primary: "true"})
 	setAudio(t, m.f, n2, "m4b", 256)

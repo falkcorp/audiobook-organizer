@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.90.0
+// version: 1.90.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-23
 
@@ -2265,7 +2265,7 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 	defer merge.UnlockMergeRMW()
 	// The group's incumbent is read and the yield written under the group's
 	// lock (merge lock, then group lock, then the book's write lock, the
-	// order merge.RestoreFromTrash uses), so no hand-off changes the group
+	// order merge.RestoreFromTrashLocked uses), so no hand-off changes the group
 	// in between.
 	cur, err := rs.db.GetBookByID(c.BookID)
 	if err != nil {

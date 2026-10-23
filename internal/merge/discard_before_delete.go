@@ -1,7 +1,7 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package merge
 
@@ -12,12 +12,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// ErrDiscardIncomplete is returned by DiscardUserStateThenHardDelete when the
+// ErrDiscardIncomplete is returned by DiscardUserStateThenHardDeleteLocked when the
 // book's listening state could not all be cleared, or a pending user-state
 // repair still names the book. The delete did not run.
 var ErrDiscardIncomplete = errors.New("merge: listening state was not fully discarded")
 
-// DiscardedUserState counts what DiscardUserStateThenHardDelete cleared.
+// DiscardedUserState counts what DiscardUserStateThenHardDeleteLocked cleared.
 type DiscardedUserState struct {
 	// Users is how many users had carryable state (hasCarryableState) or a
 	// bookmark under the book's own sync id before it was cleared.
@@ -27,11 +27,11 @@ type DiscardedUserState struct {
 	Bookmarks int `json:"bookmarks"`
 }
 
-// DiscardUserStateThenHardDelete clears every user's listening state on
+// DiscardUserStateThenHardDeleteLocked clears every user's listening state on
 // bookID -- their book state row, stored positions and the bookmarks under
 // the book's own ABS sync id -- and then runs del (the caller's hard delete),
-// all in ONE hold of the merge lock, so no merge, sweep or revert can put
-// state back on bookID between the clear and the delete.
+// all in ONE hold of the merge lock (the caller's), so no merge, sweep or
+// revert can put state back on bookID between the clear and the delete.
 //
 // It is the owner-triggered counterpart of CarryStateThenHardDelete: for a
 // book in the trash with no live version-group sibling to carry the state
@@ -40,8 +40,9 @@ type DiscardedUserState struct {
 //
 // precheck, when not nil, runs first under the same lock, before anything is
 // cleared: the caller re-reads the book there (for example that it is still
-// in the trash -- merge.RestoreFromTrash takes this lock too, so a restore
-// cannot slip in between). Its error is returned as is, nothing cleared.
+// in the trash -- merge.RestoreFromTrashLocked runs under this lock too, so a
+// restore cannot slip in between). Its error is returned as is, nothing
+// cleared.
 //
 // It refuses (ErrDiscardIncomplete, nothing cleared, del not run) when a
 // pending user-state repair names bookID: a move is still owed into or out
@@ -55,21 +56,9 @@ type DiscardedUserState struct {
 // Bookmarks are cleared only under the book's own sync id. Bookmarks a merge
 // copied here from an alias stay under that alias's id with the alias's row.
 //
-// The caller must hold neither the merge lock nor a version-group lock
-// (DiscardUserStateThenHardDeleteLocked is for one that holds the lock).
-func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, precheck, del func() error) (DiscardedUserState, error) {
-	if bookID == "" {
-		return DiscardedUserState{}, fmt.Errorf("%w: empty book id", ErrDiscardIncomplete)
-	}
-	mergeSerializeMu.Lock()
-	defer mergeSerializeMu.Unlock()
-	return discardThenHardDeleteLocked(db, bookID, precheck, del)
-}
-
-// DiscardUserStateThenHardDeleteLocked is DiscardUserStateThenHardDelete for a
-// caller that already holds the merge lock (TryLockMergeRMWWithin). Same
-// contract and errors; it does not take the lock, and a ...Locked caller may
-// run work of its own under the hold before it.
+// The caller holds the merge lock (TryLockMergeRMWWithin) and no
+// version-group lock; nothing here takes the merge lock again, and the caller
+// may run work of its own under the hold before it.
 func DiscardUserStateThenHardDeleteLocked(db UserProgressMerger, bookID string, precheck, del func() error) (DiscardedUserState, error) {
 	if bookID == "" {
 		return DiscardedUserState{}, fmt.Errorf("%w: empty book id", ErrDiscardIncomplete)
@@ -77,8 +66,9 @@ func DiscardUserStateThenHardDeleteLocked(db UserProgressMerger, bookID string, 
 	return discardThenHardDeleteLocked(db, bookID, precheck, del)
 }
 
-// discardThenHardDeleteLocked is the body of both. The caller holds
-// mergeSerializeMu and has checked bookID.
+// discardThenHardDeleteLocked is the body of
+// DiscardUserStateThenHardDeleteLocked. The caller holds mergeSerializeMu and
+// has checked bookID.
 func discardThenHardDeleteLocked(db UserProgressMerger, bookID string, precheck, del func() error) (DiscardedUserState, error) {
 	var res DiscardedUserState
 
@@ -144,7 +134,7 @@ func discardThenHardDeleteLocked(db UserProgressMerger, bookID string, precheck,
 
 // discardUserState clears one user's state row and positions on bookID and
 // reports whether they held carryable state. The caller
-// (DiscardUserStateThenHardDelete) holds the (userID, bookID) user-state
+// (DiscardUserStateThenHardDeleteLocked) holds the (userID, bookID) user-state
 // stripe across this and the hard delete after it.
 func discardUserState(db UserProgressMerger, deleter database.UserBookStateDeleter, canDelete bool, userID, bookID string) (had bool, err error) {
 	st, err := db.GetUserBookState(userID, bookID)
