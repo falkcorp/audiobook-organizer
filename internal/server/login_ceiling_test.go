@@ -1,5 +1,5 @@
 // file: internal/server/login_ceiling_test.go
-// version: 4.3.0
+// version: 4.3.1
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
 // last-edited: 2026-10-22
 
@@ -459,6 +459,9 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 	}
 	const minDelay = absauth.SaturationDelayBase - 100*time.Millisecond
 	const satAdmissions = 8
+	// Deliberately below the validated floor (config.MinLoginSaturatedRate): the
+	// bucket is meant to refill negligibly, and the computed wait then hits the
+	// defensive window cap, which this test pins.
 	ceiling.setSaturatedBound(rate.Limit(0.0001), satAdmissions)
 
 	// An untouched account (the fixture's admin), first attempt, on both logins.
@@ -519,7 +522,8 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 			start := time.Now()
 			fx.srv.router.ServeHTTP(w, req)
 			require.Equal(t, http.StatusTooManyRequests, w.Code, "%s %s: saturated admission is refused once the bucket is empty", path, name)
-			// rate 0.0001/s: the computed wait is far past the window, so it is capped there
+			// rate 0.0001/s is deliberately below the validated floor, so the computed wait
+			// is far past the window and the defensive cap shows
 			require.Equal(t, strconv.Itoa(int(loginCeilingWindow/time.Second)), w.Header().Get("Retry-After"), "%s %s", path, name)
 			require.Less(t, time.Since(start), minDelay, "%s %s: refused without the saturation delay", path, name)
 		}
@@ -1062,6 +1066,8 @@ func TestLoginCeiling_SaturatedRefusalRetryAfterMatchesTheReason(t *testing.T) {
 	_, verdict, retry = slow.admitSaturated("b")
 	require.Equal(t, satRefusedCapacity, verdict)
 	require.Equal(t, 10, retry)
+	// Deliberately below the validated floor (config.MinLoginSaturatedRate), to
+	// reach the defensive window cap that no valid configuration can.
 	slow.setSaturatedBound(rate.Limit(0.0001), 1)
 	release, _, _ = slow.admitSaturated("c")
 	release()
