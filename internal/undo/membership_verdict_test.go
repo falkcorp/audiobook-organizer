@@ -1,5 +1,5 @@
 // file: internal/undo/membership_verdict_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3a71e08-5d94-4f26-b8e0-19f6d2a4b573
 // last-edited: 2026-10-22
 
@@ -62,17 +62,18 @@ func TestMembershipVerdict_AJournalReadErrorIsFieldUnreadable(t *testing.T) {
 	require.False(t, ok.already)
 }
 
-// A store without the journal capability still has the list checked as far as
-// the row alone decides it: the owner removed S by hand, so the revert refuses
-// (changed since) whatever the journal would add.
-func TestMembershipVerdict_WithoutJournalTheListIsStillChecked(t *testing.T) {
+// A store without the journal capability refuses the row as unreadable, as the
+// revert does (revertListFollow): the revert decides every list row from the
+// list's journal and refuses without it, so the preflight must not offer an Undo
+// the revert cannot perform, whether the list looks fine or not.
+func TestMembershipVerdict_WithoutJournalTheRowIsRefusedAsUnreadable(t *testing.T) {
 	r, _ := verdictCarry(t)
-	v := membershipVerdict(noJournalStore{}, []string{"a", "c"}, r, UserContentCollection, "L")
-	require.Error(t, v.refusal)
-	require.Equal(t, ReasonChangedSince, RefusalReason(v.refusal))
-
-	still := membershipVerdict(noJournalStore{}, []string{"a", "S", "c"}, r, UserContentCollection, "L")
-	require.NoError(t, still.refusal)
+	for name, cur := range map[string][]string{"survivor removed by hand": {"a", "c"}, "list as the retire left it": {"a", "S", "c"}} {
+		v := membershipVerdict(noJournalStore{}, cur, r, UserContentCollection, "L")
+		require.Error(t, v.refusal, name)
+		require.Equal(t, ReasonFieldUnreadable, RefusalReason(v.refusal), "%s: %v", name, v.refusal)
+		require.False(t, v.already, name)
+	}
 }
 
 // S's own retire out of the list (into X) stands; B is then retired into S,

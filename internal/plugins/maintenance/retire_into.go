@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -141,7 +141,7 @@ type retireOpts struct {
 // retireOpts.AllowITunesPath) an iTunes path on one of its rows, or an
 // iTunes id among its external ids; none of them under
 // retireOpts.ITunesDatabaseOnly), and a store that lacks the collection or
-// playlist capability the carry of step 1b needs (resolveCarryStores), is
+// playlist capability the carry of step 1b needs (resolveCarryStores), or a journal that cannot write a step's rows in one commit (errCarryJournalNotBatched), is
 // checked BEFORE step 1, so a refused retire has written nothing. The count
 // is the steps written, a persisted follow snapshot included, so a failure
 // after it reports partially_applied; a book already soft-deleted counts none
@@ -214,6 +214,12 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 	carry, err := resolveCarryStores(store)
 	if err != nil {
 		return 0, fmt.Errorf("carry user content of %s: %w", id, err)
+	}
+	// The carry journals a list step's rows (the survivor's marker and the retired
+	// book's row) in one commit; a journal that cannot is refused here too, since
+	// written one by one a failure could leave a marker with no row.
+	if !w.JournalsInBatches() {
+		return 0, fmt.Errorf("carry user content of %s: %w", id, errCarryJournalNotBatched)
 	}
 	steps := 0
 	// 1. listening state

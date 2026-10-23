@@ -1,11 +1,12 @@
 // file: internal/undo/membership_anchor.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 7c2e9a40-5b1d-4f86-a3d7-e0b8c4f19a65
 // last-edited: 2026-10-22
 
 package undo
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -98,8 +99,8 @@ type carryMarker struct {
 	rec       MembershipRecord
 	recOK     bool
 	took      bool  // the survivor took the retired book's slot (held: it was listed)
-	created   int64 // CreatedAt, ns
-	reverted  int64 // RevertedAt, ns; 0 while the marker stands
+	created   int64 // CreatedKey: the journal's order (journal_order.go)
+	reverted  int64 // RevertedKey; 0 while the marker stands
 	borrowing bool  // the survivor is in the list on this marker's account
 	// root is the epoch the marker belongs to: the latest "took" marker at or
 	// before it (nil before the first). A "took" marker is written only when
@@ -125,15 +126,109 @@ func (m *carryMarker) before(o *carryMarker) bool {
 // marker when a borrowing marker was standing at the moment it was written
 // (the survivor was in the list on that marker's account, not as an original
 // member).
+//
+// Only a marker that accounts for a live retire counts. The carry journals a
+// retire's marker and its row in one commit (repairs JournalSteps), so they
+// normally exist together; but a journal written by an older build, a resumed
+// run, or a failed write can leave a marker with no row, and a standing marker
+// says "this retire's book stands in the list": believed, it would keep the
+// survivor listed for every other retire for good. So a marker is ignored when
+//
+//   - its retire has no non-voided row of the list (the retired book's row, in
+//     the marker's operation, naming the survivor: the rule PairedRow
+//     applies), or
+//   - a later marker of the same survivor names the same retire (a resumed run
+//     that journaled the retire again with another record): only the latest
+//     counts.
+//
+// Ignored is never silent: ignored holds each one, IgnoredMarkers lists them,
+// and the revert reports every one it meets (RevertResult.OrphanMarkers).
 type markerHistory struct {
 	survivor string
 	ms       []*carryMarker
+	ignored  []IgnoredMarker
+}
+
+// The reasons a survivor-side marker is ignored (IgnoredMarker.Reason).
+const (
+	IgnoredNoRow    = "no live row of the retire it names"
+	IgnoredReplaced = "a later marker names the same retire"
+)
+
+// IgnoredMarker is a survivor-side marker the membership decisions left out
+// (markerHistory): it accounts for no live retire.
+type IgnoredMarker struct {
+	ID          string
+	OperationID string
+	Survivor    string
+	Retired     string
+	Field       string
+	// Standing: the marker is not stamped reverted. Only a standing marker could
+	// have changed a decision, so the revert reports those.
+	Standing bool
+	Reason   string
+}
+
+// Detail is the one-line account of the marker for a report.
+func (m IgnoredMarker) Detail() string {
+	return fmt.Sprintf("marker %s (%s on book %s, operation %s, retired book %s) was ignored: %s",
+		m.ID, m.Field, m.Survivor, m.OperationID, m.Retired, m.Reason)
+}
+
+// retireKey names one retire of a list: its operation, the retired book and
+// the survivor it was carried into.
+func retireKey(op, retired, survivor string) string {
+	return op + "\x00" + retired + "\x00" + survivor
+}
+
+// liveRetires is the set of retires of list listID of kind that have a
+// non-voided row among rows: the main rows PairedRow pairs a marker with.
+func liveRetires(rows []*database.OperationChange, kind, listID string) map[string]bool {
+	main := UserContentField(kind, listID)
+	live := map[string]bool{}
+	for _, r := range rows {
+		if r != nil && r.ChangeType == ChangeTypeUserContentFollow && !r.Voided && r.FieldName == main {
+			live[retireKey(r.OperationID, r.BookID, r.NewValue)] = true
+		}
+	}
+	return live
+}
+
+// IgnoredMarkers lists every survivor-side marker of list listID of kind that
+// the membership decisions ignore, among the list's journal rows, whatever
+// survivor it is on, oldest first.
+func IgnoredMarkers(rows []*database.OperationChange, kind, listID string) []IgnoredMarker {
+	took := UserContentField(TookKind(kind), listID)
+	held := UserContentField(HeldKind(kind), listID)
+	live := liveRetires(rows, kind, listID)
+	seen := map[string]bool{}
+	var out []IgnoredMarker
+	for _, r := range rows {
+		if r == nil || r.ChangeType != ChangeTypeUserContentFollow || r.Voided || (r.FieldName != took && r.FieldName != held) || seen[r.BookID] {
+			continue
+		}
+		seen[r.BookID] = true
+		out = append(out, newMarkerHistoryWith(r.BookID, kind, listID, rows, live).ignored...)
+	}
+	slices.SortFunc(out, func(a, b IgnoredMarker) int { return strings.Compare(a.ID, b.ID) })
+	return out
 }
 
 func newMarkerHistory(survivor, kind, listID string, rows []*database.OperationChange) *markerHistory {
+	return newMarkerHistoryWith(survivor, kind, listID, rows, liveRetires(rows, kind, listID))
+}
+
+// newMarkerHistoryWith is newMarkerHistory with the set of live retires of the
+// list given (liveRetires), for a caller building several histories of one list.
+func newMarkerHistoryWith(survivor, kind, listID string, rows []*database.OperationChange, live map[string]bool) *markerHistory {
 	took := UserContentField(TookKind(kind), listID)
 	held := UserContentField(HeldKind(kind), listID)
 	h := &markerHistory{survivor: survivor}
+	type cand struct {
+		m   *carryMarker
+		row *database.OperationChange
+	}
+	var cands []cand
 	for _, r := range rows {
 		if r == nil || r.ChangeType != ChangeTypeUserContentFollow || r.Voided || r.BookID != survivor {
 			continue
@@ -141,24 +236,42 @@ func newMarkerHistory(survivor, kind, listID string, rows []*database.OperationC
 		if r.FieldName != took && r.FieldName != held {
 			continue
 		}
-		m := &carryMarker{id: r.ID, op: r.OperationID, retired: r.NewValue, took: r.FieldName == took, created: r.CreatedAt.UnixNano()}
+		m := &carryMarker{id: r.ID, op: r.OperationID, retired: r.NewValue, took: r.FieldName == took, created: CreatedKey(r), reverted: RevertedKey(r)}
 		if rec, err := DecodeMembership(r.OldValue); err == nil {
 			m.rec, m.recOK = rec, true
 		}
-		if r.RevertedAt != nil {
-			m.reverted = r.RevertedAt.UnixNano()
-		}
-		h.ms = append(h.ms, m)
+		cands = append(cands, cand{m, r})
 	}
-	slices.SortFunc(h.ms, func(a, b *carryMarker) int {
+	slices.SortFunc(cands, func(a, b cand) int {
 		switch {
-		case a.before(b):
+		case a.m.before(b.m):
 			return -1
-		case b.before(a):
+		case b.m.before(a.m):
 			return 1
 		}
 		return 0
 	})
+	ignore := func(c cand, reason string) {
+		h.ignored = append(h.ignored, IgnoredMarker{ID: c.row.ID, OperationID: c.row.OperationID, Survivor: survivor,
+			Retired: c.row.NewValue, Field: c.row.FieldName, Standing: c.row.RevertedAt == nil, Reason: reason})
+	}
+	latest := map[string]int{} // retire -> index of its latest marker
+	for i, c := range cands {
+		if live[retireKey(c.m.op, c.m.retired, survivor)] {
+			latest[retireKey(c.m.op, c.m.retired, survivor)] = i
+		}
+	}
+	for i, c := range cands {
+		k := retireKey(c.m.op, c.m.retired, survivor)
+		switch {
+		case !live[k]:
+			ignore(c, IgnoredNoRow)
+		case latest[k] != i:
+			ignore(c, IgnoredReplaced)
+		default:
+			h.ms = append(h.ms, c.m)
+		}
+	}
 	var root *carryMarker
 	for i, m := range h.ms {
 		if m.took {
@@ -267,7 +380,7 @@ type anchored struct {
 	survivor string
 	prev     string
 	next     string
-	created  int64 // CreatedAt, ns
+	created  int64 // CreatedKey: the journal's order
 	took     bool  // a marker-derived record of a retire where the survivor took the retired book's slot
 }
 
@@ -288,9 +401,19 @@ type MembershipGraph struct {
 	rows []*database.OperationChange
 	byID map[string]int // row id -> index in rows
 
-	built bool
-	hists map[string]*markerHistory
-	recs  []anchored
+	built   bool
+	hists   map[string]*markerHistory
+	recs    []anchored
+	ignored []IgnoredMarker
+}
+
+// Ignored lists the survivor-side markers of the list's journal the graph left
+// out (IgnoredMarkers), oldest first.
+func (g *MembershipGraph) Ignored() []IgnoredMarker {
+	g.build()
+	out := slices.Clone(g.ignored)
+	slices.SortFunc(out, func(a, b IgnoredMarker) int { return strings.Compare(a.ID, b.ID) })
+	return out
 }
 
 // NewMembershipGraph is an empty graph for kind (UserContentCollection or
@@ -334,7 +457,7 @@ func (g *MembershipGraph) build() {
 		return
 	}
 	g.built = true
-	g.hists, g.recs = map[string]*markerHistory{}, nil
+	g.hists, g.recs, g.ignored = map[string]*markerHistory{}, nil, nil
 	took := UserContentField(TookKind(g.kind), g.listID)
 	held := UserContentField(HeldKind(g.kind), g.listID)
 	var survivors []string
@@ -345,10 +468,15 @@ func (g *MembershipGraph) build() {
 		}
 	}
 	slices.Sort(survivors)
+	live := liveRetires(g.rows, g.kind, g.listID)
 	seen := map[string]bool{}
 	key := func(op, retired string) string { return op + "\x00" + retired }
 	for _, sv := range survivors {
-		h := newMarkerHistory(sv, g.kind, g.listID, g.rows)
+		h := newMarkerHistoryWith(sv, g.kind, g.listID, g.rows, live)
+		g.ignored = append(g.ignored, h.ignored...)
+		if len(h.ms) == 0 {
+			continue // every marker of this survivor was ignored: it has no history
+		}
 		g.hists[sv] = h
 		for _, m := range h.ms {
 			if !m.recOK || seen[key(m.op, m.retired)] {
@@ -368,7 +496,7 @@ func (g *MembershipGraph) build() {
 			continue
 		}
 		seen[key(r.OperationID, r.BookID)] = true
-		g.recs = append(g.recs, anchored{op: r.OperationID, id: r.ID, retired: r.BookID, survivor: r.NewValue, prev: rec.Prev, next: rec.Next, created: r.CreatedAt.UnixNano()})
+		g.recs = append(g.recs, anchored{op: r.OperationID, id: r.ID, retired: r.BookID, survivor: r.NewValue, prev: rec.Prev, next: rec.Next, created: CreatedKey(r)})
 	}
 }
 
