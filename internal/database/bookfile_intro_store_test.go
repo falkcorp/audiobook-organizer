@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d2f8b13-a7e4-4c90-96b1-e3c07a4d5f28
 // last-edited: 2026-10-23
 
@@ -295,5 +295,60 @@ func TestSetBookFileIntro_FailureSkipsARowHoldingAResult(t *testing.T) {
 	got := reread(t, s, f)
 	if got.TranscribeStatus == nil || *got.TranscribeStatus != "ok" || got.IntroRunOpID != "run-1" || got.TranscribeError != nil {
 		t.Fatalf("failure touched a result row: %+v", got)
+	}
+}
+
+// A row the book op wrote can hold real text under a failure status (no done
+// marker, no timestamp). It is not "present" for selection, but it still holds
+// text the store must protect.
+func TestSetBookFileIntro_ProtectsTextOnARowThatIsNotDone(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	row := reread(t, s, f)
+	text, status := "kept by the book op", "whisper_error"
+	row.IntroTranscription, row.TranscribeStatus = &text, &status
+	if err := s.UpdateBookFile(f.ID, row); err != nil {
+		t.Fatal(err)
+	}
+	if reread(t, s, f).HasIntroResult() {
+		t.Fatal("fixture: the row must not count as done")
+	}
+
+	fill := introOK("hash-a", "run-1", "fresh text")
+	fill.FillOnly = true
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, fill); err != nil || res != IntroWriteSkipped {
+		t.Fatalf("fill-only over held text: res=%v err=%v", res, err)
+	}
+	fail := BookFileIntroResult{SourceHash: "hash-a", RunOpID: "run-1", Status: "ffmpeg_error", Error: "bad",
+		At: time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)}
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, fail); err != nil || res != IntroWriteSkipped {
+		t.Fatalf("failure over held text: res=%v err=%v", res, err)
+	}
+	got := reread(t, s, f)
+	if got.IntroTranscription == nil || *got.IntroTranscription != text || got.IntroRunOpID != "" ||
+		got.TranscribeStatus == nil || *got.TranscribeStatus != "whisper_error" {
+		t.Fatalf("held text was touched: %+v", got)
+	}
+}
+
+func TestSetBookFileIntro_StampsAMigratedSentinelWithoutClaimingIt(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	row := reread(t, s, f)
+	sentinel := "[SILENCE]"
+	row.IntroTranscription = &sentinel
+	if err := s.UpdateBookFile(f.ID, row); err != nil {
+		t.Fatal(err)
+	}
+	silence := BookFileIntroResult{SourceHash: "hash-a", RunOpID: "run-1", Status: "empty", Transcript: &sentinel, Silence: true,
+		FillOnly: true, At: time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC), Done: true}
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, silence); err != nil || res != IntroWriteWrote {
+		t.Fatalf("stamp: res=%v err=%v", res, err)
+	}
+	got := reread(t, s, f)
+	if !got.HasIntroResult() || got.IntroRunOpID != "" || got.IntroSourceHash != "hash-a" {
+		t.Fatalf("sentinel not stamped or run claimed: %+v", got)
+	}
+	// Now present: a second silence is skipped.
+	if res, err := s.SetBookFileIntro(f.BookID, f.ID, silence); err != nil || res != IntroWriteSkipped {
+		t.Fatalf("second stamp: res=%v err=%v", res, err)
 	}
 }

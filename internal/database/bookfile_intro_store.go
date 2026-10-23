@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
 // last-edited: 2026-10-23
 
@@ -170,11 +170,22 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 	}
 
 	had := row.HasIntroResult()
+	// holdsText: the row carries a transcript even though it does not count as
+	// done. A row the book op wrote can hold real text under a failure status
+	// (applyOutcome keeps the text and sets whisper_error), and a sentinel with
+	// no timestamp or status. Such text must not be overwritten by a fill-only
+	// write, and a failure must not stamp this run on it.
+	holdsText := row.IntroTranscription != nil
+	// A silence result over a stored transcript that is exactly the same
+	// sentinel, on a row that is not yet done (the book op wrote the sentinel
+	// without a marker): let it write the same text so the marker and status get
+	// stamped and the row stops being re-selected on every run.
+	stampsSentinel := !had && r.Silence && r.Transcript != nil && holdsText && *row.IntroTranscription == *r.Transcript
 	if r.Transcript != nil {
-		if r.FillOnly && had {
+		if r.FillOnly && (had || holdsText) && !stampsSentinel {
 			return IntroWriteSkipped, nil
 		}
-		if r.Silence && row.IntroTranscription != nil {
+		if r.Silence && holdsText && !stampsSentinel {
 			// Silence never replaces a stored transcript (real text or an
 			// earlier sentinel), forced run or not.
 			return IntroWriteSkipped, nil
@@ -193,13 +204,19 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 		at := r.At
 		row.IntroTranscribedAt = &at
 		row.IntroMeta = r.Meta
-		row.IntroRunOpID = r.RunOpID
+		if stampsSentinel {
+			// The sentinel was not written by this run, so the run id is not
+			// claimed: clear_run_id must never erase it.
+			row.IntroRunOpID = ""
+		} else {
+			row.IntroRunOpID = r.RunOpID
+		}
 	} else {
-		// A failure never touches a row that holds a result: overwriting its
-		// status with whisper_error would leave a transcript labelled as a
-		// failure, and stamping this run on it would let clear_run_id erase a
-		// result this run never wrote (a migrated silence sentinel, for one).
-		if had {
+		// A failure never touches a row that holds a result or any transcript:
+		// overwriting its status with whisper_error would leave a transcript
+		// labelled as a failure, and stamping this run on it would let
+		// clear_run_id erase text this run never wrote.
+		if had || holdsText {
 			return IntroWriteSkipped, nil
 		}
 		status, detail := r.Status, optString(r.Error)
