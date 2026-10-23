@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
 // last-edited: 2026-10-22
 
@@ -772,6 +772,207 @@ func TestFileIntroPause_CancelsWhilePausedAndFailsClosedOnListErrors(t *testing.
 	if err := newWorkerForPause(flaky).waitWhileBusy(context.Background()); err != nil {
 		t.Fatalf("transient list failure: %v", err)
 	}
+}
+
+// ---- scan gate on writes ----------------------------------------------------
+
+// scanQueue reports a running library.scan while busy is set. onBusyPoll runs
+// on every poll that reports it, so a test can assert what has (not) been
+// written at that moment. After clearAfter busy polls the scan "finishes".
+type scanQueue struct {
+	mu         sync.Mutex
+	busy       bool
+	busyPolls  int
+	clearAfter int
+	onBusyPoll func()
+}
+
+func (q *scanQueue) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	q.mu.Lock()
+	if !q.busy {
+		q.mu.Unlock()
+		return nil, nil
+	}
+	q.busyPolls++
+	if q.clearAfter > 0 && q.busyPolls >= q.clearAfter {
+		q.busy = false
+	}
+	hook := q.onBusyPoll
+	q.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return []database.OperationV2Row{{ID: "scan-1", DefID: "library.scan", Status: "running"}}, nil
+}
+
+func (q *scanQueue) setBusy(v bool) {
+	q.mu.Lock()
+	q.busy = v
+	q.mu.Unlock()
+}
+
+// setBusyOnce marks the scan running unless it already ran and finished.
+func (q *scanQueue) setBusyOnce() {
+	q.mu.Lock()
+	if q.busyPolls == 0 {
+		q.busy = true
+	}
+	q.mu.Unlock()
+}
+
+func (q *scanQueue) polls() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.busyPolls
+}
+
+// queueDeps is fakeDeps with the op queue replaced.
+type queueDeps struct {
+	fakeDeps
+	q OpQueueReader
+}
+
+func (d queueDeps) OperationQueueStore() OpQueueReader { return d.q }
+
+func TestFileIntro_ScanStartingMidTranscriptionHoldsTheWrites(t *testing.T) {
+	fx := newIntroFx(t)
+	q := &scanQueue{clearAfter: 3}
+	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+	b := fx.book("Scan mid-run")
+	f1, p1 := fx.file(b, "01.m4b", 1, "sm1", false)
+	f2, p2 := fx.file(b, "02.m4b", 2, "sm2", false)
+	fx.whisp.texts[p1], fx.whisp.texts[p2] = goodIntro, "second"
+
+	// A scan starts while the batch is out at the whisper workers: the queue was
+	// idle at the start gate and at the top of the batch.
+	inner := fx.whisp.fn
+	fileIntroWhisperFn = func(ctx context.Context, jobs map[string]fileIntroJob, cb func(int, int)) (map[string]fileIntroWhisperResult, error) {
+		out, err := inner(ctx, jobs, cb)
+		q.setBusy(true)
+		return out, err
+	}
+
+	var mu sync.Mutex
+	var early []string
+	q.onBusyPoll = func() {
+		for _, id := range []string{f1, f2} {
+			if r := fx.row(b, id); r.IntroSourceHash != "" || r.IntroTranscription != nil {
+				mu.Lock()
+				early = append(early, id)
+				mu.Unlock()
+			}
+		}
+	}
+
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(early) != 0 {
+		t.Fatalf("results were written while library.scan was running: %v", early)
+	}
+	if q.polls() < 3 {
+		t.Fatalf("the write gate polled the busy queue %d times, want >= 3", q.polls())
+	}
+	for _, id := range []string{f1, f2} {
+		if r := fx.row(b, id); r.IntroSourceHash == "" || r.IntroTranscription == nil {
+			t.Fatalf("file %s was never written after the scan finished: %+v", id, r)
+		}
+	}
+}
+
+func TestFileIntro_RefusesToStartWhileAScanRuns(t *testing.T) {
+	fx := newIntroFx(t)
+	q := &scanQueue{busy: true}
+	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+	b := fx.book("Scan at start")
+	f1, p1 := fx.file(b, "01.m4b", 1, "ss1", false)
+	fx.whisp.texts[p1] = goodIntro
+
+	_, err := fx.run("")
+	if err == nil || !strings.Contains(err.Error(), "library.scan") || !strings.Contains(err.Error(), "refusing to start") {
+		t.Fatalf("a live run during a scan must refuse to start, got %v", err)
+	}
+	if n := len(fx.whisp.sentPaths()); n != 0 {
+		t.Fatalf("%d files were sent to whisper by a refused run", n)
+	}
+	if r := fx.row(b, f1); r.IntroSourceHash != "" || r.IntroTranscription != nil {
+		t.Fatalf("a refused run wrote: %+v", r)
+	}
+
+	// The preview is read-only and is never refused.
+	rep := &fileIntroRep{id: "preview-1"}
+	if err := fx.p.runFileIntroTranscribe(context.Background(), json.RawMessage(`{}`), rep); err != nil {
+		t.Fatalf("preview during a scan: %v", err)
+	}
+	if !strings.HasPrefix(rep.lastMessage(), introPreviewMarker) {
+		t.Fatalf("preview message: %q", rep.lastMessage())
+	}
+
+	// And the queue being unreadable is not an idle queue.
+	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: nil})
+	if _, err := fx.run(""); err == nil {
+		t.Fatal("a nil queue must fail closed")
+	}
+}
+
+func TestFileIntroClear_RefusesWhileAScanRunsAndGatesEachChunk(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Clear vs scan")
+	f1, p1 := fx.file(b, "01.m4b", 1, "cs1", false)
+	fx.whisp.texts[p1] = goodIntro
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+
+	q := &scanQueue{busy: true}
+	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+	err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(`{"clear_run_id":"run-test-1"}`), &fileIntroRep{id: "clear-x"})
+	if err == nil || !strings.Contains(err.Error(), "refusing to start") {
+		t.Fatalf("a live clear during a scan must refuse to start, got %v", err)
+	}
+	if r := fx.row(b, f1); r.IntroRunOpID != "run-test-1" || r.IntroTranscription == nil {
+		t.Fatalf("a refused clear wrote: %+v", r)
+	}
+
+	// Idle at the start gate, scan appears before the chunk's writes: the clear
+	// waits and clears only after the scan is gone.
+	q2 := &scanQueue{clearAfter: 3}
+	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: &flipAfterFirstPoll{inner: q2}})
+	var early bool
+	q2.onBusyPoll = func() {
+		if r := fx.row(b, f1); r.IntroRunOpID == "" {
+			early = true
+		}
+	}
+	if err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(`{"clear_run_id":"run-test-1"}`), &fileIntroRep{id: "clear-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if early {
+		t.Fatal("the clear wrote while library.scan was running")
+	}
+	if q2.polls() < 3 {
+		t.Fatalf("the clear's chunk gate polled the busy queue %d times, want >= 3", q2.polls())
+	}
+	if r := fx.row(b, f1); r.IntroRunOpID != "" || r.IntroTranscription != nil {
+		t.Fatalf("clear never landed after the scan finished: %+v", r)
+	}
+}
+
+// flipAfterFirstPoll answers the first poll idle (the start gate) and flips the
+// wrapped scanQueue to busy for every later one.
+type flipAfterFirstPoll struct {
+	inner *scanQueue
+	n     atomic.Int32
+}
+
+func (q *flipAfterFirstPoll) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	if q.n.Add(1) == 1 {
+		return nil, nil
+	}
+	q.inner.setBusyOnce()
+	return q.inner.ListActiveOperationsV2()
 }
 
 // ---- clear ------------------------------------------------------------------
