@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-23
 
@@ -190,7 +190,7 @@ type singleOwnerKind uint8
 const (
 	ownerPath singleOwnerKind = iota + 1
 	ownerPID
-	ownerHash
+	ownerFileHash
 	ownerOrigHash
 	ownerSeg
 )
@@ -212,7 +212,7 @@ func singleOwnerKeysOf(f *BookFile) []singleOwnerKey {
 		out = append(out, singleOwnerKey{ownerPID, []byte("book_file_pid:" + f.ITunesPersistentID), f.ITunesPersistentID})
 	}
 	if f.FileHash != "" {
-		out = append(out, singleOwnerKey{ownerHash, []byte("book_file_hash:" + f.FileHash), f.FileHash})
+		out = append(out, singleOwnerKey{ownerFileHash, []byte("book_file_hash:" + f.FileHash), f.FileHash})
 	}
 	if f.OriginalFileHash != "" && f.OriginalFileHash != f.FileHash {
 		out = append(out, singleOwnerKey{ownerOrigHash, []byte("book_file_orig_hash:" + f.OriginalFileHash), f.OriginalFileHash})
@@ -233,7 +233,7 @@ func (k singleOwnerKey) carries(row *BookFile) bool {
 		return row.FilePath == k.value
 	case ownerPID:
 		return row.ITunesPersistentID == k.value
-	case ownerHash:
+	case ownerFileHash:
 		return row.FileHash == k.value
 	case ownerOrigHash:
 		return row.OriginalFileHash == k.value && row.OriginalFileHash != row.FileHash
@@ -263,7 +263,7 @@ func (p *PebbleStore) liveAlternativeOwner(k singleOwnerKey, holderLive []BookFi
 		if errors.Is(err, ErrBookFilesAtPathUnavailable) {
 			return nil, fmt.Errorf("%w: path %q: %w", ErrRetireIndexIncomplete, k.value, err)
 		}
-	case ownerHash, ownerOrigHash:
+	case ownerFileHash, ownerOrigHash:
 		rows, err = p.BookFilesWithHash(k.value)
 		if errors.Is(err, ErrBookFilesWithHashUnavailable) {
 			return nil, fmt.Errorf("%w: hash %q: %w", ErrRetireIndexIncomplete, k.value, err)
