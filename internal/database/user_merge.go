@@ -1,7 +1,7 @@
 // file: internal/database/user_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0a7e3c-91b4-4f26-8c1d-e7a2b6f40935
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -687,4 +687,35 @@ func (p *PebbleStore) UnretireMergedUser(r UserRetirement) ([]string, error) {
 		return nil, err
 	}
 	return conflicts, nil
+}
+
+// maxMergedUserHops bounds the chain ResolveMergedUser follows (A merged into
+// B, B later merged into C, ...). A cycle cannot be written (a merged account
+// is refused as a survivor), but a corrupt row must not loop.
+const maxMergedUserHops = 8
+
+// ResolveMergedUser returns the account that now holds id's listening data: id
+// itself, or, when an admin merged that account into another
+// (User.MergedIntoUserID), the account at the end of that chain. A journal
+// written before such a merge (a book-merge undo journal, an ABS import's
+// state change) names the old account, whose rows the account merge moved.
+// db is a Store or a decorator of one. Anything unreadable resolves to id
+// unchanged, so the caller's own precondition checks decide, as they did
+// before account merges existed.
+func ResolveMergedUser(db any, id string) string {
+	lookup, ok := AsCapability[interface {
+		GetUserByID(id string) (*User, error)
+	}](db)
+	if !ok {
+		return id
+	}
+	cur := id
+	for range maxMergedUserHops {
+		u, err := lookup.GetUserByID(cur)
+		if err != nil || u == nil || u.MergedIntoUserID == "" || u.MergedIntoUserID == cur {
+			return cur
+		}
+		cur = u.MergedIntoUserID
+	}
+	return cur
 }

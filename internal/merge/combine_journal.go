@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.31.4
+// version: 1.32.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 package merge
 
@@ -225,10 +225,25 @@ type CombineExternalID struct {
 	ExternalID string `json:"external_id"`
 }
 
+// dataUser is the account whose state and positions this record's undo reads
+// and writes.
+func (p CombineUserProgress) dataUser() string {
+	if p.owner != "" {
+		return p.owner
+	}
+	return p.UserID
+}
+
 // CombineUserProgress is one user's progress on both sides of one absorbed
 // book's FollowMerge.
 type CombineUserProgress struct {
-	UserID              string                  `json:"user_id"`
+	UserID string `json:"user_id"`
+	// owner is the account that holds UserID's data now: UserID itself, or the
+	// account an admin merged it into (database.ResolveMergedUser), set by
+	// RestoreFollowedProgress. Every read and write of state goes to owner;
+	// the survivor put-back's marker key stays keyed by UserID, as it was
+	// written.
+	owner               string
 	AbsorbedState       *database.UserBookState `json:"absorbed_state,omitempty"`
 	AbsorbedPositions   []database.UserPosition `json:"absorbed_positions,omitempty"`
 	SurvivorStateBefore *database.UserBookState `json:"survivor_state_before,omitempty"`
@@ -1265,7 +1280,11 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 		return warnings, fmt.Errorf("drop pending user-state repair %s -> %s: %w", absorbedID, survivorID, err)
 	}
 	for _, p := range progress {
-		w, err := restoreAbsorbedSide(db, p.UserID, absorbedID, p.AbsorbedState, p.AbsorbedPositions)
+		// The journal names the account as it was when the follow ran; an admin
+		// may have merged that account into another since (database.ResolveMergedUser),
+		// and its rows are the survivor account's now.
+		p.owner = database.ResolveMergedUser(db, p.UserID)
+		w, err := restoreAbsorbedSide(db, p.dataUser(), absorbedID, p.AbsorbedState, p.AbsorbedPositions)
 		if err != nil {
 			return warnings, err
 		}
@@ -1306,12 +1325,12 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 // writer took it, re-read and compared, and a change sent the whole decision
 // round again (up to three attempts).
 func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string) (string, error) {
-	defer database.LockUserBookState(p.UserID, survivorID)()
-	cur, err := db.GetUserBookState(p.UserID, survivorID)
+	defer database.LockUserBookState(p.dataUser(), survivorID)()
+	cur, err := db.GetUserBookState(p.dataUser(), survivorID)
 	if err != nil {
 		return "", fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, survivorID, err)
 	}
-	curPos, err := db.ListUserPositionsForBook(p.UserID, survivorID)
+	curPos, err := db.ListUserPositionsForBook(p.dataUser(), survivorID)
 	if err != nil {
 		return "", fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, survivorID, err)
 	}
@@ -1406,7 +1425,7 @@ func putBackSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, k
 			return fmt.Errorf("journal survivor put-back marker user=%s book=%s: %w", p.UserID, survivorID, err)
 		}
 	}
-	if err := writeProgress(db, p.UserID, survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, cur); err != nil {
+	if err := writeProgress(db, p.dataUser(), survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, cur); err != nil {
 		if key != "" {
 			if note := withdrawPutBackMarker(db, key); note != "" {
 				return fmt.Errorf("%w; %s", err, note)
@@ -1419,7 +1438,7 @@ func putBackSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, k
 		if cur != nil {
 			pre = cur.UpdatedAt
 		}
-		recordPutBackLanded(db, p.UserID, survivorID, key, pre)
+		recordPutBackLanded(db, p.dataUser(), survivorID, key, pre)
 	}
 	return nil
 }
@@ -1691,7 +1710,7 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 			want = append(want, b)
 		}
 	}
-	if err := writePositionsDiff(db, p.UserID, survivorID, curPos, want); err != nil {
+	if err := writePositionsDiff(db, p.dataUser(), survivorID, curPos, want); err != nil {
 		return err
 	}
 	if cur == nil {
@@ -1705,7 +1724,7 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 		after = *p.SurvivorStateAfter
 	}
 	st := *cur
-	st.UserID, st.BookID = p.UserID, survivorID
+	st.UserID, st.BookID = p.dataUser(), survivorID
 	if cur.Status == after.Status && cur.StatusManual == after.StatusManual && cur.ProgressPct == after.ProgressPct {
 		st.Status, st.StatusManual, st.ProgressPct, st.FinishedAt = before.Status, before.StatusManual, before.ProgressPct, before.FinishedAt
 	}
@@ -1757,7 +1776,7 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 		}
 		return fmt.Errorf("reconcile state user=%s book=%s: %w", p.UserID, survivorID, err)
 	}
-	recordPutBackLanded(db, p.UserID, survivorID, key, cur.UpdatedAt)
+	recordPutBackLanded(db, p.dataUser(), survivorID, key, cur.UpdatedAt)
 	return nil
 }
 
