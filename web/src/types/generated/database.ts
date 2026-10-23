@@ -295,6 +295,11 @@ export interface BookFileCore {
   id: string;
   book_id: string;
   version_id?: string;
+  /**
+   * Retired is RETAINED on Core (a single bool): the retired-aware readers
+   * return Core rows too, and a Core-derived write must not un-retire a row.
+   */
+  retired?: boolean;
   file_path: string;
   original_filename?: string;
   itunes_path?: string;
