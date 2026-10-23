@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Repoints rows whose file a rename MOVED ON DISK but whose new path the
 // rename could not write to the database, even after retrying.
@@ -260,7 +260,7 @@ func bookFileClaims(store unrecordedRenameStore, records []repointRecord) (map[s
 	if len(want) == 0 {
 		return nil, nil
 	}
-	files, err := store.GetAllBookFilesCore()
+	files, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return nil, fmt.Errorf("list book files: %w", err)
 	}
