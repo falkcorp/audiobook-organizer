@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_exact.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e2f
-// last-edited: 2026-08-19
+// last-edited: 2026-10-22
 
 // Package dedup — exact-tier collector family (fable5 T014).
 //
@@ -42,8 +42,12 @@ import (
 
 // ExactFileHashStore is the subset of Store required by
 // CollectExactFileHash.
+//
+// The holders of a hash are not a method here: they come from
+// database.BooksHoldingFileHash(store, hash), which reaches the
+// FileHashHolderLookup capability through any decorator and fails closed when
+// the store has none.
 type ExactFileHashStore interface {
-	GetBookByFileHash(hash string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
@@ -90,26 +94,34 @@ func CollectExactFileHash(
 	seen := make(map[string]bool) // dedupe by other book ID in this call
 	var signals []unified.Signal
 
-	emitIfNew := func(other *database.Book, hashEvidence string) {
-		if other == nil || other.ID == book.ID || seen[other.ID] {
-			return
+	// Every holder of the hash other than book emits a signal. The single-answer
+	// lookup this replaced named the live holder with the smallest id, which is
+	// book itself whenever book is the oldest holder: scoring the older book
+	// emitted nothing, and the pair got its signal only from the newer book's side.
+	emitHolders := func(holders []*database.Book, hashEvidence string) {
+		for _, other := range holders {
+			// A trashed holder is a stale pointer, not a duplicate: the engine's
+			// handleFileHashMatch skips it for the same reason.
+			if other == nil || other.ID == book.ID || seen[other.ID] || database.IsInTrash(other) {
+				continue
+			}
+			seen[other.ID] = true
+			signals = append(signals, unified.Signal{
+				Kind:       unified.SigExactFile,
+				Raw:        1.0,
+				Confidence: 1.0, // certainty: identical whole-file hash
+				Evidence:   fmt.Sprintf("whole-file hash match %s: book %s ↔ %s", hashEvidence, book.ID, other.ID),
+			})
 		}
-		seen[other.ID] = true
-		signals = append(signals, unified.Signal{
-			Kind:       unified.SigExactFile,
-			Raw:        1.0,
-			Confidence: 1.0, // certainty: identical whole-file hash
-			Evidence:   fmt.Sprintf("whole-file hash match %s: book %s ↔ %s", hashEvidence, book.ID, other.ID),
-		})
 	}
 
 	// Book-level hash (single-file audiobooks often only have this).
 	if book.FileHash != nil && *book.FileHash != "" {
-		other, err := store.GetBookByFileHash(*book.FileHash)
+		holders, err := database.BooksHoldingFileHash(store, *book.FileHash)
 		if err != nil {
 			return nil, err
 		}
-		emitIfNew(other, *book.FileHash)
+		emitHolders(holders, *book.FileHash)
 	}
 
 	// Per-BookFile hashes (multi-file audiobooks: each chapter file has its
@@ -122,12 +134,12 @@ func CollectExactFileHash(
 		if f.FileHash == "" {
 			continue
 		}
-		other, err := store.GetBookByFileHash(f.FileHash)
+		holders, err := database.BooksHoldingFileHash(store, f.FileHash)
 		if err != nil {
 			// Single file error: log at the caller level; skip this file.
 			continue
 		}
-		emitIfNew(other, f.FileHash)
+		emitHolders(holders, f.FileHash)
 	}
 
 	return signals, nil
