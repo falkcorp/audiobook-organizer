@@ -1,5 +1,5 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
 // last-edited: 2026-10-23
 
@@ -123,6 +123,40 @@ func TestCheckFileOwnership_LiveClaimIgnoresRetiredRowAtSamePath(t *testing.T) {
 	v, err := checkFileOwnership(&Book{FilePath: shared})
 	require.NoError(t, err)
 	require.False(t, v.skip, "reason: %s", v.reason)
+}
+
+// The holder is itself the live owner of a path where it also carries a retired
+// version's row: its own rescan proceeds, the retired row is not a second claim
+// by the same book and does not turn the rescan into a skip.
+func TestCheckFileOwnership_HolderOwnRescanIgnoresItsRetiredRowAtSamePath(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shared := f.write("holder/01.mp3", "shared")
+	f.retiredRow(shared, "h-shared")
+	require.NoError(t, f.store.CreateBookFile(&database.BookFile{BookID: f.holder.ID, FilePath: shared, TrackNumber: 1}))
+
+	v, err := checkFileOwnership(&Book{FilePath: shared})
+	require.NoError(t, err)
+	require.False(t, v.skip, "reason: %s", v.reason)
+}
+
+// A retired folder plus one new file is skipped with the retired reason and
+// nothing is appended to the holder: the new file beside a retired version is
+// left for review, not grown into the holder.
+func TestCheckFileOwnership_RetiredFolderPlusNewFileIsSkippedNotAppended(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	old1 := f.write("shell/01.mp3", "r1")
+	old2 := f.write("shell/02.mp3", "r2")
+	fresh := f.write("shell/03.mp3", "brand-new")
+	f.retiredRow(old1, "h-r1")
+	f.retiredRow(old2, "h-r2")
+
+	v, err := checkFileOwnership(&Book{FilePath: old1, SegmentFiles: []string{old1, old2, fresh}})
+	require.NoError(t, err)
+	require.True(t, v.skip)
+	require.Empty(t, v.appendTo)
+	require.Empty(t, v.sameBook)
+	require.Equal(t, []string{f.holder.ID}, v.owners)
+	require.Contains(t, v.reason, "2 of the scanned files are retired versions")
 }
 
 // Scanned content that is held only by a retired row (the file moved or
