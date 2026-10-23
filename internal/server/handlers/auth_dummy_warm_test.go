@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_dummy_warm_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 87f4fc8f-71dd-485a-9f28-a24d8cf860ea
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package handlers_test
 
@@ -34,11 +34,11 @@ func TestWarmChild_NewAuthHandler(t *testing.T) {
 	if os.Getenv(warmChildEnv) != "1" {
 		t.Skip("runs only as the child of TestNewAuthHandler_WarmsTheLoginDummy")
 	}
-	if absauth.LoginDummyReady() {
+	if absauth.LoginDummyReadyForTest() {
 		t.Fatal("the dummy hash was already built before the constructor ran: the child does not start cold")
 	}
 	handlers.NewAuthHandler(handlersmocks.NewMockAuthStore(t), true)
-	if !absauth.LoginDummyReady() {
+	if !absauth.LoginDummyReadyForTest() {
 		t.Fatal("NewAuthHandler did not build the dummy hash: the first unknown-name login would pay for it")
 	}
 }
