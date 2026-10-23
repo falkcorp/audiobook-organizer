@@ -1,5 +1,5 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
 // last-edited: 2026-10-23
 
@@ -58,6 +58,10 @@ import (
 
 // guestTokenTimeout bounds one mint or revoke (token call plus policy edit).
 const guestTokenTimeout = 45 * time.Second
+
+// guestTokenListTimeout bounds the read-only last-seen lookup behind the admin
+// list, which must not make the panel hang when Cloudflare is slow.
+const guestTokenListTimeout = 10 * time.Second
 
 // Admin-facing wording. None of it goes to the guest.
 const (
@@ -581,7 +585,7 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 	if live {
 		if api, _, cerr := s.guestTokenClients(); cerr != nil {
 			lastSeenNote = "Cloudflare was not asked: its settings are missing"
-		} else if list, lerr := api.List(ctx); lerr != nil {
+		} else if list, lerr := listWithTimeout(ctx, api); lerr != nil {
 			lastSeenNote = guestTokenErrText("asking Cloudflare for last-seen times", lerr)
 		} else {
 			for _, t := range list {
@@ -652,4 +656,11 @@ func (s *Server) handleRevokeGuestServiceToken(c *gin.Context) {
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"revoked": true, "user_id": userID})
+}
+
+// listWithTimeout is one Cloudflare list call under guestTokenListTimeout.
+func listWithTimeout(ctx context.Context, api guestTokenCloudflare) ([]cfservicetoken.Token, error) {
+	ctx, cancel := context.WithTimeout(ctx, guestTokenListTimeout)
+	defer cancel()
+	return api.List(ctx)
 }

@@ -1,5 +1,5 @@
 // file: web/src/components/GuestPhoneKeys.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e1a7c93-2d48-4b6f-a0c7-8f3d9b2e6a41
 // last-edited: 2026-10-23
 
@@ -31,9 +31,21 @@ describe('GuestPhoneKeys', () => {
   it('renders nothing while the feature is off and no key exists', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ data: { flag_on: false, tokens: [] } }));
     vi.stubGlobal('fetch', fetchMock);
-    const { container } = renderWithProviders(<GuestPhoneKeys />);
+    renderWithProviders(<GuestPhoneKeys />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(container).toHaveTextContent('');
+    // Let the response settle before asserting absence.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/phone app keys/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the panel as soon as the feature is switched on, even with no key yet', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ data: { flag_on: true, enabled: true, tokens: [] } }))
+    );
+    renderWithProviders(<GuestPhoneKeys />);
+    expect(await screen.findByText(/phone app keys/i)).toBeInTheDocument();
   });
 
   it('lists each guest key and says when Cloudflare does not report last seen', async () => {
