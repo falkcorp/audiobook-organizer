@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user_merge.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e1c7a93-2b48-4d06-8f3a-c91d07e4b256
 // last-edited: 2026-10-23
 
@@ -139,8 +139,8 @@ func (h *UserHandler) ApplyUserMerge(c *gin.Context) {
 	case plan.Digest != req.Digest:
 		respondMergeConflict(c, "the accounts changed since the preview; review the new preview", plan)
 		return
-	case plan.OwnerIdentityOnAbsorbed && !req.AcknowledgeOwnerIdentity:
-		respondMergeConflict(c, "the account being merged away holds the owner's sign-in identity; acknowledge it to continue", plan)
+	case plan.OwnerIdentityAckRequired && !req.AcknowledgeOwnerIdentity:
+		respondMergeConflict(c, "the account being merged away may hold the owner's sign-in identity; acknowledge it to continue", plan)
 		return
 	}
 	h.enqueueMerge(c, actorID, usermerge.Grant{Action: usermerge.ActionApply, SurvivorID: survivorID,

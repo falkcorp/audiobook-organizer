@@ -1,5 +1,5 @@
 // file: internal/usermerge/plan.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4a82f17-5d93-4e60-9b2a-71f3d0e86a45
 // last-edited: 2026-10-23
 
@@ -118,6 +118,12 @@ type Plan struct {
 	// OwnerIdentityOnAbsorbed is true when the account being merged away holds an
 	// owner identity.
 	OwnerIdentityOnAbsorbed bool `json:"owner_identity_on_absorbed"`
+	// OwnerIdentityAckRequired is what Apply gates on: the absorbed account holds
+	// an owner identity, OR the holder cannot be told (no owner_email configured,
+	// or a linked sign-in with no address to compare) and the absorbed account has
+	// a linked sign-in at all. It fails closed: when the plan cannot say the
+	// owner's sign-in is not on the account being merged away, the admin says so.
+	OwnerIdentityAckRequired bool `json:"owner_identity_ack_required"`
 
 	RolesGained  []string `json:"roles_gained"`
 	EmailOutcome string   `json:"email_outcome"`
@@ -155,6 +161,10 @@ type builder struct {
 	counts  map[string]*FamilyCount
 	plan    *Plan
 	refused []string
+	// unit is the group the ops touched next belong to ("" for none): see
+	// database.UserMergeOp.Unit. A unit's ops are written in one batch and undone
+	// together or not at all.
+	unit string
 }
 
 func newBuilder(s *Service, p *Plan) *builder {
@@ -190,9 +200,12 @@ func (b *builder) touch(family, key string) (*database.UserMergeOp, error) {
 	}
 	cur, err := b.s.store.GetRaw(key)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
+		// The key stays out of the error: it can carry an email address or a
+		// token, and this text reaches operation rows.
+		return nil, fmt.Errorf("read a %s row: %w", family, err)
 	}
-	op := &database.UserMergeOp{Key: key, Family: family, BeforeAbsent: cur == nil, Before: cur}
+	op := &database.UserMergeOp{Key: key, Family: family, BeforeAbsent: cur == nil, Before: cur,
+		Unit: b.unit, Derived: strings.HasPrefix(key, "idx:")}
 	b.ops[key] = op
 	return op, nil
 }
@@ -203,6 +216,19 @@ func (b *builder) set(family, key, reason string, value []byte) error {
 		return err
 	}
 	op.After, op.Delete, op.Reason = bytes.Clone(value), false, reason
+	return nil
+}
+
+// setOwner re-owns a row in place: only field changes, from one account to the
+// other, in the row as it is when the op is applied. The row's other fields are
+// neither read into the digest nor overwritten (see database.UserMergeOp).
+func (b *builder) setOwner(family, key, field, from, to, reason string) error {
+	op, err := b.touch(family, key)
+	if err != nil {
+		return err
+	}
+	op.OwnerField, op.OwnerFrom, op.OwnerTo, op.Reason = field, from, to, reason
+	op.Before, op.After, op.BeforeAbsent, op.Delete = nil, nil, false, false
 	return nil
 }
 
@@ -218,26 +244,42 @@ func (b *builder) del(family, key, reason string) error {
 	return nil
 }
 
-// finalize returns the ops that change something, sets before deletes (a crash
-// partway leaves duplicates, never a loss), each group in key order.
+// finalize returns the ops that change something, in an order that is safe to
+// stop in. Unit-less writes go first and unit-less deletes last (a crash between
+// them leaves duplicates, never a loss); every unit sits between them whole and
+// in unit order, because a unit is written in one batch and a chunk never splits
+// one. Within each group, key order.
 func (b *builder) finalize() []database.UserMergeOp {
-	out := make([]database.UserMergeOp, 0, len(b.ops))
+	var sets, units, deletes []database.UserMergeOp
 	for _, op := range b.ops {
-		if op.Delete && op.BeforeAbsent {
+		switch {
+		case op.IsOwnerOp():
+		case op.Delete && op.BeforeAbsent:
 			continue // deleting a key that is not there
-		}
-		if !op.Delete && !op.BeforeAbsent && bytes.Equal(op.Before, op.After) {
+		case !op.Delete && !op.BeforeAbsent && bytes.Equal(op.Before, op.After):
 			continue // writing what is already there
 		}
-		out = append(out, *op)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Delete != out[j].Delete {
-			return !out[i].Delete
+		switch {
+		case op.Unit != "":
+			units = append(units, *op)
+		case op.Delete:
+			deletes = append(deletes, *op)
+		default:
+			sets = append(sets, *op)
 		}
-		return out[i].Key < out[j].Key
+	}
+	byKey := func(s []database.UserMergeOp) {
+		sort.Slice(s, func(i, j int) bool { return s[i].Key < s[j].Key })
+	}
+	byKey(sets)
+	byKey(deletes)
+	sort.Slice(units, func(i, j int) bool {
+		if units[i].Unit != units[j].Unit {
+			return units[i].Unit < units[j].Unit
+		}
+		return units[i].Key < units[j].Key
 	})
-	return out
+	return append(append(sets, units...), deletes...)
 }
 
 // BuildPlan builds the preview: which rows move or merge, the conflicts and how
@@ -392,7 +434,21 @@ func (s *Service) planAccounts(p *Plan, surv, abs *database.User) {
 	switch {
 	case surv.Email != "":
 		p.EmailOutcome = "the surviving account keeps its own email address"
-		if abs.Email != "" && !util.SameEmail(abs.Email, surv.Email) {
+		sameAddr := abs.Email != "" && util.SameEmail(abs.Email, surv.Email)
+		absVerified := abs.Email != "" && database.EmailSourceIsTrusted(abs.EmailSource)
+		switch {
+		case sameAddr && absVerified && !database.EmailSourceIsTrusted(surv.EmailSource):
+			// Both accounts hold this address and only the merged-away one proved it.
+			// Without this the survivor would keep an unverified copy, nobody would
+			// hold the address verified, and the owner's next SSO login with it would
+			// create a new, non-admin account (oauth.ResolveUser step 5). The proof
+			// transfers: the address becomes verified (source admin) on the survivor.
+			survAfter.EmailSource = database.EmailSourceAdmin
+			p.EmailOutcome = "the surviving account keeps this address and it becomes verified: the merged-away account held it verified, so nothing is lost"
+		case abs.Email != "" && !sameAddr && absVerified:
+			p.EmailOutcome = "the surviving account keeps its own email address. WARNING: the merged-away account's verified address is released, so no account holds it after the merge; signing in with it, without a linked sign-in, would create a new non-admin account"
+			p.Warnings = append(p.Warnings, "the merged-away account's verified email address is released and not carried over; link its sign-in to the surviving account first, or set that address on the surviving account")
+		case abs.Email != "" && !sameAddr:
 			p.Warnings = append(p.Warnings, "the merged-away account's email address is released and not carried over; the surviving account keeps its own")
 		}
 	case abs.Email != "":
@@ -439,7 +495,8 @@ func (s *Service) reportIdentities(p *Plan, surv, abs *database.UserData) error 
 		for _, r := range rows {
 			var id database.OAuthIdentity
 			if err := json.Unmarshal(r.Value, &id); err != nil {
-				return false, fmt.Errorf("decode %s: %w", r.Key, err)
+				// The row key stays out of the error (it reaches operation rows).
+				return false, fmt.Errorf("decode a linked sign-in: %w", err)
 			}
 			isOwner := owner != "" && util.NormalizeEmail(id.Email) == owner
 			hit = hit || isOwner
@@ -470,6 +527,20 @@ func (s *Service) reportIdentities(p *Plan, surv, abs *database.UserData) error 
 		p.OwnerIdentityHolder = HolderNone
 	}
 	p.OwnerIdentityOnAbsorbed = aHit
+	// Fail closed. Only the absorbed side's identities matter: that is the side
+	// whose sign-ins the merge re-links away from the account they were created on.
+	absUnknown := owner == "" && len(p.AbsorbedIdentities) > 0
+	if owner != "" {
+		for _, id := range p.AbsorbedIdentities {
+			if id.Email == "" {
+				absUnknown = true
+			}
+		}
+		if absUnknown && !aHit {
+			p.Warnings = append(p.Warnings, "a sign-in on the account being merged away has no address, so the plan cannot tell whether it is the owner's; the merge needs your acknowledgement")
+		}
+	}
+	p.OwnerIdentityAckRequired = aHit || absUnknown
 	// The same provider on both sides is allowed (both move) but worth saying.
 	seen := map[string]bool{}
 	for _, id := range p.SurvivorIdentities {
@@ -737,13 +808,15 @@ func (b *builder) planListenStats(_ context.Context, surv, abs *database.User, d
 }
 
 // planIndexed plans the two families reached through a per-user index entry
-// (linked identities, API keys): the primary row keeps its key and gets its
-// user_id rewritten, and the index entry moves.
+// (linked identities, API keys). The primary row keeps its key and its owner
+// field alone changes (an owner-field op: an API key is rewritten on every
+// request, and a merge must not compare or overwrite its use counters), and the
+// index entry moves. The row and both index entries are one unit.
 func (b *builder) planIndexed(family string, rows []database.UserDataRow, surv, abs *database.User, indexKey func(user, id string) string, idPrefix string) error {
 	for _, r := range rows {
 		b.count(family).Rows++
 		id := strings.TrimPrefix(r.Key, idPrefix)
-		moved, owner, err := database.RewriteJSONField(r.Value, "user_id", surv.ID)
+		owner, err := database.JSONStringField(r.Value, "user_id")
 		if err != nil {
 			b.refuse("cannot read %s row %s: %v", family, r.Key, err)
 			continue
@@ -752,13 +825,16 @@ func (b *builder) planIndexed(family string, rows []database.UserDataRow, surv, 
 			b.refuse("%s row %s names owner %q, not the merged-away account", family, r.Key, owner)
 			continue
 		}
-		if err := b.set(family, r.Key, "re-linked to the surviving account", moved); err != nil {
-			return err
+		b.unit = family + ":" + id
+		err = b.setOwner(family, r.Key, "user_id", abs.ID, surv.ID, "re-linked to the surviving account")
+		if err == nil {
+			err = b.del(family, indexKey(abs.ID, id), "moved to the surviving account")
 		}
-		if err := b.del(family, indexKey(abs.ID, id), "moved to the surviving account"); err != nil {
-			return err
+		if err == nil {
+			err = b.set(family, indexKey(surv.ID, id), "moved from the merged-away account", []byte("1"))
 		}
-		if err := b.set(family, indexKey(surv.ID, id), "moved from the merged-away account", []byte("1")); err != nil {
+		b.unit = ""
+		if err != nil {
 			return err
 		}
 	}
@@ -858,6 +934,11 @@ func decodePositions(b *builder, rows []database.UserDataRow) ([]database.UserPo
 
 func (b *builder) planBook(bookID string, surv, abs *database.User, absState *database.UserDataRow, absPositions []database.UserDataRow) error {
 	const fam = FamBookState
+	// One unit per book: the survivor's ubs: row, both accounts' status index
+	// entries and every upos: row move together, so an undo never reverts an index
+	// entry while keeping the row it indexes (or the other way round).
+	b.unit = "book:" + bookID
+	defer func() { b.unit = "" }()
 	var absSide, keptSide merge.UserStateSide
 	if absState != nil {
 		st, ok := decode[database.UserBookState](b, fam, absState.Key, absState.Value)
