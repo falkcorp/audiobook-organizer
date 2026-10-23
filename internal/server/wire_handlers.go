@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.56.0
+// version: 2.57.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package server
 
@@ -27,6 +27,7 @@ import (
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/gin-gonic/gin"
 )
 
@@ -46,6 +47,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	userH.SetAuthEnabled(config.AppConfig.EnableAuth)
 	userH.SetInviteDelivery(s.inviteDelivery())
 	userH.SetGuestAccessRevoker(s.revokeGuestAccess)
+	// Typed-nil guards: a nil *Service or *Registry stored in an interface is
+	// non-nil, and the merge routes answer 503 only for a nil interface.
+	if um := s.UserMerge(); um != nil && s.opRegistry != nil {
+		userH.SetUserMerge(um, s.opRegistry, usermerge.DefaultGrants)
+	}
 	authH.SetGuestAccessRevoker(s.revokeGuestAccess)
 
 	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH, userH)
