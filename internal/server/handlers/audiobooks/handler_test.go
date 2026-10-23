@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -578,6 +578,93 @@ func TestListBookFiles_DiskCheckFalseSkipsStat(t *testing.T) {
 	if len(env.Data.Files) != 1 || env.Data.Files[0].FileExists != nil || env.Data.Files[0].FileCheckError != "not checked" {
 		t.Fatalf("want file_exists=null file_check_error=not checked, got %s", w.Body.String())
 	}
+}
+
+// retiredReadingStore advertises database.RetiredBookFileReader on top of the
+// mock, the way the production store does; only the include-retired listing is
+// real, the other readers are never reached by ListBookFiles.
+type retiredReadingStore struct {
+	audiobookshandler.AudiobooksStore
+	all []database.BookFile
+}
+
+func (s retiredReadingStore) GetBookFilesIncludingRetired(string) ([]database.BookFile, error) {
+	return s.all, nil
+}
+func (retiredReadingStore) GetRetiredBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+func (retiredReadingStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return nil, nil
+}
+func (retiredReadingStore) GetRetiredVersionsFromBook(string) ([]database.BookVersion, error) {
+	return nil, nil
+}
+func (retiredReadingStore) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
+}
+
+// TestListBookFiles_IncludeRetired: the default listing never shows a retired
+// row (the store's GetBookFiles is the only read); ?include_retired=true reads
+// through the retired reader instead and flags each retired row.
+func TestListBookFiles_IncludeRetired(t *testing.T) {
+	type resp struct {
+		Data struct {
+			Files []struct {
+				ID        string `json:"id"`
+				Retired   bool   `json:"retired"`
+				VersionID string `json:"version_id"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	live := database.BookFile{ID: "live", BookID: "b1", FilePath: "/lib/b1/01.m4b"}
+	gone := database.BookFile{ID: "gone", BookID: "b1", FilePath: "/lib/shell/01.m4b", Retired: true, VersionID: "v-retired"}
+
+	t.Run("default is live only", func(t *testing.T) {
+		h, d := newHandlerWithStore(t, func(m *audiobooksmocks.MockAudiobooksStore) audiobookshandler.AudiobooksStore {
+			return retiredReadingStore{AudiobooksStore: m, all: []database.BookFile{live, gone}}
+		})
+		d.store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{live}, nil)
+		c, w := newCtx("GET", "/audiobooks/b1/files?disk_check=false", nil, p("id", "b1"))
+		h.ListBookFiles(c)
+		var env resp
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(env.Data.Files) != 1 || env.Data.Files[0].ID != "live" || env.Data.Files[0].Retired {
+			t.Fatalf("want only the live row, got %s", w.Body.String())
+		}
+	})
+	t.Run("include_retired adds and flags", func(t *testing.T) {
+		h, _ := newHandlerWithStore(t, func(m *audiobooksmocks.MockAudiobooksStore) audiobookshandler.AudiobooksStore {
+			return retiredReadingStore{AudiobooksStore: m, all: []database.BookFile{live, gone}}
+		})
+		c, w := newCtx("GET", "/audiobooks/b1/files?disk_check=false&include_retired=true", nil, p("id", "b1"))
+		h.ListBookFiles(c)
+		var env resp
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(env.Data.Files) != 2 {
+			t.Fatalf("want both rows, got %s", w.Body.String())
+		}
+		if env.Data.Files[0].Retired || !env.Data.Files[1].Retired || env.Data.Files[1].VersionID != "v-retired" {
+			t.Fatalf("want the second row flagged retired with its version, got %s", w.Body.String())
+		}
+	})
+	t.Run("only true counts", func(t *testing.T) {
+		h, d := newHandlerWithStore(t, func(m *audiobooksmocks.MockAudiobooksStore) audiobookshandler.AudiobooksStore {
+			return retiredReadingStore{AudiobooksStore: m, all: []database.BookFile{live, gone}}
+		})
+		d.store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{live}, nil)
+		c, w := newCtx("GET", "/audiobooks/b1/files?disk_check=false&include_retired=1", nil, p("id", "b1"))
+		h.ListBookFiles(c)
+		var env resp
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(env.Data.Files) != 1 {
+			t.Fatalf("include_retired=1 must not include retired rows, got %s", w.Body.String())
+		}
+	})
 }
 
 func TestPatchBookFile_NotFound(t *testing.T) {

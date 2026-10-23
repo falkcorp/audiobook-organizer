@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit
@@ -198,7 +198,10 @@ type groupMember struct {
 }
 
 // GetBook returns the full book row, every book_file row, and the version
-// group's members.
+// group's members. This is the debug view, so it lists EVERY row keyed under
+// the book, retired versions included: a retired row carries "retired": true
+// (and the retired version's id) in its own JSON, and retired_book_file_count
+// says how many of book_files they are. book_file_count counts all of them.
 func (h *Handler) GetBook(c *gin.Context) {
 	id := c.Param("id")
 	book, err := h.store.GetBookByID(id)
@@ -210,12 +213,19 @@ func (h *Handler) GetBook(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "book", id)
 		return
 	}
-	files, err := h.store.GetBookFiles(id)
+	files, err := database.BookFilesIncludingRetired(h.store, id)
 	if err != nil {
 		httputil.InternalError(c, "read book files", err)
 		return
 	}
-	resp := gin.H{"book": book, "book_files": files, "book_file_count": len(files)}
+	retired := 0
+	for i := range files {
+		if files[i].Retired {
+			retired++
+		}
+	}
+	resp := gin.H{"book": book, "book_files": files, "book_file_count": len(files),
+		"retired_book_file_count": retired}
 	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
 		members, err := h.store.GetBooksByVersionGroup(*book.VersionGroupID)
 		if err != nil {
@@ -264,6 +274,12 @@ func (h *Handler) GetBookFile(c *gin.Context) {
 		return
 	}
 	resp := gin.H{"book_file": f, "book_id": f.BookID}
+	if f.Retired {
+		// book_id is the HOLDER the row was retired into, not a book that plays
+		// it; the version names what it was retired out of.
+		resp["retired"] = true
+		resp["retired_version_id"] = f.VersionID
+	}
 	if book, err := h.store.GetBookByID(f.BookID); err != nil {
 		httputil.InternalError(c, "read owning book", err)
 		return
