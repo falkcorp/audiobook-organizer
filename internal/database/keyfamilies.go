@@ -179,6 +179,10 @@ var keyFamilies = []KeyFamily{
 	{"cat_series:", "catalog index by series", "internal/database/catalog_entry_store.go"},
 	{"cat_stale:", "catalog staleness index", "internal/database/catalog_entry_store.go"},
 
+	// ── Master lists (uploaded read-status / ISBN / ASIN lists) ──
+	{"mlist:list:", "master-list uploads: one metadata row per list", "internal/database/master_list_store.go"},
+	{"mlist:row:", "master-list rows, one per input row, in input order", "internal/database/master_list_store.go"},
+
 	// ── Decisions (internal/decisions): owner rejects/approves, never pruned ──
 	{"decision:ent:", "decision history index by entity (never pruned)", "internal/decisions/store.go"},
 	{"decision:mb:", "decision veto membership rows for rejected sets over 50 entities (never pruned)", "internal/decisions/store.go"},

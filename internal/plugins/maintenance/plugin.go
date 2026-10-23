@@ -120,6 +120,9 @@ func (p *Plugin) Repairs() *repairs.Registry {
 		if err := p.repairsReg.Register(newRetiredVersionsFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
+		if err := p.repairsReg.Register(newMasterListImportFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
 	})
 	return p.repairsReg
 }

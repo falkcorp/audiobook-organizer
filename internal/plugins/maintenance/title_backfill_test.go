@@ -253,6 +253,18 @@ func (d fakeDeps) BookTagWriter() repairs.TagStore { return d.store }
 // Server's does.
 func (d fakeDeps) UserReadStateStore() UserReadStateStore { return NewUserReadStateStore(d.store) }
 
+// MasterLists builds the list store over the fixture store's Pebble layer, as
+// Server's does; nil (an untyped nil interface) when the fixture has none.
+func (d fakeDeps) MasterLists() MasterListReader {
+	if st := database.NewMasterListStoreFromStore(d.store); st != nil {
+		return st
+	}
+	return nil
+}
+
+// ExternalIDBooks hands back the store unchanged, as Server's does.
+func (d fakeDeps) ExternalIDBooks() ExternalIDBookLookup { return d.store }
+
 // VersionPrimaryStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) VersionPrimaryStore() VersionPrimaryStore { return d.store }
 

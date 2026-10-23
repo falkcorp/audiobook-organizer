@@ -215,6 +215,20 @@ func (s *Server) UserReadStateStore() maintenanceplugin.UserReadStateStore {
 	return maintenanceplugin.NewUserReadStateStore(s.store)
 }
 
+// MasterLists serves the master-list import fixer the uploaded lists. It is
+// built over the store's Pebble layer (a capability resolved through the
+// decorator chain); nil, as an untyped nil interface, when there is none.
+func (s *Server) MasterLists() maintenanceplugin.MasterListReader {
+	if st := database.NewMasterListStoreFromStore(s.store); st != nil {
+		return st
+	}
+	return nil
+}
+
+// ExternalIDBooks serves the (source, source id) tier of the master-list
+// matcher. GetBookByExternalID is part of database.Store.
+func (s *Server) ExternalIDBooks() maintenanceplugin.ExternalIDBookLookup { return s.store }
+
 // ---- delegated run helpers ----
 
 func (s *Server) RunMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error {
