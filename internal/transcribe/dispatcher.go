@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-22
 
@@ -13,6 +13,7 @@ import (
 	"maps"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 )
@@ -265,32 +266,91 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	return results, nil
 }
 
+// allocCursor rotates which equal-priority endpoint an allocation offers
+// first. Without it every call starts at the same endpoint, and a caller that
+// sends one small batch per call (the per-file intro op sends 8 jobs per call)
+// would put every batch on endpoint 0 while the others idle.
+var allocCursor atomic.Uint64
+
+// endpointFreeSlots is how many request slots url has free right now: its
+// Concurrency (values < 1 mean 1) minus the slots currently held.
+func endpointFreeSlots(ep Endpoint) int {
+	return max(ep.Concurrency, 1) - inFlightDepth(ep.URL)
+}
+
 // allocateJobs assigns remaining jobs to healthy endpoints (already sorted by
-// ascending Priority). Each pass offers every endpoint up to
-// Concurrency×whisperBatchSize jobs in priority order; passes repeat until
-// all jobs are assigned, so overflow beyond total capacity distributes
-// proportionally to Concurrency while lower-Priority numbers fill first.
-// Job IDs are assigned in sorted order for determinism.
+// ascending Priority). See allocateJobsWith for the policy.
 func allocateJobs[J any](healthy []Endpoint, remaining map[string]J) []map[string]J {
+	return allocateJobsWith(healthy, remaining, endpointFreeSlots, int(allocCursor.Add(1)-1))
+}
+
+// allocateJobsWith assigns jobs capacity-first, then by overflow.
+//
+// Phase 1 (capacity-aware): one chunk of whisperBatchSize jobs is offered per
+// FREE request slot. Endpoints are visited tier by tier in ascending Priority
+// (a lower number fills first; jobs spill to the next tier only once every
+// slot in the tier is taken), and within a tier of equal Priority they are
+// visited round-robin starting at `start`, so equal endpoints share the work
+// instead of the first one taking it all. An endpoint whose slots are full is
+// skipped rather than queued behind.
+//
+// Phase 2 (overflow): when every slot in the pool is taken and jobs remain,
+// each pass offers every endpoint up to Concurrency x whisperBatchSize jobs in
+// priority order, so the excess queues on slots proportionally to Concurrency.
+// Job IDs are assigned in sorted order for determinism.
+func allocateJobsWith[J any](healthy []Endpoint, remaining map[string]J, free func(Endpoint) int, start int) []map[string]J {
 	assignments := make([]map[string]J, len(healthy))
 	ids := make([]string, 0, len(remaining))
 	for id := range remaining {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	chunk := max(whisperBatchSize(), 1)
 
 	pos := 0
+	give := func(i, n int) {
+		for k := 0; k < n && pos < len(ids); k++ {
+			if assignments[i] == nil {
+				assignments[i] = make(map[string]J)
+			}
+			assignments[i][ids[pos]] = remaining[ids[pos]]
+			pos++
+		}
+	}
+
+	// Phase 1: tiers of equal priority, round-robin inside a tier.
+	for lo := 0; lo < len(healthy) && pos < len(ids); {
+		hi := lo + 1
+		for hi < len(healthy) && healthy[hi].Priority == healthy[lo].Priority {
+			hi++
+		}
+		tier := hi - lo
+		slots := make([]int, tier)
+		for k := range tier {
+			slots[k] = max(free(healthy[lo+k]), 0)
+		}
+		for pos < len(ids) {
+			progressed := false
+			for k := range tier {
+				idx := (start + k) % tier
+				if slots[idx] == 0 || pos >= len(ids) {
+					continue
+				}
+				give(lo+idx, chunk)
+				slots[idx]--
+				progressed = true
+			}
+			if !progressed {
+				break
+			}
+		}
+		lo = hi
+	}
+
+	// Phase 2: every slot is taken; queue the rest in priority order.
 	for pos < len(ids) {
 		for i, ep := range healthy {
-			c := max(ep.Concurrency, 1)
-			take := c * whisperBatchSize()
-			for n := 0; n < take && pos < len(ids); n++ {
-				if assignments[i] == nil {
-					assignments[i] = make(map[string]J)
-				}
-				assignments[i][ids[pos]] = remaining[ids[pos]]
-				pos++
-			}
+			give(i, max(ep.Concurrency, 1)*chunk)
 			if pos >= len(ids) {
 				break
 			}
