@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-22
 
@@ -458,6 +458,7 @@ func (r *retiredRun) target(id string) (*retiredTarget, error) {
 			return nil, fmt.Errorf("read book_file rows of target %s: %w", id, err)
 		}
 		t := &retiredTarget{title: b.Title, files: len(files)}
+		//lint:ignore SA1019 the legacy book.itunes_path still marks an iTunes book until it is drained; the iTunes gate must read it or it would let an iTunes book be retired
 		paths := []string{b.FilePath, retiredDeref(b.ITunesPath)}
 		for i := range files {
 			if files[i].Missing {
@@ -808,6 +809,7 @@ func (r *retiredRun) countITunes(fa *retiredFacts) {
 // shellITunes runs the resolved iTunes check over every path of the shell:
 // the book's own two and each file row's two.
 func (r *retiredRun) shellITunes(fa *retiredFacts) (bool, string) {
+	//lint:ignore SA1019 the legacy book.itunes_path still marks an iTunes book until it is drained; the iTunes gate must read it or it would let an iTunes book be retired
 	paths := []string{fa.shell.FilePath, retiredDeref(fa.shell.ITunesPath)}
 	for i := range fa.files {
 		paths = append(paths, fa.files[i].FilePath, fa.files[i].ITunesPath)
