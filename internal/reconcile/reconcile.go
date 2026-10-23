@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-14
+// last-edited: 2026-10-23
 
 package reconcile
 
@@ -162,6 +162,12 @@ type VersionGroupCleanupResult struct {
 	// book_file rows: removing them would orphan those rows
 	// (database.ErrBookOwnsFiles), and their files are not deleted either.
 	SkippedOwnsFiles int `json:"skipped_owns_files"`
+	// SkippedHoldsRetired is the part of SkippedOwnsFiles whose rows include a
+	// retired version (a book_file row the retire-versions repair keyed under
+	// this book): a duplicate holding ONLY retired rows reads as having no
+	// files through GetBookFiles, so without this check it would be removed
+	// from disk and then refused by the store.
+	SkippedHoldsRetired int `json:"skipped_holds_retired"`
 	// StateCarried counts duplicates a user had listening state on whose
 	// state (progress, positions, bookmarks, ABS identity) was carried to
 	// the kept copy before the duplicate was removed
@@ -981,11 +987,26 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 			// file that is gone. Before the guard it deleted both and orphaned
 			// the rows. Fail closed on a read error. Checked in dry runs too,
 			// so the preview counts what an apply would really remove.
-			owned, ownErr := store.GetBookFiles(dup.ID)
+			//
+			// The rows are read INCLUDING retired ones: GetBookFiles skips them, so
+			// a duplicate that is the holder of retired versions and nothing else
+			// would look empty here, lose its file to os.Remove, and then be
+			// refused by DeleteBook (which counts every row key). It is kept and
+			// reported (SkippedHoldsRetired) instead of failing after the damage.
+			owned, ownErr := database.BookFilesIncludingRetired(store, dup.ID)
 			if ownErr != nil || len(owned) > 0 {
-				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: it still owns %d book_file row(s) (read error: %v)",
-					logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), len(owned), ownErr)
+				retired := 0
+				for i := range owned {
+					if owned[i].Retired {
+						retired++
+					}
+				}
+				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: it still owns %d book_file row(s), %d of them retired versions (read error: %v)",
+					logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), len(owned), retired, ownErr)
 				result.SkippedOwnsFiles++
+				if retired > 0 {
+					result.SkippedHoldsRetired++
+				}
 				continue
 			}
 			// A duplicate a user has listening state on is a hard delete
