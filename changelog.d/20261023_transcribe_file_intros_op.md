@@ -25,7 +25,8 @@ path and a 90 second length go to the worker.
 - Resumable with no checkpoint: a file is done when `IntroSourceHash == FileHash`
   (on `BookFileCore`, so selection is one memdb pass). A whisper error is
   retryable; an empty transcript at 90 s is stored as a done file marker. When
-  every endpoint is unreachable the SAME batch is retried five times with a
+  every endpoint is unreachable (a recognized network failure; a 5xx, decode error
+  or capability refusal is not retried and just defers the batch) the SAME batch is retried five times with a
   growing wait (1+2+3+4 minutes by default), writing nothing and keeping the
   progress line alive; if it stays down the run fails and the files stay undone.
 - A stored result is never degraded: silence never replaces a stored transcript
@@ -34,7 +35,11 @@ path and a 90 second length go to the worker.
   result the run did not write. A forced overwrite is reported as a replacement
   and is not counted as new coverage. "Already has a result" is one shared
   definition (`database.IntroResultPresent`) used by selection and the store, and
-  it now also counts a legacy `empty` status.
+  it now also counts a legacy `empty` status. A row that holds a transcript but
+  does not count as done (the book op keeps text under a failure status) is also
+  protected from fill-only overwrites and failure stamps, and a silence sentinel
+  the book op wrote is stamped once (without claiming it for the run) so it is no
+  longer re-sent every run.
 - Fills a book's transcript from its ordinal-0 file only when the book has none,
   and never from a silent clip. Nothing is ever overwritten under `only_missing`.
 - Refuses to start (and `clear_run_id` refuses to start) while `library.scan`,
@@ -69,4 +74,5 @@ The whisper dispatcher (`transcribe`) now allocates a call's jobs by free
 capacity: one chunk of eight per free slot, round-robin across endpoints of equal
 priority from a rotating start, spilling to a lower priority tier only when the
 higher one is saturated, and skipping an endpoint whose slots are full. Before,
-a small batch always went whole to the first healthy endpoint.
+a small batch always went whole to the first healthy endpoint, and under
+saturation the overflow pass rotates across equal-priority endpoints too.
