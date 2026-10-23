@@ -1,7 +1,7 @@
 // file: internal/merge/user_state_merge.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b1f6c2e-4d7a-4e83-a5c9-2f8e0d3b7a61
-// last-edited: 2026-10-05
+// last-edited: 2026-10-22
 
 package merge
 
@@ -208,6 +208,47 @@ func planUserStateMerge(userID, winnerBookID string, loser, winner userStateSide
 	return plan
 }
 
+// UserStateSide is one account's listening state on one book, for
+// CombineUserStates: its ubs: row (nil when it has none) and its upos: rows.
+type UserStateSide struct {
+	State     *database.UserBookState
+	Positions []database.UserPosition
+}
+
+// UserStateCombination is what CombineUserStates decided.
+type UserStateCombination struct {
+	// Carry is false when the absorbed side holds nothing a merge must carry
+	// (no positions, and a state row that is absent or drained): the kept side
+	// stays exactly as it is and State and PositionsFromAbsorbed are unset.
+	Carry bool
+	// State is the kept account's new ubs: row (its UserID is the kept
+	// account's), or nil when neither side has a state row.
+	State *database.UserBookState
+	// PositionsFromAbsorbed: the absorbed side's upos: rows replace the kept
+	// side's (each keeping its UpdatedAt). When false the kept side's rows stay.
+	PositionsFromAbsorbed bool
+}
+
+// CombineUserStates applies the per-user conflict rule of this file (finished
+// is sticky, newest position wins and a tie goes to the kept side, listened
+// time is the larger, last played is the later, hide is OR'd, reset
+// tombstones are unioned) to two ACCOUNTS' state on one book, for the admin
+// user merge: keepUserID is the account that survives, absorbed is the one
+// folded into it. It is the same rule a book merge applies to two BOOKS' state
+// for one user; planUserStateMerge takes the books' roles (loser, winner), so
+// the absorbed account plays the loser and the kept account the winner, and
+// the result is written under keepUserID and bookID. A pure function: it reads
+// and writes nothing.
+func CombineUserStates(keepUserID, bookID string, absorbed, kept UserStateSide) UserStateCombination {
+	if !hasCarryableState(absorbed.State, absorbed.Positions) {
+		return UserStateCombination{}
+	}
+	plan := planUserStateMerge(keepUserID, bookID,
+		userStateSide{state: absorbed.State, positions: absorbed.Positions},
+		userStateSide{state: kept.State, positions: kept.Positions})
+	return UserStateCombination{Carry: true, State: plan.state, PositionsFromAbsorbed: plan.loserPositionsWin}
+}
+
 // unionResetPositions unions the given sides' discarded positions in order
 // (oldest side first, so the newest resets sort last), and keeps the newest
 // database.MaxProgressResetPositions (the store's own bound). A nil side is
@@ -231,8 +272,10 @@ func unionResetPositions(sides ...*database.UserBookState) []float64 {
 }
 
 // drainedUserState neutralizes a loser row in place after its state moved.
-// There is no DeleteUserBookState; an empty Status also removes the row from
-// the ubs status index (PebbleStore.SetUserBookState), which keeps a
+// database.UserBookStateDeleter (PebbleStore.DeleteUserBookState, in
+// pebble_store_playback.go) removes a row outright, but this follow does not
+// use it: it clears the row instead, and an empty Status also removes the row
+// from the ubs status index (PebbleStore.SetUserBookState), which keeps a
 // merged-away book out of "in progress" listings. The hide flag is cleared
 // too: it has been OR'd onto the survivor, and leaving it would make the row
 // look carryable to the next follow (hasCarryableState).

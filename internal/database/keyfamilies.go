@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package database
 
@@ -68,6 +68,7 @@ var keyFamilies = []KeyFamily{
 	{"role:", "roles", "internal/database/pebble_store_auth.go"},
 	{"sess:", "web sessions", "internal/database/pebble_store_auth.go"},
 	{"u:", "users", "internal/database/pebble_store_auth.go"},
+	{"usermerge:journal:", "admin user-merge journals: every key written, with its before and after image (never pruned; the only way back)", "internal/database/user_merge.go"},
 
 	// ── Authors, narrators, series, works ──
 	{"author:", "author rows", "internal/database/pebble_store_authors.go"},

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package database
 
@@ -526,6 +526,15 @@ func runUserWriteAfterReadHook() {
 	}
 }
 
+// sameTimePtr compares two optional instants by value, not by pointer or
+// location (a time that went through JSON comes back in another Location).
+func sameTimePtr(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
 // ErrUserNotFound is returned by the field-scoped user ops for an unknown id.
 var ErrUserNotFound = errors.New("database: user not found")
 
@@ -534,12 +543,14 @@ var ErrUserNotFound = errors.New("database: user not found")
 var ErrUserStale = errors.New("database: user changed since it was read")
 
 // ErrUserProtectedField is returned by UpdateUser for a write that would change
-// the password hash or algorithm, Status or CredentialEpoch. Those change only
-// through SetUserPassword, SetUserStatus and BumpUserCredentialEpoch, which bump
-// the epoch on the fresh row. A caller that hits this either tried to change
-// one of them through the whole-row write (a bug) or is writing back a copy
-// read before one of those ops landed (re-read and retry).
-var ErrUserProtectedField = errors.New("database: UpdateUser cannot change password, status or credential epoch")
+// the password hash or algorithm, Status, CredentialEpoch, MergedIntoUserID or
+// MergedAt. The first four change only through SetUserPassword, SetUserStatus
+// and BumpUserCredentialEpoch, which bump the epoch on the fresh row; the merge
+// fields only through RetireMergedUser and UnretireMergedUser. A caller that
+// hits this either tried to change one of them through the whole-row write (a
+// bug) or is writing back a copy read before one of those ops landed (re-read
+// and retry).
+var ErrUserProtectedField = errors.New("database: UpdateUser cannot change password, status, credential epoch or merge state")
 
 // ErrUserEmailTaken is returned when an address is about to be made proven
 // for an account while another account already holds it proven, or when an
@@ -548,8 +559,9 @@ var ErrUserEmailTaken = errors.New("database: another account already has that e
 
 // UpdateUser rewrites a user row's ordinary fields (email, roles, ...). Under
 // userWriteMu it re-reads the stored row and refuses (ErrUserProtectedField) a
-// write whose password hash, algorithm, Status or CredentialEpoch differs from
-// it, so a whole-row write can never change, or revert, any of them. An unknown
+// write whose password hash, algorithm, Status, CredentialEpoch,
+// MergedIntoUserID or MergedAt differs from it, so a whole-row write can never
+// change, or revert, any of them. An unknown
 // id is ErrUserNotFound.
 //
 // An email change is never refused for being another account's address,
@@ -580,7 +592,8 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 		return fmt.Errorf("%w: %s", ErrUserNotFound, user.ID)
 	}
 	if user.PasswordHash != stored.PasswordHash || user.PasswordHashAlgo != stored.PasswordHashAlgo ||
-		user.Status != stored.Status || user.CredentialEpoch != stored.CredentialEpoch {
+		user.Status != stored.Status || user.CredentialEpoch != stored.CredentialEpoch ||
+		user.MergedIntoUserID != stored.MergedIntoUserID || !sameTimePtr(user.MergedAt, stored.MergedAt) {
 		return fmt.Errorf("%w (user %s)", ErrUserProtectedField, user.ID)
 	}
 	oldEmail := util.NormalizeEmail(stored.Email)
