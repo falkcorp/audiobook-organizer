@@ -1,5 +1,5 @@
 // file: internal/cfservicetoken/client_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b2e6c14-9d70-4a35-b8f1-2c4d7e9a1f63
 // last-edited: 2026-10-23
 
@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -286,5 +287,13 @@ func TestAnswerTextNeverDrivesBehaviour(t *testing.T) {
 	_, err := c.Create(context.Background(), Name("U1"))
 	if err == nil || errors.Is(err, ErrForbidden) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The owner's three tokens; cfaccesspolicy's test pins the same literal list,
+// which keeps the two layer-0 copies equal.
+func TestProtectedIDPrefixesAreTheOwnersThree(t *testing.T) {
+	if !reflect.DeepEqual(protectedIDPrefixes, []string{"90a520fb", "56ffe232", "790ef191"}) {
+		t.Fatalf("protected prefixes changed: %v", protectedIDPrefixes)
 	}
 }
