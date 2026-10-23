@@ -1,5 +1,5 @@
 // file: internal/server/guest_service_tokens_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d8a2f63-7b19-4c50-a3e8-1f6c9b0d5e27
 // last-edited: 2026-10-23
 
@@ -84,7 +84,6 @@ type fakeTokenPolicy struct {
 	removed   []string
 	ensureErr error
 	removeErr error
-	ensureRes cfaccesspolicy.Result
 }
 
 func (f *fakeTokenPolicy) EnsureServiceToken(_ context.Context, id string) (cfaccesspolicy.Result, error) {
@@ -611,16 +610,5 @@ func TestGuestTokenIssue_NeverPrintsTheSecret(t *testing.T) {
 		if strings.Contains(s, fakeSecret) {
 			t.Fatalf("secret printed: %s", s)
 		}
-	}
-}
-
-// The two layer-0 packages each carry the owner-token prefix list (they cannot
-// import each other); they must stay identical.
-func TestProtectedPrefixesMatch(t *testing.T) {
-	if !reflect.DeepEqual(cfservicetoken.ProtectedIDPrefixes(), cfaccesspolicy.ProtectedTokenPrefixes()) {
-		t.Fatalf("protected prefixes differ: %v vs %v", cfservicetoken.ProtectedIDPrefixes(), cfaccesspolicy.ProtectedTokenPrefixes())
-	}
-	if len(cfservicetoken.ProtectedIDPrefixes()) != 3 {
-		t.Fatal("the three owner tokens must be protected")
 	}
 }

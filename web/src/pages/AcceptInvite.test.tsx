@@ -1,7 +1,7 @@
 // file: web/src/pages/AcceptInvite.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c9e5a17-8b42-4d6f-a1e0-7f2b8d4c9e53
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -140,5 +140,99 @@ describe('AcceptInvite', () => {
     await user.type(screen.getByLabelText(/confirm password/i), 'long-enough-pw');
     await user.click(screen.getByRole('button', { name: /create my account/i }));
     await waitFor(() => expect(screen.getByText('invite already used')).toBeInTheDocument());
+  });
+
+  it('promises a one-time key before accept when the lookup says one will be minted', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          data: { username: 'guest', expires_at: '2026-10-22T12:00:00Z', phone_app_token: true },
+        })
+      )
+    );
+    renderPage();
+    await screen.findByLabelText(/choose a password/i);
+    expect(screen.getByText(/shows your own phone-app key once/i)).toBeInTheDocument();
+    expect(screen.queryByText(/CF-Access-Client/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the guest their own key exactly once after accept', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.endsWith('/accept-invite')
+          ? jsonResponse(
+              {
+                data: {
+                  user: { username: 'guest' },
+                  phone_app: {
+                    status: 'issued',
+                    client_id: 'abc123.access',
+                    client_secret: 'test-secret-value',
+                    id_header: 'CF-Access-Client-Id',
+                    secret_header: 'CF-Access-Client-Secret',
+                  },
+                },
+              },
+              201
+            )
+          : jsonResponse({
+              data: {
+                username: 'guest',
+                expires_at: '2026-10-22T12:00:00Z',
+                phone_app_token: true,
+              },
+            })
+      )
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(await screen.findByLabelText(/choose a password/i), 'long-enough-pw');
+    await user.type(screen.getByLabelText(/confirm password/i), 'long-enough-pw');
+    await user.click(screen.getByRole('button', { name: /create my account/i }));
+    expect(await screen.findByTestId('phone-app-client-id')).toHaveTextContent('abc123.access');
+    expect(screen.getByTestId('phone-app-client-secret')).toHaveTextContent('test-secret-value');
+    expect(screen.getByText(/only once/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/CF-Access-Client-Id/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/CF-Access-Client-Secret/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/will be added to your account soon/i)).not.toBeInTheDocument();
+  });
+
+  it('says so when the key could not be created, without blocking the account', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.endsWith('/accept-invite')
+          ? jsonResponse(
+              {
+                data: {
+                  user: { username: 'guest' },
+                  phone_app: {
+                    status: 'unavailable',
+                    message:
+                      'Your phone-app key could not be created. Ask the person who invited you.',
+                  },
+                },
+              },
+              201
+            )
+          : jsonResponse({
+              data: {
+                username: 'guest',
+                expires_at: '2026-10-22T12:00:00Z',
+                phone_app_token: true,
+              },
+            })
+      )
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(await screen.findByLabelText(/choose a password/i), 'long-enough-pw');
+    await user.type(screen.getByLabelText(/confirm password/i), 'long-enough-pw');
+    await user.click(screen.getByRole('button', { name: /create my account/i }));
+    expect(await screen.findByText(/is ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/phone-app key could not be created/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('phone-app-client-secret')).not.toBeInTheDocument();
   });
 });

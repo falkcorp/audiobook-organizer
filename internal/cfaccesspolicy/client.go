@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/client.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: c863e806-fb62-4ceb-9226-d971b7d4d048
 // last-edited: 2026-10-23
 
@@ -362,13 +362,11 @@ func (c *Client) RemoveServiceToken(ctx context.Context, tokenID string) (Result
 var ErrProtectedToken = errors.New("cfaccesspolicy: refusing to touch a protected service token")
 
 // protectedTokenPrefixes: see cfservicetoken.protectedIDPrefixes, which this
-// copies (layer 0 imports nothing); TestProtectedPrefixesMatch keeps them equal.
+// copies (layer 0 imports nothing); each package's test pins its list to the
+// same three owner prefixes, which keeps them equal.
 var protectedTokenPrefixes = []string{"90a520fb", "56ffe232", "790ef191"}
 
 var tokenIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-// ProtectedTokenPrefixes returns a copy of the protected id prefixes (tests).
-func ProtectedTokenPrefixes() []string { return append([]string(nil), protectedTokenPrefixes...) }
 
 func checkedServiceTokenSpec(tokenID string) (ruleSpec, error) {
 	id := strings.ToLower(tokenID)

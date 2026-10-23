@@ -1,5 +1,5 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
 // last-edited: 2026-10-23
 
@@ -62,7 +62,8 @@ const guestTokenTimeout = 45 * time.Second
 // Admin-facing wording. None of it goes to the guest.
 const (
 	guestTokenForbiddenMsg = "Cloudflare refused (HTTP 403): the server's API token (CF_POLICY_API_TOKEN) is missing the " +
-		"Account > Access: Service Tokens > Edit permission. Add it, then invite this guest again"
+		"Account > Access: Service Tokens > Edit permission. Add it. This guest's account works in a browser; " +
+		"there is no way to issue a phone-app key to an account that has already accepted its invitation yet"
 	// guestTokenUnavailableMsg is all the guest is told when a mint fails.
 	guestTokenUnavailableMsg = "Phone app access could not be set up automatically. Your account works in a browser; ask the person who invited you about the phone app."
 )
