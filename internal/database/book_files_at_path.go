@@ -1,7 +1,7 @@
 // file: internal/database/book_files_at_path.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 69f97b8f-0d70-497f-867c-a8be4011ceb8
-// last-edited: 2026-10-10
+// last-edited: 2026-10-23
 
 package database
 
@@ -47,7 +47,7 @@ func (p *PebbleStore) BookFilesAtPath(path string) ([]BookFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBookFilesAtPathUnavailable, err)
 	}
-	if hit, err := p.GetBookFileByPath(path); err != nil {
+	if hit, err := p.getBookFileByPathAny(path); err != nil {
 		return nil, err
 	} else if hit != nil {
 		refs = append(refs, [2]string{hit.BookID, hit.ID})
