@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package server
 
@@ -745,6 +745,15 @@ func TestHasCloudflareMarkers(t *testing.T) {
 // already limited does not spend a global slot.
 func TestInviteRateLimit_GlobalIsCheckedBeforeAnyBucketIsCreated(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
+	// The production buckets refill (the global one 5 tokens a second), and a
+	// -race run on a loaded runner can take longer than that to send the
+	// requests below, so the global layer would earn a token mid-test and admit
+	// a request this test expects to be refused ("request 12 past the global
+	// ceiling: 200, want 429", seen in CI at 0.21s). Keep the production
+	// bursts and refill once a minute, so the counts below hold however slowly
+	// the requests are scheduled.
+	h.limits.global = servermiddleware.NewIPRateLimiter(1, inviteGlobalRateBurst)
+	h.limits.perClient = servermiddleware.NewIPRateLimiter(1, inviteAuthRateBurst)
 	// A limited client: its refused requests leave the global budget alone.
 	if _, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
 		return h.get(inviteTestToken(i), "198.51.100.5", nil)

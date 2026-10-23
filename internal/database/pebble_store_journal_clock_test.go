@@ -1,16 +1,22 @@
 // file: internal/database/pebble_store_journal_clock_test.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 7e2b94d1-35c8-4a60-9f17-d08a6b3c5e29
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"math/rand"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // steppingClock is a wall clock the test moves by hand, backwards included.
@@ -31,6 +37,7 @@ func (c *steppingClock) set(t time.Time) {
 	c.t = t
 }
 
+// persistedClock reads the persisted ceiling.
 func persistedClock(t testing.TB, p *PebbleStore) (int64, bool) {
 	t.Helper()
 	v, closer, err := p.db.Get([]byte(journalClockKey))
@@ -55,7 +62,7 @@ func TestJournalClock_StrictlyIncreasesUnderAFrozenAndSteppedBackWallClock(t *te
 	var c journalClock
 	wall := &steppingClock{t: time.Unix(1_800_000_000, 0)}
 	c.wall = wall.now
-	_, prev := c.stamp()
+	_, prev, _ := c.stamp(nil)
 	for i := 0; i < 1000; i++ {
 		switch {
 		case i%100 == 50:
@@ -63,7 +70,10 @@ func TestJournalClock_StrictlyIncreasesUnderAFrozenAndSteppedBackWallClock(t *te
 		case i%100 == 90:
 			wall.set(wall.now().Add(2 * time.Hour)) // and forward past the mark
 		}
-		w, n := c.stamp()
+		w, n, err := c.stamp(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if n <= prev {
 			t.Fatalf("step %d: sequence %d is not after %d", i, n, prev)
 		}
@@ -85,7 +95,7 @@ func TestJournalClock_ConcurrentValuesAreDistinct(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < per; i++ {
-				_, n := c.stamp()
+				_, n, _ := c.stamp(nil)
 				out <- n
 			}
 		}()
@@ -104,11 +114,76 @@ func TestJournalClock_ConcurrentValuesAreDistinct(t *testing.T) {
 	}
 }
 
-// A journal write persists the clock in its own batch and stamps its rows from
-// it: two rows written with the wall clock stepped back between them are still
-// in the order they were written by sequence, while CreatedAt stays the wall
-// time.
-func TestJournalClock_WritesAreStampedAndPersistedInOrderAcrossAStepBack(t *testing.T) {
+// The ceiling is persisted once per window of sequence time, always before a
+// value at or past the previous one is handed out, and a failed persist hands
+// nothing out.
+func TestJournalClock_CeilingIsPersistedOncePerWindowAndBeforeAnyValueReachesIt(t *testing.T) {
+	var c journalClock
+	wall := &steppingClock{t: time.Unix(1_800_000_000, 0)}
+	c.wall = wall.now
+	var calls []int64
+	var failNext bool
+	persist := func(ceiling int64) error {
+		if failNext {
+			failNext = false
+			return errors.New("disk full")
+		}
+		calls = append(calls, ceiling)
+		return nil
+	}
+	var first int64
+	for i := 0; i < 10_000; i++ { // a frozen wall clock: each value is one nanosecond on
+		_, n, err := c.stamp(persist)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) == 0 || n >= calls[len(calls)-1] {
+			t.Fatalf("value %d was handed out at or past the persisted ceiling %v", n, calls)
+		}
+		if i == 0 {
+			first = n
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("%d ceiling writes for 10,000 stamps inside one window, want 1", len(calls))
+	}
+	if calls[0] != first+int64(journalClockWindow) {
+		t.Fatalf("the ceiling %d is not one window past the first value %d", calls[0], first)
+	}
+	// The wall clock moves on past the ceiling: one more write, before the value.
+	wall.set(wall.now().Add(2 * journalClockWindow))
+	_, n, err := c.stamp(persist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || n >= calls[1] || calls[1] <= calls[0] {
+		t.Fatalf("after the wall clock jumped past the window: value %d, ceilings %v", n, calls)
+	}
+	// A wall clock that steps back changes nothing: still inside the ceiling.
+	wall.set(wall.now().Add(-5 * time.Hour))
+	if _, m, err := c.stamp(persist); err != nil || m <= n || len(calls) != 2 {
+		t.Fatalf("after a step back: value %d (was %d), %d writes, err %v", m, n, len(calls), err)
+	}
+	// A persist that fails hands out nothing and leaves the clock where it was.
+	wall.set(time.Unix(1_800_000_000, 0).Add(24 * time.Hour))
+	failNext = true
+	before := c.high()
+	if _, _, err := c.stamp(persist); err == nil {
+		t.Fatal("a failed ceiling write must surface")
+	}
+	if c.high() != before {
+		t.Fatalf("a failed stamp moved the clock: %d -> %d", before, c.high())
+	}
+	if _, k, err := c.stamp(persist); err != nil || k <= before {
+		t.Fatalf("the retry after a failed write: %d, %v (before %d)", k, err, before)
+	}
+}
+
+// A journal write stamps its rows from the clock: two rows written with the wall
+// clock stepped back between them are still in the order they were written by
+// sequence, while CreatedAt stays the wall time. The persisted ceiling is at or
+// above both.
+func TestJournalClock_WritesAreStampedAndCoveredByTheCeilingAcrossAStepBack(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	wall := &steppingClock{t: time.Unix(1_800_000_000, 0)}
 	p.SetJournalWallClock(wall.now)
@@ -127,8 +202,8 @@ func TestJournalClock_WritesAreStampedAndPersistedInOrderAcrossAStepBack(t *test
 	if !second.CreatedAt.Before(first.CreatedAt) || !second.CreatedAt.Equal(wall.now()) {
 		t.Fatalf("CreatedAt must stay the wall time: first %v, second %v, wall %v", first.CreatedAt, second.CreatedAt, wall.now())
 	}
-	if v, ok := persistedClock(t, p); !ok || v != second.CreatedSeq {
-		t.Fatalf("persisted clock = %d, %v; want the last sequence %d", v, ok, second.CreatedSeq)
+	if v, ok := persistedClock(t, p); !ok || v < second.CreatedSeq {
+		t.Fatalf("persisted ceiling = %d, %v; want at least the last sequence %d", v, ok, second.CreatedSeq)
 	}
 	// A mark takes its sequence from the same clock: after both rows although
 	// the wall clock is a day behind them.
@@ -145,13 +220,14 @@ func TestJournalClock_WritesAreStampedAndPersistedInOrderAcrossAStepBack(t *test
 	if !rows[0].RevertedAt.Equal(wall.now()) {
 		t.Fatalf("RevertedAt %v must stay the wall time %v", rows[0].RevertedAt, wall.now())
 	}
-	if v, _ := persistedClock(t, p); v != rows[0].RevertedSeq {
-		t.Fatalf("persisted clock = %d, want the mark's %d", v, rows[0].RevertedSeq)
+	if v, _ := persistedClock(t, p); v < rows[0].RevertedSeq {
+		t.Fatalf("persisted ceiling = %d, below the mark's %d", v, rows[0].RevertedSeq)
 	}
 }
 
-// A row written reverted (a void) takes RevertedSeq from its write unless it
-// carries one.
+// A row written reverted (a void) takes RevertedSeq from its write; a rewrite
+// that carries an older RevertedSeq has it raised to the new CreatedSeq (no row
+// is reverted before it was created), and one above it is kept.
 func TestJournalClock_ABornRevertedRowIsStampedWithARevertedSeq(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	row := listRow("op1", "a", "S", "collection:L")
@@ -167,18 +243,28 @@ func TestJournalClock_ABornRevertedRowIsStampedWithARevertedSeq(t *testing.T) {
 	if void.RevertedSeq == 0 || void.RevertedSeq < row.CreatedSeq {
 		t.Fatalf("void RevertedSeq = %d, want a stamp after the row's %d", void.RevertedSeq, row.CreatedSeq)
 	}
+	// A rewrite of the reverted row carrying its old, now smaller, RevertedSeq.
+	rewrite := void
+	rewrite.RevertedSeq = 42
+	if err := p.CreateOperationChange(&rewrite); err != nil {
+		t.Fatal(err)
+	}
+	if rewrite.RevertedSeq < rewrite.CreatedSeq {
+		t.Fatalf("a rewrite reverted at %d before it was created at %d", rewrite.RevertedSeq, rewrite.CreatedSeq)
+	}
+	// A supplied RevertedSeq above the new CreatedSeq is the caller's to set.
 	kept := *row
 	kept.ID = "b"
-	kept.RevertedAt, kept.RevertedSeq = &now, 42
+	kept.RevertedAt, kept.RevertedSeq = &now, 1<<62
 	if err := p.CreateOperationChange(&kept); err != nil {
 		t.Fatal(err)
 	}
-	if kept.RevertedSeq != 42 {
-		t.Fatalf("a supplied RevertedSeq was overwritten: %d", kept.RevertedSeq)
+	if kept.RevertedSeq != 1<<62 {
+		t.Fatalf("a supplied RevertedSeq above CreatedSeq was changed: %d", kept.RevertedSeq)
 	}
 }
 
-// A batch takes one sequence per row, in order, and persists the last.
+// A batch takes one sequence per row, in order, and the ceiling covers the last.
 func TestJournalClock_BatchRowsAreStampedInOrder(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	p.SetJournalWallClock((&steppingClock{t: time.Unix(1_800_000_000, 0)}).now)
@@ -191,68 +277,266 @@ func TestJournalClock_BatchRowsAreStampedInOrder(t *testing.T) {
 			t.Fatalf("row %d not after row %d", i, i-1)
 		}
 	}
-	if v, _ := persistedClock(t, p); v != rows[2].CreatedSeq {
-		t.Fatalf("persisted = %d, want %d", v, rows[2].CreatedSeq)
+	if v, _ := persistedClock(t, p); v < rows[2].CreatedSeq {
+		t.Fatalf("persisted ceiling = %d, below the last row's %d", v, rows[2].CreatedSeq)
 	}
 }
 
-// Two writers whose batches would commit out of order must not leave the
-// persisted mark behind a committed row: A stamps first and is held before its
-// commit while B runs. The clock is held through the commit, so B waits for A
-// (without the hold B commits first and A then persists the smaller value).
-func TestJournalClock_ConcurrentWritersNeverLeaveThePersistedMarkBehindACommittedRow(t *testing.T) {
-	p := newOpChangeTestStore(t)
-	p.SetJournalWallClock((&steppingClock{t: time.Unix(1_800_000_000, 0)}).now)
-	var calls int
-	var gate sync.Mutex
-	release := make(chan struct{})
-	held := make(chan struct{})
-	journalAfterStamp = func() error {
-		gate.Lock()
-		calls++
-		first := calls == 1
-		gate.Unlock()
-		if first {
-			close(held)
-			<-release
+// ceilingWatcher samples the persisted ceiling while writers run and fails when
+// it is below the largest sequence of a row whose write had already returned (a
+// committed row) when the sample began.
+type ceilingWatcher struct {
+	committed atomic.Int64 // the largest sequence of a returned write
+	bad       atomic.Value // string
+	stop      chan struct{}
+	done      chan struct{}
+}
+
+func (w *ceilingWatcher) record(seq int64) {
+	for {
+		cur := w.committed.Load()
+		if seq <= cur || w.committed.CompareAndSwap(cur, seq) {
+			return
 		}
+	}
+}
+
+func watchCeiling(p *PebbleStore) *ceilingWatcher {
+	w := &ceilingWatcher{stop: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(w.done)
+		for {
+			select {
+			case <-w.stop:
+				return
+			default:
+			}
+			floor := w.committed.Load()
+			v, closer, err := p.db.Get([]byte(journalClockKey))
+			if err != nil {
+				if floor > 0 {
+					w.bad.Store(fmt.Sprintf("a row with sequence %d is committed and the ceiling key is missing: %v", floor, err))
+					return
+				}
+				continue
+			}
+			got := int64(binary.BigEndian.Uint64(v))
+			closer.Close()
+			if got < floor {
+				w.bad.Store(fmt.Sprintf("persisted ceiling %d is below the committed sequence %d", got, floor))
+				return
+			}
+		}
+	}()
+	return w
+}
+
+func (w *ceilingWatcher) finish(t *testing.T) {
+	t.Helper()
+	close(w.stop)
+	<-w.done
+	if bad, ok := w.bad.Load().(string); ok {
+		t.Fatal(bad)
+	}
+}
+
+// randomDelay is a journalAfterStamp hook that holds each writer a random time
+// between its stamp and its commit, so batches commit in any order.
+func randomDelay(seed int64) func() error {
+	var mu sync.Mutex
+	rng := rand.New(rand.NewSource(seed))
+	return func() error {
+		mu.Lock()
+		d := time.Duration(rng.Intn(3000)) * time.Microsecond
+		mu.Unlock()
+		time.Sleep(d)
 		return nil
 	}
+}
+
+// Many writers with a random delay between stamp and commit (so their commits
+// land in any order): the persisted ceiling is never below the sequence of a
+// committed row, and after a close and a reopen it is at or above every row and
+// the next stamp is past all of them.
+func TestJournalClock_ConcurrentCreatesNeverLeaveTheCeilingBehindACommittedRow(t *testing.T) {
+	dir := t.TempDir()
+	p := openOnDisk(t, dir)
+	// A wall clock that moves forward in big steps, so ceilings are written
+	// repeatedly while the writers run.
+	wall := &steppingClock{t: time.Unix(1_800_000_000, 0)}
+	p.SetJournalWallClock(wall.now)
+	journalAfterStamp = randomDelay(1)
 	defer func() { journalAfterStamp = nil }()
-	a := listRow("op1", "a", "S", "collection:L")
-	b := listRow("op2", "b", "S", "collection:L")
+	w := watchCeiling(p)
+	const writers, per = 12, 25
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		if err := p.CreateOperationChange(a); err != nil {
-			t.Error(err)
-		}
-	}()
-	<-held
-	bDone := make(chan struct{})
-	go func() {
-		defer wg.Done()
-		defer close(bDone)
-		if err := p.CreateOperationChange(b); err != nil {
-			t.Error(err)
-		}
-	}()
-	select {
-	case <-bDone: // not held back: B committed ahead of A
-	case <-time.After(150 * time.Millisecond):
+	var maxSeq atomic.Int64
+	for g := 0; g < writers; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < per; i++ {
+				if i%5 == 0 {
+					wall.set(wall.now().Add(40 * time.Second)) // reaches the ceiling now and then
+				}
+				rows := []*OperationChange{
+					listRow(fmt.Sprintf("op%d", g), fmt.Sprintf("m%d", i), "S", "collection-took:L"),
+					listRow(fmt.Sprintf("op%d", g), fmt.Sprintf("r%d", i), fmt.Sprintf("R%d", g), "collection:L"),
+				}
+				if err := p.CreateOperationChanges(rows); err != nil {
+					t.Error(err)
+					return
+				}
+				for _, r := range rows {
+					w.record(r.CreatedSeq)
+				}
+				for _, r := range rows {
+					for {
+						cur := maxSeq.Load()
+						if r.CreatedSeq <= cur || maxSeq.CompareAndSwap(cur, r.CreatedSeq) {
+							break
+						}
+					}
+				}
+			}
+		}()
 	}
-	close(release)
 	wg.Wait()
-	top := max(a.CreatedSeq, b.CreatedSeq)
+	w.finish(t)
+	top := maxSeq.Load()
 	if v, ok := persistedClock(t, p); !ok || v < top {
-		t.Fatalf("persisted mark %d is behind a committed row's sequence %d (a=%d b=%d)", v, top, a.CreatedSeq, b.CreatedSeq)
+		t.Fatalf("after the writers: persisted ceiling %d, %v; the largest committed sequence is %d", v, ok, top)
+	}
+	journalAfterStamp = nil
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	re := openOnDisk(t, dir)
+	defer re.Close()
+	if got := re.journalClock.high(); got < top {
+		t.Fatalf("after the reopen the clock starts at %d, below the largest committed sequence %d", got, top)
+	}
+	re.SetJournalWallClock((&steppingClock{t: time.Unix(1_700_000_000, 0)}).now) // and a wall clock far behind
+	next := listRow("opNext", "n", "S", "collection:L")
+	if err := re.CreateOperationChange(next); err != nil {
+		t.Fatal(err)
+	}
+	if next.CreatedSeq <= top {
+		t.Fatalf("the first stamp after the reopen, %d, is not past the committed %d", next.CreatedSeq, top)
 	}
 }
 
-// The seed through the real open path: write rows, close, reopen with the
-// constructor, and the mark is at least the persisted value plus the margin.
-func TestJournalClock_RealOpenSeedsFromTheKey(t *testing.T) {
+// The same invariant for the mark path: writers mark their own operations
+// reverted with a random delay between the stamp and the commit.
+func TestJournalClock_ConcurrentMarksNeverLeaveTheCeilingBehindACommittedMark(t *testing.T) {
+	dir := t.TempDir()
+	p := openOnDisk(t, dir)
+	wall := &steppingClock{t: time.Unix(1_800_000_000, 0)}
+	p.SetJournalWallClock(wall.now)
+	const writers, per = 12, 20
+	for g := 0; g < writers; g++ {
+		for i := 0; i < per; i++ {
+			if err := p.CreateOperationChange(listRow(fmt.Sprintf("op%d", g), fmt.Sprintf("c%d", i), "S", "collection-held:L")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	journalAfterStamp = randomDelay(2)
+	defer func() { journalAfterStamp = nil }()
+	w := watchCeiling(p)
+	var wg sync.WaitGroup
+	var maxSeq atomic.Int64
+	for g := 0; g < writers; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < per; i++ {
+				if i%4 == 0 {
+					wall.set(wall.now().Add(45 * time.Second))
+				}
+				op, id := fmt.Sprintf("op%d", g), fmt.Sprintf("c%d", i)
+				if err := p.MarkOperationChangesReverted(op, []string{id}); err != nil {
+					t.Error(err)
+					return
+				}
+				rows, err := p.GetOperationChanges(op)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				for _, r := range rows {
+					if r.ID == id && r.RevertedSeq > 0 {
+						w.record(r.RevertedSeq)
+						for {
+							cur := maxSeq.Load()
+							if r.RevertedSeq <= cur || maxSeq.CompareAndSwap(cur, r.RevertedSeq) {
+								break
+							}
+						}
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	w.finish(t)
+	top := maxSeq.Load()
+	if top == 0 {
+		t.Fatal("no mark was recorded")
+	}
+	if v, ok := persistedClock(t, p); !ok || v < top {
+		t.Fatalf("after the marks: persisted ceiling %d, %v; the largest committed RevertedSeq is %d", v, ok, top)
+	}
+	journalAfterStamp = nil
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	re := openOnDisk(t, dir)
+	defer re.Close()
+	if got := re.journalClock.high(); got < top {
+		t.Fatalf("after the reopen the clock starts at %d, below the largest committed RevertedSeq %d", got, top)
+	}
+}
+
+// The open seeds the clock from the persisted ceiling exactly: no margin, and no
+// scan of the rows (a row above the ceiling is not looked at).
+func TestJournalClock_OpenSeedsFromTheCeilingWithNoMarginAndNoScan(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	base := time.Unix(1_800_000_000, 0)
+	ceiling := base.UnixNano() + 12345
+	var v [8]byte
+	binary.BigEndian.PutUint64(v[:], uint64(ceiling))
+	if err := p.db.Set([]byte(journalClockKey), v[:], pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Set([]byte(opChangeByListBackfillKey), []byte("1"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	// A row stamped above the ceiling: only a scan would see it.
+	rawPutOpChange(t, p, &OperationChange{ID: "x", OperationID: "op1", BookID: "S", CreatedAt: base, CreatedSeq: ceiling + 1_000_000})
+	fresh := &PebbleStore{db: p.db}
+	if err := fresh.seedJournalClock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.journalClock.high(); got != ceiling {
+		t.Fatalf("seeded at %d, want exactly the ceiling %d (no margin, no scan)", got, ceiling)
+	}
+	fresh.SetJournalWallClock((&steppingClock{t: base.Add(-time.Hour)}).now)
+	_, n, err := fresh.stampJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != ceiling+1 {
+		t.Fatalf("first stamp %d, want the ceiling plus one (%d)", n, ceiling+1)
+	}
+	if got, _ := persistedClock(t, fresh); got <= n {
+		t.Fatalf("the ceiling %d was not moved past the stamp %d before it was handed out", got, n)
+	}
+}
+
+// A clean Close lowers the ceiling to the actual high-water mark, so a restart
+// does not begin a window ahead; a store reopened from it starts at that mark.
+func TestJournalClock_CloseSettlesTheCeilingToTheHighWaterMark(t *testing.T) {
 	dir := t.TempDir()
 	p := openOnDisk(t, dir)
 	p.SetJournalWallClock((&steppingClock{t: time.Unix(1_800_000_000, 0)}).now)
@@ -260,31 +544,46 @@ func TestJournalClock_RealOpenSeedsFromTheKey(t *testing.T) {
 	if err := p.CreateOperationChange(row); err != nil {
 		t.Fatal(err)
 	}
-	persisted, ok := persistedClock(t, p)
-	if !ok || persisted != row.CreatedSeq {
-		t.Fatalf("persisted = %d, %v; want %d", persisted, ok, row.CreatedSeq)
+	ahead, _ := persistedClock(t, p)
+	if ahead < row.CreatedSeq+int64(journalClockWindow)-1 {
+		t.Fatalf("a running store keeps its ceiling a window ahead: %d for a sequence of %d", ahead, row.CreatedSeq)
 	}
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
 	re := openOnDisk(t, dir)
 	defer re.Close()
-	if got, want := re.journalClock.hw.Load(), persisted+int64(journalClockMargin); got < want {
-		t.Fatalf("after reopen the mark = %d, want at least the persisted %d plus the margin = %d", got, persisted, want)
+	if got := re.journalClock.high(); got != row.CreatedSeq {
+		t.Fatalf("after a clean close and reopen the clock starts at %d, want the last sequence %d", got, row.CreatedSeq)
 	}
-	// Whatever the wall clock reads after the restart, the next stamp is after it.
-	re.SetJournalWallClock((&steppingClock{t: time.Unix(1_700_000_000, 0)}).now)
-	next := listRow("op2", "b", "S", "collection:L")
-	if err := re.CreateOperationChange(next); err != nil {
+	if v, _ := persistedClock(t, re); v != row.CreatedSeq {
+		t.Fatalf("persisted %d after a clean close, want %d", v, row.CreatedSeq)
+	}
+}
+
+// After a crash (no settle) the clock starts at the ceiling, a window ahead of
+// the last sequence, and every later stamp is past every row the dead process
+// could have written.
+func TestJournalClock_AfterACrashTheClockStartsAtTheCeiling(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	p.SetJournalWallClock((&steppingClock{t: time.Unix(1_800_000_000, 0)}).now)
+	row := listRow("op1", "a", "S", "collection:L")
+	if err := p.CreateOperationChange(row); err != nil {
 		t.Fatal(err)
 	}
-	if next.CreatedSeq <= persisted+int64(journalClockMargin) {
-		t.Fatalf("first stamp after a restart = %d, want after %d", next.CreatedSeq, persisted+int64(journalClockMargin))
+	ceiling, _ := persistedClock(t, p)
+	fresh := &PebbleStore{db: p.db} // a new process over the same files, no clean close
+	if err := fresh.seedJournalClock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.journalClock.high(); got != ceiling || got <= row.CreatedSeq {
+		t.Fatalf("after a crash the clock starts at %d, want the ceiling %d (> %d)", got, ceiling, row.CreatedSeq)
 	}
 }
 
 // The missing-key variant of the real open: the key is gone, so the reopen scans
-// the journal and the mark is at least the largest stamp of any row.
+// the journal, the clock starts at the largest stamp of any row and the key is
+// persisted.
 func TestJournalClock_RealOpenScansTheRowsWhenTheKeyIsMissing(t *testing.T) {
 	dir := t.TempDir()
 	p := openOnDisk(t, dir)
@@ -302,25 +601,30 @@ func TestJournalClock_RealOpenScansTheRowsWhenTheKeyIsMissing(t *testing.T) {
 	for _, r := range rows {
 		top = max(top, r.CreatedSeq, r.RevertedSeq)
 	}
-	if err := p.db.Delete([]byte(journalClockKey), nil); err != nil {
+	// Closing settles the ceiling into the key; take the key out after.
+	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Close(); err != nil {
+	reopened := openOnDisk(t, dir)
+	if err := reopened.db.Delete([]byte(journalClockKey), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
 	re := openOnDisk(t, dir)
 	defer re.Close()
-	if got := re.journalClock.hw.Load(); got < top {
-		t.Fatalf("after a reopen with no key the mark = %d, want at least the largest row stamp %d", got, top)
+	if got := re.journalClock.high(); got < top {
+		t.Fatalf("after a reopen with no key the clock starts at %d, want at least the largest row stamp %d", got, top)
 	}
 	if v, ok := persistedClock(t, re); !ok || v < top {
-		t.Fatalf("the scan must persist the mark: %d, %v (want >= %d)", v, ok, top)
+		t.Fatalf("the scan must persist the clock: %d, %v (want >= %d)", v, ok, top)
 	}
 }
 
-// With no key (a journal written before the clock existed), the mark is the
-// largest stamp of the rows already recorded: sequence or wall time, created or
-// reverted.
+// With no key (a journal written before the clock existed), the clock starts at
+// the largest stamp of the rows already recorded: sequence or wall time, created
+// or reverted.
 func TestJournalClock_SeededFromTheRowsWhenTheKeyIsMissing(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	base := time.Unix(1_800_000_000, 0)
@@ -335,19 +639,34 @@ func TestJournalClock_SeededFromTheRowsWhenTheKeyIsMissing(t *testing.T) {
 	if err := fresh.seedJournalClock(); err != nil {
 		t.Fatal(err)
 	}
-	if _, n := fresh.journalClock.stamp(); n <= reverted.UnixNano() {
-		t.Fatalf("first sequence %d is not after the largest recorded time %d", n, reverted.UnixNano())
+	if _, n, err := fresh.stampJournal(); err != nil || n <= reverted.UnixNano() {
+		t.Fatalf("first sequence %d (err %v) is not after the largest recorded time %d", n, err, reverted.UnixNano())
 	}
 	rawPutOpChange(t, p, &OperationChange{ID: "c", OperationID: "op2", BookID: "S", CreatedAt: base, CreatedSeq: reverted.UnixNano() + 5_000})
 	fresh2 := &PebbleStore{db: p.db}
 	if err := p.db.Delete([]byte(journalClockKey), nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := p.db.Delete([]byte(opChangeByListBackfillKey), nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := fresh2.seedJournalClock(); err != nil {
 		t.Fatal(err)
 	}
-	if got := fresh2.journalClock.hw.Load(); got < reverted.UnixNano()+5_000 {
-		t.Fatalf("a row's CreatedSeq must count: mark %d", got)
+	if got := fresh2.journalClock.high(); got < reverted.UnixNano()+5_000 {
+		t.Fatalf("a row's CreatedSeq must count: clock %d", got)
+	}
+}
+
+// A store that has never held a journal row opens without a clock key and starts
+// at the wall clock.
+func TestJournalClock_AFreshStoreHasNoClockKey(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	if _, ok := persistedClock(t, p); ok {
+		t.Fatal("a fresh store must not carry a clock key")
+	}
+	if got := p.journalClock.high(); got != 0 {
+		t.Fatalf("a fresh store's clock starts at %d, want 0 (the wall clock decides)", got)
 	}
 }
 
@@ -363,23 +682,40 @@ func TestJournalClock_SeedSkipsAnUndecodableRow(t *testing.T) {
 	}
 }
 
-// A malformed key does not fail the open: the seed falls back to the row scan.
-func TestJournalClock_AMalformedKeyFallsBackToTheRowScan(t *testing.T) {
-	p := newOpChangeTestStore(t)
+// A malformed key does not fail the open: the seed falls back to the row scan
+// and the key is rewritten, with rows to scan or with none.
+func TestJournalClock_AMalformedKeyFallsBackToTheRowScanAndIsRewritten(t *testing.T) {
 	base := time.Unix(1_800_000_000, 0)
-	rawPutOpChange(t, p, &OperationChange{ID: "a", OperationID: "op1", BookID: "S", CreatedAt: base, CreatedSeq: base.UnixNano() + 7})
-	if err := p.db.Set([]byte(journalClockKey), []byte{1, 2, 3}, nil); err != nil {
-		t.Fatal(err)
-	}
-	fresh := &PebbleStore{db: p.db}
-	if err := fresh.seedJournalClock(); err != nil {
-		t.Fatalf("a malformed key must not fail the open: %v", err)
-	}
-	if got := fresh.journalClock.hw.Load(); got < base.UnixNano()+7 {
-		t.Fatalf("the row scan did not run: mark %d", got)
-	}
-	if v, ok := persistedClock(t, fresh); !ok || v < base.UnixNano()+7 {
-		t.Fatalf("the scan must replace the malformed key: %d, %v", v, ok)
+	for _, withRows := range []bool{true, false} {
+		p := newOpChangeTestStore(t)
+		if withRows {
+			rawPutOpChange(t, p, &OperationChange{ID: "a", OperationID: "op1", BookID: "S", CreatedAt: base, CreatedSeq: base.UnixNano() + 7})
+		}
+		if err := p.db.Set([]byte(journalClockKey), []byte{1, 2, 3}, nil); err != nil {
+			t.Fatal(err)
+		}
+		// The list index backfill is already done, so only the clock decides.
+		if err := p.db.Set([]byte(opChangeByListBackfillKey), []byte("1"), nil); err != nil {
+			t.Fatal(err)
+		}
+		fresh := &PebbleStore{db: p.db}
+		if err := fresh.seedJournalClock(); err != nil {
+			t.Fatalf("a malformed key must not fail the open: %v", err)
+		}
+		if withRows {
+			if got := fresh.journalClock.high(); got < base.UnixNano()+7 {
+				t.Fatalf("the row scan did not run: clock %d", got)
+			}
+		}
+		v, closer, err := p.db.Get([]byte(journalClockKey))
+		if err != nil {
+			t.Fatalf("withRows=%v: key gone after the open: %v", withRows, err)
+		}
+		n := len(v)
+		closer.Close()
+		if n != 8 {
+			t.Fatalf("withRows=%v: the malformed key (%d bytes) was not rewritten", withRows, n)
+		}
 	}
 }
 
@@ -400,10 +736,13 @@ func TestJournalClock_TheFirstOpenScanStagesMissingListEntriesAndIsIdempotent(t 
 	}
 	for pass := 1; pass <= 2; pass++ {
 		fresh := &PebbleStore{db: p.db}
-		if pass == 2 {
-			if err := p.db.Delete([]byte(journalClockKey), nil); err != nil {
-				t.Fatal(err)
-			}
+		// The store was opened fresh (so it wrote its completion keys); a store
+		// from an earlier build has neither. A second pass finds every entry.
+		if err := p.db.Delete([]byte(journalClockKey), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.db.Delete([]byte(opChangeByListBackfillKey), nil); err != nil {
+			t.Fatal(err)
 		}
 		if err := fresh.seedJournalClock(); err != nil {
 			t.Fatal(err)
@@ -422,30 +761,102 @@ func TestJournalClock_TheFirstOpenScanStagesMissingListEntriesAndIsIdempotent(t 
 	}
 }
 
-// BenchmarkJournalWrite_Serialized measures one journal write (row, indexes,
-// clock key, Sync commit) with the clock held through the commit, sequentially
-// and from several writers at once, so the cost of serializing is visible.
-func BenchmarkJournalWrite_Serialized(b *testing.B) {
-	for _, workers := range []int{1, 8} {
-		b.Run(map[int]string{1: "one-writer", 8: "eight-writers"}[workers], func(b *testing.B) {
-			p := newOpChangeTestStore(b)
-			b.SetParallelism(workers)
+// The list-index backfill is gated on its own completion key, not on the clock
+// key: a store whose clock key exists (written by a build that did not stage the
+// entries) still gets its entries; and once the backfill key is written, a later
+// open does not scan again.
+func TestJournalClock_TheListIndexBackfillIsGatedOnItsOwnKey(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	base := time.Unix(1_800_000_000, 0)
+	rawPutOpChange(t, p, &OperationChange{ID: "b", OperationID: "op1", BookID: "B", ChangeType: "user_content_follow", FieldName: "collection:L1", CreatedAt: base, CreatedSeq: base.UnixNano()})
+	var v [8]byte
+	binary.BigEndian.PutUint64(v[:], uint64(base.UnixNano()+int64(time.Minute)))
+	if err := p.db.Set([]byte(journalClockKey), v[:], pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Delete([]byte(opChangeByListBackfillKey), nil); err != nil { // as in a store an earlier build wrote
+		t.Fatal(err)
+	}
+	if got := listEntries(t, p, "op1", "b"); len(got) != 0 {
+		t.Fatalf("setup: the row already has entries %v", got)
+	}
+	// The clock key is present, the backfill key is not: the scan runs.
+	fresh := &PebbleStore{db: p.db}
+	if err := fresh.seedJournalClock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := listEntries(t, p, "op1", "b"); len(got) != 1 {
+		t.Fatalf("a store with a clock key but no backfill key must get its list entries, has %v", got)
+	}
+	if _, closer, err := p.db.Get([]byte(opChangeByListBackfillKey)); err != nil {
+		t.Fatalf("the backfill completion key was not written: %v", err)
+	} else {
+		closer.Close()
+	}
+	if got, _ := persistedClock(t, p); got != base.UnixNano()+int64(time.Minute) {
+		t.Fatalf("the scan changed a good clock key: %d", got)
+	}
+	// Both keys present: a later open reads two keys and scans nothing, so an
+	// entry removed by hand stays removed.
+	if err := p.db.Delete(append(opChangeByListListPrefix("collection", "L1"), "op1:b"...), nil); err != nil {
+		t.Fatal(err)
+	}
+	fresh2 := &PebbleStore{db: p.db}
+	if err := fresh2.seedJournalClock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := listEntries(t, p, "op1", "b"); len(got) != 0 {
+		t.Fatalf("a second open scanned again: %v", got)
+	}
+}
+
+// BenchmarkJournalWrite measures one journal write (row, indexes, Sync commit)
+// on an ON-DISK store from exactly N goroutines (N = 1, 8, 32): ns/op is the
+// wall time per write across all writers, so a lock that serializes the commit
+// shows as ns/op that does not fall with N. The "-serialized" variants wrap
+// every write in one outside mutex, which is what holding a clock lock across
+// the commit did: the contrast is the cost the ceiling design removes.
+func BenchmarkJournalWrite(b *testing.B) {
+	for _, tc := range []struct {
+		workers    int
+		serialized bool
+	}{{1, false}, {8, false}, {32, false}, {32, true}} {
+		name := fmt.Sprintf("writers-%d", tc.workers)
+		if tc.serialized {
+			name += "-serialized"
+		}
+		b.Run(name, func(b *testing.B) {
+			p := openOnDisk(b, b.TempDir())
+			b.Cleanup(func() { _ = p.Close() })
+			var seq atomic.Int64
+			var outside sync.Mutex
 			b.ResetTimer()
-			var n int64
-			var mu sync.Mutex
-			b.RunParallel(func(pb *testing.PB) {
-				for pb.Next() {
-					mu.Lock()
-					n++
-					id := n
-					mu.Unlock()
-					r := listRow("op", "r"+time.Unix(0, id).Format("150405.000000000"), "S", "collection:L")
-					if err := p.CreateOperationChange(r); err != nil {
-						b.Error(err)
-						return
+			var wg sync.WaitGroup
+			for g := 0; g < tc.workers; g++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for {
+						i := seq.Add(1)
+						if i > int64(b.N) {
+							return
+						}
+						r := listRow(fmt.Sprintf("op%d", i%64), fmt.Sprintf("r%d", i), "S", "collection:L")
+						if tc.serialized {
+							outside.Lock()
+						}
+						err := p.CreateOperationChange(r)
+						if tc.serialized {
+							outside.Unlock()
+						}
+						if err != nil {
+							b.Error(err)
+							return
+						}
 					}
-				}
-			})
+				}()
+			}
+			wg.Wait()
 		})
 	}
 }
