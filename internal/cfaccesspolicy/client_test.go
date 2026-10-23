@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/client_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0b7e2d5a-91c4-4f38-8a6d-e3f15c2b9a70
 // last-edited: 2026-10-23
 
@@ -208,8 +208,10 @@ func TestEnsureEmail_ErrorNeverContainsToken(t *testing.T) {
 	if strings.Contains(err.Error(), testToken) {
 		t.Fatal("error contains the API token")
 	}
-	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "Authentication error") {
-		t.Fatalf("error should carry Cloudflare's status and message: %v", err)
+	// Only the status and the numeric code survive: Cloudflare's text is data,
+	// not repeated into logs, audit entries or responses.
+	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "10000") || strings.Contains(err.Error(), "Authentication error") {
+		t.Fatalf("error should carry Cloudflare's status and code but not its text: %v", err)
 	}
 }
 

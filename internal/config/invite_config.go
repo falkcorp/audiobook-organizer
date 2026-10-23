@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-23
 
@@ -234,9 +234,20 @@ func parseEnvBool(v string) bool {
 
 // GuestServiceTokensEnabled reports whether accepting an invitation mints a
 // per-guest Cloudflare service token: the flag is on and the three settings it
-// needs (account id, API token, the "books" policy id) are all present.
+// needs (account id, API token, the "books" policy id) are all present, and the
+// books policy is not the guest email policy (CF_GUESTS_POLICY_ID): that one
+// admits people by email, and a per-token rule written into it would mix the two
+// kinds of access in a policy the email sync rewrites.
 func (c *Config) GuestServiceTokensEnabled() bool {
-	return c.CFGuestServiceTokens && c.CFAccountID != "" && c.CFPolicyAPIToken != "" && c.CFServiceAuthPolicyID != ""
+	return c.CFGuestServiceTokens && c.CFAccountID != "" && c.CFPolicyAPIToken != "" && c.CFServiceAuthPolicyID != "" &&
+		!c.GuestServiceTokensPolicyClash()
+}
+
+// GuestServiceTokensPolicyClash reports CF_SERVICE_AUTH_POLICY_ID naming the
+// same policy as CF_GUESTS_POLICY_ID.
+func (c *Config) GuestServiceTokensPolicyClash() bool {
+	books := strings.ToLower(strings.TrimSpace(c.CFServiceAuthPolicyID))
+	return books != "" && books == strings.ToLower(strings.TrimSpace(c.CFGuestsPolicyID))
 }
 
 // GuestServiceTokensMisconfigured reports the flag being on without everything

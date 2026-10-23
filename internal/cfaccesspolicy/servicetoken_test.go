@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/servicetoken_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d9c3b71-2e84-4f06-a7b1-8c0e4d2f6a19
 // last-edited: 2026-10-23
 
@@ -187,5 +187,50 @@ func TestAPIError_IsForbiddenFollowsStatusNotText(t *testing.T) {
 	}
 	if IsForbidden(errors.New("HTTP 403: spoofed text in a plain error")) {
 		t.Fatal("IsForbidden matched on text")
+	}
+}
+
+// PlanServiceToken is the dry run the owner reads against the real books policy
+// before enabling the feature: the GET only, the exact PUT body, nothing sent.
+func TestPlanServiceToken_ReturnsTheBodyAndNeverWrites(t *testing.T) {
+	f := &fakeCF{policy: booksPolicy()}
+	c := newClient(t, f)
+	b, res, err := c.PlanServiceToken(context.Background(), guestTok)
+	if err != nil || res != Added || b == nil {
+		t.Fatalf("res=%q err=%v body=%s", res, err, b)
+	}
+	if strings.Join(f.methods, ",") != "GET" || len(f.putBody) != 0 {
+		t.Fatalf("a plan must only GET: %v", f.methods)
+	}
+	var body struct {
+		Include []map[string]any `json:"include"`
+	}
+	if err := json.Unmarshal(b, &body); err != nil || len(body.Include) != 3 {
+		t.Fatalf("include = %v err=%v", body.Include, err)
+	}
+	last, _ := json.Marshal(body.Include[2])
+	if string(last) != `{"service_token":{"token_id":"`+guestTok+`"}}` {
+		t.Fatalf("planned rule = %s", last)
+	}
+	// Nothing to do once the rule is there.
+	if _, err := c.EnsureServiceToken(context.Background(), guestTok); err != nil {
+		t.Fatal(err)
+	}
+	if b, res, err := c.PlanServiceToken(context.Background(), guestTok); err != nil || res != AlreadyPresent || b != nil {
+		t.Fatalf("plan of a present rule: res=%q err=%v body=%s", res, err, b)
+	}
+}
+
+func TestPlanServiceToken_RefusesOwnerAndMalformedIDsBeforeAnyRequest(t *testing.T) {
+	f := &fakeCF{policy: booksPolicy()}
+	c := newClient(t, f)
+	if _, _, err := c.PlanServiceToken(context.Background(), ownerTok); !errors.Is(err, ErrProtectedToken) {
+		t.Fatalf("owner token: %v", err)
+	}
+	if _, _, err := c.PlanServiceToken(context.Background(), "any_valid_service_token"); err == nil {
+		t.Fatal("malformed id accepted")
+	}
+	if len(f.methods) != 0 {
+		t.Fatalf("requests were sent: %v", f.methods)
 	}
 }

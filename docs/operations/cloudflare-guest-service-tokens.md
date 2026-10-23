@@ -1,5 +1,5 @@
 <!-- file: docs/operations/cloudflare-guest-service-tokens.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 3a9d6f21-8c74-4e15-b0a2-6d1f4c8e7b95 -->
 <!-- last-edited: 2026-10-23 -->
 
@@ -41,12 +41,29 @@ their account and browser sign-in still work.
 | Variable | Default | Meaning |
 |---|---|---|
 | `CF_GUEST_SERVICE_TOKENS` | off | Turns the feature on (`cf_guest_service_tokens`). |
-| `CF_SERVICE_AUTH_POLICY_ID` | none | Id of the non-identity ("books") Access policy that admits service tokens. The server adds one rule per guest token to it. Required when the flag is on. |
+| `CF_SERVICE_AUTH_POLICY_ID` | none | Id of the non-identity ("books") Access policy that admits service tokens. The server adds one rule per guest token to it. Required when the flag is on, and it must **not** be the same policy as `CF_GUESTS_POLICY_ID` (the email policy): the server refuses to mint, and says so at startup and on the Users page, if they match. |
 | `INVITE_EMAIL_SERVICE_TOKEN` | off | Also email the key to the guest's verified address after they accept. Off by default because email is not a safe place for a secret. |
 
 The feature also needs the existing `CF_ACCOUNT_ID` and `CF_POLICY_API_TOKEN`.
 If the flag is on and any of the three is missing the server logs a warning at
 startup, the Users page shows it, and nothing is minted.
+
+## Before you flip the flag: read the dry run
+
+The server can show you the exact change it would make to the books policy
+without making it. As the owner, signed in with your password (an API key is
+refused), call:
+
+    GET /api/v1/admin/guest-service-tokens/plan
+
+It needs `CF_ACCOUNT_ID`, `CF_POLICY_API_TOKEN` and `CF_SERVICE_AUTH_POLICY_ID`
+but **not** the flag. It reads the real policy once (a GET) and returns the PUT
+body a guest's token would produce, for a placeholder token id that is never
+created. Check that every rule already in the policy appears unchanged, that
+exactly one `{"service_token":{"token_id":...}}` rule is added, and that
+`any_valid_service_token` is not added. The same body comes from
+`cfaccesspolicy.Client.PlanServiceToken`. Nothing is sent to Cloudflare. Once an
+owner email is set, only the owner can call it (and the revoke).
 
 ## How it works
 
@@ -93,7 +110,17 @@ guest's user id and the token id, never the secret.
   revoked, and a token is only deleted after a lookup confirms its name starts
   with `aorg-guest-`.
 - Cloudflare responses are treated as data: ids and secrets are validated
-  against strict patterns before use.
+  against strict patterns before use, and Cloudflare's free text is never
+  repeated anywhere. The server keeps only the HTTP status and Cloudflare's
+  numeric error codes; every log line, audit entry, stored detail, admin list
+  note and error response uses fixed wording plus those.
+- If a mint fails in a way that may have left a token behind (a timeout, a 5xx,
+  an unreadable answer), the server lists the tokens, finds any named exactly
+  `aorg-guest-<user id>` and deletes it. If Cloudflare cannot be asked, the
+  admin detail says to check the dashboard.
+- The guest-token routes (list, plan, revoke) refuse API keys, even an
+  admin's, and need the admin role; the plan and the revoke also need the owner
+  once an owner email is set.
 - Tokens are created with Cloudflare's `forever` duration, because there is no
   renewal flow and an expiry would silently cut a guest off. Revoking is the
   lifecycle control.

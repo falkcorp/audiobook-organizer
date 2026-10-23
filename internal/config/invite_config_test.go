@@ -1,5 +1,5 @@
 // file: internal/config/invite_config_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
 // last-edited: 2026-10-23
 
@@ -308,6 +308,8 @@ func TestGuestServiceTokens_FlagAndSettings(t *testing.T) {
 		"no account": func(c *Config) { c.CFAccountID = "" },
 		"no token":   func(c *Config) { c.CFPolicyAPIToken = "" },
 		"no policy":  func(c *Config) { c.CFServiceAuthPolicyID = "" },
+		// The books policy must not be the guest email policy.
+		"same policy as the guests policy": func(c *Config) { c.CFGuestsPolicyID, c.CFServiceAuthPolicyID = "Pol-1", " pol-1 " },
 	} {
 		c := full
 		mut(&c)

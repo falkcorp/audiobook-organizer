@@ -1,5 +1,5 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
 // last-edited: 2026-10-23
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -92,6 +93,7 @@ type guestTokenCloudflare interface {
 type guestTokenPolicy interface {
 	EnsureServiceToken(ctx context.Context, tokenID string) (cfaccesspolicy.Result, error)
 	RemoveServiceToken(ctx context.Context, tokenID string) (cfaccesspolicy.Result, error)
+	PlanServiceToken(ctx context.Context, tokenID string) ([]byte, cfaccesspolicy.Result, error)
 }
 
 // guestTokenState holds the two shared clients, built once (the settings are
@@ -123,6 +125,10 @@ func (s *Server) guestTokenClients() (guestTokenCloudflare, guestTokenPolicy, er
 			st.err = errors.New("CF_ACCOUNT_ID, CF_POLICY_API_TOKEN and CF_SERVICE_AUTH_POLICY_ID must all be set")
 			return
 		}
+		if snap.GuestServiceTokensPolicyClash() {
+			st.err = errors.New("CF_SERVICE_AUTH_POLICY_ID must not be the guest email policy (CF_GUESTS_POLICY_ID)")
+			return
+		}
 		api, err := cfservicetoken.New(cfservicetoken.Config{AccountID: snap.CFAccountID, APIToken: snap.CFPolicyAPIToken})
 		if err != nil {
 			st.err = err
@@ -143,7 +149,10 @@ func (s *Server) guestTokenClients() (guestTokenCloudflare, guestTokenPolicy, er
 // warnGuestServiceTokensMisconfigured logs, at startup, the flag being on
 // without the settings it needs.
 func warnGuestServiceTokensMisconfigured(snap config.Config) {
-	if snap.GuestServiceTokensMisconfigured() {
+	if snap.CFGuestServiceTokens && snap.GuestServiceTokensPolicyClash() {
+		inviteAccessLog.Warn("CF_GUEST_SERVICE_TOKENS is on but CF_SERVICE_AUTH_POLICY_ID is the same policy as CF_GUESTS_POLICY_ID: " +
+			"the books policy must be a different, non-identity policy; no phone-app tokens will be minted")
+	} else if snap.GuestServiceTokensMisconfigured() {
 		inviteAccessLog.Warn("CF_GUEST_SERVICE_TOKENS is on but CF_ACCOUNT_ID, CF_POLICY_API_TOKEN and CF_SERVICE_AUTH_POLICY_ID " +
 			"are not all set: no phone-app tokens will be minted until they are")
 	}
@@ -185,11 +194,14 @@ func hashSecret(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// guestTokenErrText turns a Cloudflare error into the admin-facing detail.
-// Only the HTTP status picks the wording; Cloudflare's own text is never
-// interpreted (it is capped and scrubbed by the clients and appended for the
-// admin to read).
+// guestTokenErrText turns a Cloudflare failure into the admin-facing detail.
+// It is built ONLY from fixed wording, the HTTP status and Cloudflare's numeric
+// error codes (all the clients keep). Cloudflare's free text, and the text of
+// any transport error, never reaches a log line, an audit entry, a stored
+// record, an HTTP response or the admin list: it is data, not ours to repeat.
 func guestTokenErrText(step string, err error) string {
+	var tokErr *cfservicetoken.APIError
+	var polErr *cfaccesspolicy.APIError
 	switch {
 	case errors.Is(err, cfservicetoken.ErrForbidden), cfaccesspolicy.IsForbidden(err):
 		return step + ": " + guestTokenForbiddenMsg
@@ -197,8 +209,79 @@ func guestTokenErrText(step string, err error) string {
 		return step + ": the server shut down before Cloudflare answered"
 	case errors.Is(err, context.DeadlineExceeded):
 		return step + ": Cloudflare did not answer in time"
+	case errors.As(err, &tokErr):
+		return step + ": " + statusWording(tokErr.Status, tokErr.Error())
+	case errors.As(err, &polErr):
+		return step + ": " + statusWording(polErr.Status, polErr.Error())
+	case errors.Is(err, cfservicetoken.ErrBadResponse):
+		return step + ": Cloudflare's answer was not in the expected form"
+	case errors.Is(err, cfaccesspolicy.ErrWriteUnverified):
+		return step + ": the books policy may have been changed but Cloudflare did not confirm it"
 	}
-	return step + ": " + logger.SanitizeLogValue(err.Error())
+	return step + ": the request to Cloudflare failed"
+}
+
+// statusWording is fixed wording for an HTTP status, followed by the client's
+// own rendering of it (status and numeric codes only).
+func statusWording(status int, rendered string) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "Cloudflare rejected the API token (" + rendered + ")"
+	case status == http.StatusNotFound:
+		return "Cloudflare could not find it (" + rendered + ")"
+	case status == http.StatusTooManyRequests:
+		return "Cloudflare is rate limiting this server (" + rendered + ")"
+	case status >= 500:
+		return "Cloudflare had an error (" + rendered + ")"
+	}
+	return "Cloudflare refused the request (" + rendered + ")"
+}
+
+// ambiguousCreateFailure reports a failed Create that may nonetheless have made
+// a token: anything except a definite 4xx refusal from Cloudflare (a 403 is the
+// permission problem, a 400 a rejected request: nothing was made).
+func ambiguousCreateFailure(err error) bool {
+	var ae *cfservicetoken.APIError
+	if errors.As(err, &ae) && ae.Status >= 400 && ae.Status < 500 {
+		return false
+	}
+	return !errors.Is(err, cfservicetoken.ErrProtected) && !errors.Is(err, cfservicetoken.ErrInvalidID)
+}
+
+// reapOrphanedMint lists Cloudflare's tokens, finds those named exactly name
+// (cfservicetoken.Name(userID): one per guest, and the pending record guarantees
+// this is the only mint for that guest) and deletes them. It runs on fresh
+// bounded contexts because the mint's own may be the thing that expired. It
+// returns text to append to the admin-facing detail, empty when nothing needed
+// saying.
+func (s *Server) reapOrphanedMint(parent context.Context, api guestTokenCloudflare, name string) string {
+	ctx := context.WithoutCancel(parent)
+	list, err := listWithTimeout(ctx, api)
+	if err != nil {
+		return "; Cloudflare could not be asked whether a token named " + name + " was made: check the dashboard and delete it if it exists (" + guestTokenErrText("listing tokens", err) + ")"
+	}
+	var problems []string
+	reaped := 0
+	for _, t := range list {
+		if t.Name != name {
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, guestTokenListTimeout)
+		_, rerr := api.Revoke(rctx, t.ID)
+		cancel()
+		if rerr != nil {
+			problems = append(problems, guestTokenErrText("deleting the orphaned token "+t.ID, rerr))
+			continue
+		}
+		reaped++
+	}
+	switch {
+	case len(problems) > 0:
+		return "; an orphaned token named " + name + " was found but not deleted, delete it by hand: " + joinProblems(problems)
+	case reaped > 0:
+		return fmt.Sprintf("; %d orphaned token(s) named %s were deleted", reaped, name)
+	}
+	return ""
 }
 
 // mintGuestServiceToken is called by handleAcceptInvite after the account and
@@ -233,7 +316,7 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 	}
 
 	if !snap.GuestServiceTokensEnabled() {
-		return fail("CF_GUEST_SERVICE_TOKENS is on but CF_ACCOUNT_ID, CF_POLICY_API_TOKEN and CF_SERVICE_AUTH_POLICY_ID are not all set")
+		return fail("CF_GUEST_SERVICE_TOKENS is on but CF_ACCOUNT_ID, CF_POLICY_API_TOKEN and CF_SERVICE_AUTH_POLICY_ID are not all set, or CF_SERVICE_AUTH_POLICY_ID is the same policy as CF_GUESTS_POLICY_ID")
 	}
 	api, policy, err := s.guestTokenClients()
 	if err != nil {
@@ -257,7 +340,14 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 					guestTokenErrText("minted token unusable, and removing it failed", rerr))
 			}
 		}
-		return fail(guestTokenErrText("creating the service token", err))
+		detail := guestTokenErrText("creating the service token", err)
+		if ambiguousCreateFailure(err) {
+			// Cloudflare may have made the token even though we got no usable
+			// answer (a timeout, a 5xx, a malformed reply): look for one with
+			// our exact name and delete it, so no unrecorded credential lives on.
+			detail += s.reapOrphanedMint(parent, api, name)
+		}
+		return fail(detail)
 	}
 
 	// cleanup removes the token (and any policy rule) this mint made.
@@ -663,4 +753,38 @@ func listWithTimeout(ctx context.Context, api guestTokenCloudflare) ([]cfservice
 	ctx, cancel := context.WithTimeout(ctx, guestTokenListTimeout)
 	defer cancel()
 	return api.List(ctx)
+}
+
+// planSampleTokenID is the placeholder token id the dry run plans for: shaped
+// like a service-token id, not one of the owner's, and never created.
+const planSampleTokenID = "00000000-0000-4000-8000-000000000000"
+
+// handlePlanGuestServiceToken handles GET /api/v1/admin/guest-service-tokens/plan:
+// the dry run the owner reads against the REAL books policy before enabling
+// CF_GUEST_SERVICE_TOKENS. It does the one read (GET) of the policy and returns
+// the exact PUT body a guest's token would produce, for a placeholder token id,
+// sending nothing. It works with the flag off, so it can be run first.
+func (s *Server) handlePlanGuestServiceToken(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	_, policy, err := s.guestTokenClients()
+	if err != nil {
+		httputil.RespondWithError(c, http.StatusConflict, "the Cloudflare settings are missing or invalid: "+logger.SanitizeLogValue(err.Error()), "GUEST_TOKEN_NOT_CONFIGURED")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), guestTokenListTimeout)
+	defer cancel()
+	body, res, err := policy.PlanServiceToken(ctx, planSampleTokenID)
+	if err != nil {
+		httputil.RespondWithError(c, http.StatusBadGateway, guestTokenErrText("reading the books policy", err), "GUEST_TOKEN_PLAN_FAILED")
+		return
+	}
+	out := gin.H{
+		"sample_token_id": planSampleTokenID,
+		"result":          string(res),
+		"note":            "Nothing was sent to Cloudflare except a read of the policy. A real mint adds one rule like this for the guest's own token id; every existing rule must appear unchanged.",
+	}
+	if body != nil {
+		out["policy_put_body"] = json.RawMessage(body)
+	}
+	httputil.RespondWithOK(c, out)
 }

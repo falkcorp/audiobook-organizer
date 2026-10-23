@@ -1,5 +1,5 @@
 // file: internal/cfservicetoken/client.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f8a1d52-7c4e-4b96-a1d0-5e2c9b7f4a38
 // last-edited: 2026-10-23
 
@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -91,15 +92,25 @@ var (
 	secretRe    = regexp.MustCompile(`^[A-Za-z0-9_-]{16,200}$`)
 )
 
-// APIError is a non-success answer from Cloudflare. Status is what callers
-// branch on; Detail is Cloudflare's error text, capped, with the API token
-// scrubbed, for logs and the admin: never parsed.
+// APIError is a non-success answer from Cloudflare. It carries ONLY the HTTP
+// status and Cloudflare's numeric error codes: Cloudflare's free text is data
+// we do not trust, so it is dropped at the door and never reaches a log, an
+// audit entry, a stored record or an HTTP response.
 type APIError struct {
 	Status int
-	Detail string
+	Codes  []int
 }
 
-func (e *APIError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Detail) }
+func (e *APIError) Error() string {
+	if len(e.Codes) == 0 {
+		return fmt.Sprintf("HTTP %d", e.Status)
+	}
+	parts := make([]string, len(e.Codes))
+	for i, c := range e.Codes {
+		parts[i] = strconv.Itoa(c)
+	}
+	return fmt.Sprintf("HTTP %d (Cloudflare error code %s)", e.Status, strings.Join(parts, ", "))
+}
 
 // Is makes errors.Is(err, ErrForbidden) true for a 403.
 func (e *APIError) Is(target error) bool {
@@ -336,9 +347,10 @@ type apiEnvelope struct {
 	} `json:"result_info"`
 }
 
+// apiMessage keeps only the numeric code of one Cloudflare error: its text is
+// deliberately not decoded.
 type apiMessage struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code int `json:"code"`
 }
 
 func (c *Client) do(ctx context.Context, method, suffix string, q url.Values, body map[string]any) (json.RawMessage, error) {
@@ -383,41 +395,31 @@ func (c *Client) request(ctx context.Context, method, suffix string, q url.Value
 	}
 	var env apiEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, apiEnvelope{}, &APIError{Status: resp.StatusCode, Detail: "response is not Cloudflare API JSON"}
+		return nil, apiEnvelope{}, &APIError{Status: resp.StatusCode}
 	}
 	if resp.StatusCode/100 != 2 || !env.Success {
 		status := resp.StatusCode
 		if status/100 == 2 { // success=false on a 2xx: still a refusal
 			status = http.StatusBadGateway
 		}
-		return nil, env, &APIError{Status: status, Detail: describe(env.Errors, c.token)}
+		return nil, env, &APIError{Status: status, Codes: errorCodes(env.Errors)}
 	}
 	return env.Result, env, nil
 }
 
-func describe(errs []apiMessage, token string) string {
-	if len(errs) == 0 {
-		return "request refused"
-	}
-	parts := make([]string, 0, len(errs))
-	for _, e := range errs {
-		msg := e.Message
-		if len(msg) > 200 {
-			msg = msg[:200]
-		}
-		parts = append(parts, fmt.Sprintf("%d %s", e.Code, msg))
-	}
-	return cleanText(scrubString(strings.Join(parts, "; "), token))
-}
+// maxErrorCodes caps how many of Cloudflare's numeric codes are kept.
+const maxErrorCodes = 5
 
-// cleanText drops control characters so an answer cannot forge log lines.
-func cleanText(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
+// errorCodes keeps only the numeric codes of an error list, never the text.
+func errorCodes(errs []apiMessage) []int {
+	var codes []int
+	for _, e := range errs {
+		if len(codes) == maxErrorCodes {
+			break
 		}
-		return r
-	}, s)
+		codes = append(codes, e.Code)
+	}
+	return codes
 }
 
 func scrub(err error, token string) error {

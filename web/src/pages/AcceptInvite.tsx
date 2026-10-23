@@ -1,5 +1,5 @@
 // file: web/src/pages/AcceptInvite.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8e5c1a47-2d93-4b6f-a0e8-3f7b9d2c6a15
 // last-edited: 2026-10-23
 
@@ -209,15 +209,20 @@ export function AcceptInvite() {
         return;
       }
       // Read the one-time key before anything else can drop the response. A
-      // body that does not parse must not turn a created account into an error.
+      // body that does not parse must not turn a created account into an error,
+      // and a response without phone_app (the feature is off) changes nothing
+      // about this page.
       try {
         const data = unwrapData<{ phone_app?: PhoneAppKey }>(await resp.json());
-        if (data?.phone_app) setPhoneApp(data.phone_app);
+        if (data?.phone_app) {
+          setPhoneApp(data.phone_app);
+          // The key is on screen now: drop the typed passwords from state.
+          setPassword('');
+          setConfirm('');
+        }
       } catch {
         /* no phone-app key in the response */
       }
-      setPassword('');
-      setConfirm('');
       setAccepted(true);
     } catch (err) {
       setFormError(describeRequestError(err, 'Could not accept the invitation'));

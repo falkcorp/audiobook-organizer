@@ -1,5 +1,5 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
 // last-edited: 2026-10-23
 
@@ -145,11 +145,14 @@ func TestCredentialRoutes_EveryStateChangingRouteIsClassified(t *testing.T) {
 	var unclassified, bothWays, sensitivePrefixOnly []string
 	seen := map[string]bool{}
 	for _, r := range routes {
+		key := r.Method + " " + r.Path
+		// Every route counts as present, not just the state-changing ones: a
+		// GET can be a credential route too (the guest-service-token list and
+		// plan name guests and make the server call Cloudflare).
+		seen[key] = true
 		if !isStateChanging(r.Method) {
 			continue
 		}
-		key := r.Method + " " + r.Path
-		seen[key] = true
 		_, cred := f.srv.credRoutes[key]
 		_, exempt := exemptRoutes[key]
 		guarded := cred
