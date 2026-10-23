@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
 // last-edited: 2026-10-23
 
@@ -38,7 +38,7 @@ func newRetiredFixture(t *testing.T) *retiredFixture {
 	require.NoError(t, err)
 	v, err := ps.CreateBookVersion(&BookVersion{
 		BookID: holder.ID, Status: BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
-		RetiredFromBookID: shell.ID, RetireOpID: "op-1",
+		RetiredFromBookID: shell.ID, RetireOpID: "op-1", RetiredAt: new(time.Now()),
 	})
 	require.NoError(t, err)
 	return &retiredFixture{ps: ps, holder: holder, shell: shell, version: v}
@@ -129,16 +129,25 @@ func TestRetireBookFiles_RepointsRowsAndDeletesNone(t *testing.T) {
 			require.Equal(t, "book_file:"+fx.holder.ID+":"+x1.ID, indexOwner(t, fx.ps, "book_file_id:"+x1.ID))
 
 			// Keys nobody else carries stay with the retired row, re-pointed at
-			// its new key, so lookups by the retired file's own identity resolve.
+			// its new key. The single-identity lookups answer "which LIVE file",
+			// so they answer nil; the complete and include-retired lookups still
+			// resolve the retired row.
+			require.Equal(t, fx.holder.ID+":"+x1.ID, indexOwner(t, fx.ps, "book_file_path:"+bookFilePathCRC("/lib/ret/shell/01.mp3")))
 			hit, err := fx.ps.GetBookFileByPath("/lib/ret/shell/01.mp3")
 			require.NoError(t, err)
-			require.NotNil(t, hit)
-			require.Equal(t, x1.ID, hit.ID)
-			require.Equal(t, fx.holder.ID, hit.BookID)
+			require.Nil(t, hit, "a path held only by a retired row has no live file")
 			pid, err := fx.ps.GetBookFileByPID("PID-X1")
 			require.NoError(t, err)
-			require.NotNil(t, pid)
-			require.Equal(t, x1.ID, pid.ID)
+			require.Nil(t, pid, "a PID held only by a retired row has no live file")
+			pidAny, err := fx.ps.GetBookFileByPIDIncludingRetired("PID-X1")
+			require.NoError(t, err)
+			require.NotNil(t, pidAny)
+			require.Equal(t, x1.ID, pidAny.ID)
+			require.True(t, pidAny.Retired)
+			if atPath, aerr := fx.ps.BookFilesAtPath("/lib/ret/shell/01.mp3"); aerr == nil {
+				require.Len(t, atPath, 1, "BookFilesAtPath is the complete lookup and keeps retired rows")
+				require.Equal(t, x1.ID, atPath[0].ID)
+			}
 
 			// The holder's aggregates still describe only its live file.
 			hb, err := fx.ps.GetBookByID(fx.holder.ID)
@@ -289,7 +298,8 @@ func TestRetireBookFiles_Refusals(t *testing.T) {
 		require.Error(t, err)
 		other, err := fx.ps.CreateBook(&Book{Title: "Other Holder", FilePath: "/lib/ret/other"})
 		require.NoError(t, err)
-		v2, err := fx.ps.CreateBookVersion(&BookVersion{BookID: other.ID, Status: BookVersionStatusRetired, Format: "mp3", Source: "retired_book"})
+		v2, err := fx.ps.CreateBookVersion(&BookVersion{BookID: other.ID, Status: BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
+			RetiredFromBookID: fx.shell.ID, RetiredAt: new(time.Now())})
 		require.NoError(t, err)
 		err = fx.ps.RetireBookFiles([]BookFileMove{{FileIDs: []string{x.ID}, SourceBookID: fx.holder.ID}}, other.ID, v2.ID)
 		require.ErrorIs(t, err, ErrBookFileRetired)
@@ -685,7 +695,7 @@ func TestRetireBookFiles_AnotherRetiredRowIsNotALiveAlternative(t *testing.T) {
 	require.NoError(t, err)
 	v2, err := fx.ps.CreateBookVersion(&BookVersion{
 		BookID: holder2.ID, Status: BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
-		RetiredFromBookID: shell2.ID, RetireOpID: "op-2",
+		RetiredFromBookID: shell2.ID, RetireOpID: "op-2", RetiredAt: new(time.Now()),
 	})
 	require.NoError(t, err)
 	x2 := fx.create(t, shell2.ID, BookFile{FilePath: path, FileHash: "two-hash"}) // writes last: owns the keys

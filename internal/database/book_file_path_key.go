@@ -1,7 +1,7 @@
 // file: internal/database/book_file_path_key.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a41d0c6-2f7e-4b39-95d8-c6e1f3a07b24
-// last-edited: 2026-10-01
+// last-edited: 2026-10-23
 
 package database
 
@@ -22,7 +22,11 @@ import (
 // The row is re-read and the key written while holding the row's book_file
 // stripe AND its book's owner stripe; claimed is false (nil error) when the
 // row is gone or has moved, so a caller never points the key at a row
-// elsewhere.
+// elsewhere. It is also false for a RETIRED row: the single-owner index rule
+// (retired_book_files.go) lets a retired row keep a path key only while no live
+// row carries the path, and decides that in RetireBookFiles and
+// UnretireBookFiles. An undo handing a key back must never move it from a live
+// row onto a retired one, so a retired row is refused here, not claimed.
 //
 // The owner stripe is what serializes this against MoveBookFilesToBook(Bulk):
 // a move takes no book_file stripes, but its commit re-checks every source
@@ -44,7 +48,7 @@ func (p *PebbleStore) ClaimBookFilePathKey(bookID, fileID, path string) (claimed
 		unlockOwner()
 		return false, fmt.Errorf("read book_file %s: %w", fileID, err)
 	}
-	if f == nil || f.FilePath != path {
+	if f == nil || f.FilePath != path || f.Retired {
 		unlockOwner()
 		return false, nil
 	}

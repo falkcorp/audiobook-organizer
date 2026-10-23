@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.122.0
+// version: 2.123.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-23
 
@@ -973,16 +973,21 @@ type BookFile struct {
 	// Retired marks a row that was once a live file of its book and now
 	// survives only as a retired book version held by another book (see
 	// BookVersionStatusRetired and RetireBookFiles). A retired row is NOT a file
-	// of the book it is keyed under: every default book_file read (GetBookFiles,
-	// the Core and visitor variants, the counts and duplicate-hash stats) skips
-	// it, so the holder's track list, runtime, size and ABS export never see it.
-	// The retired-aware readers (GetBookFilesIncludingRetired,
-	// GetRetiredBookFiles, GetAllBookFilesCoreIncludingRetired) return it.
+	// of the book it is keyed under: the list reads (GetBookFiles, the Core and
+	// visitor variants, the counts and duplicate-hash stats) and the single-
+	// identity lookups (GetBookFileByPath, ByPID, ByAcoustID, ByAcoustIDFuzzy,
+	// GetBookBySegmentFileHash) skip it, so the holder's track list, runtime,
+	// size and ABS export never see it. GetBookFileByID, BookFilesAtPath,
+	// BookFilesWithHash, LookupAcoustIDCandidates and LSHProbe still return it
+	// (see the list in iface_retired.go). The retired-aware readers
+	// (GetBookFilesIncludingRetired, GetRetiredBookFiles,
+	// GetAllBookFilesCoreIncludingRetired, GetBookFileByPIDIncludingRetired)
+	// always return it.
 	//
 	// omitzero, never omitempty, for the same v1/v2 reason as Scan: a live row
 	// serializes byte-identically to a row written before the field existed.
 	// Only RetireBookFiles sets it and only UnretireBookFiles clears it; every
-	// other write path preserves it (bookFileFieldClasses, bfPreserveAlways).
+	// other write path preserves it (bookFileFieldClasses, bfStoredOwned).
 	Retired            bool   `json:"retired,omitzero"`
 	FilePath           string `json:"file_path"`
 	OriginalFilename   string `json:"original_filename,omitempty"`
