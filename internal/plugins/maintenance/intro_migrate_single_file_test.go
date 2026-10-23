@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 91e4c07b-5a63-4d28-8f10-2b74e9d6a35c
-// last-edited: 2026-09-02
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -200,7 +200,8 @@ func TestMigrateOneBookReportsRowShapeBeforeTranscript(t *testing.T) {
 
 // TestMigratedFieldsMatchBookFileSchema fails when someone adds a per-file
 // transcription field to BookFile without deciding whether tier 0 should carry
-// it. Without this, a new field silently stays empty on 33,780 migrated rows.
+// it (introMigratedFields) or not (introNotMigratedFields, with the reason).
+// Without this, a new field silently stays empty on 33,780 migrated rows.
 func TestMigratedFieldsMatchBookFileSchema(t *testing.T) {
 	bf := reflect.TypeFor[database.BookFile]()
 	for _, name := range introMigratedFields {
@@ -214,13 +215,22 @@ func TestMigratedFieldsMatchBookFileSchema(t *testing.T) {
 	for _, n := range introMigratedFields {
 		listed[n] = true
 	}
+	for _, n := range introNotMigratedFields {
+		if _, ok := bf.FieldByName(n); !ok {
+			t.Errorf("introNotMigratedFields names %q, which BookFile does not have", n)
+		}
+		if listed[n] {
+			t.Errorf("%q is in both introMigratedFields and introNotMigratedFields", n)
+		}
+		listed[n] = true
+	}
 	for field := range bf.Fields() {
 		n := field.Name
 		looksTranscription := len(n) >= 5 &&
 			(n[:5] == "Intro" || (len(n) >= 10 && n[:10] == "Transcribe") || (len(n) >= 11 && n[:11] == "Transcribed"))
 		if looksTranscription && !listed[n] {
 			t.Errorf("BookFile.%s looks like a transcription field but is not in "+
-				"introMigratedFields — decide explicitly whether tier 0 carries it", n)
+				"introMigratedFields or introNotMigratedFields — decide explicitly whether tier 0 carries it", n)
 		}
 	}
 }
