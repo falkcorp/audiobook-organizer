@@ -1,5 +1,5 @@
 // file: internal/itunes/retired_rows_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b6e92d4-5a17-4c3f-8d20-e4f1a7c93b58
 // last-edited: 2026-10-23
 
@@ -14,6 +14,9 @@ import (
 // retiredAwareMock is a PIDIntegrityStore + PIDCoverageStore that behaves like
 // the production store: GetAllBookFilesCore returns the LIVE rows only, and the
 // retired rows are reachable only through the RetiredBookFileReader capability.
+// The compile-time assertion below keeps it a full implementation: a method
+// added to the interface otherwise makes the capability lookup fail quietly and
+// the tests fall back to the live-only path.
 type retiredAwareMock struct {
 	pidCensusMock
 	retired []database.BookFileCore
@@ -36,9 +39,15 @@ func (m *retiredAwareMock) GetRetiredVersionsFromBook(string) ([]database.BookVe
 	return nil, nil
 }
 
+func (m *retiredAwareMock) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
+}
+
 func (m *retiredAwareMock) ListBooksByITunesPID(int, int) ([]database.Book, error) {
 	return m.books2, nil
 }
+
+var _ database.RetiredBookFileReader = (*retiredAwareMock)(nil)
 
 func retiredBF(id, bookID, path, pid string) database.BookFileCore {
 	f := bf(id, bookID, path, pid)
