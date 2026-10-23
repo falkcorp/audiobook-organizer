@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package audiobookshandler_test
 
@@ -126,7 +126,7 @@ func TestDeleteAudiobook_StatusMapping(t *testing.T) {
 		{"merge busy", merge.ErrMergeBusy, http.StatusConflict, "MERGE_BUSY"},
 		{"carry failed", fmt.Errorf("purge b1: %w: boom", audiobookspkg.ErrPurgeCarryFailed), http.StatusInternalServerError, "CARRY_FAILED"},
 		// #3777 review: the live hard delete returns the merge carry errors
-		// themselves (merge.HardDeleteKeepingUserState), wrapped.
+		// themselves (merge.HardDeleteKeepingUserStateLocked), wrapped.
 		{"live carry incomplete", fmt.Errorf("hard delete b1: %w: b1 -> b2: boom", merge.ErrStateCarryIncomplete), http.StatusInternalServerError, "CARRY_FAILED"},
 		{"live carry target unreadable", fmt.Errorf("hard delete b1: %w: boom", merge.ErrCarryTargetUnreadable), http.StatusInternalServerError, "CARRY_FAILED"},
 		{"owns files", fmt.Errorf("%w: b1", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},

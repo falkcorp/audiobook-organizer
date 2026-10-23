@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_followups_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3e8c5a71-0d2b-4f69-9a14-7b6e2c8d1f53
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package merge
 
@@ -500,7 +500,7 @@ func TestRestoreFromTrash_FollowsEmptiedGroupRedirect(t *testing.T) {
 	}
 	t.Run("restore lands with the family", func(t *testing.T) {
 		f, _, k, _, d, _ := setup(t)
-		r, err := RestoreFromTrash(f.S, d, nil, nil)
+		r, err := restoreFromTrash(f.S, d, nil, nil)
 		require.NoError(t, err)
 		require.True(t, r.Restored)
 		require.Equal(t, "H", f.GroupOf(t, d))
@@ -514,7 +514,7 @@ func TestRestoreFromTrash_FollowsEmptiedGroupRedirect(t *testing.T) {
 		r, err := readGroupRedirect(f.S, "G")
 		require.NoError(t, err)
 		require.Nil(t, r, "the undo clears the redirect")
-		_, err = RestoreFromTrash(f.S, d, nil, nil)
+		_, err = restoreFromTrash(f.S, d, nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, "G", f.GroupOf(t, d))
 	})
@@ -526,7 +526,7 @@ func TestRestoreFromTrash_FollowsEmptiedGroupRedirect(t *testing.T) {
 			return nil
 		})
 		require.NoError(t, err)
-		_, err = RestoreFromTrash(f.S, d, nil, nil)
+		_, err = restoreFromTrash(f.S, d, nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, "G", f.GroupOf(t, d))
 	})
