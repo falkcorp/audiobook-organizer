@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.70.0
+// version: 1.71.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -37,6 +37,7 @@ import (
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
@@ -122,6 +123,35 @@ func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
 // accessors to that.
 // MergeUserStateStore returns the store for repair-merged-user-state.
 func (s *Server) MergeUserStateStore() merge.UserStateRepairStore { return s.store }
+
+// UserMerge returns the admin merge-user service, built once. nil when the store
+// lacks the storage capability behind it (the maintenance.user-merge op and the
+// Users routes then refuse). Resolved through database.AsCapability inside
+// usermerge.New: the store installed by NewServer is a decorator that hides
+// capabilities from a bare assertion. Its audit sink writes one audit-tier
+// activity entry per completed apply or undo.
+func (s *Server) UserMerge() *usermerge.Service {
+	s.userMergeOnce.Do(func() {
+		var opts []usermerge.Option
+		if s.activityService != nil {
+			opts = append(opts, usermerge.WithAudit(func(summary string, details map[string]any) {
+				if err := s.activityService.Record(database.ActivityEntry{
+					Timestamp: time.Now().UTC(), Tier: "audit", Type: "user_merge", Level: "info",
+					Source: "user_merge", Summary: summary, Details: details,
+				}); err != nil {
+					logger.New("usermerge").Warn("recording the user-merge audit entry failed: %v", err)
+				}
+			}))
+		}
+		svc, err := usermerge.New(s.store, opts...)
+		if err != nil {
+			logger.New("usermerge").Warn("user merge unavailable: %v", err)
+			return
+		}
+		s.userMerge = svc
+	})
+	return s.userMerge
+}
 
 // IngestVersionStore returns the store for the relink-pre-fix-imports fixer,
 // which forwards it into internal/versions.

@@ -273,14 +273,14 @@ func (s *Service) BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error)
 	p.Survivor, p.Absorbed = summarize(surv), summarize(abs)
 
 	if req.ActorID != "" {
-		actor, err := s.store.GetUserByID(req.ActorID)
+		isAdmin, err := s.ActorIsAdmin(req.ActorID)
 		if err != nil {
-			return nil, fmt.Errorf("read actor: %w", err)
+			return nil, err
 		}
 		switch {
-		case actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, "admin"):
+		case !isAdmin:
 			p.Refusals = append(p.Refusals, "merging accounts needs an active admin")
-		case actor.ID == abs.ID:
+		case req.ActorID == abs.ID:
 			p.Refusals = append(p.Refusals, "you cannot merge away the account you are signed in as")
 		}
 	}
@@ -332,6 +332,19 @@ func (s *Service) BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error)
 	}
 	p.Digest = digest(p)
 	return p, nil
+}
+
+// ActorIsAdmin reports whether id is an existing, active account with the admin
+// role: the only kind of account that may preview or run a merge.
+func (s *Service) ActorIsAdmin(id string) (bool, error) {
+	if id == "" {
+		return false, nil
+	}
+	u, err := s.store.GetUserByID(id)
+	if err != nil {
+		return false, fmt.Errorf("read actor: %w", err)
+	}
+	return u != nil && u.Status == "active" && slices.Contains(u.Roles, "admin"), nil
 }
 
 func summarize(u *database.User) AccountSummary {
