@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-22
 
@@ -69,8 +69,8 @@ var fileIntroPauseInterval = 30 * time.Second
 const fileIntroPauseMaxListErrors = 10
 
 // fileIntroBusyOps are the operations the run pauses for: both rewrite
-// book_file rows in bulk. (Neither declares Writes yet, so the scheduler
-// cannot serialise them against this op; that is a separate fix.)
+// book_file rows in bulk. The scheduler cannot do this for us (see the Writes
+// note on the def), so the run polls the queue between batches instead.
 var fileIntroBusyOps = map[string]bool{
 	"library.scan":                true,
 	"metadata.batch-apply-cached": true,
@@ -105,8 +105,20 @@ func (p *Plugin) fileIntroTranscribeDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  fileIntroOpID,
-		// Field-scoped writes to book_file rows, plus the book transcript fill.
-		Writes:          []sdk.Resource{sdk.ResBookFiles, sdk.ResBooks},
+		// NO Writes declaration, on purpose. Gate 3b of the dispatcher holds any op
+		// back while a running op declares an overlapping write-set, and this op
+		// runs for days: declaring ResBooks/ResBookFiles would keep the nightly
+		// acoustid.backfill (and every other op that declares them) queued for the
+		// whole run. The gate exists to stop whole-row read-modify-write ops from
+		// interleaving, and neither side of that applies here: this op writes only
+		// the intro group of one row (SetBookFileIntro, under the row's lock) and
+		// fills a book through ModifyBook (under the book's lock), and a whole-row
+		// writer cannot revert the intro group because the shared book_file merge
+		// classes keep it (bookFileFieldClasses). It still writes, so it declares
+		// the write capabilities, which is what makes v3 treat it as a writer.
+		// The one thing it does not cover is a whole-row book writer losing a
+		// book fill that landed between its read and its write; the file result
+		// survives and a forced run or clear_run_id puts that right.
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         30 * 24 * time.Hour,
@@ -439,9 +451,11 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 		runID: runID, onlyMissing: onlyMissing,
 	}
 	batches := chunkFileIntroGroups(sel.groups, fileIntroBatchGroups)
+	w.batchesTotal = len(batches)
 	var filesDone atomic.Int64
 	err = registry.RunItems(ctx, reporter, batches, func(ctx context.Context, b []fileIntroGroup) error {
 		n, berr := w.runBatch(ctx, b)
+		w.batchesDone.Add(1)
 		filesDone.Add(int64(n))
 		accum.flush(false)
 		return berr
@@ -517,6 +531,10 @@ type fileIntroWorker struct {
 	accum       *fileIntroAccum
 	runID       string
 	onlyMissing bool
+	// batchesDone / batchesTotal let a paused run re-announce itself at its real
+	// position instead of resetting the progress bar to zero on every tick.
+	batchesDone  atomic.Int64
+	batchesTotal int
 	// progressMu serialises reporter calls made outside RunItems' own: the
 	// reporter is not required to be goroutine-safe.
 	progressMu sync.Mutex
@@ -525,7 +543,7 @@ type fileIntroWorker struct {
 func (w *fileIntroWorker) progress(msg string) {
 	w.progressMu.Lock()
 	defer w.progressMu.Unlock()
-	_ = w.reporter.UpdateProgress(0, 1, msg)
+	_ = w.reporter.UpdateProgress(int(w.batchesDone.Load()), max(w.batchesTotal, 1), msg)
 }
 
 // waitWhileBusy blocks while a library scan or a bulk metadata apply is

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
 // last-edited: 2026-10-22
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // ---- selection (pure) -------------------------------------------------------
@@ -870,7 +871,21 @@ func TestFileIntroClear_DonorCopyDoesNotLetItsClearUndoTheDonorsBookFill(t *test
 
 func TestFileIntroDef_Shape(t *testing.T) {
 	def := New(fakeDeps{}).fileIntroTranscribeDef()
-	if def.ID != "maintenance.transcribe-file-intros" || !def.Cancellable || len(def.Writes) == 0 {
+	if def.ID != "maintenance.transcribe-file-intros" || !def.Cancellable {
 		t.Fatalf("def: %+v", def)
+	}
+	// A multi-day op must not hold the dispatcher's write-set gate (it would keep
+	// acoustid.backfill queued for the whole run); it still has to be a writer.
+	if len(def.Writes) != 0 {
+		t.Fatalf("op declares Writes %v; see the comment on the def", def.Writes)
+	}
+	var writes bool
+	for _, c := range def.Capabilities {
+		if c == sdk.CapLibraryWrite {
+			writes = true
+		}
+	}
+	if !writes {
+		t.Fatal("op must declare library.write so v3 treats it as a writer")
 	}
 }

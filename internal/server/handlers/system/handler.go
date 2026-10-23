@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.8
+// version: 1.22.9
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-22
 
@@ -1181,7 +1181,10 @@ func (h *Handler) GetFileIntroStats(c *gin.Context) {
 	}
 	fs, _ := database.AsCapability[database.FileIntroStatsStore](store)
 	if fs == nil {
-		httputil.RespondWithOK(c, nil)
+		// A typed nil, not a bare nil: SuccessResponse.Data is omitempty, so an
+		// untyped nil drops the "data" key while a typed nil pointer serialises
+		// as {"data":null}, the same shape the "no run yet" path returns.
+		httputil.RespondWithOK(c, (*database.FileIntroStats)(nil))
 		return
 	}
 	stats, err := fs.GetFileIntroStats()
