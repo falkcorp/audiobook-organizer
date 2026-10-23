@@ -469,6 +469,73 @@ func TestUndo_LeavesAKeyWrittenAfterTheMergeAndSaysSo(t *testing.T) {
 	}
 }
 
+func TestUndo_KeepsAStatusAnAdminChangedAfterTheMerge(t *testing.T) {
+	f := newFixture(t)
+	j, err := f.apply(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An admin deactivates the merged-away account after the merge.
+	if _, err := f.s.SetUserStatus(f.b.ID, "deactivated"); err != nil {
+		t.Fatal(err)
+	}
+	undone, err := f.svc.Undo(context.Background(), UndoRequest{JournalID: j.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ub, _ := f.s.GetUserByID(f.b.ID); ub.Status != "deactivated" || ub.MergedIntoUserID != "" {
+		t.Errorf("absorbed after undo = status %q merged_into %q; a status changed since the merge must be kept", ub.Status, ub.MergedIntoUserID)
+	}
+	if !slices.ContainsFunc(undone.UndoConflicts, func(c string) bool { return strings.Contains(c, "status") && strings.Contains(c, "deactivated") }) {
+		t.Errorf("undo conflicts = %v, want the kept status named", undone.UndoConflicts)
+	}
+}
+
+func TestUndo_EndsTheSurvivorsSessionsWhenSignInsMoveBack(t *testing.T) {
+	f := newFixture(t)
+	j, err := f.apply(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The survivor signs in after the merge, possibly through a re-linked identity.
+	sess, err := f.s.CreateSession(f.a.ID, "192.0.2.20", "test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := func() int64 { u, _ := f.s.GetUserByID(f.a.ID); return u.CredentialEpoch }
+	before := epoch()
+	if _, err := f.svc.Undo(context.Background(), UndoRequest{JournalID: j.ID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.s.GetSession(sess.ID); got == nil || !got.Revoked {
+		t.Errorf("the survivor's web session outlived the credential rollback: %+v", got)
+	}
+	if epoch() <= before {
+		t.Errorf("survivor epoch %d did not go up from %d, so its ABS sessions would survive", epoch(), before)
+	}
+}
+
+func TestUndo_LeavesTheSurvivorsSessionsAloneWhenNoCredentialMoved(t *testing.T) {
+	f := newFixture(t)
+	// Take the sign-ins and keys out of the picture: nothing credential-shaped moves.
+	for _, k := range []string{"oauthid:idB", "idx:oauth:user:" + f.b.ID + ":idB", "apikey:kB", "idx:apikey:user:" + f.b.ID + ":kB"} {
+		if err := f.s.DeleteRaw(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	j, err := f.apply(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := f.s.CreateSession(f.a.ID, "192.0.2.21", "test", time.Hour)
+	if _, err := f.svc.Undo(context.Background(), UndoRequest{JournalID: j.ID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.s.GetSession(sess.ID); got == nil || got.Revoked {
+		t.Errorf("an undo that moved no sign-in or key signed the survivor out: %+v", got)
+	}
+}
+
 // failAfter makes the Nth ApplyUserMergeOps call fail, as a crash between chunks.
 type failAfter struct {
 	database.UserMerger

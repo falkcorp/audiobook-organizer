@@ -181,12 +181,17 @@ func (s *Service) Resume(ctx context.Context, journalID string, prog Progress) (
 // sessions. It does not go through the Deactivate handler, which also revokes
 // the account's guest and Cloudflare Access grant: that is a different decision.
 func (s *Service) lockAbsorbed(abs *database.User) error {
-	if abs.Status != "locked" {
-		if _, err := s.creds.SetUserStatus(abs.ID, "locked"); err != nil {
+	if abs.Status != mergeLockedStatus {
+		if _, err := s.creds.SetUserStatus(abs.ID, mergeLockedStatus); err != nil {
 			return fmt.Errorf("lock the account being merged away: %w", err)
 		}
 	}
-	sessions, err := s.store.ListUserSessions(abs.ID)
+	return s.revokeSessions(abs.ID)
+}
+
+// revokeSessions ends userID's web sessions and its Audiobookshelf sessions.
+func (s *Service) revokeSessions(userID string) error {
+	sessions, err := s.store.ListUserSessions(userID)
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
@@ -199,7 +204,7 @@ func (s *Service) lockAbsorbed(abs *database.User) error {
 		}
 	}
 	if s.abs != nil {
-		if _, err := s.abs.RevokeAllABSSessionsForUser(abs.ID); err != nil {
+		if _, err := s.abs.RevokeAllABSSessionsForUser(userID); err != nil {
 			return fmt.Errorf("revoke Audiobookshelf sessions: %w", err)
 		}
 	}
