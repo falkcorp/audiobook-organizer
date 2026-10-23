@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-user-merge-executive-summary.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: e2a85c31-7d94-4b06-8f1c-6a30d9e4b752 -->
 <!-- last-edited: 2026-10-23 -->
 
@@ -38,13 +38,17 @@ stays and when to run it.
   back, but a book either account listened to after the merge is left exactly as
   it is and reported (its progress, its status and its positions are never
   split), and anything else changed since is left alone and reported, never
-  overwritten. A sign-in or API key goes back to the account it came from with
-  only its owner changed, so uses it gathered since are kept. When sign-ins or
+  overwritten. A sign-in, API key, playlist, collection or invite goes back to
+  the account it came from with only its owner changed, so uses it gathered
+  since, or a playlist renamed since, are kept. When sign-ins or
   keys move back, the account that stayed is signed out of the website and
   Audiobookshelf apps.
 - **Safe to interrupt.** If the server stops part way, the merge can be resumed
   from where it stopped. Resuming plans the work that is left again against the
   accounts as they are, so a change made while it was stopped does not block it.
+  Each sign-in, key, book and listening-time total is written in one step with
+  the other rows that go with it, so a stop never leaves listening time added
+  to the surviving account while still counted on the one that goes away.
 
 ## Who can use it
 

@@ -1,5 +1,5 @@
 // file: internal/usermerge/plan.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c4a82f17-5d93-4e60-9b2a-71f3d0e86a45
 // last-edited: 2026-10-23
 
@@ -226,6 +226,13 @@ func (b *builder) setOwner(family, key, field, from, to, reason string) error {
 	op, err := b.touch(family, key)
 	if err != nil {
 		return err
+	}
+	if !op.IsOwnerOp() {
+		// Refuse in the preview what the apply could only stop at: a row whose
+		// owner field cannot be rewritten (repeated, or not a string).
+		if _, _, err := database.RewriteJSONField(op.Before, field, to); err != nil {
+			b.refuse("a %s row cannot be re-owned: %v", family, err)
+		}
 	}
 	op.OwnerField, op.OwnerFrom, op.OwnerTo, op.Reason = field, from, to, reason
 	op.Before, op.After, op.BeforeAbsent, op.Delete = nil, nil, false, false
@@ -797,10 +804,16 @@ func (b *builder) planListenStats(_ context.Context, surv, abs *database.User, d
 			}
 			b.conflict(FamListenStats, nk, "the two counters are added")
 		}
-		if err := b.del(FamListenStats, r.Key, "added to the surviving account"); err != nil {
-			return err
+		// The sum is not idempotent: written without the delete of the counter it
+		// came from, a resume would add the same seconds again. Both writes are
+		// one unit, so they are one batch and a chunk never splits them.
+		b.unit = "listen:" + nk
+		err = b.del(FamListenStats, r.Key, "added to the surviving account")
+		if err == nil {
+			err = b.set(FamListenStats, nk, "sum of both accounts", []byte(strconv.Itoa(have+add)))
 		}
-		if err := b.set(FamListenStats, nk, "sum of both accounts", []byte(strconv.Itoa(have+add))); err != nil {
+		b.unit = ""
+		if err != nil {
 			return err
 		}
 	}
@@ -861,14 +874,23 @@ func (b *builder) planOwnerFields(_ context.Context, surv, abs *database.User, d
 		{FamInvites, "created_by_user_id", d.Invites},
 		{FamInviteGrants, "user_id", d.InviteGrants},
 	} {
-		for _, r := range f.rows {
+		for i, r := range f.rows {
 			b.count(f.family).Rows++
-			out, _, err := database.RewriteJSONField(r.Value, f.field, surv.ID)
+			// Refusals name the row by position, not key: an invite's key is its
+			// token and an invite grant's carries an address.
+			owner, err := database.JSONStringField(r.Value, f.field)
 			if err != nil {
-				b.refuse("cannot read %s row %s: %v", f.family, r.Key, err)
+				b.refuse("cannot read %s row %d: %v", f.family, i+1, err)
 				continue
 			}
-			if err := b.set(f.family, r.Key, "re-owned by the surviving account", out); err != nil {
+			if owner != abs.ID {
+				b.refuse("%s row %d does not name the merged-away account as its owner", f.family, i+1)
+				continue
+			}
+			// An owner-field op: only the owner is compared and rewritten, in the
+			// row as it is when the op is applied, so an edit to the playlist or
+			// invite between preview and apply is neither lost nor in the digest.
+			if err := b.setOwner(f.family, r.Key, f.field, abs.ID, surv.ID, "re-owned by the surviving account"); err != nil {
 				return err
 			}
 		}
