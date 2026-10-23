@@ -210,6 +210,17 @@ func loadMLLibrary(ctx context.Context, store OpsStore) (*mlLibrary, error) {
 			break
 		}
 	}
+	// The core listings leave the trash out. It is read by its own reader
+	// (with the Pebble fallback) because a trashed book is how an identifier
+	// reaches the live survivor it was merged into, and how a row learns that
+	// only a trashed copy carries it.
+	trash, err := store.ListSoftDeletedBooks(0, 0, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ListSoftDeletedBooks: %w", err)
+	}
+	for i := range trash {
+		cores = append(cores, trash[i].Core())
+	}
 	authors, err := store.GetAllAuthors()
 	if err != nil {
 		return nil, fmt.Errorf("GetAllAuthors: %w", err)

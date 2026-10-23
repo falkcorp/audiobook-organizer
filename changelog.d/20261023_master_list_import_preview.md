@@ -1,0 +1,15 @@
+### Added
+
+#### `master-list-import` — preview of importing an uploaded book list's read status
+
+PR 1 of the master-list import. An admin uploads a CSV or JSON list of books (title, authors, ISBN-10, ISBN-13, ASIN, a source and source id such as an iTunes persistent id, runtime, read status, finish and last-listened times) to `POST /api/v1/master-lists`, and the Repairs lane plans it with the new fixer `master-list-import` (params: `list_id` and `target_user_id`, both required; `_local` is refused as for the Audible import). The plan is a preview: nothing is written to any book or to any user's read status, the fixer is `PlanOnly`, and Apply and Replan answer with an error naming PR 2. `maintenance.audible-read-status` is untouched and keeps working; the cut-over to the new fixer is PR 2.
+
+Every input row gets one plan row, in one of these classes, each a clickable filter of the rows: `matched_high` (matched by an identifier to one live book with nothing against it; the only class PR 2 will apply), `matched_review`, `ambiguous`, `unmatched`, `duplicate_in_list` (the row names the same ASIN, ISBN or source id as an earlier row; the earlier row carries the combined status and the match), `invalid` (the row names no book), and `error_unreadable` (a store read the row needed failed; the row is refused rather than guessed).
+
+Matching goes in tiers, each with its own confidence: exact ASIN, exact ISBN (an ISBN-10 is converted to its ISBN-13), source id, then folded title plus author surname with the existing scorer. Title-and-author and swapped-title matches are never `matched_high`. Several candidates are settled by runtime within 10%, otherwise they are `ambiguous`. A trashed book is never a target: an identifier found only on a trashed book is followed to its live survivor (`merge.ResolveMergeSurvivor`, flagged `via_trashed` and held for review), or reported `trashed_only` when no live survivor exists.
+
+Finer reasons are row flags, filterable as `flag:<name>`: `bad_identifier`, `identifier_conflict`, `bad_timestamp`, `future_timestamp`, `bad_status`, `bad_number`, `list_conflict`, `possible_duplicate`, `runtime_mismatch`, `series_mismatch`, `junk_title`, `author_mismatch`, `swapped_title`, `via_trashed`, `trashed_only`, `duplicate_target`. A list-side problem (a dropped bad identifier, a time with no zone or in the future) or two list rows claiming one book holds an identifier match for review.
+
+Row validation: ISBN-10 and ISBN-13 checksums are checked, an ISBN-10 is stored with its ISBN-13 form, an ASIN must have the ASIN shape, times must be RFC 3339 with a zone, and each row keeps its line number, source and findings as provenance. Lists are stored durably under the new `mlist:list:` and `mlist:row:` key families (registered in the key-family census); the upload is capped by `upload_body_limit_mb` (10 MB by default) and 50,000 rows, and a refused upload stores nothing.
+
+The upload and listing routes are admin-only and are exact entries in the credential-route classification (an admin API key may upload; it changes no credential).
