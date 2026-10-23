@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-22
 
@@ -1425,15 +1425,32 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 
 	// Hard delete path.
 	//
-	// Every hard delete takes the merge lock (the purge's per-book hold, the
-	// listening-state carry), which a running combine holds for its whole
-	// run: answer merge.ErrMergeBusy promptly instead of hanging the request.
-	if err := merge.WaitMergeIdle(merge.InteractiveMergeLockWait); err != nil {
+	// Every hard delete runs under the merge lock (the purge's per-book hold,
+	// the listening-state carry), which a running combine holds for its whole
+	// run: take it with a bound and answer merge.ErrMergeBusy promptly instead
+	// of hanging the request. The lock is KEPT and the delete runs under that
+	// one hold (purgeNowLocked, merge.HardDeleteKeepingUserStateLocked), so a
+	// combine that starts after the wait cannot make the request hang either.
+	unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
+	if err != nil {
 		return nil, err
+	}
+	defer unlock()
+
+	// The book read at the top came from before the lock: a restore or a
+	// merge revert (both take it) may have moved it in or out of the trash
+	// since, and which delete runs below depends on that. Branch on the row as
+	// it is now.
+	book, err = svc.store.GetBookByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("read audiobook %s: %w", id, err)
+	}
+	if book == nil {
+		return nil, fmt.Errorf("audiobook not found")
 	}
 
 	// A book in the trash goes through the nightly purge's own path
-	// (purgeNow): the trash page's "Purge now" must behave like the nightly
+	// (purgeNowLocked): the trash page's "Purge now" must behave like the nightly
 	// purge (owner decision 2026-10-05).
 	if database.IsInTrash(book) {
 		// Decide the hash block BEFORE the purge, on the indexes as the user
@@ -1445,7 +1462,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
 			blockHashOK, blockWarn = svc.planHashBlock(book)
 		}
-		res, err := svc.purgeNow(book)
+		res, err := svc.purgeNowLocked(book)
 		if err != nil {
 			return nil, err
 		}
@@ -1480,7 +1497,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 
 	// A live book users have listening state on is deleted only after that
 	// state is carried to another version Audiobookshelf lists, or refused
-	// (merge.HardDeleteKeepingUserState). The hash block runs inside the
+	// (merge.HardDeleteKeepingUserStateLocked). The hash block runs inside the
 	// delete, so a refusal leaves none behind.
 	merger, ok := database.AsCapability[merge.UserProgressMerger](svc.store)
 	if !ok {
@@ -1497,7 +1514,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 		return svc.store.DeleteBook(id)
 	}
-	carriedTo, err := merge.HardDeleteKeepingUserState(merger, svc.store, book, del)
+	carriedTo, err := merge.HardDeleteKeepingUserStateLocked(merger, svc.store, book, del)
 	if err != nil {
 		if err.Error() == "book not found" {
 			return nil, fmt.Errorf("audiobook not found")

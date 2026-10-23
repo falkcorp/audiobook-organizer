@@ -1,5 +1,5 @@
 // file: internal/merge/serialize_wait_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 5d0c7e2a-9b41-4f6e-8a37-c1e4b2d90f53
 // last-edited: 2026-10-22
 
@@ -13,7 +13,7 @@ import (
 
 // An interactive action in front of a running merge or combine must answer
 // ErrMergeBusy within its bound, not block for the combine's whole run.
-func TestWaitMergeIdle_BusyLockAnswersErrMergeBusyWithinTheBound(t *testing.T) {
+func TestTryLockMergeRMWWithin_BusyLockAnswersErrMergeBusyWithinTheBound(t *testing.T) {
 	LockMergeRMW()
 	released := false
 	defer func() {
@@ -23,35 +23,74 @@ func TestWaitMergeIdle_BusyLockAnswersErrMergeBusyWithinTheBound(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err := WaitMergeIdle(60 * time.Millisecond)
+	unlock, err := TryLockMergeRMWWithin(60 * time.Millisecond)
 	elapsed := time.Since(start)
-	if !errors.Is(err, ErrMergeBusy) {
-		t.Fatalf("WaitMergeIdle with the lock held = %v, want ErrMergeBusy", err)
+	if !errors.Is(err, ErrMergeBusy) || unlock != nil {
+		t.Fatalf("TryLockMergeRMWWithin with the lock held = (%v, %v), want (nil, ErrMergeBusy)", unlock != nil, err)
 	}
 	if elapsed < 50*time.Millisecond || elapsed > 2*time.Second {
-		t.Fatalf("WaitMergeIdle waited %v, want about the 60ms bound", elapsed)
+		t.Fatalf("TryLockMergeRMWWithin waited %v, want about the 60ms bound", elapsed)
 	}
 
 	UnlockMergeRMW()
 	released = true
-	if err := WaitMergeIdle(time.Second); err != nil {
-		t.Fatalf("WaitMergeIdle on a free lock = %v, want nil", err)
+	unlock, err = TryLockMergeRMWWithin(time.Second)
+	if err != nil {
+		t.Fatalf("TryLockMergeRMWWithin on a free lock = %v, want nil", err)
 	}
+	unlock()
 }
 
-// A merge that ends inside the wait lets the gate through, and the gate
-// itself must not leave the lock held (the action takes it next).
-func TestWaitMergeIdle_WaitsOutAShortMergeAndReleasesTheLock(t *testing.T) {
+// The lock is KEPT, not just checked: a combine that starts right after the
+// wait must find it held (that gap is what made a check-only gate still hang
+// the request), and the returned unlock must release it.
+func TestTryLockMergeRMWWithin_KeepsTheLockUntilUnlocked(t *testing.T) {
+	unlock, err := TryLockMergeRMWWithin(time.Second)
+	if err != nil {
+		t.Fatalf("TryLockMergeRMWWithin = %v", err)
+	}
+	if mergeSerializeMu.mu.TryLock() {
+		mergeSerializeMu.mu.Unlock()
+		t.Fatal("the lock was free right after TryLockMergeRMWWithin returned: it only checked")
+	}
+	unlock()
+	if !mergeSerializeMu.mu.TryLock() {
+		t.Fatal("the returned unlock did not release the merge lock")
+	}
+	mergeSerializeMu.mu.Unlock()
+}
+
+// A merge that ends inside the wait lets the caller in.
+func TestTryLockMergeRMWWithin_WaitsOutAShortMerge(t *testing.T) {
 	LockMergeRMW()
 	go func() {
 		time.Sleep(40 * time.Millisecond)
 		UnlockMergeRMW()
 	}()
-	if err := WaitMergeIdle(5 * time.Second); err != nil {
-		t.Fatalf("WaitMergeIdle = %v, want nil once the merge ended", err)
+	unlock, err := TryLockMergeRMWWithin(5 * time.Second)
+	if err != nil {
+		t.Fatalf("TryLockMergeRMWWithin = %v, want nil once the merge ended", err)
 	}
-	if !mergeSerializeMu.mu.TryLock() {
-		t.Fatal("WaitMergeIdle left the merge lock held")
+	unlock()
+}
+
+// The hold is counted (MergeLockAcquisitions), once per call: the actions that
+// take it may move file rows, and a counter consumer must see them. A failed
+// wait is not a hold.
+func TestTryLockMergeRMWWithin_CountsOneHoldPerAcquisitionAndNoneForABusyAnswer(t *testing.T) {
+	before := MergeLockAcquisitions()
+	unlock, err := TryLockMergeRMWWithin(time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	mergeSerializeMu.mu.Unlock()
+	if got := MergeLockAcquisitions() - before; got != 1 {
+		t.Fatalf("acquisitions after one TryLockMergeRMWWithin = %d, want 1", got)
+	}
+	if _, err := TryLockMergeRMWWithin(20 * time.Millisecond); !errors.Is(err, ErrMergeBusy) {
+		t.Fatalf("second TryLockMergeRMWWithin = %v, want ErrMergeBusy", err)
+	}
+	if got := MergeLockAcquisitions() - before; got != 1 {
+		t.Fatalf("a busy answer counted a hold: acquisitions = %d, want still 1", got)
+	}
+	unlock()
 }
