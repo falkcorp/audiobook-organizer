@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.7
+// version: 1.22.8
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -1162,6 +1162,31 @@ func (h *Handler) GetTranscribeStats(c *gin.Context) {
 	stats, err := ts.GetTranscribeStats()
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to read transcribe stats")
+		return
+	}
+	httputil.RespondWithOK(c, stats)
+}
+
+// GetFileIntroStats implements GET /api/v1/maintenance/file-intro-stats: the
+// live counters of the most recent maintenance.transcribe-file-intros run
+// (stats:transcribe-files), counted per book_file with coverage at that grain.
+// It is a separate key and endpoint from GetTranscribeStats because the two ops
+// count different things and either can be running while the other's numbers
+// are read. Returns {data: null} when no run has ever written stats.
+func (h *Handler) GetFileIntroStats(c *gin.Context) {
+	store := h.resolveStore()
+	if store == nil {
+		httputil.RespondWithInternalError(c, "store unavailable")
+		return
+	}
+	fs, _ := database.AsCapability[database.FileIntroStatsStore](store)
+	if fs == nil {
+		httputil.RespondWithOK(c, nil)
+		return
+	}
+	stats, err := fs.GetFileIntroStats()
+	if err != nil {
+		httputil.RespondWithInternalError(c, "failed to read file intro stats")
 		return
 	}
 	httputil.RespondWithOK(c, stats)
