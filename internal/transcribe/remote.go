@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.10.1
+// version: 2.11.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-09-26
+// last-edited: 2026-10-22
 
 package transcribe
 
@@ -82,6 +82,22 @@ type remoteHealth struct {
 	// DecodeFingerprint is a short hash of the server's output-affecting
 	// decode settings; part of the journal key when present.
 	DecodeFingerprint string `json:"decode_fingerprint"`
+	// PathPipeline is true when the worker serves /transcribe-path-batch: a
+	// valid WHISPER_PATH_MAP is configured on it. Absent (old worker) is false.
+	// It is the CAPABILITY; whether it can work right now is PathRoots.
+	PathPipeline bool `json:"path_pipeline"`
+	// PathRoots is the live readability of each mapped root (prefix is the
+	// SERVER-side path). A lost NFS mount shows up here as readable=false.
+	PathRoots []pathRoot `json:"path_roots"`
+	// ExtractFingerprint hashes the worker's clip-extraction arguments; it is
+	// part of path-job journal keys only. See endpointJournal.pathKey.
+	ExtractFingerprint string `json:"extract_fingerprint"`
+}
+
+// pathRoot is one mapped root's /health entry.
+type pathRoot struct {
+	Prefix   string `json:"prefix"`
+	Readable bool   `json:"readable"`
 }
 
 // supportsBatch reports whether the server exposes /transcribe-batch.
