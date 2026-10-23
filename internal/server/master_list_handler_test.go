@@ -1,5 +1,5 @@
 // file: internal/server/master_list_handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f8b4c61-9d30-4a7e-8c15-6b0e3d9a7f24
 // last-edited: 2026-10-23
 
@@ -204,4 +204,52 @@ func TestMasterListUpload_AuthAndRole(t *testing.T) {
 	lists, err := database.NewMasterListStore(f.store.DB()).ListLists()
 	require.NoError(t, err)
 	assert.Len(t, lists, 1, "only the admin key's upload was stored")
+}
+
+// RequireAdmin reads the signed-in user's role, not the credential's scopes, so
+// an admin's API key narrowed to other permissions would pass it alone. The
+// routes also demand users.manage, which a key's scopes can withhold.
+func TestMasterListRoutes_APIKeyScopesNarrow(t *testing.T) {
+	f := setupCredGuardServer(t)
+	exp := time.Now().Add(time.Hour)
+	keyWith := func(name string, scopes ...auth.Permission) string {
+		t.Helper()
+		raw, hash, err := database.GenerateAPIKeyToken()
+		require.NoError(t, err)
+		strs := make([]string, len(scopes))
+		for i, sc := range scopes {
+			strs[i] = string(sc)
+		}
+		_, err = f.store.CreateAPIKey(&database.APIKey{
+			UserID: f.adminID, Name: name, TokenHash: hash, Scopes: strs,
+			Status: "active", CreatedAt: time.Now(), ExpiresAt: &exp,
+		})
+		require.NoError(t, err)
+		return raw
+	}
+	get := func(bearer string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/master-lists", nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		w := httptest.NewRecorder()
+		f.srv.router.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	for name, scopes := range map[string][]auth.Permission{
+		"view only": {auth.PermLibraryView},
+		"editor":    {auth.PermLibraryView, auth.PermLibraryEditMetadata},
+	} {
+		key := keyWith(name, scopes...)
+		w := f.postMasterList(t, key, bytes.NewBufferString(masterListTestCSV), "text/csv", "")
+		assert.Equal(t, http.StatusForbidden, w.Code, "%s: %s", name, w.Body.String())
+		assert.Equal(t, http.StatusForbidden, get(key), "%s: the listing is gated too", name)
+	}
+	lists, err := database.NewMasterListStore(f.store.DB()).ListLists()
+	require.NoError(t, err)
+	assert.Empty(t, lists, "a refused key stores nothing")
+
+	key := keyWith("users", auth.PermUsersManage)
+	w := f.postMasterList(t, key, bytes.NewBufferString(masterListTestCSV), "text/csv", "")
+	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	assert.Equal(t, http.StatusOK, get(key))
 }

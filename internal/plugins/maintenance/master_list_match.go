@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_match.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bc498082-c7d9-434e-82a6-37e0eb55dd61
 // last-edited: 2026-10-23
 
@@ -59,6 +59,7 @@ const (
 	mlFlagTrashedOnly    = "trashed_only"
 	mlFlagRuntime        = "runtime_mismatch"
 	mlFlagSeries         = "series_mismatch"
+	mlFlagTitleMismatch  = "title_mismatch"
 	mlFlagJunkTitle      = "junk_title"
 	mlFlagAuthorMismatch = "author_mismatch"
 	mlFlagSwapped        = "swapped_title"
@@ -434,11 +435,24 @@ func (c *mlCall) resolveID(tier, note string, raw []string, viaTrashed bool, tra
 	}
 	// An identifier match whose series number disagrees with the row's title is
 	// a book carrying another volume's identifier ("Saga 1" holding "Saga 2"'s).
-	if ik, tk := arsKeyOf(c.row.Title), arsKeyOf(title); ik.nums != "" && tk.nums != "" && ik.nums != tk.nums {
+	ik, tk := arsKeyOf(c.row.Title), arsKeyOf(title)
+	seriesDiffers := ik.nums != "" && tk.nums != "" && ik.nums != tk.nums
+	if seriesDiffers {
 		review(mlFlagSeries, fmt.Sprintf("the identifier matches book %q, but its series number (%s) is not the list's (%s): a wrong identifier on that row", title, tk.nums, ik.nums))
 	}
-	if arsJunkTitle(title) {
+	junkMatched := arsJunkTitle(title)
+	if junkMatched {
 		review(mlFlagJunkTitle, fmt.Sprintf("the matched book's title %q is not a title; confirm it is this book", title))
+	}
+	// An identifier is evidence of the book, not proof: a mis-keyed ASIN or an
+	// ISBN reused by a publisher lands on a book whose title is something else
+	// entirely, runtime and all. When both sides have a title and they do not
+	// fold to the same one, the identifier match is not high confidence. The
+	// series and junk cases above already say why they are held, and a title
+	// that is not a title (either side) cannot disagree with anything.
+	if rowTitle := strings.TrimSpace(c.row.Title); rowTitle != "" && !seriesDiffers && !junkMatched && !arsJunkTitle(rowTitle) &&
+		!arsTitlesMatch(ik, tk) {
+		review(mlFlagTitleMismatch, fmt.Sprintf("the identifier matches book %q, but the list calls it %q: a mis-keyed identifier, or a retitled book; a person confirms", title, rowTitle))
 	}
 	return o, nil
 }

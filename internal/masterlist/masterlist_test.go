@@ -1,5 +1,5 @@
 // file: internal/masterlist/masterlist_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a9b54c7-a9db-4d6e-ab51-67572f9cef60
 // last-edited: 2026-10-23
 
@@ -266,4 +266,54 @@ func TestCombineStatus(t *testing.T) {
 	assert.Equal(t, StatusInProgress, g.Status, "with no times the further-along status wins")
 
 	assert.Empty(t, Combine([]Row{{Line: 1}, {Line: 2}}).Status)
+}
+
+// strconv.ParseFloat reads "NaN" and "Inf" as numbers, and every comparison
+// with NaN is false, so a range check written as "below 0 or above max" lets
+// NaN through (and int(NaN+0.5) is the minimum int64 on amd64). Neither a
+// non-finite CSV cell nor a non-finite numeric JSON string is a number here.
+func TestNonFiniteNumbersAreBadNumbers(t *testing.T) {
+	for _, bad := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf", "Infinity", "-infinity"} {
+		rows, err := ParseCSV(strings.NewReader("title,runtime_min,progress_pct,position_sec\nSynthetic Title," + bad + "," + bad + "," + bad + "\n"))
+		require.NoError(t, err, bad)
+		require.Len(t, rows, 1, bad)
+		r := rows[0]
+		got := map[string]bool{}
+		for _, is := range r.Issues {
+			if is.Code == IssueBadNumber {
+				got[is.Field] = true
+			}
+		}
+		assert.Equal(t, map[string]bool{"runtime_min": true, "progress_pct": true, "position_sec": true}, got, bad)
+		assert.Zero(t, r.RuntimeMin, bad)
+		assert.Zero(t, r.ProgressPct, bad)
+		assert.Zero(t, r.PositionSec, bad)
+
+		rows, err = ParseJSON(strings.NewReader(`[{"title":"Synthetic Title","runtime_min":"` + bad + `","progress_pct":"` + bad + `","position_sec":"` + bad + `"}]`))
+		require.NoError(t, err, bad)
+		require.Len(t, rows, 1, bad)
+		got = map[string]bool{}
+		for _, is := range rows[0].Issues {
+			if is.Code == IssueBadNumber {
+				got[is.Field] = true
+			}
+		}
+		assert.Equal(t, map[string]bool{"runtime_min": true, "progress_pct": true, "position_sec": true}, got, "json "+bad)
+		assert.Zero(t, rows[0].RuntimeMin, "json "+bad)
+	}
+	// A bare JSON number beyond float64 is not a number either.
+	rows, err := ParseJSON(strings.NewReader(`[{"title":"Synthetic Title","runtime_min":1e999}]`))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].HasIssue(IssueBadNumber))
+	// An ordinary number is untouched.
+	assert.Equal(t, 90, mustCSVRow(t, "title,runtime_min\nSynthetic Title,89.6\n").RuntimeMin)
+}
+
+func mustCSVRow(t *testing.T, csv string) Row {
+	t.Helper()
+	rows, err := ParseCSV(strings.NewReader(csv))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	return rows[0]
 }

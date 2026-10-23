@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_import_fixer_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 91c3d7e5-0a48-4b6f-8e12-d5f7a3b9c640
 // last-edited: 2026-10-23
 
@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -451,6 +452,18 @@ func TestMasterListImport_ParamsAreChecked(t *testing.T) {
 	require.NoError(t, plan(fmt.Sprintf(`{"list_id":%q,"target_user_id":%q}`, listID, l.user)))
 }
 
+// The plan names any user as its target and reads an uploaded list, so the
+// Repairs routes must ask for more than the lane's library.edit_metadata: an
+// editor must not be able to plan against another user's list.
+func TestMasterListImport_PlanNeedsUserManagement(t *testing.T) {
+	p := &Plugin{deps: fakeDeps{}}
+	fx, ok := p.Repairs().Get(masterListImportFixerID)
+	require.True(t, ok)
+	assert.Equal(t, []auth.Permission{auth.PermUsersManage}, repairs.RequiredPermissions(fx))
+	assert.NotContains(t, repairs.RequiredPermissions(fx), repairs.DefaultPermission,
+		"the lane's default permission must not be enough to start this plan")
+}
+
 func TestMasterListImport_ManyRowsPlanConcurrently(t *testing.T) {
 	l := newMLLab(t)
 	var csvRows []string
@@ -484,4 +497,48 @@ func TestMasterListImport_DisagreeingIdentifiersAreHeldForReview(t *testing.T) {
 	assert.Equal(t, []string{l.ids["a"]}, memberOf(r, "target"), "the first tier's book stays the target; a person decides")
 	assert.Equal(t, mlMatchedHigh, rows["asin:B000000051"].Class)
 	assert.NotContains(t, rows["asin:B000000051"].Flags, mlFlagIDConflict)
+}
+
+// An identifier is evidence of the book, not proof of it: a mis-keyed ASIN or a
+// reused ISBN lands on a book with another title. matched_high must never fire
+// on a title that disagrees, whatever the runtime says.
+func TestMasterListImport_IdentifierHitOnDisagreeingTitleIsReview(t *testing.T) {
+	l := newMLLab(t)
+	l.book("a", mlBook{title: "Quartz Tide", author: "Quin Ash", asin: "B000000060", minutes: 300})
+	l.book("b", mlBook{title: "Rowan Gate", author: "Rae Lund", isbn13: mlISBN13b, minutes: 300})
+	l.book("c", mlBook{title: "Sable Court", author: "Sol Vane", asin: "B000000061", minutes: 300})
+	l.book("d", mlBook{title: "Tern Field: A Novel", author: "Tia Moss", asin: "B000000062", minutes: 300})
+	l.book("e", mlBook{title: "Umber Hall", author: "Uma Reed", asin: "B000000063", minutes: 300})
+	l.book("f", mlBook{title: "Vale Spring (Unabridged)", author: "Val Rook", asin: "B000000064", minutes: 300})
+	listID := l.upload(
+		// Different title on an ASIN hit, same runtime.
+		csvLine("Zephyr Bay", "Quin Ash", "B000000060", "", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+		// Different title on an ISBN hit.
+		csvLine("Yarrow Cove", "Rae Lund", "", mlISBN13b, "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+		// The same title: high.
+		csvLine("Sable Court", "Sol Vane", "B000000061", "", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+		// A subtitle on one side only is still the same title.
+		csvLine("Tern Field", "Tia Moss", "B000000062", "", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+		// A row with no title has nothing to disagree with.
+		csvLine("", "", "B000000063", "", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+		// An edition marker is not part of the title.
+		csvLine("Vale Spring", "Val Rook", "B000000064", "", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+	)
+	_, rows := l.plan(listID)
+
+	r := rows["asin:B000000060"]
+	assert.Equal(t, mlMatchedReview, r.Class)
+	assert.Contains(t, r.Flags, mlFlagTitleMismatch)
+	assert.NotContains(t, r.Flags, mlFlagRuntime, "the runtime agreed; the title is what held it")
+	assert.Equal(t, []string{l.ids["a"]}, memberOf(r, "target"), "the identifier's book stays the proposed target")
+	assert.Contains(t, r.Reason, "Zephyr Bay")
+
+	r = rows["isbn13:"+mlISBN13b]
+	assert.Equal(t, mlMatchedReview, r.Class)
+	assert.Contains(t, r.Flags, mlFlagTitleMismatch)
+
+	for _, id := range []string{"asin:B000000061", "asin:B000000062", "asin:B000000063", "asin:B000000064"} {
+		assert.Equal(t, mlMatchedHigh, rows[id].Class, id)
+		assert.NotContains(t, rows[id].Flags, mlFlagTitleMismatch, id)
+	}
 }
