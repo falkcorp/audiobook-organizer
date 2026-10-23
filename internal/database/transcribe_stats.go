@@ -1,7 +1,7 @@
 // file: internal/database/transcribe_stats.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7f2a9c14-3b6d-4e81-9a05-2c8e1d4f6b73
-// last-edited: 2026-09-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -46,11 +46,15 @@ type TranscribeStats struct {
 	// (usable via reparse_only), but TranscribedTitle stays empty, so these
 	// are excluded by FilterSpec.OnlyParsedTranscription. OK now implies a
 	// parsed title; Unparsed is the low-quality remainder.
-	Unparsed        int `json:"unparsed"`
-	SourceMissing   int `json:"source_file_missing"`
-	NoAudio         int `json:"no_audio"`
-	FFmpegError     int `json:"ffmpeg_error"`
-	WhisperError    int `json:"whisper_error"`
+	Unparsed      int `json:"unparsed"`
+	SourceMissing int `json:"source_file_missing"`
+	NoAudio       int `json:"no_audio"`
+	FFmpegError   int `json:"ffmpeg_error"`
+	WhisperError  int `json:"whisper_error"`
+	// PathUnmapped counts remote_extract books whose worker could not read the
+	// source file through its mount while this server could stat it: a worker
+	// path-map or NFS problem, not a book problem. Retried by the next run.
+	PathUnmapped    int `json:"path_unmapped"`
 	Empty           int `json:"empty"`
 	SkippedExisting int `json:"skipped_existing"`
 	// Deferred counts books inside TotalBooks that got no outcome this run:
