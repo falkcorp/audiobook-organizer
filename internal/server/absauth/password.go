@@ -1,7 +1,7 @@
 // file: internal/server/absauth/password.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package absauth
 
@@ -184,7 +184,7 @@ func verifyArgon2id(encoded, plain string) bool {
 var (
 	dummyOnce  sync.Once
 	dummyHash  string
-	dummyBuilt atomic.Bool // set once dummyHash holds a usable hash; read by LoginDummyReady
+	dummyBuilt atomic.Bool // set once dummyHash holds a usable hash; read by LoginDummyReadyForTest
 )
 
 func dummyArgon2idHash() string {
@@ -208,9 +208,11 @@ func dummyArgon2idHash() string {
 // call it; it is idempotent.
 func WarmLoginDummy() { _ = dummyArgon2idHash() }
 
-// LoginDummyReady reports whether the dummy hash has been built; it exists for
-// the constructor-warm tests and exposes nothing but that fact.
-func LoginDummyReady() bool { return dummyBuilt.Load() }
+// LoginDummyReadyForTest reports whether the dummy hash has been built. It is a
+// test seam (the name carries ForTest, which the dead-code ratchet exempts): the
+// constructor-warm tests live in other packages, so an export_test.go here cannot
+// serve them. It exposes nothing but that fact.
+func LoginDummyReadyForTest() bool { return dummyBuilt.Load() }
 
 // SpendVerification does the work of one password verification against the dummy
 // hash and discards the result. A login for a name that does not exist calls it.

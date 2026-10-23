@@ -1,10 +1,9 @@
 //go:build !embed_frontend
 
-// version: 1.3.0
+// version: 1.4.0
 // file: internal/server/static_nonembed.go
-// last-edited: 2026-10-21
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-05-01
+// last-edited: 2026-10-23
 
 package server
 
@@ -30,8 +29,7 @@ func (s *Server) setupStaticFiles(_ ...gin.HandlerFunc) {
 
 // setupPlaceholder serves the API documentation placeholder page
 func (s *Server) setupPlaceholder() {
-	s.router.GET("/", func(c *gin.Context) {
-		html := `
+	html := `
 <!DOCTYPE html>
 <html>
 <head>
@@ -98,6 +96,12 @@ func (s *Server) setupPlaceholder() {
 </body>
 </html>
 		`
+	// Same as the embedded build: the policy is derived from the page this build
+	// actually serves, so a script added to the placeholder is allowed by its hash
+	// and nothing else is. The placeholder has no inline script today, which makes
+	// this the hash-free default.
+	setSPAInlineScripts([]byte(html))
+	s.router.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
 	})
 
