@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-22
 
@@ -472,8 +472,11 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 		accum.flush(false)
 		return berr
 	}, registry.RunItemsOptions{
-		// One worker per whisper slot: the transport enforces each endpoint's
-		// own cap, this only keeps the pool fed without queueing far past it.
+		// One worker per whisper slot across all endpoints. Each call carries one
+		// batch; the dispatcher places it on an endpoint with a free slot,
+		// rotating among equal-priority endpoints (allocateJobsWith), so the
+		// workers spread over every Mac instead of queueing on the first. The
+		// transport still enforces each endpoint's own cap.
 		Concurrency:   slots,
 		ProgressTotal: len(batches),
 		Label: func(i, t int) string {
