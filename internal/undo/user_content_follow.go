@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
 // last-edited: 2026-10-23
 
@@ -89,6 +89,24 @@ func UserContentFromField(field string) (kind, id string, ok bool) {
 	}
 	if IsMarker(kind) {
 		return kind, id, true
+	}
+	return "", "", false
+}
+
+// ListOf names the collection or playlist a user_content_follow row belongs to,
+// its main row or its survivor-side marker alike: kind is UserContentCollection
+// or UserContentPlaylist (what LockList takes), id the list's id. ok is false
+// for any other row, a rating row included.
+func ListOf(c *database.OperationChange) (kind, id string, ok bool) {
+	if c.ChangeType != ChangeTypeUserContentFollow {
+		return "", "", false
+	}
+	field, id, ok := UserContentFromField(c.FieldName)
+	switch field {
+	case UserContentCollection, UserContentCollectionHeld, UserContentCollectionTook:
+		return UserContentCollection, id, ok
+	case UserContentPlaylist, UserContentPlaylistHeld, UserContentPlaylistTook:
+		return UserContentPlaylist, id, ok
 	}
 	return "", "", false
 }

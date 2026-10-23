@@ -74,7 +74,7 @@ after this release reads the whole journal once, under its own completion key
 (`system:backfill:opchange_by_list_index_v1_done`), and stages the entry of any
 carry row that lacks one (rows written by a build without the index), in chunks
 of 2,000, logging progress every 50,000 rows and the row count, entries staged
-and duration at the end. The key is written with the last chunk, so a start that
+and duration at the end. The key is written in a separate batch after the last chunk, so a start that
 dies part way repeats the scan, which is idempotent, and a store that has the key
 is never scanned for the index again.
 
@@ -165,7 +165,14 @@ needs a store that commits several journal rows in ONE batch
 its first write otherwise. All the rows of a carry step (the row and its marker)
 are created in one commit and the index is updated only after it, so a failure
 leaves neither; a refused carry voids its row and its marker in one commit, so a
-failure can no longer leave one of them stale. A survivor marker that has no
+failure can no longer leave one of them stale. A resumed retire (the process died after its journal commit and
+before its list write, the owner then listed the survivor by hand, and the
+resumed run journaled a second pair) has two live rows for one retire; only the
+newest speaks for it. If the newest row is not restored in a revert (a commit
+failure or a refusal), the older row is left standing and reported (the revert
+and the undo preflight share the rule), so its record cannot swap a survivor the
+owner listed in that slot out of the list; a retry puts the book back once. The
+end-of-revert stamp of a list's rows is made under that list's lock. A survivor marker that has no
 live row of its retire (an orphan: a crash left the marker without its row, or
 the row was voided) is ignored by the revert, the preflight and the order graph,
 so it can never keep a survivor listed; the revert reports it in
