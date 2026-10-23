@@ -1,5 +1,5 @@
 // file: internal/logging/redact_path_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 232b593d-cfbd-4e4f-9898-8ff6d47e5768
 // last-edited: 2026-10-22
 
@@ -8,6 +8,7 @@ package logging
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRedactInvitePath(t *testing.T) {
@@ -143,5 +144,67 @@ func TestRedactInvitePath_Idempotent(t *testing.T) {
 		if strings.Contains(once, "TOK") {
 			t.Errorf("RedactInvitePath(%q) = %q still carries the token", in, once)
 		}
+	}
+}
+
+// A path over the cap is not read at all: it fails closed, query kept, whatever
+// it holds (it cannot be shown not to carry a token), and one at the cap is read
+// as usual.
+func TestRedactInvitePath_OverCapFailsClosed(t *testing.T) {
+	long := strings.Repeat("a", maxRedactPathBytes)
+	for name, tc := range map[string]struct{ in, want string }{
+		"invite route":              {"/invite/" + long, "/[REDACTED]"},
+		"not an invite route":       {"/books/" + long, "/[REDACTED]"},
+		"query kept":                {"/books/" + long + "?a=b&token=x", "/[REDACTED]?a=b&token=x"},
+		"many segments":             {strings.Repeat("/a", maxRedactPathBytes/2+1), "/[REDACTED]"},
+		"encoded slashes":           {"/invite" + strings.Repeat("%2F", maxRedactPathBytes/3+1) + "x", "/[REDACTED]"},
+		"exactly at the cap, other": {"/" + long[:maxRedactPathBytes-1], "/" + long[:maxRedactPathBytes-1]},
+		"exactly at the cap, route": {"/invite/" + long[:maxRedactPathBytes-8], "/invite/[REDACTED]"},
+	} {
+		if got := RedactInvitePath(tc.in); got != tc.want {
+			t.Errorf("%s: RedactInvitePath(%d bytes) = %.60q, want %.60q", name, len(tc.in), got, tc.want)
+		}
+	}
+}
+
+// The work is linear in the path. A 100k-segment path and a 1 MB path are
+// answered by the cap at once; the segment scan under it (anyInvitePrefix, the
+// part that was quadratic) is run directly on 100k and 400k segments, where a
+// quadratic scan would take minutes.
+func TestRedactInvitePath_LinearTime(t *testing.T) {
+	const budget = 2 * time.Second
+	start := time.Now()
+	for _, in := range []string{
+		strings.Repeat("/a", 100_000),
+		"/x/../invite/" + strings.Repeat("/a", 100_000),
+		"/" + strings.Repeat("a", 1<<20),
+		"/invite" + strings.Repeat("%2F..", 200_000),
+	} {
+		if got := RedactInvitePath(in); got != "/[REDACTED]" {
+			t.Fatalf("%d byte path not failed closed: %.40q", len(in), got)
+		}
+	}
+	if d := time.Since(start); d > budget {
+		t.Fatalf("over-cap paths took %v, want the cap to answer at once", d)
+	}
+	for _, n := range []int{100_000, 400_000} {
+		form := strings.Repeat("/a", n) + "/invite/TOK"
+		start := time.Now()
+		if !anyInvitePrefix([]string{form}) {
+			t.Fatalf("n=%d: the invite prefix at the end was not found", n)
+		}
+		if anyInvitePrefix([]string{strings.Repeat("/a", n)}) {
+			t.Fatalf("n=%d: found an invite prefix in a path without one", n)
+		}
+		if d := time.Since(start); d > budget {
+			t.Fatalf("anyInvitePrefix over %d segments took %v: not linear", n, d)
+		}
+	}
+}
+
+func BenchmarkRedactInvitePath_AtTheCap(b *testing.B) {
+	in := "/x/../invite" + strings.Repeat("/a", maxRedactPathBytes/2-8)
+	for range b.N {
+		RedactInvitePath(in)
 	}
 }

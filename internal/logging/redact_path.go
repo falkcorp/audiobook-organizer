@@ -1,5 +1,5 @@
 // file: internal/logging/redact_path.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
 // last-edited: 2026-10-22
 
@@ -43,6 +43,14 @@ var inviteTokenPrefixes = [][]string{
 // looking for an invite route (%252F is a slash after two rounds).
 const maxDecodeRounds = 3
 
+// maxRedactPathBytes bounds the path RedactInvitePath examines. The path comes
+// from an unauthenticated request line, and every form it builds (the raw path
+// and its decodings, which are never longer) is split and scanned; the scans are
+// linear, and this keeps the constant small too. A longer path is not a real
+// URL of this service: it is logged as "/[REDACTED]" (query kept) instead of
+// being read, since it cannot be shown not to carry a token.
+const maxRedactPathBytes = 8 << 10
+
 // resendSegment is the one fixed word that may follow an invite ID on the resend
 // route and stays visible.
 const resendSegment = "resend"
@@ -75,8 +83,14 @@ const resendSegment = "resend"
 // only once decoded or cleaned is logged in that form, re-escaped segment by
 // segment, so what was decoded never reaches the log as a raw control character.
 //
-// Two rules fail closed, logging "/[REDACTED]" and keeping the query, when no
-// form matched: (1) some form has a "." or ".." segment and some form has an
+// Cost: everything here is linear in the path. The path is capped at
+// maxRedactPathBytes (a longer one fails closed as below), at most
+// maxDecodeRounds+1 forms are built, each is split and scanned a constant number
+// of times, and each start position of the any-invite-prefix check looks at the
+// next four segments only. path.Clean and percent-decoding are linear.
+//
+// Three rules fail closed, logging "/[REDACTED]" and keeping the query: (0) the
+// path is longer than maxRedactPathBytes, and when no form matched: (1) some form has a "." or ".." segment and some form has an
 // invite prefix followed by a segment at any position, because a walked path
 // means no positional match can be trusted (/x/../invite/TOK/..); (2) the
 // escaping is nested deeper than maxDecodeRounds (the last form would still
@@ -88,6 +102,14 @@ func RedactInvitePath(pathWithQuery string) string {
 	// An absolute path splits to ["", seg1, seg2, ...].
 	if !strings.HasPrefix(path, "/") {
 		return pathWithQuery
+	}
+	// Over the cap nothing is read: fail closed.
+	if len(path) > maxRedactPathBytes {
+		out := "/" + InviteTokenRedacted
+		if hasQuery {
+			out += "?" + query
+		}
+		return out
 	}
 	// Every form: the raw path and up to maxDecodeRounds decodings of it.
 	forms := []string{path}
@@ -218,27 +240,41 @@ func unhex(c byte) byte {
 // when segs is not an invite route or has no token segment, and whether the
 // route is the invites one (the one with a resend action).
 func inviteTokenIndex(segs []string) (idx int, invitesRoute bool) {
-	// The non-empty segments, with their positions in segs.
+	return invitePrefixAt(segs, nonEmptyPositions(segs), 0)
+}
+
+// nonEmptyPositions is the positions in segs of its non-empty segments.
+func nonEmptyPositions(segs []string) []int {
 	nonEmpty := make([]int, 0, len(segs))
 	for i, s := range segs {
 		if s != "" {
 			nonEmpty = append(nonEmpty, i)
 		}
 	}
+	return nonEmpty
+}
+
+// invitePrefixAt reports whether the non-empty segments starting at the k-th one
+// (nonEmpty is nonEmptyPositions(segs)) are an invite route prefix followed by at
+// least one more non-empty segment, and if so the position in segs of that
+// segment (the token) and whether the route is the invites one. It compares at
+// most len(prefix) segments per prefix, so a caller can try every start in
+// O(len(segs)) in all.
+func invitePrefixAt(segs []string, nonEmpty []int, k int) (idx int, invitesRoute bool) {
 	for _, prefix := range inviteTokenPrefixes {
 		n := len(prefix)
-		if len(nonEmpty) <= n {
+		if len(nonEmpty)-k <= n {
 			continue
 		}
 		match := true
 		for i, want := range prefix {
-			if !strings.EqualFold(decodeSegment(segs[nonEmpty[i]]), want) {
+			if !strings.EqualFold(decodeSegment(segs[nonEmpty[k+i]]), want) {
 				match = false
 				break
 			}
 		}
 		if match {
-			return nonEmpty[n], prefix[len(prefix)-1] == "invites"
+			return nonEmpty[k+n], prefix[n-1] == "invites"
 		}
 	}
 	return -1, false
@@ -261,11 +297,16 @@ func anyDotSegment(forms []string) bool {
 	return false
 }
 
+// anyInvitePrefix reports whether any form has an invite route prefix followed
+// by a segment starting at any position. Linear in the size of the forms: the
+// non-empty segments are found once per form and each start is checked against
+// the few prefixes by looking at the next four segments only.
 func anyInvitePrefix(forms []string) bool {
 	for _, f := range forms {
 		segs := strings.Split(f, "/")
-		for i := range segs {
-			if idx, _ := inviteTokenIndex(segs[i:]); idx >= 0 {
+		nonEmpty := nonEmptyPositions(segs)
+		for k := range nonEmpty {
+			if idx, _ := invitePrefixAt(segs, nonEmpty, k); idx >= 0 {
 				return true
 			}
 		}
