@@ -1,5 +1,5 @@
 // file: web/src/components/GuestPhoneKeys.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4f8a2d6-93b1-4e07-8a5d-1e6b7c9d3f24
 // last-edited: 2026-10-23
 
@@ -116,8 +116,9 @@ export default function GuestPhoneKeys({ refreshToken }: { refreshToken?: unknow
       {body.flag_on && !body.enabled && (
         <Alert severity="warning" sx={{ mb: 1 }}>
           Per-guest phone-app keys are switched on, but the Cloudflare settings they need are
-          incomplete (CF_ACCOUNT_ID, CF_POLICY_API_TOKEN and CF_SERVICE_AUTH_POLICY_ID). New guests
-          will not get a key until they are set.
+          incomplete or wrong (CF_ACCOUNT_ID, CF_POLICY_API_TOKEN and CF_SERVICE_AUTH_POLICY_ID,
+          which must not be the same policy as CF_GUESTS_POLICY_ID). New guests will not get a key
+          until they are fixed.
         </Alert>
       )}
       {notice && (

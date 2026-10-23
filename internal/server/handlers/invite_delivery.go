@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-10-23
 
@@ -446,14 +446,18 @@ func (h *UserHandler) PublicInvite(c *gin.Context) {
 	// policy, so the page may tell the guest to sign in to Cloudflare with it.
 	// It is the email's own condition (inviteEmailLogin), so the page and the
 	// email cannot disagree, and it is a bool: no address is revealed.
-	httputil.RespondWithOK(c, gin.H{
+	view := gin.H{
 		"username":    inv.Username,
 		"expires_at":  inv.ExpiresAt,
 		"email_login": h.delivery.policySync() && grantsSSO,
-		// phone_app_token: accepting will mint this guest's own phone-app key
-		// and show it once. A bool, like email_login.
-		"phone_app_token": h.delivery.serviceTokens() && grantsSSO,
-	})
+	}
+	// phone_app_token: accepting will mint this guest's own phone-app key and
+	// show it once. Present only when true, so a server with the feature off
+	// answers byte-for-byte as it did before the feature existed.
+	if h.delivery.serviceTokens() && grantsSSO {
+		view["phone_app_token"] = true
+	}
+	httputil.RespondWithOK(c, view)
 }
 
 // acceptedInviteView is the admin's view of an accepted invite: no token.
