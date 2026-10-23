@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -39,7 +39,10 @@ type BookFileCore struct {
 	ID     string `json:"id"`
 	BookID string `json:"book_id"`
 
-	VersionID          string `json:"version_id,omitempty"`
+	VersionID string `json:"version_id,omitempty"`
+	// Retired is RETAINED on Core (a single bool): the retired-aware readers
+	// return Core rows too, and a Core-derived write must not un-retire a row.
+	Retired            bool   `json:"retired,omitzero"`
 	FilePath           string `json:"file_path"`
 	OriginalFilename   string `json:"original_filename,omitempty"`
 	ITunesPath         string `json:"itunes_path,omitempty"`
@@ -135,6 +138,7 @@ func (f *BookFile) Core() BookFileCore {
 		ID:                             f.ID,
 		BookID:                         f.BookID,
 		VersionID:                      f.VersionID,
+		Retired:                        f.Retired,
 		FilePath:                       f.FilePath,
 		OriginalFilename:               f.OriginalFilename,
 		ITunesPath:                     f.ITunesPath,
@@ -202,6 +206,7 @@ func (c *BookFileCore) AsBookFile() BookFile {
 		ID:                             c.ID,
 		BookID:                         c.BookID,
 		VersionID:                      c.VersionID,
+		Retired:                        c.Retired,
 		FilePath:                       c.FilePath,
 		OriginalFilename:               c.OriginalFilename,
 		ITunesPath:                     c.ITunesPath,

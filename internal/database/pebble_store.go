@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.232.1
+// version: 1.233.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-23
 
@@ -5224,6 +5224,12 @@ func (p *PebbleStore) CreateBookVersion(v *BookVersion) (*BookVersion, error) {
 			return nil, err
 		}
 	}
+	if v.RetiredFromBookID != "" {
+		if err := b.Set(retiredVersionFromKey(v.RetiredFromBookID, v.ID), []byte(v.ID), nil); err != nil {
+			b.Close()
+			return nil, err
+		}
+	}
 	if err := b.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
@@ -5294,6 +5300,9 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 	if prev == nil {
 		return fmt.Errorf("book version %s not found", v.ID)
 	}
+	if err := p.refuseRetiredVersionChange(prev, v); err != nil {
+		return err
+	}
 	now := time.Now()
 	maintainTrashedAt(prev, v, now)
 	v.UpdatedAt = now
@@ -5327,6 +5336,20 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 		}
 		if v.TorrentHash != "" {
 			if err := b.Set([]byte("idx:bv:torrent:"+v.TorrentHash), []byte(v.ID), nil); err != nil {
+				b.Close()
+				return err
+			}
+		}
+	}
+	if prev.RetiredFromBookID != v.RetiredFromBookID {
+		if prev.RetiredFromBookID != "" {
+			if err := b.Delete(retiredVersionFromKey(prev.RetiredFromBookID, v.ID), nil); err != nil {
+				b.Close()
+				return err
+			}
+		}
+		if v.RetiredFromBookID != "" {
+			if err := b.Set(retiredVersionFromKey(v.RetiredFromBookID, v.ID), []byte(v.ID), nil); err != nil {
 				b.Close()
 				return err
 			}
@@ -5377,6 +5400,9 @@ func (p *PebbleStore) DeleteBookVersion(id string) error {
 	if v == nil {
 		return nil
 	}
+	if err := p.refuseRetiredVersionDelete(v); err != nil {
+		return err
+	}
 	b := p.db.NewBatch()
 	if err := b.Delete([]byte("bv:"+id), nil); err != nil {
 		b.Close()
@@ -5394,6 +5420,12 @@ func (p *PebbleStore) DeleteBookVersion(id string) error {
 	}
 	if v.TorrentHash != "" {
 		if err := b.Delete([]byte("idx:bv:torrent:"+v.TorrentHash), nil); err != nil {
+			b.Close()
+			return err
+		}
+	}
+	if v.RetiredFromBookID != "" {
+		if err := b.Delete(retiredVersionFromKey(v.RetiredFromBookID, id), nil); err != nil {
 			b.Close()
 			return err
 		}

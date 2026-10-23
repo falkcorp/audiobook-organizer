@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -88,6 +88,14 @@ const (
 	// no recorded kind), the pair behaves as bfPreserveOnUpsert, so the next
 	// scan replaces it with a sampled digest and it is frozen from then on.
 	bfWriteOnce
+	// bfStoredOwned fields are owned by a dedicated operation, not by any
+	// caller-built row: the stored value wins on EVERY merge path, whatever the
+	// incoming row carries, zero or not. It is Retired: RetireBookFiles sets it
+	// and UnretireBookFiles clears it, and a scanner/iTunes/UpdateBookFile row
+	// that happens to carry Retired=true (or a copy of a retired row with it
+	// cleared) must neither retire a live row nor revive a retired one. A NEW
+	// row cannot carry it either; see refuseRetiredInsert.
+	bfStoredOwned
 )
 
 // bookFileDerivation says what a field was computed from, which decides when an
@@ -182,6 +190,7 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	"ID":                             {class: bfIdentity},
 	"BookID":                         {class: bfIdentity},
 	"VersionID":                      preserve,
+	"Retired":                        {class: bfStoredOwned}, // set by RetireBookFiles, cleared only by UnretireBookFiles; no other write may flip it either way
 	"FilePath":                       {class: bfUpsertOwned}, // the match key; never zero on an upsert that matched by path
 	"OriginalFilename":               preserve,
 	"ITunesPath":                     preserve,
@@ -310,8 +319,8 @@ func originalHashFrozen(stored *BookFile) bool {
 // mergeBookFileFromStored is the one merge rule shared by the book_file write
 // paths that accept a caller-built row. For every field the mode restores, a
 // zero/nil incoming value is replaced by the stored value; a non-zero incoming
-// value always wins, except for a frozen bfWriteOnce pair, where the stored
-// value always wins. Identity fields are left to the caller. It mutates
+// value always wins, except for a frozen bfWriteOnce pair and the bfStoredOwned
+// fields, where the stored value always wins. Identity fields are left to the caller. It mutates
 // incoming in place, matching the write paths' existing contract.
 //
 // On an upsert, a changed FileHash drops derivedBytes fields, and drops
@@ -343,6 +352,9 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 				continue
 			}
 			restore = upsert
+		case bfStoredOwned:
+			in.Field(i).Set(st.Field(i))
+			continue
 		case bfPreserveAlways:
 			restore = true
 		case bfPreserveOnUpsert:

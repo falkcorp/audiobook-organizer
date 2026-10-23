@@ -1,7 +1,7 @@
 // file: internal/database/dataloss_roundtrip_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e4a5b6c7-8d9e-0f1a-2b3c-roundtrip00001
-// last-edited: 2026-07-13
+// last-edited: 2026-10-23
 
 package database
 
@@ -126,6 +126,9 @@ func TestRoundTrip_UpdateBookFile(t *testing.T) {
 	dlPopulateNonZero(t, reflect.ValueOf(full).Elem(), "BookFile")
 	full.ID = seed.ID
 	full.BookID = book.ID
+	// Retired is owned by RetireBookFiles (bfStoredOwned): a generic write can
+	// neither set nor clear it, and a retired row is hidden from GetBookFiles.
+	full.Retired = false
 
 	want := &BookFile{}
 	jsonClone(t, full, want)
