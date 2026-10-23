@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.14.0
+// version: 1.14.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package batch
 
@@ -180,7 +180,7 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		var updated *database.Book
 		if isRestore(req.Updates) {
 			// marked_for_deletion=false is a restore like the "restore"
-			// action: the shared rule (merge.RestoreFromTrash) runs first, in
+			// action: the shared rule (merge.RestoreFromTrashLocked) runs first, in
 			// the same write as the rest of the payload. The payload's
 			// hand-off runs inside it too, before it decides the restored
 			// row's merge redirect, so it is not repeated below.
@@ -190,9 +190,13 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 				continue
 			}
 			var res merge.TrashRestoreResult
-			res, err = merge.RestoreFromTrashLocked(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) },
-				func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) }, joinGroups(req.Updates)...)
-			unlock()
+			func() {
+				// Released by defer: a panic in the restore must not leave the
+				// merge lock held for every later merge and purge.
+				defer unlock()
+				res, err = merge.RestoreFromTrashLocked(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) },
+					func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) }, joinGroups(req.Updates)...)
+			}()
 			pre, updated = res.Before, res.Book
 		} else {
 			updated, book, err = bs.lockedModify(id, book, req.Updates, func(b *database.Book) error {
@@ -272,9 +276,11 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 					continue
 				}
 				var res merge.TrashRestoreResult
-				res, err = merge.RestoreFromTrashLocked(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
-					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)
-				unlock()
+				func() {
+					defer unlock() // a panic in the restore must not strand the merge lock
+					res, err = merge.RestoreFromTrashLocked(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
+						func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)
+				}()
 				updated = res.Book
 			} else {
 				updated, book, err = bs.lockedModify(op.ID, book, op.Updates, func(b *database.Book) error {
@@ -314,8 +320,11 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 					resp.addError(op.ID, gerr.Error())
 					continue
 				}
-				err := bs.hardDeleteLocked(book.ID)
-				unlock()
+				var err error
+				func() {
+					defer unlock() // a panic in the delete must not strand the merge lock
+					err = bs.hardDeleteLocked(book.ID)
+				}()
 				if err != nil {
 					resp.addError(op.ID, err.Error())
 				} else {
@@ -350,7 +359,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				resp.addError(op.ID, "not found")
 				continue
 			}
-			// Restore: the shared rule (merge.RestoreFromTrash), the same as
+			// Restore: the shared rule (merge.RestoreFromTrashLocked), the same as
 			// the single-book restore. Until 2026-10-01 this cleared only the
 			// two deletion columns, so a book DeleteAudiobook had labelled
 			// "deleted" came back live but still labelled "deleted": hidden
@@ -366,8 +375,11 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				resp.addError(op.ID, gerr.Error())
 				continue
 			}
-			res, err := merge.RestoreFromTrashLocked(bs.db, op.ID, nil, nil)
-			unlock()
+			var res merge.TrashRestoreResult
+			func() {
+				defer unlock() // a panic in the restore must not strand the merge lock
+				res, err = merge.RestoreFromTrashLocked(bs.db, op.ID, nil, nil)
+			}()
 			switch {
 			case err != nil:
 				resp.addError(op.ID, err.Error())
@@ -548,7 +560,7 @@ func applyUpdates(book *database.Book, updates map[string]any) {
 var batchLog = logger.New("batch")
 
 // joinGroups is the version group a batch payload moves its book into, for
-// merge.RestoreFromTrash to lock beside the row's current one; none when the
+// merge.RestoreFromTrashLocked to lock beside the row's current one; none when the
 // payload leaves the group alone.
 func joinGroups(updates map[string]any) []string {
 	if v, ok := updates["version_group_id"].(string); ok {
@@ -572,7 +584,7 @@ func joinGroups(updates map[string]any) []string {
 // returns the written row and the row the write was locked from, which the
 // caller's hand-off must use as "before".
 //
-// Not for a restore: merge.RestoreFromTrash takes the merge lock and then
+// Not for a restore: merge.RestoreFromTrashLocked takes the merge lock and then
 // the group locks itself (passed joinGroups), and taking a group lock first
 // would invert that.
 func (bs *BatchService) lockedModify(id string, before *database.Book, updates map[string]any, fn func(*database.Book) error) (*database.Book, *database.Book, error) {
