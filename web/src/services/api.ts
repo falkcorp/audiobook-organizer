@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.199.0
+// version: 2.200.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -2976,6 +2976,167 @@ export async function listAdminUsers(): Promise<AdminUserSummary[]> {
   const body = await response.json();
   const data = body.data ?? body;
   return data.users ?? data.items ?? data ?? [];
+}
+
+// --- Admin account merge (merge one account into another) ---
+
+export interface UserMergeAccount {
+  id: string;
+  username: string;
+  status: string;
+  roles: string[];
+  email?: string;
+  email_source?: string;
+  has_password: boolean;
+  merged_into_user_id?: string;
+}
+
+/** One linked sign-in. The subject is masked by the server. */
+export interface UserMergeIdentity {
+  id: string;
+  provider: string;
+  subject: string;
+  email?: string;
+  linked_at: string;
+  owner_email: boolean;
+}
+
+export interface UserMergeFamilyCount {
+  rows: number;
+  conflicts: number;
+}
+
+export interface UserFootprint {
+  user: UserMergeAccount;
+  identities: UserMergeIdentity[];
+  counts: Record<string, number>;
+  active_sessions: number;
+  unreadable: string[];
+}
+
+export type UserMergeOwnerHolder =
+  'none' | 'survivor' | 'absorbed' | 'both' | 'no_owner_configured' | '';
+
+export interface UserMergePlan {
+  survivor_id: string;
+  absorbed_id: string;
+  survivor: UserMergeAccount;
+  absorbed: UserMergeAccount;
+  counts: Record<string, UserMergeFamilyCount>;
+  conflicts: Array<{ family: string; key: string; outcome: string }>;
+  conflict_total: number;
+  ops: number;
+  survivor_identities: UserMergeIdentity[];
+  absorbed_identities: UserMergeIdentity[];
+  owner_identity_holder: UserMergeOwnerHolder;
+  owner_identity_on_absorbed: boolean;
+  roles_gained: string[];
+  email_outcome: string;
+  warnings: string[];
+  refusals: string[];
+  /** Names exactly what apply will write; sent back on apply. */
+  digest: string;
+}
+
+export interface UserMergeJournal {
+  id: string;
+  status: 'applying' | 'applied' | 'undoing' | 'undone';
+  survivor_id: string;
+  absorbed_id: string;
+  ops: number;
+  cursor: number;
+  retired: boolean;
+  undo_conflicts?: string[];
+  conflict_total: number;
+  warnings?: string[];
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  applied_at?: string;
+  undone_at?: string;
+}
+
+const userMergePath = (absorbedId: string, survivorId: string, action: string) =>
+  `${API_BASE}/users/${encodeURIComponent(absorbedId)}/merge-into/${encodeURIComponent(survivorId)}/${action}`;
+
+async function userMergeJSON<T>(response: Response, fallback: string): Promise<T> {
+  if (!response.ok) {
+    throw await buildApiError(response, fallback);
+  }
+  const body = await response.json();
+  return (body.data ?? body) as T;
+}
+
+/** The plan an apply was refused with (a 409 carries the current one), if any. */
+export function userMergePlanFromError(err: unknown): UserMergePlan | null {
+  if (err instanceof ApiError && err.status === 409) {
+    const plan = (err.data as { plan?: UserMergePlan } | undefined)?.plan;
+    return plan ?? null;
+  }
+  return null;
+}
+
+export async function getUserFootprint(userId: string): Promise<UserFootprint> {
+  const response = await apiFetch(`${API_BASE}/users/${encodeURIComponent(userId)}/footprint`, {
+    credentials: 'include',
+  });
+  return userMergeJSON<UserFootprint>(response, 'Failed to load sign-ins and data');
+}
+
+/** Read-only: what merging `absorbedId` into `survivorId` would do. */
+export async function previewUserMerge(
+  absorbedId: string,
+  survivorId: string
+): Promise<UserMergePlan> {
+  const response = await apiFetch(userMergePath(absorbedId, survivorId, 'preview'), {
+    method: 'POST',
+    credentials: 'include',
+  });
+  return userMergeJSON<UserMergePlan>(response, 'Failed to preview the merge');
+}
+
+/**
+ * Starts the merge as a background operation. A 409 means the accounts changed
+ * since the preview (or the merge is refused): userMergePlanFromError gives the
+ * current plan.
+ */
+export async function applyUserMerge(
+  absorbedId: string,
+  survivorId: string,
+  body: { digest: string; acknowledge_owner_identity: boolean }
+): Promise<{ operation_id: string }> {
+  const response = await apiFetch(userMergePath(absorbedId, survivorId, 'apply'), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return userMergeJSON<{ operation_id: string }>(response, 'Failed to start the merge');
+}
+
+export async function listUserMerges(): Promise<UserMergeJournal[]> {
+  const response = await apiFetch(`${API_BASE}/users/merges`, { credentials: 'include' });
+  const data = await userMergeJSON<{ merges?: UserMergeJournal[] }>(
+    response,
+    'Failed to list merges'
+  );
+  return data.merges ?? [];
+}
+
+export async function resumeUserMerge(journalId: string): Promise<{ operation_id: string }> {
+  const response = await apiFetch(
+    `${API_BASE}/users/merges/${encodeURIComponent(journalId)}/resume`,
+    { method: 'POST', credentials: 'include' }
+  );
+  return userMergeJSON<{ operation_id: string }>(response, 'Failed to resume the merge');
+}
+
+export async function undoUserMerge(journalId: string): Promise<{ operation_id: string }> {
+  const response = await apiFetch(
+    `${API_BASE}/users/merges/${encodeURIComponent(journalId)}/undo`,
+    { method: 'POST', credentials: 'include' }
+  );
+  return userMergeJSON<{ operation_id: string }>(response, 'Failed to undo the merge');
 }
 
 export async function getMe(): Promise<AuthUser> {
