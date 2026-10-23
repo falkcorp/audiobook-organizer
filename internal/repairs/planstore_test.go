@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
 // last-edited: 2026-10-22
 
@@ -155,6 +155,18 @@ func TestLoadPlan_LegacyFormatIsRefused(t *testing.T) {
 	require.Contains(t, err.Error(), "run the plan again")
 }
 
+// TestLoadPlan_UndecodableSummaryNeedsARerun: a plan op whose result is not a
+// plan summary is one more way the stored plan cannot be read, with the same
+// remedy, not an unclassified error.
+func TestLoadPlan_UndecodableSummaryNeedsARerun(t *testing.T) {
+	s := newMemStore()
+	bad := `not json`
+	s.ops["bad"] = &database.OperationV2Row{ID: "bad", DefID: PlanOpID, Status: "completed", ResultData: &bad}
+	_, err := LoadPlan(s, s, "bad", "fx")
+	require.ErrorIs(t, err, ErrPlanSummaryUnreadable)
+	require.True(t, PlanNeedsRerun(err))
+}
+
 // TestLegacyPlanMigrationMatchesThePlanOp pins the def id migration 66 looks
 // for to the one the engine stores plans under, and that a plan result with
 // its inline rows stripped (what the migration leaves) is read as a legacy plan.
@@ -224,7 +236,7 @@ func TestStoredPlan_IncompleteRowsFailClosed(t *testing.T) {
 // TestPlanNeedsRerun lists exactly the three errors that mean "run the plan
 // again"; a plan that is simply not complete, or another fixer's, is not one.
 func TestPlanNeedsRerun(t *testing.T) {
-	for _, err := range []error{ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable,
+	for _, err := range []error{ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable, ErrPlanSummaryUnreadable,
 		fmt.Errorf("wrapped: %w", ErrPlanRowsUnreadable)} {
 		require.True(t, PlanNeedsRerun(err), err.Error())
 	}

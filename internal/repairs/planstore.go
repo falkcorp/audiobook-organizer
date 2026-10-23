@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8885f927-1097-4448-a36b-4a903c887c6d
 // last-edited: 2026-10-22
 
@@ -40,13 +40,15 @@ import (
 const PlanRowStoreV1 = "op_rows.v1"
 
 // PlanNeedsRerun reports whether err means the stored plan cannot be read
-// (any of ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable)
+// (any of ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable,
+// ErrPlanSummaryUnreadable)
 // and the only remedy is to run the plan again. The HTTP layer answers all of
 // them with one 409 and one code so the lane can offer exactly that.
 func PlanNeedsRerun(err error) bool {
 	return errors.Is(err, ErrPlanLegacyFormat) ||
 		errors.Is(err, ErrPlanRowsIncomplete) ||
-		errors.Is(err, ErrPlanRowsUnreadable)
+		errors.Is(err, ErrPlanRowsUnreadable) ||
+		errors.Is(err, ErrPlanSummaryUnreadable)
 }
 
 // Errors of reading a stored plan's rows.
@@ -61,6 +63,9 @@ var (
 	// it, cannot be decoded. Like ErrPlanRowsIncomplete the stored rows are not
 	// the plan the summary describes, and the remedy is the same.
 	ErrPlanRowsUnreadable = errors.New("repairs: a stored plan row cannot be read; run the plan again")
+	// ErrPlanSummaryUnreadable: the plan operation's stored summary (its
+	// result) does not decode, so nothing about the plan can be trusted.
+	ErrPlanSummaryUnreadable = errors.New("repairs: the stored plan summary cannot be read; run the plan again")
 	// ErrNoPlanRowStore: the store behind the plan operations cannot keep plan rows.
 	ErrNoPlanRowStore = errors.New("repairs: the operation store cannot keep plan rows")
 )

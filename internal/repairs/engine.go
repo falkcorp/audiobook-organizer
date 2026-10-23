@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.24.1
+// version: 1.24.2
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-22
 
@@ -263,7 +263,7 @@ func LoadPlan(r OpReader, rs database.OpRowStore, planOpID, fixerID string) (*Pl
 	}
 	var plan PlanResult
 	if err := json.Unmarshal([]byte(*row.ResultData), &plan); err != nil {
-		return nil, fmt.Errorf("repairs: decode plan %s: %w", planOpID, err)
+		return nil, fmt.Errorf("%w: plan op %s: %w", ErrPlanSummaryUnreadable, planOpID, err)
 	}
 	if plan.FixerID != fixerID {
 		return nil, fmt.Errorf("%w: %s was planned for %s", ErrPlanOtherFixer, planOpID, plan.FixerID)

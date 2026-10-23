@@ -1,5 +1,5 @@
 // file: internal/repairs/registry.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d4f2a61-0b7c-4e93-a5d8-1c6e9f3b2a70
 // last-edited: 2026-10-22
 
@@ -12,6 +12,7 @@ import (
 )
 
 // Registry holds the fixers the Repairs lane offers. Safe for concurrent use.
+// NewRegistry doubles as the boot hook that registers the abandoned-calls gauge.
 type Registry struct {
 	mu     sync.RWMutex
 	fixers map[string]Fixer
