@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
 // last-edited: 2026-10-22
 
@@ -209,11 +209,14 @@ func newIntroFx(t *testing.T) *introFx {
 	t.Cleanup(func() { s.Close() })
 	fx := &introFx{t: t, s: s, p: New(fakeDeps{store: s}), dir: t.TempDir(), whisp: &stubWhisper{texts: map[string]string{}, errs: map[string]string{}}}
 
-	origFn, origSlots, origPause := fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval
+	origFn, origSlots, origPause, origPre := fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight
 	fileIntroWhisperFn = fx.whisp.fn
+	fileIntroPreflight = func(context.Context) error { return nil }
 	fileIntroSlots = func() int { return 3 }
 	fileIntroPauseInterval = 5 * time.Millisecond
-	t.Cleanup(func() { fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval = origFn, origSlots, origPause })
+	t.Cleanup(func() {
+		fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight = origFn, origSlots, origPause, origPre
+	})
 	return fx
 }
 
@@ -540,18 +543,82 @@ func TestFileIntroRun_FailuresSilenceAndMissingSource(t *testing.T) {
 	}
 }
 
-func TestFileIntroRun_MissingTransportStopsTheRunWithoutWritingFailures(t *testing.T) {
+func TestFileIntroRun_PreflightFailureStopsTheRunBeforeAnyWork(t *testing.T) {
 	fx := newIntroFx(t)
-	fileIntroWhisperFn = func(context.Context, map[string]fileIntroJob, func(int, int)) (map[string]fileIntroWhisperResult, error) {
-		return nil, errFilePathTransportMissing
+	fileIntroPreflight = func(context.Context) error {
+		return errors.New("no whisper worker can take path jobs: http://192.0.2.10:8000: does not advertise path_pipeline")
 	}
-	b := fx.book("No transport")
+	b := fx.book("No path pipeline")
 	id, _ := fx.file(b, "01.m4b", 1, "t1", false)
-	if _, err := fx.run(""); !errors.Is(err, errFilePathTransportMissing) {
+	if _, err := fx.run(""); err == nil || !strings.Contains(err.Error(), "path_pipeline") {
 		t.Fatalf("err = %v", err)
 	}
+	if len(fx.whisp.calls) != 0 {
+		t.Fatal("whisper was called after a failed preflight")
+	}
 	if r := fx.row(b, id); r.TranscribeStatus != nil {
-		t.Fatalf("a missing transport recorded a per-file failure: %+v", r)
+		t.Fatalf("a failed preflight recorded a per-file failure: %+v", r)
+	}
+}
+
+// The worker prefixes a per-file error with a code; the code decides whether the
+// verdict is about the file (written, and how durably) or about the mount (not
+// written).
+func TestFileIntroRun_WorkerErrorCodesDecideWhatIsWritten(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Codes")
+	type c struct {
+		name, errText, wantStatus string
+		wantWritten               bool
+	}
+	cases := []c{
+		{"not_found", "not_found: no such file", statusSourceMissing, true},
+		{"ffmpeg_error", "ffmpeg_error: invalid data", statusFFmpegError, true},
+		{"path_unmapped", "path_unmapped: root unreadable", "", false},
+		{"ffmpeg_timeout", "ffmpeg_timeout: nfs stall", "", false},
+		{"whisper_error", "whisper_error: boom", statusWhisperError, true},
+		{"uncoded", "something odd", statusWhisperError, true},
+	}
+	ids := map[string]string{}
+	for i, tc := range cases {
+		id, p := fx.file(b, fmt.Sprintf("%02d.m4b", i+1), i+1, "code-"+tc.name, false)
+		ids[tc.name] = id
+		fx.whisp.errs[p] = tc.errText
+	}
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		r := fx.row(b, ids[tc.name])
+		if tc.wantWritten {
+			if r.TranscribeStatus == nil || *r.TranscribeStatus != tc.wantStatus || r.IntroSourceHash != "" {
+				t.Fatalf("%s: want status %q and no marker, got %+v", tc.name, tc.wantStatus, r)
+			}
+		} else if r.TranscribeStatus != nil {
+			t.Fatalf("%s: an infrastructure error was written as a file verdict: %v", tc.name, *r.TranscribeStatus)
+		}
+	}
+	st, _ := fx.s.GetFileIntroStats()
+	if st.FFmpegError != 1 || st.SourceMissing != 1 || st.WhisperError != 2 || st.Deferred != 2 {
+		t.Fatalf("stats: %+v", st)
+	}
+	// An ffmpeg_error file is a held verdict: the next run does not re-send it,
+	// but retry_failed does.
+	fx.whisp.calls = nil
+	delete(fx.whisp.errs, filepath.Join(fx.dir, b, "02.m4b"))
+	fx.whisp.texts[filepath.Join(fx.dir, b, "02.m4b")] = goodIntro
+	if _, err := fx.runAs(&fileIntroRep{id: "run-test-2"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.whisp.sentPaths(); got[filepath.Join(fx.dir, b, "02.m4b")] != 0 {
+		t.Fatalf("a held ffmpeg_error file was re-sent without retry_failed: %v", got)
+	}
+	fx.whisp.calls = nil
+	if _, err := fx.runAs(&fileIntroRep{id: "run-test-3"}, `{"retry_failed":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.whisp.sentPaths(); got[filepath.Join(fx.dir, b, "02.m4b")] != 1 {
+		t.Fatalf("retry_failed should re-send the ffmpeg_error file: %v", got)
 	}
 }
 
