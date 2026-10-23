@@ -1,7 +1,7 @@
 // file: internal/undo/membership_orphan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e4b27c1-5a38-4d60-b1f7-a83c0d6e2f54
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -77,14 +77,23 @@ func TestOrphanMarker_AMarkerWithoutALiveRowDoesNotKeepTheSurvivorListed(t *test
 }
 
 // The ignored marker is reported by every entry point: the lister, and the graph.
+// ignoredOf is the markers the graph of list listID of kind ignores among rows,
+// the list's whole journal, oldest first (MembershipGraph.Ignored).
+func ignoredOf(rows []*database.OperationChange, kind, listID string) []IgnoredMarker {
+	g := NewMembershipGraph("", kind, listID)
+	g.AddRows(rows)
+	return g.Ignored()
+}
+
 func TestOrphanMarker_IsListedForTheReport(t *testing.T) {
 	t.Parallel()
 	for _, voided := range []bool{false, true} {
 		f := newOrphanFixture(voided)
-		got := IgnoredMarkers(f.rows(), UserContentCollection, "L")
+		got := ignoredOf(f.rows(), UserContentCollection, "L")
 		require.Len(t, got, 1, "voidedRow=%v", voided)
 		require.Equal(t, IgnoredMarker{ID: f.h2.ID, OperationID: "op2", Survivor: "S", Retired: "X", Field: f.h2.FieldName, Standing: true, Reason: IgnoredNoRow}, got[0])
 		require.Contains(t, got[0].Detail(), f.h2.ID)
+		// The graph the revert builds around a row reports the same markers.
 		g := NewMembershipGraph("S", UserContentCollection, "L")
 		g.SetRow(f.r1)
 		g.AddRows(f.rows())
@@ -92,7 +101,7 @@ func TestOrphanMarker_IsListedForTheReport(t *testing.T) {
 	}
 	// A list with no orphan lists none.
 	f := newOrphanFixture(false)
-	require.Empty(t, IgnoredMarkers([]*database.OperationChange{f.t1, f.r1}, UserContentCollection, "L"))
+	require.Empty(t, ignoredOf([]*database.OperationChange{f.t1, f.r1}, UserContentCollection, "L"))
 }
 
 // A marker already stamped reverted is ignored as well (it never accounted for a
@@ -103,7 +112,7 @@ func TestOrphanMarker_AStampedOrphanIsIgnoredQuietly(t *testing.T) {
 	f := newOrphanFixture(false)
 	at := time.Unix(1_800_000_100, 0)
 	f.h2.RevertedAt, f.h2.RevertedSeq = &at, at.UnixNano()
-	got := IgnoredMarkers(f.rows(), UserContentCollection, "L")
+	got := ignoredOf(f.rows(), UserContentCollection, "L")
 	require.Len(t, got, 1)
 	require.False(t, got[0].Standing)
 	next, _ := f.revertB(t, f.rows())
@@ -136,7 +145,7 @@ func TestOrphanMarker_AReplacedMarkerOfTheSameRetireIsIgnored(t *testing.T) {
 	r2 := &database.OperationChange{ID: "06-op1-B", OperationID: "op1", BookID: "B", ChangeType: ChangeTypeUserContentFollow,
 		FieldName: UserContentField(UserContentCollection, "L"), OldValue: enc(rec), NewValue: "S", CreatedAt: m2.CreatedAt.Add(time.Millisecond), CreatedSeq: m2.CreatedSeq + 1}
 	rows := []*database.OperationChange{f.t1, f.r1, m2, r2}
-	got := IgnoredMarkers(rows, UserContentCollection, "L")
+	got := ignoredOf(rows, UserContentCollection, "L")
 	require.Len(t, got, 1)
 	require.Equal(t, f.t1.ID, got[0].ID)
 	require.Equal(t, IgnoredReplaced, got[0].Reason)

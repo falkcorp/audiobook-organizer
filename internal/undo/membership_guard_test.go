@@ -1,7 +1,7 @@
 // file: internal/undo/membership_guard_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 352f989b-8de0-44c0-b537-7e18620e3abf
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -35,11 +35,11 @@ func TestSlot_DeadEndBackwardWalkIsNotGuessed(t *testing.T) {
 	g.SetRow(rX)
 	g.AddRows(rows)
 	stand, _ := SurvivorStandFor(rows, rX, UserContentCollection, "L1")
-	next, note, err := RestoreMembership([]string{"S"}, "X", "S", recX, stand, g)
+	next, res, err := RestoreMember([]string{"S"}, "X", "S", recX, MemberRole{Stand: stand}, g)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if note == "" {
+	if res.Note == "" {
 		t.Fatalf("placed X at %v with no note: the walk before X dead-ends at L, which no record places", next)
 	}
 }

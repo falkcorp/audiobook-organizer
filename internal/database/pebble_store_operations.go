@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -552,8 +552,7 @@ func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
 }
 
 // CreateOperationChanges is CreateOperationChange for several rows committed in
-// ONE batch: every row, its index entries and the journal clock land together or
-// not at all. It is for a write whose rows must not be seen apart (a retire's
+// ONE batch: every row and its index entries land together or not at all. It is for a write whose rows must not be seen apart (a retire's
 // survivor marker and the retired book's row, voided together, so a failure
 // cannot leave one stale). Each row is stamped as CreateOperationChange stamps
 // it, in the order given, each with its own sequence; the ids must be distinct
@@ -579,11 +578,6 @@ func (p *PebbleStore) CreateOperationChanges(changes []*OperationChange) error {
 	defer batch.Close()
 	p.opChangeJournalMu.RLock()
 	defer p.opChangeJournalMu.RUnlock()
-	// Held from the first sequence through the commit, so batches commit in the
-	// order they stamped and the persisted mark only moves forward
-	// (pebble_store_journal_clock.go, PERSISTENCE).
-	defer p.journalClock.lock()()
-	var last int64
 	for _, change := range changes {
 		supplied := change.ID != ""
 		if !supplied {
@@ -591,9 +585,15 @@ func (p *PebbleStore) CreateOperationChanges(changes []*OperationChange) error {
 		}
 		// The journal clock: the order of the journal's rows is the order of
 		// their sequences (pebble_store_journal_clock.go).
-		change.CreatedAt, change.CreatedSeq = p.journalClock.stamp()
-		last = change.CreatedSeq
-		if change.RevertedAt != nil && change.RevertedSeq == 0 {
+		var err error
+		if change.CreatedAt, change.CreatedSeq, err = p.stampJournal(); err != nil {
+			return err
+		}
+		// A row written reverted (a void) was reverted when it was created, and a
+		// rewrite re-stamps CreatedSeq: a RevertedSeq the caller carried over from
+		// the row's earlier life is raised to the new CreatedSeq, so no row is
+		// ever reverted before it was created.
+		if change.RevertedAt != nil && change.RevertedSeq < change.CreatedSeq {
 			change.RevertedSeq = change.CreatedSeq
 		}
 		data, err := json.Marshal(change)
@@ -638,9 +638,6 @@ func (p *PebbleStore) CreateOperationChanges(changes []*OperationChange) error {
 		if err := stageOpChangeListIndex(batch, change, key); err != nil {
 			return err
 		}
-	}
-	if err := stageJournalClock(batch, last); err != nil {
-		return err
 	}
 	if journalAfterStamp != nil {
 		if err := journalAfterStamp(); err != nil {
@@ -797,11 +794,13 @@ func (p *PebbleStore) markOperationChangesRevertedWith(operationID string, chang
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	staged := 0
-	// One journal-clock stamp covers every row of the batch (its sequence is
-	// persisted with it), later than every sequence the journal has recorded, and
-	// the clock is held through the commit (see CreateOperationChanges).
-	defer p.journalClock.lock()()
-	now, seq := p.journalClock.stamp()
+	// One journal-clock stamp covers every row of the batch, later than every
+	// sequence the journal has recorded; the clock's ceiling already covers it
+	// (pebble_store_journal_clock.go, PERSISTENCE).
+	now, seq, err := p.stampJournal()
+	if err != nil {
+		return err
+	}
 	for _, key := range keys {
 		v, closer, err := p.db.Get(key)
 		if errors.Is(err, pebble.ErrNotFound) {
@@ -834,11 +833,6 @@ func (p *PebbleStore) markOperationChangesRevertedWith(operationID string, chang
 			return err
 		}
 		staged++
-	}
-	if staged > 0 {
-		if err := stageJournalClock(batch, seq); err != nil {
-			return err
-		}
 	}
 	if journalAfterStamp != nil && staged > 0 {
 		if err := journalAfterStamp(); err != nil {

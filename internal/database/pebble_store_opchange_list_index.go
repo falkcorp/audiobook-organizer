@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_list_index.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0a7e13-9c24-4b6f-8a51-3f7e2c9b40d8
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // The opchange_by_list: secondary index over the operation-change journal: the
 // carry rows of retired books into collections and playlists, filed by list.
@@ -36,9 +36,14 @@
 // PruneOperationChanges deletes it. The rows are never pruned in practice
 // (OpChangeTypesKeptByPrune), the deletion is for the invariant's sake.
 //
-// No trust gate and no backfill: the carry's rows are written only by builds
-// that stage the entry (nothing earlier wrote them), so there is nothing to
-// catch up on. A row of another build's would be invisible to GetListChanges.
+// BACKFILL. A row written by a build that did not stage the entry (an earlier
+// build of this feature, or one that crashed between the row and its entry
+// before the two shared a batch) would be invisible to GetListChanges, so the
+// first open of a store runs one pass over the journal that stages every missing
+// entry (scanJournalAtOpen, pebble_store_journal_clock.go) and then writes its
+// own completion key, system:backfill:opchange_by_list_index_v1_done. The pass
+// is idempotent, logs its progress, and runs once; rows written afterwards keep
+// the invariant in their own batch.
 
 package database
 

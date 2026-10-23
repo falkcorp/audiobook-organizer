@@ -1,7 +1,7 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -42,7 +42,7 @@ import (
 //     one operation's revert see what another operation left standing: the
 //     survivor stays in the list while any retire that put it there, or relied
 //     on it being there, is unreverted, and leaves with the last of them
-//     (SurvivorStandOf), so retires undone in any order end with the original
+//     (SurvivorStandFor), so retires undone in any order end with the original
 //     list. A marker is stamped reverted together with its row, and only then:
 //     a row that failed or was refused leaves its marker standing for the retry.
 //
@@ -307,35 +307,15 @@ const (
 	// the retired book, a removal puts the book back beside the survivor).
 	SurvivorDefault SurvivorStand = iota
 	// SurvivorStays: another standing retire put the survivor in the list, or
-	// relies on it being there (SurvivorStandOf), so the retired book goes
+	// relies on it being there (SurvivorStandFor), so the retired book goes
 	// back at its slot and the survivor stays listed beside it.
 	SurvivorStays
 	// SurvivorLeaves: the retire only removed its book because the survivor
 	// was already listed, and the survivor is there only because retires
 	// that have since been reverted put it there and left it for this one
-	// (SurvivorStandOf), so it leaves the list with this book's return.
+	// (SurvivorStandFor), so it leaves the list with this book's return.
 	SurvivorLeaves
 )
-
-// RestoreMembership is the revert of CarryMembership on the list as it is
-// now. ErrAlreadyRestored when the retired book is listed again; a
-// ReasonChangedSince refusal when the survivor was put in the retired book's
-// slot (or is to stay) and has since been taken out (the owner removed it on
-// purpose). stand is the survivor's part (SurvivorStand); a survivor the
-// owner already took out of the list is not removed again for SurvivorLeaves.
-//
-// A replaced slot the survivor still holds goes straight back to the retired
-// book. Otherwise the book is inserted where the recorded neighbours put it
-// (g, see MembershipGraph), so it lands in its original place whatever order
-// several retires into the survivor are reverted in. note is non-empty when
-// that was not possible and the recorded index was used (g nil, the records do
-// not order the book against the books listed now, or they contradict the list
-// order: the owner changed it by hand); it also says when a survivor the owner
-// listed elsewhere was left where it was put. The caller reports it.
-func RestoreMembership(cur []string, retired, survivor string, rec MembershipRecord, stand SurvivorStand, g *MembershipGraph) (next []string, note string, err error) {
-	next, pl, err := restoreMembership(cur, retired, survivor, rec, stand, g)
-	return next, pl.joined(), err
-}
 
 // placement is what a restore says about where it put the book, apart from
 // the write itself. Both parts are reported by the caller, never dropped.
@@ -354,16 +334,6 @@ func btoi(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-func (p placement) joined() string {
-	switch {
-	case p.byIndex != "" && p.kept != "":
-		return p.kept + "; " + p.byIndex
-	case p.kept != "":
-		return p.kept
-	}
-	return p.byIndex
 }
 
 func restoreMembership(cur []string, retired, survivor string, rec MembershipRecord, stand SurvivorStand, g *MembershipGraph) (next []string, pl placement, err error) {
@@ -497,7 +467,7 @@ func SurvivorRetiredOut(rows []*database.OperationChange, row *database.Operatio
 // MemberResult is what RestoreMember did besides writing the list.
 type MemberResult struct {
 	// Note is non-empty when the book was placed by its recorded index
-	// (RestoreMembership); the caller reports it.
+	// (the recorded index was used); the caller reports it.
 	Note string
 	// Kept is non-empty when the survivor was found listed where the retire did
 	// not put it and was left there (placement.kept); the caller reports it.
@@ -510,8 +480,24 @@ type MemberResult struct {
 	LeftOut bool
 }
 
-// RestoreMember is RestoreMembership for the revert of one row, which also
-// repairs two things the other retires leave behind.
+// RestoreMember is the revert of CarryMembership on the list as it is now, for
+// one row. ErrAlreadyRestored when the retired book is listed again; a
+// ReasonChangedSince refusal when the survivor was put in the retired book's
+// slot (or is to stay) and has since been taken out (the owner removed it on
+// purpose). role.Stand is the survivor's part (SurvivorStand); a survivor the
+// owner already took out of the list is not removed again for SurvivorLeaves.
+//
+// A replaced slot the survivor still holds goes straight back to the retired
+// book. Otherwise the book is inserted where the recorded neighbours put it
+// (g, see MembershipGraph), so it lands in its original place whatever order
+// several retires into the survivor are reverted in. The result's Note is
+// non-empty when that was not possible and the recorded index was used (g nil,
+// the records do not order the book against the books listed now, or they
+// contradict the list order: the owner changed it by hand); Kept says when a
+// survivor the owner listed elsewhere was left where it was put. The caller
+// reports both.
+//
+// RestoreMember also repairs two things the other retires leave behind.
 //
 // A retired book that was a survivor itself (role.RetiredStaysOut) is not put
 // back: it was listed only for retires that have all been reverted since, so
@@ -523,7 +509,7 @@ type MemberResult struct {
 // nothing else standing on it (role.Stand is not SurvivorStays), the survivor is
 // in the list only because of this retire and is taken out with it (Released),
 // not left beside the book it stood in for for good. A book already listed with
-// nothing to release is ErrAlreadyRestored, as in RestoreMembership.
+// nothing to release is ErrAlreadyRestored.
 func RestoreMember(cur []string, retired, survivor string, rec MembershipRecord, role MemberRole, g *MembershipGraph) (next []string, res MemberResult, err error) {
 	if role.RetiredStaysOut && !slices.Contains(cur, retired) {
 		next = slices.Clone(cur)
@@ -575,7 +561,7 @@ func RestoreMember(cur []string, retired, survivor string, rec MembershipRecord,
 //
 // A book that was itself a survivor of this list can be in it only on other
 // retires' account: they put it there in a retired book's slot and it stays
-// for as long as one of them stands (SurvivorStandOf). Retired into another
+// for as long as one of them stands (SurvivorStandFor). Retired into another
 // survivor while it was there, it comes back only if one of those retires still
 // stands; if they have all been reverted since, it left the list for good the
 // moment the last one was, and restoring this row must not list it again. A
@@ -616,7 +602,7 @@ func CheckMembershipFollow(cur []string, c *database.OperationChange, kind, list
 func HeldKind(kind string) string { return kind + "-held" }
 func TookKind(kind string) string { return kind + "-took" }
 
-// SurvivorStandOf decides the survivor's part in reverting row, one
+// SurvivorStandFor decides the survivor's part in reverting row, one
 // collection or playlist row of a retire's carry into list listID of kind,
 // from the list's journal (the rows GetListChanges returns).
 //
@@ -637,13 +623,9 @@ func TookKind(kind string) string { return kind + "-took" }
 // (SurvivorLeaves for a removal, the default swap back for a replace). A row
 // that does not borrow, or has no marker, leaves
 // the survivor alone (SurvivorDefault).
-func SurvivorStandOf(rows []*database.OperationChange, row *database.OperationChange, kind, listID string) SurvivorStand {
-	stand, _ := SurvivorStandFor(rows, row, kind, listID)
-	return stand
-}
-
-// SurvivorStandFor is SurvivorStandOf that also says whether the row borrowed
-// the survivor (its marker is a borrowing one, see SurvivorStandOf).
+//
+// The second result says whether the row borrowed the survivor (its marker is
+// a borrowing one).
 func SurvivorStandFor(rows []*database.OperationChange, row *database.OperationChange, kind, listID string) (stand SurvivorStand, borrowed bool) {
 	h := newMarkerHistory(row.NewValue, kind, listID, withRow(rows, row))
 	mc := h.markerOf(row.OperationID, row.BookID)

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.89.0
+// version: 1.89.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -661,7 +661,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			// A marker row restores nothing, but it is not done until the row
 			// it belongs to is: a marker says "this retire's book stands in
 			// this list", and the rows of other operations read it that way
-			// (undo.SurvivorStandOf). Decided after the loop, once every row
+			// (undo.SurvivorStandFor). Decided after the loop, once every row
 			// has run, so a marker visited before its row is not stamped
 			// while that row is still owed.
 			deferredMarkers = append(deferredMarkers, c)
@@ -1152,7 +1152,7 @@ type listWritten struct {
 //
 // A survivor-side marker that stands on no live retire (no non-voided row of the
 // retired book pairs with it, or a later marker names the same retire) is left
-// out of every decision above (undo.IgnoredMarkers) and reported with the row's
+// out of every decision above (undo.MembershipGraph.Ignored) and reported with the row's
 // outcome (orphansIgnored, counted in RevertResult.OrphanMarkers).
 //
 // A book placed by its recorded index, not its neighbours, is reported
@@ -1189,7 +1189,7 @@ func (rs *RevertService) revertListFollow(c *database.OperationChange, kind, lis
 	// The markers of the list the decisions left out (they stand on no live
 	// retire): every outcome below is wrapped so RevertOperation reports them.
 	var orphans []undo.IgnoredMarker
-	for _, m := range undo.IgnoredMarkers(rows, kind, listID) {
+	for _, m := range g.Ignored() {
 		if m.Standing {
 			orphans = append(orphans, m)
 		}
@@ -1199,7 +1199,7 @@ func (rs *RevertService) revertListFollow(c *database.OperationChange, kind, lis
 
 // orphansIgnored carries the outcome of one list row (err, possibly nil) with
 // the standing survivor-side markers of its list that the decisions ignored
-// (undo.IgnoredMarkers), up to RevertOperation, which reports them
+// (undo.MembershipGraph.Ignored), up to RevertOperation, which reports them
 // (RevertResult.OrphanMarkers) and continues with err.
 type orphansIgnored struct {
 	markers      []undo.IgnoredMarker

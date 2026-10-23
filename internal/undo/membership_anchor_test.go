@@ -1,7 +1,7 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -238,17 +238,17 @@ func TestMembershipAnchors_NoNeighbourResolvesFallsBackAndSaysSo(t *testing.T) {
 	t.Parallel()
 	rec := MembershipRecord{Index: 1, SurvivorWasMember: true, Anchored: true, Prev: "gone1", Next: "gone2"}
 	g := NewMembershipGraph("s", UserContentCollection, "L")
-	got, note, err := RestoreMembership([]string{"x", "s", "y"}, "r", "s", rec, SurvivorDefault, g)
+	got, res, err := RestoreMember([]string{"x", "s", "y"}, "r", "s", rec, MemberRole{Stand: SurvivorDefault}, g)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ucEq(t, got, []string{"x", "r", "s", "y"})
-	if !strings.Contains(note, "could not be ordered") {
-		t.Fatalf("note %q", note)
+	if !strings.Contains(res.Note, "could not be ordered") {
+		t.Fatalf("note %q", res.Note)
 	}
 	// An anchored record with no graph at all is the same fallback.
-	_, note, _ = RestoreMembership([]string{"x", "s", "y"}, "r", "s", rec, SurvivorDefault, nil)
-	if note == "" {
+	_, res, _ = RestoreMember([]string{"x", "s", "y"}, "r", "s", rec, MemberRole{Stand: SurvivorDefault}, nil)
+	if res.Note == "" {
 		t.Fatal("a fallback must be reported")
 	}
 }
