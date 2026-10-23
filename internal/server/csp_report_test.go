@@ -1,5 +1,5 @@
 // file: internal/server/csp_report_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b0cfe71e-4a49-4714-bc3b-9cbae5c214f5
 // last-edited: 2026-10-22
 
@@ -556,4 +556,19 @@ func TestCSPReporter_AFailedChargeFailsClosed(t *testing.T) {
 		}
 	}
 	require.Equal(t, 2, logged)
+}
+
+// A %3F in a reported URL decodes to "?" inside url.Path. It is path text: the
+// token behind it must not reach the log, whichever shape the URL takes.
+func TestCSPLogURL_EncodedQuestionMarkIsPathText(t *testing.T) {
+	const host = "example.test"
+	for _, raw := range []string{
+		"/invite/%3F" + cspTestToken,
+		"https://example.test/invite/%3F" + cspTestToken,
+		"https://cdn.example.com/invite/%3F" + cspTestToken,
+		"https://cdn.example.com/x%3F/../invite/" + cspTestToken,
+		"example.test/invite/%3F" + cspTestToken,
+	} {
+		require.NotContains(t, cspLogURL(raw, host), cspTestToken, "%q", raw)
+	}
 }

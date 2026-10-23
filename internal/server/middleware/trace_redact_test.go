@@ -1,5 +1,5 @@
 // file: internal/server/middleware/trace_redact_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 23c9b5f4-65b1-4dfa-8251-669861371e45
 // last-edited: 2026-10-22
 
@@ -80,5 +80,39 @@ func TestTraceWithRedactedInvitePath_DoublyEncodedTokenBeforeADotSegment(t *test
 	}
 	if handlerSaw != wantReal {
 		t.Fatalf("handler saw %q, want the real path %q", handlerSaw, wantReal)
+	}
+}
+
+// %3F decodes to "?" in URL.Path, which is path text, not a query: the span path
+// must not carry the token behind it, and the handler must still get the real path.
+func TestTraceWithRedactedInvitePath_EncodedQuestionMarkIsPathText(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const tok = "trace-question-mark-token"
+	for _, target := range []string{
+		"/api/v1/auth/invite/%3F" + tok,
+		"/invite/%3F" + tok,
+		"/x%3F/../invite/" + tok,
+		"/api/v1/users/invites/%3F" + tok + "/resend",
+	} {
+		var tracerSaw, handlerSaw string
+		tracer := func(c *gin.Context) {
+			tracerSaw = c.Request.URL.Path
+			c.Next()
+		}
+		r := gin.New()
+		r.Use(TraceWithRedactedInvitePath(tracer)...)
+		r.NoRoute(func(c *gin.Context) {
+			handlerSaw = c.Request.URL.Path
+			c.Status(http.StatusOK)
+		})
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		wantReal := req.URL.Path
+		r.ServeHTTP(httptest.NewRecorder(), req)
+		if strings.Contains(tracerSaw, tok) || !strings.Contains(tracerSaw, "[REDACTED]") {
+			t.Fatalf("request line %q: tracer saw %q", target, tracerSaw)
+		}
+		if handlerSaw != wantReal {
+			t.Fatalf("request line %q: handler saw %q, want the real path %q", target, handlerSaw, wantReal)
+		}
 	}
 }
