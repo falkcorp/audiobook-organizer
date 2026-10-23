@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-10-02
+// last-edited: 2026-10-22
 
 package database
 
@@ -12,12 +12,14 @@ import "time"
 // the heavy set that memdb clears before insertion:
 //
 //	FingerprintFailureReason, FingerprintFailureDetail, FingerprintDiagnosticJSON,
-//	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription
+//	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription, IntroMeta
 //
-// IntroTranscription is the only member of the per-file intro-transcription
-// group that is stripped. The other SEVEN (TranscribedTitle/Author/Narrator,
-// IntroTranscribedAt, TranscribeStatus, TranscribeError, TranscribeAttemptedAt)
-// are RETAINED here — they are the small, queryable fields, and the raw
+// IntroTranscription and IntroMeta are the only members of the per-file
+// intro-transcription group that are stripped. The others (TranscribedTitle/
+// Author/Narrator/Translator/CoverArtist, IntroTranscribedAt, TranscribeStatus,
+// TranscribeError, TranscribeAttemptedAt, IntroSourceHash, IntroRunOpID) are
+// RETAINED here — they are the small, queryable fields (IntroSourceHash is the
+// op's done marker, IntroRunOpID what clear-by-run-id selects on), and the raw
 // transcript carries ~99% of the group's bytes. See memdb_strip.go for the math.
 //
 // Note the two fingerprint-adjacent fields that are intentionally RETAINED
@@ -106,6 +108,10 @@ type BookFileCore struct {
 	TranscribeStatus       *string    `json:"transcribe_status,omitempty"`
 	TranscribeError        *string    `json:"transcribe_error,omitempty"`
 	TranscribeAttemptedAt  *time.Time `json:"transcribe_attempted_at,omitempty"`
+	// IntroSourceHash is the per-file done marker (== FileHash when done) and
+	// IntroRunOpID the op that wrote the result; see BookFile.
+	IntroSourceHash string `json:"intro_source_hash,omitempty"`
+	IntroRunOpID    string `json:"intro_run_op_id,omitempty"`
 
 	// Per-file scan cache. RETAINED rather than stripped: the stripped set is the
 	// heavy fingerprint/transcript strings, and these are three small scalars that
@@ -176,6 +182,8 @@ func (f *BookFile) Core() BookFileCore {
 		TranscribeStatus:               f.TranscribeStatus,
 		TranscribeError:                f.TranscribeError,
 		TranscribeAttemptedAt:          f.TranscribeAttemptedAt,
+		IntroSourceHash:                f.IntroSourceHash,
+		IntroRunOpID:                   f.IntroRunOpID,
 		LastScanMtime:                  f.LastScanMtime,
 		LastScanSize:                   f.LastScanSize,
 		NeedsRescan:                    f.NeedsRescan,
@@ -241,6 +249,8 @@ func (c *BookFileCore) AsBookFile() BookFile {
 		TranscribeStatus:               c.TranscribeStatus,
 		TranscribeError:                c.TranscribeError,
 		TranscribeAttemptedAt:          c.TranscribeAttemptedAt,
+		IntroSourceHash:                c.IntroSourceHash,
+		IntroRunOpID:                   c.IntroRunOpID,
 		LastScanMtime:                  c.LastScanMtime,
 		LastScanSize:                   c.LastScanSize,
 		NeedsRescan:                    c.NeedsRescan,

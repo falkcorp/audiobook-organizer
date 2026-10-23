@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-09-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -244,6 +244,9 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	"TranscribeStatus":               preserveAudio,
 	"TranscribeError":                preserveAudio,
 	"TranscribeAttemptedAt":          preserveAudio,
+	"IntroSourceHash":                preserveAudio,                                    // the per-file done marker; changed audio drops it, so the file is re-transcribed
+	"IntroRunOpID":                   preserveAudio,                                    // what clear-by-run-id selects on; a rescan must not orphan the row from its run
+	"IntroMeta":                      {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
 }
 
 // bookFileRulesByIndex is bookFileFieldClasses resolved to BookFile struct
