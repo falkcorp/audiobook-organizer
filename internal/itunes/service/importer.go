@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.41.1
+// version: 1.42.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package itunesservice
 
@@ -92,12 +92,14 @@ func trackDurationSeconds(t *itunes.Track) int {
 // itunesservice.Store to stay wide enough to satisfy it.
 
 // bookLookup finds existing books and their files during import, by every key
-// the pipeline dedupes on: ID, path, content hash, and iTunes external ID.
+// the pipeline dedupes on: ID, path, content hash, and iTunes external ID. The
+// content hash is not a method here: the holders of a hash come from
+// database.BooksHoldingFileHash (the FileHashHolderLookup capability), which
+// lists every one and fails closed.
 type bookLookup interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookByFilePath(path string) (*database.Book, error)
 	LiveBookIDsAtPath(path string) ([]string, error)
-	GetBookByFileHash(hash string) (*database.Book, error)
 	GetBookByExternalID(source, externalID string) (string, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
@@ -673,7 +675,13 @@ func (imp *Importer) executeLibrary(ctx context.Context, opID string, req Import
 			}
 
 			var linkGroup *string
-			if existing, err := imp.store.GetBookByFileHash(hash); err == nil && existing != nil && existing.ID != bookID {
+			holders, herr := database.BooksHoldingFileHash(imp.store, hash)
+			if herr != nil {
+				// Not knowing the holders means not linking: the hashes are
+				// still written, and the book stays the primary of its own group.
+				bookLookupErrs++
+				log.Warn("Hash validation: cannot list the books holding %s's hash, not linking it: %v", bookID, herr)
+			} else if existing := hashLinkTarget(holders, bookID); existing != nil {
 				if existing.VersionGroupID != nil && *existing.VersionGroupID != "" {
 					linkGroup = existing.VersionGroupID
 				}
@@ -722,6 +730,27 @@ func (imp *Importer) executeLibrary(ctx context.Context, opID string, req Import
 	log.UpdateProgress(totalGroups, totalGroups, summary)
 	log.Info("%s", summary)
 	_ = ctx
+	return nil
+}
+
+// hashLinkTarget picks the book a freshly imported book is linked to among the
+// holders of its hash (ascending by id): the first one that is neither the book
+// itself nor in the trash. Every holder is considered, so a book that is itself
+// the oldest holder (a re-run over books already hashed) still finds the others.
+//
+// A trashed holder is never a target. The link moves the new book into the
+// target's version group as a NON-primary member, and a trashed book's group may
+// have been emptied by a merge (group redirects, merge/group_redirect.go, are
+// followed only by a restore, not here): the new book would then sit in a group
+// with no live primary and be hidden. With only trashed holders the book is left
+// as the primary of its own group, which is what an import with no match does.
+func hashLinkTarget(holders []*database.Book, bookID string) *database.Book {
+	for _, h := range holders {
+		if h == nil || h.ID == bookID || database.IsInTrash(h) {
+			continue
+		}
+		return h
+	}
 	return nil
 }
 

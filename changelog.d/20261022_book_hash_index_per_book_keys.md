@@ -20,7 +20,11 @@ preview by default, `dry_run=false` writes every missing key and, when every
 book row decoded, sets the completion sentinel and deletes the retired
 single-valued keys, in that order. Boot enqueues it with `ensure=true` on every
 start (rollback-safe, like the opchange ensure). Until the sentinel is set,
-lookups return the union of the new keys and the legacy key, so nothing is
-missed during the cut-over. A book row that cannot be decoded keeps the sentinel
+lookups return the union of the new keys and the legacy key. That is NOT
+complete during the cut-over: the legacy key names one holder per hash and the
+new keys of the others are not written until the first repair after the deploy
+finishes, so a lookup can miss a book in that window. Once the sentinel is set
+and the legacy keys are removed, a pre-change build finds no hash matches at all
+until the next roll-forward boot rewrites its keys. A book row that cannot be decoded keeps the sentinel
 unset and fails the op. After a rollback to a pre-change build and a roll
 forward, the next boot's ensure writes the keys that build did not.
