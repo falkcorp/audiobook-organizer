@@ -1,5 +1,5 @@
 // file: internal/database/file_intro_stats.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: b4d7e2a9-6c15-4f38-8e0b-5a1d9c3f7e62
 // last-edited: 2026-10-22
 
@@ -30,7 +30,6 @@ type FileIntroStats struct {
 	StartedAt time.Time `json:"started_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Done      bool      `json:"done"`
-	DryRun    bool      `json:"dry_run"`
 
 	// Coverage at the book_file grain. Eligible is every file the op would
 	// transcribe in a full run (present, with a hash and a supported format);
