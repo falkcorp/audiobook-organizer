@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.121.2
+// version: 2.122.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package database
 
@@ -634,6 +634,15 @@ type OperationChange struct {
 	OldValue   string     `json:"old_value"`
 	NewValue   string     `json:"new_value"`
 	RevertedAt *time.Time `json:"reverted_at,omitempty"`
+	// CreatedSeq and RevertedSeq are the journal clock's stamps for CreatedAt and
+	// RevertedAt (pebble_store_journal_clock.go): strictly increasing per store
+	// whatever the wall clock does, so the order of two rows is the order of their
+	// sequences. CreatedAt and RevertedAt stay wall times (what the owner sees,
+	// and what a file's mtime is compared with). A row stored before the fields
+	// existed has 0 and is ordered by its wall time (undo.CreatedKey,
+	// undo.RevertedKey). RevertedSeq is 0 while the row stands.
+	CreatedSeq  int64 `json:"created_seq,omitempty"`
+	RevertedSeq int64 `json:"reverted_seq,omitempty"`
 	// Voided marks a row its writer took back because the write it
 	// describes was refused and never made (repairs.Writer.JournalStep,
 	// LockFields). RevertedAt is set with it, so no revert acts on it; the

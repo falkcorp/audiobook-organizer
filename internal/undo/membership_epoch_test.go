@@ -1,5 +1,5 @@
 // file: internal/undo/membership_epoch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b3e8d12-4a97-4c05-9f21-e7d0a5c18b34
 // last-edited: 2026-10-22
 
@@ -49,7 +49,7 @@ func TestSurvivorStand_EpochRule(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			stand, borrowed := SurvivorStandFor(tc.rows, tc.row, UserContentCollection, "c1")
+			stand, borrowed := SurvivorStandFor(pairRows(tc.rows), tc.row, UserContentCollection, "c1")
 			if stand != tc.want || borrowed != tc.wantBorrowed {
 				t.Fatalf("got stand %v borrowed %v, want %v %v", stand, borrowed, tc.want, tc.wantBorrowed)
 			}

@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_files.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
 // last-edited: 2026-10-22
 
@@ -50,7 +50,9 @@ var ErrNotJournaled = errors.New("repairs: undo row not recorded; the write was 
 // resume dedupe). CreateOperationChange stores a row under its id, so writing
 // a row again with the same id replaces it: that is how JournalStep and
 // LockFields void the row they just wrote when the write it describes was
-// refused (Voided, RevertedAt), by id, without reading the op's journal.
+// refused (Voided, RevertedAt), by id, without reading the op's journal. A call
+// that journals several rows at once (JournalSteps) also needs the journal's
+// ChangeBatchJournal.
 type ChangeJournal interface {
 	CreateOperationChange(change *database.OperationChange) error
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
@@ -250,6 +252,92 @@ func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journ
 	return row, nil
 }
 
+// journalRows is journalRow for the several steps of one JournalSteps call: every
+// row that is not already in the op journal is created in ONE commit (the
+// journal's CreateOperationChanges, ChangeBatchJournal), so the rows of one step
+// that belong to each other (a carry's survivor-side marker and the retired
+// book's row) land together or not at all, and the writer's own index is updated
+// only after the commit. The result is aligned with steps: a step whose row was
+// already in the journal (a resumed run, or an identical step twice in one call)
+// has the zero journaledRow.
+//
+// Two rows or more need the journal to write them in one commit. A journal that
+// cannot is refused up front, before anything is written: written one by one, a
+// failure part-way would leave one row of a pair without the other, which a
+// revert reads as a marker standing on nothing.
+func (w *Writer) journalRows(steps []BookStep) ([]journaledRow, error) {
+	if w.journal == nil || w.opID == "" || w.index == nil {
+		return nil, fmt.Errorf("%w: no journal wired (%d steps)", ErrNotJournaled, len(steps))
+	}
+	for _, st := range steps {
+		// Every journaled write journals first, so beating here renews the lease
+		// before each of them.
+		if err := w.beat(st.Entry.ChangeType + " on book " + st.BookID); err != nil {
+			return nil, err
+		}
+	}
+	ix := w.index
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if err := ix.load(w); err != nil {
+		return nil, err
+	}
+	rows := make([]journaledRow, len(steps))
+	var fresh []int // indexes into steps of the rows to create
+	var changes []*database.OperationChange
+	pending := map[string]bool{}
+	for i, st := range steps {
+		key := journalKey(st.BookID, st.Entry.ChangeType, st.Entry.Field, st.Entry.Old, st.Entry.New)
+		if ix.keys[key] || pending[key] {
+			ix.books[st.BookID] = true
+			ix.found[st.BookID] = true
+			continue
+		}
+		pending[key] = true
+		id := ulid.Make().String()
+		fresh = append(fresh, i)
+		changes = append(changes, &database.OperationChange{
+			ID: id, OperationID: w.opID, BookID: st.BookID,
+			ChangeType: st.Entry.ChangeType, FieldName: st.Entry.Field, OldValue: st.Entry.Old, NewValue: st.Entry.New,
+			// The fixer's id rides on the row itself (see journalRow).
+			Source: w.source,
+		})
+		rows[i] = journaledRow{row: changes[len(changes)-1], id: id, key: key, valueKey: valueKey(st.BookID, st.Entry.ChangeType, st.Entry.Field)}
+	}
+	if len(changes) == 0 {
+		return rows, nil
+	}
+	var err error
+	switch batch, ok := database.AsCapability[ChangeBatchJournal](w.journal); {
+	case len(changes) == 1:
+		err = w.journal.CreateOperationChange(changes[0])
+	case !ok:
+		err = errBatchJournalMissing
+	default:
+		err = batch.CreateOperationChanges(changes)
+	}
+	if err != nil {
+		w.log.Warn("%s: undo rows not recorded; the write is not made: rows=%d err=%s",
+			w.source, len(changes), logger.SanitizeLogValue(err.Error()))
+		return nil, fmt.Errorf("%w: %d rows of %s: %w", ErrNotJournaled, len(changes), steps[fresh[0]].Entry.ChangeType, err)
+	}
+	// The commit landed: the index follows it, in step order.
+	for _, i := range fresh {
+		st := steps[i]
+		row := &rows[i]
+		row.prevLatest, row.hadLatest = ix.latest[row.valueKey]
+		ix.keys[row.key] = true
+		ix.books[st.BookID] = true
+		ix.created[st.BookID]++
+		ix.latest[row.valueKey] = st.Entry.New
+		w.journaled.Add(1)
+	}
+	return rows, nil
+}
+
+// errBatchJournalMissing: the journal cannot write several rows in one commit.
+var errBatchJournalMissing = errors.New("the op journal cannot write several rows in one commit (ChangeBatchJournal)")
+
 // voidRow marks a row this writer just created reverted, because the write
 // it describes was refused and never made: left in place, the op revert would
 // "restore" a change that never happened, over whatever the field holds then
@@ -259,20 +347,37 @@ func (w *Writer) voidRow(row journaledRow) error {
 	return w.voidRows([]journaledRow{row})
 }
 
-// ChangeBatchJournal is the optional journal capability voidRows uses to take
-// back several rows in one commit (database.PebbleStore CreateOperationChanges):
-// every row lands or none does. It is resolved with database.AsCapability on the
-// ChangeJournal, so ChangeJournal does not grow.
+// ChangeBatchJournal is the journal capability for writing several rows in one
+// commit (database.PebbleStore CreateOperationChanges): every row lands or none
+// does. JournalSteps creates the rows of a multi-row step with it, and voidRows
+// takes them back with it, so the rows of one step that belong to each other (a
+// carry's survivor-side marker and the retired book's row) are never seen apart.
+// It is resolved with database.AsCapability on the ChangeJournal, so
+// ChangeJournal does not grow; a caller that journals several rows at once
+// refuses a journal without it up front (journalRows).
 type ChangeBatchJournal interface {
 	CreateOperationChanges(changes []*database.OperationChange) error
 }
 
-// voidRows is voidRow for the rows of one step, taken back together: rows that
-// belong to each other (a survivor's marker and the retired book's row of one
-// carry) must not be seen apart, so a failure cannot leave one voided and the
-// other standing. A journal that cannot write several rows in one commit
-// (ChangeBatchJournal) voids them one by one, and a failure part-way can leave
-// some standing.
+// JournalsInBatches reports whether the writer's op journal can write several
+// rows in one commit (ChangeBatchJournal). A caller whose step journals rows that
+// belong to each other (a retire's carry of a book's place in a list) asks it
+// BEFORE its first write and refuses when it is false, as it does for a store
+// without the list capabilities: JournalSteps refuses such a step anyway, but
+// only after the retire has already moved other things.
+func (w *Writer) JournalsInBatches() bool {
+	if w.journal == nil {
+		return false
+	}
+	_, ok := database.AsCapability[ChangeBatchJournal](w.journal)
+	return ok
+}
+
+// voidRows is voidRow for the rows of one step, taken back together in one
+// commit: rows that belong to each other must not be seen apart, so a failure
+// leaves all of them standing, never one voided and the other standing. Several
+// rows need the journal's ChangeBatchJournal (journalRows already required it to
+// create them); without it nothing is voided and the error says so.
 func (w *Writer) voidRows(rows []journaledRow) error {
 	var voided []*database.OperationChange
 	var todo []journaledRow
@@ -282,30 +387,29 @@ func (w *Writer) voidRows(rows []journaledRow) error {
 			continue
 		}
 		v := *row.row
+		// RevertedAt is the wall time; the journal clock stamps RevertedSeq (the
+		// order the decisions use) as the store writes the row.
 		v.RevertedAt, v.Voided = &now, true
 		voided, todo = append(voided, &v), append(todo, row)
 	}
-	if len(voided) == 0 {
+	switch {
+	case len(voided) == 0:
 		return nil
-	}
-	if batch, ok := database.AsCapability[ChangeBatchJournal](w.journal); ok && len(voided) > 1 {
+	case len(voided) == 1:
+		if err := w.journal.CreateOperationChange(voided[0]); err != nil {
+			return fmt.Errorf("void undo row %s of a refused write: %w", todo[0].id, err)
+		}
+	default:
+		batch, ok := database.AsCapability[ChangeBatchJournal](w.journal)
+		if !ok {
+			return fmt.Errorf("void %d undo rows of a refused write: %w", len(voided), errBatchJournalMissing)
+		}
 		if err := batch.CreateOperationChanges(voided); err != nil {
 			return fmt.Errorf("void undo rows of a refused write: %w", err)
 		}
-		w.forgetVoided(todo)
-		return nil
 	}
-	var errs []error
-	var landed []journaledRow
-	for i, v := range voided {
-		if err := w.journal.CreateOperationChange(v); err != nil {
-			errs = append(errs, fmt.Errorf("void undo row %s of a refused write: %w", todo[i].id, err))
-			continue
-		}
-		landed = append(landed, todo[i])
-	}
-	w.forgetVoided(landed)
-	return errors.Join(errs...)
+	w.forgetVoided(todo)
+	return nil
 }
 
 // forgetVoided takes rows the journal no longer holds as live out of the
@@ -361,15 +465,29 @@ type BookStep struct {
 // steps[i]), whether it performed that change. Every row whose step was not
 // performed -- all of them when write refused before writing, or returned
 // fewer entries than steps -- is voided, so the op revert never "restores" a
-// change that never happened; write's error is returned either way. A journal
-// failure part-way voids the rows already journaled and never calls write.
+// change that never happened; write's error is returned either way.
+//
+// All the rows of the call are created in ONE commit (journalRows,
+// ChangeBatchJournal), so they exist together or not at all: a journal failure
+// or a crash while journaling leaves none of them, never one half of a pair (a
+// carry's survivor-side marker without the retired book's row, which a revert
+// would read as a marker standing on nothing), and write is never called. Rows
+// already in the journal (a resumed run) are not written again; only the missing
+// ones are created. The rows of a refused write are voided in one commit too.
+// A journal that cannot write several rows in one commit is refused for a call
+// of two rows or more, before anything is written.
 // The crash window of JournalStep stands: a crash between the rows and the
 // write leaves them live.
 func (w *Writer) JournalSteps(steps []BookStep, write func() (done []bool, err error)) error {
 	if err := w.denyTagsOnly("JournalSteps"); err != nil {
 		return err
 	}
-	rows := make([]journaledRow, 0, len(steps))
+	// All the rows of the call are created in one commit, then write runs. A
+	// journal failure creates none of them and never calls write.
+	rows, err := w.journalRows(steps)
+	if err != nil {
+		return err
+	}
 	voidUndone := func(done []bool, cause error) error {
 		errs := []error{cause}
 		var undone []journaledRow
@@ -379,19 +497,11 @@ func (w *Writer) JournalSteps(steps []BookStep, write func() (done []bool, err e
 			}
 			undone = append(undone, row)
 		}
-		// Together: rows of one step that belong to each other (a carry's marker
-		// and its row) are voided in one commit when the journal can.
+		// Together, in one commit (voidRows).
 		if verr := w.voidRows(undone); verr != nil {
 			errs = append(errs, verr)
 		}
 		return errors.Join(errs...)
-	}
-	for _, st := range steps {
-		row, err := w.journalRow(st.BookID, st.Entry.ChangeType, st.Entry.Field, st.Entry.Old, st.Entry.New)
-		if err != nil {
-			return voidUndone(nil, err)
-		}
-		rows = append(rows, row)
 	}
 	w.Touch()
 	done, werr := write()

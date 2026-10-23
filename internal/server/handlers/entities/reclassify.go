@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package entities
 
@@ -93,6 +93,8 @@ func (j *ReclassifyJournal) step(row *database.OperationChange) (void func() err
 	return func() error {
 		voided := *row
 		now := time.Now()
+		// RevertedAt is the wall time; the store stamps RevertedSeq, the order the
+		// undo decisions use, as it writes a row that is born reverted.
 		voided.RevertedAt, voided.Voided = &now, true
 		return j.Store.CreateOperationChange(&voided)
 	}, nil

@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -1169,7 +1169,7 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "JournaledValue", "Step",
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
 		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange", "Beat", "LockWaiting",
-		"WithFieldStates", "LockFields", "JournalStep", "JournalSteps", "WithTags", "AddBookTag", "OpID",
+		"WithFieldStates", "LockFields", "JournalStep", "JournalSteps", "JournalsInBatches", "WithTags", "AddBookTag", "OpID",
 		"WithUserState", "SetUserState", "ClearBookFileITunesPath", "ClearBookITunesPath", "SupersedeChanges"}, names)
 }
 

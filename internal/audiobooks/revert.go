@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.88.0
+// version: 1.89.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-22
 
@@ -354,6 +354,15 @@ type RevertResult struct {
 	// (the survivor was left there by an earlier revert of the row that died
 	// before it stamped it). The row counts AlreadyRestored; Kept names each.
 	SurvivorsReleased int `json:"survivors_released,omitempty"`
+	// OrphanMarkers counts survivor-side marker rows of a retire's carry that the
+	// revert ignored because they account for no live retire: no non-voided row
+	// of the retired book pairs with them (a crash or a failed write left the
+	// marker without its row), or a later marker names the same retire. Believed,
+	// such a marker would keep its survivor listed for every other retire; ignored
+	// it changes nothing, and Kept names each one (once per revert) so it is
+	// never silent. A marker of the operation being reverted that has no row is
+	// stamped reverted here too and counted.
+	OrphanMarkers int `json:"orphan_markers,omitempty"`
 	// BooksLeftOut counts collection and playlist rows of a retire's carry
 	// whose retired book was NOT put back: it was itself a survivor, listed
 	// only for retires that have all been reverted since, so it never belonged
@@ -415,6 +424,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.BooksLeftOut > 0 {
 		fmt.Fprintf(&b, "; %d book(s) not put back in a list they never belonged to on their own (see kept)", r.BooksLeftOut)
+	}
+	if r.OrphanMarkers > 0 {
+		fmt.Fprintf(&b, "; %d survivor marker(s) with no live row of their retire ignored (see kept)", r.OrphanMarkers)
 	}
 	if r.Superseded > 0 {
 		fmt.Fprintf(&b, "; %d superseded and left as they are (%s)", r.Superseded, strings.Join(r.SupersededDetail, "; "))
@@ -592,6 +604,18 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// group's primary is; the settle pass after the loop reads them.
 	var touched []settleTouch
 	refusedDemote := map[string]bool{}
+	// orphansSeen: the markers already reported, so each is named once per revert
+	// however many rows of its list the run reverts.
+	orphansSeen := map[string]bool{}
+	noteOrphan := func(id, detail string) {
+		if orphansSeen[id] {
+			return
+		}
+		orphansSeen[id] = true
+		result.OrphanMarkers++
+		result.Kept = append(result.Kept, detail)
+		revertLog.Warn("revert: %s", detail)
+	}
 	plan, err := undo.PlanRevert(restorable, rs.db.GetBookFiles)
 	if err != nil {
 		return nil, err
@@ -610,6 +634,15 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		already := false
 		if err == nil {
 			err = rs.revertChangeIn(c, plan)
+			if ign, ok := errors.AsType[*orphansIgnored](err); ok {
+				// Markers of the list that stand on no live retire were left out
+				// of the decisions; said so, never silently. The row's own
+				// outcome is the wrapped one.
+				for _, m := range ign.markers {
+					noteOrphan(m.ID, fmt.Sprintf("%s %s: %s", ign.kind, ign.listID, m.Detail()))
+				}
+				err = ign.err
+			}
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				already, err = true, nil
 			}
@@ -741,6 +774,10 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		// every other retire. A marker whose row IS here is stamped by the
 		// row's own revert, in the batch that writes the list.
 		row := undo.PairedRow(changes, m)
+		if row == nil {
+			noteOrphan(m.ID, fmt.Sprintf("marker %s (%s on book %s, retired book %s) had no live row in operation %s: it is stamped reverted and accounted for nothing",
+				m.ID, m.FieldName, m.BookID, m.NewValue, m.OperationID))
+		}
 		if row != nil && row.RevertedAt == nil && !restoredSet[row.ID] {
 			revertLog.Warn("marker %s left standing: its row %s is not restored", m.ID, row.ID)
 			continue
@@ -1113,6 +1150,11 @@ type listWritten struct {
 //     stands on it, the survivor is in the list only because of this retire and
 //     is taken out with it (survivorReleased); otherwise the marker is stamped.
 //
+// A survivor-side marker that stands on no live retire (no non-voided row of the
+// retired book pairs with it, or a later marker names the same retire) is left
+// out of every decision above (undo.IgnoredMarkers) and reported with the row's
+// outcome (orphansIgnored, counted in RevertResult.OrphanMarkers).
+//
 // A book placed by its recorded index, not its neighbours, is reported
 // (indexRestore) after the write; so is a retired book left out of the list
 // (retiredLeftOut), and so is a list the owner arranged by hand since, where a
@@ -1144,6 +1186,48 @@ func (rs *RevertService) revertListFollow(c *database.OperationChange, kind, lis
 	g.SetRow(c)
 	g.AddRows(rows)
 	res, err := write(listWrite{role: undo.MemberRoleOf(rows, c, kind, listID), g: g, mark: mark})
+	// The markers of the list the decisions left out (they stand on no live
+	// retire): every outcome below is wrapped so RevertOperation reports them.
+	var orphans []undo.IgnoredMarker
+	for _, m := range undo.IgnoredMarkers(rows, kind, listID) {
+		if m.Standing {
+			orphans = append(orphans, m)
+		}
+	}
+	return rs.withOrphans(orphans, kind, listID, rs.finishListFollow(c, kind, listID, mark, res, err))
+}
+
+// orphansIgnored carries the outcome of one list row (err, possibly nil) with
+// the standing survivor-side markers of its list that the decisions ignored
+// (undo.IgnoredMarkers), up to RevertOperation, which reports them
+// (RevertResult.OrphanMarkers) and continues with err.
+type orphansIgnored struct {
+	markers      []undo.IgnoredMarker
+	kind, listID string
+	err          error
+}
+
+func (o *orphansIgnored) Error() string {
+	if o.err == nil {
+		return "orphan markers ignored"
+	}
+	return o.err.Error()
+}
+
+func (o *orphansIgnored) Unwrap() error { return o.err }
+
+// withOrphans wraps err (nil too) so the markers reach RevertOperation; with
+// none it is err itself.
+func (rs *RevertService) withOrphans(markers []undo.IgnoredMarker, kind, listID string, err error) error {
+	if len(markers) == 0 {
+		return err
+	}
+	return &orphansIgnored{markers: markers, kind: kind, listID: listID, err: err}
+}
+
+// finishListFollow is the end of revertListFollow: stamping the marker when the
+// list write did not, and the report of what RestoreMember did besides.
+func (rs *RevertService) finishListFollow(c *database.OperationChange, kind, listID string, mark *database.OperationMark, res listWritten, err error) error {
 	if err != nil && !errors.Is(err, undo.ErrAlreadyRestored) {
 		return err
 	}

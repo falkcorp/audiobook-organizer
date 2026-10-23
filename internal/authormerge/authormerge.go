@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
-// last-edited: 2026-10-15
+// last-edited: 2026-10-22
 
 // Package authormerge is the journaled write path every author merge shares:
 // moving one book's credits off the merged author, and removing the merged author
@@ -52,6 +52,8 @@ func Step(store JournalStore, opID string, row *database.OperationChange) (void 
 	return func() error {
 		voided := *row
 		now := time.Now()
+		// RevertedAt is the wall time; the store stamps RevertedSeq, the order the
+		// undo decisions use, as it writes a row that is born reverted.
 		voided.RevertedAt, voided.Voided = &now, true
 		return store.CreateOperationChange(&voided)
 	}, nil
