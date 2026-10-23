@@ -68,11 +68,15 @@ written in the same batch as each collection or playlist carry row (ratings and
 notes are not indexed) and removed only together with its row, so one call (`GetListChanges`) returns every row any retire
 into the list wrote, whichever survivor or retired book it names. There is no
 per-book journal walk and no read cap any more, so no history can need more
-reads than the cap allowed. The index is written for rows written from now on; the
-carry is new in this release, so there is nothing to backfill. The first open
-of the store after this release also stages any entry a carry row lacks (a
-one-time scan, logged with its row count and duration), so an index entry that a
-crash or an earlier build never wrote is not a hole in the graph.
+reads than the cap allowed. A carry's index entry is written in the same batch
+as its row, so a row never exists without its entry. The first open of the store
+after this release reads the whole journal once, under its own completion key
+(`system:backfill:opchange_by_list_index_v1_done`), and stages the entry of any
+carry row that lacks one (rows written by a build without the index), in chunks
+of 2,000, logging progress every 50,000 rows and the row count, entries staged
+and duration at the end. The key is written with the last chunk, so a start that
+dies part way repeats the scan, which is idempotent, and a store that has the key
+is never scanned for the index again.
 
 A book is placed by the graph only when both of its neighbours are found in the
 list now and nothing but the survivor (or another survivor's ghost) sits between
@@ -104,15 +108,24 @@ revert, the preflight, and the order graph.
 
 Journal rows are ordered by a store-level sequence that never steps back, not
 by the wall clock. Each row carries `CreatedSeq` (and a row stamped reverted
-carries `RevertedSeq`): the larger of the wall clock and one past the last
-stamp, handed out under one lock that is held until the rows are committed, so
-the mark saved with the rows (`system:journal_clock`) can never be behind a row
-that is on disk. The mark is re-read at open with one second of margin. A
-wall clock that steps back (NTP, a restore, a VM resume) between two retires
-therefore cannot reorder the journal, and the undo code orders markers by the
-sequence, falling back to the wall time only for rows written before it
-existed. If the mark is missing or unreadable the open rebuilds it from the
-rows; a damaged mark never stops the store opening.
+carries `RevertedSeq`, never below its own `CreatedSeq`, also for a row born
+reverted): the larger of the wall clock and one past the last stamp. A wall clock
+that steps back (NTP, a restore, a VM resume) between two retires therefore
+cannot reorder the journal, and the undo code orders markers by the sequence,
+falling back to the wall time only for rows written before it existed. The
+stamp is taken under a short lock that is not held across the commit, so
+concurrent writers commit in parallel. To keep the sequence from ever repeating
+after a restart, the store persists a CEILING (`system:journal_clock`): a value
+above every stamp handed out, written with one synced write when the sequence
+reaches it and moved one minute ahead (about one extra write a minute under
+sustained load, none when idle). The next open starts the sequence at the
+ceiling exactly, with no margin and no journal scan, and a clean close lowers the
+ceiling to the last stamp so a normal restart wastes nothing. A crash leaves the
+ceiling at most one minute ahead, which only skips unused numbers. The journal
+is scanned at open only when the ceiling is missing or unreadable (a store from
+before this release, or a damaged key); the scan derives the sequence from the
+rows and rewrites the key, also when the key was unreadable and the journal is
+empty, so a damaged key is repaired once and never stops the store opening.
 
 Lists the owner arranged by hand since the retire are reported, not silently
 rewritten. A survivor found listed somewhere other than the slot the retire gave

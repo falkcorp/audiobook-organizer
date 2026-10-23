@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_journal_steps_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c7f4a19-8e63-4b05-9d2a-6f13b8e0c7d4
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package repairs
 
@@ -180,7 +180,7 @@ func TestJournalSteps_AResumedRunCreatesOnlyTheMissingRows(t *testing.T) {
 
 // A resumed run whose record changed (the list moved between the runs) journals
 // a new pair; the old pair is left as it is, and the carry's history reads only
-// the latest marker of a retire (undo.IgnoredMarkers).
+// the latest marker of a retire (undo.MembershipGraph.Ignored).
 func TestJournalSteps_AResumedRunWithAChangedRecordJournalsANewPair(t *testing.T) {
 	j := &batchJournal{}
 	require.NoError(t, stepsWriter(j).JournalSteps(pairSteps("rec-1"), func() ([]bool, error) { return []bool{true, true}, nil }))

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.232.0
+// version: 1.232.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -906,6 +906,13 @@ func (p *PebbleStore) closeStore() error {
 	// A closed store reports the timeline index untrusted, and refuses any
 	// later flip to trusted (markOpsV2TimelineClosed).
 	p.markOpsV2TimelineClosed()
+
+	// Lower the journal clock's persisted ceiling to its actual high-water mark,
+	// so the next open does not start a window ahead of it. A failure only means
+	// the next open starts at the (higher) ceiling, which is still correct.
+	if err := p.journalClock.settle(p.persistJournalCeiling); err != nil {
+		journalClockLog.Warn("close: could not settle the journal clock ceiling: %s", logger.SanitizeLogValue(err.Error()))
+	}
 
 	sealed, syncErr := p.db.drainAndSeal(p.closeDrainTimeout)
 	if !sealed {
