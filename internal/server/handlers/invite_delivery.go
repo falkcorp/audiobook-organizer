@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 // Invitation delivery: the invite email, resend, and the public invite lookup
 // the accept page calls.
@@ -52,6 +52,10 @@ type InviteDelivery struct {
 	// GuestPolicySyncConfigured reports whether accept adds the invitee to
 	// the Cloudflare Access guest policy.
 	GuestPolicySyncConfigured func() bool
+	// GuestServiceTokensEnabled reports whether accepting an emailed
+	// invitation from an admin mints the guest's own Cloudflare service token
+	// for the phone app (CF_GUEST_SERVICE_TOKENS and its settings).
+	GuestServiceTokensEnabled func() bool
 	// Now is the clock (tests).
 	Now func() time.Time
 }
@@ -92,6 +96,10 @@ func (d *InviteDelivery) sendBlocked() string {
 
 func (d *InviteDelivery) policySync() bool {
 	return d != nil && d.GuestPolicySyncConfigured != nil && d.GuestPolicySyncConfigured()
+}
+
+func (d *InviteDelivery) serviceTokens() bool {
+	return d != nil && d.GuestServiceTokensEnabled != nil && d.GuestServiceTokensEnabled()
 }
 
 func (d *InviteDelivery) now() time.Time {
@@ -139,6 +147,9 @@ type inviteEmailData struct {
 	// Cloudflare with that address. False: the step is left out, because it
 	// would send the guest to a login that does not know them.
 	EmailLogin bool
+	// PhoneAppToken is true when accepting mints the guest's own phone-app
+	// key, so the email says the invitation page will show it once.
+	PhoneAppToken bool
 }
 
 const inviteEmailSubject = "You're invited to Audiobook Organizer"
@@ -162,7 +173,8 @@ You have been invited to Audiobook Organizer.
    have chosen your password in step 1.
 {{- end}}
 
-Phone app access will be added to your account soon.
+{{if .PhoneAppToken}}Phone app: when you create your account, the invitation page shows your own phone-app key
+(two values). Copy it then: it is shown only once and is not in this email.{{else}}Phone app access will be added to your account soon.{{end}}
 
 If you were not expecting this invitation, you can ignore this email.
 `))
@@ -179,20 +191,21 @@ If the link does not open, copy this address into your browser:<br>
 <h3>2. Sign in</h3>
 <p>Then open <a href="{{.ServerURL}}">{{.ServerURL}}</a> in your browser and sign in with your username (<strong>{{.Username}}</strong>) and the password you chose.</p>
 {{if .EmailLogin}}<p>If Cloudflare asks you to sign in first, enter this email address: <code>{{.Email}}</code>. Cloudflare emails you a one-time code; type it in. This works once you have chosen your password in step 1.</p>
-{{end}}<p>Phone app access will be added to your account soon.</p>
+{{end}}{{if .PhoneAppToken}}<p>Phone app: when you create your account, the invitation page shows your own phone-app key (two values). Copy it then: it is shown only once and is not in this email.</p>{{else}}<p>Phone app access will be added to your account soon.</p>{{end}}
 <p style="color:#666">If you were not expecting this invitation, you can ignore this email.</p>
 </body></html>`))
 
 // renderInviteEmail builds the invitation message. Templates escape every
 // value (html/template contextually; the text part has no markup).
-func renderInviteEmail(inv *database.Invite, inviteURL, serverURL string, emailLogin bool) (imail.Message, error) {
+func renderInviteEmail(inv *database.Invite, inviteURL, serverURL string, emailLogin, phoneAppToken bool) (imail.Message, error) {
 	data := inviteEmailData{
-		Username:   inv.Username,
-		InviteURL:  inviteURL,
-		ServerURL:  serverURL,
-		ExpiresAt:  inv.ExpiresAt.UTC().Format("Mon 2 Jan 2006 15:04 UTC"),
-		Email:      inv.Email,
-		EmailLogin: emailLogin,
+		Username:      inv.Username,
+		InviteURL:     inviteURL,
+		ServerURL:     serverURL,
+		ExpiresAt:     inv.ExpiresAt.UTC().Format("Mon 2 Jan 2006 15:04 UTC"),
+		Email:         inv.Email,
+		EmailLogin:    emailLogin,
+		PhoneAppToken: phoneAppToken,
 	}
 	var text, html bytes.Buffer
 	if err := inviteTextTmpl.Execute(&text, data); err != nil {
@@ -305,6 +318,18 @@ func (h *UserHandler) inviteEmailLogin(inv *database.Invite) bool {
 	return database.InviteCreatorMayGrant(creator)
 }
 
+// invitePhoneAppToken reports whether the email may promise the one-time
+// phone-app key: tokens are enabled and the invite's creator may grant access,
+// the condition under which accept mints one. As for inviteEmailLogin, a lookup
+// error leaves the promise out.
+func (h *UserHandler) invitePhoneAppToken(inv *database.Invite) bool {
+	if !h.delivery.serviceTokens() || inv.Email == "" {
+		return false
+	}
+	creator, err := h.store.GetUserByID(inv.CreatedByUserID)
+	return err == nil && database.InviteCreatorMayGrant(creator)
+}
+
 // sendInviteEmail renders and sends the invitation for inv and records the
 // send. It returns a message safe to show an admin: never the body.
 func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite) (sentAt *time.Time, errMsg string) {
@@ -316,7 +341,7 @@ func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite)
 		return nil, "this invitation has no email address"
 	}
 	base := h.delivery.baseURL()
-	msg, err := renderInviteEmail(inv, InviteURL(base, inv.Token), base, h.inviteEmailLogin(inv))
+	msg, err := renderInviteEmail(inv, InviteURL(base, inv.Token), base, h.inviteEmailLogin(inv), h.invitePhoneAppToken(inv))
 	if err != nil {
 		inviteLog.Error("invite email: render failed for invite of %s: %v", logger.SanitizeLogValue(inv.Username), err)
 		return nil, "could not build the invitation email"
@@ -425,6 +450,9 @@ func (h *UserHandler) PublicInvite(c *gin.Context) {
 		"username":    inv.Username,
 		"expires_at":  inv.ExpiresAt,
 		"email_login": h.delivery.policySync() && grantsSSO,
+		// phone_app_token: accepting will mint this guest's own phone-app key
+		// and show it once. A bool, like email_login.
+		"phone_app_token": h.delivery.serviceTokens() && grantsSSO,
 	})
 }
 
@@ -467,6 +495,15 @@ func (h *UserHandler) acceptedInvites() []acceptedInviteView {
 	}
 	return out
 }
+
+// GuestTokenRevoker revokes a user's per-guest Cloudflare service token
+// (userID, reason). Called after a deactivation, never on an email change: the
+// token belongs to the account, not to its address. Best-effort; it never fails
+// the request that triggered it.
+type GuestTokenRevoker func(userID, reason string)
+
+// SetGuestTokenRevoker installs the revoker DeactivateUser calls.
+func (h *UserHandler) SetGuestTokenRevoker(r GuestTokenRevoker) { h.revokeGuestToken = r }
 
 // GuestAccessRevoker ends the invite-granted SSO access (and, when it was added
 // by the sync, the Cloudflare guest-policy entry) for an email a user no longer

@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 package server
 
@@ -72,23 +72,9 @@ func inviteGrantAllowed(store any) func(string) bool {
 // func reads the config snapshot when called.
 func (s *Server) inviteDelivery() *handlers.InviteDelivery {
 	warnGuestAccessNotConfigured(config.Snapshot())
+	warnGuestServiceTokensMisconfigured(config.Snapshot())
 	return &handlers.InviteDelivery{
-		Sender: func() imail.Sender {
-			snap := config.Snapshot()
-			if !snap.InviteMailConfigured() {
-				return nil
-			}
-			sender, err := imail.NewSMTPSender(imail.SMTPConfig{
-				Host: snap.SMTPHost, Port: snap.SMTPPort,
-				Username: snap.SMTPUsername, Password: snap.SMTPPassword,
-				From: snap.SMTPFrom,
-			})
-			if err != nil {
-				inviteAccessLog.Warn("invite email: SMTP settings are invalid, email is off: %v", err)
-				return nil
-			}
-			return sender
-		},
+		Sender: s.inviteMailSender,
 		BaseURL: func() string {
 			snap := config.Snapshot()
 			return snap.InviteBaseURL(s.externalURL)
@@ -97,7 +83,34 @@ func (s *Server) inviteDelivery() *handlers.InviteDelivery {
 			snap := config.Snapshot()
 			return snap.GuestPolicySyncConfigured()
 		},
+		GuestServiceTokensEnabled: func() bool {
+			snap := config.Snapshot()
+			return snap.GuestServiceTokensEnabled()
+		},
 	}
+}
+
+// inviteMailSender returns the configured SMTP sender, or nil when invitation
+// email is not configured or its settings are invalid. It reads the config
+// snapshot when called. mailSenderOverride, when set, replaces it (tests).
+func (s *Server) inviteMailSender() imail.Sender {
+	if s.mailSenderOverride != nil {
+		return s.mailSenderOverride
+	}
+	snap := config.Snapshot()
+	if !snap.InviteMailConfigured() {
+		return nil
+	}
+	sender, err := imail.NewSMTPSender(imail.SMTPConfig{
+		Host: snap.SMTPHost, Port: snap.SMTPPort,
+		Username: snap.SMTPUsername, Password: snap.SMTPPassword,
+		From: snap.SMTPFrom,
+	})
+	if err != nil {
+		inviteAccessLog.Warn("invite email: SMTP settings are invalid, email is off: %v", err)
+		return nil
+	}
+	return sender
 }
 
 // guestAccessDeadEnd reports whether invitation email is on without the

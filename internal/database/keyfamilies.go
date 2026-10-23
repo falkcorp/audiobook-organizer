@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-23
 
@@ -63,6 +63,7 @@ var keyFamilies = []KeyFamily{
 	{"apikey:", "API keys", "internal/database/pebble_store_auth.go"},
 	{"idx:", "secondary indexes for auth, users, sessions, playback, playlists and collections", "internal/database/pebble_store_auth.go"},
 	{"invite:", "user invites", "internal/database/pebble_store_auth.go"},
+	{"guestcftoken:", "per-guest Cloudflare service token records (token id + secret hash, never the secret)", "internal/database/pebble_store_guest_tokens.go"},
 	{"inviteallow:", "SSO sign-in grants for emails of accepted invites", "internal/database/pebble_store_invite_delivery.go"},
 	{"oauthid:", "OAuth identities", "internal/database/oauth_identity.go"},
 	{"role:", "roles", "internal/database/pebble_store_auth.go"},

@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-10-23
 
@@ -212,5 +212,12 @@ func (s *Server) wireLibraryRoutes(
 		// is gone.
 		adminOnly.POST("/admin/recompact-digests",
 			gone(`POST /api/v1/operations/v2 with {"def_id":"maintenance.recompact-activity-digests"}`))
+		// Per-guest Cloudflare service tokens (guest_service_tokens.go): the
+		// list shows ids, owners, status and Cloudflare's last-seen time and
+		// never a secret; the revoke ends one guest's phone-app access. The
+		// revoke is a credential route: no API key may end or (by the revoke
+		// racing a mint) shape a guest's access.
+		adminOnly.GET("/admin/guest-service-tokens", s.handleListGuestServiceTokens)
+		s.credRoute(adminOnly, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.handleRevokeGuestServiceToken)
 	}
 }
