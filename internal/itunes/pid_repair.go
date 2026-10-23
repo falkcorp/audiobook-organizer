@@ -91,6 +91,10 @@ func ComputePIDRepairPlan(store PIDRepairStore, itlPath string, mappings []PathM
 		}
 	}
 
+	// GetAllBookFilesCore returns LIVE rows only, and that is load-bearing here:
+	// a retired row keeps its PID as the provenance the retire's undo restores
+	// from, and the live row on the holder can carry the same PID. Grouping the
+	// retired row in would plan to clear one of the two (see splitRetiredRows).
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan book_files: %w", err)
