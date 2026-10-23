@@ -1,5 +1,5 @@
 // file: internal/database/user_merge.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 5d0a7e3c-91b4-4f26-8c1d-e7a2b6f40935
 // last-edited: 2026-10-23
 
@@ -43,23 +43,47 @@ const UserMergeJournalPrefix = "usermerge:journal:"
 // something else wrote it. Nothing is written for the batch.
 var ErrUserMergeConflict = errors.New("database: a key changed since the user merge was planned")
 
-// UserMergeConflictError names the key that changed.
+// UserMergeConflictError names the key that changed. Key is the raw storage
+// key, which can carry an email address (inviteallow:<email>) or a token
+// (invite:<token>); Error() therefore leaves it out and says the family and the
+// op's position in the batch, because operation rows (readable by anyone with
+// library.view) carry error text. The admin-only journal records Key.
 type UserMergeConflictError struct {
 	Key    string
 	Family string
+	// Index is the op's position in the ApplyUserMergeOps batch.
+	Index int
 }
 
 func (e *UserMergeConflictError) Error() string {
-	return fmt.Sprintf("%s: key %q (%s)", ErrUserMergeConflict, e.Key, e.Family)
+	return fmt.Sprintf("%s: %s row, op %d of the batch", ErrUserMergeConflict, e.Family, e.Index)
+}
+
+// AdminDetail is the text for the admin-only journal: Error() plus the key.
+func (e *UserMergeConflictError) AdminDetail() string {
+	return fmt.Sprintf("%s (key %q)", e.Error(), e.Key)
 }
 
 // Unwrap lets errors.Is(err, ErrUserMergeConflict) match.
 func (e *UserMergeConflictError) Unwrap() error { return ErrUserMergeConflict }
 
-// UserMergeOp is one raw key write of a user merge: the full prior value
-// (Before, or BeforeAbsent for "the key did not exist") and either the new
-// value (After) or a delete. The before-image is what undo restores and what
-// the digest's before-hash covers.
+// UserMergeOp is one raw key write of a user merge. Two kinds:
+//
+//   - A whole-value op: the full prior value (Before, or BeforeAbsent for "the
+//     key did not exist") and either the new value (After) or a delete. The
+//     before-image is what undo restores and what the digest's before-hash
+//     covers.
+//   - An owner-field op (OwnerField set): the row stays where it is and only
+//     one top-level string field changes from OwnerFrom to OwnerTo, in the row
+//     as it is NOW. Everything else in the row (an API key's LastUsedAt and
+//     UseCount, which every request rewrites) is neither compared nor
+//     overwritten, in apply or in undo. Before, After and Delete are unused.
+//
+// Unit groups the ops that must stand or fall together: a (user, book)'s
+// ubs: row, its status index entries and its upos: rows; a credential's row and
+// its index entries. A unit is written in one batch and undone only while its
+// primary rows are still as the merge left them. Derived marks an op on an
+// index entry: it is rebuilt to match its unit's rows, never compared.
 type UserMergeOp struct {
 	Key          string `json:"key"`
 	Family       string `json:"family"`
@@ -68,7 +92,17 @@ type UserMergeOp struct {
 	BeforeAbsent bool   `json:"before_absent,omitempty"`
 	After        []byte `json:"after,omitempty"`
 	Delete       bool   `json:"delete,omitempty"`
+
+	OwnerField string `json:"owner_field,omitempty"`
+	OwnerFrom  string `json:"owner_from,omitempty"`
+	OwnerTo    string `json:"owner_to,omitempty"`
+
+	Unit    string `json:"unit,omitempty"`
+	Derived bool   `json:"derived,omitempty"`
 }
+
+// IsOwnerOp reports whether o changes one owner field of a row in place.
+func (o UserMergeOp) IsOwnerOp() bool { return o.OwnerField != "" }
 
 // UserMergeValueHash is the digest unit for one side of an op: the sha256 of
 // the value, or the fixed token "absent". Present-but-empty and absent differ.
@@ -80,11 +114,54 @@ func UserMergeValueHash(value []byte, present bool) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// BeforeHash is UserMergeValueHash of the op's before-image.
-func (o UserMergeOp) BeforeHash() string { return UserMergeValueHash(o.Before, !o.BeforeAbsent) }
+func ownerHash(field, owner string) string {
+	return UserMergeValueHash([]byte("owner:"+field+"="+owner), true)
+}
 
-// AfterHash is UserMergeValueHash of the value the op leaves behind.
-func (o UserMergeOp) AfterHash() string { return UserMergeValueHash(o.After, !o.Delete) }
+// BeforeHash is UserMergeValueHash of the op's before-image; for an owner-field
+// op, the hash of the owner it expects.
+func (o UserMergeOp) BeforeHash() string {
+	if o.IsOwnerOp() {
+		return ownerHash(o.OwnerField, o.OwnerFrom)
+	}
+	return UserMergeValueHash(o.Before, !o.BeforeAbsent)
+}
+
+// AfterHash is UserMergeValueHash of the value the op leaves behind; for an
+// owner-field op, the hash of the owner it writes. Neither covers any other
+// field of the row, so a row used (not re-owned) between preview and apply
+// does not change the digest.
+func (o UserMergeOp) AfterHash() string {
+	if o.IsOwnerOp() {
+		return ownerHash(o.OwnerField, o.OwnerTo)
+	}
+	return UserMergeValueHash(o.After, !o.Delete)
+}
+
+// OwnerInverse is the owner-field op that puts the owner back.
+func (o UserMergeOp) OwnerInverse() UserMergeOp {
+	o.OwnerFrom, o.OwnerTo = o.OwnerTo, o.OwnerFrom
+	return o
+}
+
+// OwnerState classifies a row against an owner-field op: "from" (still the
+// before-owner), "to" (already the after-owner), or "other" (the row is gone,
+// unreadable, or owned by someone else).
+func (o UserMergeOp) OwnerState(row []byte) string {
+	if row == nil {
+		return "other"
+	}
+	owner, err := JSONStringField(row, o.OwnerField)
+	switch {
+	case err != nil:
+		return "other"
+	case owner == o.OwnerFrom:
+		return "from"
+	case owner == o.OwnerTo:
+		return "to"
+	}
+	return "other"
+}
 
 // UserDataRow is one raw key and value.
 type UserDataRow struct {
@@ -185,24 +262,60 @@ func RekeyUserKey(key, from, to string) (string, bool) {
 }
 
 // RewriteJSONField returns value with the top-level string field set to to, and
-// every other field byte-for-byte as it was (a field this build does not know
-// survives). The old value of the field is returned too so a caller can check
-// it was the expected user.
+// every other byte of value exactly as it was: field order, spacing, and any
+// field this build does not know about. (Re-marshalling through a map would
+// reorder the keys, so undoing a rewrite could not give the original bytes
+// back.) A field that is absent is appended. The old value of the field is
+// returned too so a caller can check it was the expected user.
 func RewriteJSONField(value []byte, field, to string) (out []byte, old string, err error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(value, &m); err != nil {
-		return nil, "", fmt.Errorf("decode: %w", err)
-	}
-	if raw, ok := m[field]; ok {
-		_ = json.Unmarshal(raw, &old)
-	}
 	enc, err := json.Marshal(to)
 	if err != nil {
 		return nil, "", err
 	}
-	m[field] = enc
-	out, err = json.Marshal(m)
-	return out, old, err
+	dec := json.NewDecoder(bytes.NewReader(value))
+	if tok, err := dec.Token(); err != nil {
+		return nil, "", fmt.Errorf("decode: %w", err)
+	} else if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, "", errors.New("decode: not a JSON object")
+	}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, "", fmt.Errorf("decode: %w", err)
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, "", fmt.Errorf("decode: %w", err)
+		}
+		if key, _ := keyTok.(string); key == field {
+			end := int(dec.InputOffset())
+			start := end - len(raw)
+			_ = json.Unmarshal(raw, &old)
+			out = append(out, value[:start]...)
+			out = append(out, enc...)
+			out = append(out, value[end:]...)
+			return out, old, nil
+		}
+	}
+	// Absent: insert before the closing brace of the top-level object.
+	closeAt := bytes.LastIndexByte(value, '}')
+	if closeAt < 0 {
+		return nil, "", errors.New("decode: not a JSON object")
+	}
+	key, err := json.Marshal(field)
+	if err != nil {
+		return nil, "", err
+	}
+	empty := len(bytes.TrimSpace(value[bytes.IndexByte(value, '{')+1:closeAt])) == 0
+	out = append(out, value[:closeAt]...)
+	if !empty {
+		out = append(out, ',')
+	}
+	out = append(out, key...)
+	out = append(out, ':')
+	out = append(out, enc...)
+	out = append(out, value[closeAt:]...)
+	return out, "", nil
 }
 
 // JSONStringField reads one top-level string field of a JSON object ("" when
@@ -218,6 +331,11 @@ func JSONStringField(value []byte, field string) (string, error) {
 	}
 	return s, nil
 }
+
+// EmailSourceIsTrusted reports whether source records a path that proves the
+// address belongs to the account (the store's own notion of a verified
+// address), for callers outside this package that plan around it.
+func EmailSourceIsTrusted(source string) bool { return trustedEmailSource(source) }
 
 // UserIdentityFields is the part of a user row the merge changes.
 type UserIdentityFields struct {
@@ -375,13 +493,38 @@ func (p *PebbleStore) ScanUserData(userID string) (*UserData, error) {
 func (p *PebbleStore) ApplyUserMergeOps(ops []UserMergeOp, journalKey string, journal []byte) error {
 	userMergeApplyMu.Lock()
 	defer userMergeApplyMu.Unlock()
+	// Every authenticated request rewrites its API key row (use count, last
+	// used) under apiKeyMu; an owner-field rewrite is the same kind of
+	// read-modify-write, so it takes the same lock or one of the two is lost.
+	if slices.ContainsFunc(ops, func(o UserMergeOp) bool { return strings.HasPrefix(o.Key, "apikey:") }) {
+		p.apiKeyMu.Lock()
+		defer p.apiKeyMu.Unlock()
+	}
 	b := p.db.NewBatch()
 	defer func() { _ = b.Close() }()
 	for i := range ops {
 		op := &ops[i]
+		conflict := &UserMergeConflictError{Key: op.Key, Family: op.Family, Index: i}
 		cur, err := p.GetRaw(op.Key)
 		if err != nil {
 			return err
+		}
+		if op.IsOwnerOp() {
+			switch op.OwnerState(cur) {
+			case "from":
+				out, _, err := RewriteJSONField(cur, op.OwnerField, op.OwnerTo)
+				if err != nil {
+					return conflict
+				}
+				if err := b.Set([]byte(op.Key), out, nil); err != nil {
+					return err
+				}
+			case "to":
+				// Already re-owned: a chunk resumed after a crash.
+			default:
+				return conflict
+			}
+			continue
 		}
 		present := cur != nil
 		switch {
@@ -396,7 +539,7 @@ func (p *PebbleStore) ApplyUserMergeOps(ops []UserMergeOp, journalKey string, jo
 		case UserMergeValueHash(cur, present) == op.AfterHash():
 			// Already what the op writes: a chunk resumed after a crash.
 		default:
-			return &UserMergeConflictError{Key: op.Key, Family: op.Family}
+			return conflict
 		}
 	}
 	if journalKey != "" {

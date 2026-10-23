@@ -1,5 +1,5 @@
 // file: web/src/pages/UserMerge.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f3a9c15-2d68-4e04-b1a7-96c0e5d83f41
 // last-edited: 2026-10-23
 
@@ -54,6 +54,7 @@ const makePlan = (over: Partial<UserMergePlan> = {}): UserMergePlan => ({
   ],
   owner_identity_holder: 'survivor',
   owner_identity_on_absorbed: false,
+  owner_identity_ack_required: false,
   roles_gained: [],
   email_outcome: '',
   warnings: [],
@@ -118,7 +119,7 @@ describe('UserMergeDialog', () => {
         calls.push({ url: String(url), body: init?.body as string | undefined });
         if (String(url).endsWith('/preview'))
           return jsonResponse({
-            data: makePlan({ owner_identity_holder: 'absorbed', owner_identity_on_absorbed: true }),
+            data: makePlan({ owner_identity_holder: 'absorbed', owner_identity_on_absorbed: true, owner_identity_ack_required: true }),
           });
         return jsonResponse({ data: { operation_id: 'op-8' } }, 202);
       })

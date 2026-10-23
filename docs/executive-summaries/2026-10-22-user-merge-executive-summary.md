@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-user-merge-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: e2a85c31-7d94-4b06-8f1c-6a30d9e4b752 -->
 <!-- last-edited: 2026-10-23 -->
 
@@ -22,8 +22,12 @@ stays and when to run it.
 - **Preview before anything is written.** "Merge into..." shows exactly what
   would move, where both accounts have progress on the same book and which one
   wins, and anything that would stop the merge. It also says which account holds
-  the owner's sign-in. If that is the account being merged away, the admin has
-  to tick a box saying they understand it moves.
+  the owner's sign-in. If that is the account being merged away, or the tool
+  cannot tell (no owner address is set, or a sign-in has no address to compare),
+  the admin has to tick a box saying they understand it moves. If the account
+  that goes away is the only one that had verified an email address, the
+  account that stays keeps the address as verified; the preview says so, and
+  warns when an address will be left with no verified holder.
 - **Only what was previewed runs.** The confirm button carries a fingerprint of
   the preview. If either account changed in between, the merge does not run and
   the new preview is shown instead.
@@ -31,19 +35,25 @@ stays and when to run it.
   listening data move to the account that stays. It cannot be switched back on by
   hand; undoing the merge is the way back.
 - **Undo.** Every change is recorded with what it replaced. Undoing puts things
-  back, but anything either account changed after the merge is left alone and
-  reported, never overwritten. When sign-ins or keys move back, the account that
-  stayed is signed out of the website and Audiobookshelf apps.
+  back, but a book either account listened to after the merge is left exactly as
+  it is and reported (its progress, its status and its positions are never
+  split), and anything else changed since is left alone and reported, never
+  overwritten. A sign-in or API key goes back to the account it came from with
+  only its owner changed, so uses it gathered since are kept. When sign-ins or
+  keys move back, the account that stayed is signed out of the website and
+  Audiobookshelf apps.
 - **Safe to interrupt.** If the server stops part way, the merge can be resumed
-  from where it stopped.
+  from where it stopped. Resuming plans the work that is left again against the
+  accounts as they are, so a change made while it was stopped does not block it.
 
 ## Who can use it
 
 Only a signed-in admin, from the website. API keys and Audiobookshelf tokens are
 refused, and when an owner is configured the owner gate applies too. The server
 will not start a merge from anywhere else, even through the general operations
-page. The record of a running merge shows only counts, never names or email
-addresses.
+page. The record of a merge on the operations page shows only counts and account
+ids, never names, email addresses or the rows involved; those appear only on the
+admin Users page.
 
 ## Related fix
 

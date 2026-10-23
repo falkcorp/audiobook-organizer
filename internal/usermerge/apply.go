@@ -1,5 +1,5 @@
 // file: internal/usermerge/apply.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f6a0c82-d417-4b95-8e23-5a9c1e7d4b06
 // last-edited: 2026-10-23
 
@@ -8,7 +8,10 @@ package usermerge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -23,7 +26,8 @@ type ApplyRequest struct {
 	AbsorbedID string
 	Digest     string
 	// AcknowledgeOwnerIdentity lets the merge proceed when the account being
-	// merged away holds the owner's sign-in (Plan.OwnerIdentityOnAbsorbed).
+	// merged away holds the owner's sign-in, or when the plan cannot tell
+	// (Plan.OwnerIdentityAckRequired).
 	AcknowledgeOwnerIdentity bool
 }
 
@@ -72,6 +76,38 @@ func lockKeys(ops []database.UserMergeOp, a, b string) []database.UserBookKey {
 	return out
 }
 
+// chunkEnd is where the chunk starting at start ends: size ops, stretched to the
+// end of the unit it would otherwise cut in two (a unit is one batch).
+func chunkEnd(ops []database.UserMergeOp, start, size int) int {
+	end := min(start+size, len(ops))
+	for end < len(ops) && end > start && ops[end].Unit != "" && ops[end].Unit == ops[end-1].Unit {
+		end++
+	}
+	return end
+}
+
+// tagUnits makes the units of a freshly planned batch distinct from every unit
+// already in the journal (a straggler sweep or a resume re-plan can plan a book
+// the first plan also planned, and undo groups ops by unit).
+func tagUnits(ops []database.UserMergeOp, tag string) {
+	for i := range ops {
+		if ops[i].Unit != "" {
+			ops[i].Unit += "@" + tag
+		}
+	}
+}
+
+// failText is the error text for the journal, which only the admin-gated Users
+// merge routes serve: the error plus, for a storage conflict, the raw key that
+// the error itself leaves out (it reaches operation rows).
+func failText(err error) string {
+	var ce *database.UserMergeConflictError
+	if errors.As(err, &ce) {
+		return fmt.Sprintf("%s [%s]", err.Error(), ce.AdminDetail())
+	}
+	return err.Error()
+}
+
 // Apply merges the absorbed account into the survivor. It re-plans, refuses on
 // a refusal or a digest that is not the preview's, locks the absorbed account
 // and ends its sessions, takes the merge lock and the per-(user, book) stripes,
@@ -97,7 +133,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest, prog Progress) (*
 	if req.Digest == "" || req.Digest != plan.Digest {
 		return nil, ErrDigestMismatch
 	}
-	if plan.OwnerIdentityOnAbsorbed && !req.AcknowledgeOwnerIdentity {
+	if plan.OwnerIdentityAckRequired && !req.AcknowledgeOwnerIdentity {
 		return nil, ErrOwnerIdentityNotAcknowledged
 	}
 
@@ -165,6 +201,15 @@ func (s *Service) Resume(ctx context.Context, journalID string, prog Progress) (
 	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+	// The ops left in the journal were planned from the accounts as they were
+	// then; whatever stopped the first run (a restart, a cancel, a write to a row
+	// they compare against) may have changed what they expect. Plan the remainder
+	// again, here, under the merge lock, from what the absorbed account holds now.
+	if err := s.replanRemainder(ctx, j); err != nil {
+		j.Error = failText(err)
+		_ = s.save(j)
+		return j, err
+	}
 	unlock := database.LockUserBookStates(lockKeys(j.Ops, j.SurvivorID, j.AbsorbedID)...)
 	defer unlock()
 	// A resume gets a fresh sweep budget: rows left over from a run that gave up
@@ -174,6 +219,26 @@ func (s *Service) Resume(ctx context.Context, journalID string, prog Progress) (
 		return j, err
 	}
 	return j, nil
+}
+
+// replanRemainder replaces Ops[Cursor:], the writes not yet made, with a plan of
+// whatever the absorbed account still holds. Everything before the cursor is
+// written and stays as journaled. This is safe to repeat because each unit is
+// one batch (nothing is ever half-moved) and the one non-idempotent family, the
+// listen-seconds sum, is a unit.
+func (s *Service) replanRemainder(ctx context.Context, j *Journal) error {
+	if j.Cursor >= len(j.Ops) {
+		return nil
+	}
+	ops, err := s.stragglerOps(ctx, j)
+	if err != nil {
+		return err
+	}
+	tagUnits(ops, "r"+strconv.Itoa(j.Cursor))
+	left := len(j.Ops) - j.Cursor
+	j.Ops = append(slices.Clone(j.Ops[:j.Cursor]), ops...)
+	j.Warnings = append(j.Warnings, fmt.Sprintf("resume planned the %d writes that were left again (%d now), against the accounts as they are", left, len(ops)))
+	return s.save(j)
 }
 
 // lockAbsorbed locks the absorbed account (a field-scoped write that bumps its
@@ -215,7 +280,7 @@ func (s *Service) revokeSessions(userID string) error {
 // straggler sweep, then the applied mark. The caller holds the locks.
 func (s *Service) drive(ctx context.Context, j *Journal, prog Progress) error {
 	fail := func(err error) error {
-		j.Error = err.Error()
+		j.Error = failText(err)
 		_ = s.save(j) // best effort: the journal still says where it stopped
 		return err
 	}
@@ -280,7 +345,7 @@ func (s *Service) applyRemaining(ctx context.Context, j *Journal, prog Progress)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		end := min(j.Cursor+chunkSize, len(j.Ops))
+		end := chunkEnd(j.Ops, j.Cursor, chunkSize)
 		next := *j
 		next.Cursor, next.UpdatedAt = end, s.now()
 		data, err := json.Marshal(&next)
@@ -303,6 +368,7 @@ func (s *Service) sweepOnce(ctx context.Context, j *Journal) (bool, error) {
 	if err != nil || len(ops) == 0 {
 		return false, err
 	}
+	tagUnits(ops, "s"+strconv.Itoa(len(j.Ops)))
 	j.Ops = append(j.Ops, ops...)
 	j.Sweeps++
 	return true, s.save(j)
