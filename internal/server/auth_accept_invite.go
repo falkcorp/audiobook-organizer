@@ -1,5 +1,5 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 // last-edited: 2026-10-23
 
@@ -91,12 +91,16 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		return
 	}
 
-	// The response may carry the guest's one-time phone-app key: never cache it.
-	c.Header("Cache-Control", "no-store")
 	// Per-guest Cloudflare service token (CF_GUEST_SERVICE_TOKENS): minted here,
 	// not in the background, because the secret can only reach the guest in this
 	// response. It never fails the accept; nil when the feature does not apply.
 	phoneApp := s.mintGuestServiceToken(c.Request.Context(), req.Token, user)
+	if phoneApp != nil {
+		// The response carries the guest's one-time phone-app key (or the
+		// reason there is none): never cache it. Set only then, so with the
+		// feature off the response is byte-for-byte what it always was.
+		c.Header("Cache-Control", "no-store")
+	}
 
 	handlers.SetSessionCookie(c, sess.ID, sess.ExpiresAt)
 	// Session token is delivered via the HttpOnly cookie only — never in the

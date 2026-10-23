@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
 // last-edited: 2026-10-23
 
@@ -359,8 +359,8 @@ func TestPublicInvite_OnlyLiveTokensAndOnlyAllowedFields(t *testing.T) {
 			t.Fatalf("public invite returned extra field %q", k)
 		}
 	}
-	if pub["phone_app_token"] != false {
-		t.Fatalf("phone_app_token = %v, want false with per-guest tokens off", pub["phone_app_token"])
+	if _, present := pub["phone_app_token"]; present {
+		t.Fatalf("phone_app_token = %v, want the field absent with per-guest tokens off", pub["phone_app_token"])
 	}
 	if pub["username"] != "guest" || pub["email_login"] != false {
 		t.Fatalf("public invite = %v (email_login must be false without a policy sync)", pub)

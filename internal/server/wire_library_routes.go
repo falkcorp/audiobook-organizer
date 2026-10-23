@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-10-23
 
@@ -199,12 +199,14 @@ func (s *Server) wireLibraryRoutes(
 		// is gone.
 		adminOnly.POST("/admin/recompact-digests",
 			gone(`POST /api/v1/operations/v2 with {"def_id":"maintenance.recompact-activity-digests"}`))
-		// Per-guest Cloudflare service tokens (guest_service_tokens.go): the
-		// list shows ids, owners, status and Cloudflare's last-seen time and
-		// never a secret; the revoke ends one guest's phone-app access. The
-		// revoke is a credential route: no API key may end or (by the revoke
-		// racing a mint) shape a guest's access.
-		adminOnly.GET("/admin/guest-service-tokens", s.handleListGuestServiceTokens)
-		s.credRoute(adminOnly, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.handleRevokeGuestServiceToken)
+		// Per-guest Cloudflare service tokens (guest_service_tokens.go). All three
+		// are credential routes, GET included: the list names guests and their
+		// token ids and makes the server call Cloudflare, and the plan reads the
+		// real books policy, so no API key (a leaked or delegated one) may use
+		// them; the revoke ends one guest's phone-app access, and the plan and
+		// revoke also need the owner once one is set (ownerGateWhenOwnerSet).
+		s.credRoute(adminOnly, http.MethodGet, "/admin/guest-service-tokens", s.handleListGuestServiceTokens)
+		s.credRoute(adminOnly, http.MethodGet, "/admin/guest-service-tokens/plan", s.ownerGateWhenOwnerSet(), s.handlePlanGuestServiceToken)
+		s.credRoute(adminOnly, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.ownerGateWhenOwnerSet(), s.handleRevokeGuestServiceToken)
 	}
 }

@@ -6,4 +6,10 @@
       (2) hook `revokeGuestServiceToken` into user deletion when a user-delete
       path exists (none on main today);
       (3) first live run against the real Cloudflare API with the extra
-      permission, to confirm the `last_seen_at` field and the `forever` duration.
+      permission, to confirm the `last_seen_at` field and the `forever` duration;
+      (4) `cfservicetoken.Client.Revoke` should check the exact name
+      `aorg-guest-<user id>` of the record it is revoking, not just the
+      `aorg-guest-` prefix;
+      (5) the accept request waits on Cloudflare for up to 45 s while minting:
+      consider a shorter bound, or minting after the response with the key
+      delivered another way.
