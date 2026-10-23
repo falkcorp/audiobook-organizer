@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.7.3
+// version: 1.8.0
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -78,6 +78,7 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/audiobooks/:id/versions/:vid/restore": "restores a book version",
 	"POST /api/v1/books/:id/versions/:vid/restore":      "retired: 410 Gone stub, touches nothing",
 	"POST /api/v1/dedup/reset-acoustid":                 "clears dedup data",
+	"POST /api/v1/master-lists":                         "admin-only upload of a book list (ISBN/ASIN/read status) into the list's own keyspace; names no path and writes no book or user state",
 	"POST /api/v1/repairs/:fixer/plan":                  "plans a library repair",
 	"POST /api/v1/repairs/:fixer/apply":                 "applies a library repair",
 	"POST /api/v1/repairs/:fixer/owner-apply":           "owner-gated in the handler by a verified Cloudflare Access identity",

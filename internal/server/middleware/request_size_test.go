@@ -1,6 +1,7 @@
 // file: internal/server/middleware/request_size_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f5ed221-2f04-49aa-86f7-f63fa1732b2d
+// last-edited: 2026-10-23
 
 package middleware
 
@@ -30,6 +31,8 @@ func TestSelectBodyLimit(t *testing.T) {
 	assert.Equal(t, int64(10), selectBodyLimit("/api/v1/backup/create", 1, 10))
 	assert.Equal(t, int64(10), selectBodyLimit("/api/v1/import/file", 1, 10))
 	assert.Equal(t, int64(1), selectBodyLimit("/api/v1/config", 1, 10))
+	assert.Equal(t, int64(10), selectBodyLimit("/api/v1/master-lists", 1, 10))
+	assert.Equal(t, int64(1), selectBodyLimit("/api/v1/master-lists/other", 1, 10))
 }
 
 func TestMaxRequestBodySize_Middleware(t *testing.T) {
