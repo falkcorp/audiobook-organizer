@@ -1,7 +1,7 @@
 // file: internal/server/middleware/log_redact.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f83a7613-f71d-4a0c-ae37-7f7f3ccf8929
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package middleware
 
@@ -80,9 +80,14 @@ func RedactLogPath(pathWithQuery string) string {
 // way net/http parses a request: path is URL.Path (decoded once), query is
 // URL.RawQuery. The path is redacted with "?" as path text and any "?" left in
 // it is written as %3F, so the line's first "?" is always the real query
-// delimiter and RedactQueryCredentials sees exactly the query.
+// delimiter and RedactQueryCredentials sees exactly the query. Credential keys
+// after a "?" inside the path are masked too, before it is escaped.
 func RedactLogRequestPath(path, rawQuery string) string {
-	p := strings.ReplaceAll(logging.RedactInvitePath(path), "?", "%3F")
+	// A "?" in the decoded path (a %3F on the wire) is not a delimiter, but a
+	// client can still put a credential after it (/x/cover%3Ftoken=...), so the
+	// text after the first one is masked by key as a query would be before the
+	// "?" is escaped.
+	p := strings.ReplaceAll(RedactQueryCredentials(logging.RedactInvitePath(path)), "?", "%3F")
 	if rawQuery == "" {
 		return p
 	}
@@ -94,13 +99,14 @@ func RedactLogRequestPath(path, rawQuery string) string {
 // URL as it was when the request arrived (a later handler may rewrite URL.Path,
 // which is why the request's own URL.RequestURI is not used here). The known
 // query suffix is cut off first, so a "?" that came from a decoded %3F stays in
-// the path. When the request is not available the string cannot be split with
-// certainty and is read as RedactLogPath does; when its query does not match
-// what gin appended, nothing can be shown to be safe and only "/[REDACTED]" is
-// logged.
+// the path. When the request is not available the string cannot be split from
+// its query with certainty (a "?" could be a decoded %3F or the delimiter, and
+// reading it either way leaks the other shape), and when its query does not
+// match what gin appended the same holds: nothing can be shown to be safe, so
+// only "/[REDACTED]" is logged.
 func logFormatterPath(param gin.LogFormatterParams) string {
 	if param.Request == nil || param.Request.URL == nil {
-		return RedactLogPath(param.Path)
+		return "/" + logging.InviteTokenRedacted
 	}
 	raw := param.Request.URL.RawQuery
 	if raw == "" {
