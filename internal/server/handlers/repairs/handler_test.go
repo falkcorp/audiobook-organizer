@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-10-22
 
@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
@@ -643,4 +644,40 @@ func TestPlanOnlyFixer_ApplyRoutesRefuse(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
 	require.Len(t, enq.calls, 1)
 	require.Equal(t, repairs.PlanOpID, enq.calls[0].defID)
+}
+
+// A legacy plan whose stored record is damaged (migration 66 leaves it alone)
+// is the rerun 409 against a REAL store too, not a 500: the handler's
+// OpStore here is Pebble, whose GetOperationV2 reports the damage.
+func TestPlanRowsRoute_DamagedOperationRecordInRealStoreIsAConflict(t *testing.T) {
+	dir := t.TempDir()
+	st, err := database.NewPebbleStore(dir)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+	db, err := pebble.Open(dir, &pebble.Options{})
+	require.NoError(t, err)
+	torn := `{"ID":"op-torn","DefID":"` + repairs.PlanOpID + `","Status":"completed","QueuedAt":"garbage","ResultData":"{}"}`
+	require.NoError(t, db.Set([]byte("opv2:op:op-torn"), []byte(torn), pebble.Sync))
+	require.NoError(t, db.Close())
+	st, err = database.NewPebbleStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	_, err = st.GetOperationV2("op-torn")
+	require.ErrorIs(t, err, database.ErrOpRecordUndecodable, "the torn record must be found under the operation's key")
+
+	reg := repairs.NewRegistry()
+	require.NoError(t, reg.Register(stubFixer{id: "version-group-primary-repair"}))
+	h := New(reg, &fakeEnqueuer{}, st)
+	r := gin.New()
+	r.Use(callerWith(&database.User{ID: "u-editor", Username: "editor"}, auth.PermLibraryEditMetadata))
+	g := r.Group("/api/v1")
+	g.GET("/repairs/:fixer/plan/:op_id/rows", h.ListPlanRows)
+	g.POST("/repairs/:fixer/apply", h.StartApply)
+
+	w := do(r, http.MethodGet, "/api/v1/repairs/version-group-primary-repair/plan/op-torn/rows", "")
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply", `{"plan_op_id":"op-torn","row_ids":["r"]}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
 }

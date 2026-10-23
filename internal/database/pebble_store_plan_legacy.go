@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_plan_legacy.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d13d697-8014-4ff8-83c0-766ee1b5acd8
 // last-edited: 2026-10-22
 
@@ -34,10 +34,16 @@ type LegacyPlanStrip struct {
 	Stripped int
 	// Unreadable is how many results were not JSON objects, left untouched.
 	Unreadable int
-	// UnreadableOps is how many operation records could not be decoded at all
-	// (a value that is not valid JSON for an operation row). They are counted
-	// and skipped: one corrupt record must not stop the boot that runs this.
+	// UnreadableOps is how many operation records were counted and skipped
+	// because they cannot be trusted or rewritten: stored bytes that do not
+	// decode as an operation (bad JSON, a wrong-typed member, a time that does
+	// not parse), and a record stored under a key other than its own id. One
+	// such record must not stop the boot that runs this. Each is Warn-logged.
 	UnreadableOps int
+	// HollowOps is how many stored records decode but carry no id at all (the
+	// hollow shells the hollow-operation sweep removes). They cannot be a plan and are not
+	// damage worth a warning each; they are counted here and logged at Debug.
+	HollowOps int
 	// BytesBefore and BytesAfter are the total size of the stripped results.
 	BytesBefore, BytesAfter int64
 }
@@ -56,8 +62,10 @@ type LegacyPlanStrip struct {
 // SetOperationV2Result, so the opv2 row, its timeline index and the opv3 run
 // record change together.
 //
-// An operation record whose bytes cannot be decoded is counted in
-// UnreadableOps and skipped; a read, listing or write error is returned.
+// An operation record whose bytes cannot be decoded, or that is stored under
+// another record's id, is counted in UnreadableOps and skipped; one with no id
+// is counted in HollowOps and skipped; a read, listing or write error is
+// returned.
 func (p *PebbleStore) StripLegacyPlanRows() (LegacyPlanStrip, error) {
 	var rep LegacyPlanStrip
 	after := ""
@@ -83,14 +91,27 @@ func (p *PebbleStore) StripLegacyPlanRows() (LegacyPlanStrip, error) {
 			// decodes it whole and needs its timestamps for the timeline index:
 			// a plan whose record does not decode could not be rewritten
 			// anyway, so it is counted here with the rest.
-			row, _, err := p.getOpV2Raw(id)
+			row, _, err := p.legacyPlanStripGet(id)
 			if err != nil {
+				if errors.Is(err, errOpV2NoID) {
+					rep.HollowOps++
+					legacyPlanLog.Debug("legacy plan strip: operation key %s holds a record with no id; skipped", id)
+					continue
+				}
 				if errors.Is(err, errOpsV3Undecodable) {
 					rep.UnreadableOps++
 					legacyPlanLog.Warn("legacy plan strip: operation %s is not a decodable record; skipped: %v", id, err)
 					continue
 				}
 				return rep, fmt.Errorf("read operation %s: %w", id, err)
+			}
+			if row != nil && row.ID != id {
+				// The record's own id is not the key it sits under. The rewrite
+				// below writes by id, so trusting row.ID could put the result
+				// under another operation's key.
+				rep.UnreadableOps++
+				legacyPlanLog.Warn("legacy plan strip: operation key %s holds a record whose id is %q; skipped", id, row.ID)
+				continue
 			}
 			if row == nil || row.DefID != LegacyPlanOpDefID || row.ResultData == nil {
 				continue
@@ -99,21 +120,33 @@ func (p *PebbleStore) StripLegacyPlanRows() (LegacyPlanStrip, error) {
 			out, changed, err := stripLegacyPlanRows(*row.ResultData)
 			if err != nil {
 				rep.Unreadable++
-				legacyPlanLog.Warn("legacy plan strip: result of operation %s is not a JSON object; left as it is: %v", row.ID, err)
+				legacyPlanLog.Warn("legacy plan strip: result of operation %s is not a JSON object; left as it is: %v", id, err)
 				continue
 			}
 			if !changed {
 				continue
 			}
 			before := len(*row.ResultData)
-			if err := p.SetOperationV2Result(row.ID, out); err != nil {
-				return rep, fmt.Errorf("rewrite plan %s: %w", row.ID, err)
+			if err := p.SetOperationV2Result(id, out); err != nil {
+				return rep, fmt.Errorf("rewrite plan %s: %w", id, err)
 			}
 			rep.Stripped++
 			rep.BytesBefore += int64(before)
 			rep.BytesAfter += int64(len(out))
 		}
 	}
+}
+
+// legacyPlanStripGetHook, when a test sets it, replaces the read of one
+// operation record in StripLegacyPlanRows, so a test can make the read fail.
+// It is nil in production and only tests assign it.
+var legacyPlanStripGetHook func(id string) (*OperationV2Row, []byte, error)
+
+func (p *PebbleStore) legacyPlanStripGet(id string) (*OperationV2Row, []byte, error) {
+	if legacyPlanStripGetHook != nil {
+		return legacyPlanStripGetHook(id)
+	}
+	return p.getOpV2Raw(id)
 }
 
 // stripLegacyPlanRows returns result without its top-level "rows" member, and

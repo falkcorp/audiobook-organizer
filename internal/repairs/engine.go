@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.24.2
+// version: 1.24.3
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-22
 
@@ -249,6 +249,12 @@ var (
 // old way (rows inside the op result) is ErrPlanLegacyFormat.
 func LoadPlan(r OpReader, rs database.OpRowStore, planOpID, fixerID string) (*PlanResult, error) {
 	row, err := r.GetOperationV2(planOpID)
+	if errors.Is(err, database.ErrOpRecordUndecodable) {
+		// The stored record itself is damaged (a torn write, a time that does
+		// not parse), so the plan cannot be read: run it again, as for a
+		// summary that does not decode.
+		return nil, fmt.Errorf("%w: plan op %s: %w", ErrPlanSummaryUnreadable, planOpID, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("repairs: read plan op %s: %w", planOpID, err)
 	}

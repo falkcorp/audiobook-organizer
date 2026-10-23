@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.33.3
+// version: 3.34.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-22
 
@@ -249,11 +249,40 @@ func (p *PebbleStore) ListQueuedOperationsV2() (rows []OperationV2Row, err error
 	return result, iter.Error()
 }
 
-// GetOperationV2 returns a single operation by id.
-func (p *PebbleStore) GetOperationV2(id string) (*OperationV2Row, error) {
-	var row OperationV2Row
-	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+// ErrOpRecordUndecodable is matched (errors.Is) by the error GetOperationV2
+// returns when the stored bytes of an operation row are not a decodable
+// operation: bad JSON, a wrong-typed member, a time that does not parse. It is
+// how a caller tells damaged data from a failed read. The error's text and the
+// decode error under it (errors.As to a *time.ParseError, a *json.SyntaxError,
+// ...) are the ones json.Unmarshal produced; the sentinel is only added.
+var ErrOpRecordUndecodable = errors.New("operation record does not decode")
+
+// opRecordDecodeError is a decode failure that says so to errors.Is without
+// changing its message or hiding the error under it from errors.As.
+type opRecordDecodeError struct{ err error }
+
+func (e *opRecordDecodeError) Error() string { return e.err.Error() }
+func (e *opRecordDecodeError) Unwrap() error { return e.err }
+func (e *opRecordDecodeError) Is(target error) bool {
+	return target == ErrOpRecordUndecodable
+}
+
+// GetOperationV2 returns a single operation by id. A missing row, and a stored
+// record with no id, are (nil, nil). A record whose bytes do not decode is an
+// error that matches ErrOpRecordUndecodable; any other error is a failed read.
+func (p *PebbleStore) GetOperationV2(id string) (_ *OperationV2Row, err error) {
+	defer recoverPebbleClosed("GetOperationV2", &err)
+	val, closer, err := p.db.Get(opv2OpKey(id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
+	}
+	defer closer.Close()
+	var row OperationV2Row
+	if err := json.Unmarshal(val, &row); err != nil {
+		return nil, &opRecordDecodeError{err: err}
 	}
 	if row.ID == "" {
 		return nil, nil

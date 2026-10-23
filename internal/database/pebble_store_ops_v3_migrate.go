@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_migrate.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e3dede70-3460-4dd5-8185-a94a66839551
-// last-edited: 2026-10-12
+// last-edited: 2026-10-22
 
 // Migration 065's engine: build opv3: run records from opv2: operation rows
 // (state-and-persistence.md sections 3 and 4), and the boot reconcile that
@@ -63,6 +63,10 @@ func opsV3RowHash(data []byte) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// errOpV2NoID is wrapped, with errOpsV3Undecodable, by the error for a stored
+// opv2:op: record that decodes but carries no id (a hollow shell).
+var errOpV2NoID = errors.New("it has no id")
+
 // getOpV2Raw reads one opv2:op: row and its stored bytes. A missing row is
 // (nil, nil, nil). A row that does not decode, or has no id, is an error
 // wrapping errOpsV3Undecodable, returned with its bytes; a failed read is any
@@ -83,7 +87,7 @@ func (p *PebbleStore) getOpV2Raw(id string) (row *OperationV2Row, raw []byte, er
 		return nil, raw, fmt.Errorf("opv2 row %s %w: %v", id, errOpsV3Undecodable, err)
 	}
 	if r.ID == "" {
-		return nil, raw, fmt.Errorf("opv2 row %s %w: it has no id", id, errOpsV3Undecodable)
+		return nil, raw, fmt.Errorf("opv2 row %s %w: %w", id, errOpsV3Undecodable, errOpV2NoID)
 	}
 	return &r, raw, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.54.2
+// version: 1.54.3
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-10-22
 
@@ -1419,7 +1419,7 @@ func migration066Up(store migrationStore) error {
 	if err != nil {
 		return fmt.Errorf("migration 66: strip legacy plan rows: %w", err)
 	}
-	legacyPlanLog.Info("migration 66: legacy plan rows stripped: plans=%d stripped=%d unreadable=%d unreadable_ops=%d bytes_before=%d bytes_after=%d bytes_freed=%d",
-		rep.Plans, rep.Stripped, rep.Unreadable, rep.UnreadableOps, rep.BytesBefore, rep.BytesAfter, rep.BytesBefore-rep.BytesAfter)
+	legacyPlanLog.Info("migration 66: legacy plan rows stripped: plans=%d stripped=%d unreadable=%d unreadable_ops=%d hollow_ops=%d bytes_before=%d bytes_after=%d bytes_freed=%d",
+		rep.Plans, rep.Stripped, rep.Unreadable, rep.UnreadableOps, rep.HollowOps, rep.BytesBefore, rep.BytesAfter, rep.BytesBefore-rep.BytesAfter)
 	return nil
 }
