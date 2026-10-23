@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -795,7 +795,7 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	}
 	defer unlock()
 
-	// The shared user restore (merge.RestoreFromTrash): back to the state
+	// The shared user restore (merge.RestoreFromTrashLocked): back to the state
 	// the book had before the trash, not "imported" (until 2026-10-01 this
 	// always wrote "imported", so restoring a book from the library folder
 	// dropped it out of ABS); unlinked from its merge survivor, sync redirect

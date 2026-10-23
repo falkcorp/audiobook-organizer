@@ -1,7 +1,7 @@
 // file: internal/database/book_trash.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9b303f90-f72d-46b2-8cb2-be9a988a748c
-// last-edited: 2026-10-01
+// last-edited: 2026-10-23
 
 package database
 
@@ -138,7 +138,7 @@ func IsInTrash(b *Book) bool {
 // regardless, so a "restore" of a never-trashed primary demoted it.
 //
 // The sync-identity redirect a merge left on the row is not a book column;
-// merge.RestoreFromTrash removes it alongside this.
+// merge.RestoreFromTrashLocked removes it alongside this.
 func RestoreBookFromTrash(b *Book, files []BookFile, env TrashRestoreEnv) bool {
 	if !IsInTrash(b) {
 		return false
@@ -157,7 +157,7 @@ func RestoreBookFromTrash(b *Book, files []BookFile, env TrashRestoreEnv) bool {
 // quarantined), and files has at least one present row, every present row
 // inside env.RootDir and outside the iTunes library.
 //
-// merge.RestoreFromTrash removes the row's merge redirect only when this
+// merge.RestoreFromTrashLocked removes the row's merge redirect only when this
 // holds. A redirect is what forwards a client's old libraryItemId (and the
 // progress filed under it) to the survivor; removing it from a row ABS does
 // not list, or lists with no audio, strands that client on nothing.

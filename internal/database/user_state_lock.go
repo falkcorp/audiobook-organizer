@@ -1,7 +1,7 @@
 // file: internal/database/user_state_lock.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package database
 
@@ -63,7 +63,7 @@ var userStateLocks [userStateStripes]sync.Mutex
 //     from the before-snapshot through the after-snapshot, so the journal
 //     the undo restores from describes exactly what the follow moved (the
 //     per-user moves then run their ...Locked variants);
-//   - merge.DiscardUserStateThenHardDelete, inside merge.LockMergeRMW: every
+//   - merge.DiscardUserStateThenHardDeleteLocked, inside merge.LockMergeRMW: every
 //     user's stripe on the book through LockUserBookStates, from the first
 //     read through the hard delete.
 //
