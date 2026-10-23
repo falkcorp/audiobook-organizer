@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/user_merge_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d9e3a5f0-7b14-4c82-8a6d-2f1c0b9e4573
 // last-edited: 2026-10-23
 
@@ -34,11 +34,11 @@ func newUserMergeRig(t *testing.T) *userMergeRig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	a, err := s.CreateUser("keeper", "keeper@admins.example.com", "bcrypt", "hash-a", []string{"admin"}, "active")
+	a, err := s.CreateUser("keeper-acct", "keeper@admins.example.com", "bcrypt", "hash-a", []string{"admin"}, "active")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.CreateUser("absorbed", "absorbed@admins.example.com", "bcrypt", "hash-b", []string{"admin"}, "active")
+	b, err := s.CreateUser("gone-acct", "absorbed@admins.example.com", "bcrypt", "hash-b", []string{"admin"}, "active")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +94,21 @@ func (r *userMergeRig) grant(actor string) (string, string) {
 		r.t.Fatal(err)
 	}
 	return tok, d
+}
+
+// assertNoPII fails when the result stored on the op row (readable by anyone
+// with library.view) carries either account's username or email address.
+func (r *userMergeRig) assertNoPII(t *testing.T) {
+	t.Helper()
+	raw, err := json.Marshal(r.result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{r.a.Username, r.b.Username, r.a.Email, r.b.Email, "admins.example.com"} {
+		if strings.Contains(string(raw), secret) {
+			t.Errorf("the op row's result exposes %q: %s", secret, raw)
+		}
+	}
 }
 
 func equalMaps(a, b map[string]string) bool {
@@ -164,10 +179,11 @@ func TestUserMergeOp_GrantIsBoundToTheActorTheDigestAndIsSingleUse(t *testing.T)
 	if u, _ := r.store.GetUserByID(r.b.ID); u.MergedIntoUserID != r.a.ID {
 		t.Errorf("the absorbed account was not merged: %+v", u)
 	}
-	sum, ok := r.result.(usermerge.JournalSummary)
+	sum, ok := r.result.(usermerge.JournalResult)
 	if !ok || sum.Status != usermerge.StatusApplied {
-		t.Errorf("result = %#v, want an applied journal summary", r.result)
+		t.Errorf("result = %#v, want an applied journal result", r.result)
 	}
+	r.assertNoPII(t)
 	if err := runUserMerge(context.Background(), r.live(tok, d), r.env()); err == nil {
 		t.Error("a grant was redeemed twice")
 	}
@@ -180,16 +196,17 @@ func TestUserMergeOp_OmittedModeIsAPreviewAndNeedsAnAdminActor(t *testing.T) {
 	if err := runUserMerge(context.Background(), params, r.env()); err != nil {
 		t.Fatalf("preview: %v", err)
 	}
-	plan, ok := r.result.(*usermerge.Plan)
+	plan, ok := r.result.(usermerge.PlanSummary)
 	if !ok || plan.Digest == "" || plan.Ops == 0 {
-		t.Fatalf("result = %#v, want a plan with ops", r.result)
+		t.Fatalf("result = %#v, want a plan summary with ops", r.result)
 	}
+	r.assertNoPII(t)
 	if !equalMaps(before, r.keys()) {
 		t.Fatal("a preview wrote to the store")
 	}
 	raw, _ := json.Marshal(plan)
-	if strings.Contains(string(raw), `"ops":[`) {
-		t.Error("the plan JSON exposes the raw ops")
+	if strings.Contains(string(raw), `"ops":[`) || strings.Contains(string(raw), `"identities"`) {
+		t.Error("the op row's plan summary exposes raw ops or sign-ins")
 	}
 
 	viewer, err := r.store.CreateUser("viewer", "viewer@users.example.com", "bcrypt", "h", []string{"viewer"}, "active")

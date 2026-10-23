@@ -1,7 +1,7 @@
 // file: internal/usermerge/apply.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f6a0c82-d417-4b95-8e23-5a9c1e7d4b06
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package usermerge
 
@@ -332,7 +332,8 @@ func (s *Service) stragglerOps(ctx context.Context, j *Journal) ([]database.User
 		return nil, err
 	}
 	if len(b.refused) > 0 {
-		return nil, fmt.Errorf("%w: %s", ErrJournalState, strings.Join(b.refused, "; "))
+		// Row keys stay out of the error: it reaches operation rows.
+		return nil, fmt.Errorf("%w: %d row(s) the merge can no longer read or does not own", ErrJournalState, len(b.refused))
 	}
 	return b.finalize(), nil
 }
