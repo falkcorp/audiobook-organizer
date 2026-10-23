@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-22
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -313,6 +314,7 @@ type fileIntroAccum struct {
 	mu    sync.Mutex
 	stats database.FileIntroStats
 	sink  database.FileIntroStatsStore
+	log   *slog.Logger // reporter's logger; nil in tests that do not care
 }
 
 func (a *fileIntroAccum) update(fn func(s *database.FileIntroStats)) {
@@ -337,7 +339,9 @@ func (a *fileIntroAccum) flush(done bool) {
 	a.stats.Done = done
 	cp := a.stats
 	a.mu.Unlock()
-	_ = a.sink.PutFileIntroStats(&cp)
+	if err := a.sink.PutFileIntroStats(&cp); err != nil && a.log != nil {
+		a.log.Warn("transcribe-file-intros: stats write failed", "err", err)
+	}
 }
 
 func fileIntroRunID(reporter sdk.Reporter) string {
@@ -397,6 +401,9 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 	if slots < 1 {
 		return fmt.Errorf("%s: no whisper endpoint is configured (whisper_endpoints / whisper_remote_url); refusing to start a run that cannot transcribe", fileIntroOpID)
 	}
+	if err := fileIntroPreflight(ctx); err != nil {
+		return err
+	}
 	intros, ok := database.AsCapability[database.BookFileIntroStore](store)
 	if !ok {
 		return fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
@@ -406,7 +413,7 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 	runID := fileIntroRunID(reporter)
 	startedAt := time.Now()
 	sink, _ := database.AsCapability[database.FileIntroStatsStore](store)
-	accum := &fileIntroAccum{sink: sink, stats: database.FileIntroStats{
+	accum := &fileIntroAccum{sink: sink, log: log, stats: database.FileIntroStats{
 		RunOpID: runID, StartedAt: startedAt, UpdatedAt: startedAt,
 		Eligible: sel.eligible, TranscribedAtStart: sel.transcribedAtStart, TranscribedNow: sel.transcribedAtStart,
 		Selected:      sel.selected,
@@ -451,15 +458,15 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 	st := accum.snapshot()
 	log.Info("transcribe-file-intros: finished",
 		"run_id", runID, "attempted", st.Attempted, "ok", st.OK, "unparsed", st.Unparsed, "silence", st.Silence,
-		"whisper_error", st.WhisperError, "source_missing", st.SourceMissing, "reused", st.Reused,
+		"whisper_error", st.WhisperError, "ffmpeg_error", st.FFmpegError, "source_missing", st.SourceMissing, "reused", st.Reused,
 		"deferred", st.Deferred, "stale", st.Stale, "already_had", st.AlreadyHad, "book_fills", st.BookFills,
 		"coverage_now", st.TranscribedNow, "eligible", st.Eligible, "err", err)
 	if err != nil {
 		return err
 	}
 	_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
-		"Done — run %s: %d ok, %d unparsed, %d silent, %d whisper-err, %d source-missing, %d reused, %d deferred, %d stale; %d book transcripts filled; coverage %d/%d files",
-		runID, st.OK, st.Unparsed, st.Silence, st.WhisperError, st.SourceMissing, st.Reused, st.Deferred, st.Stale,
+		"Done — run %s: %d ok, %d unparsed, %d silent, %d whisper-err, %d ffmpeg-err, %d source-missing, %d reused, %d deferred, %d stale; %d book transcripts filled; coverage %d/%d files",
+		runID, st.OK, st.Unparsed, st.Silence, st.WhisperError, st.FFmpegError, st.SourceMissing, st.Reused, st.Deferred, st.Stale,
 		st.BookFills, st.TranscribedNow, st.Eligible))
 	return nil
 }
@@ -612,8 +619,6 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 		out, err := fileIntroWhisperFn(ctx, jobs, nil)
 		var te *transcribe.TransportError
 		switch {
-		case errors.Is(err, errFilePathTransportMissing):
-			return 0, err
 		case errors.As(err, &te):
 			// Endpoint problem, not a file problem: write NOTHING, the files
 			// stay undone and the next run picks them up.
@@ -656,8 +661,30 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 	switch {
 	case r.Error != "":
+		// The worker prefixes a per-file error with a code (transcribe.PathErr*).
+		// The code decides how durable the verdict is:
+		//   not_found    -> the file is absent: source_file_missing, which heals
+		//                   by itself when it reappears;
+		//   ffmpeg_error -> the worker could not decode it: a verdict about the
+		//                   file, held until retry_failed (so a corrupt file is
+		//                   not re-sent by every run);
+		//   path_unmapped, ffmpeg_timeout -> the mount or the share, not the
+		//                   file: written as nothing, the file stays undone;
+		//   anything else (whisper_error, bad_request, no code) -> whisper_error,
+		//                   retried by the next run.
+		detail := truncateDetail(r.Error)
+		switch transcribe.PathErrorCode(r.Error) {
+		case transcribe.PathErrNotFound:
+			return groupResult{kind: "source_missing", hasResult: true, res: database.BookFileIntroResult{
+				Status: statusSourceMissing, Error: detail, At: now}}
+		case transcribe.PathErrFFmpeg:
+			return groupResult{kind: "ffmpeg_error", hasResult: true, res: database.BookFileIntroResult{
+				Status: statusFFmpegError, Error: detail, At: now}}
+		case transcribe.PathErrUnmapped, transcribe.PathErrFFmpegTimeout:
+			return groupResult{kind: "deferred", hasResult: true}
+		}
 		return groupResult{kind: "whisper_error", hasResult: true, res: database.BookFileIntroResult{
-			Status: statusWhisperError, Error: truncateDetail(r.Error), At: now,
+			Status: statusWhisperError, Error: detail, At: now,
 		}}
 	case strings.TrimSpace(r.Text) == "":
 		// Nothing to transcribe at the clip length. The sentinel makes the
@@ -781,6 +808,8 @@ func (w *fileIntroWorker) count(gr groupResult, wrote database.BookFileIntroWrit
 				s.WhisperError++
 			case "source_missing":
 				s.SourceMissing++
+			case "ffmpeg_error":
+				s.FFmpegError++
 			}
 		}
 		if gr.res.Transcript != nil {
