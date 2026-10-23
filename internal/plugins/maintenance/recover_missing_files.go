@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.13.3
+// version: 1.14.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -409,11 +409,14 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		"apply", params.Apply, "root_dir", rootDir, "source_dirs", params.SourceDirs,
 		"max", maxRewrites, "require_ext_match", requireExt)
 
-	files, err := store.GetAllBookFilesCore()
+	// One list, two jobs: the claimed set below includes retired rows (a retired
+	// version still names its path, so a candidate on it would become a second
+	// row's target), while the rows to recover exclude them.
+	files, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return recoverPlan{}, fmt.Errorf("load book files: %w", err)
 	}
-	plan := recoverPlan{Apply: params.Apply, ScannedRows: len(files)}
+	plan := recoverPlan{Apply: params.Apply, ScannedRows: countLiveCores(files)}
 
 	// claimed holds EVERY path any row currently points at, missing or not. A candidate
 	// already claimed by some row must never become a second row's target — that is the
@@ -435,6 +438,9 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	}
 	items := make([]item, 0, len(files))
 	for i := range files {
+		if files[i].Retired {
+			continue // a retired version is never recovered; its path stays claimed above
+		}
 		if strings.TrimSpace(files[i].FilePath) == "" {
 			continue // a pathless row is a different defect; nothing to match on disk
 		}

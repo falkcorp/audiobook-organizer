@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
-// last-edited: 2026-10-13
+// last-edited: 2026-10-23
 
 // The same-path-twin class of the consolidation-leftovers fixer (owner
 // decision 2026-10-06, plan op 01M48JSTKZV97BK42W675089GY): a leftover whose
@@ -77,6 +77,12 @@ func leftoverFreshPathOwners(store OpsStore, p string) ([]string, error) {
 		return nil, fmt.Errorf("live books at %s: %w", p, err)
 	}
 	for _, r := range rows {
+		// A retired row is keyed under its live holder but is not a live owner of
+		// the path: counting it would make the holder and the path's real owner
+		// two owners, and every such leftover would read as ambiguous.
+		if r.Retired {
+			continue
+		}
 		if !contains(ids, r.BookID) {
 			ids = append(ids, r.BookID)
 		}
