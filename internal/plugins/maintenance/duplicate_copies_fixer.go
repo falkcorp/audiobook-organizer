@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.10.3
+// version: 1.11.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-10-17
+// last-edited: 2026-10-23
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -657,7 +657,11 @@ type dcRun struct {
 // dcHolder is leg (a)'s one filter, shared by Plan's index and a Replan's
 // store read so both reach the same answer: a row that is evidence of a work
 // (dcLinkRow) on a book that is not retired.
-func dcHolder(r database.BookFileCore, live bool) bool { return live && dcLinkRow(r) }
+//
+// A retired row is not evidence of a work held by its holder: it is a retired
+// version of a book that left the library, and counting it would make the
+// holder a second holder of content its sibling already holds.
+func dcHolder(r database.BookFileCore, live bool) bool { return live && !r.Retired && dcLinkRow(r) }
 
 // dcStoreHolders is leg (a) for a Replan, which loads only the group's
 // neighbourhood: each hash is read through BookFilesWithHash (memdb's

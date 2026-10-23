@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -1358,6 +1358,11 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 			return "", "", fmt.Errorf("read owner of %s: %w", p, err)
 		}
 		if row != nil && row.BookID != "" && row.BookID != b.ID {
+			if row.Retired {
+				// Held only as a retired version: occupied, but not a live book that
+				// owns the file, so name it as what it is.
+				return junkSkipFragment, fmt.Sprintf("its file %s is held as a retired version of book %s", p, row.BookID), nil
+			}
 			return junkSkipFragment, fmt.Sprintf("its file %s is also a file of book %s", p, row.BookID), nil
 		}
 	}

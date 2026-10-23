@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 // Folder chapter sets: the fragment-consolidation fixer's rule for a folder
 // of numbered chapter files that share one name, that no parent book owns,
@@ -1583,6 +1583,9 @@ func (s *fragApplySession) refreshAudioOf(f *fragmentFixer, store OpsStore, hist
 				return nil, fmt.Errorf("rows at %s: %w", p, err)
 			}
 			for i := range rows {
+				if rows[i].Retired {
+					continue // a retired version is not in the live snapshot; nothing to refresh
+				}
 				ids[rows[i].BookID] = true
 			}
 		}
@@ -1596,6 +1599,9 @@ func (s *fragApplySession) refreshAudioOf(f *fragmentFixer, store OpsStore, hist
 				return nil, fmt.Errorf("rows with hash %s: %w", h, err)
 			}
 			for i := range rows {
+				if rows[i].Retired {
+					continue // a retired version is not in the live snapshot; nothing to refresh
+				}
 				ids[rows[i].BookID] = true
 			}
 		}
