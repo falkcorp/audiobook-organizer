@@ -1,7 +1,7 @@
 // file: internal/merge/undo_pointer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1a6c9e38-5f02-4b7d-8e49-c3d0a7f25b16
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package merge
 
@@ -99,6 +99,8 @@ func RecordJournalPointer(w JournalPointerWriter, opID, bookID, changeType, jour
 	return func() error {
 		voided := *row
 		now := time.Now()
+		// RevertedAt is the wall time; the store stamps RevertedSeq, the order the
+		// undo decisions use, as it writes a row that is born reverted.
 		voided.RevertedAt, voided.Voided = &now, true
 		return w.CreateOperationChange(&voided)
 	}, nil

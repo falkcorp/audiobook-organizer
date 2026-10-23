@@ -64,12 +64,15 @@ undone in any order, including oldest first, put every book back in its exact
 position in every collection and playlist, survivors that are themselves
 retired later included (below). The records of a list are read from one place:
 a new index over the journal, `opchange_by_list:<kind>:<list id>:<op>:<change>`,
-written in the same batch as each user-content row and removed with it by
-journal pruning, so one call (`GetListChanges`) returns every row any retire
+written in the same batch as each collection or playlist carry row (ratings and
+notes are not indexed) and removed only together with its row, so one call (`GetListChanges`) returns every row any retire
 into the list wrote, whichever survivor or retired book it names. There is no
 per-book journal walk and no read cap any more, so no history can need more
 reads than the cap allowed. The index is written for rows written from now on; the
-carry is new in this release, so there is nothing to backfill.
+carry is new in this release, so there is nothing to backfill. The first open
+of the store after this release also stages any entry a carry row lacks (a
+one-time scan, logged with its row count and duration), so an index entry that a
+crash or an earlier build never wrote is not a hole in the graph.
 
 A book is placed by the graph only when both of its neighbours are found in the
 list now and nothing but the survivor (or another survivor's ghost) sits between
@@ -99,12 +102,17 @@ survivor left the list by hand, or a revert removed it and died before stamping
 the marker) no longer counts: its rows have no say over the survivor, in the
 revert, the preflight, and the order graph.
 
-Journal rows are ordered by a store-level clock that never steps back: each row
-is stamped with the larger of the wall clock and one nanosecond past the last
-stamp, the mark is saved with the rows (`system:journal_clock`) and re-read at
-open with one second of margin, so a wall clock that steps back (NTP, a restore,
-a VM resume) between two retires cannot reorder the journal and so cannot change
-how a later undo reads it.
+Journal rows are ordered by a store-level sequence that never steps back, not
+by the wall clock. Each row carries `CreatedSeq` (and a row stamped reverted
+carries `RevertedSeq`): the larger of the wall clock and one past the last
+stamp, handed out under one lock that is held until the rows are committed, so
+the mark saved with the rows (`system:journal_clock`) can never be behind a row
+that is on disk. The mark is re-read at open with one second of margin. A
+wall clock that steps back (NTP, a restore, a VM resume) between two retires
+therefore cannot reorder the journal, and the undo code orders markers by the
+sequence, falling back to the wall time only for rows written before it
+existed. If the mark is missing or unreadable the open rebuilds it from the
+rows; a damaged mark never stops the store opening.
 
 Lists the owner arranged by hand since the retire are reported, not silently
 rewritten. A survivor found listed somewhere other than the slot the retire gave
@@ -123,8 +131,13 @@ random histories, "exact" meaning every list ends as it was before the retires):
 operation's revert, survivors retired into survivors, undone in any order) all
 exact, none reported, refused or silent. A further 47,000 adversarial histories
 (shared timestamps, a wall clock stepping back, one step back, a row journaled
-before its marker, deep chains with crashes) all exact, none reported, refused or
-silent. 12,000 histories in which the owner added, removed or reordered list
+before its marker, deep chains with crashes), now run with the sequence fields
+stamped and the wall time left non-monotonic, all exact, none reported, refused
+or silent. A further 14,500 histories in which a survivor marker is left behind
+with no live row of its retire (a crash between the marker and the row, or a row
+voided), over 40,000 orphan markers injected in all, none left unreported: 11,500 exact, and in the 3,000 where the owner also edited
+the lists by hand 1,314 exact, 1,485 reported and 201 refused for manual review;
+0 silent wrong lists. 12,000 histories in which the owner added, removed or reordered list
 entries by hand since the retires: 0 silent wrong lists (final or
 intermediate); 5,716 exact, 5,544 reported (named in `kept`), 740 refused for
 manual review with a reason (nothing written for a refused row).
@@ -133,10 +146,17 @@ A row is stamped reverted together with its survivor-side marker, in the same
 batch as the list. A marker stands until its row is restored, so a row that
 failed or was refused leaves it standing for the retry, so the retry is not
 refused and the reverts in between see the truth; and a row stamped with its
-list is never retried against a list a newer retire has changed since. A refused
-carry takes its row and its marker back in ONE batch (`CreateOperationChanges`,
-used when the store has it), so a failure can no longer leave one of them stale;
-a store without it voids them one by one as before. The revert of a collection
+list is never retried against a list a newer retire has changed since. A carry
+needs a store that commits several journal rows in ONE batch
+(`database.ChangeBatchJournal`, which the Pebble store has) and is refused before
+its first write otherwise. All the rows of a carry step (the row and its marker)
+are created in one commit and the index is updated only after it, so a failure
+leaves neither; a refused carry voids its row and its marker in one commit, so a
+failure can no longer leave one of them stale. A survivor marker that has no
+live row of its retire (an orphan: a crash left the marker without its row, or
+the row was voided) is ignored by the revert, the preflight and the order graph,
+so it can never keep a survivor listed; the revert reports it in
+`orphan_markers` and in `kept`, once per marker. The revert of a collection
 or playlist row requires a store that writes the list and the stamp in one batch
 (`database.CollectionMembershipMarkStore`, `database.UserPlaylistMarkStore`; the
 Pebble store has both) and refuses one that does not. A revert that finds the
@@ -147,13 +167,13 @@ stamps the marker. Everything that reads a list's journal to decide a list write
 and then makes it holds one lock per list: the reverts of collection and
 playlist rows, and the retire's own marker journaling and list write, so two
 operations undone at once cannot each see the other still standing. The carry's
-`user_content_follow` rows are kept by journal pruning like the other rows an
-undo cannot be decided without. Marker rows restore nothing, so the revert
+`user_content_follow` rows are never removed by journal pruning, like the other
+rows an undo cannot be decided without. Marker rows restore nothing, so the revert
 result counts them in a separate `markers` figure, not in `restored`.
 
 The undo preflight decides a collection or playlist row from the same list
 journal the revert reads, so a row the revert restores exactly is predicted
 restorable. A journal read that fails refuses the row as unreadable
-(`field_unreadable`) and never as restorable; a store that cannot read the list
-journal at all still has the list itself checked. Rows that fail the check are
+(`field_unreadable`) and never as restorable; so does a store that cannot read
+the list journal at all, since no prediction can be made without it. Rows that fail the check are
 never filed under `check_failed`, which never counts toward offering Undo.

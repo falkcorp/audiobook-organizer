@@ -1,5 +1,5 @@
 // file: internal/undo/membership_adversarial_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a9d17c3-e605-4b82-8f31-c27d5b09e164
 // last-edited: 2026-10-22
 
@@ -8,6 +8,7 @@ package undo
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -35,10 +36,12 @@ type advSim struct {
 	touched map[string]bool
 	seq     int
 	ticks   int
-	hw      time.Time
+	hw      int64 // the journal clock's high-water mark (CreatedSeq / RevertedSeq), ns
 	stepAt  int
 	st      *advStats
 	log     *[]string
+	// orphans are the markers injected with no live row (injectOrphan), by id.
+	orphans map[string]*database.OperationChange
 }
 
 type advCfg struct {
@@ -54,12 +57,14 @@ type advCfg struct {
 	svBias     int  // 1/n: retire a listed survivor when one is listed
 	tsMode     int  // 0: row 1µs after marker; 1: marker and row at one instant; 2: clock may step back
 	mono       bool // the journal clock: every stamp strictly after the last (the store does this)
+	orphan     int  // 1/n per step: a marker is journaled whose retire never got a live row (a crash between the marker and the row, or a failed void)
 }
 
 type advStats struct {
 	total, exact, reported, refusedClean, refusedManual, silentFinal, silentInter, silentPresence int
 	preRows, preMismatchRefuse, preMismatchAlready, sameMismatchRefuse, sameMismatchAlready       int
 	manualCases                                                                                   int
+	orphansInjected, orphansMissed                                                                int
 	samples                                                                                       []string
 	perKind                                                                                       map[string]int
 }
@@ -89,19 +94,23 @@ func (s *advSim) tick() time.Time {
 		d = -time.Duration(1+s.rng.IntN(3)) * time.Second
 	}
 	s.clock = s.clock.Add(d)
-	if s.cfg.mono {
-		return s.mono(s.clock)
-	}
 	return s.clock
 }
 
-// mono is the journal clock: max(wall, last+1ns), as a persisted high-water
-// mark would give every journal write (row, marker and stamp alike).
-func (s *advSim) mono(t time.Time) time.Time {
-	if !t.After(s.hw) {
-		s.hw = s.hw.Add(time.Nanosecond)
+// seqOf is the journal clock: max(wall, last+1ns), as the store's persisted
+// high-water mark gives every journal write (row, marker and stamp alike). With
+// mono the rows carry it as CreatedSeq / RevertedSeq while CreatedAt and
+// RevertedAt stay the wall time, which may step back; without it they carry no
+// sequence and the decisions fall back to the wall time (rows written before the
+// sequences existed).
+func (s *advSim) seqOf(t time.Time) int64 {
+	if !s.cfg.mono {
+		return 0
+	}
+	if ns := t.UnixNano(); ns > s.hw {
+		s.hw = ns
 	} else {
-		s.hw = t
+		s.hw++
 	}
 	return s.hw
 }
@@ -130,23 +139,57 @@ func (s *advSim) retire(op, retired, survivor string) string {
 	case 4:
 		rowAt = now.Add(-time.Microsecond) // the clock stepped back between the marker and the row
 	}
-	if s.cfg.mono {
-		rowAt = s.mono(rowAt)
-	}
 	m := &database.OperationChange{ID: s.newID(op, survivor), OperationID: op, BookID: survivor,
-		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(kind, "L"), OldValue: val, NewValue: retired, CreatedAt: now}
+		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(kind, "L"), OldValue: val, NewValue: retired, CreatedAt: now, CreatedSeq: s.seqOf(now)}
 	r := &database.OperationChange{ID: s.newID(op, retired), OperationID: op, BookID: retired,
-		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(UserContentCollection, "L"), OldValue: val, NewValue: survivor, CreatedAt: rowAt}
+		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(UserContentCollection, "L"), OldValue: val, NewValue: survivor, CreatedAt: rowAt, CreatedSeq: s.seqOf(rowAt)}
 	s.all = append(s.all, m, r)
 	s.rows[r.ID], s.markers[r.ID] = r, m
 	return r.ID
+}
+
+// injectOrphan journals a survivor-side marker for the retire of retired into
+// survivor the way a crash between JournalSteps' two commits left it (an older
+// build), or a failed void left it: the marker, and no row of the retire (kind 0)
+// or a voided one (kind 1). The list write never ran, so the list is as it was.
+// A quarter of them are stamped reverted at once (their operation was reverted).
+// It reports whether one was written.
+func (s *advSim) injectOrphan(retired, survivor string, kind int) bool {
+	_, rec, ok := CarryMembership(s.list, retired, survivor)
+	if !ok {
+		return false
+	}
+	val, _ := EncodeMembership(rec)
+	field := TookKind(UserContentCollection)
+	if rec.SurvivorWasMember {
+		field = HeldKind(UserContentCollection)
+	}
+	op := fmt.Sprintf("orphan%d", s.seq)
+	now := s.tick()
+	m := &database.OperationChange{ID: s.newID(op, survivor), OperationID: op, BookID: survivor,
+		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(field, "L"), OldValue: val, NewValue: retired, CreatedAt: now, CreatedSeq: s.seqOf(now)}
+	s.all = append(s.all, m)
+	if kind == 1 {
+		at := s.tick()
+		rowAt := s.tick()
+		v := &database.OperationChange{ID: s.newID(op, retired), OperationID: op, BookID: retired, ChangeType: ChangeTypeUserContentFollow,
+			FieldName: UserContentField(UserContentCollection, "L"), OldValue: val, NewValue: survivor, CreatedAt: at, CreatedSeq: s.seqOf(at),
+			RevertedAt: &rowAt, RevertedSeq: s.seqOf(rowAt), Voided: true}
+		s.all = append(s.all, v)
+	}
+	if s.rng.IntN(4) == 0 {
+		s.stamp(m)
+	}
+	s.orphans[m.ID] = m
+	s.st.orphansInjected++
+	return true
 }
 
 func (s *advSim) stamp(rows ...*database.OperationChange) {
 	at := s.tick()
 	for _, r := range rows {
 		if r != nil && r.RevertedAt == nil {
-			r.RevertedAt = &at
+			r.RevertedAt, r.RevertedSeq = &at, s.seqOf(at)
 		}
 	}
 }
@@ -238,7 +281,7 @@ func runAdv(t *testing.T, seed uint64, n int, cfg advCfg) advStats {
 		var log []string
 		s := &advSim{list: slices.Clone(l0), clock: time.Unix(1_700_000_000, 0), rng: rng, cfg: cfg,
 			rows:    map[string]*database.OperationChange{},
-			markers: map[string]*database.OperationChange{}, touched: map[string]bool{}, st: &st, log: &log, stepAt: 1 + rng.IntN(3*cfg.steps)}
+			markers: map[string]*database.OperationChange{}, orphans: map[string]*database.OperationChange{}, touched: map[string]bool{}, st: &st, log: &log, stepAt: 1 + rng.IntN(3*cfg.steps)}
 		type op struct {
 			id   string
 			rows []string
@@ -357,6 +400,13 @@ func runAdv(t *testing.T, seed uint64, n int, cfg advCfg) advStats {
 					continue
 				}
 			}
+			if cfg.orphan > 0 && rng.IntN(cfg.orphan) == 0 && len(s.list) > 1 {
+				b, sv := s.list[rng.IntN(len(s.list))], svs[rng.IntN(len(svs))]
+				if b != sv && !retiredNow(sv) && s.injectOrphan(b, sv, rng.IntN(2)) {
+					log = append(log, "ORPHAN("+b+">"+sv+")")
+				}
+				continue
+			}
 			if l := live(); len(l) > 0 && rng.IntN(2) == 0 {
 				revertOp(l[rng.IntN(len(l))])
 				continue
@@ -413,6 +463,24 @@ func runAdv(t *testing.T, seed uint64, n int, cfg advCfg) advStats {
 		}
 		if seed == advTraceSeed && uint64(caseN) == advTraceCase && len(log) > 0 {
 			t.Logf("  %-24s -> %v notes=%d", log[len(log)-1], s.list, len(s.notes))
+		}
+		// Every standing orphan is reported, and nothing else is (the lister is
+		// what the revert reports from).
+		gotOrphans := map[string]bool{}
+		for _, m := range IgnoredMarkers(s.all, UserContentCollection, "L") {
+			if m.Standing {
+				gotOrphans[m.ID] = true
+			}
+		}
+		wantOrphans := map[string]bool{}
+		for id, m := range s.orphans {
+			if m.RevertedAt == nil {
+				wantOrphans[id] = true
+			}
+		}
+		if !maps.Equal(gotOrphans, wantOrphans) {
+			st.orphansMissed++
+			st.sample(fmt.Sprintf("ORPHAN-REPORT case%d log=%v want=%v got=%v", caseN, log, wantOrphans, gotOrphans))
 		}
 		st.total++
 		if manual {
@@ -491,6 +559,13 @@ func advSuites() []advSuite {
 		{"clockBack", []uint64{51, 52}, 3000, with(func(c *advCfg) { c.tsMode, c.mono = 2, true }), false},
 		{"oneStepBack", []uint64{53, 54}, 3000, with(func(c *advCfg) { c.tsMode, c.mono = 3, true }), false},
 		{"rowBeforeMarker", []uint64{55}, 3000, with(func(c *advCfg) { c.tsMode, c.mono = 4, true }), false},
+		// Markers with no live row (a crash between a retire's marker and its row, or
+		// a failed void) among the real retires: ignored, reported, and no history
+		// is wrong. The wall clock steps back in the second one.
+		{"orphans", []uint64{91, 92}, 3000, with(func(c *advCfg) { c.orphan = 4 }), false},
+		{"orphansClockBack", []uint64{93}, 3000, with(func(c *advCfg) { c.orphan, c.tsMode, c.mono = 3, 2, true }), false},
+		{"orphansCrash", []uint64{94}, 2500, advCfg{survivors: 5, minSize: 4, maxSize: 14, steps: 22, maxRows: 3, chain: true, svBias: 2, crashMid: 4, orphan: 3}, false},
+		{"orphansHand", []uint64{95}, 3000, advCfg{survivors: 4, minSize: 4, maxSize: 12, steps: 16, maxRows: 3, chain: true, svBias: 2, handRemove: 14, handReAdd: 14, orphan: 4}, true},
 		{"handEdits", []uint64{61, 62}, 3000, advCfg{survivors: 4, minSize: 4, maxSize: 12, steps: 16, maxRows: 3, chain: true, svBias: 2, handRemove: 14, handReAdd: 14}, true},
 		{"handAddOnly", []uint64{71}, 3000, advCfg{survivors: 3, minSize: 4, maxSize: 10, steps: 14, maxRows: 2, chain: true, handReAdd: 8}, true},
 		{"handRmOnly", []uint64{81}, 3000, advCfg{survivors: 3, minSize: 4, maxSize: 10, steps: 14, maxRows: 2, chain: true, handRemove: 8}, true},
@@ -505,8 +580,8 @@ func advSuites() []advSuite {
 // exact, reported, or refused with a reason.
 func requireAdvSuite(t *testing.T, su advSuite, seed uint64, st advStats) {
 	t.Helper()
-	t.Logf("%-15s seed=%d total=%d exact=%d reported=%d refusedClean=%d refusedManual=%d silentFinal=%d silentInter=%d", su.name, seed,
-		st.total, st.exact, st.reported, st.refusedClean, st.refusedManual, st.silentFinal, st.silentInter)
+	t.Logf("%-15s seed=%d total=%d exact=%d reported=%d refusedClean=%d refusedManual=%d silentFinal=%d silentInter=%d orphans=%d unreported=%d", su.name, seed,
+		st.total, st.exact, st.reported, st.refusedClean, st.refusedManual, st.silentFinal, st.silentInter, st.orphansInjected, st.orphansMissed)
 	for _, smp := range st.samples {
 		t.Logf("    %s", smp)
 	}
@@ -514,6 +589,10 @@ func requireAdvSuite(t *testing.T, su advSuite, seed uint64, st advStats) {
 	require.Zero(t, st.silentFinal, "silent wrong final lists")
 	require.Zero(t, st.silentInter, "silent wrong lists after an operation")
 	require.Zero(t, st.silentPresence, "a book lost or duplicated with no note")
+	require.Zero(t, st.orphansMissed, "a standing orphan marker was not reported, or a live marker was")
+	if su.cfg.orphan > 0 {
+		require.Positive(t, st.orphansInjected, "the suite injected no orphan")
+	}
 	require.Zero(t, st.refusedClean, "a refusal with no hand edit")
 	require.Zero(t, st.preMismatchRefuse, "the preflight disagreed with the revert about a refusal")
 	require.Zero(t, st.sameMismatchRefuse, "the preflight disagreed with the revert about a refusal (same state)")

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry_chain_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f3db16f2-7f5a-4c3e-a348-dea96c5942d4
 // last-edited: 2026-10-22
 
@@ -162,20 +162,23 @@ func TestRetireCarry_ARevertWhoseEndOfRunStampWasLostIsNotRetriedAgainstANewerRe
 	require.Zero(t, rr.Superseded, "%+v", rr)
 }
 
-// batchVoidFails is a journal whose one-commit void of several rows fails once
-// (CreateOperationChanges is the capability a refused carry voids its marker and
-// its row with); a single-row write and every other call go through.
+// batchVoidFails is a journal whose Nth one-commit write of several rows fails
+// (CreateOperationChanges is the capability a carry creates its marker and its
+// row with, and a refused carry voids them with: commit 1 creates, commit 2
+// voids); a single-row write and every other call go through.
 type batchVoidFails struct {
 	*database.PebbleStore
-	armed  atomic.Bool
+	failAt atomic.Int64 // the number (1-based) of the batch commit to fail; 0: none
 	batchN atomic.Int64
 }
 
 func (s *batchVoidFails) Unwrap() database.Store { return s.PebbleStore }
 
 func (s *batchVoidFails) CreateOperationChanges(cs []*database.OperationChange) error {
-	s.batchN.Add(1)
-	if s.armed.CompareAndSwap(true, false) {
+	if n := s.batchN.Add(1); n == s.failAt.Load() {
+		if n == 1 {
+			return errors.New("injected: create commit failed")
+		}
 		return errors.New("injected: void commit failed")
 	}
 	return s.PebbleStore.CreateOperationChanges(cs)
@@ -228,13 +231,26 @@ func TestRetireCarry_ARefusedCarryVoidsItsRowAndItsMarkerTogether(t *testing.T) 
 		live, voided := c.liveAndVoided("op2")
 		require.Equal(t, 0, live)
 		require.Equal(t, 2, voided, "the row and the marker")
-		require.EqualValues(t, 1, vs.batchN.Load(), "in one commit")
+		require.EqualValues(t, 2, vs.batchN.Load(), "the row and the marker created in one commit, voided in one commit")
+	})
+	t.Run("the create commit fails: no row at all, so no marker can stand without its row", func(t *testing.T) {
+		t.Parallel()
+		c := newChainFixture(t, []string{"a", "X", "S3", "b"}, []string{"a", "X", "S3", "b"})
+		vs := &batchVoidFails{PebbleStore: c.f.s}
+		vs.failAt.Store(1)
+		err := c.refusedCarry(vs, "op2")
+		require.ErrorIs(t, err, repairs.ErrNotJournaled)
+		require.ErrorContains(t, err, "create commit failed")
+		live, voided := c.liveAndVoided("op2")
+		require.Zero(t, live)
+		require.Zero(t, voided)
+		require.Equal(t, []string{"a", "X", "S3", "b"}, c.members(), "no row, so no write")
 	})
 	t.Run("the commit fails: neither is voided, and the failure is reported", func(t *testing.T) {
 		t.Parallel()
 		c := newChainFixture(t, []string{"a", "X", "S3", "b"}, []string{"a", "X", "S3", "b"})
 		vs := &batchVoidFails{PebbleStore: c.f.s}
-		vs.armed.Store(true)
+		vs.failAt.Store(2)
 		err := c.refusedCarry(vs, "op2")
 		require.ErrorIs(t, err, errCarryStale)
 		require.ErrorContains(t, err, "void commit failed")

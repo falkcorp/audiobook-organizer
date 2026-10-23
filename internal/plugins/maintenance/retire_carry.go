@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_carry.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b8d3f64-72a1-4c5e-8f19-6e4a9d2c7b35
 // last-edited: 2026-10-22
 
@@ -38,6 +38,15 @@ var errCarryStale = errors.New("list changed under the carry")
 // errCarryGone: the playlist was deleted, or stopped being static, since the
 // listing: nothing to carry.
 var errCarryGone = errors.New("list is gone")
+
+// errCarryJournalNotBatched: the op journal cannot write several rows in one
+// commit (repairs.ChangeBatchJournal). A list step of the carry journals the
+// survivor's marker and the retired book's row together; written one by one, a
+// failure or a crash between the two would leave a marker standing on nothing,
+// which a revert would read as a retire that holds the survivor in the list. The
+// retire is refused before its first write, like a store without the list
+// capabilities.
+var errCarryJournalNotBatched = errors.New("the op journal cannot write a retire's rows in one commit, so a marker could be left without its row; nothing was written")
 
 // carryStores are the list capabilities the carry writes through. The ratings
 // need none (they are book fields, written through the Writer) and the
