@@ -1,7 +1,7 @@
 // file: internal/undo/user_book_state.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a2ec13d4-3bc2-4bd4-a63f-d449e9180dca
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package undo
 
@@ -67,6 +67,55 @@ func DecodeUserStateSnapshot(v string) (UserStateSnapshot, error) {
 		return s, fmt.Errorf("user_book_state_set %q: %w", v, err)
 	}
 	return s, nil
+}
+
+// ResolveUserStateChange returns the account whose rows a user_book_state_set
+// row's undo must read and write, and the row to check against them. The row
+// names the account as it was when it was recorded; when an admin has merged
+// that account into another since (database.ResolveMergedUser) its rows are the
+// other account's now, so the row's snapshots are re-homed to that account
+// (their UserID fields rewritten) and the compare-and-set runs there as usual:
+// it restores only while that account still holds exactly what the change
+// wrote, and refuses otherwise. An account that was not merged gets c back
+// unchanged.
+func ResolveUserStateChange(store any, c *database.OperationChange) (string, *database.OperationChange, error) {
+	orig, ok := UserFromStateField(c.FieldName)
+	if !ok {
+		return "", c, fmt.Errorf("user_book_state_set: no user in field %q", c.FieldName)
+	}
+	user := database.ResolveMergedUser(store, orig)
+	if user == orig {
+		return orig, c, nil
+	}
+	rehome := func(v string) (string, error) {
+		snap, err := DecodeUserStateSnapshot(v)
+		if err != nil {
+			return "", err
+		}
+		if snap.State != nil {
+			st := *snap.State
+			st.UserID = user
+			snap.State = &st
+		}
+		pos := make([]database.UserPosition, len(snap.Positions))
+		for i, p := range snap.Positions {
+			p.UserID = user
+			pos[i] = p
+		}
+		snap.Positions = pos
+		return EncodeUserStateSnapshot(snap)
+	}
+	oldV, err := rehome(c.OldValue)
+	if err != nil {
+		return orig, c, err
+	}
+	newV, err := rehome(c.NewValue)
+	if err != nil {
+		return orig, c, err
+	}
+	cp := *c
+	cp.OldValue, cp.NewValue = oldV, newV
+	return user, &cp, nil
 }
 
 // SameUserBookState reports whether two state rows (nil = no row) hold the
