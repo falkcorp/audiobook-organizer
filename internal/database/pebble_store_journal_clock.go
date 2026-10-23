@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_journal_clock.go
-// version: 2.0.1
+// version: 3.0.0
 // guid: b81c4f26-7a39-4d0e-95c2-6e1f0a3d8b57
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // The journal clock: one strictly increasing sequence for every row the
 // operation-change journal writes or marks reverted.
@@ -19,31 +19,47 @@
 // wall time).
 //
 // SEQUENCE. stamp returns the wall time and max(wall, last+1ns): never equal to,
-// and never before, a sequence it handed out. The last value is a high-water mark
-// in an atomic.
+// and never before, a sequence it handed out. It runs under a short mutex that
+// is NOT held across a commit, so journal batches stamp, build and commit
+// concurrently; each fsync overlaps the others (group commit). Rows of one list
+// still stamp and commit in order, because everything that decides from a list's
+// journal and then writes it holds the list's own lock (undo.LockList) around
+// the stamp and the commit; rows of different lists have no order between them
+// to keep.
 //
-// PERSISTENCE. The mark is persisted as system:journal_clock in the batch of
-// every journal write that took a sequence from it. A journal batch holds
-// journalClock.mu from taking its sequence through its commit, so the batches
-// commit in the order they stamped and the persisted value only ever moves
-// forward: it is at or above every sequence a committed row carries, never the
-// stale value of a writer that stamped first and committed last. Journal writes
-// are low-throughput (a retire writes a few rows, a revert one batch per
-// operation), so serializing them costs one commit at a time
-// (BenchmarkJournalWrite_Serialized measures it). A max-merge operator would
-// avoid the lock but needs a stable merger name registered in the store's
-// options, a change to every opened store's on-disk options for one key; the
-// mutex needs no format change.
+// PERSISTENCE: A CEILING. system:journal_clock holds a ceiling, a value at or
+// above every sequence ever handed out. stamp never hands out a sequence at or
+// past the ceiling it last persisted: when the next value would reach it, stamp
+// first persists a new ceiling (that value plus journalClockWindow) with ONE
+// synchronous write, under its mutex, then hands the value out. A ceiling write
+// therefore happens at most once per window of sequence time (about once a
+// minute, sooner only when the wall clock jumps ahead), and no journal batch
+// carries the key. The guarantee, whichever batch commits first or last: the
+// persisted value is >= the sequence of every row that has committed (a row's
+// sequence was below the ceiling before the row was built). A merge operator
+// that max-merges the mark would also avoid the lock, but it needs a stable
+// merger name in every opened store's on-disk options for one key; the ceiling
+// needs no format change.
 //
-// OPEN. The mark is seeded from the persisted key plus journalClockMargin (the
-// margin is slack for a wall clock that stepped back while the process was down;
-// the serialized commit means there are no in-flight stamps to cover), or, when
-// the key is missing, by one scan of the journal: the largest stamp of any row.
-// That first scan also stages the opchange_by_list: entry of every
-// user_content_follow row that lacks one (rows an earlier build wrote), then
-// persists the key, so it runs once. A malformed key does not stop the open: it is
-// reported and the scan runs instead. A store that was never given a journal
-// write has no key and no rows and starts at the wall clock.
+// OPEN. The clock starts at the persisted ceiling exactly (no margin, no scan:
+// the ceiling is already above every sequence), so the first stamp after a
+// restart is past every row the previous run could have written, and a wall
+// clock that stepped back while the process was down changes nothing. A clean
+// Close persists the actual high-water mark in place of the ceiling, so a
+// restart does not leave the clock a window ahead; after a crash it starts at
+// most one window ahead of the last sequence. When the key is missing or
+// malformed (a journal written before the clock existed, or a damaged key; a
+// malformed key never stops the open) one scan of the journal finds the largest
+// stamp of any row and persists it. A store that has never held a journal row
+// starts at the wall clock.
+//
+// BACKFILL OF THE LIST INDEX. The same scan stages the opchange_by_list: entry
+// of every user_content_follow row that lacks one (rows an earlier build wrote).
+// That backfill is gated on its OWN completion key, not on the clock key: a
+// store whose clock key was written by a build that did not stage the entries
+// still gets its entries. The scan logs its progress every
+// journalScanLogEvery rows, since on a long-lived store it reads the whole
+// journal once.
 
 package database
 
@@ -53,7 +69,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -64,72 +79,117 @@ import (
 var journalClockLog = logger.New("database.journal-clock")
 
 const (
+	// journalClockKey holds the persisted ceiling (see PERSISTENCE).
 	journalClockKey = "system:journal_clock"
-	// journalClockMargin is added to the persisted mark when it seeds the clock
-	// at open.
-	journalClockMargin = time.Second
+	// opChangeByListBackfillKey marks the list-index backfill done (see
+	// BACKFILL OF THE LIST INDEX).
+	opChangeByListBackfillKey = "system:backfill:opchange_by_list_index_v1_done"
+	// journalClockWindow is how far past the sequence in hand a persisted ceiling
+	// reaches: one synchronous ceiling write per window of sequence time.
+	journalClockWindow = time.Minute
+	// journalScanLogEvery is how many journal rows the open-time scan reads
+	// between progress lines.
+	journalScanLogEvery = 50_000
 )
 
 // journalClock is the store's journal clock. The zero value reads the wall
-// clock and starts its mark at zero.
+// clock and starts at zero.
 type journalClock struct {
-	// mu is held by a journal batch from stamp through commit (see PERSISTENCE).
-	mu sync.Mutex
-	hw atomic.Int64 // the last sequence handed out, UnixNano
+	// mu guards hw and reserved. It is held for one stamp, and for the ceiling
+	// write when a stamp needs one; never across a batch commit.
+	mu       sync.Mutex
+	hw       int64 // the last sequence handed out, UnixNano
+	reserved int64 // the ceiling last persisted: every sequence handed out is below it
 	// wall is the time source; nil means time.Now. Set only before the store is
 	// shared (SetJournalWallClock).
 	wall func() time.Time
 }
 
-// lock takes the clock for one journal batch; call the result after its commit.
-func (c *journalClock) lock() (unlock func()) {
-	c.mu.Lock()
-	return c.mu.Unlock
-}
-
 // journalAfterStamp, when non-nil, runs in a journal batch right after it took
-// its sequence and before it commits, while the clock is held; a non-nil error
-// aborts the batch before anything is written. Test-only.
+// its sequence(s) and before it commits; a non-nil error aborts the batch before
+// anything is written. Test-only: it lets a test hold a writer between stamping
+// and committing.
 var journalAfterStamp func() error
 
 // stamp returns the wall time and a sequence strictly after every one stamp
-// returned before.
-func (c *journalClock) stamp() (wall time.Time, seq int64) {
+// returned before. When the sequence would reach the persisted ceiling, persist
+// is called with a new ceiling first and must make it durable; its error is
+// returned and nothing is handed out. A nil persist keeps no ceiling (a clock
+// that is not backed by a store).
+func (c *journalClock) stamp(persist func(ceiling int64) error) (wall time.Time, seq int64, err error) {
 	now := time.Now
 	if c.wall != nil {
 		now = c.wall
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	wall = now()
-	w := wall.UnixNano()
-	for {
-		last := c.hw.Load()
-		n := max(w, last+1)
-		if c.hw.CompareAndSwap(last, n) {
-			return wall, n
+	n := max(wall.UnixNano(), c.hw+1)
+	if persist != nil && n >= c.reserved {
+		ceiling := n + int64(journalClockWindow)
+		if err := persist(ceiling); err != nil {
+			return time.Time{}, 0, err
 		}
+		c.reserved = ceiling
 	}
+	c.hw = n
+	return wall, n, nil
 }
 
-// raise moves the mark up to at least n.
-func (c *journalClock) raise(n int64) {
-	for {
-		last := c.hw.Load()
-		if n <= last || c.hw.CompareAndSwap(last, n) {
-			return
-		}
+// seed starts the clock at ceiling, a value already persisted and at or above
+// every sequence handed out before it.
+func (c *journalClock) seed(ceiling int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.hw = max(c.hw, ceiling)
+	c.reserved = max(c.reserved, ceiling)
+}
+
+// high is the last sequence handed out (or the seed).
+func (c *journalClock) high() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hw
+}
+
+// ceiling is the persisted ceiling the clock believes in.
+func (c *journalClock) ceiling() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reserved
+}
+
+// settle lowers the persisted ceiling to the high-water mark (a clean Close),
+// so a restart starts at the actual mark and not a window past it.
+func (c *journalClock) settle(persist func(ceiling int64) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hw == 0 || c.reserved <= c.hw {
+		return nil
 	}
+	if err := persist(c.hw); err != nil {
+		return err
+	}
+	c.reserved = c.hw
+	return nil
 }
 
 // SetJournalWallClock replaces the wall clock the journal clock reads, for a
 // test that steps time back. It is not safe once writers are running.
 func (p *PebbleStore) SetJournalWallClock(now func() time.Time) { p.journalClock.wall = now }
 
-// stageJournalClock records seq in batch as the persisted mark.
-func stageJournalClock(batch *GatedBatch, seq int64) error {
+// stampJournal takes the next journal sequence, persisting a new ceiling first
+// when it needs one.
+func (p *PebbleStore) stampJournal() (time.Time, int64, error) {
+	return p.journalClock.stamp(p.persistJournalCeiling)
+}
+
+// persistJournalCeiling makes ceiling the durable value of the clock key.
+func (p *PebbleStore) persistJournalCeiling(ceiling int64) error {
 	var v [8]byte
-	binary.BigEndian.PutUint64(v[:], uint64(seq))
-	if err := batch.Set([]byte(journalClockKey), v[:], nil); err != nil {
-		return fmt.Errorf("stage journal clock: %w", err)
+	binary.BigEndian.PutUint64(v[:], uint64(ceiling))
+	if err := p.db.Set([]byte(journalClockKey), v[:], pebble.Sync); err != nil {
+		return fmt.Errorf("persist the journal clock ceiling: %w", err)
 	}
 	return nil
 }
@@ -144,54 +204,91 @@ type journalScanRow struct {
 	RevertedSeq int64      `json:"reverted_seq"`
 }
 
-// seedJournalClock sets the mark at open (see OPEN in the file comment). With
-// the key present it writes nothing; the first journal write persists the mark.
-func (p *PebbleStore) seedJournalClock() error {
+// readClockKey reads the clock key: the ceiling when it is well-formed, and
+// whether the key is good, absent or damaged.
+func (p *PebbleStore) readClockKey() (ceiling int64, state clockKeyState, err error) {
 	v, closer, err := p.db.Get([]byte(journalClockKey))
 	switch {
 	case err == nil:
-		ok := len(v) == 8
-		if ok {
-			p.journalClock.raise(int64(binary.BigEndian.Uint64(v)) + int64(journalClockMargin))
+		defer closer.Close()
+		if len(v) != 8 {
+			journalClockLog.Warn("journal clock key %s is malformed (%d bytes, want 8); seeding the clock from the journal instead", journalClockKey, len(v))
+			return 0, clockKeyMalformed, nil
 		}
-		n := len(v)
-		closer.Close()
-		if ok {
-			return nil
-		}
-		journalClockLog.Warn("journal clock key %s is malformed (%d bytes, want 8); seeding the clock from the journal instead", journalClockKey, n)
-	case !errors.Is(err, pebble.ErrNotFound):
-		return fmt.Errorf("read %s: %w", journalClockKey, err)
+		return int64(binary.BigEndian.Uint64(v)), clockKeyOK, nil
+	case errors.Is(err, pebble.ErrNotFound):
+		return 0, clockKeyMissing, nil
 	}
-	return p.scanJournalForClock()
+	return 0, clockKeyMissing, fmt.Errorf("read %s: %w", journalClockKey, err)
 }
 
-// scanJournalForClock is the missing-key (or malformed-key) seed: one pass over
-// the journal for the largest stamp, staging along the way every
-// opchange_by_list: entry a user_content_follow row lacks, then persisting the
-// mark. Idempotent: a second pass finds every entry and writes only the mark.
-func (p *PebbleStore) scanJournalForClock() error {
+type clockKeyState int
+
+const (
+	clockKeyOK clockKeyState = iota
+	clockKeyMissing
+	clockKeyMalformed
+)
+
+// seedJournalClock starts the clock at open (see OPEN) and runs the one-time
+// journal scan when the clock key is unusable or the list index was never
+// backfilled. With a good key and the backfill done it reads two keys.
+func (p *PebbleStore) seedJournalClock() error {
+	ceiling, state, err := p.readClockKey()
+	if err != nil {
+		return err
+	}
+	if state == clockKeyOK {
+		p.journalClock.seed(ceiling)
+	}
+	backfilled := true
+	if _, closer, gerr := p.db.Get([]byte(opChangeByListBackfillKey)); gerr == nil {
+		closer.Close()
+	} else if errors.Is(gerr, pebble.ErrNotFound) {
+		backfilled = false
+	} else {
+		return fmt.Errorf("read %s: %w", opChangeByListBackfillKey, gerr)
+	}
+	if state == clockKeyOK && backfilled {
+		return nil
+	}
+	return p.scanJournalAtOpen(state, !backfilled)
+}
+
+// scanJournalAtOpen is the one-time pass over the journal: the largest stamp of
+// any row (when the clock key is unusable), and every opchange_by_list: entry a
+// user_content_follow row lacks (when the backfill was never done). It then
+// persists the result in one last batch: the clock key (state is not
+// clockKeyOK; skipped for a store with no rows), and the backfill-done key (when
+// stage). Idempotent: a second pass finds every entry. Progress is logged every
+// journalScanLogEvery rows.
+func (p *PebbleStore) scanJournalAtOpen(state clockKeyState, stage bool) error {
 	started := time.Now()
 	// A row that does not decode has no readable time, and one corrupt row must
 	// not keep the store from opening: it is skipped here (the readers that
 	// need it fail on it, as they always did).
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte(opChangeKeyPrefix), UpperBound: []byte("opchange;")})
 	if err != nil {
-		return fmt.Errorf("seed the journal clock from the journal: %w", err)
+		return fmt.Errorf("scan the journal at open: %w", err)
 	}
 	var top int64
 	rows := 0
-	type entry struct{ key []byte }
-	var missing []entry
+	var missing [][]byte
 	for iter.First(); iter.Valid(); iter.Next() {
 		var c journalScanRow
 		if json.Unmarshal(iter.Value(), &c) != nil {
 			continue
 		}
 		rows++
+		if rows%journalScanLogEvery == 0 {
+			journalClockLog.Info("scanning the operation journal at open (one time): %d rows read, %d list index entries missing so far, %s elapsed", rows, len(missing), time.Since(started).Round(time.Millisecond))
+		}
 		top = max(top, c.CreatedSeq, c.RevertedSeq, c.CreatedAt.UnixNano())
 		if c.RevertedAt != nil {
 			top = max(top, c.RevertedAt.UnixNano())
+		}
+		if !stage {
+			continue
 		}
 		kind, id, ok := opChangeListRef(&OperationChange{ChangeType: c.ChangeType, FieldName: c.FieldName})
 		if !ok || !opChangeListIndexable(id) {
@@ -203,44 +300,56 @@ func (p *PebbleStore) scanJournalForClock() error {
 			continue
 		} else if !errors.Is(gerr, pebble.ErrNotFound) {
 			iter.Close()
-			return fmt.Errorf("seed the journal clock from the journal: read list entry: %w", gerr)
+			return fmt.Errorf("scan the journal at open: read list entry: %w", gerr)
 		}
-		missing = append(missing, entry{key: key})
+		missing = append(missing, key)
 	}
 	if err := iter.Error(); err != nil {
 		iter.Close()
-		return fmt.Errorf("seed the journal clock from the journal: %w", err)
+		return fmt.Errorf("scan the journal at open: %w", err)
 	}
 	iter.Close()
-	p.journalClock.raise(top)
-	if rows == 0 {
-		return nil
+	if state != clockKeyOK {
+		p.journalClock.seed(top)
 	}
 	const chunk = 2000
-	for start := 0; start < len(missing) || start == 0; start += chunk {
+	for start := 0; start < len(missing); start += chunk {
 		batch := p.db.NewBatch()
-		end := min(start+chunk, len(missing))
-		for _, m := range missing[start:end] {
-			if err := batch.Set(m.key, nil, nil); err != nil {
+		for _, key := range missing[start:min(start+chunk, len(missing))] {
+			if err := batch.Set(key, nil, nil); err != nil {
 				batch.Close()
 				return fmt.Errorf("stage opchange_by_list entry: %w", err)
-			}
-		}
-		if end == len(missing) {
-			if err := stageJournalClock(batch, top); err != nil {
-				batch.Close()
-				return err
 			}
 		}
 		err := batch.Commit(pebble.Sync)
 		batch.Close()
 		if err != nil {
-			return fmt.Errorf("seed the journal clock from the journal: %w", err)
-		}
-		if end == len(missing) {
-			break
+			return fmt.Errorf("scan the journal at open: %w", err)
 		}
 	}
-	journalClockLog.Info("journal clock seeded from the journal: %d rows scanned, %d list index entries staged, took %s", rows, len(missing), time.Since(started))
+	// The keys go last: a crash before this batch redoes the scan.
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	if state != clockKeyOK && (rows > 0 || state == clockKeyMalformed) {
+		var v [8]byte
+		binary.BigEndian.PutUint64(v[:], uint64(p.journalClock.high()))
+		if err := batch.Set([]byte(journalClockKey), v[:], nil); err != nil {
+			return fmt.Errorf("stage journal clock: %w", err)
+		}
+	}
+	if stage {
+		if err := batch.Set([]byte(opChangeByListBackfillKey), []byte("1"), nil); err != nil {
+			return fmt.Errorf("stage list index backfill marker: %w", err)
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("scan the journal at open: %w", err)
+	}
+	if state != clockKeyOK {
+		p.journalClock.seed(p.journalClock.high())
+	}
+	if rows > 0 {
+		journalClockLog.Info("journal scan at open done: %d rows read, %d list index entries staged, took %s", rows, len(missing), time.Since(started).Round(time.Millisecond))
+	}
 	return nil
 }

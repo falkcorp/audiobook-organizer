@@ -1,7 +1,7 @@
 // file: internal/undo/membership_anchor.go
-// version: 3.4.0
+// version: 3.4.1
 // guid: 7c2e9a40-5b1d-4f86-a3d7-e0b8c4f19a65
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -48,7 +48,7 @@ import (
 //
 // A survivor that stands in a retired book's slot, while that book is not
 // restored, is that book for this purpose (the records that name the survivor
-// are mapped to it, see markerHistory.survivorNodeAt); once the book is restored
+// are mapped to it, see markerHistory.survivorEpochAt); once the book is restored
 // the survivor is a book of its own (it sits right after the restored one), so
 // the records that name it then keep naming it.
 //
@@ -79,7 +79,7 @@ import (
 // owner re-arranged the list since, no slot found from the records can be
 // trusted, and nothing is placed from them. In both cases slot reports not-ok
 // and the caller falls back to the recorded index and says so
-// (RestoreMembership's note). A survivor the owner moved, or listed again, away
+// (RestoreMember's note). A survivor the owner moved, or listed again, away
 // from the slot the retire gave it is left where it was put and reported
 // (placement.kept): the revert never moves a book the owner placed, and never
 // does so silently.
@@ -141,7 +141,7 @@ func (m *carryMarker) before(o *carryMarker) bool {
 //     that journaled the retire again with another record): only the latest
 //     counts.
 //
-// Ignored is never silent: ignored holds each one, IgnoredMarkers lists them,
+// Ignored is never silent: ignored holds each one, MembershipGraph.Ignored lists them,
 // and the revert reports every one it meets (RevertResult.OrphanMarkers).
 type markerHistory struct {
 	survivor string
@@ -192,26 +192,6 @@ func liveRetires(rows []*database.OperationChange, kind, listID string) map[stri
 		}
 	}
 	return live
-}
-
-// IgnoredMarkers lists every survivor-side marker of list listID of kind that
-// the membership decisions ignore, among the list's journal rows, whatever
-// survivor it is on, oldest first.
-func IgnoredMarkers(rows []*database.OperationChange, kind, listID string) []IgnoredMarker {
-	took := UserContentField(TookKind(kind), listID)
-	held := UserContentField(HeldKind(kind), listID)
-	live := liveRetires(rows, kind, listID)
-	seen := map[string]bool{}
-	var out []IgnoredMarker
-	for _, r := range rows {
-		if r == nil || r.ChangeType != ChangeTypeUserContentFollow || r.Voided || (r.FieldName != took && r.FieldName != held) || seen[r.BookID] {
-			continue
-		}
-		seen[r.BookID] = true
-		out = append(out, newMarkerHistoryWith(r.BookID, kind, listID, rows, live).ignored...)
-	}
-	slices.SortFunc(out, func(a, b IgnoredMarker) int { return strings.Compare(a.ID, b.ID) })
-	return out
 }
 
 func newMarkerHistory(survivor, kind, listID string, rows []*database.OperationChange) *markerHistory {
@@ -310,22 +290,15 @@ func (h *markerHistory) markerOf(op, retired string) *carryMarker {
 // can come and go: its position in one epoch says nothing about the next.
 func ghostID(root *carryMarker) string { return "\x00ghost:" + root.id }
 
-// survivorNodeAt names the survivor as an anchor of a record written at time
+// survivorEpochAt names the survivor as an anchor of a record written at time
 // created (ns), ordered after the markers before it: "" when the survivor was
 // an original member of the list (it is itself); otherwise it is in the list
 // on a retire's account, and it is the book of the epoch's "took" marker while
 // that marker stands (the survivor took that book's slot and the book has not
 // been restored), else the epoch's ghost (the book was restored and the survivor
 // still stands for other retires, just after it). The marker itself is not
-// before itself.
-func (h *markerHistory) survivorNodeAt(created int64, id string) string {
-	node, _ := h.survivorEpochAt(created, id)
-	return node
-}
-
-// survivorEpochAt is survivorNodeAt that also returns the epoch's root marker
-// when the survivor was in the list on a retire's account (nil when it was an
-// original member).
+// before itself. It also returns the epoch's root marker when the survivor was
+// in the list on a retire's account (nil when it was an original member).
 func (h *markerHistory) survivorEpochAt(created int64, id string) (node string, root *carryMarker) {
 	probe := &carryMarker{created: created, id: id}
 	alive := false
@@ -408,7 +381,7 @@ type MembershipGraph struct {
 }
 
 // Ignored lists the survivor-side markers of the list's journal the graph left
-// out (IgnoredMarkers), oldest first.
+// out, oldest first.
 func (g *MembershipGraph) Ignored() []IgnoredMarker {
 	g.build()
 	out := slices.Clone(g.ignored)
@@ -446,7 +419,7 @@ func (g *MembershipGraph) AddRows(rows []*database.OperationChange) {
 // SetRow names the row being reverted and takes it into the graph (AddRows).
 // It matters when the retired book is itself a survivor of this list: the book
 // it is put back as is then the one it stood in for when it was retired
-// (markerHistory.survivorNodeAt), found from the row's time.
+// (markerHistory.survivorEpochAt), found from the row's time.
 func (g *MembershipGraph) SetRow(row *database.OperationChange) {
 	g.row = row
 	g.AddRows([]*database.OperationChange{row})
@@ -502,7 +475,7 @@ func (g *MembershipGraph) build() {
 
 // node maps an anchor recorded at a's time to its graph node: "" is the head
 // or the tail (empty); a survivor of this list is the book it stood in for at
-// that time (or its epoch's ghost), see markerHistory.survivorNodeAt; any other
+// that time (or its epoch's ghost), see markerHistory.survivorEpochAt; any other
 // id is itself.
 func (g *MembershipGraph) node(id, empty string, a anchored) string {
 	if id == "" {
