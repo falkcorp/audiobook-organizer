@@ -1,5 +1,5 @@
 // file: internal/database/retired_lookup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
 // last-edited: 2026-10-23
 
@@ -35,4 +35,33 @@ func AllBookFilesCoreIncludingRetired(s any) ([]BookFileCore, error) {
 		return g.GetAllBookFilesCore()
 	}
 	return nil, fmt.Errorf("all book_file rows: %w", ErrRetiredReaderUnavailable)
+}
+
+// BookFilesIncludingRetired is GetBookFiles with the retired rows kept, with the
+// same capability resolution and fallback as AllBookFilesCoreIncludingRetired.
+func BookFilesIncludingRetired(s any, bookID string) ([]BookFile, error) {
+	if r, ok := AsCapability[RetiredBookFileReader](s); ok {
+		return r.GetBookFilesIncludingRetired(bookID)
+	}
+	if g, ok := s.(interface {
+		GetBookFiles(bookID string) ([]BookFile, error)
+	}); ok {
+		return g.GetBookFiles(bookID)
+	}
+	return nil, fmt.Errorf("book_files of %s: %w", bookID, ErrRetiredReaderUnavailable)
+}
+
+// BookFileByPIDIncludingRetired is GetBookFileByPID that also answers a PID
+// held only by a retired row, with the same capability resolution and fallback
+// as AllBookFilesCoreIncludingRetired.
+func BookFileByPIDIncludingRetired(s any, itunesPID string) (*BookFile, error) {
+	if r, ok := AsCapability[RetiredBookFileReader](s); ok {
+		return r.GetBookFileByPIDIncludingRetired(itunesPID)
+	}
+	if g, ok := s.(interface {
+		GetBookFileByPID(itunesPID string) (*BookFile, error)
+	}); ok {
+		return g.GetBookFileByPID(itunesPID)
+	}
+	return nil, fmt.Errorf("book_file by PID %s: %w", itunesPID, ErrRetiredReaderUnavailable)
 }

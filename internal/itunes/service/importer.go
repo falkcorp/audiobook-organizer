@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.41.1
+// version: 1.42.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package itunesservice
 
@@ -463,6 +463,20 @@ func (imp *Importer) executeLibrary(ctx context.Context, opID string, req Import
 					continue
 				}
 				if bookID, err := imp.store.GetBookByExternalID("itunes", firstPID); err == nil && bookID != "" {
+					// The external-ID backfill maps a retired row's PID to the
+					// holder. That mapping says "this track is known", not "this
+					// track is the holder's live file": linking would write the
+					// retired track's play count and fields onto the live holder.
+					if holderID, retiredErr := imp.retiredPIDHolder(firstPID); retiredErr != nil {
+						recordImportFailure(status, fmt.Sprintf("existing-book lookup by track pid %s (retired rows) failed for '%s': %v", firstPID, book.Title, retiredErr))
+						updateImportProgress(log, status, processed, totalGroups, book.Title)
+						continue
+					} else if holderID != "" {
+						incImportSkipped(status)
+						recordImportError(status, fmt.Sprintf("skipped '%s': track pid %s is already in the library as a retired version of book %s; not importing it again and not writing it onto that book", book.Title, firstPID, holderID))
+						updateImportProgress(log, status, processed, totalGroups, book.Title)
+						continue
+					}
 					linked, linkErr := imp.linkITunesMetadata(bookID, book, log)
 					if linkErr != nil {
 						recordImportFailure(status, linkErr.Error())
@@ -1737,7 +1751,15 @@ func (e *importTargetRefusedError) Error() string { return e.msg }
 //     row awaiting purge. Which of the two the owner wants is theirs to say:
 //     restore the book (and re-import links to it) or purge it (and
 //     re-import creates a fresh one). The skip is recorded in the import's
-//     errors, naming the deleted book.
+//     errors, naming the deleted book;
+//   - nothing live matches, but a track's PID is held only by a retired
+//     book_file row. A retired row is a version the retire-versions repair
+//     moved onto a live holder and kept the PID on as provenance, so the track
+//     is a known retired version of that holder: creating a book for it would
+//     re-import content the library already holds, and linking to the holder
+//     would write a retired track's play count and fields onto the live book.
+//     (A live match wins: a retired row beside a live one for the same album is
+//     ordinary, and the live row is what GetBookFileByPID answers.)
 func (imp *Importer) findExistingImportTarget(book *database.Book, group albumGroup) (string, error) {
 	ids := map[string]string{}     // live book ID -> the key that found it
 	deleted := map[string]string{} // marked-for-deletion book ID -> key
@@ -1763,7 +1785,7 @@ func (imp *Importer) findExistingImportTarget(book *database.Book, group albumGr
 			deleted[owner.ID] = "path " + book.FilePath
 		}
 	}
-	byPID, err := imp.bookIDsByTrackPIDs(group)
+	byPID, retiredByPID, err := imp.bookIDsByTrackPIDs(group)
 	if err != nil {
 		return "", fmt.Errorf("%w (for '%s')", err, book.Title)
 	}
@@ -1793,6 +1815,9 @@ func (imp *Importer) findExistingImportTarget(book *database.Book, group albumGr
 	if len(deleted) > 0 {
 		return "", &importTargetRefusedError{msg: fmt.Sprintf("skipped '%s': it is already in the library as %d book(s) marked for deletion (%s); restore or purge them before re-importing -- not linking to a deleted book or creating a second one beside it", book.Title, len(deleted), describeMatches(deleted))}
 	}
+	if len(retiredByPID) > 0 {
+		return "", &importTargetRefusedError{msg: fmt.Sprintf("skipped '%s': its track PIDs are already in the library as retired version(s) of %d book(s) (%s); not creating a second book for content the library holds, and not writing a retired track onto its holder", book.Title, len(retiredByPID), describeMatches(retiredByPID))}
+	}
 	return "", nil
 }
 
@@ -1800,23 +1825,62 @@ func (imp *Importer) findExistingImportTarget(book *database.Book, group albumGr
 // found by each track's PID on book_files: book ID -> the PID that found it.
 // A lookup error is returned rather than read as "no match". Used by
 // findExistingImportTarget, which combines it with its own path lookup.
-func (imp *Importer) bookIDsByTrackPIDs(group albumGroup) (map[string]string, error) {
-	ids := map[string]string{}
+//
+// The second map is the retired side: holder book ID -> a PID that only a
+// retired book_file row holds (GetBookFileByPID skips retired rows, so it
+// answers nil for such a PID, which a caller would read as "new track"). A PID
+// the live lookup answers never lands in it, so a holder whose live row carries
+// the PID is found in the first map only.
+func (imp *Importer) bookIDsByTrackPIDs(group albumGroup) (live, retired map[string]string, err error) {
+	live = map[string]string{}
+	retired = map[string]string{}
 	for _, track := range group.tracks {
 		if track == nil || track.PersistentID == "" {
 			continue
 		}
 		bf, err := imp.store.GetBookFileByPID(track.PersistentID)
 		if err != nil {
-			return nil, fmt.Errorf("existing-book lookup by track pid %s failed: %w", track.PersistentID, err)
+			return nil, nil, fmt.Errorf("existing-book lookup by track pid %s failed: %w", track.PersistentID, err)
 		}
 		if bf != nil && bf.BookID != "" {
-			if _, seen := ids[bf.BookID]; !seen {
-				ids[bf.BookID] = track.PersistentID
+			if _, seen := live[bf.BookID]; !seen {
+				live[bf.BookID] = track.PersistentID
+			}
+			continue
+		}
+		rbf, err := database.BookFileByPIDIncludingRetired(imp.store, track.PersistentID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("existing-book lookup by track pid %s (retired rows) failed: %w", track.PersistentID, err)
+		}
+		if rbf != nil && rbf.Retired && rbf.BookID != "" {
+			if _, seen := retired[rbf.BookID]; !seen {
+				retired[rbf.BookID] = track.PersistentID
 			}
 		}
 	}
-	return ids, nil
+	return live, retired, nil
+}
+
+// retiredPIDHolder reports the holder book of a retired book_file row that
+// holds pid, and "" when the PID is held by a live row or by no row. A PID a
+// live row holds is the live answer even when a retired row carries it too
+// (GetBookFileByPID, which skips retired rows, finds the live one first).
+func (imp *Importer) retiredPIDHolder(pid string) (string, error) {
+	live, err := imp.store.GetBookFileByPID(pid)
+	if err != nil {
+		return "", err
+	}
+	if live != nil {
+		return "", nil
+	}
+	bf, err := database.BookFileByPIDIncludingRetired(imp.store, pid)
+	if err != nil {
+		return "", err
+	}
+	if bf == nil || !bf.Retired {
+		return "", nil
+	}
+	return bf.BookID, nil
 }
 
 // describeMatches renders ID -> key matches as a sorted, readable list.

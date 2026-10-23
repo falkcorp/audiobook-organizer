@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c9d0e1f2-a3b4-c5d6-e7f8-a9b0c1d2e3f4
-// last-edited: 2026-10-15
+// last-edited: 2026-10-23
 
 package itunes
 
@@ -105,7 +105,7 @@ func (m *MockBackfillStore) GetAllBooksCore(limit, offset int) ([]database.BookC
 	return all[offset:end], nil
 }
 
-func (m *MockBackfillStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
+func (m *MockBackfillStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
 	m.getAllBookFilesCalls++
 	if m.hasError {
 		return nil, errMockFailure
