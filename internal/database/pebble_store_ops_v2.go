@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.33.2
+// version: 3.33.3
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-22
 
@@ -38,6 +38,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
@@ -559,6 +560,9 @@ func (p *PebbleStore) getExistingOpV2(id string) (OperationV2Row, error) {
 	return row, nil
 }
 
+// opsV2SweepLog is the logger of the hollow-operation sweep.
+var opsV2SweepLog = logger.New("database.opsv2-sweep")
+
 // SweepHollowOperationsV2 deletes every opv2:op: row whose stored value does
 // not decode to an operation with an id — the shells described on
 // getExistingOpV2 — together with the act/state keys that hang off the key's
@@ -614,7 +618,9 @@ func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
 		// gone, so it goes with it.
 		// An id a row set cannot be keyed by has no rows to remove (ReplaceOpRows
 		// refuses it); skipping it keeps one such record from failing the sweep.
-		if validOpRowsID(id) != nil {
+		// stageOpRowsDelete checks the same thing again as defence in depth.
+		if verr := validOpRowsID(id); verr != nil {
+			opsV2SweepLog.Warn("hollow operation sweep: not deleting a row set for %q (nothing can be stored under it): %v", id, verr)
 			continue
 		}
 		if err := stageOpRowsDelete(batch, id); err != nil {

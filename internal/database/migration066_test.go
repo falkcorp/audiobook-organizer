@@ -1,5 +1,5 @@
 // file: internal/database/migration066_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c16a990-2d0e-4278-b18a-1d20d6bfe3ea
 // last-edited: 2026-10-22
 
@@ -148,12 +148,40 @@ func TestMigration066SkipsUndecodableOperationRecords(t *testing.T) {
 	insertPlanLikeOp(t, p, "plan-legacy", LegacyPlanOpDefID, legacy)
 	require.NoError(t, p.db.Set(opv2OpKey("junk"), []byte("{not json"), pebble.Sync))
 	require.NoError(t, p.db.Set(opv2OpKey("wrong-shape"), []byte(`{"id":["not","a","string"]}`), pebble.Sync))
+	// A time.ParseError, not a json syntax or type error: the classification
+	// is by where the failure came from, not by which error type it is.
+	require.NoError(t, p.db.Set(opv2OpKey("bad-time"), []byte(`{"ID":"bad-time","QueuedAt":"garbage"}`), pebble.Sync))
 
 	rep, err := p.StripLegacyPlanRows()
 	require.NoError(t, err, "an undecodable operation record must not fail the strip")
-	require.Equal(t, 2, rep.UnreadableOps, "the syntax-error record and the wrong-type record")
+	require.Equal(t, 3, rep.UnreadableOps, "the syntax-error, wrong-type and bad-timestamp records")
 	require.Equal(t, 1, rep.Stripped, "the plan next to them is still stripped")
 	require.NotContains(t, resultOf(t, p, "plan-legacy"), `"rows"`)
 
 	require.NoError(t, migration066Up(p), "the registered Up must succeed over the same store")
+}
+
+// TestMigration066CountsLegacyPlanWithUndecodableTimestamp: a legacy plan whose
+// record also has a timestamp that does not parse cannot be rewritten (the
+// rewrite decodes the row whole and re-indexes it by those times). It is
+// counted and left exactly as it is, the boot goes on, and a legacy plan
+// beside it is still stripped.
+func TestMigration066CountsLegacyPlanWithUndecodableTimestamp(t *testing.T) {
+	st, cleanup := setupTestDB(t)
+	defer cleanup()
+	p := st.(*PebbleStore)
+
+	insertPlanLikeOp(t, p, "plan-ok", LegacyPlanOpDefID, `{"fixer_id":"x","rows":[{"row_id":"a"}]}`)
+	torn := `{"ID":"plan-torn","DefID":"` + LegacyPlanOpDefID + `","QueuedAt":"garbage","ResultData":"{\"rows\":[1]}"}`
+	require.NoError(t, p.db.Set(opv2OpKey("plan-torn"), []byte(torn), pebble.Sync))
+
+	rep, err := p.StripLegacyPlanRows()
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.UnreadableOps)
+	require.Equal(t, 1, rep.Stripped)
+	require.NotContains(t, resultOf(t, p, "plan-ok"), `"rows"`)
+	raw, closer, err := p.db.Get(opv2OpKey("plan-torn"))
+	require.NoError(t, err)
+	require.Equal(t, torn, string(raw), "the undecodable record is left byte for byte as it was")
+	require.NoError(t, closer.Close())
 }

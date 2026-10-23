@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
 // last-edited: 2026-10-22
 
@@ -1399,9 +1399,18 @@ func opv2CheckRole(fset *token.FileSet, key, role string, fd *ast.FuncDecl, allo
 		// x.stageOpRowsDelete(...), a method of some other type that could do
 		// anything with the hollow id. Only the package-level helper is the
 		// narrow one the sweep is allowed to reach.
-		if _, bare := c.Fun.(*ast.Ident); role == "sweep" && name == "stageOpRowsDelete" && !bare {
-			add("(role sweep) calls %s as a selector at %s; only the package-level stageOpRowsDelete is the narrow row-range helper", name, pos(c))
-			return true
+		if role == "sweep" && name == "stageOpRowsDelete" {
+			if id, bare := c.Fun.(*ast.Ident); !bare {
+				add("(role sweep) calls %s as a selector at %s; only the package-level stageOpRowsDelete is the narrow row-range helper", name, pos(c))
+				return true
+			} else if id.Obj != nil && id.Obj.Kind != ast.Fun {
+				// The parser resolves a name declared in this file: a function
+				// is Kind Fun, while a local closure, variable or parameter
+				// that shadows the helper is not. The real helper lives in
+				// another file, so its Obj is nil here.
+				add("(role sweep) calls a local value named %s at %s, which shadows the package-level row-range helper", name, pos(c))
+				return true
+			}
 		}
 		if name == "len" || name == "opv2OpKey" || opv2KeySinks[role][name] || allowlistedCallee(name) {
 			return true
@@ -1815,6 +1824,20 @@ func (p *PebbleStore) Sweep(it iter, batch b) error {
 	}
 	// The helper is accepted by name, and opv2CalleeName returns the same name
 	// for a method of another type: that must not be accepted as the helper.
+	// A local closure (or variable) of the same name shadows the helper.
+	for name, body := range map[string]string{
+		"stageOpRowsDelete as a local closure":  "\t\tstageOpRowsDelete := func(b b, id string) error { return nil }\n\t\tif err := stageOpRowsDelete(batch, id); err != nil {\n\t\t\treturn err\n\t\t}\n",
+		"stageOpRowsDelete as a local variable": "\t\tvar stageOpRowsDelete func(b b, id string) error\n\t\tif err := stageOpRowsDelete(batch, id); err != nil {\n\t\t\treturn err\n\t\t}\n",
+	} {
+		v := check(body)
+		if len(v) == 0 {
+			t.Errorf("%s in the sweep role was not flagged", name)
+			continue
+		}
+		if !strings.Contains(joined(v), "local value") {
+			t.Errorf("%s: flagged, but not for being a local value:\n%s", name, joined(v))
+		}
+	}
 	for name, body := range map[string]string{
 		"stageOpRowsDelete as a method of another value":  "\t\tif err := batch.stageOpRowsDelete(batch, id); err != nil {\n\t\t\treturn err\n\t\t}\n",
 		"stageOpRowsDelete as a method of a package type": "\t\tif err := p.stageOpRowsDelete(batch, id); err != nil {\n\t\t\treturn err\n\t\t}\n",

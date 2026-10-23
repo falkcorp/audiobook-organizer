@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-10-22
 
@@ -584,10 +584,10 @@ func (h *Handler) loadPlan(c *gin.Context, opID, fixerID string) (*repairs.PlanR
 		return plan, true
 	case errors.Is(err, repairs.ErrPlanNotFound):
 		httputil.RespondWithNotFound(c, "repair plan", opID)
-	case errors.Is(err, repairs.ErrPlanLegacyFormat):
-		// LoadPlan reads only the summary, so the only unreadable-plan answer
-		// it can give is the old format; the row-level ones surface from
-		// Page and Select, which map them through respondPlanNeedsRerun.
+	case repairs.PlanNeedsRerun(err):
+		// LoadPlan reads only the summary, so what it can report here is the
+		// old format or a summary that does not decode; the row-level
+		// failures surface from Page and Select, which map them the same way.
 		respondPlanNeedsRerun(c, err)
 	case errors.Is(err, repairs.ErrPlanNotComplete):
 		httputil.RespondWithConflict(c, err.Error())

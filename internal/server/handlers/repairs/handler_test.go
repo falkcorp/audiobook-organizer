@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-10-22
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -81,6 +82,23 @@ type fakeOps struct {
 	mu       sync.Mutex
 	rows     map[string]*database.OperationV2Row
 	settings map[string]string
+	// scanErr and getRowsErr, when set, make the plan-row reads fail the way a
+	// store that cannot read answers (an I/O error, not damaged data).
+	scanErr, getRowsErr error
+}
+
+func (o *fakeOps) ScanOpRowIndex(opID string, fn func(rowID string, index []byte) error) error {
+	if o.scanErr != nil {
+		return o.scanErr
+	}
+	return o.MemOpRows.ScanOpRowIndex(opID, fn)
+}
+
+func (o *fakeOps) GetOpRows(opID string, rowIDs []string) ([][]byte, error) {
+	if o.getRowsErr != nil {
+		return nil, o.getRowsErr
+	}
+	return o.MemOpRows.GetOpRows(opID, rowIDs)
 }
 
 func (o *fakeOps) GetOperationV2(id string) (*database.OperationV2Row, error) {
@@ -381,6 +399,40 @@ func TestPlanRowsRoute_UnreadableStoredPlanAsksForARerun(t *testing.T) {
 			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 			require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
 			require.Contains(t, w.Body.String(), "run the plan again")
+		})
+	}
+}
+
+// A plan op whose stored summary is not a plan summary at all is the same 409
+// and code: the plan cannot be read and running it again is the remedy (a 500
+// would offer only a Retry that reads the same bytes).
+func TestPlanSummaryThatDoesNotDecodeIsAConflict(t *testing.T) {
+	r, _, ops := setup(t)
+	bad := `"not json"`
+	ops.rows["op-bad-summary"] = &database.OperationV2Row{ID: "op-bad-summary", DefID: repairs.PlanOpID, Status: "completed", ResultData: &bad}
+	w := do(r, http.MethodGet, "/api/v1/repairs/version-group-primary-repair/plan/op-bad-summary/rows", "")
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply", `{"plan_op_id":"op-bad-summary","row_ids":["r"]}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+}
+
+// A store that cannot READ the rows (an I/O error) is a server fault, not a
+// damaged plan: 500 and no rerun code, so the lane offers Retry, not "Run plan
+// again" for a plan that is fine.
+func TestPlanRowsRoute_StoreReadErrorIsA500NotARerun(t *testing.T) {
+	const rowsPath = "/api/v1/repairs/version-group-primary-repair/plan/op-plan/rows?offset=0&limit=5"
+	for name, set := range map[string]func(o *fakeOps){
+		"index scan": func(o *fakeOps) { o.scanErr = errors.New("io") },
+		"row read":   func(o *fakeOps) { o.getRowsErr = errors.New("io") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, _, ops := setup(t)
+			set(ops)
+			w := do(r, http.MethodGet, rowsPath, "")
+			require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+			require.NotContains(t, w.Body.String(), PlanNeedsRerunCode)
 		})
 	}
 }

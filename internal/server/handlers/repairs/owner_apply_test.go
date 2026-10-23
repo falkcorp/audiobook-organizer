@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
 // last-edited: 2026-10-22
 
@@ -8,6 +8,7 @@ package repairs
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -327,5 +328,17 @@ func TestOwnerApply_UndecodableRowAsksForARerun(t *testing.T) {
 	w := ownerPost(r, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`, browserHdrs)
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+	require.Empty(t, enq.calls)
+}
+
+// Owner-apply on a store that cannot read the row (an I/O error) is a 500 with
+// no rerun code, and nothing is enqueued: the plan is not damaged, the read
+// failed.
+func TestOwnerApply_StoreReadErrorIsA500NotARerun(t *testing.T) {
+	r, enq, _, ops := ownerSetupWithOps(t, cfOwner, testOwnerEmail)
+	ops.getRowsErr = errors.New("io")
+	w := ownerPost(r, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`, browserHdrs)
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), PlanNeedsRerunCode)
 	require.Empty(t, enq.calls)
 }

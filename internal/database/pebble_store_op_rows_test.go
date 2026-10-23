@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_op_rows_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 76703037-5000-42de-b452-f8c43b7fe9e3
 // last-edited: 2026-10-22
 
@@ -240,15 +240,17 @@ func TestReplaceOpRowsRefusesSeparatorIDs(t *testing.T) {
 }
 
 // TestSweepSkipsRowRangeOfSeparatorID: a hollow record whose key holds the
-// separator is still swept; only its row-range delete is skipped, and the
-// sweep does not fail (which would stop the boot that runs it).
+// separator is still swept, only its row-range delete is skipped, and the
+// sweep does not fail (which would stop the boot that runs it). The point of
+// the refusal is what the delete would reach: the prefix of the id "a:b" is
+// opv2:row:a:b:, and the row "b:x" of the op "a" is stored at
+// opv2:row:a:b:x, so an unguarded sweep of "a:b" deletes a row of "a".
 func TestSweepSkipsRowRangeOfSeparatorID(t *testing.T) {
 	st, cleanup := setupTestDB(t)
 	defer cleanup()
 	p := st.(*PebbleStore)
-	// Rows of the op "a" must survive the sweep of the hollow record "a:b".
 	if err := p.ReplaceOpRows("a", 1, func(int) (OpRow, error) {
-		return OpRow{ID: "r", Index: []byte("i"), Data: []byte("d")}, nil
+		return OpRow{ID: "b:x", Index: []byte("i"), Data: []byte("d")}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +261,12 @@ func TestSweepSkipsRowRangeOfSeparatorID(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("sweep = %d, %v; want 1, nil", n, err)
 	}
-	if got, _ := p.GetOpRows("a", []string{"r"}); got[0] == nil {
-		t.Fatal("the sweep of \"a:b\" deleted a row of op \"a\"")
+	got, err := p.GetOpRows("a", []string{"b:x"})
+	if err != nil || got[0] == nil {
+		t.Fatalf("the sweep of \"a:b\" deleted the row \"b:x\" of op \"a\": %q, %v", got, err)
+	}
+	ids, _ := scanIDs(t, p, "a")
+	if len(ids) != 1 {
+		t.Fatalf("index entries of op a = %v, want the one for b:x", ids)
 	}
 }

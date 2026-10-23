@@ -1,5 +1,5 @@
 // file: internal/database/iface_op_rows.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: afe6c0bf-64dc-4200-9150-d9262fe2a512
 // last-edited: 2026-10-22
 
@@ -25,7 +25,7 @@ type OpRow struct {
 // Why it exists: an operation row is read whole by GetOperationV2, by the
 // /system/status poll, by the boot scan and by the diagnostics bundle, and
 // the v3 mirror stores it a second time. A repairs plan holds one row per
-// candidate (tens of thousands of them: 40 to 57 MB in one result), and every
+// candidate (tens of thousands of them: about 39 MB in one result), and every
 // one of those readers decoded all of it. The rows live here instead, and the
 // operation's ResultData keeps only the summary.
 //
