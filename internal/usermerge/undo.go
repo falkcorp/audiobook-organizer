@@ -21,6 +21,16 @@ type UndoRequest struct {
 	JournalID string
 }
 
+// mergeLockedStatus is the status Apply leaves the absorbed account in.
+const mergeLockedStatus = "locked"
+
+// hasCredentialOps reports whether any written op moved a sign-in or an API key.
+func hasCredentialOps(ops []database.UserMergeOp) bool {
+	return slices.ContainsFunc(ops, func(op database.UserMergeOp) bool {
+		return op.Family == FamOAuthIdentities || op.Family == FamAPIKeys
+	})
+}
+
 // invert is the op that puts op's key back to its before-image: it expects the
 // value op wrote and writes the value op replaced.
 func invert(op database.UserMergeOp) database.UserMergeOp {
@@ -94,16 +104,40 @@ func (s *Service) Undo(ctx context.Context, req UndoRequest, prog Progress) (*Jo
 			return fail(err)
 		}
 	}
-	// Back to the status the account had before the merge locked it. A bump of the
-	// credential epoch comes with the write; the epoch is never lowered, so no
-	// session from before the merge comes back.
-	if want := j.AbsorbedStatusBefore; want != "" {
-		if abs, err := s.mustUser(j.AbsorbedID, "absorbed account"); err != nil {
+	// The merge moved linked sign-ins and API keys onto the survivor and undo has
+	// just moved them back. A web session the survivor opened through a sign-in
+	// that is now gone, or an ABS session stamped with the epoch of that moment,
+	// must not outlive it: bump the survivor's credential epoch (which refuses
+	// every ABS session) and revoke its web and ABS sessions. The survivor signs
+	// in again, which includes the admin who clicked undo when that is them.
+	if hasCredentialOps(written) {
+		if _, err := s.creds.BumpUserCredentialEpoch(j.SurvivorID); err != nil {
+			return fail(fmt.Errorf("end the surviving account's sessions: %w", err))
+		}
+		if err := s.revokeSessions(j.SurvivorID); err != nil {
 			return fail(err)
-		} else if abs.Status != want {
+		}
+	}
+	// Back to the status the account had before the merge locked it, but only
+	// while it still has the status the merge left it in. Anything else is an
+	// admin's decision made after the merge (deactivated, reactivated by hand);
+	// undo must not turn a deactivated account back on, so it keeps that status
+	// and says so.
+	if want := j.AbsorbedStatusBefore; want != "" {
+		abs, err := s.mustUser(j.AbsorbedID, "absorbed account")
+		if err != nil {
+			return fail(err)
+		}
+		switch {
+		case abs.Status == want:
+		case abs.Status == mergeLockedStatus:
 			if _, err := s.creds.SetUserStatus(j.AbsorbedID, want); err != nil {
 				return fail(fmt.Errorf("restore the merged-away account's status: %w", err))
 			}
+		default:
+			j.UndoConflicts = append(j.UndoConflicts, fmt.Sprintf(
+				"the merged-away account's status is %q now, not the %q the merge left it in; it keeps %q (it was %q before the merge)",
+				abs.Status, mergeLockedStatus, abs.Status, want))
 		}
 	}
 	now := s.now()
