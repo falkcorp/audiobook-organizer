@@ -2,6 +2,7 @@
   "id": "synthetic-ID",
   "book_id": "synthetic-BookID",
   "version_id": "synthetic-VersionID",
+  "retired": true,
   "file_path": "synthetic-FilePath",
   "original_filename": "synthetic-OriginalFilename",
   "itunes_path": "synthetic-ITunesPath",
