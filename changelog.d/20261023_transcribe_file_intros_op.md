@@ -27,8 +27,11 @@ server decodes nothing, each file's path and a 90 second length go to the worker
   endpoint outage writes nothing and defers.
 - Fills a book's transcript from its ordinal-0 file only when the book has none,
   and never from a silent clip. Nothing is ever overwritten under `only_missing`.
-- Pauses between batches while `library.scan` or `metadata.batch-apply-cached` is
-  queued or running. The op declares no `Writes` on purpose: it runs for days, and
+- Refuses to start (and `clear_run_id` refuses to start) while `library.scan` or
+  `metadata.batch-apply-cached` is queued or running, and re-checks immediately
+  before every batch of writes, holding results until it is clear. The scanner's
+  batch upsert reads a file row without the per-file lock, so a result written
+  during a scan could be erased by it. The op declares no `Writes` on purpose: it runs for days, and
   the dispatcher's write-set gate would keep `acoustid.backfill` (and every other
   op declaring `books`/`book_files`) queued for the whole run. Its writes are
   field-scoped and the shared `book_file` merge keeps the intro group against any
