@@ -1140,6 +1140,54 @@ type BookFile struct {
 	// (success OR failure), distinct from IntroTranscribedAt which only advances
 	// on a successful transcription.
 	TranscribeAttemptedAt *time.Time `json:"transcribe_attempted_at,omitempty"`
+
+	// ---- Per-file intro provenance (maintenance.transcribe-file-intros) ----
+	//
+	// These extend the group above; they do not duplicate it. They record WHAT
+	// produced a per-file result and are what make the op resumable and
+	// reversible. Which op owns which field:
+	//
+	//   transcribe-file-intros  writes every field of the group (the transcript,
+	//                           the parsed credits, status/error/attempted-at,
+	//                           and the four below) through
+	//                           BookFileIntroStore.SetBookFileIntro.
+	//   intro-migrate-single-file writes the transcript, the parsed credits and
+	//                           IntroTranscribedAt/TranscribeStatus only; it
+	//                           copies a book-level result and leaves the four
+	//                           below empty, which is how a migrated row is told
+	//                           from a transcribed one.
+	//   rescans / upserts       write none of them; the merge keeps the stored
+	//                           values (bookFileFieldClasses).
+
+	// IntroSourceHash is the FileHash of the bytes the stored transcript was made
+	// from, and the op's DONE MARKER: a file is done exactly when
+	// IntroSourceHash == FileHash and FileHash is non-empty. A file whose bytes
+	// changed (a new FileHash) reads as not done and is re-transcribed. It is on
+	// BookFileCore (memdb-retained) because work selection reads Core rows.
+	IntroSourceHash string `json:"intro_source_hash,omitempty"`
+	// IntroRunOpID is the id of the operation that wrote this file's result. It
+	// is what clear-by-run-id selects on, so it is memdb-retained like
+	// IntroSourceHash. It survives rescans (the merge keeps it), which is the
+	// reason it lives on the row rather than in an op-side list.
+	IntroRunOpID string `json:"intro_run_op_id,omitempty"`
+	// IntroMeta is how the clip was made and which model heard it. Not queried by
+	// any filter, so stripBookFileForMemdb clears it like IntroTranscription.
+	IntroMeta *IntroMeta `json:"intro_meta,omitempty"`
+}
+
+// IntroMeta records the settings behind one per-file intro transcript. Every
+// field is the value the Whisper endpoint or the op reported at the time, kept
+// so a later run with a different model or clip length can be told apart.
+type IntroMeta struct {
+	// Model is the model the answering endpoint reported (empty when it did not).
+	Model string `json:"model,omitempty"`
+	// Language is the language Whisper detected, when the endpoint reports one.
+	Language string `json:"language,omitempty"`
+	// ClipStartSec and ClipLengthSec describe the audio the transcript covers:
+	// the clip begins ClipStartSec seconds into the file and runs ClipLengthSec
+	// seconds (90 for every file this op transcribes).
+	ClipStartSec  int `json:"clip_start_sec"`
+	ClipLengthSec int `json:"clip_length_sec,omitempty"`
 }
 
 // UserPosition is one user's resume point for one segment of one

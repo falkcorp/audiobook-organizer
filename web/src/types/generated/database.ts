@@ -272,11 +272,13 @@ export interface BookCore {
  * performed by stripBookFileForMemdb. It contains every BookFile field EXCEPT
  * the heavy set that memdb clears before insertion:
  * 	FingerprintFailureReason, FingerprintFailureDetail, FingerprintDiagnosticJSON,
- * 	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription
- * IntroTranscription is the only member of the per-file intro-transcription
- * group that is stripped. The other SEVEN (TranscribedTitle/Author/Narrator,
- * IntroTranscribedAt, TranscribeStatus, TranscribeError, TranscribeAttemptedAt)
- * are RETAINED here — they are the small, queryable fields, and the raw
+ * 	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription, IntroMeta
+ * IntroTranscription and IntroMeta are the only members of the per-file
+ * intro-transcription group that are stripped. The others (TranscribedTitle/
+ * Author/Narrator/Translator/CoverArtist, IntroTranscribedAt, TranscribeStatus,
+ * TranscribeError, TranscribeAttemptedAt, IntroSourceHash, IntroRunOpID) are
+ * RETAINED here — they are the small, queryable fields (IntroSourceHash is the
+ * op's done marker, IntroRunOpID what clear-by-run-id selects on), and the raw
  * transcript carries ~99% of the group's bytes. See memdb_strip.go for the math.
  * Note the two fingerprint-adjacent fields that are intentionally RETAINED
  * (they are NOT stripped in memdb_strip.go and therefore belong on Core):
@@ -369,6 +371,12 @@ export interface BookFileCore {
   transcribe_status?: string;
   transcribe_error?: string;
   transcribe_attempted_at?: string;
+  /**
+   * IntroSourceHash is the per-file done marker (== FileHash when done) and
+   * IntroRunOpID the op that wrote the result; see BookFile.
+   */
+  intro_source_hash?: string;
+  intro_run_op_id?: string;
   /**
    * Per-file scan cache. RETAINED rather than stripped: the stripped set is the
    * heavy fingerprint/transcript strings, and these are three small scalars that

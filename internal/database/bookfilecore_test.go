@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 29325171-4866-4142-82c6-e010f724ae5e
-// last-edited: 2026-10-14
+// last-edited: 2026-10-22
 
 package database
 
@@ -29,10 +29,12 @@ var strippedBookFileFields = []string{
 	"FingerprintDiagnosticJSON",
 	"FingerprintFailureDetail",
 	"FingerprintFailureReason",
-	// The raw ~90s Whisper transcript. The ONLY stripped member of the eight-field
-	// per-file intro-transcription group; the other seven are small/queryable and
-	// stay on Core. See the rationale block in memdb_strip.go.
+	// The raw ~90s Whisper transcript and the model/clip settings behind it: the
+	// only stripped members of the per-file intro-transcription group; the rest
+	// (parsed credits, status, IntroSourceHash, IntroRunOpID) are small/queryable
+	// and stay on Core. See the rationale block in memdb_strip.go.
 	"IntroTranscription",
+	"IntroMeta",
 }
 
 // structFieldNames is defined once in bookcore_test.go (same package) and

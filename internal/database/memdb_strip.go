@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-stripbook0001
-// last-edited: 2026-09-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -148,5 +148,10 @@ func stripBookFileForMemdb(src *BookFile) *BookFile {
 	// per-file intro-transcription group — see the rationale block above. The
 	// other seven are small, queryable, and retained (they are on BookFileCore).
 	cp.IntroTranscription = nil
+	// IntroMeta: model/language/clip settings behind the transcript. Nothing
+	// filters on them, so they are stripped like the transcript. IntroSourceHash
+	// and IntroRunOpID are NOT: selection and clear-by-run-id read them from the
+	// Core projection.
+	cp.IntroMeta = nil
 	return &cp
 }

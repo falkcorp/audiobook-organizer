@@ -77,6 +77,8 @@
   "transcribe_status": "synthetic-TranscribeStatus",
   "transcribe_error": "synthetic-TranscribeError",
   "transcribe_attempted_at": "2026-01-02T03:04:05Z",
+  "intro_source_hash": "synthetic-IntroSourceHash",
+  "intro_run_op_id": "synthetic-IntroRunOpID",
   "last_scan_mtime": 7,
   "last_scan_size": 7,
   "needs_rescan": true
