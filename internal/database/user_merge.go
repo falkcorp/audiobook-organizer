@@ -1,5 +1,5 @@
 // file: internal/database/user_merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d0a7e3c-91b4-4f26-8c1d-e7a2b6f40935
 // last-edited: 2026-10-23
 
@@ -142,11 +142,6 @@ func UserBookStateStatusKeys(userID, bookID string) []string {
 		out = append(out, UserBookStateStatusKey(userID, st, bookID))
 	}
 	return out
-}
-
-// UserPositionKey is one segment's position row.
-func UserPositionKey(userID, bookID, segmentID string) string {
-	return "upos:" + userID + ":" + bookID + ":" + segmentID
 }
 
 // UserPositionBookPrefix is the prefix of every position row of one (user, book).

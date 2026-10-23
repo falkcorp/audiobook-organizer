@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user_merge_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c4e7b2-5d38-4a60-a7f1-3b08d6e2c945
 // last-edited: 2026-10-23
 
@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
@@ -49,6 +50,23 @@ type mergeRig struct {
 	actor    *database.User
 }
 
+// pinMergeConfig fixes the config the merge service reads (owner email, pinned
+// backfill user) for one test and restores it afterwards.
+func pinMergeConfig(t *testing.T, ownerEmail string) {
+	t.Helper()
+	prev := config.Snapshot()
+	config.Mutate(func(c *config.Config) {
+		c.OwnerEmail = ownerEmail
+		c.ABSItunesPositionBackfillUserID = ""
+	})
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) {
+			c.OwnerEmail = prev.OwnerEmail
+			c.ABSItunesPositionBackfillUserID = prev.ABSItunesPositionBackfillUserID
+		})
+	})
+}
+
 func newMergeRig(t *testing.T) *mergeRig {
 	t.Helper()
 	f := newInviteFixture(t)
@@ -67,8 +85,8 @@ func newMergeRig(t *testing.T) *mergeRig {
 	if err := f.store.SetRaw("pref:"+gone.ID+":speed", []byte(`{"key":"speed","value":"1.5"}`)); err != nil {
 		t.Fatal(err)
 	}
-	svc, err := usermerge.New(f.store, usermerge.WithOwnerEmail(func() string { return "owner@example.com" }),
-		usermerge.WithBackfillUserID(func() string { return "" }))
+	pinMergeConfig(t, "owner@example.com")
+	svc, err := usermerge.New(f.store)
 	if err != nil {
 		t.Fatal(err)
 	}
