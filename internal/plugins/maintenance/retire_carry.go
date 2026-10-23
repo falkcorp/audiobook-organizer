@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0b8d3f64-72a1-4c5e-8f19-6e4a9d2c7b35
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -122,7 +122,7 @@ func listsNaming(cs carryStores, id string) (collections, playlists []string, er
 //     the list in that book's slot). Another operation's revert reads both so
 //     that, whichever of two retires into the survivor is reverted first, the
 //     survivor leaves the list with the last of them and never before or after
-//     (undo.SurvivorStandOf).
+//     (undo.SurvivorStandFor).
 func carryUserContentInto(store OpsStore, cs carryStores, w *repairs.Writer, target, id string) (int, error) {
 	steps := 0
 	n, err := carryRatingsInto(store, w, target, id)
@@ -196,7 +196,7 @@ func carryRatingsInto(store OpsStore, w *repairs.Writer, target, id string) (int
 // listed and now also stands in for the retired book) and a "took" marker on a
 // replace (the survivor entered the list in the retired book's slot). The
 // markers write nothing; a later operation's revert reads them to decide
-// whether the survivor stays in the list (undo.SurvivorStandOf).
+// whether the survivor stays in the list (undo.SurvivorStandFor).
 func carryMembership(w *repairs.Writer, kind, listID, target, id string, rec undo.MembershipRecord, write func(carry func(cur []string) ([]string, error)) error) error {
 	oldV, err := undo.EncodeMembership(rec)
 	if err != nil {

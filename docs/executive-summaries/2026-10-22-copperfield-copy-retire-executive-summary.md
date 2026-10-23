@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-22-copperfield-copy-retire-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 86a41d45-5e65-4458-bcb8-34a1762998c0 -->
-<!-- last-edited: 2026-10-22 -->
+<!-- last-edited: 2026-10-23 -->
 
 # Retiring single-file copies of multi-file books, safely and undoably
 
@@ -91,8 +91,12 @@ walking through books other clean-ups have taken out, so every book returns
 beside its real neighbours whatever order the undos run in. The records of a
 list are read from one dedicated index, so the undo always sees every record
 for that list. Journal entries carry a running sequence number that never
-steps backward, handed out and saved together with the entries, so a system
-clock correction between two clean-ups cannot reorder the history. A surviving book that was removed from a list by hand and later
+steps backward, so a system
+clock correction between two clean-ups cannot reorder the history. The number
+is handed out under a very short lock, and the store saves a ceiling a minute
+ahead of it (one saved write a minute while clean-ups are running), so several
+clean-ups can save their entries at the same time and a restart can never reuse
+a number. A surviving book that was removed from a list by hand and later
 came back is treated as a fresh arrival, not as part of the earlier clean-up.
 
 ## 4. Never silently wrong when the owner edits lists by hand
@@ -174,11 +178,27 @@ through an undo, and surviving books retired into other survivors:
 - Retire operations (this fixer, duplicate copies, consolidation leftovers)
   now carry ratings, notes, collections and playlists from the retired book to
   the survivor.
+- **The first start after deploy reads the whole undo journal once.** It
+  checks that every record of a collection or playlist clean-up has its entry
+  in the new list index, and it works out where the running sequence number
+  must start. Progress is written to the server log every 50,000 records, with
+  the totals at the end. The check is saved as done, so later starts read two
+  keys and skip it. How long it takes was not measured on the production
+  server: its record count could not be read (the API key had expired and the
+  data directory needs sudo). On a development Mac a journal of 500,000
+  records was read in under a second (about 680,000 records a second), so even
+  several million records should take seconds, not minutes; the log lines will
+  show the real figure. Until the first start finishes, the server is not
+  serving.
 
 ## Limits worth knowing
 
-- The index of list records is written for new clean-ups only. This feature is
-  new in this release, so there is no earlier history to convert.
+- The list index is written together with each new clean-up record. Records
+  written before this release get their index entries from the one-time
+  first-start read described above; that read is saved as done under its own
+  key, separate from the sequence number's.
 - The never-steps-backward sequence fixes the order of entries at the moment
   they are written. It cannot repair entries already written out of order.
+  After a crash the next number may skip ahead by up to a minute's worth,
+  which only leaves unused numbers.
 - The locking protects one running server process.

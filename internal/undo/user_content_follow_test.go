@@ -1,7 +1,7 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -54,7 +54,7 @@ func TestCarryMembership(t *testing.T) {
 				t.Fatalf("record %+v, want %+v", rec, tc.wantRec)
 			}
 			ucEq(t, tc.cur, orig) // the input is never written
-			back, _, err := RestoreMembership(next, "r", "s", rec, SurvivorDefault, nil)
+			back, _, err := RestoreMember(next, "r", "s", rec, MemberRole{Stand: SurvivorDefault}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,12 +72,12 @@ func TestCarryMembership(t *testing.T) {
 	})
 }
 
-func TestRestoreMembership(t *testing.T) {
+func TestRestoreMember_Placement(t *testing.T) {
 	t.Parallel()
 
 	t.Run("the retired book is listed again: already restored", func(t *testing.T) {
 		t.Parallel()
-		_, _, err := RestoreMembership([]string{"r", "s"}, "r", "s", MembershipRecord{}, SurvivorDefault, nil)
+		_, _, err := RestoreMember([]string{"r", "s"}, "r", "s", MembershipRecord{}, MemberRole{Stand: SurvivorDefault}, nil)
 		if !errors.Is(err, ErrAlreadyRestored) {
 			t.Fatalf("err = %v", err)
 		}
@@ -85,7 +85,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("the survivor was taken out of the slot: refused, never guessed", func(t *testing.T) {
 		t.Parallel()
-		_, _, err := RestoreMembership([]string{"a", "b"}, "r", "s", MembershipRecord{Index: 1}, SurvivorDefault, nil)
+		_, _, err := RestoreMember([]string{"a", "b"}, "r", "s", MembershipRecord{Index: 1}, MemberRole{Stand: SurvivorDefault}, nil)
 		if RefusalReason(err) != ReasonChangedSince {
 			t.Fatalf("err = %v", err)
 		}
@@ -93,7 +93,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("survivor was already a member: the book goes back at its index", func(t *testing.T) {
 		t.Parallel()
-		got, _, err := RestoreMembership([]string{"s", "b"}, "r", "s", MembershipRecord{Index: 1, SurvivorWasMember: true}, SurvivorDefault, nil)
+		got, _, err := RestoreMember([]string{"s", "b"}, "r", "s", MembershipRecord{Index: 1, SurvivorWasMember: true}, MemberRole{Stand: SurvivorDefault}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +102,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("the index is clamped to a list that shrank", func(t *testing.T) {
 		t.Parallel()
-		got, _, err := RestoreMembership([]string{"s"}, "r", "s", MembershipRecord{Index: 9, SurvivorWasMember: true}, SurvivorDefault, nil)
+		got, _, err := RestoreMember([]string{"s"}, "r", "s", MembershipRecord{Index: 9, SurvivorWasMember: true}, MemberRole{Stand: SurvivorDefault}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +111,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("an unrelated edit of the list does not block the restore", func(t *testing.T) {
 		t.Parallel()
-		got, _, err := RestoreMembership([]string{"x", "s", "y", "z"}, "r", "s", MembershipRecord{Index: 1}, SurvivorDefault, nil)
+		got, _, err := RestoreMember([]string{"x", "s", "y", "z"}, "r", "s", MembershipRecord{Index: 1}, MemberRole{Stand: SurvivorDefault}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestRestoreMembership(t *testing.T) {
 	t.Run("SurvivorStays: another retire stands in the slot, so the survivor stays", func(t *testing.T) {
 		t.Parallel()
 		// Op1 replaced r by s at index 0; op2 removed b because s was listed.
-		got, _, err := RestoreMembership([]string{"s"}, "r", "s", MembershipRecord{Index: 0}, SurvivorStays, nil)
+		got, _, err := RestoreMember([]string{"s"}, "r", "s", MembershipRecord{Index: 0}, MemberRole{Stand: SurvivorStays}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("SurvivorLeaves: a removal puts the book back and takes the survivor out", func(t *testing.T) {
 		t.Parallel()
-		got, _, err := RestoreMembership([]string{"x", "s", "y"}, "r", "s", MembershipRecord{Index: 1, SurvivorWasMember: true}, SurvivorLeaves, nil)
+		got, _, err := RestoreMember([]string{"x", "s", "y"}, "r", "s", MembershipRecord{Index: 1, SurvivorWasMember: true}, MemberRole{Stand: SurvivorLeaves}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("SurvivorLeaves with the survivor already gone just puts the book back", func(t *testing.T) {
 		t.Parallel()
-		got, _, err := RestoreMembership([]string{"y"}, "r", "s", MembershipRecord{Index: 0, SurvivorWasMember: true}, SurvivorLeaves, nil)
+		got, _, err := RestoreMember([]string{"y"}, "r", "s", MembershipRecord{Index: 0, SurvivorWasMember: true}, MemberRole{Stand: SurvivorLeaves}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +148,7 @@ func TestRestoreMembership(t *testing.T) {
 
 	t.Run("SurvivorStays with the survivor gone is still a refusal", func(t *testing.T) {
 		t.Parallel()
-		_, _, err := RestoreMembership([]string{"a"}, "r", "s", MembershipRecord{Index: 0}, SurvivorStays, nil)
+		_, _, err := RestoreMember([]string{"a"}, "r", "s", MembershipRecord{Index: 0}, MemberRole{Stand: SurvivorStays}, nil)
 		if RefusalReason(err) != ReasonChangedSince {
 			t.Fatalf("err = %v", err)
 		}
@@ -269,7 +269,7 @@ func TestCheckMembershipFollow(t *testing.T) {
 	}
 }
 
-func TestSurvivorStandOf(t *testing.T) {
+func TestSurvivorStandFor(t *testing.T) {
 	t.Parallel()
 	base := time.Unix(1_700_000_000, 0)
 	at := func(sec int) time.Time { return base.Add(time.Duration(sec) * time.Second) }
@@ -320,7 +320,7 @@ func TestSurvivorStandOf(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := SurvivorStandOf(pairRows(tc.rows), tc.row, UserContentCollection, "c1"); got != tc.want {
+			if got, _ := SurvivorStandFor(pairRows(tc.rows), tc.row, UserContentCollection, "c1"); got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
@@ -476,7 +476,7 @@ func TestSurvivorStandFor_ReportsBorrowing(t *testing.T) {
 	}
 }
 
-// RestoreMember is RestoreMembership plus the repair of a revert that wrote the
+// RestoreMember is the placement of a revert plus the repair of a revert that wrote the
 // list and died before stamping: the book is already listed, the row borrowed
 // the survivor, nothing else stands on it, so the survivor is taken out.
 func TestRestoreMember(t *testing.T) {

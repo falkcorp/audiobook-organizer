@@ -1,7 +1,7 @@
 // file: internal/undo/membership_adversarial_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a9d17c3-e605-4b82-8f31-c27d5b09e164
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -467,7 +467,7 @@ func runAdv(t *testing.T, seed uint64, n int, cfg advCfg) advStats {
 		// Every standing orphan is reported, and nothing else is (the lister is
 		// what the revert reports from).
 		gotOrphans := map[string]bool{}
-		for _, m := range IgnoredMarkers(s.all, UserContentCollection, "L") {
+		for _, m := range ignoredOf(s.all, UserContentCollection, "L") {
 			if m.Standing {
 				gotOrphans[m.ID] = true
 			}

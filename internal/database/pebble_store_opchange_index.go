@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // The opchange_by_book: secondary index over the operation-change journal. Its
 // sibling opchange_by_list: indexes the user-content rows by the collection or
@@ -91,6 +91,20 @@
 // than deleted from a stale view. Lock order: a book stripe (ModifyBook) may
 // be held when the journal lock is taken, never the reverse; no journal-lock
 // holder takes a book lock.
+//
+// The whole order of a journal write that touches a collection or playlist is:
+//
+//	undo.LockList (per list, taken by the revert and the carry)
+//	  -> collMu / userPlaylistWriteMu (the list store's own lock)
+//	    -> opChangeJournalMu, read side (CreateOperationChange(s), the mark)
+//	      -> journalClock.mu (one stamp, and the ceiling write when it needs one)
+//
+// PruneOperationChanges holds the write side of opChangeJournalMu and never
+// takes the clock. The index-pass slot (opChangeIdxRunSem, the backfill and
+// rebuild passes) is not part of this order: no journal writer takes it.
+// The clock mutex is never held across a batch commit
+// (pebble_store_journal_clock.go, SEQUENCE), so journal writers overlap their
+// fsyncs.
 
 package database
 
