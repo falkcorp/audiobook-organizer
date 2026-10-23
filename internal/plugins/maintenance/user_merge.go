@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/user_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c2f8a14-93d7-4b50-a1e6-d0b45f7c9823
 // last-edited: 2026-10-23
 
@@ -91,7 +91,11 @@ type userMergeEnv struct {
 	Grants  *usermerge.Grants
 	// Actor is the user and run history of the op row this run belongs to.
 	Actor func() (userID string, fresh bool, err error)
-	// SetResult records the run's result data on the op row.
+	// SetResult records the run's result data on the op row. Operation rows are
+	// readable by anyone with library.view, so only the redacted forms
+	// (usermerge.PlanSummary, usermerge.JournalResult) are ever passed: the full
+	// plan and journal name accounts, emails and rows, and are served only by the
+	// admin-gated Users merge routes.
 	SetResult func(any) error
 	// Progress reports progress and refreshes liveness.
 	Progress func(done, total int, msg string)
@@ -190,13 +194,13 @@ func runUserMerge(ctx context.Context, params userMergeParams, env userMergeEnv)
 		j, err = env.Service.Undo(ctx, usermerge.UndoRequest{JournalID: params.JournalID}, prog)
 	}
 	if j != nil {
-		if rerr := env.SetResult(j.Summary()); rerr != nil {
+		if rerr := env.SetResult(j.OpResult()); rerr != nil {
 			env.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", rerr))
 		}
 	}
 	var refused *usermerge.RefusedError
 	if errors.As(err, &refused) {
-		_ = env.SetResult(refused.Plan)
+		_ = env.SetResult(refused.Plan.Summary())
 	}
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", UserMergeOpID, action, err)
@@ -214,12 +218,12 @@ func previewUserMerge(ctx context.Context, params userMergeParams, action userme
 			return err
 		}
 		env.Progress(1, 1, fmt.Sprintf("Preview: %d writes, %d conflicts, %d refusals (nothing written)", plan.Ops, plan.ConflictTotal, len(plan.Refusals)))
-		return env.SetResult(plan)
+		return env.SetResult(plan.Summary())
 	}
 	j, err := env.Service.LoadJournal(params.JournalID)
 	if err != nil {
 		return err
 	}
 	env.Progress(1, 1, fmt.Sprintf("Preview: journal %s is %s (nothing written)", j.ID, j.Status))
-	return env.SetResult(j.Summary())
+	return env.SetResult(j.OpResult())
 }

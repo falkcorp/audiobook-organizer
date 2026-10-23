@@ -1,7 +1,7 @@
 // file: internal/usermerge/service.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3e91d4-2c58-4a07-b6f1-0e94d5a8c3b2
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // Package usermerge is the admin "merge user B into user A" tool: it plans a
 // merge of one account's per-user data into another (a read-only preview with a
@@ -81,7 +81,9 @@ var (
 type RefusedError struct{ Plan *Plan }
 
 func (e *RefusedError) Error() string {
-	return fmt.Sprintf("%s: %v", ErrRefused, e.Plan.Refusals)
+	// Row-quoting refusals are left out: this text reaches operation rows that
+	// non-admins can read. The admin's preview has the full list.
+	return e.Plan.PublicError()
 }
 
 // Unwrap lets errors.Is(err, ErrRefused) match.
