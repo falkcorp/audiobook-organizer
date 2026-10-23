@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.8
+// version: 1.4.9
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -195,6 +195,7 @@ var layerOf = map[string]int{
 	"internal/transcode":                3, // computed: max of imports=3, floored at 3
 	"internal/transcribe":               3, // computed: max of imports=3, floored at 3
 	"internal/undo":                     3, // table: domain
+	"internal/usermerge":                3, // table: domain
 	"internal/updater":                  3, // computed: max of imports=1, floored at 3
 	"internal/versionprimary":           3, // table: domain
 	"internal/versionprimary/vptest":    3, // computed: max of imports=2, floored at 3
@@ -521,7 +522,7 @@ var namedLayer = map[string]int{
 	"internal/merge": 3, "internal/versionprimary": 3, "internal/versions": 3, "internal/dedup": 3,
 	"internal/matcher": 3, "internal/fingerprint": 3, "internal/metadata": 3, "internal/organizer": 3,
 	"internal/scanner": 3, "internal/itunes": 3, "internal/audiobooks": 3, "internal/metafetch": 3,
-	"internal/reconcile": 3, "internal/repairs": 3, "internal/undo": 3, "internal/writeback": 3,
+	"internal/reconcile": 3, "internal/repairs": 3, "internal/undo": 3, "internal/usermerge": 3, "internal/writeback": 3,
 	// Layer 4 jobs.
 	"internal/operations/registry": 4, "internal/scheduler": 4, "internal/maintenance/jobs": 4,
 	// Layer 5 transport.
