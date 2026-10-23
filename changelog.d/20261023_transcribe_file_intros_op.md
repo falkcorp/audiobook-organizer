@@ -28,8 +28,11 @@ server decodes nothing, each file's path and a 90 second length go to the worker
 - Fills a book's transcript from its ordinal-0 file only when the book has none,
   and never from a silent clip. Nothing is ever overwritten under `only_missing`.
 - Pauses between batches while `library.scan` or `metadata.batch-apply-cached` is
-  queued or running (neither declares `Writes` yet, so the scheduler cannot
-  serialise them against this op; that is a separate fix).
+  queued or running. The op declares no `Writes` on purpose: it runs for days, and
+  the dispatcher's write-set gate would keep `acoustid.backfill` (and every other
+  op declaring `books`/`book_files`) queued for the whole run. Its writes are
+  field-scoped and the shared `book_file` merge keeps the intro group against any
+  whole-row writer.
 - Worker pool sized to the whisper endpoints' own concurrency (capped), bounded by
   `whisper_max_in_flight`.
 - Rollback is by run id: `clear_run_id=<op id>` (dry run first for the count)
