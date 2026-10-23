@@ -349,7 +349,6 @@ func (c *mlCall) resolveID(tier, note string, raw []string, viaTrashed bool, tra
 	o := mlOutcome{tier: tier, trashed: trashed}
 	o.evidence = append(o.evidence, "matched by "+strings.ReplaceAll(tier, "_", " ")+": "+note)
 	if viaTrashed {
-		o.flag(mlFlagViaTrashed)
 		o.evidence = append(o.evidence, fmt.Sprintf("only a trashed copy (%s) carries it; followed to its live survivor", strings.Join(trashed, ", ")))
 	}
 	cands := lib.targets(raw)
@@ -390,6 +389,11 @@ func (c *mlCall) resolveID(tier, note string, raw []string, viaTrashed bool, tra
 		}
 	}
 	title := lib.books[target].Title
+	if viaTrashed {
+		// Followed through a merge or redirect: the list names a book that is
+		// gone, so a person confirms where it went.
+		review(mlFlagViaTrashed, fmt.Sprintf("only a trashed copy carried the identifier; its live survivor %q is the match, which a person confirms", title))
+	}
 	if !fits {
 		review(mlFlagRuntime, fmt.Sprintf("the matched book runs %.0f min and the list's edition %.0f min (more than 10%% apart): a different edition, a part, or a wrong identifier", d/60, c.listSec/60))
 	}
