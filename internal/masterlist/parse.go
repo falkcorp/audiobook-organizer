@@ -1,5 +1,5 @@
 // file: internal/masterlist/parse.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a1896ea-2d97-4da6-bb85-27abe9094240
 // last-edited: 2026-10-23
 
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -269,9 +270,12 @@ func jsonString(s string) json.RawMessage {
 
 // parseCSVNum reads a number from text. Text that is not a number is kept in
 // flexNum.bad, so build reports bad_number instead of reading it as 0.
+// strconv.ParseFloat accepts "NaN" and "Inf" as numbers; neither is a runtime,
+// a percent or a position (and int(NaN+0.5) is the minimum int64 on amd64), so
+// both are kept as bad text too.
 func parseCSVNum(v string) flexNum {
 	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 		return flexNum{bad: v}
 	}
 	return flexNum{val: f, set: true}
@@ -418,17 +422,17 @@ func build(in inRow, line int) Row {
 	}
 	r.addSource(string(in.Source), string(in.SourceID), string(in.PurchasedAt), string(in.LastListenedAt), issue)
 
-	if in.RuntimeMin.bad != "" || (in.RuntimeMin.set && (in.RuntimeMin.val < 0 || in.RuntimeMin.val > 1e6)) {
+	if in.RuntimeMin.bad != "" || (in.RuntimeMin.set && !inRange(in.RuntimeMin.val, 0, 1e6)) {
 		issue(IssueBadNumber, "runtime_min", numText(in.RuntimeMin), "a runtime is a number of minutes, 0 or more")
 	} else if in.RuntimeMin.set {
 		r.RuntimeMin = int(in.RuntimeMin.val + 0.5)
 	}
-	if in.ProgressPct.bad != "" || (in.ProgressPct.set && (in.ProgressPct.val < 0 || in.ProgressPct.val > 100)) {
+	if in.ProgressPct.bad != "" || (in.ProgressPct.set && !inRange(in.ProgressPct.val, 0, 100)) {
 		issue(IssueBadNumber, "progress_pct", numText(in.ProgressPct), "a percent is a number from 0 to 100")
 	} else if in.ProgressPct.set {
 		r.ProgressPct = int(in.ProgressPct.val + 0.5)
 	}
-	if in.PositionSec.bad != "" || (in.PositionSec.set && (in.PositionSec.val < 0 || in.PositionSec.val > 1e9)) {
+	if in.PositionSec.bad != "" || (in.PositionSec.set && !inRange(in.PositionSec.val, 0, 1e9)) {
 		issue(IssueBadNumber, "position_sec", numText(in.PositionSec), "a position is a number of seconds, 0 or more")
 	} else if in.PositionSec.set {
 		r.PositionSec = int(in.PositionSec.val)
@@ -450,6 +454,11 @@ func build(in inRow, line int) Row {
 	}
 	return r
 }
+
+// inRange reports lo <= v <= hi. It is written as a positive test on purpose:
+// every comparison with NaN is false, so a "v < lo || v > hi" refusal lets a
+// NaN through while this one refuses it.
+func inRange(v, lo, hi float64) bool { return v >= lo && v <= hi }
 
 func numText(n flexNum) string {
 	if n.bad != "" {

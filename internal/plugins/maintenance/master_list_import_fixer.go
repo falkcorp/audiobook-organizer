@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_import_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b0c5f4a-6d0a-4f0e-9d8e-3f1f7a9a52c1
 // last-edited: 2026-10-23
 
@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -69,9 +70,10 @@ func newMasterListImportFixer(p *Plugin) *masterListImportFixer {
 }
 
 var (
-	_ repairs.Fixer           = (*masterListImportFixer)(nil)
-	_ repairs.NoScanStandDown = (*masterListImportFixer)(nil)
-	_ repairs.PlanOnly        = (*masterListImportFixer)(nil)
+	_ repairs.Fixer            = (*masterListImportFixer)(nil)
+	_ repairs.NoScanStandDown  = (*masterListImportFixer)(nil)
+	_ repairs.PlanOnly         = (*masterListImportFixer)(nil)
+	_ repairs.PermissionScoped = (*masterListImportFixer)(nil)
 )
 
 func (f *masterListImportFixer) ID() string { return masterListImportFixerID }
@@ -85,6 +87,16 @@ func (f *masterListImportFixer) Description() string {
 		"and author (review); rows sharing an identifier are folded into the first; a trashed book is followed " +
 		"to its live survivor and never a target. Classes: matched_high, matched_review, ambiguous, unmatched, " +
 		"duplicate_in_list, invalid. Preview only: nothing is written, and Apply is refused until PR 2."
+}
+
+// RequiredPermissions implements repairs.PermissionScoped: the plan names any
+// user as target_user_id and reads an uploaded list, so it is a user-management
+// act, above the lane's default library.edit_metadata. Without it an editor
+// could plan against another user's list. It is the same permission the
+// upload routes demand (wire_master_list_routes.go), so one grant covers the
+// whole import.
+func (f *masterListImportFixer) RequiredPermissions() []auth.Permission {
+	return []auth.Permission{auth.PermUsersManage}
 }
 
 // NoScanStandDown: the preview writes nothing the scan writes.
