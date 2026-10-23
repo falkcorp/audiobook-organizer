@@ -1,11 +1,14 @@
 // file: internal/config/invite_config.go
-// version: 1.4.0
+// version: 1.9.1
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package config
 
 import (
+	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -16,17 +19,12 @@ import (
 // Every key here is ENVIRONMENT-ONLY and carries `json:"-"` on Config, which
 // buys three properties at once:
 //
-//   - GET /api/v1/config can never return one. Three of them are secrets (the
-//     SMTP password, the guest service token's client secret and the Cloudflare
-//     policy API token), and the others are deliberately hidden too: the guest
-//     service token's client id is half of a credential, and the SMTP username
-//     is usually a person's mailbox. Settings screens and admin API responses
-//     report only whether each feature is configured (InviteMailConfigured
-//     and friends), never the values. The guest client id and secret are the
-//     exception by design: they are what a guest needs, so the invitation
-//     email carries them and the public accept page returns them for a live,
-//     unused token, and anyone holding a live invite link, including the
-//     admin who created it, can read them there.
+//   - GET /api/v1/config can never return one. Two of them are secrets (the
+//     SMTP password and the Cloudflare policy API token), and the others are
+//     deliberately hidden too: the SMTP username is usually a person's
+//     mailbox. Settings screens and admin API responses report only whether
+//     each feature is configured (InviteMailConfigured and friends), never
+//     the values.
 //   - The config blob never stores one, so a value can only come from the
 //     operator's environment and a database dump carries none of them.
 //   - PUT /api/v1/config refuses a payload naming any of them, with the same
@@ -45,12 +43,73 @@ var inviteEnvOnlySettings = []struct {
 	{"smtp_password", "SMTP_PASSWORD"},
 	{"smtp_from", "SMTP_FROM"},
 	{"public_base_url", "PUBLIC_BASE_URL"},
-	{"invite_cf_access_client_id", "INVITE_CF_ACCESS_CLIENT_ID"},
-	{"invite_cf_access_client_secret", "INVITE_CF_ACCESS_CLIENT_SECRET"},
 	{"cf_account_id", "CF_ACCOUNT_ID"},
 	{"cf_guests_policy_id", "CF_GUESTS_POLICY_ID"},
 	{"cf_policy_api_token", "CF_POLICY_API_TOKEN"},
 	{"tunnel_connector_addrs", "TUNNEL_CONNECTOR_ADDRS"},
+	{"allowed_peer_cidrs", "ALLOWED_PEER_CIDRS"},
+	{"login_saturated_rate", "LOGIN_SATURATED_RATE"},
+	{"login_saturated_burst", "LOGIN_SATURATED_BURST"},
+}
+
+// The service-wide bound on password logins admitted while the aggregate login
+// ceilings are spent ("saturated"): every one of them still costs a real
+// argon2id derivation (an unknown name spends one too, so the answer does not
+// reveal whether the name exists), and this token bucket caps how many the
+// service takes on per second, whatever the number of visitors. Unset keys
+// mean the defaults. Cloudflare Access logins (a verified Access identity) are
+// outside the bucket. They still run the password check; they are bounded by
+// the per-visitor throttle and by the allow-listed identity Cloudflare Access
+// vouches for, not by this bucket.
+const (
+	// DefaultLoginSaturatedRate is the sustained rate, in logins per second.
+	DefaultLoginSaturatedRate = 2.0
+	// DefaultLoginSaturatedBurst is the bucket size.
+	DefaultLoginSaturatedBurst = 8
+	// MaxLoginSaturatedRate and MaxLoginSaturatedBurst bound what an operator
+	// may set. The argon2id derivation costs on the order of 70 ms of one core
+	// and 64 MiB, so beyond these the setting no longer bounds anything.
+	MaxLoginSaturatedRate  = 50.0
+	MaxLoginSaturatedBurst = 200
+	// MinLoginSaturatedRate is the slowest sustained rate an operator may set.
+	// Below it a refused caller would wait more than 100 seconds for one token
+	// (the 429 Retry-After is the time to the next token), which is a lockout in
+	// all but name, not a bound on derivations.
+	MinLoginSaturatedRate = 0.01
+)
+
+// LoginSaturatedLimits returns the effective saturated-login rate (per second)
+// and burst: the defaults for an unset key, the parsed values otherwise. An
+// unusable value (not a number, NaN/Inf, a rate below MinLoginSaturatedRate or
+// above MaxLoginSaturatedRate, a burst that is not an integer in 1..
+// MaxLoginSaturatedBurst) is an error, never a silent default: the server
+// refuses to start on it, because a typo here must neither remove nor tighten
+// the bound unnoticed. The error names the setting and the accepted range, and
+// never echoes the value it was given.
+func LoginSaturatedLimits() (rate float64, burst int, err error) {
+	mu.RLock()
+	rawRate, rawBurst := AppConfig.LoginSaturatedRate, AppConfig.LoginSaturatedBurst
+	mu.RUnlock()
+	return parseLoginSaturatedLimits(rawRate, rawBurst)
+}
+
+func parseLoginSaturatedLimits(rawRate, rawBurst string) (rate float64, burst int, err error) {
+	rate, burst = DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst
+	if rawRate = strings.TrimSpace(rawRate); rawRate != "" {
+		r, perr := strconv.ParseFloat(rawRate, 64)
+		if perr != nil || math.IsNaN(r) || math.IsInf(r, 0) || r < MinLoginSaturatedRate || r > MaxLoginSaturatedRate {
+			return 0, 0, fmt.Errorf("LOGIN_SATURATED_RATE must be a number of logins per second from %v to %v", MinLoginSaturatedRate, MaxLoginSaturatedRate)
+		}
+		rate = r
+	}
+	if rawBurst = strings.TrimSpace(rawBurst); rawBurst != "" {
+		b, perr := strconv.Atoi(rawBurst)
+		if perr != nil || b < 1 || b > MaxLoginSaturatedBurst {
+			return 0, 0, fmt.Errorf("LOGIN_SATURATED_BURST must be a whole number from 1 to %d", MaxLoginSaturatedBurst)
+		}
+		burst = b
+	}
+	return rate, burst, nil
 }
 
 // DefaultSMTPPort is used when SMTP_HOST is set and SMTP_PORT is not.
@@ -81,12 +140,13 @@ func applyInviteEnv(c *Config) {
 	c.SMTPPassword = viper.GetString("smtp_password")
 	c.SMTPFrom = strings.TrimSpace(viper.GetString("smtp_from"))
 	c.PublicBaseURL = strings.TrimSpace(viper.GetString("public_base_url"))
-	c.InviteCFAccessClientID = strings.TrimSpace(viper.GetString("invite_cf_access_client_id"))
-	c.InviteCFAccessClientSecret = strings.TrimSpace(viper.GetString("invite_cf_access_client_secret"))
 	c.CFAccountID = strings.TrimSpace(viper.GetString("cf_account_id"))
 	c.CFGuestsPolicyID = strings.TrimSpace(viper.GetString("cf_guests_policy_id"))
 	c.CFPolicyAPIToken = strings.TrimSpace(viper.GetString("cf_policy_api_token"))
 	c.TunnelConnectorAddrs = strings.TrimSpace(viper.GetString("tunnel_connector_addrs"))
+	c.AllowedPeerCIDRs = strings.TrimSpace(viper.GetString("allowed_peer_cidrs"))
+	c.LoginSaturatedRate = strings.TrimSpace(viper.GetString("login_saturated_rate"))
+	c.LoginSaturatedBurst = strings.TrimSpace(viper.GetString("login_saturated_burst"))
 }
 
 // inviteEnvOnlyKeyInUpdate returns the refusal for a PUT /config payload that
@@ -123,17 +183,29 @@ func TunnelConnectorAddrs() string {
 	return AppConfig.TunnelConnectorAddrs
 }
 
+// CFAccessTeam returns cf_access_team_domain under the read lock: one field, not
+// a Snapshot copy, because the Content-Security-Policy builder reads it on every
+// response.
+func CFAccessTeam() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.CFAccessTeamDomain
+}
+
+// AllowedPeerCIDRs returns allowed_peer_cidrs under the read lock: one field,
+// not a Snapshot copy, because the peer allow-list reads it on every request.
+// The value is a comma-separated list of CIDR networks and bare IP addresses;
+// see Config.AllowedPeerCIDRs for the empty and all-invalid cases.
+func AllowedPeerCIDRs() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.AllowedPeerCIDRs
+}
+
 // InviteMailConfigured reports whether invitation email can be sent: a host and
 // a From address are the minimum (no AUTH is a supported setup).
 func (c *Config) InviteMailConfigured() bool {
 	return c.SMTPHost != "" && c.SMTPFrom != ""
-}
-
-// InviteHeadersConfigured reports whether the shared guest service-token header
-// pair is configured. Both halves or nothing: one half alone is useless to a
-// guest and is treated as unconfigured.
-func (c *Config) InviteHeadersConfigured() bool {
-	return c.InviteCFAccessClientID != "" && c.InviteCFAccessClientSecret != ""
 }
 
 // GuestPolicySyncConfigured reports whether accepted invitees are added to the

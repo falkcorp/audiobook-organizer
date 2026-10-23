@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -40,6 +40,9 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/auth/setup":         "public; only while no user exists",
 	"POST /api/v1/auth/bootstrap":     "public; consumes a one-time bootstrap token",
 	"POST /api/v1/auth/accept-invite": "public; consumes a one-time invite token",
+	// Browser CSP violation reports: unauthenticated by design (csp_report.go),
+	// a size-capped, rate-limited log line and no state change.
+	"POST /api/v1/csp-report": "public; CSP violation report, logs one capped line",
 	// Taking access away is not a credential change.
 	"POST /api/v1/auth/logout":         "ends the caller's own session",
 	"DELETE /api/v1/auth/sessions/:id": "revokes one of the caller's own sessions",

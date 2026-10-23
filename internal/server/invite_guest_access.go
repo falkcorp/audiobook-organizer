@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.9.1
+// version: 1.11.0
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -71,6 +71,7 @@ func inviteGrantAllowed(store any) func(string) bool {
 // inviteDelivery builds the handler's delivery dependencies from config. Each
 // func reads the config snapshot when called.
 func (s *Server) inviteDelivery() *handlers.InviteDelivery {
+	warnGuestAccessNotConfigured(config.Snapshot())
 	return &handlers.InviteDelivery{
 		Sender: func() imail.Sender {
 			snap := config.Snapshot()
@@ -92,17 +93,28 @@ func (s *Server) inviteDelivery() *handlers.InviteDelivery {
 			snap := config.Snapshot()
 			return snap.InviteBaseURL(s.externalURL)
 		},
-		GuestHeaders: func() (handlers.GuestHeaders, bool) {
-			snap := config.Snapshot()
-			if !snap.InviteHeadersConfigured() {
-				return handlers.GuestHeaders{}, false
-			}
-			return handlers.GuestHeaders{ClientID: snap.InviteCFAccessClientID, ClientSecret: snap.InviteCFAccessClientSecret}, true
-		},
 		GuestPolicySyncConfigured: func() bool {
 			snap := config.Snapshot()
 			return snap.GuestPolicySyncConfigured()
 		},
+	}
+}
+
+// guestAccessDeadEnd reports whether invitation email is on without the
+// Cloudflare guest-policy sync.
+func guestAccessDeadEnd(snap config.Config) bool {
+	return snap.InviteMailConfigured() && !snap.GuestPolicySyncConfigured()
+}
+
+// warnGuestAccessNotConfigured logs, at startup, the combination that invites
+// guests into a dead end: invitation email is on but the Cloudflare guest-policy
+// sync is not, so an invited guest from outside the local network has no way
+// through Cloudflare (the email then leaves out the sign-in step).
+func warnGuestAccessNotConfigured(snap config.Config) {
+	if guestAccessDeadEnd(snap) {
+		inviteAccessLog.Warn("invitation email is configured (SMTP_HOST, SMTP_FROM) but the Cloudflare guest-policy sync is not " +
+			"(CF_ACCOUNT_ID, CF_GUESTS_POLICY_ID, CF_POLICY_API_TOKEN): an invited guest cannot get through Cloudflare until " +
+			"their address is added to the guest policy by hand")
 	}
 }
 

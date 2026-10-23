@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfbounce.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b7e1d52-9c04-4a68-b1f3-5d2a8e60c9b7
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package middleware
 
@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
@@ -319,6 +320,14 @@ func WriteCFLoopErrorPage(c *gin.Context) {
 	c.Abort()
 }
 
+// cfLogPath is the request path as it may be logged here: invite-token segments
+// redacted (a page navigation to /invite/<token> is an eligible recovery path, so
+// a person with a Cloudflare session opening an invite link reaches these lines)
+// and control characters escaped.
+func cfLogPath(c *gin.Context) string {
+	return logger.SanitizeLogValue(logging.RedactInvitePath(c.Request.URL.Path))
+}
+
 // CFServiceTokenRecovery is the web-UI middleware: place it where page
 // navigations are served (the SPA fallback), next to CloudflareAccessAuth's
 // position in the chain. eligible decides which URL paths are SPA page routes;
@@ -334,7 +343,7 @@ func CFServiceTokenRecovery(b *CFServiceTokenBouncer, eligible func(path string)
 		if ins.Kind == CFNavSkip {
 			if ins.SkippedNoSecFetch {
 				cfBounceLog.Info("cfaccess: page-like request with a service-token assertion left alone: no Sec-Fetch headers (sec_fetch_mode=- sec_fetch_dest=-) service_token=%s path=%s",
-					CFLogName(ins.CommonName), logger.SanitizeLogValue(c.Request.URL.Path))
+					CFLogName(ins.CommonName), cfLogPath(c))
 			}
 			c.Next()
 			return
@@ -360,7 +369,7 @@ func CFServiceTokenRecovery(b *CFServiceTokenBouncer, eligible func(path string)
 				// The bounce already happened and Cloudflare STILL admitted this
 				// navigation on a service token. Another bounce would loop.
 				cfBounceLog.Warn("cfaccess: browser still presents a service-token session after recovery bounce: service_token=%s cookie_poisoned=%t path=%s",
-					CFLogName(ins.CommonName), ins.CookiePoisoned, logger.SanitizeLogValue(c.Request.URL.Path))
+					CFLogName(ins.CommonName), ins.CookiePoisoned, cfLogPath(c))
 				WriteCFLoopErrorPage(c)
 				return
 			}
@@ -371,7 +380,7 @@ func CFServiceTokenRecovery(b *CFServiceTokenBouncer, eligible func(path string)
 			}
 			cfBounceLog.Info("cfaccess: bouncing browser navigation that carries a service-token session: service_token=%s cookie_poisoned=%t sec_fetch_mode=%s sec_fetch_dest=%s path=%s",
 				CFLogName(ins.CommonName), ins.CookiePoisoned, CFLogHeader(ins.SecFetchMode), CFLogHeader(ins.SecFetchDest),
-				logger.SanitizeLogValue(c.Request.URL.Path))
+				cfLogPath(c))
 			WriteCFBouncePage(c, target, ins.CookiePoisoned)
 		}
 	}

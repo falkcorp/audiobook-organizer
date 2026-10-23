@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.25.0
+// version: 1.27.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -537,17 +537,20 @@ func TestInviteRateLimit_IdenticalRefusals(t *testing.T) {
 		},
 	}
 	type refusal struct {
-		code        int
-		body, ctype string
+		code                    int
+		body, ctype, retryAfter string
 	}
 	got := map[string]refusal{}
 	for name, f := range trip {
 		w := f(newInviteLimitHarness(t, false))
-		got[name] = refusal{w.Code, w.Body.String(), w.Header().Get("Content-Type")}
+		got[name] = refusal{w.Code, w.Body.String(), w.Header().Get("Content-Type"), w.Header().Get("Retry-After")}
 	}
 	ref := got["per client"]
 	if ref.code != http.StatusTooManyRequests || !strings.Contains(ref.body, "TOO_MANY_REQUESTS") {
 		t.Fatalf("refusal = %+v, want a 429 TOO_MANY_REQUESTS body", ref)
+	}
+	if ref.retryAfter != "60" {
+		t.Fatalf("refusal Retry-After = %q, want the fixed \"60\" (the same for every layer)", ref.retryAfter)
 	}
 	for name, r := range got {
 		if r != ref {
@@ -1553,8 +1556,7 @@ func withFreshUnlistedWarnings(t *testing.T) {
 }
 
 // N-a: how inviteClientKey keys each kind of peer: a direct LAN peer gets
-// the direct total and the global exemption (and its /64 aggregate when it
-// is IPv6), an unlisted Cf-marked LAN peer its /64 or /24 aggregate and the
+// the direct total (and its /64 aggregate when it is IPv6), an unlisted Cf-marked LAN peer its /64 or /24 aggregate and the
 // unlisted total, and a public client none of them.
 func TestInviteClientKey_LANAggregates(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
@@ -1586,12 +1588,11 @@ func TestInviteClientKey_LANAggregates(t *testing.T) {
 	}
 }
 
-// N-a: a direct LAN peer is exempt from the global layer. Once a public
-// client has spent the whole global budget, a direct LAN caller (IPv4 and
-// ULA, no Cloudflare markers) still gets its per-client burst, while an
-// unlisted Cf-marked LAN host, which stays under the global layer, is
-// refused.
-func TestInviteRateLimit_DirectLANPeerIsExemptFromTheGlobalLayer(t *testing.T) {
+// A direct LAN peer is NOT exempt from the global layer (it was until
+// 2026-10-21). Once a public client has spent the whole global budget, a
+// direct LAN caller (IPv4 and ULA, no Cloudflare markers) is refused like an
+// unlisted Cf-marked LAN host, even with its own per-client burst untouched.
+func TestInviteRateLimit_DirectLANPeerIsNotExemptFromTheGlobalLayer(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
 	withFreshUnlistedWarnings(t)
 	h.limits.global = servermiddleware.NewIPRateLimiter(1, 1)
@@ -1601,12 +1602,9 @@ func TestInviteRateLimit_DirectLANPeerIsExemptFromTheGlobalLayer(t *testing.T) {
 	if w := h.get(inviteTestToken(2), "198.51.100.31", nil); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("a second public client: %d, want 429 (global spent)", w.Code)
 	}
-	for d, peer := range []string{"10.0.0.50", "[fd12:3456:789a:1::50]"} {
-		allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
-			return h.get(inviteTestToken(100*(d+1)+i), peer, nil)
-		})
-		if !limited || allowed < inviteAuthRateBurst || allowed > inviteAuthRateBurst+1 {
-			t.Fatalf("direct LAN peer %s with the global spent: %d admitted (limited=%v), want its burst of %d", peer, allowed, limited, inviteAuthRateBurst)
+	for d, peer := range []string{"10.0.0.50", "[fd12:3456:789a:1::50]", "127.0.0.1"} {
+		if w := h.get(inviteTestToken(100*(d+1)), peer, nil); w.Code != http.StatusTooManyRequests {
+			t.Fatalf("direct LAN peer %s with the global spent: %d, want 429", peer, w.Code)
 		}
 	}
 	if w := h.get(inviteTestToken(900), "10.0.0.60", map[string]string{"Cf-Ray": "x"}); w.Code != http.StatusTooManyRequests {
@@ -1614,12 +1612,27 @@ func TestInviteRateLimit_DirectLANPeerIsExemptFromTheGlobalLayer(t *testing.T) {
 	}
 }
 
-// N-a: the global exemption comes with a total. One direct LAN host
-// rotating through 100 IPv4 aliases (no IPv4 prefix aggregate: a /24 would be
-// shared by the whole home network) gets a fresh per-client bucket each
-// time, but all direct traffic shares the direct total, so it is capped
-// there; and it never touched the global layer, so a public client is
-// still admitted.
+// The other direction: direct LAN traffic spends the global layer. With a
+// global budget of three, three direct peers are admitted and the fourth
+// caller, a public client, is refused.
+func TestInviteRateLimit_DirectLANTrafficSpendsTheGlobalLayer(t *testing.T) {
+	h := newInviteLimitHarness(t, false)
+	h.limits.global = servermiddleware.NewIPRateLimiter(1, 3)
+	for i, peer := range []string{"10.0.0.50", "10.0.0.51", "[fd12:3456:789a:1::52]"} {
+		if w := h.get(inviteTestToken(i), peer, nil); w.Code != http.StatusOK {
+			t.Fatalf("direct LAN peer %s under the global budget: %d, want 200", peer, w.Code)
+		}
+	}
+	if w := h.get(inviteTestToken(10), "198.51.100.30", nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("a public client after three direct requests: %d, want 429 (direct traffic spends the global layer)", w.Code)
+	}
+}
+
+// One direct LAN host rotating through 100 IPv4 aliases (no IPv4 prefix
+// aggregate: a /24 would be shared by the whole home network) gets a fresh
+// per-client bucket each time, but all direct traffic shares the direct
+// total, so it is capped there. That total is half the global layer, so the
+// other half is still there for public clients.
 func TestInviteRateLimit_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
 	admitted := 0
@@ -1634,9 +1647,9 @@ func TestInviteRateLimit_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *test
 	if admitted < inviteDirectLANTotalRateBurst || admitted > inviteDirectLANTotalRateBurst+1 {
 		t.Fatalf("direct IPv4 alias rotation: %d of 200 admitted, want the direct total's burst of %d", admitted, inviteDirectLANTotalRateBurst)
 	}
-	for i := range inviteGlobalRateBurst - 5 {
+	for i := range inviteGlobalRateBurst - inviteDirectLANTotalRateBurst - 5 {
 		if w := h.get(inviteTestToken(1000+i), fmt.Sprintf("198.51.100.%d", i+1), nil); w.Code != http.StatusOK {
-			t.Fatalf("public client %d after the direct rotation: %d, want 200 (direct traffic never spent the global)", i, w.Code)
+			t.Fatalf("public client %d after the direct rotation: %d, want 200 (direct traffic can spend at most half the global layer)", i, w.Code)
 		}
 	}
 }

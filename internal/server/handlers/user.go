@@ -1,5 +1,5 @@
 // file: internal/server/handlers/user.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-23
 
@@ -49,7 +49,7 @@ type UserHandler struct {
 	// deliveryStore records invitation email sends and lists accepted
 	// invites. nil when the store lacks the capability; sends still go out.
 	deliveryStore database.InviteDeliveryStore
-	// delivery supplies the mail sender, link base and guest headers; nil or
+	// delivery supplies the mail sender, link base and policy-sync switch; nil or
 	// empty means invitation email is off (SetInviteDelivery).
 	delivery *InviteDelivery
 	// sendLimiter bounds invitation emails per invite and per admin.
@@ -188,7 +188,7 @@ func (h *UserHandler) CreateInvite(c *gin.Context) {
 	}
 	// The creator sees the token: the route is a credential route (no API
 	// key reaches it), and an emailed invite from a creator who is not an
-	// admin binds no address and grants nothing (inviteCreatorMayGrant), so
+	// admin binds no address and grants nothing (InviteCreatorMayGrant), so
 	// accepting it themselves gains them nothing.
 	view := newPendingInviteView(created, true)
 	resp := gin.H{
@@ -299,7 +299,6 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 	for i := range invites {
 		views = append(views, newPendingInviteView(&invites[i], h.inviteTokenVisible(c, &invites[i])))
 	}
-	_, headersOK := h.delivery.headers()
 	httputil.RespondWithOK(c, gin.H{
 		"invites": views, "count": len(views),
 		// Accepted invites from the last 30 days with their Cloudflare
@@ -309,7 +308,6 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 		// an absolute link base); mail_unavailable_reason says why not.
 		"mail_configured":              h.delivery.sendBlocked() == "",
 		"mail_unavailable_reason":      h.delivery.sendBlocked(),
-		"guest_headers_configured":     headersOK,
 		"guest_policy_sync_configured": h.delivery.policySync(),
 	})
 }

@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.10.0
+// version: 1.12.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-10-17
+// last-edited: 2026-10-21
 
 package server
 
@@ -93,16 +93,18 @@ func corsMiddleware() gin.HandlerFunc {
 }
 
 // securityHeadersMiddleware sets browser security headers on every response.
-// TLS-only headers (HSTS) are added only when the connection is HTTPS.
-// CSP is intentionally omitted here — the React SPA requires inline styles and
-// scripts that vary across builds; add it as a separate hardening step once the
-// nonce/hash strategy is settled.
+// TLS-only headers (HSTS) are added only when the connection is HTTPS. The CSP
+// and Permissions-Policy are set before the handler runs, so a handler that
+// sets its own Content-Security-Policy keeps it (see csp.go).
 func securityHeadersMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "SAMEORIGIN")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		c.Header("X-XSS-Protection", "0") // tell browsers to use built-in XSS filters, not legacy mode
+		c.Header("Content-Security-Policy", contentSecurityPolicy())
+		c.Header("Reporting-Endpoints", cspReportGroup+"=\""+cspReportPath+"\"") // report-to target for the CSP's report-to directive
+		c.Header("Permissions-Policy", permissionsPolicy)
 
 		if c.Request.TLS != nil || strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https") {
 			c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")

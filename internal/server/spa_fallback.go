@@ -1,13 +1,15 @@
 // file: internal/server/spa_fallback.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 1e6d90b4-27a5-4c31-8f9e-a3b715c8d604
-// last-edited: 2026-09-02
+// last-edited: 2026-10-21
 
 package server
 
-import "slices"
-
-import "strings"
+import (
+	"net/http"
+	"path"
+	"strings"
+)
 
 // nonSPAPrefixes are URL prefixes that must NEVER fall through to the SPA
 // shell. A request under one of these is asking the SERVER a question, and an
@@ -54,29 +56,69 @@ import "strings"
 // Keep this list to prefixes that are unambiguously server-side. Anything a
 // human might type or bookmark belongs in the SPA.
 var nonSPAPrefixes = []string{
-	"/api",        // the JSON API, including the ABS-compatible surface
-	"/auth/",      // login/OAuth/OIDC machinery; registered routes match before NoRoute
-	"/socket.io/", // Engine.IO transport probe; unimplemented, must not look implemented
+	"/api", // the JSON API, including the ABS-compatible surface
 }
 
-// nonSPAExact are server-side paths whose prefix form above deliberately
-// requires a trailing slash, so the bare path needs its own exact match. The
-// slash requirement keeps a future SPA route like /authors from being captured
-// by "/auth/".
-var nonSPAExact = []string{"/auth", "/socket.io"}
+// nonSPASegments are server-side top-level path segments matched as a whole
+// segment (so "/auth" and "/auth/x" are server-side but "/authors" is not).
+// Every one is a path the router registers (or a protocol probe it answers 404
+// to), so a request for it in a form that misses the registered one -- a
+// trailing slash, a doubled slash, other letter case -- must not be answered
+// with the SPA shell: with redirects off (newBaseRouter) such a request lands in
+// NoRoute, and a 200 text/html there tells an ABS client that "/ping/" or
+// "/Status" is a working server answering in HTML.
+//
+// "/login" is deliberately NOT here: GET /login is the SPA's login page (the
+// ABS surface registers only POST /login), so it is covered by the method rule in
+// spaWillNotServe instead -- POST /login/ is a 404, GET /login/ is the page.
+var nonSPASegments = map[string]bool{
+	"auth":      true, // login/OAuth/OIDC machinery; registered routes match before NoRoute
+	"socket.io": true, // Engine.IO transport probe; unimplemented, must not look implemented
+	"ping":      true, // ABS liveness probe
+	"status":    true, // ABS server status
+	"logout":    true, // ABS logout
+	"health":    true,
+	"metrics":   true,
+	"public":    true, // ABS public share/cover surface
+}
+
+// normalizeNonSPAPath folds the variations a request can use to miss a
+// registered route without changing which route it names: a query string,
+// repeated slashes, "." and ".." segments, a trailing slash, letter case. It is
+// used ONLY to decide a 404. The normalised path is never dispatched into the
+// router, so it cannot be used to reach a route the original did not match.
+func normalizeNonSPAPath(p string) string {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		p = p[:i]
+	}
+	return path.Clean("/" + strings.ToLower(p))
+}
 
 // isNonSPAPath reports whether an unmatched path must 404 rather than render the
 // SPA shell.
 //
-// Only UNMATCHED paths reach here — this runs from NoRoute, so real routes such
+// Only UNMATCHED paths reach here -- this runs from NoRoute, so real routes such
 // as /auth/temp-login are dispatched by gin long before it, and adding a prefix
 // here cannot shadow a registered handler. Both the embedded and non-embedded
 // static handlers consult this before they diverge, so one entry fixes both.
-func isNonSPAPath(path string) bool {
+func isNonSPAPath(p string) bool {
+	p = normalizeNonSPAPath(p)
 	for _, prefix := range nonSPAPrefixes {
-		if strings.HasPrefix(path, prefix) {
+		if strings.HasPrefix(p, prefix) {
 			return true
 		}
 	}
-	return slices.Contains(nonSPAExact, path)
+	first, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
+	return nonSPASegments[first]
+}
+
+// spaWillNotServe reports whether the NoRoute fallback must answer 404 instead
+// of the SPA shell: a server-side path (isNonSPAPath), or any method other than
+// GET/HEAD -- the shell is a document to navigate to, and a POST or DELETE that
+// matched no route has nothing to do with it.
+func spaWillNotServe(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return true
+	}
+	return isNonSPAPath(r.URL.Path)
 }

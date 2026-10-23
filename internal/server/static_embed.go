@@ -1,10 +1,9 @@
 //go:build embed_frontend
 
-// version: 1.2.0
 // file: internal/server/static_embed.go
-// last-edited: 2026-10-20
+// version: 1.4.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-05-01
+// last-edited: 2026-10-21
 
 package server
 
@@ -38,6 +37,23 @@ func (s *Server) setupStaticFiles(spaMiddleware ...gin.HandlerFunc) {
 		// If Sub fails, log and continue - we'll fall back to placeholder
 		webDist = nil
 	}
+	if webDist != nil {
+		// Allow the shell's inline scripts by hash, computed from the very file
+		// served below (csp.go), so the policy cannot drift from the build.
+		index, err := fs.ReadFile(webDist, "index.html")
+		switch {
+		case err != nil:
+			// Without the hashes the shell's inline scripts are blocked and the
+			// UI renders blank under the CSP: say so, loudly, at startup.
+			lifecycleLog.Warn("CSP: cannot read index.html from the embedded frontend (%v); its inline scripts will be blocked by the policy", err)
+		default:
+			if n := setSPAInlineScripts(index); n == 0 {
+				lifecycleLog.Warn("CSP: index.html has no inline script to allow by hash; if the build's shell relies on one the policy will block it")
+			} else {
+				lifecycleLog.Info("CSP: allowing %d inline script(s) in index.html by hash", n)
+			}
+		}
+	}
 
 	// NoRoute handler to serve static files or SPA index.html
 	spaHandlers := make([]gin.HandlerFunc, 0, len(spaMiddleware)+1)
@@ -50,7 +66,7 @@ func (s *Server) setupStaticFiles(spaMiddleware ...gin.HandlerFunc) {
 		// Server-side paths must 404 rather than render the SPA shell. Serving
 		// the React index for an unimplemented protocol endpoint tells a client
 		// the feature exists — see isNonSPAPath for the AudioBooth OIDC case.
-		if isNonSPAPath(c.Request.URL.Path) {
+		if spaWillNotServe(c.Request) {
 			httputil.RespondWithNotFound(c, "endpoint", "")
 			return
 		}

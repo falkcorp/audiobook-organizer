@@ -1,12 +1,13 @@
 // file: internal/server/middleware/cfbounce_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5c1a7d3-2f94-4b60-8d17-a3b9c6e04f28
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package middleware
 
 import (
 	"html"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
@@ -437,5 +439,45 @@ func TestInspect_ReportsCookieIsPerson(t *testing.T) {
 		if ins.CookiePoisoned != want[0] || ins.CookieIsPerson != want[1] {
 			t.Errorf("cookie %q: poisoned=%v person=%v, want %v", cookie, ins.CookiePoisoned, ins.CookieIsPerson, want)
 		}
+	}
+}
+
+// /invite/<token> is an eligible recovery path (a page navigation), so a person
+// whose browser holds a Cloudflare service-token session reaches all three log
+// lines of the recovery middleware with an invite token in the path. None of them
+// may carry it, including a token behind a decoded %3F.
+func TestCFServiceTokenRecovery_LogsNoInviteToken(t *testing.T) {
+	const tok = "cfbounce-invite-token-example"
+	cases := []struct {
+		name    string
+		target  string
+		headers map[string]string
+		cookies map[string]string
+		wantLog string
+	}{
+		{"left alone without Sec-Fetch headers", "/invite/" + tok,
+			map[string]string{"Accept": "text/html,application/xhtml+xml", "Cf-Access-Jwt-Assertion": bounceSvcHeader}, nil, "left alone"},
+		{"bounce", "/invite/" + tok, with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader), nil, "bouncing browser navigation"},
+		{"loop guard", "/invite/" + tok + "?cfreset=1", with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader),
+			map[string]string{"CF_Authorization": bounceSvcCookie}, "after recovery bounce"},
+		{"bounce behind an encoded question mark", "/invite/%3F" + tok, with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader), nil, "bouncing browser navigation"},
+		{"loop guard behind an encoded question mark", "/invite/%3F" + tok + "?cfreset=1", with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader),
+			map[string]string{"CF_Authorization": bounceSvcCookie}, "after recovery bounce"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := logtest.Capture(t, slog.LevelDebug)
+			runBounce(t, bounceReq{target: tc.target, headers: tc.headers, cookies: tc.cookies})
+			out := buf.String()
+			if !strings.Contains(out, tc.wantLog) {
+				t.Fatalf("expected the %q log line, got:\n%s", tc.wantLog, out)
+			}
+			if strings.Contains(out, tok) {
+				t.Fatalf("log line carries the invite token:\n%s", out)
+			}
+			if !strings.Contains(out, "path=/invite/[REDACTED]") {
+				t.Fatalf("log line lost the readable path:\n%s", out)
+			}
+		})
 	}
 }

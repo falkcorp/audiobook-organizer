@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.31.0
+// version: 1.35.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package server
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 // Compile-time proof that the production store satisfies the Phase 6 capability the
@@ -569,7 +570,11 @@ func (s *Server) wireABSRoutes() {
 		Progress:    asProgressStore(s.Ops()),
 		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so
 		// the CRUD routes always register on the supported backend.
-		Bookmarks:   bookmarkStore,
+		Bookmarks: bookmarkStore,
+		// The failure throttle's bucket is the tunnel visitor, not the connector.
+		ThrottleKey: loginThrottleKey,
+		// One throttle for both password logins (see s.loginThrottle).
+		Throttle:    s.loginThrottle(),
 		AliasUses:   aliasUses,
 		CoverRoot:   config.AppConfig.RootDir,
 		LibraryName: "Books",
@@ -626,6 +631,11 @@ func (s *Server) wireABSRoutes() {
 			"Credential VALUES are never logged (booleans and lengths only), but this is verbose; " +
 			"unset " + servermiddleware.ABSAuthProbeEnvVar + " when the diagnostic window is over")
 	}
+	// Aggregate password-guessing ceilings (login_ceiling.go) in front of the ABS
+	// password login only; /auth/refresh does no password work.
+	absGroup.Use(s.loginCeiling().middleware(func(c *gin.Context) bool {
+		return c.Request.Method == http.MethodPost && c.FullPath() == "/login"
+	}, respondABSLoginError)) // ABS clients parse {"error": msg}, not the web envelope
 	handler.Register(absGroup)
 
 	if !handler.HasUserDataProvider() {

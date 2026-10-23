@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.10.0
+// version: 1.12.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 package server
 
@@ -497,11 +497,10 @@ func TestConfigGET_NeverReturnsInviteSecrets(t *testing.T) {
 	srv, _ := setupUserHandlerServer(t)
 	saved := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
-	secrets := []string{"smtp-pw-SENTINEL-41", "guest-secret-SENTINEL-42", "guest-id-SENTINEL-43.access", "cf-token-SENTINEL-44", "mailer-SENTINEL@example.com"}
+	secrets := []string{"smtp-pw-SENTINEL-41", "cf-token-SENTINEL-44", "mailer-SENTINEL@example.com"}
 	config.Mutate(func(c *config.Config) {
 		c.SMTPHost, c.SMTPFrom = "127.0.0.1", "books@example.com"
-		c.SMTPPassword, c.InviteCFAccessClientSecret, c.InviteCFAccessClientID, c.CFPolicyAPIToken, c.SMTPUsername =
-			secrets[0], secrets[1], secrets[2], secrets[3], secrets[4]
+		c.SMTPPassword, c.CFPolicyAPIToken, c.SMTPUsername = secrets[0], secrets[1], secrets[2]
 	})
 	for _, path := range []string{"/api/v1/config", "/api/v1/users/invites"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -691,5 +690,28 @@ func TestRevokeGuestAccess_UnverifiedRemovalDoesNotPanicOrRetry(t *testing.T) {
 	srv.bgWG.Wait()
 	if len(fake.removed) != 1 {
 		t.Fatalf("removed = %v", fake.removed)
+	}
+}
+
+// Invitation email on without the Cloudflare guest-policy sync is the dead end
+// the startup warning names.
+func TestGuestAccessDeadEnd(t *testing.T) {
+	mail := config.Config{SMTPHost: "192.0.2.25", SMTPFrom: "invites@example.test"}
+	sync := config.Config{CFAccountID: "acct", CFGuestsPolicyID: "pol", CFPolicyAPIToken: "tok"}
+	both := mail
+	both.CFAccountID, both.CFGuestsPolicyID, both.CFPolicyAPIToken = sync.CFAccountID, sync.CFGuestsPolicyID, sync.CFPolicyAPIToken
+	for name, tc := range map[string]struct {
+		c    config.Config
+		want bool
+	}{
+		"mail without sync":   {mail, true},
+		"mail with sync":      {both, false},
+		"neither":             {config.Config{}, false},
+		"sync without mail":   {sync, false},
+		"partial sync (mail)": {config.Config{SMTPHost: mail.SMTPHost, SMTPFrom: mail.SMTPFrom, CFAccountID: "acct"}, true},
+	} {
+		if got := guestAccessDeadEnd(tc.c); got != tc.want {
+			t.Errorf("%s: guestAccessDeadEnd = %v, want %v", name, got, tc.want)
+		}
 	}
 }

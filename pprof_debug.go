@@ -1,7 +1,7 @@
 // file: pprof_debug.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f9e1a23b-4c56-7890-d1e2-f3a4b5c6d7e8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-21
 
 //go:build pprof
 
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -24,7 +25,10 @@ import (
 //
 //	ABK_PPROF_ADDR=localhost:6060 ./audiobook-organizer
 //
-// For a remote host, prefer SSH port-forwarding over binding a public address.
+// A non-loopback address is REFUSED, not warned about: the listener has no
+// authentication, so it must never be reachable from another machine (see
+// pprofAddrIsLoopback). For a remote host, use SSH port-forwarding to the
+// loopback listener.
 //
 // Importing net/http/pprof registers its handlers on http.DefaultServeMux as an
 // import side effect, even though this file only calls its exported handler
@@ -59,6 +63,22 @@ func resolvePprofAddr(raw string) string {
 	return net.JoinHostPort("127.0.0.1", port)
 }
 
+// pprofAddrIsLoopback reports whether addr binds only the loopback interface: a
+// loopback IP literal or the name localhost. Any other host name is refused
+// without resolving it (a name can resolve to anything), as is an unspecified
+// address (0.0.0.0, ::), which binds every interface.
+func pprofAddrIsLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // startPprofFromEnv starts the listener only when ABK_PPROF_ADDR is non-empty,
 // by calling the injected serve in a goroutine. Tests inject a no-op serve.
 func startPprofFromEnv(getenv func(string) string, serve func(addr string, h http.Handler)) (addr string, started bool) {
@@ -71,13 +91,12 @@ func startPprofFromEnv(getenv func(string) string, serve func(addr string, h htt
 	if addr != raw {
 		slog.Warn("pprof address had no host; pinned to loopback", "requested", raw, "addr", addr)
 	}
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-			slog.Warn("pprof address binds every interface; profiling endpoints are unauthenticated", "addr", addr)
-		}
+	if !pprofAddrIsLoopback(addr) {
+		slog.Error("pprof listener REFUSED: "+pprofAddrEnv+" must be a loopback address (127.0.0.1:PORT, [::1]:PORT or localhost:PORT); the profiling endpoints are unauthenticated. Use SSH port-forwarding for a remote host", "addr", addr)
+		return "", false
 	}
 	go func() {
-		slog.Warn("pprof listener enabled — exposes unauthenticated profiling data; bind to loopback only", "addr", addr)
+		slog.Warn("pprof listener enabled on loopback — exposes unauthenticated profiling data to local users", "addr", addr)
 		serve(addr, newPprofMux())
 	}()
 	return addr, true

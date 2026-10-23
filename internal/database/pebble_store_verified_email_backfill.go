@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_verified_email_backfill.go
-// version: 2.9.0
+// version: 2.9.1
 // guid: b03036d5-834d-4848-93e7-d72c52242753
 // last-edited: 2026-10-21
 
@@ -591,7 +591,7 @@ func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error
 				if err != nil {
 					return "", err
 				}
-				if inviteCreatorMayGrant(creator) {
+				if InviteCreatorMayGrant(creator) {
 					source = EmailSourceInvite
 				}
 			}

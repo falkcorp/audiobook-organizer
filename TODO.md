@@ -13183,8 +13183,8 @@ audit nobody reopens:
 
 - [ ] **SEC-2** — bootstrap still writes plaintext credential files — ❓ owner decision 2026-10-03: keep bootstrap's 0600 credential files, make them opt-in, or local-only?
       (`internal/server/bootstrap.go:108,:153`). Decide opt-in/local-only.
-- [ ] **SEC-4 residue** — no CSP header yet (middleware comment defers until a
-      nonce/hash strategy is settled).
+- [x] **SEC-4 residue** — no CSP header yet (middleware comment defers until a
+      nonce/hash strategy is settled). ✅ DONE 2026-10-21 (fix/public-surface-hardening): CSP + Permissions-Policy, inline theme script allowed by a hash computed at startup.
 - [x] **SEC-8 residue** — Dockerfile build-dep tarballs (`utfcpp`, `taglib`) (done in #2692, TASK-011)
       are `curl | tar` with no SHA256 verification; base images are pinned.
 - [x] **PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over ✅ DONE 2026-09-12 (#3277): both backfill passes read one snapshot; progress reports the real total.

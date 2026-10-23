@@ -1,7 +1,7 @@
 // file: internal/config/invite_config_test.go
-// version: 1.1.0
+// version: 1.5.0
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package config
 
@@ -11,15 +11,15 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 // Sentinel values: if any of them shows up in serialized output, a secret leaked.
 const (
-	testSMTPPassword   = "smtp-pass-SENTINEL-1f2e"
-	testCFClientID     = "client-id-SENTINEL-3a4b.access"
-	testCFClientSecret = "client-secret-SENTINEL-5c6d"
-	testCFPolicyToken  = "policy-token-SENTINEL-7e8f"
-	testSMTPUsername   = "mailer-SENTINEL@example.com"
+	testSMTPPassword  = "smtp-pass-SENTINEL-1f2e"
+	testCFPolicyToken = "policy-token-SENTINEL-7e8f"
+	testSMTPUsername  = "mailer-SENTINEL@example.com"
 )
 
 func setInviteEnv(t *testing.T) {
@@ -30,12 +30,11 @@ func setInviteEnv(t *testing.T) {
 	t.Setenv("SMTP_PASSWORD", testSMTPPassword)
 	t.Setenv("SMTP_FROM", "Books <books@example.com>")
 	t.Setenv("PUBLIC_BASE_URL", "https://books.example.com/")
-	t.Setenv("INVITE_CF_ACCESS_CLIENT_ID", testCFClientID)
-	t.Setenv("INVITE_CF_ACCESS_CLIENT_SECRET", testCFClientSecret)
 	t.Setenv("CF_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
 	t.Setenv("CF_GUESTS_POLICY_ID", "11111111-2222-3333-4444-555555555555")
 	t.Setenv("CF_POLICY_API_TOKEN", testCFPolicyToken)
 	t.Setenv("TUNNEL_CONNECTOR_ADDRS", " 192.0.2.10, 198.51.100.7 ")
+	t.Setenv("ALLOWED_PEER_CIDRS", " 192.0.2.0/24, 198.51.100.7 ")
 }
 
 func TestInviteConfig_DefaultsAreInert(t *testing.T) {
@@ -43,7 +42,7 @@ func TestInviteConfig_DefaultsAreInert(t *testing.T) {
 	registerInviteDefaults()
 	var c Config
 	applyInviteEnv(&c)
-	if c.InviteMailConfigured() || c.InviteHeadersConfigured() || c.GuestPolicySyncConfigured() {
+	if c.InviteMailConfigured() || c.GuestPolicySyncConfigured() {
 		t.Fatalf("an unconfigured server must have every invite feature off: %+v", c)
 	}
 	if c.SMTPPort != DefaultSMTPPort {
@@ -51,6 +50,9 @@ func TestInviteConfig_DefaultsAreInert(t *testing.T) {
 	}
 	if c.TunnelConnectorAddrs != "" {
 		t.Fatalf("tunnel_connector_addrs default = %q, want empty (no trusted connector)", c.TunnelConnectorAddrs)
+	}
+	if c.AllowedPeerCIDRs != "" {
+		t.Fatalf("allowed_peer_cidrs default = %q, want empty (allow every peer, with a startup warning)", c.AllowedPeerCIDRs)
 	}
 }
 
@@ -65,8 +67,8 @@ func TestInviteConfig_EnvReachesConfigAndSurvivesBlobOverlay(t *testing.T) {
 	if c.SMTPHost != "127.0.0.1" || c.SMTPPort != 25 || c.SMTPPassword != testSMTPPassword {
 		t.Fatalf("SMTP settings not applied: host=%q port=%d", c.SMTPHost, c.SMTPPort)
 	}
-	if !c.InviteMailConfigured() || !c.InviteHeadersConfigured() || !c.GuestPolicySyncConfigured() {
-		t.Fatal("all three invite features must report configured")
+	if !c.InviteMailConfigured() || !c.GuestPolicySyncConfigured() {
+		t.Fatal("both invite features must report configured")
 	}
 	if got := c.InviteBaseURL("http://fallback"); got != "https://books.example.com" {
 		t.Fatalf("InviteBaseURL = %q", got)
@@ -74,13 +76,13 @@ func TestInviteConfig_EnvReachesConfigAndSurvivesBlobOverlay(t *testing.T) {
 	if c.TunnelConnectorAddrs != "192.0.2.10, 198.51.100.7" {
 		t.Fatalf("TunnelConnectorAddrs = %q, want the trimmed env value", c.TunnelConnectorAddrs)
 	}
+	if c.AllowedPeerCIDRs != "192.0.2.0/24, 198.51.100.7" {
+		t.Fatalf("AllowedPeerCIDRs = %q, want the trimmed env value", c.AllowedPeerCIDRs)
+	}
 }
 
 func TestInviteConfig_PartialSettingsStayInert(t *testing.T) {
-	c := Config{InviteCFAccessClientID: "id-only", CFAccountID: "acct", CFGuestsPolicyID: "pol"}
-	if c.InviteHeadersConfigured() {
-		t.Fatal("one half of the header pair must not count as configured")
-	}
+	c := Config{CFAccountID: "acct", CFGuestsPolicyID: "pol"}
 	if c.GuestPolicySyncConfigured() {
 		t.Fatal("policy sync without its API token must be inert")
 	}
@@ -117,7 +119,7 @@ func TestInviteConfig_NeverSerialized(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := string(b)
-		for _, secret := range []string{testSMTPPassword, testCFClientID, testCFClientSecret, testCFPolicyToken, testSMTPUsername} {
+		for _, secret := range []string{testSMTPPassword, testCFPolicyToken, testSMTPUsername} {
 			if strings.Contains(out, secret) {
 				t.Fatalf("%s config JSON contains an invite secret", name)
 			}
@@ -140,7 +142,7 @@ func TestInviteConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "invite_cf_access_client_secret", "tunnel_connector_addrs"} {
+	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "tunnel_connector_addrs", "allowed_peer_cidrs", "login_saturated_rate", "LOGIN_SATURATED_BURST"} {
 		status, resp := svc.UpdateConfig(context.Background(), map[string]any{
 			key:         "x",
 			"log_level": "warn",
@@ -158,5 +160,134 @@ func TestInviteConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
 	}
 	if len(*blobs) != 0 {
 		t.Fatal("refused PUT persisted a blob")
+	}
+}
+
+// The shared guest service token was removed (2026-10-21). Its two names are
+// no longer env-only settings: a PUT naming one gets the removal message, not
+// the env-only refusal, and a stale value in the environment is warned about
+// at startup and never reaches Config.
+func TestInviteConfig_GuestServiceTokenIsGone(t *testing.T) {
+	restoreAppConfig(t)
+	Mutate(func(c *Config) { c.EnableAuth = false })
+	ms, blobs := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+	for _, key := range []string{"invite_cf_access_client_id", "invite_cf_access_client_secret"} {
+		status, resp := svc.UpdateConfig(context.Background(), map[string]any{key: "x", "log_level": "warn"})
+		if status != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400; resp = %v", key, status, resp)
+		}
+		msg, _ := resp["error"].(string)
+		if !strings.Contains(msg, "was removed") || strings.Contains(msg, EnvOnlySettingsRefusedMessage) {
+			t.Fatalf("%s: want the removal message, got %q", key, msg)
+		}
+	}
+	if len(*blobs) != 0 {
+		t.Fatal("refused PUT persisted a blob")
+	}
+	for _, s := range inviteEnvOnlySettings {
+		if strings.HasPrefix(s.key, "invite_cf_access") {
+			t.Fatalf("%s is still bound as an invite setting", s.key)
+		}
+	}
+}
+
+func TestInitConfig_StaleGuestServiceTokenEnvWarns(t *testing.T) {
+	restoreAppConfig(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	logs := captureRemovedKeyLogs(t)
+
+	t.Setenv("INVITE_CF_ACCESS_CLIENT_ID", "stale-id.access")
+	t.Setenv("INVITE_CF_ACCESS_CLIENT_SECRET", "stale-secret-SENTINEL")
+	viper.AutomaticEnv() // same order as cmd/root.go initConfig
+
+	InitConfig()
+
+	out := logs.String()
+	for _, k := range []string{"key=invite_cf_access_client_id ", "key=invite_cf_access_client_secret "} {
+		if !strings.Contains(out, k) || !strings.Contains(out, "removed setting is ignored") {
+			t.Errorf("expected a removed-setting WARN containing %q, got:\n%s", k, out)
+		}
+	}
+	if strings.Contains(out, "stale-secret-SENTINEL") || strings.Contains(out, "stale-id.access") {
+		t.Errorf("the warning must name the key, never log its value:\n%s", out)
+	}
+}
+
+func TestLoginSaturatedLimits_DefaultsAndEnv(t *testing.T) {
+	resetViper(t)
+	registerInviteDefaults()
+	var c Config
+	applyInviteEnv(&c)
+	rate, burst, err := parseLoginSaturatedLimits(c.LoginSaturatedRate, c.LoginSaturatedBurst)
+	if err != nil || rate != DefaultLoginSaturatedRate || burst != DefaultLoginSaturatedBurst {
+		t.Fatalf("unset keys: rate=%v burst=%d err=%v, want the defaults %v/%d", rate, burst, err, DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst)
+	}
+	if DefaultLoginSaturatedRate != 2 || DefaultLoginSaturatedBurst != 8 {
+		t.Fatalf("defaults are documented as 2/s burst 8, got %v/%d", DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst)
+	}
+
+	t.Setenv("LOGIN_SATURATED_RATE", " 0.5 ")
+	t.Setenv("LOGIN_SATURATED_BURST", " 3 ")
+	resetViper(t)
+	registerInviteDefaults()
+	restoreAppConfig(t)
+	var c2 Config
+	applyInviteEnv(&c2)
+	Mutate(func(cfg *Config) {
+		cfg.LoginSaturatedRate, cfg.LoginSaturatedBurst = c2.LoginSaturatedRate, c2.LoginSaturatedBurst
+	})
+	rate, burst, err = LoginSaturatedLimits()
+	if err != nil || rate != 0.5 || burst != 3 {
+		t.Fatalf("env values: rate=%v burst=%d err=%v, want 0.5/3", rate, burst, err)
+	}
+}
+
+func TestLoginSaturatedLimits_RejectsUnusableValues(t *testing.T) {
+	for _, tc := range []struct{ rate, burst, want string }{
+		{"abc", "", "LOGIN_SATURATED_RATE"},
+		{"0", "", "LOGIN_SATURATED_RATE"},
+		{"-1", "", "LOGIN_SATURATED_RATE"},
+		{"NaN", "", "LOGIN_SATURATED_RATE"},
+		{"Inf", "", "LOGIN_SATURATED_RATE"},
+		{"1e9", "", "LOGIN_SATURATED_RATE"},
+		{"50.5", "", "LOGIN_SATURATED_RATE"},
+		{"0.009", "", "LOGIN_SATURATED_RATE"}, // below the floor: a refused caller would wait minutes
+		{"0.0001", "", "LOGIN_SATURATED_RATE"},
+		{"", "0", "LOGIN_SATURATED_BURST"},
+		{"", "-3", "LOGIN_SATURATED_BURST"},
+		{"", "2.5", "LOGIN_SATURATED_BURST"},
+		{"", "lots", "LOGIN_SATURATED_BURST"},
+		{"", "201", "LOGIN_SATURATED_BURST"},
+	} {
+		if _, _, err := parseLoginSaturatedLimits(tc.rate, tc.burst); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("rate=%q burst=%q: err=%v, want an error naming %s", tc.rate, tc.burst, err, tc.want)
+		}
+	}
+	// The raw value is operator input read from the environment: the error names
+	// the setting and the accepted range, and never echoes what was typed.
+	for _, tc := range []struct{ rate, burst string }{{"zz-7.31-rate", ""}, {"", "zz-7.31-burst"}, {"0.0049999", ""}, {"", "4242424"}} {
+		_, _, err := parseLoginSaturatedLimits(tc.rate, tc.burst)
+		if err == nil {
+			t.Fatalf("rate=%q burst=%q: expected an error", tc.rate, tc.burst)
+		}
+		for _, raw := range []string{tc.rate, tc.burst} {
+			if raw != "" && strings.Contains(err.Error(), raw) {
+				t.Errorf("error %q echoes the raw value %q", err, raw)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		rate, burst string
+		wantRate    float64
+		wantBurst   int
+	}{
+		{"50", "200", 50, 200}, {"0.01", "1", 0.01, 1}, {"", "", 2, 8},
+	} {
+		r, b, err := parseLoginSaturatedLimits(tc.rate, tc.burst)
+		if err != nil || r != tc.wantRate || b != tc.wantBurst {
+			t.Errorf("rate=%q burst=%q: %v/%d err=%v, want %v/%d", tc.rate, tc.burst, r, b, err, tc.wantRate, tc.wantBurst)
+		}
 	}
 }

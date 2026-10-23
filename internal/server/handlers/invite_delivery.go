@@ -1,18 +1,17 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
-// last-edited: 2026-10-20
+// last-edited: 2026-10-21
 
 // Invitation delivery: the invite email, resend, and the public invite lookup
 // the accept page calls.
 //
-// What an invite email carries: the invitee's own link, the SHARED guest
-// Cloudflare service-token header pair (when configured) and the AudioBooth
-// setup steps. The header pair is a credential, so:
-//   - it is rendered only into the email body and into the public lookup for
-//     a valid, unexpired, unused token;
-//   - no admin response, error or log line ever contains it, or the rendered
-//     body. Admins get only email_sent / email_error.
+// What an invite email carries: the invitee's own link and the AudioBooth
+// setup steps. There is no shared credential in it: a guest gets through
+// Cloudflare by email login, because accepting the invitation adds their
+// address to the guest Access policy (invite_guest_access.go). No admin
+// response, error or log line contains the rendered body; admins get only
+// email_sent / email_error.
 
 package handlers
 
@@ -41,12 +40,6 @@ import (
 
 var inviteLog = logger.New("handlers.invites")
 
-// GuestHeaders is the shared guest Cloudflare Access service token.
-type GuestHeaders struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-}
-
 // InviteDelivery is what UserHandler needs to deliver invitations. Every field
 // is read per request so tests can swap them; the server wires them from
 // config (wire_handlers.go). A nil func means "not configured".
@@ -56,8 +49,6 @@ type InviteDelivery struct {
 	Sender func() imail.Sender
 	// BaseURL returns the public origin links are built on ("" = relative).
 	BaseURL func() string
-	// GuestHeaders returns the shared header pair and whether it is configured.
-	GuestHeaders func() (GuestHeaders, bool)
 	// GuestPolicySyncConfigured reports whether accept adds the invitee to
 	// the Cloudflare Access guest policy.
 	GuestPolicySyncConfigured func() bool
@@ -97,13 +88,6 @@ func (d *InviteDelivery) sendBlocked() string {
 		return publicURLMissingReason
 	}
 	return ""
-}
-
-func (d *InviteDelivery) headers() (GuestHeaders, bool) {
-	if d == nil || d.GuestHeaders == nil {
-		return GuestHeaders{}, false
-	}
-	return d.GuestHeaders()
 }
 
 func (d *InviteDelivery) policySync() bool {
@@ -149,7 +133,12 @@ type inviteEmailData struct {
 	InviteURL string
 	ServerURL string
 	ExpiresAt string
-	Headers   *GuestHeaders
+	Email     string
+	// EmailLogin is true when accepting adds the invitee's address to the
+	// Cloudflare Access guest policy, so the email says to sign in to
+	// Cloudflare with that address. False: the step is left out, because it
+	// would send the guest to a login that does not know them.
+	EmailLogin bool
 }
 
 const inviteEmailSubject = "You're invited to Audiobook Organizer"
@@ -163,27 +152,18 @@ You have been invited to Audiobook Organizer.
    {{.InviteURL}}
 
    The link works once and expires {{.ExpiresAt}}.
-{{if .Headers}}
-2. Set up the AudioBooth app on your phone:
 
-   a. Open AudioBooth and go to Servers. Tap + to add a server.
-   b. Server address: {{.ServerURL}}
-   c. BEFORE signing in, tap Custom Headers and add these two headers,
-      exactly as written:
+2. Then open {{.ServerURL}} in your browser and sign in with your username ({{.Username}}) and the password you chose.
+{{- if .EmailLogin}}
 
-      Name:  CF-Access-Client-Id
-      Value: {{.Headers.ClientID}}
+   If Cloudflare asks you to sign in first, enter this email address:
+   {{.Email}}
+   Cloudflare emails you a one-time code; type it in. This works once you
+   have chosen your password in step 1.
+{{- end}}
 
-      Name:  CF-Access-Client-Secret
-      Value: {{.Headers.ClientSecret}}
+Phone app access will be added to your account soon.
 
-   d. Go back. The Custom Headers row should read 2.
-   e. Sign in with your username ({{.Username}}) and the password you chose.
-
-These two header values are shared guest credentials for reaching the
-server. They do not sign you in; your own password does. Please do not
-share them.
-{{end}}
 If you were not expecting this invitation, you can ignore this email.
 `))
 
@@ -196,35 +176,23 @@ var inviteHTMLTmpl = htmltemplate.Must(htmltemplate.New("html").Parse(`<!doctype
 If the link does not open, copy this address into your browser:<br>
 <code>{{.InviteURL}}</code></p>
 <p>The link works once and expires {{.ExpiresAt}}.</p>
-{{if .Headers}}
-<h3>2. Set up AudioBooth on your phone</h3>
-<ol>
-<li>Open AudioBooth and go to <strong>Servers</strong>. Tap <strong>+</strong> to add a server.</li>
-<li>Server address: <code>{{.ServerURL}}</code></li>
-<li><strong>Before signing in</strong>, tap <strong>Custom Headers</strong> and add these two headers, exactly as written:
-<table style="border-collapse:collapse;margin:8px 0">
-<tr><td style="padding:4px 8px;border:1px solid #ccc">Name</td><td style="padding:4px 8px;border:1px solid #ccc"><code>CF-Access-Client-Id</code></td></tr>
-<tr><td style="padding:4px 8px;border:1px solid #ccc">Value</td><td style="padding:4px 8px;border:1px solid #ccc"><code>{{.Headers.ClientID}}</code></td></tr>
-<tr><td style="padding:4px 8px;border:1px solid #ccc">Name</td><td style="padding:4px 8px;border:1px solid #ccc"><code>CF-Access-Client-Secret</code></td></tr>
-<tr><td style="padding:4px 8px;border:1px solid #ccc">Value</td><td style="padding:4px 8px;border:1px solid #ccc"><code>{{.Headers.ClientSecret}}</code></td></tr>
-</table></li>
-<li>Go back. The Custom Headers row should read <strong>2</strong>.</li>
-<li>Sign in with your username (<strong>{{.Username}}</strong>) and the password you chose.</li>
-</ol>
-<p>These two header values are shared guest credentials for reaching the server. They do not sign you in; your own password does. Please do not share them.</p>
-{{end}}
+<h3>2. Sign in</h3>
+<p>Then open <a href="{{.ServerURL}}">{{.ServerURL}}</a> in your browser and sign in with your username (<strong>{{.Username}}</strong>) and the password you chose.</p>
+{{if .EmailLogin}}<p>If Cloudflare asks you to sign in first, enter this email address: <code>{{.Email}}</code>. Cloudflare emails you a one-time code; type it in. This works once you have chosen your password in step 1.</p>
+{{end}}<p>Phone app access will be added to your account soon.</p>
 <p style="color:#666">If you were not expecting this invitation, you can ignore this email.</p>
 </body></html>`))
 
 // renderInviteEmail builds the invitation message. Templates escape every
 // value (html/template contextually; the text part has no markup).
-func renderInviteEmail(inv *database.Invite, inviteURL, serverURL string, headers *GuestHeaders) (imail.Message, error) {
+func renderInviteEmail(inv *database.Invite, inviteURL, serverURL string, emailLogin bool) (imail.Message, error) {
 	data := inviteEmailData{
-		Username:  inv.Username,
-		InviteURL: inviteURL,
-		ServerURL: serverURL,
-		ExpiresAt: inv.ExpiresAt.UTC().Format("Mon 2 Jan 2006 15:04 UTC"),
-		Headers:   headers,
+		Username:   inv.Username,
+		InviteURL:  inviteURL,
+		ServerURL:  serverURL,
+		ExpiresAt:  inv.ExpiresAt.UTC().Format("Mon 2 Jan 2006 15:04 UTC"),
+		Email:      inv.Email,
+		EmailLogin: emailLogin,
 	}
 	var text, html bytes.Buffer
 	if err := inviteTextTmpl.Execute(&text, data); err != nil {
@@ -320,9 +288,25 @@ func currentUserID(c *gin.Context) string {
 
 // ── Sending ────────────────────────────────────────────────────────────────
 
+// inviteEmailLogin reports whether the email may tell the guest to sign in to
+// Cloudflare with their address: policy sync is configured and the invite's
+// creator may grant access (an active admin), the two conditions under which
+// accept adds the address to the guest policy. A lookup error leaves the step
+// out, because promising a login that does not exist sends the guest nowhere.
+func (h *UserHandler) inviteEmailLogin(inv *database.Invite) bool {
+	if !h.delivery.policySync() || inv.Email == "" {
+		return false
+	}
+	creator, err := h.store.GetUserByID(inv.CreatedByUserID)
+	if err != nil {
+		inviteLog.Warn("invite email: could not look up the creator of the invite for %s: %v", logger.SanitizeLogValue(inv.Username), err)
+		return false
+	}
+	return database.InviteCreatorMayGrant(creator)
+}
+
 // sendInviteEmail renders and sends the invitation for inv and records the
-// send. It returns a message safe to show an admin: never the body, never the
-// header pair.
+// send. It returns a message safe to show an admin: never the body.
 func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite) (sentAt *time.Time, errMsg string) {
 	if why := h.delivery.sendBlocked(); why != "" {
 		return nil, why
@@ -332,11 +316,7 @@ func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite)
 		return nil, "this invitation has no email address"
 	}
 	base := h.delivery.baseURL()
-	var hdr *GuestHeaders
-	if g, ok := h.delivery.headers(); ok {
-		hdr = &g
-	}
-	msg, err := renderInviteEmail(inv, InviteURL(base, inv.Token), base, hdr)
+	msg, err := renderInviteEmail(inv, InviteURL(base, inv.Token), base, h.inviteEmailLogin(inv))
 	if err != nil {
 		inviteLog.Error("invite email: render failed for invite of %s: %v", logger.SanitizeLogValue(inv.Username), err)
 		return nil, "could not build the invitation email"
@@ -399,7 +379,7 @@ func (h *UserHandler) ResendInvite(c *gin.Context) {
 
 // PublicInvite handles GET /api/v1/auth/invite/:token (public, rate-limited at
 // the route). It answers only for a token accept would take, and then with
-// only the username, the expiry and, when configured, the guest header pair.
+// only the username and the expiry.
 // Every case accept refuses (missing, used, expired, the username taken since,
 // the invited address held verified by another account) gets the same 404:
 // the store runs accept's own checks (InviteAcceptChecker), so a link holder
@@ -425,20 +405,27 @@ func (h *UserHandler) PublicInvite(c *gin.Context) {
 		notFound()
 		return
 	}
+	grantsSSO := false
 	if h.acceptChecker != nil {
-		if err := h.acceptChecker.CheckInviteAcceptable(token); database.IsInviteRefusal(err) {
+		preview, err := h.acceptChecker.CheckInviteAcceptable(token)
+		if database.IsInviteRefusal(err) {
 			notFound()
 			return
 		} else if err != nil {
 			httputil.InternalError(c, "failed to check invite", err)
 			return
 		}
+		grantsSSO = preview.GrantsSSO
 	}
-	resp := gin.H{"username": inv.Username, "expires_at": inv.ExpiresAt}
-	if g, ok := h.delivery.headers(); ok {
-		resp["guest_headers"] = g
-	}
-	httputil.RespondWithOK(c, resp)
+	// email_login: accepting will add this address to the Cloudflare guest
+	// policy, so the page may tell the guest to sign in to Cloudflare with it.
+	// It is the email's own condition (inviteEmailLogin), so the page and the
+	// email cannot disagree, and it is a bool: no address is revealed.
+	httputil.RespondWithOK(c, gin.H{
+		"username":    inv.Username,
+		"expires_at":  inv.ExpiresAt,
+		"email_login": h.delivery.policySync() && grantsSSO,
+	})
 }
 
 // acceptedInviteView is the admin's view of an accepted invite: no token.

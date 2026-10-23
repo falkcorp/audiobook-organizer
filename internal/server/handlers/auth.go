@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.19.1
+// version: 3.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 package handlers
 
@@ -10,12 +10,12 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -87,23 +87,6 @@ type AuthStore interface {
 }
 
 const (
-	// Per-IP failed-login throttle. Once a single source IP exceeds
-	// maxFailedLoginsPerIP failures inside loginThrottleWindow it is rejected
-	// with 429 until the window rolls over. Keyed on the *attacker's* source —
-	// not the target account — so it cannot be used to lock a victim out
-	// (pen-test finding HIGH-3). This is meaningful now that X-Forwarded-For is
-	// no longer trusted for ClientIP (HIGH-2).
-	maxFailedLoginsPerIP = 15
-	loginThrottleWindow  = 15 * time.Minute
-
-	// Per-account soft slowdown. After accountSoftThreshold failures a small
-	// progressive delay (capped at accountSoftMaxDelay) is added to each *failed*
-	// attempt. The account is never hard-locked: a correct password always
-	// succeeds immediately, so a third party cannot deny a known user access.
-	accountSoftThreshold = 5
-	accountSoftStep      = 200 * time.Millisecond
-	accountSoftMaxDelay  = 2 * time.Second
-
 	// DefaultSessionTTL is the session lifetime for a normal login.
 	DefaultSessionTTL = 24 * time.Hour
 	// TempLoginTokenTTL is the lifetime of a single-use temp-login token.
@@ -113,21 +96,15 @@ const (
 	defaultSessionTTL    = DefaultSessionTTL
 )
 
-type failedAttempt struct {
-	count   int
-	firstAt time.Time
-}
-
 // AuthHandler handles all /auth routes (login, sessions, password management).
 type AuthHandler struct {
 	store      AuthStore
 	enableAuth bool
-	acctFails  map[string]*failedAttempt // keyed by user ID — drives the soft delay
-	ipFails    map[string]*failedAttempt // keyed by client IP — drives the hard throttle
-	failMu     sync.Mutex
-	// failureDelay performs the soft per-account slowdown. Defaults to time.Sleep;
-	// tests override it to keep the suite fast and deterministic.
-	failureDelay func(time.Duration)
+	// throttle is the failed-login throttle: per-source hard limit, per-account soft
+	// delay. The server shares ONE with the Audiobookshelf-compatible /login
+	// (SetThrottle), so a guess through either door counts toward the same
+	// account. Its delay function defaults to time.Sleep (SetFailureDelay).
+	throttle *absauth.Throttle
 	// absSessions signs a user out of every ABS client when their password
 	// changes. nil when the store has no ABS keyspace (no ABS session can exist).
 	absSessions ABSSessionRevoker
@@ -138,102 +115,61 @@ type AuthHandler struct {
 	// revokeGuestAccess ends invite-granted SSO / Cloudflare access for an
 	// email the user gave up in UpdateMe; nil = nothing to revoke.
 	revokeGuestAccess GuestAccessRevoker
+	// throttleKeyFn names the bucket of the per-IP failure throttle for a
+	// request (SetThrottleKeyFunc); nil keys on c.ClientIP().
+	throttleKeyFn func(*gin.Context) string
 }
 
 // NewAuthHandler constructs an AuthHandler.
 // enableAuth should be set from config.AppConfig.EnableAuth at wire time.
 func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
+	absauth.WarmLoginDummy() // so the first login for an unknown name costs what any other does
 	return &AuthHandler{
-		store:        store,
-		enableAuth:   enableAuth,
-		acctFails:    make(map[string]*failedAttempt),
-		ipFails:      make(map[string]*failedAttempt),
-		failureDelay: time.Sleep,
-		absSessions:  ResolveABSSessionRevoker(store),
-		creds:        ResolveUserCredentialWriter(store),
+		store:       store,
+		enableAuth:  enableAuth,
+		throttle:    absauth.NewThrottle(),
+		absSessions: ResolveABSSessionRevoker(store),
+		creds:       ResolveUserCredentialWriter(store),
 	}
 }
 
-// SetFailureDelay replaces the per-account soft-delay function. The only
-// intended caller is test code in the external handlers_test package; inject a
-// no-op (func(time.Duration) {}) to keep the suite fast and deterministic.
-func (h *AuthHandler) SetFailureDelay(fn func(time.Duration)) {
-	h.failureDelay = fn
+// SetThrottleKeyFunc sets how the per-IP failed-login throttle keys a request.
+// The router trusts no proxy headers, so behind the Cloudflare tunnel c.ClientIP()
+// is the connector's address, shared by every visitor: three buckets for the
+// whole site, and one caller spending one of them locks out everyone behind
+// that connector. The server wires a function that returns the visitor's own
+// address when that can be believed (see server.loginThrottleKey) and the peer's
+// address otherwise. nil, or an empty answer, keeps c.ClientIP(). It decides
+// only the throttle bucket; sessions still record c.ClientIP().
+func (h *AuthHandler) SetThrottleKeyFunc(fn func(*gin.Context) string) {
+	h.throttleKeyFn = fn
 }
 
-// bumpFailureLocked increments the windowed failure counter for key and returns
-// the post-increment count. Caller must hold failMu.
-func bumpFailureLocked(m map[string]*failedAttempt, key string) int {
-	a, ok := m[key]
-	if !ok || time.Since(a.firstAt) > loginThrottleWindow {
-		m[key] = &failedAttempt{count: 1, firstAt: time.Now()}
-		return 1
-	}
-	a.count++
-	return a.count
-}
-
-// ipThrottled reports whether the given source IP has exceeded its failed-login
-// budget within the current window.
-func (h *AuthHandler) ipThrottled(ip string) bool {
-	if ip == "" {
-		return false
-	}
-	h.failMu.Lock()
-	defer h.failMu.Unlock()
-	a, ok := h.ipFails[ip]
-	if !ok {
-		return false
-	}
-	if time.Since(a.firstAt) > loginThrottleWindow {
-		delete(h.ipFails, ip)
-		return false
-	}
-	return a.count >= maxFailedLoginsPerIP
-}
-
-// purgeExpiredLocked removes entries whose throttle window has elapsed so the
-// maps don't grow without bound when attackers rotate source IPs. Caller must
-// hold failMu.
-func purgeExpiredLocked(m map[string]*failedAttempt) {
-	for k, a := range m {
-		if time.Since(a.firstAt) > loginThrottleWindow {
-			delete(m, k)
+// throttleKey is the bucket the failed-login throttle charges this request to.
+func (h *AuthHandler) throttleKey(c *gin.Context) string {
+	if h.throttleKeyFn != nil {
+		if k := strings.TrimSpace(h.throttleKeyFn(c)); k != "" {
+			return k
 		}
 	}
+	return strings.TrimSpace(c.ClientIP())
 }
 
-// recordFailure bumps the per-IP counter and (when userID is non-empty) the
-// per-account counter, returning the soft delay to apply for this account
-// failure. Unknown users still count against the IP so username guessing can't
-// dodge the throttle.
-func (h *AuthHandler) recordFailure(userID, ip string) time.Duration {
-	h.failMu.Lock()
-	defer h.failMu.Unlock()
-	purgeExpiredLocked(h.ipFails)
-	purgeExpiredLocked(h.acctFails)
-	if ip != "" {
-		bumpFailureLocked(h.ipFails, ip)
+// SetThrottle replaces the failed-login throttle. The server calls it with the
+// one Throttle the Audiobookshelf-compatible login also uses, so both logins
+// share their per-account and per-source counters.
+func (h *AuthHandler) SetThrottle(t *absauth.Throttle) {
+	if t != nil {
+		h.throttle = t
 	}
-	if userID == "" {
-		return 0
-	}
-	count := bumpFailureLocked(h.acctFails, userID)
-	if count <= accountSoftThreshold {
-		return 0
-	}
-	d := min(time.Duration(count-accountSoftThreshold)*accountSoftStep, accountSoftMaxDelay)
-	return d
 }
 
-// clearFailures resets both counters after a successful login.
-func (h *AuthHandler) clearFailures(userID, ip string) {
-	h.failMu.Lock()
-	defer h.failMu.Unlock()
-	delete(h.acctFails, userID)
-	if ip != "" {
-		delete(h.ipFails, ip)
-	}
+// SetFailureDelay replaces the per-account soft-delay function of the throttle.
+// The only intended caller is test code in the external handlers_test package;
+// inject a no-op (func(time.Duration) {}) to keep the suite fast and
+// deterministic.
+func (h *AuthHandler) SetFailureDelay(fn func(time.Duration)) {
+	h.throttle.SetSleep(fn)
 }
 
 // buildAuthUserResponse converts a database User to the API response shape.
@@ -372,6 +308,8 @@ func (h *AuthHandler) SetupInitialAdmin(c *gin.Context) {
 	})
 }
 
+var authLoginLog = logger.New("handlers.auth")
+
 // Login handles POST /auth/login.
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req struct {
@@ -388,31 +326,71 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "username and password are required")
 		return
 	}
-	ip := strings.TrimSpace(c.ClientIP())
+	// Everything below is keyed on the normalised SUBMITTED username, never on the
+	// user row, so a name that does not exist behaves exactly like one that does.
+	accountKey := absauth.AccountKey(req.Username)
+	absauth.NoteLoginAccount(c, accountKey) // for the login ceilings' same-account refund
+	ip := h.throttleKey(c)
 	// Per-IP throttle first: a source that has burned through its failure budget
 	// is rejected before any credential work, so it can't keep probing (HIGH-3).
-	if h.ipThrottled(ip) {
+	if h.throttle.IPBlocked(ip) {
+		absauth.SetRetryAfter(c)
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts from this source — try again later", "TOO_MANY_REQUESTS")
 		return
 	}
+	// While the aggregate login ceilings are spent (absauth.MarkLoginSaturated) the
+	// login is delayed before any password work, and refused only when the
+	// submitted name has already failed SoftThreshold times. The decision uses the
+	// counter for the submitted name alone, so the answer does not tell a caller
+	// whether the name exists.
+	if absauth.LoginSaturated(c) &&
+		absauth.RefuseSaturatedLogin(c, h.throttle.AccountFailures(accountKey), h.throttle.Delay) {
+		absauth.SetRetryAfter(c)
+		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
+		return
+	}
 	user, err := h.store.GetUserByUsername(req.Username)
-	if err != nil || user == nil {
-		// Count the failure against the IP even for unknown users so username
-		// guessing can't dodge the throttle.
-		h.recordFailure("", ip)
+	if err != nil {
+		// A store failure is not a credential verdict: nothing is charged to the
+		// source or the name, and the caller is told it was our fault. The cause
+		// goes to the log, because the response deliberately carries none.
+		authLoginLog.Error("login: user lookup failed: %s", logger.SanitizeLogValue(err.Error()))
+		httputil.RespondWithInternalError(c, "could not verify credentials")
+		return
+	}
+	if user == nil {
+		// Counted against the source AND the submitted name even when the user
+		// does not exist, so username guessing can't dodge the throttle and an
+		// unknown name slows down exactly like a real one. The same password work
+		// is spent first, so the response time does not give the name away either.
+		absauth.SpendVerification(req.Password)
+		h.throttle.Delay(h.throttle.RecordFailure(accountKey, ip))
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
 	}
-	if ok, _ := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
+	if ok, _ := absauth.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
 		// Soft, progressive per-account slowdown — never a hard lock, so the
-		// real user with the correct password is never denied (HIGH-3).
-		if delay := h.recordFailure(user.ID, ip); delay > 0 {
-			h.failureDelay(delay)
-		}
+		// real user with the correct password is never denied (HIGH-3). An account
+		// with no password credential at all spends the same verification work.
+		h.throttle.Delay(h.throttle.RecordFailure(accountKey, ip))
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
 	}
-	h.clearFailures(user.ID, ip)
+	// A correct password for a disabled account is 403, as on the ABS door: the
+	// credential is fine, the authorization is not. It is checked AFTER the
+	// verification (so a disabled account costs the same password work as any
+	// other and the response time does not reveal its status) and BEFORE the
+	// success bookkeeping and the session: a disabled account must not mint a
+	// session, hand back this source's failures, or clear its own counter. It is
+	// not charged as a credential failure either.
+	if !auth.UserIsActive(user) {
+		httputil.RespondWithForbidden(c, "account is not active")
+		return
+	}
+	// A success clears this account's counter and takes back only this source's
+	// own failures against this account (capped), never its failures against
+	// other accounts.
+	h.throttle.Clear(accountKey, ip)
 	ttl := defaultSessionTTL
 	if req.RememberMe {
 		ttl = rememberMeSessionTTL

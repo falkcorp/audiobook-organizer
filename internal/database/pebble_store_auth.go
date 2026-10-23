@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -1424,12 +1424,12 @@ func (p *PebbleStore) planInviteAcceptLocked(token string, now time.Time) (*invi
 		// (handlers.UserHandler inviteTokenVisible). The creator could
 		// still accept it themselves, which gives them nothing new only
 		// because binding requires the creator to be an admin
-		// (inviteCreatorMayGrant), who can already set any user's email and
+		// (InviteCreatorMayGrant), who can already set any user's email and
 		// give any address access directly. A non-admin's invite binds
 		// nothing. If binding is ever opened to lower roles, the create
 		// response must stop carrying the token, or the token must be
 		// rotated on send.
-		if !inviteCreatorMayGrant(creator) {
+		if !InviteCreatorMayGrant(creator) {
 			inv.EmailBinding = InviteEmailCreatorNotAdmin
 			inv.SSOGrant = InviteSSOCreatorNotAdmin
 			break
@@ -1458,24 +1458,38 @@ func (p *PebbleStore) planInviteAcceptLocked(token string, now time.Time) (*invi
 	return &inviteAcceptPlan{inv: inv, lowerUser: lowerUser, lowerEmail: lowerEmail, grantSSO: grantSSO, displace: displace}, nil
 }
 
+// InviteAcceptPreview is what accepting an invite now would do that the public
+// invitation page needs to describe. It is decided by the same plan ConsumeInvite
+// applies, so the page cannot promise what accept will not do.
+type InviteAcceptPreview struct {
+	// GrantsSSO is true when accept would bind the invited address and grant it
+	// SSO sign-in (and, where configured, the Cloudflare guest entry): the
+	// invitation carries an email, it was delivered to that address and its
+	// creator is an active admin.
+	GrantsSSO bool
+}
+
 // InviteAcceptChecker answers whether an invite could be accepted now. Not on
 // Store; resolve it with AsCapability.
 type InviteAcceptChecker interface {
-	// CheckInviteAcceptable returns nil when accepting token now would
-	// succeed as far as the store can tell, or the refusal ConsumeInvite
-	// would return (IsInviteRefusal), or a storage error. It writes nothing.
-	CheckInviteAcceptable(token string) error
+	// CheckInviteAcceptable returns the preview when accepting token now would
+	// succeed as far as the store can tell, or the refusal ConsumeInvite would
+	// return (IsInviteRefusal), or a storage error. It writes nothing.
+	CheckInviteAcceptable(token string) (InviteAcceptPreview, error)
 }
 
 var _ InviteAcceptChecker = (*PebbleStore)(nil)
 
 // CheckInviteAcceptable implements InviteAcceptChecker with the same
 // planInviteAcceptLocked ConsumeInvite applies.
-func (p *PebbleStore) CheckInviteAcceptable(token string) error {
+func (p *PebbleStore) CheckInviteAcceptable(token string) (InviteAcceptPreview, error) {
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
-	_, err := p.planInviteAcceptLocked(token, time.Now())
-	return err
+	plan, err := p.planInviteAcceptLocked(token, time.Now())
+	if err != nil {
+		return InviteAcceptPreview{}, err
+	}
+	return InviteAcceptPreview{GrantsSSO: plan.grantSSO}, nil
 }
 
 // ConsumeInvite creates the invitee's user and marks the invite used, in one
@@ -1490,7 +1504,7 @@ func (p *PebbleStore) CheckInviteAcceptable(token string) error {
 //     that address (inviteEmailDelivered). Otherwise the account is created
 //     with no email and EmailBinding records why; an admin can set it later.
 //   - A bound email also gets an SSO grant (InviteEmailGrantStore) only when
-//     the invite's creator is still an active admin (inviteCreatorMayGrant).
+//     the invite's creator is still an active admin (InviteCreatorMayGrant).
 //     A users.manage holder who is not an admin can invite, but cannot widen
 //     who may sign in through SSO or Cloudflare Access.
 func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string) (*User, error) {

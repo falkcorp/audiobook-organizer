@@ -1,7 +1,7 @@
 // file: internal/server/middleware/recovery_redact_test.go
-// version: 1.3.0
+// version: 1.6.0
 // guid: fac23317-790b-49a1-b9f3-81b598014604
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package middleware
 
@@ -94,6 +94,45 @@ func TestRedactingRecovery_LogsNoInviteToken(t *testing.T) {
 				}
 				if !strings.Contains(out, rt.wantLine) {
 					t.Fatalf("recovery log lost the readable path %q: %s", rt.wantLine, out)
+				}
+			})
+		}
+	}
+}
+
+// SF2: the recovery dump logs RequestURI, which keeps %2F escaped, so an invite
+// token behind an encoded slash (/api/v1/auth/invite%2F<token>) must still be
+// masked there, on the panic and the broken-pipe path.
+func TestRedactingRecovery_LogsNoEncodedSlashInviteToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const tok = "recovery-encoded-slash-token-example"
+	for _, tc := range []struct{ target, wantLine string }{
+		{"/api/v1/auth/invite%2F" + tok, "/api/v1/auth/invite/[REDACTED] "},
+		{"/api/v1/auth/invite%2f" + tok + "?x=1", "/api/v1/auth/invite/[REDACTED]?x=1 "},
+		{"/invite%2F" + tok, "/invite/[REDACTED] "},
+		{"/api/v1/users/invites%2F" + tok + "/resend", "/api/v1/users/invites/[REDACTED]/resend "},
+		// A decoy segment does not hide the token: everything after the prefix goes.
+		{"/invite/%2F/" + tok, "/invite/[REDACTED]/[REDACTED] "},
+		{"/invite%2F%2E%2F" + tok, "/invite/[REDACTED] "},
+		{"/invite/./" + tok, "/invite/[REDACTED]/[REDACTED] "},
+		{"/invite%252F" + tok, "/invite/[REDACTED] "},
+		// A dot segment AFTER the token must not clean the route away first.
+		{"/invite%2F" + tok + "/..", "/invite/[REDACTED]/[REDACTED] "},
+		{"/x/../invite/" + tok + "/..", "/[REDACTED] "},
+	} {
+		for name, panicWith := range map[string]any{"panic": "boom", "broken pipe": syscall.EPIPE} {
+			t.Run(tc.target+" "+name, func(t *testing.T) {
+				buf := captureSlog(t)
+				r := gin.New()
+				r.Use(RedactingRecovery())
+				r.NoRoute(func(c *gin.Context) { panic(panicWith) })
+				r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tc.target, nil))
+				out := buf.String()
+				if strings.Contains(out, tok) {
+					t.Fatalf("recovery log leaked the invite token: %s", out)
+				}
+				if !strings.Contains(out, tc.wantLine) {
+					t.Fatalf("recovery log lost the readable path %q: %s", tc.wantLine, out)
 				}
 			})
 		}

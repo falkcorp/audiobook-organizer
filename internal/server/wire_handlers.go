@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.55.0
+// version: 2.57.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-23
 
@@ -36,6 +36,10 @@ import (
 // Route registration is delegated to per-domain wire*Routes methods.
 func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFunc, protected *gin.RouterGroup, oauthH *handlers.OAuthHandler) {
 	authH := handlers.NewAuthHandler(s.storeForWiring(), config.AppConfig.EnableAuth)
+	// The login throttle charges the tunnel visitor, not the connector.
+	authH.SetThrottleKeyFunc(loginThrottleKey)
+	// ...and shares its counters with the Audiobookshelf-compatible /login.
+	authH.SetThrottle(s.loginThrottle())
 	apiKeyH := handlers.NewAPIKeyHandler(s.storeForWiring())
 
 	// Built before the auth routes: the public invite lookup is one of them.

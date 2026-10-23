@@ -1,7 +1,7 @@
 // file: internal/server/absauth/password.go
-// version: 1.2.0
+// version: 1.6.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package absauth
 
@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
@@ -162,4 +164,85 @@ func verifyArgon2id(encoded, plain string) bool {
 	}
 	got := argonIDKey([]byte(plain), salt, time, memory, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+// The work a login does for a name that has no usable password.
+//
+// A login for a username that does not exist (or whose account has no password
+// credential: an OAuth user, an empty hash) would otherwise skip the argon2id
+// derivation a real account costs, and the difference in response time, tens of
+// milliseconds against microseconds, tells a caller which names are real however
+// carefully the status codes and the throttle charges are kept identical. So such a
+// login verifies the submitted password against a fixed dummy argon2id hash built
+// once with the production parameters (HashPassword), under the same argonSem as
+// every other derivation, and discards the answer.
+//
+// The dummy is derived from a random secret nobody holds, so the verification
+// cannot succeed. Legacy bcrypt rows (which still cost a bcrypt compare, not an
+// argon2id derivation, until their first successful login rehashes them) are the
+// one place a timing difference could remain.
+var (
+	dummyOnce  sync.Once
+	dummyHash  string
+	dummyBuilt atomic.Bool // set once dummyHash holds a usable hash; read by LoginDummyReadyForTest
+)
+
+func dummyArgon2idHash() string {
+	dummyOnce.Do(func() {
+		secret := make([]byte, 32)
+		// crypto/rand.Read never fails (Go 1.24: it crashes the program if the system
+		// source is unavailable), so there is no error path to fall back from.
+		_, _ = rand.Read(secret)
+		_, h, err := HashPassword(base64.RawStdEncoding.EncodeToString(secret))
+		if err != nil {
+			return
+		}
+		dummyHash = h
+		dummyBuilt.Store(true)
+	})
+	return dummyHash
+}
+
+// WarmLoginDummy builds the dummy hash now, so the first login for an unknown
+// name does not pay for building it as well. Constructors of the login handlers
+// call it; it is idempotent.
+func WarmLoginDummy() { _ = dummyArgon2idHash() }
+
+// LoginDummyReadyForTest reports whether the dummy hash has been built. It is a
+// test seam (the name carries ForTest, which the dead-code ratchet exempts): the
+// constructor-warm tests live in other packages, so an export_test.go here cannot
+// serve them. It exposes nothing but that fact.
+func LoginDummyReadyForTest() bool { return dummyBuilt.Load() }
+
+// SpendVerification does the work of one password verification against the dummy
+// hash and discards the result. A login for a name that does not exist calls it.
+func SpendVerification(plain string) {
+	if h := dummyArgon2idHash(); h != "" {
+		_ = verifyArgon2id(h, plain)
+	}
+}
+
+// hasPasswordCredential reports whether a stored (algo, hash) pair is one
+// VerifyPassword will do real work for.
+func hasPasswordCredential(algo, hash string) bool {
+	if strings.TrimSpace(hash) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(algo)) {
+	case AlgoArgon2id, AlgoBcrypt, "":
+		return true
+	}
+	return false
+}
+
+// VerifyLoginPassword is VerifyPassword for the login handlers: when the account
+// has no password credential at all (no hash, an OAuth user, an unknown algorithm)
+// it spends the same verification work on the dummy hash before answering false,
+// so that case costs what a wrong password for a real account costs.
+func VerifyLoginPassword(algo, hash, plain string) (ok bool, needsRehash bool) {
+	if !hasPasswordCredential(algo, hash) {
+		SpendVerification(plain)
+		return false, false
+	}
+	return VerifyPassword(algo, hash, plain)
 }

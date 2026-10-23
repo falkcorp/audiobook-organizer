@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.168.0
+// version: 1.172.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package config
 
@@ -1649,11 +1649,6 @@ type Config struct {
 	// PublicBaseURL is the origin invitation links point at; falls back to
 	// OAuthRedirectBaseURL, then the server's external URL (InviteBaseURL).
 	PublicBaseURL string `json:"-" mapstructure:"public_base_url"`
-	// The SHARED guest Cloudflare Access service token handed to invitees as
-	// the CF-Access-Client-Id / CF-Access-Client-Secret header pair. It carries
-	// no identity; every guest still signs in as themselves.
-	InviteCFAccessClientID     string `json:"-" mapstructure:"invite_cf_access_client_id"`
-	InviteCFAccessClientSecret string `json:"-" mapstructure:"invite_cf_access_client_secret"`
 	// Optional Cloudflare Access guest-policy sync: on accept, the invitee's
 	// email is appended to the include list of this ONE reusable Access policy.
 	// Inert unless all three are set (GuestPolicySyncConfigured).
@@ -1668,6 +1663,26 @@ type Config struct {
 	// routes and bootstrap). An unlisted connector is keyed on its own
 	// address: one rate-limit bucket shared by every visitor it relays.
 	TunnelConnectorAddrs string `json:"-" mapstructure:"tunnel_connector_addrs"`
+	// AllowedPeerCIDRs is a comma-separated list of the networks (CIDR, e.g.
+	// 192.0.2.0/24) or single addresses allowed to open a connection to the
+	// public listeners. A peer that is none of loopback, a TunnelConnectorAddrs
+	// entry or listed here is answered 403 before any routing, so the origin is
+	// reachable only through the tunnel and the LAN you name even if a port is
+	// exposed by mistake. Empty (the default) allows every peer and logs a
+	// startup warning. An entry that cannot be parsed stops the service starting
+	// (a typo must neither narrow nor widen the list silently). The list must
+	// cover the LAN, including this host's own LAN address, and any Prometheus
+	// scraper or LAN client that talks to it directly.
+	AllowedPeerCIDRs string `json:"-" mapstructure:"allowed_peer_cidrs"`
+	// LoginSaturatedRate and LoginSaturatedBurst (LOGIN_SATURATED_RATE logins
+	// per second, LOGIN_SATURATED_BURST) are the service-wide token bucket on
+	// password logins admitted while the aggregate login ceilings are spent.
+	// Empty means DefaultLoginSaturatedRate / DefaultLoginSaturatedBurst; use
+	// LoginSaturatedLimits, which validates them (the server refuses to start
+	// on an unusable value). Kept as the raw text so a typo is an error, not a
+	// silent zero.
+	LoginSaturatedRate  string `json:"-" mapstructure:"login_saturated_rate"`
+	LoginSaturatedBurst string `json:"-" mapstructure:"login_saturated_burst"`
 
 	// Memory management
 	// CacheInvalidateOnBookUpdate controls whether updating a book's metadata

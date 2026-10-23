@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.1.0
+// version: 1.7.0
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package abs
 
@@ -17,6 +17,17 @@ import (
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
+
+// throttleKey is the bucket the failure throttle charges this request to:
+// Options.ThrottleKey's answer, else the peer address (c.ClientIP()).
+func (h *Handler) throttleKey(c *gin.Context) string {
+	if h.throttleKeyFn != nil {
+		if k := strings.TrimSpace(h.throttleKeyFn(c)); k != "" {
+			return k
+		}
+	}
+	return strings.TrimSpace(c.ClientIP())
+}
 
 // loginRequest is the ABS login body. deviceInfo is optional and echoed back on
 // GET /api/me/sessions.
@@ -79,21 +90,47 @@ func (h *Handler) Login(c *gin.Context) {
 	// The hard limit is checked BEFORE any credential work so a spent source cannot
 	// keep probing. It is 429, never 401/403 — a 4xx-auth answer would tell a client
 	// its credential is dead.
-	if h.throttle.IPBlocked(ip) {
+	throttleKey := h.throttleKey(c)
+	// Only this door's own budget is read. The refresh endpoint spends a separate
+	// one (absauth.RefreshKey), and neither password login looks at it: a client
+	// holding a stale token that burns its refresh budget must still be able to
+	// sign in with its password, which is how it gets a fresh token.
+	if h.throttle.IPBlocked(throttleKey) {
 		absauth.Audit(absauth.AuditEvent{
 			Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
 			Username: req.Username, Reason: "ip-failure-budget-exhausted",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
+		absauth.SetRetryAfter(c)
 		respondError(c, http.StatusTooManyRequests, "too many failed login attempts from this source — try again later")
 		return
 	}
 
 	username := strings.TrimSpace(req.Username)
 	if username == "" || req.Password == "" {
-		h.throttle.Delay(h.throttle.RecordFailure("", ip))
+		h.throttle.Delay(h.throttle.RecordFailure("", throttleKey))
 		h.auditLoginFailure(c, ip, username, "", "missing-credentials")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	// Everything below is keyed on the normalised SUBMITTED username, never on the
+	// user row, so a name that does not exist behaves exactly like one that does.
+	accountKey := absauth.AccountKey(username)
+	absauth.NoteLoginAccount(c, accountKey) // for the login ceilings' same-account refund
+	// While the aggregate login ceilings are spent (absauth.MarkLoginSaturated) the
+	// login is delayed before any password work, and refused only when the
+	// submitted name has already failed SoftThreshold times; the answer does not
+	// tell a caller whether the name exists.
+	if absauth.LoginSaturated(c) &&
+		absauth.RefuseSaturatedLogin(c, h.throttle.AccountFailures(accountKey), h.throttle.Delay) {
+		absauth.Audit(absauth.AuditEvent{
+			Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
+			Username: username, Reason: "login-ceiling-account-failures",
+			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
+		})
+		absauth.SetRetryAfter(c)
+		respondError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later")
 		return
 	}
 
@@ -108,17 +145,20 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 	if user == nil {
-		// Charge the IP even for an unknown username so guessing cannot dodge the
-		// hard limit.
-		h.throttle.Delay(h.throttle.RecordFailure("", ip))
+		// Charged to the source and the submitted name even for an unknown
+		// username, so guessing cannot dodge the hard limit and the name slows
+		// down like a real one. The same password work is spent first, so the
+		// response time does not give the name away either.
+		absauth.SpendVerification(req.Password)
+		h.throttle.Delay(h.throttle.RecordFailure(accountKey, throttleKey))
 		h.auditLoginFailure(c, ip, username, "", "unknown-user")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	ok, needsRehash := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password)
+	ok, needsRehash := absauth.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password)
 	if !ok {
-		h.throttle.Delay(h.throttle.RecordFailure(user.ID, ip))
+		h.throttle.Delay(h.throttle.RecordFailure(accountKey, throttleKey))
 		h.auditLoginFailure(c, ip, username, user.ID, "bad-password")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -135,7 +175,9 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	h.throttle.Clear(user.ID, ip)
+	// A success clears this account's counter and takes back only this source's own
+	// failures against this account (capped), never its failures against others.
+	h.throttle.Clear(accountKey, throttleKey)
 
 	// spec §3.5: rehash-on-successful-login migrates bcrypt users to argon2id with no
 	// flag day. It is best-effort — a store hiccup here must never deny a correct

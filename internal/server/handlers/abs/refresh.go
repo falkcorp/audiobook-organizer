@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.3.0
+// version: 1.6.0
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package abs
 
@@ -63,12 +63,13 @@ func (h *Handler) Refresh(c *gin.Context) {
 		})
 		return
 	}
-	if h.throttle.IPBlocked(ip) {
+	if h.throttle.IPBlocked(absauth.RefreshKey(h.throttleKey(c))) {
 		// 429, not 401: a rate-limit answer must not be mistaken for a dead token.
 		absauth.Audit(absauth.AuditEvent{
 			Action: "refresh", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
 			Reason: "ip-failure-budget-exhausted", Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
+		absauth.SetRetryAfter(c)
 		respondError(c, http.StatusTooManyRequests, "too many failed refresh attempts from this source — try again later")
 		return
 	}
@@ -309,7 +310,9 @@ func (h *Handler) completeRefresh(c *gin.Context, user *database.User, session *
 		UserID: user.ID, Username: user.Username, Email: email, SessionID: session.ID,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
-	h.throttle.Clear(user.ID, ip)
+	// No throttle refund here: a refresh is not a password login, it must never
+	// give back source budget (Clear takes back only the same source's failures
+	// against the same account, and a refresh names none).
 
 	respondJSON(c, http.StatusOK, h.buildAuthResponse(user, accessToken, refreshToken, progress, bookmarks))
 }
@@ -317,7 +320,7 @@ func (h *Handler) completeRefresh(c *gin.Context, user *database.User, session *
 // failRefresh answers 401 for a genuinely dead refresh token and charges the source
 // IP's failure budget.
 func (h *Handler) failRefresh(c *gin.Context, ip, sessionID, reason string) {
-	h.throttle.RecordFailure("", ip)
+	h.throttle.RecordFailure("", absauth.RefreshKey(h.throttleKey(c)))
 	absauth.Audit(absauth.AuditEvent{
 		Action: "refresh", Outcome: absauth.OutcomeFailure, Mode: servermiddleware.ABSModeJWT,
 		SourceIP: ip, SessionID: sessionID, Reason: reason,

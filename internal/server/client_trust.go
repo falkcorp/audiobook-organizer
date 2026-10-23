@@ -1,7 +1,7 @@
 // file: internal/server/client_trust.go
-// version: 1.16.0
+// version: 1.19.2
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 package server
 
@@ -352,6 +352,28 @@ func clientPrefixKey(ip string) (key string, ok bool) {
 	return a.String(), true
 }
 
+// clientSaturatedKey is clientPrefixKey with a coarser IPv6 grain: a public
+// IPv6 address is keyed on its /48, the allocation an ISP hands one customer
+// site, instead of its /64. It is the key of the login ceilings' SATURATED
+// admission (what a visitor may do once the aggregate ceilings are spent),
+// where the per-visitor refusal is the only thing that keeps one caller from
+// holding a seat per address: a caller who owns a /48 can mint 65,536 distinct
+// /64 keys, so a /64 key would let it start 65,536 "first" attempts. IPv4 and
+// LAN addresses are keyed exactly as clientPrefixKey keys them (a LAN device
+// must not share a key with the rest of its network). ok is false when ip
+// does not parse.
+func clientSaturatedKey(ip string) (key string, ok bool) {
+	a, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return "", false
+	}
+	a = a.WithZone("").Unmap()
+	if a.Is6() && !isLANAddr(a) {
+		return netip.PrefixFrom(a, 48).Masked().String(), true
+	}
+	return a.String(), true
+}
+
 // lanIPv6Prefix returns the /64 of a LAN IPv6 address (isLANAddr: ULA
 // fc00::/7, link-local, or a global address in an on-link prefix of this
 // host), and false for anything else (IPv4, other public IPv6, loopback,
@@ -579,6 +601,63 @@ func requestClientIP(c *gin.Context) string {
 	return ip
 }
 
+// loginThrottleKey is the bucket the password-login failure throttles (the web
+// POST /api/v1/auth/login and the ABS POST /login and /auth/refresh) charge a
+// request to. Behind the tunnel c.ClientIP() is the connector's address, so a
+// throttle keyed on it is one bucket per connector shared by every visitor: a
+// single caller failing 15 times locks everyone out through that connector.
+// This keys on trustedClientIP instead, the visitor's CF-Connecting-IP
+// when the peer is a configured tunnel connector (or this host behind a
+// verified Access assertion), and otherwise the peer's own address, whatever
+// headers the caller sends, so a header a caller made up never picks its
+// bucket. Where the visitor cannot be established (a connector request with
+// no usable CF-Connecting-IP) that is the connector's address, the old shared
+// bucket. The address goes through clientPrefixKey, so a public IPv6 visitor
+// is one bucket per /64, as the bootstrap and invite limiters key it: now that
+// the visitor's own address is believed, an unkeyed one would let a caller who
+// owns a /64 rotate for a fresh failure budget per attempt. "" only when no
+// address parses, and the callers then fall back to c.ClientIP().
+//
+// The answer is kept on the request: one login asks several times, and the
+// answer involves a kernel lookup.
+func loginThrottleKey(c *gin.Context) string {
+	if v, ok := c.Get(loginThrottleKeyCtx); ok {
+		if k, ok := v.(string); ok {
+			return k
+		}
+	}
+	key := ""
+	if ip := requestClientIP(c); ip != "" {
+		key, _ = clientPrefixKey(ip)
+	}
+	c.Set(loginThrottleKeyCtx, key)
+	return key
+}
+
+// loginThrottleKeyCtx is the gin context key loginThrottleKey keeps its answer under.
+const loginThrottleKeyCtx = "login_throttle_key"
+
+// loginSaturatedKey is the visitor key the login ceilings use for SATURATED
+// admission, and the CSP report limiter for its per-visitor budget: the same
+// address loginThrottleKey establishes, grouped by clientSaturatedKey (a public
+// IPv6 visitor per /48, not /64). "" when no address parses, as loginThrottleKey.
+func loginSaturatedKey(c *gin.Context) string {
+	if v, ok := c.Get(loginSaturatedKeyCtx); ok {
+		if k, ok := v.(string); ok {
+			return k
+		}
+	}
+	key := ""
+	if ip := requestClientIP(c); ip != "" {
+		key, _ = clientSaturatedKey(ip)
+	}
+	c.Set(loginSaturatedKeyCtx, key)
+	return key
+}
+
+// loginSaturatedKeyCtx is the gin context key loginSaturatedKey keeps its answer under.
+const loginSaturatedKeyCtx = "login_saturated_key"
+
 // lanPeer classifies a request keyed on ip whose ip is the request's own
 // peer (not a visitor address taken from CF-Connecting-IP) and not a listed
 // connector:
@@ -624,8 +703,10 @@ func classifyLANPeer(c *gin.Context, ip string, connectors connectorPeers) lanPe
 // (hasCloudflareMarkers). Cloudflare's edge adds those to everything it
 // proxies and the connector passes them through, so tunnel traffic is never
 // direct even though the connectors reach this service from private LAN
-// addresses. Both limiters exempt a direct caller from their global ceiling
-// and give it LAN aggregates no other traffic can spend (classifyLANPeer).
+// addresses. Both limiters give a direct caller LAN aggregates no other
+// traffic can spend (classifyLANPeer); neither exempts it from the global
+// ceiling (it was exempt until 2026-10-21; anything that can reach the port
+// off-tunnel is "direct", so the exemption was budget for any such caller).
 // With TUNNEL_CONNECTOR_ADDRS unset, a
 // connector request stripped of every Cloudflare header on the way would
 // count as direct too (see trustedClientIP).
