@@ -1,7 +1,7 @@
 // file: internal/usermerge/journal.go
 // version: 1.0.0
 // guid: 91e5d3a0-6b47-4c82-a1f9-d2b70c4e8365
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package usermerge
 
