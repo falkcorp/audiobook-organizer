@@ -1,5 +1,5 @@
 <!-- file: docs/operations/cloudflare-guest-service-tokens.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 3a9d6f21-8c74-4e15-b0a2-6d1f4c8e7b95 -->
 <!-- last-edited: 2026-10-23 -->
 
@@ -10,8 +10,11 @@ browser login, so the app has to send a Cloudflare Access **service token**
 with every request. This feature gives each guest their **own** service token,
 minted when they accept their invitation, instead of any shared credential.
 
-It is **off by default**. With the flag off the server makes no Cloudflare
-calls for this and the accept response has no new fields.
+It is **off by default**. With the flag off, accepting an invitation makes no
+Cloudflare call for this and the accept response has no new fields. Revoking
+still works with the flag off, so a guest's key can always be removed, and the
+admin list asks Cloudflare for last-seen times (one read-only call, 10 second
+limit) only while at least one live key is on record.
 
 ## What the owner must add first: one extra API permission
 
@@ -58,7 +61,8 @@ startup, the Users page shows it, and nothing is minted.
    no-store`.
 4. The server keeps only a SHA-256 hash of the secret, the Cloudflare token id,
    and the guest's user id. The secret is never logged, audited or stored in
-   readable form, and cannot be shown again.
+   readable form, and cannot be shown again (the one exception is the opt-in
+   `INVITE_EMAIL_SERVICE_TOKEN` email below).
 
 The books policy is never given `any_valid_service_token`: each rule names one
 token id, so revoking one guest touches nothing else.
