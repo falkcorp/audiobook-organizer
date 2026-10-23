@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -72,8 +72,17 @@ const fileIntroPauseMaxListErrors = 10
 // rewrite book_file rows in bulk. The scheduler cannot do this for us (see the
 // Writes note on the def), so the run refuses to start while one is active and
 // re-checks immediately before every batch of writes.
+//
+// The set is every op that reaches the scanner's unlocked batch upsert:
+// library.scan, library.import (its scanner.ScanRequest path) and
+// library.folder-auto-scan (ProcessBooksParallel), plus the bulk metadata apply.
+// itunes.import is NOT here: it creates rows with CreateBookFile and edits them
+// with UpdateBookFile, which read under the row's lock, so it cannot erase an
+// intro result between a read and a commit.
 var fileIntroBusyOps = map[string]bool{
 	"library.scan":                true,
+	"library.import":              true,
+	"library.folder-auto-scan":    true,
 	"metadata.batch-apply-cached": true,
 }
 
@@ -189,18 +198,9 @@ func isTranscribable(f *database.BookFileCore) bool {
 	return f.FilePath != "" && transcribableExtSet[strings.ToLower(filepath.Ext(f.FilePath))]
 }
 
-func fileHasResult(f *database.BookFileCore) bool {
-	if f.FileHash != "" && f.IntroSourceHash == f.FileHash {
-		return true
-	}
-	// A result written before the marker existed (the book op's migration, an
-	// earlier apply): trusted under only_missing, never used as a donor.
-	if f.IntroTranscribedAt != nil && f.TranscribeStatus != nil &&
-		(*f.TranscribeStatus == statusOK || *f.TranscribeStatus == statusUnparsed) {
-		return true
-	}
-	return false
-}
+// fileHasResult is database.IntroResultPresent, the one definition selection
+// and the store's write rules share (see its doc for the legacy-result rule).
+func fileHasResult(f *database.BookFileCore) bool { return f.HasIntroResult() }
 
 // selectFileIntroWork reads the whole library's book_file projection once and
 // decides, per file, whether it is work. Pure over its inputs apart from the
@@ -658,6 +658,54 @@ type groupResult struct {
 	hasResult bool
 }
 
+// fileIntroOutageInterval is the base wait between retries of a batch whose
+// endpoints were all unreachable (try n waits n x this). A var so tests do not
+// wait minutes.
+var fileIntroOutageInterval = time.Minute
+
+// fileIntroOutageMaxTries is how many times one batch is attempted against an
+// unreachable pool before the run stops. With the default interval that is
+// 1+2+3+4 = 10 minutes of waiting, long enough for a worker restart or a
+// brief network fault, short enough that a dead pool fails the run instead of
+// silently skipping the whole library.
+const fileIntroOutageMaxTries = 5
+
+// errFileIntroOutage marks a batch that exhausted its retries against an
+// unreachable pool.
+var errFileIntroOutage = errors.New("whisper endpoints unreachable")
+
+// callWhisper sends one batch, retrying the SAME batch with a growing,
+// ctx-aware wait while every endpoint is unreachable (a transport error says
+// nothing about the files, so nothing is written meanwhile). It re-announces
+// itself in the progress line each wait so the watchdog sees the op alive. Any
+// other outcome, success or a per-batch error, is returned as is.
+func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileIntroJob) (map[string]fileIntroWhisperResult, error) {
+	log := w.reporter.Logger()
+	for try := 1; ; try++ {
+		out, err := fileIntroWhisperFn(ctx, jobs, nil)
+		var te *transcribe.TransportError
+		if !errors.As(err, &te) {
+			return out, err
+		}
+		if try >= fileIntroOutageMaxTries {
+			return nil, fmt.Errorf("%s: %w: %d tries in a row for one batch of %d files; stopping the run, nothing was written for it and the files stay undone: %w",
+				fileIntroOpID, errFileIntroOutage, try, len(jobs), err)
+		}
+		wait := time.Duration(try) * fileIntroOutageInterval
+		log.Warn("transcribe-file-intros: endpoints unreachable, retrying the batch (nothing written)",
+			"jobs", len(jobs), "try", try, "of", fileIntroOutageMaxTries, "retry_in", wait.String(), "endpoints", te.Endpoints, "err", te.Err)
+		w.progress(introLiveMarker + fmt.Sprintf("whisper endpoints unreachable (try %d of %d); retrying in %s",
+			try, fileIntroOutageMaxTries, wait.Round(time.Second)))
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
 // runBatch handles one batch of groups and returns how many files it settled.
 func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup) (int, error) {
 	if err := w.waitWhileBusy(ctx); err != nil {
@@ -696,17 +744,13 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 	}
 
 	if len(jobs) > 0 {
-		out, err := fileIntroWhisperFn(ctx, jobs, nil)
-		var te *transcribe.TransportError
+		out, err := w.callWhisper(ctx, jobs)
 		switch {
-		case errors.As(err, &te):
-			// Endpoint problem, not a file problem: write NOTHING, the files
-			// stay undone and the next run picks them up.
-			log.Warn("transcribe-file-intros: endpoints unreachable, batch deferred (nothing written)",
-				"jobs", len(jobs), "endpoints", te.Endpoints, "err", te.Err)
-			for _, gi := range jobGroup {
-				results[gi] = groupResult{kind: "deferred", hasResult: true}
-			}
+		case errors.Is(err, errFileIntroOutage):
+			// The endpoints stayed unreachable through every retry: stop the run
+			// (nothing was written for this batch) rather than drain every
+			// remaining batch as deferred.
+			return 0, err
 		case ctx.Err() != nil:
 			return 0, ctx.Err()
 		case err != nil:
@@ -720,7 +764,15 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 		default:
 			now := time.Now()
 			for key, gi := range jobGroup {
-				results[gi] = whisperGroupResult(out[key], now)
+				r, ok := out[key]
+				if !ok {
+					// No answer is not silence. An absent key is a transport
+					// that dropped the job, so the file stays undone.
+					log.Warn("transcribe-file-intros: no result for a sent job, deferred", "file_id", key)
+					results[gi] = groupResult{kind: "deferred", hasResult: true}
+					continue
+				}
+				results[gi] = whisperGroupResult(r, now)
 			}
 		}
 	}
@@ -756,8 +808,10 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		//   ffmpeg_error -> the worker could not decode it: a verdict about the
 		//                   file, held until retry_failed (so a corrupt file is
 		//                   not re-sent by every run);
-		//   path_unmapped, ffmpeg_timeout -> the mount or the share, not the
-		//                   file: written as nothing, the file stays undone;
+		//   path_unmapped, ffmpeg_timeout, worker_misconfigured,
+		//   container_rejected -> the mount, the share or the worker's own
+		//                   setup or policy, not the file: written as nothing,
+		//                   the file stays undone;
 		//   anything else (whisper_error, bad_request, no code) -> whisper_error,
 		//                   retried by the next run.
 		detail := truncateDetail(r.Error)
@@ -768,7 +822,10 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		case transcribe.PathErrFFmpeg:
 			return groupResult{kind: "ffmpeg_error", hasResult: true, res: database.BookFileIntroResult{
 				Status: statusFFmpegError, Error: detail, At: now}}
-		case transcribe.PathErrUnmapped, transcribe.PathErrFFmpegTimeout:
+		case transcribe.PathErrUnmapped, transcribe.PathErrFFmpegTimeout,
+			transcribe.PathErrWorkerMisconfigured, transcribe.PathErrContainerRejected:
+			// The mount, the share or the worker's own setup or policy, not a
+			// verdict on the file: written as nothing, the file stays undone.
 			return groupResult{kind: "deferred", hasResult: true}
 		}
 		return groupResult{kind: "whisper_error", hasResult: true, res: database.BookFileIntroResult{
@@ -780,7 +837,7 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		// and never fills a book (see fileIntroFillBook).
 		s := transcribe.SilenceSentinel
 		return groupResult{kind: "silence", hasResult: true, res: database.BookFileIntroResult{
-			Status: statusEmpty, Error: "whisper returned empty text", Transcript: &s, At: now, Done: true,
+			Status: statusEmpty, Error: "whisper returned empty text", Transcript: &s, At: now, Done: true, Silence: true,
 			Meta: &database.IntroMeta{Model: r.Model, Language: r.Language, ClipLengthSec: fileIntroClipSeconds},
 		}}
 	default:
@@ -825,7 +882,8 @@ func (w *fileIntroWorker) donorResult(g fileIntroGroup) groupResult {
 	text := *d.IntroTranscription
 	gr := groupResult{kind: "reuse", reuse: true, hasResult: true, res: database.BookFileIntroResult{
 		Status: status, Error: str(d.TranscribeError), Transcript: &text, At: at, Done: true, Meta: d.IntroMeta,
-		Title: str(d.TranscribedTitle), Author: str(d.TranscribedAuthor), Narrator: str(d.TranscribedNarrator),
+		Silence: text == transcribe.SilenceSentinel,
+		Title:   str(d.TranscribedTitle), Author: str(d.TranscribedAuthor), Narrator: str(d.TranscribedNarrator),
 		Translator: str(d.TranscribedTranslator), CoverArtist: str(d.TranscribedCoverArtist),
 	}}
 	gr.fillable = text != transcribe.SilenceSentinel && (status == statusOK || status == statusUnparsed)
@@ -862,7 +920,7 @@ func (w *fileIntroWorker) applyGroup(g fileIntroGroup, gr groupResult) (int, err
 		}
 		settled++
 		w.count(gr, wrote)
-		if wrote == database.IntroWriteWrote && m.Ordinal == 0 && gr.fillable {
+		if (wrote == database.IntroWriteWrote || wrote == database.IntroWriteReplaced) && m.Ordinal == 0 && gr.fillable {
 			if err := w.fillBook(m.BookID, r, gr); err != nil {
 				log.Warn("transcribe-file-intros: book fill failed", "book_id", m.BookID, "err", err)
 			}
@@ -900,7 +958,9 @@ func (w *fileIntroWorker) count(gr groupResult, wrote database.BookFileIntroWrit
 				s.FFmpegError++
 			}
 		}
-		if gr.res.Transcript != nil {
+		// Coverage grows only when the row held no result before this write; a
+		// forced re-run replacing a transcript (IntroWriteReplaced) does not.
+		if gr.res.Transcript != nil && wrote == database.IntroWriteWrote {
 			s.TranscribedNow++
 		}
 	})

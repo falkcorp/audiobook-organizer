@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -137,14 +137,16 @@ type introFx struct {
 // stubWhisper stands in for the worker: it answers by path and records every
 // call, including the highest number of calls in flight at once.
 type stubWhisper struct {
-	mu       sync.Mutex
-	texts    map[string]string // path -> transcript ("" = silence)
-	errs     map[string]string // path -> per-file error
-	transErr error             // returned for the whole call
-	calls    [][]fileIntroJob
-	inFlight atomic.Int32
-	maxSeen  atomic.Int32
-	delay    time.Duration
+	mu          sync.Mutex
+	texts       map[string]string // path -> transcript ("" = silence)
+	errs        map[string]string // path -> per-file error
+	transErr    error             // returned for the whole call
+	transErrFor int               // when > 0, transErr is returned for this many calls, then cleared
+	dropKeys    bool              // answer with an empty map (a transport that dropped every job)
+	calls       [][]fileIntroJob
+	inFlight    atomic.Int32
+	maxSeen     atomic.Int32
+	delay       time.Duration
 }
 
 func (w *stubWhisper) fn(ctx context.Context, jobs map[string]fileIntroJob, _ func(int, int)) (map[string]fileIntroWhisperResult, error) {
@@ -171,7 +173,16 @@ func (w *stubWhisper) fn(ctx context.Context, jobs map[string]fileIntroJob, _ fu
 	}
 	w.calls = append(w.calls, batch)
 	if w.transErr != nil {
-		return nil, w.transErr
+		err := w.transErr
+		if w.transErrFor > 0 {
+			if w.transErrFor--; w.transErrFor == 0 {
+				w.transErr = nil
+			}
+		}
+		return nil, err
+	}
+	if w.dropKeys {
+		return map[string]fileIntroWhisperResult{}, nil
 	}
 	out := make(map[string]fileIntroWhisperResult, len(jobs))
 	for k, j := range jobs {
@@ -210,13 +221,14 @@ func newIntroFx(t *testing.T) *introFx {
 	t.Cleanup(func() { s.Close() })
 	fx := &introFx{t: t, s: s, p: New(fakeDeps{store: s}), dir: t.TempDir(), whisp: &stubWhisper{texts: map[string]string{}, errs: map[string]string{}}}
 
-	origFn, origSlots, origPause, origPre := fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight
+	origFn, origSlots, origPause, origPre, origOutage := fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight, fileIntroOutageInterval
 	fileIntroWhisperFn = fx.whisp.fn
+	fileIntroOutageInterval = time.Millisecond
 	fileIntroPreflight = func(context.Context) error { return nil }
 	fileIntroSlots = func() int { return 3 }
 	fileIntroPauseInterval = 5 * time.Millisecond
 	t.Cleanup(func() {
-		fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight = origFn, origSlots, origPause, origPre
+		fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight, fileIntroOutageInterval = origFn, origSlots, origPause, origPre, origOutage
 	})
 	return fx
 }
@@ -384,15 +396,19 @@ func TestFileIntroRun_ResumesFromTheMarkerAndNeverResendsDoneFiles(t *testing.T)
 	_, p2 := fx.file(b, "02.m4b", 2, "r2", false)
 	fx.whisp.texts[p1], fx.whisp.texts[p2] = goodIntro, "words"
 
-	// First run is cancelled before it starts, second is interrupted by an
-	// outage on its only batch: neither leaves a marker.
+	// An outage that outlasts every retry stops the run (it does not drain the
+	// library as deferred) and writes nothing for the batch.
 	fx.whisp.transErr = &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("connection refused")}
-	if _, err := fx.run(""); err != nil {
-		t.Fatal(err)
+	_, err := fx.run("")
+	if !errors.Is(err, errFileIntroOutage) {
+		t.Fatalf("a dead pool should fail the run with errFileIntroOutage, got %v", err)
+	}
+	if n := len(fx.whisp.calls); n != fileIntroOutageMaxTries {
+		t.Fatalf("one batch should be tried %d times, was %d", fileIntroOutageMaxTries, n)
 	}
 	st, _ := fx.s.GetFileIntroStats()
-	if st.Deferred != 2 || st.Attempted != 0 {
-		t.Fatalf("outage should defer, not fail files: %+v", st)
+	if st.Attempted != 0 {
+		t.Fatalf("an outage must not count as an attempt: %+v", st)
 	}
 	for _, r := range mustFiles(t, fx.s, b) {
 		if r.IntroSourceHash != "" || r.TranscribeStatus != nil || r.IntroTranscription != nil {
@@ -577,6 +593,8 @@ func TestFileIntroRun_WorkerErrorCodesDecideWhatIsWritten(t *testing.T) {
 		{"ffmpeg_error", "ffmpeg_error: invalid data", statusFFmpegError, true},
 		{"path_unmapped", "path_unmapped: root unreadable", "", false},
 		{"ffmpeg_timeout", "ffmpeg_timeout: nfs stall", "", false},
+		{"worker_misconfigured", "worker_misconfigured: no audio root", "", false},
+		{"container_rejected", "container_rejected: unsupported container", "", false},
 		{"whisper_error", "whisper_error: boom", statusWhisperError, true},
 		{"uncoded", "something odd", statusWhisperError, true},
 	}
@@ -600,7 +618,7 @@ func TestFileIntroRun_WorkerErrorCodesDecideWhatIsWritten(t *testing.T) {
 		}
 	}
 	st, _ := fx.s.GetFileIntroStats()
-	if st.FFmpegError != 1 || st.SourceMissing != 1 || st.WhisperError != 2 || st.Deferred != 2 {
+	if st.FFmpegError != 1 || st.SourceMissing != 1 || st.WhisperError != 2 || st.Deferred != 4 {
 		t.Fatalf("stats: %+v", st)
 	}
 	// An ffmpeg_error file is a held verdict: the next run does not re-send it,
@@ -721,7 +739,7 @@ func TestFileIntroPause_WaitsWhileScanOrBatchApplyRuns(t *testing.T) {
 	fileIntroPauseInterval = time.Millisecond
 	t.Cleanup(func() { fileIntroPauseInterval = orig })
 
-	for _, def := range []string{"library.scan", "metadata.batch-apply-cached"} {
+	for _, def := range []string{"library.scan", "library.import", "library.folder-auto-scan", "metadata.batch-apply-cached"} {
 		for _, status := range []string{"running", "queued"} {
 			q := &fakeQueue{busyN: 4, defID: def, status: status}
 			if err := newWorkerForPause(q).waitWhileBusy(context.Background()); err != nil {
@@ -732,10 +750,14 @@ func TestFileIntroPause_WaitsWhileScanOrBatchApplyRuns(t *testing.T) {
 			}
 		}
 	}
-	// An unrelated op does not pause the run.
-	q := &fakeQueue{busyN: 3, defID: "maintenance.something-else", status: "running"}
-	if err := newWorkerForPause(q).waitWhileBusy(context.Background()); err != nil || q.calls != 1 {
-		t.Fatalf("unrelated op paused the run: err=%v calls=%d", err, q.calls)
+	// An unrelated op does not pause the run, and neither does itunes.import,
+	// which edits rows under their lock instead of through the scanner's
+	// unlocked upsert.
+	for _, def := range []string{"maintenance.something-else", "itunes.import"} {
+		q := &fakeQueue{busyN: 3, defID: def, status: "running"}
+		if err := newWorkerForPause(q).waitWhileBusy(context.Background()); err != nil || q.calls != 1 {
+			t.Fatalf("%s paused the run: err=%v calls=%d", def, err, q.calls)
+		}
 	}
 }
 
@@ -1088,5 +1110,191 @@ func TestFileIntroDef_Shape(t *testing.T) {
 	}
 	if !writes {
 		t.Fatal("op must declare library.write so v3 treats it as a writer")
+	}
+}
+
+// ---- review-round behaviour ---------------------------------------------------
+
+// A transport outage that recovers inside the retry budget writes the batch
+// once, with nothing deferred and no run failure.
+func TestFileIntroRun_OutageThatRecoversRetriesTheSameBatch(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Recovers")
+	id1, p1 := fx.file(b, "01.m4b", 1, "o1", false)
+	fx.whisp.texts[p1] = goodIntro
+	fx.whisp.transErr = &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("connection refused")}
+	fx.whisp.transErrFor = 2
+
+	rep, err := fx.run("")
+	if err != nil {
+		t.Fatalf("a recovering outage must not fail the run: %v", err)
+	}
+	if n := len(fx.whisp.calls); n != 3 {
+		t.Fatalf("expected 2 failed tries + 1 success, calls=%d", n)
+	}
+	if r := fx.row(b, id1); r.IntroSourceHash != "o1" || r.IntroTranscription == nil || *r.IntroTranscription != goodIntro {
+		t.Fatalf("file not written after recovery: %+v", r)
+	}
+	st, _ := fx.s.GetFileIntroStats()
+	if st.Deferred != 0 || st.OK != 1 {
+		t.Fatalf("stats after recovery: %+v", st)
+	}
+	_ = rep
+}
+
+// A worker that answers without a key for a sent job did not say "silence": the
+// file stays undone and the next run sends it again.
+func TestFileIntroRun_AMissingAnswerIsDeferredNotSilence(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Dropped")
+	id1, p1 := fx.file(b, "01.m4b", 1, "d1", false)
+	fx.whisp.texts[p1] = goodIntro
+	fx.whisp.dropKeys = true
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+	if r := fx.row(b, id1); r.IntroSourceHash != "" || r.IntroTranscription != nil || r.TranscribeStatus != nil {
+		t.Fatalf("a dropped job was written: %+v", r)
+	}
+	if st, _ := fx.s.GetFileIntroStats(); st.Deferred != 1 || st.Silence != 0 {
+		t.Fatalf("stats: %+v", st)
+	}
+	fx.whisp.dropKeys = false
+	fx.whisp.calls = nil
+	if _, err := fx.runAs(&fileIntroRep{id: "run-test-2"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.whisp.sentPaths(); got[p1] != 1 {
+		t.Fatalf("the dropped file was not re-sent: %v", got)
+	}
+}
+
+// A forced run that hears silence over a file that already holds text keeps the
+// text, and a forced replacement is not counted as new coverage.
+func TestFileIntroRun_ForcedSilenceNeverReplacesTextAndReplacementIsNotNewCoverage(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Forced")
+	id1, p1 := fx.file(b, "01.m4b", 1, "f1", false)
+	id2, p2 := fx.file(b, "02.m4b", 2, "f2", false)
+	fx.whisp.texts[p1], fx.whisp.texts[p2] = goodIntro, "second file words"
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := fx.s.GetFileIntroStats()
+	if st.TranscribedNow != 2 {
+		t.Fatalf("first run coverage: %+v", st)
+	}
+
+	fx.whisp.texts[p1] = "" // silence this time
+	fx.whisp.texts[p2] = "replacement words"
+	if _, err := fx.runAs(&fileIntroRep{id: "run-test-2"}, `{"only_missing":false}`); err != nil {
+		t.Fatal(err)
+	}
+	r1 := fx.row(b, id1)
+	if r1.IntroTranscription == nil || *r1.IntroTranscription != goodIntro || r1.IntroRunOpID != "run-test-1" {
+		t.Fatalf("forced silence replaced real text: %+v", r1)
+	}
+	r2 := fx.row(b, id2)
+	if r2.IntroTranscription == nil || *r2.IntroTranscription != "replacement words" || r2.IntroRunOpID != "run-test-2" {
+		t.Fatalf("forced run did not replace the transcript: %+v", r2)
+	}
+	st, _ = fx.s.GetFileIntroStats()
+	if st.TranscribedNow != 2 {
+		t.Fatalf("a replacement counted as new coverage: %+v", st)
+	}
+}
+
+// A failure verdict never lands on a row that holds a result, so it can neither
+// relabel a transcript as an error nor claim a migrated sentinel for its run id
+// (which clear_run_id would then erase).
+func TestFileIntroRun_FailureNeverTouchesARowHoldingAResult(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Migrated")
+	id1, p1 := fx.file(b, "01.m4b", 1, "m1", false)
+	sentinel := transcribe.SilenceSentinel
+	if _, err := fx.s.SetBookFileIntro(b, id1, database.BookFileIntroResult{
+		SourceHash: "m1", Status: statusEmpty, Transcript: &sentinel, Silence: true,
+		At: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Done: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fx.whisp.errs[p1] = "whisper_error: boom"
+	if _, err := fx.run(`{"only_missing":false}`); err != nil {
+		t.Fatal(err)
+	}
+	r := fx.row(b, id1)
+	if r.IntroRunOpID != "" || r.TranscribeStatus == nil || *r.TranscribeStatus != statusEmpty ||
+		r.IntroTranscription == nil || *r.IntroTranscription != sentinel {
+		t.Fatalf("a failure touched a row holding a result: %+v", r)
+	}
+	// Clearing the run that tried it leaves the migrated sentinel alone.
+	if err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(`{"clear_run_id":"run-test-1"}`), &fileIntroRep{id: "clear-z"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := fx.row(b, id1); r.IntroTranscription == nil || r.IntroSourceHash != "m1" {
+		t.Fatalf("clear_run_id erased a result the run never wrote: %+v", r)
+	}
+}
+
+// recordingReporter keeps every progress message.
+type recordingReporter struct {
+	lastProgressReporter
+	mu2  sync.Mutex
+	msgs []string
+}
+
+func (r *recordingReporter) UpdateProgress(c, t int, msg string) error {
+	r.mu2.Lock()
+	r.msgs = append(r.msgs, msg)
+	r.mu2.Unlock()
+	return r.lastProgressReporter.UpdateProgress(c, t, msg)
+}
+
+func (r *recordingReporter) sawPause() bool {
+	r.mu2.Lock()
+	defer r.mu2.Unlock()
+	for _, m := range r.msgs {
+		if strings.Contains(m, "paused") {
+			return true
+		}
+	}
+	return false
+}
+
+// While a clear waits out a busy op it keeps announcing itself, so the
+// watchdog sees a live op instead of a silent one.
+func TestFileIntroClear_AnnouncesItsPauseInProgress(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Clear pause")
+	_, p1 := fx.file(b, "01.m4b", 1, "cp1", false)
+	fx.whisp.texts[p1] = goodIntro
+	if _, err := fx.run(""); err != nil {
+		t.Fatal(err)
+	}
+	q2 := &scanQueue{clearAfter: 3}
+	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: &flipAfterFirstPoll{inner: q2}})
+	rep := &recordingReporter{}
+	if err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(`{"clear_run_id":"run-test-1"}`), &fileIntroClearRep{recordingReporter: rep, id: "clear-p"}); err != nil {
+		t.Fatal(err)
+	}
+	if !rep.sawPause() {
+		t.Fatalf("clear never reported its pause, messages: %v", rep.msgs)
+	}
+}
+
+type fileIntroClearRep struct {
+	*recordingReporter
+	id string
+}
+
+func (r *fileIntroClearRep) OpID() string { return r.id }
+
+// The database package cannot import this one, so the status strings it
+// compares against are duplicated there; this keeps the two in step.
+func TestFileIntro_StatusConstantsMatchTheDatabasePackage(t *testing.T) {
+	for _, c := range [][2]string{{statusOK, database.IntroStatusOK}, {statusUnparsed, database.IntroStatusUnparsed}, {statusEmpty, database.IntroStatusEmpty}} {
+		if c[0] != c[1] {
+			t.Fatalf("maintenance status %q != database status %q", c[0], c[1])
+		}
 	}
 }
