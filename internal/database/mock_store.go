@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.153.0
+// version: 1.154.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package database
 
@@ -29,9 +29,17 @@ import (
 // clearly an improvement, so we keep the two patterns and rely on
 // this assertion + CI vet to prevent drift.)
 var _ Store = (*MockStore)(nil)
+var _ FileHashHolderLookup = (*MockStore)(nil)
+var _ FileHashHolderLookup = (*PebbleStore)(nil)
 
 // MockStore is a simple mock implementation for testing services
 type MockStore struct {
+	// BooksByFileHashFunc backs BooksByFileHash (the FileHashHolderLookup
+	// capability, not a Store method). Unset, BooksByFileHash answers with what
+	// GetBookByFileHash answers, as a one-element list, so a test that stubs
+	// only the single-answer lookup keeps working.
+	BooksByFileHashFunc func(hash string) ([]*Book, error)
+
 	// Book methods
 	GetBookByIDFunc           func(id string) (*Book, error)
 	ClearBookSignatureFunc    func(id string) error
@@ -1211,6 +1219,19 @@ func (m *MockStore) GetBookByFileHash(hash string) (*Book, error) {
 		return m.GetBookByFileHashFunc(hash)
 	}
 	return nil, nil
+}
+
+// BooksByFileHash is the FileHashHolderLookup capability: BooksByFileHashFunc
+// when set, else the single book GetBookByFileHash answers with.
+func (m *MockStore) BooksByFileHash(hash string) ([]*Book, error) {
+	if m.BooksByFileHashFunc != nil {
+		return m.BooksByFileHashFunc(hash)
+	}
+	b, err := m.GetBookByFileHash(hash)
+	if err != nil || b == nil {
+		return nil, err
+	}
+	return []*Book{b}, nil
 }
 
 func (m *MockStore) GetBookByOriginalHash(hash string) (*Book, error) {

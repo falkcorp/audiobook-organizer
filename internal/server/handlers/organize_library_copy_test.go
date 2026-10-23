@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_library_copy_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 68af52f3-742d-4b0c-99ba-e3a73e2e0443
-// last-edited: 2026-10-10
+// last-edited: 2026-10-22
 
 package handlers_test
 
@@ -14,8 +14,10 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -43,7 +45,30 @@ func (s *handlerCollisionSpy) OnCollision(string, string) {
 	s.mu.Unlock()
 }
 
+// zeroEntropy makes a ULID a function of its timestamp alone.
+type zeroEntropy struct{}
+
+func (zeroEntropy) Read(p []byte) (int, error) { return len(p), nil }
+
+// The hash lookup names the live holder with the smallest id, so which book it
+// names (the original itself, or its copy) is decided by the id order. The
+// handlers must act on the library copy under both.
 func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
+	base := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	older := ulid.MustNew(ulid.Timestamp(base), zeroEntropy{}).String()
+	newer := ulid.MustNew(ulid.Timestamp(base.Add(time.Minute)), zeroEntropy{}).String()
+	for _, tc := range []struct {
+		name           string
+		origID, copyID string
+	}{
+		{"original-id-smaller", older, newer}, // the prod order: the copy is made after the original
+		{"copy-id-smaller", newer, older},
+	} {
+		t.Run(tc.name, func(t *testing.T) { organizeHandlersActOnTheLibraryCopy(t, tc.origID, tc.copyID) })
+	}
+}
+
+func organizeHandlersActOnTheLibraryCopy(t *testing.T, origID, copyID string) {
 	gin.SetMode(gin.TestMode)
 	prev := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = prev })
@@ -91,17 +116,17 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 	}
 	origPath := filepath.Join(t.TempDir(), "newbooks", "Welcome to the Rift.mp3")
 	copyPath := filepath.Join(root, "Harmon Example", "Welcome to the Rift", "Welcome to the Rift.mp3")
-	mk("orig", origPath, &imported)
-	mk("copy", copyPath, &organized) // created second: the hash index names the copy, as in prod
-	if hit, _ := store.GetBookByFileHash(hash); hit == nil || hit.ID != "copy" {
-		t.Fatalf("fixture: hash lookup must name the copy, got %+v", hit)
+	mk(origID, origPath, &imported)
+	mk(copyID, copyPath, &organized)
+	if hit, _ := store.GetBookByFileHash(hash); hit == nil || hit.ID != min(origID, copyID) {
+		t.Fatalf("fixture: hash lookup must name the smaller id %s, got %+v", min(origID, copyID), hit)
 	}
 
 	resolveCalls := 0
 	resolve := organizer.LibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
 		resolveCalls++
-		if b.ID == "orig" {
-			cp, err := store.GetBookByID("copy")
+		if b.ID == origID {
+			cp, err := store.GetBookByID(copyID)
 			return cp, err == nil && cp != nil
 		}
 		return b, true
@@ -117,8 +142,8 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 	call := func(method string, fn gin.HandlerFunc) (int, map[string]any) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(method, "/audiobooks/orig/organize", nil)
-		c.Params = gin.Params{{Key: "id", Value: "orig"}}
+		c.Request = httptest.NewRequest(method, "/audiobooks/"+origID+"/organize", nil)
+		c.Params = gin.Params{{Key: "id", Value: origID}}
 		fn(c)
 		var body map[string]any
 		_ = json.Unmarshal(w.Body.Bytes(), &body)
@@ -138,11 +163,11 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 		t.Fatalf("apply: HTTP %d %v -- the prod failure was 500 'duplicate file already organized'", code, applied)
 	}
 
-	if preview["book_id"] != "copy" || preview["library_copy_of"] != "orig" {
-		t.Errorf("preview acts on %v (copy of %v); want the library copy of orig", preview["book_id"], preview["library_copy_of"])
+	if preview["book_id"] != copyID || preview["library_copy_of"] != origID {
+		t.Errorf("preview acts on %v (copy of %v); want the library copy of the original", preview["book_id"], preview["library_copy_of"])
 	}
-	if applied["book_id"] != "copy" || applied["original_book_id"] != "orig" {
-		t.Errorf("apply acted on %v (original %v); want the library copy of orig", applied["book_id"], applied["original_book_id"])
+	if applied["book_id"] != copyID || applied["original_book_id"] != origID {
+		t.Errorf("apply acted on %v (original %v); want the library copy of the original", applied["book_id"], applied["original_book_id"])
 	}
 	if preview["target_path"] != applied["new_path"] {
 		t.Errorf("preview promised %v, apply landed at %v", preview["target_path"], applied["new_path"])
@@ -170,7 +195,7 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 	if len(entries) != 1 {
 		t.Errorf("library folder holds %d entries; a second copy was written", len(entries))
 	}
-	if cp, _ := store.GetBookByID("copy"); cp == nil || cp.FilePath != copyPath {
+	if cp, _ := store.GetBookByID(copyID); cp == nil || cp.FilePath != copyPath {
 		t.Errorf("library copy row changed: %+v", cp)
 	}
 }
