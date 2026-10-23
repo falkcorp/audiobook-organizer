@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package transcribe
 
@@ -27,9 +27,10 @@ import (
 //     capabilities.go). This is what "tier routing" means here — a tier is a
 //     required-label set, not an entry in a routing table.
 //  2. Priority ORDERS the survivors. Lower numbers are filled first (a GPU box
-//     gets 1, a CPU box gets 100), each up to its Concurrency worth of
-//     batch-sized chunks, with the remainder spilling to lower-priority
-//     endpoints.
+//     gets 1, a CPU box gets 100), one batch-sized chunk per FREE request
+//     slot, with the remainder spilling to lower-priority endpoints only when
+//     the higher tier's slots are all taken. Equal-priority endpoints share
+//     work round-robin.
 //
 // So deadline-less bulk work lands on low-priority endpoints through spill,
 // while work that genuinely CANNOT run somewhere (it needs a GPU, or must stay
@@ -38,9 +39,10 @@ type Endpoint struct {
 	// URL is the base URL of the faster-whisper server,
 	// e.g. "http://whisper-1.local:8000".
 	URL string
-	// Concurrency is the allocation weight: how many whisperBatchSize-sized
-	// chunks this endpoint is offered per allocation pass. Values < 1 are
-	// treated as 1.
+	// Concurrency is the endpoint's request-slot count: how many requests it
+	// may serve at once (enforced at the request), and so how many
+	// whisperBatchSize-sized chunks allocation offers it while its slots are
+	// free. Values < 1 are treated as 1.
 	Concurrency int
 	// Label is a human-readable name for logs ("gpu-box", "cpu-node").
 	Label string
@@ -295,8 +297,10 @@ func allocateJobs[J any](healthy []Endpoint, remaining map[string]J) []map[strin
 // skipped rather than queued behind.
 //
 // Phase 2 (overflow): when every slot in the pool is taken and jobs remain,
-// each pass offers every endpoint up to Concurrency x whisperBatchSize jobs in
-// priority order, so the excess queues on slots proportionally to Concurrency.
+// each pass offers every endpoint up to Concurrency x whisperBatchSize jobs,
+// tier by tier in priority order, round-robin from `start` inside a tier, so
+// the excess queues on slots proportionally to Concurrency and a small batch
+// still rotates across equal endpoints.
 // Job IDs are assigned in sorted order for determinism.
 func allocateJobsWith[J any](healthy []Endpoint, remaining map[string]J, free func(Endpoint) int, start int) []map[string]J {
 	assignments := make([]map[string]J, len(healthy))
@@ -347,13 +351,31 @@ func allocateJobsWith[J any](healthy []Endpoint, remaining map[string]J, free fu
 		lo = hi
 	}
 
-	// Phase 2: every slot is taken; queue the rest in priority order.
+	// Phase 2: every slot is taken; queue the rest. Each pass walks the tiers
+	// in priority order and, inside a tier, visits endpoints round-robin from
+	// `start`, one chunk per visit, up to each endpoint's Concurrency chunks. A
+	// pass therefore still offers every endpoint Concurrency x whisperBatchSize
+	// jobs, but a small batch no longer always lands on healthy[0].
 	for pos < len(ids) {
-		for i, ep := range healthy {
-			give(i, max(ep.Concurrency, 1)*chunk)
-			if pos >= len(ids) {
-				break
+		for lo := 0; lo < len(healthy) && pos < len(ids); {
+			hi := lo + 1
+			for hi < len(healthy) && healthy[hi].Priority == healthy[lo].Priority {
+				hi++
 			}
+			tier := hi - lo
+			maxConc := 0
+			for k := range tier {
+				maxConc = max(maxConc, max(healthy[lo+k].Concurrency, 1))
+			}
+			for r := 0; r < maxConc && pos < len(ids); r++ {
+				for k := range tier {
+					idx := (start + k) % tier
+					if r < max(healthy[lo+idx].Concurrency, 1) && pos < len(ids) {
+						give(lo+idx, chunk)
+					}
+				}
+			}
+			lo = hi
 		}
 	}
 	return assignments
