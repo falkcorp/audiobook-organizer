@@ -1,7 +1,7 @@
 // file: internal/transcribe/journal.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 60c7ae00-b3ec-476b-a63e-00418bb73933
-// last-edited: 2026-09-19
+// last-edited: 2026-10-22
 
 package transcribe
 
@@ -32,6 +32,12 @@ import (
 // endpoint's decode_fingerprint to the key, so no v1 entry is ever served.
 const clipParamsVersion = "whisper-clip-v2"
 
+// pathParamsVersion keys path-job entries (the worker extracts the clip, so the
+// WAV bytes are never seen here). It is a different version string from
+// clipParamsVersion so the two keyspaces cannot collide: a path key hashes a
+// file's identity, a clip key hashes audio bytes.
+const pathParamsVersion = "whisper-path-v1"
+
 var journalLog = logger.New("transcribe-journal")
 
 // journalResult is the journalled form of a successful transcript.
@@ -59,6 +65,10 @@ type endpointJournal struct {
 	// of those workers without also changing its model will serve transcripts
 	// from its previous settings until it is restarted on a current script.
 	fingerprint string
+	// extract is the endpoint's /health extract_fingerprint (its ffmpeg
+	// arguments). Folded into path-job keys ONLY, so retuning extraction never
+	// invalidates upload-path entries and retuning decoding invalidates both.
+	extract string
 }
 
 // key is the journal key for a clip with the given sha256.
@@ -112,7 +122,7 @@ func newEndpointJournal(j ResultJournal, endpoint string, h remoteHealth, probed
 	if fp == "" {
 		journalLog.Info("endpoint reports no decode_fingerprint, journalling by model only: url=%s model=%s", endpoint, model)
 	}
-	return &endpointJournal{journal: j, endpoint: endpoint, model: model, fingerprint: fp}
+	return &endpointJournal{journal: j, endpoint: endpoint, model: model, fingerprint: fp, extract: strings.TrimSpace(h.ExtractFingerprint)}
 }
 
 // lookupBypass is a ResultJournal whose Lookup always misses: every clip is
@@ -239,10 +249,20 @@ func (ej *endpointJournal) complete(results map[string]BatchResult, uploaded map
 }
 
 func (ej *endpointJournal) completeOne(id, uploadedHash string, r BatchResult) {
-	if ej == nil || r.Error != "" || r.Text == "" || uploadedHash == "" {
+	if ej == nil || uploadedHash == "" {
 		return
 	}
-	if err := ej.journal.Complete(ej.key(uploadedHash), ej.endpoint, ej.label(), journalResult{Text: r.Text}); err != nil {
+	ej.put(id, ej.key(uploadedHash), r)
+}
+
+// put journals one result under key, applying the same rules for every kind of
+// job: only a non-empty transcript with no per-file error is journalled (see
+// complete for why), and a failed write is logged, not returned.
+func (ej *endpointJournal) put(id, key string, r BatchResult) {
+	if ej == nil || r.Error != "" || r.Text == "" {
+		return
+	}
+	if err := ej.journal.Complete(key, ej.endpoint, ej.label(), journalResult{Text: r.Text}); err != nil {
 		journalLog.Warn("journal write failed, result not restart-protected: job=%s err=%v", id, err)
 	}
 }

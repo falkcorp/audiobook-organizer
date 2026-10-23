@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-09-26
+// last-edited: 2026-10-22
 
 package transcribe
 
@@ -90,6 +90,25 @@ func endpointInCooldown(url string) bool {
 // decision in PLAN.md, that error carries no per-file meaning and callers
 // must write nothing.
 func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]string, onProgress ProgressFunc, journal ResultJournal) (map[string]BatchResult, error) {
+	return dispatchPool(ctx, endpoints, requires, jobs, onProgress, nil,
+		func(ctx context.Context, g gatedEndpoint, sub map[string]string, progress ProgressFunc) (map[string]BatchResult, error) {
+			return transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, g.Endpoint.Concurrency, sub, progress, journal)
+		})
+}
+
+// endpointSender transcribes one endpoint's share of a dispatch. It is the only
+// part of the round loop that depends on what a job IS (a WAV path to upload,
+// or a server path the worker extracts itself), which is why dispatchPool is
+// generic over the job type instead of being copied per kind of job.
+type endpointSender[J any] func(ctx context.Context, g gatedEndpoint, jobs map[string]J, onProgress ProgressFunc) (map[string]BatchResult, error)
+
+// dispatchPool is the pool round loop shared by every kind of job: gate,
+// priority-ordered allocation, concurrent per-endpoint sends, cooldown on
+// failure, re-queue to survivors. extraRefusal (may be nil) lets a caller
+// refuse endpoints the label gate cannot express -- the path pipeline refuses
+// a worker whose mapped NFS root is unreadable right now. A non-empty return is
+// the operator-facing reason and is reported like any capability refusal.
+func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]J, onProgress ProgressFunc, extraRefusal func(gatedEndpoint) string, send endpointSender[J]) (map[string]BatchResult, error) {
 	if len(jobs) == 0 {
 		return nil, nil
 	}
@@ -104,6 +123,17 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 	// the loop. gateEndpoints also performs the /health probe that the batch
 	// decision needs, so this adds no requests.
 	gated, refused := gateEndpoints(ctx, endpoints, requires)
+	if extraRefusal != nil {
+		kept := gated[:0:0]
+		for _, g := range gated {
+			if reason := extraRefusal(g); reason != "" {
+				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason})
+				continue
+			}
+			kept = append(kept, g)
+		}
+		gated = kept
+	}
 	for _, r := range refused {
 		slog.Warn("transcribe: endpoint refused by capability requirements", "url", r.URL, "label", r.Label, "reason", r.Reason)
 	}
@@ -128,7 +158,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 	// One endpoint: byte-for-byte the historical single-URL behaviour.
 	if len(eligible) == 1 {
 		g := probeByURL[eligible[0].URL]
-		results, err := transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, g.Endpoint.Concurrency, jobs, onProgress, journal)
+		results, err := send(ctx, g, jobs, onProgress)
 		if err != nil {
 			return nil, classifyTransport([]string{g.Endpoint.URL}, err)
 		}
@@ -139,7 +169,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 	copy(ordered, eligible)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Priority < ordered[j].Priority })
 
-	remaining := make(map[string]string, len(jobs))
+	remaining := make(map[string]J, len(jobs))
 	maps.Copy(remaining, jobs)
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
@@ -197,7 +227,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 			ep := healthy[idx]
 			wg.Go(func() {
 				g := probeByURL[ep.URL]
-				r, err := transcribeRemoteWithHealth(ctx, ep.URL, g.Health, g.Probed, ep.Concurrency, sub, progressFor(), journal)
+				r, err := send(ctx, g, sub, progressFor())
 				resCh <- epResult{idx: idx, res: r, err: err}
 			})
 		}
@@ -241,8 +271,8 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 // all jobs are assigned, so overflow beyond total capacity distributes
 // proportionally to Concurrency while lower-Priority numbers fill first.
 // Job IDs are assigned in sorted order for determinism.
-func allocateJobs(healthy []Endpoint, remaining map[string]string) []map[string]string {
-	assignments := make([]map[string]string, len(healthy))
+func allocateJobs[J any](healthy []Endpoint, remaining map[string]J) []map[string]J {
+	assignments := make([]map[string]J, len(healthy))
 	ids := make([]string, 0, len(remaining))
 	for id := range remaining {
 		ids = append(ids, id)
@@ -256,7 +286,7 @@ func allocateJobs(healthy []Endpoint, remaining map[string]string) []map[string]
 			take := c * whisperBatchSize()
 			for n := 0; n < take && pos < len(ids); n++ {
 				if assignments[i] == nil {
-					assignments[i] = make(map[string]string)
+					assignments[i] = make(map[string]J)
 				}
 				assignments[i][ids[pos]] = remaining[ids[pos]]
 				pos++
