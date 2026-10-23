@@ -1,11 +1,17 @@
 // file: web/src/pages/Users.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { apiFetch } from '../utils/apiFetch';
 import { describeRequestError, responseErrorMessage, unwrapData } from '../utils/apiResponse';
+import {
+  UserFootprintDrawer,
+  UserMergeDialog,
+  UserMergesPanel,
+  type MergeableUser,
+} from './UserMerge';
 import {
   emailBindingLabel,
   guestPolicyLabel,
@@ -43,6 +49,8 @@ import {
   ContentCopy as CopyIcon,
   Email as EmailIcon,
   AlternateEmail as SetEmailIcon,
+  MergeType as MergeIcon,
+  Fingerprint as FootprintIcon,
 } from '@mui/icons-material';
 
 const API_BASE = '/api/v1';
@@ -54,6 +62,8 @@ interface User {
   roles: string[];
   status: string;
   created_at: string;
+  /** Set once an admin merged this account into another. */
+  merged_into_user_id?: string;
 }
 
 interface Invite {
@@ -132,6 +142,9 @@ export default function Users() {
   const [error, setError] = useState('');
   const [copiedToken, setCopiedToken] = useState('');
   const [emailUser, setEmailUser] = useState<User | null>(null);
+  const [footprintUser, setFootprintUser] = useState<User | null>(null);
+  const [mergeUser, setMergeUser] = useState<User | null>(null);
+  const [mergesRefresh, setMergesRefresh] = useState(0);
 
   // Ref for token reset timeout
   const copiedTokenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -321,10 +334,32 @@ export default function Users() {
                       </IconButton>
                     </Tooltip>
                   )}
-                  {u.status === 'locked' && (
+                  {u.status === 'locked' && !u.merged_into_user_id && (
                     <Tooltip title="Reactivate">
                       <IconButton size="small" onClick={() => handleReactivate(u.id)}>
                         <ActiveIcon fontSize="small" color="success" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                  {u.username !== '_system' && (
+                    <Tooltip title="Sign-ins & data">
+                      <IconButton
+                        size="small"
+                        aria-label={`Sign-ins and data for ${u.username}`}
+                        onClick={() => setFootprintUser(u)}
+                      >
+                        <FootprintIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                  {u.username !== '_system' && u.status === 'active' && !u.merged_into_user_id && (
+                    <Tooltip title="Merge into…">
+                      <IconButton
+                        size="small"
+                        aria-label={`Merge ${u.username} into another account`}
+                        onClick={() => setMergeUser(u)}
+                      >
+                        <MergeIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   )}
@@ -458,6 +493,39 @@ export default function Users() {
         </>
       )}
 
+      <UserMergesPanel
+        users={users as MergeableUser[]}
+        refreshKey={mergesRefresh}
+        onNotice={(message) => {
+          setNotice(message);
+          load();
+        }}
+      />
+      <UserFootprintDrawer
+        key={footprintUser?.id ?? 'none'}
+        user={footprintUser}
+        onClose={() => setFootprintUser(null)}
+      />
+      <UserMergeDialog
+        key={mergeUser?.id ?? 'none'}
+        absorbed={mergeUser}
+        candidates={users.filter(
+          (c) =>
+            c.id !== mergeUser?.id &&
+            c.status === 'active' &&
+            !c.merged_into_user_id &&
+            (c.roles ?? []).includes('admin')
+        )}
+        onClose={() => setMergeUser(null)}
+        onStarted={(operationId, absorbed) => {
+          setMergeUser(null);
+          setNotice(
+            `Merging ${absorbed.username} started (operation ${operationId}). It is listed under Account merges when it has begun.`
+          );
+          setMergesRefresh((n) => n + 1);
+          load();
+        }}
+      />
       <CreateInviteDialog
         open={inviteOpen}
         mailConfigured={settings.mailConfigured}
