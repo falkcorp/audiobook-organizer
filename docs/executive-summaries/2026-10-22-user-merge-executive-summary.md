@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-user-merge-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: e2a85c31-7d94-4b06-8f1c-6a30d9e4b752 -->
 <!-- last-edited: 2026-10-23 -->
 
@@ -32,8 +32,8 @@ stays and when to run it.
   hand; undoing the merge is the way back.
 - **Undo.** Every change is recorded with what it replaced. Undoing puts things
   back, but anything either account changed after the merge is left alone and
-  reported, never overwritten. Undoing signs the account that stayed out of the
-  website and Audiobookshelf apps, because sign-ins and keys move back.
+  reported, never overwritten. When sign-ins or keys move back, the account that
+  stayed is signed out of the website and Audiobookshelf apps.
 - **Safe to interrupt.** If the server stops part way, the merge can be resumed
   from where it stopped.
 

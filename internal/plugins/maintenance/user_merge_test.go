@@ -241,3 +241,34 @@ func TestUserMergeOp_OmittedModeIsAPreviewAndNeedsAnAdminActor(t *testing.T) {
 		t.Error("a preview with no actor on the op row was honoured")
 	}
 }
+
+// A live run the plan refuses leaves a summary on the op row, and neither the
+// summary nor the error text names an account or an address.
+func TestUserMergeOp_RefusedLiveRunLeavesNoPIIOnTheOpRow(t *testing.T) {
+	r := newUserMergeRig(t)
+	viewer, err := r.store.CreateUser("viewer-acct", "viewer@users.example.com", "bcrypt", "h", []string{"viewer"}, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The survivor is not an admin, so the plan refuses.
+	tok, err := r.grants.Issue(usermerge.Grant{ActorID: r.a.ID, Action: usermerge.ActionApply, SurvivorID: viewer.ID, AbsorbedID: r.b.ID, Digest: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	no := false
+	params := userMergeParams{DryRun: &no, SurvivorID: viewer.ID, AbsorbedID: r.b.ID, Digest: "d", Grant: tok}
+	err = runUserMerge(context.Background(), params, r.env())
+	if err == nil {
+		t.Fatal("a refused plan ran")
+	}
+	sum, ok := r.result.(usermerge.PlanSummary)
+	if !ok || sum.Applicable || sum.RefusalCount == 0 {
+		t.Fatalf("result = %#v, want a refused plan summary", r.result)
+	}
+	r.assertNoPII(t)
+	for _, secret := range []string{viewer.Username, viewer.Email, r.a.Username, r.b.Username, r.a.Email, r.b.Email} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("the op error exposes %q: %v", secret, err)
+		}
+	}
+}

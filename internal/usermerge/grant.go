@@ -1,7 +1,7 @@
 // file: internal/usermerge/grant.go
 // version: 1.0.0
 // guid: 08d4f2b6-a173-4e59-8c30-b9e5a7d1f642
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package usermerge
 
