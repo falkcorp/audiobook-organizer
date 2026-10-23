@@ -1,5 +1,5 @@
 // file: internal/usermerge/service_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b17d4c90-3e62-4a85-9d0f-4c8a2e6b7153
 // last-edited: 2026-10-22
 
@@ -71,10 +71,12 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{t: t, s: s, a: a, b: b, t0: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)}
-	svc, err := New(s, WithOwnerEmail(func() string { return ownerAddr }), WithBackfillUserID(func() string { return "" }))
+	svc, err := New(s)
 	if err != nil {
 		t.Fatal(err)
 	}
+	svc.ownerEmail = func() string { return ownerAddr }
+	svc.backfillUserID = func() string { return "" }
 	f.svc = svc
 	f.seed()
 	return f
@@ -85,8 +87,14 @@ func (f *fixture) state(user, book, status string, pct int, last time.Time) {
 	f.put(database.UserBookStateStatusKey(user, status, book), "1")
 }
 
+// uposKey is the layout of one playback-position row (database.
+// UserPositionBookPrefix plus the segment).
+func uposKey(user, book, seg string) string {
+	return database.UserPositionBookPrefix(user, book) + seg
+}
+
 func (f *fixture) pos(user, book, seg string, sec float64, at time.Time) {
-	f.put(database.UserPositionKey(user, book, seg), database.UserPosition{UserID: user, BookID: book, SegmentID: seg, PositionSeconds: sec, UpdatedAt: at})
+	f.put(uposKey(user, book, seg), database.UserPosition{UserID: user, BookID: book, SegmentID: seg, PositionSeconds: sec, UpdatedAt: at})
 }
 
 func (f *fixture) seed() {
@@ -281,10 +289,10 @@ func TestApply_MovesEverythingAndLeavesNoLiveRowOfTheAbsorbedAccount(t *testing.
 	if got := f.get(database.UserBookStateKey(a, "book-both")); !strings.Contains(got, `"progress_pct":60`) {
 		t.Errorf("book-both state = %s, want the newer absorbed progress", got)
 	}
-	if got := f.get(database.UserPositionKey(a, "book-both", "s9")); got == "" || !strings.Contains(got, a) {
+	if got := f.get(uposKey(a, "book-both", "s9")); got == "" || !strings.Contains(got, a) {
 		t.Errorf("absorbed's newer position did not move, got %q", got)
 	}
-	if f.get(database.UserPositionKey(a, "book-both", "s1")) != "" {
+	if f.get(uposKey(a, "book-both", "s1")) != "" {
 		t.Error("the survivor's older position row should have been replaced")
 	}
 	if got := f.get(database.UserBookStateKey(a, "book-only-b")); !strings.Contains(got, `"status":"finished"`) {
@@ -609,7 +617,8 @@ func TestBuildPlan_Refusals(t *testing.T) {
 	refusal("actor not an admin", f.svc, PlanRequest{ActorID: viewer.ID, SurvivorID: f.a.ID, AbsorbedID: f.b.ID}, "active admin")
 	refusal("survivor not an admin", f.svc, PlanRequest{ActorID: f.a.ID, SurvivorID: viewer.ID, AbsorbedID: f.b.ID}, "not an admin")
 	refusal("missing absorbed", f.svc, PlanRequest{ActorID: f.a.ID, SurvivorID: f.a.ID, AbsorbedID: "nobody"}, "does not exist")
-	pinned, _ := New(f.s, WithBackfillUserID(func() string { return f.b.ID }))
+	pinned, _ := New(f.s)
+	pinned.backfillUserID = func() string { return f.b.ID }
 	refusal("pinned backfill user", pinned, f.planReq(), "abs_itunes_position_backfill_user_id")
 
 	// An undecodable row of the absorbed account refuses.

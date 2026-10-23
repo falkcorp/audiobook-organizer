@@ -1,5 +1,5 @@
 // file: internal/usermerge/service.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b3e91d4-2c58-4a07-b6f1-0e94d5a8c3b2
 // last-edited: 2026-10-23
 
@@ -109,7 +109,8 @@ type Service struct {
 	creds  database.UserCredentialWriter
 	abs    ABSSessionRevoker // optional
 
-	// ownerEmail and backfillUserID read config at call time; tests replace them.
+	// ownerEmail and backfillUserID read config at call time (package tests
+	// replace the fields; other packages set the config).
 	ownerEmail     func() string
 	backfillUserID func() string
 	now            func() time.Time
@@ -121,16 +122,6 @@ type Service struct {
 
 // Option configures a Service.
 type Option func(*Service)
-
-// WithOwnerEmail overrides where the configured owner email comes from.
-func WithOwnerEmail(f func() string) Option { return func(s *Service) { s.ownerEmail = f } }
-
-// WithBackfillUserID overrides where the pinned iTunes-position backfill user
-// id (config abs_itunes_position_backfill_user_id) comes from.
-func WithBackfillUserID(f func() string) Option { return func(s *Service) { s.backfillUserID = f } }
-
-// WithClock overrides the clock.
-func WithClock(f func() time.Time) Option { return func(s *Service) { s.now = f } }
 
 // WithAudit sets the audit sink called after an apply or undo completes.
 func WithAudit(f func(summary string, details map[string]any)) Option {

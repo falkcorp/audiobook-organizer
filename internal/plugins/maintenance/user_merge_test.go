@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/user_merge_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d9e3a5f0-7b14-4c82-8a6d-2f1c0b9e4573
 // last-edited: 2026-10-23
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 )
@@ -45,7 +46,8 @@ func newUserMergeRig(t *testing.T) *userMergeRig {
 	if err := s.SetRaw("pref:"+b.ID+":speed", []byte(`{"key":"speed","value":"1.5"}`)); err != nil {
 		t.Fatal(err)
 	}
-	svc, err := usermerge.New(s, usermerge.WithOwnerEmail(func() string { return "owner@example.com" }), usermerge.WithBackfillUserID(func() string { return "" }))
+	pinMergeConfig(t, "owner@example.com")
+	svc, err := usermerge.New(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +111,23 @@ func (r *userMergeRig) assertNoPII(t *testing.T) {
 			t.Errorf("the op row's result exposes %q: %s", secret, raw)
 		}
 	}
+}
+
+// pinMergeConfig fixes the config the merge service reads (owner email, pinned
+// backfill user) for one test and restores it afterwards.
+func pinMergeConfig(t *testing.T, ownerEmail string) {
+	t.Helper()
+	prev := config.Snapshot()
+	config.Mutate(func(c *config.Config) {
+		c.OwnerEmail = ownerEmail
+		c.ABSItunesPositionBackfillUserID = ""
+	})
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) {
+			c.OwnerEmail = prev.OwnerEmail
+			c.ABSItunesPositionBackfillUserID = prev.ABSItunesPositionBackfillUserID
+		})
+	})
 }
 
 func equalMaps(a, b map[string]string) bool {
