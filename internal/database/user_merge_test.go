@@ -1,5 +1,5 @@
 // file: internal/database/user_merge_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f7b9c10-4e83-4a6d-b1f5-8c0d3e92a746
 // last-edited: 2026-10-23
 
@@ -516,5 +516,52 @@ func TestRewriteJSONField_MatchesAnEscapedKey(t *testing.T) {
 	}
 	if want := `{"a":1, "own\u0065r" : "z" ,"b":[1,2]}`; string(out) != want {
 		t.Errorf("out = %s, want %s", out, want)
+	}
+}
+
+// An accept (or any other invite writer) that holds inviteMu across its
+// read-modify-write must not have its commit overwritten by an owner-field op
+// that read the row before it: the apply waits, then sees the row as it is.
+func TestApplyUserMergeOps_WaitsForInviteWritersAndKeepsTheirFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, field, row, committed string
+	}{
+		{"invite", "invite:tok1", "created_by_user_id",
+			`{"token":"tok1","created_by_user_id":"u-old"}`,
+			`{"token":"tok1","created_by_user_id":"u-old","used_at":"2026-10-23T00:00:00Z","accepted_user_id":"u-new"}`},
+		{"invite grant", inviteEmailGrantPrefix + "guest@example.com", "user_id",
+			`{"user_id":"u-old","cf_added":true}`,
+			`{"user_id":"u-old","cf_added":false}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newInviteTestStore(t)
+			if err := s.SetRaw(tc.key, []byte(tc.row)); err != nil {
+				t.Fatal(err)
+			}
+			op := UserMergeOp{Key: tc.key, Family: "f", OwnerField: tc.field, OwnerFrom: "u-old", OwnerTo: "u-keep"}
+
+			// A writer is inside its read-modify-write: it holds inviteMu and has
+			// read tc.row. The apply must not start its own read until it lets go.
+			s.inviteMu.Lock()
+			done := make(chan error, 1)
+			go func() { done <- s.ApplyUserMergeOps([]UserMergeOp{op}, "usermerge:journal:t", []byte(`{}`)) }()
+			select {
+			case err := <-done:
+				t.Fatalf("apply finished (%v) while an invite writer held inviteMu", err)
+			case <-time.After(150 * time.Millisecond):
+			}
+			if err := s.SetRaw(tc.key, []byte(tc.committed)); err != nil { // the writer commits
+				t.Fatal(err)
+			}
+			s.inviteMu.Unlock()
+			if err := <-done; err != nil {
+				t.Fatalf("apply after the writer committed = %v", err)
+			}
+			got, _ := s.GetRaw(tc.key)
+			want := strings.Replace(tc.committed, `"u-old"`, `"u-keep"`, 1)
+			if string(got) != want {
+				t.Errorf("row = %s, want the writer's commit with only the owner moved: %s", got, want)
+			}
+		})
 	}
 }

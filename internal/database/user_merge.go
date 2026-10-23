@@ -1,5 +1,5 @@
 // file: internal/database/user_merge.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5d0a7e3c-91b4-4f26-8c1d-e7a2b6f40935
 // last-edited: 2026-10-23
 
@@ -507,6 +507,20 @@ func (p *PebbleStore) ScanUserData(userID string) (*UserData, error) {
 func (p *PebbleStore) ApplyUserMergeOps(ops []UserMergeOp, journalKey string, journal []byte) error {
 	userMergeApplyMu.Lock()
 	defer userMergeApplyMu.Unlock()
+	// An owner-field rewrite of an invite or an invite email grant is a
+	// read-modify-write of a row that ConsumeInvite, MarkInviteEmailSent,
+	// RecordInviteGuestPolicy and the grant setters also read-modify-write under
+	// inviteMu. Without it, an accept could commit between this batch's read and
+	// its write, and the write would put the pre-accept row back (a reusable
+	// token, a lost accepted-user id, a revoked grant back). Lock order: this
+	// mutex is taken after userMergeApplyMu (used nowhere else) and before
+	// apiKeyMu (never held by an inviteMu holder).
+	if slices.ContainsFunc(ops, func(o UserMergeOp) bool {
+		return strings.HasPrefix(o.Key, "invite:") || strings.HasPrefix(o.Key, inviteEmailGrantPrefix)
+	}) {
+		p.inviteMu.Lock()
+		defer p.inviteMu.Unlock()
+	}
 	// Every authenticated request rewrites its API key row (use count, last
 	// used) under apiKeyMu; an owner-field rewrite is the same kind of
 	// read-modify-write, so it takes the same lock or one of the two is lost.
