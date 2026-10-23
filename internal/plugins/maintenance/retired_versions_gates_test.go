@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
 // last-edited: 2026-10-22
 
@@ -540,6 +540,7 @@ func TestRetiredVersions_ITunesPathOnlyRows(t *testing.T) {
 	bookLevel := rf.trashed("shell-book", "g", 30, rf.file("g/b.mp3"))
 	b, err := rf.st.GetBookByID(bookLevel)
 	require.NoError(t, err)
+	//lint:ignore SA1019 the fixture sets the legacy column the gate must still honour
 	b.ITunesPath = retiredPtr(frozen)
 	_, err = rf.st.UpdateBook(b.ID, b)
 	require.NoError(t, err)

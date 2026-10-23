@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.96.0
+// version: 1.97.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-22
 
@@ -97,19 +97,24 @@ type opsBookWriter interface {
 	opsBookRetirer
 }
 
-// opsFileAndPathReader reads book files and the configured import paths.
-type opsFileAndPathReader interface {
+// opsBookFileListReader lists book files and the configured import paths.
+type opsBookFileListReader interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	// GetAllBookFilesCoreComplete is the same list, refusing a memdb known to
 	// be missing rows: the chapter-fragment apply re-check reads its absences.
 	GetAllBookFilesCoreComplete() ([]database.BookFileCore, error)
 	GetAllImportPaths() ([]database.ImportPath, error)
-	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	// GetBookFilesForIDsCore is the Core projection of the files of a few
 	// books; the retired-versions preview reads a shell's and a target's rows
 	// through it (no raw tags or metadata blobs).
 	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
+}
+
+// opsBookFileLookup answers keyed questions about book files: by path, by id,
+// by hash, and which live books sit at a path.
+type opsBookFileLookup interface {
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	// GetBookFileByID is the Repairs writer's read-before-journal for a
 	// book_file compare-and-set (repairs.BookFileWriter).
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
@@ -120,6 +125,18 @@ type opsFileAndPathReader interface {
 	// BookFilesWithHash is the multi-valued "which rows carry this hash?"
 	// read: the duplicate-copies box-set check re-reads it at apply.
 	BookFilesWithHash(hash string) ([]database.BookFile, error)
+}
+
+// opsFileAndPathReader reads book files and the configured import paths.
+//
+// Split into the 2 interfaces above on 2026-10-22, when the retired-versions
+// preview's GetBookFilesForIDsCore took it to 9 declared entries and over the
+// interfacebloat limit of 8. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type opsFileAndPathReader interface {
+	opsBookFileListReader
+	opsBookFileLookup
 }
 
 // opsBookFileMutator creates and updates book_file rows.

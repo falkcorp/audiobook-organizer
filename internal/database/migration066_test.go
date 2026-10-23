@@ -1,5 +1,5 @@
 // file: internal/database/migration066_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9c16a990-2d0e-4278-b18a-1d20d6bfe3ea
 // last-edited: 2026-10-22
 
@@ -245,6 +245,8 @@ func TestMigration066ReadFailureStaysFatal(t *testing.T) {
 	p := st.(*PebbleStore)
 	insertPlanLikeOp(t, p, "plan-legacy", LegacyPlanOpDefID, `{"rows":[1]}`)
 
+	// legacyPlanStripGetHook is a package-level variable: this test must not
+	// use t.Parallel(), and neither may any other test that sets the hook.
 	boom := errors.New("injected read failure")
 	legacyPlanStripGetHook = func(string) (*OperationV2Row, []byte, error) { return nil, nil, boom }
 	t.Cleanup(func() { legacyPlanStripGetHook = nil })
