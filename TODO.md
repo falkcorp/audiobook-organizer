@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.3 -->
+<!-- version: 10.78.4 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-22 -->
+<!-- last-edited: 2026-10-23 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,35 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **INVITE-PATH-REDACTION-FOLLOWUPS** Invite-path redaction follow-ups (#4112):
+      (1) `internal/server/middleware/log_path_guard_test.go` only sees a
+      `<x>.URL.Path` that is a direct argument of a log call: it misses a path
+      built with `+` (a `BinaryExpr`) or put in a local first, and it accepts any
+      call whose name contains `Redact`, including `RedactQueryCredentials`, which
+      does not touch the path. Make it resolve locals and require the invite
+      redactor (`logging.RedactInvitePath` or `cfLogPath`) by name;
+      (2) the allocation-linearity test (`TestRedactInvitePath_LinearAllocs`) only
+      exercises `anyInvitePrefix`; add inputs that put the same pressure on the
+      cleaning, decoding and anchored-match stages, and note that a truly
+      quadratic version fails only at the `go test` timeout because
+      `AllocsPerRun` cannot be interrupted;
+      (3) the remaining raw `URL.Path` log or audit sites on non-invite surfaces
+      (`absauthprobe.go`, `handlers/activity.go`, `handlers/abs/stream.go`, the
+      audit `Path` fields in `handlers/abs/login.go` and `absauth.go`) are
+      allowlisted or unchecked: route them through one path-for-log helper.
+
+- [ ] **TODO-WHISPER-PATH-FOLLOWUPS** Whisper path pipeline follow-ups (#4115):
+      (1) abort a transcribe-book-intros run after K consecutive fully-deferred
+      pages, so a lost mount or a misconfigured worker does not walk the whole
+      library deferring every page; (2) add a Python test that drives the real
+      ffmpeg timeout/kill path in `_extract_clip` (only the classification of a
+      nonzero exit is tested today, with subprocess faked); (3) validate the
+      worker's result ids against the chunk that was sent in
+      `internal/transcribe/path.go`, so an unexpected or missing id is an error
+      rather than silently ignored; (4) add a local-mode failed-retry test: a silence retry whose local
+      ffmpeg clip cut fails must defer the book rather than write the
+      [SILENCE] sentinel (only the remote-mode retries are covered today).
 
 - [ ] **INVITE-FOLLOWUPS** Follow-ups from emailed invitations (`feat/invite-email`):
       (1) reactivating a user does not restore an invitee's SSO grant or
