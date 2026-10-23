@@ -1,7 +1,7 @@
 // file: internal/itunes/cross_type.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b7e1a92-3c6d-4f80-9a15-8e2c7b3d1f64
-// last-edited: 2026-07-24
+// last-edited: 2026-10-23
 //
 // READ-ONLY cross-type PID-collision census — the disjointness backstop for the
 // iTunes 2-way-sync relocate path (P0 of the 2-way-sync system design).
