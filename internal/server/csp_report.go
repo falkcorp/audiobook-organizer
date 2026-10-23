@@ -1,5 +1,5 @@
 // file: internal/server/csp_report.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d896d6d8-b883-482d-8e34-d41a4abd52df
 // last-edited: 2026-10-22
 
@@ -23,8 +23,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // Where a browser reports Content-Security-Policy violations (csp.go points
@@ -289,9 +289,10 @@ func cspHostName(u *url.URL) string {
 //   - a keyword with no path (inline, eval, self, data) is kept as it is;
 //   - a URL with a scheme but no host (data:, blob:, about:) is reduced to its
 //     scheme, so no payload is logged;
-//   - the path goes through servermiddleware.RedactLogPath (invite tokens live in
-//     the path: /invite/<token>), which matches without regard to case and skips
-//     empty segments;
+//   - the path (url.Parse's decoded Path, in which a %3F is a "?" that is path
+//     text, not a query) goes through logging.RedactInvitePath (invite tokens
+//     live in the path: /invite/<token>), which matches without regard to case
+//     and skips empty segments;
 //   - the path is then cut to its first segment when the URL is SAME-SITE as the
 //     reported document (same normalised host, see cspHostName; or no host at all,
 //     as in a relative or schemeless URL), or when the document's host is not
@@ -316,7 +317,7 @@ func cspLogURL(raw, docHost string) string {
 	if u.Host == "" && u.Scheme != "" { // data:, blob:, about: ...
 		return u.Scheme + ":"
 	}
-	redacted := servermiddleware.RedactLogPath(u.Path)
+	redacted := logging.RedactInvitePath(u.Path)
 	if u.Host == "" {
 		return firstSegment(redacted)
 	}

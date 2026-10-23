@@ -1,5 +1,5 @@
 // file: internal/server/middleware/log_redact_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 67c415d9-c181-4b1c-9481-527366cb1090
 // last-edited: 2026-10-22
 
@@ -138,6 +138,101 @@ func TestRedactLogPath_EncodedSlashBeforeTheInviteToken(t *testing.T) {
 	} {
 		if got := RedactLogPath(in); got != want {
 			t.Fatalf("RedactLogPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// %3F decodes to "?" in URL.Path. The access log must treat it as path text: the
+// invite token behind it is masked, and the "?" is written back as %3F so the
+// first "?" in the line is the real query delimiter. Each target goes through the
+// real gin logger, the way the production router wires it.
+func TestRedactingLogFormatter_EncodedQuestionMarkIsPathText(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const tok = "SEKRET-question-mark-token"
+	cases := []struct {
+		name, route, target, wantLogged string
+	}{
+		{"public lookup", "/api/v1/auth/invite/:token", "/api/v1/auth/invite/%3F" + tok, "/api/v1/auth/invite/[REDACTED]"},
+		{"spa page", "", "/invite/%3F" + tok, "/invite/[REDACTED]"},
+		{"dot walk behind an encoded question mark", "", "/x%3F/../invite/" + tok, "/invite/[REDACTED]"},
+		{"resend", "/api/v1/users/invites/:token/resend", "/api/v1/users/invites/%3F" + tok + "/resend", "/api/v1/users/invites/[REDACTED]/resend"},
+		{"real query beside the token", "", "/invite/" + tok + "?x=1%3F", "/invite/[REDACTED]?x=1%3F"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			r := gin.New()
+			r.Use(gin.LoggerWithConfig(gin.LoggerConfig{Formatter: RedactingLogFormatter, Output: &buf}))
+			ok := func(c *gin.Context) { c.Status(http.StatusOK) }
+			if tc.route != "" {
+				r.GET(tc.route, ok)
+			} else {
+				r.NoRoute(ok)
+			}
+			r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tc.target, nil))
+			line := buf.String()
+			if strings.Contains(line, tok) {
+				t.Fatalf("request log leaked the invite token: %s", line)
+			}
+			// The formatter quotes the target (%#v), so matching the quoted form
+			// pins the whole logged path, not a prefix of it.
+			if !strings.Contains(line, `"`+tc.wantLogged+`"`) {
+				t.Fatalf("request log = %s, want the target %q", line, tc.wantLogged)
+			}
+		})
+	}
+}
+
+// A "?" in a decoded path must not hide the real query from the credential
+// redaction either: /books%3Fa=1?token=SECRET is the path "/books?a=1" plus the
+// query "token=SECRET".
+func TestRedactingLogFormatter_EncodedQuestionMarkDoesNotHideTheQueryCredential(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var buf bytes.Buffer
+	r := gin.New()
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{Formatter: RedactingLogFormatter, Output: &buf}))
+	r.NoRoute(func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/books%3Fa=1?token=SECRET-query-value", nil))
+	line := buf.String()
+	if strings.Contains(line, "SECRET-query-value") {
+		t.Fatalf("request log leaked the query credential: %s", line)
+	}
+	if !strings.Contains(line, `"/books%3Fa=1?token=REDACTED"`) {
+		t.Fatalf("request log = %s, want /books%%3Fa=1?token=REDACTED", line)
+	}
+}
+
+// The formatter cannot split a path it cannot match to the request's query, and
+// then logs only the redacted root.
+func TestRedactingLogFormatter_FailsClosedWhenThePathDoesNotEndInTheQuery(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/invite/SEKRET-mismatch?a=1", nil)
+	param := gin.LogFormatterParams{Request: req, Path: "/invite/SEKRET-mismatch?b=2", Method: http.MethodGet}
+	line := RedactingLogFormatter(param)
+	if strings.Contains(line, "SEKRET-mismatch") || !strings.Contains(line, `"/[REDACTED]"`) {
+		t.Fatalf("formatter did not fail closed: %s", line)
+	}
+}
+
+// Without a request the target is read as a RequestURI (the first "?" cuts), and
+// the token is still masked.
+func TestRedactingLogFormatter_NoRequestReadsThePathAsARequestURI(t *testing.T) {
+	line := RedactingLogFormatter(gin.LogFormatterParams{Path: "/invite/SEKRET-no-request?token=abc", Method: http.MethodGet})
+	if strings.Contains(line, "SEKRET-no-request") || strings.Contains(line, "abc") ||
+		!strings.Contains(line, "/invite/[REDACTED]?token=REDACTED") {
+		t.Fatalf("formatter without a request: %s", line)
+	}
+}
+
+func TestRedactLogRequestPath(t *testing.T) {
+	for _, tc := range []struct{ path, query, want string }{
+		{"/invite/SEKRET", "", "/invite/[REDACTED]"},
+		{"/invite/?SEKRET", "", "/invite/[REDACTED]"},
+		{"/books?a=1", "token=SECRET", "/books%3Fa=1?token=REDACTED"},
+		{"/books", "q=1", "/books?q=1"},
+		{"/x?/../invite/SEKRET", "", "/invite/[REDACTED]"},
+	} {
+		if got := RedactLogRequestPath(tc.path, tc.query); got != tc.want {
+			t.Errorf("RedactLogRequestPath(%q, %q) = %q, want %q", tc.path, tc.query, got, tc.want)
 		}
 	}
 }
