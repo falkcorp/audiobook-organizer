@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
@@ -71,6 +72,11 @@ type UserHandler struct {
 	// too, so invite tokens are listed as before. Defaults to true, so a
 	// handler nobody configured hides them.
 	authEnabled bool
+	// merge, mergeEnqueuer and mergeGrants serve the account-merge routes
+	// (SetUserMerge). nil answers 503.
+	merge         UserMergeService
+	mergeEnqueuer UserMergeEnqueuer
+	mergeGrants   *usermerge.Grants
 }
 
 // NewUserHandler constructs a UserHandler backed by the given UserStore.
@@ -479,6 +485,13 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 	}
 	if user == nil {
 		httputil.RespondWithNotFound(c, "user", id)
+		return
+	}
+	// A merged-away account stays locked: reactivating it would put a second
+	// live account back on sign-ins and data that now belong to the survivor.
+	// Undoing the merge is the way back.
+	if user.MergedIntoUserID != "" {
+		httputil.RespondWithConflict(c, "this account was merged into another account; undo the merge instead of reactivating it")
 		return
 	}
 

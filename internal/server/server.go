@@ -255,16 +255,16 @@ type Server struct {
 	activityService    *activity.Service
 	// userMergeOnce builds userMerge on first use (UserMerge): the admin merge-user
 	// service shared by the Users handler and the maintenance.user-merge op.
-	userMergeOnce sync.Once
-	userMerge     *usermerge.Service
-	embeddingStore     *database.EmbeddingStore
-	embedClient        *ai.EmbeddingClient
-	metricsStore       database.MetricsStorer
-	dedupEngine        *dedup.Engine
-	activityWriter     *activity.Writer
-	eventBus           *plugin.EventBus
-	pluginRegistry     *plugin.Registry
-	quarantineSvc      *quarantine.QuarantineService
+	userMergeOnce  sync.Once
+	userMerge      *usermerge.Service
+	embeddingStore *database.EmbeddingStore
+	embedClient    *ai.EmbeddingClient
+	metricsStore   database.MetricsStorer
+	dedupEngine    *dedup.Engine
+	activityWriter *activity.Writer
+	eventBus       *plugin.EventBus
+	pluginRegistry *plugin.Registry
+	quarantineSvc  *quarantine.QuarantineService
 	// searchIndex is the Bleve library search index (spec DES-1).
 	// Opened at startup, nil if DB path isn't set yet.
 	searchIndex *search.BleveIndex

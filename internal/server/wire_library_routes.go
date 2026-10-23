@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package server
 
@@ -167,6 +167,19 @@ func (s *Server) wireLibraryRoutes(
 		// with it link to that account: an identity change, hence credRoute;
 		// the handler also requires the acting user to hold the admin role.
 		s.credRoute(users, http.MethodPut, "/:id/email", s.perm("users.manage"), userH.SetUserEmail)
+
+		// Account merge (merge :id into :target). Reads are plain admin GETs;
+		// every POST is a credential route (no API key or ABS token may move
+		// another account's sign-ins) behind the owner gate, and the handler
+		// also requires the admin role. Apply, resume and undo run as the
+		// maintenance.user-merge operation and only with a grant these
+		// handlers mint. Registered before /:id/... so "merges" is not an id.
+		users.GET("/merges", s.perm("users.manage"), userH.ListUserMerges)
+		s.credRoute(users, http.MethodPost, "/merges/:jid/resume", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.ResumeUserMerge)
+		s.credRoute(users, http.MethodPost, "/merges/:jid/undo", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.UndoUserMerge)
+		users.GET("/:id/footprint", s.perm("users.manage"), userH.UserFootprint)
+		s.credRoute(users, http.MethodPost, "/:id/merge-into/:target/preview", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.PreviewUserMerge)
+		s.credRoute(users, http.MethodPost, "/:id/merge-into/:target/apply", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.ApplyUserMerge)
 	}
 
 	// Version groups
