@@ -1,0 +1,1 @@
+Fixed: CI `apt-get` steps now go through `scripts/ci/apt_install.sh`, which adds apt retries, 30s network timeouts, a 600s cap per call and up to 3 whole-sequence attempts, so a hung package mirror can no longer stall a job for 34 minutes.

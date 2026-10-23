@@ -1,7 +1,7 @@
 # file: .github/workflows/binary-smoke.yml
-# version: 1.8.0
+# version: 1.9.0
 # guid: 8dad4b58-c626-48e4-9adc-2696ddd2e864
-# last-edited: 2026-10-10
+# last-edited: 2026-10-23
 
 name: Binary Smoke
 
@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+        run: scripts/ci/apt_install.sh libtag1-dev
 
       - name: Build CLI Binary
         run: go build -o audiobook-organizer .

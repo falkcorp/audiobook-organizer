@@ -1,7 +1,7 @@
 # file: .github/workflows/ratchet-lower.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 2f6a9c13-8d47-4e0b-a5c2-91b7d3e4f068
-# last-edited: 2026-10-12
+# last-edited: 2026-10-23
 
 # Weekly: measure every file-backed ratchet baseline listed in ci/gates.txt and,
 # when a measured count is now LOWER, open a PR that lowers the file (07-G4,
@@ -64,7 +64,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+        run: scripts/ci/apt_install.sh libtag1-dev
 
       # Same pins as ci.yml: a version bump changes the count on its own.
       - name: Install golangci-lint and deadcode
