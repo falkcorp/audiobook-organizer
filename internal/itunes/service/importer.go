@@ -1838,24 +1838,24 @@ func (imp *Importer) bookIDsByTrackPIDs(group albumGroup) (live, retired map[str
 		if track == nil || track.PersistentID == "" {
 			continue
 		}
-		bf, err := imp.store.GetBookFileByPID(track.PersistentID)
+		// One read answers both questions: the include-retired getter returns
+		// the live row when a live row holds the PID (a retired row never takes
+		// the single-owner key from a live one) and a retired row otherwise.
+		bf, err := database.BookFileByPIDIncludingRetired(imp.store, track.PersistentID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("existing-book lookup by track pid %s failed: %w", track.PersistentID, err)
 		}
-		if bf != nil && bf.BookID != "" {
-			if _, seen := live[bf.BookID]; !seen {
-				live[bf.BookID] = track.PersistentID
+		if bf == nil || bf.BookID == "" {
+			continue
+		}
+		if bf.Retired {
+			if _, seen := retired[bf.BookID]; !seen {
+				retired[bf.BookID] = track.PersistentID
 			}
 			continue
 		}
-		rbf, err := database.BookFileByPIDIncludingRetired(imp.store, track.PersistentID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("existing-book lookup by track pid %s (retired rows) failed: %w", track.PersistentID, err)
-		}
-		if rbf != nil && rbf.Retired && rbf.BookID != "" {
-			if _, seen := retired[rbf.BookID]; !seen {
-				retired[rbf.BookID] = track.PersistentID
-			}
+		if _, seen := live[bf.BookID]; !seen {
+			live[bf.BookID] = track.PersistentID
 		}
 	}
 	return live, retired, nil
@@ -1863,16 +1863,10 @@ func (imp *Importer) bookIDsByTrackPIDs(group albumGroup) (live, retired map[str
 
 // retiredPIDHolder reports the holder book of a retired book_file row that
 // holds pid, and "" when the PID is held by a live row or by no row. A PID a
-// live row holds is the live answer even when a retired row carries it too
-// (GetBookFileByPID, which skips retired rows, finds the live one first).
+// live row holds is the live answer even when a retired row carries it too:
+// the include-retired getter returns the single-owner key's row, and a live
+// row always owns that key over a retired one.
 func (imp *Importer) retiredPIDHolder(pid string) (string, error) {
-	live, err := imp.store.GetBookFileByPID(pid)
-	if err != nil {
-		return "", err
-	}
-	if live != nil {
-		return "", nil
-	}
 	bf, err := database.BookFileByPIDIncludingRetired(imp.store, pid)
 	if err != nil {
 		return "", err

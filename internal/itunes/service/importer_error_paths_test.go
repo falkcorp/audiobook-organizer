@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-23
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -192,6 +192,9 @@ func TestExecute_ExistingPID_LinkedNotCreated(t *testing.T) {
 	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
 	// PID already mapped → returns existing book ID.
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return(existingBookID, nil).Once()
+	// A mapped PID is linked only when no retired row holds it: one lookup,
+	// answered by no row.
+	m.EXPECT().GetBookFileByPID(pid).Return(nil, nil).Once()
 	// linkITunesMetadata fills the missing iTunes fields via ModifyBook.
 	expectModifyBook(m, existingBookID, existingBook, nil)
 	// End of Execute: ClearState + fingerprint.

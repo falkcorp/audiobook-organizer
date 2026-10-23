@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package merge
 
@@ -22,6 +22,11 @@ import (
 // abort-with-error branches in MergeBooks and CombineBooks that depend on a
 // store call failing get exercised without hand-rolling a full mock
 // expectation sequence for the whole read-modify-write.
+// Unwrap opts the fault wrapper into the decorator chain, so a capability the
+// real store has (database.RetiredBookFileReader) is still found through it
+// instead of the include-retired helpers failing closed on an opaque wrapper.
+func (f *b3FaultStore) Unwrap() database.Store { return f.Store }
+
 type b3FaultStore struct {
 	database.Store
 

@@ -1,5 +1,5 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
 // last-edited: 2026-10-23
 
@@ -78,6 +78,10 @@ func (s *recStore) GetBookFileByID(bookID, fileID string) (*database.BookFile, e
 	cp := *f
 	return &cp, nil
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row unless a test
+// wraps it to say otherwise (database.NoRetiredBookFiles).
+func (s *recStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func (s *recStore) GetBookFileByPath(path string) (*database.BookFile, error) {
 	s.mu.Lock()

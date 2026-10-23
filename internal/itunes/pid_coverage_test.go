@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b5990a2-9a20-4b60-b852-64e4f8edc841
-// last-edited: 2026-09-11
+// last-edited: 2026-10-23
 
 package itunes
 
@@ -34,6 +34,10 @@ type coverageStoreFake struct {
 func (f *coverageStoreFake) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.files, f.filesErr
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row
+// (database.NoRetiredBookFiles).
+func (f *coverageStoreFake) HoldsNoRetiredBookFiles() bool { return true }
 
 func (f *coverageStoreFake) ListBooksByITunesPID(limit, offset int) ([]database.Book, error) {
 	f.booksCalls++
