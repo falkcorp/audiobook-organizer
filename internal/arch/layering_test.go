@@ -87,6 +87,7 @@ var layerOf = map[string]int{
 	"internal/logger/mocks":            0, // computed: imports no module package
 	"internal/logging":                 0, // table: leaf
 	"internal/mail":                    0, // computed: imports no module package
+	"internal/masterlist":              0, // computed: imports no module package
 	"internal/matcher":                 0, // reclassified from domain: imports only internal/personname
 	"internal/metadata/dailyquota":     0, // computed: imports no module package
 	"internal/metastate":               0, // computed: imports no module package

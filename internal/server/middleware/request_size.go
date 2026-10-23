@@ -1,7 +1,7 @@
 // file: internal/server/middleware/request_size.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f2129ae7-cf11-4888-bd4f-ab4b578f8f18
-// last-edited: 2026-09-19
+// last-edited: 2026-10-23
 
 package middleware
 
@@ -30,9 +30,17 @@ func methodHasBody(method string) bool {
 // json_body_limit_mb says; the handler enforces the same cap again.
 const fingerprintWorkerPathPrefix = "/api/v1/fingerprint/worker/"
 
+// masterListUploadPath is the master-list upload (a CSV or JSON book list). A
+// list of a few thousand rows is well over the 1 MB JSON default, so it takes
+// the upload class limit; the handler enforces the same cap again.
+const masterListUploadPath = "/api/v1/master-lists"
+
 func selectBodyLimit(path string, jsonLimitBytes, uploadLimitBytes int64) int64 {
 	if strings.HasPrefix(path, fingerprintWorkerPathPrefix) {
 		return workerapi.MaxBodyBytes
+	}
+	if path == masterListUploadPath {
+		return uploadLimitBytes
 	}
 	if strings.Contains(path, "/import/") || strings.Contains(path, "/backup/") {
 		return uploadLimitBytes

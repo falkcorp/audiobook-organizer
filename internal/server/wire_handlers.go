@@ -718,6 +718,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	s.wireDedupRoutes(protected, dedupH, duplicatesH)
 	s.wireReviewRoutes(protected, reviewH)
 	s.wireRepairsRoutes(protected)
+	s.wireMasterListRoutes(protected)
 	s.wireCatalogRoutes(protected)
 	s.wireAudiobooksRoutes(protected, audiobooksH)
 	s.wireMetadataRoutes(protected, metadataH)
