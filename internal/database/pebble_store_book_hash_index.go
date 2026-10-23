@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_hash_index.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 9a4d7e21-3b86-4c05-8f19-e5c2a7d0b634
 // last-edited: 2026-10-22
 
@@ -117,25 +117,17 @@ type bookHashRow struct {
 
 // bookHashKey is the index key for one (hash, book) pair of an index kind.
 func bookHashKey(kind int, hash, id string) []byte {
-	prefix := bookHashKinds[kind].prefix
-	k := make([]byte, 0, len(prefix)+len(hash)+1+len(id))
-	k = append(k, prefix...)
-	k = append(k, hash...)
-	k = append(k, 0)
-	k = append(k, id...)
-	return k
+	// String concatenation sizes its own result; an explicit capacity sum of
+	// the caller-supplied lengths is what CodeQL's allocation-size-overflow
+	// rule (alerts 2143, 2144) flags.
+	return []byte(bookHashKinds[kind].prefix + hash + "\x00" + id)
 }
 
 // bookHashBounds is the scan range holding exactly hash's keys:
 // [prefix<h>\x00, prefix<h>\x01). A file hash is hex and cannot contain NUL.
 func bookHashBounds(kind int, hash string) (lower, upper []byte) {
-	prefix := bookHashKinds[kind].prefix
-	lower = make([]byte, 0, len(prefix)+len(hash)+1)
-	lower = append(lower, prefix...)
-	lower = append(lower, hash...)
-	upper = append(append([]byte{}, lower...), 1)
-	lower = append(lower, 0)
-	return lower, upper
+	base := bookHashKinds[kind].prefix + hash
+	return []byte(base + "\x00"), []byte(base + "\x01")
 }
 
 // stageBookHashKeys stages the hash keys of book id into batch (id is the row's
