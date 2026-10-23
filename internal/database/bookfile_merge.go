@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
 // last-edited: 2026-10-22
 
@@ -244,9 +244,17 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	"TranscribeStatus":               preserveAudio,
 	"TranscribeError":                preserveAudio,
 	"TranscribeAttemptedAt":          preserveAudio,
-	"IntroSourceHash":                preserveAudio,                                    // the per-file done marker; changed audio drops it, so the file is re-transcribed
-	"IntroRunOpID":                   preserveAudio,                                    // what clear-by-run-id selects on; a rescan must not orphan the row from its run
-	"IntroMeta":                      {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
+	// IntroSourceHash is the per-file done marker: the hash of the bytes that
+	// produced the stored transcript. derivedAudio, not derivedBytes, on purpose:
+	// it must live and die with the transcript and IntroRunOpID it describes
+	// (clear-by-run-id and the stale-write guard read all three). A bytes-only
+	// change (a tag rewrite) keeps all three, the marker then no longer equals
+	// FileHash, and selection re-transcribes the file; changed audio drops all
+	// three. Dropping the marker alone on any byte change would leave a
+	// transcript with no provenance, indistinguishable from "never done".
+	"IntroSourceHash": preserveAudio,
+	"IntroRunOpID":    preserveAudio,                                    // what clear-by-run-id selects on; a rescan must not orphan the row from its run
+	"IntroMeta":       {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
 }
 
 // bookFileRulesByIndex is bookFileFieldClasses resolved to BookFile struct

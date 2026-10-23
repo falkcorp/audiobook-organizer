@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
 // last-edited: 2026-10-22
 
@@ -33,7 +33,7 @@ import (
 // A book fill is reverted only when the book still holds EXACTLY what the fill
 // wrote (same text, same transcribed-at, same attempted-at), so a transcript
 // the book op or the owner wrote afterwards is never erased.
-func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, reporter sdk.Reporter, runID string, dryRun bool) error {
+func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) error {
 	mark := introModeMarker(dryRun)
 	log := reporter.Logger()
 
@@ -43,6 +43,11 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, repo
 		intros, ok = database.AsCapability[database.BookFileIntroStore](store)
 		if !ok {
 			return fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
+		}
+		// A scan's unlocked read-modify-write can bring a cleared group back
+		// with its stale run id, so a live clear obeys the same gate as a run.
+		if err := fileIntroRefuseIfBusy(queue); err != nil {
+			return err
 		}
 	}
 
@@ -71,6 +76,13 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, repo
 	// per-book lock plus an exact-match check, so workers cannot double-revert;
 	// the pool is bounded to the CPU count (the work is store reads/writes).
 	err = registry.RunItems(ctx, reporter, chunks, func(ctx context.Context, rs []ref) error {
+		if !dryRun {
+			// Immediately before this chunk's writes, not only at start: a
+			// clear over many chunks outlives a scan that begins mid-run.
+			if err := fileIntroWaitWhileBusy(ctx, queue, nil); err != nil {
+				return err
+			}
+		}
 		for _, r := range rs {
 			if ctx.Err() != nil {
 				return ctx.Err()

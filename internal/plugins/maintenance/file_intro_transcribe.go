@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-22
 
@@ -68,9 +68,10 @@ var fileIntroPauseInterval = 30 * time.Second
 // scan) is the one wrong answer, so it stops instead.
 const fileIntroPauseMaxListErrors = 10
 
-// fileIntroBusyOps are the operations the run pauses for: both rewrite
-// book_file rows in bulk. The scheduler cannot do this for us (see the Writes
-// note on the def), so the run polls the queue between batches instead.
+// fileIntroBusyOps are the operations the run will not write alongside: both
+// rewrite book_file rows in bulk. The scheduler cannot do this for us (see the
+// Writes note on the def), so the run refuses to start while one is active and
+// re-checks immediately before every batch of writes.
 var fileIntroBusyOps = map[string]bool{
 	"library.scan":                true,
 	"metadata.batch-apply-cached": true,
@@ -389,7 +390,7 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 		return err
 	}
 	if params.ClearRunID != "" {
-		return p.clearFileIntros(ctx, store, reporter, params.ClearRunID, dryRun)
+		return p.clearFileIntros(ctx, store, p.deps.OperationQueueStore(), reporter, params.ClearRunID, dryRun)
 	}
 
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
@@ -421,6 +422,11 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 		return fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
 	}
 	queue := p.deps.OperationQueueStore()
+	// A live run refuses to start while a scan or bulk apply is running (see
+	// fileIntroWaitWhileBusy for why); the preview above never reaches here.
+	if err := fileIntroRefuseIfBusy(queue); err != nil {
+		return err
+	}
 
 	runID := fileIntroRunID(reporter)
 	startedAt := time.Now()
@@ -546,17 +552,60 @@ func (w *fileIntroWorker) progress(msg string) {
 	_ = w.reporter.UpdateProgress(int(w.batchesDone.Load()), max(w.batchesTotal, 1), msg)
 }
 
-// waitWhileBusy blocks while a library scan or a bulk metadata apply is
-// queued or running. It selects on ctx.Done in every wait, re-announces itself
-// so the watchdog sees the op as alive, and fails (never proceeds) when the
-// queue cannot be read repeatedly.
-func (w *fileIntroWorker) waitWhileBusy(ctx context.Context) error {
-	if w.queue == nil {
+// fileIntroBusyDef returns the DefID of the first queued or running operation
+// the run must not write alongside, or "" when none is.
+func fileIntroBusyDef(active []database.OperationV2Row) string {
+	for _, op := range active {
+		if fileIntroBusyOps[op.DefID] && (op.Status == "running" || op.Status == "queued") {
+			return op.DefID
+		}
+	}
+	return ""
+}
+
+// fileIntroRefuseIfBusy is the START gate: a live run (or a clear) refuses to
+// begin while a scan or bulk apply is queued or running, and refuses when the
+// queue cannot be read. A point-in-time check, like the dedupe op's; the
+// per-batch write gate (fileIntroWaitWhileBusy before every write batch) is
+// what covers a scan that starts later.
+func fileIntroRefuseIfBusy(queue OpQueueReader) error {
+	if queue == nil {
+		return fmt.Errorf("%s: cannot verify no library scan is active; refusing to run", fileIntroOpID)
+	}
+	active, err := queue.ListActiveOperationsV2()
+	if err != nil {
+		return fmt.Errorf("%s: cannot list active operations; refusing to run: %w", fileIntroOpID, err)
+	}
+	if def := fileIntroBusyDef(active); def != "" {
+		return fmt.Errorf("%s: %s is queued or running; refusing to start — a scan rewrites book_file rows with a "+
+			"read-modify-write that can erase an intro result written between its read and its commit. Run this op "+
+			"when the scan has finished. If that row is a stale zombie with no live handle, clear it rather than "+
+			"bypassing this check", fileIntroOpID, def)
+	}
+	return nil
+}
+
+// fileIntroWaitWhileBusy blocks while a library scan or a bulk metadata apply
+// is queued or running. It selects on ctx.Done in every wait, calls onWait (may
+// be nil) with the blocking def each tick so the caller can re-announce itself
+// to the watchdog, and fails (never proceeds) when the queue cannot be read
+// repeatedly.
+//
+// WHY THIS GATES WRITES, not just batch starts: the scanner's batch upsert reads
+// the stored book_file row WITHOUT the per-file lock SetBookFileIntro and
+// ClearBookFileIntro take, then commits bare-row-plus-old-values. A result
+// committed between that read and that commit is wiped (transcript, done marker
+// and run id), and a cleared group can come back with its stale run id. The op
+// therefore calls this immediately before every batch of writes. It narrows the
+// race to the milliseconds between this return and the writes that follow it; it
+// does not remove it, because only a lock the scanner also takes could.
+func fileIntroWaitWhileBusy(ctx context.Context, queue OpQueueReader, onWait func(def string)) error {
+	if queue == nil {
 		return fmt.Errorf("%s: cannot verify no library scan is active; refusing to run", fileIntroOpID)
 	}
 	listErrs := 0
 	for {
-		active, err := w.queue.ListActiveOperationsV2()
+		active, err := queue.ListActiveOperationsV2()
 		if err != nil {
 			listErrs++
 			if listErrs >= fileIntroPauseMaxListErrors {
@@ -564,17 +613,13 @@ func (w *fileIntroWorker) waitWhileBusy(ctx context.Context) error {
 			}
 		} else {
 			listErrs = 0
-			busy := ""
-			for _, op := range active {
-				if fileIntroBusyOps[op.DefID] && (op.Status == "running" || op.Status == "queued") {
-					busy = op.DefID
-					break
-				}
-			}
+			busy := fileIntroBusyDef(active)
 			if busy == "" {
 				return nil
 			}
-			w.progress(introLiveMarker + "paused — " + busy + " is running; resumes when it finishes")
+			if onWait != nil {
+				onWait(busy)
+			}
 		}
 		t := time.NewTimer(fileIntroPauseInterval)
 		select {
@@ -584,6 +629,14 @@ func (w *fileIntroWorker) waitWhileBusy(ctx context.Context) error {
 		case <-t.C:
 		}
 	}
+}
+
+// waitWhileBusy is fileIntroWaitWhileBusy announcing the pause in the op's
+// progress line.
+func (w *fileIntroWorker) waitWhileBusy(ctx context.Context) error {
+	return fileIntroWaitWhileBusy(ctx, w.queue, func(def string) {
+		w.progress(introLiveMarker + "paused — " + def + " is running; resumes when it finishes")
+	})
 }
 
 // groupResult is what a group's file result looks like before it is applied
@@ -663,6 +716,14 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 		}
 	}
 
+	// WRITE GATE. The whisper call above can take minutes, so the check at the
+	// top of this function is stale by now: a scan may have started meanwhile.
+	// Hold the results (a few files' worth of text) until none is running, then
+	// write at once. Nothing is lost if the run is cancelled here: the files are
+	// still undone and the next run picks them up.
+	if err := w.waitWhileBusy(ctx); err != nil {
+		return settled, err
+	}
 	for gi, g := range groups {
 		gr := results[gi]
 		n, err := w.applyGroup(g, gr)
