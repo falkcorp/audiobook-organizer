@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -553,7 +553,7 @@ func (svc *AudiobookService) recorder() activityRecorder {
 // the book is hard-deleted through the purge's own delete path
 // (purgeDeleteRow, then purgeFinish with the configured
 // PurgeSoftDeletedDeleteFiles), in one hold of the merge lock
-// (merge.DiscardUserStateThenHardDelete). actor names who asked, for the
+// (merge.DiscardUserStateThenHardDeleteLocked). actor names who asked, for the
 // audit row.
 //
 // It refuses, changing nothing, a book that is not in the trash

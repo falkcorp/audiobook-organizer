@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_keeping_state.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 051a1636-d299-45a5-80d2-9b72255cffcf
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package merge
 
@@ -19,9 +19,9 @@ import (
 // deleted only after that state is carried to a version of the book
 // Audiobookshelf lists; with no such version the delete is refused, and the
 // owner can drop the state on purpose with "Discard progress and purge"
-// (DiscardUserStateThenHardDelete).
+// (DiscardUserStateThenHardDeleteLocked).
 
-// ErrBookHasListeningState is returned by HardDeleteKeepingUserState when
+// ErrBookHasListeningState is returned by HardDeleteKeepingUserStateLocked when
 // users have listening state on the book and no other version of it that
 // Audiobookshelf lists exists to carry the state to. Nothing was deleted or
 // moved.
@@ -91,15 +91,15 @@ func CarryTargetPrecheck(books VersionGroupReader, targetID string) func() error
 	}
 }
 
-// HardDeleteKeepingUserState runs del (the caller's hard delete of book)
+// HardDeleteKeepingUserStateLocked runs del (the caller's hard delete of book)
 // only where no listening state is lost:
 //
 //   - no user has state on the book (UserStateProbe.Has, bookmarks
 //     included): del runs under the merge lock after the same check is made
-//     again there (HardDeleteWithoutUserState);
+//     again there (HardDeleteWithoutUserStateLocked);
 //   - state, and a version of the book Audiobookshelf lists exists
 //     (ListedLiveSibling): the state is carried there and del runs, in one
-//     hold of the merge lock (CarryStateThenHardDelete), carriedTo naming it;
+//     hold of the merge lock (CarryStateThenHardDeleteLocked), carriedTo naming it;
 //   - state and no such version: ErrBookHasListeningState, nothing done.
 //
 // Errors: a probe that cannot be made wraps ErrUserStateCheckFailed; an
@@ -107,21 +107,11 @@ func CarryTargetPrecheck(books VersionGroupReader, targetID string) func() error
 // ErrStateCarryIncomplete (put back, del not run); del's own error is
 // returned wrapped (after a carry the state is on carriedTo by then).
 //
-// The caller must hold neither the merge lock nor a version-group lock. It
-// takes the lock itself, unbounded; an interactive caller that must not hang
-// behind a running combine takes TryLockMergeRMWWithin and calls
-// HardDeleteKeepingUserStateLocked instead.
-func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader, book *database.Book, del func() error) (carriedTo string, err error) {
-	LockMergeRMW()
-	defer UnlockMergeRMW()
-	return HardDeleteKeepingUserStateLocked(db, books, book, del)
-}
-
-// HardDeleteKeepingUserStateLocked is HardDeleteKeepingUserState for a caller
-// that already holds the merge lock (TryLockMergeRMWWithin), so the whole
-// probe, carry and delete is ONE hold of it. Same contract and errors; the
-// probe is made under the lock rather than before it, and nothing here takes
-// the lock again (it calls only the ...Locked carry and delete).
+// The caller holds the merge lock (TryLockMergeRMWWithin: an interactive
+// handler bounds its wait for a running combine), so the whole probe, carry
+// and delete is ONE hold of it. The probe is made under the lock, and nothing
+// here takes the lock again (it calls only the ...Locked carry and delete). It
+// must not hold a version-group lock.
 func HardDeleteKeepingUserStateLocked(db UserProgressMerger, books VersionGroupReader, book *database.Book, del func() error) (carriedTo string, err error) {
 	if book == nil || book.ID == "" {
 		return "", fmt.Errorf("%w: no book", ErrUserStateCheckFailed)
