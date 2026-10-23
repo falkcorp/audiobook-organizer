@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-22
 
@@ -102,7 +102,7 @@ func (p *Plugin) fileIntroTranscribeDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe file intros",
-		Description:     "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run pauses while a library scan or a bulk metadata apply is running. dry_run defaults to true: a run that states no mode only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (dry run first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
+		Description:     "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. dry_run defaults to true: a run that states no mode only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (dry run first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  fileIntroOpID,
@@ -114,12 +114,18 @@ func (p *Plugin) fileIntroTranscribeDef() sdk.OperationDef {
 		// interleaving, and neither side of that applies here: this op writes only
 		// the intro group of one row (SetBookFileIntro, under the row's lock) and
 		// fills a book through ModifyBook (under the book's lock), and a whole-row
-		// writer cannot revert the intro group because the shared book_file merge
-		// classes keep it (bookFileFieldClasses). It still writes, so it declares
-		// the write capabilities, which is what makes v3 treat it as a writer.
-		// The one thing it does not cover is a whole-row book writer losing a
-		// book fill that landed between its read and its write; the file result
-		// survives and a forced run or clear_run_id puts that right.
+		// writer that reads under the lock cannot revert the intro group because
+		// the shared book_file merge classes keep it (bookFileFieldClasses). It
+		// still writes, so it declares the write capabilities, which is what makes
+		// v3 treat it as a writer.
+		// TWO things this does not cover. (1) The scanner's batch upsert reads the
+		// stored row WITHOUT the per-file lock, so a scan can overwrite a result
+		// committed between its read and its commit; that is why the op refuses to
+		// start while a scan runs and re-checks before every write batch
+		// (fileIntroWaitWhileBusy), a gate that narrows the window rather than
+		// closing it. (2) A whole-row book writer can lose a book fill that
+		// landed between its read and its write; the file result survives and a
+		// forced run or clear_run_id puts that right.
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         30 * 24 * time.Hour,
