@@ -1,5 +1,5 @@
 // file: internal/database/file_intro_stats.go
-// version: 1.0.1
+// version: 1.0.3
 // guid: b4d7e2a9-6c15-4f38-8e0b-5a1d9c3f7e62
 // last-edited: 2026-10-22
 
@@ -7,7 +7,7 @@ package database
 
 import (
 	"encoding/json"
-	"log/slog"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -47,11 +47,14 @@ type FileIntroStats struct {
 	Selected int `json:"selected"`
 
 	// Outcomes. Attempted is the sum of the outcome buckets below it.
-	Attempted     int `json:"attempted"`
-	OK            int `json:"ok"`
-	Unparsed      int `json:"unparsed"`
-	Silence       int `json:"silence"`
-	WhisperError  int `json:"whisper_error"`
+	Attempted    int `json:"attempted"`
+	OK           int `json:"ok"`
+	Unparsed     int `json:"unparsed"`
+	Silence      int `json:"silence"`
+	WhisperError int `json:"whisper_error"`
+	// FFmpegError counts files the worker could not decode; held until
+	// retry_failed.
+	FFmpegError   int `json:"ffmpeg_error"`
 	SourceMissing int `json:"source_file_missing"`
 	// Reused counts files that took a transcript from another file with the
 	// same FileHash instead of being sent to whisper.
@@ -89,8 +92,7 @@ func (p *PebbleStore) PutFileIntroStats(s *FileIntroStats) error {
 		return err
 	}
 	if err := p.db.Set([]byte(statsTranscribeFilesKey), data, pebble.Sync); err != nil {
-		slog.Error("pebble Set stats:transcribe-files", "error", err)
-		return err
+		return fmt.Errorf("pebble Set %s: %w", statsTranscribeFilesKey, err)
 	}
 	return nil
 }
