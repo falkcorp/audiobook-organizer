@@ -1,5 +1,5 @@
 // file: internal/server/login_ceiling.go
-// version: 4.3.0
+// version: 4.3.1
 // guid: bbbd655c-e45d-48ca-badb-d7b48a4d69e0
 // last-edited: 2026-10-22
 
@@ -498,7 +498,9 @@ func (l *loginCeiling) admitSaturated(visitor string) (release func(), verdict s
 
 // bucketRetryAfterLocked is how many seconds until the saturated bucket holds one
 // token again: max(1, ceil((1 - tokens) / rate)), never more than the window.
-// Caller holds l.mu.
+// The window cap is defensive: the configured rate is validated to be at least
+// config.MinLoginSaturatedRate (0.01 a second, so a wait of at most 100 seconds),
+// so no configuration reaches it. Caller holds l.mu.
 func (l *loginCeiling) bucketRetryAfterLocked(now time.Time) int {
 	rps := float64(l.satBound.Limit())
 	if rps <= 0 {

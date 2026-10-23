@@ -1,5 +1,5 @@
 // file: internal/config/invite_config.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
 // last-edited: 2026-10-22
 
@@ -72,9 +72,9 @@ const (
 	MaxLoginSaturatedRate  = 50.0
 	MaxLoginSaturatedBurst = 200
 	// MinLoginSaturatedRate is the slowest sustained rate an operator may set.
-	// Below it a refused caller would wait minutes for one token (the 429
-	// Retry-After is the time to the next token), which is a lockout in all but
-	// name, not a bound on derivations.
+	// Below it a refused caller would wait more than 100 seconds for one token
+	// (the 429 Retry-After is the time to the next token), which is a lockout in
+	// all but name, not a bound on derivations.
 	MinLoginSaturatedRate = 0.01
 )
 

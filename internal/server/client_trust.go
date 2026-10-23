@@ -1,5 +1,5 @@
 // file: internal/server/client_trust.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
 // last-edited: 2026-10-22
 
@@ -638,9 +638,9 @@ func loginThrottleKey(c *gin.Context) string {
 const loginThrottleKeyCtx = "login_throttle_key"
 
 // loginSaturatedKey is the visitor key the login ceilings use for SATURATED
-// admission, and the CSP report limiter for its per-visitor budget: the same address loginThrottleKey establishes, grouped by
-// clientSaturatedKey (a public IPv6 visitor per /48, not /64). "" when no
-// address parses, as loginThrottleKey.
+// admission, and the CSP report limiter for its per-visitor budget: the same
+// address loginThrottleKey establishes, grouped by clientSaturatedKey (a public
+// IPv6 visitor per /48, not /64). "" when no address parses, as loginThrottleKey.
 func loginSaturatedKey(c *gin.Context) string {
 	if v, ok := c.Get(loginSaturatedKeyCtx); ok {
 		if k, ok := v.(string); ok {
