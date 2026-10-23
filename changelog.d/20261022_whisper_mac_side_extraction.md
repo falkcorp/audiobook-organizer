@@ -8,10 +8,9 @@ silence retries (300 s clip, second audio file) go through the worker too.
 (`scripts/whisper_mlx_server.py`) gains `POST /transcribe-path` and
 `/transcribe-path-batch`, driven by the new `WHISPER_PATH_MAP` variable (no
 default), and `/health` reports `path_pipeline`, the mapped prefixes and
-whether each mapped root is readable. The Go client gains
+whether each mapped root is readable. A silence retry that fails no longer writes the `[SILENCE]` marker (the book is deferred), a read fault inside ffmpeg is reported as retryable rather than a durable `ffmpeg_error`, and a worker without ffmpeg answers `worker_misconfigured`, which defers the book. The Go client gains
 `transcribe.TranscribeByPathBatch` (same pool, journal and progress as the
-upload path; `transcribePool` and `allocateJobs` are now generic over the job
-type) and fails closed with a `TransportError`, deferring the page and writing
+upload path; `dispatchPool` and `allocateJobs` are now generic over the job type) and fails closed with a `TransportError`, deferring the page and writing
 no status, when no endpoint qualifies or a mount is lost. Worker errors map to
 `ffmpeg_error`, `source_file_missing` (only when the server cannot stat the file
 either), a new non-durable `path_unmapped` status with its own

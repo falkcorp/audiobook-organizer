@@ -1,7 +1,7 @@
 // file: internal/transcribe/path_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d8b0e62-91c7-4a35-b6f0-3e5a7c21d984
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package transcribe
 
@@ -146,6 +146,7 @@ func TestPathErrorCode(t *testing.T) {
 		"ffmpeg_timeout: ffmpeg exceeded 120s":             PathErrFFmpegTimeout,
 		"bad_request: seconds must be an integer":          PathErrBadRequest,
 		"whisper_error: model fell over":                   PathErrWhisper,
+		"worker_misconfigured: ffmpeg is not on PATH":      PathErrWorkerMisconfigured,
 		// No code: an old/foreign worker's free text must not be guessed at.
 		"Failed to load audio: ffmpeg_error: x": "",
 		"ffmpeg_error":                          "",

@@ -1,7 +1,7 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.5.0
+# version: 1.6.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
-# last-edited: 2026-10-22
+# last-edited: 2026-10-23
 #
 # Contract tests for scripts/whisper_mlx_server.py.
 #
@@ -514,6 +514,170 @@ def test_parse_path_map_longest_prefix_first(srv):
     mod, _ = srv
     pairs = mod.parse_path_map("/mnt/bigdata=/a, /mnt/bigdata/books=/b ,")
     assert pairs[0][0] == "/mnt/bigdata/books"
+
+
+# ── ffmpeg failure classification (the real _extract_clip, subprocess faked) ──
+#
+# ffmpeg_error is a DURABLE verdict on the Go side: it hides the book until its
+# mtime changes. So a nonzero exit is only that verdict when the file is still
+# readable and the stderr is not an I/O fault.
+
+
+@pytest.fixture
+def extract_env(srv, tmp_path, monkeypatch):
+    mod, client = srv
+    share = tmp_path / "share"
+    share.mkdir()
+    src = share / "book.m4b"
+    src.write_bytes(b"audio")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/fake/bin/ffmpeg")
+    return mod, share, str(src)
+
+
+def _fake_run(monkeypatch, mod, stderr, before=None):
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if before:
+            before()
+        return subprocess.CompletedProcess(argv, 1, b"", stderr)
+
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    return calls
+
+
+def _extract_code(mod, src):
+    with pytest.raises(mod.PathJobError) as ei:
+        mod._extract_clip(src, 90)
+    return ei.value.code, str(ei.value)
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        b"book.m4b: Input/output error\n",
+        b"read failed: Operation timed out",
+        b"Stale file handle",
+        b"Connection timed out",
+        b"Device not configured",
+    ],
+)
+def test_ffmpeg_io_fault_text_is_a_retryable_timeout_not_a_verdict(
+    extract_env, monkeypatch, stderr
+):
+    mod, _, src = extract_env
+    _fake_run(monkeypatch, mod, stderr)
+    code, _ = _extract_code(mod, src)
+    assert code == mod.ERR_FFMPEG_TIMEOUT
+
+
+def test_ffmpeg_decode_failure_on_a_readable_file_stays_the_verdict(extract_env, monkeypatch):
+    mod, _, src = extract_env
+    _fake_run(monkeypatch, mod, b"book.m4b: Invalid data found when processing input\n")
+    code, _ = _extract_code(mod, src)
+    assert code == mod.ERR_FFMPEG
+
+
+def test_ffmpeg_failure_after_the_mount_dropped_is_path_unmapped(extract_env, monkeypatch):
+    """The decode error text looks like a corrupt file, but the root can no
+    longer be listed by the time ffmpeg exits: the evidence says mount fault."""
+    mod, share, src = extract_env
+    gone = share.with_name("share-gone")
+    _fake_run(
+        monkeypatch,
+        mod,
+        b"Invalid data found when processing input",
+        before=lambda: share.rename(gone),
+    )
+    code, _ = _extract_code(mod, src)
+    assert code == mod.ERR_PATH_UNMAPPED
+
+
+def test_ffmpeg_failure_when_the_file_vanished_is_path_unmapped(extract_env, monkeypatch):
+    mod, _, src = extract_env
+    _fake_run(
+        monkeypatch,
+        mod,
+        b"Invalid data found when processing input",
+        before=lambda: pathlib.Path(src).unlink(),
+    )
+    code, _ = _extract_code(mod, src)
+    assert code == mod.ERR_PATH_UNMAPPED
+
+
+def test_missing_ffmpeg_is_a_worker_fault_not_a_book_verdict(extract_env, monkeypatch):
+    mod, _, src = extract_env
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    code, text = _extract_code(mod, src)
+    assert code == mod.ERR_WORKER_MISCONFIGURED
+    assert text.startswith("worker_misconfigured: ")
+
+
+def test_ffmpeg_argv_restricts_the_demuxers_before_the_input(extract_env, monkeypatch):
+    """A planted .m3u8 must not let ffmpeg's HLS demuxer open other paths."""
+    mod, _, src = extract_env
+    calls = _fake_run(monkeypatch, mod, b"x")
+    _extract_code(mod, src)
+    argv = calls[0]
+    i = argv.index("-format_whitelist")
+    assert argv[i + 1] == mod.FORMAT_WHITELIST
+    assert i < argv.index("-i")
+    names = mod.FORMAT_WHITELIST.split(",")
+    assert "hls" not in names and "concat" not in names and "sdp" not in names
+
+
+def test_extract_fingerprint_covers_the_format_whitelist(srv):
+    mod, _ = srv
+    assert "-format_whitelist" in mod.EXTRACT_SETTINGS["args"]
+
+
+def test_worker_misconfigured_reaches_the_client_as_a_prefixed_error(pathsrv, monkeypatch):
+    mod, client, _ = pathsrv
+
+    def no_ffmpeg(src, seconds):
+        raise mod.PathJobError(mod.ERR_WORKER_MISCONFIGURED, "ffmpeg is not on PATH on this worker")
+
+    monkeypatch.setattr(mod, "_extract_clip", no_ffmpeg)
+    res = client.post(
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
+    ).json()["results"]["k"]
+    assert res["error"].startswith("worker_misconfigured:")
+
+
+# ── /health liveness with a hung mount ───────────────────────────────────────
+
+
+def test_health_is_sync_and_a_hung_root_does_not_block_the_event_loop(srv):
+    """A plain def runs in the threadpool, so a root listing that hangs on a
+    dead NFS server stalls one thread, not the loop serving the upload
+    endpoints."""
+    import inspect
+
+    mod, _ = srv
+    assert not inspect.iscoroutinefunction(mod.health)
+
+
+def test_root_readable_reads_one_entry_not_the_whole_listing(srv, monkeypatch, tmp_path):
+    mod, _ = srv
+    (tmp_path / "a").write_text("x")
+    monkeypatch.setattr(
+        mod.os, "listdir", lambda *a, **k: pytest.fail("listdir builds the whole library listing")
+    )
+    assert mod._root_readable(str(tmp_path)) is True
+    assert mod._root_readable(str(tmp_path / "missing")) is False
+
+
+def test_mapped_path_returned_is_the_resolved_real_path(srv, monkeypatch, tmp_path):
+    mod, _ = srv
+    real_share = tmp_path / "real"
+    real_share.mkdir()
+    (real_share / "f.m4b").write_bytes(b"x")
+    link = tmp_path / "link"
+    link.symlink_to(real_share)
+    got = mod.map_server_path("/mnt/bigdata/f.m4b", [("/mnt/bigdata", str(link))])
+    assert got == str((real_share / "f.m4b").resolve())
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed on this host")

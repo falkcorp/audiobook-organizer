@@ -1,7 +1,7 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
-<!-- last-edited: 2026-10-22 -->
+<!-- last-edited: 2026-10-23 -->
 
 # Whisper intro transcription with Mac-side extraction
 
@@ -37,12 +37,23 @@ NFSv4 fails for a non-root mount with "Invalid argument"; NFSv3 works.
 
 ```bash
 mkdir -p ~/mnt/bigdata
-mount_nfs -o vers=3,ro,soft,noresvport,nolocks <server-host>:/mnt/bigdata ~/mnt/bigdata
+mount_nfs -o vers=3,ro,soft,noresvport,nolocks,timeo=10,retrans=3,deadtimeout=30 <server-host>:/mnt/bigdata ~/mnt/bigdata
 ls ~/mnt/bigdata | head          # must list the library
 ```
 
 `<server-host>` is "the server" (the host that exports `/mnt/bigdata`). The
 mount is read-only on purpose: the worker never writes to the library.
+
+The timeout options are not optional. `soft` makes a read on an unreachable
+server fail with an I/O error instead of blocking forever; `timeo=10` (1 s, in
+tenths of a second), `retrans=3` and `deadtimeout=30` (seconds) bound how long
+that takes: a request against a dead server stalls on the order of
+`deadtimeout` (30 s), after which the mount is marked dead and further reads
+fail at once until the server answers again. Without them a dropped server
+leaves ffmpeg and the health check hanging on the mount. The 30 s figure is the
+documented meaning of those options; it has not been measured here by pulling
+the server away mid-read. The worker's own `WHISPER_EXTRACT_TIMEOUT` (120 s per
+clip) is the backstop either way.
 
 To mount it at every login and re-mount it if it drops, use a user LaunchAgent.
 Save as `~/Library/LaunchAgents/com.jdfalk.bigdata-nfs.plist` (replace
@@ -58,7 +69,7 @@ Save as `~/Library/LaunchAgents/com.jdfalk.bigdata-nfs.plist` (replace
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>mkdir -p /Users/jdfalk/mnt/bigdata &amp;&amp; { /sbin/mount | /usr/bin/grep -q ' on /Users/jdfalk/mnt/bigdata ' || /sbin/mount_nfs -o vers=3,ro,soft,noresvport,nolocks &lt;server-host&gt;:/mnt/bigdata /Users/jdfalk/mnt/bigdata; }</string>
+    <string>mkdir -p /Users/jdfalk/mnt/bigdata &amp;&amp; { /sbin/mount | /usr/bin/grep -q ' on /Users/jdfalk/mnt/bigdata ' || /sbin/mount_nfs -o vers=3,ro,soft,noresvport,nolocks,timeo=10,retrans=3,deadtimeout=30 &lt;server-host&gt;:/mnt/bigdata /Users/jdfalk/mnt/bigdata; }</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>300</integer>
@@ -159,8 +170,22 @@ remote-mode run never decodes on the server.
   either the book is `source_file_missing`; if it can, the book is
   **`path_unmapped`**, a new status that is not durable and is retried next run.
 - **Worker's ffmpeg cannot decode the file:** `ffmpeg_error` (durable, as
-  before). A *timeout* is not a decode verdict and is recorded as the retryable
-  `whisper_error`.
+  before), but only when the file is still readable afterwards. A nonzero ffmpeg
+  exit is re-checked: if the mapped root can no longer be listed or the file is
+  gone the worker answers `path_unmapped`, and if ffmpeg's error text names an
+  I/O fault or timeout (`Input/output error`, `Operation timed out`, `Stale file
+  handle`) it answers `ffmpeg_timeout`. A *timeout* is not a decode verdict and
+  is recorded as the retryable `whisper_error`.
+- **Worker has no ffmpeg on its PATH:** the worker answers
+  `worker_misconfigured`. That is a fault of the worker, not of the book: the
+  server writes no status and counts the book **deferred**.
+- **Planted playlists:** ffmpeg is started with `-format_whitelist` listing the
+  audio containers only, so a `.m3u8`, `.sdp` or concat "audio file" dropped in
+  the share cannot make ffmpeg's playlist demuxers open other paths on the Mac.
+- **A silence retry that fails:** the `[SILENCE]` marker, which makes
+  `only_missing` skip a book for good, is written only when the retries came
+  back as successful empty results. A retry that hit a transport or per-book
+  error writes nothing and the book is deferred.
 - **Path outside every mapped prefix, containing `..`, or resolving outside its
   root through a symlink:** refused per job, same handling as above.
 

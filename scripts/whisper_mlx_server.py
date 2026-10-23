@@ -1,7 +1,7 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.5.0
+# version: 1.6.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
-# last-edited: 2026-10-22
+# last-edited: 2026-10-23
 #
 # /// script
 # requires-python = ">=3.11"
@@ -253,18 +253,53 @@ EXTRACT_WORKERS = max(1, int(os.environ.get("WHISPER_EXTRACT_WORKERS", "4")))
 #   ffmpeg_timeout  ffmpeg exceeded the timeout: NOT a verdict (NFS stall), retryable
 #   bad_request     malformed job (bad seconds, missing path)
 #   whisper_error   inference raised
+#   worker_misconfigured  this worker cannot do the job at all (ffmpeg not on
+#                   PATH): a fault of the worker, never a verdict about a book;
+#                   the Go side defers the book and writes nothing
 ERR_PATH_UNMAPPED = "path_unmapped"
 ERR_NOT_FOUND = "not_found"
 ERR_FFMPEG = "ffmpeg_error"
 ERR_FFMPEG_TIMEOUT = "ffmpeg_timeout"
 ERR_BAD_REQUEST = "bad_request"
 ERR_WHISPER = "whisper_error"
+ERR_WORKER_MISCONFIGURED = "worker_misconfigured"
+
+# Demuxers ffmpeg may use on a library file. An allow-list, not a deny-list: the
+# share is writable by anyone who can drop a file in it, and a planted .m3u8 /
+# .sdp / .concat "audio file" would otherwise make ffmpeg's playlist demuxers
+# open arbitrary paths on this Mac. Names are ffmpeg demuxer names, covering
+# every container in intro_transcribe.go's transcribableExtSet (.wma is asf).
+FORMAT_WHITELIST = "mov,mp4,m4a,3gp,3g2,mj2,mp3,flac,ogg,wav,aac,matroska,webm,asf,opus"
+
+# Substrings of ffmpeg stderr that mean the READ failed (a dropped or stalling
+# NFS mount), not that the file cannot be decoded. Matched case-insensitively.
+IO_FAULT_MARKERS = (
+    "input/output error",
+    "operation timed out",
+    "connection timed out",
+    "stale file handle",
+    "device not configured",
+    "no such device",
+    "transport endpoint",
+)
 
 # Every argument that changes the extracted WAV. Hashed into /health's
 # extract_fingerprint, which the Go client folds into path-job journal keys
 # only (DECODE_FINGERPRINT is untouched, so upload-path entries stay valid).
 EXTRACT_SETTINGS = {
-    "args": ["-ss", "0", "-vn", "-ac", "1", "-ar", "16000", "-f", "wav"],
+    "args": [
+        "-format_whitelist",
+        FORMAT_WHITELIST,
+        "-ss",
+        "0",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-f",
+        "wav",
+    ],
     "max_seconds": MAX_CLIP_SECONDS,
 }
 EXTRACT_FINGERPRINT = hashlib.sha256(
@@ -319,14 +354,29 @@ def _path_map() -> tuple[list[tuple[str, str]], str]:
 
 
 def _root_readable(root: str) -> bool:
-    """True when `root` can be listed right now. os.listdir, not isdir: a lost
-    NFS mount leaves the mountpoint directory behind, so isdir stays true while
-    every read fails."""
+    """True when `root` can be listed right now. A directory read, not isdir: a
+    lost NFS mount leaves the mountpoint directory behind, so isdir stays true
+    while every read fails. scandir stopping at the first entry, not listdir:
+    the root holds the whole library, and building that list on every /health
+    poll is wasted work on a mount that is already slow."""
     try:
-        os.listdir(root)
+        with os.scandir(root) as entries:
+            next(entries, None)
         return True
     except OSError:
         return False
+
+
+def _mapped_root_of(local_path: str) -> str | None:
+    """The mapped local root that `local_path` lives under, or None."""
+    pairs, _ = _path_map()
+    for _server, local in pairs:
+        # Both spellings: map_server_path hands ffmpeg the REALPATH, which
+        # differs from the configured root when the mountpoint sits under a symlink.
+        for base in (local.rstrip("/"), os.path.realpath(local).rstrip("/")):
+            if local_path == base or local_path.startswith(base + "/"):
+                return local
+    return None
 
 
 def map_server_path(path: Any, pairs: list[tuple[str, str]]) -> str:
@@ -358,7 +408,10 @@ def map_server_path(path: Any, pairs: list[tuple[str, str]]) -> str:
         real = os.path.realpath(mapped)
         if os.path.commonpath([real_root, real]) != real_root:
             raise PathJobError(ERR_PATH_UNMAPPED, "path resolves outside its mapped root")
-        return mapped
+        # The resolved path, not `mapped`: ffmpeg then opens exactly the file
+        # that was just checked, with no symlink left to swap between the check
+        # and the open.
+        return real
     raise PathJobError(ERR_PATH_UNMAPPED, "path is not under a mapped prefix")
 
 
@@ -373,6 +426,28 @@ def _ffmpeg_tail(stderr: bytes) -> str:
     return (lines[-1] if lines else "no output")[:200]
 
 
+def _raise_ffmpeg_failure(src: str, stderr: bytes) -> None:
+    """Classify a nonzero ffmpeg exit. ffmpeg_error is a DURABLE verdict on the
+    Go side (the book is hidden until its mtime changes), so it is reserved for
+    a file that is still readable and still will not decode. A read fault
+    mid-decode (the NFS mount dropped, the handle went stale) exits nonzero
+    exactly like a corrupt file, so the evidence is re-checked after the fact:
+
+      the mapped root is no longer listable, or the file is gone -> path_unmapped
+      stderr names an I/O fault or timeout                       -> ffmpeg_timeout
+      otherwise                                                  -> ffmpeg_error
+    """
+    root = _mapped_root_of(src)
+    if (root is not None and not _root_readable(root)) or not os.path.isfile(src):
+        raise PathJobError(
+            ERR_PATH_UNMAPPED, "source became unreadable while ffmpeg ran (mount lost?)"
+        )
+    text = stderr.decode("utf-8", "replace").lower()
+    if any(marker in text for marker in IO_FAULT_MARKERS):
+        raise PathJobError(ERR_FFMPEG_TIMEOUT, f"read fault during decode: {_ffmpeg_tail(stderr)}")
+    raise PathJobError(ERR_FFMPEG, _ffmpeg_tail(stderr))
+
+
 def _extract_clip(src: str, seconds: int) -> tuple[str, str]:
     """Extract the first `seconds` of `src` to a validated 16 kHz mono WAV.
 
@@ -384,7 +459,7 @@ def _extract_clip(src: str, seconds: int) -> tuple[str, str]:
         raise PathJobError(ERR_NOT_FOUND, "file not found under the mapped root")
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        raise PathJobError(ERR_FFMPEG, "ffmpeg is not on PATH")
+        raise PathJobError(ERR_WORKER_MISCONFIGURED, "ffmpeg is not on PATH on this worker")
     tmpdir = tempfile.mkdtemp(prefix="whisper-clip-")
     wav = os.path.join(tmpdir, "clip.wav")
     try:
@@ -396,6 +471,8 @@ def _extract_clip(src: str, seconds: int) -> tuple[str, str]:
                     "-y",
                     "-v",
                     "error",
+                    "-format_whitelist",
+                    FORMAT_WHITELIST,
                     "-ss",
                     "0",
                     "-t",
@@ -423,7 +500,7 @@ def _extract_clip(src: str, seconds: int) -> tuple[str, str]:
                 str(e),
             )
         if proc.returncode != 0:
-            raise PathJobError(ERR_FFMPEG, _ffmpeg_tail(proc.stderr))
+            _raise_ffmpeg_failure(src, proc.stderr)
         _validate_wav(wav)
         return tmpdir, wav
     except BaseException:
@@ -565,8 +642,12 @@ def _path_health() -> dict:
 
 
 @app.get("/health")
-async def health():
+def health():
     """Health probe.
+
+    A plain def, not async: it reads the NFS root, and on a hung mount that
+    call blocks. A sync handler blocks one threadpool thread; an async one would
+    freeze the event loop and with it the upload endpoints.
 
     batch_pipeline MUST be present for the Go client to use /transcribe-batch:
     supportsRemoteBatch decodes it as *bool and enables batching when the

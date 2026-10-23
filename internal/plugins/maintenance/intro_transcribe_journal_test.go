@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_journal_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 0b42d884-b844-4201-ba60-046bfb995928
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -325,6 +325,23 @@ func TestIntroTranscribe_IdenticalClipsBothWritten(t *testing.T) {
 	}
 }
 
+// stubFFmpeg puts an `ffmpeg` on PATH that "cuts" every clip successfully (it
+// just creates the output file, the last argument). The silence retries cut a
+// second clip from the book's source; the fixtures' sources are not real
+// audio, so without this the retry's ffmpeg fails. A failed retry is now
+// deferred rather than marked [SILENCE], so a test that wants the sentinel has
+// to let the retry come back as a successful empty result instead of passing
+// by accident through an ffmpeg failure.
+func stubFFmpeg(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nfor a; do last=$a; done\n: > \"$last\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "ffmpeg"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // retry_silence exists to get a different answer for the same audio after VAD
 // or decoder tuning, so the run must bypass journal lookups. A book whose
 // first run came back silent is transcribed again, reaches the server, and
@@ -332,6 +349,7 @@ func TestIntroTranscribe_IdenticalClipsBothWritten(t *testing.T) {
 func TestIntroTranscribe_RetrySilenceReachesServer(t *testing.T) {
 	fw := newFakeWhisper(t)
 	cacheDir := journalTestEnv(t, fw, 8)
+	stubFFmpeg(t)
 	s := openJournalPebble(t, t.TempDir())
 	t.Cleanup(func() { _ = s.Close() })
 	const clip = "quiet-intro"
