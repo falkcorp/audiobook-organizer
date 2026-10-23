@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -297,7 +297,10 @@ func (p *Plugin) runRepointBookFileRows(ctx context.Context, raw json.RawMessage
 // holding it, from ONE pass over every row's core. Missing rows count: a row
 // flagged missing still names the path.
 func rbfClaims(store rbfStore, want map[string]bool) (map[string][]string, error) {
-	cores, err := store.GetAllBookFilesCore()
+	// Retired rows count as claims: a retired version still names its path, and
+	// a live row repointed onto it would share a path with a file the library is
+	// holding. (The row being repointed is refused if retired; see rbfPlanOne.)
+	cores, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return nil, fmt.Errorf("%s: list book_file rows: %w", rbfOpName, err)
 	}
@@ -493,6 +496,10 @@ func rbfPlanOne(env rbfEnv, rp rbfRepoint, claims map[string][]string, books map
 		r.Gates.RowFound = rbfGateFail
 		return refuse("row not found under book " + rp.BookID)
 	}
+	if row.Retired {
+		r.Gates.RowFound = rbfGateFail
+		return refuse("row is a retired version (version " + row.VersionID + "); restore it instead of repointing it")
+	}
 	if row.FilePath == "" {
 		r.Gates.RowFound = rbfGateFail
 		return refuse("row has no file_path")
@@ -672,6 +679,9 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 	}
 	if row == nil {
 		return "row vanished since the plan"
+	}
+	if row.Retired {
+		return "row was retired since the plan"
 	}
 	planned := *r
 	rp := rbfRepoint{RowID: r.RowID, BookID: r.BookID, NewPath: r.NewPath, AllowHashMismatch: r.HashMismatchAllowed}
