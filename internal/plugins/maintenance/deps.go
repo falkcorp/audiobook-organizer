@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.97.0
+// version: 1.98.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -438,6 +438,7 @@ type StoreProvider interface {
 	opsStoreProvider
 	forwardingStoreProvider
 	keyspaceStoreProvider
+	masterListStoreProvider
 }
 
 // opsStoreProvider is the common path, OpsStore, plus the single-purpose
@@ -543,6 +544,30 @@ type keyspaceStoreProvider interface {
 	// store can write a position with its own timestamp; the fixer then
 	// refuses to plan. Build it with NewUserReadStateStore.
 	UserReadStateStore() UserReadStateStore
+}
+
+// MasterListReader reads the uploaded master lists (database.MasterListStore).
+// The fixer only reads: an upload is the HTTP endpoint's write.
+type MasterListReader interface {
+	GetList(id string) (*database.MasterListMeta, error)
+	ScanRows(id string, fn func(n int, raw []byte) error) error
+}
+
+// ExternalIDBookLookup is the one external-id read the master-list matcher
+// makes: the book id a (source, id) pair maps to, "" when none. It is on
+// database.Store, not on OpsStore (which is at its embed cap).
+type ExternalIDBookLookup interface {
+	GetBookByExternalID(source, externalID string) (string, error)
+}
+
+// masterListStoreProvider serves the master-list import fixer. It is its own
+// group because keyspaceStoreProvider is at the interfacebloat cap of 8.
+type masterListStoreProvider interface {
+	// MasterLists serves the uploaded lists. nil when the store cannot keep
+	// them (no Pebble layer); the fixer then refuses to plan.
+	MasterLists() MasterListReader
+	// ExternalIDBooks serves the (source, source id) tier of the matcher.
+	ExternalIDBooks() ExternalIDBookLookup
 }
 
 // UserReadStateStore is what the Audible read-status fixer reads and writes:

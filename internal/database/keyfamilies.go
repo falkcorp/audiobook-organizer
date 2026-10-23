@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -177,6 +177,10 @@ var keyFamilies = []KeyFamily{
 	{"cat_raw:", "catalog raw provider payloads", "internal/database/catalog_entry_store.go"},
 	{"cat_series:", "catalog index by series", "internal/database/catalog_entry_store.go"},
 	{"cat_stale:", "catalog staleness index", "internal/database/catalog_entry_store.go"},
+
+	// ── Master lists (uploaded read-status / ISBN / ASIN lists) ──
+	{"mlist:list:", "master-list uploads: one metadata row per list", "internal/database/master_list_store.go"},
+	{"mlist:row:", "master-list rows, one per input row, in input order", "internal/database/master_list_store.go"},
 
 	// ── Decisions (internal/decisions): owner rejects/approves, never pruned ──
 	{"decision:ent:", "decision history index by entity (never pruned)", "internal/decisions/store.go"},

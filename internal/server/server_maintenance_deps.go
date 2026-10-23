@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.70.0
+// version: 1.71.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -184,6 +184,20 @@ func (s *Server) BookTagWriter() repairs.TagStore { return s.store }
 func (s *Server) UserReadStateStore() maintenanceplugin.UserReadStateStore {
 	return maintenanceplugin.NewUserReadStateStore(s.store)
 }
+
+// MasterLists serves the master-list import fixer the uploaded lists. It is
+// built over the store's Pebble layer (a capability resolved through the
+// decorator chain); nil, as an untyped nil interface, when there is none.
+func (s *Server) MasterLists() maintenanceplugin.MasterListReader {
+	if st := database.NewMasterListStoreFromStore(s.store); st != nil {
+		return st
+	}
+	return nil
+}
+
+// ExternalIDBooks serves the (source, source id) tier of the master-list
+// matcher. GetBookByExternalID is part of database.Store.
+func (s *Server) ExternalIDBooks() maintenanceplugin.ExternalIDBookLookup { return s.store }
 
 // ---- delegated run helpers ----
 
