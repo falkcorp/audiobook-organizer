@@ -1,5 +1,5 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
 // last-edited: 2026-10-22
 
@@ -28,6 +28,7 @@ type carrySim struct {
 	list      []string
 	clock     time.Time
 	survivorJ []*database.OperationChange // the survivor's journal
+	rowsJ     []*database.OperationChange // every retired book's row, a book retired again included
 	byRetired map[string][2]*database.OperationChange
 	notes     []string
 }
@@ -62,17 +63,14 @@ func (s *carrySim) retire(op, retired string) {
 		ChangeType: ChangeTypeUserContentFollow, FieldName: UserContentField(UserContentCollection, s.listID),
 		OldValue: val, NewValue: s.survivor, CreatedAt: now}
 	s.survivorJ = append(s.survivorJ, marker)
+	s.rowsJ = append(s.rowsJ, row)
 	s.byRetired[retired] = [2]*database.OperationChange{row, marker}
 }
 
 // listRows is the list's whole journal: the survivor's markers and every retired
 // book's row.
 func (s *carrySim) listRows() []*database.OperationChange {
-	rows := slices.Clone(s.survivorJ)
-	for _, pair := range s.byRetired {
-		rows = append(rows, pair[0])
-	}
-	return rows
+	return slices.Concat(s.survivorJ, s.rowsJ)
 }
 
 // revert undoes the retire of one book the way RevertOperation does for a
@@ -92,7 +90,7 @@ func (s *carrySim) revertStamping(retired string, stamp bool) error {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	stand, borrowed := SurvivorStandFor(s.survivorJ, row, UserContentCollection, s.listID)
+	stand, borrowed := SurvivorStandFor(s.listRows(), row, UserContentCollection, s.listID)
 	g := NewMembershipGraph(s.survivor, UserContentCollection, s.listID)
 	g.SetRow(row)
 	g.AddRows(s.listRows())
