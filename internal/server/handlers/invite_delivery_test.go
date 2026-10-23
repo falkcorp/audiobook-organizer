@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 package handlers_test
 
@@ -37,6 +37,7 @@ type inviteFixture struct {
 	h      *handlers.UserHandler
 	mailOn bool
 	syncOn bool           // GuestPolicySyncConfigured: accept adds the invitee to the Access guest policy
+	tokens bool           // GuestServiceTokensEnabled: accept mints the guest's own phone-app token
 	base   string         // the link base BaseURL returns
 	actor  *database.User // the signed-in caller (auth_user) for routes that read it
 }
@@ -71,6 +72,7 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 		},
 		BaseURL:                   func() string { return f.base },
 		GuestPolicySyncConfigured: func() bool { return f.syncOn },
+		GuestServiceTokensEnabled: func() bool { return f.tokens },
 	})
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -353,9 +355,12 @@ func TestPublicInvite_OnlyLiveTokensAndOnlyAllowedFields(t *testing.T) {
 		t.Fatal("public invite response must not be cached")
 	}
 	for k := range pub {
-		if k != "username" && k != "expires_at" && k != "email_login" {
+		if k != "username" && k != "expires_at" && k != "email_login" && k != "phone_app_token" {
 			t.Fatalf("public invite returned extra field %q", k)
 		}
+	}
+	if pub["phone_app_token"] != false {
+		t.Fatalf("phone_app_token = %v, want false with per-guest tokens off", pub["phone_app_token"])
 	}
 	if pub["username"] != "guest" || pub["email_login"] != false {
 		t.Fatalf("public invite = %v (email_login must be false without a policy sync)", pub)
@@ -802,5 +807,39 @@ func TestPublicInvite_EmailLoginMatchesWhatAcceptWillGrant(t *testing.T) {
 		if strings.Contains(w.Body.String(), "@example.com") {
 			t.Errorf("%s: the lookup revealed the address", tt.name)
 		}
+	}
+}
+
+// With per-guest tokens on, an invite from an admin tells the guest the page
+// will show a one-time phone-app key; the email never carries the key itself
+// (it does not exist yet), and an invite that will not get one keeps the old line.
+func TestCreateInvite_PhoneAppKeyPromiseOnlyWhenAcceptWillMintOne(t *testing.T) {
+	f := newInviteFixture(t)
+	f.tokens = true
+	f.asUser(t, "boss", "admin")
+	w, _ := f.do(t, http.MethodPost, "/users/invite", map[string]any{
+		"username": "guest", "role_id": "viewer", "email": "guest@example.com", "send_email": true,
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status %d", w.Code)
+	}
+	m := f.rec.Sent()[0]
+	for _, part := range []string{m.Text, m.HTML} {
+		if !strings.Contains(part, "shown only once") || strings.Contains(part, "will be added to your account soon") {
+			t.Fatalf("promise missing or old line kept: %s", part)
+		}
+		assertNoGuestHeaderInstructions(t, "invitation email", part)
+	}
+
+	f2 := newInviteFixture(t)
+	f2.tokens = true
+	f2.asUser(t, "helper", "viewer") // not an admin: accept will not grant, so no key
+	if w, _ := f2.do(t, http.MethodPost, "/users/invite", map[string]any{
+		"username": "guest", "role_id": "viewer", "email": "guest@example.com", "send_email": true,
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("status %d", w.Code)
+	}
+	if got := f2.rec.Sent()[0].Text; strings.Contains(got, "shown only once") || !strings.Contains(got, "will be added to your account soon") {
+		t.Fatalf("a non-admin invite promised a key: %s", got)
 	}
 }

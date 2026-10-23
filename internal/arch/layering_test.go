@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.4.7
+// version: 1.4.8
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -66,6 +66,7 @@ var layerOf = map[string]int{
 	"internal/authorname":              0, // table: leaf
 	"internal/cache":                   0, // table: leaf
 	"internal/cfaccesspolicy":          0, // computed: imports no module package
+	"internal/cfservicetoken":          0, // computed: imports no module package
 	"internal/chaptershape":            0, // computed: imports no module package
 	"internal/covertext":               0, // computed: imports no module package
 	"internal/database/aggtest":        0, // computed: imports no module package

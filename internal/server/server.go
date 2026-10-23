@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.111.0
+// version: 2.112.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package server
 
@@ -40,6 +40,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	_ "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -401,6 +402,11 @@ type Server struct {
 	guestPolicy         guestPolicyEnsurer
 	guestPolicyErr      error
 	guestPolicyOverride guestPolicyEnsurer
+	// guestTokens: the per-guest Cloudflare service token clients and test
+	// overrides (guest_service_tokens.go).
+	guestTokens guestTokenState
+	// mailSenderOverride replaces the SMTP sender (tests only).
+	mailSenderOverride imail.Sender
 	// opsV3Closing is closed when Shutdown begins (closeOpsV3Streams), before
 	// the HTTP server's graceful shutdown: an open /api/v3/ops/events stream
 	// would otherwise hold that shutdown for its whole 30s timeout.

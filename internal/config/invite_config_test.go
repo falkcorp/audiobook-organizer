@@ -1,7 +1,7 @@
 // file: internal/config/invite_config_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package config
 
@@ -289,5 +289,53 @@ func TestLoginSaturatedLimits_RejectsUnusableValues(t *testing.T) {
 		if err != nil || r != tc.wantRate || b != tc.wantBurst {
 			t.Errorf("rate=%q burst=%q: %v/%d err=%v, want %v/%d", tc.rate, tc.burst, r, b, err, tc.wantRate, tc.wantBurst)
 		}
+	}
+}
+
+func TestGuestServiceTokens_FlagAndSettings(t *testing.T) {
+	for in, want := range map[string]bool{"": false, "true": true, "TRUE": true, "1": true, " yes ": true, "on": true,
+		"false": false, "0": false, "tru": false, "enable": false} {
+		if got := parseEnvBool(in); got != want {
+			t.Errorf("parseEnvBool(%q) = %v, want %v", in, got, want)
+		}
+	}
+	full := Config{CFGuestServiceTokens: true, CFAccountID: "a", CFPolicyAPIToken: "t", CFServiceAuthPolicyID: "p"}
+	if !full.GuestServiceTokensEnabled() || full.GuestServiceTokensMisconfigured() {
+		t.Fatal("a complete configuration must be enabled")
+	}
+	for name, mut := range map[string]func(*Config){
+		"flag off":   func(c *Config) { c.CFGuestServiceTokens = false },
+		"no account": func(c *Config) { c.CFAccountID = "" },
+		"no token":   func(c *Config) { c.CFPolicyAPIToken = "" },
+		"no policy":  func(c *Config) { c.CFServiceAuthPolicyID = "" },
+	} {
+		c := full
+		mut(&c)
+		if c.GuestServiceTokensEnabled() {
+			t.Errorf("%s: still enabled", name)
+		}
+		if name != "flag off" && !c.GuestServiceTokensMisconfigured() {
+			t.Errorf("%s: flag on but incomplete must be reported as misconfigured", name)
+		}
+	}
+	if (&Config{}).GuestServiceTokensEnabled() {
+		t.Fatal("the zero Config (default) must be off")
+	}
+}
+
+func TestGuestServiceTokens_EnvBindingsDefaultOff(t *testing.T) {
+	resetViper(t)
+	registerInviteDefaults()
+	c := Config{}
+	applyInviteEnv(&c)
+	if c.CFGuestServiceTokens || c.InviteEmailServiceToken || c.CFServiceAuthPolicyID != "" {
+		t.Fatalf("defaults must be off/empty: %+v", c)
+	}
+	t.Setenv("CF_GUEST_SERVICE_TOKENS", "true")
+	t.Setenv("CF_SERVICE_AUTH_POLICY_ID", " pol-id ")
+	t.Setenv("INVITE_EMAIL_SERVICE_TOKEN", "true")
+	applyInviteEnv(&c)
+	if !c.CFGuestServiceTokens || !c.InviteEmailServiceToken || c.CFServiceAuthPolicyID != "pol-id" {
+		t.Fatalf("env not applied: %+v", c)
 	}
 }

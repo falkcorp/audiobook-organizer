@@ -1,11 +1,16 @@
 // file: internal/cfaccesspolicy/client.go
-// version: 1.3.1
+// version: 1.4.1
 // guid: c863e806-fb62-4ceb-9226-d971b7d4d048
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
-// Package cfaccesspolicy adds an email address to, and removes one from, ONE
-// Cloudflare Access reusable policy's include list. It backs the optional
-// "accepted invitees get browser access" sync (owner decision 2026-10-19).
+// Package cfaccesspolicy adds one include rule to, and removes one from, ONE
+// Cloudflare Access reusable policy's include list. Two rule kinds exist and no
+// other: an email address ({"email":{"email":...}}, the optional "accepted
+// invitees get browser access" sync, owner decision 2026-10-19) and ONE named
+// service token ({"service_token":{"token_id":...}}, the per-guest phone-app
+// credential, owner decision 2026-10-22). It never writes the
+// any_valid_service_token rule, and never removes a rule it did not match
+// exactly. It refuses the owner's own service-token ids (protectedTokenPrefixes).
 //
 // Scope is fixed at construction: the account id and policy id are fields of
 // the Client, never parameters, so no caller can point it at another policy.
@@ -19,9 +24,10 @@
 // reusable, ...) are never sent. After the PUT the policy is re-read and the
 // email's presence verified; a mismatch is re-planned from a fresh read and
 // retried a bounded number of times (the endpoint documents no ETag/If-Match),
-// and ends in ErrWriteUnverified if a PUT landed but was never confirmed. EnsureEmail only appends;
-// RemoveEmail drops only rules that are exactly {"email":{"email":<that
-// address>}} and leaves every other rule as it was.
+// and ends in ErrWriteUnverified if a PUT landed but was never confirmed. The
+// Ensure* calls only append; the Remove* calls drop only rules that are exactly
+// {"email":{"email":<that address>}} or {"service_token":{"token_id":<that
+// id>}} and leave every other rule as it was.
 //
 // The API token is sent only in the Authorization header and never appears in
 // an error. Package imports nothing from this module and logs nothing.
@@ -104,7 +110,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("cfaccesspolicy: CF_ACCOUNT_ID must be 32 hex characters")
 	}
 	if !policyIDRe.MatchString(cfg.PolicyID) {
-		return nil, errors.New("cfaccesspolicy: CF_GUESTS_POLICY_ID is not a policy id")
+		return nil, errors.New("cfaccesspolicy: the policy id (CF_GUESTS_POLICY_ID or CF_SERVICE_AUTH_POLICY_ID) is not a policy id")
 	}
 	if strings.TrimSpace(cfg.APIToken) == "" || strings.ContainsAny(cfg.APIToken, "\r\n ") {
 		return nil, errors.New("cfaccesspolicy: CF_POLICY_API_TOKEN is empty or malformed")
@@ -189,9 +195,33 @@ func writableBody(policy map[string]any) map[string]any {
 	return out
 }
 
-// plan reads the policy and computes the change for e. When the policy needs
+// ruleSpec is the one include rule a plan appends or removes: what to append,
+// how to recognise exactly that rule, and what to call it in messages.
+type ruleSpec struct {
+	rule  map[string]any
+	match func(rule any) bool
+	label string
+}
+
+func emailSpec(e string) ruleSpec {
+	return ruleSpec{
+		rule:  map[string]any{"email": map[string]any{"email": e}},
+		match: func(r any) bool { return isEmailRule(r, e) },
+		label: "email",
+	}
+}
+
+func serviceTokenSpec(id string) ruleSpec {
+	return ruleSpec{
+		rule:  map[string]any{"service_token": map[string]any{"token_id": id}},
+		match: func(r any) bool { return isServiceTokenRule(r, id) },
+		label: "service token",
+	}
+}
+
+// plan reads the policy and computes the change for spec. When the policy needs
 // no change it returns a nil body and AlreadyPresent / NotPresent.
-func (c *Client) plan(ctx context.Context, e string, add bool) (body map[string]any, res Result, err error) {
+func (c *Client) plan(ctx context.Context, spec ruleSpec, add bool) (body map[string]any, res Result, err error) {
 	policy, err := c.do(ctx, http.MethodGet, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("cfaccesspolicy: read policy: %w", err)
@@ -202,16 +232,15 @@ func (c *Client) plan(ctx context.Context, e string, add bool) (body map[string]
 	}
 	var want []any
 	if add {
-		if hasEmail(include, e) {
+		if hasRule(include, spec.match) {
 			return nil, AlreadyPresent, nil
 		}
-		want = append(append(make([]any, 0, len(include)+1), include...),
-			map[string]any{"email": map[string]any{"email": e}})
+		want = append(append(make([]any, 0, len(include)+1), include...), spec.rule)
 		res = Added
 	} else {
 		want = make([]any, 0, len(include))
 		for _, rule := range include {
-			if !isEmailRule(rule, e) {
+			if !spec.match(rule) {
 				want = append(want, rule)
 			}
 		}
@@ -249,11 +278,12 @@ func (c *Client) planJSON(ctx context.Context, email string, add bool) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
+	spec := emailSpec(e)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	body, res, err := c.plan(ctx, e, add)
+	body, res, err := c.plan(ctx, spec, add)
 	if err != nil || body == nil {
 		return nil, res, err
 	}
@@ -302,6 +332,58 @@ func (c *Client) apply(ctx context.Context, email string, add bool) (Result, err
 	if err != nil {
 		return "", err
 	}
+	return c.applyRule(ctx, emailSpec(e), add)
+}
+
+// EnsureServiceToken makes the service token tokenID an include rule of the
+// configured policy ({"service_token":{"token_id":tokenID}}): that ONE token,
+// never any_valid_service_token. Idempotent. tokenID must be a service-token id
+// and must not be one of the owner's own tokens.
+func (c *Client) EnsureServiceToken(ctx context.Context, tokenID string) (Result, error) {
+	spec, err := checkedServiceTokenSpec(tokenID)
+	if err != nil {
+		return "", err
+	}
+	return c.applyRule(ctx, spec, true)
+}
+
+// RemoveServiceToken drops the include rule for tokenID, and only a rule that
+// is exactly {"service_token":{"token_id":tokenID}}. Idempotent. Refuses the
+// owner's own token ids before any request is sent.
+func (c *Client) RemoveServiceToken(ctx context.Context, tokenID string) (Result, error) {
+	spec, err := checkedServiceTokenSpec(tokenID)
+	if err != nil {
+		return "", err
+	}
+	return c.applyRule(ctx, spec, false)
+}
+
+// ErrProtectedToken: the id is one of the owner's own service tokens.
+var ErrProtectedToken = errors.New("cfaccesspolicy: refusing to touch a protected service token")
+
+// protectedTokenPrefixes: see cfservicetoken.protectedIDPrefixes, which this
+// copies (layer 0 imports nothing); TestProtectedPrefixesMatch keeps them equal.
+var protectedTokenPrefixes = []string{"90a520fb", "56ffe232", "790ef191"}
+
+var tokenIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// ProtectedTokenPrefixes returns a copy of the protected id prefixes (tests).
+func ProtectedTokenPrefixes() []string { return append([]string(nil), protectedTokenPrefixes...) }
+
+func checkedServiceTokenSpec(tokenID string) (ruleSpec, error) {
+	id := strings.ToLower(tokenID)
+	if !tokenIDRe.MatchString(id) {
+		return ruleSpec{}, errors.New("cfaccesspolicy: not a service token id")
+	}
+	for _, p := range protectedTokenPrefixes {
+		if strings.HasPrefix(id, p) {
+			return ruleSpec{}, ErrProtectedToken
+		}
+	}
+	return serviceTokenSpec(id), nil
+}
+
+func (c *Client) applyRule(ctx context.Context, spec ruleSpec, add bool) (Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -319,7 +401,7 @@ func (c *Client) apply(ctx context.Context, email string, add bool) (Result, err
 	}
 	var lastProblem string
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		body, res, err := c.plan(ctx, e, add)
+		body, res, err := c.plan(ctx, spec, add)
 		if err != nil {
 			return fail(err)
 		}
@@ -341,13 +423,13 @@ func (c *Client) apply(ctx context.Context, email string, add bool) (Result, err
 		if err != nil {
 			return fail(err)
 		}
-		if add == hasEmail(inc, e) {
+		if add == hasRule(inc, spec.match) {
 			return wroteRes, nil
 		}
 		if add {
-			lastProblem = "the email is not in the include list"
+			lastProblem = "the " + spec.label + " is not in the include list"
 		} else {
-			lastProblem = "the email is still in the include list"
+			lastProblem = "the " + spec.label + " is still in the include list"
 		}
 		if attempt < maxAttempts {
 			select {
@@ -386,21 +468,45 @@ func includeList(policy map[string]any) ([]any, error) {
 	return list, nil
 }
 
-func hasEmail(include []any, email string) bool {
+func hasRule(include []any, match func(any) bool) bool {
 	for _, rule := range include {
-		r, ok := rule.(map[string]any)
-		if !ok {
-			continue
-		}
-		inner, ok := r["email"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if s, ok := inner["email"].(string); ok && normalizeAddress(s) == email {
+		if match(rule) {
 			return true
 		}
 	}
 	return false
+}
+
+// isServiceTokenRule reports whether rule is exactly
+// {"service_token":{"token_id":id}}. any_valid_service_token never matches.
+func isServiceTokenRule(rule any, id string) bool {
+	r, ok := rule.(map[string]any)
+	if !ok || len(r) != 1 {
+		return false
+	}
+	inner, ok := r["service_token"].(map[string]any)
+	if !ok || len(inner) != 1 {
+		return false
+	}
+	s, ok := inner["token_id"].(string)
+	return ok && strings.EqualFold(s, id)
+}
+
+// APIError is a non-success answer from Cloudflare. Callers branch on Status
+// (IsForbidden), never on Detail, which is Cloudflare's text, capped and with
+// the API token scrubbed, for logs and the admin.
+type APIError struct {
+	Status int
+	Detail string
+}
+
+func (e *APIError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Detail) }
+
+// IsForbidden reports whether err is, or wraps, a Cloudflare 403: the API
+// token lacks the permission the call needs.
+func IsForbidden(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusForbidden
 }
 
 type apiEnvelope struct {
@@ -444,10 +550,10 @@ func (c *Client) do(ctx context.Context, method string, body map[string]any) (ma
 	}
 	var env apiEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, fmt.Errorf("HTTP %d: response is not Cloudflare API JSON", resp.StatusCode)
+		return nil, &APIError{Status: resp.StatusCode, Detail: "response is not Cloudflare API JSON"}
 	}
 	if resp.StatusCode/100 != 2 || !env.Success {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, describe(env.Errors, c.token))
+		return nil, &APIError{Status: resp.StatusCode, Detail: describe(env.Errors, c.token)}
 	}
 	dec := json.NewDecoder(bytes.NewReader(env.Result))
 	dec.UseNumber()
