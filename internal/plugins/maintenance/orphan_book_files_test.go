@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-09-19
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -381,5 +381,13 @@ type withExtraFileCores struct {
 
 func (w withExtraFileCores) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	rows, err := w.PebbleStore.GetAllBookFilesCore()
+	return append(rows, w.extra...), err
+}
+
+// GetAllBookFilesCoreIncludingRetired is overridden too: the scan reads through
+// the retired-aware reader, which the embedded PebbleStore would otherwise
+// answer without the extra rows.
+func (w withExtraFileCores) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	rows, err := w.PebbleStore.GetAllBookFilesCoreIncludingRetired()
 	return append(rows, w.extra...), err
 }
