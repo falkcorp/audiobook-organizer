@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
 // last-edited: 2026-10-23
 
@@ -257,10 +257,15 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	// produced the stored transcript. derivedAudio, not derivedBytes, on purpose:
 	// it must live and die with the transcript and IntroRunOpID it describes
 	// (clear-by-run-id and the stale-write guard read all three). A bytes-only
-	// change (a tag rewrite) keeps all three, the marker then no longer equals
-	// FileHash, and selection re-transcribes the file; changed audio drops all
-	// three. Dropping the marker alone on any byte change would leave a
-	// transcript with no provenance, indistinguishable from "never done".
+	// change (a tag rewrite) keeps all three plus the transcript fields, so the
+	// marker no longer equals FileHash but the file is still DONE under the
+	// legacy rule in IntroResultPresent (IntroTranscribedAt set and status
+	// ok/unparsed/empty): selection does NOT re-transcribe it, because the
+	// audio, and so the transcript, is unchanged. Changed audio drops the
+	// marker, the run id and the transcript together, and the file is
+	// transcribed again. Dropping the marker alone on any byte change would
+	// leave a transcript with no provenance, indistinguishable from "never
+	// done".
 	"IntroSourceHash": preserveAudio,
 	"IntroRunOpID":    preserveAudio,                                    // what clear-by-run-id selects on; a rescan must not orphan the row from its run
 	"IntroMeta":       {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
