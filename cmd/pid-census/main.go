@@ -157,8 +157,8 @@ func main() {
 		}
 		fmt.Printf("=== CLEANUP PROVENANCE CENSUS (P3 exit-gate) ===\n")
 		fmt.Printf("automerge_journal_entries=%d journal_loser_ids=%d\n", len(entries), c.JournalLoserIDs)
-		fmt.Printf("tracks_in_itl=%d  healthy=%d  stale_owner=%d  no_live_owner=%d\n",
-			c.TracksInITL, c.Healthy, c.StaleOwner, c.NoLiveOwner)
+		fmt.Printf("tracks_in_itl=%d  healthy=%d  stale_owner=%d  no_live_owner=%d  retired_version_owner=%d\n",
+			c.TracksInITL, c.Healthy, c.StaleOwner, c.NoLiveOwner, c.RetiredVersionOwner)
 		fmt.Printf("merged_into_losers=%d distinct_loser_set(seen)=%d residual_duplicate_pids=%d\n",
 			c.MergedIntoLosers, c.DistinctLoserSet, c.ResidualDuplicatePIDs)
 		fmt.Printf(">>> PROVABLE_MERGE_ORPHANS=%d  (sha_gated_removable=%d)\n",
