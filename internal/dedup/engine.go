@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.95.5
+// version: 1.95.6
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package dedup
 
@@ -1408,7 +1408,8 @@ var errHashHolderLookup = errors.New("dedup: list the holders of a file hash")
 
 // checkHashHolders runs handleFileHashMatch against every book other than book
 // that holds match.hash, in id order, and stops at the first merge. sawOther
-// reports whether any such book existed, merged or not.
+// reports whether any such book existed, merged or not; a trashed holder and a
+// member of book's own version group are not counted.
 func (de *Engine) checkHashHolders(book *database.Book, authorName string, match fileHashMatch) (merged, sawOther bool, err error) {
 	holders, err := database.BooksHoldingFileHash(de.bookStore, match.hash)
 	if err != nil {
@@ -1416,6 +1417,14 @@ func (de *Engine) checkHashHolders(book *database.Book, authorName string, match
 	}
 	for _, other := range holders {
 		if other == nil || other.ID == book.ID {
+			continue
+		}
+		// A trashed holder is nothing to act on (a merge winner's soft-deleted
+		// loser keeps the winner's hash for 30 days), and a live member of this
+		// book's own version group is already merged. Neither is "another book
+		// that shares the hash": counting one would end the book-level check
+		// and, in checkExactFileHash, skip the per-file lookups of every scan.
+		if database.IsInTrash(other) || sameVersionGroup(book, other) {
 			continue
 		}
 		sawOther = true
@@ -1428,6 +1437,13 @@ func (de *Engine) checkHashHolders(book *database.Book, authorName string, match
 		}
 	}
 	return false, sawOther, nil
+}
+
+// sameVersionGroup reports whether a and b are in one (non-empty) version
+// group.
+func sameVersionGroup(a, b *database.Book) bool {
+	return a.VersionGroupID != nil && b.VersionGroupID != nil &&
+		*a.VersionGroupID != "" && *a.VersionGroupID == *b.VersionGroupID
 }
 
 // handleFileHashMatch decides whether to auto-merge or create a candidate for a file hash match.
@@ -1457,8 +1473,7 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		return false, nil
 	}
 	// Two live members of one version group are already merged.
-	if book.VersionGroupID != nil && other.VersionGroupID != nil &&
-		*book.VersionGroupID != "" && *book.VersionGroupID == *other.VersionGroupID {
+	if sameVersionGroup(book, other) {
 		return false, nil
 	}
 
