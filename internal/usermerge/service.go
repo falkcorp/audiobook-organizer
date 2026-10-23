@@ -1,5 +1,5 @@
 // file: internal/usermerge/service.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7b3e91d4-2c58-4a07-b6f1-0e94d5a8c3b2
 // last-edited: 2026-10-23
 
@@ -66,9 +66,10 @@ var (
 	// ErrDigestMismatch: what the admin previewed is not what would be applied
 	// now. Nothing was merged.
 	ErrDigestMismatch = errors.New("usermerge: the accounts changed since the preview; preview again")
-	// ErrOwnerIdentityNotAcknowledged: the absorbed account holds the owner's
-	// sign-in and the request did not acknowledge that.
-	ErrOwnerIdentityNotAcknowledged = errors.New("usermerge: the account being merged away holds the owner's sign-in; acknowledge it to proceed")
+	// ErrOwnerIdentityNotAcknowledged: the absorbed account holds, or may hold
+	// (the plan cannot tell), the owner's sign-in and the request did not
+	// acknowledge that.
+	ErrOwnerIdentityNotAcknowledged = errors.New("usermerge: the account being merged away may hold the owner's sign-in; acknowledge it to proceed")
 	// ErrJournalNotFound: no such merge journal.
 	ErrJournalNotFound = errors.New("usermerge: merge journal not found")
 	// ErrJournalState: the journal is not in a state the action works on.

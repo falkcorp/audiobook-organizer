@@ -1,5 +1,5 @@
 // file: internal/database/user_merge_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 2f7b9c10-4e83-4a6d-b1f5-8c0d3e92a746
 // last-edited: 2026-10-23
 
@@ -365,5 +365,109 @@ func TestResolveMergedUser(t *testing.T) {
 	}
 	if got := ResolveMergedUser(struct{}{}, "b"); got != "b" {
 		t.Errorf("a store that cannot look users up resolved to %q, want the id unchanged", got)
+	}
+}
+
+// RewriteJSONField changes the one field and nothing else, in place: field
+// order and spacing survive, so a rewrite followed by the inverse rewrite gives
+// the original bytes back (undo relies on it), and a missing field is appended.
+func TestRewriteJSONField_KeepsEveryOtherByteAndIsInvertible(t *testing.T) {
+	for _, in := range []string{
+		`{"id":"k1","user_id":"B","name":"x","use_count":3}`,
+		`{ "z": 1,  "user_id" : "B" , "a": [1, 2] }`,
+		`{"user_id":"B"}`,
+		`{"a":{"user_id":"nested"},"user_id":"B"}`,
+	} {
+		out, old, err := RewriteJSONField([]byte(in), "user_id", "A")
+		if err != nil || old != "B" {
+			t.Fatalf("%s: err %v old %q", in, err, old)
+		}
+		if want := strings.Replace(in, `"B"`, `"A"`, 1); string(out) != want {
+			t.Errorf("rewrite of %s = %s, want %s", in, out, want)
+		}
+		back, _, err := RewriteJSONField(out, "user_id", "B")
+		if err != nil || string(back) != in {
+			t.Errorf("inverse rewrite = %s (%v), want the original %s", back, err, in)
+		}
+	}
+	for in, want := range map[string]string{
+		`{"a":1}`: `{"a":1,"user_id":"A"}`,
+		`{}`:      `{"user_id":"A"}`,
+	} {
+		out, old, err := RewriteJSONField([]byte(in), "user_id", "A")
+		if err != nil || old != "" || string(out) != want {
+			t.Errorf("rewrite of %s = %s, %q, %v; want %s", in, out, old, err, want)
+		}
+	}
+}
+
+// An owner-field op re-owns the row as it is NOW: a use of the key between the
+// preview and the apply does not conflict and is not overwritten, an owner that
+// is neither one the plan expected conflicts, and re-running is a no-op.
+func TestApplyUserMergeOps_OwnerFieldOpTouchesOnlyTheOwner(t *testing.T) {
+	s := newInviteTestStore(t)
+	set := func(k, v string) {
+		t.Helper()
+		if err := s.db.Set([]byte(k), []byte(v), pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("apikey:k1", `{"id":"k1","user_id":"B","use_count":7,"last_used_ip":"192.0.2.9"}`)
+	op := UserMergeOp{Key: "apikey:k1", Family: "api_keys", OwnerField: "user_id", OwnerFrom: "B", OwnerTo: "A"}
+	if op.BeforeHash() == op.AfterHash() {
+		t.Fatal("an owner op's before and after hashes must differ")
+	}
+	// The key is used after the op was built: the stored row is not the one planned.
+	set("apikey:k1", `{"id":"k1","user_id":"B","use_count":8,"last_used_ip":"192.0.2.10"}`)
+	if err := s.ApplyUserMergeOps([]UserMergeOp{op}, "", nil); err != nil {
+		t.Fatalf("apply = %v, want it to go through whatever the counters hold", err)
+	}
+	if v, _ := s.GetRaw("apikey:k1"); string(v) != `{"id":"k1","user_id":"A","use_count":8,"last_used_ip":"192.0.2.10"}` {
+		t.Fatalf("row = %s, want only the owner changed", v)
+	}
+	if err := s.ApplyUserMergeOps([]UserMergeOp{op}, "", nil); err != nil {
+		t.Fatalf("re-applying = %v, want a no-op (a chunk resumed after a crash)", err)
+	}
+	if err := s.ApplyUserMergeOps([]UserMergeOp{op.OwnerInverse()}, "", nil); err != nil {
+		t.Fatalf("inverse = %v", err)
+	}
+	if v, _ := s.GetRaw("apikey:k1"); string(v) != `{"id":"k1","user_id":"B","use_count":8,"last_used_ip":"192.0.2.10"}` {
+		t.Fatalf("row after the inverse = %s", v)
+	}
+	set("apikey:k1", `{"id":"k1","user_id":"C"}`)
+	var ce *UserMergeConflictError
+	if err := s.ApplyUserMergeOps([]UserMergeOp{op}, "", nil); !errors.As(err, &ce) {
+		t.Fatalf("an owner that is neither expected one = %v, want a conflict", err)
+	}
+	if err := s.db.Delete([]byte("apikey:k1"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyUserMergeOps([]UserMergeOp{op}, "", nil); !errors.As(err, &ce) {
+		t.Fatalf("a row that is gone = %v, want a conflict", err)
+	}
+}
+
+// The conflict error is stored on operation rows that anyone with library.view
+// can read, so it never carries the key (an invite grant's key is an email
+// address, an invite's is its token); the field the admin-only journal uses does.
+func TestUserMergeConflictError_ErrorLeavesTheKeyOut(t *testing.T) {
+	s := newInviteTestStore(t)
+	for _, key := range []string{"inviteallow:friend@example.com", "invite:tok-secret-123"} {
+		if err := s.db.Set([]byte(key), []byte("changed-by-someone"), pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+		err := s.ApplyUserMergeOps([]UserMergeOp{{Key: key, Family: "invite_grants", Before: []byte("planned"), Delete: true}}, "", nil)
+		var ce *UserMergeConflictError
+		if !errors.As(err, &ce) || ce.Key != key {
+			t.Fatalf("err = %v, want a conflict carrying %s", err, key)
+		}
+		for _, leak := range []string{"@", "friend", "tok-secret", "inviteallow", "invite:"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("the conflict error exposes %q: %v", leak, err)
+			}
+		}
+		if !strings.Contains(err.Error(), "invite_grants") || !strings.Contains(ce.AdminDetail(), key) {
+			t.Errorf("error %q must name the family and AdminDetail %q the key", err, ce.AdminDetail())
+		}
 	}
 }

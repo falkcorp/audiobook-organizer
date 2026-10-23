@@ -1,5 +1,5 @@
 // file: internal/usermerge/redacted.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3b9e41-6a5c-4f28-b0e7-2c84a1f93d60
 // last-edited: 2026-10-23
 
@@ -30,6 +30,7 @@ type PlanSummary struct {
 	ConflictTotal           int                    `json:"conflict_total"`
 	OwnerIdentityHolder     Holder                 `json:"owner_identity_holder"`
 	OwnerIdentityOnAbsorbed bool                   `json:"owner_identity_on_absorbed"`
+	OwnerIdentityAckNeeded  bool                   `json:"owner_identity_ack_required"`
 	WarningCount            int                    `json:"warning_count"`
 	RefusalCount            int                    `json:"refusal_count"`
 	// Refusals holds the refusals that say nothing about a particular row or
@@ -44,7 +45,8 @@ func (p *Plan) Summary() PlanSummary {
 		SurvivorID: p.SurvivorID, AbsorbedID: p.AbsorbedID, Applicable: p.Applicable(),
 		Digest: p.Digest, Ops: p.Ops, Counts: p.Counts, ConflictTotal: p.ConflictTotal,
 		OwnerIdentityHolder: p.OwnerIdentityHolder, OwnerIdentityOnAbsorbed: p.OwnerIdentityOnAbsorbed,
-		WarningCount: len(p.Warnings), RefusalCount: len(p.Refusals), Refusals: []string{},
+		OwnerIdentityAckNeeded: p.OwnerIdentityAckRequired,
+		WarningCount:           len(p.Warnings), RefusalCount: len(p.Refusals), Refusals: []string{},
 	}
 	for _, r := range p.Refusals {
 		if slices.Contains(p.rowRefusals, r) {

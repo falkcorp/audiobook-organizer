@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.198.0
+// version: 2.199.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-23
 
@@ -3030,6 +3030,8 @@ export interface UserMergePlan {
   absorbed_identities: UserMergeIdentity[];
   owner_identity_holder: UserMergeOwnerHolder;
   owner_identity_on_absorbed: boolean;
+  /** True when apply needs the acknowledgement: the account being merged away holds the owner's sign-in, or the plan cannot tell. */
+  owner_identity_ack_required: boolean;
   roles_gained: string[];
   email_outcome: string;
   warnings: string[];
