@@ -1,5 +1,5 @@
 // file: internal/cfservicetoken/client.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8a1d52-7c4e-4b96-a1d0-5e2c9b7f4a38
 // last-edited: 2026-10-23
 
@@ -212,9 +212,6 @@ func (r rawToken) token() Token {
 // ValidID reports whether id has the shape of a service-token id.
 func ValidID(id string) bool { return tokenIDRe.MatchString(id) }
 
-// ProtectedIDPrefixes returns a copy of the protected id prefixes (tests).
-func ProtectedIDPrefixes() []string { return append([]string(nil), protectedIDPrefixes...) }
-
 // IsProtected reports whether id is one of the owner's own tokens.
 func IsProtected(id string) bool {
 	id = strings.ToLower(id)
@@ -272,7 +269,7 @@ func (c *Client) Get(ctx context.Context, id string) (*Token, error) {
 		return nil, err
 	}
 	var r rawToken
-	if err := json.Unmarshal(raw, &r); err != nil || strings.ToLower(r.ID) != strings.ToLower(id) {
+	if err := json.Unmarshal(raw, &r); err != nil || !strings.EqualFold(r.ID, id) {
 		return nil, ErrBadResponse
 	}
 	t := r.token()

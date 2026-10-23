@@ -1,5 +1,5 @@
 // file: internal/cfaccesspolicy/servicetoken_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d9c3b71-2e84-4f06-a7b1-8c0e4d2f6a19
 // last-edited: 2026-10-23
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -142,7 +143,11 @@ func TestRemoveServiceToken_DoesNotMatchLookalikeRules(t *testing.T) {
 func TestServiceToken_ProtectedAndMalformedIDsNeverReachTheNetwork(t *testing.T) {
 	f := &fakeCF{policy: booksPolicy()}
 	c := newClient(t, f)
-	for _, prefix := range ProtectedTokenPrefixes() {
+	// The owner's three tokens; cfservicetoken's test pins the same literal list.
+	if !reflect.DeepEqual(protectedTokenPrefixes, []string{"90a520fb", "56ffe232", "790ef191"}) {
+		t.Fatalf("protected prefixes changed: %v", protectedTokenPrefixes)
+	}
+	for _, prefix := range protectedTokenPrefixes {
 		id := prefix + "-0000-4000-8000-000000000000"
 		if _, err := c.RemoveServiceToken(context.Background(), id); !errors.Is(err, ErrProtectedToken) {
 			t.Errorf("Remove(%s) = %v", id, err)

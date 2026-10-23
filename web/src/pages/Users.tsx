@@ -1,10 +1,11 @@
 // file: web/src/pages/Users.tsx
-// version: 1.9.0
+// version: 1.9.1
 // guid: 4d2e3f1a-5b6c-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-23
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { apiFetch } from '../utils/apiFetch';
+import GuestPhoneKeys from '../components/GuestPhoneKeys';
 import { describeRequestError, responseErrorMessage, unwrapData } from '../utils/apiResponse';
 import {
   UserFootprintDrawer,
@@ -527,6 +528,8 @@ export default function Users() {
           load();
         }}
       />
+      <GuestPhoneKeys refreshToken={users} />
+
       <CreateInviteDialog
         open={inviteOpen}
         mailConfigured={settings.mailConfigured}
