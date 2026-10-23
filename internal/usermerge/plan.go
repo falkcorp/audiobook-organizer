@@ -1,5 +1,5 @@
 // file: internal/usermerge/plan.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c4a82f17-5d93-4e60-9b2a-71f3d0e86a45
 // last-edited: 2026-10-23
 
@@ -991,7 +991,7 @@ func (b *builder) planBook(bookID string, surv, abs *database.User, absState *da
 	}
 	keptPosRows := make([]database.UserDataRow, 0, len(keptPos))
 	for _, kv := range keptPos {
-		keptPosRows = append(keptPosRows, database.UserDataRow{Key: kv.Key, Value: kv.Value})
+		keptPosRows = append(keptPosRows, database.UserDataRow(kv))
 	}
 	if keptSide.Positions, ok = decodePositions(b, keptPosRows); !ok {
 		return nil
