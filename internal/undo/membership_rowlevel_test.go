@@ -1,7 +1,7 @@
 // file: internal/undo/membership_rowlevel_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e98c6d5-ae02-4209-a3b4-306133edd303
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package undo
 
@@ -9,12 +9,37 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// Case counts. Every sim is deterministic in its seed (the same seed replays the
+// same histories in the same order), so a smaller count replays a prefix of the
+// full run. The defaults are sized so the whole package finishes in a few minutes
+// on a slow 4-core CI box (the full counts took the package past its 25 minute
+// timeout there): rowSimCases picks the default count, a further cut under
+// `go test -short` (make ci), and the full count (the one the recorded residual
+// histories were found with) when UNDO_ROWSIM_FULL=1 is set. Run the full counts
+// before changing the graph, the revert order or the retire journal:
+//
+//	UNDO_ROWSIM_FULL=1 go test ./internal/undo -run TestRowSim -count=1 -timeout 60m
+const rowSimShortCases = 300
+
+// rowSimCases is the case count for one sim: full under UNDO_ROWSIM_FULL=1,
+// rowSimShortCases under -short, else def.
+func rowSimCases(full, def int) int {
+	if os.Getenv("UNDO_ROWSIM_FULL") == "1" {
+		return full
+	}
+	if testing.Short() {
+		return rowSimShortCases
+	}
+	return def
+}
 
 // rowSim models the product at row level, several survivors in one list, every
 // book with a journal of its own. A retire journals a marker on its survivor and
@@ -317,19 +342,19 @@ func reportRowSim(t *testing.T, name string, st rowSimStats, wantExact bool) {
 
 func TestRowSim_TwoSurvivorsExact(t *testing.T) {
 	t.Parallel()
-	reportRowSim(t, "2 survivors", runRowSim(t, 101, 6000, rowSimCfg{survivors: 2, steps: 10}), true)
+	reportRowSim(t, "2 survivors", runRowSim(t, 101, rowSimCases(6000, 1500), rowSimCfg{survivors: 2, steps: 10}), true)
 }
 
 func TestRowSim_ThreeSurvivorsExact(t *testing.T) {
 	t.Parallel()
-	reportRowSim(t, "3 survivors", runRowSim(t, 202, 6000, rowSimCfg{survivors: 3, steps: 12}), true)
+	reportRowSim(t, "3 survivors", runRowSim(t, 202, rowSimCases(6000, 1500), rowSimCfg{survivors: 3, steps: 12}), true)
 }
 
 // A process that dies part way through an operation's revert leaves the rows it
 // did not reach standing; the retry finishes them.
 func TestRowSim_CrashMidOperationExact(t *testing.T) {
 	t.Parallel()
-	reportRowSim(t, "3 survivors, crashes", runRowSim(t, 303, 6000, rowSimCfg{survivors: 3, steps: 10, crashMid: 3}), true)
+	reportRowSim(t, "3 survivors, crashes", runRowSim(t, 303, rowSimCases(6000, 1500), rowSimCfg{survivors: 3, steps: 10, crashMid: 3}), true)
 }
 
 // A survivor may itself be retired into another survivor (the duplicate-copies
@@ -340,12 +365,12 @@ func TestRowSim_CrashMidOperationExact(t *testing.T) {
 // retired since is followed to the stand-in that took the slot).
 func TestRowSim_SurvivorChainsExact(t *testing.T) {
 	t.Parallel()
-	reportRowSim(t, "3 survivors, chains", runRowSim(t, 505, 6000, rowSimCfg{survivors: 3, steps: 10, chain: true}), true)
+	reportRowSim(t, "3 survivors, chains", runRowSim(t, 505, rowSimCases(6000, 1500), rowSimCfg{survivors: 3, steps: 10, chain: true}), true)
 }
 
 func TestRowSim_ChainsAndCrashesExact(t *testing.T) {
 	t.Parallel()
-	reportRowSim(t, "chains and crashes", runRowSim(t, 606, 6000, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}), true)
+	reportRowSim(t, "chains and crashes", runRowSim(t, 606, rowSimCases(6000, 1500), rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}), true)
 }
 
 // Further seeds of the same chain shapes (long histories, many survivors).
@@ -359,7 +384,7 @@ func TestRowSim_ChainsMoreSeedsExact(t *testing.T) {
 		{808, rowSimCfg{survivors: 3, steps: 12, chain: true}},
 		{2606, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}},
 	} {
-		reportRowSim(t, fmt.Sprintf("3 survivors, chains, seed %d", c.seed), runRowSim(t, c.seed, 6000, c.cfg), true)
+		reportRowSim(t, fmt.Sprintf("3 survivors, chains, seed %d", c.seed), runRowSim(t, c.seed, rowSimCases(6000, 1500), c.cfg), true)
 	}
 }
 
@@ -378,7 +403,7 @@ func TestRowSim_ChainResidualReportedNeverRefusedOrSilent(t *testing.T) {
 		{909, rowSimCfg{survivors: 3, steps: 12, chain: true}},
 		{1606, rowSimCfg{survivors: 3, steps: 12, chain: true, crashMid: 4}},
 	} {
-		st := runRowSim(t, c.seed, 6000, c.cfg)
+		st := runRowSim(t, c.seed, rowSimCases(6000, 1500), c.cfg)
 		reportRowSim(t, fmt.Sprintf("3 survivors, chains, seed %d", c.seed), st, true)
 	}
 }
@@ -387,7 +412,7 @@ func TestRowSim_SmallChainCasesExact(t *testing.T) {
 	t.Parallel()
 	for _, steps := range []int{4, 5, 6, 8} {
 		reportRowSim(t, fmt.Sprintf("2 survivors, chains and crashes, steps=%d", steps),
-			runRowSim(t, uint64(900+steps), 20000, rowSimCfg{survivors: 2, steps: steps, chain: true, crashMid: 2}), true)
+			runRowSim(t, uint64(900+steps), rowSimCases(20000, 2000), rowSimCfg{survivors: 2, steps: steps, chain: true, crashMid: 2}), true)
 	}
 }
 
