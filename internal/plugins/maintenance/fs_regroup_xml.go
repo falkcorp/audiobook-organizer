@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.19.3
+// version: 2.20.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -1156,6 +1156,10 @@ func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 			return
 		}
 		if existing != nil {
+			if existing.Retired {
+				skip("%q is held as a retired version of %s outside the group (plan is stale)", logger.SanitizeLogValue(b.FilePath), existing.BookID)
+				return
+			}
 			skip("%q already has a row on %s outside the group (plan is stale)", logger.SanitizeLogValue(b.FilePath), existing.BookID)
 			return
 		}

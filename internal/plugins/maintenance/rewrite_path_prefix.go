@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.4.2
+// version: 2.5.0
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -516,7 +516,10 @@ func planRewritePathPrefix(
 	}
 
 	// --- read every book_file row ---
-	files, err := store.GetAllBookFilesCore()
+	// Retired rows included: a mount or prefix migration that skipped them would
+	// leave a retired version pointing at a path that no longer exists, and its
+	// paths are claims a rewrite target must not collide with.
+	files, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return plan, fmt.Errorf("load book files: %w", err)
 	}

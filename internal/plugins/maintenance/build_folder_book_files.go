@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -603,6 +603,12 @@ func liveOwnersOf(store folderBuildStore, path, self string) ([]string, error) {
 	}
 	cand := make(map[string]struct{}, len(rows)+len(ids))
 	for _, r := range rows {
+		// A retired row is keyed under its live holder but is not a live owner of
+		// the path; counting it would offer the holder as a second owner of a path
+		// its sibling actively owns.
+		if r.Retired {
+			continue
+		}
 		if r.BookID != self {
 			cand[r.BookID] = struct{}{}
 		}
