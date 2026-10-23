@@ -12,3 +12,10 @@
       (6) the locked re-plan under every merge lock runs `warnAboutHistory`,
       which scans every `merge:combine-journal:` value: skip the warnings in the
       re-plan.
+      (7) `JSONStringField` and `RewriteJSONField` match field names
+      case-sensitively while the struct decoders fold case: unreachable for rows
+      written by `json.Marshal`, but a hand-written row with a differently cased
+      owner key would be read as unowned: make both match like the decoder, or
+      refuse a case-folded duplicate; (8) the owner-family refusals name a row
+      by position ("row 3"), which an admin cannot map to a row without
+      `AdminDetail`: return the position-to-key map in the admin-only detail.
