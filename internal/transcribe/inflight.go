@@ -1,7 +1,7 @@
 // file: internal/transcribe/inflight.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 55d73cef-7ffe-4cc4-bc48-434789153386
-// last-edited: 2026-09-13
+// last-edited: 2026-10-23
 
 package transcribe
 
@@ -22,10 +22,11 @@ var ErrSlotWait = aidispatch.ErrSlotWait
 // endpoint ID. These wrappers keep transcribe's URL-keyed call sites and their
 // behaviour identical until PR 3 moves Whisper onto the dispatcher proper.
 //
-// Endpoint.Concurrency is still enforced HERE, at the request, and not in
-// allocateJobs, which uses Concurrency only as an allocation weight. The
-// asymmetry is preserved exactly: a per-endpoint limit < 1 means 1, while
-// whisper_max_in_flight < 1 means no pool-wide cap.
+// Endpoint.Concurrency is enforced HERE, at the request. allocateJobs also
+// reads it, as the slot count it subtracts the in-flight depth from to find an
+// endpoint's FREE slots (and as the queue weight once every slot is taken). A
+// per-endpoint limit < 1 means 1, while whisper_max_in_flight < 1 means no
+// pool-wide cap.
 
 // whisperTotalGroup names the pool-wide cap whisper_max_in_flight governs.
 const whisperTotalGroup = "whisper"
