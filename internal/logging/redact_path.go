@@ -1,5 +1,5 @@
 // file: internal/logging/redact_path.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
 // last-edited: 2026-10-22
 
@@ -55,13 +55,19 @@ const maxRedactPathBytes = 8 << 10
 // route and stays visible.
 const resendSegment = "resend"
 
-// RedactInvitePath returns pathWithQuery with everything after an invite route
-// prefix replaced by InviteTokenRedacted, one per non-empty path segment. The
-// prefix, empty segments (doubled or trailing slashes) and any query string are
+// RedactInvitePath returns path, a URL path with no query string, with everything
+// after an invite route prefix replaced by InviteTokenRedacted, one per non-empty
+// path segment. The prefix and empty segments (doubled or trailing slashes) are
 // preserved, a trailing "resend" is kept when it is the last segment of the
 // invites route (POST /api/v1/users/invites/:id/resend), and every path that is
 // not an invite route (including the invite list endpoint /api/v1/users/invites,
 // which has no token) is returned unchanged.
+//
+// A "?" in path is path text, never a query delimiter. That matters for a path
+// that has already been decoded once, such as net/http's URL.Path: for the
+// request line /invite/%3FTOK it is "/invite/?TOK", and cutting it at the "?"
+// would log TOK verbatim. A caller holding a string with a real query appended
+// (a RequestURI) uses RedactInvitePathWithQuery.
 //
 // Everything after the prefix is redacted, not just the next segment, because a
 // decoy segment must not hide the token: a lenient front end or proxy can still
@@ -83,33 +89,33 @@ const resendSegment = "resend"
 // only once decoded or cleaned is logged in that form, re-escaped segment by
 // segment, so what was decoded never reaches the log as a raw control character.
 //
-// Cost: everything here is linear in the path. The path is capped at
-// maxRedactPathBytes (a longer one fails closed as below), at most
-// maxDecodeRounds+1 forms are built, each is split and scanned a constant number
-// of times, and each start position of the any-invite-prefix check looks at the
-// next four segments only. path.Clean and percent-decoding are linear.
+// Cost: everything here is linear in the path. A path with no "%" and no
+// "invite" in it (any case) cannot be an invite route and is returned at once.
+// The path is capped at maxRedactPathBytes, at most maxDecodeRounds+1 forms are
+// built, each is split and scanned a constant number of times, and the
+// any-position check reads each segment once. path.Clean and percent-decoding
+// are linear.
 //
-// Three rules fail closed, logging "/[REDACTED]" and keeping the query: (0) the
-// path is longer than maxRedactPathBytes, and when no form matched: (1) some form has a "." or ".." segment and some form has an
-// invite prefix followed by a segment at any position, because a walked path
-// means no positional match can be trusted (/x/../invite/TOK/..); (2) the
+// Fail closed, logging "/[REDACTED]": (0) the path is longer than
+// maxRedactPathBytes; and, when no form matched, (1) some form has a "." or ".."
+// segment and some form has an "invite" or "invites" segment followed by another
+// segment at any position, because a walked path means no positional match can
+// be trusted (/x/../invite/TOK/.., /api/v1/users/q/../invites/TOK/..); (2) the
 // escaping is nested deeper than maxDecodeRounds (the last form would still
-// decode and has "invite" in it or in its next decoding). Neither fires for
-// /books/invite/TOK or /books/../x, which have no invite route at the start of
-// any form and no dot walk over one.
-func RedactInvitePath(pathWithQuery string) string {
-	path, query, hasQuery := strings.Cut(pathWithQuery, "?")
+// decode). (1) does not fire for /books/invite/TOK or /books/../x, which have no
+// dot walk over an invite route.
+func RedactInvitePath(path string) string {
 	// An absolute path splits to ["", seg1, seg2, ...].
 	if !strings.HasPrefix(path, "/") {
-		return pathWithQuery
+		return path
 	}
 	// Over the cap nothing is read: fail closed.
 	if len(path) > maxRedactPathBytes {
-		out := "/" + InviteTokenRedacted
-		if hasQuery {
-			out += "?" + query
-		}
-		return out
+		return "/" + InviteTokenRedacted
+	}
+	// The ordinary case: no escape to decode and no route name to match.
+	if strings.IndexByte(path, '%') < 0 && !containsFoldInvite(path) {
+		return path
 	}
 	// Every form: the raw path and up to maxDecodeRounds decodings of it.
 	forms := []string{path}
@@ -121,43 +127,72 @@ func RedactInvitePath(pathWithQuery string) string {
 		cur = dec
 		forms = append(forms, cur)
 	}
-	// (a) Anchored match, each form both as written and cleaned.
-	var out string
-	ok := false
+	// (a) Anchored match, each form both as written and cleaned (skipping the
+	// cleaned candidate when it is the form itself).
 	for i, f := range forms {
-		cands := []string{cleanKeepingTrailingSlash(f), f}
-		if i == 0 {
-			cands = []string{f, cleanKeepingTrailingSlash(f)}
+		cands := [2]string{f, cleanKeepingTrailingSlash(f)}
+		if i > 0 {
+			cands[0], cands[1] = cands[1], cands[0]
 		}
-		for _, cand := range cands {
-			if out, ok = redactInviteSegments(cand, i > 0); ok {
+		for j, cand := range cands {
+			if j == 1 && cand == cands[0] {
 				break
 			}
-		}
-		if ok {
-			break
+			if out, ok := redactInviteSegments(cand, i > 0); ok {
+				return out
+			}
 		}
 	}
 	// (b) Fail closed: a form with a dot segment walks the path, so an invite
-	// prefix anywhere in any form means no positional redaction can be trusted.
-	if !ok && anyDotSegment(forms) && anyInvitePrefix(forms) {
-		out, ok = "/"+InviteTokenRedacted, true
+	// route name anywhere in any form means no positional redaction can be trusted.
+	if anyDotSegment(forms) && anyInvitePrefix(forms) {
+		return "/" + InviteTokenRedacted
 	}
 	// Also fail closed on nesting deeper than maxDecodeRounds: if the last form
-	// would still decode and the text "invite" shows up in it or in its next
-	// decoding, a further layer of escaping may hide a route. Not decoded until
-	// stable: each round of nested escapes shrinks the text by only two bytes, so
-	// looping to a fixed point would be quadratic in the length of the path.
-	if !ok && len(forms) > maxDecodeRounds && hidesInviteBeyondRounds(forms[len(forms)-1]) {
-		out, ok = "/"+InviteTokenRedacted, true
+	// would still decode, a further layer of escaping may hide a route. Not
+	// decoded until stable: each round of nested escapes shrinks the text by only
+	// two bytes, so looping to a fixed point would be quadratic in the length of
+	// the path.
+	if last := forms[len(forms)-1]; len(forms) > maxDecodeRounds && unescapeLenient(last) != last {
+		return "/" + InviteTokenRedacted
 	}
-	if !ok {
-		return pathWithQuery
-	}
+	return path
+}
+
+// RedactInvitePathWithQuery is RedactInvitePath for a string that carries a real
+// query, such as a RequestURI: the text from the first "?" is the query and is
+// kept as it is (RedactQueryCredentials is its own step).
+func RedactInvitePathWithQuery(pathWithQuery string) string {
+	path, query, hasQuery := strings.Cut(pathWithQuery, "?")
+	out := RedactInvitePath(path)
 	if hasQuery {
 		out += "?" + query
 	}
 	return out
+}
+
+// containsFoldInvite reports whether s contains "invite" in any ASCII case. A
+// route segment that matches an invite word starts with those six letters (the
+// one non-ASCII folding, U+017F for the s of "invites", comes after them), so a
+// path without them cannot be an invite route.
+func containsFoldInvite(s string) bool {
+	const word = "invite"
+	for i := 0; i+len(word) <= len(s); i++ {
+		j := 0
+		for ; j < len(word); j++ {
+			c := s[i+j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != word[j] {
+				break
+			}
+		}
+		if j == len(word) {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanKeepingTrailingSlash is path.Clean that keeps a trailing slash.
@@ -280,12 +315,16 @@ func invitePrefixAt(segs []string, nonEmpty []int, k int) (idx int, invitesRoute
 	return -1, false
 }
 
+// decodeSegment is s percent-decoded once, or s itself when it has an invalid
+// escape (so a prefix word cannot be hidden by one, nor invented from one).
 func decodeSegment(s string) string {
 	if dec, err := url.PathUnescape(s); err == nil {
 		return dec
 	}
 	return s
 }
+
+// anyDotSegment reports whether any form has a "." or ".." path segment.
 func anyDotSegment(forms []string) bool {
 	for _, f := range forms {
 		for _, s := range strings.Split(f, "/") {
@@ -297,30 +336,24 @@ func anyDotSegment(forms []string) bool {
 	return false
 }
 
-// anyInvitePrefix reports whether any form has an invite route prefix followed
-// by a segment starting at any position. Linear in the size of the forms: the
-// non-empty segments are found once per form and each start is checked against
-// the few prefixes by looking at the next four segments only.
+// anyInvitePrefix reports whether any form has an "invite" or "invites" segment
+// (percent-decoded once, any case) followed by another non-empty segment, at any
+// position. This is deliberately wider than the routes: a dot walk can split the
+// route itself (/api/v1/users/q/../invites/TOK/..), so no more than the route's
+// last word is relied on. One pass over each form, one decoding per segment.
 func anyInvitePrefix(forms []string) bool {
 	for _, f := range forms {
-		segs := strings.Split(f, "/")
-		nonEmpty := nonEmptyPositions(segs)
-		for k := range nonEmpty {
-			if idx, _ := invitePrefixAt(segs, nonEmpty, k); idx >= 0 {
+		prev := false
+		for _, seg := range strings.Split(f, "/") {
+			if seg == "" {
+				continue
+			}
+			if prev {
 				return true
 			}
+			d := decodeSegment(seg)
+			prev = strings.EqualFold(d, "invite") || strings.EqualFold(d, "invites")
 		}
 	}
 	return false
-}
-
-// hidesInviteBeyondRounds reports whether last, the final form RedactInvitePath
-// read, would still decode and has "invite" (any case) in it or in its next
-// decoding.
-func hidesInviteBeyondRounds(last string) bool {
-	next := unescapeLenient(last)
-	if next == last {
-		return false
-	}
-	return strings.Contains(strings.ToLower(last), "invite") || strings.Contains(strings.ToLower(next), "invite")
 }

@@ -1,5 +1,5 @@
 // file: internal/logging/redact_path_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 232b593d-cfbd-4e4f-9898-8ff6d47e5768
 // last-edited: 2026-10-22
 
@@ -40,8 +40,9 @@ func TestRedactInvitePath(t *testing.T) {
 		{"doubled slash and case", "//Invite//" + tok + "/", "//Invite//[REDACTED]/"},
 		{"bare invite with doubled slashes", "//invite//", "//invite//"},
 
-		// An encoded slash is the slash it decodes to (the request line is logged
-		// as RequestURI, which keeps %2F escaped).
+		// An encoded slash is the slash it decodes to (panic recovery and the HTTPS
+		// redirect log RequestURI, which keeps %2F escaped; the access log, the
+		// error log and the trace use the once-decoded URL.Path, which does not).
 		{"encoded slash before the token", "/api/v1/auth/invite%2F" + tok, "/api/v1/auth/invite/[REDACTED]"},
 		{"encoded slash, lower-case hex", "/api/v1/auth/invite%2f" + tok, "/api/v1/auth/invite/[REDACTED]"},
 		{"encoded slash on the spa page", "/invite%2F" + tok, "/invite/[REDACTED]"},
@@ -86,9 +87,19 @@ func TestRedactInvitePath(t *testing.T) {
 		{"fail closed: four rounds of encoding", "/invite%2525252F" + tok, "/[REDACTED]"},
 		{"fail closed: four rounds, the route name itself escaped", "/%2569nvite%2525252F" + tok, "/[REDACTED]"},
 		{"fail closed: the route name only shows in the decoding after the last round", "/%25252569nvite%2525252F" + tok, "/[REDACTED]"},
+		// A dot walk can split the invites route itself.
+		{"dot walk inside the invites prefix, after users", "/api/v1/users/q/../invites/" + tok + "/..", "/[REDACTED]"},
+		{"dot walk inside the invites prefix, after api", "/api/x/../v1/users/invites/" + tok + "/..", "/[REDACTED]"},
+		{"dot walk inside the invites prefix, after v1", "/api/v1/x/../users/invites/" + tok + "/..", "/[REDACTED]"},
+		{"dot walk inside the invites prefix, all encoded", "/api/v1/users/q%2F..%2Finvites%2F" + tok + "%2F..", "/[REDACTED]"},
+		{"dot walk inside the lookup prefix", "/api/v1/q/../auth/invite/" + tok + "/..", "/[REDACTED]"},
+		// Five layers of escaping on the route name itself.
+		{"fail closed: five rounds, the route name escaped", "/%2525252569nvite/" + tok, "/[REDACTED]"},
 		// Not invite routes, so unchanged: no walk of a route, no deep nesting.
 		{"unchanged: invite is not the first segment", "/books/invite/" + tok, "/books/invite/" + tok},
 		{"unchanged: dot walk without an invite route", "/books/../x", "/books/../x"},
+		{"unchanged: dot walk over the invites list, nothing after it", "/api/v1/users/q/../invites", "/api/v1/users/q/../invites"},
+		{"unchanged: a word that only starts like the route", "/books/../invitesx/" + tok, "/books/../invitesx/" + tok},
 		{"unchanged: deep escaping without the route name", "/a/%2541%25252Fb", "/a/%2541%25252Fb"},
 		{"decoy: encoded query delimiter stays in the token", "/invite%2F" + tok + "%3Fx=1", "/invite/[REDACTED]"},
 		{"a decoded control character never reaches the output", "/%69nvite%2F" + tok + "/%0d%0a", "/invite/[REDACTED]/[REDACTED]"},
@@ -119,8 +130,8 @@ func TestRedactInvitePath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := RedactInvitePath(tc.in); got != tc.want {
-				t.Fatalf("RedactInvitePath(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := RedactInvitePathWithQuery(tc.in); got != tc.want {
+				t.Fatalf("RedactInvitePathWithQuery(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -136,13 +147,15 @@ func TestRedactInvitePath_Idempotent(t *testing.T) {
 		"/api/v1/auth/invite%2FTOK%2F..", "/api/v1/users/invites%2FTOK%2F..%2F..", "/invite%2FTOK%2F..%2F..%2Fbooks",
 		"/invite%252FTOK/..", "/invite%252FTOK%252F..", "/x/../invite/TOK/..", "/a%2Finvite%2FTOK/../x/invite/y/..",
 		"/invite%2525252FTOK", "/x/../invite/TOK/..?a=b", "/%25252569nvite%2525252FTOK",
+		"/api/v1/users/q/../invites/TOK/..", "/api/x/../v1/users/invites/TOK/..", "/api/v1/x/../users/invites/TOK/..",
+		"/api/v1/users/q%2F..%2Finvites%2FTOK%2F..", "/%2525252569nvite/TOK",
 	} {
-		once := RedactInvitePath(in)
-		if twice := RedactInvitePath(once); twice != once {
-			t.Errorf("RedactInvitePath not idempotent for %q: %q then %q", in, once, twice)
+		once := RedactInvitePathWithQuery(in)
+		if twice := RedactInvitePathWithQuery(once); twice != once {
+			t.Errorf("RedactInvitePathWithQuery not idempotent for %q: %q then %q", in, once, twice)
 		}
 		if strings.Contains(once, "TOK") {
-			t.Errorf("RedactInvitePath(%q) = %q still carries the token", in, once)
+			t.Errorf("RedactInvitePathWithQuery(%q) = %q still carries the token", in, once)
 		}
 	}
 }
@@ -161,49 +174,111 @@ func TestRedactInvitePath_OverCapFailsClosed(t *testing.T) {
 		"exactly at the cap, other": {"/" + long[:maxRedactPathBytes-1], "/" + long[:maxRedactPathBytes-1]},
 		"exactly at the cap, route": {"/invite/" + long[:maxRedactPathBytes-8], "/invite/[REDACTED]"},
 	} {
-		if got := RedactInvitePath(tc.in); got != tc.want {
-			t.Errorf("%s: RedactInvitePath(%d bytes) = %.60q, want %.60q", name, len(tc.in), got, tc.want)
+		if got := RedactInvitePathWithQuery(tc.in); got != tc.want {
+			t.Errorf("%s: RedactInvitePathWithQuery(%d bytes) = %.60q, want %.60q", name, len(tc.in), got, tc.want)
 		}
 	}
 }
 
-// The work is linear in the path. A 100k-segment path and a 1 MB path are
-// answered by the cap at once; the segment scan under it (anyInvitePrefix, the
-// part that was quadratic) is run directly on 100k and 400k segments, where a
-// quadratic scan would take minutes.
-func TestRedactInvitePath_LinearTime(t *testing.T) {
-	const budget = 2 * time.Second
-	start := time.Now()
-	for _, in := range []string{
-		strings.Repeat("/a", 100_000),
-		"/x/../invite/" + strings.Repeat("/a", 100_000),
-		"/" + strings.Repeat("a", 1<<20),
-		"/invite" + strings.Repeat("%2F..", 200_000),
+// A "?" in a path is path text (URL.Path after net/http decoded %3F), never a
+// query delimiter: the token behind it must still be redacted.
+func TestRedactInvitePath_QuestionMarkIsPathText(t *testing.T) {
+	for in, want := range map[string]string{
+		"/api/v1/auth/invite/?SEKRET":          "/api/v1/auth/invite/[REDACTED]",
+		"/invite/?SEKRET":                      "/invite/[REDACTED]",
+		"/invite/?SEKRET?a=b":                  "/invite/[REDACTED]",
+		"/x?/../invite/SEKRET":                 "/invite/[REDACTED]",
+		"/api/v1/users/invites/?SEKRET/resend": "/api/v1/users/invites/[REDACTED]/resend",
+		"/invite?/SEKRET":                      "/invite?/SEKRET", // a segment "invite?" is not the route
+		"/books?a=1":                           "/books?a=1",
+		"/books?a=1?token=SECRET":              "/books?a=1?token=SECRET",
+		"/invite%2F%3FSEKRET":                  "/invite/[REDACTED]",
+	} {
+		if got := RedactInvitePath(in); got != want {
+			t.Errorf("RedactInvitePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// The query-carrying entry point still cuts at the first "?".
+	for in, want := range map[string]string{
+		"/invite/TOK?x=/invite/y": "/invite/[REDACTED]?x=/invite/y",
+		"/books?a=1":              "/books?a=1",
+	} {
+		if got := RedactInvitePathWithQuery(in); got != want {
+			t.Errorf("RedactInvitePathWithQuery(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestContainsFoldInvite(t *testing.T) {
+	for in, want := range map[string]bool{
+		"/books/12": false, "/invit/e": false, "": false, "/INVITE/x": true, "/xInViTeS": true,
+		"/%69nvite": false, // the escaped spelling is why a path with '%' is never fast-pathed
+		"invit":     false, "invite": true,
+	} {
+		if got := containsFoldInvite(in); got != want {
+			t.Errorf("containsFoldInvite(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// The work is linear in the path, proved by allocation counts rather than the
+// clock (a wall-clock bound flakes under -race on a loaded runner): the scan for
+// an invite route name at any position allocates a constant number of times
+// whatever the number of segments (the quadratic version allocated about one
+// slice per segment), and a path over the cap is answered with none at all.
+func TestRedactInvitePath_LinearAllocs(t *testing.T) {
+	allocsFor := func(n int, tail string) float64 {
+		forms := []string{strings.Repeat("/a", n) + tail}
+		return testing.AllocsPerRun(5, func() { anyInvitePrefix(forms) })
+	}
+	for _, tail := range []string{"/invite/TOK", ""} {
+		small, big := allocsFor(25_000, tail), allocsFor(100_000, tail)
+		if small != big || big > 4 {
+			t.Errorf("tail %q: allocs at 25k segments = %v, at 100k = %v: want equal and at most 4", tail, small, big)
+		}
+	}
+	if !anyInvitePrefix([]string{strings.Repeat("/a", 100_000) + "/invite/TOK"}) {
+		t.Error("the invite route name at the end was not found")
+	}
+	if anyInvitePrefix([]string{strings.Repeat("/a", 100_000)}) {
+		t.Error("found an invite route name in a path without one")
+	}
+	for name, in := range map[string]string{
+		"100k segments": strings.Repeat("/a", 100_000),
+		"1 MB":          "/" + strings.Repeat("a", 1<<20),
+		"escaped dots":  "/invite" + strings.Repeat("%2F..", 200_000),
 	} {
 		if got := RedactInvitePath(in); got != "/[REDACTED]" {
-			t.Fatalf("%d byte path not failed closed: %.40q", len(in), got)
+			t.Errorf("%s: not failed closed: %.40q", name, got)
+		}
+		if a := testing.AllocsPerRun(3, func() { RedactInvitePath(in) }); a != 0 {
+			t.Errorf("%s: over the cap, allocs = %v, want 0 (nothing is read)", name, a)
 		}
 	}
-	if d := time.Since(start); d > budget {
-		t.Fatalf("over-cap paths took %v, want the cap to answer at once", d)
+	// A hang guard only: the whole thing, many times, is far under this.
+	start := time.Now()
+	for range 50 {
+		RedactInvitePath("/x/.." + strings.Repeat("/%25252541", maxRedactPathBytes/10-1))
 	}
-	for _, n := range []int{100_000, 400_000} {
-		form := strings.Repeat("/a", n) + "/invite/TOK"
-		start := time.Now()
-		if !anyInvitePrefix([]string{form}) {
-			t.Fatalf("n=%d: the invite prefix at the end was not found", n)
-		}
-		if anyInvitePrefix([]string{strings.Repeat("/a", n)}) {
-			t.Fatalf("n=%d: found an invite prefix in a path without one", n)
-		}
-		if d := time.Since(start); d > budget {
-			t.Fatalf("anyInvitePrefix over %d segments took %v: not linear", n, d)
-		}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Fatalf("redacting 50 paths at the cap took %v", d)
 	}
 }
 
+// The worst case under the cap: a dot walk (so every form is scanned) over
+// triply escaped segments (so every segment costs a decode).
 func BenchmarkRedactInvitePath_AtTheCap(b *testing.B) {
-	in := "/x/../invite" + strings.Repeat("/a", maxRedactPathBytes/2-8)
+	in := "/x/.." + strings.Repeat("/%25252541", maxRedactPathBytes/10-1)
+	b.ReportAllocs()
+	for range b.N {
+		RedactInvitePath(in)
+	}
+}
+
+// The ordinary request path, which is almost all of them.
+func BenchmarkRedactInvitePath_Ordinary(b *testing.B) {
+	in := "/api/v1/audiobooks/0123456789ABCDEFGHIJKLMNOPQ/cover"
+	b.ReportAllocs()
 	for range b.N {
 		RedactInvitePath(in)
 	}
