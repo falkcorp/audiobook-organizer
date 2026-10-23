@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
 // last-edited: 2026-10-22
 
@@ -451,6 +451,19 @@ func MemberRoleOf(rows []*database.OperationChange, row *database.OperationChang
 		Superseded:      MarkerSuperseded(rows, row, kind, listID)}
 }
 
+// withRow is rows with row among them. The row being decided is a row of its
+// list's journal by definition, so the rule that a marker counts only with a
+// live row of its retire (markerHistory) never loses it when a caller hands over
+// a journal that does not list it.
+func withRow(rows []*database.OperationChange, row *database.OperationChange) []*database.OperationChange {
+	for _, r := range rows {
+		if r != nil && r.ID == row.ID && r.OperationID == row.OperationID {
+			return rows
+		}
+	}
+	return append(slices.Clone(rows), row)
+}
+
 // MarkerSuperseded reports that row's survivor-side marker belongs to an epoch
 // that a later "took" marker of the same survivor in the same list ended. A
 // "took" marker is written only when the survivor was not listed, so the
@@ -458,7 +471,7 @@ func MemberRoleOf(rows []*database.OperationChange, row *database.OperationChang
 // revert took it out and died before it stamped the marker), and row's retire no
 // longer accounts for its place (or its absence).
 func MarkerSuperseded(rows []*database.OperationChange, row *database.OperationChange, kind, listID string) bool {
-	h := newMarkerHistory(row.NewValue, kind, listID, rows)
+	h := newMarkerHistory(row.NewValue, kind, listID, withRow(rows, row))
 	mc := h.markerOf(row.OperationID, row.BookID)
 	return mc != nil && h.superseded(mc)
 }
@@ -569,8 +582,8 @@ func RestoreMember(cur []string, retired, survivor string, rec MembershipRecord,
 // book that was an original member of the list (no borrowing marker of its own
 // when it was retired) always comes back.
 func RetiredStaysOut(rows []*database.OperationChange, row *database.OperationChange, kind, listID string) bool {
-	h := newMarkerHistory(row.BookID, kind, listID, rows)
-	if _, root := h.survivorEpochAt(row.CreatedAt.UnixNano(), row.ID); root == nil {
+	h := newMarkerHistory(row.BookID, kind, listID, withRow(rows, row))
+	if _, root := h.survivorEpochAt(CreatedKey(row), row.ID); root == nil {
 		return false
 	}
 	_, alive := h.epochNow()
@@ -632,7 +645,7 @@ func SurvivorStandOf(rows []*database.OperationChange, row *database.OperationCh
 // SurvivorStandFor is SurvivorStandOf that also says whether the row borrowed
 // the survivor (its marker is a borrowing one, see SurvivorStandOf).
 func SurvivorStandFor(rows []*database.OperationChange, row *database.OperationChange, kind, listID string) (stand SurvivorStand, borrowed bool) {
-	h := newMarkerHistory(row.NewValue, kind, listID, rows)
+	h := newMarkerHistory(row.NewValue, kind, listID, withRow(rows, row))
 	mc := h.markerOf(row.OperationID, row.BookID)
 	if mc == nil || !mc.borrowing || h.superseded(mc) {
 		return SurvivorDefault, false
@@ -672,17 +685,24 @@ func PairedRow(all []*database.OperationChange, marker *database.OperationChange
 	return best
 }
 
-// latestRow is the later of two rows by CreatedAt, ties to the greater id: the
-// rule PairedRow and MarkerOf share (and markerHistory sorts by), so a marker
-// and its row are always the same retire's.
+// latestRow is the later of two rows in the journal's order (CreatedKey), ties
+// to the greater id: the rule PairedRow and MarkerOf share (and markerHistory
+// sorts by), so a marker and its row are always the same retire's.
 func latestRow(a, b *database.OperationChange) *database.OperationChange {
-	switch {
+	switch ka, kb := keyOrZero(a), CreatedKey(b); {
 	case a == nil:
 		return b
-	case b.CreatedAt.After(a.CreatedAt), b.CreatedAt.Equal(a.CreatedAt) && b.ID > a.ID:
+	case kb > ka, kb == ka && b.ID > a.ID:
 		return b
 	}
 	return a
+}
+
+func keyOrZero(c *database.OperationChange) int64 {
+	if c == nil {
+		return 0
+	}
+	return CreatedKey(c)
 }
 
 // MarkerOf returns the survivor-side marker row of row, a collection or

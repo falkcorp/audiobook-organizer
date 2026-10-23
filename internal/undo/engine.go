@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-22
 //
@@ -238,12 +238,14 @@ type ListJournalReader interface {
 // standing, the retired book's, or a survivor retired out of the list since is
 // therefore not filed under CheckFailed (an unrestorable row never counts toward
 // offering Undo, so a wrong refusal here would hide an Undo the revert performs
-// exactly). A store that cannot read the journal still has the list checked, as
-// far as the row alone decides it.
+// exactly). A store that cannot read the journal refuses the row
+// (ReasonFieldUnreadable), as the revert does (revertListFollow): the revert
+// decides every list row from the list's journal and has no answer without it,
+// so predicting one from the row alone would offer an Undo the revert refuses.
 func membershipVerdict(store ConflictChecker, cur []string, c *database.OperationChange, kind, listID string) rowVerdict {
 	j, ok := database.AsCapability[ListJournalReader](store)
 	if !ok {
-		return verdictOf(CheckMembershipFollow(cur, c, kind, listID, nil))
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "store cannot read the journal of %s %s", kind, listID)}
 	}
 	rows, err := j.GetListChanges(kind, listID)
 	if err != nil {

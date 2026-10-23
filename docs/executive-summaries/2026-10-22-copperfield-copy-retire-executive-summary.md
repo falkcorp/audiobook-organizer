@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-copperfield-copy-retire-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 86a41d45-5e65-4458-bcb8-34a1762998c0 -->
 <!-- last-edited: 2026-10-22 -->
 
@@ -31,11 +31,13 @@ commit: not recorded yet (the PR was open when this was written).
   it held in every collection and playlist.
 - **If the owner rearranged a list by hand in the meantime, the undo says so.**
   It never quietly moves a book the owner placed.
-- **A failure part-way cannot leave the records half-written.** The undo
-  bookkeeping is written together with the list itself, and two undos running
-  at once cannot trip over each other.
-- Verified by running the real undo code against about 200,000 simulated
-  histories, and by 15 deliberately injected faults that the tests caught.
+- **A failure part-way cannot leave a book wrongly listed.** The undo
+  bookkeeping is written together with the list itself, a clean-up's records
+  are saved in one step, a leftover note whose record is missing is ignored and
+  reported instead of keeping a book in a list, and two undos running at once
+  cannot trip over each other.
+- Verified by running the real undo code against more than 210,000 simulated
+  histories, and by 35 deliberately injected faults that the tests caught.
 
 ## 1. Finding copies by file fingerprint
 
@@ -88,9 +90,9 @@ after the one it removed. The undo rebuilds the order from those records,
 walking through books other clean-ups have taken out, so every book returns
 beside its real neighbours whatever order the undos run in. The records of a
 list are read from one dedicated index, so the undo always sees every record
-for that list. Journal entries are stamped by a clock that never steps
-backward, so a system clock correction between two clean-ups cannot reorder
-the history. A surviving book that was removed from a list by hand and later
+for that list. Journal entries carry a running sequence number that never
+steps backward, handed out and saved together with the entries, so a system
+clock correction between two clean-ups cannot reorder the history. A surviving book that was removed from a list by hand and later
 came back is treated as a fresh arrival, not as part of the earlier clean-up.
 
 ## 4. Never silently wrong when the owner edits lists by hand
@@ -102,14 +104,15 @@ a clean-up, the old records no longer described the list.
 placed on purpose, with no sign that anything was overridden.
 
 **The fix.** The undo checks the records against the list as it is now. A
-surviving book found somewhere other than where the clean-up put it is left
-where the owner placed it, and the undo says so. A position the records cannot
-confirm, or records that contradict the list order, are reported, and the
-book goes back by its recorded position number instead. A list the owner never
+surviving book found somewhere other than the slot the clean-up gave it is left
+where the owner placed it, and the undo says so; the retired book still goes
+back beside its recorded neighbours. A position the records cannot confirm, or
+records that contradict the list order, are reported, and the book goes back to
+its recorded position number instead. A list the owner never
 touched is never reported. A record that lacks the neighbour information is
 refused with a reason and nothing is written.
 
-## 5. Atomic bookkeeping and locking
+## 5. Records that cannot be left half-written, and locking
 
 **What it was.** Each undo wrote the list and then, separately, marked the
 clean-up as undone. A crash or a second undo in between could leave the two
@@ -119,8 +122,12 @@ disagreeing, and a retry could act on a list that had changed.
 left out for good.
 
 **The fix.** The list and the "undone" mark are written in one step, each list
-has its own lock while it is read and written, and a clean-up that is refused
-takes back its record and its marker together.
+has its own lock while it is read and written, a clean-up's records (the entry
+and its note on the surviving book) are saved in one step, and a clean-up that
+is refused takes both back in one step. A clean-up needs a store that can do
+that and is refused before changing anything otherwise. If a crash ever leaves
+a note on the surviving book with no record behind it, the undo ignores that
+note, says so, and does not keep the book in the list on its account.
 
 ## What the numbers show
 
@@ -132,17 +139,25 @@ through an undo, and surviving books retired into other survivors:
   original lists, none reported, none refused, none silent.
 - **47,000 adversarial histories** (identical timestamps, a clock stepping
   backward, a record written before its marker, deep chains with crashes): all
-  exact.
+  exact, now run with the sequence numbers in place and the wall time left
+  out of order.
+- **14,500 histories with leftover notes** (a note on the surviving book whose
+  record is missing or was voided, including a clock stepping backward and
+  crashes): 11,500 ended exact, and in the 3,000 where the owner also edited
+  the lists by hand, 1,314 ended exact, 1,485 were restored with the deviation
+  reported and 201 were refused for manual review; none ended wrong without
+  being reported.
 - **12,000 histories where the owner edited lists by hand afterward:** 5,716
   ended exact, 5,544 were restored with the deviation reported to the owner,
   740 were refused for manual review with a reason and wrote nothing, and
   **none ended wrong without being reported**. These suites report a lot by
   design, because a hand-edited list is exactly where the code refuses to
   guess.
-- **15 of 15 injected faults** (for example, ignoring the order records,
-  skipping the new index, letting the clock run backward, dropping a report)
-  were caught by the tests. Two faults survived the first pass; tests were
-  added for them and they are now caught as well.
+- **35 of 35 injected faults** were caught by the tests (for example,
+  ignoring the order records, skipping the new index, letting the clock run
+  backward, dropping a report, ignoring a leftover note's missing record, saving
+  a clean-up's records one at a time). Two faults survived the first pass of an
+  earlier round; tests were added for them and they are now caught as well.
 
 ## What the owner will see after deploy
 
@@ -164,6 +179,6 @@ through an undo, and surviving books retired into other survivors:
 
 - The index of list records is written for new clean-ups only. This feature is
   new in this release, so there is no earlier history to convert.
-- The never-steps-backward clock fixes the order of entries at the moment they
-  are written. It cannot repair entries already written out of order.
+- The never-steps-backward sequence fixes the order of entries at the moment
+  they are written. It cannot repair entries already written out of order.
 - The locking protects one running server process.

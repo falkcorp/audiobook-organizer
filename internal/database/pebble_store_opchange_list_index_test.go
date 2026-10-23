@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_list_index_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c6e3a52-81d7-4f09-b3a4-92d5e17f6c48
 // last-edited: 2026-10-22
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -343,6 +344,59 @@ func TestOpchangeListIndex_CreateOperationChangesIsOneBatch(t *testing.T) {
 	}
 	if err := p.CreateOperationChanges(nil); err != nil {
 		t.Fatalf("an empty batch is a no-op: %v", err)
+	}
+}
+
+// A batch that fails before its commit leaves nothing behind: no row, no book
+// or list index entry, no clock key.
+func TestOpchangeListIndex_CreateOperationChangesFailsAsAWhole(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	journalAfterStamp = func() error { return errors.New("injected failure before the commit") }
+	defer func() { journalAfterStamp = nil }()
+	err := p.CreateOperationChanges([]*OperationChange{
+		listRow("op1", "m", "S", "collection-held:L"),
+		listRow("op1", "r", "R", "collection:L"),
+	})
+	if err == nil {
+		t.Fatal("the injected failure must surface")
+	}
+	journalAfterStamp = nil
+	if got := listIDs(t, p, "collection", "L"); len(got) != 0 {
+		t.Fatalf("list entries landed: %v", got)
+	}
+	if all := scanAllChanges(t, p); len(all) != 0 {
+		t.Fatalf("rows landed: %v", changeIDs(all))
+	}
+	for _, b := range []string{"S", "R"} {
+		if got, err := p.GetBookChanges(b); err != nil || len(got) != 0 {
+			t.Fatalf("book %s index landed: %v, %v", b, changeIDs(got), err)
+		}
+	}
+	if v, ok := persistedClock(t, p); ok {
+		t.Fatalf("the clock key landed: %d", v)
+	}
+}
+
+// A repeated (operation, id) in one batch is refused up front: the second row
+// would silently replace the first.
+func TestOpchangeListIndex_CreateOperationChangesRejectsDuplicateIDs(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	err := p.CreateOperationChanges([]*OperationChange{
+		listRow("op1", "m", "S", "collection-held:L"),
+		listRow("op1", "m", "R", "collection:L"),
+	})
+	if err == nil {
+		t.Fatal("a repeated id must be an error")
+	}
+	if all := scanAllChanges(t, p); len(all) != 0 {
+		t.Fatalf("nothing may be written: %v", changeIDs(all))
+	}
+	// The same id under another operation is a different row.
+	if err := p.CreateOperationChanges([]*OperationChange{
+		listRow("op1", "m", "S", "collection-held:L"),
+		listRow("op2", "m", "R", "collection:L"),
+	}); err != nil {
+		t.Fatalf("same id, different operation: %v", err)
 	}
 }
 

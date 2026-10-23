@@ -1,5 +1,5 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
 // last-edited: 2026-10-22
 
@@ -320,7 +320,7 @@ func TestSurvivorStandOf(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := SurvivorStandOf(tc.rows, tc.row, UserContentCollection, "c1"); got != tc.want {
+			if got := SurvivorStandOf(pairRows(tc.rows), tc.row, UserContentCollection, "c1"); got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
@@ -468,7 +468,7 @@ func TestSurvivorStandFor_ReportsBorrowing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			stand, borrowed := SurvivorStandFor(tc.rows, tc.row, UserContentCollection, "c1")
+			stand, borrowed := SurvivorStandFor(pairRows(tc.rows), tc.row, UserContentCollection, "c1")
 			if stand != tc.want || borrowed != tc.wantBorrowed {
 				t.Fatalf("got stand %v borrowed %v, want %v %v", stand, borrowed, tc.want, tc.wantBorrowed)
 			}
@@ -604,7 +604,7 @@ func TestRetiredStaysOut(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := RetiredStaysOut(tc.rows, row, UserContentCollection, "c1"); got != tc.want {
+			if got := RetiredStaysOut(pairRows(tc.rows), row, UserContentCollection, "c1"); got != tc.want {
 				t.Fatalf("RetiredStaysOut = %v, want %v", got, tc.want)
 			}
 		})

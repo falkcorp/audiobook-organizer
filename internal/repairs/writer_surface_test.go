@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_surface_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 0f69b17c-331b-4c43-9317-c7276540fe70
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 package repairs
 
@@ -30,6 +30,7 @@ var (
 	_ func(*Writer, string, string, string, string, string) error                                          = (*Writer).Journal
 	_ func(*Writer, string, UndoEntry, func() error) error                                                 = (*Writer).JournalStep
 	_ func(*Writer, []BookStep, func() ([]bool, error)) error                                              = (*Writer).JournalSteps
+	_ func(*Writer) bool                                                                                   = (*Writer).JournalsInBatches
 	_ func(*Writer) int                                                                                    = (*Writer).Journaled
 	_ func(*Writer, string, string, string) (string, bool, error)                                          = (*Writer).JournaledValue
 	_ func(*Writer, string, ...string) error                                                               = (*Writer).LockFields
@@ -62,7 +63,7 @@ var (
 // changes its signature.
 func TestWriterMethodSetPinned(t *testing.T) {
 	want := []string{"AddBookTag", "Beat", "ClearBookFileITunesPath", "ClearBookITunesPath", "HistoryFailed",
-		"HistoryRows", "Journal", "JournalStep", "JournalSteps", "Journaled", "JournaledValue", "LockFields",
+		"HistoryRows", "Journal", "JournalStep", "JournalSteps", "JournalsInBatches", "Journaled", "JournaledValue", "LockFields",
 		"LockWaiting", "Modify", "ModifyCredits", "MoveBookFiles", "OpID", "Recompute", "RecordChange",
 		"RepointBookFile", "SetPrimaryAuthor", "SetTrackNumber", "SetUserState", "Step", "SupersedeChanges", "Touch", "WithCredits",
 		"WithFieldStates", "WithJournal", "WithLiveness", "WithTags", "WithUserState", "Writes"}

@@ -1,5 +1,5 @@
 // file: internal/undo/membership_multi_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8d4f2a61-7c35-4b90-a1e8-5f3c9b0d7e42
 // last-edited: 2026-10-22
 
@@ -72,7 +72,7 @@ func (s *multiSim) revertStamping(retired string, stamp bool) error {
 	r, m := s.pair[retired][0], s.pair[retired][1]
 	rec, _ := DecodeMembership(r.OldValue)
 	sv := r.NewValue
-	stand, borrowed := SurvivorStandFor(s.journals[sv], r, UserContentCollection, "L")
+	stand, borrowed := SurvivorStandFor(s.listRows(), r, UserContentCollection, "L")
 	g := NewMembershipGraph(sv, UserContentCollection, "L")
 	g.SetRow(r)
 	g.AddRows(s.listRows())

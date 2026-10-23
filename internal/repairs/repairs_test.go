@@ -1178,7 +1178,7 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 		"WithJournal", "WithLiveness", "Touch", "Journal", "Journaled", "JournaledValue", "Step",
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
 		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange", "Beat", "LockWaiting",
-		"WithFieldStates", "LockFields", "JournalStep", "JournalSteps", "WithTags", "AddBookTag", "OpID",
+		"WithFieldStates", "LockFields", "JournalStep", "JournalSteps", "JournalsInBatches", "WithTags", "AddBookTag", "OpID",
 		"WithUserState", "SetUserState", "ClearBookFileITunesPath", "ClearBookITunesPath", "SupersedeChanges"}, names)
 }
 
