@@ -465,3 +465,23 @@ func TestMasterListImport_ManyRowsPlanConcurrently(t *testing.T) {
 	assert.Equal(t, n, plan.Applicable)
 	assert.Equal(t, n, plan.ByClass[mlMatchedHigh])
 }
+
+func TestMasterListImport_DisagreeingIdentifiersAreHeldForReview(t *testing.T) {
+	l := newMLLab(t)
+	l.book("a", mlBook{title: "November Rain", author: "Nia Fox", asin: "B000000050", minutes: 300})
+	l.book("b", mlBook{title: "Oscar Hill", author: "Oli Dane", isbn13: mlISBN13b, minutes: 300})
+	l.book("c", mlBook{title: "Papa Sound", author: "Pia Cole", asin: "B000000051", isbn13: mlISBN13, minutes: 300})
+	listID := l.upload(
+		// The ASIN is book a's, the ISBN is book b's.
+		csvLine("November Rain", "Nia Fox", "B000000050", mlISBN13b, "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+		// ASIN and ISBN both name book c: nothing disagrees.
+		csvLine("Papa Sound", "Pia Cole", "B000000051", mlISBN13, "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+	)
+	_, rows := l.plan(listID)
+	r := rows["asin:B000000050"]
+	assert.Equal(t, mlMatchedReview, r.Class)
+	assert.Contains(t, r.Flags, mlFlagIDConflict)
+	assert.Equal(t, []string{l.ids["a"]}, memberOf(r, "target"), "the first tier's book stays the target; a person decides")
+	assert.Equal(t, mlMatchedHigh, rows["asin:B000000051"].Class)
+	assert.NotContains(t, rows["asin:B000000051"].Flags, mlFlagIDConflict)
+}
