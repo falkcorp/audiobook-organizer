@@ -1,5 +1,5 @@
 // file: internal/usermerge/undo.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e2b94a57-0c31-4d86-b7f5-6a3d8c1f9e20
 // last-edited: 2026-10-23
 
@@ -310,11 +310,11 @@ func (s *Service) classifyGroup(g undoGroup, survivorID string) (inverse []datab
 			label = label[:at]
 		}
 		conflicts = append(conflicts, fmt.Sprintf("%s (%s): a row changed after the merge; the whole group is left as it is", label, g[0].Family))
-		rebuild, err := s.rebuildBookIndex(g, survivorID)
+		rebuild, more, err := s.rebuildBookIndex(g, survivorID)
 		if err != nil {
 			return nil, nil, err
 		}
-		return rebuild, conflicts, nil
+		return rebuild, append(conflicts, more...), nil
 	}
 	for i, op := range g {
 		switch {
@@ -346,8 +346,9 @@ func (s *Service) classifyGroup(g undoGroup, survivorID string) (inverse []datab
 // rebuildBookIndex makes the survivor's status index entries for the book of a
 // skipped unit agree with the ubs: row that is there: exactly the entry for its
 // status, or none when the row is gone. It returns nothing for a unit that is
-// not a book's listening state, and when the row cannot be read.
-func (s *Service) rebuildBookIndex(g undoGroup, survivorID string) ([]database.UserMergeOp, error) {
+// not a book's listening state; when the row cannot be read it returns a
+// conflict line and leaves the index alone.
+func (s *Service) rebuildBookIndex(g undoGroup, survivorID string) (ops []database.UserMergeOp, conflicts []string, err error) {
 	var rowKey, bookID string
 	prefix := "ubs:" + survivorID + ":"
 	for _, op := range g {
@@ -357,17 +358,19 @@ func (s *Service) rebuildBookIndex(g undoGroup, survivorID string) ([]database.U
 		}
 	}
 	if rowKey == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	row, err := s.store.GetRaw(rowKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	status := ""
 	if row != nil {
 		var st database.UserBookState
 		if err := json.Unmarshal(row, &st); err != nil {
-			return nil, nil
+			// The status cannot be told, so the index is left as it is, and that
+			// is said: a silent skip would look like a rebuilt index.
+			return nil, []string{fmt.Sprintf("book:%s (%s): the surviving account's state row cannot be read, so its status index was not rebuilt", bookID, FamBookState)}, nil
 		}
 		status = st.Status
 	}
@@ -381,7 +384,7 @@ func (s *Service) rebuildBookIndex(g undoGroup, survivorID string) ([]database.U
 		key := database.UserBookStateStatusKey(survivorID, st, bookID)
 		cur, err := s.store.GetRaw(key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		want := row != nil && st == status
 		switch {
@@ -394,5 +397,5 @@ func (s *Service) rebuildBookIndex(g undoGroup, survivorID string) ([]database.U
 				Before: cur, Delete: true, Derived: true})
 		}
 	}
-	return out, nil
+	return out, nil, nil
 }

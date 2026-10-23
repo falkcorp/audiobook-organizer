@@ -1,5 +1,5 @@
 // file: internal/database/user_merge.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5d0a7e3c-91b4-4f26-8c1d-e7a2b6f40935
 // last-edited: 2026-10-23
 
@@ -265,7 +265,8 @@ func RekeyUserKey(key, from, to string) (string, bool) {
 // every other byte of value exactly as it was: field order, spacing, and any
 // field this build does not know about. (Re-marshalling through a map would
 // reorder the keys, so undoing a rewrite could not give the original bytes
-// back.) A field that is absent is appended. The old value of the field is
+// back.) A field that is absent is appended; one that appears twice, or is
+// not a string, is an error. The old value of the field is
 // returned too so a caller can check it was the expected user.
 func RewriteJSONField(value []byte, field, to string) (out []byte, old string, err error) {
 	enc, err := json.Marshal(to)
@@ -278,6 +279,10 @@ func RewriteJSONField(value []byte, field, to string) (out []byte, old string, e
 	} else if d, ok := tok.(json.Delim); !ok || d != '{' {
 		return nil, "", errors.New("decode: not a JSON object")
 	}
+	// Scan every member: a decoder (encoding/json into a map or struct) keeps the
+	// LAST of a repeated key, so rewriting the first would leave the owner a
+	// reader sees unchanged. A repeated key is refused instead of guessed at.
+	start, end, found := 0, 0, false
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
@@ -288,14 +293,23 @@ func RewriteJSONField(value []byte, field, to string) (out []byte, old string, e
 			return nil, "", fmt.Errorf("decode: %w", err)
 		}
 		if key, _ := keyTok.(string); key == field {
-			end := int(dec.InputOffset())
-			start := end - len(raw)
+			if found {
+				return nil, "", fmt.Errorf("decode: field %q appears more than once", field)
+			}
+			if len(raw) == 0 || raw[0] != '"' {
+				return nil, "", fmt.Errorf("decode: field %q is not a string", field)
+			}
+			found = true
+			end = int(dec.InputOffset())
+			start = end - len(raw)
 			_ = json.Unmarshal(raw, &old)
-			out = append(out, value[:start]...)
-			out = append(out, enc...)
-			out = append(out, value[end:]...)
-			return out, old, nil
 		}
+	}
+	if found {
+		out = append(out, value[:start]...)
+		out = append(out, enc...)
+		out = append(out, value[end:]...)
+		return out, old, nil
 	}
 	// Absent: insert before the closing brace of the top-level object.
 	closeAt := bytes.LastIndexByte(value, '}')

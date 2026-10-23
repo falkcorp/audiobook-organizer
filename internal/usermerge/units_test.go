@@ -1,5 +1,5 @@
 // file: internal/usermerge/units_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e8b1c63-d2a7-4905-b1f4-6a09c3e7d582
 // last-edited: 2026-10-23
 
@@ -443,4 +443,181 @@ func TestBuildPlan_SurvivorTakesTheProofOfAnAddressTheAbsorbedAccountVerified(t 
 			t.Errorf("the outcome text quotes the address: %q", plan.EmailOutcome)
 		}
 	})
+}
+
+// failOnDelete stops the first batch that deletes key, as a restart or a
+// cancelled run does.
+type failOnDelete struct {
+	database.UserMerger
+	key   string
+	armed bool
+}
+
+func (m *failOnDelete) ApplyUserMergeOps(ops []database.UserMergeOp, key string, journal []byte) error {
+	if m.armed {
+		for _, o := range ops {
+			if o.Key == m.key && o.Delete {
+				return errors.New("simulated stop")
+			}
+		}
+	}
+	return m.UserMerger.ApplyUserMergeOps(ops, key, journal)
+}
+
+// The listen-seconds sum is the one write that is not idempotent. With the sum
+// and the delete of the counter it came from in different batches, a stop
+// between them made a resume add the same seconds again.
+func TestResume_ListenSecondsStoppedBetweenSumAndDeleteAreNotCountedTwice(t *testing.T) {
+	old := chunkSize
+	chunkSize = 1
+	t.Cleanup(func() { chunkSize = old })
+	f := newFixture(t)
+	real := f.svc.merger
+	aKey, bKey := "stats:user:listen_seconds:"+f.a.ID, "stats:user:listen_seconds:"+f.b.ID
+	f.svc.merger = &failOnDelete{UserMerger: real, key: bKey, armed: true}
+	j, err := f.apply(true)
+	if err == nil {
+		t.Fatal("the run was meant to stop on the batch that deletes the counter")
+	}
+	if a, b := f.get(aKey), f.get(bKey); (a == "150") != (b == "") {
+		t.Fatalf("after the stop A=%q B=%q: the sum and the delete must be in one batch or neither", a, b)
+	}
+	f.svc.merger = real
+	if _, err := f.svc.Resume(context.Background(), j.ID, nil); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if got := f.get(aKey); got != "150" {
+		t.Errorf("listen seconds after resume = %q, want 150 (50 must be added once)", got)
+	}
+	if got := f.get(bKey); got != "" {
+		t.Errorf("the absorbed counter is still there: %q", got)
+	}
+}
+
+// The listen-stat sum and its delete sit in one unit in the plan.
+func TestBuildPlan_ListenSecondsSumAndDeleteShareAUnit(t *testing.T) {
+	f := newFixture(t)
+	plan, err := f.svc.BuildPlan(context.Background(), f.planReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	units := map[string]int{}
+	for _, op := range plan.ops {
+		if op.Family == FamListenStats {
+			if op.Unit == "" {
+				t.Fatalf("a listen-stats op has no unit")
+			}
+			units[op.Unit]++
+		}
+	}
+	if len(units) != 1 {
+		t.Fatalf("listen-stats units = %v, want exactly one", units)
+	}
+	for u, n := range units {
+		if n != 2 {
+			t.Errorf("unit %s holds %d ops, want the delete and the sum", u, n)
+		}
+	}
+}
+
+// Playlists, collections, invites and invite grants are re-owned by an
+// owner-field op: an edit made between the preview and the apply is neither
+// lost nor a reason to refuse, and undo puts the owner back without touching it.
+func TestApply_OwnerFieldFamiliesKeepAnEditMadeAfterThePreview(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, family, edit, from, to string
+	}{
+		{"playlist", "upl:plB", FamPlaylists, `"b list"`, `"b list"`, `"renamed after preview"`},
+		{"collection", "col:colB", FamCollections, `"b coll"`, `"b coll"`, `"renamed after preview"`},
+		{"invite", "invite:tokB", FamInvites, `"newbie"`, `"newbie"`, `"renamed-after-preview"`},
+		{"invite grant", "inviteallow:friend@example.com", FamInviteGrants, `"cf_added":true`, `"cf_added":true`, `"cf_added":false`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			plan, err := f.svc.BuildPlan(context.Background(), f.planReq())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var op *database.UserMergeOp
+			for i := range plan.ops {
+				if plan.ops[i].Key == tc.key {
+					op = &plan.ops[i]
+				}
+			}
+			if op == nil || !op.IsOwnerOp() || op.Unit != "" {
+				t.Fatalf("op for the %s = %+v, want a unit-less owner-field op", tc.name, op)
+			}
+			before := f.get(tc.key)
+			if !strings.Contains(before, tc.from) {
+				t.Fatalf("row %s lacks %s", before, tc.from)
+			}
+			edited := strings.Replace(before, tc.from, tc.to, 1)
+			if err := f.s.SetRaw(tc.key, []byte(edited)); err != nil {
+				t.Fatal(err)
+			}
+			j, err := f.svc.Apply(context.Background(), ApplyRequest{ActorID: f.a.ID, SurvivorID: f.a.ID, AbsorbedID: f.b.ID,
+				Digest: plan.Digest, AcknowledgeOwnerIdentity: true}, nil)
+			if err != nil {
+				t.Fatalf("apply after an edit = %v, want it to go through", err)
+			}
+			got := f.get(tc.key)
+			if !strings.Contains(got, tc.to) || !strings.Contains(got, f.a.ID) || strings.Contains(got, f.b.ID) {
+				t.Errorf("row after apply = %s, want the edit kept and the owner moved", got)
+			}
+			if _, err := f.svc.Undo(context.Background(), UndoRequest{JournalID: j.ID}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.get(tc.key); got != edited {
+				t.Errorf("row after undo = %s, want %s", got, edited)
+			}
+		})
+	}
+}
+
+// A row whose owner field cannot be rewritten without guessing is refused in the
+// preview, not left for the apply to stop on.
+func TestBuildPlan_RefusesAnOwnerRowWithARepeatedOwnerField(t *testing.T) {
+	f := newFixture(t)
+	if err := f.s.SetRaw("upl:plDup", []byte(`{"ID":"plDup","created_by_user_id":"someone-else","created_by_user_id":"`+f.b.ID+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := f.svc.BuildPlan(context.Background(), f.planReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Applicable() {
+		t.Fatal("a plan with a repeated owner field was applicable")
+	}
+	if n := countContaining(plan.Refusals, "more than once"); n != 1 {
+		t.Errorf("refusals = %v, want one naming the repeated field", plan.Refusals)
+	}
+	for _, r := range plan.Refusals {
+		if strings.Contains(r, "plDup") {
+			t.Errorf("refusal quotes the key: %q", r)
+		}
+	}
+}
+
+// When the survivor's state row for a skipped book cannot be decoded, the status
+// index cannot be rebuilt from it, and undo says so rather than skipping quietly.
+func TestUndo_UnreadableBookStateRowIsReportedNotSkippedQuietly(t *testing.T) {
+	f := newFixture(t)
+	j, err := f.apply(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := "book-only-b"
+	if err := f.s.SetRaw(database.UserBookStateKey(f.a.ID, book), []byte(`{not json`)); err != nil {
+		t.Fatal(err)
+	}
+	undone, err := f.svc.Undo(context.Background(), UndoRequest{JournalID: j.ID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countContaining(undone.UndoConflicts, "cannot be read"); n != 1 {
+		t.Errorf("conflicts = %v, want exactly one saying the state row cannot be read", undone.UndoConflicts)
+	}
+	if got := f.get(database.UserBookStateKey(f.a.ID, book)); got != `{not json` {
+		t.Errorf("the unreadable row was changed: %q", got)
+	}
 }

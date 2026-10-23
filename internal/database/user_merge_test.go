@@ -1,5 +1,5 @@
 // file: internal/database/user_merge_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f7b9c10-4e83-4a6d-b1f5-8c0d3e92a746
 // last-edited: 2026-10-23
 
@@ -469,5 +469,52 @@ func TestUserMergeConflictError_ErrorLeavesTheKeyOut(t *testing.T) {
 		if !strings.Contains(err.Error(), "invite_grants") || !strings.Contains(ce.AdminDetail(), key) {
 			t.Errorf("error %q must name the family and AdminDetail %q the key", err, ce.AdminDetail())
 		}
+	}
+}
+
+// A decoder keeps the LAST of a repeated key, so rewriting the first would leave
+// the owner every reader sees unchanged. Rows that cannot be rewritten without
+// guessing are errors, and the error text carries no value from the row.
+func TestRewriteJSONField_RefusesWhatItCannotRewriteWithoutGuessing(t *testing.T) {
+	for _, tc := range []struct {
+		name, in, want string
+	}{
+		{"repeated key", `{"owner":"x","n":1,"owner":"y"}`, "more than once"},
+		{"repeated key, one escaped", `{"owner":"x","own\u0065r":"y"}`, "more than once"},
+		{"non-string owner", `{"owner":7}`, "not a string"},
+		{"null owner", `{"owner":null}`, "not a string"},
+		{"object owner", `{"owner":{"id":"x"}}`, "not a string"},
+		{"top-level array", `[{"owner":"x"}]`, "not a JSON object"},
+		{"top-level null", `null`, "not a JSON object"},
+		{"top-level string", `"owner"`, "not a JSON object"},
+		{"empty", ``, "decode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, err := RewriteJSONField([]byte(tc.in), "owner", "z")
+			if err == nil {
+				t.Fatalf("RewriteJSONField(%s) = %s, want an error", tc.in, out)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to contain %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), `"x"`) || strings.Contains(err.Error(), `"y"`) {
+				t.Errorf("error quotes a value of the row: %v", err)
+			}
+		})
+	}
+}
+
+// An escaped spelling of the key is the same key, and only that member changes.
+func TestRewriteJSONField_MatchesAnEscapedKey(t *testing.T) {
+	in := `{"a":1, "own\u0065r" : "x" ,"b":[1,2]}`
+	out, old, err := RewriteJSONField([]byte(in), "owner", "z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old != "x" {
+		t.Errorf("old = %q, want x", old)
+	}
+	if want := `{"a":1, "own\u0065r" : "z" ,"b":[1,2]}`; string(out) != want {
+		t.Errorf("out = %s, want %s", out, want)
 	}
 }
