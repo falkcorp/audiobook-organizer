@@ -1,7 +1,7 @@
 // file: internal/usermerge/plan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4a82f17-5d93-4e60-9b2a-71f3d0e86a45
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package usermerge
 
@@ -130,6 +130,9 @@ type Plan struct {
 
 	ops    []database.UserMergeOp
 	retire database.UserRetirement
+	// rowRefusals are the refusals in Refusals that quote row keys and decode
+	// errors. Summary leaves them out (they are for the admin-only preview).
+	rowRefusals []string
 }
 
 // Applicable is true when the plan has no refusal.
@@ -319,10 +322,11 @@ func (s *Service) BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error)
 		return nil, err
 	}
 	if len(survData.OAuthIdentities)+len(absData.OAuthIdentities) == 0 && surv.PasswordHash == "" {
-		b.refuse("the surviving account would have no way to sign in (no password and no linked sign-in)")
+		p.Refusals = append(p.Refusals, "the surviving account would have no way to sign in (no password and no linked sign-in)")
 	}
 	s.planAccounts(p, surv, abs)
 	p.Refusals = append(p.Refusals, b.refused...)
+	p.rowRefusals = slices.Clone(b.refused)
 	s.warnAboutHistory(p, abs.ID)
 
 	p.ops = b.finalize()
