@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-09-19
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -26,8 +26,13 @@ const (
 	statusNoAudio       = "no_audio"
 	statusFFmpegError   = "ffmpeg_error"
 	statusWhisperError  = "whisper_error"
-	statusEmpty         = "empty"
-	statusExtracted     = "extracted" // extract-only mode: WAV cached, not transcribed
+	// statusPathUnmapped: remote_extract only. The worker could not read the
+	// book's source file through its mount, but this server can stat it, so the
+	// fault is the worker's path map or NFS mount rather than the book. NOT
+	// durable (see isDurableTranscribeFailure): the next run retries it.
+	statusPathUnmapped = "path_unmapped"
+	statusEmpty        = "empty"
+	statusExtracted    = "extracted" // extract-only mode: WAV cached, not transcribed
 )
 
 // transcribeStatsAccum is a thread-safe accumulator for the live transcription
@@ -72,6 +77,8 @@ func (a *transcribeStatsAccum) recordOutcome(status string, now time.Time) {
 		a.stats.FFmpegError++
 	case statusWhisperError:
 		a.stats.WhisperError++
+	case statusPathUnmapped:
+		a.stats.PathUnmapped++
 	case statusEmpty:
 		a.stats.Empty++
 	case statusExtracted:

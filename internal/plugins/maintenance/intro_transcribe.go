@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.35.1
+// version: 3.38.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -41,6 +41,34 @@ import (
 // can substitute a stub (e.g. one returning *transcribe.TransportError) without
 // a live Whisper endpoint. Production code never reassigns it.
 var transcribeBatchFn = transcribe.TranscribeBatchOpts
+
+// transcribePathBatchFn and pathPipelineAvailableFn are the same kind of test
+// seam for the remote_extract path: the batch call that sends SERVER PATHS to a
+// worker, and the probe that decides whether any worker can take them.
+var (
+	transcribePathBatchFn   = transcribe.TranscribeByPathBatch
+	pathPipelineAvailableFn = transcribe.PathPipelineAvailable
+)
+
+// extractMode says where a page's audio clips are cut.
+type extractMode int
+
+const (
+	// extractLocal runs ffmpeg in this process (after serverdecode.Check at run
+	// level) and uploads the WAVs; the clip cache applies.
+	extractLocal extractMode = iota
+	// extractRemote sends the book's source path to a worker, which cuts the
+	// clip on its own machine. This process decodes nothing and writes no clip
+	// cache, which is the whole point of the mode.
+	extractRemote
+)
+
+// remoteClipSeconds is the clip length remote jobs ask for; it matches the
+// local first-pass clip.
+const (
+	remoteClipSeconds      = 90
+	remoteRetryLongSeconds = 300
+)
 
 // whisperJournalKind is the resultjournal kind for whisper transcripts.
 const whisperJournalKind = resultjournal.KindWhisperIntro
@@ -128,6 +156,15 @@ type introTranscribeParams struct {
 	// {"dryRun":false} body was ignored and the run previewed. Like DryRun, the
 	// checkpoint leaves it nil so a resumed run keeps its original mode.
 	DryRunCamel *bool `json:"dryRun,omitempty"`
+	// RemoteExtract chooses where the first-90s clip is cut. Omitted means
+	// AUTO: remote when this host may not decode audio (serverdecode.Allowed()
+	// is false -- production) and some Whisper endpoint advertises
+	// path_pipeline, local otherwise. true forces remote and errors if no
+	// endpoint can serve it; false forces local, which then needs
+	// ALLOW_SERVER_DECODE like it always did. extract_only always runs local:
+	// its output is this server's clip cache. Remote mode skips the clip cache.
+	// The checkpoint leaves it nil so a resumed run re-resolves it.
+	RemoteExtract *bool `json:"remote_extract,omitempty"`
 }
 
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
@@ -137,7 +174,7 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Extracts the first 90 seconds of each book's first audio file and transcribes it with Whisper. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Uses batch mode: one Python process per page of 200 books loads the model once. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply. dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false (or dryRun=false) to transcribe, extract or reparse for real.",
+		Description:     "Transcribes the first 90 seconds of each book's first audio file with Whisper. Where the clip is cut depends on remote_extract: by default, when this server may not decode audio (production) and a Whisper worker advertises path_pipeline, the server sends the worker the file's path and the worker cuts the clip from its own NFS mount (no server decode, no clip cache; a worker with a lost mount defers the page instead of failing books); otherwise ffmpeg runs on this host, which needs ALLOW_SERVER_DECODE. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Works in pages of 200 books sent as batches. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode; a path_unmapped book, whose worker could not read the share, is never durable and is simply retried) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply. dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false (or dryRun=false) to transcribe, extract or reparse for real.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
@@ -198,11 +235,23 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		return p.reparseStoredIntros(ctx, store, reporter, ids, dryRun)
 	}
 
-	// A live run below extracts audio clips with ffmpeg (including extract_only),
-	// so it is refused unless the host opted in. reparse_only above never decodes,
-	// and neither does a preview (it only selects work), so neither is refused.
-	if !dryRun {
+	// Where the clips are cut. Resolved for previews too, so the preview can name
+	// it; the probe is one read-only /health per endpoint and decodes nothing.
+	mode, modeNote, err := resolveExtractMode(ctx, params.RemoteExtract, extractOnly)
+	if err != nil {
+		return err
+	}
+
+	// ffmpeg runs on this host ONLY in local mode, so only local mode is gated.
+	// reparse_only above never decodes, and neither does a preview (it only
+	// selects work). A remote-mode run decodes nothing here: the worker cuts the
+	// clip, which is how production transcribes without breaking the standing
+	// no-decode-on-the-server rule.
+	if !dryRun && mode == extractLocal {
 		if err := serverdecode.Check("maintenance.transcribe-book-intros"); err != nil {
+			if modeNote != "" {
+				return fmt.Errorf("%w (remote_extract not used: %s)", err, modeNote)
+			}
 			return err
 		}
 	}
@@ -269,7 +318,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	total := len(sel.work)
 
 	if dryRun {
-		return previewIntroTranscribe(reporter, sel, extractOnly, len(allIDs), startIdx)
+		return previewIntroTranscribe(reporter, sel, extractOnly, len(allIDs), startIdx, mode, modeNote)
 	}
 
 	log.Info("transcribe-book-intros: starting batch run",
@@ -278,7 +327,8 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		"total_books", total, "skipped_existing", sel.skipped,
 		"skipped_known_broken", sel.failedSkipped,
 		"not_found", sel.notFound, "read_errors", sel.readErrors,
-		"start_index", startIdx, "page_size", introTranscribePageSize)
+		"start_index", startIdx, "page_size", introTranscribePageSize,
+		"extract_mode", describeExtractMode(mode, modeNote))
 	if sel.unreadable() > 0 {
 		log.Warn("transcribe-book-intros: books listed but not readable, left out of this run",
 			"not_found", sel.notFound, "read_errors", sel.readErrors,
@@ -398,7 +448,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(cur, total,
 				mark+fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, pj)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, pj, mode)
 		cum := int(processed.Add(int64(done)))
 		accum.flush(false) // persist cumulative counts so the monitor sees live progress
 		log.Info("transcribe-book-intros: page complete",
@@ -438,13 +488,13 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		"processed", total64, "total_books", total, "attempted", st.Attempted,
 		"ok", st.OK, "source_missing", st.SourceMissing, "no_audio", st.NoAudio,
 		"ffmpeg_error", st.FFmpegError, "whisper_error", st.WhisperError,
-		"empty", st.Empty, "deferred", st.Deferred, "skipped_existing", st.SkippedExisting,
+		"path_unmapped", st.PathUnmapped, "empty", st.Empty, "deferred", st.Deferred, "skipped_existing", st.SkippedExisting,
 		"skipped_known_broken", sel.failedSkipped,
 		"unreadable", st.Unreadable, "cache_hits", st.CacheHits)
 	_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
-		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty, %d deferred "+
+		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d path-unmapped, %d empty, %d deferred "+
 			"(of %d total; %d skipped, %d of them known-broken not retried, %d unreadable)",
-		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, st.Deferred, total,
+		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.PathUnmapped, st.Empty, st.Deferred, total,
 		st.SkippedExisting, sel.failedSkipped, st.Unreadable)+journalFailureNote(st.JournalWriteFailures))
 	return nil
 }
@@ -467,6 +517,48 @@ func introModeMarker(dryRun bool) string {
 	return introLiveMarker
 }
 
+// resolveExtractMode decides where clips are cut (see
+// introTranscribeParams.RemoteExtract). note is a human reason when remote was
+// considered and not chosen, so a refusal can say why remote was not used.
+//
+// extract_only is always local: it exists to rebuild THIS server's clip cache,
+// which a worker-side extraction cannot populate.
+func resolveExtractMode(ctx context.Context, remoteExtract *bool, extractOnly bool) (mode extractMode, note string, err error) {
+	if extractOnly {
+		if remoteExtract != nil && *remoteExtract {
+			return extractLocal, "", errors.New("remote_extract=true cannot be combined with extract_only: " +
+				"extract_only rebuilds this server's clip cache, which a worker cannot fill")
+		}
+		return extractLocal, "", nil
+	}
+	if remoteExtract != nil && !*remoteExtract {
+		return extractLocal, "", nil
+	}
+	forced := remoteExtract != nil
+	if !forced && serverdecode.Allowed() {
+		// A development host that opted in keeps the historical local path.
+		return extractLocal, "", nil
+	}
+	ok, reason := pathPipelineAvailableFn(ctx)
+	if ok {
+		return extractRemote, "", nil
+	}
+	if forced {
+		return extractLocal, "", fmt.Errorf("remote_extract=true but no whisper endpoint can serve path jobs: %s", reason)
+	}
+	return extractLocal, "no whisper endpoint advertises path_pipeline: " + reason, nil
+}
+
+func describeExtractMode(mode extractMode, note string) string {
+	if mode == extractRemote {
+		return "on a Whisper worker (remote_extract: no decoding on this server)"
+	}
+	if note != "" {
+		return "on this host (" + note + ")"
+	}
+	return "on this host"
+}
+
 // introPreviewSamples bounds the book ids a preview names.
 const introPreviewSamples = 5
 
@@ -474,7 +566,7 @@ const introPreviewSamples = 5
 // selection and returns. It is the whole of a transcribe/extract_only preview:
 // it calls no ffmpeg and no Whisper and writes no clip, no stats key, no
 // journal entry and no book, so everything it needs is already in sel.
-func previewIntroTranscribe(reporter sdk.Reporter, sel transcribeSelection, extractOnly bool, libraryBooks, startIdx int) error {
+func previewIntroTranscribe(reporter sdk.Reporter, sel transcribeSelection, extractOnly bool, libraryBooks, startIdx int, mode extractMode, modeNote string) error {
 	verb := "transcribe"
 	if extractOnly {
 		verb = "extract clips for"
@@ -482,14 +574,16 @@ func previewIntroTranscribe(reporter sdk.Reporter, sel transcribeSelection, extr
 	samples := sel.work[:min(introPreviewSamples, len(sel.work))]
 	msg := introPreviewMarker + fmt.Sprintf(
 		"would %s %d books (of %d listed, starting at %d); "+
-			"%d skipped (%d of them known-broken, not retried), %d unreadable; first ids: [%s]. "+
-			"Pass dry_run=false to run.",
+			"%d skipped (%d of them known-broken, not retried), %d unreadable; first ids: [%s]; "+
+			"clips would be cut %s. Pass dry_run=false to run.",
 		verb, len(sel.work), libraryBooks, startIdx,
-		sel.skipped, sel.failedSkipped, sel.unreadable(), strings.Join(samples, ", "))
+		sel.skipped, sel.failedSkipped, sel.unreadable(), strings.Join(samples, ", "),
+		describeExtractMode(mode, modeNote))
 	reporter.Logger().Info("transcribe-book-intros: preview",
 		"would_process", len(sel.work), "library_books", libraryBooks, "start_index", startIdx,
 		"skipped_existing", sel.skipped, "skipped_known_broken", sel.failedSkipped,
-		"not_found", sel.notFound, "read_errors", sel.readErrors, "sample_ids", samples)
+		"not_found", sel.notFound, "read_errors", sel.readErrors, "sample_ids", samples,
+		"extract_mode", describeExtractMode(mode, modeNote))
 	if sel.unreadable() > 0 {
 		reporter.Logger().Warn("transcribe-book-intros: books listed but not readable, left out of the preview",
 			"not_found", sel.notFound, "read_errors", sel.readErrors, "samples", sel.samples)
@@ -981,21 +1075,29 @@ func (p *Plugin) processTranscribePage(
 	accum *transcribeStatsAccum,
 	extractOnly bool,
 	pj pageJournal,
+	mode extractMode,
 ) (processed int) {
-	cacheDir := wavCacheDir(rootDir)
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		log.Warn("transcribe: cannot create clip cache dir, running without cache", "dir", cacheDir, "err", err)
-		cacheDir = ""
-	}
+	remote := mode == extractRemote
+	// Remote mode cuts no clip on this host, so it neither creates the clip
+	// cache directory nor a temp dir for WAVs: nothing here may write audio.
+	cacheDir, tmpDir := "", ""
+	if !remote {
+		cacheDir = wavCacheDir(rootDir)
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			log.Warn("transcribe: cannot create clip cache dir, running without cache", "dir", cacheDir, "err", err)
+			cacheDir = ""
+		}
 
-	// tmpDir holds WAVs for books whose source file has no stored hash (no caching).
-	tmpDir, err := os.MkdirTemp("", "ao-transcribe-*")
-	if err != nil {
-		log.Warn("transcribe: create temp dir failed, page deferred (no status written)", "books", len(books), "err", err)
-		accum.recordDeferred(len(books))
-		return 0
+		// tmpDir holds WAVs for books whose source file has no stored hash (no caching).
+		var err error
+		tmpDir, err = os.MkdirTemp("", "ao-transcribe-*")
+		if err != nil {
+			log.Warn("transcribe: create temp dir failed, page deferred (no status written)", "books", len(books), "err", err)
+			accum.recordDeferred(len(books))
+			return 0
+		}
+		defer os.RemoveAll(tmpDir)
 	}
-	defer os.RemoveAll(tmpDir)
 
 	now := time.Now()
 	bookByID := make(map[string]database.Book, len(books))
@@ -1033,6 +1135,17 @@ func (p *Plugin) processTranscribePage(
 	for i, j := range jobs {
 		if j.audioSrc == "" {
 			wavResults[i] = wavResult{bookID: j.book.ID, status: statusNoAudio}
+			continue
+		}
+		if remote {
+			// Nothing is cut here. A stat is not a decode, and it keeps a stale
+			// FilePath's verdict identical to local mode ("source file not
+			// found") without spending a worker request on it.
+			if _, statErr := os.Stat(j.audioSrc); statErr != nil {
+				wavResults[i] = wavResult{bookID: j.book.ID, status: statusSourceMissing, detail: "source file not found: " + j.audioSrc}
+			} else {
+				wavResults[i] = wavResult{bookID: j.book.ID} // accepted: the worker cuts it
+			}
 			continue
 		}
 		idx, bookID, src, fileHash := i, j.book.ID, j.audioSrc, j.fileHash
@@ -1115,21 +1228,41 @@ func (p *Plugin) processTranscribePage(
 		return extracted
 	}
 
-	// Build the jobs map for TranscribeBatch (only books with valid WAVs).
+	// Build the jobs for the whisper call. Local: the WAV path of every book
+	// that has a clip. Remote: the SOURCE path of every book the stat accepted,
+	// which the worker cuts itself. submitted is the set of books whose outcome
+	// step 4 writes.
 	batchJobs := make(map[string]string)
+	pathJobs := make(map[string]transcribe.PathJob)
+	submitted := make(map[string]bool)
+	srcByID := make(map[string]string, len(jobs))
+	for _, j := range jobs {
+		srcByID[j.book.ID] = j.audioSrc
+	}
 	for _, r := range wavResults {
-		if r.wavPath != "" {
+		switch {
+		case remote && r.status == "":
+			pathJobs[r.bookID] = transcribe.PathJob{Path: srcByID[r.bookID], Seconds: remoteClipSeconds}
+			submitted[r.bookID] = true
+		case !remote && r.wavPath != "":
 			batchJobs[r.bookID] = r.wavPath
+			submitted[r.bookID] = true
 		}
 	}
-	if len(batchJobs) == 0 {
+	if len(submitted) == 0 {
 		return 0
 	}
 
-	// Step 3: one Python/Whisper process for the whole page.
-	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
+	// Step 3: one whisper batch for the whole page.
+	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(submitted), "remote_extract", remote)
 	batchOpts := transcribe.BatchOptions{OnProgress: onBook, Journal: pj.journal, RefreshJournal: pj.refresh}
-	batchResults, err := transcribeBatchFn(ctx, batchJobs, batchOpts)
+	var batchResults map[string]transcribe.BatchResult
+	var err error
+	if remote {
+		batchResults, err = transcribePathBatchFn(ctx, pathJobs, batchOpts)
+	} else {
+		batchResults, err = transcribeBatchFn(ctx, batchJobs, batchOpts)
+	}
 	var te *transcribe.TransportError
 	switch {
 	case errors.As(err, &te):
@@ -1138,17 +1271,17 @@ func (p *Plugin) processTranscribePage(
 		// branch's absence recorded a day-long endpoint outage as ~34,000
 		// false per-book whisper_error verdicts.
 		log.Warn("transcribe: endpoints unreachable, page deferred (no status written)",
-			"jobs", len(batchJobs), "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err)
-		accum.recordDeferred(len(batchJobs))
+			"jobs", len(submitted), "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err)
+		accum.recordDeferred(len(submitted))
 		return 0
 	case err != nil:
 		// Whole-batch failure: every book that had a WAV is a whisper_error.
 		// Note classifyTransport wraps EVERY batch-level error from the remote
 		// path as a TransportError, so in practice this arm is unreachable from
 		// the remote path; kept as defence for the local path.
-		log.Warn("transcribe: whisper batch failed", "jobs", len(batchJobs), "err", err)
+		log.Warn("transcribe: whisper batch failed", "jobs", len(submitted), "err", err)
 		detail := truncateDetail(err.Error())
-		for bookID := range batchJobs {
+		for bookID := range submitted {
 			b := bookByID[bookID]
 			p.applyOutcome(store, log, &b, statusWhisperError, detail, "", transcribe.IntroFields{}, now, accum)
 		}
@@ -1182,33 +1315,109 @@ func (p *Plugin) processTranscribePage(
 	// silencedBookIDs tracks books written with the sentinel so Step 4 skips them.
 	silencedBookIDs := map[string]bool{}
 
-	if len(silentQueue) > 0 {
-		log.Info("transcribe: retrying with 300s clip", "count", len(silentQueue))
-		retry1Jobs := make(map[string]string, len(silentQueue))
-		for _, s := range silentQueue {
-			wav := filepath.Join(tmpDir, "r1_"+s.book.ID+".wav")
-			cmd := exec.CommandContext(ctx, "ffmpeg",
-				"-y", "-i", s.src, "-t", "300",
-				"-vn", "-ar", "16000", "-ac", "1", "-f", "wav", wav)
-			if out, ferr := cmd.CombinedOutput(); ferr != nil {
-				log.Warn("transcribe: retry1 ffmpeg failed", "book_id", s.book.ID, "err", ferr, "out", strings.TrimSpace(string(out)))
-			} else {
-				retry1Jobs[s.book.ID] = wav
+	// retryFailed holds the books whose silence retry told us nothing about the
+	// book: a batch/transport error, no result, a misconfigured worker, or (local)
+	// a clip that could not be cut. A retry that returned a real per-job verdict
+	// is NOT in here; its error stays in batchResults for Step 4 to classify.
+	// A book in here was never shown to be silent: writing the [SILENCE] sentinel for it would make only_missing skip
+	// it forever on the strength of a mount drop or an endpoint outage. It gets
+	// no outcome this run and is counted deferred, so the next run retries it.
+	retryFailed := map[string]bool{}
+
+	// retryRound re-transcribes a set of source files (book id -> path) with a
+	// clip of the given length and returns whatever came back, with the ids
+	// whose retry failed (see retryFailed) in the second result.
+	// Local mode cuts the clips with ffmpeg here; remote mode sends the paths to
+	// a worker, so a remote-mode run's retries never decode on this server either.
+	retryRound := func(name string, srcs map[string]string, seconds int) (map[string]transcribe.BatchResult, map[string]bool) {
+		failed := map[string]bool{}
+		failAll := func() {
+			for id := range srcs {
+				failed[id] = true
 			}
 		}
-		if len(retry1Jobs) > 0 {
-			if r1, rerr := transcribeBatchFn(ctx, retry1Jobs, batchOpts); rerr == nil {
-				for id, res := range r1 {
-					if res.Text != "" {
-						batchResults[id] = res
-					}
+		// collect flags every submitted id whose retry says nothing about the
+		// book: no result at all, or (remote) a worker that is itself
+		// misconfigured. A per-job error that IS a verdict about the book
+		// (ffmpeg_error on the 300 s clip, a not_found the server's own stat
+		// confirms) is not a failure here: the caller keeps it in batchResults
+		// and Step 4's classifyTranscribeError decides what it means.
+		collect := func(res map[string]transcribe.BatchResult, sent map[string]string) {
+			for id := range sent {
+				r, ok := res[id]
+				if !ok || (remote && transcribe.PathErrorCode(r.Error) == transcribe.PathErrWorkerMisconfigured) {
+					failed[id] = true
 				}
 			}
 		}
+		if len(srcs) == 0 {
+			return nil, failed
+		}
+		if remote {
+			jobs := make(map[string]transcribe.PathJob, len(srcs))
+			for id, src := range srcs {
+				jobs[id] = transcribe.PathJob{Path: src, Seconds: seconds}
+			}
+			res, rerr := transcribePathBatchFn(ctx, jobs, batchOpts)
+			if rerr != nil {
+				log.Warn("transcribe: "+name+" path batch failed", "jobs", len(jobs), "err", rerr)
+				failAll()
+				return nil, failed
+			}
+			collect(res, srcs)
+			return res, failed
+		}
+		wavs := make(map[string]string, len(srcs))
+		for id, src := range srcs {
+			wav := filepath.Join(tmpDir, "r"+strings.TrimPrefix(name, "retry")+"_"+id+".wav")
+			cmd := exec.CommandContext(ctx, "ffmpeg",
+				"-y", "-i", src, "-t", strconv.Itoa(seconds),
+				"-vn", "-ar", "16000", "-ac", "1", "-f", "wav", wav)
+			if out, ferr := cmd.CombinedOutput(); ferr != nil {
+				log.Warn("transcribe: "+name+" ffmpeg failed", "book_id", id, "err", ferr, "out", strings.TrimSpace(string(out)))
+				failed[id] = true
+			} else {
+				wavs[id] = wav
+			}
+		}
+		if len(wavs) == 0 {
+			return nil, failed
+		}
+		res, rerr := transcribeBatchFn(ctx, wavs, batchOpts)
+		if rerr != nil {
+			log.Warn("transcribe: "+name+" batch failed", "jobs", len(wavs), "err", rerr)
+			failAll()
+			return nil, failed
+		}
+		collect(res, wavs)
+		return res, failed
+	}
 
-		// Collect books still silent after retry1.
+	if len(silentQueue) > 0 {
+		log.Info("transcribe: retrying with 300s clip", "count", len(silentQueue))
+		retry1Srcs := make(map[string]string, len(silentQueue))
+		for _, sb := range silentQueue {
+			retry1Srcs[sb.book.ID] = sb.src
+		}
+		r1, r1failed := retryRound("retry1", retry1Srcs, remoteRetryLongSeconds)
+		for id, res := range r1 {
+			// A transcript replaces the empty first pass; so does a per-job
+			// error, which Step 4 classifies (see retryRound's collect).
+			if res.Text != "" || res.Error != "" {
+				batchResults[id] = res
+			}
+		}
+		for id := range r1failed {
+			retryFailed[id] = true
+		}
+
+		// Collect books still silent after retry1 (a failed retry is not
+		// "still silent": it is unknown, see retryFailed).
 		var stillSilent []silentBook
 		for _, s := range silentQueue {
+			if retryFailed[s.book.ID] {
+				continue
+			}
 			if res := batchResults[s.book.ID]; res.Text == "" && res.Error == "" {
 				stillSilent = append(stillSilent, s)
 			}
@@ -1216,38 +1425,29 @@ func (p *Plugin) processTranscribePage(
 
 		if len(stillSilent) > 0 {
 			log.Info("transcribe: retrying with second audio file", "count", len(stillSilent))
-			retry2Jobs := make(map[string]string, len(stillSilent))
-			for _, s := range stillSilent {
-				ref2, _ := nthAudioFile(store, s.book, 1)
-				src2 := ref2.Path
-				if src2 == "" {
+			retry2Srcs := make(map[string]string, len(stillSilent))
+			for _, sb := range stillSilent {
+				ref2, _ := nthAudioFile(store, sb.book, 1)
+				if ref2.Path == "" {
 					continue
 				}
-				wav := filepath.Join(tmpDir, "r2_"+s.book.ID+".wav")
-				cmd := exec.CommandContext(ctx, "ffmpeg",
-					"-y", "-i", src2, "-t", "90",
-					"-vn", "-ar", "16000", "-ac", "1", "-f", "wav", wav)
-				if out, ferr := cmd.CombinedOutput(); ferr != nil {
-					log.Warn("transcribe: retry2 ffmpeg failed", "book_id", s.book.ID, "err", ferr, "out", strings.TrimSpace(string(out)))
-				} else {
-					retry2Jobs[s.book.ID] = wav
+				retry2Srcs[sb.book.ID] = ref2.Path
+			}
+			r2, r2failed := retryRound("retry2", retry2Srcs, remoteClipSeconds)
+			for id, res := range r2 {
+				if res.Text != "" || res.Error != "" {
+					batchResults[id] = res
 				}
 			}
-			if len(retry2Jobs) > 0 {
-				if r2, rerr := transcribeBatchFn(ctx, retry2Jobs, batchOpts); rerr == nil {
-					for id, res := range r2 {
-						if res.Text != "" {
-							batchResults[id] = res
-						}
-					}
-				}
+			for id := range r2failed {
+				retryFailed[id] = true
 			}
 
 			// Mark books that exhausted all retries with the silence sentinel.
 			sentinel := silenceSentinel
 			markedSilent := 0
 			for _, s := range stillSilent {
-				if batchResults[s.book.ID].Text != "" {
+				if br := batchResults[s.book.ID]; br.Text != "" || br.Error != "" || retryFailed[s.book.ID] {
 					continue
 				}
 				// s.book was copied before ffmpeg and two whisper passes ran.
@@ -1289,20 +1489,34 @@ func (p *Plugin) processTranscribePage(
 	// Step 4: write per-book outcome for every book that had a WAV submitted.
 	// Books that received the silence sentinel in Step 3b are skipped here so
 	// the sentinel is not overwritten with statusEmpty.
-	for bookID := range batchJobs {
+	for bookID := range submitted {
 		book := bookByID[bookID]
 		result, ok := batchResults[bookID]
 		switch {
+		case remote && ok && transcribe.PathErrorCode(result.Error) == transcribe.PathErrWorkerMisconfigured:
+			// The worker, not the book, is broken (ffmpeg missing from its
+			// PATH). Storing it as a per-book verdict is the 2026-08-31 shape:
+			// write nothing and defer, like an unreachable endpoint.
+			log.Warn("transcribe: worker misconfigured, book deferred (no status written)", "book_id", bookID, "err", result.Error)
+			accum.recordDeferred(1)
 		case !ok || result.Error != "":
-			detail := "no whisper result"
+			status, detail := statusWhisperError, "no whisper result"
 			if ok {
-				detail = truncateDetail(result.Error)
+				status, detail = classifyTranscribeError(remote, srcByID[bookID], result.Error)
 			}
-			log.Warn("transcribe: whisper error", "book_id", bookID, "err", detail)
-			p.applyOutcome(store, log, &book, statusWhisperError, detail, "", transcribe.IntroFields{}, now, accum)
+			log.Warn("transcribe: "+status, "book_id", bookID, "err", detail)
+			p.applyOutcome(store, log, &book, status, detail, "", transcribe.IntroFields{}, now, accum)
 		case result.Text == "":
 			if silencedBookIDs[bookID] {
 				continue // handled by Step 3b; sentinel already written
+			}
+			if retryFailed[bookID] {
+				// A silence retry failed, so the book is not known to be
+				// silent: write nothing (no sentinel, no empty verdict) and
+				// leave it for the next run.
+				log.Warn("transcribe: silence retry failed, book deferred (no status written)", "book_id", bookID)
+				accum.recordDeferred(1)
+				continue
 			}
 			p.applyOutcome(store, log, &book, statusEmpty, "whisper returned empty text", "", transcribe.IntroFields{}, now, accum)
 		default:
@@ -1418,6 +1632,46 @@ func (p *Plugin) applyOutcome(
 		return false
 	}
 	return hasTranscript
+}
+
+// classifyTranscribeError maps one book's per-file error from the whisper call
+// to the status and detail to store.
+//
+// Local mode: every error is a whisper_error, as it always was. Remote mode:
+// the worker prefixes its errors with a stable code (transcribe.PathErrorCode),
+// and each code means something different for the book's FUTURE:
+//
+//   - ffmpeg_error: the worker's ffmpeg could not decode the file. A verdict
+//     about the file, so it is the (durable) ffmpeg_error status.
+//   - path_unmapped / not_found: the worker could not reach the file. Whether the
+//     BOOK is at fault is answered by the one witness this process has: if the
+//     server cannot stat the file either, it is gone (source_file_missing,
+//     durable, self-heals when the file returns). If the server CAN, the fault
+//     is the worker's mapping or mount, so path_unmapped, which is not durable
+//     and is retried next run.
+//   - worker_misconfigured never reaches this function: the caller defers the
+//     book (no status written), because the worker, not the book, is at fault.
+//   - ffmpeg_timeout, container_rejected, bad_request, whisper_error, or no code:
+//     not a verdict about the file (an NFS stall, a refused container, a
+//     malformed request, inference trouble):
+//     whisper_error, retried next run. Burying a book as ffmpeg_error because an
+//     NFS read stalled would hide it until its mtime changed.
+func classifyTranscribeError(remote bool, src, errText string) (status, detail string) {
+	if !remote {
+		return statusWhisperError, truncateDetail(errText)
+	}
+	_, msg, _ := strings.Cut(errText, ": ")
+	switch transcribe.PathErrorCode(errText) {
+	case transcribe.PathErrFFmpeg:
+		return statusFFmpegError, truncateDetail(msg)
+	case transcribe.PathErrUnmapped, transcribe.PathErrNotFound:
+		if _, err := os.Stat(src); err != nil {
+			return statusSourceMissing, "source file not found: " + src
+		}
+		return statusPathUnmapped, truncateDetail(errText)
+	default:
+		return statusWhisperError, truncateDetail(errText)
+	}
 }
 
 // ffmpegErrorTail returns the most diagnostic tail of ffmpeg stderr. ffmpeg

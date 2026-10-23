@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/setup_mac_ai_worker.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: 3b8e6d21-7f4a-4c19-9e52-0a6d4f8c1b73
-# last-edited: 2026-10-20
+# last-edited: 2026-10-22
 """Set up an Apple Silicon Mac as an AI worker for audiobook-organizer.
 
 It installs and configures three things:
@@ -89,20 +89,28 @@ def whisper_label(port: int) -> str:
     return f"com.jdfalk.whisper-mlx-{port}"
 
 
-def whisper_plist(port: int, repo: Path, home: Path, model: str) -> dict:
+def whisper_plist(port: int, repo: Path, home: Path, model: str, path_map: str = "") -> dict:
     # No ProcessType/Nice: background QoS pins the worker to the efficiency
     # cores and starves Metal (4.92 s vs >240 s measured 2026-08-31).
     # PATH must include Homebrew or mlx_whisper cannot find ffmpeg.
+    env = {
+        "WHISPER_BIND": "127.0.0.1",
+        "WHISPER_PORT": str(port),
+        "WHISPER_MLX_MODEL": model,
+        "PATH": BREW_PATH,
+    }
+    if path_map:
+        # Enables the worker's /transcribe-path* endpoints (no default exists on
+        # purpose; see docs/whisper-remote-extract.md). Omitted when not given,
+        # which leaves path_pipeline off. Re-running this script rewrites the
+        # plist from scratch, so a map set only by hand is lost unless it is
+        # passed here again.
+        env["WHISPER_PATH_MAP"] = path_map
     return {
         "Label": whisper_label(port),
         "ProgramArguments": ["/opt/homebrew/bin/uv", "run", "scripts/whisper_mlx_server.py"],
         "WorkingDirectory": str(repo),
-        "EnvironmentVariables": {
-            "WHISPER_BIND": "127.0.0.1",
-            "WHISPER_PORT": str(port),
-            "WHISPER_MLX_MODEL": model,
-            "PATH": BREW_PATH,
-        },
+        "EnvironmentVariables": env,
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 30,
@@ -245,7 +253,9 @@ def apply(args: argparse.Namespace, plan: PortPlan) -> int:
         for port in plan.whisper_local:
             path = agents / f"{whisper_label(port)}.plist"
             path.write_bytes(
-                plistlib.dumps(whisper_plist(port, args.repo, home, args.whisper_model))
+                plistlib.dumps(
+                    whisper_plist(port, args.repo, home, args.whisper_model, args.whisper_path_map)
+                )
             )
             launchd_reload(path, whisper_label(port))
         for port in plan.whisper_local:
@@ -323,6 +333,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent)
     ap.add_argument("--models", nargs="+", default=list(DEFAULT_MODELS))
     ap.add_argument("--whisper-model", default=DEFAULT_WHISPER_MODEL)
+    ap.add_argument(
+        "--whisper-path-map",
+        default="",
+        help="WHISPER_PATH_MAP for the workers, e.g. /mnt/bigdata=/Users/you/mnt/bigdata "
+        "(enables worker-side clip extraction; no default)",
+    )
     ap.add_argument("--skip-ollama", action="store_true")
     ap.add_argument("--skip-whisper", action="store_true")
     ap.add_argument(

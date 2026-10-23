@@ -1,7 +1,7 @@
 # file: scripts/tests/test_setup_mac_ai_worker.py
-# version: 1.1.1
+# version: 1.2.0
 # guid: 8d4f2a6c-1e9b-4b7d-a3c5-6f0e2d9b4a18
-# last-edited: 2026-10-20
+# last-edited: 2026-10-22
 """Tests for scripts/setup_mac_ai_worker.py (pure functions only, no side effects).
 
 stdlib unittest only: the Repo Guards job runs these without pytest installed.
@@ -78,6 +78,19 @@ class PlistTest(unittest.TestCase):
         self.assertEqual(env["WHISPER_PORT"], "19848")
         self.assertIn("/opt/homebrew/bin", env["PATH"])
         self.assertEqual(pl["Label"], "com.jdfalk.whisper-mlx-19848")
+
+    def test_path_map_is_off_unless_given(self):
+        """No default: an unset map must leave the worker's path pipeline off."""
+        pl = m.whisper_plist(19848, Path("/repo"), Path("/Users/x"), "model")
+        self.assertNotIn("WHISPER_PATH_MAP", pl["EnvironmentVariables"])
+
+    def test_path_map_is_written_when_given(self):
+        pl = m.whisper_plist(
+            19848, Path("/repo"), Path("/Users/x"), "model", "/mnt/bigdata=/Users/x/mnt/bigdata"
+        )
+        self.assertEqual(
+            pl["EnvironmentVariables"]["WHISPER_PATH_MAP"], "/mnt/bigdata=/Users/x/mnt/bigdata"
+        )
 
 
 class EnvFileTest(unittest.TestCase):
