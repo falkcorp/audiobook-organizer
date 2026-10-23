@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.89.2
+// version: 1.90.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-23
 
@@ -1427,9 +1427,17 @@ type userStateRevertStore interface {
 // follow cannot move the rows between the check and the write. The book
 // itself need not exist: user state outlives it.
 func (rs *RevertService) revertUserBookStateSet(c *database.OperationChange) error {
-	user, ok := undo.UserFromStateField(c.FieldName)
-	if !ok {
+	if _, ok := undo.UserFromStateField(c.FieldName); !ok {
 		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: fmt.Sprintf("no user in field %q", c.FieldName)}
+	}
+	// The change names the account as it was when it was recorded. If an admin
+	// has merged that account into another since, its rows are the other
+	// account's now: the change is re-homed there and the compare-and-set
+	// below refuses (never overwrites) unless that account still holds exactly
+	// what the change wrote.
+	user, c, err := undo.ResolveUserStateChange(rs.db, c)
+	if err != nil {
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: err.Error()}
 	}
 	old, err := undo.DecodeUserStateSnapshot(c.OldValue)
 	if err != nil {
