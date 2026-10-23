@@ -1,5 +1,5 @@
 // file: internal/batch/service_test.go
-// version: 1.11.0
+// version: 1.12.0
 // last-edited: 2026-10-22
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
@@ -745,7 +745,7 @@ type fakeTrashPurger struct {
 	err    error
 }
 
-func (f *fakeTrashPurger) PurgeTrashedBook(b *database.Book) error {
+func (f *fakeTrashPurger) PurgeTrashedBookLocked(b *database.Book) error {
 	f.called = append(f.called, b.ID)
 	return f.err
 }

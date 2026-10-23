@@ -1,5 +1,5 @@
 // file: internal/merge/combine_incomplete_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3d698376-7775-4e75-b18b-bdb85372ac0e
 // last-edited: 2026-10-22
 
@@ -151,7 +151,9 @@ func TestCombineBooks_ContextDoneStopsBetweenBooksAndIsUndone(t *testing.T) {
 	require.Equal(t, "op-ctxstop", incomplete.OperationID)
 
 	// The lock is free again: a stopped combine must not keep holding it.
-	require.NoError(t, WaitMergeIdle(time.Second))
+	unlock, lerr := TryLockMergeRMWWithin(time.Second)
+	require.NoError(t, lerr)
+	unlock()
 
 	j, err := NewService(store).GetCombineJournal(incomplete.JournalID)
 	require.NoError(t, err)
