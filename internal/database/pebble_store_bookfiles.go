@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-23
 
@@ -290,7 +290,7 @@ func (s *PebbleStore) stagePIDTransfer(batch *GatedBatch, file *BookFile) (*Book
 	if file == nil || file.ITunesPersistentID == "" {
 		return nil, nil
 	}
-	prior, err := s.GetBookFileByPID(file.ITunesPersistentID)
+	prior, err := s.getBookFileByPIDAny(file.ITunesPersistentID)
 	if err != nil {
 		return nil, fmt.Errorf("stagePIDTransfer: PID-uniqueness lookup for %q: %w", file.ITunesPersistentID, err)
 	}
@@ -1256,9 +1256,23 @@ func (s *PebbleStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, err
 	return out, nil
 }
 
-// GetBookFileByPID looks up a BookFile by iTunes persistent ID using the
-// book_file_pid:<pid> secondary index.
+// GetBookFileByPID looks up the LIVE BookFile that carries an iTunes persistent
+// ID, using the book_file_pid:<pid> secondary index. A PID held only by a
+// retired row (a version held by another book) answers (nil, nil): the retired
+// row keeps the index key only while no live row carries the PID, and it is not
+// a file of the book it is keyed under. GetBookFileByPIDIncludingRetired
+// returns it.
 func (s *PebbleStore) GetBookFileByPID(itunesPID string) (*BookFile, error) {
+	f, err := s.getBookFileByPIDAny(itunesPID)
+	if err != nil || f == nil || f.Retired {
+		return nil, err
+	}
+	return f, nil
+}
+
+// getBookFileByPIDAny is GetBookFileByPID without the retired filter, for the
+// store's own write paths that make their own decision about a retired row.
+func (s *PebbleStore) getBookFileByPIDAny(itunesPID string) (*BookFile, error) {
 	if itunesPID == "" {
 		return nil, nil
 	}
@@ -1302,9 +1316,22 @@ func (s *PebbleStore) ClearITunesPID(itunesPID string) (bool, error) {
 	return true, nil
 }
 
-// GetBookFileByPath looks up a BookFile by file path using the
-// book_file_path:<crc32hex> secondary index.
+// GetBookFileByPath looks up the LIVE BookFile at a file path using the
+// book_file_path:<crc32hex> secondary index. A path held only by a retired row
+// answers (nil, nil), for the same reason as GetBookFileByPID; BookFilesAtPath
+// returns every row at a path, retired ones included.
 func (s *PebbleStore) GetBookFileByPath(filePath string) (*BookFile, error) {
+	f, err := s.getBookFileByPathAny(filePath)
+	if err != nil || f == nil || f.Retired {
+		return nil, err
+	}
+	return f, nil
+}
+
+// getBookFileByPathAny is GetBookFileByPath without the retired filter (the
+// complete BookFilesAtPath lookup and the store's own upsert paths need to see
+// the retired row).
+func (s *PebbleStore) getBookFileByPathAny(filePath string) (*BookFile, error) {
 	if filePath == "" {
 		return nil, nil
 	}
@@ -1334,8 +1361,11 @@ func (s *PebbleStore) GetBookFileByPath(filePath string) (*BookFile, error) {
 	return f, nil
 }
 
-// GetBookFileByAcoustID looks up a BookFile by exact AcoustID fingerprint
-// using the book_file_acoustid: secondary index.
+// GetBookFileByAcoustID looks up the LIVE BookFile with an exact AcoustID
+// fingerprint using the book_file_acoustid: secondary index. A fingerprint held
+// only by a retired row answers (nil, nil): the exact lookup must not name the
+// holder as the owner of a print it does not carry, the same rule the fuzzy
+// lookup applies.
 func (s *PebbleStore) GetBookFileByAcoustID(fp string) (*BookFile, error) {
 	if fp == "" {
 		return nil, nil
@@ -1355,7 +1385,11 @@ func (s *PebbleStore) GetBookFileByAcoustID(fp string) (*BookFile, error) {
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("corrupt book_file_acoustid index: %q", ref)
 	}
-	return s.getBookFileByID(parts[0], parts[1])
+	f, err := s.getBookFileByID(parts[0], parts[1])
+	if err != nil || f == nil || f.Retired {
+		return nil, err
+	}
+	return f, nil
 }
 
 // GetBookFileByAcoustIDFuzzy scans all book_file records and returns the first
@@ -1866,7 +1900,7 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	// key; see writeBookFileSecondaryIndexesFor). Matching by an explicit ID
 	// below still reaches a retired row, which keeps Retired (bfStoredOwned).
 	if file.ITunesPersistentID != "" {
-		existing, err = s.GetBookFileByPID(file.ITunesPersistentID)
+		existing, err = s.getBookFileByPIDAny(file.ITunesPersistentID)
 		if err != nil {
 			return err
 		}
@@ -1876,7 +1910,7 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	}
 
 	if existing == nil && file.FilePath != "" {
-		existing, err = s.GetBookFileByPath(file.FilePath)
+		existing, err = s.getBookFileByPathAny(file.FilePath)
 		if err != nil {
 			return err
 		}
@@ -2100,7 +2134,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 			// A retired row is never an upsert's match by PID or path (see
 			// UpsertBookFile): the caller's row is created live instead.
 			if file.ITunesPersistentID != "" {
-				existing, lookupErr = s.GetBookFileByPID(file.ITunesPersistentID)
+				existing, lookupErr = s.getBookFileByPIDAny(file.ITunesPersistentID)
 			}
 			if lookupErr != nil {
 				batch.Close()
@@ -2110,7 +2144,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 				existing = nil
 			}
 			if existing == nil && file.FilePath != "" {
-				existing, lookupErr = s.GetBookFileByPath(file.FilePath)
+				existing, lookupErr = s.getBookFileByPathAny(file.FilePath)
 				if lookupErr != nil {
 					batch.Close()
 					return nil, lookupErr
