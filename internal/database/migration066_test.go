@@ -1,5 +1,5 @@
 // file: internal/database/migration066_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c16a990-2d0e-4278-b18a-1d20d6bfe3ea
 // last-edited: 2026-10-22
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -184,4 +185,113 @@ func TestMigration066CountsLegacyPlanWithUndecodableTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, torn, string(raw), "the undecodable record is left byte for byte as it was")
 	require.NoError(t, closer.Close())
+}
+
+// TestMigration066SkipsRecordStoredUnderAnotherKey: a record whose own id is
+// not the key it sits under is counted as unreadable and skipped. The rewrite
+// writes by id, so a legacy plan found under "plan-x" whose JSON says "other"
+// must neither be stripped nor cause anything to be written under "other".
+func TestMigration066SkipsRecordStoredUnderAnotherKey(t *testing.T) {
+	st, cleanup := setupTestDB(t)
+	defer cleanup()
+	p := st.(*PebbleStore)
+
+	result := `{"fixer_id":"x","rows":[{"row_id":"a"}]}`
+	now := time.Now().UTC()
+	data, err := json.Marshal(OperationV2Row{ID: "other", DefID: LegacyPlanOpDefID, Status: "completed",
+		QueuedAt: now, CompletedAt: &now, ResultData: &result})
+	require.NoError(t, err)
+	require.NoError(t, p.db.Set(opv2OpKey("plan-x"), data, pebble.Sync))
+
+	rep, err := p.StripLegacyPlanRows()
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.UnreadableOps)
+	require.Zero(t, rep.Stripped)
+	require.Zero(t, rep.Plans, "a record under the wrong key is not counted as a plan")
+
+	raw, closer, err := p.db.Get(opv2OpKey("plan-x"))
+	require.NoError(t, err)
+	require.Equal(t, string(data), string(raw), "the mismatched record is left byte for byte as it was")
+	require.NoError(t, closer.Close())
+	_, _, err = p.db.Get(opv2OpKey("other"))
+	require.ErrorIs(t, err, pebble.ErrNotFound, "nothing may be written under the id the record claims")
+}
+
+// TestMigration066CountsHollowRecordsApart: a stored record that decodes but has
+// no id is a hollow shell, counted in HollowOps, not in UnreadableOps (which
+// is Warn-logged per record); a damaged record beside it still is.
+func TestMigration066CountsHollowRecordsApart(t *testing.T) {
+	st, cleanup := setupTestDB(t)
+	defer cleanup()
+	p := st.(*PebbleStore)
+
+	require.NoError(t, p.db.Set(opv2OpKey("shell-1"), []byte(`{}`), pebble.Sync))
+	require.NoError(t, p.db.Set(opv2OpKey("shell-2"), []byte(`{"Status":"queued"}`), pebble.Sync))
+	require.NoError(t, p.db.Set(opv2OpKey("junk"), []byte("{not json"), pebble.Sync))
+
+	rep, err := p.StripLegacyPlanRows()
+	require.NoError(t, err)
+	require.Equal(t, 2, rep.HollowOps)
+	require.Equal(t, 1, rep.UnreadableOps)
+}
+
+// TestMigration066ReadFailureStaysFatal: only a record whose bytes do not
+// decode is skipped. A failed read (an I/O error, a closed store) says nothing
+// about the record, so the strip stops and returns it, and boot reports the
+// failure instead of carrying on with a migration it only half did.
+func TestMigration066ReadFailureStaysFatal(t *testing.T) {
+	st, cleanup := setupTestDB(t)
+	defer cleanup()
+	p := st.(*PebbleStore)
+	insertPlanLikeOp(t, p, "plan-legacy", LegacyPlanOpDefID, `{"rows":[1]}`)
+
+	boom := errors.New("injected read failure")
+	legacyPlanStripGetHook = func(string) (*OperationV2Row, []byte, error) { return nil, nil, boom }
+	t.Cleanup(func() { legacyPlanStripGetHook = nil })
+
+	rep, err := p.StripLegacyPlanRows()
+	require.ErrorIs(t, err, boom)
+	require.Zero(t, rep.UnreadableOps, "a failed read is not counted as an undecodable record")
+	require.Error(t, migration066Up(p), "the registered Up must fail, not skip, on a read failure")
+	legacyPlanStripGetHook = nil
+	require.Contains(t, resultOf(t, p, "plan-legacy"), `"rows"`, "nothing was rewritten while the read was failing")
+}
+
+// TestGetOperationV2ClassifiesUndecodableRecords: the sentinel is how a caller
+// tells a damaged record from a failed read. The message and the decode error
+// under it are unchanged, a record with no id is still (nil, nil), and a good
+// record is unaffected.
+func TestGetOperationV2ClassifiesUndecodableRecords(t *testing.T) {
+	st, cleanup := setupTestDB(t)
+	defer cleanup()
+	p := st.(*PebbleStore)
+
+	require.NoError(t, p.db.Set(opv2OpKey("bad-time"), []byte(`{"ID":"bad-time","QueuedAt":"garbage"}`), pebble.Sync))
+	require.NoError(t, p.db.Set(opv2OpKey("bad-json"), []byte(`{not json`), pebble.Sync))
+	require.NoError(t, p.db.Set(opv2OpKey("shell"), []byte(`{}`), pebble.Sync))
+	insertPlanLikeOp(t, p, "good", "x.y", `{}`)
+
+	row, err := p.GetOperationV2("bad-time")
+	require.Nil(t, row)
+	require.ErrorIs(t, err, ErrOpRecordUndecodable)
+	var perr *time.ParseError
+	require.ErrorAs(t, err, &perr, "the decode error under the sentinel is still reachable")
+	var want OperationV2Row
+	require.EqualError(t, err, json.Unmarshal([]byte(`{"ID":"bad-time","QueuedAt":"garbage"}`), &want).Error(), "message unchanged")
+
+	_, err = p.GetOperationV2("bad-json")
+	require.ErrorIs(t, err, ErrOpRecordUndecodable)
+	var serr *json.SyntaxError
+	require.ErrorAs(t, err, &serr)
+
+	row, err = p.GetOperationV2("shell")
+	require.NoError(t, err)
+	require.Nil(t, row, "a record with no id stays (nil, nil)")
+	row, err = p.GetOperationV2("missing")
+	require.NoError(t, err)
+	require.Nil(t, row)
+	row, err = p.GetOperationV2("good")
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	require.False(t, errors.Is(err, ErrOpRecordUndecodable))
 }

@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
 // last-edited: 2026-10-22
 
@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -233,7 +234,7 @@ func TestStoredPlan_IncompleteRowsFailClosed(t *testing.T) {
 	require.True(t, PlanNeedsRerun(err))
 }
 
-// TestPlanNeedsRerun lists exactly the three errors that mean "run the plan
+// TestPlanNeedsRerun lists exactly the four errors that mean "run the plan
 // again"; a plan that is simply not complete, or another fixer's, is not one.
 func TestPlanNeedsRerun(t *testing.T) {
 	for _, err := range []error{ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable, ErrPlanSummaryUnreadable,
@@ -373,4 +374,42 @@ func TestRunPlan_RefusesAFlagTheIndexCannotCarry(t *testing.T) {
 		require.Error(t, err, "flag %q", bad)
 		require.Contains(t, err.Error(), "invalid row flag")
 	}
+}
+
+// storeWithTornPlan opens a real Pebble store holding one operation record
+// whose bytes are a repairs.plan operation with a timestamp that does not
+// parse (a torn or hand-edited value). The value is written straight into the
+// database, before the store opens, because no store method can produce it.
+// The key layout is pinned by the assertion at the end: if it changes, the
+// store would see no such operation and that assertion fails.
+func storeWithTornPlan(t *testing.T, opID string) *database.PebbleStore {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := database.NewPebbleStore(dir)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+	db, err := pebble.Open(dir, &pebble.Options{})
+	require.NoError(t, err)
+	torn := `{"ID":"` + opID + `","DefID":"` + PlanOpID + `","Status":"completed","QueuedAt":"garbage","ResultData":"{}"}`
+	require.NoError(t, db.Set([]byte("opv2:op:"+opID), []byte(torn), pebble.Sync))
+	require.NoError(t, db.Close())
+	st, err = database.NewPebbleStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	_, err = st.GetOperationV2(opID)
+	require.ErrorIs(t, err, database.ErrOpRecordUndecodable, "the torn record must be found under the operation's key")
+	return st
+}
+
+// TestLoadPlan_UndecodableOperationRecordNeedsARerun: a plan operation whose
+// stored record cannot be decoded at all (migration 66 leaves such a legacy
+// plan as it found it) is a plan to run again, not a 500: the store's read
+// error carries database.ErrOpRecordUndecodable and LoadPlan maps it.
+func TestLoadPlan_UndecodableOperationRecordNeedsARerun(t *testing.T) {
+	st := storeWithTornPlan(t, "op-torn")
+	_, err := LoadPlan(st, st, "op-torn", "any-fixer")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrPlanSummaryUnreadable)
+	require.True(t, PlanNeedsRerun(err), err.Error())
+	require.NotErrorIs(t, err, ErrPlanNotFound)
 }
