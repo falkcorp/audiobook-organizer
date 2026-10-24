@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
-// last-edited: 2026-10-20
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -68,9 +69,9 @@ func stripAudioExt(name string) string {
 // titleFromFilename recovers the title from a file named by the
 // "<Title> - <Author> - read by <narrator>" convention.
 //
-// 🔑 The author name is REQUIRED to strip safely, and that is the whole point.
-// Naively dropping the last " - " segment after the credit would corrupt any
-// title that legitimately contains one:
+// 🔑 Only a segment that is provably an author is stripped, and that is the
+// whole point. Naively dropping the last " - " segment after the credit would
+// corrupt any title that legitimately contains one:
 //
 //	"Dark Gallifrey - The War Master Part 2 - read by narrator.mp3"
 //	  naive → "Dark Gallifrey - The War Master"   ✗ eats real title text
@@ -82,26 +83,94 @@ func stripAudioExt(name string) string {
 //	"Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b"
 //	  → "Nocturne - 3 - Umbra Mortem"
 //
-// A filename carrying no credit at all is used whole.
+// A filename carrying no credit at all is used whole (but for a trailing
+// placeholder author or the stored author: see titleFromFilenameWith).
 func titleFromFilename(filename, author string) string {
+	return titleFromFilenameWith(filename, author, authorRecognisers{})
+}
+
+// authorRecognisers tells titleFromFilenameWith which trailing " - <segment>"
+// is a person's credit. A recogniser that is nil recognises nobody.
+type authorRecognisers struct {
+	// own recognises the book's own credited people: a linked author or a
+	// narrator. Its names are the book's, so they go with or without a "read
+	// by" credit in the stem.
+	own func(string) bool
+	// library recognises any author of the library. It is honoured only behind
+	// a " - read by " credit, for the one segment that stands where the
+	// convention puts the author, and never for a name that is also a real
+	// title (the caller's recogniser must say so): the library holds author
+	// rows that are really titles, and stripping one of those deletes title
+	// text (🔴 above).
+	library func(string) bool
+}
+
+// filenameHead is a file name's stem without its extension and without a
+// trailing " - read by <narrator>" credit, and whether it had one. A stem that
+// is only an author credit ("read by X") has no title: "".
+func filenameHead(filename string) (head string, credited bool) {
 	stem := strings.TrimSpace(stripAudioExt(filename))
-	if stem == "" {
+	if stem == "" || readByLeadRe.MatchString(stem) {
+		return "", false
+	}
+	// The index comes from the stem itself: lower-casing a copy first can
+	// change its byte length (U+0130, U+212A) and misalign the cut.
+	if locs := readBySepRe.FindAllStringIndex(stem, -1); len(locs) > 0 {
+		return strings.TrimSpace(stem[:locs[len(locs)-1][0]]), true
+	}
+	return stem, false
+}
+
+// titleFromFilenameWith is titleFromFilename with the recognisers of names
+// beyond the stored author. A trailing " - <segment>" goes when it is
+//
+//   - a placeholder author ("Unknown Author", "Unknown"): never title text, so
+//     with or without a credit ("Marble Gate - Unknown Author.mp3" is "Marble
+//     Gate": the stored author was junk, so no author match was possible);
+//   - the stored author, unless that author is junk: a chapter label or an
+//     essay name the parser put in the author field is title text in the file
+//     name, and stripping it left a plausible-looking fragment;
+//   - one of the book's own people (rec.own);
+//   - behind a "read by" credit, and for the first author segment only, a name
+//     of the library (rec.library): the convention is one author before the
+//     credit, so a second name-shaped segment is title text.
+//
+// A segment that opens with a position word ("Volume II", "Part 3") is title
+// text even when a scan stored it as the author (a reviewer accepted such a
+// title).
+func titleFromFilenameWith(filename, author string, rec authorRecognisers) string {
+	head, credited := filenameHead(filename)
+	if head == "" {
 		return ""
 	}
-
-	lower := strings.ToLower(stem)
-	idx := strings.LastIndex(lower, " - read by ")
-	if idx < 0 {
-		return stem // no credit suffix — the whole stem is the title
+	a := strings.TrimSpace(author)
+	if junkStoredAuthor(a) {
+		a = ""
 	}
-	head := strings.TrimSpace(stem[:idx])
-
-	// Remove a trailing " - <Author>" only when it really is the author.
-	if a := strings.TrimSpace(author); a != "" {
-		suffix := " - " + strings.ToLower(a)
-		if strings.HasSuffix(strings.ToLower(head), suffix) {
-			head = strings.TrimSpace(head[:len(head)-len(suffix)])
+	authorStripped := false
+	// A trailing author segment, and the placeholder one an organizer pass
+	// may have written before it ("Title - Author - Unknown Author").
+	for range 3 {
+		i := strings.LastIndex(head, " - ")
+		if i < 0 {
+			break
 		}
+		seg := strings.TrimSpace(head[i+3:])
+		if seg == "" || positionLeadRe.MatchString(seg) {
+			break
+		}
+		switch {
+		case authorname.IsPlaceholderAuthor(seg):
+		case a != "" && strings.EqualFold(seg, a):
+			authorStripped = true
+		case rec.own != nil && rec.own(seg):
+			authorStripped = true
+		case credited && !authorStripped && rec.library != nil && rec.library(seg):
+			authorStripped = true
+		default:
+			return head
+		}
+		head = strings.TrimSpace(head[:i])
 	}
 	return head
 }
@@ -150,6 +219,13 @@ func majorityDirOf(paths []string) string {
 // Returns ok=false when nothing trustworthy is found; the caller must then leave
 // the book alone rather than invent a title.
 func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) (title, method string, ok bool) {
+	return deriveJunkTitleReplacement(storedTitle, author, filePaths, authorRecognisers{})
+}
+
+// deriveJunkTitleReplacement is DeriveJunkTitleReplacement with rec, the
+// recognisers of names beyond the stored author that titleFromFilenameWith
+// strips from a filename's tail (the zero value recognises none).
+func deriveJunkTitleReplacement(storedTitle, author string, filePaths []string, rec authorRecognisers) (title, method string, ok bool) {
 	stored := strings.TrimSpace(storedTitle)
 
 	// corroborated: some path element already matches the stored title, which
@@ -183,7 +259,7 @@ func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) 
 
 	// 2. The filename and its "read by" convention.
 	if len(filePaths) > 0 {
-		if t, m, good := accept(titleFromFilename(filepath.Base(filePaths[0]), author), "filename"); good {
+		if t, m, good := accept(titleFromFilenameWith(filepath.Base(filePaths[0]), author, rec), "filename"); good {
 			return t, m, true
 		}
 	}

@@ -1,11 +1,14 @@
 // file: internal/plugins/maintenance/junk_title_derive_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 51758d2b-4a45-4c0b-9bd0-5b22cc579c19
-// last-edited: 2026-09-28
+// last-edited: 2026-10-24
 
 package maintenance
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 🔴 THE CORRUPTION THIS MUST NOT CAUSE. Dropping the last " - " segment after
 // the credit is the obvious implementation and it silently eats real title text
@@ -204,5 +207,99 @@ func TestDeriveJunkTitleReplacement_NoHopOutOfAClassifierJunkFolder(t *testing.T
 		if got, method, ok := DeriveJunkTitleReplacement("intro", "", paths); ok {
 			t.Fatalf("%v: derived %q via %s, want nothing", paths, got, method)
 		}
+	}
+}
+
+// The stored author is junk on most of the rows that carry a filename credit,
+// so the strip cannot depend on it: a placeholder author goes whether or not
+// the stem has a "read by" credit, and so does a person of the book's own. A
+// name that is only in the library goes behind a credit and for the segment
+// that stands where the convention puts the author. Title text with a " - " in
+// it stays. (Shapes of the 2026-10-23 review, with invented titles.)
+func TestTitleFromFilenameWith_StripsAuthorSegments(t *testing.T) {
+	set := func(names ...string) func(string) bool {
+		m := map[string]bool{}
+		for _, n := range names {
+			m[strings.ToLower(n)] = true
+		}
+		return func(s string) bool { return m[strings.ToLower(strings.TrimSpace(s))] }
+	}
+	rec := authorRecognisers{own: set("Oliver Narrate"), library: set("Zed Writer", "Q. V. Example", "Salt Harbor")}
+	cases := []struct {
+		name, file, author, want string
+	}{
+		{"placeholder, no credit", "Marble Gate - Unknown Author.mp3", "", "Marble Gate"},
+		{"placeholder, with credit", "Marble Gate - Unknown Author - read by narrator.mp3", "", "Marble Gate"},
+		{"placeholder, stored author junk", "Marble Gate - Unknown Author.m4b", "read by narrator", "Marble Gate"},
+		{"unknown alone", "Marble Gate - Unknown.mp3", "", "Marble Gate"},
+		{"stored author, no credit", "Marble Gate - Someone New.mp3", "Someone New", "Marble Gate"},
+		{"stored author, credit", "Marble Gate - Someone New - read by narrator.mp3", "Someone New", "Marble Gate"},
+		{"the book's own person, no credit", "Marble Gate - Oliver Narrate.mp3", "", "Marble Gate"},
+		{"library author behind a credit", "Marble Gate - Zed Writer - read by narrator.mp3", "", "Marble Gate"},
+		{"library author with initials behind a credit", "Marble Gate 3 - Q. V. Example - read by narrator.m4b", "", "Marble Gate 3"},
+		{"placeholder after the library author", "Marble Gate - Zed Writer - Unknown Author - read by narrator.mp3", "", "Marble Gate"},
+		// A library name with no credit is not stripped: the library holds author
+		// rows that are titles, and nothing says this segment is the author.
+		{"library author, no credit", "Marble Gate - Zed Writer.mp3", "", "Marble Gate - Zed Writer"},
+		{"library author with initials, no credit", "Marble Gate 3 - Q. V. Example.mp3", "", "Marble Gate 3 - Q. V. Example"},
+		{"title text survives", "Dark Harbor - The Salt Wind Part 2 - Unknown Author.mp3", "", "Dark Harbor - The Salt Wind Part 2"},
+		{"unknown segment that is not an author", "Dark Harbor - Salt Wind.mp3", "", "Dark Harbor - Salt Wind"},
+		{"no separator", "Marble Gate.mp3", "", "Marble Gate"},
+		{"only a placeholder after the separator", "Unknown Author - Marble Gate.mp3", "", "Unknown Author - Marble Gate"},
+		// 🔴 A title-shaped author row ("Salt Harbor" is both) before the real
+		// author: only the segment where the author stands goes, whether the
+		// stored author names it or the library does.
+		{"title-shaped author row, stored author", "Ember Wars 13 - Salt Harbor - Zed Writer - read by narrator.mp3", "Zed Writer", "Ember Wars 13 - Salt Harbor"},
+		{"title-shaped author row, library author", "Ember Wars 13 - Salt Harbor - Zed Writer - read by narrator.mp3", "", "Ember Wars 13 - Salt Harbor"},
+		{"title-shaped author row, junk stored author", "Ember Wars 13 - Salt Harbor - Zed Writer - read by narrator.mp3", "read by narrator", "Ember Wars 13 - Salt Harbor"},
+		// A stored author that is junk (a chapter label in the author field) is
+		// title text in the file name.
+		{"junk stored author is not stripped", "Tide Log 1 0 - Prologue + Chapter 1.mp3", "Prologue + Chapter 1", "Tide Log 1 0 - Prologue + Chapter 1"},
+		{"junk stored author, credit", "Tide Log 1 0 - Chapter 1 - read by narrator.mp3", "Chapter 1", "Tide Log 1 0 - Chapter 1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := titleFromFilenameWith(c.file, c.author, rec); got != c.want {
+				t.Errorf("titleFromFilenameWith(%q, %q) = %q, want %q", c.file, c.author, got, c.want)
+			}
+		})
+	}
+	// Without the recognisers a name that is not the stored author stays.
+	if got := titleFromFilename("Marble Gate - Zed Writer - read by narrator.mp3", ""); got != "Marble Gate - Zed Writer" {
+		t.Errorf("no recogniser: got %q", got)
+	}
+}
+
+// A stem that is only an author credit has no title.
+func TestTitleFromFilename_AuthorCreditOnlyStemHasNoTitle(t *testing.T) {
+	for _, file := range []string{"read by Some Narrator.mp3", "Read By Some Narrator", "narrated by Some Narrator.m4b", "  read by narrator  .mp3"} {
+		if got := titleFromFilename(file, "Some Author"); got != "" {
+			t.Errorf("titleFromFilename(%q) = %q, want no title", file, got)
+		}
+	}
+}
+
+// The credit is found on the stem itself: lower-casing a copy first changes its
+// byte length for some runes (U+0130 grows by one byte, U+212A shrinks), and the
+// index it gave cut the original in the wrong place or past its end.
+func TestFilenameHead_NonASCIICaseFoldingDoesNotMisalignTheCut(t *testing.T) {
+	for _, tc := range []struct{ file, want string }{
+		{"Marble Gate - Unknown Author - read by narrator.mp3", "Marble Gate - Unknown Author"},
+		{strings.Repeat("\u0130", 40) + " Gate - READ BY Narrator.mp3", strings.Repeat("\u0130", 40) + " Gate"},
+		{strings.Repeat("\u212a", 40) + " Gate - Read By Narrator.mp3", strings.Repeat("\u212a", 40) + " Gate"},
+		{"No credit here.mp3", "No credit here"},
+	} {
+		head, _ := filenameHead(tc.file)
+		if head != tc.want {
+			t.Errorf("filenameHead(%q) = %q, want %q", tc.file, head, tc.want)
+		}
+	}
+}
+
+func TestDeriveJunkTitleReplacement_FilenameAuthorSuffixIsDropped(t *testing.T) {
+	got, method, ok := deriveJunkTitleReplacement("read by narrator", "",
+		[]string{"/lib/Books/Marble Gate - Unknown Author - read by narrator.mp3"}, authorRecognisers{})
+	if !ok || got != "Marble Gate" || method != "filename" {
+		t.Fatalf("got (%q, %q, %v), want (Marble Gate, filename, true)", got, method, ok)
 	}
 }
