@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.53.3
+// version: 1.54.1
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-28
 //
@@ -570,7 +570,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		}
 		return verdictOf(CheckRepairBookCreate(rbs, c))
 	case ChangeTypeBookFileRetire, ChangeTypeBookVersionCreate, ChangeTypeRetiredVersionRehome:
-		return verdictOf(checkRetireRow(store, c))
+		return verdictOf(checkRetireRow(store, c, plan))
 	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
 		ChangeTypeBookFileMove, database.ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow,
@@ -980,7 +980,17 @@ func recreatableShellVerdict(store ConflictChecker, c *database.OperationChange)
 // CheckRehomeCurrent), and for a file row whose shell was purged, or a rehome
 // whose old holder was, the same shell check (ShellCheck), so "purged but
 // recreatable" is restorable.
-func checkRetireRow(store ConflictChecker, c *database.OperationChange) error {
+//
+// plan carries the chain: a rehome row of the same operation is newer than the
+// retire rows of the version it moved, so the revert reverses it first and the
+// later rows find the version and its file rows back on the holder they
+// journaled, while the store still shows them on the holder the rehome moved
+// them to. Judging those rows against the store as it is now would refuse a
+// revert that works, so a version's holder is the one plan.RehomeHolder
+// predicts, and its file rows are read where they are (the version's holder
+// now) when that prediction is the holder the row journaled. A nil plan, or a
+// version no recorded rehome touched, is judged against the store as before.
+func checkRetireRow(store ConflictChecker, c *database.OperationChange, plan *RevertPlan) error {
 	switch c.ChangeType {
 	case ChangeTypeBookFileRetire:
 		r, err := DecodeBookFileRetire(c)
@@ -991,9 +1001,25 @@ func checkRetireRow(store ConflictChecker, c *database.OperationChange) error {
 		if !ok {
 			return refuse(ReasonFieldUnreadable, "this store cannot read book_file %s", r.FileID)
 		}
-		onHolder, err := rd.GetBookFileByID(r.Holder, r.FileID)
+		holderNow := r.Holder
+		if h, moved := plan.RehomeHolder(r.VersionID); moved && h == r.Holder {
+			// A newer rehome of this version is reversed first: its file rows
+			// are under the holder it moved them to until then.
+			vr, ok := database.AsCapability[bookVersionReader](store)
+			if !ok {
+				return refuse(ReasonFieldUnreadable, "this store cannot read book version %s", r.VersionID)
+			}
+			ver, err := vr.GetBookVersion(r.VersionID)
+			if err != nil {
+				return refuse(ReasonFieldUnreadable, "read book version %s: %v", r.VersionID, err)
+			}
+			if ver != nil {
+				holderNow = ver.BookID
+			}
+		}
+		onHolder, err := rd.GetBookFileByID(holderNow, r.FileID)
 		if err != nil {
-			return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", r.FileID, r.Holder, err)
+			return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", r.FileID, holderNow, err)
 		}
 		onShell, err := rd.GetBookFileByID(r.Shell, r.FileID)
 		if err != nil {
@@ -1016,6 +1042,13 @@ func checkRetireRow(store ConflictChecker, c *database.OperationChange) error {
 		cur, err := rd.GetBookVersion(id)
 		if err != nil {
 			return refuse(ReasonFieldUnreadable, "read book version %s: %v", id, err)
+		}
+		// The version as the revert will find it once the newer rehomes of it
+		// in this plan are reversed.
+		if h, moved := plan.RehomeHolder(id); moved && cur != nil && cur.BookID != h {
+			predicted := *cur
+			predicted.BookID = h
+			cur = &predicted
 		}
 		if c.ChangeType == ChangeTypeBookVersionCreate {
 			return CheckVersionCreateCurrent(cur, c)

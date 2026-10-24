@@ -1,5 +1,5 @@
 // file: internal/merge/combine_retire_undo_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 169db87a-6f56-43c0-91a1-9a1fa5f526ea
 // last-edited: 2026-10-24
 
@@ -38,8 +38,25 @@ type fakeRetireUndoer struct {
 	// merged-into pointer included).
 	snapshot *database.Book
 
+	// lockErr is the busy refusal LockRetireOps answers. locked records each
+	// call's op ids; held is how many locks are held now.
+	lockErr error
+	locked  [][]string
+	held    int
+	// heldAtRevert is what held was when each Revert ran.
+	heldAtRevert []int
+
 	planned, reverted []string
 	shellSoftDeleted  []bool
+}
+
+func (f *fakeRetireUndoer) LockRetireOps(opIDs []string) (func(), error) {
+	f.locked = append(f.locked, append([]string(nil), opIDs...))
+	if f.lockErr != nil {
+		return nil, f.lockErr
+	}
+	f.held++
+	return func() { f.held-- }, nil
 }
 
 func (f *fakeRetireUndoer) PlanRetireRevert(opID, shellID string) (*RetireReversal, error) {
@@ -52,6 +69,7 @@ func (f *fakeRetireUndoer) PlanRetireRevert(opID, shellID string) (*RetireRevers
 	if f.live {
 		rev.Revert = func() error {
 			f.reverted = append(f.reverted, key)
+			f.heldAtRevert = append(f.heldAtRevert, f.held)
 			if f.snapshot != nil {
 				if b, err := f.store.GetBookByID(f.shell); err == nil && b == nil {
 					_, cerr := f.store.CreateBook(f.snapshot)
@@ -470,4 +488,66 @@ func TestUndoCombine_TwoRetireOpsOfOneShellAreBothReversedNewestFirst(t *testing
 	assert.Equal(t, []string{"01RETIREOPOLDER/" + f.absA, "02RETIREOPNEWER/" + f.absA}, u.planned, "each link is planned exactly once, in link order")
 	assert.Equal(t, []string{"02RETIREOPNEWER/" + f.absA, "01RETIREOPOLDER/" + f.absA}, u.reverted)
 	assert.False(t, viewBook(t, store, f.absA).SoftDel)
+}
+
+// A busy retire op refuses the combine undo BEFORE its first write: the journal
+// keeps its Applied status (marking it undo_failed first would make the next
+// attempt run with the retry tolerance of a half-done undo that never started),
+// and nothing is reversed or restored.
+func TestUndoCombine_BusyRetireOpRefusesBeforeTheRetryMark(t *testing.T) {
+	store, f, ms, journalID := combined(t)
+	require.NoError(t, WriteCombineRetireLink(store, journalID, f.absA, "retire-op-1"))
+	u := &fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA, lockErr: errors.New("retire op retire-op-1: busy")}
+	ms.SetRetireUndoer(u)
+	preBooks, preFiles := snapshot(t, store, f)
+
+	_, err := ms.UndoCombine(journalID)
+	var refused *CombineUndoRefusedError
+	require.True(t, errors.As(err, &refused), "%v", err)
+	assert.Contains(t, refused.Reasons[0], "busy")
+	assert.Empty(t, u.reverted)
+	postBooks, postFiles := snapshot(t, store, f)
+	assert.Equal(t, preBooks, postBooks)
+	assert.Equal(t, preFiles, postFiles)
+	j, gerr := ms.GetCombineJournal(journalID)
+	require.NoError(t, gerr)
+	assert.Equal(t, CombineJournalApplied, j.Status, "no retry mark: nothing was started")
+	assert.Empty(t, j.LastError)
+
+	u.lockErr = nil
+	_, err = ms.UndoCombine(journalID)
+	require.NoError(t, err, "free now: the undo runs")
+}
+
+// The retire ops are locked once each (two shells of one op take one lock), held
+// across every Revert, and released when the undo ends, whether it succeeds or
+// not.
+func TestUndoCombine_LocksEachLiveRetireOpOnceAndHoldsItThroughTheReversal(t *testing.T) {
+	store, f, ms, journalID := combined(t)
+	require.NoError(t, WriteCombineRetireLink(store, journalID, f.absA, "retire-op-1"))
+	require.NoError(t, WriteCombineRetireLink(store, journalID, f.absB, "retire-op-1"))
+	u := &fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA, revertErr: errors.New("boom")}
+	ms.SetRetireUndoer(u)
+
+	_, err := ms.UndoCombine(journalID)
+	require.Error(t, err)
+	assert.Equal(t, [][]string{{"retire-op-1"}}, u.locked, "one op, one lock")
+	assert.Equal(t, []int{1}, u.heldAtRevert, "held while the reversal ran")
+	assert.Zero(t, u.held, "released after a failed undo")
+
+	u.revertErr = nil
+	_, err = ms.UndoCombine(journalID)
+	require.NoError(t, err)
+	assert.Zero(t, u.held, "released after a finished undo")
+}
+
+// A dead link takes no lock: nothing of it is reversed.
+func TestUndoCombine_DeadLinkTakesNoLock(t *testing.T) {
+	store, f, ms, journalID := combined(t)
+	require.NoError(t, WriteCombineRetireLink(store, journalID, f.absA, "retire-op-1"))
+	u := &fakeRetireUndoer{t: t, store: store, live: false, shell: f.absA, lockErr: errors.New("would refuse")}
+	ms.SetRetireUndoer(u)
+	_, err := ms.UndoCombine(journalID)
+	require.NoError(t, err)
+	assert.Empty(t, u.locked)
 }

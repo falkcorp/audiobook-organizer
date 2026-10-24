@@ -1,5 +1,5 @@
 // file: internal/merge/retire_link.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b3ee74d4-1ccc-4309-8939-7fe3a7b5f62f
 // last-edited: 2026-10-24
 
@@ -125,7 +125,8 @@ type RetireReversal struct {
 	// first from GetBookFiles, and a revert of it makes the second look gained.
 	PendingFileIDs, RevertedFileIDs []string
 	// Revert reverses the pending rows, from the rows this plan read. nil when
-	// not Live.
+	// not Live. It must run only while RetireUndoer.LockRetireOps holds the
+	// retire op's lock.
 	Revert func() error
 }
 
@@ -134,13 +135,22 @@ type RetireReversal struct {
 // undo is injected: audiobooks.RevertService wires one in where it builds the
 // merge service for a combine row (SetRetireUndoer).
 //
-// PlanRetireRevert runs, and the Revert it returns runs, with the merge lock
-// HELD (UndoCombine holds it, and it is not re-entrant), so an implementation
-// must never take it (it may take locks that are only ever TRIED under it).
+// PlanRetireRevert, LockRetireOps and the Revert a plan returns all run with
+// the merge lock HELD (UndoCombine holds it, and it is not re-entrant), so an
+// implementation must never take it (it may take locks that are only ever TRIED
+// under it).
 type RetireUndoer interface {
 	// PlanRetireRevert reads retire op opID once and returns its rows for
 	// shellID (see RetireReversal). It writes nothing.
 	PlanRetireRevert(opID, shellID string) (*RetireReversal, error)
+	// LockRetireOps takes, without waiting, the revert lock of each retire op
+	// in opIDs (distinct) and returns the release that frees them all. It
+	// returns an error, holding none, when one is busy: another revert of that
+	// retire op is running, and the combine undo is to be run again when it
+	// finishes. UndoCombine calls it before it writes anything (the journal's
+	// retry mark included) and holds the locks through every Revert, so a busy
+	// op refuses the undo cleanly instead of failing it half-way.
+	LockRetireOps(opIDs []string) (release func(), err error)
 }
 
 // SetRetireUndoer wires the undoer UndoCombine reverses linked retires with.

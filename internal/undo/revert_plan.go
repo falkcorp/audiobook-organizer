@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.11.1
+// version: 1.12.1
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-10-28
 
@@ -76,6 +76,11 @@ type RevertPlan struct {
 	// unrestored: rows whose revert was recorded as not done (Record with an
 	// error), refusals and failures alike.
 	unrestored map[string]bool
+	// heldAfter: where a retired version is predicted to be held once the
+	// rehome rows recorded restored so far are reverted (RehomeHolder). Rows
+	// run newest-first, so a retire row of the same version reads the holder
+	// the newer rehomes put it back on, not the one the store shows now.
+	heldAfter map[string]string
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -91,7 +96,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
 		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
 		refusedAuthor: map[int]bool{}, primaries: map[string]*int{},
-		newerMain: newerMainRows(rows), unrestored: map[string]bool{}}
+		newerMain: newerMainRows(rows), unrestored: map[string]bool{}, heldAfter: map[string]string{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -211,6 +216,11 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 		if before, ok := primaryRestoredBy(c); ok {
 			p.primaries[c.BookID] = before
 		}
+		if c.ChangeType == ChangeTypeRetiredVersionRehome {
+			if id, ok := BookVersionIDFromField(c.FieldName); ok {
+				p.heldAfter[id] = c.OldValue
+			}
+		}
 		return
 	}
 	var partly *AuthorPartlyRestoredError
@@ -220,6 +230,20 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 	if c.ChangeType == ChangeTypeBookSoftDelete {
 		p.refusedBook[c.BookID] = true
 	}
+}
+
+// RehomeHolder is the holder of retired version versionID once every rehome
+// row recorded restored so far has been reverted (Record), and whether any
+// has. A rehome revert moves the version's file rows with it, so the revert's
+// later rows (the version's file retires, its creation) find them back on the
+// holder; the store still shows them on the holder the rehome moved them to
+// until then, which is what a preflight reads. A nil plan has none.
+func (p *RevertPlan) RehomeHolder(versionID string) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	h, ok := p.heldAfter[versionID]
+	return h, ok
 }
 
 // newerMainRows maps each older main list row (collection or playlist) of a

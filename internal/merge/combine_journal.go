@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-28
 
@@ -771,6 +771,16 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 	if reasons := ms.undoPreconditions(j, plans); len(reasons) > 0 {
 		return nil, &CombineUndoRefusedError{JournalID: j.ID, Reasons: reasons}
 	}
+	// The retire ops about to be reversed are locked now, before any write: a
+	// busy one refuses the undo with the journal untouched. Taken later (in
+	// step 0) it would refuse after the retry mark below, leaving a journal
+	// that wrote nothing as undo_failed, and the next attempt would run with
+	// the retry tolerance of a half-done one.
+	unlockRetires, err := plans.lockLiveOps()
+	if err != nil {
+		return nil, &CombineUndoRefusedError{JournalID: j.ID, Reasons: []string{err.Error()}}
+	}
+	defer unlockRetires()
 	// Mark an Applied journal as a retry BEFORE the first write. undo_failed
 	// was written only on an error return, so a crash (or a kill) part-way
 	// through applyUndo left the journal Applied over a half-undone library,
@@ -1186,6 +1196,31 @@ func (rp *retirePlans) get() ([]retireLinkPlan, error) {
 		rp.plans = append(rp.plans, p)
 	}
 	return rp.plans, nil
+}
+
+// lockLiveOps takes the revert lock of every retire op that has rows to
+// reverse (each op once, however many shells it retired), through the
+// RetireUndoer, and returns the release. Nothing live is a no-op. An error is
+// the busy refusal, with nothing held.
+func (rp *retirePlans) lockLiveOps() (func(), error) {
+	plans, err := rp.get()
+	if err != nil {
+		return nil, err
+	}
+	var ops []string
+	seen := map[string]bool{}
+	for _, p := range plans {
+		if p.live() && !seen[p.link.OpID] {
+			seen[p.link.OpID] = true
+			ops = append(ops, p.link.OpID)
+		}
+	}
+	if len(ops) == 0 {
+		return func() {}, nil
+	}
+	// Every live plan came from the undoer (a link with none has a problem,
+	// which undoPreconditions refused before this).
+	return rp.ms.retireUndo.LockRetireOps(ops)
 }
 
 // shellRetires are the plans of the links of one shell.

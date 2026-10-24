@@ -18,12 +18,20 @@
       yet offer `RevertOperationForBooks` per shell; the endpoint wiring
       belongs with the UI change (PR 9).
       (4) A whole-operation preflight (`undo.PreflightUndoConflicts`) of a
-      chain operation (a retire whose version was later rehomed to another
-      holder) reports the retire rows "changed since", because the version
-      they name is on the new holder until the rehome is reversed and the
-      check reads state, not the reversal order. The revert itself is right;
-      only the prediction is not, with a live old holder as well as a trashed
-      one. (5) The combine undo still refuses a retire that also rehomed a
+      retire op judges the retire rows of a version against the holder the
+      rehome rows of that SAME operation put it back on
+      (`RevertPlan.RehomeHolder`); a retire op whose version was rehomed by a
+      LATER operation still reports its rows "changed since", as the revert of
+      the earlier op refuses them: reverse the later operation first.
+      (5) The combine undo still refuses a retire that also rehomed a
       version the shell's own retire created; only the rehome of a version the
       shell held before is reversed with it. (6) PR 7 must put the shell in the
       trash before calling `RetireVersion` (it now refuses a live shell).
+      (7) A scoped revert (`RevertOperationForBooks`, the combine undo) keeps
+      its owed-settle record under `revert_settle_owed:<op>#scope:<shells>`.
+      Only a scoped run of the same shells retries or clears it; a later
+      whole-operation `RevertOperation` reads and clears only its own record,
+      so a dead scoped run's owed group settle waits for the same scope to run
+      again (nothing scans that key family by prefix). The fix is a
+      `ScanPrefix` of `revert_settle_owed:<op>#scope:` in the whole-operation
+      settle, merged into its owed groups and deleted when it settles.
