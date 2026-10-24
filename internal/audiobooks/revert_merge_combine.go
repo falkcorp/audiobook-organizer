@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_combine.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 3f7b0d52-c1e4-4a98-8d26-9e5a7c13b0f4
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -33,7 +33,12 @@ func (rs *RevertService) combineUndoerFor() combineUndoer {
 		return rs.combineUndo
 	}
 	if st, ok := rs.db.(merge.Store); ok {
-		return merge.NewService(st)
+		svc := merge.NewService(st)
+		// Without it an undo of a combine whose absorbed book was retired
+		// refuses (fail closed); with it the combine undo reverses the retire
+		// first (merge.RetireUndoer).
+		svc.SetRetireUndoer(rs.retireUndoer())
+		return svc
 	}
 	return nil
 }

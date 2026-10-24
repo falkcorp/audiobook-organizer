@@ -1,5 +1,5 @@
 // file: internal/undo/retire.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 78716d7c-a378-4584-9b30-edcdab627347
 // last-edited: 2026-10-23
 
@@ -195,7 +195,7 @@ func retireRowLabel(c *database.OperationChange) string {
 // IsRetireStageType reports whether changeType is one a retire (stage R of the
 // retired-versions plan) journals: the three types above, the shell's external
 // id moves and its merged-into pointer. The combine undo reverses exactly
-// these and nothing else (see RetireStageRow).
+// these and nothing else (RetireScopeRefusals refuses any other row).
 func IsRetireStageType(changeType string) bool {
 	switch changeType {
 	case ChangeTypeBookVersionCreate, ChangeTypeBookFileRetire, ChangeTypeRetiredVersionRehome,
@@ -345,4 +345,60 @@ func EnsureShellPresent(store BookLookup, shellID string) (recreated bool, err e
 		return false, fmt.Errorf("recreate purged shell %s: %w", shellID, err)
 	}
 	return true, nil
+}
+
+// RetireScopeRefusals predicts, for the combine undo, whether a retire op's
+// pending rows for one shell can all be reversed now, writing nothing. rows are
+// the shell's un-reverted, un-voided rows of the op (audiobooks'
+// revertScope.filter). It returns one sentence per refusal, naming the row, and
+// an empty slice when every row reverts.
+//
+// It judges the rows exactly as PreflightUndoConflicts does (same plan, same
+// gate, same row checks, the shell a purge deleted counted present when a
+// snapshot can recreate it), with two refusals of its own. The combine undo
+// reverses a retire and nothing else, so a row outside IsRetireStageType (the
+// retire op also changed the shell some other way) refuses: reversing part of
+// it would leave the shell half-restored. A rehome row refuses too, because the
+// rows it moved are not where the retire rows say until it is reversed, and a
+// check that reads state cannot see that reversal in advance.
+func RetireScopeRefusals(store ConflictChecker, rows []*database.OperationChange) ([]string, error) {
+	var reasons []string
+	var judged []*database.OperationChange
+	for _, c := range rows {
+		switch {
+		case c.ChangeType == ChangeTypeRetiredVersionRehome:
+			reasons = append(reasons, fmt.Sprintf("change %s (%s): the retired version was moved to another holder since; that move is reversed first, not by the combine undo", c.ID, c.ChangeType))
+		case !IsRetireStageType(c.ChangeType):
+			reasons = append(reasons, fmt.Sprintf("change %s (%s): the retire op also changed the shell in a way the combine undo does not reverse", c.ID, c.ChangeType))
+		default:
+			judged = append(judged, c)
+		}
+	}
+	var files func(string) ([]database.BookFile, error)
+	if r, ok := store.(bookFilesReader); ok {
+		files = r.GetBookFiles
+	}
+	plan, err := PlanRevert(judged, files)
+	if err != nil {
+		return nil, err
+	}
+	recreatable := recreatableShells(store, judged)
+	for _, c := range plan.Order {
+		if refusal := plan.Gate(c); refusal != nil {
+			plan.Record(c, refusal)
+			reasons = append(reasons, fmt.Sprintf("change %s (%s): %v", c.ID, c.ChangeType, refusal))
+			continue
+		}
+		var v rowVerdict
+		if recreatable[c.BookID] && shellRowType(c.ChangeType) {
+			v = recreatableShellVerdict(store, c)
+		} else {
+			v = preflightRow(store, c, plan.Stamps, plan)
+		}
+		plan.Record(c, v.refusal)
+		if v.refusal != nil {
+			reasons = append(reasons, fmt.Sprintf("change %s (%s): %v", c.ID, c.ChangeType, v.refusal))
+		}
+	}
+	return reasons, nil
 }
