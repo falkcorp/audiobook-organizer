@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-19
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -502,7 +502,14 @@ func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	purged := p.deps.CleanupTrashedVersions()
+	purged, failed, err := p.deps.CleanupTrashedVersions()
+	if err != nil {
+		// Some due purges failed (or the trash could not be listed): say so in
+		// the operation log and fail the op, so a night in which nothing could
+		// be purged does not read as "purged 0 versions" with a success status.
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: purged %d versions, %d failed: %v", purged, failed, err))
+		return err
+	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: purged %d versions", purged))
 	return nil
 }

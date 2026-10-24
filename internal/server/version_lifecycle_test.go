@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -220,7 +220,7 @@ func TestHandleTrashVersion_StampsTrashedAt(t *testing.T) {
 	}
 
 	// The daily cleanup must leave it alone: it was trashed seconds ago.
-	if n := CleanupTrashedVersions(store); n != 0 {
+	if n, _, _ := CleanupTrashedVersions(store); n != 0 {
 		t.Fatalf("cleanup purged %d version(s) trashed seconds ago", n)
 	}
 

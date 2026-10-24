@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -140,6 +140,9 @@ type serverBookFileReader interface {
 	// BookFilesAtPath: versions.PurgeVersion asks it, retired rows included,
 	// whether another row still names a file before removing it.
 	BookFilesAtPath(path string) ([]database.BookFile, error)
+	// LiveBookIDsAtPath: versions.PurgeVersion asks it whether a live book
+	// names the file with its own FilePath (no book_file row needed).
+	LiveBookIDsAtPath(path string) ([]string, error)
 	// GetAllBookFilesCore: the external-ID backfill's one batch read of
 	// book_file rows (PERF-5) — see internal/itunes/backfill.go.
 	GetAllBookFilesCore() ([]database.BookFileCore, error)

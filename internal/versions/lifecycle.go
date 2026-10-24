@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
@@ -30,6 +30,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -57,7 +58,7 @@ var ErrRetiredVersion = errors.New("a retired version is not part of the version
 // refuses here, up front, from the status the caller holds.
 func refuseRetired(v *database.BookVersion, action string) error {
 	if v != nil && v.Status == database.BookVersionStatusRetired {
-		return fmt.Errorf("%s version %s: %w (it holds the retired files of book %s; restore it as a separate book instead)",
+		return fmt.Errorf("%s version %s: %w (it holds the retired files of book %s, which stay where they are)",
 			action, v.ID, ErrRetiredVersion, v.RetiredFromBookID)
 	}
 	return nil
@@ -142,7 +143,16 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 // is made for every path before the first removal and fails closed: a path
 // whose owners cannot be listed (database.ErrBookFilesAtPathUnavailable) aborts
 // the purge with nothing deleted and the version unchanged, so the next run
-// retries it.
+// retries it. Owners are every other book_file row (retired ones included) and
+// every other LIVE book whose own FilePath is the path, the same two questions
+// the book purge asks (audiobooks purgePathStillReferenced): a book can name a
+// file with no row at all. The version's own book is not another owner.
+//
+// A file that cannot be removed leaves the version in the trash. Marking it
+// purged would orphan the file, because nothing looks at a purged version's
+// disk again; left in the trash it is retried on the next run, and a file the
+// first attempt already removed is simply gone then (a missing file counts as
+// removed).
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	if err := refuseRetired(ver, "purge"); err != nil {
 		return err
@@ -198,16 +208,35 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 				ver.ID, p, owner.ID, owner.BookID, owner.VersionID, owner.Retired)
 			continue
 		}
+		live, err := store.LiveBookIDsAtPath(p)
+		if err != nil {
+			return fmt.Errorf("purge version %s: cannot verify %s is not a live book's file: %w", ver.ID, p, err)
+		}
+		// The version's own book naming its file is the normal case, not a
+		// second owner: the file is the version's, and the version is what is
+		// being purged. Any OTHER live book naming it keeps it.
+		live = slices.DeleteFunc(live, func(id string) bool { return id == ver.BookID })
+		if len(live) > 0 {
+			lifecycleLog.Warn("purge version %s: keeping %s, it is the file path of live book(s) %v",
+				ver.ID, p, live)
+			continue
+		}
 		doomed = append(doomed, p)
 	}
+	var removeErrs []error
 	for _, p := range doomed {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			lifecycleLog.Warn("purge version %s: remove %s failed: %v", ver.ID, p, err)
+			removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", p, err))
 		}
 	}
 	if bookDir != "" {
 		pruneEmptyDirs(VersionSlotDir(bookDir, ver.ID))
 		_ = PruneEmptyVersionsDir(bookDir)
+	}
+	if len(removeErrs) > 0 {
+		return fmt.Errorf("purge version %s: %d of %d file(s) could not be removed; the version stays in the trash and is retried: %w",
+			ver.ID, len(removeErrs), len(doomed), errors.Join(removeErrs...))
 	}
 
 	now := time.Now()
@@ -274,7 +303,14 @@ func pruneEmptyDirs(dir string) {
 
 // CleanupTrashedVersions is the maintenance task that purges versions
 // whose trash window has run out. Called by the scheduler.
-func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
+//
+// It reports how many it purged and how many it could not (failed), with an
+// error that is non-nil exactly when failed > 0 or the trash could not be
+// listed. A run in which every due purge fails (book_files flagged incomplete,
+// a file that cannot be removed) must not read as "purged 0" to the operation
+// that called it: the versions stay in the trash past their window and only the
+// error says so.
+func CleanupTrashedVersions(store TrashedVersionCleaner) (purged, failed int, err error) {
 	return cleanupTrashedVersionsAt(store, time.Now())
 }
 
@@ -296,11 +332,24 @@ func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
 // restore between the re-read and the stamp write is re-trashed, and one
 // between the re-read and PurgeVersion still loses its files. Closing it needs
 // an atomic claim of the row before any file is deleted.
-func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purged int) {
+//
+// failed counts the versions this run could not act on: a purge that failed,
+// a re-read that failed, a stamp that could not be written. err is nil when
+// failed is 0; otherwise it names the count and wraps the first failure, so a
+// caller can use errors.Is on it. When the trash cannot be listed at all, err
+// is that failure and failed is 0 (no version was attempted).
+func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purged, failed int, err error) {
 	trashed, err := store.ListTrashedBookVersions()
 	if err != nil {
 		lifecycleLog.Warn("trash cleanup: list trashed versions failed: %v", err)
-		return 0
+		return 0, 0, fmt.Errorf("trash cleanup: list trashed versions: %w", err)
+	}
+	var firstErr error
+	fail := func(e error) {
+		failed++
+		if firstErr == nil {
+			firstErr = e
+		}
 	}
 
 	ttl := time.Duration(TrashTTLDays) * 24 * time.Hour
@@ -312,6 +361,7 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 		v, err := store.GetBookVersion(id)
 		if err != nil {
 			lifecycleLog.Warn("trash cleanup: re-read version %s failed, skipping it this run: %v", id, err)
+			fail(fmt.Errorf("re-read version %s: %w", id, err))
 			continue
 		}
 		// Only a trashed version is ever purged here. A retired version is not
@@ -325,6 +375,7 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 			v.TrashedAt = &stamp
 			if err := store.UpdateBookVersion(v); err != nil {
 				lifecycleLog.Warn("trash cleanup: version %s has no trashed-at time and stamping it failed; not purging it: %v", id, err)
+				fail(fmt.Errorf("stamp version %s: %w", id, err))
 				continue
 			}
 			stamped++
@@ -337,6 +388,7 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 		}
 		if err := PurgeVersion(store, v); err != nil {
 			lifecycleLog.Warn("trash cleanup: purging version %s failed: %v", v.ID, err)
+			fail(err)
 			continue
 		}
 		purged++
@@ -344,5 +396,11 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 	if stamped > 0 {
 		lifecycleLog.Info("trash cleanup: stamped %d trashed version(s) that had no trashed-at time; none of them were purged", stamped)
 	}
-	return purged
+	if failed > 0 {
+		lifecycleLog.Warn("trash cleanup: purged %d, failed %d of %d trashed version(s); the failed ones stay in the trash and are retried next run",
+			purged, failed, len(trashed))
+		return purged, failed, fmt.Errorf("trash cleanup: %d of %d trashed version(s) could not be handled (%d purged); first failure: %w",
+			failed, len(trashed), purged, firstErr)
+	}
+	return purged, 0, nil
 }

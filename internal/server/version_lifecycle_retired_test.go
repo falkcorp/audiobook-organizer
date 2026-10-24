@@ -1,11 +1,12 @@
 // file: internal/server/version_lifecycle_retired_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d2a9c41-3b7e-4f08-a5d1-7e9b04c8f326
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -183,5 +184,89 @@ func TestHandleRestoreVersion_RefusesRetiredVersion(t *testing.T) {
 		if w.Code != c.want {
 			t.Errorf("control: restore of version %s: expected %d, got %d: %s", c.ver, c.want, w.Code, w.Body.String())
 		}
+	}
+}
+
+// unavailablePathStore answers BookFilesAtPath the way a store does while the
+// memdb is warming up or book_files is flagged incomplete.
+type unavailablePathStore struct{ database.Store }
+
+func (unavailablePathStore) BookFilesAtPath(string) ([]database.BookFile, error) {
+	return nil, fmt.Errorf("%w: injected", database.ErrBookFilesAtPathUnavailable)
+}
+
+// "Purge now" while the path index cannot answer is a 503 (nothing was deleted,
+// the version is still in the trash, try again), not a 500 that reads as a
+// server fault. Controls: the same purge on a working store answers 200 (the
+// existing TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows), and any other
+// failure stays a 500 (the last case).
+func TestHandlePurgeVersion_PathIndexUnavailableIsA503(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+	bookDir := t.TempDir()
+	audio := filepath.Join(bookDir, "book.m4b")
+	if err := os.WriteFile(audio, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: filepath.Join(bookDir, "other.m4b")}); err != nil {
+		t.Fatal(err)
+	}
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBookFile(&database.BookFile{BookID: "b1", FilePath: audio, VersionID: ver.ID, TrackNumber: 1}); err != nil {
+		t.Fatal(err)
+	}
+	srv.store = unavailablePathStore{store}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/purge-now", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("purge-now with the path index unavailable: expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(audio); err != nil {
+		t.Errorf("the file was removed although the purge was refused: %v", err)
+	}
+	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusTrash {
+		t.Errorf("status = %s, want the version left in the trash", got.Status)
+	}
+}
+
+// A file that cannot be removed is a real failure: 500, and the version stays in
+// the trash so the next attempt retries it (an own row naming a directory that
+// still has content; os.Remove refuses it as root or not).
+func TestHandlePurgeVersion_UnremovableFileIsA500AndKeepsTheVersion(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: filepath.Join(t.TempDir(), "book.m4b")}); err != nil {
+		t.Fatal(err)
+	}
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := filepath.Join(t.TempDir(), "stuck")
+	if err := os.MkdirAll(stuck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "inner.m4b"), []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBookFile(&database.BookFile{BookID: "b1", FilePath: stuck, VersionID: ver.ID, TrackNumber: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/purge-now", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("purge-now with an unremovable file: expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusTrash || got.PurgedDate != nil {
+		t.Errorf("status=%s PurgedDate=%v, want the version left in the trash", got.Status, got.PurgedDate)
 	}
 }

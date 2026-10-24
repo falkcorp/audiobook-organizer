@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package versions
 
@@ -47,6 +47,10 @@ type versionPurger interface {
 	// BookFilesAtPath lists EVERY row at a path, retired rows included, so a
 	// purge never removes a file another row (a retired version's) still names.
 	BookFilesAtPath(path string) ([]database.BookFile, error)
+
+	// LiveBookIDsAtPath lists the live books whose own FilePath is the path: a
+	// book can name a file no book_file row does.
+	LiveBookIDsAtPath(path string) ([]string, error)
 
 	GetBookByID(id string) (*database.Book, error)
 }

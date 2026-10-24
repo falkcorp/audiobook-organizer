@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_retired_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f4b7d29-6a1c-4e83-9d52-c8e1a7b30f64
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package versions
 
@@ -282,7 +282,7 @@ func TestCleanupTrashedVersions_NeverPurgesRetired(t *testing.T) {
 	forged.TrashedAt = &trashedAt
 	snapshot := append(listed, *forged)
 
-	if n := cleanupTrashedVersionsAt(staleListStore{f.store, snapshot}, time.Now()); n != 1 {
+	if n, _, _ := cleanupTrashedVersionsAt(staleListStore{f.store, snapshot}, time.Now()); n != 1 {
 		t.Fatalf("purged %d, want 1 (the trashed alt only)", n)
 	}
 	if _, err := os.Stat(trashedFile); !os.IsNotExist(err) {
@@ -427,7 +427,7 @@ func TestPurgeVersion_KeepsFilesARetiredRowStillNames(t *testing.T) {
 // The same guard holds on the nightly cleanup path.
 func TestCleanupTrashedVersions_KeepsFilesARetiredRowStillNames(t *testing.T) {
 	f := newSharedPathFixture(t)
-	if n := cleanupTrashedVersionsAt(f.store, time.Now()); n != 1 {
+	if n, _, _ := cleanupTrashedVersionsAt(f.store, time.Now()); n != 1 {
 		t.Fatalf("purged %d, want 1", n)
 	}
 	requireOnDisk(t, f.slotShare)
@@ -460,7 +460,7 @@ func TestPurgeVersion_FailsClosedWhenPathOwnersUnknown(t *testing.T) {
 	if got.Status != database.BookVersionStatusTrash || got.PurgedDate != nil {
 		t.Errorf("status=%s PurgedDate=%v, want the version left in the trash", got.Status, got.PurgedDate)
 	}
-	if n := cleanupTrashedVersionsAt(pathLookupStore{f.store}, time.Now()); n != 0 {
+	if n, _, _ := cleanupTrashedVersionsAt(pathLookupStore{f.store}, time.Now()); n != 0 {
 		t.Errorf("cleanup purged %d with the lookup down, want 0", n)
 	}
 	requireOnDisk(t, f.ownOnly)

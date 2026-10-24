@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
@@ -160,6 +160,14 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		if respondIfRetiredVersion(c, err) {
 			return
 		}
+		// PurgeVersion fails closed while the book_file index cannot name every
+		// owner of a path (the database is still warming up, or the table is
+		// flagged incomplete): nothing was deleted and the version is still in
+		// the trash, so this is "try again", not a server fault.
+		if errors.Is(err, database.ErrBookFilesAtPathUnavailable) {
+			httputil.RespondWithServiceUnavailable(c, "the database is still starting up and cannot yet say whether another book uses these files; nothing was deleted, try again shortly")
+			return
+		}
 		httputil.InternalError(c, "purge version", err)
 		return
 	}
@@ -195,7 +203,7 @@ func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 }
 
 // CleanupTrashedVersions delegates to versions.CleanupTrashedVersions.
-func CleanupTrashedVersions(store trashedVersionCleaner) (purged int) {
+func CleanupTrashedVersions(store trashedVersionCleaner) (purged, failed int, err error) {
 	return versions.CleanupTrashedVersions(store)
 }
 

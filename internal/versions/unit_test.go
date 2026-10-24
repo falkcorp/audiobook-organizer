@@ -1,7 +1,7 @@
 // file: internal/versions/unit_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
-// last-edited: 2026-10-10
+// last-edited: 2026-10-24
 
 package versions
 
@@ -258,16 +258,22 @@ func TestCleanupTrashedVersions_EmptyList(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	mockStore.EXPECT().ListTrashedBookVersions().Return([]database.BookVersion{}, nil)
 
-	purged := CleanupTrashedVersions(mockStore)
+	purged, failed, err := CleanupTrashedVersions(mockStore)
 	assert.Equal(t, 0, purged)
+	assert.Equal(t, 0, failed)
+	assert.NoError(t, err)
 }
 
 func TestCleanupTrashedVersions_StoreError(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	mockStore.EXPECT().ListTrashedBookVersions().Return(nil, errors.New("db error"))
 
-	purged := CleanupTrashedVersions(mockStore)
+	purged, failed, err := CleanupTrashedVersions(mockStore)
 	assert.Equal(t, 0, purged)
+	assert.Equal(t, 0, failed, "no version was attempted")
+	// A trash that cannot be listed is a failed run, not a successful zero.
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "db error")
 }
 
 // --------------------------------------------------------------------------
