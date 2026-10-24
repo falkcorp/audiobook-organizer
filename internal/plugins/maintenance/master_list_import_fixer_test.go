@@ -550,26 +550,22 @@ func TestMasterListImport_AmbiguousASINIsSettledByTheISBN(t *testing.T) {
 	yes := true
 	l.book("ed1", mlBook{title: "November Rain", author: "Nia Orr", asin: "B000000060", isbn13: "9780306406157", vg: "vg-1", primary: &yes})
 	l.book("ed2", mlBook{title: "November Rain", author: "Nia Orr", asin: "B000000060", isbn13: "9780140449136", vg: "vg-2", primary: &yes})
-	listID := l.upload(
-		// Control: the ASIN alone cannot choose.
-		csvLine("November Rain", "Nia Orr", "B000000060"),
-		// The same ASIN with one edition's ISBN-13.
-		csvLine("November Rain", "Nia Orr", "B000000060", "9780306406157"),
-	)
-	_, rows := l.plan(listID)
-	require.Len(t, rows, 2)
-	var plain, settled *repairs.Row
+	// Control: the ASIN alone cannot choose. (Two rows of one list naming the
+	// same ASIN are one group, so the control is a list of its own.)
+	_, plainRows := l.plan(l.upload(csvLine("November Rain", "Nia Orr", "B000000060")))
+	require.Len(t, plainRows, 1)
+	plain := plainRows["asin:B000000060"]
+	assert.Equal(t, mlAmbiguous, plain.Class, "an ASIN on two primary books, no runtime to choose: ambiguous")
+
+	// The same ASIN with one edition's ISBN-13.
+	_, rows := l.plan(l.upload(csvLine("November Rain", "Nia Orr", "B000000060", "9780306406157")))
+	require.Len(t, rows, 1)
+	var settled repairs.Row
 	for _, r := range rows {
-		r := r
-		if r.Class == mlAmbiguous {
-			plain = &r
-		} else {
-			settled = &r
-		}
+		settled = r
 	}
-	require.NotNil(t, plain, "an ASIN on two primary books, no runtime to choose: ambiguous")
-	require.NotNil(t, settled, "the ISBN-13 names one of the two: not ambiguous")
-	assert.Equal(t, []string{l.ids["ed1"]}, memberOf(*settled, "target"))
+	assert.NotEqual(t, mlAmbiguous, settled.Class, "the ISBN-13 names one of the two")
+	assert.Equal(t, []string{l.ids["ed1"]}, memberOf(settled, "target"))
 	assert.NotContains(t, settled.Flags, mlFlagIDConflict, "the ISBN agrees with the ASIN's candidates")
 	assert.Contains(t, strings.Join(settled.Evidence, "\n"), "names one of them")
 }

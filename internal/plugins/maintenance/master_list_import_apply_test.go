@@ -7,8 +7,8 @@ package maintenance
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -512,7 +513,6 @@ func TestMasterListImport_SummaryAndRegistration(t *testing.T) {
 	require.False(t, repairs.AllowsBookTagsOnly(f), "the framework guard must run")
 	require.False(t, repairs.AllowsITunesDatabaseOnly(f), "the iTunes path guard must run")
 	var _ repairs.ApplyScoped = l.fixer
-	b, err := json.Marshal(l.fixer.Title())
-	require.NoError(t, err)
-	require.NotContains(t, string(b), "preview")
+	require.NotContains(t, strings.ToLower(l.fixer.Title()), "preview")
+	require.Equal(t, []auth.Permission{auth.PermUsersManage}, l.fixer.RequiredPermissions())
 }
