@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d3a96b50-1e87-4f2c-8a64-b05c7e19f3d2
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -35,20 +35,25 @@ type retiredBookReader struct {
 // owner's rejects: is this shell's proposal rejected (SubjectRejected), and is
 // this pair of books vetoed (PairVetoed). It answers from ONE point-in-time
 // decisions.Vetoes snapshot, loaded once per reader (so once per plan or
-// replan run: OwnerVetoes() hands a fresh one to each run), whose stored ids
-// are resolved through the book resolver, so a reject naming a book that was
-// merged away, retired or purged still holds.
+// replan run: OwnerVetoes() hands a fresh one to each run). Every stored id of
+// the snapshot is resolved through the book path resolver, and the veto keeps
+// the whole path of each end, so a reject naming a book that was merged away,
+// retired, absorbed or purged still holds, including against the book it was
+// merged or retired into (decisions.Vetoes.PairVetoed explains the rule).
 //
-// Load can be called up front to refuse a run whose rejects cannot be read; a
+// An id the resolver cannot settle (a shell whose retired versions name two
+// holders, a merge chain that loops) does not fail the load: the veto that
+// holds it is held per id, and a query that touches it gets a
+// *decisions.UnresolvableError naming every such id. Unresolved lists them all.
+//
+// Load can be called up front to refuse a run whose rejects cannot be READ; a
 // query before Load loads on demand. A failed load is remembered and every
 // query returns it: never "no veto".
 type ownerVetoReader struct {
 	store   retiredVetoReaderStore
 	retired database.RetiredBookFileReader
-	// exact reads the rejects with NO id resolution: the pair as named, which
-	// a resolved snapshot cannot answer once the ends resolve to one book.
-	exact *decisions.Store
-	kv    decisions.KV
+	kv      decisions.KV
+	rows    *decisions.RowCache
 
 	once sync.Once
 	v    *decisions.Vetoes
@@ -57,10 +62,13 @@ type ownerVetoReader struct {
 
 var _ OwnerVetoReader = (*ownerVetoReader)(nil)
 
-// NewOwnerVetoReader builds the owner-veto reader over store. It is nil (the
-// fixer then refuses to plan) when the store cannot serve the decisions KV or
-// the retired-version index, which a non-Pebble backend cannot.
-func NewOwnerVetoReader(store database.Store) OwnerVetoReader {
+// NewOwnerVetoReader builds the owner-veto reader over store. rows (nil is
+// fine) lets the readers a long-lived owner builds share one scan of the
+// decision log while no record is written (decisions.RowCache); the ids are
+// still resolved afresh by every reader. The result is nil (the fixer then
+// refuses to plan) when the store cannot serve the decisions KV or the
+// retired-version index, which a non-Pebble backend cannot.
+func NewOwnerVetoReader(store database.Store, rows *decisions.RowCache) OwnerVetoReader {
 	if store == nil {
 		return nil
 	}
@@ -72,10 +80,11 @@ func NewOwnerVetoReader(store database.Store) OwnerVetoReader {
 	if !ok {
 		return nil
 	}
-	return &ownerVetoReader{store: store, retired: retired, exact: decisions.New(kv), kv: kv}
+	return &ownerVetoReader{store: store, retired: retired, kv: kv, rows: rows}
 }
 
-// Load reads the rejects and the journals the book resolver needs, once.
+// Load reads the rejects and the journals the book resolver needs, once. The
+// ctx of the first call is the one the read runs under (the plan's).
 func (o *ownerVetoReader) Load(ctx context.Context) error {
 	o.once.Do(func() { o.v, o.err = o.load(ctx) })
 	return o.err
@@ -86,7 +95,11 @@ func (o *ownerVetoReader) load(ctx context.Context) (*decisions.Vetoes, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read the merge journals for the book resolver: %w", err)
 	}
-	v, err := decisions.New(o.kv).Load(ctx, newBookIDResolver(o.store, o.retired, follows))
+	var opts []decisions.Option
+	if o.rows != nil {
+		opts = append(opts, decisions.WithRowCache(o.rows))
+	}
+	v, err := decisions.New(o.kv, opts...).LoadPaths(ctx, newBookPathResolver(o.store, o.retired, follows))
 	if err != nil {
 		return nil, fmt.Errorf("load the owner's rejects: %w", err)
 	}
@@ -100,26 +113,20 @@ func (o *ownerVetoReader) snapshot() (*decisions.Vetoes, error) {
 	return o.v, nil
 }
 
-// PairVetoed is true when the owner rejected joining a and b in family, either
-// as the ids are named (the unresolved lookup) or after both ends are resolved
-// to the book that survives (the snapshot).
+// PairVetoed is true when the owner rejected joining a and b in family. There
+// is one lookup, in the snapshot: a veto whose ends were merged or retired
+// into one book is kept with its paths, so it is found against that book
+// without a second look at the names the veto was recorded under.
 //
-// BOTH are asked on purpose. A shell that was merged into its target resolves
-// to that target, and the snapshot then sees one book, not a pair, and answers
-// false ("merged anyway"). The retire of that shell onto that target is
-// exactly the join the owner rejected, so the exact lookup stands as well: a
-// veto on the very pair held the row before the resolver existed, and still
-// does.
+// The error is a *decisions.UnresolvableError when a or b cannot be resolved,
+// or when a veto that touches them has an end that cannot; the caller holds
+// the row for it rather than treating it as "no veto".
 func (o *ownerVetoReader) PairVetoed(entityType, a, b, family string) (bool, error) {
 	v, err := o.snapshot()
 	if err != nil {
 		return false, err
 	}
-	hit, err := v.PairVetoed(entityType, a, b, family)
-	if err != nil || hit {
-		return hit, err
-	}
-	return o.exact.PairVetoed(entityType, a, b, family)
+	return v.PairVetoed(entityType, a, b, family)
 }
 
 // SubjectRejected is true when a live reject of the proposal (opKind,
@@ -132,58 +139,70 @@ func (o *ownerVetoReader) SubjectRejected(opKind, subjectKey, materialHash strin
 	return v.SubjectRejected(opKind, subjectKey, materialHash)
 }
 
-// newBookIDResolver is the IDResolver decisions requires for book ids: the
-// retired-version index (a shell resolves to the book that holds its files),
-// then the merge survivor, over and over until the id stops moving. Safe for
-// concurrent use (a snapshot is queried by every plan worker), and memoised
-// per resolver, so each distinct id costs its reads once per snapshot.
-func newBookIDResolver(store retiredVetoReaderStore, retired database.RetiredBookFileReader, follows map[string]merge.FlagFollow) decisions.IDResolver {
-	chain := decisions.ChainResolvers(
-		decisions.RetiredBookResolver(retiredBookReader{store, retired}),
-		mergeSurvivorResolver(store, follows),
+// Unresolved lists every stored id the snapshot could not resolve, for the
+// plan to report once. It is empty before Load, and after a failed one.
+func (o *ownerVetoReader) Unresolved() []decisions.UnresolvedID {
+	if o.v == nil {
+		return nil
+	}
+	return o.v.Unresolved()
+}
+
+// newBookPathResolver is the decisions.PathResolver for book ids: the retired-
+// version index (a shell resolves to the book that holds its files), then the
+// merge survivor, over and over until the id stops moving. Safe for concurrent
+// use (a snapshot is queried by every plan worker). It memoises successes only,
+// per resolver, so each distinct id costs its reads once per snapshot; a
+// failure is asked again, so a read that failed once is not remembered as the
+// answer. The paths it returns are shared and must not be modified.
+func newBookPathResolver(store retiredVetoReaderStore, retired database.RetiredBookFileReader, follows map[string]merge.FlagFollow) decisions.PathResolver {
+	chain := decisions.ChainPathResolvers(
+		decisions.PathOf(decisions.RetiredBookResolver(retiredBookReader{store, retired})),
+		mergeSurvivorPathResolver(store, follows),
 	)
-	var memo sync.Map // entityType + "\x00" + id -> string
-	return func(entityType, id string) (string, error) {
+	var memo sync.Map // entityType + "\x00" + id -> []string
+	return func(entityType, id string) ([]string, error) {
 		k := entityType + "\x00" + id
 		if got, ok := memo.Load(k); ok {
-			return got.(string), nil
+			return got.([]string), nil
 		}
-		out, err := chain(entityType, id)
+		path, err := chain(entityType, id)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		memo.Store(k, out)
-		return out, nil
+		memo.Store(k, path)
+		return path, nil
 	}
 }
 
-// mergeSurvivorResolver resolves a book to the live book its work went into
-// (merge.ResolveMergeSurvivor). A book with no live survivor is NOT an error
-// here: a trashed shell that was never merged, and a purged id with no trace,
-// are ordinary and resolve to themselves. When the full chain ends nowhere
-// live (merged into a book that was then purged) the one direct hop of
-// MergedIntoBookID is taken, so the chain can go on from that book through the
-// retired-version index. A read error propagates.
-func mergeSurvivorResolver(store retiredVetoReaderStore, follows map[string]merge.FlagFollow) decisions.IDResolver {
-	return func(entityType, id string) (string, error) {
+// mergeSurvivorPathResolver resolves a book to the live book its work went
+// into, with the books it went through (merge.ResolveMergeSurvivorPath). A
+// book with no live survivor is NOT an error here: a trashed shell that was
+// never merged, and a purged id with no trace, are ordinary and resolve to
+// themselves. When the full chain ends nowhere live (merged into a book that
+// was then purged) the one direct hop of MergedIntoBookID is taken, so the
+// chain can go on from that book through the retired-version index. A read
+// error propagates.
+func mergeSurvivorPathResolver(store retiredVetoReaderStore, follows map[string]merge.FlagFollow) decisions.PathResolver {
+	return func(entityType, id string) ([]string, error) {
 		if entityType != retiredEntityBook {
-			return id, nil
+			return []string{id}, nil
 		}
-		surv, err := merge.ResolveMergeSurvivor(store, id, follows)
+		path, err := merge.ResolveMergeSurvivorPath(store, id, follows)
 		if err == nil {
-			return surv, nil
+			return path, nil
 		}
 		if !errors.Is(err, merge.ErrNoLiveSurvivor) {
-			return "", fmt.Errorf("resolve book %s: %w", id, err)
+			return nil, fmt.Errorf("resolve book %s: %w", id, err)
 		}
 		b, err := store.GetBookByID(id)
 		if err != nil {
-			return "", fmt.Errorf("resolve book %s: %w", id, err)
+			return nil, fmt.Errorf("resolve book %s: %w", id, err)
 		}
-		if b != nil && b.MergedIntoBookID != nil && *b.MergedIntoBookID != "" {
-			return *b.MergedIntoBookID, nil
+		if b != nil && b.MergedIntoBookID != nil && *b.MergedIntoBookID != "" && *b.MergedIntoBookID != id {
+			return []string{id, *b.MergedIntoBookID}, nil
 		}
-		return id, nil
+		return []string{id}, nil
 	}
 }
 

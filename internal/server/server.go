@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.113.0
+// version: 2.114.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
@@ -445,6 +446,13 @@ type Server struct {
 	embedQueue *tools.EmbedQueue
 	// hnswPersistDir is the directory where HNSW snapshots are saved/loaded.
 	hnswPersistDir string
+
+	// ownerVetoRows lets the owner-veto readers OwnerVetoes hands out (one per
+	// retired-versions plan or replan) share one scan of the decisions log while
+	// no record is written. Built on first use; only the scan is shared, every
+	// reader resolves the stored book ids itself.
+	ownerVetoRowsOnce sync.Once
+	ownerVetoRows     *decisions.RowCache
 }
 
 // ServerConfig holds server configuration
