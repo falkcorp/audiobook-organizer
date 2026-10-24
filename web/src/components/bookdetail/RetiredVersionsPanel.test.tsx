@@ -1,14 +1,24 @@
 // file: web/src/components/bookdetail/RetiredVersionsPanel.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d6f81a4-5b3c-4e90-8a17-c4f09e7b3d52
 // last-edited: 2026-10-23
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { loginPageResponse } from '../../test/loginRedirect';
+
+vi.mock('../../hooks/useCanOrganizeLibrary', () => ({ useCanOrganizeLibrary: vi.fn() }));
+
+import { useCanOrganizeLibrary } from '../../hooks/useCanOrganizeLibrary';
 import { RetiredVersionsPanel } from './RetiredVersionsPanel';
 import type { RetiredVersion } from '../../services/versionApi';
+
+const mockCanOrganize = vi.mocked(useCanOrganizeLibrary);
+
+beforeEach(() => {
+  mockCanOrganize.mockReturnValue(true);
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -22,6 +32,7 @@ function version(over: Partial<RetiredVersion> = {}): RetiredVersion {
     retired_from_book_id: 'shell-1',
     retired_from_title: 'The Shell Title',
     shell_exists: true,
+    shell_in_trash: true,
     retired_at: '2026-10-02T12:00:00Z',
     source_original_path: '/lib/shell',
     ingest_date: '2026-01-01T00:00:00Z',
@@ -48,19 +59,17 @@ interface Call {
   method: string;
 }
 
-// Stubs fetch: GET .../retired-versions answers the current `versions` list;
-// POST .../restore runs `onRestore` (which may change the list).
-function stubApi(opts: {
-  versions: () => RetiredVersion[];
-  onRestore?: () => Response;
-}): Call[] {
+// Stubs fetch: GET .../retired-versions answers the current `versions` list.
+// Any POST is recorded and answered 501, the way the server's restore route
+// answers while restores are not journaled.
+function stubApi(opts: { versions: () => RetiredVersion[] }): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       const method = (init?.method ?? 'GET').toUpperCase();
       calls.push({ url, method });
-      if (method === 'POST') return opts.onRestore ? opts.onRestore() : json({ data: {} });
+      if (method === 'POST') return json({ error: 'not implemented' }, 501);
       return json({ data: { versions: opts.versions(), count: opts.versions().length } });
     })
   );
@@ -118,66 +127,51 @@ describe('RetiredVersionsPanel', () => {
     expect(within(list).getByText(/\/lib\/shell\/02\.m4b \(missing\)/)).toBeInTheDocument();
   });
 
-  it('restore POSTs to the restore route, refetches the list and calls onRestored', async () => {
-    let restored = false;
-    const calls = stubApi({
-      versions: () => (restored ? [] : [version()]),
-      onRestore: () => {
-        restored = true;
-        return json({ data: { version_id: 'v1', restored_to_book: 'shell-1', restored_files: 2 } });
-      },
-    });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const onRestored = vi.fn();
-    renderWithProviders(<RetiredVersionsPanel bookId="holder-1" onRestored={onRestored} />);
-    await expand();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
-
-    await waitFor(() => expect(onRestored).toHaveBeenCalledTimes(1));
-    expect(
-      calls.filter((c) => c.method === 'POST').map((c) => c.url)
-    ).toEqual(['/api/v1/audiobooks/holder-1/retired-versions/v1/restore']);
-    // The list was fetched again after the POST, and the restored row is gone.
-    const postIndex = calls.findIndex((c) => c.method === 'POST');
-    expect(calls.slice(postIndex + 1).some((c) => c.method === 'GET')).toBe(true);
-    expect(await screen.findByText('Retired versions (0)')).toBeInTheDocument();
-    expect(screen.getByText(/Restored 2 files to "The Shell Title"/)).toBeInTheDocument();
-    expect(screen.queryByTestId('retired-version-v1')).not.toBeInTheDocument();
-  });
-
-  it('does nothing when the confirmation is declined', async () => {
+  it('shows Restore disabled with the journaling reason and never calls the restore route', async () => {
     const calls = stubApi({ versions: () => [version()] });
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const onRestored = vi.fn();
-    renderWithProviders(<RetiredVersionsPanel bookId="holder-1" onRestored={onRestored} />);
+    renderWithProviders(<RetiredVersionsPanel bookId="holder-1" />);
     await expand();
-    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
+    const button = await screen.findByRole('button', { name: 'Restore' });
+    expect(button).toBeDisabled();
+    expect(
+      screen.getByLabelText('Restore will be available once restores are journaled.')
+    ).toBeInTheDocument();
+    fireEvent.click(button);
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
-    expect(onRestored).not.toHaveBeenCalled();
   });
 
-  it('shows the server reason when a restore is refused and keeps the row', async () => {
-    stubApi({
-      versions: () => [version()],
-      onRestore: () => json({ error: 'the book this version was retired from is not in the trash' }, 409),
-    });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const onRestored = vi.fn();
-    renderWithProviders(<RetiredVersionsPanel bookId="holder-1" onRestored={onRestored} />);
-    await expand();
-    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
-    expect(await screen.findByText(/is not in the trash/)).toBeInTheDocument();
-    expect(onRestored).not.toHaveBeenCalled();
-    expect(screen.getByTestId('retired-version-v1')).toBeInTheDocument();
-  });
-
-  it('disables restore for a version whose book was purged', async () => {
-    stubApi({ versions: () => [version({ shell_exists: false, retired_from_title: undefined })] });
+  it('gives the specific reason when the book it was retired from is no longer in the trash', async () => {
+    stubApi({ versions: () => [version({ shell_in_trash: false })] });
     renderWithProviders(<RetiredVersionsPanel bookId="holder-1" />);
     await expand();
     expect(await screen.findByRole('button', { name: 'Restore' })).toBeDisabled();
+    expect(screen.getByLabelText(/no longer in the trash/)).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Restore will be available once restores are journaled.')
+    ).not.toBeInTheDocument();
+  });
+
+  it('gives the specific reason when the book it was retired from was purged', async () => {
+    stubApi({
+      versions: () => [
+        version({ shell_exists: false, shell_in_trash: false, retired_from_title: undefined }),
+      ],
+    });
+    renderWithProviders(<RetiredVersionsPanel bookId="holder-1" />);
+    await expand();
+    expect(await screen.findByRole('button', { name: 'Restore' })).toBeDisabled();
+    expect(screen.getByLabelText(/has been purged/)).toBeInTheDocument();
     expect(screen.getByText('purged')).toBeInTheDocument();
+  });
+
+  it('does not show Restore to a caller without the organize permission, but still lists the version', async () => {
+    mockCanOrganize.mockReturnValue(false);
+    stubApi({ versions: () => [version()] });
+    renderWithProviders(<RetiredVersionsPanel bookId="holder-1" />);
+    await expand();
+    expect(await screen.findByTestId('retired-version-v1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show files' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore' })).not.toBeInTheDocument();
   });
 
   it('reloads when refreshKey changes', async () => {
