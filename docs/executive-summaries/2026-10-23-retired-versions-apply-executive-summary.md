@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-23-retired-versions-apply-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b7e34a18-52c9-4f60-9d1b-8a63c0e5f247 -->
-<!-- last-edited: 2026-10-23 -->
+<!-- last-edited: 2026-10-24 -->
 
 # The trashed-duplicates clean-up can now actually run, behind an off switch
 
@@ -26,14 +26,14 @@ For each of those it:
 - moves the book's iTunes and other outside identifiers to the kept copy, so a
   later import finds the kept copy instead of a dead entry;
 - marks the trashed book as merged into the kept copy;
-- writes a record of every step before taking it, so a later undo has something
-  to work from.
+- writes a record of every step before taking it, so the work can be traced and,
+  later, reversed.
 
 Books the preview left alone (too recent, owner said no, listening progress,
 Doctor Who and the other protected series, files under the iTunes folder, or no
 clear kept copy) are still left alone.
 
-## The nightly trash purge now leaves these books alone
+## Trashed books that were cleaned up are protected from every way out of the trash
 
 The trash is emptied automatically after 30 days. A book whose files were moved
 onto another copy has no files of its own any more, so the purge would have
@@ -41,7 +41,13 @@ treated it as empty and deleted it, taking with it the only record of where
 those older versions came from. Until the purge that keeps a snapshot is built,
 the purge, "Purge now", "Discard progress and purge", the hard delete and
 "Restore" all refuse such a book and say why (restoring it would only bring
-back an empty book). If the check cannot be read, the book is left alone.
+back an empty book). The same refusal now covers the other ways a trashed book
+could be brought back or removed: the metadata "revert" button, undoing an
+automatic merge, undoing a delete, and undoing a combine. A trashed book that
+holds nothing but older versions of other books is kept as "owns files" by the
+purge rather than failing every night. If the check cannot be read, the book is
+left alone. Asking to restore a book that does not exist now says "not found"
+rather than a generic server error.
 
 ## Why it is safe to run
 
@@ -52,7 +58,13 @@ back an empty book). If the check cannot be read, the book is left alone.
   skipped and counted as "changed since plan", never applied on stale facts.
 - **Stops and restarts cleanly.** A book that is already done is skipped, so a
   second run applies nothing. If a run is cut off after a book's files moved but
-  before its identifiers did, the next run finishes just that book.
+  before its identifiers did, a fresh plan lists just that book as "finish the
+  tail" and the next run completes it. A book is only counted as cleaned up if an
+  older version actually holds its files, never because an empty version exists.
+- **One look at the library per run.** The settings and indexes the clean-up
+  needs are read once when the run starts, not for every book and never while
+  the merge lock is held. If the switch is flipped off as a run starts, the books
+  are reported as "try again later", not as failures.
 - **No two workers on the same book.** Books going to the same kept copy are
   handled one after another, never together. A single lock also keeps the
   clean-up from running at the same moment as a merge.
@@ -61,15 +73,20 @@ back an empty book). If the check cannot be read, the book is left alone.
 
 ## What is not finished, and must be before the switch is turned on in production
 
-- **Undo is not wired up yet.** The record of each step is written, but the
-  button that reverses an operation does not yet understand these steps. That
-  arrives with the undo work (the fifth of nine changes in this series). Do not
-  turn the switch on before it lands.
+- **Undo does not work for these steps yet, and the Operations page now says
+  so.** Reversing a clean-up operation as a whole is refused with a plain
+  message instead of half-undoing it. The undo steps arrive with the undo work
+  (the fifth of nine changes in this series). Do not turn the switch on before
+  it lands.
 - **Books from a combine that can still be undone are held, not cleaned up.**
   They are reported as "try again later" until undoing a combine also undoes the
   clean-up. This is also in the undo work.
 - **The automatic-merge history is not read yet.** The only protection against
   cleaning up a book from a very recent automatic merge is the 14-day minimum age.
+- **A snapshot, not a live view, of combines.** The clean-up reads the list of
+  combines that can still be undone once when it starts, so a combine made while
+  a run is in progress is not seen by that run. Undoing a combine now refuses a
+  cleaned-up book, which covers the gap.
 - **Speed.** A single lock means one book at a time is written. The plan
   estimated 45 to 130 minutes for the whole trash. That is an estimate, not a
   measurement.
