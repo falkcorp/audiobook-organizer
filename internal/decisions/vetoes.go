@@ -1,7 +1,7 @@
 // file: internal/decisions/vetoes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a2e90c7-35d1-4b48-9f6e-d17b83a40c52
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 package decisions
 
@@ -31,13 +31,14 @@ const maxTombstoneHops = 16
 // AuthorTombstoneResolver resolves "author" ids through author_tombstone:
 // redirects. Other entity types and non-numeric ids resolve to themselves.
 //
-// BOOK MERGE REDIRECTS ARE NOT RESOLVED HERE YET, and a snapshot built without
-// one fails OPEN for a merged-away book id: a pair rejected as (A, B) is not
-// seen as vetoed once A has been merged into C. A resolver for "book" has to
-// follow the merge survivor (merge.ResolveMergeSurvivor, which weighs the sync
-// redirect against MergedIntoBookID) and that package sits at the same layer
-// as this one, so the caller composes it into an IDResolver; it is required
-// before the first producer that proposes book pairs (PR3).
+// BOOK ids are not resolved here. A snapshot built without a book resolver
+// fails OPEN for a merged-away or retired book id: a pair rejected as (A, B) is
+// not seen as vetoed once A has been merged into C, or retired into C and
+// purged. The book resolver is RetiredBookResolver (follows the retired-version
+// index) chained with the merge survivor through ChainResolvers; internal/merge
+// sits at the same layer as this package, so the caller that imports both
+// composes them (maintenance.NewOwnerVetoReader does, for the retired-versions
+// fixer). Any producer that proposes book pairs must load its snapshot with it.
 func AuthorTombstoneResolver(store interface {
 	GetAuthorTombstone(oldID int) (int, error)
 }) IDResolver {

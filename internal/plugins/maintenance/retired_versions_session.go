@@ -78,7 +78,7 @@ var _ repairs.ApplyScoped = (*retiredVersionsFixer)(nil)
 // BeginApply implements repairs.ApplyScoped.
 func (f *retiredVersionsFixer) BeginApply(ctx context.Context, _ bool) (context.Context, func()) {
 	s := &retiredSession{applyOn: f.applyOn()}
-	if s.shared, s.err = f.loadShared(); s.err == nil {
+	if s.shared, s.err = f.loadShared(ctx); s.err == nil {
 		s.undo.idx, s.undo.err = merge.UnreversedCombineShells(s.shared.journal)
 		if s.undo.err != nil {
 			s.undo.err = fmt.Errorf("%w: %w", errRetiredUndoRead, s.undo.err)

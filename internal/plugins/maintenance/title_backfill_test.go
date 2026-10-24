@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.56.1
+// version: 1.56.2
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-28
 
@@ -17,7 +17,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -78,23 +77,19 @@ type fakeDeps struct {
 	// reconcileScan backs LatestReconcileScan; nil means no scan has run.
 	reconcileScan func() (ReconcileScan, error)
 	// vetoes and journals override RetiredVersionGuards; nil means the way the
-	// server resolves them from the store (decisions over the raw KV, and the
+	// server resolves them from the store (the snapshot reader over the store, and the
 	// store's own prefix scan).
 	vetoes   OwnerVetoReader
 	journals CombineJournalScanner
 }
 
-// OwnerVetoes (RetiredVersionGuards): the fixture's reader, else the decisions
-// store over the fixture store's raw KV, as Server's does.
+// OwnerVetoes (RetiredVersionGuards): the fixture's reader, else the snapshot
+// reader over the fixture store, as Server's is.
 func (d fakeDeps) OwnerVetoes() OwnerVetoReader {
 	if d.vetoes != nil {
 		return d.vetoes
 	}
-	kv, ok := database.AsCapability[decisions.KV](d.store)
-	if !ok {
-		return nil
-	}
-	return decisions.New(kv)
+	return NewOwnerVetoReader(d.store)
 }
 
 // CombineJournals (RetiredVersionGuards): the fixture's scanner, else the store.
