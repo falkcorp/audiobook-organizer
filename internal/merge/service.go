@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.63.0
+// version: 1.63.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -1985,7 +1985,11 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 
 	// Materialize the survivor's own single-file (virtual-segment) audio as a
 	// BookFile so the combined book owns ALL its files explicitly.
-	ownN, err := ms.attachJournaledFile(journal, &journal.SurvivorFiles, ms.planOwnFile(survivor), survivor.ID)
+	ownPlan, err := ms.planOwnFile(survivor)
+	if err != nil {
+		return nil, fmt.Errorf("combine refused: %w", err)
+	}
+	ownN, err := ms.attachJournaledFile(journal, &journal.SurvivorFiles, ownPlan, survivor.ID)
 	if err != nil {
 		return nil, fmt.Errorf("combine refused: %w", err)
 	}
@@ -2061,7 +2065,11 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 			FollowFileMove(ms.db, id, survivor.ID, ids)
 			res.FilesMoved += len(ids)
 		} else if a.FilePath != "" {
-			n, err := ms.attachJournaledFile(journal, &a.Files, ms.planVirtualFile(books[id], survivor.ID), survivor.ID)
+			plan, err := ms.planVirtualFile(books[id], survivor.ID)
+			if err != nil {
+				return nil, fmt.Errorf("combine %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
+			}
+			n, err := ms.attachJournaledFile(journal, &a.Files, plan, survivor.ID)
 			if err != nil {
 				return nil, fmt.Errorf("combine %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 			}
@@ -2679,13 +2687,14 @@ type virtualFilePlan struct {
 }
 
 // planOwnFile plans materializing a single-file book's FilePath as a BookFile
-// when it has no BookFile rows yet (the virtual-segment model).
-func (ms *Service) planOwnFile(b *database.Book) virtualFilePlan {
+// when it has no BookFile rows yet (the virtual-segment model). An error means
+// the path could not be checked and nothing may be planned from it.
+func (ms *Service) planOwnFile(b *database.Book) (virtualFilePlan, error) {
 	if b.FilePath == "" {
-		return virtualFilePlan{}
+		return virtualFilePlan{}, nil
 	}
 	if files, _ := ms.db.GetBookFiles(b.ID); len(files) > 0 {
-		return virtualFilePlan{} // already materialized
+		return virtualFilePlan{}, nil // already materialized
 	}
 	return ms.planVirtualFile(b, b.ID)
 }
@@ -2694,32 +2703,38 @@ func (ms *Service) planOwnFile(b *database.Book) virtualFilePlan {
 // Reattach-safe per #1549: an existing row at that path is MOVED (its BookID
 // can't be changed in place -- the primary key embeds it), never duplicated.
 // A new row's id is minted here, so the journal can name it before it exists.
-func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtualFilePlan {
+//
+// An error means the path could not be checked, and it is returned, never read
+// as "nothing to attach": an empty plan makes attachJournaledFile report 0
+// files with no error, so the combine would soft-delete the absorbed book while
+// its file got no row under the survivor and the combine would still report
+// success. The combine stops on the error with its journal left pending, like
+// any other failed step.
+func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtualFilePlan, error) {
 	// A path held by a retired version is that version's file: the move below
 	// would refuse the row (a retired row is only moved by the retire operations)
 	// and creating one would put a second row on the file, so the plan attaches
 	// nothing. The retired row keeps the file; the merge goes on without a row for
 	// it. GetBookFileByPath cannot see the retired row (it answers live rows
-	// only), so ask the complete lookup, and the STRICT one: the non-strict
-	// variant falls back to GetBookFileByPath when memdb is not serving, which
-	// is exactly the lookup that cannot see a retired row, so it would answer
-	// "free" for a retired-held path during startup warmup. An answer that
-	// cannot be complete is treated like a claim rather than as "free".
-	rows, rowsErr := database.BookFileRowsAtPathStrict(ms.db, b.FilePath)
+	// only), so the claim comes from the complete lookup. That lookup refuses
+	// while memdb is not serving, so it is required only once a retired version
+	// exists (BookFileRowsAtPathForWrite): with none, no retired row can hold the
+	// path and the single-owner lookup below is the whole answer, which keeps a
+	// combine of a rowless book working through the warmup after a restart. When
+	// the complete lookup is needed and cannot be answered, that is an error.
+	rows, rowsErr := database.BookFileRowsAtPathForWrite(ms.db, b.FilePath)
 	if rowsErr != nil {
-		mlog.Warn("combine: cannot tell whether a retired version holds the file; no row planned for it book=%s path=%s err=%s",
-			b.ID, logger.SanitizeLogValue(b.FilePath), logger.SanitizeLogValue(fmt.Sprint(rowsErr)))
-		return virtualFilePlan{}
+		return virtualFilePlan{}, fmt.Errorf("cannot tell whether a retired version holds %s: %w", b.FilePath, rowsErr)
 	}
 	if held := database.RetiredClaimOnPath(rows); held != nil {
 		mlog.Info("combine: the file is held by a retired version; no row planned for it book=%s path=%s retired_file=%s holder=%s",
 			b.ID, logger.SanitizeLogValue(b.FilePath), held.ID, held.BookID)
-		return virtualFilePlan{}
+		return virtualFilePlan{}, nil
 	}
 	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
 	if existing != nil {
 		if existing.BookID == targetBookID {
-			return virtualFilePlan{attached: true}
+			return virtualFilePlan{attached: true}, nil
 		}
 		return virtualFilePlan{
 			fm: CombineFileMove{
@@ -2728,7 +2743,7 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtua
 			},
 			existing: existing,
 			attached: true,
-		}
+		}, nil
 	}
 	bf := &database.BookFile{
 		ID:       ulid.Make().String(),
@@ -2747,7 +2762,7 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtua
 		fm:       CombineFileMove{FileID: bf.ID, FromBookID: b.ID, FilePath: bf.FilePath, Created: true},
 		create:   bf,
 		attached: true,
-	}
+	}, nil
 }
 
 // applyVirtualFile performs a plan. It returns the number of files attached

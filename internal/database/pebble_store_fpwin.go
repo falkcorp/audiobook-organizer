@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
-// last-edited: 2026-10-19
+// last-edited: 2026-10-24
 
 package database
 
@@ -411,7 +411,11 @@ func (s *PebbleStore) commitWithWindowCascadeIfPresent(batch *GatedBatch, f *Boo
 		return err
 	}
 	_ = closer.Close()
+	// The delete drops the row's single-owner index keys: take the index mutex
+	// around the apply (innermost; lockSingleOwnerIndex).
+	unlockIndex := s.lockSingleOwnerIndex()
 	err = batch.Commit(pebble.NoSync)
+	unlockIndex()
 	unlockOwner()
 	if err != nil {
 		return err
@@ -432,7 +436,8 @@ func (s *PebbleStore) commitWithWindowCascade(batch *GatedBatch, files ...*BookF
 		batch.Close()
 		return err
 	}
-	return batch.Commit(pebble.Sync)
+	// The delete drops the rows' single-owner index keys (lockSingleOwnerIndex).
+	return s.commitSingleOwnerIndexBatch(batch)
 }
 
 // stageFingerprintWindowDeletes stages a point delete for every stored window of

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.0
+// version: 1.233.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -222,6 +222,7 @@ type PebbleStore struct {
 	bookLocks                bookLocks            // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookFileLocks            bookLocks            // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookVersionLocks         bookLocks            // per-version-ID write stripes: UpdateBookVersion, DeleteBookVersion and the retired-row writers hold one across read AND commit (pebble_store_book_lock.go lockBookVersion)
+	singleOwnerIndexMu       sync.Mutex           // held across the commit (and, for the retired-version writers, the index re-check before it) of every batch that writes or deletes a single-owner index key (path, PID, hash, original hash, AcoustID segment): the LEAF of the book_file lock order, taken after the owner stripes and holding nothing else (pebble_store_book_lock.go lockSingleOwnerIndex)
 	bookOwnerLocks           bookLocks            // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
 	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors -> book_narrators (pebble_store_authors.go)
 	bookNarratorLocks        bookLocks            // per-book-ID stripes for the book_narrators join: SetBookNarrators, ModifyBookNarrators and ModifyBookCredits hold one across read AND commit, DeleteBook from its probe through its commit; taken last in the order above (credits_store.go)

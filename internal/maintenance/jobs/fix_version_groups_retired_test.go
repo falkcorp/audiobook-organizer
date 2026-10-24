@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3c1b57-4a92-4d06-b7f1-2c5d9a60e417
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package jobs
 
@@ -91,4 +91,61 @@ func TestVgPlanAuthorDirFix_FileHeldByRetiredVersionIsNeitherCreatedNorRepointed
 	require.NoError(t, err)
 	require.Len(t, at, 1)
 	require.Equal(t, retiredID, at[0].ID)
+}
+
+// vgIndexDownStore reports the complete multi-row lookup as unavailable, the
+// way the store does while memdb warms up after a restart. Every other read is
+// the real store's.
+type vgIndexDownStore struct{ *database.PebbleStore }
+
+func (vgIndexDownStore) BookFilesAtPath(string) ([]database.BookFile, error) {
+	return nil, database.ErrBookFilesAtPathUnavailable
+}
+
+func vgWarmupFixture(t *testing.T) (ps *database.PebbleStore, book *database.Book, subdir, free string) {
+	t.Helper()
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	ps.WaitForWarmup()
+	t.Cleanup(func() { _ = ps.Close() })
+	root := t.TempDir()
+	subdir = filepath.Join(root, "Author", "Book")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	free = filepath.Join(subdir, "01.mp3")
+	require.NoError(t, os.WriteFile(free, []byte("1234"), 0o644))
+	book, err = ps.CreateBook(&database.Book{Title: "Book", FilePath: filepath.Join(root, "old")})
+	require.NoError(t, err)
+	return ps, book, subdir, free
+}
+
+// With no retired version in the store, the author-dir fix does not need the
+// complete lookup (no retired row can hold a file), so it still plans while memdb
+// is warming up, and still sees a live row another book owns at the path through
+// the single-owner index.
+func TestVgPlanAuthorDirFix_CompleteLookupDownWithNoRetiredVersionsStillPlans(t *testing.T) {
+	ps, book, subdir, free := vgWarmupFixture(t)
+	other, err := ps.CreateBook(&database.Book{Title: "Other", FilePath: filepath.Join(t.TempDir(), "other")})
+	require.NoError(t, err)
+	taken := filepath.Join(subdir, "02.mp3")
+	require.NoError(t, os.WriteFile(taken, []byte("1234"), 0o644))
+	require.NoError(t, ps.CreateBookFile(&database.BookFile{BookID: other.ID, FilePath: taken, Format: "mp3", FileSize: 4}))
+
+	plan, err := vgPlanAuthorDirFix(vgIndexDownStore{ps}, book.ID, subdir)
+	require.NoError(t, err)
+	require.Equal(t, []string{free}, plan.create)
+	require.Equal(t, []string{taken}, plan.ownedElsewhere)
+	require.Empty(t, plan.heldRetired)
+}
+
+// Once a retired version exists the complete lookup is required, and when it
+// cannot be answered the plan is an error, never a plan made from a lookup that
+// cannot see a retired row.
+func TestVgPlanAuthorDirFix_CompleteLookupDownWithRetiredVersionsIsAnError(t *testing.T) {
+	ps, book, subdir, _ := vgWarmupFixture(t)
+	holder, err := ps.CreateBook(&database.Book{Title: "Holder", FilePath: filepath.Join(t.TempDir(), "holder")})
+	require.NoError(t, err)
+	vgRetireRowOnto(t, ps, holder.ID, filepath.Join(t.TempDir(), "elsewhere.mp3"))
+
+	_, err = vgPlanAuthorDirFix(vgIndexDownStore{ps}, book.ID, subdir)
+	require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete)
 }

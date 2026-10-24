@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.8.4
+// version: 2.8.5
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -53,6 +53,42 @@ import (
 // a ~230 KB AcoustIDFingerprint, so 1000 rows is ~230 MB in one batch. A var (not
 // a const) so tests can shrink it to exercise the multi-batch path.
 var tagBackfillWriteBatchSize = 250
+
+// tagBackfillMaxRowsPerWrite caps the rows of one BatchUpsertBookFiles call. The
+// call holds the write stripe of every row it rewrites for its whole staging pass
+// (BatchUpsertBookFiles, lockBookFiles), and a row's stripe is one of 256, so n
+// rows hold about 256*(1-e^(-n/256)) of them: a 250-row batch held ~160 stripes
+// (63%), stalling every single-row fingerprint, transcript and scan write
+// library-wide for the pass. A call of at most this many rows holds at most this
+// many stripes (rows >= distinct stripes). Chunks end on book boundaries (see
+// tagBackfillWriteChunk), so one book with more rows than the cap is written
+// whole. A var so tests can shrink it.
+var tagBackfillMaxRowsPerWrite = 32
+
+// tagBackfillWriteChunk returns how many of pending's leading rows to hand to one
+// BatchUpsertBookFiles call: whole books only, at most maxRows rows, and at least
+// the first book (a book larger than maxRows is never split: its siblings are
+// renumbered together, and a half-written book would show a mixed numbering to
+// readers between the two calls). pending holds each book's rows contiguously,
+// since a book is enqueued whole.
+func tagBackfillWriteChunk(pending []*database.BookFile, maxRows int) int {
+	if len(pending) == 0 {
+		return 0
+	}
+	end := 0 // end of the last whole book that fits
+	for i := 0; i < len(pending); {
+		j := i
+		for j < len(pending) && pending[j].BookID == pending[i].BookID {
+			j++
+		}
+		if end > 0 && j > maxRows {
+			break
+		}
+		end = j
+		i = j
+	}
+	return end
+}
 
 // tagReadTimeout bounds one file's tag read. metadata.ExtractMetadata falls back
 // to TagLib running in WASM, which takes no context and cannot be interrupted, so
@@ -283,11 +319,12 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		if writeErr != nil {
 			return writeErr
 		}
-		// pending holds only whole books, so writing all of it in one call is
-		// what keeps every batch on a book boundary. (The loop runs once; it is a
-		// loop so that a chunked variant would still write every row.)
+		// pending holds only whole books. Each call writes whole books only
+		// (tagBackfillWriteChunk), so every batch ends on a book boundary, and at
+		// most tagBackfillMaxRowsPerWrite rows (barring one oversized book), so a
+		// call holds a bounded number of file stripes instead of ~160 of 256.
 		for len(pending) > 0 {
-			n := len(pending)
+			n := tagBackfillWriteChunk(pending, tagBackfillMaxRowsPerWrite)
 			if err := store.BatchUpsertBookFiles(pending[:n]); err != nil {
 				// One deleted book refuses only its own rows; the rest of the
 				// batch IS written. Count both and keep going.
