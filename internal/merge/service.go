@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.61.1
+// version: 1.62.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package merge
 
@@ -1755,14 +1755,27 @@ type CombineOptions struct {
 	// combine it made. Empty: a correlation id of its own, returned in
 	// CombineResult.OperationID.
 	OperationID string
-	// Context, when set, is checked between the absorbed books: once it is
-	// done (the op's timeout, or the server shutting down) the combine stops
-	// before the next book instead of holding the merge lock until the whole
-	// run ends. The stop is the part-way stop the journal already handles: a
+	// Context, when set, bounds how long the combine holds the merge lock (the
+	// op's timeout, or the server shutting down). It is honoured at two
+	// points, and never at one where stopping would strand a book:
+	//
+	//   - before the first write: a context already done refuses the combine
+	//     with nothing journaled or changed (a plain error, not a
+	//     *CombineIncompleteError);
+	//   - between the absorbed books, but only for a book whose files the
+	//     bulk move did NOT take. That move is one write and is not
+	//     interruptible, and it leaves every absorbed book that had files with
+	//     none of them until the per-book loop retires it, so every such book
+	//     is still finished (its progress followed, its shell retired) after
+	//     the context ends. The books the move did not touch are left exactly
+	//     as they were and dropped from the journal.
+	//
+	// A stop therefore leaves every absorbed book either fully combined or
+	// untouched, never live with no files. It returns a
 	// *CombineIncompleteError wrapping the context's error, the journal left
-	// Pending and naming every step that ran, so reverting the operation
-	// puts back exactly that. nil never stops. The bulk file move before the
-	// per-book steps is one write and is not interruptible.
+	// Pending (reverting the operation puts back what ran); the aggregate
+	// recompute and version-group hand-off still run, the metadata override
+	// does not. nil never stops.
 	Context context.Context
 }
 
@@ -1873,6 +1886,14 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	}
 	if err := GuardITunesProtected(ms.db, bookIDs); err != nil {
 		return nil, err
+	}
+
+	// The one point where a done context refuses the whole combine: nothing has
+	// been journaled or written yet (see CombineOptions.Context).
+	if opts.Context != nil {
+		if err := opts.Context.Err(); err != nil {
+			return nil, fmt.Errorf("combine not started: %w", err)
+		}
 	}
 
 	res := &CombineResult{PrimaryID: primaryID}
@@ -2048,14 +2069,28 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 		return nil
 	}
+	// stopErr is the context's error once it ended mid-loop. From then on only
+	// the books whose files the bulk move took are still processed: those
+	// have no files of their own until they are retired, so stopping before
+	// one would leave it live and empty. A book with nothing moved has not
+	// been touched, and stopping before it is safe.
+	var stopErr error
+	untouched := 0
 	for _, id := range absorbedOrder {
-		// The only point where stopping is safe and cheap: the previous
-		// absorbed book is complete (files attached, progress followed,
-		// retired, each journaled), the next has not been touched.
-		if opts.Context != nil {
+		if stopErr == nil && opts.Context != nil {
 			if err := opts.Context.Err(); err != nil {
-				return nil, fmt.Errorf("combine stopped before %s: %w (journal %s left %s)", id, err, journal.ID, CombineJournalPending)
+				stopErr = err
+				mlog.Warn("combine: context ended before %s; finishing the books whose files already moved and leaving the rest untouched journal=%s err=%s",
+					logger.SanitizeLogValue(id), journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
 			}
+		}
+		if stopErr != nil && len(movedFiles[id]) == 0 {
+			journal.Absorbed = slices.DeleteFunc(journal.Absorbed, func(e CombineAbsorbed) bool { return e.BookID == id })
+			untouched++
+			if err := persist("dropping untouched book " + id + " after the context ended"); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		a := entryOf(id)
 
@@ -2193,13 +2228,17 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 	}
 	journal.Absorbed = kept
-	// The body is complete: from here a caller may renumber the survivor's
-	// rows (regroup_apply stamps play order once this returns nil), so the
-	// undo must restore their numbers. Journaled before returning, or the
-	// combine stops: a renumbering the journal does not allow for would
-	// survive the undo.
-	journal.SurvivorNumbering = SurvivorNumberingMayChange
-	if err := persist("the end of the combine body (every file is moved and every absorbed book retired; the aggregate recompute, version-group hand-off and override did not run)"); err != nil {
+	if stopErr == nil {
+		// The body is complete: from here a caller may renumber the survivor's
+		// rows (regroup_apply stamps play order once this returns nil), so the
+		// undo must restore their numbers. Journaled before returning, or the
+		// combine stops: a renumbering the journal does not allow for would
+		// survive the undo.
+		journal.SurvivorNumbering = SurvivorNumberingMayChange
+		if err := persist("the end of the combine body (every file is moved and every absorbed book retired; the aggregate recompute, version-group hand-off and override did not run)"); err != nil {
+			return nil, err
+		}
+	} else if err := persist("the end of a combine its context stopped (every book whose files moved is retired; the aggregate recompute and version-group hand-off did not run)"); err != nil {
 		return nil, err
 	}
 
@@ -2220,6 +2259,16 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 	}
 	handOffLeftGroups(ms.db, leftGroups)
+
+	if stopErr != nil {
+		// Every absorbed book is complete or untouched, the survivor's
+		// aggregates and the groups' primaries are settled; the override and
+		// the Applied status are not written. No renumbering can have run
+		// (SurvivorNumbering is still Untouched), so a revert has nothing to
+		// restore there.
+		return nil, fmt.Errorf("combine stopped: %w (%d absorbed book(s) retired, %d left untouched; journal %s left %s, reverting the operation puts back what ran)",
+			stopErr, res.BooksDeleted, untouched, journal.ID, CombineJournalPending)
+	}
 
 	// The override is planned (every before-value read, the author looked
 	// up), journaled, and only then written, a new author row included
