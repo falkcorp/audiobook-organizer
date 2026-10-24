@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -41,6 +42,17 @@ func (rs *RevertService) lockMerge() func() {
 	}
 	merge.LockMergeRMW()
 	return merge.UnlockMergeRMW
+}
+
+// withMergeLockHeld returns a RevertService over the same stores for a caller
+// that already holds the merge lock (the combine undo's retire reversal): its
+// cases then skip the lock (lockMerge). The one place the service is copied, so
+// a lock added to RevertService later is a single, visible fix (go vet's
+// copylocks check flags this copy) rather than a silent copy of a held mutex.
+func (rs *RevertService) withMergeLockHeld() *RevertService {
+	held := *rs
+	held.mergeLockHeld = true
+	return &held
 }
 
 func retireStoreMissing(what string) error {
@@ -146,7 +158,11 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) er
 }
 
 // revertRetiredVersionRehome moves a retired version (and its rows) back to
-// the holder it was rehomed from.
+// the holder it was rehomed from. That holder is trashed by definition (the
+// chain case rehomed the version because the holder was being retired), and a
+// revert does not un-trash it, so the store path is the one that accepts a
+// trashed destination (database.RetiredVersionHolderRestorer); a destination a
+// purge deleted is recreated from its purge snapshot first, like any shell.
 func (rs *RevertService) revertRetiredVersionRehome(c *database.OperationChange) error {
 	id, ok := undo.BookVersionIDFromField(c.FieldName)
 	if !ok {
@@ -157,9 +173,9 @@ func (rs *RevertService) revertRetiredVersionRehome(c *database.OperationChange)
 	if !ok {
 		return retireStoreMissing("read book versions")
 	}
-	w, err := rs.retireWriter()
-	if err != nil {
-		return err
+	restorer, ok := database.AsCapability[database.RetiredVersionHolderRestorer](rs.db)
+	if !ok {
+		return retireStoreMissing("move a retired version back to its previous holder")
 	}
 	defer rs.lockMerge()()
 	cur, err := vs.GetBookVersion(id)
@@ -169,29 +185,53 @@ func (rs *RevertService) revertRetiredVersionRehome(c *database.OperationChange)
 	if err := undo.CheckRehomeCurrent(cur, c); err != nil {
 		return err
 	}
-	if err := w.RehomeRetiredVersion(id, c.OldValue); err != nil {
+	if err := rs.ensureShellPresent(c.OldValue); err != nil {
+		return err
+	}
+	if err := restorer.RestoreRetiredVersionHolder(id, c.OldValue); err != nil {
+		if errors.Is(err, database.ErrBookFileOwnerMissing) || errors.Is(err, database.ErrRetiredVersionMismatch) {
+			return &undo.ReferentError{Reason: undo.ReasonChangedSince,
+				Detail: fmt.Sprintf("retired version %s could not go back to %s: %v", id, c.OldValue, err)}
+		}
 		return fmt.Errorf("rehome retired version %s back to %s: %w", id, c.OldValue, err)
 	}
 	return nil
 }
 
 // prepassShells recreates, before any row runs, every purged shell a retire
-// row of the revert will write back to. A revert runs newest first, and the
+// row of the revert will write back to: the shell a file row left, and the
+// holder a rehome took a version from. A revert runs newest first, and the
 // shell's external-id and merged-into rows are newer than the retire rows, so
 // without this they would reach a purged shell and refuse book_missing before
 // any retire row recreated it. A shell that cannot be made present is not an
 // error here: the rows that need it refuse with the reason, on their own.
+//
+// It runs under the merge lock (taken here unless the caller holds it), like
+// every other recreate: undo.PurgedShellRecreator is always called with the
+// merge lock held and never takes it. Nothing is taken when no row names a
+// shell, so a revert without retire rows is unchanged.
 func (rs *RevertService) prepassShells(rows []*database.OperationChange) {
 	var shells []string
-	for _, c := range rows {
-		if c.ChangeType != undo.ChangeTypeBookFileRetire {
-			continue
-		}
-		if r, err := undo.DecodeBookFileRetire(c); err == nil && !slices.Contains(shells, r.Shell) {
-			shells = append(shells, r.Shell)
+	add := func(id string) {
+		if id != "" && !slices.Contains(shells, id) {
+			shells = append(shells, id)
 		}
 	}
+	for _, c := range rows {
+		switch c.ChangeType {
+		case undo.ChangeTypeBookFileRetire:
+			if r, err := undo.DecodeBookFileRetire(c); err == nil {
+				add(r.Shell)
+			}
+		case undo.ChangeTypeRetiredVersionRehome:
+			add(c.OldValue)
+		}
+	}
+	if len(shells) == 0 {
+		return
+	}
 	sort.Strings(shells)
+	defer rs.lockMerge()()
 	for _, shell := range shells {
 		if err := rs.ensureShellPresent(shell); err != nil {
 			revertLog.Warn("revert: shell %s not recreated before the retire rows run: %v", shell, err)
@@ -214,14 +254,44 @@ func newRevertScope(shellIDs []string) *revertScope {
 	return s
 }
 
+// recordID names the owed-settle record a scoped run of operationID reads and
+// writes: its own, never the whole operation's, so a scoped run cannot clear
+// or rewrite the intent a dead earlier run of the whole operation left for
+// other books' groups, and a dead scoped run's intent is retried by the next
+// scoped run of the same books.
+func (s *revertScope) recordID(operationID string) string {
+	ids := make([]string, 0, len(s.shells))
+	for id := range s.shells {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return operationID + "#scope:" + strings.Join(ids, ",")
+}
+
+// isRetireRowType reports one of the three types a retire adds.
+func isRetireRowType(changeType string) bool {
+	switch changeType {
+	case undo.ChangeTypeBookFileRetire, undo.ChangeTypeBookVersionCreate, undo.ChangeTypeRetiredVersionRehome:
+		return true
+	}
+	return false
+}
+
 // includes reports whether row c belongs to the scope on its own: the rows of
-// the three retire types by the shell or version they decode to, any other row
-// by its BookID. A row that does not decode is not selected (it is not
-// restorable either way; NotRestorableLabel names it in a whole-op revert).
-// The rehomes are decided by filter, from the versions the other rows touch.
+// the three retire types by the shell or version they decode to, the rehomes
+// that took a version off a scoped shell (the shell was the holder of a version
+// an earlier retire put there), any other row by its BookID. A retire row that
+// does not decode is selected, whichever shell it belongs to (that cannot be
+// told): it is not restorable, so a revert counts it by name
+// (undo.NotRestorableLabel) and the combine undo refuses it, instead of
+// restoring the shell around a file that stays retired. The rehomes of the
+// versions the other rows create are decided by filter.
 func (s *revertScope) includes(c *database.OperationChange) (selected bool, version string) {
 	if undo.IsLedgerOnly(c) {
 		return false, ""
+	}
+	if isRetireRowType(c.ChangeType) && undo.NotRestorableLabel(c) != "" {
+		return true, ""
 	}
 	switch c.ChangeType {
 	case undo.ChangeTypeBookFileRetire:
@@ -231,7 +301,7 @@ func (s *revertScope) includes(c *database.OperationChange) (selected bool, vers
 		v, err := undo.DecodeBookVersionCreate(c)
 		return err == nil && s.shells[v.RetiredFromBookID], v.ID
 	case undo.ChangeTypeRetiredVersionRehome:
-		return false, ""
+		return c.OldValue != "" && s.shells[c.OldValue], ""
 	}
 	return s.shells[c.BookID], ""
 }
@@ -262,69 +332,138 @@ func (s *revertScope) filter(changes []*database.OperationChange) []*database.Op
 	return out
 }
 
+// requireShellsOf refuses a scope that names a book the operation never names
+// as a shell: a shell is the book a retire took file rows from, the book a
+// retired version was created from, the holder a rehome took a version off, or
+// a book whose external ids or merged-into pointer the retire moved. Selecting
+// by anything else (the holder, say, whose BookID keys every retire row)
+// would pick up every row keyed by it, of every type and every shell.
+func (s *revertScope) requireShellsOf(operationID string, changes []*database.OperationChange) error {
+	named := map[string]bool{}
+	for _, c := range changes {
+		switch c.ChangeType {
+		case undo.ChangeTypeBookFileRetire:
+			if r, err := undo.DecodeBookFileRetire(c); err == nil {
+				named[r.Shell] = true
+			}
+		case undo.ChangeTypeBookVersionCreate:
+			if v, err := undo.DecodeBookVersionCreate(c); err == nil {
+				named[v.RetiredFromBookID] = true
+			}
+		case undo.ChangeTypeRetiredVersionRehome:
+			if c.OldValue != "" {
+				named[c.OldValue] = true
+			}
+		case undo.ChangeTypeBookMergedInto, undo.ChangeTypeExternalIDReassign:
+			named[c.BookID] = true
+		}
+	}
+	var notShells []string
+	for id := range s.shells {
+		if !named[id] {
+			notShells = append(notShells, id)
+		}
+	}
+	if len(notShells) == 0 {
+		return nil
+	}
+	sort.Strings(notShells)
+	return fmt.Errorf("operation %s does not name %s as a shell (a book a retire took rows from): a scoped revert takes shell ids only", operationID, strings.Join(notShells, ", "))
+}
+
 // retireUndoer is merge.RetireUndoer over a RevertService: how UndoCombine
 // reverses the retire of a shell the combine absorbed (retired-versions plan
-// 6.5). Both methods run with the merge lock held by UndoCombine, so they work
-// on a copy of the service that never takes it (mergeLockHeld), and neither
-// takes the operation lock: the retire op's own RevertOperation takes the
-// operation lock and then the merge lock, so taking them in the opposite order
-// here could deadlock. A concurrent RevertOperation of the same op finds its
-// rows already reverted (a row back on the shell is already restored) and
-// finishes.
+// 6.5). Both its steps run with the merge lock held by UndoCombine, so the
+// reversal works on a copy of the service that never takes it
+// (withMergeLockHeld). It takes the retire op's operation lock with a TRY: the
+// retire op's own RevertOperation takes the operation lock and then the merge
+// lock, so waiting for the operation lock here, under the merge lock, could
+// deadlock. A busy lock refuses with a retryable error, and the undo (which
+// has changed nothing yet, or is a retry of one that did) is run again.
 type retireUndoer struct{ rs *RevertService }
 
 // retireUndoer returns the merge.RetireUndoer to wire into a merge.Service the
 // revert builds for a combine row.
 func (rs *RevertService) retireUndoer() merge.RetireUndoer { return retireUndoer{rs: rs} }
 
-// pending returns the shell's un-reverted, un-voided rows of retire op opID.
-func (u retireUndoer) pending(opID, shellID string) ([]*database.OperationChange, error) {
+// PlanRetireRevert implements merge.RetireUndoer: it reads retire op opID once
+// and returns the shell's rows, every refusal, and the reversal that runs from
+// the same read. It writes nothing.
+func (u retireUndoer) PlanRetireRevert(opID, shellID string) (*merge.RetireReversal, error) {
 	changes, err := u.rs.db.GetOperationChanges(opID)
 	if err != nil {
 		return nil, fmt.Errorf("read the changes of retire op %s: %w", opID, err)
 	}
-	var out []*database.OperationChange
-	for _, c := range newRevertScope([]string{shellID}).filter(changes) {
-		if !c.Voided && c.RevertedAt == nil {
-			out = append(out, c)
+	scope := newRevertScope([]string{shellID})
+	rev := &merge.RetireReversal{}
+	var pending []*database.OperationChange
+	for _, c := range scope.filter(changes) {
+		if c.Voided {
+			continue // the write it describes never happened
+		}
+		done := c.RevertedAt != nil
+		if c.ChangeType == undo.ChangeTypeBookFileRetire {
+			// The file rows of this shell (a row that does not decode names no
+			// file: it is refused below).
+			if r, derr := undo.DecodeBookFileRetire(c); derr == nil {
+				if done {
+					rev.RevertedFileIDs = append(rev.RevertedFileIDs, r.FileID)
+				} else {
+					rev.PendingFileIDs = append(rev.PendingFileIDs, r.FileID)
+				}
+			}
+		}
+		if !done {
+			pending = append(pending, c)
 		}
 	}
-	return out, nil
-}
-
-// CheckRetireRevert implements merge.RetireUndoer. It is read-only.
-func (u retireUndoer) CheckRetireRevert(opID, shellID string) (bool, []string, error) {
-	rows, err := u.pending(opID, shellID)
-	if err != nil || len(rows) == 0 {
-		return false, nil, err
+	if len(pending) == 0 {
+		return rev, nil
 	}
+	rev.Live = true
 	cc, ok := u.rs.db.(undo.ConflictChecker)
 	if !ok {
-		return true, []string{fmt.Sprintf("the store cannot check the retire of shell %s", shellID)}, nil
+		rev.Reasons = []string{fmt.Sprintf("the store cannot check the retire of shell %s", shellID)}
+		return rev, nil
 	}
-	reasons, err := undo.RetireScopeRefusals(cc, rows)
+	reasons, err := undo.RetireScopeRefusals(cc, shellID, pending)
 	if err != nil {
-		return true, nil, err
+		return nil, err
 	}
-	return true, reasons, nil
+	rev.Reasons = reasons
+	if len(reasons) == 0 {
+		rev.Revert = func() error { return u.revert(opID, shellID, scope, changes, pending) }
+	} else {
+		rev.Revert = func() error {
+			return fmt.Errorf("retire op %s of shell %s cannot be reversed: %s", opID, shellID, strings.Join(reasons, "; "))
+		}
+	}
+	return rev, nil
 }
 
-// RevertRetire implements merge.RetireUndoer. It refuses, before writing
-// anything, a row the check refuses to predict (outside the retire stage): such
-// a row's case could take a lock the caller holds.
-func (u retireUndoer) RevertRetire(opID, shellID string) error {
-	rows, err := u.pending(opID, shellID)
-	if err != nil || len(rows) == 0 {
-		return err
-	}
-	for _, c := range rows {
-		if !undo.IsRetireStageType(c.ChangeType) || c.ChangeType == undo.ChangeTypeRetiredVersionRehome {
+// errRetireOpBusy is the retryable refusal of a retire reversal whose operation
+// lock another revert of the same operation holds.
+var errRetireOpBusy = errors.New("another revert of this retire operation is running; try the undo again when it finishes")
+
+// revert reverses pending (the shell's un-reverted rows, read by
+// PlanRetireRevert from changes) with the merge lock already held by the
+// caller. It refuses, before writing anything, a row the plan refuses to
+// predict: such a row's case could take a lock the caller holds.
+func (u retireUndoer) revert(opID, shellID string, scope *revertScope, changes, pending []*database.OperationChange) error {
+	for _, c := range pending {
+		if !undo.IsRetireStageType(c.ChangeType) || undo.NotRestorableLabel(c) != "" ||
+			(c.ChangeType == undo.ChangeTypeRetiredVersionRehome && !undo.RehomeFromShell(c, shellID)) {
 			return fmt.Errorf("retire op %s: change %s (%s) is not a row the combine undo reverses", opID, c.ID, c.ChangeType)
 		}
 	}
-	scoped := *u.rs
-	scoped.mergeLockHeld = true
-	if _, err := scoped.revertOperation(opID, newRevertScope([]string{shellID})); err != nil {
+	// The owed-settle record is read, rewritten and cleared across a run, and
+	// the retire op's own RevertOperation holds this lock for its whole run.
+	release, ok := tryLockOperation(opID)
+	if !ok {
+		return fmt.Errorf("reverse the retire of shell %s (op %s): %w", shellID, opID, errRetireOpBusy)
+	}
+	defer release()
+	if _, err := u.rs.withMergeLockHeld().revertLoaded(opID, scope, changes); err != nil {
 		return fmt.Errorf("reverse the retire of shell %s (op %s): %w", shellID, opID, err)
 	}
 	return nil

@@ -1,5 +1,5 @@
 // file: internal/undo/retire.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 78716d7c-a378-4584-9b30-edcdab627347
 // last-edited: 2026-10-24
 
@@ -64,7 +64,7 @@ func BookVersionIDFromField(field string) (string, bool) {
 //
 // CombineJournalID is set on the NewValue of a retire that was linked to a
 // combine journal (retired-versions plan 6.5): the raw key
-// merge:combine-retire:<combine id>:<shell id> names the retire op, and this
+// merge:combine-retire:<combine id>:<shell id>:<retire op id> names the retire op, and this
 // field names the combine on the row itself, so the link can be rebuilt from
 // the journal. It rides inside the JSON because OperationChange has no field
 // for it, and a row without it decodes to "".

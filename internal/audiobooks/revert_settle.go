@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"slices"
 	"strings"
 	"sync"
@@ -80,20 +79,78 @@ type settleInput struct {
 	// record; this run's own intent is not evidence (a retire cut off
 	// before it wrote has rows, and its group must be left alone).
 	priorPending map[string]bool
+	// recordID names the owed record this run reads and writes; empty means
+	// the operation's own. A scoped run (RevertOperationForBooks, the combine
+	// undo's retire reversal) keeps a record of its own (revertScope.recordID),
+	// so it neither reads nor rewrites, and cannot clear, the intent a dead
+	// earlier run of the whole operation left for other books' groups.
+	recordID string
 }
 
 // opLocks serialises reverts of one operation in this process, so two
 // concurrent reverts of it cannot interleave the owed record's
-// load-modify-store (or its rows).
-var opLocks [64]sync.Mutex
+// load-modify-store (or its rows). It is keyed by the exact operation id
+// (a refcounted map, not striped by hash): the combine undo's retire
+// reversal takes the RETIRE op's lock while the combine op's own revert may
+// already hold the combine op's, and two different ops sharing a stripe
+// would make that a self-deadlock (or a TryLock that always fails).
+var opLocks = struct {
+	mu sync.Mutex
+	m  map[string]*opLockEntry
+}{m: map[string]*opLockEntry{}}
+
+type opLockEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// opLockRef takes a reference on operationID's entry (creating it); the entry
+// is dropped when its last reference is released.
+func opLockRef(operationID string) *opLockEntry {
+	opLocks.mu.Lock()
+	defer opLocks.mu.Unlock()
+	e := opLocks.m[operationID]
+	if e == nil {
+		e = &opLockEntry{}
+		opLocks.m[operationID] = e
+	}
+	e.refs++
+	return e
+}
+
+func opLockUnref(operationID string, e *opLockEntry) {
+	opLocks.mu.Lock()
+	defer opLocks.mu.Unlock()
+	if e.refs--; e.refs == 0 {
+		delete(opLocks.m, operationID)
+	}
+}
 
 // lockOperation takes operationID's revert lock and returns its release.
 func lockOperation(operationID string) func() {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(operationID))
-	mu := &opLocks[h.Sum32()%uint32(len(opLocks))]
-	mu.Lock()
-	return mu.Unlock
+	e := opLockRef(operationID)
+	e.mu.Lock()
+	return func() {
+		e.mu.Unlock()
+		opLockUnref(operationID, e)
+	}
+}
+
+// tryLockOperation is lockOperation that gives up instead of waiting: for a
+// caller that already holds the merge lock. RevertOperation takes the
+// operation lock and THEN the merge lock (once per row), so waiting for an
+// operation lock while holding the merge lock could deadlock; refusing when it
+// is busy cannot.
+func tryLockOperation(operationID string) (release func(), ok bool) {
+	e := opLockRef(operationID)
+	if !e.mu.TryLock() {
+		opLockUnref(operationID, e)
+		return nil, false
+	}
+	return func() {
+		e.mu.Unlock()
+		opLockUnref(operationID, e)
+	}, true
 }
 
 // handOffEvidence is what an operation's notes say about the primary
@@ -327,7 +384,11 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 	}
 
 	kv, _ := rs.db.(rawKV)
-	owed := rs.loadSettleOwed(kv, operationID)
+	record := in.recordID
+	if record == "" {
+		record = operationID
+	}
+	owed := rs.loadSettleOwed(kv, record)
 	for gid, og := range owed.Groups {
 		if og.Pending {
 			if !in.priorPending[gid] {
@@ -379,7 +440,7 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 		result.HandOffFailed = append(result.HandOffFailed, msg)
 		errMsgs = append(errMsgs, msg)
 	}
-	if err := rs.storeSettleOwed(kv, operationID, left); err != nil {
+	if err := rs.storeSettleOwed(kv, record, left); err != nil {
 		for i := range result.HandOffFailed {
 			result.HandOffFailed[i] += "; the retry could not be recorded (" + err.Error() + "), run version-group-primary-repair"
 		}
