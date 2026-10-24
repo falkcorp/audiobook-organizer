@@ -1,5 +1,5 @@
 // file: internal/server/master_list_handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f8b4c61-9d30-4a7e-8c15-6b0e3d9a7f24
 // last-edited: 2026-10-23
 
@@ -252,4 +252,186 @@ func TestMasterListRoutes_APIKeyScopesNarrow(t *testing.T) {
 	w := f.postMasterList(t, key, bytes.NewBufferString(masterListTestCSV), "text/csv", "")
 	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	assert.Equal(t, http.StatusOK, get(key))
+}
+
+func (f *credGuardFixture) doMasterList(t *testing.T, method, path, bearer string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	w := httptest.NewRecorder()
+	f.srv.router.ServeHTTP(w, req)
+	return w
+}
+
+func (f *credGuardFixture) uploadMasterListID(t *testing.T) masterListUploadResponse {
+	t.Helper()
+	w := f.postMasterList(t, f.sessionToken, bytes.NewBufferString(masterListTestCSV), "text/csv", "")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var resp masterListUploadResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// List ids order by upload time, then by id: keep two uploads apart.
+	time.Sleep(3 * time.Millisecond)
+	return resp
+}
+
+func masterListIDs(t *testing.T, f *credGuardFixture) []string {
+	t.Helper()
+	lists, err := database.NewMasterListStore(f.store.DB()).ListLists()
+	require.NoError(t, err)
+	ids := make([]string, len(lists))
+	for i, l := range lists {
+		ids[i] = l.ID
+	}
+	return ids
+}
+
+// An upload prunes the uploader's oldest lists beyond master_list_retention,
+// never another uploader's lists and never read-elsewhere records.
+func TestMasterListUpload_RetentionPrunesTheUploadersOldestLists(t *testing.T) {
+	f := setupCredGuardServer(t)
+	prev := config.AppConfig.MasterListRetention
+	config.AppConfig.MasterListRetention = 2
+	t.Cleanup(func() { config.AppConfig.MasterListRetention = prev })
+
+	st := database.NewMasterListStore(f.store.DB())
+	other, err := st.PutList(database.MasterListMeta{Filename: "other.csv", Format: masterlist.FormatCSV, UploadedBy: "someone-else"},
+		[][]byte{[]byte(`{"line":2,"title":"Synthetic Tale"}`)})
+	require.NoError(t, err)
+	require.NoError(t, st.CreateElsewhere(database.MasterListElsewhere{ID: database.ElsewhereID("u1", "asin:B000000001"), UserID: "u1", ListID: "gone", Title: "Kept"}))
+
+	first := f.uploadMasterListID(t)
+	assert.Empty(t, first.PrunedLists)
+	assert.NotNil(t, first.PrunedLists, "the field is always a list")
+	second := f.uploadMasterListID(t)
+	assert.Empty(t, second.PrunedLists)
+	third := f.uploadMasterListID(t)
+	assert.Equal(t, []string{first.List.ID}, third.PrunedLists, "the oldest of the uploader's lists went")
+	assert.Empty(t, third.PruneError)
+	fourth := f.uploadMasterListID(t)
+	assert.Equal(t, []string{second.List.ID}, fourth.PrunedLists)
+
+	assert.ElementsMatch(t, []string{other.ID, third.List.ID, fourth.List.ID}, masterListIDs(t, f),
+		"two of the uploader's lists and the other uploader's one")
+	recs, err := st.ListElsewhere("")
+	require.NoError(t, err)
+	assert.Len(t, recs, 1, "retention never touches read-elsewhere records")
+}
+
+// A retention that is unset or invalid falls back to the default (10): it can
+// never become "keep nothing" and prune the list just stored.
+func TestMasterListUpload_RetentionDefaultsWhenUnsetOrInvalid(t *testing.T) {
+	for _, n := range []int{0, -5} {
+		f := setupCredGuardServer(t)
+		prev := config.AppConfig.MasterListRetention
+		config.AppConfig.MasterListRetention = n
+		for i := 0; i < 3; i++ {
+			assert.Empty(t, f.uploadMasterListID(t).PrunedLists, "retention %d", n)
+		}
+		assert.Len(t, masterListIDs(t, f), 3, "retention %d", n)
+		config.AppConfig.MasterListRetention = prev
+	}
+	assert.Equal(t, database.DefaultMasterListRetention, func() int {
+		prev := config.AppConfig.MasterListRetention
+		defer func() { config.AppConfig.MasterListRetention = prev }()
+		config.AppConfig.MasterListRetention = 0
+		return masterListRetention()
+	}())
+}
+
+func TestMasterListDelete_RemovesTheListAndItsRows(t *testing.T) {
+	f := setupCredGuardServer(t)
+	keep := f.uploadMasterListID(t)
+	drop := f.uploadMasterListID(t)
+	st := database.NewMasterListStore(f.store.DB())
+	require.NoError(t, st.CreateElsewhere(database.MasterListElsewhere{ID: database.ElsewhereID("u1", "asin:B000000001"), UserID: "u1", ListID: drop.List.ID, Title: "Kept"}))
+
+	w := f.doMasterList(t, http.MethodDelete, "/api/v1/master-lists/"+drop.List.ID, f.sessionToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.JSONEq(t, `{"deleted":"`+drop.List.ID+`"}`, w.Body.String())
+	assert.Equal(t, []string{keep.List.ID}, masterListIDs(t, f))
+	assert.ErrorIs(t, st.ScanRows(drop.List.ID, func(int, []byte) error { return nil }), database.ErrMasterListNotFound)
+	kvs, err := f.store.ScanPrefix("mlist:row:" + drop.List.ID)
+	require.NoError(t, err)
+	assert.Empty(t, kvs, "the rows went with the list")
+	recs, err := st.ListElsewhere("")
+	require.NoError(t, err)
+	assert.Len(t, recs, 1, "records made from the list are the import's output and stay")
+	rows := masterListRowsOf(t, f, keep.List.ID)
+	assert.Len(t, rows, 3, "the other list is intact")
+
+	w = f.doMasterList(t, http.MethodDelete, "/api/v1/master-lists/"+drop.List.ID, f.sessionToken)
+	assert.Equal(t, http.StatusNotFound, w.Code, "a second delete: %s", w.Body.String())
+	w = f.doMasterList(t, http.MethodDelete, "/api/v1/master-lists/no-such-list", f.sessionToken)
+	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+}
+
+func TestMasterListDeleteAndElsewhere_AdminOnlyAndScoped(t *testing.T) {
+	f := setupCredGuardServer(t)
+	up := f.uploadMasterListID(t)
+	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
+	require.NoError(t, err)
+	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	require.NoError(t, err)
+
+	exp := time.Now().Add(time.Hour)
+	keyWith := func(scope auth.Permission) string {
+		raw, hash, err := database.GenerateAPIKeyToken()
+		require.NoError(t, err)
+		_, err = f.store.CreateAPIKey(&database.APIKey{UserID: f.adminID, Name: string(scope), TokenHash: hash, Scopes: []string{string(scope)},
+			Status: "active", CreatedAt: time.Now(), ExpiresAt: &exp})
+		require.NoError(t, err)
+		return raw
+	}
+	for name, bearer := range map[string]string{"anonymous": "", "viewer": sess.ID, "view-only key": keyWith(auth.PermLibraryView)} {
+		want := http.StatusForbidden
+		if bearer == "" {
+			want = http.StatusUnauthorized
+		}
+		w := f.doMasterList(t, http.MethodDelete, "/api/v1/master-lists/"+up.List.ID, bearer)
+		assert.Equal(t, want, w.Code, "delete as %s: %s", name, w.Body.String())
+		w = f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere", bearer)
+		assert.Equal(t, want, w.Code, "elsewhere as %s: %s", name, w.Body.String())
+	}
+	assert.Equal(t, []string{up.List.ID}, masterListIDs(t, f), "no refused caller deleted it")
+
+	// users.manage is what the routes demand.
+	w := f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere", keyWith(auth.PermUsersManage))
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+func TestMasterListElsewhere_ListsRecordsNewestFirstAndFiltersByUser(t *testing.T) {
+	f := setupCredGuardServer(t)
+	w := f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere", f.sessionToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.JSONEq(t, `{"records":[],"count":0}`, w.Body.String(), "empty is an empty list, not null")
+
+	st := database.NewMasterListStore(f.store.DB())
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i, rec := range []database.MasterListElsewhere{
+		{ID: database.ElsewhereID("u1", "asin:B000000001"), UserID: "u1", ListID: "l1", Title: "Older", CreatedAt: base},
+		{ID: database.ElsewhereID("u1", "asin:B000000002"), UserID: "u1", ListID: "l1", Title: "Newer", CreatedAt: base.Add(time.Hour)},
+		{ID: database.ElsewhereID("u2", "asin:B000000001"), UserID: "u2", ListID: "l1", Title: "Other user", CreatedAt: base.Add(2 * time.Hour)},
+	} {
+		require.NoError(t, st.CreateElsewhere(rec), i)
+	}
+	type listResp struct {
+		Records []database.MasterListElsewhere `json:"records"`
+		Count   int                            `json:"count"`
+	}
+	get := func(q string) listResp {
+		w := f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere"+q, f.sessionToken)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var r listResp
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &r))
+		return r
+	}
+	all := get("")
+	require.Equal(t, 3, all.Count)
+	assert.Equal(t, []string{"Other user", "Newer", "Older"}, []string{all.Records[0].Title, all.Records[1].Title, all.Records[2].Title})
+	u1 := get("?user_id=u1")
+	require.Equal(t, 2, u1.Count)
+	assert.Equal(t, "Newer", u1.Records[0].Title)
+	assert.Equal(t, 0, get("?user_id=nobody").Count)
 }

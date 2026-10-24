@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-23
 
@@ -183,6 +183,7 @@ var keyFamilies = []KeyFamily{
 	// ── Master lists (uploaded read-status / ISBN / ASIN lists) ──
 	{"mlist:list:", "master-list uploads: one metadata row per list", "internal/database/master_list_store.go"},
 	{"mlist:row:", "master-list rows, one per input row, in input order", "internal/database/master_list_store.go"},
+	{"mlist:elsewhere:", "read-elsewhere records: books a master list says the owner has read or owns that the library does not hold", "internal/database/master_list_elsewhere.go"},
 
 	// ── Decisions (internal/decisions): owner rejects/approves, never pruned ──
 	{"decision:ent:", "decision history index by entity (never pruned)", "internal/decisions/store.go"},

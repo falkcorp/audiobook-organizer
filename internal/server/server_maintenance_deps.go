@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.71.0
+// version: 1.72.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-23
 
@@ -218,7 +218,7 @@ func (s *Server) UserReadStateStore() maintenanceplugin.UserReadStateStore {
 // MasterLists serves the master-list import fixer the uploaded lists. It is
 // built over the store's Pebble layer (a capability resolved through the
 // decorator chain); nil, as an untyped nil interface, when there is none.
-func (s *Server) MasterLists() maintenanceplugin.MasterListReader {
+func (s *Server) MasterLists() maintenanceplugin.MasterListStore {
 	if st := database.NewMasterListStoreFromStore(s.store); st != nil {
 		return st
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-23
 
@@ -255,7 +255,7 @@ func (d fakeDeps) UserReadStateStore() UserReadStateStore { return NewUserReadSt
 
 // MasterLists builds the list store over the fixture store's Pebble layer, as
 // Server's does; nil (an untyped nil interface) when the fixture has none.
-func (d fakeDeps) MasterLists() MasterListReader {
+func (d fakeDeps) MasterLists() MasterListStore {
 	if st := database.NewMasterListStoreFromStore(d.store); st != nil {
 		return st
 	}
