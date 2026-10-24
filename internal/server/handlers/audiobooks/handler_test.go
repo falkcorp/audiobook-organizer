@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -397,7 +397,7 @@ func TestPurgeSoftDeletedAudiobooks_QueuesOpAndAnswers202(t *testing.T) {
 	h, _ := newHandler(t)
 	rec := &purgeEnqueueRecorder{}
 	h.SetPurgeEnqueuer(rec.enqueue)
-	c, w := newCtx("DELETE", "/audiobooks/purge-soft-deleted?delete_files=true&older_than_days=7", nil, nil)
+	c, w := newCtx("DELETE", "/audiobooks/purge-soft-deleted?delete_files=true&older_than_days=7&trashed_before=2026-10-23T12:00:00.123456789Z", nil, nil)
 	h.PurgeSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
@@ -415,6 +415,9 @@ func TestPurgeSoftDeletedAudiobooks_QueuesOpAndAnswers202(t *testing.T) {
 	if sent["delete_files"] != true || sent["older_than_days"] != float64(7) {
 		t.Fatalf("query params must reach the op, got %v", sent)
 	}
+	if sent["trashed_before"] != "2026-10-23T12:00:00.123456789Z" {
+		t.Fatalf("the preview's trashed_before must reach the op unchanged, got %v", sent["trashed_before"])
+	}
 	var body struct {
 		Data struct {
 			ID     string `json:"id"`
@@ -426,6 +429,55 @@ func TestPurgeSoftDeletedAudiobooks_QueuesOpAndAnswers202(t *testing.T) {
 	}
 	if body.Data.ID != "op-purge-1" || body.Data.DryRun {
 		t.Fatalf("unexpected response data: %+v", body.Data)
+	}
+}
+
+// A purge is bound to the preview before it: without that preview's
+// trashed_before the endpoint is a 400 that enqueues nothing, and so is a value
+// that is not an RFC 3339 instant.
+func TestPurgeSoftDeletedAudiobooks_RequiresThePreviewsTrashedBefore(t *testing.T) {
+	for _, target := range []string{
+		"/audiobooks/purge-soft-deleted",
+		"/audiobooks/purge-soft-deleted?delete_files=true",
+		"/audiobooks/purge-soft-deleted?trashed_before=yesterday",
+		"/audiobooks/purge-soft-deleted?trashed_before=1729684800",
+	} {
+		h, _ := newHandler(t)
+		rec := &purgeEnqueueRecorder{}
+		h.SetPurgeEnqueuer(rec.enqueue)
+		c, w := newCtx("DELETE", target, nil, nil)
+		h.PurgeSoftDeletedAudiobooks(c)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: want 400, got %d: %s", target, w.Code, w.Body.String())
+		}
+		if rec.calls != 0 {
+			t.Fatalf("%s: a refused request must enqueue nothing, got %d enqueue(s)", target, rec.calls)
+		}
+	}
+}
+
+// A preview takes no trashed_before: it is what produces it. One sent anyway is
+// not forwarded, and a malformed one is still refused.
+func TestPreviewPurgeSoftDeleted_DoesNotForwardTrashedBefore(t *testing.T) {
+	h, _ := newHandler(t)
+	rec := &purgeEnqueueRecorder{}
+	h.SetPurgeEnqueuer(rec.enqueue)
+	c, w := newCtx("POST", "/audiobooks/purge-soft-deleted/preview?trashed_before=2026-10-23T12:00:00Z", nil, nil)
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(rec.params, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sent["trashed_before"]; ok {
+		t.Fatalf("a preview must not carry trashed_before, got %v", sent)
+	}
+	c, w = newCtx("POST", "/audiobooks/purge-soft-deleted/preview?trashed_before=nope", nil, nil)
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed trashed_before: want 400, got %d", w.Code)
 	}
 }
 

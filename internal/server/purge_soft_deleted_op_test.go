@@ -1,7 +1,7 @@
 // file: internal/server/purge_soft_deleted_op_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a1c8e53-0d72-4f9b-b3e4-9c5a2d7f1e08
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package server
 
@@ -112,7 +112,7 @@ func TestPurgeSoftDeletedOp_LivePurgeStoresResultAndLogsSummary(t *testing.T) {
 	s, st := purgeOpWorld(t, "a", "b")
 	require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: "b", FilePath: "/x/b.m4b", Format: "m4b"}))
 
-	rep, err := runPurgeOp(t, s, `{"dry_run":false}`)
+	rep, err := runPurgeOp(t, s, livePurgeParams())
 	require.NoError(t, err)
 	res := purgeResultOf(t, rep)
 	assert.False(t, res.DryRun)
@@ -130,6 +130,35 @@ func TestPurgeSoftDeletedOp_LivePurgeStoresResultAndLogsSummary(t *testing.T) {
 
 	require.NotEmpty(t, rep.progress)
 	assert.Equal(t, [2]int{2, 2}, rep.progress[len(rep.progress)-1])
+}
+
+// livePurgeParams is a real purge bound to a preview taken now.
+func livePurgeParams() string {
+	return fmt.Sprintf(`{"dry_run":false,"trashed_before":%q}`, time.Now().Format(time.RFC3339Nano))
+}
+
+// A real pass with no trashed_before (an op started by a caller that skipped
+// the preview) is refused: nothing says which books the preview showed. The
+// op fails, the stored result says why, and nothing is deleted. A purge bound
+// to an earlier instant takes only the books trashed by then.
+func TestPurgeSoftDeletedOp_RealPassNeedsAPreviewsTrashedBefore(t *testing.T) {
+	s, st := purgeOpWorld(t, "a")
+
+	rep, err := runPurgeOp(t, s, `{"dry_run":false}`)
+	require.Error(t, err)
+	require.ErrorIs(t, err, audiobookspkg.ErrPurgePreviewRequired)
+	res := purgeResultOf(t, rep)
+	assert.True(t, res.StoppedEarly)
+	assert.Contains(t, res.StopReason, "trashed_before")
+	assert.False(t, purgeBookGone(t, st, "a"), "a refused pass deletes nothing")
+
+	early := time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	rep, err = runPurgeOp(t, s, fmt.Sprintf(`{"dry_run":false,"trashed_before":%q}`, early))
+	require.NoError(t, err)
+	res = purgeResultOf(t, rep)
+	assert.Zero(t, res.Purged)
+	assert.Equal(t, 1, res.TrashedAfterPreview)
+	assert.False(t, purgeBookGone(t, st, "a"), "trashed an hour ago, after an instant two hours ago")
 }
 
 func TestPurgeSoftDeletedOp_RejectsConflictingModeSpellings(t *testing.T) {

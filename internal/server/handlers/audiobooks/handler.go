@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -55,6 +55,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -1002,6 +1003,9 @@ type purgeOpParams struct {
 	DeleteFiles   bool  `json:"delete_files,omitempty"`
 	OlderThanDays *int  `json:"older_than_days,omitempty"`
 	DryRun        *bool `json:"dry_run"`
+	// TrashedBefore is the instant the preview returned (RFC 3339): the purge
+	// takes no book trashed after it. Sent only by DELETE.
+	TrashedBefore *time.Time `json:"trashed_before,omitempty"`
 }
 
 // PurgeSoftDeletedAudiobooks handles DELETE /audiobooks/purge-soft-deleted.
@@ -1011,6 +1015,11 @@ type purgeOpParams struct {
 // what was kept, by reason) is the operation's result. It used to run inside
 // the request: 72 s on 2026-10-21, no progress, no log line, and a response
 // whose breakdown the UI discarded. WHICH books are purgeable is unchanged.
+//
+// The request must carry trashed_before, the instant the preview returned: the
+// purge is bound to the books that preview showed and never takes one trashed
+// after it (the trash keeps changing while the dialog is open, and a purge has
+// no rollback). Without it the request is a 400 that says to preview first.
 func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
 	h.enqueuePurgeOp(c, false)
 }
@@ -1034,10 +1043,29 @@ func (h *Handler) enqueuePurgeOp(c *gin.Context, dryRun bool) {
 			olderThanDays = &days
 		}
 	}
+	// trashed_before binds a real purge to the preview before it. Parsed, not
+	// passed through, so a malformed value is a 400 here rather than an op that
+	// fails to decode its params after it was accepted.
+	var trashedBefore *time.Time
+	if raw := c.Query("trashed_before"); raw != "" {
+		at, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			httputil.RespondWithBadRequest(c, "trashed_before must be the RFC 3339 instant the preview returned: "+err.Error())
+			return
+		}
+		trashedBefore = &at
+	}
+	if !dryRun && trashedBefore == nil {
+		httputil.RespondWithBadRequest(c, "trashed_before is required: preview the purge first and send the trashed_before it returns, so the purge takes only the books the preview showed")
+		return
+	}
 	params := purgeOpParams{
 		DeleteFiles:   c.Query("delete_files") == "true",
 		OlderThanDays: olderThanDays,
 		DryRun:        &dryRun,
+	}
+	if !dryRun {
+		params.TrashedBefore = trashedBefore
 	}
 	opID, err := h.enqueuePurge(c.Request.Context(), params)
 	if err != nil {

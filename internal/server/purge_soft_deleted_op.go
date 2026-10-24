@@ -1,5 +1,5 @@
 // file: internal/server/purge_soft_deleted_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e7a9c41-5d08-4b63-8f1a-6c3d0b9e4a72
 // last-edited: 2026-10-23
 
@@ -39,6 +39,10 @@ type PurgeSoftDeletedOpParams struct {
 	OlderThanDays *int  `json:"older_than_days,omitempty"`
 	DryRun        *bool `json:"dry_run,omitempty"`
 	DryRunCamel   *bool `json:"dryRun,omitempty"`
+	// TrashedBefore (RFC 3339) is the instant the preview returned. A real
+	// pass needs it and takes no book trashed after it; without it the pass is
+	// refused (audiobooks.ErrPurgePreviewRequired). Ignored by a preview.
+	TrashedBefore *time.Time `json:"trashed_before,omitempty"`
 }
 
 // purgeResultCap bounds the id lists and error lines kept in the stored op
@@ -61,7 +65,7 @@ func (s *Server) RegisterPurgeSoftDeletedOp(reg *opsregistry.Registry) error {
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Purge soft-deleted books",
-		Description:     "Permanently removes soft-deleted books from the trash. A book is purged only when it owns no book_file rows, is not the retired shell of a combine that can still be undone, and has no listening state it cannot carry to a live version. Dry run by default: reports how many would be purged and how many are kept, by reason, and changes nothing. The result breaks the trash down by reason.",
+		Description:     "Permanently removes soft-deleted books from the trash. A book is purged only when it owns no book_file rows, is not the retired shell of a combine that can still be undone, and has no listening state it cannot carry to a live version. Dry run by default: reports how many would be purged and how many are kept, by reason, and changes nothing. A real run must be given the trashed_before the preview returned and takes no book trashed after it. The result breaks the trash down by reason.",
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Timeout:         2 * time.Hour,
@@ -101,6 +105,7 @@ func (s *Server) runPurgeSoftDeletedOp(ctx context.Context, raw json.RawMessage,
 	res, err := s.audiobookService.RunPurge(ctx, audiobooks.PurgeOptions{
 		DeleteFiles:   p.DeleteFiles,
 		OlderThanDays: p.OlderThanDays,
+		TrashedBefore: p.TrashedBefore,
 		DryRun:        dryRun,
 		Progress: func(done, total int) {
 			_ = reporter.UpdateProgress(done, total, fmt.Sprintf("%s soft-deleted books: %d of %d decided", verb, done, total))
