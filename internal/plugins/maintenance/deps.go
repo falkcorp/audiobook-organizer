@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.98.0
+// version: 1.100.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -995,12 +996,25 @@ type ReconcileScanReader interface {
 	LatestReconcileScan() (ReconcileScan, error)
 }
 
-// OwnerVetoReader is the one read of the owner's rejects the retired-versions
-// preview makes: whether an active reject vetoes joining two entities in an op
-// family. *decisions.Store satisfies it (PairVetoed); the plugin cannot import
-// the store's constructor path, so the server composes it.
+// OwnerVetoReader is the owner's-rejects read the retired-versions plan makes:
+// whether an active reject vetoes joining two books in an op family
+// (PairVetoed), and whether a live reject blocks one proposal
+// (SubjectRejected: the shell's own repairs:retired-versions reject). The
+// server composes it with NewOwnerVetoReader, which answers from one
+// point-in-time snapshot whose stored ids are resolved through the retired-
+// version index and the merge survivor; the plugin cannot import the store's
+// constructor path.
+//
+// Load reads that snapshot once, at the start of each run, so a run that
+// cannot READ the rejects is refused rather than planned row by row. An id the
+// resolver cannot settle does not fail Load: PairVetoed answers a
+// *decisions.UnresolvableError for the pairs it touches (the caller holds the
+// row) and Unresolved lists every such id.
 type OwnerVetoReader interface {
+	Load(ctx context.Context) error
 	PairVetoed(entityType, a, b, family string) (bool, error)
+	SubjectRejected(opKind, subjectKey, materialHash string) (bool, error)
+	Unresolved() []decisions.UnresolvedID
 }
 
 // CombineJournalScanner is the raw-key prefix scan the combine undo journal

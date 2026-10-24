@@ -1,7 +1,7 @@
 // file: internal/decisions/review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c18d5f62-0e47-4a93-b6d1-7f3a92e4058c
-// last-edited: 2026-10-21
+// last-edited: 2026-10-24
 
 package decisions
 
@@ -423,8 +423,8 @@ func (selfTombstone) GetAuthorTombstone(old int) (int, error) { return old, nil 
 
 // A resolver is caller code. What it returns is canonicalised before it keys a
 // pair, so a ULID handed back in lower case still meets the stored (upper
-// case) edge, and an id with stray whitespace or nothing at all is an error,
-// never a silent miss.
+// case) edge, and an id with stray whitespace or nothing at all makes the id
+// unresolvable (held, never a silent miss).
 func TestVetoes_ResolverOutputIsCanonicalised(t *testing.T) {
 	const a, b = "01J0000000000000000000000A", "01J0000000000000000000000B"
 	s, _ := newStore(t)
@@ -436,14 +436,16 @@ func TestVetoes_ResolverOutputIsCanonicalised(t *testing.T) {
 
 	for name, bad := range map[string]string{"whitespace": " " + a, "empty": "", "newline": a + "\n"} {
 		t.Run(name, func(t *testing.T) {
-			// At Load (stored edge ids) ...
-			_, err := s.Load(context.Background(), func(_, id string) (string, error) { return bad, nil })
-			require.Error(t, err)
+			// At Load (stored edge ids): the ids are listed, the veto is held ...
+			held, err := s.Load(context.Background(), func(_, id string) (string, error) { return bad, nil })
+			require.NoError(t, err)
+			require.Len(t, held.Unresolved(), 2)
 			// ... and at query time.
 			ok := mustLoad(t, s, nil)
-			ok.resolve = func(_, id string) (string, error) { return bad, nil }
+			ok.resolve = func(_, id string) ([]string, error) { return []string{id, bad}, nil }
 			_, err = ok.PairVetoed(testType, a, b, FamilySameWork)
-			require.Error(t, err)
+			require.ErrorIs(t, err, ErrIDUnresolvable)
+			require.ErrorIs(t, err, ErrResolvedIDInvalid)
 		})
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/decisions/store.go
-// version: 1.2.1
+// version: 1.4.0
 // guid: 0f7b3a91-d542-4e86-a1c3-78e9b60d2f15
-// last-edited: 2026-10-21
+// last-edited: 2026-10-24
 
 package decisions
 
@@ -89,6 +89,7 @@ type Store struct {
 	now func() time.Time
 
 	lockScope string
+	cache     *RowCache
 
 	idMu     sync.Mutex
 	entropy  *ulid.MonotonicEntropy
@@ -163,7 +164,51 @@ func (s *Store) Record(in Input) (*Record, error) {
 	subject := subjectHash(in.OpKind, in.EntityType, ids, in.Scope) // ids are canonical
 	unlock := s.lockSubject(in.OpKind, subject)
 	defer unlock()
+	return s.recordLocked(in, ids, subject)
+}
 
+// RecordUnlessSeen is Record, except that when a record already on the
+// proposal's chain satisfies same, that record is returned and nothing is
+// written. The chain is searched, and the record written, under ONE hold of
+// the subject's lock: a check made before Record would let two concurrent
+// callers both find nothing and both write. It is how a retried write (a
+// crashed run resumed, an undo repeated) stays one record. same sees the
+// chain newest first and must not call back into the Store.
+func (s *Store) RecordUnlessSeen(in Input, same func(Record) bool) (*Record, error) {
+	ids, err := in.validate()
+	if err != nil {
+		return nil, err
+	}
+	subject := subjectHash(in.OpKind, in.EntityType, ids, in.Scope)
+	unlock := s.lockSubject(in.OpKind, subject)
+	defer unlock()
+
+	v, err := s.readVerdict(in.OpKind, subject)
+	if err != nil {
+		return nil, err
+	}
+	if v != nil {
+		seen := map[string]bool{}
+		for id := v.LatestID; id != ""; {
+			if seen[id] {
+				return nil, fmt.Errorf("%w: supersedes cycle at %s", ErrCorrupt, id)
+			}
+			seen[id] = true
+			rec, err := s.readRecord(id)
+			if err != nil {
+				return nil, err
+			}
+			if same(*rec) {
+				return rec, nil
+			}
+			id = rec.SupersedesID
+		}
+	}
+	return s.recordLocked(in, ids, subject)
+}
+
+// recordLocked is Record's body; the caller holds the subject's lock.
+func (s *Store) recordLocked(in Input, ids []string, subject string) (*Record, error) {
 	prev, err := s.readVerdict(in.OpKind, subject)
 	if err != nil {
 		return nil, err
@@ -271,10 +316,21 @@ func (s *Store) Record(in Input) (*Record, error) {
 	for _, eid := range ids {
 		writes = append(writes, database.RawWrite{Key: entityKey(in.EntityType, eid, rec.ID)})
 	}
-	if err := s.kv.ApplyRawBatch(writes); err != nil {
+	if err := s.commit(writes); err != nil {
 		return nil, fmt.Errorf("decisions: commit %s: %w", rec.ID, err)
 	}
 	return &rec, nil
+}
+
+// commit is the ONE way this package writes the decision keys: it applies the
+// batch and counts the write. The count is bumped whether or not the commit
+// reported success, because a cached read of the log (RowCache) must never
+// outlive a write that may have landed. TestDecisionKeysHaveOneWriter holds
+// the package to it.
+func (s *Store) commit(writes []database.RawWrite) error {
+	err := s.kv.ApplyRawBatch(writes)
+	bumpLogGeneration(s.lockScope)
+	return err
 }
 
 // checkTransition refuses a decision the current state does not allow.
