@@ -1,7 +1,7 @@
 // file: internal/undo/retire_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 54f67c90-9235-45fd-b826-66a6f3be19d9
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package undo
 
@@ -255,20 +255,158 @@ func TestRetireScopeRefusals(t *testing.T) {
 	// A retire that stopped half way is enough here: the check reads the row's
 	// place, which is "on the shell, not retired" (already restored).
 	rows := []*database.OperationChange{retireRow("c1", "op1", f.ID, shell.ID, holder.ID, "v1")}
-	reasons, err := RetireScopeRefusals(st, rows)
+	reasons, err := RetireScopeRefusals(st, shell.ID, rows)
 	if err != nil || len(reasons) != 0 {
 		t.Fatalf("a row that is already restored does not refuse: %v, %v", reasons, err)
 	}
 
 	rows = append(rows, &database.OperationChange{ID: "c2", OperationID: "op1", BookID: shell.ID, ChangeType: "metadata_update", FieldName: "title", OldValue: "a", NewValue: "b"})
-	reasons, err = RetireScopeRefusals(st, rows)
+	reasons, err = RetireScopeRefusals(st, shell.ID, rows)
 	if err != nil || len(reasons) != 1 || !strings.Contains(reasons[0], "c2") {
 		t.Fatalf("a row the combine undo does not reverse refuses, named: %v, %v", reasons, err)
 	}
 
 	rows = []*database.OperationChange{{ID: "c3", OperationID: "op1", BookID: holder.ID, ChangeType: ChangeTypeRetiredVersionRehome, FieldName: BookVersionField("v1"), OldValue: "x", NewValue: holder.ID}}
-	reasons, err = RetireScopeRefusals(st, rows)
+	reasons, err = RetireScopeRefusals(st, shell.ID, rows)
 	if err != nil || len(reasons) != 1 || !strings.Contains(reasons[0], "c3") {
 		t.Fatalf("a rehome row refuses: %v, %v", reasons, err)
 	}
+}
+
+// rehomeRow is a ChangeTypeRetiredVersionRehome row: version versionID moved
+// from from to to.
+func rehomeRow(id, op, versionID, from, to string) *database.OperationChange {
+	return &database.OperationChange{
+		ID: id, OperationID: op, BookID: to, ChangeType: ChangeTypeRetiredVersionRehome,
+		FieldName: BookVersionField(versionID), OldValue: from, NewValue: to,
+	}
+}
+
+// A rehome that took a version off the shell itself is part of restoring the
+// shell: the scoped check judges it (the shell is where the version goes back)
+// instead of refusing it, and one that took it off another holder still refuses.
+func TestRetireScopeRefusals_RehomeFromTheShellIsJudged(t *testing.T) {
+	st := newRetireStore(t)
+	shell, err := st.CreateBook(&database.Book{Title: "Synthetic Shell", FilePath: "/lib/syn/shell"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newHolder, err := st.CreateBook(&database.Book{Title: "Synthetic New Holder", FilePath: "/lib/syn/new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := st.CreateBookVersion(&database.BookVersion{ID: "v1", BookID: newHolder.ID, Status: database.BookVersionStatusRetired, RetiredFromBookID: "someone", RetiredAt: &now}); err != nil {
+		t.Fatal(err)
+	}
+	row := rehomeRow("c1", "op1", "v1", shell.ID, newHolder.ID)
+	reasons, err := RetireScopeRefusals(st, shell.ID, []*database.OperationChange{row})
+	if err != nil || len(reasons) != 0 {
+		t.Fatalf("a rehome off the shell, version still on the new holder, is restorable: %v, %v", reasons, err)
+	}
+	// The same row judged for another shell is a move the combine undo does not own.
+	reasons, err = RetireScopeRefusals(st, "other-shell", []*database.OperationChange{row})
+	if err != nil || len(reasons) < 1 || !strings.Contains(reasons[0], "c1") {
+		t.Fatalf("a rehome off some other holder refuses, named: %v, %v", reasons, err)
+	}
+	// The version has moved on since: changed since, named.
+	third, err := st.CreateBook(&database.Book{Title: "Synthetic Third", FilePath: "/lib/syn/third"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RehomeRetiredVersion("v1", third.ID); err != nil {
+		t.Fatal(err)
+	}
+	reasons, err = RetireScopeRefusals(st, shell.ID, []*database.OperationChange{row})
+	if err != nil || len(reasons) != 1 || !strings.Contains(reasons[0], "c1") {
+		t.Fatalf("a version that moved on refuses: %v, %v", reasons, err)
+	}
+}
+
+// The chain case: the holder a rehome took the version from was trashed when
+// the version left it. The preflight must accept the trashed holder (the revert
+// does, RestoreRetiredVersionHolder), refuse a purged one with no snapshot, and
+// accept a purged one a snapshot can recreate.
+func TestPreflightUndoConflicts_RehomeToATrashedOrPurgedOldHolder(t *testing.T) {
+	st := newRetireStore(t)
+	oldHolder, err := st.CreateBook(&database.Book{Title: "Synthetic Old Holder", FilePath: "/lib/syn/old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newHolder, err := st.CreateBook(&database.Book{Title: "Synthetic New Holder", FilePath: "/lib/syn/new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := st.CreateBookVersion(&database.BookVersion{ID: "v1", BookID: newHolder.ID, Status: database.BookVersionStatusRetired, RetiredFromBookID: "someone", RetiredAt: &now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateOperationChange(rehomeRow("c1", "op1", "v1", oldHolder.ID, newHolder.ID)); err != nil {
+		t.Fatal(err)
+	}
+	// Trashed, not purged: restorable.
+	trashed := true
+	oldHolder.MarkedForDeletion = &trashed
+	if _, err := st.UpdateBook(oldHolder.ID, oldHolder); err != nil {
+		t.Fatal(err)
+	}
+	report, err := PreflightUndoConflicts(st, "op1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refusedRows(report) != 0 {
+		t.Fatalf("a trashed old holder is restorable: %+v", report)
+	}
+	// Purged, nothing to recreate it from: refused.
+	if err := st.DeleteBook(oldHolder.ID); err != nil {
+		t.Fatal(err)
+	}
+	report, err = PreflightUndoConflicts(st, "op1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refusedRows(report) == 0 {
+		t.Fatalf("a purged old holder with no snapshot is refused: %+v", report)
+	}
+	// Purged, recreatable: restorable again.
+	report, err = PreflightUndoConflicts(recreatingShells{PebbleStore: st, has: map[string]bool{oldHolder.ID: true}}, "op1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refusedRows(report) != 0 {
+		t.Fatalf("a recreatable old holder is restorable: %+v", report)
+	}
+}
+
+// A retire row that does not parse refuses by name, never silently skipped.
+func TestRetireScopeRefusals_UndecodableRowRefusesByName(t *testing.T) {
+	st := newRetireStore(t)
+	shell, err := st.CreateBook(&database.Book{Title: "Synthetic Shell", FilePath: "/lib/syn/shell"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := retireRow("cbad", "op1", "f1", shell.ID, "holder", "v1")
+	bad.NewValue = "{"
+	reasons, err := RetireScopeRefusals(st, shell.ID, []*database.OperationChange{bad})
+	if err != nil || len(reasons) < 1 || !strings.Contains(reasons[0], "cbad") || !strings.Contains(reasons[0], "does not parse") {
+		t.Fatalf("an undecodable retire row refuses by name: %v, %v", reasons, err)
+	}
+}
+
+// The shell itself must be presentable, even when no row names a file on it.
+func TestRetireScopeRefusals_ShellPurgedWithoutSnapshotRefuses(t *testing.T) {
+	st := newRetireStore(t)
+	reasons, err := RetireScopeRefusals(st, "purged-shell", nil)
+	if err != nil || len(reasons) != 1 || !strings.Contains(reasons[0], "purged-shell") {
+		t.Fatalf("a purged shell nothing can recreate refuses, named: %v, %v", reasons, err)
+	}
+	reasons, err = RetireScopeRefusals(recreatingShells{PebbleStore: st, has: map[string]bool{"purged-shell": true}}, "purged-shell", nil)
+	if err != nil || len(reasons) != 0 {
+		t.Fatalf("a recreatable shell does not refuse: %v, %v", reasons, err)
+	}
+}
+
+// refusedRows counts the rows a preflight report files as not restorable.
+func refusedRows(r *UndoConflictReport) int {
+	return len(r.BookMissing) + len(r.CheckFailed) + len(r.SeriesDeleted) + len(r.SeriesRenamedSince) + len(r.SeriesNameTaken)
 }

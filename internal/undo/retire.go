@@ -1,7 +1,7 @@
 // file: internal/undo/retire.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 78716d7c-a378-4584-9b30-edcdab627347
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package undo
 
@@ -280,6 +280,10 @@ func CheckRehomeCurrent(cur *database.BookVersion, c *database.OperationChange) 
 // real implementation is the purge's; until it exists the store does not
 // implement this and a purged shell stays unrestorable (book missing).
 // Resolve it with database.AsCapability; it is not on Store.
+//
+// Lock contract: both methods are called with the merge lock HELD (the revert's
+// retire-row cases and pre-pass, and everything under UndoCombine) and must
+// never take it: the lock is a counted mutex that is not re-entrant.
 type PurgedShellRecreator interface {
 	// HasPurgeSnapshot reports whether a snapshot of the purged book bookID
 	// exists (and so RecreatePurgedBook can bring it back).
@@ -347,26 +351,43 @@ func EnsureShellPresent(store BookLookup, shellID string) (recreated bool, err e
 	return true, nil
 }
 
+// RehomeFromShell reports whether rehome row c took its version off shellID:
+// the shell was the HOLDER of a retired version (one an earlier retire put
+// there) and a later retire, which retired the shell into another book, moved
+// that version along with it. Reversing it puts the version back on the shell,
+// which is part of restoring the shell, and does not depend on any of the
+// shell's own retire rows. A rehome of a version the shell's own retire created
+// is not this case: its rows are not where the retire rows say until the rehome
+// is reversed.
+func RehomeFromShell(c *database.OperationChange, shellID string) bool {
+	return c.ChangeType == ChangeTypeRetiredVersionRehome && shellID != "" && c.OldValue == shellID
+}
+
 // RetireScopeRefusals predicts, for the combine undo, whether a retire op's
-// pending rows for one shell can all be reversed now, writing nothing. rows are
-// the shell's un-reverted, un-voided rows of the op (audiobooks'
-// revertScope.filter). It returns one sentence per refusal, naming the row, and
-// an empty slice when every row reverts.
+// pending rows for one shell (shellID) can all be reversed now, writing
+// nothing. rows are the shell's un-reverted, un-voided rows of the op
+// (audiobooks' revertScope.filter). It returns one sentence per refusal, naming
+// the row, and an empty slice when every row reverts.
 //
 // It judges the rows exactly as PreflightUndoConflicts does (same plan, same
 // gate, same row checks, the shell a purge deleted counted present when a
-// snapshot can recreate it), with two refusals of its own. The combine undo
-// reverses a retire and nothing else, so a row outside IsRetireStageType (the
-// retire op also changed the shell some other way) refuses: reversing part of
-// it would leave the shell half-restored. A rehome row refuses too, because the
-// rows it moved are not where the retire rows say until it is reversed, and a
+// snapshot can recreate it, whether or not the retire moved any file row off
+// it), with these refusals of its own. The combine undo reverses a retire and
+// nothing else, so a row outside IsRetireStageType (the retire op also changed
+// the shell some other way) refuses: reversing part of it would leave the shell
+// half-restored. A row that does not parse refuses by name, since nothing can
+// say what it would restore. A rehome row refuses unless it took a version off
+// the shell itself (RehomeFromShell): the rows a rehome of the retire's own
+// version moved are not where the retire rows say until it is reversed, and a
 // check that reads state cannot see that reversal in advance.
-func RetireScopeRefusals(store ConflictChecker, rows []*database.OperationChange) ([]string, error) {
+func RetireScopeRefusals(store ConflictChecker, shellID string, rows []*database.OperationChange) ([]string, error) {
 	var reasons []string
 	var judged []*database.OperationChange
 	for _, c := range rows {
 		switch {
-		case c.ChangeType == ChangeTypeRetiredVersionRehome:
+		case retireRowLabel(c) != "":
+			reasons = append(reasons, fmt.Sprintf("change %s (%s): the row does not parse, so the combine undo cannot tell what it would restore", c.ID, c.ChangeType))
+		case c.ChangeType == ChangeTypeRetiredVersionRehome && !RehomeFromShell(c, shellID):
 			reasons = append(reasons, fmt.Sprintf("change %s (%s): the retired version was moved to another holder since; that move is reversed first, not by the combine undo", c.ID, c.ChangeType))
 		case !IsRetireStageType(c.ChangeType):
 			reasons = append(reasons, fmt.Sprintf("change %s (%s): the retire op also changed the shell in a way the combine undo does not reverse", c.ID, c.ChangeType))
@@ -383,6 +404,15 @@ func RetireScopeRefusals(store ConflictChecker, rows []*database.OperationChange
 		return nil, err
 	}
 	recreatable := recreatableShells(store, judged)
+	// The shell itself, whatever rows name it: a retire whose file rows the
+	// combine moved off the shell has none, only the shell's external-id and
+	// merged-into rows, and those need a shell that is there.
+	switch state, serr := ShellCheck(store, shellID); {
+	case serr != nil:
+		reasons = append(reasons, fmt.Sprintf("shell %s cannot be made present: %v", shellID, serr))
+	case state == ShellRecreatable:
+		recreatable[shellID] = true
+	}
 	for _, c := range plan.Order {
 		if refusal := plan.Gate(c); refusal != nil {
 			plan.Record(c, refusal)

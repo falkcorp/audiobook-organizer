@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-28
 
@@ -932,8 +932,9 @@ func (p *PebbleStore) indexOwnerIsRetiredOrGone(ref string) (bool, error) {
 // holds, from its current holder to newHolderID. It is for the chain case: the
 // holder is itself being retired into another book, and the versions it holds
 // must follow the files they describe rather than be stranded under a shell.
-// One atomic batch (the version row and its rows commit together). Its own
-// inverse.
+// One atomic batch (the version row and its rows commit together). The new
+// holder must not be soft-deleted; the inverse, which has to accept the old
+// holder the chain case trashed, is RestoreRetiredVersionHolder.
 func (p *PebbleStore) RehomeRetiredVersion(versionID, newHolderID string) error {
 	if versionID == "" || newHolderID == "" {
 		return errors.New("RehomeRetiredVersion: version and new holder are required")
@@ -941,6 +942,35 @@ func (p *PebbleStore) RehomeRetiredVersion(versionID, newHolderID string) error 
 	if err := p.requireHolderNotSoftDeleted(newHolderID); err != nil {
 		return fmt.Errorf("RehomeRetiredVersion: %w", err)
 	}
+	return p.moveRetiredVersion(versionID, newHolderID)
+}
+
+// RestoreRetiredVersionHolder is the revert of a RehomeRetiredVersion: it moves
+// the retired version and its rows back to previousHolderID, the holder the
+// rehome journaled as the one the version left. Unlike RehomeRetiredVersion it
+// accepts a soft-deleted destination, because in the chain case the previous
+// holder is trashed by definition (it was being retired into another book when
+// the version left it) and a revert does not un-trash it. A destination that
+// does not exist is still refused (ErrBookFileOwnerMissing), so the caller
+// recreates a purged one first. Resolve it with AsCapability
+// (RetiredVersionHolderRestorer); it is not part of RetiredBookFileWriter.
+func (p *PebbleStore) RestoreRetiredVersionHolder(versionID, previousHolderID string) error {
+	if versionID == "" || previousHolderID == "" {
+		return errors.New("RestoreRetiredVersionHolder: version and previous holder are required")
+	}
+	b, err := p.GetBookByID(previousHolderID)
+	if err != nil {
+		return fmt.Errorf("RestoreRetiredVersionHolder: read previous holder %s: %w", previousHolderID, err)
+	}
+	if b == nil {
+		return fmt.Errorf("RestoreRetiredVersionHolder: %w: previous holder %s", ErrBookFileOwnerMissing, previousHolderID)
+	}
+	return p.moveRetiredVersion(versionID, previousHolderID)
+}
+
+// moveRetiredVersion is the locked, retried body both rehome entry points
+// share; the caller has already decided whether the destination is acceptable.
+func (p *PebbleStore) moveRetiredVersion(versionID, newHolderID string) error {
 	// The version stripe excludes RetireBookFiles, UnretireBookFiles and
 	// UpdateBookVersion for this version, so neither its holder nor the set of
 	// rows that carry it changes between the reads below and the commit.

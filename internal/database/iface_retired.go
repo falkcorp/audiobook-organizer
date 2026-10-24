@@ -1,7 +1,7 @@
 // file: internal/database/iface_retired.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4d6b0c1e-8f3a-4b57-9e21-6a7c52d9f0b3
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package database
 
@@ -92,8 +92,8 @@ type RetiredBookFileWriter interface {
 	// VersionID restored from versionIDBefore (absent key = empty).
 	UnretireBookFiles(moves []BookFileMove, backToBookID, retireVersionID string, versionIDBefore map[string]string) error
 	// RehomeRetiredVersion moves a retired version and all its retired rows to
-	// newHolderID, for the chain case where the holder is itself retired. Its
-	// own inverse: rehome back to the old holder.
+	// newHolderID, for the chain case where the holder is itself retired. The
+	// new holder must be live; the inverse is RetiredVersionHolderRestorer.
 	RehomeRetiredVersion(versionID, newHolderID string) error
 }
 
@@ -105,8 +105,22 @@ type RetiredPathKeyClaimer interface {
 	ClaimRetiredBookFilePathKey(bookID, fileID, path string) (claimed bool, err error)
 }
 
+// RetiredVersionHolderRestorer is the revert of RehomeRetiredVersion. It is its
+// own capability, not a RetiredBookFileWriter method, so the writer's other
+// implementers (the retired-aware test fakes) are not widened by it.
+type RetiredVersionHolderRestorer interface {
+	// RestoreRetiredVersionHolder moves a retired version and all its retired
+	// rows back to previousHolderID, the holder a rehome took it from. Unlike
+	// RehomeRetiredVersion it accepts a soft-deleted previousHolderID (the
+	// chain case trashed it, and a revert does not un-trash it) and refuses one
+	// that does not exist (ErrBookFileOwnerMissing).
+	RestoreRetiredVersionHolder(versionID, previousHolderID string) error
+}
+
 var (
 	_ RetiredBookFileReader = (*PebbleStore)(nil)
 	_ RetiredBookFileWriter = (*PebbleStore)(nil)
 	_ RetiredPathKeyClaimer = (*PebbleStore)(nil)
+
+	_ RetiredVersionHolderRestorer = (*PebbleStore)(nil)
 )
