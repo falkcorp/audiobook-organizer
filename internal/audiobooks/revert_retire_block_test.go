@@ -128,7 +128,7 @@ func TestRetireOperation_PreflightAndRevertibleAgree(t *testing.T) {
 	f := newRetireOpFixture(t, true)
 
 	require.False(t, undo.OperationRevertible(f.changes))
-	report, err := undo.PreflightUndoConflicts(f.s, f.opID)
+	report, err := preflightUndoConflicts(f.s, f.opID)
 	require.NoError(t, err)
 	require.Zero(t, report.Safe)
 	require.Len(t, report.CheckFailed, 2)

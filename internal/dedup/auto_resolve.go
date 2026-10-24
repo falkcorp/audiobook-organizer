@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
 // version: 1.13.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package dedup
 
@@ -459,13 +459,20 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	// entry is open: see audiobooks' undoHold) would otherwise leave the
 	// siblings moved back and then fail on the loser, a half-applied undo
 	// that a retry cannot finish.
+	//
+	// A side that is the shell of a retired version cannot take a whole-row
+	// revert either (it would un-trash the shell and clear its merged-into link
+	// while its files stay retired under the other book), so that is refused
+	// here too, before the sibling undo, the first write; the store refuses the
+	// same revert itself as a backstop.
 	for _, side := range []struct {
-		role string
-		id   string
-		need bool
+		role    string
+		id      string
+		need    bool
+		reverts bool
 	}{
-		{"loser", entry.LoserID, true},
-		{"winner", entry.WinnerID, entry.WinnerPreMergeTS != 0},
+		{"loser", entry.LoserID, true, entry.LoserPreMergeTS != 0},
+		{"winner", entry.WinnerID, entry.WinnerPreMergeTS != 0, entry.WinnerPreMergeTS != 0},
 	} {
 		if !side.need {
 			continue
@@ -476,6 +483,12 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 		}
 		if b == nil {
 			return fmt.Errorf("unmerge-auto: %s %s no longer exists (it was purged from the trash), so this merge cannot be undone; nothing reverted", side.role, side.id)
+		}
+		if !side.reverts {
+			continue // nothing is reverted for this side
+		}
+		if err := database.RefuseRetiredShell(de.bookStore, side.id, "unmerge the "+side.role); err != nil {
+			return fmt.Errorf("unmerge-auto: %w; nothing reverted", err)
 		}
 	}
 

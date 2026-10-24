@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.7
+// version: 1.97.8
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-28
 
@@ -2481,6 +2481,15 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 	cur, err := rs.db.GetBookByID(c.BookID)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", c.BookID, err)
+	}
+	if cur != nil && database.IsInTrash(cur) {
+		// A retired shell is not brought back: it would return as an empty book
+		// beside the audio retired under another book. Refused under the merge
+		// lock the retire holds, before the first write; the preflight asks the
+		// same question (undo.CheckNotRetiredShell).
+		if err := database.RefuseRetiredShell(rs.db, c.BookID, "restore"); err != nil {
+			return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+		}
 	}
 	gid, incumbent := "", ""
 	if cur != nil && cur.VersionGroupID != nil {

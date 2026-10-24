@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.54.2
+// version: 1.54.3
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-28
 //
@@ -150,7 +150,7 @@ func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*databas
 		restorable = append(restorable, c)
 	}
 
-	if blocked := RetireRevertBlock(operationID, changes); blocked != nil {
+	if blocked := RetireRevertBlock("", changes); blocked != nil {
 		// The revert refuses the whole operation (RetireRevertBlock): every
 		// restorable row is refused, none is Safe, so no Undo is offered.
 		for _, c := range restorable {
@@ -752,7 +752,11 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 	case ChangeTypeBookMergedInto:
 		return CheckMergedIntoCurrent(book, c)
 	case ChangeTypeBookSoftDelete:
-		return CheckSoftDeleteCurrent(book, c, stamps)
+		if err := CheckSoftDeleteCurrent(book, c, stamps); err != nil {
+			return err
+		}
+		// The revert would bring the book back: not a retired shell.
+		return CheckNotRetiredShell(store, c.BookID, "restore")
 	case ChangeTypeUserStateFollow:
 		// The revert writes progress on both books: both must exist.
 		survivor, _ := SurvivorFromField(c.FieldName)

@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.42.2
+// version: 1.42.3
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-28
 
@@ -549,7 +549,28 @@ const (
 	// retire row the engine cannot read; RevertOperation refuses the whole
 	// operation (RetireRevertBlock), so every row is refused.
 	ReasonRetireOpNotRevertible = "operation holds a retire row the undo cannot read"
+	// ReasonBookIsRetiredShell: the book to bring back is the shell of a retired
+	// version that still holds its files (database.ErrBookIsRetiredShell).
+	// Restoring it would un-trash an empty book next to the audio it lost.
+	ReasonBookIsRetiredShell = "book is a retired shell"
 )
+
+// CheckNotRetiredShell refuses (a *ReferentError) bringing book id back from
+// the trash when it is the shell of a retired version that still holds rows.
+// Both the revert of a soft-delete row and its preflight call it, so they
+// agree. A store that cannot read retired rows refuses too (ReasonBookLookupFailed:
+// fail closed), never passes.
+func CheckNotRetiredShell(store any, id, action string) error {
+	err := database.RefuseRetiredShell(store, id, action)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, database.ErrBookIsRetiredShell):
+		return refuse(ReasonBookIsRetiredShell, "%v", err)
+	default:
+		return refuse(ReasonBookLookupFailed, "%v", err)
+	}
+}
 
 // ReferentError is CheckRestoreReferent's refusal: Reason is one of the
 // Reason* constants, Detail the human-readable specifics.
