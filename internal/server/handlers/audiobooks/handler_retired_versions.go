@@ -1,10 +1,11 @@
 // file: internal/server/handlers/audiobooks/handler_retired_versions.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6818f543-1756-455b-9346-0581d8885fb8
 // last-edited: 2026-10-23
 
 // Retired-versions endpoints for the book detail page: the read that feeds the
-// "Retired versions" panel and the per-version restore. A retired version is a
+// "Retired versions" panel, and the per-version restore, which answers 501 until
+// restores are journaled. A retired version is a
 // book_versions row of status "retired" that holds the retired book_file rows
 // of a shell book (trashed or merged) that the retire-versions repair moved
 // onto a live "holder" book. See docs and PLAN.md section 3 for the model.
@@ -12,7 +13,7 @@
 package audiobookshandler
 
 import (
-	"errors"
+	"net/http"
 	"sort"
 	"time"
 
@@ -21,18 +22,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// retiredVersionReader is the version-row side of the store these endpoints
-// need. AudiobooksStore does not carry it (and is not widened for it: that
+// retiredVersionReader is the version-row side of the store the listing
+// needs. AudiobooksStore does not carry it (and is not widened for it: that
 // would regenerate its mock), so it is resolved through database.AsCapability
 // like the other optional store methods of this package.
 type retiredVersionReader interface {
-	GetBookVersion(id string) (*database.BookVersion, error)
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-}
-
-// retiredVersionDeleter removes the version row once a restore has emptied it.
-type retiredVersionDeleter interface {
-	DeleteBookVersion(id string) error
 }
 
 // retiredVersionFile is the per-row slice of a retired book_file the panel
@@ -52,11 +47,14 @@ type retiredVersionFile struct {
 
 // retiredVersionView is one entry of the retired-versions listing.
 type retiredVersionView struct {
-	ID                 string               `json:"id"`
-	BookID             string               `json:"book_id"`
-	RetiredFromBookID  string               `json:"retired_from_book_id,omitempty"`
-	RetiredFromTitle   string               `json:"retired_from_title,omitempty"`
-	ShellExists        bool                 `json:"shell_exists"`
+	ID                string `json:"id"`
+	BookID            string `json:"book_id"`
+	RetiredFromBookID string `json:"retired_from_book_id,omitempty"`
+	RetiredFromTitle  string `json:"retired_from_title,omitempty"`
+	ShellExists       bool   `json:"shell_exists"`
+	// ShellInTrash is true when the shell still exists and is in the trash: the
+	// state a restore needs it in, so the page can say why one is not offered.
+	ShellInTrash       bool                 `json:"shell_in_trash"`
 	RetireOpID         string               `json:"retire_op_id,omitempty"`
 	RetiredAt          *time.Time           `json:"retired_at,omitempty"`
 	Source             string               `json:"source,omitempty"`
@@ -82,7 +80,7 @@ func retiredFileView(f database.BookFile) retiredVersionFile {
 	}
 }
 
-// retiredCapabilities resolves the store capabilities both endpoints need and
+// retiredCapabilities resolves the store capabilities the listing needs and
 // fails closed when one is missing: an empty list would read as "this book has
 // no retired versions", which is a claim the handler cannot make without them.
 func (h *Handler) retiredCapabilities(c *gin.Context) (retiredVersionReader, database.RetiredBookFileReader, bool) {
@@ -108,10 +106,8 @@ func (h *Handler) retiredCapabilities(c *gin.Context) (retiredVersionReader, dat
 //
 // :id is the HOLDER, the live book the rows were moved onto, because that is
 // the page the panel is on. (GetRetiredVersionsFromBook is keyed by the shell
-// and cannot answer this.) A retired version with no rows left has already been
-// restored (the restore deletes the row, and a restore that failed between its
-// two steps leaves an empty one), so it is not listed: it holds nothing to
-// show or restore.
+// and cannot answer this.) A retired version with no rows left holds nothing to
+// show or restore, so it is not listed.
 func (h *Handler) ListRetiredVersions(c *gin.Context) {
 	bookID := c.Param("id")
 	versions, files, ok := h.retiredCapabilities(c)
@@ -140,6 +136,20 @@ func (h *Handler) ListRetiredVersions(c *gin.Context) {
 	rowsByVersion := make(map[string][]database.BookFile)
 	for _, f := range retiredRows {
 		rowsByVersion[f.VersionID] = append(rowsByVersion[f.VersionID], f)
+	}
+	// The panel lists a version's files in playback order. The store already
+	// returns disc, track, path order; sorting here keeps the listing's order
+	// this handler's own guarantee rather than a store implementation detail.
+	for _, rows := range rowsByVersion {
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].DiscNumber != rows[j].DiscNumber {
+				return rows[i].DiscNumber < rows[j].DiscNumber
+			}
+			if rows[i].TrackNumber != rows[j].TrackNumber {
+				return rows[i].TrackNumber < rows[j].TrackNumber
+			}
+			return rows[i].FilePath < rows[j].FilePath
+		})
 	}
 
 	out := make([]retiredVersionView, 0)
@@ -176,6 +186,7 @@ func (h *Handler) ListRetiredVersions(c *gin.Context) {
 			}
 			if shell != nil {
 				view.ShellExists = true
+				view.ShellInTrash = shell.MarkedForDeletion != nil && *shell.MarkedForDeletion
 				view.RetiredFromTitle = shell.Title
 			}
 		}
@@ -196,108 +207,23 @@ func (h *Handler) ListRetiredVersions(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"versions": out, "count": len(out)})
 }
 
-// RestoreRetiredVersion un-retires one retired version: its rows go back under
-// the shell book they were retired out of, and the now-empty version row is
-// deleted. POST /audiobooks/:id/retired-versions/:vid/restore.
+// restoreNotJournaledMessage is the 501 body of RestoreRetiredVersion and the
+// reason the web panel shows on its disabled Restore button.
+const restoreNotJournaledMessage = "restoring a retired version is not available yet: restores will be available once they are journaled"
+
+// RestoreRetiredVersion is the per-version restore route,
+// POST /audiobooks/:id/retired-versions/:vid/restore. It answers 501 Not
+// Implemented and changes nothing.
 //
-// STUB, not the finished undo (PLAN.md section 6.4). Three things PR 5/7 own:
-//   - It is not journaled: nothing is written to the operation-change journal,
-//     so this restore cannot itself be undone and the retire's journal is not
-//     marked reverted.
-//   - Each row's prior VersionID comes back empty (UnretireBookFiles' map is
-//     nil). The real value is in the retire's journal; survivors' rows carried
-//     none, so this is right for them and loses the value for the rest.
-//   - The shell must still exist and be in the trash. A purged shell needs
-//     the journaled recreate (RevertOperationForBooks), which is not built, so
-//     that case answers 409 rather than guessing. The shell stays in the trash:
-//     "restore as separate book" is the owner un-trashing it afterwards.
-//
-// A retried restore is safe: rows already moved are simply absent from the
-// retired set, and the empty version row is deleted on the retry.
+// The restore that would un-retire the version's rows and delete the version
+// row must not run until it is journaled (PLAN.md section 6.4,
+// TODO-RETIRED-RESTORE-JOURNAL): done directly it clears every row's VersionID
+// (the torrent/ingest link, whose prior value lives only in the retire's
+// journal), deletes the version row that carries RetireOpID, leaves no journal
+// or activity entry, and cannot be undone. The route stays registered, with its
+// permission guard, so the client contract exists and the real restore replaces
+// this body; it deliberately reads nothing from the store either, so an
+// unknown version or book is not told apart from a known one.
 func (h *Handler) RestoreRetiredVersion(c *gin.Context) {
-	bookID := c.Param("id")
-	versionID := c.Param("vid")
-	versions, files, ok := h.retiredCapabilities(c)
-	if !ok {
-		return
-	}
-	writer, ok := database.AsCapability[database.RetiredBookFileWriter](h.store)
-	if !ok {
-		httputil.RespondWithInternalError(c, "this store cannot restore retired book files")
-		return
-	}
-	deleter, ok := database.AsCapability[retiredVersionDeleter](h.store)
-	if !ok {
-		httputil.RespondWithInternalError(c, "this store cannot delete book versions")
-		return
-	}
-
-	ver, err := versions.GetBookVersion(versionID)
-	if err != nil {
-		httputil.InternalError(c, "failed to get book version", err)
-		return
-	}
-	if ver == nil {
-		httputil.RespondWithNotFound(c, "version", versionID)
-		return
-	}
-	if ver.BookID != bookID {
-		httputil.RespondWithBadRequest(c, "version/book mismatch")
-		return
-	}
-	if ver.Status != database.BookVersionStatusRetired {
-		httputil.RespondWithBadRequest(c, "version is not a retired version")
-		return
-	}
-	if ver.RetiredFromBookID == "" {
-		httputil.RespondWithBadRequest(c, "version records no book it was retired from")
-		return
-	}
-	shell, err := h.store.GetBookByID(ver.RetiredFromBookID)
-	if err != nil {
-		httputil.InternalError(c, "failed to get the book this version was retired from", err)
-		return
-	}
-	if shell == nil {
-		httputil.RespondWithConflict(c, "the book this version was retired from no longer exists; restoring a purged book needs the journaled undo, which is not available yet")
-		return
-	}
-	if shell.MarkedForDeletion == nil || !*shell.MarkedForDeletion {
-		httputil.RespondWithConflict(c, "the book this version was retired from is not in the trash; restore only returns files to a trashed book")
-		return
-	}
-
-	retiredRows, err := files.GetRetiredBookFiles(bookID)
-	if err != nil {
-		httputil.InternalError(c, "failed to get retired book files", err)
-		return
-	}
-	var fileIDs []string
-	for _, f := range retiredRows {
-		if f.VersionID == versionID {
-			fileIDs = append(fileIDs, f.ID)
-		}
-	}
-	if len(fileIDs) > 0 {
-		moves := []database.BookFileMove{{FileIDs: fileIDs, SourceBookID: bookID}}
-		if err := writer.UnretireBookFiles(moves, ver.RetiredFromBookID, versionID, nil); err != nil {
-			if errors.Is(err, database.ErrRetiredVersionMismatch) ||
-				errors.Is(err, database.ErrBookFileNotRetired) ||
-				errors.Is(err, database.ErrBookFileOwnerMissing) {
-				httputil.RespondWithConflict(c, "the retired files changed since they were listed: "+err.Error())
-				return
-			}
-			httputil.InternalError(c, "failed to restore retired version", err)
-			return
-		}
-	}
-	if err := deleter.DeleteBookVersion(versionID); err != nil {
-		httputil.InternalError(c, "files restored but the empty version row could not be removed", err)
-		return
-	}
-	httputil.RespondWithOK(c, gin.H{
-		"version_id":       versionID,
-		"restored_to_book": ver.RetiredFromBookID,
-		"restored_files":   len(fileIDs),
-	})
+	httputil.RespondWithError(c, http.StatusNotImplemented, restoreNotJournaledMessage, "NOT_IMPLEMENTED")
 }
