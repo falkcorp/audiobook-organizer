@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: b036c68e-a6da-48df-806b-b765cda262ef
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -56,6 +56,29 @@ func (f *rewriteFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCo
 
 func (f *rewriteFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.fileCores, nil
+}
+
+// The op reads through database.AllBookFilesCoreIncludingRetired, which fails
+// closed unless the store is a database.RetiredBookFileReader, so the fake is
+// one. fileCores may carry rows with Retired set; the other reads are not used
+// by this op and answer nothing.
+var _ database.RetiredBookFileReader = (*rewriteFakeStore)(nil)
+
+func (f *rewriteFakeStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return f.fileCores, nil
+}
+func (f *rewriteFakeStore) GetBookFilesIncludingRetired(string) ([]database.BookFile, error) {
+	return nil, nil
+}
+func (f *rewriteFakeStore) GetRetiredBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+func (f *rewriteFakeStore) GetRetiredVersionsFromBook(string) ([]database.BookVersion, error) {
+	return nil, nil
+}
+func (f *rewriteFakeStore) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
+}
+func (f *rewriteFakeStore) GetBookFileByPathIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
 }
 
 func (f *rewriteFakeStore) LiveBookIDsAtPath(path string) ([]string, error) {
@@ -603,4 +626,92 @@ func TestRewritePathPrefix_ApplyAtPathIndexFollows(t *testing.T) {
 		}
 	}
 	require.True(t, sawRewrite, "path_history must carry a prefix-rewrite entry")
+}
+
+// addRetiredRow gives holder a retired row at oldDir/<name>, as a retire repair
+// leaves it: keyed under the holder, flagged Retired.
+func addRetiredRow(store *rewriteFakeStore, holder, id, path string) {
+	store.fileCores = append(store.fileCores, database.BookFileCore{ID: id, BookID: holder, FilePath: path, Retired: true})
+	store.fullFiles[id] = &database.BookFile{ID: id, BookID: holder, FilePath: path, Retired: true}
+}
+
+// A retired version's file that is missing at the target is refused ON ITS OWN:
+// it must not drag the holder's live rows into the same refusal. The retired
+// rows used to share the holder's all-or-nothing unit, so one retired row whose
+// target was not on disk refused the live book and every live file with it.
+// The scanned/matched file counts are live-only, with the retired rows counted
+// apart.
+func TestRewritePathPrefix_RetiredRowWithMissingTargetDoesNotBlockLiveRows(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir) // new/01.mp3 only: the retired row's 02.mp3 target is absent
+	store := seedRewrite(t, oldDir)
+	addRetiredRow(store, "b1", "f-retired", filepath.Join(oldDir, "02.mp3"))
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, plan.ScannedBookFiles, "retired rows are not live files")
+	require.Equal(t, 1, plan.ScannedRetiredFiles)
+	require.Equal(t, 1, plan.MatchedBooks)
+	require.Equal(t, 3, plan.MatchedFields, "book.file_path, source_import_path and the one live file")
+	require.Equal(t, 1, plan.MatchedRetiredFiles)
+	require.Equal(t, 1, plan.TargetMissing, "the retired unit is the only refusal")
+	require.Equal(t, 1, plan.Rewritable)
+	require.Equal(t, 1, plan.BooksRewritten, "the live book is rewritten whole")
+	require.Equal(t, 3, plan.FieldsRewritten, "book path, source import path, live file (retired counted apart)")
+	require.Zero(t, plan.RetiredFilesRewritten)
+	require.Equal(t, newDir, store.fullBooks["b1"].FilePath)
+	require.Equal(t, filepath.Join(newDir, "01.mp3"), store.fullFiles["f1"].FilePath)
+	require.Equal(t, filepath.Join(oldDir, "02.mp3"), store.fullFiles["f-retired"].FilePath, "the refused retired row is untouched")
+
+	var reported bool
+	for _, d := range plan.all {
+		if d.RowID == "f-retired" {
+			reported = true
+			require.Equal(t, "target-missing", d.Bucket)
+			require.Equal(t, rewriteFieldRetiredFile, d.Field)
+		}
+	}
+	require.True(t, reported, "the retired row is still reported")
+}
+
+// A retired row whose target IS on disk follows the prefix like any other row
+// (a retired version pointing at a path that no longer exists is the bug a
+// migration that skipped it would leave).
+func TestRewritePathPrefix_RetiredRowIsRewrittenWhenItsTargetExists(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	require.NoError(t, os.WriteFile(filepath.Join(newDir, "02.mp3"), []byte("x"), 0o644))
+	store := seedRewrite(t, oldDir)
+	addRetiredRow(store, "b1", "f-retired", filepath.Join(oldDir, "02.mp3"))
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.RetiredFilesRewritten)
+	require.Equal(t, 1, plan.BooksRewritten, "a retired unit is not a rewritten book")
+	require.Equal(t, filepath.Join(newDir, "02.mp3"), store.fullFiles["f-retired"].FilePath)
+	require.True(t, store.fullFiles["f-retired"].Retired, "the rewrite leaves the row retired")
+}
+
+// A retired row's path is a claim: a live row whose rewrite target is a path a
+// retired row already sits on is a collision.
+func TestRewritePathPrefix_RetiredRowsPathBlocksALiveRowsTarget(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	newDir := filepath.Join(root, "new")
+	makeTree(t, newDir)
+	store := seedRewrite(t, oldDir)
+	addRetiredRow(store, "b-other", "f-retired", filepath.Join(newDir, "01.mp3"))
+
+	plan, err := planRewritePathPrefix(context.Background(), store, nil,
+		rewriteParams(oldDir, newDir, false), &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.TargetCollision)
+	require.Empty(t, store.fileWrites)
 }

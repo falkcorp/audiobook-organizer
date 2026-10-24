@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
 // last-edited: 2026-10-23
 
@@ -191,11 +191,18 @@ func (p rewritePathPrefixParams) validate() error {
 
 // rewriteFieldChange is one field of one row moving from old to new.
 type rewriteFieldChange struct {
-	Field string `json:"field"` // "book.file_path", "book.source_import_path", "book_file.file_path"
+	Field string `json:"field"` // "book.file_path", "book.source_import_path", "book_file.file_path", "retired_book_file.file_path"
 	RowID string `json:"row_id"`
 	Old   string `json:"old"`
 	New   string `json:"new"`
 }
+
+// The book_file row fields a unit can carry. A retired row has its own field
+// name so the report says which rows are retired versions.
+const (
+	rewriteFieldFile        = "book_file.file_path"
+	rewriteFieldRetiredFile = "retired_book_file.file_path"
+)
 
 // rewriteBookPlan is the unit of work: ONE BOOK and every field under it.
 //
@@ -206,8 +213,16 @@ type rewriteFieldChange struct {
 // and interleave their aggregate recomputes. One book per item makes the worker
 // sets disjoint, and makes the reported outcome one coherent unit: a book is
 // rewritten whole or refused whole, never half.
+//
+// A holder's RETIRED book_file rows are a unit of their own (Retired=true),
+// never part of the holder's live unit: a retired version's file can be gone
+// from disk for reasons that have nothing to do with the live rows, and folding
+// it into the all-or-nothing bucket let a missing retired target refuse the
+// holder's live rows with it. Retired rows are still rewritten and still
+// collision-checked (their paths are claims); they just stand or fall alone.
 type rewriteBookPlan struct {
 	BookID  string
+	Retired bool
 	Changes []rewriteFieldChange
 	// Bucket is the decision. "rewritable" is the only one that writes.
 	Bucket string
@@ -234,15 +249,24 @@ type rewritePathPrefixPlan struct {
 	DryRun              bool `json:"dry_run"`
 	RequireTargetExists bool `json:"require_target_exists"`
 
-	ScannedBooks     int `json:"scanned_books"`
-	ScannedBookFiles int `json:"scanned_book_files"`
-	MatchedBooks     int `json:"matched_books"`
-	MatchedFields    int `json:"matched_fields"`
+	ScannedBooks int `json:"scanned_books"`
+	// ScannedBookFiles counts LIVE book_file rows; retired rows are counted apart
+	// in ScannedRetiredFiles so the live figure keeps meaning "files of books".
+	ScannedBookFiles    int `json:"scanned_book_files"`
+	ScannedRetiredFiles int `json:"scanned_retired_files"`
+	// MatchedBooks / MatchedFields are live units and fields only;
+	// MatchedRetiredFiles counts the retired rows that matched old_prefix.
+	MatchedBooks        int `json:"matched_books"`
+	MatchedFields       int `json:"matched_fields"`
+	MatchedRetiredFiles int `json:"matched_retired_files"`
 
 	TargetMissing   int `json:"target_missing"`
 	TargetCollision int `json:"target_collision"`
 	Unreadable      int `json:"unreadable"`
 	Rewritable      int `json:"rewritable"`
+	// RewritableRetired counts the retired holders' units that passed their
+	// checks; Rewritable is live units only.
+	RewritableRetired int `json:"rewritable_retired"`
 	// SourceImportOnly counts the rewritable books whose ONLY matched field is
 	// source_import_path: no file or folder changes location, and nothing about
 	// them was stat- or collision-checked because nothing about them could be.
@@ -252,10 +276,12 @@ type rewritePathPrefixPlan struct {
 
 	BooksRewritten  int `json:"books_rewritten"`
 	FieldsRewritten int `json:"fields_rewritten"`
-	SkippedChanged  int `json:"skipped_changed_underneath"`
-	SkippedGone     int `json:"skipped_row_gone"`
-	UpdateErrs      int `json:"update_errs"`
-	CappedAt        int `json:"capped_at,omitempty"`
+	// RetiredFilesRewritten counts retired rows rewritten (not in FieldsRewritten).
+	RetiredFilesRewritten int `json:"retired_files_rewritten"`
+	SkippedChanged        int `json:"skipped_changed_underneath"`
+	SkippedGone           int `json:"skipped_row_gone"`
+	UpdateErrs            int `json:"update_errs"`
+	CappedAt              int `json:"capped_at,omitempty"`
 
 	ReportPath string `json:"report_path,omitempty"`
 
@@ -298,11 +324,13 @@ func (p rewritePathPrefixPlan) summary() string {
 		mode = "APPLIED"
 	}
 	return fmt.Sprintf(
-		"%s scanned=%d books/%d files | matched books=%d fields=%d | rewritable=%d (source-import-only=%d) "+
-			"rewrote books=%d fields=%d | refused: target-missing=%d collision=%d unreadable=%d | "+
+		"%s scanned=%d books/%d files (+%d retired files) | matched books=%d fields=%d (+%d retired files) | "+
+			"rewritable=%d (source-import-only=%d; retired units=%d) "+
+			"rewrote books=%d fields=%d (+%d retired files) | refused: target-missing=%d collision=%d unreadable=%d | "+
 			"skipped: changed-underneath=%d row-gone=%d | update_errs=%d",
-		mode, p.ScannedBooks, p.ScannedBookFiles, p.MatchedBooks, p.MatchedFields,
-		p.Rewritable, p.SourceImportOnly, p.BooksRewritten, p.FieldsRewritten,
+		mode, p.ScannedBooks, p.ScannedBookFiles, p.ScannedRetiredFiles, p.MatchedBooks, p.MatchedFields,
+		p.MatchedRetiredFiles, p.Rewritable, p.SourceImportOnly, p.RewritableRetired,
+		p.BooksRewritten, p.FieldsRewritten, p.RetiredFilesRewritten,
 		p.TargetMissing, p.TargetCollision, p.Unreadable,
 		p.SkippedChanged, p.SkippedGone, p.UpdateErrs)
 }
@@ -487,6 +515,7 @@ func planRewritePathPrefix(
 
 	// --- read every book, in bounded pages ---
 	byBook := map[string]*rewriteBookPlan{}
+	byRetired := map[string]*rewriteBookPlan{}
 	for offset := 0; ; offset += bookPageSize {
 		page, perr := store.GetAllBooksCore(bookPageSize, offset)
 		if perr != nil {
@@ -523,7 +552,13 @@ func planRewritePathPrefix(
 	if err != nil {
 		return plan, fmt.Errorf("load book files: %w", err)
 	}
-	plan.ScannedBookFiles = len(files)
+	for i := range files {
+		if files[i].Retired {
+			plan.ScannedRetiredFiles++
+		} else {
+			plan.ScannedBookFiles++
+		}
+	}
 
 	// claimed holds EVERY path any book_file row currently points at, matched or
 	// not: a rewrite target already in here would leave two rows on one file.
@@ -539,29 +574,48 @@ func planRewritePathPrefix(
 		if !ok {
 			continue
 		}
-		bp := byBook[f.BookID]
+		// A retired row goes into its own unit (see rewriteBookPlan): it must not
+		// share a verdict with the holder's live rows.
+		units, field := byBook, rewriteFieldFile
+		if f.Retired {
+			units, field = byRetired, rewriteFieldRetiredFile
+			plan.MatchedRetiredFiles++
+		}
+		bp := units[f.BookID]
 		if bp == nil {
-			bp = &rewriteBookPlan{BookID: f.BookID}
-			byBook[f.BookID] = bp
+			bp = &rewriteBookPlan{BookID: f.BookID, Retired: f.Retired}
+			units[f.BookID] = bp
 		}
 		bp.Changes = append(bp.Changes, rewriteFieldChange{
-			Field: "book_file.file_path", RowID: f.ID, Old: f.FilePath, New: np})
+			Field: field, RowID: f.ID, Old: f.FilePath, New: np})
 	}
 
 	// Deterministic order, so a capped run takes a stable prefix across re-runs.
-	plans := make([]*rewriteBookPlan, 0, len(byBook))
-	for _, bp := range byBook {
-		sort.Slice(bp.Changes, func(a, b int) bool {
-			if bp.Changes[a].Field != bp.Changes[b].Field {
-				return bp.Changes[a].Field < bp.Changes[b].Field
+	plans := make([]*rewriteBookPlan, 0, len(byBook)+len(byRetired))
+	for _, units := range []map[string]*rewriteBookPlan{byBook, byRetired} {
+		for _, bp := range units {
+			sort.Slice(bp.Changes, func(a, b int) bool {
+				if bp.Changes[a].Field != bp.Changes[b].Field {
+					return bp.Changes[a].Field < bp.Changes[b].Field
+				}
+				return bp.Changes[a].RowID < bp.Changes[b].RowID
+			})
+			plans = append(plans, bp)
+			if bp.Retired {
+				continue
 			}
-			return bp.Changes[a].RowID < bp.Changes[b].RowID
-		})
-		plans = append(plans, bp)
-		plan.MatchedFields += len(bp.Changes)
+			plan.MatchedFields += len(bp.Changes)
+			plan.MatchedBooks++
+		}
 	}
-	sort.Slice(plans, func(a, b int) bool { return plans[a].BookID < plans[b].BookID })
-	plan.MatchedBooks = len(plans)
+	// A holder's live unit sorts before its retired unit, so a capped run takes
+	// the live rows first. The cap counts units (live and retired alike).
+	sort.Slice(plans, func(a, b int) bool {
+		if plans[a].BookID != plans[b].BookID {
+			return plans[a].BookID < plans[b].BookID
+		}
+		return !plans[a].Retired && plans[b].Retired
+	})
 
 	if len(plans) == 0 {
 		log.Info("rewrite-path-prefix: no row is filed under old_prefix — nothing to do",
@@ -618,7 +672,13 @@ func planRewritePathPrefix(
 			plan.recordBook(bp)
 		}
 	}
-	plan.Rewritable = len(rewritable)
+	for _, bp := range rewritable {
+		if bp.Retired {
+			plan.RewritableRetired++
+		} else {
+			plan.Rewritable++
+		}
+	}
 
 	if len(rewritable) > maxBooks {
 		plan.CappedAt = maxBooks
@@ -656,7 +716,7 @@ func planRewritePathPrefix(
 	}
 	defer releaseStandDown()
 
-	var booksWritten, fieldsWritten, skippedChanged, skippedGone, updateErrs atomic.Int64
+	var booksWritten, fieldsWritten, retiredWritten, skippedChanged, skippedGone, updateErrs atomic.Int64
 	var standDownLost atomic.Bool
 	var mu sync.Mutex // guards plan.record from the worker pool
 
@@ -678,7 +738,11 @@ func planRewritePathPrefix(
 		for _, d := range decisions {
 			switch d.Bucket {
 			case "rewritten":
-				fieldsWritten.Add(1)
+				if d.Field == rewriteFieldRetiredFile {
+					retiredWritten.Add(1)
+				} else {
+					fieldsWritten.Add(1)
+				}
 			case "skipped-changed-underneath":
 				skippedChanged.Add(1)
 			case "skipped-row-gone":
@@ -687,7 +751,7 @@ func planRewritePathPrefix(
 				updateErrs.Add(1)
 			}
 		}
-		if wrote {
+		if wrote && !bp.Retired {
 			booksWritten.Add(1)
 		}
 		return nil
@@ -704,6 +768,7 @@ func planRewritePathPrefix(
 	}
 	plan.BooksRewritten = int(booksWritten.Load())
 	plan.FieldsRewritten = int(fieldsWritten.Load())
+	plan.RetiredFilesRewritten = int(retiredWritten.Load())
 	plan.SkippedChanged = int(skippedChanged.Load())
 	plan.SkippedGone = int(skippedGone.Load())
 	plan.UpdateErrs = int(updateErrs.Load())
@@ -765,7 +830,7 @@ func checkRewriteBook(
 					return "unreadable", fmt.Sprintf("stat %s: %v", ch.New, serr), ch.RowID, ch.Field
 				}
 			}
-		case "book_file.file_path":
+		case rewriteFieldFile, rewriteFieldRetiredFile:
 			if owner, taken := claimed[ch.New]; taken && owner != ch.RowID {
 				return "collision", fmt.Sprintf("book_file %s already claims %s", owner, ch.New), ch.RowID, ch.Field
 			}
@@ -913,7 +978,7 @@ func applyRewriteBook(
 		// bucket" property true.
 		refuseFileRows := func(bucket, reason string) {
 			for _, ch := range bp.Changes {
-				if ch.Field == "book_file.file_path" {
+				if ch.Field == rewriteFieldFile {
 					dec(bucket, ch.Field, ch.RowID, ch.Old, ch.New, reason)
 				}
 			}
@@ -967,7 +1032,7 @@ func applyRewriteBook(
 
 	// --- the book_file rows ---
 	for _, ch := range bp.Changes {
-		if ch.Field != "book_file.file_path" {
+		if ch.Field != rewriteFieldFile && ch.Field != rewriteFieldRetiredFile {
 			continue
 		}
 		var newPath string
@@ -1012,7 +1077,9 @@ func applyRewriteBook(
 	//
 	//	prefix-rewrite               the book row's own FilePath moved; carries
 	//	                             the book's real old and new path.
-	//	prefix-rewrite-files         only book_file rows moved; carries the
+	//	prefix-rewrite-files         only book_file rows moved (a holder's retired
+	//	                             unit commits on its own, so it can add its own
+	//	                             entry beside the live unit's); carries the
 	//	                             PREFIXES, because inventing a book path from
 	//	                             a file's directory would record something the
 	//	                             row never held.
