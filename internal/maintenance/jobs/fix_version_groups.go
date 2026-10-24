@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.6.0
+// version: 3.6.1
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package jobs
 
@@ -442,7 +442,7 @@ func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgA
 		// rows only, so a file held by a retired version read as free and got a
 		// second row (create) or a live row repointed onto it. A lookup that
 		// cannot be complete is an error, never "no row".
-		at, err := database.BookFileRowsAtPathStrict(store, fp)
+		at, err := database.BookFileRowsAtPathForWrite(store, fp)
 		if err != nil {
 			return nil, fmt.Errorf("look up rows for %s: %w", fp, err)
 		}

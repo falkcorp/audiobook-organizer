@@ -1,7 +1,7 @@
 // file: internal/database/book_file_path_key.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8a41d0c6-2f7e-4b39-95d8-c6e1f3a07b24
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -58,7 +58,9 @@ func (p *PebbleStore) ClaimBookFilePathKey(bookID, fileID, path string) (claimed
 	key := []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(path)))
 	// NoSync under the owner stripe, fsync after releasing it: no fsync runs
 	// under an owner stripe (book_delete_owns_files.go, WHAT RUNS UNDER THEM).
+	unlockIndex := p.lockSingleOwnerIndex()
 	err = p.db.Set(key, []byte(bookID+":"+fileID), pebble.NoSync)
+	unlockIndex()
 	unlockOwner()
 	if err != nil {
 		return false, fmt.Errorf("claim the path key for %s: %w", fileID, err)

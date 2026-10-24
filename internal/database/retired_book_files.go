@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -281,10 +281,11 @@ func fileRef(bookID, fileID string) string { return bookID + ":" + fileID }
 // shows this attempt's own earlier writes, which would make a row that shares a
 // key with a previous row of the same attempt look "changed".
 //
-// THIS NARROWS THE RACE, IT DOES NOT CLOSE IT. The owner stripes serialize the
-// commit only against writers that share one of its owner books; a writer of the
-// same key under other books' stripes can still commit after verify returns and
-// before the batch is applied. A lock per index key would close it.
+// THE RACE IS CLOSED BY lockSingleOwnerIndex. The owner stripes serialize the
+// commit only against writers that share one of its owner books, so verify and
+// the apply run under the single-owner index mutex, which every other writer of
+// a single-owner key takes around its own apply: a writer of the same key under
+// other books' stripes lands before verify (and fails it) or after the apply.
 type indexCAS struct {
 	expected map[string]casValue
 	written  [][]byte

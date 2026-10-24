@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_claims_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c41f7a0e-2b95-4d63-8e1a-5f90d3b7a264
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -232,4 +232,33 @@ func TestRfPathClaim_RetiredRowIsAClaimWhoeverHoldsIt(t *testing.T) {
 	claim, err = rfPathClaim(ps, liveBooks, repaired.ID, free)
 	require.NoError(t, err)
 	require.False(t, claim.held())
+}
+
+// While no retired version exists, the gap check does not need the complete
+// lookup: no retired row can hold the file, so the group still applies while
+// memdb is warming up (the complete lookup reports unavailable).
+func TestFsRegroupApply_CompleteLookupDownWithNoRetiredVersionsStillApplies(t *testing.T) {
+	s := regroupStore(t)
+	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: database.ErrBookFilesAtPathUnavailable}
+	plan := fsPlan(t, g)
+	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-warm-noretired"})
+	require.NoError(t, err)
+	require.NotZero(t, res.Groups, "the group applies: %s", res)
+}
+
+// Once a retired version exists the complete lookup is required, and with it
+// unavailable the group is refused before any write.
+func TestFsRegroupApply_CompleteLookupDownWithRetiredVersionsRefusesTheGroup(t *testing.T) {
+	s := regroupStore(t)
+	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	holder := fsSeedBook(t, s, "Retire Holder", filepath.Join(t.TempDir(), "holder"))
+	retireFileOnto(t, s, holder, filepath.Join(t.TempDir(), "elsewhere.mp3"))
+	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: database.ErrBookFilesAtPathUnavailable}
+	plan := fsPlan(t, g)
+	before := fsRowCount(t, s)
+	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-warm-retired"})
+	require.Error(t, err, "the group fails visibly; the apply reports a count of errors")
+	require.Zero(t, res.Groups)
+	require.Equal(t, before, fsRowCount(t, s))
 }

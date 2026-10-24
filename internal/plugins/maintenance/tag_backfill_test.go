@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
-// last-edited: 2026-10-20
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -684,6 +684,92 @@ func TestTagBackfill_WritesInBoundedBatches(t *testing.T) {
 		t.Errorf("got %d batches, want more than one", len(fx.batches))
 	}
 	assertSummaryHas(t, summary, "wrote 12 rows; not-written=0", "judged-rows=12", "read-took-tag-tracks=12")
+}
+
+// tagBackfillWriteChunk takes whole books only, at most maxRows rows, and always
+// at least the first book.
+func TestTagBackfillWriteChunk(t *testing.T) {
+	rows := func(books ...int) []*database.BookFile {
+		var out []*database.BookFile
+		for b, n := range books {
+			for range n {
+				out = append(out, &database.BookFile{BookID: fmt.Sprintf("b%d", b)})
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name    string
+		pending []*database.BookFile
+		max     int
+		want    int
+	}{
+		{"empty", nil, 4, 0},
+		{"fits-whole", rows(2, 2), 4, 4},
+		{"stops-at-a-book-boundary", rows(2, 2, 2), 4, 4},
+		{"never-splits-a-book", rows(3, 3), 4, 3},
+		{"first-book-over-the-cap-goes-whole", rows(7, 1), 4, 7},
+		{"cap-of-one", rows(2, 2), 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tagBackfillWriteChunk(tc.pending, tc.max); got != tc.want {
+				t.Fatalf("tagBackfillWriteChunk = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// A flush that holds more rows than tagBackfillMaxRowsPerWrite is written in
+// several BatchUpsertBookFiles calls, so no call holds more file stripes than the
+// cap; every row is still written once and no book is split across calls.
+func TestTagBackfill_WritesAreBoundedByRowCap(t *testing.T) {
+	oldSize, oldCap := tagBackfillWriteBatchSize, tagBackfillMaxRowsPerWrite
+	tagBackfillWriteBatchSize = 1000 // one flush at the end holds everything
+	tagBackfillMaxRowsPerWrite = 4
+	t.Cleanup(func() { tagBackfillWriteBatchSize, tagBackfillMaxRowsPerWrite = oldSize, oldCap })
+
+	var files []database.BookFile
+	tags := map[string]metadata.Metadata{}
+	for i := range 6 {
+		for j := range 2 {
+			id := fmt.Sprintf("pair-%d-%d", i, j)
+			files = append(files, database.BookFile{ID: id, BookID: fmt.Sprintf("pair-%d", i), TrackNumber: j + 1})
+			tags[id+".mp3"] = tagMeta(j+1, 2, 0, 0)
+		}
+	}
+	for i := range 6 { // one book larger than the cap
+		id := fmt.Sprintf("big-%d", i)
+		files = append(files, database.BookFile{ID: id, BookID: "big", TrackNumber: i + 1})
+		tags[id+".mp3"] = tagMeta(i+1, 6, 0, 0)
+	}
+	fx := newTagFixture(t, files, tags)
+	fx.run(tagBackfillParams{DryRun: new(false)})
+
+	bookOf := map[string]string{}
+	for _, f := range files {
+		bookOf[f.ID] = f.BookID
+	}
+	batchOfBook := map[string]int{}
+	rows := 0
+	for i, b := range fx.batches {
+		for _, u := range b {
+			book := bookOf[u.ID]
+			if prev, ok := batchOfBook[book]; ok && prev != i {
+				t.Errorf("book %s split across calls %d and %d", book, prev, i)
+			}
+			batchOfBook[book] = i
+		}
+		if len(b) > 4 && !(len(b) == 6 && bookOf[b[0].ID] == "big") {
+			t.Errorf("call %d wrote %d rows, over the cap of 4 and not the one oversized book", i, len(b))
+		}
+		rows += len(b)
+	}
+	if rows != 18 || len(fx.writtenIDs()) != 18 {
+		t.Errorf("wrote %d rows (%d distinct), want 18", rows, len(fx.writtenIDs()))
+	}
+	if len(fx.batches) < 4 {
+		t.Errorf("got %d calls, want at least 4 (18 rows, cap 4)", len(fx.batches))
+	}
 }
 
 // Cancel mid-run: books judged in full before the cancel are still flushed (in

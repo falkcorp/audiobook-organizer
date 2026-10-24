@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -82,7 +82,8 @@ func (p *PebbleStore) lockBookFile(fileID string) func() {
 // batch, which writes the row as it was read.
 //
 // LOCK ORDER: version stripe (lockBookVersion), then the file stripes here, then
-// the owner stripes (commitBookFileBatch). Book stripes are taken only after the
+// the owner stripes (commitBookFileBatch), then, innermost, the single-owner
+// index mutex (lockSingleOwnerIndex). Book stripes are taken only after the
 // file stripes are released. Holding several file stripes is deadlock-free
 // because every holder takes its stripes in this same ascending order (the
 // single-row writers take exactly one and never wait for a second). The stripes
@@ -118,6 +119,63 @@ func (p *PebbleStore) lockBookVersion(versionID string) func() {
 	mu := &p.bookVersionLocks[stripeFor(versionID)]
 	mu.Lock()
 	return mu.Unlock
+}
+
+// singleOwnerIndexContendedHook, when non-nil, runs when lockSingleOwnerIndex
+// finds the mutex held, just before it waits. Test-only: it lets a test prove a
+// writer was held out without sleeping.
+var singleOwnerIndexContendedHook func()
+
+// lockSingleOwnerIndex takes the single-owner index commit mutex and returns its
+// unlock func.
+//
+// WHAT IT GUARDS. The single-owner index keys (book_file_path:, book_file_pid:,
+// book_file_hash:, book_file_orig_hash:, book_file_acoustid:) name ONE row each,
+// last writer wins, and a LIVE row's write of one is an unconditional Set. The
+// retired-version writers (RetireBookFiles, UnretireBookFiles,
+// RehomeRetiredVersion) decide each key from a read taken before the owner
+// stripes and re-check it (indexCAS.verify) under them; the owner stripes
+// exclude only writers that share one of the batch's owner books, so a live
+// writer of the same key under other books' stripes could commit between that
+// re-check and the batch's apply, and the retired row's reference would then
+// overwrite the live row's key (a duplicate PID import, a second live row for a
+// scanned path). Holding this mutex across [re-check, apply] in the retired
+// writers, and across the apply of every other batch that writes or deletes
+// one of these keys, makes the re-check and the commit one step: another writer
+// lands before the re-check (and fails it, re-staging the batch) or after the
+// apply (and takes the key from the retired row, as a live row must).
+//
+// WHO TAKES IT. commitBookFileBatchVerified (so CreateBookFile,
+// BatchCreateBookFiles, UpdateBookFile and its hash writers, UpsertBookFile and
+// BatchUpsertBookFiles, MoveBookFilesToBook(Bulk), and the retire, un-retire
+// and rehome writers), ClaimBookFilePathKey, the three book_file delete commits
+// (commitWithWindowCascadeIfPresent, commitWithWindowCascade) and the
+// AcoustID-segment wipes. NOT setBookFileRowIfPresent or PatchBookFileFields:
+// they write the primary row key only and never an index key (their field
+// sets exclude every indexed field). A new writer of one of these keys must
+// take it around its Commit; TestSingleOwnerIndexStagers_AreAllListed fails on
+// an unlisted stager, and TestSingleOwnerIndexWriters_AreHeldOutOfARetiresVerifyCommitWindow
+// proves the writers are held out of a retire's window.
+//
+// WHERE IT SITS. It is the LEAF of the book_file lock order:
+//
+//	version stripe -> file stripes -> window refs -> owner stripes -> THIS
+//
+// Everything under it is Pebble reads (the verify hook) and the batch apply;
+// nothing under it takes a stripe, another mutex or the WAL fsync (which runs
+// after every release), so it cannot take part in a cycle, and it inverts no
+// existing order: no code holds it while taking a book, file, version, window
+// or owner stripe. It is NOT re-entrant: a verify hook must not call a writer.
+// Hold time is one apply (NoSync) or, for the Sync-committing wipes, one
+// flush.
+func (p *PebbleStore) lockSingleOwnerIndex() func() {
+	if !p.singleOwnerIndexMu.TryLock() {
+		if singleOwnerIndexContendedHook != nil {
+			singleOwnerIndexContendedHook()
+		}
+		p.singleOwnerIndexMu.Lock()
+	}
+	return p.singleOwnerIndexMu.Unlock
 }
 
 // ErrSkipBookWrite, returned by a ModifyBook callback, means "nothing to

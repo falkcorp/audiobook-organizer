@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -210,9 +210,12 @@ const (
 // for order-sensitive work): a book row write and its book_file writes both take
 // the book's stripe (updateBookFileLocked's post-commit aggregate recompute runs
 // under lockBook), so two workers sharing a book would serialise on that stripe
-// and interleave their aggregate recomputes. One book per item makes the worker
+// and interleave their aggregate recomputes. One book per worker makes the worker
 // sets disjoint, and makes the reported outcome one coherent unit: a book is
-// rewritten whole or refused whole, never half.
+// rewritten whole or refused whole, never half. A holder's retired unit shares
+// its BookID, so the write phase groups the units by BookID and one worker runs
+// the live unit then the retired unit; the check phase only reads, so it stays
+// per unit.
 //
 // A holder's RETIRED book_file rows are a unit of their own (Retired=true),
 // never part of the holder's live unit: a retired version's file can be gone
@@ -720,14 +723,35 @@ func planRewritePathPrefix(
 	var standDownLost atomic.Bool
 	var mu sync.Mutex // guards plan.record from the worker pool
 
-	err = registry.RunItems(ctx, reporter, rewritable, func(_ context.Context, bp *rewriteBookPlan) error {
+	// The write phase's unit of work is ONE BOOK, not one plan: a holder's live
+	// unit and its retired unit share a BookID, and every write of either takes
+	// that book's stripe (the aggregate recompute after a file write), so two
+	// workers on the two units would serialise on the stripe and interleave their
+	// recomputes, which is the reason the partition is by book at all. The
+	// safety sweep above stays per unit (it only reads, and each worker writes its
+	// own plan's verdict); here the units of one book go to ONE worker, live unit
+	// first, so the worker sets are disjoint by book again.
+	type bookWriteGroup struct{ units []*rewriteBookPlan }
+	var groups []*bookWriteGroup
+	groupOf := map[string]*bookWriteGroup{}
+	for _, bp := range rewritable { // sorted by BookID, live unit before retired
+		g := groupOf[bp.BookID]
+		if g == nil {
+			g = &bookWriteGroup{}
+			groupOf[bp.BookID] = g
+			groups = append(groups, g)
+		}
+		g.units = append(g.units, bp)
+	}
+
+	writeUnit := func(bp *rewriteBookPlan) {
 		if standDownLost.Load() {
-			return nil
+			return
 		}
 		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
 			standDownLost.Store(true)
 			log.Warn("rewrite-path-prefix: scan stand-down lease lost — aborting remaining writes")
-			return nil
+			return
 		}
 		decisions, wrote := applyRewriteBook(store, bp, params, log)
 		mu.Lock()
@@ -753,6 +777,12 @@ func planRewritePathPrefix(
 		}
 		if wrote && !bp.Retired {
 			booksWritten.Add(1)
+		}
+	}
+
+	err = registry.RunItems(ctx, reporter, groups, func(_ context.Context, g *bookWriteGroup) error {
+		for _, bp := range g.units {
+			writeUnit(bp)
 		}
 		return nil
 	}, registry.RunItemsOptions{
