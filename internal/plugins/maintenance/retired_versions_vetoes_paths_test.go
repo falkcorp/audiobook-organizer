@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_paths_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e2c4d91-a508-4b36-9f1d-c63a08e5b274
 // last-edited: 2026-10-24
 
@@ -133,6 +133,14 @@ func TestRetiredVersions_PlanHoldsRowsThatTouchAnUnresolvableID(t *testing.T) {
 	for i, r := range rows {
 		byID[r.RowID] = i
 	}
+	// A re-plan of a held row, nothing changed, is the same row: the ids in its
+	// reason come out in a fixed order.
+	y1 := rows[byID[rf.ids["y1"]]]
+	again, err := rf.f.Replan(context.Background(), nil, y1, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, y1.Fingerprint, again.Fingerprint, "no changed_since_plan flap")
+	require.Equal(t, y1.Reason, again.Reason)
+
 	for _, name := range []string{"y1", "y2"} {
 		r := rows[byID[rf.ids[name]]]
 		require.Equal(t, retCatVetoUnresolvable, r.Class, "%s: %s", name, r.Reason)
