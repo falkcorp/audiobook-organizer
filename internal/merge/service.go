@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.64.3
+// version: 1.64.4
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package merge
 
@@ -62,6 +62,9 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 type Service struct {
 	db           Store
 	syncFollower SyncFollower
+	// retireUndo reverses the retires linked to a combine's absorbed shells
+	// (retire_link.go); nil until SetRetireUndoer.
+	retireUndo RetireUndoer
 }
 
 // SetSyncFollower overrides the sync-identity follower wired by NewService.
