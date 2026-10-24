@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_decide.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2e84a1-5b3c-4f90-a6e8-1c9f0b47d352
 // last-edited: 2026-10-24
 
@@ -53,7 +53,10 @@ type mlDecider struct {
 // book. A record's id is derived from the first identifier its row gave
 // (ElsewhereID), so the same book listed by ASIN in one list and by its ISBN
 // alone in another has two different ids; the index matches by every identifier
-// instead (masterlist.IdentityKeys: ASIN, ISBN-13, source id), per user.
+// instead (masterlist.CrossListKeys: ASIN, ISBN-13, a named source's id), per
+// user. An unlabelled source id ("src:other:<id>") is deliberately not a key:
+// it is only an identity inside the list that gave it, and two lists' "17" are
+// not one book.
 //
 // It is read once, on the first row that needs it, and shared for the run: a
 // record another apply creates after that is found by its id (decideElsewhere
@@ -85,7 +88,7 @@ func (x *mlElsewhereIndex) find(lists MasterListStore, user string, row masterli
 			for _, s := range rec.Sources {
 				as.Sources = append(as.Sources, masterlist.Source{Source: s.Source, SourceID: s.SourceID})
 			}
-			for _, k := range masterlist.IdentityKeys(as) {
+			for _, k := range masterlist.CrossListKeys(as) {
 				x.byKey[mlElsewhereKey(rec.UserID, k)] = rec
 			}
 		}
@@ -93,7 +96,7 @@ func (x *mlElsewhereIndex) find(lists MasterListStore, user string, row masterli
 	if x.err != nil {
 		return nil, x.err
 	}
-	for _, k := range masterlist.IdentityKeys(row) {
+	for _, k := range masterlist.CrossListKeys(row) {
 		if rec, ok := x.byKey[mlElsewhereKey(user, k)]; ok {
 			return &rec, nil
 		}
@@ -384,7 +387,8 @@ func (d *mlDecider) decideMatched(base repairs.Row, st mlRowState) repairs.Row {
 // one exists already.
 func (d *mlDecider) decideElsewhere(base repairs.Row, st mlRowState) repairs.Row {
 	r := base
-	id := database.ElsewhereID(st.User, r.RowID)
+	row := st.Row
+	id := database.ElsewhereID(st.User, mlElsewhereRowKey(st.ListID, r.RowID, row))
 	existing, err := d.lists.GetElsewhere(id)
 	switch {
 	case errors.Is(err, database.ErrElsewhereNotFound):
@@ -394,7 +398,6 @@ func (d *mlDecider) decideElsewhere(base repairs.Row, st mlRowState) repairs.Row
 		return mlSkip(r, arsTarget{}, mlSkipAlreadyRecorded,
 			fmt.Sprintf("already kept as a read-elsewhere record (from list %s)", existing.ListID), "recorded")
 	}
-	row := st.Row
 	// The same book under another identifier (an earlier list gave its ASIN, this
 	// one gives its ISBN): one record, not two.
 	if same, err := d.elsewhere.find(d.lists, st.User, row); err != nil {

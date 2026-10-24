@@ -1,5 +1,5 @@
 // file: internal/database/master_list_store_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d7f0b394-f709-439a-b110-47286050c881
 // last-edited: 2026-10-24
 
@@ -201,7 +201,7 @@ func TestMasterListStore_PruneListsKeepsNewestPerUploader(t *testing.T) {
 	a3 := putTestList(t, st, "alice", 1)
 	a4 := putTestList(t, st, "alice", 1)
 
-	deleted, err := st.PruneLists("alice", 2)
+	deleted, err := st.PruneLists("alice", 2, "")
 	require.NoError(t, err)
 	assert.Equal(t, []string{a1, a2}, deleted, "oldest first")
 
@@ -215,13 +215,13 @@ func TestMasterListStore_PruneListsKeepsNewestPerUploader(t *testing.T) {
 	assert.Equal(t, 4, countKeys(t, db, masterListRowPrefix))
 
 	// Nothing over the limit: nothing deleted.
-	deleted, err = st.PruneLists("alice", 2)
+	deleted, err = st.PruneLists("alice", 2, "")
 	require.NoError(t, err)
 	assert.Empty(t, deleted)
 
 	// The no-uploader group prunes on its own and never touches the others.
 	n2 := putTestList(t, st, "", 1)
-	deleted, err = st.PruneLists("", 1)
+	deleted, err = st.PruneLists("", 1, "")
 	require.NoError(t, err)
 	assert.Equal(t, []string{n1}, deleted)
 	_, err = st.GetList(n2)
@@ -234,10 +234,35 @@ func TestMasterListStore_PruneListsRefusesKeepBelowOne(t *testing.T) {
 	st, _ := openTestMasterListStore(t)
 	id := putTestList(t, st, "u1", 1)
 	for _, keep := range []int{0, -1} {
-		deleted, err := st.PruneLists("u1", keep)
+		deleted, err := st.PruneLists("u1", keep, id)
 		require.Error(t, err)
 		assert.Empty(t, deleted)
 	}
 	_, err := st.GetList(id)
 	assert.NoError(t, err, "a bad setting must not delete the list just stored")
+}
+
+// The list just stored is exempt from the retention however its UploadedAt
+// compares: a clock that stepped back makes it the "oldest", and it must still
+// be kept while an older-looking-newer list goes.
+func TestMasterListStore_PruneListsKeepsTheProtectedListWhateverItsTime(t *testing.T) {
+	st, _ := openTestMasterListStore(t)
+	clock := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	st.now = func() time.Time { return clock }
+	old := putTestList(t, st, "alice", 1)
+	clock = clock.Add(-48 * time.Hour) // the clock steps back before the next upload
+	fresh := putTestList(t, st, "alice", 1)
+
+	deleted, err := st.PruneLists("alice", 1, fresh)
+	require.NoError(t, err)
+	assert.Equal(t, []string{old}, deleted)
+	_, err = st.GetList(fresh)
+	require.NoError(t, err, "the list just stored survives")
+	_, err = st.GetList(old)
+	assert.ErrorIs(t, err, ErrMasterListNotFound)
+
+	// An unknown id protects nothing and costs nothing.
+	deleted, err = st.PruneLists("alice", 1, "no-such-list")
+	require.NoError(t, err)
+	assert.Empty(t, deleted)
 }

@@ -1,7 +1,7 @@
 // file: internal/server/master_list_handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d1e8a40-2b63-4c59-9f0a-5e3c6b7d8a12
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -203,7 +203,7 @@ func (s *Server) uploadMasterList(c *gin.Context) {
 	// Retention runs after the new list is durably stored, so a failure here
 	// can never cost the upload. It touches lists only: read-elsewhere records
 	// are the import's output, are not retained by list, and are never pruned.
-	pruned, perr := store.PruneLists(stored.UploadedBy, masterListRetention())
+	pruned, perr := store.PruneLists(stored.UploadedBy, masterListRetention(), stored.ID)
 	if pruned != nil {
 		resp.PrunedLists = pruned
 	}
@@ -276,9 +276,19 @@ func (s *Server) deleteMasterList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
 }
 
+// masterListElsewhereDefaultLimit and masterListElsewhereMaxLimit bound one page
+// of GET /master-lists/elsewhere: the records are the import's output for the
+// whole library and grow with every list.
+const (
+	masterListElsewhereDefaultLimit = 200
+	masterListElsewhereMaxLimit     = 1000
+)
+
 // listMasterListElsewhere answers the read-elsewhere records the master-list
 // import has made (rows of a list that match no library book), newest first;
-// ?user_id= narrows them to one user.
+// ?user_id= narrows them to one user. It pages: ?limit= (default 200, at most
+// 1000) and ?offset=; "total" is the number of records before paging, "count"
+// the number in this page.
 func (s *Server) listMasterListElsewhere(c *gin.Context) {
 	store := database.NewMasterListStoreFromStore(s.storeForWiring())
 	if store == nil {
@@ -290,8 +300,16 @@ func (s *Server) listMasterListElsewhere(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "list read-elsewhere records: "+err.Error())
 		return
 	}
-	if records == nil {
-		records = []database.MasterListElsewhere{}
+	total := len(records)
+	limit := httputil.ParseQueryInt(c, "limit", masterListElsewhereDefaultLimit)
+	if limit < 1 {
+		limit = masterListElsewhereDefaultLimit
 	}
-	c.JSON(http.StatusOK, gin.H{"records": records, "count": len(records)})
+	limit = min(limit, masterListElsewhereMaxLimit)
+	offset := min(max(httputil.ParseQueryInt(c, "offset", 0), 0), total)
+	page := records[offset:min(offset+limit, total)]
+	if page == nil {
+		page = []database.MasterListElsewhere{}
+	}
+	c.JSON(http.StatusOK, gin.H{"records": page, "count": len(page), "total": total, "limit": limit, "offset": offset})
 }
