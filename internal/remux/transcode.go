@@ -1,7 +1,7 @@
 // file: internal/remux/transcode.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-15
+// last-edited: 2026-10-24
 
 package remux
 
@@ -63,7 +63,9 @@ func (t *Transcoder) transcodeAndRecord(ctx context.Context, path string, transc
 		return nil
 	}
 	log := logger.New("remux")
-	row, err := t.files.GetBookFileByPath(path)
+	// The row at the path, live or retired: a transcode changes the stream
+	// whichever row describes it (see fileops.BookFileRowAtPath).
+	row, err := fileops.BookFileRowAtPath(t.files, path)
 	if err != nil {
 		log.Warn("book_file lookup after transcode failed; codec, bitrate and sample rate left as stored: path=%s error=%v",
 			logger.SanitizeLogValue(path), err)
