@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.6
+// version: 1.97.7
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-28
 
@@ -575,6 +575,14 @@ func (rs *RevertService) revertOperation(operationID string, scope *revertScope)
 // the combine undo's retire reversal, which has read them once to plan the
 // reversal and must not decode a whole retire op again under the merge lock.
 func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, changes []*database.OperationChange) (*RevertResult, error) {
+	// Refuse an operation holding a retire row the engine cannot read as a
+	// whole, before any branch below writes or marks a row (see
+	// undo.RetireRevertBlock).
+	if blocked := undo.RetireRevertBlock(operationID, changes); blocked != nil {
+		revertLog.Warn("revert refused: operation holds retire rows the undo cannot read: operation=%s types=%s",
+			logger.SanitizeLogValue(operationID), formatTypeCounts(blocked.Types))
+		return nil, blocked
+	}
 	if scope != nil {
 		if err := scope.requireShellsOf(operationID, changes); err != nil {
 			return nil, err
