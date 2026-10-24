@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -279,29 +279,50 @@ func (s *Server) warmFacetsCache() {
 // 04-P4b. ctx is the op's own context, so the def's Timeout, shutdown, the watchdog
 // and a quiesce all stop the purge between books. The def is not Cancellable,
 // so a user cancel cannot reach it.
-func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) {
+//
+// The error it returns is the op's outcome. A pass RunPurge refused (the undo
+// records or the operation ledger's by-book index cannot be read: it would
+// otherwise end "completed" every night and do nothing) and a pass that stopped
+// before deciding every book (purgeStoppedError) both fail the op, as
+// library.purge-soft-deleted does. The line it logs is PurgeResult.Summary, so
+// the log, the activity entry and the manual op's result say the same things.
+//
+// It is the one purge with no preview in front of it, so it runs Unattended:
+// there is no screen whose counts it could be held to (RunPurge's preview
+// binding). It purges only books past the retention window, as before.
+func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) error {
 	if config.AppConfig.PurgeSoftDeletedAfterDays <= 0 {
-		return
+		return nil
 	}
 	if s.Ops() == nil || s.audiobookService == nil {
 		slog.Debug("Auto-purge skipped database or audiobook service not initialized")
-		return
+		return nil
 	}
 
 	days := config.AppConfig.PurgeSoftDeletedAfterDays
 	result, err := s.audiobookService.PurgeSoftDeletedBooks(ctx, config.AppConfig.PurgeSoftDeletedDeleteFiles, &days)
 	if err != nil {
-		slog.Warn("Auto-purge failed", "err", err)
-		return
+		// A refused pass still returns its result (StoppedEarly, StopReason).
+		if result != nil {
+			slog.Warn("Auto-purge failed", "err", err, "summary", result.Summary())
+			activity.EmitInfo(s.activityWriter, opID, "purge-deleted", "purge-deleted", "Purge failed: "+result.Summary())
+		} else {
+			slog.Warn("Auto-purge failed", "err", err)
+		}
+		return fmt.Errorf("%s: %w", autoPurgeOpID, err)
 	}
 
-	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d skipped: still own book_file rows, carried_to_sibling=%d, kept_has_progress=%d, carry_failed=%d, %d errors)",
-		result.Purged, result.Attempted, result.FilesDeleted, result.SkippedOwnsFiles, result.CarriedToSibling, result.KeptHasProgress, result.CarryFailed, len(result.Errors))
+	msg := result.Summary()
 	slog.Info("Auto-purge", "msg", msg)
 	activity.EmitInfo(s.activityWriter, opID, "purge-deleted", "purge-deleted", msg,
-		activity.TagsIf(result.Purged == 0, activity.NoOpTag)...)
+		activity.TagsIf(result.Purged == 0 && !result.StoppedEarly, activity.NoOpTag)...)
 	for _, e := range result.Errors {
 		activity.LogBatch(s.activityWriter, opID, "purge-deleted", "purge-deleted",
 			activity.BatchItem{Name: e, Detail: "error"})
 	}
+	return purgeStoppedError(ctx, autoPurgeOpID, result)
 }
+
+// autoPurgeOpID is the nightly purge's op id (maintenance.purge-deleted), for
+// the errors it ends with.
+const autoPurgeOpID = "maintenance.purge-deleted"

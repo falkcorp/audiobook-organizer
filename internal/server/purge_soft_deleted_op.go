@@ -1,7 +1,7 @@
 // file: internal/server/purge_soft_deleted_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e7a9c41-5d08-4b63-8f1a-6c3d0b9e4a72
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package server
 
@@ -145,14 +145,21 @@ func (s *Server) runPurgeSoftDeletedOp(ctx context.Context, raw json.RawMessage,
 	if err := opsregistry.ReporterSetResult(reporter, res.Capped(purgeResultCap)); err != nil {
 		return fmt.Errorf("%s: store the result: %w", purgeSoftDeletedOpID, err)
 	}
-	if res.StoppedEarly {
-		// Not a completed run: a cancel or a timeout must not end "completed".
-		// The context's own error is wrapped so the registry records a cancel as
-		// a cancel and a timeout as a failure.
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("%s: %s: %w", purgeSoftDeletedOpID, res.StopReason, cerr)
-		}
-		return fmt.Errorf("%s: %s", purgeSoftDeletedOpID, res.StopReason)
+	return purgeStoppedError(ctx, purgeSoftDeletedOpID, res)
+}
+
+// purgeStoppedError is the error an operation ends with when its purge pass
+// stopped before it decided every book, nil for a pass that finished. Not a
+// completed run: a cancel or a timeout must not end "completed". The context's
+// own error is wrapped so the registry records a cancel as a cancel and a
+// timeout as a failure. The manual op and the nightly one share it, so the two
+// cannot disagree about what a stopped pass is.
+func purgeStoppedError(ctx context.Context, opID string, res *audiobooks.PurgeResult) error {
+	if res == nil || !res.StoppedEarly {
+		return nil
 	}
-	return nil
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("%s: %s: %w", opID, res.StopReason, cerr)
+	}
+	return fmt.Errorf("%s: %s", opID, res.StopReason)
 }
