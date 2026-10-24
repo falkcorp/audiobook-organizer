@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
 // version: 1.3.0
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -340,7 +340,8 @@ func snapshotLibrary(t *testing.T, st *database.PebbleStore) string {
 	return string(out)
 }
 
-// Plan, re-plan and apply write nothing, and apply refuses every row.
+// Plan, re-plan and apply write nothing while retire_versions_apply_enabled is
+// off (the default), and apply refuses every row naming the flag.
 func TestRetiredVersions_NoWritesAndApplyRefuses(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.seedEveryCategory()
@@ -376,14 +377,14 @@ func TestRetiredVersions_NoWritesAndApplyRefuses(t *testing.T) {
 	require.Equal(t, len(ids), out.Failed, "%v", out.ByOutcome)
 	for _, rr := range out.Rows {
 		require.Equal(t, repairs.OutcomeFailed, rr.Outcome)
-		require.Contains(t, rr.Error, "not implemented until PR 7")
+		require.Contains(t, rr.Error, "retire_versions_apply_enabled")
 	}
 	require.Zero(t, out.BookWrites)
 	require.Zero(t, out.JournalRows)
 
 	// Calling Apply directly refuses too.
 	err = rf.f.Apply(context.Background(), nil, res.Rows[0])
-	require.ErrorIs(t, err, errRetiredApplyNotBuilt)
+	require.ErrorIs(t, err, errRetiredApplyDisabled)
 
 	require.Equal(t, before, snapshotLibrary(t, rf.st), "preview must not change a book or a book_file row")
 	files, err := rf.st.GetBookFiles(rf.ids["would-retire"])
@@ -526,6 +527,6 @@ func TestRetiredVersions_Registered(t *testing.T) {
 	fx, ok := p.Repairs().Get("retired-versions")
 	require.True(t, ok)
 	require.Equal(t, retiredVersionsFixerID, fx.ID())
-	require.True(t, repairs.IsPlanOnly(fx), "the preview has no Apply, so the lane must not offer one")
-	require.True(t, repairs.SkipsScanStandDown(fx), "the preview writes nothing a scan writes")
+	require.True(t, repairs.IsPlanOnly(fx), "with retire_versions_apply_enabled off the fixer has no Apply, so the lane must not offer one")
+	require.True(t, repairs.SkipsScanStandDown(fx), "with the flag off it writes nothing a scan writes")
 }

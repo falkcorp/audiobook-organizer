@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.174.0
+// version: 1.174.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-23
 
@@ -1235,6 +1235,15 @@ type Config struct {
 	// authority.Empty() and credit resolution is unchanged. Read on every
 	// resolve, so flipping it needs no restart.
 	AuthorityEvidenceEnabled bool `json:"authority_evidence_enabled" mapstructure:"authority_evidence_enabled"`
+	// RetireVersionsApplyEnabled is the feature flag of the retired-versions
+	// fixer's Apply (the Repairs-lane fixer "retired-versions"; plan
+	// docs 2026-10-22, PR 7). Off (the default) keeps the fixer preview-only:
+	// the Repairs routes refuse an apply of it and its Apply writes nothing.
+	// On, an apply moves each selected trashed book's file records onto the
+	// live book it lost to, as a hidden retired version (never deleting a
+	// row). Env override RETIRE_VERSIONS_APPLY_ENABLED; read on every apply, so
+	// flipping it needs no restart.
+	RetireVersionsApplyEnabled bool `json:"retire_versions_apply_enabled" mapstructure:"retire_versions_apply_enabled"`
 	// ABSItunesPositionBackfillUserID pins the one-time iTunes-position
 	// backfill job to a specific user ID instead of the default
 	// single-user/earliest-created-user resolution. An ID matching no user
@@ -1959,6 +1968,16 @@ func AuthorityEvidenceEnabled() bool {
 	return AppConfig.AuthorityEvidenceEnabled
 }
 
+// RetireVersionsApplyEnabled reports retire_versions_apply_enabled under the
+// read lock. The retired-versions fixer asks on every Repairs request and
+// every apply while PUT /config may flip it, so the read is one field under
+// RLock, not a whole-struct Snapshot copy.
+func RetireVersionsApplyEnabled() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.RetireVersionsApplyEnabled
+}
+
 // Mutate applies fn to AppConfig under a write lock.
 // ALL write sites (startup init, update service, test setups) must use this.
 func Mutate(fn func(*Config)) {
@@ -2636,6 +2655,7 @@ func InitConfig() {
 	viper.SetDefault("openai_base_url", "")
 	viper.SetDefault("abs_auth_probe_enabled", false)
 	viper.SetDefault("authority_evidence_enabled", false)
+	viper.SetDefault("retire_versions_apply_enabled", false)
 	viper.SetDefault("abs_itunes_position_backfill_user_id", "")
 	viper.SetDefault("otel_exporter_otlp_endpoint", "")
 	viper.SetDefault("otel_metrics_otlp_endpoint", "")
@@ -2660,6 +2680,7 @@ func InitConfig() {
 	viper.BindEnv("whisper_max_in_flight", "WHISPER_MAX_IN_FLIGHT")                               //nolint:errcheck
 	viper.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                           //nolint:errcheck
 	viper.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
+	viper.BindEnv("retire_versions_apply_enabled", "RETIRE_VERSIONS_APPLY_ENABLED")               //nolint:errcheck
 	viper.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
 	viper.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck
 	viper.BindEnv("otel_metrics_otlp_endpoint", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")            //nolint:errcheck
@@ -3211,6 +3232,7 @@ func InitConfig() {
 			OpenAIBaseURL:                        viper.GetString("openai_base_url"),
 			ABSAuthProbeEnabled:                  viper.GetBool("abs_auth_probe_enabled"),
 			AuthorityEvidenceEnabled:             viper.GetBool("authority_evidence_enabled"),
+			RetireVersionsApplyEnabled:           viper.GetBool("retire_versions_apply_enabled"),
 			ABSItunesPositionBackfillUserID:      viper.GetString("abs_itunes_position_backfill_user_id"),
 			OTelExporterOTLPEndpoint:             viper.GetString("otel_exporter_otlp_endpoint"),
 			OTelMetricsOTLPEndpoint:              viper.GetString("otel_metrics_otlp_endpoint"),
@@ -4080,6 +4102,7 @@ func ResetToDefaults() {
 			EnableAuth:                       true,
 			EnableRateLimit:                  true,
 			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled
+			RetireVersionsApplyEnabled:       false, // OFF by default — the retired-versions fixer only previews until enabled
 			FingerprintRemoteWorkersEnabled:  false, // OFF by default — worker routes 404 until enabled
 			FingerprintWindowReferenceTools:  "",    // unset — remote-only window backfill refuses to start
 			BulkApplyMaxItems:                5000,
