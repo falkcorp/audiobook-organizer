@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -240,7 +240,7 @@ type UserStateReader interface {
 // The automatic hard deletes refuse a book this reports true for, because
 // deleting it would drop state that never reached a live book (a follow that
 // failed with no repair record, a follow still pending repair, a duplicate no
-// merge ever followed): audiobooks.PurgeSoftDeletedBooks,
+// merge ever followed): audiobooks.PurgeSoftDeletedUnattended,
 // reconcile.CleanupDuplicateVersionGroups and the iTunes regroup apply. The
 // iTunes clone rollback carries the clone's state to its source first and
 // uses this to confirm the move finished.

@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.62.0
+// version: 1.62.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -2085,11 +2085,15 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 			}
 		}
 		if stopErr != nil && len(movedFiles[id]) == 0 {
+			// Dropped in memory only. Nothing was written for this book, so
+			// the journal on disk is not wrong for naming it (the undo
+			// tolerates an entry that never ran), and the next persist, which
+			// a moved book's retirement makes, and the final one write the
+			// reduced list. A persist here could fail on a store error and
+			// return before the moved books later in the order are retired,
+			// which is the state this stop handling exists to prevent.
 			journal.Absorbed = slices.DeleteFunc(journal.Absorbed, func(e CombineAbsorbed) bool { return e.BookID == id })
 			untouched++
-			if err := persist("dropping untouched book " + id + " after the context ended"); err != nil {
-				return nil, err
-			}
 			continue
 		}
 		a := entryOf(id)
@@ -2322,7 +2326,7 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 // MarkedForDeletionAt stamp as the store kept it (read back).
 //
 // Clearing FilePath is what makes the soft delete safe: the path now belongs to
-// a file row the survivor owns, and PurgeSoftDeletedBooks (with delete-files
+// a file row the survivor owns, and PurgeSoftDeletedUnattended (with delete-files
 // on) os.Remove()s a purged single-file book's FilePath. The journal keeps the
 // original for undo. A separate function from SoftDeleteBook because
 // MergeBooks' losers keep their own files and must keep their FilePath.

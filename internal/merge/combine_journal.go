@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.32.2
+// version: 1.32.3
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -158,7 +158,7 @@ type CombineJournal struct {
 	// journal states that explicitly: CombineBooks queues NO iTunes-library
 	// removals (only MergeBooks does). The absorbed books' PIDs are REASSIGNED
 	// to the survivor, which now owns that audio; undo moves them back via
-	// Absorbed[].ExternalIDs. Removal is deferred to PurgeSoftDeletedBooks,
+	// Absorbed[].ExternalIDs. Removal is deferred to PurgeSoftDeletedUnattended,
 	// which enqueues removes for whatever PIDs a purged book still holds.
 	ITunesRemovals []string `json:"itunes_removals"`
 
@@ -172,7 +172,7 @@ type CombineAbsorbed struct {
 	BookID string `json:"book_id"`
 	// FilePath is the book row's pre-combine FilePath. The combine CLEARS it on
 	// the soft-deleted shell: that path now belongs to a file row the survivor
-	// owns, and PurgeSoftDeletedBooks with delete-files enabled os.Remove()s a
+	// owns, and PurgeSoftDeletedUnattended with delete-files enabled os.Remove()s a
 	// purged single-file book's FilePath. Leaving it set would let the purge
 	// delete the survivor's audio from disk 30 days later.
 	FilePath         string  `json:"file_path"`

@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.12.1 -->
+<!-- version: 1.12.2 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-23 -->
+<!-- last-edited: 2026-10-24 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -457,7 +457,7 @@ Every variable component is escaped (`%` and `:` and control bytes become `%XX`)
 - **Writers serialise per engine.** The subject lock is a package-level registry keyed by `KV.LockIdentity()` (`*PebbleStore` returns its engine handle; a wrapper that embeds the KV inherits it), so two `Store` values share it whether they were built over the same KV value or over different wrappers of one store. `LockIdentity` is on `decisions.KV` only, not on `RawKVStore`. `Load` reads one point-in-time snapshot (`database.RawSnapshotter`), so a record committing mid-load cannot be half-seen; the raw rows are collected and the snapshot closed before any id is resolved, and resolver output is canonicalised. `Iterate` walks ULID order, which can differ slightly from commit order across `Store` instances (a subject's own `History` follows `SupersedesID` and is exact).
 - **Book merges are not resolved yet.** The author-tombstone resolver is provided; a caller-composed resolver over `merge.ResolveMergeSurvivor` is required before a book-merging consumer lands (until then snapshots fail open for merged-away book ids).
 
-**Durability invariant**: `decision:` keys are never pruned and have no TTL. They are owner decisions and training data. `internal/decisions/retention_test.go` runs the prune, sweep, purge, expiry and cleanup entry points of the log, activity, undo-journal, metrics and session stores plus `resultjournal.Journal.Prune`, `AudiobookService.PurgeSoftDeletedBooks` and `dedup.Engine.PurgeStaleCandidates`, and fails when a method of the four reflected store types matching `Prune|Sweep|Purge|DeleteExpired|Cleanup` is added without coverage. A sweep on any other type is listed by hand; plugin sweeps with their own fixed prefixes (`pcache_sweep`, the resultjournal) carry a `decision:` sentinel in their own tests. Only `internal/decisions` may build `decision:` keys (source guard).
+**Durability invariant**: `decision:` keys are never pruned and have no TTL. They are owner decisions and training data. `internal/decisions/retention_test.go` runs the prune, sweep, purge, expiry and cleanup entry points of the log, activity, undo-journal, metrics and session stores plus `resultjournal.Journal.Prune`, `AudiobookService.PurgeSoftDeletedUnattended` and `dedup.Engine.PurgeStaleCandidates`, and fails when a method of the four reflected store types matching `Prune|Sweep|Purge|DeleteExpired|Cleanup` is added without coverage. A sweep on any other type is listed by hand; plugin sweeps with their own fixed prefixes (`pcache_sweep`, the resultjournal) carry a `decision:` sentinel in their own tests. Only `internal/decisions` may build `decision:` keys (source guard).
 
 ---
 
