@@ -1,13 +1,15 @@
 // file: internal/decisions/retired_versions.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c41e2a9-0d58-4b36-a1f3-5e92b6d08c74
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package decisions
 
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -33,25 +35,27 @@ func RetiredVersionsSubjectKey(shellID string) (string, error) {
 }
 
 // RetiredBookReader is the slice of the store RetiredBookResolver reads.
-// database.Store carries GetBookByID; GetRetiredVersionsFromBook is on the
-// database.RetiredBookFileReader capability (resolve it with
-// database.AsCapability).
+// database.Store carries GetBookByID; GetRetiredVersionsFromBook and
+// GetRetiredBookFiles are on the database.RetiredBookFileReader capability
+// (resolve it with database.AsCapability).
 type RetiredBookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetRetiredVersionsFromBook(shellID string) ([]database.BookVersion, error)
+	GetRetiredBookFiles(holderID string) ([]database.BookFile, error)
 }
 
-// ErrRetiredShellAmbiguous is returned by RetiredBookResolver for a shell whose
-// retired versions name more than one holder. It is an error, not a guess: an
-// id that cannot be resolved to one book must not silently pick a side of a
-// veto.
-var ErrRetiredShellAmbiguous = errors.New("decisions: retired versions of one book name several holders")
+// ErrRetiredShellAmbiguous is the Kind of the UnresolvableIDError
+// RetiredBookResolver returns for a shell whose retired versions, each still
+// holding rows, name more than one holder. It is an error, not a guess: an id
+// that cannot be resolved to one book must not silently pick a side of a veto.
+// The error lists every candidate holder (UnresolvableIDError.Related).
+var ErrRetiredShellAmbiguous = errors.New("retired versions of one book name several holders")
 
 // RetiredBookResolver is the IDResolver for a book that was retired: it follows
 // idx:bv:from:<shell> (database.GetRetiredVersionsFromBook) to the book that
 // holds the shell's files now. Version.BookID is the CURRENT holder, also after
 // a RehomeRetiredVersion moved the version on to the holder's own target, so one
-// hop reaches the newest holder; ChainResolvers then continues from there.
+// hop reaches the newest holder; ChainPathResolvers then continues from there.
 //
 // It exists because the purge that follows a retire deletes the shell's book
 // row: a veto naming a purged shell would otherwise be looked up under an id
@@ -61,11 +65,17 @@ var ErrRetiredShellAmbiguous = errors.New("decisions: retired versions of one bo
 //   - a trashed or purged book with retired versions to their holder;
 //   - any other book, and any other entity type, to itself.
 //
-// Only versions of status retired whose RetiredFromBookID is the shell count. A
-// shell whose versions name more than one holder is ErrRetiredShellAmbiguous.
-// It follows ONE hop; compose it with the merge survivor resolver through
-// ChainResolvers (internal/merge sits at this package's layer, so the caller
-// that imports both does the composing; see maintenance.NewOwnerVetoReader).
+// Only a version that is retired, whose RetiredFromBookID is the shell AND that
+// still holds at least one retired row counts. Reverting a retire
+// (UnretireBookFiles) puts the rows back and leaves the version row in place, so
+// an emptied version is a record of a retire that no longer stands: it does not
+// redirect the shell, and a shell retired again onto another book is not
+// ambiguous for having the old, empty version. A shell whose live versions name
+// more than one holder is an UnresolvableIDError of Kind ErrRetiredShellAmbiguous.
+// The resolver follows ONE hop; compose it with the merge survivor resolver
+// through ChainPathResolvers (internal/merge sits at this package's layer, so
+// the caller that imports both does the composing; see
+// maintenance.NewOwnerVetoReader).
 func RetiredBookResolver(r RetiredBookReader) IDResolver {
 	return func(entityType, id string) (string, error) {
 		if entityType != retiredEntityBook {
@@ -82,61 +92,48 @@ func RetiredBookResolver(r RetiredBookReader) IDResolver {
 		if err != nil {
 			return "", fmt.Errorf("decisions: resolve retired book %s: %w", id, err)
 		}
-		holder := ""
+		var holders []string
+		// versionsHeld caches, per holder, the versions that still hold rows.
+		versionsHeld := map[string]map[string]bool{}
 		for i := range versions {
 			v := &versions[i]
 			if v.Status != database.BookVersionStatusRetired || v.RetiredFromBookID != id || v.BookID == "" || v.BookID == id {
 				continue
 			}
-			if holder != "" && holder != v.BookID {
-				dlog.Error("book %s: retired versions name several holders (%s, %s); refusing to resolve it",
-					logger.SanitizeLogValue(id), logger.SanitizeLogValue(holder), logger.SanitizeLogValue(v.BookID))
-				return "", fmt.Errorf("%w: book %s names %s and %s", ErrRetiredShellAmbiguous, id, holder, v.BookID)
-			}
-			holder = v.BookID
-		}
-		if holder == "" {
-			return id, nil
-		}
-		return holder, nil
-	}
-}
-
-// ChainResolvers composes resolvers into one that applies them in order, over
-// and over, until none moves the id (a fixed point). That is what a book needs:
-// a purged shell resolves to its retired-version holder, which may itself have
-// been merged away, which resolves to its survivor. A chain longer than
-// maxTombstoneHops (or one that loops) is an error, never a partial answer.
-func ChainResolvers(resolvers ...IDResolver) IDResolver {
-	return func(entityType, id string) (string, error) {
-		cur := id
-		for hop := 0; hop < maxTombstoneHops; hop++ {
-			moved := false
-			for _, r := range resolvers {
-				next, err := r(entityType, cur)
+			held, ok := versionsHeld[v.BookID]
+			if !ok {
+				files, err := r.GetRetiredBookFiles(v.BookID)
 				if err != nil {
-					return "", err
+					return "", fmt.Errorf("decisions: resolve retired book %s: read the rows retired into %s: %w", id, v.BookID, err)
 				}
-				if next != cur {
-					cur, moved = next, true
+				held = map[string]bool{}
+				for j := range files {
+					if files[j].Retired {
+						held[files[j].VersionID] = true
+					}
 				}
+				versionsHeld[v.BookID] = held
 			}
-			if !moved {
-				return cur, nil
+			if held[v.ID] && !slices.Contains(holders, v.BookID) {
+				holders = append(holders, v.BookID)
 			}
 		}
-		dlog.Error("%s %s: resolver chain longer than %d hops (cycle?); refusing to resolve it",
-			logger.SanitizeLogValue(entityType), logger.SanitizeLogValue(id), maxTombstoneHops)
-		return "", fmt.Errorf("decisions: %s %s: resolver chain longer than %d hops", entityType, id, maxTombstoneHops)
+		switch len(holders) {
+		case 0:
+			return id, nil
+		case 1:
+			return holders[0], nil
+		}
+		dlog.Error("book %s: retired versions name several holders (%s); refusing to resolve it",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(strings.Join(holders, ", ")))
+		return "", &UnresolvableIDError{EntityType: entityType, ID: id, Kind: ErrRetiredShellAmbiguous, Related: holders}
 	}
 }
 
 // Recorder is the one write the retired-versions records make. *Store
 // satisfies it.
 type Recorder interface {
-	Record(in Input) (*Record, error)
-	Verdict(opKind, subjectKey string) (*Verdict, error)
-	Get(id string) (*Record, error)
+	RecordUnlessSeen(in Input, same func(Record) bool) (*Record, error)
 }
 
 // RetiredVersionsEvent is one applied or reverted retired-versions row.
@@ -145,10 +142,15 @@ type RetiredVersionsEvent struct {
 	ShellID string
 	// TargetID is the live book that holds them (the holder).
 	TargetID string
-	// VersionID is the retired book_versions row the retire minted.
+	// VersionID is the retired book_versions row the retire minted. Required:
+	// it is what tells one retire of the shell from another.
 	VersionID string
-	// OpID is the operation whose journal carries the retire: the apply op for
-	// an applied record, the apply op that was reverted for an undone one.
+	// OpID is the operation that performed the event, whose journal carries it:
+	// the apply op for an applied record, the revert (undo) op for an undone
+	// one. Required. The apply op an undone record took back is the op_id of the
+	// applied record before it on the same chain. With VersionID and the
+	// decision it makes the record idempotent: a retry of the same event is the
+	// same record.
 	OpID string
 	// PlanOpID and PlanRowID are the repairs plan op and row the retire came
 	// from (provenance; the row id is the shell's).
@@ -161,8 +163,8 @@ type RetiredVersionsEvent struct {
 
 // RecordRetiredApplied writes an `applied` record for a retired-versions row.
 // `applied` is a label: it vetoes nothing and lifts no reject. It is
-// idempotent: a retry that finds the shell's latest record to be an applied one
-// for the same version returns that record instead of writing a second.
+// idempotent: a retry of the same event (same version and op) finds the record
+// already on the shell's chain and returns it instead of writing a second.
 func RecordRetiredApplied(rec Recorder, ev RetiredVersionsEvent) (*Record, error) {
 	return recordRetired(rec, DecisionApplied, ev)
 }
@@ -179,22 +181,10 @@ func recordRetired(rec Recorder, d Decision, ev RetiredVersionsEvent) (*Record, 
 	if ev.ShellID == "" {
 		return nil, invalid("retired-versions %s record: shell id is empty", d)
 	}
-	key, err := RetiredVersionsSubjectKey(ev.ShellID)
-	if err != nil {
-		return nil, err
-	}
-	// A retry (a crashed run resumed, an undo repeated) must not stack
-	// duplicates on the chain: stop at an identical latest record.
-	if v, err := rec.Verdict(OpKindRetiredVersions, key); err != nil {
-		return nil, err
-	} else if v != nil && v.LatestID != "" {
-		last, err := rec.Get(v.LatestID)
-		if err != nil {
-			return nil, err
-		}
-		if last.Decision == d && last.Snapshot.Current["version_id"] == ev.VersionID && last.Snapshot.Current["op_id"] == ev.OpID {
-			return last, nil
-		}
+	// Without both, "the same event" cannot be told from any other: an empty
+	// pair would match every earlier record that also lacks them.
+	if ev.VersionID == "" || ev.OpID == "" {
+		return nil, invalid("retired-versions %s record for %s: version id and op id are required", d, ev.ShellID)
 	}
 	src := SourceAuto
 	if ev.ActorUserID != "" {
@@ -207,11 +197,16 @@ func recordRetired(rec Recorder, d Decision, ev RetiredVersionsEvent) (*Record, 
 	if ev.TargetID != "" {
 		entities = append(entities, EntitySnapshot{EntityType: retiredEntityBook, EntityID: ev.TargetID, Label: "target"})
 	}
-	return rec.Record(Input{
+	// A retry (a crashed run resumed, an undo repeated) must not stack
+	// duplicates on the chain. The search and the write are one hold of the
+	// subject's lock (RecordUnlessSeen), so two concurrent retries write once.
+	return rec.RecordUnlessSeen(Input{
 		OpKind: OpKindRetiredVersions, EntityType: retiredEntityBook, EntityIDs: []string{ev.ShellID},
 		PlanOpID: ev.PlanOpID, PlanRowID: ev.PlanRowID,
 		Snapshot: Snapshot{Entities: entities, Current: current},
 		Decision: d, Source: src, ActorUserID: ev.ActorUserID, ActorName: ev.ActorName,
 		ReasonText: ev.ReasonText,
+	}, func(r Record) bool {
+		return r.Decision == d && r.Snapshot.Current["version_id"] == ev.VersionID && r.Snapshot.Current["op_id"] == ev.OpID
 	})
 }

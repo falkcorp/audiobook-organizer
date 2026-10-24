@@ -1,7 +1,7 @@
 // file: internal/merge/pending_repair.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 4c8a2e71-9f3d-4b06-8e5a-1d7c3b9f2e84
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package merge
 
@@ -153,7 +153,7 @@ var ErrNoLiveSurvivor = errors.New("merge: no live survivor")
 func ResolveSurvivor(db interface {
 	GetBookByID(id string) (*database.Book, error)
 }, bookID string) (string, error) {
-	return resolveForward(db, bookID, nil)
+	return lastOf(resolveForwardPath(db, bookID, nil))
 }
 
 // ResolveMergeSurvivor is ResolveSurvivor for a reader asking which live book
@@ -173,7 +173,24 @@ func ResolveSurvivor(db interface {
 func ResolveMergeSurvivor(db interface {
 	GetBookByID(id string) (*database.Book, error)
 }, bookID string, follows map[string]FlagFollow) (string, error) {
-	return resolveForward(db, bookID, func(cur *database.Book, next string) string {
+	return lastOf(resolveForwardPath(db, bookID, mergeSurvivorHop(follows)))
+}
+
+// ResolveMergeSurvivorPath is ResolveMergeSurvivor that also returns the books
+// the chain went through: the first element is bookID, the last is the live
+// survivor (a live bookID gives just itself). A caller that asks "was this
+// other book merged into the same place through a given book?" needs the hops,
+// not only where they end. The error is ErrNoLiveSurvivor, with a nil path,
+// when the chain ends nowhere live.
+func ResolveMergeSurvivorPath(db interface {
+	GetBookByID(id string) (*database.Book, error)
+}, bookID string, follows map[string]FlagFollow) ([]string, error) {
+	return resolveForwardPath(db, bookID, mergeSurvivorHop(follows))
+}
+
+// mergeSurvivorHop is the redirect correction ResolveMergeSurvivor applies.
+func mergeSurvivorHop(follows map[string]FlagFollow) func(cur *database.Book, next string) string {
+	return func(cur *database.Book, next string) string {
 		ff, ok := follows[cur.ID]
 		if !ok || ff.SurvivorID == "" || ff.SurvivorID == cur.ID {
 			return next
@@ -182,35 +199,47 @@ func ResolveMergeSurvivor(db interface {
 			return next
 		}
 		return ff.SurvivorID
-	})
+	}
 }
 
-func resolveForward(db interface {
+// lastOf is the end of a resolution path.
+func lastOf(path []string, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	return path[len(path)-1], nil
+}
+
+// resolveForwardPath follows bookID forward and returns every book it stood on,
+// bookID first and the live book last.
+func resolveForwardPath(db interface {
 	GetBookByID(id string) (*database.Book, error)
-}, bookID string, redirectHop func(cur *database.Book, next string) string) (string, error) {
+}, bookID string, redirectHop func(cur *database.Book, next string) string) ([]string, error) {
 	ids := database.AsSyncIdentityStore(db)
 	cur := bookID
 	seen := map[string]bool{}
+	path := make([]string, 0, 3)
 	for range 10 {
 		if seen[cur] {
 			break
 		}
 		seen[cur] = true
+		path = append(path, cur)
 		b, err := db.GetBookByID(cur)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if b != nil && !b.IsSoftDeleted() {
-			return cur, nil
+			return path, nil
 		}
 		next := ""
 		if ids != nil {
 			if sid, has, err := ids.GetSyncIDForBook(cur); err != nil {
-				return "", err
+				return nil, err
 			} else if has {
 				item, err := ids.ResolveSyncItem(sid)
 				if err != nil && !errors.Is(err, database.ErrSyncRedirectChainBroken) {
-					return "", err
+					return nil, err
 				}
 				if item != nil && item.CurrentBookID != "" && item.CurrentBookID != cur {
 					next = item.CurrentBookID
@@ -228,7 +257,7 @@ func resolveForward(db interface {
 		}
 		cur = next
 	}
-	return "", fmt.Errorf("%w for %s", ErrNoLiveSurvivor, bookID)
+	return nil, fmt.Errorf("%w for %s", ErrNoLiveSurvivor, bookID)
 }
 
 // logPendingLeft records, once per loser, that a pending record now holds the move.
