@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-24
 
@@ -33,6 +33,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -83,7 +84,8 @@ const (
 // name, and 37 more "title right, book is a 9 s intro fragment" rows. The
 // runtime is the book's own Duration, or the sum of its files' when the book
 // has none and every file does (bookRuntimeSec). A book with no known runtime
-// is not gated.
+// fails closed: nothing says it is a whole book, so it goes to a person
+// (needs_manual) rather than being retitled from outside evidence.
 const junkMinDurationSeconds = 30 * 60
 
 // junkLibraryStateSuspicious is the library_state the scanner gives a file it
@@ -188,9 +190,14 @@ type junkIndex struct {
 	// authorNames maps util.NormalizeAuthor of every author name that is not
 	// junk to the ids of the author rows that carry it, and authorBooks counts
 	// the live books credited to each id (isLibraryAuthor): a filename's or
-	// folder's " - <name>" credit that is one is stripped or refused.
+	// folder's " - <name>" credit that is one is stripped or refused. A book
+	// is credited to its primary author and to every author-role row of the
+	// book_authors junction (a co-author has no other trace), once each;
+	// bookAuthors holds the ids each live book was counted under, so the book
+	// being judged can be left out of its own authors' counts.
 	authorNames map[string][]int
 	authorBooks map[int]int
+	bookAuthors map[string][]int
 	// owners maps each file path of a junk-titled book to every live book
 	// with a book_file row at that path. GetBookFileByPath cannot answer
 	// this: its index holds one id per path and the last writer wins, which
@@ -259,16 +266,18 @@ func junkTitleKey(authorID *int, title string) string {
 // refuses a real title. Two things mark such a row: a live book holds the name
 // as its title, or no book other than the one being judged is credited to it
 // (an author row with no books, or whose only book is this one, whose stored
-// author is the title text). self is the judged book's own author id. Read-only
+// author is the title text). bookID is the judged book: it is left out of the
+// count of every author it is credited to, primary or co-author. Read-only
 // after the index is built.
-func (idx *junkIndex) isLibraryAuthor(s string, self *int) bool {
+func (idx *junkIndex) isLibraryAuthor(s, bookID string) bool {
 	if len(idx.titleAuthors[util.TitleSortKey(s)]) > 0 {
 		return false
 	}
+	own := idx.bookAuthors[bookID]
 	for _, form := range personNameForms(s) {
 		for _, id := range idx.authorNames[form] {
 			n := idx.authorBooks[id]
-			if self != nil && *self == id {
+			if slices.Contains(own, id) {
 				n--
 			}
 			if n > 0 {
@@ -320,17 +329,37 @@ func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCo
 	idx := &junkIndex{dirBooks: map[string]int{}, dirChapters: map[string]int{}, titles: map[string]bool{},
 		authors: map[int]string{}, series: map[int]string{}, owners: map[string][]string{},
 		authorTitles: map[int]map[string]string{}, titleAuthors: map[string][]int{},
-		authorNames: map[string][]int{}, authorBooks: map[int]int{}}
+		authorNames: map[string][]int{}, authorBooks: map[int]int{}, bookAuthors: map[string][]int{}}
 	allAuthors, err := store.GetAllAuthors()
 	if err != nil {
 		// Fail closed: without the author list a filename's author suffix is
 		// not recognised and the duplicate guard cannot name an owner.
 		return nil, nil, nil, fmt.Errorf("GetAllAuthors: %w", err)
 	}
+	// Classifying a name (authorjunk.ClassifyName) is CPU-only and touches no
+	// shared state, and there are ~16k authors on a real library, so the
+	// verdicts are computed on a bounded pool, each worker writing its own
+	// slots of realName. The maps are built serially afterwards, in author
+	// order, so the index does not depend on the scheduling.
+	realName := make([]bool, len(allAuthors))
+	var classify errgroup.Group
+	classify.SetLimit(titleRepairWorkers())
+	const classifyChunk = 512
+	for lo := 0; lo < len(allAuthors); lo += classifyChunk {
+		hi := min(lo+classifyChunk, len(allAuthors))
+		classify.Go(func() error {
+			for i := lo; i < hi; i++ {
+				n := strings.TrimSpace(allAuthors[i].Name)
+				realName[i] = n != "" && !junkStoredAuthor(n)
+			}
+			return nil
+		})
+	}
+	_ = classify.Wait() // the workers return no error
 	for i := range allAuthors {
 		idx.authors[allAuthors[i].ID] = allAuthors[i].Name
-		if n := strings.TrimSpace(allAuthors[i].Name); n != "" && !junkStoredAuthor(n) {
-			k := util.NormalizeAuthor(n)
+		if realName[i] {
+			k := util.NormalizeAuthor(strings.TrimSpace(allAuthors[i].Name))
 			idx.authorNames[k] = append(idx.authorNames[k], allAuthors[i].ID)
 		}
 	}
@@ -361,8 +390,9 @@ func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCo
 		if b.IsSoftDeleted() {
 			continue
 		}
+		idx.bookAuthors[b.ID] = nil // a live book; its authors are filled below
 		if b.AuthorID != nil {
-			idx.authorBooks[*b.AuthorID]++
+			idx.bookAuthors[b.ID] = []int{*b.AuthorID}
 		}
 		kind := metadata.ClassifyJunkTitleFor(b.Title, narratorsOf(b.Narrator))
 		if d := junkWorkDir(b.FilePath, b.Title); d != "" {
@@ -396,6 +426,35 @@ func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCo
 			continue
 		}
 		cands = append(cands, *b)
+	}
+
+	// A co-author is credited only through the book_authors junction. One
+	// read of every credit row (not a store read per book) adds each live
+	// book to each of its author-role rows' counts; fail closed when the
+	// credits cannot be read, since a half-counted author is wrongly judged
+	// not to be one.
+	if cs, ok := database.AsCapability[database.BookCreditIndexStore](store); ok {
+		credits, cerr := cs.GetAllBookAuthorRoleCredits()
+		if cerr != nil {
+			return nil, nil, nil, fmt.Errorf("GetAllBookAuthorRoleCredits: %w", cerr)
+		}
+		for bookID, rows := range credits {
+			ids, live := idx.bookAuthors[bookID]
+			if !live {
+				continue
+			}
+			for _, row := range rows {
+				if !slices.Contains(ids, row.AuthorID) {
+					ids = append(ids, row.AuthorID)
+				}
+			}
+			idx.bookAuthors[bookID] = ids
+		}
+	}
+	for _, ids := range idx.bookAuthors {
+		for _, id := range ids {
+			idx.authorBooks[id]++
+		}
 	}
 
 	// File ownership: two passes over one listing of every book_file row.
@@ -848,17 +907,20 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// book's own people, minus a stored author that is junk (a chapter label
 	// in the author field is title text in the file name), and any name of the
 	// library that no live book holds as its title, which only counts behind
-	// a "read by" credit.
+	// a "read by" credit. The own people go with no credit in the stem only
+	// when they have evidence beyond the stem: an author with other books, or
+	// a narrator.
 	var ownPeople []string
 	for _, p := range people {
 		if !junkStoredAuthor(p) {
 			ownPeople = append(ownPeople, p)
 		}
 	}
-	libraryAuthor := func(s string) bool { return idx.isLibraryAuthor(s, b.AuthorID) }
+	libraryAuthor := func(s string) bool { return idx.isLibraryAuthor(s, b.ID) }
 	rec := authorRecognisers{
-		own:     func(s string) bool { return titleNamesAPerson(s, ownPeople) },
-		library: libraryAuthor,
+		own:         func(s string) bool { return titleNamesAPerson(s, ownPeople) },
+		independent: func(s string) bool { return libraryAuthor(s) || titleNamesAPerson(s, narrators) },
+		library:     libraryAuthor,
 	}
 	pc := junkProposalCheck{stored: b.Title, narrators: narrators, people: people, roots: idx.roots,
 		authorRoot: idx.authorRoot, paths: paths, libraryAuthor: libraryAuthor}
@@ -922,11 +984,14 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if b.SeriesID != nil {
 		seriesName = strings.TrimSpace(idx.series[*b.SeriesID])
 	}
+	// liveTitle: a live book holds s as its title (stripRecordedSeries leaves
+	// a series that ends a real title alone).
+	liveTitle := func(s string) bool { return len(idx.titleAuthors[util.TitleSortKey(s)]) > 0 }
 	if folderSrc != "" {
 		folderTitle = stripReadByCredit(folderTitle)
 		// The book's own series, named in the folder or file ("Ember Wars,
 		// Book 3, Harbor Lights"), is not part of the title.
-		folderTitle = stripRecordedSeries(folderTitle, seriesName)
+		folderTitle = stripRecordedSeries(folderTitle, seriesName, liveTitle)
 	}
 	// A folder named like the book's series ("The Stormlight Archive/") says
 	// which series, not which book: it is neither evidence nor a proposal.
@@ -950,13 +1015,13 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	weakFolder := folder != "" && folderSrc == junkSrcFilename && isWeakFileStem(folder)
 
 	// The transcription window reads on into the publisher's series line:
-	// "Orchard Keep, Book Two of Ember Wars, a Starship Mage story".
+	// "Orchard Keep, Book Nine in Ember Wars, a Tinker Spindle saga".
 	// The tail is dropped before the title is judged, compared or proposed.
 	// The book's own recorded series, spoken before or after the title
 	// ("Ember Wars Book 3 Harbor Lights"), goes too (stripRecordedSeries).
 	spokenCore := stripSeriesTail(transcribed)
 	if spokenCore != "" {
-		spokenCore = stripRecordedSeries(spokenCore, seriesName)
+		spokenCore = stripRecordedSeries(spokenCore, seriesName, liveTitle)
 	}
 	if transcribed != "" && spokenCore == "" {
 		refused = append(refused, fmt.Sprintf("transcription %q is only a series or book marker", transcribed))
@@ -1159,7 +1224,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			// differs.
 			probe, seps := other.title, junkSubtitleSeps
 			if other.source == junkSrcTranscribed {
-				probe, seps = transcribed, junkTranscriptionSeps
+				// The series tail ("Book 2 of …") stays; the book's own recorded
+				// series ("Ember Wars, Book 3, <title>") does not: it is no
+				// other book of the series, and left in it turned a correct
+				// path into a conflict.
+				probe, seps = stripRecordedSeries(transcribed, seriesName, liveTitle), junkTranscriptionSeps
 			}
 			if other.title == "" || junkEvidenceAgreesSeps(probe, pathTitles, seps) {
 				continue
@@ -1260,11 +1329,23 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// one, or one the scanner flagged suspicious, is a piece of it. A stripped
 	// prefix is the file's own title and holds either way.
 	if best.source != junkSrcStripped {
-		if why := f.fragmentEvidenceReason(b, runtimeSec, runtimeKnown); why != "" {
-			return finish(junkSkipPossibleFragment, "possible fragment: "+why)
+		if skip, why := f.fragmentEvidenceReason(b, runtimeSec, runtimeKnown); skip != "" {
+			if skip == junkSkipPossibleFragment {
+				why = "possible fragment: " + why
+			}
+			return finish(skip, why)
 		}
 	}
-	owner := f.proposalOwner(idx, b, author, fetchedAuthor, paths)
+	// The author a provider recorded names this book's owner only when the
+	// provider's title was not refused: a wrong-book title (the fetch's
+	// title-only fallback) comes with another person's name, and the duplicate
+	// guard would then look for the title under the wrong owner. Otherwise the
+	// owner is the author folder's, or unknown.
+	ownerFetchedAuthor := fetchedAuthor
+	if fetchedTitle != "" && !providerSaidIt && provided == "" && providerEchoesPath == "" {
+		ownerFetchedAuthor = ""
+	}
+	owner := f.proposalOwner(idx, b, author, ownerFetchedAuthor, paths)
 	if f.titleTaken(idx, owner, best.title) {
 		who := "this author already has"
 		if owner.junk {
@@ -1895,7 +1976,7 @@ func seriesNumberRefusal(series string, b database.BookCore, narrators, agreeWit
 		return "the book has no recorded series position to check the number in its title against"
 	case positionWordRe.MatchString(b.Title):
 		return fmt.Sprintf("the stored title %q is a position inside a book (disc, track, part or chapter), not a series position", b.Title)
-	case metadata.ClassifyJunkTitleFor(series, narrators) != metadata.JunkNone, positionWordRe.MatchString(series),
+	case metadata.ClassifyJunkTitleFor(series, narrators) != metadata.JunkNone, positionMarkerRe.MatchString(series),
 		trackTokenRe.MatchString(series), authorname.IsPlaceholderTitle(series):
 		return fmt.Sprintf("the series %q is not a real series name", series)
 	case junkLettersKey(series) == junkLettersKey(b.Title):
@@ -1909,7 +1990,7 @@ func seriesNumberRefusal(series string, b database.BookCore, narrators, agreeWit
 // bookRuntimeSec is how long the book runs: its own Duration, or, when it has
 // none, the sum of its files' durations when EVERY file has one (a partial sum
 // would call a whole book short). known is false when neither is available; the
-// gate then does not fire. A file's duration is read through
+// gate then fails closed (fragmentEvidenceReason). A file's duration is read through
 // database.NormalizeDurationSec, which repairs a millisecond value.
 func bookRuntimeSec(b database.BookCore, files []database.BookFile) (secs int, known bool) {
 	if b.Duration != nil && *b.Duration > 0 {
@@ -1929,19 +2010,34 @@ func bookRuntimeSec(b database.BookCore, files []database.BookFile) (secs int, k
 	return sum, true
 }
 
-// fragmentEvidenceReason returns why the book's own facts say it is a piece of
-// a bigger book, "" when they do not: a runtime under the fixer's minimum
-// (an unknown runtime is not gated, bookRuntimeSec), or a library_state of
-// "suspicious".
-func (f *junkTitleFixer) fragmentEvidenceReason(b database.BookCore, runtimeSec int, runtimeKnown bool) string {
+// fragmentEvidenceReason returns the skip status and the reason when the
+// book's own facts say it is, or cannot be shown not to be, a piece of a bigger
+// book, and "" when they say it is a whole one:
+//
+//   - a library_state of "suspicious", or a runtime under the fixer's minimum:
+//     a possible fragment;
+//   - an unknown runtime (bookRuntimeSec): needs_manual. The gate cannot clear
+//     the book, and the books it exists for (one lesson of a language course,
+//     an intro track) are the ones a scan often has no duration for, so
+//     passing them would retitle each with its whole work's name. A person
+//     decides; a book whose duration is filled in later is planned normally.
+func (f *junkTitleFixer) fragmentEvidenceReason(b database.BookCore, runtimeSec int, runtimeKnown bool) (skip, why string) {
 	if b.LibraryState != nil && strings.EqualFold(strings.TrimSpace(*b.LibraryState), junkLibraryStateSuspicious) {
-		return "the scanner marked the book suspicious, so its path and tags are not evidence of its title"
+		return junkSkipPossibleFragment, "the scanner marked the book suspicious, so its path and tags are not evidence of its title"
 	}
-	if f.minDurationSec > 0 && runtimeKnown && runtimeSec < f.minDurationSec {
-		return fmt.Sprintf("the book runs %d s, under the %d s of a whole book; it is likely one track of a bigger book, "+
+	if f.minDurationSec <= 0 {
+		return "", ""
+	}
+	if !runtimeKnown {
+		return junkSkipNeedsManual, fmt.Sprintf("runtime unknown: neither the book nor every one of its files has a duration, so it cannot be told "+
+			"from one track of a bigger book (a whole book runs at least %d s), and a title found outside its own stored title names the whole work",
+			f.minDurationSec)
+	}
+	if runtimeSec < f.minDurationSec {
+		return junkSkipPossibleFragment, fmt.Sprintf("the book runs %d s, under the %d s of a whole book; it is likely one track of a bigger book, "+
 			"and a title found outside its own stored title names the whole work", runtimeSec, f.minDurationSec)
 	}
-	return ""
+	return "", ""
 }
 
 // junkOwner is whose title a proposal would be. For a real stored author it is
@@ -2011,19 +2107,18 @@ func folderAuthor(idx *junkIndex, paths []string) string {
 }
 
 // titleTaken reports whether a live book with a real title already holds
-// title for the proposal's owner. A real author is matched by id; a junk one
-// by ownersMayBeSame against each holder, where a holder whose author is junk
-// or missing is an unknown owner and counts, and with no name the title alone
-// decides: a skipped row costs far less than a duplicate.
+// title for the proposal's owner. Each holder of the title is matched by
+// ownersMayBeSame, the rule Plan's grouping applies between two proposals, so a
+// duplicate is held whichever of the two guards sees it: a holder of the same
+// author id, of a duplicate row of the same person under another id, or one
+// whose author is junk or missing (an unknown owner: it may be the very book
+// this one is) counts. A skipped row costs far less than a duplicate.
 func (f *junkTitleFixer) titleTaken(idx *junkIndex, o junkOwner, title string) bool {
-	if !o.junk {
-		return idx.titles[junkTitleKey(o.id, title)]
-	}
 	for _, id := range idx.titleAuthors[util.TitleSortKey(title)] {
 		holder := junkOwner{id: &id}
 		if id != 0 {
 			// A holder with no real author name (a placeholder, a credit line)
-			// is an unknown owner: it may be the very book this one is.
+			// is an unknown owner.
 			if n := f.authorName(idx, &id); !junkStoredAuthor(n) {
 				holder.name = strings.TrimSpace(n)
 			}

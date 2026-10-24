@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_derive_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 51758d2b-4a45-4c0b-9bd0-5b22cc579c19
 // last-edited: 2026-10-24
 
@@ -212,10 +212,13 @@ func TestDeriveJunkTitleReplacement_NoHopOutOfAClassifierJunkFolder(t *testing.T
 
 // The stored author is junk on most of the rows that carry a filename credit,
 // so the strip cannot depend on it: a placeholder author goes whether or not
-// the stem has a "read by" credit, and so does a person of the book's own. A
-// name that is only in the library goes behind a credit and for the segment
-// that stands where the convention puts the author. Title text with a " - " in
-// it stays. (Shapes of the 2026-10-23 review, with invented titles.)
+// the stem has a "read by" credit. A person of the book's own (the stored
+// author, a linked author, a narrator) goes behind a credit; with no credit
+// it goes only when it has evidence beyond the stem (an author with other
+// books, a narrator), because the stored author is often this file name's own
+// last segment read back. A name that is only in the library goes behind a
+// credit and for the segment that stands where the convention puts the
+// author. Title text with a " - " in it stays. (Shapes of the 2026-10-23 review, with invented titles.)
 func TestTitleFromFilenameWith_StripsAuthorSegments(t *testing.T) {
 	set := func(names ...string) func(string) bool {
 		m := map[string]bool{}
@@ -224,7 +227,11 @@ func TestTitleFromFilenameWith_StripsAuthorSegments(t *testing.T) {
 		}
 		return func(s string) bool { return m[strings.ToLower(strings.TrimSpace(s))] }
 	}
-	rec := authorRecognisers{own: set("Oliver Narrate"), library: set("Zed Writer", "Q. V. Example", "Salt Harbor")}
+	rec := authorRecognisers{
+		own:         set("Oliver Narrate", "Someone New", "Linked Person", "Established Writer"),
+		independent: set("Oliver Narrate", "Established Writer"),
+		library:     set("Zed Writer", "Q. V. Example", "Salt Harbor", "Established Writer"),
+	}
 	cases := []struct {
 		name, file, author, want string
 	}{
@@ -232,9 +239,14 @@ func TestTitleFromFilenameWith_StripsAuthorSegments(t *testing.T) {
 		{"placeholder, with credit", "Marble Gate - Unknown Author - read by narrator.mp3", "", "Marble Gate"},
 		{"placeholder, stored author junk", "Marble Gate - Unknown Author.m4b", "read by narrator", "Marble Gate"},
 		{"unknown alone", "Marble Gate - Unknown.mp3", "", "Marble Gate"},
-		{"stored author, no credit", "Marble Gate - Someone New.mp3", "Someone New", "Marble Gate"},
+		// Circular: the stored author is the stem's last segment read back, and
+		// nothing but this stem says it is an author, so a subtitle stays.
+		{"stored author with no other evidence, no credit", "Marble Gate - Someone New.mp3", "Someone New", "Marble Gate - Someone New"},
+		{"stored author with other books, no credit", "Marble Gate - Established Writer.mp3", "Established Writer", "Marble Gate"},
 		{"stored author, credit", "Marble Gate - Someone New - read by narrator.mp3", "Someone New", "Marble Gate"},
-		{"the book's own person, no credit", "Marble Gate - Oliver Narrate.mp3", "", "Marble Gate"},
+		{"linked person with no other evidence, no credit", "Marble Gate - Linked Person.mp3", "", "Marble Gate - Linked Person"},
+		{"linked person, credit", "Marble Gate - Linked Person - read by narrator.mp3", "", "Marble Gate"},
+		{"the book's narrator, no credit", "Marble Gate - Oliver Narrate.mp3", "", "Marble Gate"},
 		{"library author behind a credit", "Marble Gate - Zed Writer - read by narrator.mp3", "", "Marble Gate"},
 		{"library author with initials behind a credit", "Marble Gate 3 - Q. V. Example - read by narrator.m4b", "", "Marble Gate 3"},
 		{"placeholder after the library author", "Marble Gate - Zed Writer - Unknown Author - read by narrator.mp3", "", "Marble Gate"},
@@ -267,6 +279,13 @@ func TestTitleFromFilenameWith_StripsAuthorSegments(t *testing.T) {
 	// Without the recognisers a name that is not the stored author stays.
 	if got := titleFromFilename("Marble Gate - Zed Writer - read by narrator.mp3", ""); got != "Marble Gate - Zed Writer" {
 		t.Errorf("no recogniser: got %q", got)
+	}
+	// And a stored author is stripped only behind a credit, as before.
+	if got := titleFromFilename("Marble Gate - Someone New.mp3", "Someone New"); got != "Marble Gate - Someone New" {
+		t.Errorf("no recogniser, no credit: got %q", got)
+	}
+	if got := titleFromFilename("Marble Gate - Someone New - read by narrator.mp3", "Someone New"); got != "Marble Gate" {
+		t.Errorf("no recogniser, credit: got %q", got)
 	}
 }
 

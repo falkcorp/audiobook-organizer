@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-10-24
 
@@ -22,6 +22,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
+
+// junkFixtureRuntimeSec is the runtime fixture books carry: ten hours, a whole
+// book. The fixer's fragment gate fails closed on a book with no known runtime
+// (fragmentEvidenceReason), so a fixture that is not about that gate has one.
+var junkFixtureRuntimeSec = 36000
 
 // junkLib is a real Pebble library with one book per decision the fixer
 // makes. ids maps a fixture name to the book id the store assigned.
@@ -46,7 +51,8 @@ func newJunkLib(t *testing.T) *junkLib {
 
 	add := func(name, title, bookPath string, author *int, series *int, files ...string) string {
 		t.Helper()
-		b, err := st.CreateBook(&database.Book{Title: title, FilePath: bookPath, AuthorID: author, SeriesID: series, Format: "mp3"})
+		b, err := st.CreateBook(&database.Book{Title: title, FilePath: bookPath, AuthorID: author, SeriesID: series, Format: "mp3",
+			Duration: &junkFixtureRuntimeSec})
 		require.NoError(t, err)
 		for _, f := range files {
 			require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f, Format: "mp3"}))
@@ -93,7 +99,7 @@ func newJunkLib(t *testing.T) *junkLib {
 		}}))
 	kate := "Kate Reading"
 	named, err := st.CreateBook(&database.Book{Title: "Read by Kate Reading", FilePath: "/lib/Alma Reed/Named Credit Book",
-		AuthorID: a, Narrator: &kate, Format: "mp3"})
+		AuthorID: a, Narrator: &kate, Format: "mp3", Duration: &junkFixtureRuntimeSec})
 	require.NoError(t, err)
 	for _, fp := range []string{"/lib/Alma Reed/Named Credit Book/01.mp3", "/lib/Alma Reed/Named Credit Book/02.mp3"} {
 		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: named.ID, FilePath: fp, Format: "mp3"}))
@@ -678,7 +684,8 @@ func planRows(t *testing.T, st *database.PebbleStore) map[string]repairs.Row {
 
 func addJunkBook(t *testing.T, st *database.PebbleStore, title string, author *int, files ...string) string {
 	t.Helper()
-	b, err := st.CreateBook(&database.Book{Title: title, FilePath: files[0], AuthorID: author, Format: "mp3"})
+	b, err := st.CreateBook(&database.Book{Title: title, FilePath: files[0], AuthorID: author, Format: "mp3",
+		Duration: &junkFixtureRuntimeSec})
 	require.NoError(t, err)
 	for _, f := range files {
 		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f, Format: "mp3"}))

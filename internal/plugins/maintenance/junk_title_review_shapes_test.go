@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/junk_title_review_shapes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d2e8a1c-47b3-4c90-9e6f-3a1b7c0d8e24
 // last-edited: 2026-10-24
 
 package maintenance
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,6 +14,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Every title in this file is invented. The shapes are the ones the second
@@ -55,7 +58,21 @@ func TestStripRecordedSeries(t *testing.T) {
 		{"  Harbor Lights  ", ser, "Harbor Lights"},
 	}
 	for _, c := range cases {
-		require.Equal(t, c.want, stripRecordedSeries(c.in, c.series), "%q / %q", c.in, c.series)
+		require.Equal(t, c.want, stripRecordedSeries(c.in, c.series, nil), "%q / %q", c.in, c.series)
+	}
+	// The series can end a real title: with no live book holding the text
+	// before "Book N" it is a title and a series tail, with one it is a title.
+	live := func(s string) bool { return strings.EqualFold(s, "Dark Ember Wars") }
+	require.Equal(t, "Dark", stripRecordedSeries("Dark Ember Wars Book 3", ser, nil))
+	require.Equal(t, "Dark Ember Wars Book 3", stripRecordedSeries("Dark Ember Wars Book 3", ser, live))
+	require.Equal(t, "Dark Ember Wars, Book 3", stripRecordedSeries("Dark Ember Wars, Book 3", ser, live))
+	require.Equal(t, "Harbor Lights", stripRecordedSeries("Harbor Lights Ember Wars Book 3", ser, live),
+		"a live title elsewhere does not stop the strip")
+	// The regexps are cached by series name: repeated calls, a name with
+	// regexp metacharacters included, answer the same.
+	for range 2 {
+		require.Equal(t, "Harbor Lights", stripRecordedSeries("Harbor Lights Ember (Wars Book 3", "Ember (Wars", nil))
+		require.Equal(t, "Harbor Lights Book 3", stripRecordedSeries("Harbor Lights Book 3", "Ember (Wars", nil))
 	}
 }
 
@@ -193,10 +210,15 @@ func TestJunkTitleFixer_FileDurationsReachTheGate(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		durations []int
-		want      string // "" = held as a possible fragment
+		want      string // "" = held, as heldAs
+		heldAs    string
 	}{
-		{"short pieces", []int{300, 300}, ""},
-		{"whole book in pieces", []int{900, 900, 900}, "Lantern Keepers"},
+		{"short pieces", []int{300, 300}, "", junkSkipPossibleFragment},
+		{"whole book in pieces", []int{900, 900, 900}, "Lantern Keepers", ""},
+		// No file has a duration (the store keeps no aggregate either): the
+		// runtime is unknown, and unknown fails closed. bookRuntimeSec's unit
+		// test covers a partial set.
+		{"no file has a duration", []int{0, 0}, "", junkSkipNeedsManual},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l := newEvLib(t)
@@ -209,7 +231,7 @@ func TestJunkTitleFixer_FileDurationsReachTheGate(t *testing.T) {
 				fileDurations: tc.durations, transcribed: "Lantern Keepers"})
 			r := l.rows(l.fixer())["b"]
 			if tc.want == "" {
-				require.Equal(t, junkSkipPossibleFragment, r.Skipped, "%v: %s", r.Proposed, r.SkipReason)
+				require.Equal(t, tc.heldAs, r.Skipped, "%v: %s", r.Proposed, r.SkipReason)
 				return
 			}
 			require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
@@ -275,13 +297,17 @@ func TestJunkTitleFixer_FilenameAuthorStripping(t *testing.T) {
 	require.Contains(t, rows["author-first"].SkipReason, "person")
 	require.Contains(t, rows["last-first"].SkipReason, "person")
 
-	// The title is never cut to "Ember Wars 13": whatever the row does, it
-	// does not propose that.
-	if r := rows["title-shaped-segment"]; r.Applicable() {
-		require.Equal(t, "Ember Wars 13 - Salt Harbor", r.Proposed["title"])
-	}
+	// The title is never cut to "Ember Wars 13": the credited segment goes,
+	// "Salt Harbor" is name-shaped and no author of the library (the live book
+	// of that title holds the name; its row has no book), so the tail is
+	// refused rather than guessed. The live-title guard itself is decided in
+	// TestJunkTitleFixer_LibraryAuthorGuards, where the row has other books.
+	r := rows["title-shaped-segment"]
+	require.False(t, r.Applicable(), "proposed %q", r.Proposed["title"])
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "author credit")
 
-	r := rows["orphan-author-row"]
+	r = rows["orphan-author-row"]
 	require.Equal(t, junkSkipNeedsManual, r.Skipped, "%v %s", r.Proposed, r.SkipReason)
 	require.Contains(t, r.SkipReason, "author credit")
 
@@ -411,24 +437,304 @@ func TestJunkTitleFixer_TranscriptionCommaSubtitleAgreesWithStripped(t *testing.
 	require.Contains(t, r.SkipReason, "conflicting evidence")
 }
 
-// The shapes of the provider_value rows a reviewer accepted: a real stored
-// author, the provider's title recorded under that author, nothing else to
-// compare it with. The tagline and spelling rules leave them as they are.
+// The provider_value shape the fixer must leave alone: a real stored author,
+// the provider's title recorded under that author, nothing else to compare it
+// with (invented titles). The tagline and spelling rules leave them as they are.
 func TestJunkTitleFixer_AcceptedProviderShapesStay(t *testing.T) {
 	l := newEvLib(t)
 	a := l.author("Zed Writer")
 	l.add(evBook{name: "volume-subtitle", title: "read by narrator", author: a, path: "/lib/Books/zz1.mp3",
-		files: []string{"/lib/Books/zz1.mp3"}, providerTitle: "Tide Reborn as a Lantern: Volume 1", providerAuthor: "Zed Writer"})
+		files: []string{"/lib/Books/zz1.mp3"}, providerTitle: "Moss Keeper Wakes in the Orchard: Volume 1", providerAuthor: "Zed Writer"})
 	l.add(evBook{name: "multi-colon", title: "Intro", author: a, path: "/lib/Books/zz2.mp3",
-		files: []string{"/lib/Books/zz2.mp3"}, providerTitle: "Salt Saga: The New Tide: Edge of Harbor II: Rebirth", providerAuthor: "Zed Writer"})
+		files: []string{"/lib/Books/zz2.mp3"}, providerTitle: "Quill Chronicle: The Third Ferry: Harbor Hymn IX: Dawn", providerAuthor: "Zed Writer"})
 	rows := l.rows(l.fixer())
 	for name, want := range map[string]string{
-		"volume-subtitle": "Tide Reborn as a Lantern: Volume 1",
-		"multi-colon":     "Salt Saga: The New Tide: Edge of Harbor II: Rebirth",
+		"volume-subtitle": "Moss Keeper Wakes in the Orchard: Volume 1",
+		"multi-colon":     "Quill Chronicle: The Third Ferry: Harbor Hymn IX: Dawn",
 	} {
 		r := rows[name]
 		require.True(t, r.Applicable(), "%s: %s: %s", name, r.Skipped, r.SkipReason)
 		require.Equal(t, want, r.Proposed["title"], name)
 		require.Contains(t, r.Reason, "proposed from provider_value", name)
+	}
+}
+
+// S1, decided by the two conditions of isLibraryAuthor and by nothing else.
+// Every author row here is credited to a book other than the one judged, or
+// would be but for the condition under test, so the "no other book" rule
+// cannot be what holds the title.
+//
+//   - Live title: the author row has other books and its name is also a live
+//     book's title ("Marlow Finch" is a person and a title). It is not an
+//     author of the library, so the segment before the credit is title text
+//     and stays. Without the guard it is stripped.
+//   - Self-exclusion: the stored author's only book is the judged one, and the
+//     file name spells the name the other way round ("Last, First"), so no
+//     stored-author or own-person match strips it first. The row is the very
+//     author the stem was read back from, so it is no evidence of an author:
+//     the segment stays and the name-shaped tail is refused. Without the
+//     exclusion it counts the judged book and the segment is stripped.
+func TestJunkTitleFixer_LibraryAuthorGuards(t *testing.T) {
+	l := newEvLib(t)
+	zed := l.author("Zed Writer")
+
+	// Live title.
+	l.authorWithBook("Marlow Finch")
+	l.add(evBook{name: "holds-the-title", title: "Marlow Finch", author: zed, path: "/lib/Zed Writer/Marlow Finch/book.m4b",
+		files: []string{"/lib/Zed Writer/Marlow Finch/book.m4b"}})
+	l.authorWithBook("The Last Lantern")
+	l.add(evBook{name: "holds-the-other-title", title: "The Last Lantern", author: zed, path: "/lib/Zed Writer/Last Lantern/book.m4b",
+		files: []string{"/lib/Zed Writer/Last Lantern/book.m4b"}})
+	l.add(evBook{name: "live-title-not-name-shaped", title: "read by narrator", author: nil,
+		path:  "/lib/u00/Harbor Dusk - The Last Lantern - read by narrator.mp3",
+		files: []string{"/lib/u00/Harbor Dusk - The Last Lantern - read by narrator.mp3"}})
+	l.add(evBook{name: "live-title-segment", title: "read by narrator", author: nil,
+		path:  "/lib/u01/Harbor Dusk - Marlow Finch - read by narrator.mp3",
+		files: []string{"/lib/u01/Harbor Dusk - Marlow Finch - read by narrator.mp3"}})
+	// The same shape with an author row no live book is titled after: the
+	// segment is the author and goes.
+	l.authorWithBook("Wren Marsh")
+	l.add(evBook{name: "not-a-title-segment", title: "read by narrator", author: nil,
+		path:  "/lib/u02/Harbor Dusk - Wren Marsh - read by narrator.mp3",
+		files: []string{"/lib/u02/Harbor Dusk - Wren Marsh - read by narrator.mp3"}})
+
+	// Self-exclusion.
+	alone := l.author("Alma Reed")
+	l.add(evBook{name: "self-only-book", title: "read by narrator", author: alone,
+		path:  "/lib/u03/Dawn Orchard - Reed, Alma - read by narrator.mp3",
+		files: []string{"/lib/u03/Dawn Orchard - Reed, Alma - read by narrator.mp3"}})
+	// The same shape where the author has another book: the segment is the
+	// author, whichever way round the name is spelled.
+	other := l.authorWithBook("Mina Quill")
+	l.add(evBook{name: "has-other-book", title: "read by narrator", author: other,
+		path:  "/lib/u04/Dawn Orchard - Quill, Mina - read by narrator.mp3",
+		files: []string{"/lib/u04/Dawn Orchard - Quill, Mina - read by narrator.mp3"}})
+	rows := l.rows(l.fixer())
+
+	// A name-shaped segment that survives the guard is still a refusal (a
+	// "Title - Name" tail is never guessed), so the guard shows as a held row
+	// where the strip would have proposed "Harbor Dusk".
+	r := rows["live-title-segment"]
+	require.False(t, r.Applicable(), "proposed %q", r.Proposed["title"])
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "author credit")
+
+	r = rows["live-title-not-name-shaped"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Harbor Dusk - The Last Lantern", r.Proposed["title"])
+
+	r = rows["not-a-title-segment"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Harbor Dusk", r.Proposed["title"])
+
+	r = rows["self-only-book"]
+	require.False(t, r.Applicable(), "proposed %q", r.Proposed["title"])
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "author credit")
+
+	r = rows["has-other-book"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Dawn Orchard", r.Proposed["title"])
+}
+
+// A co-author has no trace but the book_authors junction. Such a row is an
+// author of the library when another live book credits it there, and the
+// judged book is left out of its own co-authors' counts. With no " - read by "
+// credit in the stem the segment goes only for a name with evidence beyond the
+// stem, so the junction is what decides.
+func TestJunkTitleFixer_CoAuthorsAreCountedWithoutTheJudgedBook(t *testing.T) {
+	l := newEvLib(t)
+	zed := l.author("Zed Writer")
+	// "Mina Quill" is linked to one other book only through the junction.
+	mina := l.author("Mina Quill")
+	l.add(evBook{name: "minas-other-book", title: "Tides Told Twice", author: zed, coAuthors: []*int{mina},
+		path: "/lib/Zed Writer/Tides Told Twice/book.m4b", files: []string{"/lib/Zed Writer/Tides Told Twice/book.m4b"}})
+	l.add(evBook{name: "co-author-elsewhere", title: "read by narrator", author: zed, coAuthors: []*int{mina},
+		path: "/lib/u05/Dawn Orchard - Mina Quill.mp3", files: []string{"/lib/u05/Dawn Orchard - Mina Quill.mp3"}})
+	// "Nell Harbor" is linked to the judged book and to no other.
+	nell := l.author("Nell Harbor")
+	l.add(evBook{name: "co-author-only-here", title: "read by narrator", author: zed, coAuthors: []*int{nell},
+		path: "/lib/u06/Dawn Orchard - Nell Harbor.mp3", files: []string{"/lib/u06/Dawn Orchard - Nell Harbor.mp3"}})
+	rows := l.rows(l.fixer())
+
+	r := rows["co-author-elsewhere"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Dawn Orchard", r.Proposed["title"])
+
+	r = rows["co-author-only-here"]
+	require.False(t, r.Applicable(), "proposed %q", r.Proposed["title"])
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "author credit")
+}
+
+// S2/SF4: with no " - read by " credit the stem is a bare "<Title> - <Segment>",
+// which the scanner reads as a title and an author. A stored author with no
+// other book is that segment read back, so stripping it is circular and the
+// subtitle it cuts off goes with it. A stored author with other books, or the
+// book's narrator, is evidence of its own, and a credit vouches for any
+// of the book's people.
+func TestJunkTitleFixer_NoCreditStripNeedsIndependentEvidence(t *testing.T) {
+	l := newEvLib(t)
+	// The stored author's only book is the judged one: the segment is kept
+	// (and, name-shaped, refused rather than guessed).
+	circular := l.author("Moss Keeper")
+	l.add(evBook{name: "circular", title: "read by narrator", author: circular,
+		path: "/lib/u07/Quiet Orchard - Moss Keeper.mp3", files: []string{"/lib/u07/Quiet Orchard - Moss Keeper.mp3"}})
+	// The same stem with a credit: the author goes.
+	credited := l.author("Wren Keeper")
+	l.add(evBook{name: "credited", title: "read by narrator", author: credited,
+		path:  "/lib/u08/Quiet Orchard - Wren Keeper - read by narrator.mp3",
+		files: []string{"/lib/u08/Quiet Orchard - Wren Keeper - read by narrator.mp3"}})
+	// The stored author has another book: independent, so the author goes.
+	established := l.authorWithBook("Ivy Keeper")
+	l.add(evBook{name: "established", title: "read by narrator", author: established,
+		path: "/lib/u09/Quiet Orchard - Ivy Keeper.mp3", files: []string{"/lib/u09/Quiet Orchard - Ivy Keeper.mp3"}})
+	// The segment is the narrator, who is on the book's narrator field.
+	soloAuthor := l.author("Fern Writer")
+	l.add(evBook{name: "narrator", title: "read by narrator", author: soloAuthor, narrator: "Oliver Narrate",
+		path: "/lib/u10/Quiet Orchard - Oliver Narrate.mp3", files: []string{"/lib/u10/Quiet Orchard - Oliver Narrate.mp3"}})
+	rows := l.rows(l.fixer())
+
+	r := rows["circular"]
+	require.False(t, r.Applicable(), "proposed %q", r.Proposed["title"])
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "author credit")
+
+	for name, want := range map[string]string{"credited": "Quiet Orchard", "established": "Quiet Orchard", "narrator": "Quiet Orchard"} {
+		r := rows[name]
+		require.True(t, r.Applicable(), "%s: %s: %s", name, r.Skipped, r.SkipReason)
+		require.Equal(t, want, r.Proposed["title"], name)
+	}
+}
+
+// SF3: a real-author proposal is held by the same rule Plan applies between
+// two proposals (ownersMayBeSame), not by author id alone: a live book of a
+// duplicate row of the same person, or of no author, holds the title too.
+func TestJunkTitleFixer_RealOwnerDuplicateGuardSharesTheOwnerRule(t *testing.T) {
+	two := func(dir string) []string { return []string{dir + "/01.mp3", dir + "/02.mp3"} }
+	build := func(t *testing.T, holder func(l *evLib, zed *int) evBook) repairs.Row {
+		l := newEvLib(t)
+		zed := l.author("J.M. Quill")
+		l.add(evBook{name: "proposal", title: "read by narrator", author: zed, transcribed: "Marble Gate",
+			path: "/lib/Books/Marble Gate/01.mp3", files: two("/lib/Books/Marble Gate")})
+		h := holder(l, zed)
+		h.name, h.title = "holder", "Marble Gate"
+		l.add(h)
+		return l.rows(l.fixer())["proposal"]
+	}
+	const held = `already has a book titled "Marble Gate"`
+	requireHeld := func(t *testing.T, r repairs.Row) {
+		t.Helper()
+		require.Equal(t, junkSkipPossibleFragment, r.Skipped, "proposed %q: %s", r.Proposed["title"], r.SkipReason)
+		require.Contains(t, r.SkipReason, held)
+	}
+	hold := func(path string, author func(l *evLib) *int) func(*evLib, *int) evBook {
+		return func(l *evLib, _ *int) evBook {
+			return evBook{author: author(l), path: path, files: []string{path}}
+		}
+	}
+	t.Run("same author id", func(t *testing.T) {
+		requireHeld(t, build(t, func(l *evLib, zed *int) evBook {
+			return evBook{author: zed, path: "/lib/h/a.m4b", files: []string{"/lib/h/a.m4b"}}
+		}))
+	})
+	t.Run("duplicate row of the same person", func(t *testing.T) {
+		requireHeld(t, build(t, hold("/lib/h/b.m4b", func(l *evLib) *int { return l.author("J. M. Quill") })))
+	})
+	t.Run("no author", func(t *testing.T) {
+		requireHeld(t, build(t, hold("/lib/h/c.m4b", func(*evLib) *int { return nil })))
+	})
+	t.Run("junk author", func(t *testing.T) {
+		requireHeld(t, build(t, hold("/lib/h/d.m4b", func(l *evLib) *int {
+			a, err := l.store.CreateAuthor("Unknown Author")
+			require.NoError(t, err)
+			return &a.ID
+		})))
+	})
+	t.Run("another person", func(t *testing.T) {
+		r := build(t, hold("/lib/h/e.m4b", func(l *evLib) *int { return l.author("Zed Writer") }))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, "Marble Gate", r.Proposed["title"])
+	})
+}
+
+// NIT-4: the author a provider recorded names the proposal's owner only when
+// the provider's title was not refused. Here the provider's title disagrees
+// with the title's own evidence, so it is another book's and so is its author:
+// the owner is unknown, and a live book of any author holds the title.
+func TestJunkTitleFixer_RefusedProviderAuthorIsNotTheOwner(t *testing.T) {
+	l := newEvLib(t)
+	zed := l.author("Zed Writer")
+	l.add(evBook{name: "holder", title: "Marble Gate", author: zed, path: "/lib/h/a.m4b", files: []string{"/lib/h/a.m4b"}})
+	unknown, err := l.store.CreateAuthor("Unknown Author")
+	require.NoError(t, err)
+	l.add(evBook{name: "refused-provider", title: "05 - Marble Gate", author: &unknown.ID,
+		path: "/lib/u11/Marble Gate.mp3", files: []string{"/lib/u11/Marble Gate.mp3"},
+		providerTitle: "Salt Orchard", providerAuthor: "Other Person"})
+	// The provider's title agrees with the path (the catalog tagline is not
+	// proposed): its author is the owner, a different person from the
+	// holder's, so nothing is held.
+	l.add(evBook{name: "accepted-provider", title: "05 - Cold Spire", author: &unknown.ID,
+		path: "/lib/u12/Cold Spire.mp3", files: []string{"/lib/u12/Cold Spire.mp3"},
+		providerTitle: "Cold Spire: The Tower", providerAuthor: "Other Person"})
+	l.add(evBook{name: "holder-2", title: "Cold Spire", author: zed, path: "/lib/h/b.m4b", files: []string{"/lib/h/b.m4b"}})
+	rows := l.rows(l.fixer())
+
+	r := rows["refused-provider"]
+	require.Equal(t, junkSkipPossibleFragment, r.Skipped, "proposed %q: %s", r.Proposed["title"], r.SkipReason)
+	require.Contains(t, r.SkipReason, `already has a book titled "Marble Gate"`)
+
+	r = rows["accepted-provider"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Cold Spire", r.Proposed["title"])
+}
+
+// NIT-3: the conflict check reads the transcription without the book's own
+// recorded series, as the proposal does: "<series>, Book 3, <title>" agrees
+// with a path that says <title>.
+func TestJunkTitleFixer_RecordedSeriesInTranscriptionIsNoConflict(t *testing.T) {
+	l := newEvLib(t)
+	zed := l.author("Zed Writer")
+	ser, err := l.store.CreateSeries("Ember Wars", nil)
+	require.NoError(t, err)
+	l.add(evBook{name: "series-prefixed", title: "05 - Harbor Lights", author: zed, series: &ser.ID, seq: intp(3),
+		path:  "/lib/Zed Writer/Harbor Lights/Harbor Lights.mp3",
+		files: []string{"/lib/Zed Writer/Harbor Lights/Harbor Lights.mp3"}, transcribed: "Ember Wars, Book 3, Harbor Lights"})
+	l.add(evBook{name: "other-title", title: "06 - Salt Garden", author: zed, series: &ser.ID, seq: intp(4),
+		path:  "/lib/Zed Writer/Salt Garden/Salt Garden.mp3",
+		files: []string{"/lib/Zed Writer/Salt Garden/Salt Garden.mp3"}, transcribed: "Ember Wars, Book 4, Salt Orchard"})
+	rows := l.rows(l.fixer())
+
+	r := rows["series-prefixed"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Harbor Lights", r.Proposed["title"])
+
+	r = rows["other-title"]
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "conflicting evidence")
+}
+
+// NIT-10: the author classification pass runs on a pool; the index it builds
+// must not depend on the scheduling, and a junk name must stay out of it.
+func TestJunkTitleFixer_IndexAuthorPassIsOrderIndependent(t *testing.T) {
+	l := newEvLib(t)
+	const n = 1300 // more than two chunks of the pool
+	for i := range n {
+		l.author(fmt.Sprintf("Quill Person%04d", i))
+	}
+	unknown, err := l.store.CreateAuthor("Unknown Author")
+	require.NoError(t, err)
+	chapter, err := l.store.CreateAuthor("Prologue + Chapter 1")
+	require.NoError(t, err)
+	idx, _, err := l.fixer().buildJunkIndex()
+	require.NoError(t, err)
+	require.Len(t, idx.authorNames, n)
+	for i := range n {
+		require.Len(t, idx.authorNames[util.NormalizeAuthor(fmt.Sprintf("Quill Person%04d", i))], 1, i)
+	}
+	for _, id := range []int{unknown.ID, chapter.ID} {
+		for _, ids := range idx.authorNames {
+			require.NotContains(t, ids, id)
+		}
 	}
 }

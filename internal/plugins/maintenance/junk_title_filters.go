@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_filters.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 642f415f-8f15-4d76-83b6-8290d9c7029f
 // last-edited: 2026-10-24
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
@@ -34,22 +35,22 @@ var (
 	// ("Harbor Lights, Book 9"), and nothing in a bare number says it is not
 	// part of the title.
 	seriesBookTailRe = regexp.MustCompile(`(?i)[\s,;:.\-–]*\(?\bbook\s+(?:\d+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:of|in)\b.*$`)
-	// genreTailRe: ", a crunchy LitRPG adventure", ", a Starships Mage story",
+	// genreTailRe: ", a drowsy Quillfeather tale", ", a Tinker Spindle saga",
 	// ", a novel": a comma, an article, and a descriptor ending in a genre word.
 	genreTailRe = regexp.MustCompile(`(?i),\s+an?\s+[^,]{0,80}?\b(?:story|saga|novel|novelization|novella|adventure|tale|trilogy|series|romance|fantasy|epic|thriller|mystery|litrpg|lit\s?rpg|progression)\b.*$`)
 	// seriesNameTailRe: ", The Ember Cycle", ", The Foo Series": a comma and
 	// the series' name.
 	seriesNameTailRe = regexp.MustCompile(`(?i),\s+the\s+[^,]+?\s+(?:cycle|series|saga|trilogy|chronicles|sequence)\s*$`)
 	// catalogTaglineRe: a marketing tagline a catalog appends as a subtitle,
-	// ": A Windswept Harbor Romance", " - A Crunchy LitRPG Adventure": a colon
+	// ": A Windswept Harbor Romance", " - A Drowsy Quillfeather Tale": a colon
 	// or dash, an article, and a descriptor ending in a genre word. A subtitle
 	// that is not shaped so (": Volume 1", ": The Salt Wars") is not matched.
 	catalogTaglineRe = regexp.MustCompile(`(?i)\s*(?::|\s[-–—])\s+an?\s+[^:]{0,80}?\b(?:story|saga|novel|novelization|novella|adventure|tale|trilogy|series|romance|fantasy|epic|thriller|mystery|litrpg|lit\s?rpg|progression)\b.*$`)
 )
 
 // stripSeriesTail drops a series or genre tail a transcription (or any other
-// free-text source) appended to the title: "Orchard Keep, Book Two of Ember
-// Wars, a Starship Mage story" is "Orchard Keep". It returns "" when nothing
+// free-text source) appended to the title: "Orchard Keep, Book Nine in Ember
+// Wars, a Tinker Spindle saga" is "Orchard Keep". It returns "" when nothing
 // is left (a string that is only "Book One of X"). A string with none of the
 // tails is returned trimmed and otherwise as it was.
 func stripSeriesTail(s string) string {
@@ -123,14 +124,21 @@ var articleEndRe = regexp.MustCompile(`(?i)\b(?:the|a|an|of|and|in|to|for|on|at|
 // left must be a title of its own: it has a letter, does not start with a
 // digit, does not end in an article or a preposition (a series that merely
 // ends the title: "Wrath of the" + "Marsh"), and is not the series again.
-func stripRecordedSeries(s, series string) string {
+//
+// A series can also END a real title: with series "Ember Wars", "Dark Ember
+// Wars Book 3" is the title "Dark Ember Wars" and book 3 of its series, not
+// "Dark" followed by the series. isTitle (nil: none) says whether a string is
+// the title of a live book; the tail form leaves the string alone when the
+// whole text before "Book N" is one.
+func stripRecordedSeries(s, series string, isTitle func(string) bool) string {
 	t := strings.TrimSpace(s)
 	if t == "" || strings.TrimSpace(series) == "" {
 		return t
 	}
-	name := seriesNamePattern(series)
-	tail := regexp.MustCompile(`(?i)^(.+?)(?:\s*[,.;:\-–]\s*|\s+)` + name + `\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b[\s.]*$`)
-	prefix := regexp.MustCompile(`(?i)^` + name + `\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b\s*(?:[,.;:\-–]+\s*|\s+)(.+)$`)
+	res := recordedSeriesRegexps(series)
+	if res == nil {
+		return t
+	}
 	usable := func(rest string) (string, bool) {
 		rest = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(rest), " ,;:.-–"))
 		if rest == "" || !strings.ContainsFunc(rest, unicode.IsLetter) || unicode.IsDigit([]rune(rest)[0]) ||
@@ -140,14 +148,49 @@ func stripRecordedSeries(s, series string) string {
 		}
 		return rest, true
 	}
-	for _, re := range []*regexp.Regexp{tail, prefix} {
-		if m := re.FindStringSubmatch(t); m != nil {
-			if rest, ok := usable(m[1]); ok {
-				return rest
-			}
+	// tail: m[1] is everything before "Book N", m[2] the title it leaves.
+	if m := res.tail.FindStringSubmatch(t); m != nil {
+		if isTitle != nil && isTitle(strings.TrimRight(strings.TrimSpace(m[1]), " ,;:.-–")) {
+			return t
+		}
+		if rest, ok := usable(m[2]); ok {
+			return rest
+		}
+	}
+	if m := res.prefix.FindStringSubmatch(t); m != nil {
+		if rest, ok := usable(m[1]); ok {
+			return rest
 		}
 	}
 	return t
+}
+
+// recordedSeriesRes are the two regexps stripRecordedSeries builds for one
+// series name.
+type recordedSeriesRes struct{ tail, prefix *regexp.Regexp }
+
+// recordedSeriesCache memoizes recordedSeriesRegexps by series name. The
+// regexps depend on nothing but the name, stripRecordedSeries runs twice per
+// book with a series on the Plan worker pool, and there are as many entries as
+// the library has series. A name that does not compile is cached as nil.
+var recordedSeriesCache sync.Map // string -> *recordedSeriesRes
+
+// recordedSeriesRegexps returns the regexps for series, nil when they do not
+// compile (the strip then leaves the text alone; nothing here panics on data).
+func recordedSeriesRegexps(series string) *recordedSeriesRes {
+	key := strings.TrimSpace(series)
+	if v, ok := recordedSeriesCache.Load(key); ok {
+		return v.(*recordedSeriesRes)
+	}
+	name := seriesNamePattern(key)
+	tail, err1 := regexp.Compile(`(?i)^((.+?)(?:\s*[,.;:\-–]\s*|\s+)` + name + `)\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b[\s.]*$`)
+	prefix, err2 := regexp.Compile(`(?i)^` + name + `\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b\s*(?:[,.;:\-–]+\s*|\s+)(.+)$`)
+	var res *recordedSeriesRes
+	if err1 == nil && err2 == nil {
+		res = &recordedSeriesRes{tail: tail, prefix: prefix}
+	}
+	v, _ := recordedSeriesCache.LoadOrStore(key, res)
+	return v.(*recordedSeriesRes)
 }
 
 var (
@@ -364,8 +407,8 @@ var (
 	// author or album, a parenthesised part or "N of M", a release-group tag,
 	// a trailing year in brackets, or a leading track name, ANYWHERE in a
 	// folder or filename title: "41.Chapter 9 - 12) Tides - read by
-	// narrator", "Tide Log 1 0 - Prologue + Chapter 1", "Unknown Album (7 4
-	// 2011 …)", "Intro - Harbor Lights 2033", "Harbor Lights-Part (16)",
+	// narrator", "Tide Log 1 0 - Prologue + Chapter 1", "Unknown Album (3 12
+	// 2014 …)", "Intro - Harbor Lights 2033", "Harbor Lights-Part (16)",
 	// "Harbor Lights (1 of 5)", "Harbor Lights [XYZ]". chapterHeadingRe only
 	// sees a heading at the start. A bare "Part 2" is not here: "The Salt Wind
 	// Part 2" is a title. A bitrate ("64kbps") is not here either: a rip's
@@ -389,7 +432,7 @@ var (
 	romanTrackRe = regexp.MustCompile(`\b(?:Chapter|CHAPTER|Track|TRACK)[\s._\-]*[IVXLC]{1,6}\b`)
 
 	// readByCreditRe: a trailing narrator credit, with or without brackets:
-	// "Harbor Lights (read by Some Narrator)", "Afterword - 2006 Foo - read by
+	// "Harbor Lights (read by Some Narrator)", "Foreword - 1987 Foo - read by
 	// narrator".
 	readByCreditRe = regexp.MustCompile(`(?i)\s*(?:[-–—]\s*read\s+by\b[^()\[\]]*|[(\[]\s*read\s+by\b[^()\[\]]*[)\]])\s*$`)
 
@@ -498,3 +541,12 @@ var positionLeadRe = regexp.MustCompile(`(?i)^(?:volume|vol|part|pt|book|disc|di
 // position word in a file name ("CD_01"), where \b would not see the end of
 // the word.
 var positionWordRe = regexp.MustCompile(`(?i)\b(?:(?:disc|disk|cd|dvd|tape|side|track|part|pt|chapter|chap|ch)(?:\b|\d|_)|(?:volume|vol)\b|\d+\s*of\s*\d+)`)
+
+// positionMarkerRe: a position word WITH its number ("Disc 04", "CD5", "Part
+// II", "Side_2", "3 of 12"). positionWordRe also fires on the bare word, which
+// is right for a stored title ("Part" alone is no title) but refuses real
+// series that contain one ("Side Effects", "Track Marks", "Tape Deck Tales").
+// A series is refused only when the word carries a number: digits may follow
+// the word directly, a roman numeral or a spelled number needs a separator
+// ("Chi Alpha" is no "Ch I").
+var positionMarkerRe = regexp.MustCompile(`(?i)\b(?:(?:disc|disk|cd|dvd|tape|side|track|part|pt|chapter|chap|ch|volume|vol)\.?(?:[\s_]*\d+|[\s_]+(?:[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\b|\d+\s*of\s*\d+)`)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_evidence_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
 // last-edited: 2026-10-24
 
@@ -28,12 +28,13 @@ func TestStripSeriesTail(t *testing.T) {
 		// "Book N of/in …" tails, digit and spelled
 		{"Harbor Lights, Book 2 of the Ember series", "Harbor Lights"},
 		{"Harbor Lights Book 5 of The Ember Wars", "Harbor Lights"},
-		{"Harbor Lights, Book Two of Ember Wars, a Starship Mage story", "Harbor Lights"},
+		{"Harbor Lights, Book Nine in Ember Wars, a Tinker Spindle saga", "Harbor Lights"},
+		{"Harbor Lights, a Lamplight LitRPG", "Harbor Lights"},
 		{"Harbor Lights, Book 6 in the Ember Series", "Harbor Lights"},
 		{"Harbor Lights, Book IV of the Ember Cycle", "Harbor Lights"},
 		{"Harbor Lights (Book 3 of the Ember Wars)", "Harbor Lights"},
 		// genre tails
-		{"Harbor Lights, a crunchy LitRPG adventure", "Harbor Lights"},
+		{"Harbor Lights, a drowsy Quillfeather tale", "Harbor Lights"},
 		{"Harbor Lights, a novel", "Harbor Lights"},
 		{"Harbor Lights, an Open Tide Adventure", "Harbor Lights"},
 		{"Harbor Lights, a Space Fleet Saga of Many Ships", "Harbor Lights"},
@@ -88,7 +89,7 @@ func TestJunkEvidenceAgrees(t *testing.T) {
 		{"dash subtitle", "Harbor Lights - Salt Edition", []string{"Harbor Lights"}, true},
 		{"apostrophes ignored", "Captain's Tide", []string{"Captains Tide"}, true},
 		{"book-of tail agrees with the folder", "Harbor Lights, Book 2 of the Ember series", []string{"Harbor Lights"}, true},
-		{"genre tail agrees", "Harbor Lights, a crunchy LitRPG adventure", []string{"Harbor Lights"}, true},
+		{"genre tail agrees", "Harbor Lights, a drowsy Quillfeather tale", []string{"Harbor Lights"}, true},
 		{"tail on the evidence side", "Harbor Lights", []string{"Harbor Lights, Book Two of Ember Wars"}, true},
 		{"comma is not a subtitle", "Harbor Lights, The Second Tide", []string{"Harbor Lights"}, false},
 		{"comma is not a subtitle (reverse)", "Harbor Lights", []string{"Harbor Lights, The Second Tide"}, false},
@@ -115,23 +116,24 @@ func TestJunkProposalCheck_TranscriptionAnnouncersAndSentences(t *testing.T) {
 	pc := junkProposalCheck{stored: "read by narrator", people: []string{"Zed Writer"}}
 	refused := map[string]string{
 		// announcer phrases and idents
-		"an unabridged recording of Harbor Lights":        "announcer",
-		"the unabridged recording of Harbor Lights":       "announcer",
-		"Gate Studios presents, Harbor Lights":            "announcer",
-		"Simon Example presents Harbor Lights":            "announcer",
-		"Marble Gate Audio is pleased to present Tides":   "announcer",
-		"You're listening to Harbor Lights, Volume 5":     "announcer",
-		"You’re listening to Harbor Lights":               "announcer",
-		"you are listening to Harbor Lights":              "announcer",
-		"And now, part five, of twelve":                   "announcer",
-		"And now Part 2 of Harbor Lights":                 "announcer",
-		"This concludes Harbor Lights":                    "announcer",
-		"This has been Harbor Lights Book one":            "announcer",
-		"Welcome to Harbor Lights":                        "announcer",
-		"Side four a lamp upon the sea":                   "announcer",
-		"Side 9, Salt and Stone":                          "announcer",
-		"Book One of Scathing Tides":                      "announcer",
-		"Episode 1 Harbor Lights a Romance of Many Tides": "announcer",
+		"an unabridged recording of Harbor Lights":             "announcer",
+		"the unabridged recording of Harbor Lights":            "announcer",
+		"Gate Studios presents, Harbor Lights":                 "announcer",
+		"Simon Example presents Harbor Lights":                 "announcer",
+		"Marble Gate Studios is pleased to present Tides":      "announcer",
+		"You're listening to Harbor Lights, Volume 5":          "announcer",
+		"You’re listening to Harbor Lights":                    "announcer",
+		"you are listening to Harbor Lights":                   "announcer",
+		"And now, part five, of twelve":                        "announcer",
+		"And now Part 2 of Harbor Lights":                      "announcer",
+		"This concludes Harbor Lights":                         "announcer",
+		"This is the end of Harbor Lights":                     "announcer",
+		"This has been Harbor Lights":                          "announcer",
+		"Welcome to Harbor Lights":                             "announcer",
+		"Side four of the Marble Tides":                        "announcer",
+		"Side 9, Salt and Stone":                               "announcer",
+		"Book One of Scathing Tides":                           "announcer",
+		"Episode 1 Harbor Lights a Chronicle of Quiet Ferries": "announcer",
 		// a format, edition or disc marker
 		"Harbor Lights (Unabridged)": "format",
 		"Harbor Lights MP3":          "format",
@@ -157,7 +159,7 @@ func TestJunkProposalCheck_TranscriptionAnnouncersAndSentences(t *testing.T) {
 	// ending in ? or !, a trailing abbreviation, a subtitle.
 	for _, c := range []string{
 		"Salt Postal", "It", "Tide", "Gull", "Gannets", "The Lanternless", "Marta Grabbed the Moon",
-		"She Sails in Starlight", "They Both Sail at the End", "I, Lantern", "Who Walks Here?", "Fantastic Mr Otter!",
+		"She Sails in Starlight", "They Both Sail at the End", "I, Lantern", "Who Walks Here?", "Sunday at the Pier!", "Dr Quillby Sails!",
 		"Harbor Lights: A Tale of Salt", "Harbor Lights, Book 9", "Gifts and Presents",
 		"Sidewalk Tides", "Welcomed Guests", "Episodes of Salt",
 	} {
@@ -180,10 +182,10 @@ func TestJunkProposalCheck_FolderAndFilenameTokens(t *testing.T) {
 		"Tides - Chapter 4":                           "marker",
 		"Tide Log 1 0 - Prologue + Chapter 1":         "marker",
 		"Harbor Lights Track 07":                      "marker",
-		"Afterword - 2006 Harbor Lights":              "marker",
+		"Foreword - 1987 Harbor Lights":               "marker",
 		"Intro - Harbor Lights 2033":                  "marker",
 		"Recap - The Ember Wars 9":                    "marker",
-		"Unknown Album (7 4 2011 9 -21 -05 AM)":       "marker",
+		"Unknown Album (3 12 2014 2 -48 -17 PM)":      "marker",
 		"Harbor Lights - Unknown Author":              "marker",
 		"Harbor Lights (read by Some Narrator)":       "marker",
 		"Harbor Lights narrated by Some Narrator":     "marker",
@@ -221,10 +223,10 @@ func TestJunkProposalCheck_FolderAndFilenameTokens(t *testing.T) {
 
 func TestStripReadByCredit(t *testing.T) {
 	cases := map[string]string{
-		"Harbor Lights (read by Some Narrator)":             "Harbor Lights",
-		"Harbor Lights [read by Some Narrator]":             "Harbor Lights",
-		"Afterword - 2006 Harbor Lights - read by narrator": "Afterword - 2006 Harbor Lights",
-		"41.Chapter 9 - 12) Tides - read by narrator":       "41.Chapter 9 - 12) Tides",
+		"Harbor Lights (read by Some Narrator)":            "Harbor Lights",
+		"Harbor Lights [read by Some Narrator]":            "Harbor Lights",
+		"Foreword - 1987 Harbor Lights - read by narrator": "Foreword - 1987 Harbor Lights",
+		"41.Chapter 9 - 12) Tides - read by narrator":      "41.Chapter 9 - 12) Tides",
 		"Harbor Lights":      "Harbor Lights",
 		"Read by Moonlight":  "Read by Moonlight",
 		"Tides (Unabridged)": "Tides (Unabridged)",
@@ -257,7 +259,7 @@ func TestSeriesNumberRefusal(t *testing.T) {
 		{"no recorded position", "Ember Wars", "03", nil, nil, "no recorded series position"},
 		{"disc title", "Ember Wars", "Disc 03", seq(3), nil, "position inside a book"},
 		{"CD title", "Ember Wars", "CD5", seq(5), nil, "position inside a book"},
-		{"N of M title", "Ember Wars", "01 of 19", seq(1), nil, "position inside a book"},
+		{"N of M title", "Ember Wars", "02 of 14", seq(1), nil, "position inside a book"},
 		{"part title", "Ember Wars", "Part 02", seq(2), nil, "position inside a book"},
 		{"series is a disc", "Disc 04", "04", seq(4), nil, "not a real series name"},
 		{"series is a junk title", "read by narrator", "04", seq(4), nil, "not a real series name"},
@@ -266,6 +268,16 @@ func TestSeriesNumberRefusal(t *testing.T) {
 		// "of" in a series name is not a position ("2 of 19" is).
 		{"series name with of", "The Wheel of Tides", "03", seq(3), nil, ""},
 		{"series name with of, book of", "Book of Tides", "03", seq(3), nil, ""},
+		// A series that merely contains a position word is a series; one that
+		// is a position word with its number is not.
+		{"series name with side", "Side Effects of Tides", "03", seq(3), nil, ""},
+		{"series name with track", "Track Marks", "03", seq(3), nil, ""},
+		{"series name with part", "Part of Your Harbor", "03", seq(3), nil, ""},
+		{"series name with chapter house", "Chapter House Tides", "03", seq(3), nil, ""},
+		{"series name with chi", "Chi Alpha Tides", "03", seq(3), nil, ""},
+		{"series is a side and number", "Side 3", "03", seq(3), nil, "not a real series name"},
+		{"series is a part and roman number", "Part IV", "03", seq(3), nil, "not a real series name"},
+		{"series is a spaced N of M", "3 of 12", "03", seq(3), nil, "not a real series name"},
 		{"disc with an underscore", "Ember Wars", "CD_01", seq(1), nil, "position inside a book"},
 		{"track of a total, spaced", "Ember Wars", "3 of 19", seq(3), nil, "position inside a book"},
 		{"series is the book's folder", "Prince Tides", "03", seq(3), []string{"Prince Tides"}, "own folder or title"},
@@ -307,6 +319,15 @@ type evBook struct {
 	state             string
 	transcribed       string
 	files             []string
+	// narrator is the book's narrator credit. coAuthors are author rows linked
+	// to the book through the book_authors junction only (role "co-author"),
+	// the one trace a co-author has.
+	narrator  string
+	coAuthors []*int
+	// unknownRuntime leaves the book with no duration at all. A book with
+	// neither a duration nor fileDurations otherwise gets junkFixtureRuntimeSec:
+	// the fragment gate fails closed on an unknown runtime.
+	unknownRuntime bool
 	// fileDurations, when set, is each file's duration in seconds (same order
 	// as files); the book's own aggregate is then whatever the store derives.
 	fileDurations []int
@@ -318,14 +339,31 @@ type evBook struct {
 func (l *evLib) add(b evBook) string {
 	l.t.Helper()
 	st := l.store
+	if b.duration == nil && len(b.fileDurations) == 0 && !b.unknownRuntime {
+		b.duration = &junkFixtureRuntimeSec
+	}
 	book := &database.Book{Title: b.title, FilePath: b.path, AuthorID: b.author, SeriesID: b.series,
 		SeriesSequence: b.seq, Duration: b.duration, Format: "mp3"}
 	if b.state != "" {
 		s := b.state
 		book.LibraryState = &s
 	}
+	if b.narrator != "" {
+		n := b.narrator
+		book.Narrator = &n
+	}
 	created, err := st.CreateBook(book)
 	require.NoError(l.t, err)
+	if len(b.coAuthors) > 0 {
+		var rows []database.BookAuthor
+		if b.author != nil {
+			rows = append(rows, database.BookAuthor{BookID: created.ID, AuthorID: *b.author, Role: "author", Position: 0})
+		}
+		for _, c := range b.coAuthors {
+			rows = append(rows, database.BookAuthor{BookID: created.ID, AuthorID: *c, Role: "co-author", Position: len(rows)})
+		}
+		require.NoError(l.t, st.SetBookAuthors(created.ID, rows))
+	}
 	for i, f := range b.files {
 		bf := &database.BookFile{BookID: created.ID, FilePath: f, Format: "mp3"}
 		if i < len(b.fileDurations) {
@@ -405,7 +443,7 @@ func TestJunkTitleFixer_EvidenceRanking(t *testing.T) {
 		files: weak("p1"), providerTitle: "Lantern Keepers", providerAuthor: "Zed Writer", transcribed: "Lantern Keeprs"})
 	// The transcription is the same title plus the publisher's series line.
 	l.add(evBook{name: "tail-dropped", title: "read by narrator", path: weak("p2")[0], author: a,
-		files: weak("p2"), transcribed: "Orchard Keep, Book Two of the Ember Wars, a Starship Mage story"})
+		files: weak("p2"), transcribed: "Orchard Keep, Book Nine in the Ember Wars, a Tinker Spindle saga"})
 	// The stripped title and the transcription agree (a subtitle); the
 	// stripped one is proposed, at low risk, not the longer transcription.
 	l.add(evBook{name: "stripped-over-heard", title: "05 - Harbor Lights", path: "/lib/Zed Writer/Harbor Lights/Harbor Lights.mp3", author: a,
@@ -540,7 +578,7 @@ func TestJunkTitleFixer_SeriesAndNumber(t *testing.T) {
 		{"no recorded position", "03", "Ember Wars", nil, ""},
 		{"disc title", "Disc 03", "Ember Wars", intp(3), ""},
 		{"CD title", "CD5", "Ember Wars", intp(5), ""},
-		{"track of a total", "01 of 19", "Ember Wars", intp(1), ""},
+		{"track of a total", "02 of 14", "Ember Wars", intp(1), ""},
 		{"part title", "Part 02", "Ember Wars", intp(2), ""},
 		{"series is a disc", "04", "Disc 04", intp(4), ""},
 		{"series is a placeholder album", "02", "Unknown Album", intp(2), ""},
@@ -568,7 +606,8 @@ func TestJunkTitleFixer_SeriesAndNumber(t *testing.T) {
 
 // Fix 6: a book under the minimum duration, or flagged suspicious, is not
 // retitled from a transcription, folder or filename; the prefix-stripped title
-// is the file's own and holds either way; an unknown duration is not gated.
+// is the file's own and holds either way; an unknown duration fails closed
+// (needs_manual), because nothing says the book is a whole one.
 func TestJunkTitleFixer_DurationAndSuspiciousGate(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -584,8 +623,10 @@ func TestJunkTitleFixer_DurationAndSuspiciousGate(t *testing.T) {
 		{"just under", "read by narrator", intp(1799), "", nil, "", "runs 1799 s"},
 		{"exactly the minimum", "read by narrator", intp(1800), "", nil, "Lantern Keepers", ""},
 		{"a whole book", "read by narrator", intp(36000), "", nil, "Lantern Keepers", ""},
-		{"unknown duration", "read by narrator", nil, "", nil, "Lantern Keepers", ""},
-		{"zero duration is unknown", "read by narrator", intp(0), "", nil, "Lantern Keepers", ""},
+		{"unknown duration", "read by narrator", nil, "", nil, "", "runtime unknown"},
+		{"zero duration is unknown", "read by narrator", intp(0), "", nil, "", "runtime unknown"},
+		{"unknown duration, gate off", "read by narrator", nil, "", intp(0), "Lantern Keepers", ""},
+		{"unknown duration, stripped prefix", "05 - Lantern Keepers", nil, "", nil, "Lantern Keepers", ""},
 		{"suspicious", "read by narrator", intp(36000), "suspicious", nil, "", "marked the book suspicious"},
 		{"suspicious, unknown duration", "read by narrator", nil, "Suspicious", nil, "", "marked the book suspicious"},
 		{"another library state", "read by narrator", intp(36000), "imported", nil, "Lantern Keepers", ""},
@@ -598,14 +639,19 @@ func TestJunkTitleFixer_DurationAndSuspiciousGate(t *testing.T) {
 			l := newEvLib(t)
 			a := l.author("Zed Writer")
 			l.add(evBook{name: "b", title: c.title, path: "/lib/Zed Writer/Lantern Keepers.mp3", author: a,
-				files: []string{"/lib/Zed Writer/zz.mp3"}, duration: c.duration, state: c.state, transcribed: "Lantern Keepers"})
+				files: []string{"/lib/Zed Writer/zz.mp3"}, duration: c.duration, unknownRuntime: c.duration == nil,
+				state: c.state, transcribed: "Lantern Keepers"})
 			f := l.fixer()
 			if c.min != nil {
 				f.minDurationSec = *c.min
 			}
 			r := l.rows(f)["b"]
 			if c.want == "" {
-				require.Equal(t, junkSkipPossibleFragment, r.Skipped, "proposed %q: %s", r.Proposed["title"], r.SkipReason)
+				wantSkip := junkSkipPossibleFragment
+				if c.skipWhy == "runtime unknown" {
+					wantSkip = junkSkipNeedsManual // fails closed, held for a person
+				}
+				require.Equal(t, wantSkip, r.Skipped, "proposed %q: %s", r.Proposed["title"], r.SkipReason)
 				require.Contains(t, r.SkipReason, c.skipWhy)
 				return
 			}
@@ -740,5 +786,8 @@ func TestJunkTitleFixer_DuplicateGuardWithJunkAuthor(t *testing.T) {
 func TestTitleFromFilename_PositionSegmentIsNotAnAuthor(t *testing.T) {
 	require.Equal(t, "Harbor Lights - Volume II", titleFromFilename("Harbor Lights - Volume II.mp3", "Volume II"))
 	require.Equal(t, "Harbor Lights - Part 3", titleFromFilename("Harbor Lights - Part 3.mp3", ""))
-	require.Equal(t, "Harbor Lights", titleFromFilename("Harbor Lights - Zed Writer.mp3", "Zed Writer"))
+	// The stored author is stripped behind a credit; with none it may be this
+	// name's own last segment read back, so the stem stays whole.
+	require.Equal(t, "Harbor Lights", titleFromFilename("Harbor Lights - Zed Writer - read by narrator.mp3", "Zed Writer"))
+	require.Equal(t, "Harbor Lights - Zed Writer", titleFromFilename("Harbor Lights - Zed Writer.mp3", "Zed Writer"))
 }

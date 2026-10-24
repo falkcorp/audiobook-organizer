@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
 // last-edited: 2026-10-24
 
@@ -83,8 +83,9 @@ func stripAudioExt(name string) string {
 //	"Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b"
 //	  → "Nocturne - 3 - Umbra Mortem"
 //
-// A filename carrying no credit at all is used whole (but for a trailing
-// placeholder author or the stored author: see titleFromFilenameWith).
+// A filename carrying no credit at all is used whole, but for a trailing
+// placeholder author and a name with evidence of its own (see
+// titleFromFilenameWith).
 func titleFromFilename(filename, author string) string {
 	return titleFromFilenameWith(filename, author, authorRecognisers{})
 }
@@ -92,10 +93,19 @@ func titleFromFilename(filename, author string) string {
 // authorRecognisers tells titleFromFilenameWith which trailing " - <segment>"
 // is a person's credit. A recogniser that is nil recognises nobody.
 type authorRecognisers struct {
-	// own recognises the book's own credited people: a linked author or a
-	// narrator. Its names are the book's, so they go with or without a "read
-	// by" credit in the stem.
+	// own recognises the book's own credited people: the stored author, a
+	// linked author or a narrator. Their names go behind a "read by" credit;
+	// without one they go only when independent says so.
 	own func(string) bool
+	// independent recognises a name the book's own file name is not the only
+	// evidence for: an author with books other than this one, or a narrator
+	// (read from the narrator field, which a title segment cannot have set).
+	// Without a credit the stem is a bare "<Title> - <Segment>" and the scanner
+	// reads such a stem as a title and an author, so a stored author with no
+	// other book is that very segment read back, and stripping it is circular:
+	// it cuts a subtitle off the title and nothing checks what is left. A nil
+	// independent recognises nobody.
+	independent func(string) bool
 	// library recognises any author of the library. It is honoured only behind
 	// a " - read by " credit, for the one segment that stands where the
 	// convention puts the author, and never for a name that is also a real
@@ -127,10 +137,13 @@ func filenameHead(filename string) (head string, credited bool) {
 //   - a placeholder author ("Unknown Author", "Unknown"): never title text, so
 //     with or without a credit ("Marble Gate - Unknown Author.mp3" is "Marble
 //     Gate": the stored author was junk, so no author match was possible);
-//   - the stored author, unless that author is junk: a chapter label or an
+//   - the stored author, unless that author is junk (a chapter label or an
 //     essay name the parser put in the author field is title text in the file
-//     name, and stripping it left a plausible-looking fragment;
-//   - one of the book's own people (rec.own);
+//     name, and stripping it left a plausible-looking fragment), or one of the
+//     book's own people (rec.own): behind a "read by" credit, or, with no
+//     credit in the stem, only when rec.independent vouches for the name. The
+//     stored author is often parsed from this very file name, so with no
+//     credit and no evidence of its own the strip is circular;
 //   - behind a "read by" credit, and for the first author segment only, a name
 //     of the library (rec.library): the convention is one author before the
 //     credit, so a second name-shaped segment is title text.
@@ -148,6 +161,11 @@ func titleFromFilenameWith(filename, author string, rec authorRecognisers) strin
 		a = ""
 	}
 	authorStripped := false
+	// vouched: the stem itself credits the author (a " - read by " suffix), or
+	// the name has evidence beyond the stem.
+	vouched := func(seg string) bool {
+		return credited || (rec.independent != nil && rec.independent(seg))
+	}
 	// A trailing author segment, and the placeholder one an organizer pass
 	// may have written before it ("Title - Author - Unknown Author").
 	for range 3 {
@@ -161,9 +179,9 @@ func titleFromFilenameWith(filename, author string, rec authorRecognisers) strin
 		}
 		switch {
 		case authorname.IsPlaceholderAuthor(seg):
-		case a != "" && strings.EqualFold(seg, a):
+		case a != "" && strings.EqualFold(seg, a) && vouched(seg):
 			authorStripped = true
-		case rec.own != nil && rec.own(seg):
+		case rec.own != nil && rec.own(seg) && vouched(seg):
 			authorStripped = true
 		case credited && !authorStripped && rec.library != nil && rec.library(seg):
 			authorStripped = true
