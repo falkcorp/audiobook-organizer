@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.36.2
+// version: 1.37.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-20
+// last-edited: 2026-10-24
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -70,6 +70,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -151,6 +152,25 @@ type Handler struct {
 	// publishEvent wraps *Server.publishEvent (the shared plugin event bus), used
 	// by deleteAudiobook.
 	publishEvent func(ctx context.Context, event plugin.Event)
+
+	// repairsAccess decides which of a book's change-journal rows the caller
+	// may read (GET /audiobooks/:id/changes and /changelog): a Repairs fixer's
+	// rows, such as one user's listening state, need the fixer's permissions.
+	// Unset (nil) refuses every row that could be Repairs data: see
+	// WithRepairsOpAccess.
+	repairsAccess *opaccess.Repairs
+}
+
+// WithRepairsOpAccess installs the check that keeps a Repairs fixer's
+// change-journal rows on a book (GET /audiobooks/:id/changes and
+// /audiobooks/:id/changelog) to callers who hold the fixer's permissions
+// (opaccess.Reader.MayReadChange). It is the same *opaccess.Repairs the
+// operations handlers are given. Omitting it fails closed: every user-state
+// row and every row naming a fixer source is left out. The server's wiring is
+// pinned by TestWireHandlers_RepairsOpAccessIsInstalled.
+func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
+	h.repairsAccess = a
+	return h
 }
 
 // SetSearchResultCached tells the handler which search requests are served

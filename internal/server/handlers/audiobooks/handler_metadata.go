@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 // Metadata-history / undo / field-state / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -280,10 +280,14 @@ func (h *Handler) GetAudiobookExternalIDs(c *gin.Context) {
 	})
 }
 
-// GetBookChangelog handles GET /audiobooks/:id/changelog.
+// GetBookChangelog handles GET /audiobooks/:id/changelog. Change-journal rows
+// the caller may not read (opaccess.Reader.MayReadChange: a Repairs fixer's
+// rows, such as other users' listening state) are left out; the rest of the
+// book's history stays.
 func (h *Handler) GetBookChangelog(c *gin.Context) {
 	id := c.Param("id")
-	entries, err := h.changelogService.GetBookChangelog(id)
+	r := h.repairsAccess.For(c)
+	entries, err := h.changelogService.GetBookChangelog(id, r.MayReadChange)
 	if err != nil {
 		httputil.InternalError(c, "failed to get changelog", err)
 		return
@@ -297,7 +301,10 @@ func (h *Handler) GetBookChangelog(c *gin.Context) {
 // GetBookChanges returns change tracking records for a book.
 // GET /audiobooks/:id/changes. Ledger-only rows (undo.IsLedgerOnly: a
 // Repairs plan record, which changes nothing about the book) are left out;
-// GET /operations/:id/changes still lists them.
+// GET /operations/:id/changes still lists them. So are rows the caller may not
+// read (opaccess.Reader.MayReadChange: a Repairs fixer's rows, such as other
+// users' listening state, need the fixer's permissions); the rest of the
+// book's history stays.
 func (h *Handler) GetBookChanges(c *gin.Context) {
 	id := c.Param("id")
 	all, err := h.store.GetBookChanges(id)
@@ -305,9 +312,10 @@ func (h *Handler) GetBookChanges(c *gin.Context) {
 		httputil.InternalError(c, "failed to get book changes", err)
 		return
 	}
+	r := h.repairsAccess.For(c)
 	changes := make([]*database.OperationChange, 0, len(all))
 	for _, ch := range all {
-		if !undo.IsLedgerOnly(ch) {
+		if !undo.IsLedgerOnly(ch) && r.MayReadChange(ch) {
 			changes = append(changes, ch)
 		}
 	}

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-10-24
 
@@ -115,17 +115,20 @@ func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
 	return h
 }
 
-// mayReadOp is the repairs-op read check for a route that has an op id and has
-// not loaded its row: false means the response is written (403, or 500 when the
-// row cannot be read, which fails closed). An id with no v2 row is not a Repairs
-// op the caller could be refused, so it passes and the route answers as before.
-func (h *Handler) mayReadOp(c *gin.Context, id string) bool {
+// mayReadOp is the repairs-op read check on the operation row, for a route
+// that has an op id and has not loaded its row: false means the response is
+// written (403, or 500 when the row cannot be read, which fails closed). An id
+// with no v2 row passes this check, and that is not enough on its own for a
+// route that serves the change journal: registry.Discard deletes the op row
+// and keeps the journal, so those routes also check every journal row
+// (opaccess.Reader.MayReadChange), which needs no op row.
+func (h *Handler) mayReadOp(c *gin.Context, r *opaccess.Reader, id string) bool {
 	row, err := h.store.GetOperationV2(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get operation", err)
 		return false
 	}
-	return h.repairsAccess.For(c).Require(row)
+	return r.Require(row)
 }
 
 // revertResponse is the POST /operations/:id/revert success body. Partial is
@@ -464,10 +467,14 @@ func (h *Handler) respondWithResult(c *gin.Context, stored *string) {
 }
 
 // GetOperationChanges returns change tracking records for an operation.
-// Implements GET /operations/:id/changes.
+// Implements GET /operations/:id/changes. A Repairs op the caller may not
+// read is a 403; otherwise the rows the caller may not read
+// (opaccess.Reader.MayReadChange) are left out, which is what keeps a
+// discarded Repairs op's journal, whose op row is gone, from a viewer.
 func (h *Handler) GetOperationChanges(c *gin.Context) {
 	id := c.Param("id")
-	if !h.mayReadOp(c, id) {
+	r := h.repairsAccess.For(c)
+	if !h.mayReadOp(c, r, id) {
 		return
 	}
 	changes, err := h.store.GetOperationChanges(id)
@@ -475,15 +482,31 @@ func (h *Handler) GetOperationChanges(c *gin.Context) {
 		httputil.InternalError(c, "failed to get operation changes", err)
 		return
 	}
-	httputil.RespondWithOK(c, gin.H{"changes": changes})
+	httputil.RespondWithOK(c, gin.H{"changes": r.ReadableChanges(changes)})
 }
 
 // UndoPreflightHandler checks for conflicts before executing an undo.
-// Implements GET /operations/:id/undo/preflight.
+// Implements GET /operations/:id/undo/preflight. The report is built from
+// every row of the operation's journal, so it is refused (403) when the caller
+// may not read the op row or any one of those rows
+// (opaccess.Reader.MayReadChange): a discarded Repairs op has no op row left
+// to refuse on.
 func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 	id := c.Param("id")
-	if !h.mayReadOp(c, id) {
+	r := h.repairsAccess.For(c)
+	if !h.mayReadOp(c, r, id) {
 		return
+	}
+	changes, err := h.store.GetOperationChanges(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to get operation changes", err)
+		return
+	}
+	for _, ch := range changes {
+		if !r.MayReadChange(ch) {
+			httputil.RespondWithForbidden(c, "permission denied: this operation's changes belong to a Repairs fixer you may not use")
+			return
+		}
 	}
 	report, err := h.preflightUndo(id)
 	if err != nil {

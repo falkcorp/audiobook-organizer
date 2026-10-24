@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
 // last-edited: 2026-10-24
 
@@ -308,6 +308,7 @@ func TestGetOperationChanges_Success(t *testing.T) {
 func TestUndoPreflightHandler_UsesInjectedFunc(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
 	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
+	store.EXPECT().GetOperationChanges("op-1").Return([]*database.OperationChange{{ID: "c1", ChangeType: "metadata_update"}}, nil)
 	w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/undo/preflight", h.UndoPreflightHandler)
 	})
@@ -318,6 +319,7 @@ func TestUndoPreflightHandler_Error(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := operationsmocks.NewMockOperationsStore(t)
 	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
+	store.EXPECT().GetOperationChanges("op-1").Return(nil, nil)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(id string) (*undo.UndoConflictReport, error) { return nil, errors.New("boom") },
 		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
