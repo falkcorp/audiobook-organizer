@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_surface_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 0f69b17c-331b-4c43-9317-c7276540fe70
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package repairs
 
@@ -41,6 +41,8 @@ var (
 	_ func(*Writer, string) error                                                                          = (*Writer).Recompute
 	_ func(*Writer, string, UndoEntry) error                                                               = (*Writer).RecordChange
 	_ func(*Writer, string, string, database.BookFileLocation, database.BookFileLocation) error            = (*Writer).RepointBookFile
+	_ func(*Writer, string, string) error                                                                  = (*Writer).RehomeRetiredVersion
+	_ func(*Writer, RetireSpec) error                                                                      = (*Writer).RetireVersion
 	_ func(*Writer, string, int, *database.Author) error                                                   = (*Writer).SetPrimaryAuthor
 	_ func(*Writer, string, string, int, int) error                                                        = (*Writer).SetTrackNumber
 	_ func(*Writer, context.Context, string, string, undo.UserStateSnapshot, undo.UserStateSnapshot) error = (*Writer).SetUserState
@@ -65,7 +67,7 @@ func TestWriterMethodSetPinned(t *testing.T) {
 	want := []string{"AddBookTag", "Beat", "ClearBookFileITunesPath", "ClearBookITunesPath", "HistoryFailed",
 		"HistoryRows", "Journal", "JournalStep", "JournalSteps", "JournalsInBatches", "Journaled", "JournaledValue", "LockFields",
 		"LockWaiting", "Modify", "ModifyCredits", "MoveBookFiles", "OpID", "Recompute", "RecordChange",
-		"RepointBookFile", "SetPrimaryAuthor", "SetTrackNumber", "SetUserState", "Step", "SupersedeChanges", "Touch", "WithCredits",
+		"RehomeRetiredVersion", "RepointBookFile", "RetireVersion", "SetPrimaryAuthor", "SetTrackNumber", "SetUserState", "Step", "SupersedeChanges", "Touch", "WithCredits",
 		"WithFieldStates", "WithJournal", "WithLiveness", "WithTags", "WithUserState", "Writes"}
 	typ := reflect.TypeFor[*Writer]()
 	got := make([]string, 0, typ.NumMethod())

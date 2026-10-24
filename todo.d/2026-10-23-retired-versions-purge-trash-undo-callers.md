@@ -9,10 +9,10 @@
       `audiobooks/trash_progress.go` (two reads, same as purge),
       `merge/trash_restore.go` (restoring a trashed holder must carry its
       retired versions), `versions/lifecycle.go` `PurgeVersion` (refuse a
-      `retired` version explicitly instead of relying on the default filter),
-      and the revert and combine-undo path/sibling reads in
-      `audiobooks/revert.go` and `merge/combine_journal.go` (a journaled row
-      that is now retired is changed-since). All of them are safe while nothing
+      `retired` version explicitly instead of relying on the default filter).
+      (The revert and combine-undo path/sibling reads in
+      `audiobooks/revert.go` and `merge/combine_journal.go` landed with the
+      undo change, PR 5.) All of them are safe while nothing
       retires a row (the fixer's Apply is not built yet), and must land before
       the first prod retire. Also open from 3b: the two `AcoustIDScan` retired
       checks in `dedup/engine.go` have no unit test (the collectors do).
