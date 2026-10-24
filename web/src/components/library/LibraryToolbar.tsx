@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-24
+// last-edited: 2026-10-22
 
 import { useState } from 'react';
 import {
@@ -71,6 +71,8 @@ interface LibraryToolbarProps {
   onSearchMetadata: () => void;
   onSaveToFiles: () => void;
   onOrganizeSelected: () => void;
+  /** Why merge/combine is blocked for this selection (a running operation covers some of it), or null. */
+  bookOpBlockedReason?: string | null;
   onMergeAsVersions: () => void;
   onCombineIntoOneBook: () => void;
   onTagClick: () => void;
@@ -121,6 +123,7 @@ export const LibraryToolbar = ({
   onSearchMetadata,
   onSaveToFiles,
   onOrganizeSelected,
+  bookOpBlockedReason = null,
   onMergeAsVersions,
   onCombineIntoOneBook,
   onTagClick,
@@ -181,6 +184,7 @@ export const LibraryToolbar = ({
             onSearchMetadataClick={onSearchMetadata}
             onSaveToFilesClick={onSaveToFiles}
             onOrganizeSelectedClick={onOrganizeSelected}
+            bookOpBlockedReason={bookOpBlockedReason}
             onMergeAsVersionsClick={onMergeAsVersions}
             onCombineIntoOneBookClick={onCombineIntoOneBook}
             onTagClick={onTagClick}

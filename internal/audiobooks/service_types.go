@@ -1,12 +1,13 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.10.0
+// version: 1.12.1
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-17
+// last-edited: 2026-10-24
 
 package audiobooks
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -71,7 +72,73 @@ type PurgeResult struct {
 	// back on the book and it stays in the trash; the reason is in Errors.
 	CarryFailed    int      `json:"carry_failed"`
 	CarryFailedIDs []string `json:"carry_failed_ids,omitempty"`
-	Errors         []string `json:"errors"`
+	// KeptUndoPossible counts trashed books an undo that can still run needs
+	// (undoHold): the retired shell of a combine (merge.UndoShellIndex), the
+	// shell a maintenance operation soft-deleted and journaled in the
+	// operation ledger, or the loser of an auto-merge that was not undone.
+	// Purging one would make that undo refuse or stop part way. The book stays
+	// in the trash until the undo runs or is retired. This is the blocker the
+	// purge gained on 2026-10-22; it never applies to a book that owns files
+	// (those are SkippedOwnsFiles first).
+	KeptUndoPossible    int      `json:"kept_undo_possible"`
+	KeptUndoPossibleIDs []string `json:"kept_undo_possible_ids,omitempty"`
+	// Failed counts books the purge could not decide or finish (unreadable
+	// file rows, a store error on the delete); each has a line in Errors.
+	Failed int `json:"failed"`
+	// TrashedBefore is the instant the pass was bound to (PurgeOptions.
+	// TrashedBefore): a preview returns the one it used, the dialog sends it
+	// back with the purge, and a purge echoes the one it ran under. A book
+	// trashed (or, without a stamp, written) after it is left alone. nil on a
+	// pass with no bound (the nightly one).
+	TrashedBefore *time.Time `json:"trashed_before,omitempty"`
+	// TrashedAfterPreview counts the books the bound left out: trashed after
+	// the preview (or restored and trashed again), or with no stamp to show
+	// they were not. Not touched, and not in any kept count.
+	TrashedAfterPreview int `json:"trashed_after_preview"`
+	// NotYetDue counts the books the retention window (PurgeOptions.
+	// OlderThanDays) left out because they were trashed less than that long ago.
+	// Attempted counts them: it is the whole trash.
+	NotYetDue int `json:"not_yet_due"`
+	// NotInPreview counts the books a bound pass found it could purge but the
+	// preview it is bound to had not listed as purgeable (it showed them as kept:
+	// they owned files, an undo could still run, or they held listening state,
+	// and that changed since). Not touched; a new preview lists them.
+	NotInPreview int `json:"not_in_preview"`
+	// FilesToDelete, on a preview, lists the files and empty directories a
+	// purge WITH delete_files would remove for the books it would purge
+	// (purgeFinish's own checks: inside the library root, not protected, named
+	// by no book_file row or live book). FilesToDeleteCount is the exact count
+	// when the list is capped; FilesKept counts the files the purge would leave
+	// in place (protected, outside the root, still referenced, or also named by
+	// a trashed book that is itself kept). Computed whether or not the preview
+	// asked for delete_files.
+	FilesToDelete      []string `json:"files_to_delete,omitempty"`
+	FilesToDeleteCount int      `json:"files_to_delete_count"`
+	FilesKept          int      `json:"files_kept"`
+	// fileCands are the paths a preview's purgeable books would remove, before
+	// settlePreviewFiles decides which stay (two trashed rows can name one path,
+	// and a kept row's file is its own). purgeable is the set of books the
+	// preview says would be purged, kept by the service for the purge bound to
+	// it.
+	fileCands map[string]struct{}
+	purgeable map[string]struct{}
+	// DryRun is set on a preview: nothing was deleted or moved. Purged is then
+	// 0 and Purgeable is the number a real run would purge right now, the
+	// books that would carry listening state to a sibling included
+	// (CarriedToSibling counts those "would carry").
+	DryRun    bool `json:"dry_run"`
+	Purgeable int  `json:"purgeable"`
+	// Truncated is set when the ID lists and Errors were cut to keep the result
+	// small enough to store as an operation result; the counts are exact.
+	Truncated bool     `json:"truncated,omitempty"`
+	Errors    []string `json:"errors"`
+	// StoppedEarly is set when the pass ended before it decided every book:
+	// it was cancelled, ran past its time limit, or was refused before it
+	// began (StopReason says which). The counts then cover only the books
+	// decided, so a reader must not take them for the whole trash. It is a
+	// flag and not a line in Errors, which Capped cuts.
+	StoppedEarly bool   `json:"stopped_early,omitempty"`
+	StopReason   string `json:"stop_reason,omitempty"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook

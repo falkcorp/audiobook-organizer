@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.0
+// version: 1.234.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -158,6 +158,11 @@ type PebbleStore struct {
 	// bookAtPathBuilt caches a positive read of the book_atpath: backfill
 	// sentinel. Only true is ever stored; see bookAtPathIndexBuilt.
 	bookAtPathBuilt atomic.Bool
+
+	// bookHashTrusted caches a positive read of the file-hash index sentinel
+	// (pebble_store_book_hash_index.go): once true, lookups ignore the legacy
+	// single-valued keys.
+	bookHashTrusted atomic.Bool
 	// opChangeByBookGen and opChangeByBookBuiltAt cache a positive read of the
 	// opchange_by_book: backfill sentinel. The cache is valid only while
 	// opChangeByBookBuiltAt == opChangeByBookGen+1; the rebuild and Reset bump
@@ -1737,8 +1742,15 @@ func bookToSummary(b *Book) BookSummary {
 }
 
 func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
+	return getBookByIDFrom(p.db, id)
+}
+
+// getBookByIDFrom is GetBookByID reading from r: the live database, or one
+// snapshot when a caller must read several rows (and index keys) as of one
+// instant (holdersOfHash).
+func getBookByIDFrom(r gatedReader, id string) (*Book, error) {
 	key := []byte(fmt.Sprintf("book:%s", id))
-	value, closer, err := p.db.Get(key)
+	value, closer, err := r.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}
@@ -1758,7 +1770,7 @@ func (p *PebbleStore) GetBookByID(id string) (*Book, error) {
 	// booksig_recovery_audit's reads, UpdateBook's own oldBook fetch, and
 	// GetAllBooksFullFrom's memdb branch, which point-gets each ID through this
 	// function). See pebble_store_booksig.go.
-	if err := p.hydrateBookSig(&book); err != nil {
+	if err := hydrateBookSigFrom(r, &book); err != nil {
 		return nil, err
 	}
 	return &book, nil
@@ -1918,50 +1930,20 @@ func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 	return books, nil
 }
 
+// GetBookByFileHash, GetBookByOriginalHash and GetBookByOrganizedHash resolve a
+// file hash through the multi-valued book_hash: family (see
+// pebble_store_book_hash_index.go): the live holder with the smallest id, else
+// the trashed holder with the smallest id, else nil.
 func (p *PebbleStore) GetBookByFileHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:hash:%s", hash))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer closer.Close()
-
-	id := string(value) // ULID string
-
-	return p.GetBookByID(id)
+	return p.bookByHash(bookHashKindFile, hash)
 }
 
 func (p *PebbleStore) GetBookByOriginalHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:originalhash:%s", hash))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer closer.Close()
-
-	id := string(value)
-	return p.GetBookByID(id)
+	return p.bookByHash(bookHashKindOriginal, hash)
 }
 
 func (p *PebbleStore) GetBookByOrganizedHash(hash string) (*Book, error) {
-	indexKey := []byte(fmt.Sprintf("book:organizedhash:%s", hash))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer closer.Close()
-
-	id := string(value)
-	return p.GetBookByID(id)
+	return p.bookByHash(bookHashKindOrganized, hash)
 }
 
 // GetBookBySegmentFileHash returns the parent Book of the first book_file whose
@@ -3082,6 +3064,7 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	now := time.Now()
 	book.CreatedAt = &now
 	book.UpdatedAt = &now
+	enforceTrashStamp(book, nil, now)
 
 	// Series follows SeriesID on create exactly as on update; there is no
 	// stored row to take an object from, and none to lose one from, so
@@ -3126,29 +3109,12 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 		return nil, err
 	}
 
-	// Hash index (if hash provided)
-	if book.FileHash != nil && *book.FileHash != "" {
-		hashKey := []byte(fmt.Sprintf("book:hash:%s", *book.FileHash))
-		if err := batch.Set(hashKey, []byte(book.ID), nil); err != nil {
-			batch.Close()
-			return nil, err
-		}
-	}
-
-	if book.OriginalFileHash != nil && *book.OriginalFileHash != "" {
-		origKey := []byte(fmt.Sprintf("book:originalhash:%s", *book.OriginalFileHash))
-		if err := batch.Set(origKey, []byte(book.ID), nil); err != nil {
-			batch.Close()
-			return nil, err
-		}
-	}
-
-	if book.OrganizedFileHash != nil && *book.OrganizedFileHash != "" {
-		orgKey := []byte(fmt.Sprintf("book:organizedhash:%s", *book.OrganizedFileHash))
-		if err := batch.Set(orgKey, []byte(book.ID), nil); err != nil {
-			batch.Close()
-			return nil, err
-		}
+	// Multi-valued file-hash indexes, same batch as the row: one key per
+	// (hash, book), so no other book's write can erase it
+	// (pebble_store_book_hash_index.go).
+	if err := stageBookHashKeys(batch, book.ID, nil, book); err != nil {
+		batch.Close()
+		return nil, err
 	}
 
 	// Version-group index (PERF-VERSIONS): O(N) full-scan in
@@ -3298,6 +3264,11 @@ type bookWriteOpts struct {
 	// series), which the stale-series relink repairs. Only
 	// SeedLegacyBookRowForTest sets it (pebble_store_legacy_seed.go).
 	legacySeries bool
+	// legacyTrash writes the trash columns exactly as given, skipping
+	// enforceTrashStamp, so tests can seed a row an older build trashed
+	// without a stamp (or left a stale one on). Only SeedLegacyBookRowForTest
+	// sets it.
+	legacyTrash bool
 	// stage, when set, adds writes to the row's batch before it commits, so
 	// they land atomically with the row. ModifyBookCredits stages the
 	// book's credit lists through it (credits_store.go). An error aborts the
@@ -3340,6 +3311,9 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	}
 	now := time.Now()
 	book.UpdatedAt = &now
+	if !opts.legacyTrash {
+		enforceTrashStamp(book, oldBook, now)
+	}
 
 	// Preserve fields stripped by stripBookForMemdb (STOR-1). Callers that
 	// sourced `book` from the memdb projection (GetAllBooks on the production
@@ -3511,41 +3485,10 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		}
 	}
 
-	updateHashIndex := func(oldVal, newVal *string, prefix string) error {
-		var oldStr, newStr string
-		if oldVal != nil {
-			oldStr = *oldVal
-		}
-		if newVal != nil {
-			newStr = *newVal
-		}
-		if oldStr == newStr {
-			return nil
-		}
-		if oldStr != "" {
-			oldKey := []byte(fmt.Sprintf("book:%s:%s", prefix, oldStr))
-			if err := batch.Delete(oldKey, nil); err != nil {
-				return err
-			}
-		}
-		if newStr != "" {
-			newKey := []byte(fmt.Sprintf("book:%s:%s", prefix, newStr))
-			if err := batch.Set(newKey, []byte(id), nil); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	if err := updateHashIndex(oldBook.FileHash, book.FileHash, "hash"); err != nil {
-		batch.Close()
-		return nil, err
-	}
-	if err := updateHashIndex(oldBook.OriginalFileHash, book.OriginalFileHash, "originalhash"); err != nil {
-		batch.Close()
-		return nil, err
-	}
-	if err := updateHashIndex(oldBook.OrganizedFileHash, book.OrganizedFileHash, "organizedhash"); err != nil {
+	// File-hash indexes: delete the keys of hashes this book gave up, set the
+	// keys of the hashes it holds (unconditionally, so a missing key heals).
+	// Each key belongs to this book alone (pebble_store_book_hash_index.go).
+	if err := stageBookHashKeys(batch, id, oldBook, book); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -4183,27 +4126,12 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		}
 	}
 
-	// Delete the three file-hash index rows CreateBook writes. Same dangling-row
-	// class as the work index above: without these, book:hash / book:originalhash
-	// / book:organizedhash lookups resolve to a hard-deleted book ID. Guards
-	// mirror CreateBook's (nil / empty-string skipped).
-	if book.FileHash != nil && *book.FileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:hash:%s", *book.FileHash)), nil); err != nil {
-			batch.Close()
-			return err
-		}
-	}
-	if book.OriginalFileHash != nil && *book.OriginalFileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:originalhash:%s", *book.OriginalFileHash)), nil); err != nil {
-			batch.Close()
-			return err
-		}
-	}
-	if book.OrganizedFileHash != nil && *book.OrganizedFileHash != "" {
-		if err := batch.Delete([]byte(fmt.Sprintf("book:organizedhash:%s", *book.OrganizedFileHash)), nil); err != nil {
-			batch.Close()
-			return err
-		}
+	// Delete the file-hash index keys CreateBook writes. Each is per (hash,
+	// book), so this removes only this book's own keys and can never erase the
+	// lookup of another book that holds the same file.
+	if err := stageBookHashKeyDeletes(batch, id, book); err != nil {
+		batch.Close()
+		return err
 	}
 
 	statePrefix := []byte(fmt.Sprintf("metadata_state:%s:", id))
@@ -4861,7 +4789,7 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 		if book.MarkedForDeletion == nil || !*book.MarkedForDeletion {
 			return nil
 		}
-		if olderThan != nil && book.MarkedForDeletionAt != nil && book.MarkedForDeletionAt.After(*olderThan) {
+		if olderThan != nil && trashedAfter(&book, *olderThan) {
 			return nil
 		}
 		books = append(books, book)
@@ -6041,6 +5969,10 @@ func (p *PebbleStore) Reset() error {
 	// liveBookIDsAtPathIndex can snapshot after the wipe and return an empty
 	// set. Reset is a factory-reset path with no concurrent library work.
 	p.bookAtPathBuilt.Store(false)
+	// Same for the file-hash index sentinel: a wiped store has no index, and a
+	// cached true would make lookups ignore the legacy keys of whatever is
+	// written back.
+	p.bookHashTrusted.Store(false)
 
 	// Use DeleteRange to wipe the entire keyspace in one operation.
 	// The range ["\x00", "\xff\xff") covers all possible keys.

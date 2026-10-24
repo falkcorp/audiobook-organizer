@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -146,7 +146,10 @@ type AudiobookTrashService interface {
 	// fetch-10,000-and-len() whose count saturated and whose error was
 	// swallowed into total:0 — callers must surface the error, never zero it.
 	CountSoftDeletedBooks(ctx context.Context, olderThanDays *int) (int, error)
-	PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobookspkg.PurgeResult, error)
+	// LastPurgeBreakdown is the purgeable-versus-blocked split of the most
+	// recent purge pass or preview (nil before one has run since the server
+	// started). The trash listing shows it; it is never recomputed per request.
+	LastPurgeBreakdown() *audiobookspkg.PurgeBreakdown
 	RestoreAudiobook(ctx context.Context, id string) (*database.Book, error)
 	DeleteAudiobook(ctx context.Context, id string, opts *audiobookspkg.DeleteAudiobookOptions) (map[string]any, error)
 	// TrashProgress flags the trashed books a user still has listening

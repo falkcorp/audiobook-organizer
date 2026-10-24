@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_merge_lock_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e44858b2-5180-4f51-9842-e61721722f2f
-// last-edited: 2026-10-20
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -81,7 +81,7 @@ func TestPurge_StateCheckAndDeleteHoldTheMergeLock(t *testing.T) {
 	require.NoError(t, err)
 
 	ws := &lockWatchStore{PebbleStore: store, doomed: "doomed"}
-	res, err := NewAudiobookService(ws).PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := NewAudiobookService(ws).PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Purged, "result %+v", res)
 
@@ -143,7 +143,7 @@ func TestPurge_BookRestoredMeanwhileIsNotPurged(t *testing.T) {
 	_, store, _ := setupPurgeBoundary(t)
 	softDeleted(t, store, "back", "")
 	res, err := NewAudiobookService(&restoredMeanwhileStore{PebbleStore: store, doomed: "back"}).
-		PurgeSoftDeletedBooks(context.Background(), false, nil)
+		PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Zero(t, res.Purged, "result %+v", res)
 	require.Empty(t, res.Errors, "a book restored meanwhile is not an error")
@@ -159,7 +159,7 @@ func TestPurge_BookWithStateRestoredMeanwhileIsNotCarried(t *testing.T) {
 	groupBook(t, store, "dup", "g1", true, false)
 	u := purgeSeedProgress(t, store, "dup")
 	res, err := NewAudiobookService(&restoredMeanwhileStore{PebbleStore: store, doomed: "dup", onSiblingLookup: true}).
-		PurgeSoftDeletedBooks(context.Background(), false, nil)
+		PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Zero(t, res.Purged, "result %+v", res)
 	require.Zero(t, res.CarriedToSibling)
@@ -193,7 +193,7 @@ func TestPurge_StatelessHoldsAreNotCounted(t *testing.T) {
 		softDeleted(t, store, fmt.Sprintf("doomed-%02d", i), "")
 	}
 	before := merge.MergeLockAcquisitions()
-	res, err := NewAudiobookService(store).PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := NewAudiobookService(store).PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, n, res.Purged, "result %+v", res)
 	require.Zero(t, merge.MergeLockAcquisitions()-before, "a stateless purge adds no counted hold")

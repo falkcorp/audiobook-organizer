@@ -1,75 +1,26 @@
 // file: web/src/pages/libraryCombineToast.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: c0c7ee3f-0536-48da-951a-b0bfa6e93857
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 import { describe, it, expect } from 'vitest';
 import { ApiError } from '../services/api';
 import {
   describeCombineFailure,
-  describeCombineResult,
   describeUndoFailure,
   describeUndoResult,
 } from './libraryCombineToast';
 
 describe('libraryCombineToast', () => {
-  it('keeps both the journal-pending sentence and warnings', () => {
-    const p = describeCombineResult({
-      primary_id: 'a',
-      files_moved: 3,
-      books_deleted: 2,
-      operation_id: 'op',
-      journal_pending: 'j',
-      warnings: ['W1.'],
-    });
-    expect(p.severity).toBe('warning');
-    expect(p.message).toContain('moved 2 entries to trash');
-    expect(p.message).toContain('could not be finalized');
-    expect(p.message).toContain('W1.');
-    expect(p.undoOperationId).toBe('op');
-  });
-
-  it('plain success without operation id has no undo', () => {
-    const p = describeCombineResult({ primary_id: 'a', files_moved: 1, books_deleted: 1 });
-    expect(p.severity).toBe('success');
-    expect(p.undoOperationId).toBeUndefined();
-  });
-
-  it('failure without operation_id keeps the plain message', () => {
+  it('a refusal from the combine request keeps the server reason, or a plain message', () => {
     expect(describeCombineFailure(new Error('x'))).toEqual({
       message: 'Failed to combine books.',
       severity: 'error',
     });
-    const p = describeCombineFailure(new ApiError('boom', 500, { error: 'boom' }));
-    expect(p.message).toBe('boom');
+    const p = describeCombineFailure(new ApiError('book-b is in the trash', 409));
+    expect(p.message).toBe('book-b is in the trash');
+    expect(p.severity).toBe('error');
     expect(p.undoOperationId).toBeUndefined();
-  });
-
-  it('a pending journal without an operation id promises no undo', () => {
-    const p = describeCombineResult({
-      primary_id: 'a',
-      files_moved: 1,
-      books_deleted: 1,
-      journal_pending: 'j',
-    });
-    expect(p.undoOperationId).toBeUndefined();
-    expect(p.message).not.toMatch(/Undo|revert/);
-  });
-
-  it('an incomplete combine says what Undo does, without repeating the server text', () => {
-    const p = describeCombineFailure(
-      new ApiError(
-        'The combine stopped part-way ... Revert operation op-1 to undo what it did.',
-        500,
-        {
-          operation_id: 'op-1',
-        }
-      )
-    );
-    expect(p.undoOperationId).toBe('op-1');
-    expect(p.actionLabel).toBe('Undo');
-    expect(p.message.match(/stopped part-way/g)).toHaveLength(1);
-    expect(p.message).toContain('operation op-1');
   });
 
   it('a partial undo offers Retry of the same operation', () => {

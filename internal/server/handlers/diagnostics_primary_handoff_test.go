@@ -1,13 +1,14 @@
 // file: internal/server/handlers/diagnostics_primary_handoff_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f2a8c35-9d41-4e7b-a0c6-3b5e7d1f9a24
-// last-edited: 2026-10-05
+// last-edited: 2026-10-24
 
 package handlers_test
 
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -80,4 +81,36 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersionsSiblingMoveIsUndoable(
 	require.Equal(t, "G", f.GroupOf(t, ls))
 	f.RequireSinglePrimary(t, "G", ls)
 	f.RequireSinglePrimary(t, "H", k)
+}
+
+// A delete_orphan apply stamps the trash time: the retention window and a
+// purge's bound both read it. A book restored by older code carries its first
+// trashing's stamp; trashing it again must not leave that stamp on it.
+func TestDiagnosticsHandler_ApplySuggestions_DeleteOrphanStampsTheTrashTime(t *testing.T) {
+	f := vptest.New(t)
+	prev := config.AppConfig.RootDir
+	config.AppConfig.RootDir = f.Root
+	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	id := f.Book(t, vptest.Spec{ID: "orph", Group: "g", Primary: "true"})
+	f.Book(t, vptest.Spec{ID: "other", Group: "g", Primary: "false"})
+	stale := time.Now().Add(-200 * 24 * time.Hour)
+	_, err := f.S.SeedLegacyBookRowForTest(id, func(b *database.Book) error {
+		b.MarkedForDeletionAt = &stale
+		return nil
+	})
+	require.NoError(t, err)
+
+	before := time.Now()
+	store := diagOpStore{PebbleStore: f.S, op: diagSuggestionOp(`{"id":"s1","action":"delete_orphan","book_ids":["` + id + `"]}`)}
+	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
+	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
+		`{"operation_id":"op-1","approved_suggestion_ids":["s1"]}`, nil)
+	h.ApplySuggestions(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	got, err := f.S.GetBookByID(id)
+	require.NoError(t, err)
+	require.True(t, got.IsSoftDeleted())
+	require.NotNil(t, got.MarkedForDeletionAt)
+	require.False(t, got.MarkedForDeletionAt.Before(before), "trashed now, not at the stale %v: %v", stale, got.MarkedForDeletionAt)
 }

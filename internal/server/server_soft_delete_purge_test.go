@@ -1,7 +1,7 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.3.1
+// version: 1.4.2
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-24
 
 package server
 
@@ -38,10 +38,8 @@ func TestSoftDeleteAndPurge_WithFileDeletion(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// Purge with file deletion.
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true", nil)
-	w = httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true")
+	require.Equal(t, 1, res.Purged)
 
 	_, err = os.Stat(filePath)
 	assert.Error(t, err)
@@ -131,7 +129,7 @@ func seedOldSoftDeletedBook(t *testing.T, name string) *database.Book {
 
 // The merged maintenance.purge-deleted op hands its own context to the purge,
 // so the def's Timeout and a cancel stop it. Before 04-P4b the server copy
-// passed context.Background() and neither could reach PurgeSoftDeletedBooks.
+// passed context.Background() and neither could reach PurgeSoftDeletedUnattended.
 func TestRunAutoPurgeSoftDeleted_ContextCancelPropagates(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -146,7 +144,11 @@ func TestRunAutoPurgeSoftDeleted_ContextCancelPropagates(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	server.runAutoPurgeSoftDeleted(ctx, "")
+	// A pass the context stopped before it decided every book is a failed run
+	// (it used to end "completed" with a line saying "Purged 0/3").
+	err := server.runAutoPurgeSoftDeleted(ctx, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 
 	for _, b := range books {
 		got, err := database.GetGlobalStore().GetBookByID(b.ID)
@@ -155,6 +157,31 @@ func TestRunAutoPurgeSoftDeleted_ContextCancelPropagates(t *testing.T) {
 		_, statErr := os.Stat(b.FilePath)
 		assert.NoError(t, statErr, "file of %q must not be deleted after cancel", b.Title)
 	}
+}
+
+// RunPurge refuses a pass whose undo records cannot be read (here a combine
+// journal row that does not decode) and returns the error with it. The nightly
+// helper must hand that error to its op: it logged it and returned, so the op
+// ended "completed" every night and purged nothing until someone read the log.
+func TestRunAutoPurgeSoftDeleted_RefusedPassFailsTheOp(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	config.AppConfig.PurgeSoftDeletedAfterDays = 1
+	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	book := seedOldSoftDeletedBook(t, "refused-pass")
+	require.NoError(t, database.GetGlobalStore().SetRaw("merge:combine-journal:01CORRUPTROW", []byte("{not json")))
+
+	err := server.runAutoPurgeSoftDeleted(t.Context(), "")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "purge refused")
+	assert.Contains(t, err.Error(), "maintenance.purge-deleted")
+	got, gerr := database.GetGlobalStore().GetBookByID(book.ID)
+	require.NoError(t, gerr)
+	assert.NotNil(t, got, "a refused pass deletes nothing")
+	_, statErr := os.Stat(book.FilePath)
+	assert.NoError(t, statErr)
 }
 
 // PurgeSoftDeletedAfterDays <= 0 is the op's safety valve: it returns before

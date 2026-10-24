@@ -1,12 +1,13 @@
 // file: web/src/pages/Library.scopedTagCloud.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0d7b4f2a-8c3e-4a19-b6d5-2e9f1c7a3b84
-// last-edited: 2026-10-21
+// last-edited: 2026-10-22
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { useLibraryCache } from '../stores/useLibraryCache';
 
@@ -113,7 +114,9 @@ describe('Library Browse-by-Tag chips are scoped to the current results', () => 
   it('shows counts over the current results, not the library-wide totals', async () => {
     render(
       <MemoryRouter initialEntries={['/library']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
     expect(await screen.findByText('fantasy (20)', {}, { timeout: 3000 })).toBeInTheDocument();
@@ -125,7 +128,9 @@ describe('Library Browse-by-Tag chips are scoped to the current results', () => 
   it('refetches the facets with the query the list runs', async () => {
     render(
       <MemoryRouter initialEntries={['/library?search=dune']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
     await waitFor(() => expect(lastFacetsCall()?.search).toBe('dune'), { timeout: 3000 });
@@ -138,7 +143,9 @@ describe('Library Browse-by-Tag chips are scoped to the current results', () => 
   it('a chip click appends tag:"x" to the search and each further chip narrows', async () => {
     render(
       <MemoryRouter initialEntries={['/library']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
     fireEvent.click(await screen.findByText('fantasy (20)', {}, { timeout: 3000 }));
@@ -169,7 +176,9 @@ describe('Library Browse-by-Tag chips are scoped to the current results', () => 
     );
     render(
       <MemoryRouter initialEntries={['/library']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 

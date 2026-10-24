@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.5.2
+// version: 2.7.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-09-25
+// last-edited: 2026-10-22
 
 package maintenance
 
@@ -1332,4 +1332,164 @@ func TestFsRegroupApply_OtherLiveBookAtFolderRefusesGroup(t *testing.T) {
 		t.Fatalf("apply err=%v res=%s, want the group skipped and nothing applied", err, res)
 	}
 	fsRequireUntouched(t, s, ids, before, "op-atpath-other")
+}
+
+// opJournalFailStore fails CreateOperationChange for one change type.
+type opJournalFailStore struct {
+	*fsGuardStore
+	failType string
+}
+
+func (s *opJournalFailStore) CreateOperationChange(c *database.OperationChange) error {
+	if c.ChangeType == s.failType {
+		return errors.New("synthetic ledger write failure")
+	}
+	return s.fsGuardStore.CreateOperationChange(c)
+}
+
+// The soft-delete is journaled before it is written: when the row cannot be
+// written the shell stays live (a trashed shell with no ledger row is one the
+// purge may hard-delete while the regroup can no longer be reverted), and the
+// step is counted, not applied.
+func TestFsRegroupDuplicates_ShellStaysLiveWhenItsSoftDeleteCannotBeJournaled(t *testing.T) {
+	s := regroupStore(t)
+	_, shells := seedDuplicates(t, s, "/lib/Kevin J. Anderson/Metal Swarm")
+	plan := fsPlan(t, s)
+	g := &opJournalFailStore{fsGuardStore: &fsGuardStore{PebbleStore: s}, failType: fsChangeSoftDelete}
+	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-nojournal"}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
+		t.Fatalf("apply err = %v, want the step failures reported", err)
+	}
+	for _, id := range shells {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("shell %s was soft-deleted although its ledger row could not be written", id)
+		}
+	}
+	if led := fsLedgerTypes(t, s, "op-nojournal"); led[fsChangeSoftDelete] != 0 {
+		t.Errorf("ledger = %v, want no book_soft_delete rows", led)
+	}
+}
+
+// The order is journal first: a soft-delete that FAILS after its row was
+// written voids that row, so it never holds a book that was never retired.
+func TestFsRegroupDuplicates_FailedSoftDeleteVoidsItsJournaledRow(t *testing.T) {
+	s := regroupStore(t)
+	_, shells := seedDuplicates(t, s, "/lib/Kevin J. Anderson/Metal Swarm")
+	plan := fsPlan(t, s)
+	g := &softDeleteFailStore{fsGuardStore: &fsGuardStore{PebbleStore: s}}
+	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-sdfail"}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
+		t.Fatalf("apply err = %v, want the step failures reported", err)
+	}
+	for _, id := range shells {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("shell %s soft-deleted despite the injected failure", id)
+		}
+	}
+	changes, err := s.GetOperationChanges("op-sdfail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, c := range changes {
+		if c.ChangeType == fsChangeSoftDelete {
+			n++
+			if c.RevertedAt == nil {
+				t.Errorf("soft-delete row %s for %s was not voided", c.ID, c.BookID)
+			}
+		}
+	}
+	if n != len(shells) {
+		t.Errorf("journaled %d soft-delete rows, want %d (journal comes first)", n, len(shells))
+	}
+}
+
+// softDeleteFailStore fails the ModifyBook merge.SoftDeleteBook uses for a
+// soft-delete, and no other.
+type softDeleteFailStore struct{ *fsGuardStore }
+
+func (s *softDeleteFailStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	probe := &database.Book{}
+	if err := fn(probe); err == nil && probe.MarkedForDeletion != nil && *probe.MarkedForDeletion {
+		return nil, errors.New("synthetic soft-delete failure")
+	}
+	return s.fsGuardStore.ModifyBook(id, fn)
+}
+
+// softDeleteLandsThenFailsStore reports an error for the soft-delete write,
+// having committed it when landed is set (a store that wrote and lost the
+// acknowledgement). With failReread set, the read of the shell after that error
+// fails too.
+type softDeleteLandsThenFailsStore struct {
+	*fsGuardStore
+	landed     bool
+	failReread bool
+	failed     sync.Map // ids whose soft-delete write has errored
+}
+
+func (s *softDeleteLandsThenFailsStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	probe := &database.Book{}
+	if err := fn(probe); err == nil && probe.MarkedForDeletion != nil && *probe.MarkedForDeletion {
+		if s.landed {
+			if _, werr := s.fsGuardStore.ModifyBook(id, fn); werr != nil {
+				return nil, werr
+			}
+		}
+		s.failed.Store(id, true)
+		return nil, errors.New("synthetic soft-delete error")
+	}
+	return s.fsGuardStore.ModifyBook(id, fn)
+}
+
+func (s *softDeleteLandsThenFailsStore) GetBookByID(id string) (*database.Book, error) {
+	if _, failed := s.failed.Load(id); s.failReread && failed {
+		return nil, errors.New("synthetic re-read failure")
+	}
+	return s.fsGuardStore.GetBookByID(id)
+}
+
+// A soft-delete that returns an error but landed leaves a TRASHED shell. Its
+// journal row is the only way back (the purge's undo hold finds the shell by
+// it), so it must not be voided; and when the shell cannot be re-read to tell
+// whether the write landed, the row is kept too (fail closed).
+func TestFsRegroupDuplicates_SoftDeleteErrorKeepsItsJournalRowUnlessTheShellReadsLive(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		landed     bool
+		failReread bool
+		wantTrash  bool
+	}{
+		{"write-landed-reads-back-trashed", true, false, true},
+		{"write-did-not-land-but-reread-fails", false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := regroupStore(t)
+			_, shells := seedDuplicates(t, s, "/lib/Kevin J. Anderson/Metal Swarm")
+			plan := fsPlan(t, s)
+			g := &softDeleteLandsThenFailsStore{fsGuardStore: &fsGuardStore{PebbleStore: s}, landed: tc.landed, failReread: tc.failReread}
+			opID := "op-sdkept-" + tc.name
+			if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: opID}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
+				t.Fatalf("apply err = %v, want the step failures reported", err)
+			}
+			for _, id := range shells {
+				if got := fsSoftDeleted(t, s, id); got != tc.wantTrash {
+					t.Errorf("shell %s soft-deleted = %v, want %v", id, got, tc.wantTrash)
+				}
+			}
+			changes, err := s.GetOperationChanges(opID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := 0
+			for _, c := range changes {
+				if c.ChangeType == fsChangeSoftDelete {
+					n++
+					if c.RevertedAt != nil {
+						t.Errorf("soft-delete row %s for %s was voided although the shell may be trashed", c.ID, c.BookID)
+					}
+				}
+			}
+			if n != len(shells) {
+				t.Errorf("journaled %d soft-delete rows, want %d", n, len(shells))
+			}
+		})
+	}
 }

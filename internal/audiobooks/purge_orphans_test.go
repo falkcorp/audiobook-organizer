@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_orphans_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f6b1d8e-2a47-4c95-8e0b-7d4a9c2e51f6
-// last-edited: 2026-09-19
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -115,7 +115,7 @@ func TestPurge_MergeLoserNeverOrphansBookFiles(t *testing.T) {
 	keepID, loserID, _ := mergeFixture(t, store, lib, loserPath)
 
 	days := 30
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, &days)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, &days)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestPurge_DeleteFilesNeverRemovesSurvivorsFile(t *testing.T) {
 	}
 
 	days := 30
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, &days)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, &days)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestPurge_FilelessSoftDeletedBookStillPurged(t *testing.T) {
 		t.Fatal(err)
 	}
 	days := 30
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, &days)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, &days)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestPurge_DeleteFilesSeesEveryRowAtPath(t *testing.T) {
 
 	// A soft-deleted, fileless book whose FilePath is the shared file.
 	softDeleted(t, store, "loser", shared)
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

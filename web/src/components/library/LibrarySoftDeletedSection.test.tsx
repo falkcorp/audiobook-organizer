@@ -1,12 +1,13 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.test.tsx
-// version: 1.1.0
+// version: 1.3.0
 // guid: 48522977-5b92-481c-896b-a80b826f7b2e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-22
 
 import { describe, it, expect, vi } from 'vitest';
 import { screen, fireEvent, within } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { LibrarySoftDeletedSection } from './LibrarySoftDeletedSection';
+import type { PurgeBreakdown } from '../../services/api';
 import type { Audiobook } from '../../types';
 
 const held = {
@@ -179,5 +180,45 @@ describe('LibrarySoftDeletedSection carry outlook', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Discard progress and purge' }));
     expect(props.onDiscardProgressOne).toHaveBeenCalledWith(noCopy);
     expect(onDiscardPromptClose).toHaveBeenCalled();
+  });
+});
+
+describe('LibrarySoftDeletedSection purge breakdown', () => {
+  const breakdown: PurgeBreakdown = {
+    computed_at: '2026-10-22T04:00:00Z',
+    from_preview: true,
+    total: 40,
+    purgeable: 3,
+    owns_files: 30,
+    undo_possible: 5,
+    has_listening_state: 2,
+    failed: 0,
+  };
+
+  it('says how many are purgeable now and how many are kept, by reason', () => {
+    renderSection({ softDeletedCount: 40, purgeBreakdown: breakdown });
+    expect(screen.getByTestId('purge-breakdown-purgeable')).toHaveTextContent('3 purgeable now');
+    expect(screen.getByTestId('purge-breakdown-owns_files')).toHaveTextContent(
+      '30 kept: own files'
+    );
+    expect(screen.getByTestId('purge-breakdown-undo_possible')).toHaveTextContent(
+      '5 kept: undo possible'
+    );
+    expect(screen.getByTestId('purge-breakdown-has_progress')).toHaveTextContent(
+      '2 kept: listening progress'
+    );
+    expect(screen.getByText(/From the last purge check/)).toBeInTheDocument();
+  });
+
+  it('before any purge check, says not every book can be purged instead of implying all can', () => {
+    renderSection({ softDeletedCount: 40, purgeBreakdown: null });
+    expect(screen.getByTestId('purge-breakdown-none')).toHaveTextContent(
+      'Not every soft-deleted book can be purged'
+    );
+  });
+
+  it('shows no breakdown for an empty trash', () => {
+    renderSection({ softDeletedCount: 0, softDeletedBooks: [], purgeBreakdown: breakdown });
+    expect(screen.queryByTestId('purge-breakdown')).toBeNull();
   });
 });

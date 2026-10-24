@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package merge
 
@@ -16,12 +16,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
-// TrashRestoreStore is what RestoreFromTrash reads and writes.
+// TrashRestoreStore is what RestoreFromTrashLocked reads and writes.
 type TrashRestoreStore interface {
 	versionprimary.EnsureStore
 }
 
-// TrashRestoreResult is one RestoreFromTrash.
+// TrashRestoreResult is one RestoreFromTrashLocked.
 type TrashRestoreResult struct {
 	// Book is the row as written, or as read when nothing was written. Nil
 	// when the book does not exist.
@@ -50,8 +50,8 @@ type pendingRepairScanner interface {
 	DeleteRaw(key string) error
 }
 
-// RestoreFromTrash is the user-facing restore of one book (the single restore,
-// the bulk "restore" action and a batch update setting
+// RestoreFromTrashLocked is the user-facing restore of one book (the single
+// restore, the bulk "restore" action and a batch update setting
 // marked_for_deletion=false). Owner decision 2026-10-01: a book restored from
 // the trash is a book of its own again.
 //
@@ -122,21 +122,22 @@ type pendingRepairScanner interface {
 // afterwards: a flag change after the redirect decision is the gap this
 // closes.
 //
-// It takes LockMergeRMW, so it never interleaves with a merge or combine that
-// is recording a redirect on the same book. Then, in one
-// versionprimary.LockBookGroups acquisition, the version-group locks of the
-// row's current group (the no-group sentinel when it has none) and of every
-// group in joinGroups: a caller whose apply moves the row into another group
-// names it there. They are held across the incumbent read and the write, and
-// released before handOff, which takes them itself. A row that changes group
-// in between is refused (versionprimary.ErrMembershipChanged).
+// The caller holds the merge lock (TryLockMergeRMWWithin: an interactive
+// handler bounds its wait for a running combine and runs the restore under
+// that same hold), so it never interleaves with a merge or combine that is
+// recording a redirect on the same book. Nothing in it takes the merge lock
+// again. In one versionprimary.LockBookGroups acquisition it takes the
+// version-group locks of the row's current group (the no-group sentinel when
+// it has none) and of every group in joinGroups: a caller whose apply moves
+// the row into another group names it there. They are held across the
+// incumbent read and the write, and released before handOff, which takes
+// them itself. A row that changes group in between is refused
+// (versionprimary.ErrMembershipChanged).
 //
 // There is no operation journal for a trash restore (there is none for the
 // trash either); the redirect removal and every dropped record are logged.
-func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book), joinGroups ...string) (TrashRestoreResult, error) {
+func RestoreFromTrashLocked(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book), joinGroups ...string) (TrashRestoreResult, error) {
 	var res TrashRestoreResult
-	LockMergeRMW()
-	defer UnlockMergeRMW()
 
 	// A row in a group a merge emptied is restored into the group that group
 	// went to (group_redirect.go), so it comes back with its family instead

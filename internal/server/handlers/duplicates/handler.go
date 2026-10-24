@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.23.1
+// version: 1.25.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-22
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series
@@ -16,7 +16,7 @@
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
 // interfaces (DuplicatesStore, OperationsRegistry, MergeService,
-// MetadataFetchService, DedupEngine) plus the concrete
+// MetadataFetchService) plus the concrete
 // *cache.Cache[gin.H] (the dedup cache — a clean generic type held by pointer,
 // the established cache exception) and a set of INJECTED func fields that wrap
 // helpers which STAY in package server because they are shared with files that
@@ -36,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strconv"
 	"time"
 
@@ -79,14 +78,6 @@ type Handler struct {
 	// so this package needs neither the merge constructor nor a server import.
 	getMergeService func() MergeService
 
-	// dedupEngine backs the post-merge orphan-candidate sweep for
-	// combineBooks (mirrors the sweep the
-	// dedup handler package already runs after its own per-candidate Merge
-	// button). Interface snapshot, typed-nil guarded by the controller; nil is
-	// tolerated (skips the sweep) since CleanupCandidatesAfterMerge itself
-	// also nil-checks its receiver.
-	dedupEngine DedupEngine
-
 	// --- injected funcs wrapping helpers that stay in package server ---
 
 	// computeSeriesPrunePreview wraps the server-resident computeSeriesPrunePreview
@@ -102,7 +93,6 @@ func New(
 	opRegistry OperationsRegistry,
 	metadataFetchService MetadataFetchService,
 	getMergeService func() MergeService,
-	dedupEngine DedupEngine,
 	computeSeriesPrunePreview func() (any, error),
 ) *Handler {
 	return &Handler{
@@ -111,7 +101,6 @@ func New(
 		opRegistry:                opRegistry,
 		metadataFetchService:      metadataFetchService,
 		getMergeService:           getMergeService,
-		dedupEngine:               dedupEngine,
 		computeSeriesPrunePreview: computeSeriesPrunePreview,
 	}
 }
@@ -199,26 +188,6 @@ func respondMergeError(c *gin.Context, err error, fallback string) {
 	}
 }
 
-// respondCombineIncomplete answers a combine that failed after its undo
-// pointer was journaled: it may have moved files or retired books before it
-// stopped, so the body carries the ids that undo it (journal_id, operation_id)
-// and says so. The underlying error is logged, not sent: it names internal
-// rows and store errors. 409 when the failure is a refusal (nothing the
-// caller can retry as is), 500 otherwise.
-func respondCombineIncomplete(c *gin.Context, e *merge.CombineIncompleteError) {
-	logger.New("duplicates").Error("combine stopped part-way journal=%s operation=%s err=%s",
-		logger.SanitizeLogValue(e.JournalID), logger.SanitizeLogValue(e.OperationID), logger.SanitizeLogValue(fmt.Sprint(e.Err)))
-	status := http.StatusInternalServerError
-	if merge.IsRefusal(e) {
-		status = http.StatusConflict
-	}
-	msg := fmt.Sprintf("The combine stopped part-way and may already have moved some files or put some books in the trash. Revert operation %s to undo what it did.", e.OperationID)
-	httputil.RespondWithErrorFields(c, status, msg, "COMBINE_INCOMPLETE", map[string]any{
-		"journal_id":   e.JournalID,
-		"operation_id": e.OperationID,
-	})
-}
-
 // ListCombineJournals lists combine undo journals newest-first.
 // GET /merge/combine-journal?limit=N (default 50).
 func (h *Handler) ListCombineJournals(c *gin.Context) {
@@ -280,18 +249,6 @@ func (h *Handler) ListSiblingMoveJournals(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
 }
 
-// mergedAwayIDs returns ids minus the survivor, for handing to
-// DedupEngine.CleanupCandidatesAfterMerge after a successful merge/combine.
-func mergedAwayIDs(ids []string, primaryID string) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id != primaryID {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
 // LinkBooks enqueues an async book-link operation (books become version-group
 // members; no files move). POST /audiobooks/link.
 //
@@ -331,17 +288,38 @@ func (h *Handler) LinkBooks(c *gin.Context) {
 		return
 	}
 
+	// Refuse here what the operation would refuse after it ran, so a request
+	// that cannot succeed fails this call (409 with the reason) instead of
+	// queueing an operation whose failure shows only in the operations list.
+	// A trashed loser is not refused: the operation skips it.
+	ms := h.getMergeService()
+	if ms == nil {
+		httputil.RespondWithInternalError(c, "merge service not initialized")
+		return
+	}
+	if err := ms.PreflightLink(req.KeepID, req.MergeIDs); err != nil {
+		respondMergeError(c, err, "failed to check the merge")
+		return
+	}
+
 	detail := fmt.Sprintf("merge-books:keep=%s,merge=%d", req.KeepID, len(req.MergeIDs))
 	h.launchOp(c, "dedup.book-merge", "book-merge", detail,
 		bookMergeOpParams{KeepID: req.KeepID, MergeIDs: req.MergeIDs, Detail: detail})
 }
 
-// CombineBooks combines several single-file books into ONE multi-file book on the
-// survivor (keep_id) and soft-deletes the absorbed shells, returning the combine
-// journal id and the operation id that undoes it (POST /operations/:id/revert).
-// Distinct from LinkBooks, which links them as alternate VERSIONS in a version
-// group. Synchronous — combine is a fast DB-only operation.
+// CombineBooks queues the dedup.book-combine operation: it combines several
+// single-file books into ONE multi-file book on the survivor (keep_id) and
+// soft-deletes the absorbed shells. Distinct from LinkBooks, which links them as
+// alternate VERSIONS in a version group.
 // POST /audiobooks/combine.
+//
+// It does not run the combine. Moving every file and journaling each step is
+// not fast on a real library (it hung the page), so the request is checked here
+// (merge.PreflightCombine: 400 for a malformed request, 404 for a missing book,
+// 409 for a soft-deleted or iTunes-protected one) and answered 202 with the
+// operation id. The combine's outcome (files moved, books trashed, the id that
+// undoes it, a part-way failure) is the operation's result, read from
+// GET /operations/:id/result.
 func (h *Handler) CombineBooks(c *gin.Context) {
 	var req struct {
 		KeepID   string   `json:"keep_id" binding:"required"`
@@ -360,56 +338,31 @@ func (h *Handler) CombineBooks(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "merge_ids must not be empty")
 		return
 	}
+	seen := map[string]bool{req.KeepID: true}
+	for _, id := range req.MergeIDs {
+		if seen[id] {
+			httputil.RespondWithBadRequest(c, fmt.Sprintf("book %s is listed more than once (merge_ids must not repeat or include keep_id)", id))
+			return
+		}
+		seen[id] = true
+	}
 
 	ms := h.getMergeService()
 	if ms == nil {
 		httputil.RespondWithInternalError(c, "merge service not initialized")
 		return
 	}
-
-	// Pass ALL ids (the absorbed books plus the survivor) and the survivor id.
-	result, err := ms.CombineBooks(append(req.MergeIDs, req.KeepID), req.KeepID, req.Override)
-	if incomplete, ok := errors.AsType[*merge.CombineIncompleteError](err); ok {
-		respondCombineIncomplete(c, incomplete)
-		return
-	}
-	if err != nil {
-		respondMergeError(c, err, "failed to combine books")
+	// Refuse here what the operation would refuse before it wrote anything, so
+	// a request that cannot succeed fails this call instead of queueing an
+	// operation whose failure shows only in the operations list.
+	if err := ms.PreflightCombine(req.KeepID, req.MergeIDs); err != nil {
+		respondMergeError(c, err, "failed to check the combine")
 		return
 	}
 
-	if h.dedupCache != nil {
-		// No reader today (see dedupCache above); kept until 04 decides dedup.book-scan.
-		h.dedupCache.Invalidate("book-dedup-scan")
-	}
-
-	if h.dedupEngine != nil {
-		h.dedupEngine.CleanupCandidatesAfterMerge(mergedAwayIDs(req.MergeIDs, result.PrimaryID))
-	}
-
-	body := gin.H{
-		"primary_id":    result.PrimaryID,
-		"files_moved":   result.FilesMoved,
-		"books_deleted": result.BooksDeleted,
-	}
-	done := fmt.Sprintf("Combined %d files onto book; moved %d absorbed entries to trash", result.FilesMoved, result.BooksDeleted)
-	// operation_id: POST /operations/:id/revert with it undoes this combine
-	// (the combine's undo pointer is journaled under it).
-	body["journal_id"] = result.JournalID
-	body["operation_id"] = result.OperationID
-	if result.JournalPending != "" {
-		// The combine applied but its journal could not be marked applied.
-		// It stays pending and still names every step that ran, so the
-		// revert replays it (the split-book merge's rule).
-		body["message"] = fmt.Sprintf("%s; its undo journal could not be finalized and is still pending: reverting operation %s replays what it recorded", done, result.OperationID)
-		body["journal_pending"] = result.JournalPending
-	} else {
-		body["message"] = fmt.Sprintf("%s; revert operation %s to undo it", done, result.OperationID)
-	}
-	if len(result.Warnings) > 0 {
-		body["warnings"] = result.Warnings
-	}
-	httputil.RespondWithOK(c, body)
+	detail := fmt.Sprintf("combine-books:keep=%s,merge=%d", req.KeepID, len(req.MergeIDs))
+	h.launchOp(c, "dedup.book-combine", "book-combine", detail,
+		bookCombineOpParams{KeepID: req.KeepID, MergeIDs: req.MergeIDs, Override: req.Override, Detail: detail})
 }
 
 // ListDuplicateAuthors handles GET /authors/duplicates.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.98.0
+// version: 1.98.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-23
 
@@ -711,8 +711,10 @@ type MediaFileRunners interface {
 
 // CleanupRunners runs the retention and reclamation operations.
 type CleanupRunners interface {
-	// RunAutoPurgeSoftDeleted delegates to server.runAutoPurgeSoftDeleted.
-	RunAutoPurgeSoftDeleted(ctx context.Context, opID string)
+	// RunAutoPurgeSoftDeleted delegates to server.runAutoPurgeSoftDeleted. A
+	// non-nil error is a pass that was refused or stopped before deciding every
+	// book; the op fails with it.
+	RunAutoPurgeSoftDeleted(ctx context.Context, opID string) error
 	CleanupOrphanedTempFiles(rootDir string, opID string) int
 	CleanupTrashedVersions() int
 	// PruneOldLogs prunes legacy operation log rows and system log rows older

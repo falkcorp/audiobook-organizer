@@ -1,12 +1,13 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
-// last-edited: 2026-08-25
+// last-edited: 2026-10-22
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { useLibraryCache } from '../stores/useLibraryCache';
 
@@ -115,7 +116,9 @@ describe('Library import dialog', () => {
   it('imports a selected file path', async () => {
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -147,7 +150,9 @@ describe('Library import dialog', () => {
   it('sends organize=true when the organize checkbox is ticked', async () => {
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -193,7 +198,9 @@ describe('Library import dialog', () => {
 
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -230,7 +237,9 @@ describe('Library import dialog', () => {
 
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -271,7 +280,9 @@ describe('Library import dialog', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 

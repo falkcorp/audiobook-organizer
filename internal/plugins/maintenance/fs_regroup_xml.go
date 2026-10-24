@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.19.3
+// version: 2.21.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-20
+// last-edited: 2026-10-22
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -155,6 +155,8 @@ type fsRepairStore interface {
 	versionprimary.EnsureStore
 	regroupSnapshotReader
 	CreateOperationChange(change *database.OperationChange) error
+	// A soft-delete row journaled before a write that then fails is voided.
+	MarkOperationChangesReverted(operationID string, changeIDs []string) error
 	database.MetadataFieldStateReader
 	// A retired shell's external ids move one at a time, so each move can be
 	// journaled and reversed.
@@ -908,16 +910,23 @@ func (a *fsApplier) log(level slog.Level, format string, args ...any) {
 }
 
 func (a *fsApplier) journal(bookID, changeType, field, oldV, newV string) {
-	err := a.store.CreateOperationChange(&database.OperationChange{
+	_, _ = a.journalRow(bookID, changeType, field, oldV, newV)
+}
+
+// journalRow is journal that also returns the row it wrote (nil on failure)
+// and whether it was written, for a caller that must not go on without it.
+func (a *fsApplier) journalRow(bookID, changeType, field, oldV, newV string) (*database.OperationChange, bool) {
+	row := &database.OperationChange{
 		OperationID: a.opID, BookID: bookID, ChangeType: changeType,
 		FieldName: field, OldValue: oldV, NewValue: newV,
-	})
-	if err != nil {
+	}
+	if err := a.store.CreateOperationChange(row); err != nil {
 		a.errs.Add(1)
 		a.log(slog.LevelWarn, "ledger row %s for book %s failed: %v", changeType, bookID, err)
-		return
+		return nil, false
 	}
 	a.ledger.Add(1)
+	return row, true
 }
 
 // applyFSRepairPlan applies the fragments and duplicates groups. It never
@@ -1442,13 +1451,46 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 			a.journal(shellID, fsChangePrimaryDemote, "is_primary_version", prev, "false")
 		}
 	}
+	// Journal the soft-delete BEFORE it is written (repairs.Writer.Step's
+	// order). The purge's undo hold finds a shell by this row, so a shell
+	// soft-deleted with no row behind it is a trashed book the purge may
+	// hard-delete while the regroup can no longer be reverted. When the row
+	// cannot be written the shell stays live and the step fails (counted as
+	// kept); a soft-delete that then fails voids the row it journaled.
+	row, ok := a.journalRow(shellID, fsChangeSoftDelete, "marked_for_deletion", "", note)
+	if !ok {
+		a.kept.Add(1)
+		a.log(slog.LevelWarn, "%s %q: shell %s kept live, its soft-delete could not be journaled", kind, folder, shellID)
+		return
+	}
 	if err := merge.SoftDeleteBook(a.store, shellID); err != nil {
 		a.errs.Add(1)
 		a.log(slog.LevelWarn, "%s %q: soft-delete %s: %v", kind, folder, shellID, err)
+		// An error is not proof the write did not land (the store can commit
+		// and then fail to report it). The row is the only way back for a
+		// shell that IS trashed, and the purge's undo hold finds the shell by
+		// it, so it is voided only when the shell reads back live: a failed
+		// read, a missing row or a trashed one keeps the row (fail closed).
+		// The cost of keeping a row for a shell that stayed live is a revert
+		// that finds it already restored, which it handles; the cost of
+		// voiding one for a trashed shell is a book the purge may hard-delete
+		// with no revert path.
+		cur, rerr := a.store.GetBookByID(shellID)
+		switch {
+		case rerr != nil:
+			a.log(slog.LevelWarn, "%s %q: soft-delete row %s for %s kept: the shell could not be re-read after the error: %v", kind, folder, row.ID, shellID, rerr)
+		case cur == nil:
+			a.log(slog.LevelWarn, "%s %q: soft-delete row %s for %s kept: the shell is gone", kind, folder, row.ID, shellID)
+		case database.IsInTrash(cur):
+			a.log(slog.LevelWarn, "%s %q: soft-delete row %s for %s kept: the write landed although it returned an error", kind, folder, row.ID, shellID)
+		default:
+			if verr := a.store.MarkOperationChangesReverted(a.opID, []string{row.ID}); verr != nil {
+				a.log(slog.LevelWarn, "%s %q: void the unwritten soft-delete row %s for %s: %v", kind, folder, row.ID, shellID, verr)
+			}
+		}
 		return
 	}
 	a.softDeleted.Add(1)
-	a.journal(shellID, fsChangeSoftDelete, "marked_for_deletion", "", note)
 	// Hand the shell's group on, or it is left with no primary. The writes
 	// are not journaled (undo has no promote kind): a revert restores the
 	// shell and revertBookPrimaryDemote then crowns it and demotes the rest

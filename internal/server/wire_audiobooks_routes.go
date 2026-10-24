@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-10-18
+// last-edited: 2026-10-22
 
 package server
 
@@ -29,6 +29,7 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/facets", s.perm(auth.PermLibraryView), audiobooksH.AudiobookFacets)
 	protected.GET("/audiobooks/soft-deleted", s.perm(auth.PermLibraryView), audiobooksH.ListSoftDeletedAudiobooks)
 	protected.DELETE("/audiobooks/purge-soft-deleted", s.perm(auth.PermLibraryDelete), audiobooksH.PurgeSoftDeletedAudiobooks)
+	protected.POST("/audiobooks/purge-soft-deleted/preview", s.perm(auth.PermLibraryDelete), audiobooksH.PreviewPurgeSoftDeleted)
 	protected.POST("/audiobooks/:id/restore", s.perm(auth.PermLibraryOrganize), audiobooksH.RestoreAudiobook)
 	// The owner's explicit "discard progress and purge" for one trashed book
 	// the nightly purge keeps because a user has listening state on it.
