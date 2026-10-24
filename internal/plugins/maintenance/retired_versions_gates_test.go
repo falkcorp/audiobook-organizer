@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -77,6 +77,10 @@ func (rf *retiredFixture) withDeps(d ServerDeps) {
 type errVetoes struct{}
 
 func (errVetoes) PairVetoed(string, string, string, string) (bool, error) {
+	return false, errors.New("vetoes unavailable")
+}
+
+func (errVetoes) SubjectRejected(string, string, string) (bool, error) {
 	return false, errors.New("vetoes unavailable")
 }
 
