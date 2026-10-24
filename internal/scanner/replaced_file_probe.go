@@ -1,7 +1,7 @@
 // file: internal/scanner/replaced_file_probe.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b2e9f41-8c37-4d05-a9e1-3f7d2c5b8a64
-// last-edited: 2026-09-25
+// last-edited: 2026-10-24
 
 package scanner
 
@@ -48,11 +48,18 @@ func probeReplacedFileAudio(bf *database.BookFile, filePath string, scanLog logg
 		logger.SanitizeLogValue(filePath), mi.DurationEstimated)
 }
 
-// storedBookFileAt is the stored row that owns filePath, the row the scanner's
-// upsert will merge with, or nil when there is none. It is a point lookup on
-// the book_file_path index. The caller reads its FileHash (was the file
-// replaced?) and its Duration (would the merge keep a stored duration anyway,
-// making a probe wasted work?).
+// storedBookFileAt is the stored LIVE row that owns filePath, the row the
+// scanner's upsert will merge with, or nil when there is none. It is a point
+// lookup on the book_file_path index. The caller reads its FileHash (was the
+// file replaced?) and its Duration (would the merge keep a stored duration
+// anyway, making a probe wasted work?).
+//
+// Live-only on purpose, unlike the other path lookups that decide ownership: a
+// retired version's row is never what an upsert merges with (UpsertBookFile
+// treats it as no match and mints a live row), so the row whose hash and
+// duration answer "will the merge keep it?" is the live one or none. A file
+// only a retired row claims never gets here as a new row anyway: the scan skips
+// it first (checkFileOwnership, lookupScanExisting).
 func storedBookFileAt(filePath string, scanLog logger.Logger) *database.BookFile {
 	row, err := getStore().GetBookFileByPath(filePath)
 	if err != nil {
