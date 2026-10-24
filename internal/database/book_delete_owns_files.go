@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -104,9 +104,12 @@ func (p *PebbleStore) refuseDeleteIfBookOwnsFiles(bookID string) error {
 // first makes the writer's existence check fail; a writer that commits first
 // makes the delete's count non-zero.
 //
-// LOCK ORDER: owner stripes are always the INNERMOST lock. They may be taken
+// LOCK ORDER: owner stripes are the INNERMOST STRIPE. They may be taken
 // while a book stripe (DeleteBook) or a book_file stripe (UpdateBookFile) is
-// held, but nothing takes a book or book_file stripe while holding one. A
+// held, but nothing takes a book or book_file stripe while holding one. The one
+// lock that may be taken under them is the single-owner index mutex
+// (lockSingleOwnerIndex, pebble_store_book_lock.go), a leaf that holds only the
+// batch apply (and the retired writers' index re-check) and takes nothing. A
 // writer holding several takes them in ascending stripe order, de-duplicated,
 // so two multi-book writers cannot deadlock and DeleteBook, which holds one,
 // cannot either.
@@ -271,13 +274,12 @@ func (p *PebbleStore) commitBookFileBatch(batch *GatedBatch, lockIDs, newOwners 
 // re-stage wraps errBookFileRowVanished, which every retry loop already tests).
 //
 // It exists for decisions the batch made from index state it read BEFORE the
-// stripes were taken (the retired-version writers' single-owner index keys). It
-// NARROWS the window in which that state can change under the batch; it does not
-// close it. The owner stripes serialize this commit only against writers that
-// share one of ITS owner books: another writer of the same index key holds the
-// stripes of a different book, so it can still commit between verify returning
-// and the batch being applied. Closing that would take a lock per index key,
-// which the single-owner index does not have.
+// stripes were taken (the retired-version writers' single-owner index keys). The
+// owner stripes serialize this commit only against writers that share one of ITS
+// owner books, so verify and the apply also run under the single-owner index
+// mutex (lockSingleOwnerIndex), which every other writer of those keys takes
+// around its own apply: no writer of a key can commit between verify returning
+// and the batch being applied.
 func (p *PebbleStore) commitBookFileBatchVerified(batch *GatedBatch, lockIDs, newOwners []string, rewriteKeys [][]byte, verify func() error) error {
 	if bookFileBeforeCommitHook != nil {
 		bookFileBeforeCommitHook()
@@ -319,14 +321,22 @@ func (p *PebbleStore) commitBookFileBatchVerified(batch *GatedBatch, lockIDs, ne
 		_ = batch.Close()
 		return stale
 	}
+	// The re-check and the apply are one step with respect to every other
+	// writer of a single-owner index key (lockSingleOwnerIndex).
+	unlockIndex := p.lockSingleOwnerIndex()
 	if verify != nil {
 		if err := verify(); err != nil {
+			unlockIndex()
 			unlock()
 			_ = batch.Close()
 			return err
 		}
+		if singleOwnerIndexAfterVerifyHook != nil {
+			singleOwnerIndexAfterVerifyHook()
+		}
 	}
 	err := batch.Commit(pebble.NoSync)
+	unlockIndex()
 	unlock()
 	if err != nil {
 		return err
@@ -334,9 +344,32 @@ func (p *PebbleStore) commitBookFileBatchVerified(batch *GatedBatch, lockIDs, ne
 	return p.syncBookFileWAL()
 }
 
+// commitSingleOwnerIndexBatch applies batch under the single-owner index mutex
+// (lockSingleOwnerIndex) with the durability of a pebble.Sync commit, without
+// holding the mutex across the fsync: the apply is NoSync under the mutex and
+// the WAL fsync follows the release (the WAL is sequential, so the fsync makes
+// this record and every one before it durable). It is for the batches that write
+// or delete a single-owner index key outside commitBookFileBatchVerified: the
+// book_file deletes and the AcoustID-segment wipes. An error means what a failed
+// Commit(pebble.Sync) meant; the batch is not closed here (Commit finishes it).
+func (p *PebbleStore) commitSingleOwnerIndexBatch(batch *GatedBatch) error {
+	unlock := p.lockSingleOwnerIndex()
+	err := batch.Commit(pebble.NoSync)
+	unlock()
+	if err != nil {
+		return err
+	}
+	return p.db.SyncWAL()
+}
+
 // bookFileWALSyncHook, when non-nil, runs after a book_file writer released
 // its owner stripes and before its WAL fsync. Test-only.
 var bookFileWALSyncHook func() error
+
+// singleOwnerIndexAfterVerifyHook, when non-nil, runs inside
+// commitBookFileBatchVerified after a verify hook succeeded and before the apply,
+// with the owner stripes and the single-owner index mutex held. Test-only.
+var singleOwnerIndexAfterVerifyHook func()
 
 // bookFileBeforeCommitHook, when non-nil, runs at the start of every
 // commitBookFileBatch, before any owner stripe is taken. Test-only.
@@ -446,7 +479,7 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 			if f == nil || refused[f] {
 				continue
 			}
-			c := *f
+			c := cloneBookFile(f) // deep: a pass must leave no trace on the caller's struct
 			clones = append(clones, &c)
 			origOf[&c] = f
 			if present != nil {
