@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-23-master-list-import-apply-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5b1d8e47-3c92-4a60-b7f5-d04e9a2c6813 -->
-<!-- last-edited: 2026-10-23 -->
+<!-- last-edited: 2026-10-24 -->
 
 # An uploaded reading list can now update what a person has read
 
@@ -24,6 +24,15 @@ only showed a preview. This stage lets the admin apply it, safely.
   and never becomes a book.
 - **Uploaded lists no longer pile up.** An admin can delete a stored list, and
   each uploader keeps only their ten newest lists by default.
+- **Doubtful rows wait for a person.** A row for a book the library lacks is
+  only filed as "read elsewhere" automatically when the row itself is sound; a
+  bad code, a finish date in the future or an unreadable date puts it in the
+  review queue instead. The same book is never filed twice because two lists
+  name it by different codes.
+- **The write double-checks.** Just before a change is made the import looks
+  again at the person and the book: if the person was removed, or the book was
+  deleted or merged into another in the meantime, nothing is written and the
+  row says so.
 - **Five matching gaps found in review are closed**: an ISBN-10 ending in X,
   disagreeing ISBN columns, one badly typed row spoiling a whole JSON file,
   an Audible code on two editions that the ISBN could settle, and an ISBN that
@@ -40,4 +49,9 @@ visible and reversible.
 ## Not covered yet
 
 The older Audible-only import is still in place; moving it onto this one is the
-next stage. Two small admin-route issues found in review are still open.
+next stage. While the import is previewed, anyone who may view the library can
+still read the preview rows (list titles, authors and the person's reading
+status): closing that is a separate fix, PR #4148. The admin-only gate on the
+import's routes now works when sign-in is switched off; the same gate on a few
+unrelated admin routes (cache and debug tools, the wipe routes) is unchanged
+and tracked.

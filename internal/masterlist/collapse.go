@@ -1,7 +1,7 @@
 // file: internal/masterlist/collapse.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c98332e8-00a2-48b9-b729-87f0dbd569f2
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package masterlist
 
@@ -52,7 +52,7 @@ func Collapse(rows []Row) []Group {
 	}
 	owner := map[string]int{}
 	for i := range rows {
-		for _, k := range joinKeys(rows[i]) {
+		for _, k := range IdentityKeys(rows[i]) {
 			if j, ok := owner[k]; ok {
 				union(i, j)
 			} else {
@@ -81,8 +81,12 @@ func Collapse(rows []Row) []Group {
 	return out
 }
 
-// joinKeys are the identifiers two rows must not share without being one book.
-func joinKeys(r Row) []string {
+// IdentityKeys are the identifiers two rows must not share without being one
+// book: "asin:<ASIN>", "isbn13:<ISBN-13>" (an ISBN-10 counts as the ISBN-13 it
+// converts to) and "src:<source>:<id>" for each source with an id. Collapse
+// joins rows by them; the read-elsewhere records are matched by the same keys,
+// so one book is one record whichever of its identifiers a list gives first.
+func IdentityKeys(r Row) []string {
 	var keys []string
 	if r.ASIN != "" {
 		keys = append(keys, "asin:"+r.ASIN)
@@ -145,7 +149,7 @@ func Combine(rows []Row) Row {
 		if r.ASIN != "" {
 			asins[r.ASIN] = true
 		}
-		for _, k := range joinKeys(r) {
+		for _, k := range IdentityKeys(r) {
 			if v, ok := strings.CutPrefix(k, "isbn13:"); ok {
 				isbns[v] = true
 			}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_decide.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2e84a1-5b3c-4f90-a6e8-1c9f0b47d352
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -43,6 +44,61 @@ type mlDecider struct {
 	us    UserReadStateStore
 	lists MasterListStore
 	m     *mlMatcher
+	// elsewhere finds a read-elsewhere record by the row's identifiers. Shared
+	// by every decider of one plan or apply run (never nil).
+	elsewhere *mlElsewhereIndex
+}
+
+// mlElsewhereIndex finds the read-elsewhere records that already name a row's
+// book. A record's id is derived from the first identifier its row gave
+// (ElsewhereID), so the same book listed by ASIN in one list and by its ISBN
+// alone in another has two different ids; the index matches by every identifier
+// instead (masterlist.IdentityKeys: ASIN, ISBN-13, source id), per user.
+//
+// It is read once, on the first row that needs it, and shared for the run: a
+// record another apply creates after that is found by its id (decideElsewhere
+// reads that live) but not by a second identifier. Rows of one list never share
+// an identifier (Collapse), so a run's own creates are never looked for.
+// Title-only rows have no identifier and match only by their record id.
+type mlElsewhereIndex struct {
+	once  sync.Once
+	byKey map[string]database.MasterListElsewhere
+	err   error
+}
+
+func mlElsewhereKey(user, key string) string { return user + "\x00" + key }
+
+// find returns the record of user that shares an identifier with row, if any.
+func (x *mlElsewhereIndex) find(lists MasterListStore, user string, row masterlist.Row) (*database.MasterListElsewhere, error) {
+	x.once.Do(func() {
+		recs, err := lists.ListElsewhere("")
+		if err != nil {
+			x.err = fmt.Errorf("list the read-elsewhere records: %w", err)
+			return
+		}
+		x.byKey = make(map[string]database.MasterListElsewhere, len(recs))
+		// ListElsewhere is newest first: the oldest record of a key wins, by
+		// writing in reverse, so the answer does not move as records are added.
+		for i := len(recs) - 1; i >= 0; i-- {
+			rec := recs[i]
+			as := masterlist.Row{ASIN: rec.ASIN, ISBN10: rec.ISBN10, ISBN13: rec.ISBN13}
+			for _, s := range rec.Sources {
+				as.Sources = append(as.Sources, masterlist.Source{Source: s.Source, SourceID: s.SourceID})
+			}
+			for _, k := range masterlist.IdentityKeys(as) {
+				x.byKey[mlElsewhereKey(rec.UserID, k)] = rec
+			}
+		}
+	})
+	if x.err != nil {
+		return nil, x.err
+	}
+	for _, k := range masterlist.IdentityKeys(row) {
+		if rec, ok := x.byKey[mlElsewhereKey(user, k)]; ok {
+			return &rec, nil
+		}
+	}
+	return nil, nil
 }
 
 // mlFingerprint covers every input a decision was made from: the row as
@@ -60,14 +116,25 @@ func mlNeedsDecision(r repairs.Row, st mlRowState) bool {
 	return r.Class == mlMatchedHigh || mlElsewhereEligible(r, st)
 }
 
-// mlElsewhereEligible: an unmatched row with no title candidate and no trashed
+// mlElsewhereCandidate: an unmatched row with no title candidate and no trashed
 // copy carrying one of its identifiers. A row that might still be a library
-// book (the title is there under another author's name, or a trashed book
-// holds the identifier) is for a person to look at, not to record as read
-// elsewhere.
-func mlElsewhereEligible(r repairs.Row, st mlRowState) bool {
+// book (the title is there under another author's name, or a trashed book holds
+// the identifier) is for a person to look at, not to record as read elsewhere.
+func mlElsewhereCandidate(r repairs.Row, st mlRowState) bool {
 	return r.Class == mlUnmatched && len(st.Candidates) == 0 && len(st.Trashed) == 0 &&
 		!slices.Contains(r.Flags, mlFlagAuthorMismatch) && !slices.Contains(r.Flags, mlFlagTrashedOnly)
+}
+
+// mlElsewhereEligible: a candidate (above) whose list row also has no data
+// problem of its own. A row whose identifier was dropped as bad
+// (bad_identifier), whose identifiers disagree (identifier_conflict), or whose
+// time is unreadable or in the future may well be a library book the matcher
+// could not see (the dropped value was the one that would have matched), and a
+// future time would be stored as the record's finish date; a matched_high row
+// with any of these is held for review (matchRow), and so is this one. It stays
+// an unmatched row, listed with the findings, never a bulk-applicable record.
+func mlElsewhereEligible(r repairs.Row, st mlRowState) bool {
+	return mlElsewhereCandidate(r, st) && len(st.Row.Issues) == 0
 }
 
 // decide runs the decision for a row mlNeedsDecision accepted.
@@ -179,7 +246,7 @@ func (d *mlDecider) decideMatched(base repairs.Row, st mlRowState) repairs.Row {
 	if hasTS && ts.After(d.now().Add(mlFutureSlack)) {
 		// Plan flags a future time on the row (matched_review); this guards a
 		// row replanned after the clock moved.
-		return mlSkip(r, t, mlSkipNoTimestamp, fmt.Sprintf("the list's time %s is in the future; it would beat every real listen", ts.Format(time.RFC3339)), nil)
+		return mlSkip(r, t, mlSkipFutureTimestamp, fmt.Sprintf("the list's time %s is in the future; it would beat every real listen", ts.Format(time.RFC3339)), nil)
 	}
 
 	cur, err := undo.ReadUserStateSnapshot(d.us, st.User, t.id)
@@ -328,6 +395,20 @@ func (d *mlDecider) decideElsewhere(base repairs.Row, st mlRowState) repairs.Row
 			fmt.Sprintf("already kept as a read-elsewhere record (from list %s)", existing.ListID), "recorded")
 	}
 	row := st.Row
+	// The same book under another identifier (an earlier list gave its ASIN, this
+	// one gives its ISBN): one record, not two.
+	if same, err := d.elsewhere.find(d.lists, st.User, row); err != nil {
+		return mlSkip(r, arsTarget{}, mlStateUnreadable, err.Error(), nil)
+	} else if same != nil {
+		return mlSkip(r, arsTarget{}, mlSkipAlreadyRecorded,
+			fmt.Sprintf("the same book is already kept as a read-elsewhere record %s (from list %s), under another identifier", same.ID, same.ListID), "recorded:"+same.ID)
+	}
+	// The record keeps the list's finish time verbatim, so a future one is never
+	// copied. Plan holds such a row for review (future_timestamp, see
+	// mlElsewhereEligible); this guards a row replanned after the clock moved.
+	if ts, ok := masterlist.ParseTime(row.FinishedAt); ok && ts.After(d.now().Add(mlFutureSlack)) {
+		return mlSkip(r, arsTarget{}, mlSkipFutureTimestamp, fmt.Sprintf("the list's finish time %s is in the future; it is not kept as a read-elsewhere record", ts.Format(time.RFC3339)), nil)
+	}
 	rec := database.MasterListElsewhere{
 		ID: id, UserID: st.User, ListID: st.ListID, UploadedBy: st.UploadedBy, Lines: slices.Clone(st.Lines),
 		Title: row.Title, Authors: slices.Clone(row.Authors), ISBN10: row.ISBN10, ISBN13: row.ISBN13, ASIN: row.ASIN,
