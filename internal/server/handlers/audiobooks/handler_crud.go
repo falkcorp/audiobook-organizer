@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.19.2
+// version: 1.19.3
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-28
 
@@ -225,7 +225,7 @@ const (
 	// CodeRetiredShell: 409, the book's files were retired onto another book
 	// as retired versions that still hold rows (database.ErrBookIsRetiredShell);
 	// nothing was deleted or restored.
-	CodeRetiredShell = "RETIRED_SHELL"
+	CodeRetiredShell = httputil.CodeRetiredShell
 	// CodeCarryFailed: 500, moving the listening state to the version
 	// Audiobookshelf lists did not complete; the book was kept with its
 	// state.

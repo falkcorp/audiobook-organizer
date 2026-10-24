@@ -1,7 +1,7 @@
 // file: internal/httputil/respond.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-19
+// last-edited: 2026-10-24
 
 // Package httputil provides shared HTTP response helpers for all packages
 // that handle gin HTTP requests (server, middleware, itunes/service, etc).
@@ -78,6 +78,12 @@ func RespondWithInternalError(c *gin.Context, message string) {
 func RespondWithApplyCapExceeded(c *gin.Context, err *applycap.ExceededError) {
 	RespondWithError(c, http.StatusUnprocessableEntity, err.Error(), "BULK_APPLY_CAP_EXCEEDED")
 }
+
+// CodeRetiredShell is the stable code of the 409 every endpoint answers with
+// when it refuses to purge, delete, restore or revert a book whose files were
+// retired onto another book (database.ErrBookIsRetiredShell). The web branches
+// on it instead of the message text.
+const CodeRetiredShell = "RETIRED_SHELL"
 
 // RespondWithConflict sends a 409 Conflict error response.
 func RespondWithConflict(c *gin.Context, message string) {

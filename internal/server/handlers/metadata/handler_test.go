@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-10
+// last-edited: 2026-10-24
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -471,6 +471,23 @@ func TestRevertAudiobookMetadata(t *testing.T) {
 		map[string]any{"timestamp": ts}, idParam("b1"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A retired shell is refused with 409 RETIRED_SHELL, not a 500, and the cached
+// candidates are left alone (nothing changed).
+func TestRevertAudiobookMetadata_RetiredShellIs409(t *testing.T) {
+	h, d := newHandler(t)
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	d.store.EXPECT().RevertBookToVersion("b1", mock.Anything).
+		Return(nil, fmt.Errorf("revert book b1: %w", database.ErrBookIsRetiredShell))
+	w := doReq(h.RevertAudiobookMetadata, http.MethodPost, "/audiobooks/b1/revert-metadata",
+		map[string]any{"timestamp": ts}, idParam("b1"))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "RETIRED_SHELL") {
+		t.Errorf("body lacks the RETIRED_SHELL code: %s", w.Body.String())
 	}
 }
 
