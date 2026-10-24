@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
 // last-edited: 2026-10-24
 
@@ -62,7 +62,8 @@ func TestReader_MayRead(t *testing.T) {
 	}
 	view := []auth.Permission{auth.PermLibraryView}
 	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
-	admin := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage}
+	admin := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage, auth.PermUsersManage}
+	settingsOnly := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage}
 
 	for name, tc := range map[string]struct {
 		row  *database.OperationV2Row
@@ -82,6 +83,9 @@ func TestReader_MayRead(t *testing.T) {
 		"unparseable params and result":  {row(repairs.ApplyOpID, `not json`, ptr(`also not`)), admin, false},
 		"unknown fixer, editor":          {row(repairs.ApplyOpID, `{"fixer_id":"gone"}`, nil), edit, false},
 		"unknown fixer, admin":           {row(repairs.ApplyOpID, `{"fixer_id":"gone"}`, nil), admin, true},
+		// A removed fixer could have been the users.manage one (the two
+		// read-status imports), so settings.manage alone is not enough.
+		"unknown fixer, settings admin": {row(repairs.ApplyOpID, `{"fixer_id":"gone"}`, nil), settingsOnly, false},
 	} {
 		c, _ := ctxHolding()
 		got := NewRepairs(reg, holdsOnly(tc.held...)).For(c).MayRead(tc.row)
@@ -120,4 +124,41 @@ func TestReader_AsksOncePerFixer(t *testing.T) {
 		require.True(t, r.MayRead(row))
 	}
 	require.Equal(t, 1, asked)
+}
+
+// The v3 run record states its fixer the way a v2 row does (params, else
+// result), and the two surfaces give one verdict.
+func TestReader_MayReadRunAgreesWithRows(t *testing.T) {
+	reg := fixers{"scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage}}}
+	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
+	admin := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage}
+	for name, tc := range map[string]struct {
+		rec  *database.RunRecord
+		held []auth.Permission
+		want bool
+	}{
+		"nil":                       {nil, edit, true},
+		"non-repairs":               {&database.RunRecord{DefID: "library.scan"}, nil, true},
+		"params, editor":            {&database.RunRecord{DefID: repairs.PlanOpID, Params: []byte(`{"fixer_id":"scoped"}`)}, edit, false},
+		"params, admin":             {&database.RunRecord{DefID: repairs.PlanOpID, Params: []byte(`{"fixer_id":"scoped"}`)}, admin, true},
+		"result only, admin":        {&database.RunRecord{DefID: repairs.ApplyOpID, Result: []byte(`{"fixer_id":"scoped"}`)}, admin, true},
+		"no fixer, admin":           {&database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`{}`)}, admin, false},
+		"unparseable params, admin": {&database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`nope`)}, admin, false},
+	} {
+		c, _ := ctxHolding()
+		require.Equal(t, tc.want, NewRepairs(reg, holdsOnly(tc.held...)).For(c).MayReadRun(tc.rec), name)
+	}
+}
+
+// The fixer-level verdict the event broker carries on a message: a fixer id of
+// a non-repairs def is never asked about, and an empty fixer of a repairs def is
+// refused.
+func TestReader_MayReadFixer(t *testing.T) {
+	a := NewRepairs(fixers{"plain": scopedFixer{}}, holdsOnly(auth.PermLibraryEditMetadata))
+	c, _ := ctxHolding()
+	r := a.For(c)
+	require.True(t, r.MayReadFixer("library.scan", ""))
+	require.False(t, r.MayReadFixer(repairs.ApplyOpID, ""))
+	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.False(t, r.MayReadFixer(repairs.PlanOpID, "gone"))
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-24
 
@@ -28,8 +28,9 @@ import (
 // listening state, the operation's change journal (every user's state and
 // positions before and after). The generic routes (GET /operations/:id/result,
 // /changes, /undo/preflight, /operations/v2/:id and its logs, the system log
-// reader's operation_id branch, /operations/timeline and /operations/events)
-// are library.view reads, and guests hold the viewer role. So for these two
+// reader's operation_id branch, /operations/timeline and /operations/events;
+// /api/v3/ops runs, counts, timeline and events; the activity log's reads by
+// operation) are library.view reads, and guests hold the viewer role. So for these two
 // definitions the caller must hold every permission of the op's fixer
 // (repairs.RequiredPermissions, the same set the Repairs routes check in
 // fixerPermitted), and every other operation is unaffected.
@@ -60,29 +61,46 @@ func IsRepairsOp(defID string) bool {
 	return defID == repairs.PlanOpID || defID == repairs.ApplyOpID
 }
 
-// repairsOpFixerID is the fixer a repairs op row belongs to: params.fixer_id,
-// else result.fixer_id; "" when neither states one.
-func repairsOpFixerID(row *database.OperationV2Row) string {
+// fixerIDOf is the fixer a repairs op belongs to: params.fixer_id, else
+// result.fixer_id; "" when neither states one. The one reader of that rule, so
+// an operations_v2 row and an operations v3 run record cannot disagree.
+func fixerIDOf(params string, result *string) string {
 	var v struct {
 		FixerID string `json:"fixer_id"`
 	}
-	if row.Params != "" {
-		if json.Unmarshal([]byte(row.Params), &v) == nil && v.FixerID != "" {
+	if params != "" {
+		if json.Unmarshal([]byte(params), &v) == nil && v.FixerID != "" {
 			return v.FixerID
 		}
 	}
-	if row.ResultData != nil {
+	if result != nil {
 		v.FixerID = ""
-		if json.Unmarshal([]byte(*row.ResultData), &v) == nil && v.FixerID != "" {
+		if json.Unmarshal([]byte(*result), &v) == nil && v.FixerID != "" {
 			return v.FixerID
 		}
 	}
 	return ""
 }
 
+// RowFixerID is the fixer a repairs op row belongs to; "" when it states none.
+func RowFixerID(row *database.OperationV2Row) string {
+	return fixerIDOf(row.Params, row.ResultData)
+}
+
+// RunFixerID is RowFixerID for an operations v3 run record.
+func RunFixerID(rec *database.RunRecord) string {
+	var result *string
+	if len(rec.Result) > 0 {
+		r := string(rec.Result)
+		result = &r
+	}
+	return fixerIDOf(string(rec.Params), result)
+}
+
 // Reader answers, for one request, whether the caller may read the
-// data of an operation row. It remembers the verdict per fixer, because a
+// data of an operation. It remembers the verdict per fixer, because a
 // timeline can hold hundreds of repairs rows and each check asks the store.
+// It is not safe for concurrent use: one request goroutine owns it.
 type Reader struct {
 	a       *Repairs
 	c       *gin.Context
@@ -100,24 +118,42 @@ func (r *Reader) MayRead(row *database.OperationV2Row) bool {
 	if row == nil || !IsRepairsOp(row.DefID) {
 		return true
 	}
+	return r.MayReadFixer(row.DefID, RowFixerID(row))
+}
+
+// MayReadRun is MayRead for an operations v3 run record.
+func (r *Reader) MayReadRun(rec *database.RunRecord) bool {
+	if rec == nil || !IsRepairsOp(rec.DefID) {
+		return true
+	}
+	return r.MayReadFixer(rec.DefID, RunFixerID(rec))
+}
+
+// MayReadFixer is the verdict for an operation of definition defID that belongs
+// to fixerID ("" when it states none): always true for an operation that is not
+// a Repairs one, and false for a Repairs one with no fixer, with a fixer no
+// check can resolve, or whose permissions the caller does not all hold.
+func (r *Reader) MayReadFixer(defID, fixerID string) bool {
+	if !IsRepairsOp(defID) {
+		return true
+	}
 	if r.a == nil || r.a.fixers == nil || r.a.holds == nil {
 		return false
 	}
-	id := repairsOpFixerID(row)
-	if id == "" {
+	if fixerID == "" {
 		return false
 	}
-	if v, ok := r.verdict[id]; ok {
+	if v, ok := r.verdict[fixerID]; ok {
 		return v
 	}
 	var perms []auth.Permission
-	if f, ok := r.a.fixers.Get(id); ok {
+	if f, ok := r.a.fixers.Get(fixerID); ok {
 		perms = repairs.RequiredPermissions(f)
 	} else {
 		// A fixer this build does not know (removed or renamed since the op
-		// ran): its scope is unknown, so ask for the lane's permission and the
-		// strictest one a fixer names.
-		perms = []auth.Permission{repairs.DefaultPermission, auth.PermSettingsManage}
+		// ran): its scope is unknown, so ask for the lane's permission and
+		// every stricter one a fixer names (UnknownFixerPermissions).
+		perms = UnknownFixerPermissions
 	}
 	ok := true
 	for _, p := range perms {
@@ -126,8 +162,17 @@ func (r *Reader) MayRead(row *database.OperationV2Row) bool {
 			break
 		}
 	}
-	r.verdict[id] = ok
+	r.verdict[fixerID] = ok
 	return ok
+}
+
+// UnknownFixerPermissions is what reading an operation of a fixer this build
+// does not register requires: the lane's default permission and each stricter
+// permission any registered fixer names (settings.manage for the Missing files
+// and reconcile fixers, users.manage for the two read-status imports). A test
+// walks the registry and fails when a fixer names a permission this list lacks.
+var UnknownFixerPermissions = []auth.Permission{
+	repairs.DefaultPermission, auth.PermSettingsManage, auth.PermUsersManage,
 }
 
 // Require is MayRead that answers 403 itself when the caller may not read.

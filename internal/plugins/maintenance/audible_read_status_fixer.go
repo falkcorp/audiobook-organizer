@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -146,6 +147,16 @@ func (f *audibleReadStatusFixer) Description() string {
 		"unless the book is already finished or has newer local activity; in-progress titles get Audible's " +
 		"position only when the book has no local progress. Never un-finishes anything. Undo with the apply " +
 		"operation's revert, which refuses a book the user has listened to since."
+}
+
+// RequiredPermissions implements repairs.PermissionScoped: the plan names any
+// user as target_user_id and the apply writes that user's listening state, so
+// running it is a user-management act, above the lane's default
+// library.edit_metadata (owner decision 2026-10-24: admins only, the same as the
+// master-list import). The same set gates reading the fixer's plan rows and its
+// operations through the generic operations routes (opaccess).
+func (f *audibleReadStatusFixer) RequiredPermissions() []auth.Permission {
+	return []auth.Permission{auth.PermUsersManage}
 }
 
 // arsRowState is what a planned row stores (Row.State) for its re-plan.

@@ -1,5 +1,5 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
 // last-edited: 2026-10-24
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )
 
 const (
@@ -283,5 +284,24 @@ func TestWireHandlers_RepairsOpAccessIsInstalled(t *testing.T) {
 	} {
 		w := getAs(f.srv, f.admin, path)
 		require.Equal(t, http.StatusOK, w.Code, "%s: %s", path, w.Body.String())
+	}
+}
+
+// TestRepairsOpData_UnknownFixerFallbackCoversEveryFixer: an op of a fixer this
+// build does not register is read with opaccess.UnknownFixerPermissions, which
+// must therefore name every permission any registered fixer requires, or an
+// editor-plus-settings caller could read the ops of a removed fixer that needed
+// more (the read-status imports need users.manage). A fixer that adds a new
+// scoped permission fails here until the list names it.
+func TestRepairsOpData_UnknownFixerFallbackCoversEveryFixer(t *testing.T) {
+	srv, _, _ := repairsPermServer(t, false, false)
+	require.NotNil(t, srv.repairFixers)
+	fixers := srv.repairFixers.List()
+	require.NotEmpty(t, fixers)
+	for _, f := range fixers {
+		for _, p := range repairs.RequiredPermissions(f) {
+			require.Contains(t, opaccess.UnknownFixerPermissions, p,
+				"fixer %s requires %s, which the unknown-fixer fallback does not ask for", f.ID(), p)
+		}
 	}
 }

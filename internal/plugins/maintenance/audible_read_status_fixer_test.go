@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 569aec15-d845-4f39-9a8e-63ba7e93162a
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -746,4 +747,17 @@ func TestAudibleReadStatus_TitleHitsOnlyTheTargetsCopies(t *testing.T) {
 	require.Equal(t, []string{l.ids["mine"]}, st.Hits)
 	res := l.apply(plan, []string{"asin:B0TEST0701"})
 	require.Equal(t, repairs.OutcomeApplied, res["asin:B0TEST0701"].Outcome, "%+v", res)
+}
+
+// The import writes any user's listening state (the plan names the target user
+// and the apply writes it), so the Repairs routes and the op-read checks must
+// ask for users.manage, not the lane's library.edit_metadata (owner decision
+// 2026-10-24: admins only, as for the master-list import).
+func TestAudibleReadStatus_NeedsUserManagement(t *testing.T) {
+	p := &Plugin{deps: fakeDeps{}}
+	fx, ok := p.Repairs().Get(audibleReadStatusFixerID)
+	require.True(t, ok)
+	require.Equal(t, []auth.Permission{auth.PermUsersManage}, repairs.RequiredPermissions(fx))
+	require.NotContains(t, repairs.RequiredPermissions(fx), repairs.DefaultPermission,
+		"the lane's default permission must not be enough to run this fixer")
 }
