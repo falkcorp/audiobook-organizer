@@ -1,7 +1,7 @@
 // file: internal/organizer/collision_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4e07b5c9-1a26-4f83-b0d7-92c1e6438af5
-// last-edited: 2026-09-13
+// last-edited: 2026-10-24
 
 package organizer
 
@@ -27,6 +27,10 @@ type fakeCollisionStore struct {
 	updates    int
 	failUpdate bool
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// path lookup is the complete answer for the resolver's retired-aware read.
+func (*fakeCollisionStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func newFakeCollisionStore() *fakeCollisionStore {
 	return &fakeCollisionStore{
