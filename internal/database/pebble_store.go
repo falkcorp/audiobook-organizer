@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.0
+// version: 1.234.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -3282,11 +3282,18 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 // still replaces that write with its stale copy. Use ModifyBook (read and
 // write under one hold) for that.
 func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
+	return p.updateBook(id, book, nil)
+}
+
+// updateBook is UpdateBook with an optional refusal, run with the book's write
+// stripe held and the stored row read, before anything is written (see
+// bookWriteOpts.refuseOld).
+func (p *PebbleStore) updateBook(id string, book *Book, refuseOld func(old *Book) error) (*Book, error) {
 	var before string
 	updated, err := func() (*Book, error) {
 		unlock := p.lockBook(id)
 		defer unlock()
-		return p.updateBookLockedMode(id, book, bookWriteOpts{onOld: func(old *Book) { before = narratorOf(old) }})
+		return p.updateBookLockedMode(id, book, bookWriteOpts{refuseOld: refuseOld, onOld: func(old *Book) { before = narratorOf(old) }})
 	}()
 	if err == nil && updated != nil {
 		p.syncNarratorJunctionAfterWrite(id, before, updated)
@@ -3303,6 +3310,11 @@ type bookWriteOpts struct {
 	// onOld, when set, is handed the stored row as read under the stripe,
 	// before anything is written.
 	onOld func(*Book)
+	// refuseOld, when set, is handed the stored row as read under the stripe
+	// and may refuse the write; a non-nil error is returned and nothing is
+	// written. RevertBookToVersion uses it to refuse a whole-row revert of a
+	// retired shell.
+	refuseOld func(*Book) error
 	// legacySeries writes Book.Series exactly as given, skipping the rule (enforceSeriesInvariant, which every other create and update applies)
 	// that holds the object to SeriesID. It exists so tests can seed the rows
 	// older builds wrote (object kept with SeriesID nil, or naming another
@@ -3335,6 +3347,11 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	}
 	if oldBook == nil {
 		return nil, fmt.Errorf("book not found")
+	}
+	if opts.refuseOld != nil {
+		if err := opts.refuseOld(oldBook); err != nil {
+			return nil, err
+		}
 	}
 	if onOld != nil {
 		onOld(oldBook)
@@ -3970,13 +3987,29 @@ func (p *PebbleStore) GetBookAtVersion(id string, ts time.Time) (*Book, error) {
 // concurrent writer just set, is replaced by the snapshot's. UpdateBook still
 // holds the book's write stripe across its read and commit, so the revert is
 // serialized against other writers; it is only the merge that is omitted.
+//
+// It refuses (ErrBookIsRetiredShell) a book that is a retired shell, whatever
+// the snapshot holds: the snapshot is a whole row, so it brings back the trash
+// mark the shell carries (an empty book next to the audio it lost) and clears
+// the merged-into link the retire wrote. The check runs under the book's write
+// stripe, right after the stored row is read and before anything is written.
+// A retire commits under the shell's owner stripe, not its write stripe, so a
+// retire landing between that read and the commit is not excluded here; every
+// retire runs under the merge lock, which the callers that must be exact
+// (merge.RestoreFromTrash) hold.
 func (p *PebbleStore) RevertBookToVersion(id string, ts time.Time) (*Book, error) {
 	oldBook, err := p.GetBookAtVersion(id, ts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get version: %w", err)
 	}
 	oldBook.ID = id
-	return p.UpdateBook(id, oldBook)
+	return p.updateBook(id, oldBook, func(*Book) error {
+		n, err := retiredRowsHeld(p, id)
+		if err != nil {
+			return fmt.Errorf("revert book %s: cannot verify it is not a retired shell: %w", id, err)
+		}
+		return retiredShellRefusal("revert book", id, n)
+	})
 }
 
 // snapshotKeyRange returns the iterator bounds covering one book's CoW snapshots.
@@ -4096,7 +4129,16 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 	return len(toDelete), nil
 }
 
+// DeleteBook hard-deletes a book row and the indexes keyed by it. It refuses a
+// book that still owns book_file rows (ErrBookOwnsFiles) and a book that is a
+// retired shell (ErrBookIsRetiredShell), by construction for every caller.
 func (p *PebbleStore) DeleteBook(id string) error {
+	return p.deleteBook(id, deleteBookOpts{})
+}
+
+// deleteBook is DeleteBook's body with the variations in opts
+// (retired_shell.go).
+func (p *PebbleStore) deleteBook(id string, opts deleteBookOpts) error {
 	// The book's write stripe (pebble_store_book_lock.go) spans the read below
 	// and the commit, so a concurrent UpdateBook cannot move the book's path
 	// between them: the compare-and-delete of book:path: and the book_atpath
@@ -4126,6 +4168,17 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	defer unlockOwner()
 	if err := p.refuseDeleteIfBookOwnsFiles(id); err != nil {
 		return err
+	}
+	// A retired shell owns no live row, so the count above passes it, but its
+	// retired versions (held under another book) are the only record of where
+	// its audio went, and nothing journals this delete yet. Same stripes, so a
+	// retire cannot commit between this read and the commit below
+	// (retired_shell.go). The bypass, opts.allowRetiredShell, is the seam of
+	// the journaled purge and is never set today.
+	if !opts.allowRetiredShell {
+		if err := p.refuseDeleteIfRetiredShell(id); err != nil {
+			return err
+		}
 	}
 
 	batch := p.db.NewBatch()
