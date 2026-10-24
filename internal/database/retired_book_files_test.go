@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -813,4 +813,53 @@ func TestUpsertIgnoresRetiredRowsAtItsPathAndPID(t *testing.T) {
 			require.Equal(t, "PID-IGN", old.ITunesPersistentID)
 		})
 	}
+}
+
+// RestoreRetiredVersionHolder is the inverse of a rehome and accepts the holder
+// the chain case trashed; the forward rehome does not accept a trashed holder.
+func TestRestoreRetiredVersionHolder_AcceptsATrashedPreviousHolder(t *testing.T) {
+	fx := newRetiredFixture(t)
+	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/r/01.mp3", FileHash: "restore-hash"})
+	require.NoError(t, fx.retire(t, x))
+	newHolder, err := fx.ps.CreateBook(&Book{Title: "Chain Holder", FilePath: "/lib/ret/chain-r"})
+	require.NoError(t, err)
+	require.NoError(t, fx.ps.RehomeRetiredVersion(fx.version.ID, newHolder.ID))
+
+	// The chain case: the old holder was trashed when the version left it.
+	trashed := true
+	fx.holder.MarkedForDeletion = &trashed
+	_, err = fx.ps.UpdateBook(fx.holder.ID, fx.holder)
+	require.NoError(t, err)
+
+	err = fx.ps.RehomeRetiredVersion(fx.version.ID, fx.holder.ID)
+	require.ErrorIs(t, err, ErrBookFileOwnerMissing, "the forward move refuses a trashed holder")
+
+	require.NoError(t, fx.ps.RestoreRetiredVersionHolder(fx.version.ID, fx.holder.ID))
+	v, err := fx.ps.GetBookVersion(fx.version.ID)
+	require.NoError(t, err)
+	require.Equal(t, fx.holder.ID, v.BookID)
+	rows, err := fx.ps.GetRetiredBookFiles(fx.holder.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, fx.holder.ID+":"+x.ID, indexOwner(t, fx.ps, "book_file_hash:restore-hash"))
+	left, err := fx.ps.GetRetiredBookFiles(newHolder.ID)
+	require.NoError(t, err)
+	require.Empty(t, left)
+}
+
+func TestRestoreRetiredVersionHolder_RefusesAMissingHolderAndTheShell(t *testing.T) {
+	fx := newRetiredFixture(t)
+	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/m/01.mp3"})
+	require.NoError(t, fx.retire(t, x))
+	newHolder, err := fx.ps.CreateBook(&Book{Title: "Chain Holder", FilePath: "/lib/ret/chain-m"})
+	require.NoError(t, err)
+	require.NoError(t, fx.ps.RehomeRetiredVersion(fx.version.ID, newHolder.ID))
+
+	require.Error(t, fx.ps.RestoreRetiredVersionHolder("", fx.holder.ID))
+	require.ErrorIs(t, fx.ps.RestoreRetiredVersionHolder(fx.version.ID, "no-such-book"), ErrBookFileOwnerMissing)
+	require.ErrorIs(t, fx.ps.RestoreRetiredVersionHolder(fx.version.ID, fx.shell.ID), ErrRetiredVersionMismatch,
+		"a version never goes back to the book it was retired out of")
+	v, err := fx.ps.GetBookVersion(fx.version.ID)
+	require.NoError(t, err)
+	require.Equal(t, newHolder.ID, v.BookID, "a refused restore writes nothing")
 }

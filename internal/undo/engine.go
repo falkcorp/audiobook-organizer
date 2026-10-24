@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -874,22 +874,32 @@ type bookVersionReader interface {
 }
 
 // recreatableShells returns the shells a purge deleted that an un-reverted
-// retire row of rows names and a purge snapshot can bring back (ShellCheck).
+// retire row of rows names (as the shell a file row left, or as the holder a
+// rehome took a version from) and a purge snapshot can bring back (ShellCheck).
 // The revert recreates them before it reverts any row (the revert's own
 // pre-pass), so every row of such a shell is judged against a shell that will
 // be there, never refused book_missing.
 func recreatableShells(store ConflictChecker, rows []*database.OperationChange) map[string]bool {
 	out := map[string]bool{}
+	note := func(id string) {
+		if id == "" || out[id] {
+			return
+		}
+		if state, err := ShellCheck(store, id); err == nil && state == ShellRecreatable {
+			out[id] = true
+		}
+	}
 	for _, c := range rows {
-		if c.ChangeType != ChangeTypeBookFileRetire {
-			continue
-		}
-		r, err := DecodeBookFileRetire(c)
-		if err != nil || out[r.Shell] {
-			continue
-		}
-		if state, err := ShellCheck(store, r.Shell); err == nil && state == ShellRecreatable {
-			out[r.Shell] = true
+		switch c.ChangeType {
+		case ChangeTypeBookFileRetire:
+			if r, err := DecodeBookFileRetire(c); err == nil {
+				note(r.Shell)
+			}
+		case ChangeTypeRetiredVersionRehome:
+			// The holder a rehome took the version from is trashed (the chain
+			// case) and may have been purged since; the revert recreates it
+			// before the version goes back.
+			note(c.OldValue)
 		}
 	}
 	return out
@@ -936,8 +946,9 @@ func recreatableShellVerdict(store ConflictChecker, c *database.OperationChange)
 // checkRetireRow predicts the revert of one retire row (RevertService's
 // revertBookFileRetire, revertBookVersionCreate, revertRetiredVersionRehome):
 // the same compare-and-set (CheckRetireCurrent, CheckVersionCreateCurrent,
-// CheckRehomeCurrent), and for a file row whose shell was purged the same
-// shell check (ShellCheck), so "purged but recreatable" is restorable.
+// CheckRehomeCurrent), and for a file row whose shell was purged, or a rehome
+// whose old holder was, the same shell check (ShellCheck), so "purged but
+// recreatable" is restorable.
 func checkRetireRow(store ConflictChecker, c *database.OperationChange) error {
 	switch c.ChangeType {
 	case ChangeTypeBookFileRetire:
@@ -978,7 +989,16 @@ func checkRetireRow(store ConflictChecker, c *database.OperationChange) error {
 		if c.ChangeType == ChangeTypeBookVersionCreate {
 			return CheckVersionCreateCurrent(cur, c)
 		}
-		return CheckRehomeCurrent(cur, c)
+		if err := CheckRehomeCurrent(cur, c); err != nil {
+			return err
+		}
+		// The version goes back to the holder it left. That holder was trashed
+		// when the rehome moved the version off it, and the revert accepts a
+		// trashed holder (RestoreRetiredVersionHolder), but it must exist or be
+		// recreatable from a purge snapshot: the same shell check the revert's
+		// ensureShellPresent makes first.
+		_, err = ShellCheck(store, c.OldValue)
+		return err
 	}
 	return nil
 }
