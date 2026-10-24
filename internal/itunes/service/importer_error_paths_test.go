@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.9.1
+// version: 1.11.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-23
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -192,6 +192,9 @@ func TestExecute_ExistingPID_LinkedNotCreated(t *testing.T) {
 	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
 	// PID already mapped → returns existing book ID.
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return(existingBookID, nil).Once()
+	// A mapped PID is linked only when no retired row holds it: one lookup,
+	// answered by no row.
+	m.EXPECT().GetBookFileByPID(pid).Return(nil, nil).Once()
 	// linkITunesMetadata fills the missing iTunes fields via ModifyBook.
 	expectModifyBook(m, existingBookID, existingBook, nil)
 	// End of Execute: ClearState + fingerprint.
@@ -211,6 +214,58 @@ func TestExecute_ExistingPID_LinkedNotCreated(t *testing.T) {
 	snap := imp.GetStatus("op-existing-pid")
 	assert.Equal(t, 1, snap.Linked, "one book should have been linked via PID")
 	assert.Equal(t, 0, snap.Imported, "no new books should have been imported")
+}
+
+// ---------------------------------------------------------------------------
+// 5b'. External-ID collision where the PID is held only by a RETIRED row: the
+//      external-ID backfill maps a retired row's PID to its holder, and that
+//      mapping means "known", not "the holder's live file". The album is
+//      skipped: no link (no ModifyBook on the holder, which the strict mock
+//      would fail), no new book.
+// ---------------------------------------------------------------------------
+
+func TestExecute_ExistingPID_HeldByRetiredRowIsSkippedNotLinked(t *testing.T) {
+	dir := t.TempDir()
+	trackPath := filepath.Join(dir, "chapter.m4b")
+	require.NoError(t, os.WriteFile(trackPath, bytes.Repeat([]byte("r"), 512), 0o644))
+
+	pid := "RETIRED_PID_001"
+	holderBookID := "holder-book-id-77"
+	xmlPath := writeXMLWithAudiobook(t, dir, "Audiobook R", "Author R", pid, trackPath)
+
+	authorRecord := &database.Author{ID: 4, Name: "Author R"}
+
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().GetOperationState("op-retired-pid").Return(nil, nil).Once()
+	m.EXPECT().GetAuthorByName(mock.Anything).Return(authorRecord, nil).Maybe()
+	m.EXPECT().GetSeriesByName(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().CreateSeries(mock.Anything, mock.Anything).Return(&database.Series{ID: 4, Name: "Audiobook R"}, nil).Maybe()
+	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
+	// The backfill mapped the retired row's PID to its holder.
+	m.EXPECT().GetBookByExternalID("itunes", pid).Return(holderBookID, nil).Once()
+	// The PID's single-owner key is held by a retired row of the holder.
+	m.EXPECT().GetBookFileByPID(pid).Return(&database.BookFile{
+		ID: "retired-file-1", BookID: holderBookID, ITunesPersistentID: pid, Retired: true,
+	}, nil).Once()
+	m.EXPECT().DeleteOperationState("op-retired-pid").Return(nil).Once()
+	m.EXPECT().SaveLibraryFingerprint(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	imp := newImporter(Deps{Store: m, Config: Config{}})
+	log := logger.New("test")
+	err := imp.Execute(context.Background(), "op-retired-pid", ImportRequest{
+		LibraryPath: xmlPath,
+		ImportMode:  "import",
+	}, log)
+
+	assert.NoError(t, err)
+	snap := imp.GetStatus("op-retired-pid")
+	assert.Equal(t, 1, snap.Skipped, "the album is skipped")
+	assert.Equal(t, 0, snap.Linked, "nothing is written onto the holder")
+	assert.Equal(t, 0, snap.Imported, "no second book is created")
+	assert.Equal(t, 0, snap.Failed)
+	require.Len(t, snap.Errors, 1)
+	assert.Contains(t, snap.Errors[0], holderBookID)
+	assert.Contains(t, snap.Errors[0], "retired version")
 }
 
 // ---------------------------------------------------------------------------

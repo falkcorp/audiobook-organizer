@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-10-15
+// last-edited: 2026-10-23
 
 package itunes
 
@@ -21,13 +21,19 @@ type ExternalIDBackfillStore interface {
 	// GetAllBooksCore returns the memdb-slim projection — the backfill loops
 	// only read Core-safe fields (ITunesPersistentID, ID) off each book.
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	// GetAllBookFilesCore is the one batch read of book_file rows the
-	// backfill makes (PERF-5). It replaces a GetBookFiles(bookID) point read
-	// per book — under Pebble-direct that was one prefix iterator per book,
-	// i.e. ~100k random reads on a production-sized library at every boot.
-	// The Core projection carries the only three fields needed here
+	// GetAllBookFilesCoreIncludingRetired is the one batch read of book_file
+	// rows the backfill makes (PERF-5). It replaces a GetBookFiles(bookID)
+	// point read per book — under Pebble-direct that was one prefix iterator
+	// per book, i.e. ~100k random reads on a production-sized library at every
+	// boot. The Core projection carries the only three fields needed here
 	// (BookID, FilePath, ITunesPersistentID).
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	//
+	// Retired rows are INCLUDED on purpose: a retired row is keyed under its
+	// holder and keeps its PID as provenance, so its PID maps to the holder
+	// (the same book the retire's external-ID reassignment names). The plain
+	// GetAllBookFilesCore skips retired rows and would leave those PIDs
+	// unmapped, so a later import would see them as brand-new tracks.
+	GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
 	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
 	BulkCreateExternalIDMappings(mappings []database.ExternalIDMapping) error
 	GetSetting(key string) (*database.Setting, error)
@@ -189,7 +195,8 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 	slog.Info("Starting external ID backfill v4...")
 
 	// PERF-5: one batch read of every book_file row, reduced to the
-	// PID-bearing subset keyed by book ID, replaces a per-book GetBookFiles
+	// PID-bearing subset keyed by book ID (the holder, for a retired row),
+	// replaces a per-book GetBookFiles
 	// point read. The Core projection is memdb-slim, and only files that
 	// actually carry a PID are retained, so the resident set is bounded by the
 	// iTunes-linked file count rather than the whole table. Books are then
@@ -200,7 +207,7 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		slog.Info("external ID backfill canceled before file read", "err", err)
 		return nil
 	}
-	allFiles, err := store.GetAllBookFilesCore()
+	allFiles, err := store.GetAllBookFilesCoreIncludingRetired()
 	if err != nil {
 		return fmt.Errorf("external ID backfill: read book files: %w", err)
 	}

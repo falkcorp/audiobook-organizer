@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-23
 
@@ -1353,7 +1353,9 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 		}
 	}
 	for _, p := range paths {
-		row, err := store.GetBookFileByPath(p)
+		// Unfiltered: a path held only by a retired row must reach the Retired
+		// branch below, not read as unowned.
+		row, err := database.BookFileByPathIncludingRetired(store, p)
 		if err != nil {
 			return "", "", fmt.Errorf("read owner of %s: %w", p, err)
 		}

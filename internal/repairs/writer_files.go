@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package repairs
 
@@ -75,7 +75,12 @@ var ErrSupersedeUnsupported = errors.New("repairs: the op journal cannot mark an
 type BookFileWriter interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	// GetBookFileByPath names the row holding a path's single-owner key:
-	// RepointBookFile records it so the revert can hand the key back.
+	// RepointBookFile records it so the revert can hand the key back. When
+	// the store can also read retired rows (database.RetiredBookFileReader,
+	// reached through decorators), the key's holder is read with
+	// database.BookFileByPathIncludingRetired, so a retired row that holds
+	// the key is journaled as its owner instead of being invisible; this
+	// method is the fallback for a store without that reader.
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
@@ -572,7 +577,9 @@ func (w *Writer) Journaled() int { return int(w.journaled.Load()) }
 // after, so the revert restores path, Missing, hash and size exactly; the
 // write is then a compare-and-set against the location journaled. The
 // journaled after-location also names the row that held to.Path's
-// single-owner path key (KeyOwnerBook/KeyOwnerRow), read before the write:
+// single-owner path key (KeyOwnerBook/KeyOwnerRow), read before the write
+// and including a retired row (a version another book holds), which owns the
+// key while no live row does:
 // the revert hands the key back to that row and no other. A compare-and-set
 // refusal at the write voids the row it journaled.
 func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.BookFileLocation) error {
@@ -598,7 +605,7 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.Book
 			ErrChangedSincePlan, fileID, was.Path, was.Missing, expect.Missing)
 	}
 	to.KeyOwnerBook, to.KeyOwnerRow = "", ""
-	owner, err := w.files.GetBookFileByPath(to.Path)
+	owner, err := database.BookFileByPathIncludingRetired(w.files, to.Path)
 	if err != nil {
 		return fmt.Errorf("read the row at %s: %w", to.Path, err)
 	}

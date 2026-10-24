@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-10-06
+// last-edited: 2026-10-23
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -348,6 +348,13 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 // fetch many books at once (the dedup embedding tab loads files for every
 // candidate on a page). file_exists is then null with file_check_error
 // "not checked", so the response still never claims disk truth it lacks.
+//
+// ?include_retired=true adds the book's retired rows (versions the
+// retire-versions repair moved onto this book from a trashed or merged shell)
+// for the versions panel; each row carries "retired" and its "version_id". The
+// default leaves them out: a retired row is not a playable file of the book,
+// and every caller that wants "this book's files" must keep getting only the
+// live ones. Anything other than "true" means false.
 func (h *Handler) ListBookFiles(c *gin.Context) {
 	bookID := c.Param("id")
 	store := h.store
@@ -355,7 +362,15 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
-	files, err := store.GetBookFiles(bookID)
+	var (
+		files []database.BookFile
+		err   error
+	)
+	if c.Query("include_retired") == "true" {
+		files, err = database.BookFilesIncludingRetired(store, bookID)
+	} else {
+		files, err = store.GetBookFiles(bookID)
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to get book files", err)
 		return
@@ -412,6 +427,8 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 			"fingerprint_diagnostic_json": f.FingerprintDiagnosticJSON,
 			"organize_method":             f.OrganizeMethod,
 			"missing":                     f.Missing,
+			"retired":                     f.Retired,
+			"version_id":                  f.VersionID,
 			"file_exists":                 disk[i].Exists,
 			"file_check_error":            disk[i].CheckError,
 			"created_at":                  f.CreatedAt,

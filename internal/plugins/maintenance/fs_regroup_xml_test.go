@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.5.2
+// version: 2.5.3
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-09-25
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -84,6 +84,15 @@ func (s *fsGuardStore) GetBookFileByPath(p string) (*database.BookFile, error) {
 		return nil, s.lookupErr
 	}
 	return s.PebbleStore.GetBookFileByPath(p)
+}
+
+// GetBookFileByPathIncludingRetired is the lookup the apply makes (it must see
+// a retired row holding the path), so the injected failure goes here too.
+func (s *fsGuardStore) GetBookFileByPathIncludingRetired(p string) (*database.BookFile, error) {
+	if s.lookupErr != nil {
+		return nil, s.lookupErr
+	}
+	return s.PebbleStore.GetBookFileByPathIncludingRetired(p)
 }
 
 func fsSeedBook(t *testing.T, s *database.PebbleStore, title, path string) string {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-10-23
 
@@ -1150,7 +1150,10 @@ func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 	for _, b := range gaps {
 		// A lookup error is not proof there is no row; creating one on it could
 		// put a second row on the same path.
-		existing, err := a.store.GetBookFileByPath(b.FilePath)
+		// The unfiltered getter: GetBookFileByPath answers nil for a path only a
+		// retired row holds, so the Retired branch below was unreachable and the
+		// CreateBookFile that follows put a live row on a retired version's file.
+		existing, err := database.BookFileByPathIncludingRetired(a.store, b.FilePath)
 		if err != nil {
 			fail("look up %q: %v", logger.SanitizeLogValue(b.FilePath), err)
 			return

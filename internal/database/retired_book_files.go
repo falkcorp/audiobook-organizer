@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-23
 
@@ -146,6 +146,15 @@ func (p *PebbleStore) GetAllBookFilesCoreIncludingRetired() ([]BookFileCore, err
 // filter. See RetiredBookFileReader.
 func (p *PebbleStore) GetBookFileByPIDIncludingRetired(itunesPID string) (*BookFile, error) {
 	return p.getBookFileByPIDAny(itunesPID)
+}
+
+// GetBookFileByPathIncludingRetired is GetBookFileByPath without the retired
+// filter: the single-row path-index hit, whoever holds it. It is the twin the
+// "is this path claimed?" checks need, because GetBookFileByPath answers nil
+// for a path only a retired row holds. Like the index it reads, it names one
+// row per path CRC; BookFilesAtPath is the complete multi-row lookup.
+func (p *PebbleStore) GetBookFileByPathIncludingRetired(filePath string) (*BookFile, error) {
+	return p.getBookFileByPathAny(filePath)
 }
 
 // GetRetiredVersionsFromBook returns the retired versions retired out of

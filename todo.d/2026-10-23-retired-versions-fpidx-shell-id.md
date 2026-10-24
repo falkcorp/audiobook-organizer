@@ -4,6 +4,7 @@
       therefore reports the shell, not the holder, until the index is rebuilt.
       Rewrite the `fpidx:` value in the retire and un-retire batch (or have the
       LSH readers resolve the owner through the file id), and add a test that a
-      retire followed by an `LSHProbe` hit resolves to the holder. Callers of
-      `LookupAcoustIDCandidates` and `LSHProbe` must skip a retired row until
-      then (follow-up PR 3b, dedup collectors).
+      retire followed by an `LSHProbe` hit resolves to the holder. The callers
+      of `LookupAcoustIDCandidates` and `LSHProbe` (the dedup collectors and
+      the `AcoustIDScan` LSH branch) already skip a retired row, so this
+      rewrite is no longer blocking them.

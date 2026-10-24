@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-10-13
+// last-edited: 2026-10-23
 
 package scanner
 
@@ -34,6 +34,12 @@ type scanHashLookup interface {
 	GetBookBySegmentFileHash(hash string) (*database.Book, error)
 	GetBooksByMetadataSourceHash(hash string) ([]database.Book, error)
 	IsHashBlocked(hash string) (bool, error)
+	// BookFilesWithHash answers every book_file row, live and retired, whose
+	// FileHash or OriginalFileHash is hash. Named here (not reached through
+	// database.AsCapability alone) so a test decorator that embeds
+	// scannerStore forwards it like the other lookups; the retired-content
+	// check (retiredHolderOfHash) must never see it missing.
+	BookFilesWithHash(hash string) ([]database.BookFile, error)
 }
 
 type scanBookLookup interface {

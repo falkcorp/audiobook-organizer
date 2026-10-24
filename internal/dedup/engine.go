@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.95.3
+// version: 1.95.4
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package dedup
 
@@ -4839,7 +4839,10 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 							continue
 						}
 						cand, _ := lshStore.GetBookFileByID("", candID)
-						if cand == nil || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 ||
+						// A retired row is a version that left the library: the fpidx: value
+						// still names it, and its BookID is the holder, so pairing it would
+						// propose a merge of the holder with content already merged into it.
+						if cand == nil || cand.Retired || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 ||
 							!cand.HasCurrentPrint() || isBoilerplateTitle(cand.Title) {
 							continue
 						}
@@ -4876,7 +4879,10 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 
 					// Tier 1: exact match (O(1) via Pebble book_file_acoustid: index).
 					exactHit, _ := de.bookStore.GetBookFileByAcoustID(seg)
-					if exactHit != nil && exactHit.BookID != book.ID {
+					// GetBookFileByAcoustID already answers nil for a retired-only
+					// identity; the Retired test keeps this site correct on a store
+					// that does not filter.
+					if exactHit != nil && !exactHit.Retired && exactHit.BookID != book.ID {
 						if isBoilerplateTitle(exactHit.Title) {
 							continue
 						}

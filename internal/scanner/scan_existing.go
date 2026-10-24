@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 //
 // Resolves, once, the stored row a scanned book already is.
 
@@ -49,6 +49,34 @@ type scanExisting struct {
 	bySegments   *database.Book
 	segCount     int
 	segThreshold int
+
+	// retired is set when nothing above found a row and the scanned content
+	// is a retired version's content (lookupRetiredContent): the library
+	// already holds these bytes as a version another book keeps out of its
+	// live files, so the import is skipped. The holder is never offered as
+	// byHash, bySegments or row(): that would read the retired version as
+	// the book's own file and version-link a new row to it.
+	retired *retiredContentHit
+}
+
+// retiredContentHit names the retired version a scanned file or segment list
+// matched by content. matched of total hashed files matched it (a single file
+// is 1 of 1).
+type retiredContentHit struct {
+	holder    string
+	versionID string
+	matched   int
+	total     int
+}
+
+// asError is the skip the save returns: the same errFileOwnedByOtherBook the
+// ownership check raises, so every caller already skips the book's rows,
+// chapters, scan-cache stamp and AI nomination, and the run's ownership-skip
+// log carries the holder and the reason.
+func (h *retiredContentHit) asError(path string) error {
+	return &ownershipSkipError{Path: path, Owners: []string{h.holder},
+		Reason: fmt.Sprintf("content of a retired version of book %s (version %s): %d of %d file(s) match",
+			h.holder, h.versionID, h.matched, h.total)}
 }
 
 // lookupScanExisting resolves book's existing row: path, organizer ID, the
@@ -90,7 +118,91 @@ func lookupScanExisting(book *Book, verdict fileOwnershipVerdict, fileHash *stri
 	if e.byHash == nil {
 		e.lookupSegments(book)
 	}
+	if e.row() == nil {
+		// About to be a new book: last check that its content is not a
+		// retired version's. A hit through a retired row counts only when no
+		// non-retired row holds the content too (those are the lookups above).
+		if err := e.lookupRetiredContent(book, fileHash); err != nil {
+			return nil, err
+		}
+	}
 	return e, nil
+}
+
+// lookupRetiredContent sets e.retired when the scanned content matches a
+// retired book_file row and no non-retired row. GetBookBySegmentFileHash and
+// the book-level hash lookups never answer for a retired row, so without this
+// a copy of a retired version's bytes (the same file dropped in again, or a
+// re-download) was imported as a brand new book. A single file is judged by
+// its hash; a segment list by the segments' hashes (kept on book.SegmentHashes
+// by lookupSegments) at the same 80% bar the live segment vote uses.
+//
+// BookFilesWithHash is the one complete per-hash read, and it fails with
+// ErrBookFilesWithHashUnavailable instead of answering short. That is returned:
+// the book cannot be proven not to be a retired version, so the import is
+// skipped (the file is untouched and imports on a later scan once the store
+// recovers), the same rule as a failing duplicate-hash lookup.
+func (e *scanExisting) lookupRetiredContent(book *Book, fileHash *string) error {
+	store := getStore()
+	if len(book.SegmentFiles) > 1 {
+		threshold := int(math.Ceil(float64(len(book.SegmentFiles)) * 0.8))
+		var first *retiredContentHit
+		matched := 0
+		for _, f := range book.SegmentFiles {
+			h := book.SegmentHashes[f]
+			if h == "" {
+				continue
+			}
+			hit, err := retiredHolderOfHash(store, h)
+			if err != nil {
+				return fmt.Errorf("skipping import of %s: retired-version check undeterminable: %w", book.FilePath, err)
+			}
+			if hit == nil {
+				continue
+			}
+			matched++
+			if first == nil {
+				first = hit
+			}
+		}
+		if first != nil && matched >= threshold {
+			first.matched, first.total = matched, len(book.SegmentFiles)
+			e.retired = first
+		}
+		return nil
+	}
+	if fileHash == nil || *fileHash == "" {
+		return nil
+	}
+	hit, err := retiredHolderOfHash(store, *fileHash)
+	if err != nil {
+		return fmt.Errorf("skipping import of %s: retired-version check undeterminable: %w", book.FilePath, err)
+	}
+	if hit != nil {
+		hit.matched, hit.total = 1, 1
+		e.retired = hit
+	}
+	return nil
+}
+
+// retiredHolderOfHash returns the retired version holding hash, or nil when no
+// retired row has it or any non-retired row does (a live copy is the live
+// lookups' business, not a retired-content skip).
+func retiredHolderOfHash(store any, hash string) (*retiredContentHit, error) {
+	rows, err := database.BookFilesHoldingHash(store, hash)
+	if err != nil {
+		return nil, err
+	}
+	var hit *retiredContentHit
+	for i := range rows {
+		if !rows[i].Retired {
+			return nil, nil
+		}
+		if hit == nil {
+			hit = &retiredContentHit{holder: rows[i].BookID, versionID: rows[i].VersionID}
+		}
+	}
+	return hit, nil
 }
 
 // row is the existing row the folder-parse hold keeps the stored identity

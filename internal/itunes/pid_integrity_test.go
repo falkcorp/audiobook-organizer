@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: c9a3e714-0d62-4b58-9f21-6e4a2c8b1d70
-// last-edited: 2026-09-02
+// last-edited: 2026-10-23
 
 package itunes
 
@@ -21,6 +21,10 @@ type pidCensusMock struct {
 func (m *pidCensusMock) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return m.files, nil
 }
+
+// HoldsNoRetiredBookFiles: this in-memory list never holds a retired row, so
+// GetAllBookFilesCore is the complete answer (database.NoRetiredBookFiles).
+func (m *pidCensusMock) HoldsNoRetiredBookFiles() bool { return true }
 
 func (m *pidCensusMock) GetBookByID(id string) (*database.Book, error) {
 	return m.books[id], nil

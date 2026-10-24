@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package reconcile
 
@@ -303,8 +303,12 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, opID string
 	rows := make([]row, 0, len(candidates))
 	for _, path := range candidates {
 		f, err := store.GetBookFileByPath(path)
-		// A legacy-era print (misdecoded bytes) is unknown, like no print.
-		if err != nil || f == nil || len(f.AcoustIDFingerprint) == 0 || !f.HasCurrentPrint() {
+		// A legacy-era print (misdecoded bytes) is unknown, like no print. A retired
+		// row is not a live candidate: GetBookFileByPath answers nil for a path only
+		// a retired row holds, and the Retired test keeps this correct on a store
+		// that does not filter. Its BookID is the holder, so a collapse built from it
+		// would merge the holder into a book it already absorbed.
+		if err != nil || f == nil || f.Retired || len(f.AcoustIDFingerprint) == 0 || !f.HasCurrentPrint() {
 			return "", 0
 		}
 		rows = append(rows, row{f.BookID, f.AcoustIDFingerprint, path})
@@ -423,7 +427,9 @@ func resolveAmbiguousByBookMeta(store reconcileStore, track iTunesTrack, candida
 	scored := make([]entry, 0, len(candidates))
 	for _, path := range candidates {
 		bf, err := store.GetBookFileByPath(path)
-		if err != nil || bf == nil {
+		if err != nil || bf == nil || bf.Retired {
+			// A retired row's BookID is its holder, not the book the path was
+			// ever scored against: it is not a candidate.
 			continue
 		}
 		book, err := store.GetBookByID(bf.BookID)
@@ -497,7 +503,7 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *a
 
 		// Stored print only when it is current-era; a legacy one is not a
 		// valid AcoustID submission, so fingerprint the file afresh instead.
-		if bf, err := store.GetBookFileByPath(path); err == nil && bf != nil && len(bf.AcoustIDFingerprint) > 0 && bf.HasCurrentPrint() {
+		if bf, err := store.GetBookFileByPath(path); err == nil && bf != nil && !bf.Retired && len(bf.AcoustIDFingerprint) > 0 && bf.HasCurrentPrint() {
 			rawFP = bf.AcoustIDFingerprint
 			durationSec = int(bf.AcoustIDFingerprintDurationSec)
 		} else {
@@ -588,7 +594,10 @@ func resolveNotFoundByPID(store reconcileStore, pid string) string {
 		return ""
 	}
 	bf, err := store.GetBookFileByPID(pid)
-	if err != nil || bf == nil || bf.FilePath == "" {
+	// GetBookFileByPID answers nil for a PID only a retired row holds; a retired
+	// row's path is a retired version, never "the book's current file", so it is
+	// refused here too rather than relying on the store's filter alone.
+	if err != nil || bf == nil || bf.Retired || bf.FilePath == "" {
 		return ""
 	}
 	if _, err := os.Stat(bf.FilePath); err != nil {
@@ -630,7 +639,7 @@ func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, 
 
 		// Find the first audio file of this candidate's book.
 		firstFile := candidatePath
-		if bf, err := store.GetBookFileByPath(candidatePath); err == nil && bf != nil {
+		if bf, err := store.GetBookFileByPath(candidatePath); err == nil && bf != nil && !bf.Retired {
 			files, err := store.GetBookFiles(bf.BookID)
 			if err == nil && len(files) > 0 {
 				if f := pickFirstFile(files); f != "" {

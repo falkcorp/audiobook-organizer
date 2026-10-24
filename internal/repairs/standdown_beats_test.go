@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown_beats_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d3f6b21-7a4e-4c58-b1d0-2e8f5c7a3b96
-// last-edited: 2026-10-01
+// last-edited: 2026-10-23
 
 package repairs
 
@@ -51,6 +51,10 @@ func (m *memFiles) ModifyBookFile(bookID, fileID string, fn func(*database.BookF
 	*r = c
 	return &c, nil
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row unless a test
+// wraps it to say otherwise (database.NoRetiredBookFiles).
+func (m *memFiles) HoldsNoRetiredBookFiles() bool { return true }
 
 // GetBookFileByPath names the row holding a path's single-owner key (the
 // first row naming it here; the tests never put two rows on one path).

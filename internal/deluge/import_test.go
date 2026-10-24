@@ -1,7 +1,7 @@
 // file: internal/deluge/import_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678902
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 //
 // Tests for ImportToLibrary in internal/deluge/import.go.
 
@@ -25,6 +25,11 @@ type fakeDelugStore struct {
 	updated *database.BookFile
 	owners  map[string]*database.BookFile // GetBookFileByPath answers
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// GetBookFileByPath is the complete answer database.BookFileByPathIncludingRetired
+// accepts for a store without the retired reader.
+func (*fakeDelugStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func (f *fakeDelugStore) GetBookFileByPath(path string) (*database.BookFile, error) {
 	return f.owners[path], nil
@@ -190,6 +195,11 @@ type failingDelugStore struct {
 	updated *database.BookFile
 }
 
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// GetBookFileByPath is the complete answer database.BookFileByPathIncludingRetired
+// accepts for a store without the retired reader.
+func (*failingDelugStore) HoldsNoRetiredBookFiles() bool { return true }
+
 // No row claims any destination in these tests.
 func (f *failingDelugStore) GetBookFileByPath(string) (*database.BookFile, error) {
 	return nil, nil
@@ -335,6 +345,11 @@ type raceDelugStore struct {
 	started chan struct{} // closed when failID's update begins
 	release chan struct{} // failID's update fails once this closes, or after a timeout
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// GetBookFileByPath is the complete answer database.BookFileByPathIncludingRetired
+// accepts for a store without the retired reader.
+func (*raceDelugStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func (s *raceDelugStore) GetBookFileByPath(path string) (*database.BookFile, error) {
 	s.mu.Lock()

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 458004fb-a5f3-4cb8-a25f-741cd3f75b74
-// last-edited: 2026-10-13
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -110,6 +110,13 @@ type OrphanRepointPlan struct {
 	OrphanBookIDs   int            `json:"orphan_book_ids"`
 	ByClass         map[string]int `json:"by_class"`
 	PlannedRepoints int            `json:"planned_repoints"`
+	// RetiredOrphansExcluded counts orphan rows that are retired versions
+	// (their holder book is gone): the orphan SCAN reports them, but no store
+	// move can repoint a retired row (the generic moves refuse it; only the
+	// retire operations move one), so they are left out of this plan instead of
+	// being listed as repoints that could never apply. They are not counted in
+	// Orphans or the class tallies.
+	RetiredOrphansExcluded int `json:"retired_orphans_excluded"`
 	// PathOwnerSkipped is set when the book_atpath index is not built, so no
 	// row was checked for a live book at its path or directory.
 	PathOwnerSkipped string                  `json:"path_owner_skipped,omitempty"`
@@ -205,7 +212,9 @@ func (p *Plugin) runOrphanBookFilesRepointPlan(ctx context.Context, _ json.RawMe
 // Work is partitioned by orphan BookID — one worker owns every row of one
 // missing book — so the per-book tombstone/version-group lookup is done once
 // and no two workers touch the same book. Results merge under one mutex.
-func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, orphans []database.BookFileCore) (*OrphanRepointPlan, error) {
+func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, allOrphans []database.BookFileCore) (*OrphanRepointPlan, error) {
+	orphans := liveCores(allOrphans)
+	retiredExcluded := len(allOrphans) - len(orphans)
 	byBook := make(map[string][]database.BookFileCore)
 	for _, f := range orphans {
 		byBook[f.BookID] = append(byBook[f.BookID], f)
@@ -217,10 +226,11 @@ func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, orpha
 	sort.Strings(ids)
 
 	plan := &OrphanRepointPlan{
-		Orphans:       len(orphans),
-		OrphanBookIDs: len(byBook),
-		ByClass:       map[string]int{},
-		Items:         make([]OrphanRepointPlanItem, 0, len(orphans)),
+		Orphans:                len(orphans),
+		OrphanBookIDs:          len(byBook),
+		ByClass:                map[string]int{},
+		Items:                  make([]OrphanRepointPlanItem, 0, len(orphans)),
+		RetiredOrphansExcluded: retiredExcluded,
 	}
 	built, err := store.BookAtPathIndexBuilt()
 	if err != nil {
@@ -363,6 +373,9 @@ func classifyOrphanRow(store orphanRepointPlanStore, f database.BookFileCore, su
 			if owner != nil {
 				it.Class = orphanClassDuplicate
 				it.Detail = fmt.Sprintf("path already owned by book_file %s of book %s", other.ID, other.BookID)
+				if other.Retired {
+					it.Detail = fmt.Sprintf("path already held by book_file %s, a retired version of book %s", other.ID, other.BookID)
+				}
 				return it, nil
 			}
 		}

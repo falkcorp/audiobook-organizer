@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-10-14
+// last-edited: 2026-10-23
 
 package reconcile
 
@@ -47,6 +47,10 @@ func (f *fakeReconcileStore) GetUserBookState(_, bookID string) (*database.UserB
 func (f *fakeReconcileStore) ListUserPositionsForBook(string, string) ([]database.UserPosition, error) {
 	return nil, nil
 }
+
+// HoldsNoRetiredBookFiles: this in-memory fake never holds a retired row, so
+// its GetBookFiles is the complete answer (database.NoRetiredBookFiles).
+func (s *fakeReconcileStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func newFakeStore() *fakeReconcileStore {
 	return &fakeReconcileStore{

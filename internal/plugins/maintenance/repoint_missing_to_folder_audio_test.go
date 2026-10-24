@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7aa3a17c-fb70-48c4-ad3c-0911029bae0b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -39,6 +39,11 @@ type rfFakeStore struct {
 	// simulating a change between plan and write.
 	onApplyLoad func([]database.BookFile)
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// reads are the complete answer database.AllBookFilesCoreIncludingRetired
+// accepts for a store without the retired reader.
+func (*rfFakeStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func (s *rfFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	s.mu.Lock()

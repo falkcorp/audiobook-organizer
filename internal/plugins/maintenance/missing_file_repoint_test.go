@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -27,6 +27,11 @@ type repointFakeStore struct {
 	updates []database.BookFile
 	getErr  error
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// reads are the complete answer database.AllBookFilesCoreIncludingRetired
+// accepts for a store without the retired reader.
+func (*repointFakeStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func (f *repointFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.cores, nil

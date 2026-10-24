@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.133.0
+// version: 1.134.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-16
+// last-edited: 2026-10-23
 
 package scanner
 
@@ -3429,6 +3429,11 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		found, err := lookupScanExisting(book, verdict, fileHash)
 		if err != nil {
 			return err
+		}
+		if found.retired != nil {
+			// Known retired content: the library already holds these bytes as
+			// a version another book keeps out of its live files.
+			return found.retired.asError(book.FilePath)
 		}
 
 		// An EXISTING row keeps its title, author, series and position
