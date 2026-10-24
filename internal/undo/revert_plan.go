@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-10-23
 
@@ -306,7 +306,9 @@ func (p *RevertPlan) ChangedPrimary(bookID string) bool {
 
 // RetireDependents maps each book a soft-delete row of rows restores to the
 // ids of the rows (in rows) that moved one of its book_file rows onto another
-// book (book_file_reassign with OldValue == the book) or repointed another
+// book (book_file_reassign with OldValue == the book), retired one of its rows
+// into a holder's version (book_file_retire naming the book as the shell) or
+// repointed another
 // book's row at one of its files (book_file_repoint_location whose new path is
 // one of the book's row paths). Only books with at least one such row are
 // listed. files nil skips the repoint rows.
@@ -331,6 +333,13 @@ func RetireDependents(rows []*database.OperationChange, files func(bookID string
 		case database.ChangeTypeBookFileRepoint:
 			if to, err := database.DecodeBookFileLocation(c.NewValue); err == nil {
 				repointedTo[to.Path] = append(repointedTo[to.Path], c.ID)
+			}
+		case ChangeTypeBookFileRetire:
+			// A retire re-keyed the shell's row under the holder: the shell is
+			// not restored until the row is back (and the revert's shell
+			// pre-pass has made the shell present for that).
+			if r, err := DecodeBookFileRetire(c); err == nil && retired[r.Shell] {
+				out[r.Shell] = append(out[r.Shell], c.ID)
 			}
 		}
 	}
