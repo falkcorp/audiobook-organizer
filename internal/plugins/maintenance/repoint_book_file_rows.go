@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
 // last-edited: 2026-10-23
 
@@ -99,6 +99,13 @@ const (
 // row is no longer the row the plan approved. It is deliberately not
 // database.ErrSkipBookFileWrite, which ModifyBookFile turns into a nil error.
 var errRBFRowChanged = errors.New("row changed since it was planned")
+
+// errRBFRowRetired is returned from the ModifyBookFile callback when the stored
+// row is a retired version's row. ModifyBookFile does not refuse retired rows
+// itself, so the check has to run on the row the write is about to replace: a
+// check before the disk re-check would leave the hash-and-stat window (a retire
+// can commit in it) between the check and the write.
+var errRBFRowRetired = errors.New("row was retired since the plan")
 
 // rbfStat and rbfHash are variables only so a test can change the disk between
 // the plan and the apply; production never reassigns them.
@@ -680,9 +687,6 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 	if row == nil {
 		return "row vanished since the plan"
 	}
-	if row.Retired {
-		return "row was retired since the plan"
-	}
 	planned := *r
 	rp := rbfRepoint{RowID: r.RowID, BookID: r.BookID, NewPath: r.NewPath, AllowHashMismatch: r.HashMismatchAllowed}
 	if reason := rbfCheckDisk(env, rp, row, r, claims); reason != "" {
@@ -694,6 +698,9 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 
 	newHash, newSize := r.DiskHash, r.DiskSize
 	updated, err := env.store.ModifyBookFile(r.BookID, r.RowID, func(f *database.BookFile) error {
+		if f.Retired {
+			return errRBFRowRetired
+		}
 		if f.FilePath != planned.OldPath || f.FileSize != planned.RowSize || f.FileHash != planned.RowHash {
 			return errRBFRowChanged
 		}

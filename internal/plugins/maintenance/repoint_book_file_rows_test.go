@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c8e1a57-92d3-4f6b-b0a4-6e3f9d2c7b18
-// last-edited: 2026-09-26
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -318,6 +318,22 @@ func setRBFHashHook(t *testing.T, after func()) {
 	t.Cleanup(func() { rbfHash = orig })
 }
 
+// retiredAtWriteStore presents the stored row as retired to the ModifyBookFile
+// callback only: the state a retire committed after the apply path's read would
+// produce, which the single-threaded fixture cannot create any other way (a
+// real retire re-keys the row under the holder, so the write would find no row).
+//
+// It embeds the concrete store, not the rbfStore interface, so the optional
+// RetiredBookFileReader the claim scan type-asserts for is still visible.
+type retiredAtWriteStore struct{ *database.PebbleStore }
+
+func (s *retiredAtWriteStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return s.PebbleStore.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
+		f.Retired = true
+		return fn(f)
+	})
+}
+
 func TestRepointBookFileRows_ApplyTimeRecheck(t *testing.T) {
 	t.Run("old file reappears", func(t *testing.T) {
 		f := newRBFFixture(t, -1, "-")
@@ -334,6 +350,17 @@ func TestRepointBookFileRows_ApplyTimeRecheck(t *testing.T) {
 		require.Equal(t, rbfStatusFailed, rep.Repoints[0].Status)
 		require.Contains(t, rep.Repoints[0].Error, "size differs")
 		require.Equal(t, f.oldPath, f.storedRow(t).FilePath)
+	})
+	t.Run("row is retired between the apply-time read and the write", func(t *testing.T) {
+		// The write sees a stored row flagged Retired although the apply-time
+		// read did not: the check must run on the row the write replaces, inside
+		// the ModifyBookFile callback, not only before the disk re-check.
+		f := newRBFFixture(t, -1, "-")
+		store := &retiredAtWriteStore{PebbleStore: f.s}
+		rep := runRBF(t, store, true, nil, f.item())
+		require.Equal(t, rbfStatusFailed, rep.Repoints[0].Status)
+		require.Contains(t, rep.Repoints[0].Error, "retired since the plan")
+		require.Equal(t, f.oldPath, f.storedRow(t).FilePath, "a retired row's path is not rewritten")
 	})
 	t.Run("another row takes new_path", func(t *testing.T) {
 		f := newRBFFixture(t, -1, "-")
