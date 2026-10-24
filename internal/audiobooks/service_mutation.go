@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
 // version: 1.31.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package audiobooks
 
@@ -1506,6 +1506,12 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// moves any listening state, not after it.
 	refuseIfOwnsFiles := func() error { return database.CheckBookOwnsNoFiles(svc.store, id, "hard delete") }
 	if err := refuseIfOwnsFiles(); err != nil {
+		return nil, err
+	}
+
+	// A retire shell owns no live row, so the check above passes it; its
+	// deletion would drop the record of where its retired versions came from.
+	if err := merge.RefuseRetiredShell(svc.store, id, "hard delete"); err != nil {
 		return nil, err
 	}
 

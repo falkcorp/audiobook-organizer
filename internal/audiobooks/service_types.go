@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-10-28
 
@@ -90,6 +90,16 @@ type PurgeResult struct {
 	// back on the book and it stays in the trash; the reason is in Errors.
 	CarryFailed    int      `json:"carry_failed"`
 	CarryFailedIDs []string `json:"carry_failed_ids,omitempty"`
+	// SkippedRetiredShell counts books left in the trash because the
+	// retired-versions repair retired their files onto another book and those
+	// versions still hold rows (database.ErrBookIsRetiredShell). Such a book
+	// owns no live row, so the owned-files check passes it; purging it would
+	// destroy the only record of where the versions came from, and the purge
+	// that journals a snapshot for a per-version restore is not built yet. They
+	// are named in SkippedRetiredShellIDs, reported once per run like
+	// SkippedOwnsFiles.
+	SkippedRetiredShell    int      `json:"skipped_retired_shell"`
+	SkippedRetiredShellIDs []string `json:"skipped_retired_shell_ids,omitempty"`
 	// KeptUndoPossible counts trashed books an undo that can still run needs
 	// (undoHold): the retired shell of a combine (merge.UndoShellIndex), the
 	// shell a maintenance operation soft-deleted and journaled in the

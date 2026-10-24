@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.41.1
+// version: 1.41.2
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-28
 
@@ -1041,6 +1041,8 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		httputil.RespondWithError(c, status, err.Error(), CodeProgressDiscardedBookKept)
 	case errors.Is(err, database.ErrBookOwnsFiles):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), ownsFilesCode(err))
+	case errors.Is(err, database.ErrBookIsRetiredShell):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeRetiredShell)
 	case errors.Is(err, audiobookspkg.ErrPurgeUndoPossible):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
 	case errors.Is(err, merge.ErrMergeBusy):
@@ -1385,8 +1387,9 @@ func (h *Handler) RestoreAudiobook(c *gin.Context) {
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
 		case errors.Is(err, database.ErrBookIsRetiredShell):
 			// Refused on purpose (the book exists; its files are kept as a
-			// retired version), so it is a conflict, not a 404.
-			httputil.RespondWithConflict(c, err.Error())
+			// retired version), so it is a conflict, not a 404. The stable code
+			// is the one the delete and the discard-progress purge answer with.
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeRetiredShell)
 		case errors.Is(err, versionprimary.ErrMembershipChanged):
 			// A concurrent group change outlasted the lock's retries: transient,
 			// nothing was written, and the same request succeeds when it settles.

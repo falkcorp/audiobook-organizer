@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package batch
 
@@ -860,6 +860,13 @@ func (bs *BatchService) hardDeleteLocked(id string, purges *trashPurges) error {
 			return errors.New("hard delete of a trashed book refused: the purge path is not wired, so an undo that still needs the book cannot be checked")
 		}
 		return purges.purgeLocked(book)
+	}
+	// A retire shell owns no live row, so the owned-files check below passes
+	// it; deleting it would drop the record of where its retired versions came
+	// from. A trashed shell is refused by the purge above (purgeGate); this is
+	// the same refusal for a shell that is not in the trash.
+	if err := merge.RefuseRetiredShell(bs.db, id, "hard delete"); err != nil {
+		return err
 	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
 	if !ok {
