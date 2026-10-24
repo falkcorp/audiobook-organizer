@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_reliability_test.go
-// version: 1.1.4
+// version: 1.2.0
 // guid: 9f8e7d6c-5b4a-3921-8c7d-6e5f4a3b2c1d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 // Tests for the 2026-07-17 multi-discipline-review scanner findings:
 // R-4 (refcounted scan/works caches surviving concurrent runs) and
@@ -13,6 +13,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -272,5 +274,41 @@ func TestRelScn_HashLookupPartialErrorStillFindsDuplicate(t *testing.T) {
 	}
 	if created {
 		t.Fatal("already-version-linked duplicate must not be re-imported")
+	}
+}
+
+// A failing segment-hash lookup used to be dropped without a trace, so a store
+// failure during the multi-file vote read as "no match". It is still not a vote,
+// but it is now counted and logged.
+func TestRelScn_SegmentLookupStoreErrorIsCounted(t *testing.T) {
+	resetScanCacheRefsForTest(t)
+
+	dir := t.TempDir()
+	var segs []string
+	for i, body := range []string{"segment one bytes", "segment two bytes"} {
+		p := filepath.Join(dir, fmt.Sprintf("seg%d.mp3", i))
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		segs = append(segs, p)
+	}
+	mock := &database.MockStore{
+		GetBookBySegmentFileHashFunc: func(hash string) (*database.Book, error) {
+			return nil, errors.New("pebble: injected I/O failure")
+		},
+	}
+	prevStore := getStore()
+	SetStore(mock)
+	t.Cleanup(func() { SetStore(prevStore) })
+
+	errsBefore := dupLookupErrCount.Load()
+	e := &scanExisting{}
+	e.lookupSegments(&Book{FilePath: dir, SegmentFiles: segs})
+
+	if got := dupLookupErrCount.Load() - errsBefore; got != 2 {
+		t.Fatalf("dupLookupErrCount delta = %d, want 2 (one per failing segment lookup)", got)
+	}
+	if e.bySegments != nil {
+		t.Fatal("a failed lookup must not produce a vote")
 	}
 }

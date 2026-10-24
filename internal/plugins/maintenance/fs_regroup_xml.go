@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.19.3
+// version: 2.21.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -1149,14 +1149,21 @@ func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 	}
 	for _, b := range gaps {
 		// A lookup error is not proof there is no row; creating one on it could
-		// put a second row on the same path.
-		existing, err := a.store.GetBookFileByPath(b.FilePath)
+		// put a second row on the same path. The lookup is the complete one
+		// (every row at the path, retired included): GetBookFileByPath filters a
+		// retired row out, so a gap on a retired version's file read as free and
+		// got a second, live row (the claim rule in database/iface_retired.go).
+		rows, err := database.BookFileRowsAtPathStrict(a.store, b.FilePath)
 		if err != nil {
 			fail("look up %q: %v", logger.SanitizeLogValue(b.FilePath), err)
 			return
 		}
-		if existing != nil {
-			skip("%q already has a row on %s outside the group (plan is stale)", logger.SanitizeLogValue(b.FilePath), existing.BookID)
+		if held := database.RetiredClaimOnPath(rows); held != nil {
+			skip("%q is held as a retired version of %s outside the group (plan is stale)", logger.SanitizeLogValue(b.FilePath), held.BookID)
+			return
+		}
+		if len(rows) > 0 {
+			skip("%q already has a row on %s outside the group (plan is stale)", logger.SanitizeLogValue(b.FilePath), rows[0].BookID)
 			return
 		}
 		if _, err := os.Stat(b.FilePath); err != nil {

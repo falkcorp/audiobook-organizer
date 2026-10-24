@@ -221,6 +221,7 @@ type PebbleStore struct {
 	atpathRuns               atpathRunLock        // one book_atpath backfill/rebuild/verify at a time, startup run included (pebble_store_atpath_markers.go)
 	bookLocks                bookLocks            // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookFileLocks            bookLocks            // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
+	bookVersionLocks         bookLocks            // per-version-ID write stripes: UpdateBookVersion, DeleteBookVersion and the retired-row writers hold one across read AND commit (pebble_store_book_lock.go lockBookVersion)
 	bookOwnerLocks           bookLocks            // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
 	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors -> book_narrators (pebble_store_authors.go)
 	bookNarratorLocks        bookLocks            // per-book-ID stripes for the book_narrators join: SetBookNarrators, ModifyBookNarrators and ModifyBookCredits hold one across read AND commit, DeleteBook from its probe through its commit; taken last in the order above (credits_store.go)
@@ -1964,9 +1965,12 @@ func (p *PebbleStore) GetBookByOrganizedHash(hash string) (*Book, error) {
 	return p.GetBookByID(id)
 }
 
-// GetBookBySegmentFileHash returns the parent Book of the first book_file whose
-// file_hash or original_file_hash matches hash. Tries the book_file_hash: and
-// book_file_orig_hash: secondary indexes in order.
+// GetBookBySegmentFileHash returns the parent Book of the first LIVE book_file
+// whose file_hash or original_file_hash matches hash. Tries the book_file_hash:
+// and book_file_orig_hash: secondary indexes in order. A hash held only by a
+// retired row (a version held by another book) answers (nil, nil): naming the
+// holder would claim it carries content it only keeps as a retired version.
+// BookFilesWithHash returns every row with a hash, retired ones included.
 func (p *PebbleStore) GetBookBySegmentFileHash(hash string) (*Book, error) {
 	if hash == "" {
 		return nil, nil
@@ -1985,6 +1989,13 @@ func (p *PebbleStore) GetBookBySegmentFileHash(hash string) (*Book, error) {
 
 		parts := strings.SplitN(ref, ":", 2)
 		if len(parts) != 2 {
+			continue
+		}
+		f, ferr := p.getBookFileByID(parts[0], parts[1])
+		if ferr != nil {
+			return nil, ferr
+		}
+		if f != nil && f.Retired {
 			continue
 		}
 		return p.GetBookByID(parts[0])
@@ -5191,6 +5202,14 @@ func (p *PebbleStore) CreateBookVersion(v *BookVersion) (*BookVersion, error) {
 		v.TrashedAt = nil
 	}
 
+	// A retired version is created only by the retire op, which says which shell
+	// it was retired out of and when: without them the version has no
+	// idx:bv:from: entry and no provenance for the undo.
+	if v.Status == BookVersionStatusRetired && (v.RetiredFromBookID == "" || v.RetiredAt == nil) {
+		return nil, fmt.Errorf("book version: status %q needs retired_from_book_id and retired_at: %w",
+			BookVersionStatusRetired, ErrRetiredVersionMismatch)
+	}
+
 	// Single-active invariant: callers swapping primary go through
 	// the version_swap tracked op per spec 3.1 §4.
 	if v.Status == BookVersionStatusActive {
@@ -5293,6 +5312,13 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 	if v == nil || v.ID == "" {
 		return fmt.Errorf("book version: id required")
 	}
+	// The read of the stored version, the retired-version refusal that depends
+	// on it, and the commit are one step under the version's stripe. Without it a
+	// caller holding a version loaded before RehomeRetiredVersion moved it
+	// would write that stale BookID back, and the retired-rows check would then
+	// look under the old holder, find none, and allow a delete.
+	unlockVersion := p.lockBookVersion(v.ID)
+	defer unlockVersion()
 	prev, err := p.GetBookVersion(v.ID)
 	if err != nil {
 		return err
@@ -5393,6 +5419,8 @@ func maintainTrashedAt(prev, v *BookVersion, now time.Time) {
 }
 
 func (p *PebbleStore) DeleteBookVersion(id string) error {
+	unlockVersion := p.lockBookVersion(id)
+	defer unlockVersion()
 	v, err := p.GetBookVersion(id)
 	if err != nil {
 		return err

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.5.2
+// version: 1.7.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -465,6 +465,9 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 		}
 	}
 	liveBooks := books.live
+	// The default list: retired rows are never repaired. Their claim on a path is
+	// honoured separately, by rfPathClaim, which counts a retired row as a claim
+	// on its file (two rows on one file is what a repoint onto it would make).
 	files, err := env.store.GetAllBookFilesCore()
 	if err != nil {
 		return report, fmt.Errorf("%s: load book files: %w", rfOpName, err)
@@ -778,17 +781,18 @@ func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 		if own[path] {
 			continue // this book already points at it
 		}
-		owner, oerr := rfOtherOwner(env.store, liveBooks, b.core.ID, path)
+		claim, oerr := rfPathClaim(env.store, liveBooks, b.core.ID, path)
 		if oerr != nil {
 			if errors.Is(oerr, database.ErrBookFilesAtPathUnavailable) {
 				return amb("owner-check-unavailable", oerr.Error())
 			}
 			return amb("owner-check-failed", oerr.Error())
 		}
-		if owner != "" {
+		if claim.held() {
 			// Any other book's audio in the folder makes a lone unowned file
-			// a stray, not this book's consolidation.
-			return amb("folder-shared-with-other-book", path+" is referenced by book "+owner)
+			// a stray, not this book's consolidation. A retired version's file
+			// is not this book's to take either, the book's own included.
+			return amb("folder-shared-with-other-book", path+" is "+claim.describe())
 		}
 		info, serr := e.Info()
 		if serr != nil {
@@ -1004,19 +1008,52 @@ func rfFolder(env rfEnv, b *rfBook) (string, string) {
 	return folder, ""
 }
 
-// rfOtherOwner returns the ID of a live book OTHER than bookID that references
-// path through a book_file row or its own file_path, or "".
-func rfOtherOwner(store rfStore, liveBooks map[string]bool, bookID, path string) (string, error) {
+// rfClaim is what stops a repoint of bookID's row onto a path: a live book
+// other than bookID that references it, or a retired version that holds it.
+type rfClaim struct {
+	// OtherBookID is a live book other than bookID that references the path
+	// through a book_file row or its own file_path ("" when none does).
+	OtherBookID string
+	// RetiredHolderBookID is the book a retired version holding the path is keyed
+	// under ("" when none does). It can be bookID itself.
+	RetiredHolderBookID string
+}
+
+func (c rfClaim) held() bool { return c.OtherBookID != "" || c.RetiredHolderBookID != "" }
+
+// describe is the claim as a clause for a refusal message.
+func (c rfClaim) describe() string {
+	if c.OtherBookID != "" {
+		return "referenced by book " + c.OtherBookID
+	}
+	return "held by a retired version of book " + c.RetiredHolderBookID
+}
+
+// rfPathClaim says whether path is claimed against a repoint of bookID's row:
+// by a live book other than bookID that references it through a book_file row
+// or its own file_path, or by a retired version.
+//
+// A retired row is a claim whoever it is keyed under (database.RetiredClaimOnPath):
+// repointing a live row onto its file puts two rows on one file, whether or not
+// the holder is a live book and even when the holder is bookID itself, so the
+// liveBooks and bookID filters below apply to live rows only. A live holder is
+// not reported as an OTHER owner on the strength of a retired row, though: a
+// live owner is named only for what it actively references.
+func rfPathClaim(store rfStore, liveBooks map[string]bool, bookID, path string) (rfClaim, error) {
 	rows, err := store.BookFilesAtPath(path)
 	if err != nil {
-		return "", err
+		return rfClaim{}, err
+	}
+	if held := database.RetiredClaimOnPath(rows); held != nil {
+		return rfClaim{RetiredHolderBookID: held.BookID}, nil
 	}
 	for i := range rows {
 		if rows[i].BookID != bookID && liveBooks[rows[i].BookID] {
-			return rows[i].BookID, nil
+			return rfClaim{OtherBookID: rows[i].BookID}, nil
 		}
 	}
-	return rfOtherLiveBook(store, bookID, path)
+	other, err := rfOtherLiveBook(store, bookID, path)
+	return rfClaim{OtherBookID: other}, err
 }
 
 // rfOtherLiveBook returns a live book other than bookID whose file_path is
@@ -1043,12 +1080,12 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		if err != nil || !st.Mode().IsRegular() {
 			return rfOutcomeChanged, "target no longer a regular file: " + target
 		}
-		owner, err := rfOtherOwner(env.store, liveBooks, r.BookID, target)
+		claim, err := rfPathClaim(env.store, liveBooks, r.BookID, target)
 		if err != nil {
 			return rfOutcomeFailed, "owner re-check: " + err.Error()
 		}
-		if owner != "" {
-			return rfOutcomeChanged, target + " is now referenced by book " + owner
+		if claim.held() {
+			return rfOutcomeChanged, target + " is now " + claim.describe()
 		}
 	}
 	rows, err := env.store.GetBookFiles(r.BookID)

@@ -1,7 +1,7 @@
 // file: internal/itunes/cross_type.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 4b7e1a92-3c6d-4f80-9a15-8e2c7b3d1f64
-// last-edited: 2026-07-24
+// last-edited: 2026-10-23
 //
 // READ-ONLY cross-type PID-collision census — the disjointness backstop for the
 // iTunes 2-way-sync relocate path (P0 of the 2-way-sync system design).
@@ -67,6 +67,10 @@ type CrossTypeReport struct {
 	// hazard: relocate would rewrite this music/podcast track).
 	CrossTypeCollisions        int `json:"cross_type_collisions"`
 	CollisionsLivePrimaryOwner int `json:"collisions_live_primary_owner"`
+	// CollisionsRetiredOnlyOwner is the subset of CrossTypeCollisions whose only
+	// claimant is a RETIRED book_file row: AO still holds the track's PID as undo
+	// provenance, but no live row exists for relocate to rewrite.
+	CollisionsRetiredOnlyOwner int `json:"collisions_retired_only_owner"`
 
 	// Genre/Kind distribution over ALL collisions (not just samples) — lets a
 	// reviewer confirm whether the "collisions" are real music/podcasts vs
@@ -95,7 +99,7 @@ func ComputeCrossTypeCollisions(store PIDIntegrityStore, itlPath string) (*Cross
 // computeCrossTypeCollisions is the pure core: it takes the parsed track slice
 // directly so it is unit-testable without a binary .itl.
 func computeCrossTypeCollisions(store PIDIntegrityStore, tracks []ITLTrack) (*CrossTypeReport, error) {
-	files, err := store.GetAllBookFilesCore()
+	files, retiredRows, err := splitRetiredRows(store)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +112,22 @@ func computeCrossTypeCollisions(store PIDIntegrityStore, tracks []ITLTrack) (*Cr
 		if pid != "" {
 			byPID[pid] = append(byPID[pid], files[i])
 		}
+	}
+	// A retired row still claims its track: AO holds the PID as undo provenance
+	// even though the row is no longer a live version. Appended AFTER every live
+	// row so a sample's owner (owners[0]) is a live row whenever one exists, and
+	// counted apart (CollisionsRetiredOnlyOwner) so it is not mistaken for a
+	// live relocate hazard.
+	retiredOnly := make(map[string]bool)
+	for i := range retiredRows {
+		pid := strings.ToUpper(strings.TrimSpace(retiredRows[i].ITunesPersistentID))
+		if pid == "" {
+			continue
+		}
+		if len(byPID[pid]) == 0 {
+			retiredOnly[pid] = true
+		}
+		byPID[pid] = append(byPID[pid], retiredRows[i])
 	}
 
 	// Resolve the owner books only for tracks that are BOTH non-audiobook AND
@@ -138,6 +158,9 @@ func computeCrossTypeCollisions(store PIDIntegrityStore, tracks []ITLTrack) (*Cr
 			report.NonAudiobookTracks++
 			report.NonABOwned++
 			collisions = append(collisions, trackRef{idx: i, pid: pid})
+			if retiredOnly[pid] {
+				report.CollisionsRetiredOnlyOwner++
+			}
 			for _, f := range owners {
 				needBook[f.BookID] = struct{}{}
 			}
@@ -200,8 +223,14 @@ func computeCrossTypeCollisions(store PIDIntegrityStore, tracks []ITLTrack) (*Cr
 				s.OwnerSoftDelete = b.IsSoftDeleted()
 			}
 		}
-		// A collision is acute when ANY owner is a live primary.
+		// A collision is acute when ANY owner is a live primary. A retired row is
+		// keyed under its holder, usually a live primary, but it is not a row a
+		// relocate would rewrite: counting it would report a retired-only PID (and a
+		// PID whose live row is on a non-primary book) as a live-primary hazard.
 		for _, f := range owners {
+			if f.Retired {
+				continue
+			}
 			if b := books[f.BookID]; b != nil {
 				pr := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 				del := b.IsSoftDeleted()

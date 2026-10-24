@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.0.1
+// version: 1.3.0
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-23
 
@@ -9,9 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // ErrBookFileRetired is returned by the generic book_file move and delete
@@ -141,6 +144,18 @@ func (p *PebbleStore) GetAllBookFilesCoreIncludingRetired() ([]BookFileCore, err
 	return out, nil
 }
 
+// GetBookFileByPIDIncludingRetired is GetBookFileByPID without the retired
+// filter. See RetiredBookFileReader.
+func (p *PebbleStore) GetBookFileByPIDIncludingRetired(itunesPID string) (*BookFile, error) {
+	return p.getBookFileByPIDAny(itunesPID)
+}
+
+// GetBookFileByPathIncludingRetired is GetBookFileByPath without the retired
+// filter. See RetiredBookFileReader.
+func (p *PebbleStore) GetBookFileByPathIncludingRetired(path string) (*BookFile, error) {
+	return p.getBookFileByPathAny(path)
+}
+
 // GetRetiredVersionsFromBook returns the retired versions retired out of
 // shellID, oldest first.
 func (p *PebbleStore) GetRetiredVersionsFromBook(shellID string) ([]BookVersion, error) {
@@ -170,10 +185,13 @@ func (p *PebbleStore) GetRetiredVersionsFromBook(shellID string) ([]BookVersion,
 //
 // book_file_path:, book_file_pid:, book_file_hash:, book_file_orig_hash: and
 // book_file_acoustid: each hold ONE row reference per key ("<bookID>:<fileID>"),
-// whichever row wrote last. A retired row keeps its rows' secondary indexes
-// (so a lookup by the retired file's own hash still resolves), but it must
-// never HIDE a live row: GetBookFileByPath on a path the live target also
-// holds has to answer the live row, not the retired copy.
+// whichever row wrote last. A retired row keeps its rows' secondary indexes (so
+// the complete lookups, BookFilesAtPath and BookFilesWithHash, and the undo
+// that restores the row still find it), but it must never HIDE a live row:
+// GetBookFileByPath on a path the live target also holds has to answer the live
+// row, not the retired copy. The single-identity getters (ByPath, ByPID,
+// ByAcoustID, GetBookBySegmentFileHash) answer "which LIVE file has this
+// identity" and so answer nil when the key is held only by a retired row.
 //
 // So retiring row X, for each single-owner key K:
 //   - K is not X's (another row owns it, or nothing does): leave it.
@@ -242,6 +260,119 @@ func (k singleOwnerKey) carries(row *BookFile) bool {
 }
 
 func fileRef(bookID, fileID string) string { return bookID + ":" + fileID }
+
+// indexCAS makes the single-owner index decisions of a retired-version writer
+// (retire, un-retire, rehome) checkable at commit.
+//
+// Each of those writers decides, for every index key of every row it moves,
+// whether to repoint the key, and stages the write from the value it read. The
+// read happens before the owner stripes are taken, so another writer can take
+// the key in between (a new live row with the same PID or path), and the staged
+// write would then put the retired row's reference over the live one. The
+// writer records the COMMITTED value each key had when it decided (note,
+// BEFORE the decision read, so a change between the two reads can only make the
+// check fail, never pass), marks the keys it writes (wrote), and hands verify
+// to commitBookFileBatchVerified, which re-reads them under the owner stripes.
+// A key whose committed value moved, or an alternative owner that is no longer
+// a live row carrying the key, is errBookFileRowVanished and the attempt
+// re-stages from fresh reads.
+//
+// The committed value is read with p.db.Get, never through the batch: the batch
+// shows this attempt's own earlier writes, which would make a row that shares a
+// key with a previous row of the same attempt look "changed".
+//
+// THIS NARROWS THE RACE, IT DOES NOT CLOSE IT. The owner stripes serialize the
+// commit only against writers that share one of its owner books; a writer of the
+// same key under other books' stripes can still commit after verify returns and
+// before the batch is applied. A lock per index key would close it.
+type indexCAS struct {
+	expected map[string]casValue
+	written  [][]byte
+	alts     []casAlt
+}
+
+type casValue struct {
+	val   string
+	found bool
+}
+
+// casAlt is a live row an index key was repointed to: it must still exist, be
+// live, and carry the key when the batch is applied.
+type casAlt struct {
+	key    singleOwnerKey
+	bookID string
+	fileID string
+}
+
+func newIndexCAS() *indexCAS { return &indexCAS{expected: map[string]casValue{}} }
+
+// note records key's committed value the first time it is asked for.
+func (c *indexCAS) note(p *PebbleStore, key []byte) error {
+	if _, ok := c.expected[string(key)]; ok {
+		return nil
+	}
+	v, closer, err := p.db.Get(key)
+	switch {
+	case errors.Is(err, pebble.ErrNotFound):
+		c.expected[string(key)] = casValue{}
+		return nil
+	case err != nil:
+		return fmt.Errorf("read index key %s: %w", key, err)
+	}
+	c.expected[string(key)] = casValue{val: string(v), found: true}
+	_ = closer.Close()
+	return nil
+}
+
+// wrote marks key as written by the batch, so verify re-checks it.
+func (c *indexCAS) wrote(key []byte) {
+	c.written = append(c.written, key)
+}
+
+// alt records the live alternative owner a key was repointed to.
+func (c *indexCAS) alt(k singleOwnerKey, bookID, fileID string) {
+	c.alts = append(c.alts, casAlt{key: k, bookID: bookID, fileID: fileID})
+}
+
+// verify is the commitBookFileBatchVerified hook. It runs with the owner
+// stripes of the batch held.
+func (c *indexCAS) verify(p *PebbleStore) func() error {
+	return func() error {
+		for _, key := range c.written {
+			want, ok := c.expected[string(key)]
+			if !ok {
+				return fmt.Errorf("index key %s was written without being read first (a bug)", key)
+			}
+			v, closer, err := p.db.Get(key)
+			switch {
+			case errors.Is(err, pebble.ErrNotFound):
+				if want.found {
+					return fmt.Errorf("index key %s vanished since it was read: %w", key, errBookFileRowVanished)
+				}
+			case err != nil:
+				return fmt.Errorf("re-read index key %s: %w", key, err)
+			default:
+				got := string(v)
+				_ = closer.Close()
+				if !want.found || got != want.val {
+					return fmt.Errorf("index key %s changed since it was read (was %q, found=%v; now %q): %w",
+						key, want.val, want.found, got, errBookFileRowVanished)
+				}
+			}
+		}
+		for _, a := range c.alts {
+			row, err := p.getBookFileByID(a.bookID, a.fileID)
+			if err != nil {
+				return fmt.Errorf("re-read alternative owner %s:%s: %w", a.bookID, a.fileID, err)
+			}
+			if row == nil || row.Retired || !a.key.carries(row) {
+				return fmt.Errorf("alternative owner %s:%s of %s is no longer a live row carrying it: %w",
+					a.bookID, a.fileID, a.key.key, errBookFileRowVanished)
+			}
+		}
+		return nil
+	}
+}
 
 // liveAlternativeOwner finds a live row other than the retiring ones that
 // carries k, or nil when there is none. holderLive is the holder's own live
@@ -328,6 +459,25 @@ func (p *PebbleStore) requireHolderNotSoftDeleted(holderID string) error {
 	return nil
 }
 
+// setKeys returns the keys of a string set.
+func setKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// sortedFileIDs returns the sorted file IDs of rows.
+func sortedFileIDs(rows []BookFile) []string {
+	out := make([]string, len(rows))
+	for i := range rows {
+		out[i] = rows[i].ID
+	}
+	slices.Sort(out)
+	return out
+}
+
 // moveFileIDs flattens moves to a de-duplicated id set and rejects an empty
 // move list or a duplicate id (a row retired twice in one call would be
 // staged twice).
@@ -381,6 +531,11 @@ func (p *PebbleStore) RetireBookFiles(moves []BookFileMove, holderID, versionID 
 			return fmt.Errorf("RetireBookFiles: book %s cannot be retired into itself", holderID)
 		}
 	}
+	// The version stripe makes "versionID is a retired version of holderID"
+	// stay true until the rows are re-keyed: RehomeRetiredVersion and
+	// UpdateBookVersion take it too.
+	unlockVersion := p.lockBookVersion(versionID)
+	defer unlockVersion()
 	if _, err := p.requireRetiredVersionOf(versionID, holderID); err != nil {
 		return fmt.Errorf("RetireBookFiles: %w", err)
 	}
@@ -397,6 +552,19 @@ func (p *PebbleStore) RetireBookFiles(moves []BookFileMove, holderID, versionID 
 }
 
 func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[string]struct{}, holderID, versionID string) error {
+	// Every row's stripe is held from the read below to the commit, so a
+	// concurrent UpdateBookFile (a fingerprint or transcript write) lands before
+	// the read, and is carried into the retired row, or after the commit, and is
+	// applied to the retired row; it is never overwritten by the batch.
+	unlockFiles := p.lockBookFiles(setKeys(retiring))
+	filesLocked := true
+	releaseFiles := func() {
+		if filesLocked {
+			filesLocked = false
+			unlockFiles()
+		}
+	}
+	defer releaseFiles()
 	holderLive, err := p.bookFilesForBook(holderID, bookFilesLive)
 	if err != nil {
 		return fmt.Errorf("RetireBookFiles: read holder %s rows: %w", holderID, err)
@@ -405,6 +573,7 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 
 	var moved []*BookFile
 	var oldKeys [][]byte
+	cas := newIndexCAS()
 	affected := []string{holderID}
 	seen := map[string]struct{}{holderID: {}}
 	now := time.Now()
@@ -439,6 +608,11 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 			oldRef := fileRef(f.BookID, f.ID)
 			newRef := fileRef(holderID, f.ID)
 			for _, k := range singleOwnerKeysOf(f) {
+				// Committed value first, then the decision read: see indexCAS.
+				if err := cas.note(p, k.key); err != nil {
+					batch.Close()
+					return err
+				}
 				cur, found, err := p.hashIndexValue(batch, k.key)
 				if err != nil {
 					batch.Close()
@@ -457,14 +631,18 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 					if alt != nil {
 						owner = fileRef(alt.BookID, alt.ID)
 						// The alternative was read before the owner stripes are
-						// taken: re-check its key under them.
+						// taken: re-check its key under them (it must still
+						// exist, which oldKeys covers, and the cas hook checks
+						// that it is still live and still carries the key).
 						oldKeys = append(oldKeys, []byte("book_file:"+alt.BookID+":"+alt.ID))
+						cas.alt(k, alt.BookID, alt.ID)
 					}
 				}
 				if err := batch.Set(k.key, []byte(owner), nil); err != nil {
 					batch.Close()
 					return err
 				}
+				cas.wrote(k.key)
 			}
 			if err := batch.Set([]byte("book_file_id:"+f.ID), []byte("book_file:"+holderID+":"+f.ID), nil); err != nil {
 				batch.Close()
@@ -488,7 +666,10 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 		}
 	}
 
-	durErr := p.commitBookFileBatch(batch, affected, []string{holderID}, oldKeys)
+	durErr := p.commitBookFileBatchVerified(batch, affected, []string{holderID}, oldKeys, cas.verify(p))
+	// The aggregate recompute below takes book stripes, and no book_file stripe
+	// may be held while one is taken.
+	releaseFiles()
 	if !bookFileApplied(durErr) {
 		return durErr
 	}
@@ -535,6 +716,8 @@ func (p *PebbleStore) UnretireBookFiles(moves []BookFileMove, backToBookID, reti
 			return fmt.Errorf("UnretireBookFiles: rows are already under book %s", backToBookID)
 		}
 	}
+	unlockVersion := p.lockBookVersion(retireVersionID)
+	defer unlockVersion()
 	for range maxStageRetries {
 		err = p.unretireBookFilesAttempt(moves, backToBookID, retireVersionID, versionIDBefore)
 		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
@@ -545,9 +728,25 @@ func (p *PebbleStore) UnretireBookFiles(moves []BookFileMove, backToBookID, reti
 }
 
 func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookID, retireVersionID string, versionIDBefore map[string]string) error {
+	// Row stripes held from the first read to the commit; see
+	// retireBookFilesAttempt.
+	var fileIDs []string
+	for _, mv := range moves {
+		fileIDs = append(fileIDs, mv.FileIDs...)
+	}
+	unlockFiles := p.lockBookFiles(fileIDs)
+	filesLocked := true
+	releaseFiles := func() {
+		if filesLocked {
+			filesLocked = false
+			unlockFiles()
+		}
+	}
+	defer releaseFiles()
 	batch := p.db.NewIndexedBatch()
 	var moved []*BookFile
 	var oldKeys [][]byte
+	cas := newIndexCAS()
 	affected := []string{backToBookID}
 	seen := map[string]struct{}{backToBookID: {}}
 	now := time.Now()
@@ -586,6 +785,10 @@ func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookI
 			oldRef := fileRef(f.BookID, f.ID)
 			newRef := fileRef(backToBookID, f.ID)
 			for _, k := range singleOwnerKeysOf(f) {
+				if err := cas.note(p, k.key); err != nil {
+					batch.Close()
+					return err
+				}
 				cur, found, err := p.hashIndexValue(batch, k.key)
 				if err != nil {
 					batch.Close()
@@ -605,6 +808,7 @@ func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookI
 						batch.Close()
 						return err
 					}
+					cas.wrote(k.key)
 				}
 			}
 			if err := batch.Set([]byte("book_file_id:"+f.ID), []byte("book_file:"+backToBookID+":"+f.ID), nil); err != nil {
@@ -629,7 +833,8 @@ func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookI
 		}
 	}
 
-	durErr := p.commitBookFileBatch(batch, affected, []string{backToBookID}, oldKeys)
+	durErr := p.commitBookFileBatchVerified(batch, affected, []string{backToBookID}, oldKeys, cas.verify(p))
+	releaseFiles()
 	if !bookFileApplied(durErr) {
 		return durErr
 	}
@@ -666,6 +871,11 @@ func (p *PebbleStore) RehomeRetiredVersion(versionID, newHolderID string) error 
 	if err := p.requireHolderNotSoftDeleted(newHolderID); err != nil {
 		return fmt.Errorf("RehomeRetiredVersion: %w", err)
 	}
+	// The version stripe excludes RetireBookFiles, UnretireBookFiles and
+	// UpdateBookVersion for this version, so neither its holder nor the set of
+	// rows that carry it changes between the reads below and the commit.
+	unlockVersion := p.lockBookVersion(versionID)
+	defer unlockVersion()
 	var err error
 	for range maxStageRetries {
 		err = p.rehomeRetiredVersionAttempt(versionID, newHolderID)
@@ -688,14 +898,41 @@ func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string)
 	if oldHolder == newHolderID {
 		return fmt.Errorf("RehomeRetiredVersion: version %s is already held by %s", versionID, newHolderID)
 	}
+	if newHolderID == v.RetiredFromBookID {
+		return fmt.Errorf("RehomeRetiredVersion: version %s was retired out of %s and cannot be held by it: %w",
+			versionID, newHolderID, ErrRetiredVersionMismatch)
+	}
 	rows, err := p.retiredRowsOfVersion(oldHolder, versionID)
 	if err != nil {
 		return fmt.Errorf("RehomeRetiredVersion: read rows of %s: %w", versionID, err)
 	}
+	// Lock the rows' stripes, then read them again: a single-row writer that
+	// committed after the first read is carried into the batch, and one that
+	// arrives later waits for the commit. The row set itself cannot change
+	// (the version stripe is held); a mismatch means a row left the version some
+	// other way, and the attempt starts over.
+	unlockFiles := p.lockBookFiles(sortedFileIDs(rows))
+	filesLocked := true
+	releaseFiles := func() {
+		if filesLocked {
+			filesLocked = false
+			unlockFiles()
+		}
+	}
+	defer releaseFiles()
+	fresh, err := p.retiredRowsOfVersion(oldHolder, versionID)
+	if err != nil {
+		return fmt.Errorf("RehomeRetiredVersion: re-read rows of %s: %w", versionID, err)
+	}
+	if !slices.Equal(sortedFileIDs(fresh), sortedFileIDs(rows)) {
+		return fmt.Errorf("RehomeRetiredVersion: the rows of %s changed while locking them: %w", versionID, errBookFileRowVanished)
+	}
+	rows = fresh
 
 	batch := p.db.NewIndexedBatch()
 	var moved []*BookFile
 	var oldKeys [][]byte
+	cas := newIndexCAS()
 	now := time.Now()
 	for i := range rows {
 		f := &rows[i]
@@ -708,6 +945,10 @@ func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string)
 		oldRef := fileRef(oldHolder, f.ID)
 		newRef := fileRef(newHolderID, f.ID)
 		for _, k := range singleOwnerKeysOf(f) {
+			if err := cas.note(p, k.key); err != nil {
+				batch.Close()
+				return err
+			}
 			cur, found, err := p.hashIndexValue(batch, k.key)
 			if err != nil {
 				batch.Close()
@@ -718,6 +959,7 @@ func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string)
 					batch.Close()
 					return err
 				}
+				cas.wrote(k.key)
 			}
 		}
 		if err := batch.Set([]byte("book_file_id:"+f.ID), []byte("book_file:"+newHolderID+":"+f.ID), nil); err != nil {
@@ -763,7 +1005,8 @@ func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string)
 	}
 
 	affected := []string{newHolderID, oldHolder}
-	durErr := p.commitBookFileBatch(batch, affected, []string{newHolderID}, oldKeys)
+	durErr := p.commitBookFileBatchVerified(batch, affected, []string{newHolderID}, oldKeys, cas.verify(p))
+	releaseFiles()
 	if !bookFileApplied(durErr) {
 		return durErr
 	}

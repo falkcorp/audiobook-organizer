@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.46.0
+// version: 1.48.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-23
 
@@ -13,9 +13,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -290,7 +293,7 @@ func (s *PebbleStore) stagePIDTransfer(batch *GatedBatch, file *BookFile) (*Book
 	if file == nil || file.ITunesPersistentID == "" {
 		return nil, nil
 	}
-	prior, err := s.GetBookFileByPID(file.ITunesPersistentID)
+	prior, err := s.getBookFileByPIDAny(file.ITunesPersistentID)
 	if err != nil {
 		return nil, fmt.Errorf("stagePIDTransfer: PID-uniqueness lookup for %q: %w", file.ITunesPersistentID, err)
 	}
@@ -1256,9 +1259,23 @@ func (s *PebbleStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, err
 	return out, nil
 }
 
-// GetBookFileByPID looks up a BookFile by iTunes persistent ID using the
-// book_file_pid:<pid> secondary index.
+// GetBookFileByPID looks up the LIVE BookFile that carries an iTunes persistent
+// ID, using the book_file_pid:<pid> secondary index. A PID held only by a
+// retired row (a version held by another book) answers (nil, nil): the retired
+// row keeps the index key only while no live row carries the PID, and it is not
+// a file of the book it is keyed under. GetBookFileByPIDIncludingRetired
+// returns it.
 func (s *PebbleStore) GetBookFileByPID(itunesPID string) (*BookFile, error) {
+	f, err := s.getBookFileByPIDAny(itunesPID)
+	if err != nil || f == nil || f.Retired {
+		return nil, err
+	}
+	return f, nil
+}
+
+// getBookFileByPIDAny is GetBookFileByPID without the retired filter, for the
+// store's own write paths that make their own decision about a retired row.
+func (s *PebbleStore) getBookFileByPIDAny(itunesPID string) (*BookFile, error) {
 	if itunesPID == "" {
 		return nil, nil
 	}
@@ -1302,9 +1319,22 @@ func (s *PebbleStore) ClearITunesPID(itunesPID string) (bool, error) {
 	return true, nil
 }
 
-// GetBookFileByPath looks up a BookFile by file path using the
-// book_file_path:<crc32hex> secondary index.
+// GetBookFileByPath looks up the LIVE BookFile at a file path using the
+// book_file_path:<crc32hex> secondary index. A path held only by a retired row
+// answers (nil, nil), for the same reason as GetBookFileByPID; BookFilesAtPath
+// returns every row at a path, retired ones included.
 func (s *PebbleStore) GetBookFileByPath(filePath string) (*BookFile, error) {
+	f, err := s.getBookFileByPathAny(filePath)
+	if err != nil || f == nil || f.Retired {
+		return nil, err
+	}
+	return f, nil
+}
+
+// getBookFileByPathAny is GetBookFileByPath without the retired filter (the
+// complete BookFilesAtPath lookup and the store's own upsert paths need to see
+// the retired row).
+func (s *PebbleStore) getBookFileByPathAny(filePath string) (*BookFile, error) {
 	if filePath == "" {
 		return nil, nil
 	}
@@ -1334,8 +1364,11 @@ func (s *PebbleStore) GetBookFileByPath(filePath string) (*BookFile, error) {
 	return f, nil
 }
 
-// GetBookFileByAcoustID looks up a BookFile by exact AcoustID fingerprint
-// using the book_file_acoustid: secondary index.
+// GetBookFileByAcoustID looks up the LIVE BookFile with an exact AcoustID
+// fingerprint using the book_file_acoustid: secondary index. A fingerprint held
+// only by a retired row answers (nil, nil): the exact lookup must not name the
+// holder as the owner of a print it does not carry, the same rule the fuzzy
+// lookup applies.
 func (s *PebbleStore) GetBookFileByAcoustID(fp string) (*BookFile, error) {
 	if fp == "" {
 		return nil, nil
@@ -1355,7 +1388,11 @@ func (s *PebbleStore) GetBookFileByAcoustID(fp string) (*BookFile, error) {
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("corrupt book_file_acoustid index: %q", ref)
 	}
-	return s.getBookFileByID(parts[0], parts[1])
+	f, err := s.getBookFileByID(parts[0], parts[1])
+	if err != nil || f == nil || f.Retired {
+		return nil, err
+	}
+	return f, nil
 }
 
 // GetBookFileByAcoustIDFuzzy scans all book_file records and returns the first
@@ -1866,7 +1903,7 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	// key; see writeBookFileSecondaryIndexesFor). Matching by an explicit ID
 	// below still reaches a retired row, which keeps Retired (bfStoredOwned).
 	if file.ITunesPersistentID != "" {
-		existing, err = s.GetBookFileByPID(file.ITunesPersistentID)
+		existing, err = s.getBookFileByPIDAny(file.ITunesPersistentID)
 		if err != nil {
 			return err
 		}
@@ -1876,7 +1913,7 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	}
 
 	if existing == nil && file.FilePath != "" {
-		existing, err = s.GetBookFileByPath(file.FilePath)
+		existing, err = s.getBookFileByPathAny(file.FilePath)
 		if err != nil {
 			return err
 		}
@@ -2013,6 +2050,29 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool, op
 // batchUpsertBookFilesAttempt is one staging pass of batchUpsertBookFiles; it
 // returns the rows it staged as NEW, grouped by owner book (see
 // partitionedBookFileWrite).
+//
+// It holds the file stripe of every row it rewrites from the first match
+// lookup to the commit, like the retired-version writers and every single-row
+// writer (UpdateBookFile, ModifyBookFile, PatchBookFileFields): without it a
+// RetireBookFiles that read a row, and a scan that rewrote the same row, raced
+// to commit and the retire wrote the row back as it had read it, losing the
+// scan's update (and a field another writer had patched between this method's
+// read and its commit was reverted the same way).
+//
+// The set of rows to lock is not known until the match lookups have run, and
+// they must run under the stripes. So the attempt guesses it from a lock-free
+// pre-lookup (upsertCandidateRowIDs), locks it, stages, and when staging
+// matches a row outside the locked set (the pre-lookup went stale) it throws
+// the stage away, adds that row, restores the caller's structs from a pristine
+// shallow copy and stages again. That retry is inside the attempt on purpose:
+// reporting it as a *staleStageError would make partitionedBookFileWrite count
+// it as churn on the rows.
+//
+// LOCK ORDER: file stripes (ascending, de-duplicated) then the owner stripes
+// taken by commitBookFileBatch; they are released right after the commit and
+// BEFORE the memdb refresh and notifyBookFileChanges, which take book stripes.
+// The stripes are not re-entrant: nothing called under them may take a file
+// stripe (a ModifyBookFile callback must not write a book_file, and none does).
 func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []bool, opts bookFileUpsertOpts) (*stagedBookFileRows, error) {
 	if len(files) == 0 {
 		return nil, nil
@@ -2021,6 +2081,85 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 		return nil, fmt.Errorf("batchUpsertBookFiles: %d presence flags for %d rows", len(present), len(files))
 	}
 
+	pristine := make([]BookFile, len(files))
+	for i, f := range files {
+		if f != nil {
+			pristine[i] = *f
+		}
+	}
+	held := s.upsertCandidateRowIDs(files)
+	if batchUpsertAfterCandidatesHook != nil {
+		batchUpsertAfterCandidatesHook()
+	}
+	for round := 0; ; round++ {
+		unlock := s.lockBookFiles(slices.Sorted(maps.Keys(held)))
+		var once sync.Once
+		release := func() { once.Do(unlock) }
+		staged, need, err := s.batchUpsertBookFilesStaged(files, present, opts, held, release)
+		release()
+		if len(need) == 0 {
+			return staged, err
+		}
+		if round >= maxStageRetries {
+			return nil, fmt.Errorf("batchUpsertBookFiles: the set of rows to lock kept growing: %w", errBookFileRowVanished)
+		}
+		for _, id := range need {
+			held[id] = struct{}{}
+		}
+		for i, f := range files {
+			if f != nil {
+				*f = pristine[i]
+			}
+		}
+	}
+}
+
+// batchUpsertAfterCandidatesHook, when non-nil, runs in every
+// batchUpsertBookFilesAttempt between the lock-free candidate lookup and the
+// first stripe acquisition: the window in which the candidate set can go stale.
+// Test-only.
+var batchUpsertAfterCandidatesHook func()
+
+// upsertCandidateRowIDs returns the IDs of the committed rows an upsert of files
+// may rewrite, read without any lock: the row each file names by ID, by iTunes
+// PID and by path. It is a guess; the staging pass re-derives the matches under
+// the stripes and reports any row it did not guess (see
+// batchUpsertBookFilesAttempt). A lookup error is ignored here because the
+// staging pass hits the same error and reports it properly.
+func (s *PebbleStore) upsertCandidateRowIDs(files []*BookFile) map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, f := range files {
+		if f == nil {
+			continue
+		}
+		if f.ID != "" {
+			if live, _, err := s.bookFileIDState(f.ID); err == nil && live != nil {
+				ids[live.ID] = struct{}{}
+			}
+		}
+		if f.ITunesPersistentID != "" {
+			if r, err := s.getBookFileByPIDAny(f.ITunesPersistentID); err == nil && r != nil {
+				ids[r.ID] = struct{}{}
+			}
+		}
+		if f.FilePath != "" {
+			if r, err := s.getBookFileByPathAny(f.FilePath); err == nil && r != nil {
+				ids[r.ID] = struct{}{}
+			}
+		}
+	}
+	return ids
+}
+
+// batchUpsertBookFilesStaged is one staging pass over files with the file
+// stripes of held locked by the caller. It matches rows exactly as
+// UpsertBookFile does. A matched committed row whose ID is not in held is
+// collected and returned as need (nothing is committed then, release is not
+// called and the caller adds those rows and starts over). Otherwise it commits,
+// calls release as soon as the commit returns (before any step that takes a
+// book stripe), and returns the rows it staged.
+func (s *PebbleStore) batchUpsertBookFilesStaged(files []*BookFile, present []bool, opts bookFileUpsertOpts, held map[string]struct{}, release func()) (*stagedBookFileRows, []string, error) {
+	needSet := map[string]struct{}{}
 	batch := s.db.NewIndexedBatch()
 
 	// Books whose aggregates this batch invalidates, in first-touched order.
@@ -2100,20 +2239,20 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 			// A retired row is never an upsert's match by PID or path (see
 			// UpsertBookFile): the caller's row is created live instead.
 			if file.ITunesPersistentID != "" {
-				existing, lookupErr = s.GetBookFileByPID(file.ITunesPersistentID)
+				existing, lookupErr = s.getBookFileByPIDAny(file.ITunesPersistentID)
 			}
 			if lookupErr != nil {
 				batch.Close()
-				return nil, lookupErr
+				return nil, nil, lookupErr
 			}
 			if existing != nil && existing.Retired {
 				existing = nil
 			}
 			if existing == nil && file.FilePath != "" {
-				existing, lookupErr = s.GetBookFileByPath(file.FilePath)
+				existing, lookupErr = s.getBookFileByPathAny(file.FilePath)
 				if lookupErr != nil {
 					batch.Close()
-					return nil, lookupErr
+					return nil, nil, lookupErr
 				}
 				if existing != nil && existing.Retired {
 					existing = nil
@@ -2142,7 +2281,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 				live, gone, idErr := s.bookFileIDState(file.ID)
 				if idErr != nil {
 					batch.Close()
-					return nil, idErr
+					return nil, nil, idErr
 				}
 				switch {
 				case gone:
@@ -2159,6 +2298,14 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 		}
 
 		if existing != nil {
+			// A committed row this pass rewrites must be one whose stripe is held
+			// (batchUpsertBookFilesAttempt). A row matched from THIS batch is staged,
+			// not committed, and its stripe is already accounted for.
+			if mergeTarget == nil {
+				if _, ok := held[existing.ID]; !ok {
+					needSet[existing.ID] = struct{}{}
+				}
+			}
 			// Preserve identity fields; remove stale secondary indexes.
 			file.ID = existing.ID
 			file.BookID = existing.BookID
@@ -2191,7 +2338,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 
 			if err := s.deleteBookFileSecondaryIndexes(batch, existing); err != nil {
 				batch.Close()
-				return nil, err
+				return nil, nil, err
 			}
 
 			if mergeTarget != nil {
@@ -2220,13 +2367,13 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 		} else {
 			if err := refuseRetiredInsert(file); err != nil {
 				batch.Close()
-				return nil, err
+				return nil, nil, err
 			}
 			if file.ID == "" {
 				id, err := newULID()
 				if err != nil {
 					batch.Close()
-					return nil, err
+					return nil, nil, err
 				}
 				file.ID = id
 			}
@@ -2257,18 +2404,18 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 		data, err := marshalBookFileDropSegs(file)
 		if err != nil {
 			batch.Close()
-			return nil, err
+			return nil, nil, err
 		}
 
 		key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
 		if err := batch.Set(key, data, nil); err != nil {
 			batch.Close()
-			return nil, err
+			return nil, nil, err
 		}
 
 		if err := s.writeBookFileSecondaryIndexesFor(batch, file); err != nil {
 			batch.Close()
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Record AFTER staging, so a row that failed to stage is never offered as a
@@ -2283,9 +2430,20 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 		}
 	}
 
+	if len(needSet) > 0 {
+		// A matched row was not in the locked set: nothing is committed, and the
+		// caller locks these rows too and stages again (batchUpsertBookFilesAttempt).
+		batch.Close()
+		return nil, slices.Sorted(maps.Keys(needSet)), nil
+	}
+
 	durErr := s.commitBookFileBatch(batch, affectedBooks, newOwners, rewriteKeys)
+	// The file stripes are released here, BEFORE the memdb refresh and the
+	// aggregate recompute below: the recompute writes the book under lockBook,
+	// and no file stripe may be held while a book stripe is taken.
+	release()
 	if !bookFileApplied(durErr) {
-		return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor, refusals: refusals}, durErr
+		return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor, refusals: refusals}, nil, durErr
 	}
 	// Refresh memdb for every upserted file. UpdateBookFile does this per row;
 	// BatchUpsertBookFiles historically did not, so after a batch write the memdb
@@ -2323,7 +2481,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 	// Best-effort, like every other caller: the rows are committed, and a failure
 	// to refresh a derived aggregate must not be reported as a failed write.
 	s.notifyBookFileChanges(affectedBooks)
-	return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor, refusals: refusals}, durErr
+	return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor, refusals: refusals}, nil, durErr
 }
 
 // GetBookFileByID returns a single BookFile by bookID and fileID.

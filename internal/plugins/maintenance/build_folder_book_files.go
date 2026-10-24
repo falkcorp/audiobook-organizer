@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.2.2
+// version: 1.4.0
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -134,10 +134,14 @@ var _ folderBuildStore = database.Store(nil)
 const fbOwnedListCap = 10
 
 // folderBuildOwned is one audio file the op left alone because another live
-// book already references it.
+// book already references it, or because a retired version holds it.
 type folderBuildOwned struct {
 	Path         string   `json:"path"`
-	OwnerBookIDs []string `json:"owner_book_ids"`
+	OwnerBookIDs []string `json:"owner_book_ids,omitempty"`
+	// RetiredHolderBookID is the book a retired version that holds the file is
+	// keyed under (set only when one does). It may be the book being built: a
+	// retired version of the book itself still holds the file.
+	RetiredHolderBookID string `json:"retired_holder_book_id,omitempty"`
 }
 
 // folderBuildBook is the per-book result entry.
@@ -507,14 +511,18 @@ func buildOneFolder(ctx context.Context, store folderBuildStore, c *fbCandidate,
 			res.Decision, res.Reason = fbITunesRoot, "an audio file resolves under the iTunes tree"
 			return nil
 		}
-		owners, err := liveOwnersOf(store, path, c.book.ID)
+		owners, retired, err := pathClaimantsOf(store, path, c.book.ID)
 		if err != nil {
 			return err
 		}
-		if len(owners) > 0 {
+		if len(owners) > 0 || retired != nil {
 			res.OwnedSkippedCount++
 			if len(res.OwnedSkipped) < fbOwnedListCap {
-				res.OwnedSkipped = append(res.OwnedSkipped, folderBuildOwned{Path: path, OwnerBookIDs: owners})
+				o := folderBuildOwned{Path: path, OwnerBookIDs: owners}
+				if retired != nil {
+					o.RetiredHolderBookID = retired.BookID
+				}
+				res.OwnedSkipped = append(res.OwnedSkipped, o)
 			}
 			continue
 		}
@@ -531,7 +539,7 @@ func buildOneFolder(ctx context.Context, store folderBuildStore, c *fbCandidate,
 	res.FileCount = len(rows)
 	if len(rows) == 0 {
 		res.Decision = fbAllFilesOwned
-		res.Reason = fmt.Sprintf("all %d audio files are referenced by other live books", len(audio))
+		res.Reason = fmt.Sprintf("all %d audio files are referenced by other live books or held by retired versions", len(audio))
 		return nil
 	}
 
@@ -589,20 +597,32 @@ func folderAudioFiles(dir string) (audio, names []string, subdirs int, err error
 	return audio, names, subdirs, nil
 }
 
-// liveOwnersOf returns the ids of live books other than self that reference
-// path: through a book_file row at it, or as their own file_path. Either
-// lookup failing is an error, never "no owner".
-func liveOwnersOf(store folderBuildStore, path, self string) ([]string, error) {
+// pathClaimantsOf says what stops self from getting a new row on path. It
+// returns the ids of live books other than self that reference path (through a
+// book_file row at it, or as their own file_path), and the retired row that
+// holds the path, if one does. Either lookup failing is an error, never "no
+// owner".
+//
+// The retired row is returned apart from the owners and is a claim whoever it
+// is keyed under (database.RetiredClaimOnPath): the book it is keyed under may
+// be a live sibling, a soft-deleted book, or self, and none of those lets a
+// second row onto the file. It is not listed among the owners, though, so a
+// live holder is not offered as a second owner of a path its sibling owns.
+func pathClaimantsOf(store folderBuildStore, path, self string) (owners []string, retired *database.BookFile, err error) {
 	rows, err := store.BookFilesAtPath(path)
 	if err != nil {
-		return nil, fmt.Errorf("book_file rows at %s: %w", path, err)
+		return nil, nil, fmt.Errorf("book_file rows at %s: %w", path, err)
 	}
 	ids, err := store.LiveBookIDsAtPath(path)
 	if err != nil {
-		return nil, fmt.Errorf("live books at %s: %w", path, err)
+		return nil, nil, fmt.Errorf("live books at %s: %w", path, err)
 	}
+	retired = database.RetiredClaimOnPath(rows)
 	cand := make(map[string]struct{}, len(rows)+len(ids))
 	for _, r := range rows {
+		if r.Retired {
+			continue
+		}
 		if r.BookID != self {
 			cand[r.BookID] = struct{}{}
 		}
@@ -616,7 +636,7 @@ func liveOwnersOf(store folderBuildStore, path, self string) ([]string, error) {
 	for id := range cand {
 		b, err := store.GetBookByID(id)
 		if err != nil {
-			return nil, fmt.Errorf("owner %s of %s: %w", id, path, err)
+			return nil, nil, fmt.Errorf("owner %s of %s: %w", id, path, err)
 		}
 		// A row left behind by a deleted book does not own the file.
 		if b == nil || b.IsSoftDeleted() {
@@ -625,5 +645,5 @@ func liveOwnersOf(store folderBuildStore, path, self string) ([]string, error) {
 		out = append(out, id)
 	}
 	sort.Strings(out)
-	return out, nil
+	return out, retired, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -118,7 +118,9 @@ func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans 
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
 	}
-	files, ferr := store.GetAllBookFilesCore()
+	// Retired rows included: a retired row is keyed under its holder, so one whose
+	// holder is gone is an orphan like any other row.
+	files, ferr := database.AllBookFilesCoreIncludingRetired(store)
 	if ferr != nil {
 		return nil, 0, 0, fmt.Errorf("GetAllBookFilesCore: %w", ferr)
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.5.2
+// version: 1.7.0
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 // Repoints rows whose file a rename MOVED ON DISK but whose new path the
 // rename could not write to the database, even after retrying.
@@ -247,9 +247,12 @@ func repointRowID(rec organizer.RenamePathWriteFailure) string {
 // lookup missed would have been repointed onto a path another live row holds.
 // book_file rows have no soft-delete marker: BookFile carries no
 // MarkedForDeletion (that flag is on book rows only), and a deleted book_file
-// row is removed, so both GetAllBookFilesCore arms (memdb walk, Pebble scan)
-// list only live rows. Every row listed is a claim; a row flagged Missing still
-// holds the path and counts too.
+// row is removed. The list is read through AllBookFilesCoreIncludingRetired,
+// NOT GetAllBookFilesCore: both arms of the latter list only LIVE rows
+// (Retired == false), and a retired version's row is a claim on its path too.
+// Every row listed is a claim; a row flagged Missing still holds the path and
+// counts too. If the retired-inclusive reader is unavailable the call fails
+// closed rather than answering from live rows only.
 func bookFileClaims(store unrecordedRenameStore, records []repointRecord) (map[string][]string, error) {
 	want := map[string]bool{}
 	for _, r := range records {
@@ -260,7 +263,7 @@ func bookFileClaims(store unrecordedRenameStore, records []repointRecord) (map[s
 	if len(want) == 0 {
 		return nil, nil
 	}
-	files, err := store.GetAllBookFilesCore()
+	files, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {
 		return nil, fmt.Errorf("list book files: %w", err)
 	}

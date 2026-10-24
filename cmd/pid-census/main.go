@@ -1,7 +1,7 @@
 // file: cmd/pid-census/main.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8f2b0d61-4a37-4c95-9e12-7d3a6b1c0e58
-// last-edited: 2026-10-07
+// last-edited: 2026-10-23
 //
 // READ-ONLY book_file iTunes-PID integrity census. Point it at a COPY of the
 // production Pebble DB (never the live dir — Pebble opens read-write and wants the
@@ -157,8 +157,8 @@ func main() {
 		}
 		fmt.Printf("=== CLEANUP PROVENANCE CENSUS (P3 exit-gate) ===\n")
 		fmt.Printf("automerge_journal_entries=%d journal_loser_ids=%d\n", len(entries), c.JournalLoserIDs)
-		fmt.Printf("tracks_in_itl=%d  healthy=%d  stale_owner=%d  no_live_owner=%d\n",
-			c.TracksInITL, c.Healthy, c.StaleOwner, c.NoLiveOwner)
+		fmt.Printf("tracks_in_itl=%d  healthy=%d  stale_owner=%d  no_live_owner=%d  retired_version_owner=%d\n",
+			c.TracksInITL, c.Healthy, c.StaleOwner, c.NoLiveOwner, c.RetiredVersionOwner)
 		fmt.Printf("merged_into_losers=%d distinct_loser_set(seen)=%d residual_duplicate_pids=%d\n",
 			c.MergedIntoLosers, c.DistinctLoserSet, c.ResidualDuplicatePIDs)
 		fmt.Printf(">>> PROVABLE_MERGE_ORPHANS=%d  (sha_gated_removable=%d)\n",

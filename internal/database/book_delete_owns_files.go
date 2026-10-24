@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package database
 
@@ -261,6 +261,24 @@ const maxStageRetries = 5
 // and a *staleStageError says why. The fsync runs after the stripes are
 // released (see WHAT RUNS UNDER THEM above).
 func (p *PebbleStore) commitBookFileBatch(batch *GatedBatch, lockIDs, newOwners []string, rewriteKeys [][]byte) error {
+	return p.commitBookFileBatchVerified(batch, lockIDs, newOwners, rewriteKeys, nil)
+}
+
+// commitBookFileBatchVerified is commitBookFileBatch plus a verify hook that
+// runs with the owner stripes held, after the owner and vanished-key checks and
+// immediately before the batch is applied. A non-nil error from verify closes
+// the batch without applying it and is returned as is (a verify that wants a
+// re-stage wraps errBookFileRowVanished, which every retry loop already tests).
+//
+// It exists for decisions the batch made from index state it read BEFORE the
+// stripes were taken (the retired-version writers' single-owner index keys). It
+// NARROWS the window in which that state can change under the batch; it does not
+// close it. The owner stripes serialize this commit only against writers that
+// share one of ITS owner books: another writer of the same index key holds the
+// stripes of a different book, so it can still commit between verify returning
+// and the batch being applied. Closing that would take a lock per index key,
+// which the single-owner index does not have.
+func (p *PebbleStore) commitBookFileBatchVerified(batch *GatedBatch, lockIDs, newOwners []string, rewriteKeys [][]byte, verify func() error) error {
 	if bookFileBeforeCommitHook != nil {
 		bookFileBeforeCommitHook()
 	}
@@ -300,6 +318,13 @@ func (p *PebbleStore) commitBookFileBatch(batch *GatedBatch, lockIDs, newOwners 
 		unlock()
 		_ = batch.Close()
 		return stale
+	}
+	if verify != nil {
+		if err := verify(); err != nil {
+			unlock()
+			_ = batch.Close()
+			return err
+		}
 	}
 	err := batch.Commit(pebble.NoSync)
 	unlock()

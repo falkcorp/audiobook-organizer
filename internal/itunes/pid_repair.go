@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_repair.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5a9d3c62-7e14-4b80-9f26-1c8b0a3e6d47
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 //
 // Read-only repair PLAN for duplicate book_file iTunes PIDs (the ~8,987 the
 // census found). A PID must identify exactly one book_file; where several rows
@@ -91,6 +91,10 @@ func ComputePIDRepairPlan(store PIDRepairStore, itlPath string, mappings []PathM
 		}
 	}
 
+	// GetAllBookFilesCore returns LIVE rows only, and that is load-bearing here:
+	// a retired row keeps its PID as the provenance the retire's undo restores
+	// from, and the live row on the holder can carry the same PID. Grouping the
+	// retired row in would plan to clear one of the two (see splitRetiredRows).
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan book_files: %w", err)

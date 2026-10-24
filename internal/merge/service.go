@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.60.5
+// version: 1.63.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package merge
 
@@ -2695,6 +2695,27 @@ func (ms *Service) planOwnFile(b *database.Book) virtualFilePlan {
 // can't be changed in place -- the primary key embeds it), never duplicated.
 // A new row's id is minted here, so the journal can name it before it exists.
 func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtualFilePlan {
+	// A path held by a retired version is that version's file: the move below
+	// would refuse the row (a retired row is only moved by the retire operations)
+	// and creating one would put a second row on the file, so the plan attaches
+	// nothing. The retired row keeps the file; the merge goes on without a row for
+	// it. GetBookFileByPath cannot see the retired row (it answers live rows
+	// only), so ask the complete lookup, and the STRICT one: the non-strict
+	// variant falls back to GetBookFileByPath when memdb is not serving, which
+	// is exactly the lookup that cannot see a retired row, so it would answer
+	// "free" for a retired-held path during startup warmup. An answer that
+	// cannot be complete is treated like a claim rather than as "free".
+	rows, rowsErr := database.BookFileRowsAtPathStrict(ms.db, b.FilePath)
+	if rowsErr != nil {
+		mlog.Warn("combine: cannot tell whether a retired version holds the file; no row planned for it book=%s path=%s err=%s",
+			b.ID, logger.SanitizeLogValue(b.FilePath), logger.SanitizeLogValue(fmt.Sprint(rowsErr)))
+		return virtualFilePlan{}
+	}
+	if held := database.RetiredClaimOnPath(rows); held != nil {
+		mlog.Info("combine: the file is held by a retired version; no row planned for it book=%s path=%s retired_file=%s holder=%s",
+			b.ID, logger.SanitizeLogValue(b.FilePath), held.ID, held.BookID)
+		return virtualFilePlan{}
+	}
 	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
 	if existing != nil {
 		if existing.BookID == targetBookID {
