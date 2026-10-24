@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -217,6 +217,10 @@ const (
 	// CodeOwnsFiles: 409, the book still owns book_file rows
 	// (database.ErrBookOwnsFiles); nothing was deleted.
 	CodeOwnsFiles = "OWNS_FILES"
+	// CodeRetiredShell: 409, the book's files were retired onto another book
+	// as retired versions that still hold rows (merge.ErrBookIsRetiredShell);
+	// nothing was deleted or restored.
+	CodeRetiredShell = "RETIRED_SHELL"
 	// CodeCarryFailed: 500, moving the listening state to the version
 	// Audiobookshelf lists did not complete; the book was kept with its
 	// state.
@@ -246,6 +250,10 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 		// message text.
 		if errors.Is(err, database.ErrBookOwnsFiles) {
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
+			return
+		}
+		if errors.Is(err, merge.ErrBookIsRetiredShell) {
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeRetiredShell)
 			return
 		}
 		// Refused because users have listening progress on it and there is

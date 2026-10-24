@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package batch
 
@@ -596,6 +596,11 @@ func groupOf(b *database.Book) string {
 // holds the global merge lock for its whole check-carry-delete, so a worker
 // pool would only queue on that lock.
 func (bs *BatchService) hardDelete(book *database.Book) error {
+	// A retire shell owns no live row; deleting it would drop the record of
+	// where its retired versions came from (merge.ErrBookIsRetiredShell).
+	if err := merge.RefuseRetiredShell(bs.db, book.ID, "hard delete"); err != nil {
+		return err
+	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
 	if !ok {
 		return errors.New("hard delete refused: the store cannot check or carry users' listening state")

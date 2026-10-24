@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -42,6 +42,9 @@ const (
 	// listing and the purge's hold of the merge lock. Nothing was done, and
 	// it is not an error.
 	purgeNotInTrash
+	// purgeRetiredShell: the book's files were retired onto another book and
+	// those versions still hold rows. Nothing was done.
+	purgeRetiredShell
 )
 
 // purgeOutcome is one book's result in a purge pass.
@@ -65,6 +68,9 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	case purgeOwnsFiles:
 		r.SkippedOwnsFiles++
 		r.SkippedOwnsFilesIDs = append(r.SkippedOwnsFilesIDs, bookID)
+	case purgeRetiredShell:
+		r.SkippedRetiredShell++
+		r.SkippedRetiredShellIDs = append(r.SkippedRetiredShellIDs, bookID)
 	case purgeKeptHasProgress:
 		r.KeptHasProgress++
 		r.KeptHasProgressIDs = append(r.KeptHasProgressIDs, bookID)
@@ -82,6 +88,7 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 // particular order, so a result reads the same run to run.
 func (r *PurgeResult) sortIDs() {
 	slices.Sort(r.SkippedOwnsFilesIDs)
+	slices.Sort(r.SkippedRetiredShellIDs)
 	slices.Sort(r.CarriedToSiblingIDs)
 	slices.Sort(r.KeptHasProgressIDs)
 	slices.Sort(r.CarryFailedIDs)
@@ -413,6 +420,8 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 			detail = "the purge never deletes a book that owns file rows"
 		}
 		return nil, fmt.Errorf("purge %s: %w: %s", book.ID, database.ErrBookOwnsFiles, detail)
+	case purgeRetiredShell:
+		return nil, fmt.Errorf("purge %s: %w; restore one of its retired versions as a separate book instead", book.ID, merge.ErrBookIsRetiredShell)
 	case purgeKeptHasProgress:
 		return nil, fmt.Errorf("purge %s: %w. Restore it, or use Discard progress and purge to delete it together with its progress", book.ID, ErrBookHasProgress)
 	case purgeCarryFailed:
@@ -516,6 +525,10 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if !book.IsSoftDeleted() {
 		return nil, fmt.Errorf("%w: %s", ErrNotInTrash, id)
 	}
+	// A retire shell is refused before anything else is read or recorded.
+	if err := merge.RefuseRetiredShell(svc.store, id, "discard progress and purge"); err != nil {
+		return nil, err
+	}
 	rec := svc.recorder()
 	if rec == nil {
 		return nil, ErrAuditUnavailable
@@ -559,6 +572,10 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		}
 		if len(owned) > 0 {
 			return fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
+		}
+		// And the retired-shell refusal, before any state is cleared.
+		if rerr := merge.RefuseRetiredShell(svc.store, id, "discard progress and purge"); rerr != nil {
+			return rerr
 		}
 		book = cur
 		return nil

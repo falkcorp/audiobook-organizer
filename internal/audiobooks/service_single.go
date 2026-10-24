@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -431,6 +431,19 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	}
 	if len(ownedFiles) > 0 {
 		return purgeOutcome{kind: purgeOwnsFiles}
+	}
+	// Step 0a: a retire shell. The retired-versions repair re-keys a trashed
+	// book's file rows onto the live book it lost to, so the shell owns no live
+	// row and the check above passes it. Purging it now would drop the only
+	// record of where those versions came from, with no journaled snapshot to
+	// restore a version from (the purge that writes one is not built yet), so
+	// it stays in the trash until its versions no longer hold rows. Fail
+	// closed: an unreadable answer is not proof there is none.
+	if rerr := merge.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
+		if errors.Is(rerr, merge.ErrBookIsRetiredShell) {
+			return purgeOutcome{kind: purgeRetiredShell, errs: nil}
+		}
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %v", book.ID, rerr)}}
 	}
 	// Step 0b: a book a user still has listening state on, checked at the
 	// same point (before any side effect). A merge moves a loser's progress
