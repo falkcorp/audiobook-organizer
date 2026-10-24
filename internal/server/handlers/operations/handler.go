@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-10-09
+// last-edited: 2026-10-24
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -47,6 +47,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/gin-gonic/gin"
@@ -96,6 +97,35 @@ type Handler struct {
 	// Same opaque-store rationale as preflightUndo. The result carries the
 	// restored / failed / not-restorable counts the response reports.
 	revert func(id string) (*audiobooks.RevertResult, error)
+
+	// repairsAccess decides who may read a Repairs operation's result, change
+	// journal and undo report. Unset (nil) refuses every repairs op: see
+	// WithRepairsOpAccess.
+	repairsAccess *opaccess.Repairs
+}
+
+// WithRepairsOpAccess installs the check that keeps a Repairs operation's data
+// (GET /operations/:id/result, /changes and /undo/preflight) to callers who
+// hold the op's fixer's permissions. A setter rather than a New parameter
+// because New already has nine and a dozen call sites; omitting it fails
+// closed (every repairs op is refused), and the server's wiring is pinned by
+// TestWireHandlers_RepairsOpAccessIsInstalled.
+func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
+	h.repairsAccess = a
+	return h
+}
+
+// mayReadOp is the repairs-op read check for a route that has an op id and has
+// not loaded its row: false means the response is written (403, or 500 when the
+// row cannot be read, which fails closed). An id with no v2 row is not a Repairs
+// op the caller could be refused, so it passes and the route answers as before.
+func (h *Handler) mayReadOp(c *gin.Context, id string) bool {
+	row, err := h.store.GetOperationV2(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to get operation", err)
+		return false
+	}
+	return h.repairsAccess.For(c).Require(row)
 }
 
 // revertResponse is the POST /operations/:id/revert success body. Partial is
@@ -410,6 +440,9 @@ func (h *Handler) GetOperationResult(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "operation", id)
 		return
 	}
+	if !h.repairsAccess.For(c).Require(row) {
+		return
+	}
 	h.respondWithResult(c, row.ResultData)
 }
 
@@ -434,6 +467,9 @@ func (h *Handler) respondWithResult(c *gin.Context, stored *string) {
 // Implements GET /operations/:id/changes.
 func (h *Handler) GetOperationChanges(c *gin.Context) {
 	id := c.Param("id")
+	if !h.mayReadOp(c, id) {
+		return
+	}
 	changes, err := h.store.GetOperationChanges(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get operation changes", err)
@@ -446,6 +482,9 @@ func (h *Handler) GetOperationChanges(c *gin.Context) {
 // Implements GET /operations/:id/undo/preflight.
 func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 	id := c.Param("id")
+	if !h.mayReadOp(c, id) {
+		return
+	}
 	report, err := h.preflightUndo(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to check conflicts", err)

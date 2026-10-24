@@ -1,5 +1,5 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
 // last-edited: 2026-10-24
 
@@ -10,6 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	repairshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/repairs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
@@ -73,4 +74,19 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 	return func(c *gin.Context, p auth.Permission) bool {
 		return servermiddleware.HoldsPermission(store, c, p)
 	}
+}
+
+// repairsOpAccess is the check the generic operations routes apply to a
+// Repairs operation's data (result, logs, change journal, listings): the
+// caller must hold the op's fixer's permissions, as the Repairs routes require
+// (see opaccess.Repairs). It asks permHolds, so auth disabled and a first run
+// hold everything, as everywhere else.
+func (s *Server) repairsOpAccess() *opaccess.Repairs {
+	// A nil *repairs.Registry must not become a non-nil interface: the check
+	// then refuses every repairs op rather than calling Get on nil.
+	var fixers opaccess.FixerLookup
+	if s.repairFixers != nil {
+		fixers = s.repairFixers
+	}
+	return opaccess.NewRepairs(fixers, s.permHolds())
 }

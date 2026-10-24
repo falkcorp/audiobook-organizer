@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-10-09
+// last-edited: 2026-10-24
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (stale-op clear, pause-state
@@ -295,6 +295,7 @@ func TestGetOperationResult_UnknownIDIsNotFound(t *testing.T) {
 
 func TestGetOperationChanges_Success(t *testing.T) {
 	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
 	store.EXPECT().GetOperationChanges("op-1").Return([]*database.OperationChange{{ID: "c1"}}, nil)
 	w := run(http.MethodGet, "/operations/:id/changes", "/operations/op-1/changes", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/changes", h.GetOperationChanges)
@@ -305,7 +306,8 @@ func TestGetOperationChanges_Success(t *testing.T) {
 // --- UndoPreflightHandler ---
 
 func TestUndoPreflightHandler_UsesInjectedFunc(t *testing.T) {
-	h, _, _, _, _, _ := newTestHandler(t)
+	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
 	w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/undo/preflight", h.UndoPreflightHandler)
 	})
@@ -315,6 +317,7 @@ func TestUndoPreflightHandler_UsesInjectedFunc(t *testing.T) {
 func TestUndoPreflightHandler_Error(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := operationsmocks.NewMockOperationsStore(t)
+	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(id string) (*undo.UndoConflictReport, error) { return nil, errors.New("boom") },
 		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
