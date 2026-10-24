@@ -1,13 +1,14 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
 package server
 
 import (
+	"errors"
 	"log/slog"
 	"time"
 
@@ -17,6 +18,19 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/gin-gonic/gin"
 )
+
+// respondIfRetiredVersion answers 409 and reports true when err says the
+// version is a retired one (versions.ErrRetiredVersion). A retired version is
+// not part of the trash/restore/purge machine: the user restores it as a
+// separate book instead, so the refusal is a conflict with the version's state,
+// not a bad request.
+func respondIfRetiredVersion(c *gin.Context, err error) bool {
+	if !errors.Is(err, versions.ErrRetiredVersion) {
+		return false
+	}
+	httputil.RespondWithConflict(c, err.Error())
+	return true
+}
 
 // handleTrashVersion moves a version to trash.
 // DELETE /api/v1/audiobooks/:id/versions/:vid
@@ -38,7 +52,16 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 
 	// Stamps TrashedAt: the 14-day window before the trash cleanup purges
 	// this version's files is counted from now.
-	versions.MarkTrashed(ver, time.Now())
+	//
+	// A retired version is refused (409) before anything is written: the store
+	// refuses to change one only while it still holds retired rows, and a
+	// retired version in the trash would be purged from disk 14 days later.
+	if err := versions.MarkTrashed(ver, time.Now()); err != nil {
+		if !respondIfRetiredVersion(c, err) {
+			httputil.InternalError(c, "trash version", err)
+		}
+		return
+	}
 	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		httputil.InternalError(c, "trash version", err)
 		return
@@ -70,12 +93,24 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "version/book mismatch")
 		return
 	}
+	// A retired version is answered with its own 409 before the not-in-trash
+	// check, as purge-now does: it is never in the trash, so "not in trash"
+	// would be a misleading 400. MarkRestored refuses it as well.
+	if ver.Status == database.BookVersionStatusRetired {
+		httputil.RespondWithConflict(c, "version is a retired version; restore it as a separate book instead")
+		return
+	}
 	if ver.Status != database.BookVersionStatusTrash {
 		httputil.RespondWithBadRequest(c, "version is not in trash")
 		return
 	}
 
-	versions.MarkRestored(ver)
+	if err := versions.MarkRestored(ver); err != nil {
+		if !respondIfRetiredVersion(c, err) {
+			httputil.InternalError(c, "restore version", err)
+		}
+		return
+	}
 	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		httputil.InternalError(c, "restore version", err)
 		return
@@ -109,12 +144,22 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "version/book mismatch")
 		return
 	}
+	// A retired version is refused with its own answer before the not-in-trash
+	// check: "trash it first" would be wrong advice for it (trashing is refused
+	// too). PurgeVersion refuses it as well, ahead of any disk write.
+	if ver.Status == database.BookVersionStatusRetired {
+		httputil.RespondWithConflict(c, "version is a retired version; purging it would delete files a live book keeps")
+		return
+	}
 	if ver.Status != database.BookVersionStatusTrash {
 		httputil.RespondWithBadRequest(c, "version is not in trash; trash it before purging")
 		return
 	}
 
 	if err := versions.PurgeVersion(s.Ops(), ver); err != nil {
+		if respondIfRetiredVersion(c, err) {
+			return
+		}
 		httputil.InternalError(c, "purge version", err)
 		return
 	}

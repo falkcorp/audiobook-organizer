@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -217,11 +217,25 @@ const (
 	// CodeOwnsFiles: 409, the book still owns book_file rows
 	// (database.ErrBookOwnsFiles); nothing was deleted.
 	CodeOwnsFiles = "OWNS_FILES"
+	// CodeHoldsRetiredVersions: 409, the book owns no live file row but holds
+	// retired versions (audiobookspkg.ErrHoldsRetiredVersions, which also wraps
+	// database.ErrBookOwnsFiles); nothing was deleted.
+	CodeHoldsRetiredVersions = "HOLDS_RETIRED_VERSIONS"
 	// CodeCarryFailed: 500, moving the listening state to the version
 	// Audiobookshelf lists did not complete; the book was kept with its
 	// state.
 	CodeCarryFailed = "CARRY_FAILED"
 )
+
+// ownsFilesCode is the stable code for a refusal that wraps
+// database.ErrBookOwnsFiles: CodeHoldsRetiredVersions when the book holds only
+// retired versions, CodeOwnsFiles when it owns live rows.
+func ownsFilesCode(err error) string {
+	if errors.Is(err, audiobookspkg.ErrHoldsRetiredVersions) {
+		return CodeHoldsRetiredVersions
+	}
+	return CodeOwnsFiles
+}
 
 // DeleteAudiobook handles DELETE /audiobooks/:id.
 func (h *Handler) DeleteAudiobook(c *gin.Context) {
@@ -245,7 +259,7 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 		// OWNS_FILES code lets the web tell it apart without matching the
 		// message text.
 		if errors.Is(err, database.ErrBookOwnsFiles) {
-			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), ownsFilesCode(err))
 			return
 		}
 		// Refused because users have listening progress on it and there is

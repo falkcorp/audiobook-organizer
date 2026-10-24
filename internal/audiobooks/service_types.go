@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-17
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -48,6 +48,14 @@ type PurgeResult struct {
 	// real errors. The nightly job reports the count once per run.
 	SkippedOwnsFiles    int      `json:"skipped_owns_files"`
 	SkippedOwnsFilesIDs []string `json:"skipped_owns_files_ids,omitempty"`
+	// SkippedHoldsRetiredVersions counts books left soft-deleted because they
+	// hold retired versions and nothing else (reason ReasonHoldsRetiredVersions):
+	// book_file rows the retire-versions repair keyed under them, which a live
+	// file list hides, and which DeleteBook refuses to orphan. It is disjoint
+	// from SkippedOwnsFiles (a book with live rows is counted there, whether or
+	// not it also holds retired rows) and is reported once per run the same way.
+	SkippedHoldsRetiredVersions    int      `json:"skipped_holds_retired_versions"`
+	SkippedHoldsRetiredVersionsIDs []string `json:"skipped_holds_retired_versions_ids,omitempty"`
 	// The next three count the books a user still has listening state on
 	// (merge.BookHasCarryableUserState: a position, a status, progress,
 	// listened time or the hide flag). Such a book is never purged with its

@@ -73,6 +73,22 @@ func BookFilesIncludingRetired(s any, bookID string) ([]BookFile, error) {
 	return nil, fmt.Errorf("book_files of %s: %w", bookID, ErrRetiredReaderUnavailable)
 }
 
+// RetiredVersionsFromBook returns the retired versions that were retired out of
+// shellID (RetiredBookFileReader.GetRetiredVersionsFromBook) for callers that
+// hold a narrowed store. Same capability resolution and fallback as
+// AllBookFilesCoreIncludingRetired: a store that declares NoRetiredBookFiles has
+// none by construction, and any other store without the reader returns
+// ErrRetiredReaderUnavailable, never an empty answer.
+func RetiredVersionsFromBook(s any, shellID string) ([]BookVersion, error) {
+	if r, ok := AsCapability[RetiredBookFileReader](s); ok {
+		return r.GetRetiredVersionsFromBook(shellID)
+	}
+	if plainReadsAreComplete(s) {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("retired versions of %s: %w", shellID, ErrRetiredReaderUnavailable)
+}
+
 // BookFileByPIDIncludingRetired is GetBookFileByPID that also answers a PID
 // held only by a retired row, with the same capability resolution and fallback
 // as AllBookFilesCoreIncludingRetired.

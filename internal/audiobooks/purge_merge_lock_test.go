@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_merge_lock_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e44858b2-5180-4f51-9842-e61721722f2f
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -126,6 +126,17 @@ func (s *restoredMeanwhileStore) GetBookFiles(bookID string) ([]database.BookFil
 		s.restore()
 	}
 	return s.PebbleStore.GetBookFiles(bookID)
+}
+
+// GetBookFilesIncludingRetired is the same hook for the read the purge's
+// file-row pre-check actually makes now that it counts a holder's retired
+// versions too: PebbleStore's own method would otherwise be promoted past the
+// GetBookFiles override and the restore would never fire.
+func (s *restoredMeanwhileStore) GetBookFilesIncludingRetired(bookID string) ([]database.BookFile, error) {
+	if bookID == s.doomed && !s.onSiblingLookup {
+		s.restore()
+	}
+	return s.PebbleStore.GetBookFilesIncludingRetired(bookID)
 }
 
 func (s *restoredMeanwhileStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {

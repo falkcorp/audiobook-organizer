@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package server
 
@@ -28,6 +28,7 @@ func setupVersionLifecycleServer(t *testing.T) (*Server, database.Store) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
+	store.WaitForWarmup() // PurgeVersion's BookFilesAtPath guard needs the memdb
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(store)
 	t.Cleanup(func() {

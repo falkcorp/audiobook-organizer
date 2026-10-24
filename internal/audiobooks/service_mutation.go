@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -1445,11 +1445,17 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// hard delete would orphan every one of them; it refuses too
 	// (database.ErrBookOwnsFiles), but only after the hash block below had
 	// already been written. Fail closed on a read error.
-	if owned, ownErr := svc.store.GetBookFiles(id); ownErr != nil {
+	//
+	// The rows are read INCLUDING retired versions: GetBookFiles hides them, so
+	// a live book that holds only retired versions would pass this check, have
+	// its hash blocked, and then be refused by DeleteBook, which counts every
+	// row key. The refusal for such a book wraps ErrHoldsRetiredVersions too.
+	holdings, ownErr := svc.readBookFileHoldings(id)
+	if ownErr != nil {
 		return nil, fmt.Errorf("hard delete %s: cannot read its book_file rows: %w", id, ownErr)
-	} else if len(owned) > 0 {
-		return nil, fmt.Errorf("hard delete %s: %w (%d row(s)); soft-delete it instead, or move its files to another book first",
-			id, database.ErrBookOwnsFiles, len(owned))
+	}
+	if err := holdings.refusal("hard delete", id, "soft-delete it instead, or move its files to another book first"); err != nil {
+		return nil, err
 	}
 
 	// A live book users have listening state on is deleted only after that

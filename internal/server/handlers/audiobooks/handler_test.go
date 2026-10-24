@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-10-23
 
@@ -399,6 +399,23 @@ func TestRestoreAudiobook_NotFound(t *testing.T) {
 	h.RestoreAudiobook(c)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// A restore the service refuses because the book is the shell of a retired
+// version is a 409 that carries the reason, not the 404 every other error maps
+// to: the book exists, its files are kept as a retired version.
+func TestRestoreAudiobook_RetiredShellIsConflict(t *testing.T) {
+	h, d := newHandler(t)
+	refused := fmt.Errorf("restore s1: %w (version v1 keeps its files under book h1)", database.ErrBookIsRetiredShell)
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "s1").Return(nil, refused)
+	c, w := newCtx("POST", "/audiobooks/s1/restore", nil, p("id", "s1"))
+	h.RestoreAudiobook(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "retired version") {
+		t.Errorf("the 409 should carry the reason, got %s", w.Body.String())
 	}
 }
 

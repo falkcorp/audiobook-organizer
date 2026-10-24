@@ -1,7 +1,7 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 package versions
 
@@ -50,6 +50,7 @@ func newTrashFixtureStamped(t *testing.T, createdAt time.Time, status string, tr
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	store.WaitForWarmup() // BookFilesAtPath (PurgeVersion's guard) needs the memdb
 
 	bookDir := t.TempDir()
 	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Trash Window Book", FilePath: filepath.Join(bookDir, "book.m4b")}); err != nil {
@@ -91,7 +92,9 @@ func (f *trashFixture) reread(t *testing.T) *database.BookVersion {
 func (f *trashFixture) trash(t *testing.T, now time.Time) {
 	t.Helper()
 	v := f.reread(t)
-	MarkTrashed(v, now)
+	if err := MarkTrashed(v, now); err != nil {
+		t.Fatalf("mark trashed: %v", err)
+	}
 	if err := f.store.UpdateBookVersion(v); err != nil {
 		t.Fatalf("trash: %v", err)
 	}
@@ -256,7 +259,9 @@ func TestCleanupTrashed_RestoreAfterListingWins(t *testing.T) {
 	}
 
 	v := f.reread(t)
-	MarkRestored(v)
+	if err := MarkRestored(v); err != nil {
+		t.Fatalf("mark restored: %v", err)
+	}
 	if err := f.store.UpdateBookVersion(v); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -278,7 +283,9 @@ func TestTrashedAt_RestoreClearsAndRetrashRestamps(t *testing.T) {
 	f := newTrashFixtureStamped(t, now.Add(-30*day), database.BookVersionStatusTrash, &trashedAt)
 
 	v := f.reread(t)
-	MarkRestored(v)
+	if err := MarkRestored(v); err != nil {
+		t.Fatalf("mark restored: %v", err)
+	}
 	if v.TrashedAt != nil {
 		t.Fatal("MarkRestored left TrashedAt set on the caller's copy")
 	}
@@ -324,7 +331,9 @@ func TestTrashedAt_StaleWriteWhileStillTrashedKeepsLaterStamp(t *testing.T) {
 	}
 
 	restored := f.reread(t)
-	MarkRestored(restored)
+	if err := MarkRestored(restored); err != nil {
+		t.Fatalf("mark restored: %v", err)
+	}
 	if err := f.store.UpdateBookVersion(restored); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -405,8 +414,8 @@ func TestTrashedAt_EveryPathIn_StampsEveryPathOut_Clears(t *testing.T) {
 		enter func(v *database.BookVersion)
 	}
 	entries := []entry{
-		{"handler MarkTrashed from active", database.BookVersionStatusActive, func(v *database.BookVersion) { MarkTrashed(v, time.Now()) }},
-		{"handler MarkTrashed from alt", database.BookVersionStatusAlt, func(v *database.BookVersion) { MarkTrashed(v, time.Now()) }},
+		{"handler MarkTrashed from active", database.BookVersionStatusActive, func(v *database.BookVersion) { _ = MarkTrashed(v, time.Now()) }},
+		{"handler MarkTrashed from alt", database.BookVersionStatusAlt, func(v *database.BookVersion) { _ = MarkTrashed(v, time.Now()) }},
 	}
 	for _, from := range []string{
 		database.BookVersionStatusActive,
@@ -454,7 +463,9 @@ func TestTrashedAt_EveryPathIn_StampsEveryPathOut_Clears(t *testing.T) {
 	}{
 		{"restore (MarkRestored)", func(t *testing.T, f *trashFixture) {
 			v := f.reread(t)
-			MarkRestored(v)
+			if err := MarkRestored(v); err != nil {
+				t.Fatal(err)
+			}
 			if err := f.store.UpdateBookVersion(v); err != nil {
 				t.Fatal(err)
 			}
@@ -499,7 +510,9 @@ func TestTrashedAt_EveryPathIn_StampsEveryPathOut_Clears(t *testing.T) {
 func TestMarkTrashed_AlreadyTrashedKeepsStamp(t *testing.T) {
 	orig := time.Now().Add(-5 * day)
 	v := &database.BookVersion{Status: database.BookVersionStatusTrash, TrashedAt: &orig}
-	MarkTrashed(v, time.Now())
+	if err := MarkTrashed(v, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if !v.TrashedAt.Equal(orig) {
 		t.Fatalf("TrashedAt = %v, want kept at %v", v.TrashedAt, orig)
 	}
@@ -507,7 +520,9 @@ func TestMarkTrashed_AlreadyTrashedKeepsStamp(t *testing.T) {
 	// A legacy trashed row with no stamp gets one.
 	legacy := &database.BookVersion{Status: database.BookVersionStatusTrash}
 	now := time.Now()
-	MarkTrashed(legacy, now)
+	if err := MarkTrashed(legacy, now); err != nil {
+		t.Fatal(err)
+	}
 	if legacy.TrashedAt == nil || !legacy.TrashedAt.Equal(now) {
 		t.Fatalf("legacy TrashedAt = %v, want %v", legacy.TrashedAt, now)
 	}

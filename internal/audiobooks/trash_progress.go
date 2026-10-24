@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -35,6 +35,10 @@ const (
 	purgeFailed purgeKind = iota
 	purgePurged
 	purgeOwnsFiles
+	// purgeHoldsRetiredVersions: the book owns no live file row but holds
+	// retired versions (ReasonHoldsRetiredVersions); it is kept like one that
+	// owns files.
+	purgeHoldsRetiredVersions
 	purgeCarried
 	purgeKeptHasProgress
 	purgeCarryFailed
@@ -65,6 +69,9 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	case purgeOwnsFiles:
 		r.SkippedOwnsFiles++
 		r.SkippedOwnsFilesIDs = append(r.SkippedOwnsFilesIDs, bookID)
+	case purgeHoldsRetiredVersions:
+		r.SkippedHoldsRetiredVersions++
+		r.SkippedHoldsRetiredVersionsIDs = append(r.SkippedHoldsRetiredVersionsIDs, bookID)
 	case purgeKeptHasProgress:
 		r.KeptHasProgress++
 		r.KeptHasProgressIDs = append(r.KeptHasProgressIDs, bookID)
@@ -82,6 +89,7 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 // particular order, so a result reads the same run to run.
 func (r *PurgeResult) sortIDs() {
 	slices.Sort(r.SkippedOwnsFilesIDs)
+	slices.Sort(r.SkippedHoldsRetiredVersionsIDs)
 	slices.Sort(r.CarriedToSiblingIDs)
 	slices.Sort(r.KeptHasProgressIDs)
 	slices.Sort(r.CarryFailedIDs)
@@ -413,6 +421,8 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 			detail = "the purge never deletes a book that owns file rows"
 		}
 		return nil, fmt.Errorf("purge %s: %w: %s", book.ID, database.ErrBookOwnsFiles, detail)
+	case purgeHoldsRetiredVersions:
+		return nil, fmt.Errorf("purge %s: %w: %w: the purge never deletes a book that holds retired versions", book.ID, ErrHoldsRetiredVersions, database.ErrBookOwnsFiles)
 	case purgeKeptHasProgress:
 		return nil, fmt.Errorf("purge %s: %w. Restore it, or use Discard progress and purge to delete it together with its progress", book.ID, ErrBookHasProgress)
 	case purgeCarryFailed:
@@ -493,8 +503,9 @@ func (svc *AudiobookService) recorder() activityRecorder {
 // audit row.
 //
 // It refuses, changing nothing, a book that is not in the trash
-// (ErrNotInTrash), one that still owns book_file rows
-// (database.ErrBookOwnsFiles: the purge never deletes those), and any call
+// (ErrNotInTrash), one that still owns book_file rows or holds retired
+// versions (database.ErrBookOwnsFiles, which a holder of retired versions also
+// wraps with ErrHoldsRetiredVersions: the purge never deletes those), and any call
 // when no activity log is wired (ErrAuditUnavailable). The trash and
 // file-row checks run once up front and again under the merge lock in the
 // precheck, before any state is cleared, so a restore or a file row that
@@ -520,12 +531,16 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if rec == nil {
 		return nil, ErrAuditUnavailable
 	}
-	owned, err := svc.store.GetBookFiles(id)
+	// Read INCLUDING retired versions (see purgeOne): a holder of retired
+	// versions looks empty to GetBookFiles and would have every user's state
+	// discarded before DeleteBook refused it.
+	const discardAdvice = "the purge never deletes those, so the book stays in the trash"
+	holdings, err := svc.readBookFileHoldings(id)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the book_file rows of %s: %w", id, err)
 	}
-	if len(owned) > 0 {
-		return nil, fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
+	if err := holdings.refusal("discard progress and purge", id, discardAdvice); err != nil {
+		return nil, err
 	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](svc.store)
 	if !ok {
@@ -553,12 +568,12 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		// cleared yet: a file row that landed since the check above would
 		// make the delete refuse (DeleteBook: database.ErrBookOwnsFiles)
 		// only AFTER every user's state was discarded.
-		owned, ferr := svc.store.GetBookFiles(id)
+		held, ferr := svc.readBookFileHoldings(id)
 		if ferr != nil {
 			return fmt.Errorf("cannot re-read the book_file rows of %s: %w", id, ferr)
 		}
-		if len(owned) > 0 {
-			return fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
+		if rerr := held.refusal("discard progress and purge", id, discardAdvice); rerr != nil {
+			return rerr
 		}
 		book = cur
 		return nil

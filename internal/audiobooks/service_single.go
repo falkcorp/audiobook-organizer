@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -425,12 +425,23 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	// pre-check exists so the refusal happens before the side effects
 	// above, not after them. Fail closed: an unreadable file list is not
 	// proof there are no rows.
-	ownedFiles, ownErr := svc.store.GetBookFiles(book.ID)
+	//
+	// The rows are read INCLUDING retired versions: a trashed book can itself
+	// be the holder of retired versions (rows the retire-versions repair keyed
+	// under it), GetBookFiles hides those, and DeleteBook counts every row key
+	// and refuses. Reading live rows only would let such a book through this
+	// check and fail it after the side effects. A book with only retired rows
+	// is reported with its own reason, ReasonHoldsRetiredVersions, apart from a
+	// book that owns live files.
+	holdings, ownErr := svc.readBookFileHoldings(book.ID)
 	if ownErr != nil {
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot read its book_file rows: %v", book.ID, ownErr)}}
 	}
-	if len(ownedFiles) > 0 {
+	if holdings.live > 0 {
 		return purgeOutcome{kind: purgeOwnsFiles}
+	}
+	if holdings.retired > 0 {
+		return purgeOutcome{kind: purgeHoldsRetiredVersions}
 	}
 	// Step 0b: a book a user still has listening state on, checked at the
 	// same point (before any side effect). A merge moves a loser's progress
