@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_scope_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 5b0e7c2d-41a6-4f93-8d17-c3a92e6f0b58
 // last-edited: 2026-10-24
 
@@ -50,14 +50,38 @@ func runWithTimeout(t *testing.T, d time.Duration, fn func()) {
 // holder, and the old holder trashed (it was being retired itself).
 func newChainRehomeFx(t *testing.T, op string) (*retireRevertFx, *database.Book) {
 	t.Helper()
+	fx, newHolder := newLiveChainRehomeFx(t, op)
+	trashBook(t, fx.st, fx.holder)
+	return fx, newHolder
+}
+
+// newLiveChainRehomeFx is newChainRehomeFx with the old holder left live.
+func newLiveChainRehomeFx(t *testing.T, op string) (*retireRevertFx, *database.Book) {
+	t.Helper()
 	fx := newRetireRevertFx(t)
 	w := fx.writer(op)
 	fx.retire(t, w, "ver-chain")
 	newHolder, err := fx.st.CreateBook(&database.Book{Title: "Synthetic New Holder", FilePath: "/lib/syn/new"})
 	require.NoError(t, err)
 	require.NoError(t, w.RehomeRetiredVersion("ver-chain", newHolder.ID))
-	trashBook(t, fx.st, fx.holder)
 	return fx, newHolder
+}
+
+// requireChainPreflightMatchesRevert: the whole-operation preflight of a chain
+// operation (the retire rows, the version's creation and a rehome of it, all in
+// one op) judges the retire rows against the holder the rehome's own reversal
+// puts the version back on, so it files nothing as changed or missing and counts
+// every row safe: exactly what RevertOperation then restores.
+func requireChainPreflightMatchesRevert(t *testing.T, fx *retireRevertFx, op string) {
+	t.Helper()
+	report, err := undo.PreflightUndoConflicts(fx.st, op)
+	require.NoError(t, err)
+	assert.Empty(t, report.CheckFailed, "%+v", report)
+	assert.Empty(t, report.BookMissing, "%+v", report)
+	assert.Equal(t, report.TotalChanges, report.Safe, "every row of the chain is restorable: %+v", report)
+	res, err := NewRevertService(fx.st).RevertOperation(op)
+	require.NoError(t, err, "%+v", res)
+	assert.Equal(t, report.Safe, res.Restored+res.AlreadyRestored, "the revert restores what the preflight predicted: %+v", res)
 }
 
 // A chain rehome reverts onto the TRASHED holder it left: the forward rehome
@@ -66,17 +90,14 @@ func newChainRehomeFx(t *testing.T, op string) (*retireRevertFx, *database.Book)
 func TestRevertRetire_RehomeBackOntoATrashedOldHolder(t *testing.T) {
 	fx, newHolder := newChainRehomeFx(t, "op-chain-trashed")
 
-	// The rehome row is restorable. (The retire rows of the same op are
-	// predicted "changed since" by a whole-operation preflight, because the
-	// version they name is on the new holder until the rehome is reversed: that
-	// is the preflight's known blind spot for a chain, with a live old holder
-	// too, and is not about the holder's trash state.)
+	// The whole operation is restorable, the retire rows of the same op
+	// included: they name a version that is on the new holder until the rehome
+	// is reversed, and the preflight judges them against where it goes back to.
 	report, err := undo.PreflightUndoConflicts(fx.st, "op-chain-trashed")
 	require.NoError(t, err)
+	assert.Empty(t, report.CheckFailed, "%+v", report)
 	assert.Empty(t, report.BookMissing, "%+v", report)
-	for _, item := range append(append([]undo.UndoConflictItem{}, report.CheckFailed...), report.BookMissing...) {
-		assert.NotEqual(t, undo.ChangeTypeRetiredVersionRehome, item.ChangeType, "the rehome onto a trashed old holder is restorable: %+v", item)
-	}
+	assert.Equal(t, report.TotalChanges, report.Safe, "%+v", report)
 
 	// The rehome row on its own: the version goes back to the trashed holder.
 	changes, err := fx.st.GetOperationChanges("op-chain-trashed")
@@ -107,6 +128,52 @@ func TestRevertRetire_RehomeBackOntoATrashedOldHolder(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	assert.True(t, h.IsSoftDeleted(), "a revert does not un-trash the holder")
+}
+
+// The same chain with the old holder live (the common case): the preflight
+// agrees with the revert for it too.
+func TestPreflightUndoConflicts_ChainRehomeLiveOldHolder(t *testing.T) {
+	fx, _ := newLiveChainRehomeFx(t, "op-chain-live")
+	requireChainPreflightMatchesRevert(t, fx, "op-chain-live")
+	for _, id := range fx.ids() {
+		assert.Equal(t, fx.shell.ID, view(t, fx.st, fx.shell.ID, id).BookID)
+	}
+}
+
+// A version rehomed twice (holder to a, a to b): each rehome row is judged
+// against the holder the newer one puts the version back on, not the one the
+// store shows, so the older rehome is not "held by another book".
+func TestPreflightUndoConflicts_TwoRehomesOfOneVersion(t *testing.T) {
+	fx := newRetireRevertFx(t)
+	w := fx.writer("op-chain-two")
+	fx.retire(t, w, "ver-chain")
+	a, err := fx.st.CreateBook(&database.Book{Title: "Synthetic Holder A", FilePath: "/lib/syn/a"})
+	require.NoError(t, err)
+	b, err := fx.st.CreateBook(&database.Book{Title: "Synthetic Holder B", FilePath: "/lib/syn/b"})
+	require.NoError(t, err)
+	require.NoError(t, w.RehomeRetiredVersion("ver-chain", a.ID))
+	require.NoError(t, w.RehomeRetiredVersion("ver-chain", b.ID))
+	requireChainPreflightMatchesRevert(t, fx, "op-chain-two")
+	v, err := fx.st.GetBookVersion("ver-chain")
+	require.NoError(t, err)
+	assert.Nil(t, v, "the version the retire created is gone once its rows are back on the shell")
+}
+
+// A rehome the revert will refuse does not predict the rows after it restored:
+// the version stays where it is, so its retire rows are still judged against
+// the store.
+func TestPreflightUndoConflicts_RefusedRehomeKeepsTheRetireRowsRefused(t *testing.T) {
+	fx, newHolder := newLiveChainRehomeFx(t, "op-chain-refused")
+	other, err := fx.st.CreateBook(&database.Book{Title: "Synthetic Other", FilePath: "/lib/syn/other"})
+	require.NoError(t, err)
+	// Someone moved the version on since the operation: the rehome's
+	// compare-and-set no longer holds.
+	require.NoError(t, fx.writer("op-later").RehomeRetiredVersion("ver-chain", other.ID))
+	_ = newHolder
+	report, err := undo.PreflightUndoConflicts(fx.st, "op-chain-refused")
+	require.NoError(t, err)
+	assert.NotEmpty(t, report.CheckFailed, "%+v", report)
+	assert.Less(t, report.Safe, report.TotalChanges, "%+v", report)
 }
 
 // The old holder was purged since: the revert recreates it from its purge
@@ -294,38 +361,60 @@ func TestOperationLocks_AreKeyedByTheExactOperationID(t *testing.T) {
 	assert.Empty(t, opLocks.m, "no entry outlives its last holder")
 }
 
-// The combine undo's reversal try-locks the retire op: a busy lock is a
-// retryable error and writes nothing, a free one reverses. It runs with the
-// merge lock held and must never wait on it.
+// The combine undo try-locks the retire ops before its first write
+// (LockRetireOps): a busy op is a retryable refusal that names it and holds
+// nothing, a free one is held until the release, and the reversal run under it
+// does not take the lock again. It runs with the merge lock held and must never
+// wait on it.
 func TestRetireUndoer_BusyRetireOperationIsARetryableRefusal(t *testing.T) {
 	fx := newRetireRevertFx(t)
 	fx.retire(t, fx.writer("op-busy"), "ver-busy")
 	rs := NewRevertService(fx.st)
-	plan, err := rs.retireUndoer().PlanRetireRevert("op-busy", fx.shell.ID)
+	u := rs.retireUndoer()
+	plan, err := u.PlanRetireRevert("op-busy", fx.shell.ID)
 	require.NoError(t, err)
 	require.Empty(t, plan.Reasons)
 
 	release := lockOperation("op-busy")
+	var lockErr error
 	runWithTimeout(t, 30*time.Second, func() {
-		err = plan.Revert()
+		_, lockErr = u.LockRetireOps([]string{"op-free", "op-busy"})
 	})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, errRetireOpBusy), "%v", err)
+	require.Error(t, lockErr)
+	assert.True(t, errors.Is(lockErr, errRetireOpBusy), "%v", lockErr)
+	assert.Contains(t, lockErr.Error(), "op-busy")
 	f, gerr := fx.st.GetBookFileByID(fx.holder.ID, fx.rows[0].ID)
 	require.NoError(t, gerr)
 	require.NotNil(t, f)
 	assert.True(t, f.Retired, "nothing was written while the other revert ran")
+	free, ok := tryLockOperation("op-free")
+	require.True(t, ok, "the busy refusal released the lock it had already taken")
+	free()
 	release()
 
 	unlockMerge := rs.lockMerge() // the combine undo holds it for the whole call
+	var unlockOps func()
+	var revertErr error
 	runWithTimeout(t, 30*time.Second, func() {
-		err = plan.Revert()
+		var lerr error
+		if unlockOps, lerr = u.LockRetireOps([]string{"op-busy"}); lerr != nil {
+			revertErr = lerr
+			return
+		}
+		revertErr = plan.Revert()
 	})
+	require.NotNil(t, unlockOps)
+	_, again := tryLockOperation("op-busy")
+	assert.False(t, again, "held through the reversal")
+	unlockOps()
 	unlockMerge()
-	require.NoError(t, err, "free now: reverses, without taking the merge lock again")
+	require.NoError(t, revertErr, "free now: reverses, without taking the merge lock again")
 	for _, id := range fx.ids() {
 		assert.Equal(t, fx.shell.ID, view(t, fx.st, fx.shell.ID, id).BookID)
 	}
+	rel, ok := tryLockOperation("op-busy")
+	require.True(t, ok, "released")
+	rel()
 }
 
 // countingStore counts GetOperationChanges per operation id.

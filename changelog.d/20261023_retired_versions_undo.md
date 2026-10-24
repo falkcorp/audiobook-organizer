@@ -25,5 +25,5 @@ written even when the combine left the shell no files. The revert of a chain
 rehome moves the version back onto an old holder that is in the trash (a new
 `RestoreRetiredVersionHolder` store method) and recreates a purged one from its
 purge snapshot once one exists, and the operation revert lock is now keyed by
-the exact operation id rather than a shared stripe. Restoring a trashed book
+the exact operation id rather than a shared stripe. The preflight of a chain operation (a retire whose version was rehomed in the same operation) judges the retire rows against the holder the rehome's own reversal puts the version back on, as the revert does. A combine undo takes the locks of the retire operations it reverses before it writes anything, so a busy one refuses the undo with the journal untouched. Restoring a trashed book
 decides its library state on its live files, not on retired versions it holds. The retire journal rows are exempt from journal pruning, so an old retire is never mistaken for a reversed one. Nothing retires a row yet, so running behavior does not change.
