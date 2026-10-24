@@ -1,5 +1,5 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
 // last-edited: 2026-10-24
 
@@ -444,4 +444,19 @@ func TestRetiredShellOwnPath_ChangedBytesAreStillSkippedByPathClaim(t *testing.T
 	serr := saveBookToDatabase(t.Context(), &Book{Title: "Changed", FilePath: row.FilePath, FileHash: newHash})
 	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
 	require.Empty(t, f.liveRowsAt(row.FilePath))
+}
+
+// The owner of a multi-file book's first segment is locked for the scan. For a
+// segment only a retired version's row claims, that owner is the book the
+// version is held under: the scan reads its retired rows to decide the file is
+// not new, and a retire into it or a purge of it must not run underneath.
+func TestResolveScanLockSet_RetiredFirstSegmentLocksTheHolder(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	first := f.write("shell/01.mp3", "retired-bytes")
+	second := f.write("shell/02.mp3", "more-bytes")
+	f.retiredRow(first, "h-retired-lock")
+
+	ids, _, err := resolveScanLockSet(&Book{FilePath: filepath.Join(f.root, "shell"), SegmentFiles: []string{first, second}})
+	require.NoError(t, err)
+	require.Contains(t, ids, f.holder.ID, "the holder of the retired version was not locked")
 }
