@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.44.1
+// version: 1.44.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package organizer
 
@@ -180,14 +180,18 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		// What the refusal protects: the library gaining a second copy of bytes
 		// it already holds under another row. A book still OUTSIDE the root
 		// (an import path, a protected original) would gain one by being
-		// organized, so a twin inside the root refuses it. A book already
-		// INSIDE the root adds nothing to the library by being re-laid-out:
-		// the pair exists whether or not this organize runs, so refusing only
-		// blocks a rename (after a metadata edit, say) on every run until
-		// dedup resolves the pair. It is reported to dedup instead
-		// (inRootTwins) and the organize goes on, except where the twin
-		// occupies the very target (below): that would write a _copyN of
-		// identical bytes beside it.
+		// organized, so a twin inside the root refuses it.
+		//
+		// A book already INSIDE the root is reached here only by the direct
+		// OrganizeSingleFile callers (the library clone and the iTunes
+		// importer). OrganizeBook itself never re-lays a file out in place: it
+		// writes a NEW file at the target. The in-root re-layout that follows a
+		// metadata edit is inPlaceLanding (OrganizeOneBook), which never gets
+		// here. For such a book the pair already exists whether or not this
+		// organize runs, so the twin is reported to dedup (inRootTwins) and the
+		// organize goes on, except where the twin occupies the very target
+		// (below): that would write a _copyN of identical bytes beside it.
+		// This branch rarely fires in production for that reason.
 		bookInRoot := pathutil.IsWithin(book.FilePath, o.config.RootDir)
 		var inRootTwins []string
 		for _, existingBook := range holders {
@@ -218,8 +222,8 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 			if SameVersionGroup(book, existingBook) {
 				return "", "", &LibraryCopyExistsError{BookID: book.ID, CopyID: existingBook.ID, CopyPath: existingBook.FilePath}
 			}
-			// An organized book re-laid-out to a path its twin does not hold:
-			// report the pair, keep going.
+			// A book already in the root, organized by a direct caller to a
+			// path its twin does not hold: report the pair, keep going.
 			if bookInRoot && existingBook.FilePath != targetPath {
 				inRootTwins = append(inRootTwins, existingBook.FilePath)
 				continue
