@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -205,6 +205,24 @@ describe('useRepairsLane: loading', () => {
     const { result } = renderHook(() => useRepairsLane(toast, true));
     await waitFor(() => expect(result.current.rowsError).toBe('busy'));
     expect(result.current.rowsNeedRerun).toBe(false);
+  });
+
+  it('flags a 403 on the rows as forbidden, and nothing else as forbidden', async () => {
+    vi.mocked(api.getRepairPlanRows).mockRejectedValue(
+      Object.assign(new Error('permission denied: settings.manage'), { status: 403 })
+    );
+    const { result } = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(result.current.rowsError).toBe('permission denied: settings.manage'));
+    expect(result.current.rowsForbidden).toBe(true);
+    expect(result.current.rowsNeedRerun).toBe(false);
+    expect(result.current.page).toBeNull();
+  });
+
+  it('does not flag an ordinary rows failure as forbidden', async () => {
+    vi.mocked(api.getRepairPlanRows).mockRejectedValue(new Error('rows exploded'));
+    const { result } = renderHook(() => useRepairsLane(toast, true));
+    await waitFor(() => expect(result.current.rowsError).toBe('rows exploded'));
+    expect(result.current.rowsForbidden).toBe(false);
   });
 
   it('shows no plan for a fixer that has never run a trial', async () => {
