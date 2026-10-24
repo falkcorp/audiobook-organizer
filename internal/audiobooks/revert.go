@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.2
+// version: 1.97.3
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-28
 
@@ -1678,7 +1678,7 @@ func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 // under from (a book folder) at the same place under to. Each row is re-read
 // in full before it is written: UpdateBookFile replaces the whole record.
 func (rs *RevertService) repointBookFiles(bookID, from, to string) error {
-	files, err := rs.db.GetBookFiles(bookID)
+	files, err := rs.filesIncludingRetired(bookID)
 	if err != nil {
 		return fmt.Errorf("list book_file rows of %s: %w", bookID, err)
 	}
@@ -1870,6 +1870,13 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, pla
 	if err != nil {
 		return fmt.Errorf("read book_file %s on %s: %w", fileID, c.OldValue, err)
 	}
+	// A row retired since is neither "still on the target" nor "back on the
+	// source": a later retire owns it, and is reversed first, never overwritten.
+	for _, f := range []*database.BookFile{onTarget, onSource} {
+		if f != nil && f.Retired {
+			return undo.RetiredRowRefusal(f)
+		}
+	}
 	if err := undo.CheckReassignCurrent(onTarget != nil, onSource != nil, c); err != nil {
 		return err
 	}
@@ -2031,6 +2038,9 @@ func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error 
 	if err != nil || f == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
 	}
+	if f.Retired {
+		return undo.RetiredRowRefusal(f)
+	}
 	if f.TrackNumber != set {
 		// Already the old number (a journaled step never written) is no
 		// drift; anything else is.
@@ -2061,6 +2071,9 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
 	if err != nil || f == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
+	}
+	if f.Retired {
+		return undo.RetiredRowRefusal(f)
 	}
 	// Path and Missing only (undo.CheckRepointCurrent): a hash or size a scan
 	// filled in since does not make the row someone else's; a row already back
@@ -2298,6 +2311,9 @@ func (rs *RevertService) revertITunesPathClear(c *database.OperationChange) erro
 	if err != nil || f == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
 	}
+	if f.Retired {
+		return undo.RetiredRowRefusal(f)
+	}
 	if err := undo.CheckITunesPathClearCurrent(f.ITunesPath, c); err != nil {
 		return err
 	}
@@ -2338,6 +2354,9 @@ func (rs *RevertService) revertBookFileMove(c *database.OperationChange) error {
 	bf, err := rs.db.GetBookFileByID(c.BookID, fileID)
 	if err != nil || bf == nil {
 		return driftRefusal("book_file %s is no longer on book %s", fileID, c.BookID)
+	}
+	if bf.Retired {
+		return undo.RetiredRowRefusal(bf)
 	}
 	if bf.FilePath != c.NewValue {
 		if bf.FilePath == c.OldValue {
@@ -2385,7 +2404,7 @@ func (rs *RevertService) revertBookFileMove(c *database.OperationChange) error {
 // siblingRowAt reports whether book bookID has a book_file row other than
 // exceptID at path.
 func (rs *RevertService) siblingRowAt(bookID, exceptID, path string) bool {
-	rows, err := rs.db.GetBookFiles(bookID)
+	rows, err := rs.filesIncludingRetired(bookID)
 	if err != nil {
 		return false
 	}
@@ -2408,7 +2427,7 @@ func (rs *RevertService) siblingRowAt(bookID, exceptID, path string) bool {
 // value the book had before the operation, which may be a pointer that
 // predates it.
 func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamps undo.SoftDeleteStamps) error {
-	files, err := rs.db.GetBookFiles(c.BookID)
+	files, err := rs.filesIncludingRetired(c.BookID)
 	if err != nil {
 		return fmt.Errorf("read files of %s: %w", c.BookID, err)
 	}
@@ -2743,6 +2762,9 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	bf, err := rs.db.GetBookFileByID(c.BookID, fileID)
 	if err != nil || bf == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
+	}
+	if bf.Retired {
+		return undo.RetiredRowRefusal(bf)
 	}
 	// Checked after the book and file, so a row whose book is gone reports
 	// that reason; either way nothing is written and the row fails.
@@ -3365,7 +3387,7 @@ func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, 
 	if hidden != nil && !hidden.IsSoftDeleted() {
 		return nil
 	}
-	rows, err := rs.db.GetBookFiles(bookID)
+	rows, err := rs.filesIncludingRetired(bookID)
 	if err != nil {
 		return fmt.Errorf("rows of hidden book %s: %w", bookID, err)
 	}
