@@ -57,7 +57,7 @@ type pendingRepairScanner interface {
 //
 // A trashed book that is the shell of a retired version still holding rows is
 // refused with database.ErrBookIsRetiredShell before anything is written
-// (RefuseRetiredShell, retired_shell.go).
+// (database.RefuseRetiredShell).
 //
 // When the row is in the trash (database.IsInTrash) it:
 //
@@ -207,7 +207,7 @@ func RestoreFromTrashLocked(store TrashRestoreStore, id string, apply func(*data
 		return res, nil
 	}
 	if trashed {
-		if err := RefuseRetiredShell(store, id, "restore"); err != nil {
+		if err := database.RefuseRetiredShell(store, id, "restore"); err != nil {
 			res.Book = book
 			return res, err
 		}

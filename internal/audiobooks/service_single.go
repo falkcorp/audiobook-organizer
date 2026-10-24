@@ -544,7 +544,7 @@ func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv,
 	// lock too, so the lock-free gate (purgeGate) could have passed a book the
 	// repair retired a moment later, and the delete would then drop the record
 	// of where its versions came from.
-	if r.retiredErr = merge.RefuseRetiredShell(svc.store, cur.ID, "purge"); r.retiredErr != nil {
+	if r.retiredErr = database.RefuseRetiredShell(svc.store, cur.ID, "purge"); r.retiredErr != nil {
 		return r
 	}
 	r.hasState, r.stateErr = env.probe.Has(cur.ID)
@@ -632,7 +632,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 			return oerr
 		}
 		// Under the lock: a retire shell is never purged (see purgeGate).
-		if rerr := merge.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
+		if rerr := database.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
 			return rerr
 		}
 		doomed = cur
