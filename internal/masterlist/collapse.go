@@ -1,5 +1,5 @@
 // file: internal/masterlist/collapse.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c98332e8-00a2-48b9-b729-87f0dbd569f2
 // last-edited: 2026-10-24
 
@@ -84,8 +84,8 @@ func Collapse(rows []Row) []Group {
 // IdentityKeys are the identifiers two rows must not share without being one
 // book: "asin:<ASIN>", "isbn13:<ISBN-13>" (an ISBN-10 counts as the ISBN-13 it
 // converts to) and "src:<source>:<id>" for each source with an id. Collapse
-// joins rows by them; the read-elsewhere records are matched by the same keys,
-// so one book is one record whichever of its identifiers a list gives first.
+// joins the rows of ONE list by them. Matching across lists uses CrossListKeys,
+// which leaves out the unlabelled "src:other:<id>" keys.
 func IdentityKeys(r Row) []string {
 	var keys []string
 	if r.ASIN != "" {
@@ -105,6 +105,24 @@ func IdentityKeys(r Row) []string {
 		}
 	}
 	return keys
+}
+
+// UnlabelledSource is the source name a row's source_id gets when the list has
+// no source column (or an empty cell): the id is only meaningful inside the list
+// that gave it.
+const UnlabelledSource = "other"
+
+// CrossListKeys are the IdentityKeys that mean the same book in a DIFFERENT
+// list: every key except "src:other:<id>". Within one list an unlabelled
+// source id is one system's id (Collapse joins on it), but two lists that never
+// said which system their ids come from will both have a "17", and they are not
+// the same book. ASIN, ISBN-13 and the named sources (audible, itunes, ...) are
+// product or system identities and match across lists. The read-elsewhere
+// records are matched across lists by these keys only.
+func CrossListKeys(r Row) []string {
+	prefix := "src:" + UnlabelledSource + ":"
+	keys := IdentityKeys(r)
+	return slices.DeleteFunc(keys, func(k string) bool { return strings.HasPrefix(k, prefix) })
 }
 
 // Combine merges rows that are one book into one Row, given in input order.

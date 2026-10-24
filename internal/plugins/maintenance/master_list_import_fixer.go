@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_import_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4b0c5f4a-6d0a-4f0e-9d8e-3f1f7a9a52c1
 // last-edited: 2026-10-24
 
@@ -48,9 +48,11 @@ const mlLibraryPage = 5000
 //     skipped_no_timestamp, skipped_no_progress, skipped_local_progress,
 //     skipped_manual_unstarted, skipped_no_status, skipped_not_started,
 //     skipped_list_abandoned, skipped_future_timestamp, error_state_unreadable).
-//   - matched_review: a match a person confirms: by title and author, a
-//     swapped title, a runtime or series disagreement, a list-side data problem,
-//     a trashed copy followed to its survivor, or a book two list rows claim.
+//   - matched_review: a match listed for a person to look at, never applied:
+//     by title and author, a swapped title, a runtime or series disagreement, a
+//     list-side data problem, a trashed copy followed to its survivor, or a book
+//     two list rows claim. There is no confirm action yet, so these rows are
+//     read-only until a later change adds one.
 //   - ambiguous: several books fit.
 //   - unmatched: no live book fits, and the row might still be one.
 //   - read_elsewhere: no live book fits and nothing in the library could be it
@@ -511,14 +513,23 @@ func (f *masterListImportFixer) Apply(ctx context.Context, w *repairs.Writer, fr
 // recheckTarget is what Apply re-reads under the write (the Writer's merge lock
 // and the (user, book) stripe), because the apply run's library snapshot is
 // loaded once and a row can wait behind thousands of others: the target user
-// must still exist, and the matched book must still be a live book. A book
-// merged into another is held, not followed: the match was made, and reviewed
-// as high confidence, for THIS book, and its survivor's state and copies were
-// never read; a re-plan matches the survivor through its trashed twin and files
-// it for review (via_trashed). Both refusals wrap repairs.ErrChangedSincePlan,
-// so the row reports changed_since_plan with the reason. (The framework guard
-// does not cover this: it skips a trashed book as having nothing left to
-// protect, it does not refuse it.)
+// must still exist, and the matched book must still be a live book.
+//
+// What the lock excludes is a merge or a purge, which take the same mutex, so
+// neither can land between this check and the write. A trash is a soft delete,
+// a bare book-row write that does not take it: a book trashed after this check
+// passes and before the state is written still gets the state. The row is
+// journaled, so its revert removes it, and the stateless purge will not purge a
+// book carrying state unseen. The check narrows that window; it does not close
+// it.
+//
+// A book merged into another is held, not followed: the match was made, and
+// reviewed as high confidence, for THIS book, and its survivor's state and
+// copies were never read; a re-plan matches the survivor through its trashed
+// twin and files it for review (via_trashed). Both refusals wrap
+// repairs.ErrChangedSincePlan, so the row reports changed_since_plan with the
+// reason. (The framework guard does not cover this: it skips a trashed book as
+// having nothing left to protect, it does not refuse it.)
 func (f *masterListImportFixer) recheckTarget(user, book string) error {
 	if err := f.recheckUser(user); err != nil {
 		return err
@@ -612,8 +623,29 @@ func mlGroupKey(r masterlist.Row) string {
 	if !r.HasIdentity() {
 		return "line:" + strconv.Itoa(r.Line)
 	}
+	return mlTitleKey(r)
+}
+
+// mlTitleKey is "noid:" and a hash of the row's folded title and authors.
+func mlTitleKey(r masterlist.Row) string {
 	sum := sha256.Sum256([]byte(arsKeyOf(r.Title).full + "\x00" + strings.Join(r.Authors, "\x00")))
 	return "noid:" + hex.EncodeToString(sum[:])[:16]
+}
+
+// mlElsewhereRowKey is the key a read-elsewhere record's id (ElsewhereID) is
+// derived from. It is the plan row's key, except for a row keyed by an
+// unlabelled source id ("src:other:<id>"): that key is the same string in every
+// list that has a "17", and it would make two lists' different books one
+// record. Such a row is keyed by its folded title and authors instead, or, with
+// neither, by the list and the row so it never meets another list's record.
+func mlElsewhereRowKey(listID, rowID string, r masterlist.Row) string {
+	if !strings.HasPrefix(rowID, "src:"+masterlist.UnlabelledSource+":") {
+		return rowID
+	}
+	if strings.TrimSpace(r.Title) != "" || len(r.Authors) > 0 {
+		return mlTitleKey(r)
+	}
+	return "list:" + listID + ":" + rowID
 }
 
 // assemble turns the outcomes into one plan row per INPUT row. A group's first

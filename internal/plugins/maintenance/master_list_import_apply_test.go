@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_import_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6a9c13-d874-4e05-b1a7-83c5e0d94f68
 // last-edited: 2026-10-24
 
@@ -886,4 +886,51 @@ func TestMasterListImport_ReadElsewhereDedupedByAnyIdentifier(t *testing.T) {
 		csvLine("Same Book Again", "Zed Elsewhere", "B100000051", "", "", "", "", "", "finished", fin))
 	_, rows3 := l.plan(list3)
 	require.Equal(t, mlSkipAlreadyRecorded, rows3["asin:B100000051"].Class)
+}
+
+// An unlabelled source id (a source_id column with no source) is only an
+// identity inside the list that gave it: two lists that both have a "17" are
+// not naming one book, so the second list's different book is its own record,
+// whether or not it carries an ASIN. (Collapse still joins on it inside a
+// list; the cross-list index and the record ids do not.)
+func TestMasterListImport_ReadElsewhereNotDedupedByUnlabelledSourceID(t *testing.T) {
+	l := newMLLab(t)
+	st := database.NewMasterListStore(l.store.DB())
+	fin := mlTS(mlFinishedAt)
+
+	list1 := l.uploadWithHeader(mlCSVHeader,
+		csvLine("Alpha Tale", "Zed Elsewhere", "B100000061", "", "", "", "17", "", "finished", fin),
+		csvLine("Gamma Tale", "Zed Elsewhere", "", "", "", "", "18", "", "finished", fin))
+	plan1, rows1 := l.plan(list1)
+	require.Equal(t, mlReadElsewhere, rows1["asin:B100000061"].Class)
+	byTitle1 := mlRowsByTitle(plan1)
+	require.Equal(t, mlReadElsewhere, byTitle1["Gamma Tale"].Class, "%+v", byTitle1["Gamma Tale"])
+	res := l.apply(plan1, []string{"asin:B100000061", byTitle1["Gamma Tale"].RowID}, false)
+	require.Equal(t, repairs.OutcomeApplied, res["asin:B100000061"].Outcome, "%+v", res)
+	require.Equal(t, repairs.OutcomeApplied, res[byTitle1["Gamma Tale"].RowID].Outcome, "%+v", res)
+
+	// A second list from another system: its own "17" and "18", other books.
+	list2 := l.uploadWithHeader(mlCSVHeader,
+		csvLine("Beta Tale", "Yan Away", "B100000062", "", "", "", "17", "", "finished", fin),
+		csvLine("Delta Tale", "Yan Away", "", "", "", "", "18", "", "finished", fin))
+	plan2, rows2 := l.plan(list2)
+	beta := rows2["asin:B100000062"]
+	require.Equal(t, mlReadElsewhere, beta.Class, "an ASIN row is not refused for sharing an unlabelled source id: %+v", beta)
+	require.True(t, beta.Applicable())
+	delta := mlRowsByTitle(plan2)["Delta Tale"]
+	require.Equal(t, mlReadElsewhere, delta.Class, "a row keyed only by an unlabelled id is not another list's record: %+v", delta)
+	require.True(t, delta.Applicable())
+
+	res = l.apply(plan2, []string{beta.RowID, delta.RowID}, false)
+	require.Equal(t, repairs.OutcomeApplied, res[beta.RowID].Outcome, "%+v", res)
+	require.Equal(t, repairs.OutcomeApplied, res[delta.RowID].Outcome, "%+v", res)
+	mine, err := st.ListElsewhere(l.user)
+	require.NoError(t, err)
+	require.Len(t, mine, 4, "four different books, four records")
+
+	// The same book again, by a named identifier, is still found.
+	list3 := l.uploadWithHeader(mlCSVHeader,
+		csvLine("Alpha Tale Again", "Zed Elsewhere", "B100000061", "", "", "", "99", "", "finished", fin))
+	_, rows3 := l.plan(list3)
+	require.Equal(t, mlSkipAlreadyRecorded, rows3["asin:B100000061"].Class)
 }

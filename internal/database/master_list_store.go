@@ -1,5 +1,5 @@
 // file: internal/database/master_list_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e49355ec-8cf3-4b4d-b7a4-732d4c7f90e7
 // last-edited: 2026-10-24
 
@@ -227,16 +227,19 @@ func (s *MasterListStore) DeleteList(id string) error {
 // setting is unset or unusable.
 const DefaultMasterListRetention = 10
 
-// PruneLists deletes the uploader's lists beyond the newest keep (the list
-// just uploaded counts as one of them, being the newest), oldest first, and
-// returns the ids it deleted. Lists of other uploaders are never touched; a
-// list with no recorded uploader (an upload by a key that names no user) is
-// its own group. keep below 1 is refused: a bad setting must never be able to
-// prune the list that was just stored.
+// PruneLists deletes the uploader's lists beyond the newest keep, oldest first,
+// and returns the ids it deleted. protectID is the list just stored: it counts
+// as the newest of the keep whatever its UploadedAt says (a clock that stepped
+// back, or two uploads in one tick, must not let the retention delete the list
+// the caller is about to answer with), and it is never deleted; "" protects
+// none. Lists of other uploaders are never touched; a list with no recorded
+// uploader (an upload by a key that names no user) is its own group. keep below
+// 1 is refused: a bad setting must never be able to prune the list that was
+// just stored.
 //
 // It stops at the first list it cannot delete and returns that error with the
 // ids already deleted, so the caller can say how far it got.
-func (s *MasterListStore) PruneLists(uploadedBy string, keep int) ([]string, error) {
+func (s *MasterListStore) PruneLists(uploadedBy string, keep int, protectID string) ([]string, error) {
 	if keep < 1 {
 		return nil, fmt.Errorf("master list retention must keep at least 1 list per uploader, got %d", keep)
 	}
@@ -244,9 +247,13 @@ func (s *MasterListStore) PruneLists(uploadedBy string, keep int) ([]string, err
 	if err != nil {
 		return nil, err
 	}
+	// The protected list first, then the rest newest first: keep >= 1, so the
+	// protected list is always inside the kept head.
 	var mine []MasterListMeta
 	for _, m := range all {
-		if m.UploadedBy == uploadedBy {
+		if m.UploadedBy == uploadedBy && m.ID == protectID {
+			mine = append([]MasterListMeta{m}, mine...)
+		} else if m.UploadedBy == uploadedBy {
 			mine = append(mine, m)
 		}
 	}

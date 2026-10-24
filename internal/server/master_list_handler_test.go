@@ -1,5 +1,5 @@
 // file: internal/server/master_list_handler_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f8b4c61-9d30-4a7e-8c15-6b0e3d9a7f24
 // last-edited: 2026-10-24
 
@@ -412,7 +412,7 @@ func TestMasterListElsewhere_ListsRecordsNewestFirstAndFiltersByUser(t *testing.
 	f := setupCredGuardServer(t)
 	w := f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere", f.sessionToken)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.JSONEq(t, `{"records":[],"count":0}`, w.Body.String(), "empty is an empty list, not null")
+	assert.JSONEq(t, `{"records":[],"count":0,"total":0,"limit":200,"offset":0}`, w.Body.String(), "empty is an empty list, not null")
 
 	st := database.NewMasterListStore(f.store.DB())
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -426,6 +426,7 @@ func TestMasterListElsewhere_ListsRecordsNewestFirstAndFiltersByUser(t *testing.
 	type listResp struct {
 		Records []database.MasterListElsewhere `json:"records"`
 		Count   int                            `json:"count"`
+		Total   int                            `json:"total"`
 	}
 	get := func(q string) listResp {
 		w := f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere"+q, f.sessionToken)
@@ -441,6 +442,21 @@ func TestMasterListElsewhere_ListsRecordsNewestFirstAndFiltersByUser(t *testing.
 	require.Equal(t, 2, u1.Count)
 	assert.Equal(t, "Newer", u1.Records[0].Title)
 	assert.Equal(t, 0, get("?user_id=nobody").Count)
+
+	// Paged: count is the page, total is everything the filter matched.
+	p1 := get("?limit=2")
+	require.Equal(t, 2, p1.Count)
+	require.Equal(t, 3, p1.Total)
+	assert.Equal(t, []string{"Other user", "Newer"}, []string{p1.Records[0].Title, p1.Records[1].Title})
+	p2 := get("?limit=2&offset=2")
+	require.Equal(t, 1, p2.Count)
+	require.Equal(t, 3, p2.Total)
+	assert.Equal(t, "Older", p2.Records[0].Title)
+	past := get("?offset=99")
+	assert.Equal(t, 0, past.Count, "an offset past the end is an empty page")
+	assert.Equal(t, 3, past.Total)
+	assert.NotNil(t, past.Records)
+	assert.Equal(t, 3, get("?limit=0&offset=-5").Count, "a bad limit or offset falls back to the defaults")
 }
 
 // With authentication switched off the master-list routes are open, like the

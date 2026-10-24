@@ -1,7 +1,7 @@
 // file: internal/masterlist/masterlist_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9a9b54c7-a9db-4d6e-ab51-67572f9cef60
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package masterlist
 
@@ -189,6 +189,16 @@ func TestFutureTimestamps(t *testing.T) {
 	require.Len(t, got, 1, "five minutes ahead is inside the slack")
 	assert.Equal(t, "last_listened_at", got[0].Field)
 	assert.Equal(t, IssueFutureTimestamp, got[0].Code)
+}
+
+func TestCrossListKeys(t *testing.T) {
+	r := Row{ASIN: "B000000000", ISBN13: "9780306406157", Sources: []Source{
+		{Source: UnlabelledSource, SourceID: "17"}, {Source: "audible", SourceID: "XYZ"}, {Source: "itunes"}}}
+	assert.Equal(t, []string{"asin:B000000000", "isbn13:9780306406157", "src:other:17", "src:audible:XYZ"}, IdentityKeys(r),
+		"inside one list an unlabelled source id still joins rows")
+	assert.Equal(t, []string{"asin:B000000000", "isbn13:9780306406157", "src:audible:XYZ"}, CrossListKeys(r),
+		"across lists it does not: two lists' 17 are not one book")
+	assert.Empty(t, CrossListKeys(Row{Sources: []Source{{Source: UnlabelledSource, SourceID: "17"}}}))
 }
 
 func TestNaturalKey(t *testing.T) {
