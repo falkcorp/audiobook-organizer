@@ -3224,7 +3224,9 @@ func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, 
 	if hidden != nil && !hidden.IsSoftDeleted() {
 		return nil
 	}
-	rows, err := rs.filesIncludingRetired(bookID)
+	// Live rows only: a retired row never holds a path key (RetireBookFiles
+	// gives it to a live row or drops it), so there is none to re-index away.
+	rows, err := rs.db.GetBookFiles(bookID)
 	if err != nil {
 		return fmt.Errorf("rows of hidden book %s: %w", bookID, err)
 	}

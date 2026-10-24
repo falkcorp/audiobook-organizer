@@ -1,5 +1,5 @@
 // file: internal/merge/combine_retire_undo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 169db87a-6f56-43c0-91a1-9a1fa5f526ea
 // last-edited: 2026-10-23
 
@@ -8,6 +8,7 @@ package merge
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
@@ -191,4 +192,124 @@ func TestUndoCombine_RetireReversalFailureLeavesRetryableJournal(t *testing.T) {
 	u.revertErr = nil
 	_, err = ms.UndoCombine(journalID)
 	require.NoError(t, err, "the retry reverses the retire and finishes")
+}
+
+// retireRowInto leaves the row fileID retired under holder, as another
+// operation's retire (one with no combine link) would: it is first moved onto
+// a scratch book, then retired from there into a version of holder.
+func retireRowInto(t *testing.T, store database.Store, fileID, currentOwner, holder, versionID string) {
+	t.Helper()
+	scratch, err := store.CreateBook(&database.Book{Title: "Synthetic Scratch " + versionID, FilePath: "/tmp/undo/scratch-" + versionID})
+	require.NoError(t, err)
+	require.NoError(t, store.MoveBookFilesToBook([]string{fileID}, currentOwner, scratch.ID))
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	_, err = store.CreateBookVersion(&database.BookVersion{ID: versionID, BookID: holder, Status: database.BookVersionStatusRetired,
+		RetiredFromBookID: scratch.ID, RetiredAt: &now})
+	require.NoError(t, err)
+	w, ok := database.AsCapability[database.RetiredBookFileWriter](store)
+	require.True(t, ok)
+	require.NoError(t, w.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{fileID}, SourceBookID: scratch.ID}}, holder, versionID))
+}
+
+func refusalText(t *testing.T, err error) string {
+	t.Helper()
+	var refused *CombineUndoRefusedError
+	require.True(t, errors.As(err, &refused), "%v", err)
+	joined := ""
+	for _, r := range refused.Reasons {
+		joined += r + "\n"
+	}
+	return joined
+}
+
+// An absorbed book that already held a retired version before the combine
+// still holds it afterwards, and the undo must restore it without calling that
+// version a file the book "has been given since". The include-retired read has
+// to tell the two apart.
+func TestUndoCombine_AShellsOwnRetiredVersionIsNotAGiftSinceTheCombine(t *testing.T) {
+	store := setupTestStore(t)
+	f := seedUndoFixture(t, store)
+	ms := NewService(store)
+	// A row of a scratch book retired into a version of absA, before the combine.
+	scratch, err := store.CreateBook(&database.Book{Title: "Synthetic Scratch", FilePath: "/tmp/undo/scratch"})
+	require.NoError(t, err)
+	rowID := "01SYNTHETICRETIREDROW00000"
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: rowID, BookID: scratch.ID, FilePath: "/tmp/undo/scratch/01.mp3", Format: "mp3", TrackNumber: 1}))
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	_, err = store.CreateBookVersion(&database.BookVersion{ID: "ver-before", BookID: f.absA, Status: database.BookVersionStatusRetired, RetiredFromBookID: scratch.ID, RetiredAt: &now})
+	require.NoError(t, err)
+	w, ok := database.AsCapability[database.RetiredBookFileWriter](store)
+	require.True(t, ok)
+	require.NoError(t, w.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{rowID}, SourceBookID: scratch.ID}}, f.absA, "ver-before"))
+
+	res, err := ms.CombineBooks([]string{f.survivor, f.absA, f.absB}, f.survivor, nil)
+	if err != nil {
+		t.Skipf("the combine itself refuses a holder of retired versions: %v", err)
+	}
+	_, err = ms.UndoCombine(res.JournalID)
+	require.NoError(t, err, "a retired version the shell held before the combine is not a gift since it")
+}
+
+// A row the combine moved onto the survivor was later retired back into the
+// survivor (it sits there flagged and versioned). The undo must not move it
+// to its old owner: that would rewrite a version the owner keeps.
+func TestUndoCombine_RefusesARowRetiredIntoTheSurvivorSinceTheCombine(t *testing.T) {
+	store, f, ms, journalID := combined(t)
+	j, err := ms.GetCombineJournal(journalID)
+	require.NoError(t, err)
+	var fileID string
+	for _, a := range j.Absorbed {
+		if a.BookID == f.absA {
+			fileID = a.Files[0].FileID
+		}
+	}
+	retireRowInto(t, store, fileID, f.survivor, f.survivor, "ver-into-survivor")
+	row, err := store.GetBookFileByID(f.survivor, fileID)
+	require.NoError(t, err)
+	require.True(t, row.Retired)
+
+	_, err = ms.UndoCombine(journalID)
+	require.Error(t, err)
+	assert.Contains(t, refusalText(t, err), "retired into version")
+	after, err := store.GetBookFileByID(f.survivor, fileID)
+	require.NoError(t, err)
+	require.NotNil(t, after, "the row stays where the retire put it")
+	assert.True(t, after.Retired)
+}
+
+// The three row-level reads behind those refusals, called directly: a retired
+// row is neither "already undone", nor renumbered, nor moved back.
+func TestCombineUndoHelpers_TreatARetiredRowAsNotTheCombinesToRestore(t *testing.T) {
+	store, f, ms, journalID := combined(t)
+	j, err := ms.GetCombineJournal(journalID)
+	require.NoError(t, err)
+	var fm CombineFileMove
+	for _, a := range j.Absorbed {
+		if a.BookID == f.absA {
+			fm = a.Files[0]
+		}
+	}
+	require.Equal(t, f.absA, fm.FromBookID)
+	// A retry: the failed attempt had already restored absA, and another
+	// operation then retired the row into it.
+	no := false
+	_, err = store.ModifyBook(f.absA, func(b *database.Book) error { b.MarkedForDeletion = &no; b.MarkedForDeletionAt = nil; return nil })
+	require.NoError(t, err)
+	retireRowInto(t, store, fm.FileID, f.survivor, f.absA, "ver-helpers")
+	assert.False(t, ms.fileAlreadyUndone(j, fm), "a retired row on its old owner is not where a completed undo puts it")
+
+	// The same row retired under the survivor: numbers are not restored.
+	store2, f2, ms2, journalID2 := combined(t)
+	j2, err := ms2.GetCombineJournal(journalID2)
+	require.NoError(t, err)
+	var fm2 CombineFileMove
+	for _, a := range j2.Absorbed {
+		if a.BookID == f2.absA {
+			fm2 = a.Files[0]
+		}
+	}
+	retireRowInto(t, store2, fm2.FileID, f2.survivor, f2.survivor, "ver-helpers-2")
+	err = ms2.restoreSurvivorFileNumbers(j2, fm2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retired into version")
 }
