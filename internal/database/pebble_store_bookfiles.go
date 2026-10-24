@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.48.0
+// version: 1.48.1
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -2064,7 +2064,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool, op
 // pre-lookup (upsertCandidateRowIDs), locks it, stages, and when staging
 // matches a row outside the locked set (the pre-lookup went stale) it throws
 // the stage away, adds that row, restores the caller's structs from a pristine
-// shallow copy and stages again. That retry is inside the attempt on purpose:
+// deep copy (cloneBookFile) and stages again. That retry is inside the attempt on purpose:
 // reporting it as a *staleStageError would make partitionedBookFileWrite count
 // it as churn on the rows.
 //
@@ -2081,10 +2081,15 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 		return nil, fmt.Errorf("batchUpsertBookFiles: %d presence flags for %d rows", len(present), len(files))
 	}
 
+	// DEEP copies: the restore below must put back exactly what the caller
+	// handed in. A shallow `*f` copy shares every pointer and slice with the
+	// caller's struct, so a staging step that wrote through one would have
+	// survived the restore. pristine is itself never handed out: each restore
+	// takes a fresh clone, so a second retry also starts from the original.
 	pristine := make([]BookFile, len(files))
 	for i, f := range files {
 		if f != nil {
-			pristine[i] = *f
+			pristine[i] = cloneBookFile(f)
 		}
 	}
 	held := s.upsertCandidateRowIDs(files)
@@ -2108,7 +2113,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 		}
 		for i, f := range files {
 			if f != nil {
-				*f = pristine[i]
+				*f = cloneBookFile(&pristine[i])
 			}
 		}
 	}
@@ -2870,7 +2875,7 @@ func (s *PebbleStore) ClearAllAcoustIDFingerprints(ctx context.Context, batchSiz
 	processed := 0
 	batch := s.db.NewBatch()
 	flush := func() error {
-		if err := batch.Commit(pebble.Sync); err != nil {
+		if err := s.commitSingleOwnerIndexBatch(batch); err != nil {
 			return err
 		}
 		batch = s.db.NewBatch()
@@ -3011,7 +3016,7 @@ func (s *PebbleStore) ClearAllAcoustIDFingerprints(ctx context.Context, batchSiz
 		}
 	}
 
-	if err := batch.Commit(pebble.Sync); err != nil {
+	if err := s.commitSingleOwnerIndexBatch(batch); err != nil {
 		return cleared, total, err
 	}
 
@@ -3143,7 +3148,7 @@ func (s *PebbleStore) SweepBookFileSegDrop(
 	batch := s.db.NewBatch()
 	rewrittenSinceFlush := 0
 	flush := func() error {
-		if err := batch.Commit(pebble.Sync); err != nil {
+		if err := s.commitSingleOwnerIndexBatch(batch); err != nil {
 			return err
 		}
 		batch = s.db.NewBatch()
@@ -3211,7 +3216,7 @@ func (s *PebbleStore) SweepBookFileSegDrop(
 	}
 
 	// Commit any remaining work.
-	if err := batch.Commit(pebble.Sync); err != nil {
+	if err := s.commitSingleOwnerIndexBatch(batch); err != nil {
 		return result, err
 	}
 

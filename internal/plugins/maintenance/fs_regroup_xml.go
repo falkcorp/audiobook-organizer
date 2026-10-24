@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.21.0
+// version: 2.21.1
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -1153,7 +1153,7 @@ func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 		// (every row at the path, retired included): GetBookFileByPath filters a
 		// retired row out, so a gap on a retired version's file read as free and
 		// got a second, live row (the claim rule in database/iface_retired.go).
-		rows, err := database.BookFileRowsAtPathStrict(a.store, b.FilePath)
+		rows, err := database.BookFileRowsAtPathForWrite(a.store, b.FilePath)
 		if err != nil {
 			fail("look up %q: %v", logger.SanitizeLogValue(b.FilePath), err)
 			return
