@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_userstate.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c7635eb-815c-443d-830a-34ca2ca14c4a
-// last-edited: 2026-10-05
+// last-edited: 2026-10-24
 
 package repairs
 
@@ -61,6 +61,18 @@ func (w *Writer) WithUserState(store UserStateStore) *Writer {
 // positions were written keeps the row (the revert's per-part check puts the
 // positions back) and the error wraps ErrPartiallyApplied.
 func (w *Writer) SetUserState(ctx context.Context, userID, bookID string, expect, next undo.UserStateSnapshot) error {
+	return w.SetUserStateChecked(ctx, userID, bookID, expect, next, nil)
+}
+
+// SetUserStateChecked is SetUserState with a re-check the fixer makes of what
+// the write depends on besides the user's state: check runs once the merge lock
+// and the (user, book) stripe are held, before the state is read and compared,
+// so a merge or a delete that races the apply cannot land between the check and
+// the write (a merge moves user state under the same merge lock). A non-nil
+// error refuses the row with nothing written and nothing journaled; the error
+// is returned as it is, so a check that wants the row reported
+// changed_since_plan wraps ErrChangedSincePlan. A nil check is SetUserState.
+func (w *Writer) SetUserStateChecked(ctx context.Context, userID, bookID string, expect, next undo.UserStateSnapshot, check func() error) error {
 	if err := w.denyTagsOnly("SetUserState"); err != nil {
 		return err
 	}
@@ -87,6 +99,11 @@ func (w *Writer) SetUserState(ctx context.Context, userID, bookID string, expect
 	}
 	defer merge.UnlockMergeRMW()
 	defer database.LockUserBookState(userID, bookID)()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	cur, err := undo.ReadUserStateSnapshot(w.userState, userID, bookID)
 	if err != nil {
 		return err

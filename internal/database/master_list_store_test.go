@@ -1,7 +1,7 @@
 // file: internal/database/master_list_store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d7f0b394-f709-439a-b110-47286050c881
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -154,6 +154,28 @@ func TestMasterListStore_DeleteListRemovesMetaAndRowsOnly(t *testing.T) {
 
 	assert.ErrorIs(t, st.DeleteList(gone), ErrMasterListNotFound, "second delete")
 	assert.ErrorIs(t, st.DeleteList("nope"), ErrMasterListNotFound)
+}
+
+// A list whose metadata does not decode can still be deleted, rows and all.
+func TestMasterListStore_DeleteListRemovesAListWhoseMetadataDoesNotDecode(t *testing.T) {
+	st, db := openTestMasterListStore(t)
+	keep := putTestList(t, st, "u1", 2)
+	bad := putTestList(t, st, "u1", 3)
+	require.NoError(t, db.Set([]byte(masterListPrefix+bad), []byte("{not json"), pebble.Sync))
+	_, err := st.GetList(bad)
+	require.Error(t, err, "the fixture is a list GetList cannot decode")
+	require.NotErrorIs(t, err, ErrMasterListNotFound)
+
+	require.NoError(t, st.DeleteList(bad))
+
+	assert.Equal(t, 2, countKeys(t, db, masterListRowPrefix), "only the kept list's rows remain")
+	_, closer, gerr := db.Get([]byte(masterListPrefix + bad))
+	assert.ErrorIs(t, gerr, pebble.ErrNotFound)
+	if closer != nil {
+		_ = closer.Close()
+	}
+	require.NoError(t, st.ScanRows(keep, func(int, []byte) error { return nil }))
+	assert.ErrorIs(t, st.DeleteList(bad), ErrMasterListNotFound, "second delete")
 }
 
 func TestMasterListStore_DeleteListMetadataFirstLeavesNoVisibleBrokenList(t *testing.T) {

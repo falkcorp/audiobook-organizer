@@ -1,14 +1,16 @@
 // file: internal/plugins/maintenance/master_list_import_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6a9c13-d874-4e05-b1a7-83c5e0d94f68
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -51,11 +55,18 @@ func applyLine(title, author, asin string, runtimeMin int, status, finishedAt, l
 
 func (l *mlLab) apply(plan *repairs.PlanResult, rowIDs []string, dryRun bool) map[string]repairs.RowResult {
 	l.t.Helper()
+	return l.applyWith(l.fixer, plan, rowIDs, dryRun)
+}
+
+// applyWith is apply through fixer f (the lab's own, or a wrapper that acts
+// between a row's re-plan and its write).
+func (l *mlLab) applyWith(f repairs.Fixer, plan *repairs.PlanResult, rowIDs []string, dryRun bool) map[string]repairs.RowResult {
+	l.t.Helper()
 	series, err := l.store.GetAllSeries()
 	require.NoError(l.t, err)
-	w := repairs.NewWriter(l.store, l.store, l.fixer.ID(), "bulk_update", "repairs-").
+	w := repairs.NewWriter(l.store, l.store, f.ID(), "bulk_update", "repairs-").
 		WithJournal(l.store, l.store, mlTestApplyOp).WithUserState(l.p.deps.UserReadStateStore())
-	res, err := repairs.RunApply(context.Background(), l.fixer, plan, mlTestPlanOp, rowIDs, dryRun,
+	res, err := repairs.RunApply(context.Background(), f, plan, mlTestPlanOp, rowIDs, dryRun,
 		repairs.ApplyDeps{Guard: l.store, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: mlTestApplyOp}, &fakeReporter{})
 	require.NoError(l.t, err)
 	out := map[string]repairs.RowResult{}
@@ -453,9 +464,9 @@ func TestMasterListImport_ReadElsewhereRecordApplyIdempotentAndUndo(t *testing.T
 }
 
 // A record that appears between the plan and the apply (another apply of a
-// list with the same row) is not overwritten, and the revert of this apply
-// does not delete it.
-func TestMasterListImport_RecordCreatedSincePlanIsKept(t *testing.T) {
+// list with the same row) is seen by the apply's own re-check: the row reports
+// changed_since_plan as skipped_already_recorded and nothing is written.
+func TestMasterListImport_RecordCreatedSincePlanIsSeenByTheRecheck(t *testing.T) {
 	l := newMLLab(t)
 	st := database.NewMasterListStore(l.store.DB())
 	fin := mlTS(mlFinishedAt)
@@ -476,6 +487,66 @@ func TestMasterListImport_RecordCreatedSincePlanIsKept(t *testing.T) {
 	changes, err := l.store.GetOperationChanges(mlTestApplyOp)
 	require.NoError(t, err)
 	require.Empty(t, changes)
+}
+
+// hidingLists is a MasterListStore whose GetElsewhere never finds a record, so
+// the re-check at apply time reads "absent" while the record is really there: a
+// record created in the window between that read and the create (the store's
+// create-if-absent is the only thing that sees it).
+type hidingLists struct{ MasterListStore }
+
+func (hidingLists) GetElsewhere(string) (*database.MasterListElsewhere, error) {
+	return nil, database.ErrElsewhereNotFound
+}
+
+type hidingDeps struct {
+	fakeDeps
+	lists MasterListStore
+}
+
+func (d hidingDeps) MasterLists() MasterListStore { return d.lists }
+
+// A record that appears AFTER the apply's re-check, inside the write (another
+// apply of a list with the same row), is not overwritten: the create refuses,
+// the row reports changed_since_plan, the other apply's record is untouched, and
+// the journal row written for this create is voided, so the revert of this apply
+// does not delete the record it never made.
+func TestMasterListImport_RecordCreatedSincePlanIsKept(t *testing.T) {
+	l := newMLLab(t)
+	st := database.NewMasterListStore(l.store.DB())
+	fin := mlTS(mlFinishedAt)
+	listID := l.uploadWithHeader(mlApplyHeader,
+		applyLine("Never In The Library", "Zed Elsewhere", "B100000099", 300, "finished", fin, "", 0, 0))
+	plan, _ := l.plan(listID)
+
+	id := database.ElsewhereID(l.user, "asin:B100000099")
+	other := database.MasterListElsewhere{ID: id, UserID: l.user, ListID: "another-list", Title: "Someone else's"}
+	require.NoError(t, st.CreateElsewhere(other))
+	l.p.deps = hidingDeps{fakeDeps: fakeDeps{store: l.store}, lists: hidingLists{st}}
+
+	res := l.apply(plan, []string{"asin:B100000099"}, false)
+	require.Equal(t, repairs.OutcomeChangedSincePlan, res["asin:B100000099"].Outcome, "%+v", res)
+	require.Empty(t, res["asin:B100000099"].Skipped, "the re-check passed: the refusal came from the create inside the write")
+	require.Contains(t, res["asin:B100000099"].Error, "created since the plan")
+
+	got, err := st.GetElsewhere(id)
+	require.NoError(t, err)
+	require.Equal(t, "Someone else's", got.Title, "the other apply's record is untouched")
+	recs, err := st.ListElsewhere("")
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+
+	changes, err := l.store.GetOperationChanges(mlTestApplyOp)
+	require.NoError(t, err)
+	require.Len(t, changes, 1, "the create was journaled before it was tried")
+	require.True(t, changes[0].Voided, "and voided when it failed")
+	require.Equal(t, undo.ChangeTypeMasterListElsewhereCreate, changes[0].ChangeType)
+
+	// The revert of this apply restores nothing and leaves the record alone.
+	_, _ = audiobooks.NewRevertService(l.store).RevertOperation(mlTestApplyOp)
+	got, err = st.GetElsewhere(id)
+	require.NoError(t, err, "a revert must not delete the record this apply never made")
+	require.Equal(t, "Someone else's", got.Title)
 }
 
 // An unmatched row that might still be a library book is not recorded: the
@@ -515,4 +586,304 @@ func TestMasterListImport_SummaryAndRegistration(t *testing.T) {
 	var _ repairs.ApplyScoped = l.fixer
 	require.NotContains(t, strings.ToLower(l.fixer.Title()), "preview")
 	require.Equal(t, []auth.Permission{auth.PermUsersManage}, l.fixer.RequiredPermissions())
+}
+
+// byTitle indexes a plan's rows by title (rows with no identifier have an id
+// that is a hash).
+func mlRowsByTitle(plan *repairs.PlanResult) map[string]repairs.Row {
+	out := map[string]repairs.Row{}
+	for _, r := range plan.Rows {
+		out[r.Title] = r
+	}
+	return out
+}
+
+// An unmatched row with a data problem of its own is held for review like a
+// matched row is, never a bulk-applicable read-elsewhere record: a dropped bad
+// identifier may have been the one that matched, and a future or unreadable
+// finish time must not be stored as the record's.
+func TestMasterListImport_ReadElsewhereHeldForRowDataProblems(t *testing.T) {
+	l := newMLLab(t)
+	st := database.NewMasterListStore(l.store.DB())
+	fin := mlTS(mlFinishedAt)
+	future := mlTS(l.now.Add(30 * 24 * time.Hour))
+	listID := l.uploadWithHeader(mlCSVHeader,
+		csvLine("Clean Absent", "Zed Elsewhere", "B100000041", "", "", "", "", "", "finished", fin),
+		csvLine("Bad Code Absent", "Yan Away", "", "9780306406158", "", "", "", "", "finished", fin),
+		csvLine("Future Absent", "Xan Yu", "B100000043", "", "", "", "", "", "finished", future),
+		csvLine("Zoneless Absent", "Wes Nowhere", "B100000044", "", "", "", "", "", "finished", "2026-09-01T10:00:00"),
+		csvLine("Conflict Absent", "Val Elsewhere", "", mlISBN13b, mlISBN10, "", "", "", "finished", fin),
+	)
+	plan, _ := l.plan(listID)
+	byTitle := mlRowsByTitle(plan)
+	require.Len(t, byTitle, 5)
+
+	clean := byTitle["Clean Absent"]
+	require.Equal(t, mlReadElsewhere, clean.Class)
+	require.True(t, clean.Applicable())
+	require.Equal(t, 1, plan.Applicable, "only the clean row is bulk-applicable")
+
+	for title, flag := range map[string]string{
+		"Bad Code Absent": masterlist.IssueBadIdentifier,
+		"Future Absent":   masterlist.IssueFutureTimestamp,
+		"Zoneless Absent": masterlist.IssueBadTimestamp,
+		"Conflict Absent": masterlist.IssueIdentifierConflict,
+	} {
+		r := byTitle[title]
+		require.Equal(t, mlUnmatched, r.Class, "%s", title)
+		require.False(t, r.Applicable(), "%s must not be bulk-applicable", title)
+		require.Equal(t, repairs.RiskReview, r.Risk, "%s", title)
+		require.Contains(t, r.Flags, flag, "%s", title)
+		require.Contains(t, r.Reason, "held for review", "%s: the lane says why it is not a record", title)
+		require.Contains(t, r.Reason, flag, "%s", title)
+	}
+
+	var applicable []string
+	for _, r := range plan.Rows {
+		if r.Applicable() {
+			applicable = append(applicable, r.RowID)
+		}
+	}
+	res := l.apply(plan, applicable, false)
+	require.Len(t, res, 1)
+	require.Equal(t, repairs.OutcomeApplied, res[clean.RowID].Outcome, "%+v", res)
+	recs, err := st.ListElsewhere("")
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "the held rows wrote no record")
+	require.Equal(t, "Clean Absent", recs[0].Title)
+	require.Empty(t, recs[0].Issues)
+}
+
+// A list time that is in the future when the apply re-plans (the clock stepped
+// back since the plan) is its own skip kind, for a matched row and for a
+// read-elsewhere record alike, and is never written.
+func TestMasterListImport_FutureTimeAtApplyIsItsOwnSkip(t *testing.T) {
+	l := newMLLab(t)
+	l.book("fresh", mlBook{title: "Fresh Finish", author: "Pat Example", asin: "B100000001", minutes: 600})
+	finished := mlTS(l.now.Add(-24 * time.Hour))
+	listID := l.uploadWithHeader(mlApplyHeader,
+		applyLine("Fresh Finish", "Pat Example", "B100000001", 600, "finished", finished, "", 0, 0),
+		applyLine("Never In The Library", "Zed Elsewhere", "B100000099", 300, "finished", finished, "", 0, 0),
+	)
+	plan, _ := l.plan(listID)
+	require.Equal(t, 2, plan.Applicable)
+
+	l.fixer.now = func() time.Time { return l.now.Add(-30 * 24 * time.Hour) }
+	res := l.apply(plan, []string{"asin:B100000001", "asin:B100000099"}, false)
+	for _, id := range []string{"asin:B100000001", "asin:B100000099"} {
+		require.Equal(t, repairs.OutcomeChangedSincePlan, res[id].Outcome, "%s: %+v", id, res[id])
+		require.Equal(t, mlSkipFutureTimestamp, res[id].Skipped, "%s", id)
+		require.NotEqual(t, mlSkipNoTimestamp, res[id].Skipped, "%s: the no-timestamp filter counts rows that give no time", id)
+	}
+	require.Nil(t, l.state("fresh"), "nothing was written")
+	recs, err := database.NewMasterListStore(l.store.DB()).ListElsewhere("")
+	require.NoError(t, err)
+	require.Empty(t, recs, "the future finish time was not copied into a record")
+}
+
+// actingFixer runs after on a row's re-plan, before the Apply that follows: a
+// merge, a delete or a user removal that lands while an apply run is working
+// through its rows.
+type actingFixer struct {
+	*masterListImportFixer
+	after func()
+}
+
+func (a *actingFixer) Replan(ctx context.Context, params json.RawMessage, planned repairs.Row, rep registry.Reporter) (repairs.Row, error) {
+	row, err := a.masterListImportFixer.Replan(ctx, params, planned, rep)
+	a.after()
+	return row, err
+}
+
+// vanishingUsers reports no user once gone is set.
+type vanishingUsers struct {
+	UserReadStateStore
+	gone *atomic.Bool
+}
+
+func (v vanishingUsers) GetUserByID(id string) (*database.User, error) {
+	if v.gone.Load() {
+		return nil, nil
+	}
+	return v.UserReadStateStore.GetUserByID(id)
+}
+
+type vanishingDeps struct {
+	fakeDeps
+	us UserReadStateStore
+}
+
+func (d vanishingDeps) UserReadStateStore() UserReadStateStore { return d.us }
+
+func (l *mlLab) updateBook(key string, mutate func(b *database.Book)) {
+	l.t.Helper()
+	b, err := l.store.GetBookByID(l.ids[key])
+	require.NoError(l.t, err)
+	require.NotNil(l.t, b)
+	mutate(b)
+	_, err = l.store.UpdateBook(b.ID, b)
+	require.NoError(l.t, err)
+}
+
+// The apply run's library snapshot is read once, so a book trashed or merged
+// after a row's re-plan (while other rows were being written) is still live in
+// it. The write re-reads the book and the user: a trashed or merged book, or a
+// removed user, writes nothing and reports changed_since_plan.
+func TestMasterListImport_ApplyRechecksTargetBookAndUser(t *testing.T) {
+	fin := mlTS(mlFinishedAt)
+	setup := func(t *testing.T) (*mlLab, *repairs.PlanResult) {
+		l := newMLLab(t)
+		l.book("fresh", mlBook{title: "Fresh Finish", author: "Pat Example", asin: "B100000001", minutes: 600})
+		l.book("survivor", mlBook{title: "Fresh Finish Survivor", author: "Pat Example", minutes: 600})
+		listID := l.uploadWithHeader(mlApplyHeader,
+			applyLine("Fresh Finish", "Pat Example", "B100000001", 600, "finished", fin, "", 0, 0),
+			applyLine("Never In The Library", "Zed Elsewhere", "B100000099", 300, "finished", fin, "", 0, 0),
+		)
+		plan, _ := l.plan(listID)
+		require.Equal(t, 2, plan.Applicable)
+		return l, plan
+	}
+	nothingWritten := func(t *testing.T, l *mlLab, elsewhere bool) {
+		t.Helper()
+		require.Nil(t, l.state("fresh"), "no user state was written")
+		require.Empty(t, l.positions("fresh"))
+		changes, err := l.store.GetOperationChanges(mlTestApplyOp)
+		require.NoError(t, err)
+		for _, c := range changes {
+			if c.ChangeType == undo.ChangeTypeUserBookStateSet || elsewhere {
+				require.True(t, c.Voided, "a journaled step that did not write is voided: %+v", c)
+			}
+		}
+		recs, err := database.NewMasterListStore(l.store.DB()).ListElsewhere("")
+		require.NoError(t, err)
+		if elsewhere {
+			require.Empty(t, recs, "no record for a user who is gone")
+		}
+	}
+
+	t.Run("book moved to the trash", func(t *testing.T) {
+		l, plan := setup(t)
+		f := &actingFixer{masterListImportFixer: l.fixer, after: func() {
+			l.updateBook("fresh", func(b *database.Book) {
+				b.MarkedForDeletion = new(true)
+				now := l.now
+				b.MarkedForDeletionAt = &now
+			})
+		}}
+		res := l.applyWith(f, plan, []string{"asin:B100000001"}, false)
+		r := res["asin:B100000001"]
+		require.Equal(t, repairs.OutcomeChangedSincePlan, r.Outcome, "%+v", r)
+		require.Contains(t, r.Error, "trash")
+		nothingWritten(t, l, false)
+	})
+
+	t.Run("book merged into another", func(t *testing.T) {
+		l, plan := setup(t)
+		f := &actingFixer{masterListImportFixer: l.fixer, after: func() {
+			l.updateBook("fresh", func(b *database.Book) {
+				into := l.ids["survivor"]
+				b.MergedIntoBookID = &into
+				b.MarkedForDeletion = new(true)
+				now := l.now
+				b.MarkedForDeletionAt = &now
+			})
+		}}
+		res := l.applyWith(f, plan, []string{"asin:B100000001"}, false)
+		r := res["asin:B100000001"]
+		require.Equal(t, repairs.OutcomeChangedSincePlan, r.Outcome, "%+v", r)
+		require.Contains(t, r.Error, "merged into "+l.ids["survivor"], "held with the survivor named, not followed")
+		nothingWritten(t, l, false)
+		require.Nil(t, func() *database.UserBookState {
+			s, err := l.store.GetUserBookState(l.user, l.ids["survivor"])
+			require.NoError(t, err)
+			return s
+		}(), "the survivor got no state either: the match was never reviewed for it")
+	})
+
+	for _, rowID := range []string{"asin:B100000001", "asin:B100000099"} {
+		// One row per run: rows of a run may be re-planned in any order, so
+		// the removal is triggered by the only row there is.
+		t.Run("user removed before the write "+rowID, func(t *testing.T) {
+			l, plan := setup(t)
+			var gone atomic.Bool
+			l.p.deps = vanishingDeps{fakeDeps: fakeDeps{store: l.store}, us: vanishingUsers{UserReadStateStore: NewUserReadStateStore(l.store), gone: &gone}}
+			f := &actingFixer{masterListImportFixer: l.fixer, after: func() { gone.Store(true) }}
+			res := l.applyWith(f, plan, []string{rowID}, false)
+			require.Equal(t, repairs.OutcomeChangedSincePlan, res[rowID].Outcome, "%+v", res[rowID])
+			require.Contains(t, res[rowID].Error, "no longer exists")
+			nothingWritten(t, l, true)
+		})
+	}
+
+	t.Run("user already gone at the re-plan", func(t *testing.T) {
+		l, plan := setup(t)
+		var gone atomic.Bool
+		gone.Store(true)
+		l.p.deps = vanishingDeps{fakeDeps: fakeDeps{store: l.store}, us: vanishingUsers{UserReadStateStore: NewUserReadStateStore(l.store), gone: &gone}}
+		for _, dry := range []bool{true, false} {
+			res := l.apply(plan, []string{"asin:B100000001"}, dry)
+			r := res["asin:B100000001"]
+			require.Equal(t, repairs.OutcomeFailed, r.Outcome, "dry=%v: %+v", dry, r)
+			require.Contains(t, r.Error, "no longer exists", "a dry run must not say would_apply for a user who is gone")
+		}
+		nothingWritten(t, l, false)
+	})
+
+	t.Run("live book and user write as planned", func(t *testing.T) {
+		l, plan := setup(t)
+		res := l.apply(plan, []string{"asin:B100000001", "asin:B100000099"}, false)
+		require.Equal(t, repairs.OutcomeApplied, res["asin:B100000001"].Outcome, "%+v", res)
+		require.Equal(t, repairs.OutcomeApplied, res["asin:B100000099"].Outcome, "%+v", res)
+		require.Equal(t, database.UserBookStatusFinished, l.state("fresh").Status)
+	})
+}
+
+// One book is one read-elsewhere record whichever of its identifiers a list
+// names: an earlier list gave the ASIN and the ISBN, a later one gives the ISBN
+// alone. Another user's record of the same book does not count, and a different
+// book is still its own.
+func TestMasterListImport_ReadElsewhereDedupedByAnyIdentifier(t *testing.T) {
+	l := newMLLab(t)
+	st := database.NewMasterListStore(l.store.DB())
+	fin := mlTS(mlFinishedAt)
+
+	list1 := l.uploadWithHeader(mlCSVHeader,
+		csvLine("Same Book", "Zed Elsewhere", "B100000051", mlISBN13, "", "", "", "", "finished", fin))
+	plan1, rows1 := l.plan(list1)
+	require.Equal(t, mlReadElsewhere, rows1["asin:B100000051"].Class)
+	res := l.apply(plan1, []string{"asin:B100000051"}, false)
+	require.Equal(t, repairs.OutcomeApplied, res["asin:B100000051"].Outcome, "%+v", res)
+
+	// Another user has the second book on record: no bearing on this user.
+	require.NoError(t, st.CreateElsewhere(database.MasterListElsewhere{
+		ID: database.ElsewhereID("another-user", "isbn13:"+mlISBN13b), UserID: "another-user", ListID: "l0", ISBN13: mlISBN13b, Title: "Theirs"}))
+
+	list2 := l.uploadWithHeader(mlCSVHeader,
+		csvLine("Same Book (Unabridged)", "Zed Elsewhere", "", mlISBN13, "", "", "", "", "finished", fin),
+		csvLine("Different Book", "Yan Away", "", mlISBN13b, "", "", "", "", "finished", fin),
+	)
+	plan2, _ := l.plan(list2)
+	byTitle := mlRowsByTitle(plan2)
+	same := byTitle["Same Book (Unabridged)"]
+	require.Equal(t, mlSkipAlreadyRecorded, same.Class, "%+v", same)
+	require.False(t, same.Applicable())
+	require.Contains(t, same.Reason, "under another identifier")
+	diff := byTitle["Different Book"]
+	require.Equal(t, mlReadElsewhere, diff.Class)
+	require.True(t, diff.Applicable())
+
+	res = l.apply(plan2, []string{diff.RowID}, false)
+	require.Equal(t, repairs.OutcomeApplied, res[diff.RowID].Outcome, "%+v", res)
+	mine, err := st.ListElsewhere(l.user)
+	require.NoError(t, err)
+	require.Len(t, mine, 2, "one record per book for this user")
+	everyone, err := st.ListElsewhere("")
+	require.NoError(t, err)
+	require.Len(t, everyone, 3)
+
+	// A third list naming the first book by its ASIN alone is found too.
+	list3 := l.uploadWithHeader(mlCSVHeader,
+		csvLine("Same Book Again", "Zed Elsewhere", "B100000051", "", "", "", "", "", "finished", fin))
+	_, rows3 := l.plan(list3)
+	require.Equal(t, mlSkipAlreadyRecorded, rows3["asin:B100000051"].Class)
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.99.0
+// version: 1.100.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -555,6 +555,9 @@ type MasterListStore interface {
 	GetList(id string) (*database.MasterListMeta, error)
 	ScanRows(id string, fn func(n int, raw []byte) error) error
 	GetElsewhere(id string) (*database.MasterListElsewhere, error)
+	// ListElsewhere lists the records of one user ("" lists everyone's): the
+	// plan matches a row against them by identifier, not only by record id.
+	ListElsewhere(userID string) ([]database.MasterListElsewhere, error)
 	CreateElsewhere(rec database.MasterListElsewhere) error
 }
 

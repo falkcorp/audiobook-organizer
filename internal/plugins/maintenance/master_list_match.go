@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_match.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bc498082-c7d9-434e-82a6-37e0eb55dd61
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -62,6 +62,10 @@ const (
 	mlSkipLocalProgress   = "skipped_local_progress"
 	mlSkipUserAbandoned   = "skipped_user_abandoned"
 	mlSkipManualUnstarted = "skipped_manual_unstarted"
+	// mlSkipFutureTimestamp: the list's time is later than now (plus the clock
+	// slack), so it would beat every real listen. Apart from skipped_no_timestamp,
+	// whose filter counts the rows that give no time at all.
+	mlSkipFutureTimestamp = "skipped_future_timestamp"
 	// mlSkipAlreadyRecorded: a read-elsewhere record for this row and user
 	// already exists (an earlier import of it, from this list or another).
 	mlSkipAlreadyRecorded = "skipped_already_recorded"
