@@ -1,5 +1,5 @@
 // file: internal/decisions/vetoes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6a2e90c7-35d1-4b48-9f6e-d17b83a40c52
 // last-edited: 2026-10-24
 
@@ -251,9 +251,31 @@ type loadedRows struct {
 	members  []rawMember
 }
 
-// readRows reads the three veto families from ONE snapshot and closes it
-// before returning.
+// readRows returns the three veto families from ONE snapshot, closed before
+// it returns. With a RowCache it is the cached read while no record has been
+// written since; otherwise a fresh scan.
 func (s *Store) readRows(ctx context.Context) (*loadedRows, error) {
+	if s.cache == nil {
+		return s.scanRows(ctx)
+	}
+	// The generation is read BEFORE the scan: a write that commits during the
+	// scan bumps it afterwards, so rows scanned across a commit are cached
+	// under a generation that is already stale.
+	gen := logGeneration(s.lockScope)
+	if rows := s.cache.get(s.lockScope, gen); rows != nil {
+		return rows, nil
+	}
+	rows, err := s.scanRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.cache.put(s.lockScope, gen, rows)
+	return rows, nil
+}
+
+// scanRows reads the three veto families from ONE snapshot and closes it
+// before returning.
+func (s *Store) scanRows(ctx context.Context) (*loadedRows, error) {
 	snap, err := s.kv.NewRawSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("decisions: open snapshot: %w", err)
