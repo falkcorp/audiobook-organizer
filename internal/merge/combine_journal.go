@@ -1011,7 +1011,11 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		case a.MarkedForDeletionAt == nil || b.MarkedForDeletionAt == nil || !b.MarkedForDeletionAt.Equal(*a.MarkedForDeletionAt):
 			reasons = append(reasons, fmt.Sprintf("absorbed book %s was re-deleted since the combine", a.BookID))
 		}
-		if files, err := ms.filesIncludingRetired(a.BookID); err != nil {
+		// Live rows only. A book that held a retired version before the
+		// combine still holds it, and a retire into a soft-deleted shell is
+		// refused by the store, so a retired row here is never a gain since
+		// the combine (counting it refused every undo of such a combine).
+		if files, err := ms.db.GetBookFiles(a.BookID); err != nil {
 			reasons = append(reasons, fmt.Sprintf("load files of absorbed book %s: %v", a.BookID, err))
 		} else {
 			// On a retry the failed attempt may already have moved some of
@@ -1066,19 +1070,6 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		}
 	}
 	return append(reasons, ms.retireReasons(j)...)
-}
-
-// filesIncludingRetired lists every book_file row keyed under bookID, the rows
-// retired into it as well as its live ones, when the store can say
-// (database.RetiredBookFileReader); otherwise the live rows, which are then all
-// there are. The undo asks it wherever it decides whether a book "has gained"
-// files or what a restored book owns: GetBookFiles alone leaves a retired
-// version out.
-func (ms *Service) filesIncludingRetired(bookID string) ([]database.BookFile, error) {
-	if r, ok := database.AsCapability[database.RetiredBookFileReader](ms.db); ok {
-		return r.GetBookFilesIncludingRetired(bookID)
-	}
-	return ms.db.GetBookFiles(bookID)
 }
 
 // combineRetireLinks returns the retire links of the combine's absorbed
@@ -2564,7 +2555,7 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		if !retired[a.BookID] {
 			continue
 		}
-		files, err := ms.filesIncludingRetired(a.BookID)
+		files, err := ms.db.GetBookFiles(a.BookID)
 		if err != nil {
 			return res, fmt.Errorf("read files of absorbed book %s: %w", a.BookID, err)
 		}

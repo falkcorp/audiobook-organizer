@@ -14,4 +14,4 @@ revert of an earlier operation now refuses a file that has since been retired
 path and sibling reads count retired rows. Undoing a combine first reverses
 the retire linked to each absorbed shell (the new `merge:combine-retire:` key
 family) and refuses the whole undo, writing nothing, if any retire cannot be
-reversed. Nothing retires a row yet, so running behavior does not change.
+reversed. The retire journal rows are exempt from journal pruning, so an old retire is never mistaken for a reversed one. Nothing retires a row yet, so running behavior does not change.

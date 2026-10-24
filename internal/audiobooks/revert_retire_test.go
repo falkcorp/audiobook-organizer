@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
 // last-edited: 2026-10-23
 
@@ -475,4 +475,21 @@ func TestRevertRetire_MissingStoreSurfaceRefusesRatherThanPanics(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, undo.ReasonFieldUnreadable, undo.RefusalReason(err))
+}
+
+// A row that already carried a (live) version id before the retire gets that
+// id back, not an empty one: the retire row journals it as the prior id.
+func TestRevertRetire_RestoresAPriorVersionID(t *testing.T) {
+	fx := newRetireRevertFx(t)
+	_, err := fx.st.CreateBookVersion(&database.BookVersion{ID: "ver-prior", BookID: fx.shell.ID, Status: database.BookVersionStatusActive, Format: "mp3", Source: "manual"})
+	require.NoError(t, err)
+	_, err = fx.st.ModifyBookFile(fx.shell.ID, fx.rows[1].ID, func(f *database.BookFile) error { f.VersionID = "ver-prior"; return nil })
+	require.NoError(t, err)
+	before := fx.snapshot(t)
+	require.Equal(t, "ver-prior", before[fx.rows[1].ID].VersionID)
+
+	fx.retire(t, fx.writer("op-prior"), "ver-after")
+	_, err = NewRevertService(fx.st).RevertOperation("op-prior")
+	require.NoError(t, err)
+	assert.Equal(t, before, fx.snapshot(t), "the prior version id is back with everything else")
 }
