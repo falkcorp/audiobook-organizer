@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
 // last-edited: 2026-10-24
 
@@ -375,11 +375,12 @@ func (s *revertScope) requireShellsOf(operationID string, changes []*database.Op
 // reverses the retire of a shell the combine absorbed (retired-versions plan
 // 6.5). Both its steps run with the merge lock held by UndoCombine, so the
 // reversal works on a copy of the service that never takes it
-// (withMergeLockHeld). It takes the retire op's operation lock with a TRY: the
-// retire op's own RevertOperation takes the operation lock and then the merge
-// lock, so waiting for the operation lock here, under the merge lock, could
-// deadlock. A busy lock refuses with a retryable error, and the undo (which
-// has changed nothing yet, or is a retry of one that did) is run again.
+// (withMergeLockHeld). It takes the retire ops' operation locks with a TRY
+// (LockRetireOps): the retire op's own RevertOperation takes the operation lock
+// and then the merge lock, so waiting for the operation lock here, under the
+// merge lock, could deadlock. A busy lock refuses with a retryable error, and
+// UndoCombine takes them before its first write, so the undo is run again with
+// nothing changed.
 type retireUndoer struct{ rs *RevertService }
 
 // retireUndoer returns the merge.RetireUndoer to wire into a merge.Service the
@@ -441,13 +442,36 @@ func (u retireUndoer) PlanRetireRevert(opID, shellID string) (*merge.RetireRever
 	return rev, nil
 }
 
+// LockRetireOps implements merge.RetireUndoer: it try-locks the operation lock
+// of each retire op, which the owed-settle record the reversal reads, rewrites
+// and clears is guarded by (the retire op's own RevertOperation holds it for its
+// whole run), and holds them until the release. Busy frees what it took and
+// refuses with errRetireOpBusy.
+func (u retireUndoer) LockRetireOps(opIDs []string) (func(), error) {
+	var releases []func()
+	releaseAll := func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}
+	for _, id := range opIDs {
+		release, ok := tryLockOperation(id)
+		if !ok {
+			releaseAll()
+			return nil, fmt.Errorf("retire op %s: %w", id, errRetireOpBusy)
+		}
+		releases = append(releases, release)
+	}
+	return releaseAll, nil
+}
+
 // errRetireOpBusy is the retryable refusal of a retire reversal whose operation
 // lock another revert of the same operation holds.
 var errRetireOpBusy = errors.New("another revert of this retire operation is running; try the undo again when it finishes")
 
 // revert reverses pending (the shell's un-reverted rows, read by
-// PlanRetireRevert from changes) with the merge lock already held by the
-// caller. It refuses, before writing anything, a row the plan refuses to
+// PlanRetireRevert from changes) with the merge lock and the retire op's
+// operation lock (LockRetireOps) already held by the caller. It refuses, before writing anything, a row the plan refuses to
 // predict: such a row's case could take a lock the caller holds.
 func (u retireUndoer) revert(opID, shellID string, scope *revertScope, changes, pending []*database.OperationChange) error {
 	for _, c := range pending {
@@ -456,13 +480,6 @@ func (u retireUndoer) revert(opID, shellID string, scope *revertScope, changes, 
 			return fmt.Errorf("retire op %s: change %s (%s) is not a row the combine undo reverses", opID, c.ID, c.ChangeType)
 		}
 	}
-	// The owed-settle record is read, rewritten and cleared across a run, and
-	// the retire op's own RevertOperation holds this lock for its whole run.
-	release, ok := tryLockOperation(opID)
-	if !ok {
-		return fmt.Errorf("reverse the retire of shell %s (op %s): %w", shellID, opID, errRetireOpBusy)
-	}
-	defer release()
 	if _, err := u.rs.withMergeLockHeld().revertLoaded(opID, scope, changes); err != nil {
 		return fmt.Errorf("reverse the retire of shell %s (op %s): %w", shellID, opID, err)
 	}
