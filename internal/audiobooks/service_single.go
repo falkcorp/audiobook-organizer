@@ -417,6 +417,10 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 		return purgeOutcome{kind: purgeKeptUndo}
 	case r.undoErr != nil:
 		return purgeOutcome{kind: purgeFailed, abort: purgeAbortOf(r.undoErr), errs: []string{fmt.Sprintf("%s: not purged: cannot tell under the merge lock whether an undo still needs it: %v", book.ID, r.undoErr)}}
+	case errors.Is(r.retiredErr, database.ErrBookIsRetiredShell):
+		return purgeOutcome{kind: purgeRetiredShell}
+	case r.retiredErr != nil:
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %v", book.ID, r.retiredErr)}}
 	case r.stateErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(r.stateErr), r.stateErr)}}
 	case r.hasState:
@@ -466,6 +470,11 @@ type statelessPurge struct {
 	undoErr                      error
 	hasState                     bool
 	readErr, stateErr, deleteErr error
+	// retiredErr: the retired-shell refusal (database.ErrBookIsRetiredShell) or a
+	// failed lookup, read under the lock: the retire repair takes the same lock,
+	// so a check made outside it could pass a book the repair retired a moment
+	// later, and the delete would then find no row key under it.
+	retiredErr error
 }
 
 // purgeIfStateless re-reads book, checks it for listening state and, when it
@@ -529,6 +538,13 @@ func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv,
 		return r
 	case held:
 		r.keptUndo = true
+		return r
+	}
+	// A retire shell, on the row as it is now: the retire repair takes this
+	// lock too, so the lock-free gate (purgeGate) could have passed a book the
+	// repair retired a moment later, and the delete would then drop the record
+	// of where its versions came from.
+	if r.retiredErr = merge.RefuseRetiredShell(svc.store, cur.ID, "purge"); r.retiredErr != nil {
 		return r
 	}
 	r.hasState, r.stateErr = env.probe.Has(cur.ID)
@@ -615,6 +631,10 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		if oerr := database.CheckBookOwnsNoFiles(svc.store, book.ID, "purge"); oerr != nil {
 			return oerr
 		}
+		// Under the lock: a retire shell is never purged (see purgeGate).
+		if rerr := merge.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
+			return rerr
+		}
 		doomed = cur
 		// The file was decided for the path the listing named. A row whose path
 		// changed since is not what was decided: refused before anything moves.
@@ -658,6 +678,8 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		return purgeOutcome{kind: purgeNotInPreview}
 	case errors.Is(err, errUndoHeldUnderLock):
 		return purgeOutcome{kind: purgeKeptUndo}
+	case errors.Is(err, database.ErrBookIsRetiredShell):
+		return purgeOutcome{kind: purgeRetiredShell}
 	case errors.Is(err, merge.ErrCarryTargetUnreadable):
 		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: %v", book.ID, err)}}
 	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, database.ErrBookOwnsFiles):

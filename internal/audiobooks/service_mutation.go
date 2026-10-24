@@ -1504,14 +1504,19 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// under the merge lock the carry and the delete run in (below): a file a
 	// merge moved onto the book after this read is caught before the carry
 	// moves any listening state, not after it.
-	refuseIfOwnsFiles := func() error { return database.CheckBookOwnsNoFiles(svc.store, id, "hard delete") }
-	if err := refuseIfOwnsFiles(); err != nil {
-		return nil, err
+	//
+	// A retire shell owns no live row, so that check passes it; its deletion
+	// would drop the record of where its retired versions came from, so the
+	// same closure refuses it (merge.RefuseRetiredShell). The retire repair
+	// takes the merge lock too, so the run under the lock catches a shell
+	// retired since this read.
+	refuseIfBlocked := func() error {
+		if err := database.CheckBookOwnsNoFiles(svc.store, id, "hard delete"); err != nil {
+			return err
+		}
+		return merge.RefuseRetiredShell(svc.store, id, "hard delete")
 	}
-
-	// A retire shell owns no live row, so the check above passes it; its
-	// deletion would drop the record of where its retired versions came from.
-	if err := merge.RefuseRetiredShell(svc.store, id, "hard delete"); err != nil {
+	if err := refuseIfBlocked(); err != nil {
 		return nil, err
 	}
 
@@ -1534,7 +1539,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 		return svc.store.DeleteBook(id)
 	}
-	carriedTo, err := merge.HardDeleteKeepingUserStateLocked(merger, svc.store, book, refuseIfOwnsFiles, del)
+	carriedTo, err := merge.HardDeleteKeepingUserStateLocked(merger, svc.store, book, refuseIfBlocked, del)
 	if err != nil {
 		if err.Error() == "book not found" {
 			return nil, fmt.Errorf("audiobook not found")
