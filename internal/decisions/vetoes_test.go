@@ -1,7 +1,7 @@
 // file: internal/decisions/vetoes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 47c2d9e5-1f80-4a36-b3d7-90e6a5c8142f
-// last-edited: 2026-10-21
+// last-edited: 2026-10-24
 
 package decisions
 
@@ -147,15 +147,19 @@ func TestVetoes_MergedAwayIDsResolveToTheirSurvivor(t *testing.T) {
 	require.False(t, snapVetoed(t, plain, "author", "7", "4", FamilySamePerson))
 }
 
-func TestVetoes_EdgeWhoseEndsMergedIsDroppedAndSetMembersResolve(t *testing.T) {
+func TestVetoes_EdgeWhoseEndsMergedIsKeptAsACollapsedVetoAndSetMembersResolve(t *testing.T) {
 	s, _ := newStore(t)
 	in := humanReject("7", "9")
 	in.OpKind, in.EntityType, in.Family, in.ReasonCode = "authors:group-merge", "author", FamilySamePerson, "different_people"
 	mustRecord(t, s, in)
 	v := mustLoad(t, s, mapResolver(map[string]string{"9": "7"}, nil))
-	require.False(t, snapVetoed(t, v, "author", "7", "9", FamilySamePerson), "both ends are one author now; nothing to veto")
+	// 9 was merged into 7 against the owner's veto. There is no pair of live
+	// authors left (no edge is stored), but a caller asking to join 7 and 9 is
+	// asking for the join the owner rejected, so the veto still answers.
+	require.True(t, snapVetoed(t, v, "author", "7", "9", FamilySamePerson))
+	require.False(t, snapVetoed(t, v, "author", "7", "9", FamilySameCopy), "family scoped")
 	_, pairs, _ := v.Counts()
-	require.Zero(t, pairs)
+	require.Zero(t, pairs, "a collapsed veto is not a pair of live ids")
 
 	// Set membership resolves too.
 	big := make([]string, 0, MaxEdgeSet+5)
@@ -177,7 +181,7 @@ func TestVetoes_ResolverErrorFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, boom, "a resolver error while loading is a load error, never a quiet no-veto")
 
 	v := mustLoad(t, s, nil)
-	v.resolve = func(_, _ string) (string, error) { return "", boom }
+	v.resolve = func(_, _ string) ([]string, error) { return nil, boom }
 	_, err = v.PairVetoed(testType, "b1", "b2", FamilySameWork)
 	require.ErrorIs(t, err, boom)
 }
