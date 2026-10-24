@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.1
+// version: 1.97.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package audiobooks
 
@@ -195,6 +195,11 @@ type RevertService struct {
 	// undo.ChangeTypeMergeSiblingJournal row. nil means merge.NewService
 	// over db (siblingUndoerFor).
 	siblingUndo siblingUndoer
+	// mergeLockHeld: the caller already holds the merge lock
+	// (merge.LockMergeRMW, a counted non-re-entrant mutex), so the cases that
+	// take it themselves must not (lockMerge). Set only on the copy the combine
+	// undo's retire reversal runs (retireUndoer).
+	mergeLockHeld bool
 }
 
 // NewRevertService creates a new RevertService.
@@ -524,9 +529,43 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// One revert of an operation at a time: the owed-settle record is read,
 	// rewritten and cleared across the whole run.
 	defer lockOperation(operationID)()
+	return rs.revertOperation(operationID, nil)
+}
+
+// RevertOperationForBooks is RevertOperation for the rows of an operation that
+// concern the named books only: the book_file_retire rows whose SHELL (the book
+// the rows left) is one of them, the retired versions created from those
+// shells, the rehomes of those versions, and every other non-ledger row whose
+// BookID is one of them (the shell's external-id moves and merged-into
+// pointer). It selects by shell and version, never by a retire row's BookID,
+// which is the holder: a retire op that retired several shells into one holder
+// is reversed one shell at a time.
+//
+// The operation's ledger-only rows (the plan record) are never selected and
+// never marked: they are marked only together with the whole operation, by a
+// RevertOperation that finds every other row reverted. Everything else
+// (ordering, gating, refusals, marking) is RevertOperation's.
+func (rs *RevertService) RevertOperationForBooks(operationID string, bookIDs []string) (*RevertResult, error) {
+	if len(bookIDs) == 0 {
+		return nil, errors.New("revert for books: no books named")
+	}
+	defer lockOperation(operationID)()
+	return rs.revertOperation(operationID, newRevertScope(bookIDs))
+}
+
+// revertOperation is the body of RevertOperation and RevertOperationForBooks;
+// scope nil reverts the whole operation. The caller holds the operation lock
+// (or, for the combine undo's retire reversal, deliberately does not: see
+// retireUndoer).
+func (rs *RevertService) revertOperation(operationID string, scope *revertScope) (*RevertResult, error) {
 	changes, err := rs.db.GetOperationChanges(operationID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get operation changes: %w", err)
+	}
+	if scope != nil {
+		if changes = scope.filter(changes); len(changes) == 0 {
+			return nil, fmt.Errorf("operation %s has no rows for the named books", operationID)
+		}
 	}
 
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
@@ -657,6 +696,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		result.Kept = append(result.Kept, detail)
 		revertLog.Warn("revert: %s", detail)
 	}
+	// Recreate every purged shell the retire rows write back to before any
+	// row runs (see prepassShells).
+	rs.prepassShells(restorable)
 	plan, err := undo.PlanRevert(restorable, rs.db.GetBookFiles)
 	if err != nil {
 		return nil, err
@@ -1044,6 +1086,12 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertMergeCombineJournal(c)
 	case undo.ChangeTypeMergeSiblingJournal:
 		return rs.revertMergeSiblingJournal(c)
+	case undo.ChangeTypeBookFileRetire:
+		return rs.revertBookFileRetire(c)
+	case undo.ChangeTypeBookVersionCreate:
+		return rs.revertBookVersionCreate(c)
+	case undo.ChangeTypeRetiredVersionRehome:
+		return rs.revertRetiredVersionRehome(c)
 	case "organize_failed", "organize_skipped", "organize_summary",
 		undo.ChangeTypeRepairPlanRecord, undo.ChangeTypeRepairOwnerApply, undo.ChangeTypeAIScanResultApplied:
 		// No filesystem or DB mutation recorded; nothing to reverse.
@@ -1520,8 +1568,7 @@ func (rs *RevertService) revertUserBookStateSet(c *database.OperationChange) err
 	if !ok {
 		return fmt.Errorf("store cannot restore user listening state; %s on %s left as the import wrote it", user, c.BookID)
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	// And the per-(user, book) lock the ABS write paths and the Repairs
 	// writer hold, so a device sync cannot land between the check and the
 	// restore. Always taken inside the merge lock, never around it.
@@ -1979,8 +2026,7 @@ func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error 
 	if err != nil {
 		return fmt.Errorf("track %q is not a number: %w", c.NewValue, err)
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
 	if err != nil || f == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
@@ -2011,8 +2057,7 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 	if err != nil {
 		return err
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
 	if err != nil || f == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
@@ -2154,8 +2199,7 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 // revertBookMergedInto puts a retired book's merged_into_book_id back
 // (OldValue "" is unset) while it still names the book the operation set.
 func (rs *RevertService) revertBookMergedInto(c *database.OperationChange) error {
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if err := undo.CheckMergedIntoCurrent(book, c); err != nil {
 			return err
@@ -2198,8 +2242,7 @@ func (rs *RevertService) revertUserStateFollow(c *database.OperationChange) erro
 	if !ok {
 		return fmt.Errorf("store cannot restore user progress; %d user(s) left on %s", len(progress), survivor)
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	warns, err := merge.RestoreFollowedProgress(db, survivor, c.BookID, rec.SyncRedirected, progress)
 	for _, w := range warns {
 		revertLog.Warn("revert of change %s: %s", c.ID, logger.SanitizeLogValue(w))
@@ -2212,8 +2255,7 @@ func (rs *RevertService) revertUserStateFollow(c *database.OperationChange) erro
 // only while the path is still the one the operation set. The check and the
 // write both run on the row as read under the book's write stripe.
 func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error {
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if err := undo.CheckPathUpdateCurrent(book, c); err != nil {
 			return err
@@ -2233,8 +2275,7 @@ func (rs *RevertService) revertITunesPathClear(c *database.OperationChange) erro
 	if !undo.ITunesPathClearValid(c) {
 		return fmt.Errorf("itunes_path_clear row %s is malformed (field %q)", c.ID, c.FieldName)
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	if c.FieldName == undo.ITunesPathBookField {
 		return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 			cur := ""
@@ -2372,8 +2413,7 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 		return fmt.Errorf("read files of %s: %w", c.BookID, err)
 	}
 	env := merge.TrashRestoreEnv()
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	// The group's incumbent is read and the yield written under the group's
 	// lock (merge lock, then group lock, then the book's write lock, the
 	// order merge.RestoreFromTrashLocked uses), so no hand-off changes the group
@@ -2475,8 +2515,7 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 	default:
 		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: fmt.Sprintf("is_primary_version %q", c.OldValue)}
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	crowns := restored == nil || *restored
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		live := !book.IsSoftDeleted()
@@ -2506,8 +2545,7 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 	if !ok {
 		return fmt.Errorf("no external id in field %q", c.FieldName)
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	if _, err := rs.loadBook(c.OldValue); err != nil {
 		return err
 	}
@@ -2525,8 +2563,7 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 }
 
 func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange, plan *undo.RevertPlan) error {
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	if _, err := rs.loadBook(c.BookID); err != nil {
 		return err
 	}
@@ -3281,8 +3318,7 @@ func (rs *RevertService) revertRepairBookCreate(c *database.OperationChange) err
 	if !ok {
 		return fmt.Errorf("revert repair_book_create %s: this store cannot list a path's rows", c.ID)
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	if err := undo.CheckRepairBookCreate(st, c); err != nil {
 		if errors.Is(err, undo.ErrAlreadyRestored) {
 			return rs.repointPathIndexAwayFrom(atPath, c.BookID)

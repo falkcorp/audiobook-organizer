@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -466,8 +466,7 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 		}
 		return guard(m)
 	}
-	merge.LockMergeRMW()
-	defer merge.UnlockMergeRMW()
+	defer rs.lockMerge()()
 	members, err := rs.db.GetBooksByVersionGroup(gid)
 	if err != nil {
 		return nil, fmt.Errorf("read version group %s: %w", gid, err)
