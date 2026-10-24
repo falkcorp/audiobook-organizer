@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
 // last-edited: 2026-10-23
 
@@ -144,9 +144,16 @@ func TestRetireBookFiles_RepointsRowsAndDeletesNone(t *testing.T) {
 			require.NotNil(t, pidAny)
 			require.Equal(t, x1.ID, pidAny.ID)
 			require.True(t, pidAny.Retired)
-			if atPath, aerr := fx.ps.BookFilesAtPath("/lib/ret/shell/01.mp3"); aerr == nil {
+			// The complete lookup needs memdb: it answers in the memdb arm and
+			// refuses (rather than guessing) in the pebble arm. Asserting each arm
+			// means neither can be skipped silently.
+			atPath, aerr := fx.ps.BookFilesAtPath("/lib/ret/shell/01.mp3")
+			if useMem {
+				require.NoError(t, aerr)
 				require.Len(t, atPath, 1, "BookFilesAtPath is the complete lookup and keeps retired rows")
 				require.Equal(t, x1.ID, atPath[0].ID)
+			} else {
+				require.ErrorIs(t, aerr, ErrBookFilesAtPathUnavailable)
 			}
 
 			// The holder's aggregates still describe only its live file.
