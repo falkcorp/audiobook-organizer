@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.71.0
+// version: 1.72.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-23
 
@@ -25,7 +25,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -164,17 +163,15 @@ func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 	return nil
 }
 
-// OwnerVetoes hands the retired-versions fixer the owner's rejects. The
+// OwnerVetoes hands the retired-versions fixer the owner's rejects, read from
+// one point-in-time snapshot per run with its stored book ids resolved through
+// the retired-version index and the merge survivor (NewOwnerVetoReader). The
 // decisions store is built over the engine's raw key-value surface, resolved
 // through database.AsCapability so a decorated store still reaches it. nil
 // when the store has none (a non-Pebble backend): the fixer then refuses to
 // plan.
 func (s *Server) OwnerVetoes() maintenanceplugin.OwnerVetoReader {
-	kv, ok := database.AsCapability[decisions.KV](s.store)
-	if !ok {
-		return nil
-	}
-	return decisions.New(kv)
+	return maintenanceplugin.NewOwnerVetoReader(s.store)
 }
 
 // CombineJournals hands the retired-versions fixer the combine undo journal's

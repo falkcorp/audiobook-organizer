@@ -14,7 +14,7 @@ The categories that stay put each have their own count and clickable rows, and t
 
 A book that a combine journal not yet undone names as absorbed is no longer held in its own category. It is classified like any other book and its row carries `combine_undo_aware`, with an evidence line naming the journal, because the cleanup is meant to be reversible by undoing that combine rather than to skip those books. The plan's log summary counts these rows separately. If the combine journals cannot be read, the plan fails instead of guessing which rows carry the flag. Auto-merge journals are not read yet.
 
-The plan's rule 5, a content-hash match between a book and its target, is not applied yet, and neither is the check of a rejected retired-versions proposal for a single book.
+The plan's rule 5, a content-hash match between a book and its target, is not applied yet.
 
 #### Repairs lane — a fixer can be preview-only
 

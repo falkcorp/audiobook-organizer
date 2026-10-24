@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -92,8 +92,11 @@ const retiredMinAgeDaysDefault = 14
 //     whether any of its files is still on disk (an os.Stat per file; a stat
 //     that cannot be answered counts the file as present and is reported as
 //     rows_stat_unknown).
-//  5. owner_vetoed: the owner rejected joining this book and its target
-//     (decisions.PairVetoed, same_work or same_copy).
+//  5. owner_vetoed: the owner rejected this book's retired-versions proposal
+//     (a live reject under op_kind repairs:retired-versions with the book as
+//     the entity), or rejected joining this book and its target
+//     (decisions.PairVetoed, same_work or same_copy, ids resolved through the
+//     retired-version index and the merge survivor).
 //  6. itunes_needs_owner_approval: a file of the book OR of its target sits
 //     under the frozen books/itunes/** tree, symlinks resolved. The owner
 //     approves these separately.
@@ -113,8 +116,7 @@ const retiredMinAgeDaysDefault = 14
 //  11. would_retire: everything else.
 //
 // The plan's rule 5 (a content-hash match between the shell and its target)
-// is deferred to a later PR; so are rule 2 (merge.ResolveMergeSurvivor) and a
-// veto check on a rejected retired-versions shell proposal.
+// is deferred to a later PR; so is rule 2 (merge.ResolveMergeSurvivor).
 const (
 	retCatTrashLabelled    = "trash_labelled_deleted"
 	retCatNoFiles          = "no_book_files"
@@ -376,6 +378,14 @@ func (f *retiredVersionsFixer) newRun(params json.RawMessage) (*retiredRun, erro
 	if vetoes == nil || journals == nil {
 		return nil, fmt.Errorf("%s: the owner's rejects or the combine journal cannot be read on this server; refusing to plan without them", retiredVersionsFixerID)
 	}
+	// A reader that loads a snapshot (NewOwnerVetoReader's) does it now, so a
+	// run that cannot read the rejects is refused whole instead of becoming a
+	// plan of error rows.
+	if l, ok := vetoes.(interface{ Load(context.Context) error }); ok {
+		if err := l.Load(context.Background()); err != nil {
+			return nil, fmt.Errorf("%s: read the owner's rejects: %w", retiredVersionsFixerID, err)
+		}
+	}
 	probe, err := merge.NewUserStateProbe(users)
 	if err != nil {
 		return nil, fmt.Errorf("%s: list users for the listening-state check: %w", retiredVersionsFixerID, err)
@@ -518,10 +528,28 @@ func (r *retiredRun) undoShells() (map[string][]string, error) {
 	})
 }
 
-// vetoed returns the op family in which the owner rejected joining a and b
-// ("" for none). The exact ids are asked about: there is no book merge-redirect
-// resolver yet (the plan's RetiredBookResolver is a later PR).
+// retVetoShellRejected is the owner_veto_family of a row held by the owner's
+// reject of the shell's own proposal (not by a pair veto in a family).
+const retVetoShellRejected = "shell_rejected"
+
+// vetoed returns why the owner's rejects hold the row of shell a retiring onto
+// b: retVetoShellRejected when a live reject of a's repairs:retired-versions
+// proposal exists (sticky: it holds whatever the target), else the op family in
+// which the owner rejected joining a and b, "" for none. The pair is asked
+// through the owner-veto reader, whose ids are resolved to the books that
+// survive, so a veto naming a retired, purged or merged-away book still holds.
 func (r *retiredRun) vetoed(a, b string) (string, error) {
+	key, err := decisions.RetiredVersionsSubjectKey(a)
+	if err != nil {
+		return "", fmt.Errorf("fingerprint the proposal for %s: %w", a, err)
+	}
+	rejected, err := r.vetoes.SubjectRejected(decisions.OpKindRetiredVersions, key, "")
+	if err != nil {
+		return "", fmt.Errorf("read the owner's rejects for %s: %w", a, err)
+	}
+	if rejected {
+		return retVetoShellRejected, nil
+	}
 	for _, fam := range []string{decisions.FamilySameWork, decisions.FamilySameCopy} {
 		v, err := r.vetoes.PairVetoed(retiredEntityBook, a, b, fam)
 		if err != nil {
@@ -847,6 +875,9 @@ func (r *retiredRun) decide(ctx context.Context, fa *retiredFacts) (cat, why str
 	}
 	if fam != "" {
 		fa.vetoFamily = fam
+		if fam == retVetoShellRejected {
+			return retCatVetoed, "the owner rejected retiring this book (a reject of its retired-versions proposal)", nil
+		}
 		return retCatVetoed, "the owner rejected joining this book and its target (" + fam + ")", nil
 	}
 	if hit, w := r.shellITunes(fa); hit {
