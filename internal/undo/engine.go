@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.53.0
+// version: 1.53.1
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 //
 // Undo preflight. PreflightUndoConflictsFromChanges predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -172,6 +172,7 @@ func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*databas
 	// group lock): it has no way to know that will happen, so it counts
 	// those rows safe and the revert refuses them when it does.
 	restoresBook := map[string]bool{}
+	recreatable := recreatableShells(store, restorable)
 	for _, c := range plan.Order {
 		if refusal := plan.Gate(c); refusal != nil {
 			plan.Record(c, refusal)
@@ -179,9 +180,12 @@ func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*databas
 			continue
 		}
 		var v rowVerdict
-		if c.ChangeType == ChangeTypeBookSoftDelete && restoresBook[c.BookID] {
+		switch {
+		case c.ChangeType == ChangeTypeBookSoftDelete && restoresBook[c.BookID] && !recreatable[c.BookID]:
 			v = rowVerdict{already: true}
-		} else {
+		case recreatable[c.BookID] && shellRowType(c.ChangeType):
+			v = recreatableShellVerdict(store, c)
+		default:
 			v = preflightRow(store, c, plan.Stamps, plan)
 		}
 		if c.ChangeType == ChangeTypeBookSoftDelete && v.refusal == nil && v.conflict == nil {
@@ -561,6 +565,8 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 				Detail: "this store cannot read the created book's rows"}}
 		}
 		return verdictOf(CheckRepairBookCreate(rbs, c))
+	case ChangeTypeBookFileRetire, ChangeTypeBookVersionCreate, ChangeTypeRetiredVersionRehome:
+		return verdictOf(checkRetireRow(store, c))
 	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
 		ChangeTypeBookFileMove, database.ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow,
@@ -696,6 +702,13 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 		if err != nil {
 			return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", id, c.OldValue, err)
 		}
+		// A row retired since is neither "still on the target" nor "back on
+		// the source": a later retire owns it.
+		for _, f := range []*database.BookFile{onTarget, onSource} {
+			if f != nil && f.Retired {
+				return RetiredRowRefusal(f)
+			}
+		}
 		return CheckReassignCurrent(onTarget != nil, onSource != nil, c)
 	case ChangeTypeBookFileTrack:
 		return checkFsRegroupRowCurrent(store, c, func(f *database.BookFile) error {
@@ -780,6 +793,9 @@ func checkFsRegroupRowCurrent(store ConflictChecker, c *database.OperationChange
 	if f == nil {
 		return refuse(ReasonChangedSince, "book_file %s is no longer on book %s", id, c.BookID)
 	}
+	if f.Retired {
+		return RetiredRowRefusal(f)
+	}
 	return check(f)
 }
 
@@ -797,6 +813,9 @@ func checkFsRegroupRowOn(store ConflictChecker, c *database.OperationChange, hol
 	f, err := r.GetBookFileByID(c.BookID, id)
 	if err != nil || f == nil {
 		return refuse(ReasonChangedSince, "book_file %s is no longer on book %s", id, c.BookID)
+	}
+	if f.Retired {
+		return RetiredRowRefusal(f)
 	}
 	if holds != nil && !holds(f) {
 		return refuse(ReasonChangedSince, "book_file %s changed since the operation", id)
@@ -854,4 +873,120 @@ func preflightAuthorDelete(store ConflictChecker, c *database.OperationChange) r
 	}
 	already, refusal := AuthorDeleteRestoreRefusal(snap, cur != nil && cur.ID == snap.ID, holder, into)
 	return rowVerdict{refusal: refusal, already: already}
+}
+
+// bookVersionReader is the version read the preflight of a retire row makes.
+// Resolved with database.AsCapability; a store without it refuses the row.
+type bookVersionReader interface {
+	GetBookVersion(id string) (*database.BookVersion, error)
+}
+
+// recreatableShells returns the shells a purge deleted that an un-reverted
+// retire row of rows names and a purge snapshot can bring back (ShellCheck).
+// The revert recreates them before it reverts any row (the revert's own
+// pre-pass), so every row of such a shell is judged against a shell that will
+// be there, never refused book_missing.
+func recreatableShells(store ConflictChecker, rows []*database.OperationChange) map[string]bool {
+	out := map[string]bool{}
+	for _, c := range rows {
+		if c.ChangeType != ChangeTypeBookFileRetire {
+			continue
+		}
+		r, err := DecodeBookFileRetire(c)
+		if err != nil || out[r.Shell] {
+			continue
+		}
+		if state, err := ShellCheck(store, r.Shell); err == nil && state == ShellRecreatable {
+			out[r.Shell] = true
+		}
+	}
+	return out
+}
+
+// shellRowType reports whether a row of this type acts on the shell book row
+// itself (its soft-delete, pointers and external ids), the rows a recreated
+// shell has to be judged for.
+func shellRowType(changeType string) bool {
+	switch changeType {
+	case ChangeTypeBookSoftDelete, ChangeTypeBookMergedInto, ChangeTypeBookPathUpdate,
+		ChangeTypeBookPrimaryDemote, ChangeTypeUserStateFollow, ChangeTypeExternalIDReassign:
+		return true
+	}
+	return false
+}
+
+// recreatableShellVerdict predicts a row on a shell the revert will recreate
+// from its purge snapshot. The snapshot is the shell as the purge found it,
+// after every write of the retire, and a purge deletes the book, so nothing
+// could have changed it since: the book-row compare-and-sets (soft-delete,
+// merged-into, path, primary flag, followed progress) hold by construction and
+// the row is safe. An external id is not on the book row, so its owner is
+// still compared.
+func recreatableShellVerdict(store ConflictChecker, c *database.OperationChange) rowVerdict {
+	if c.ChangeType != ChangeTypeExternalIDReassign {
+		return rowVerdict{}
+	}
+	source, id, ok := ExternalIDFromField(c.FieldName)
+	if !ok {
+		return rowVerdict{refusal: refuse(ReasonOldValueUnparsable, "no external id in %q", c.FieldName)}
+	}
+	r, ok := store.(externalIDOwnerReader)
+	if !ok {
+		return rowVerdict{}
+	}
+	owner, err := r.GetBookByExternalID(source, id)
+	if err != nil {
+		return rowVerdict{refusal: refuse(ReasonBookLookupFailed, "look up external id %s/%s: %v", source, id, err)}
+	}
+	return verdictOf(CheckExternalIDOwnerCurrent(owner, c))
+}
+
+// checkRetireRow predicts the revert of one retire row (RevertService's
+// revertBookFileRetire, revertBookVersionCreate, revertRetiredVersionRehome):
+// the same compare-and-set (CheckRetireCurrent, CheckVersionCreateCurrent,
+// CheckRehomeCurrent), and for a file row whose shell was purged the same
+// shell check (ShellCheck), so "purged but recreatable" is restorable.
+func checkRetireRow(store ConflictChecker, c *database.OperationChange) error {
+	switch c.ChangeType {
+	case ChangeTypeBookFileRetire:
+		r, err := DecodeBookFileRetire(c)
+		if err != nil {
+			return refuse(ReasonOldValueUnparsable, "%v", err)
+		}
+		rd, ok := store.(bookFileByIDReader)
+		if !ok {
+			return refuse(ReasonFieldUnreadable, "this store cannot read book_file %s", r.FileID)
+		}
+		onHolder, err := rd.GetBookFileByID(r.Holder, r.FileID)
+		if err != nil {
+			return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", r.FileID, r.Holder, err)
+		}
+		onShell, err := rd.GetBookFileByID(r.Shell, r.FileID)
+		if err != nil {
+			return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", r.FileID, r.Shell, err)
+		}
+		if err := CheckRetireCurrent(onHolder, onShell, r); err != nil {
+			return err
+		}
+		_, err = ShellCheck(store, r.Shell)
+		return err
+	case ChangeTypeBookVersionCreate, ChangeTypeRetiredVersionRehome:
+		id, ok := BookVersionIDFromField(c.FieldName)
+		if !ok {
+			return refuse(ReasonOldValueUnparsable, "no book_version id in %q", c.FieldName)
+		}
+		rd, ok := database.AsCapability[bookVersionReader](store)
+		if !ok {
+			return refuse(ReasonFieldUnreadable, "this store cannot read book version %s", id)
+		}
+		cur, err := rd.GetBookVersion(id)
+		if err != nil {
+			return refuse(ReasonFieldUnreadable, "read book version %s: %v", id, err)
+		}
+		if c.ChangeType == ChangeTypeBookVersionCreate {
+			return CheckVersionCreateCurrent(cur, c)
+		}
+		return CheckRehomeCurrent(cur, c)
+	}
+	return nil
 }
