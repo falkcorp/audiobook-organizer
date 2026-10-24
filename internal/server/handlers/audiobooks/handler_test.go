@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
 // version: 1.20.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-24
+// last-edited: 2026-10-23
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
