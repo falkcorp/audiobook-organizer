@@ -1,7 +1,7 @@
 // file: internal/server/middleware/check_permission_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fce91a68-942b-4396-a09d-db4029d93a8b
-// last-edited: 2026-10-14
+// last-edited: 2026-10-24
 
 package middleware
 
@@ -80,5 +80,37 @@ func TestCheckPermission_UnauthenticatedIs401ForbiddenIs403(t *testing.T) {
 	ok, w = checkAs(nil, nil, nil, auth.PermSettingsManage)
 	if ok || w.Code != http.StatusUnauthorized {
 		t.Fatalf("no store: ok=%v code=%d, want no bypass (401)", ok, w.Code)
+	}
+}
+
+// TestHoldsPermission_AnswersWithoutWriting: the question CheckPermission
+// asks, with nothing written to the response whatever the answer.
+func TestHoldsPermission_AnswersWithoutWriting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	editor := &database.User{ID: "u-editor", Username: "editor"}
+	held := []auth.Permission{auth.PermLibraryEditMetadata}
+	for name, tc := range map[string]struct {
+		store UserCounter
+		user  *database.User
+		perms []auth.Permission
+		want  bool
+	}{
+		"held":                  {countUsers{n: 2}, editor, held, true},
+		"not held":              {countUsers{n: 2}, editor, nil, false},
+		"no user":               {countUsers{n: 2}, nil, nil, false},
+		"first run bypass":      {countUsers{n: 0}, nil, nil, true},
+		"count error no bypass": {countUsers{err: errors.New("down")}, nil, nil, false},
+		"nil store":             {nil, editor, nil, false},
+	} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		c.Request = req.WithContext(auth.WithPermissions(auth.WithUser(req.Context(), tc.user), tc.perms))
+		if got := HoldsPermission(tc.store, c, auth.PermLibraryEditMetadata); got != tc.want {
+			t.Errorf("%s: got %v, want %v", name, got, tc.want)
+		}
+		if w.Body.Len() != 0 || c.Writer.Written() {
+			t.Errorf("%s: wrote a response: %q", name, w.Body.String())
+		}
 	}
 }

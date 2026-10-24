@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-14
+// last-edited: 2026-10-24
 
 package server
 
@@ -15,12 +15,17 @@ import (
 )
 
 // wireRepairsRoutes registers the Repairs lane routes on the protected group.
-// Reads need library.view; starting a plan or an apply changes (or leads to
-// changing) the library, so both POSTs need library.edit_metadata, matching
-// the review-queue mutations. A fixer that needs more
-// (repairs.PermissionScoped, e.g. the missing-files fixer's settings.manage)
-// is checked by the handler once it knows the fixer, with the same semantics
-// as s.perm.
+// The route gates are library.view for the two list reads and the rows read,
+// and library.edit_metadata for starting a plan or an apply (which change, or
+// lead to changing, the library), matching the review-queue mutations. They
+// are only the floor: once the handler knows the fixer it checks every
+// permission the fixer requires (repairs.RequiredPermissions: the lane's
+// library.edit_metadata, or what a repairs.PermissionScoped fixer names, e.g.
+// the missing-files fixer's settings.manage), with the same semantics as
+// s.perm, on the plan, apply and owner-apply POSTs and also on the rows read,
+// because plan rows carry other users' data and a guest holds library.view.
+// GET /repairs lists every fixer to a library.view caller but leaves the
+// last-run pointers off the ones the caller may not use.
 func (s *Server) wireRepairsRoutes(protected *gin.RouterGroup) {
 	var enq repairshandler.Enqueuer
 	if s.opRegistry != nil {
@@ -47,6 +52,6 @@ func (s *Server) permCheck() repairshandler.PermissionCheck {
 	}
 	store := s.storeForWiring()
 	return func(c *gin.Context, p auth.Permission) bool {
-		return servermiddleware.CheckPermission(store, c, p)
+		return servermiddleware.HoldsPermission(store, c, p)
 	}
 }

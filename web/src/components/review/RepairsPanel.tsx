@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.31.2
+// version: 1.32.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -273,29 +273,31 @@ function FixerRail({ repairs, width }: RepairsPanelProps & { width: number }) {
                 {f.description}
               </Typography>
               <Typography variant="caption" component="div" data-testid={`repairs-fixer-plan-${f.id}`}>
-                {planSummary(f.last_plan, trial)}
+                {f.permitted === false ? "Needs access you don't have" : planSummary(f.last_plan, trial)}
               </Typography>
               {apply && (
                 <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
                   {apply}
                 </Typography>
               )}
-              <Button
-                size="small"
-                variant="outlined"
-                sx={{ mt: 0.5 }}
-                disabled={running}
-                data-testid={`repairs-run-trial-${f.id}`}
-                onClick={(e) => {
-                  // The row is also a button (select); run the trial without
-                  // re-selecting through the bubbling click.
-                  e.stopPropagation();
-                  repairs.selectFixer(f.id);
-                  repairs.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: f.id });
-                }}
-              >
-                {running ? 'Trial running…' : 'Run trial'}
-              </Button>
+              {f.permitted !== false && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  sx={{ mt: 0.5 }}
+                  disabled={running}
+                  data-testid={`repairs-run-trial-${f.id}`}
+                  onClick={(e) => {
+                    // The row is also a button (select); run the trial without
+                    // re-selecting through the bubbling click.
+                    e.stopPropagation();
+                    repairs.selectFixer(f.id);
+                    repairs.dispatch({ lane: 'repairs', type: 'runTrial', fixerId: f.id });
+                  }}
+                >
+                  {running ? 'Trial running…' : 'Run trial'}
+                </Button>
+              )}
             </ListItemButton>
           );
         })}
@@ -593,6 +595,21 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
   const remaining = repairs.remainingApplicable ?? 0;
   const applyDisabled = repairs.applying || repairs.applyPreparing || running;
 
+  // The server marks a fixer the caller may not use and leaves its last runs
+  // off; every control below would be refused, so none is offered.
+  if (fixer.permitted === false) {
+    return (
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <FixerHeader title={fixer.title} description={fixer.description} />
+        <Alert severity="warning" sx={{ m: 2 }} data-testid="repairs-fixer-forbidden">
+          You don't have permission to use this repair. Its trial rows can include other people's
+          data, so they are shown only to accounts with the access it needs. Ask an administrator
+          if you need it.
+        </Alert>
+      </Box>
+    );
+  }
+
   return (
     <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <FixerHeader title={fixer.title} description={fixer.description} />
@@ -785,7 +802,14 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
 
           {repairs.rowsLoading && <LinearProgress data-testid="repairs-rows-loading" />}
           <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            {repairs.rowsError && (
+            {repairs.rowsError && repairs.rowsForbidden && (
+              <Alert severity="warning" sx={{ m: 2 }} data-testid="repairs-rows-forbidden">
+                You don't have permission to view this repair's trial rows ({repairs.rowsError}). They
+                can include other people's data, so they are shown only to accounts with the access
+                this repair needs.
+              </Alert>
+            )}
+            {repairs.rowsError && !repairs.rowsForbidden && (
               <Alert
                 severity={repairs.rowsNeedRerun ? 'warning' : 'error'}
                 sx={{ m: 2 }}
