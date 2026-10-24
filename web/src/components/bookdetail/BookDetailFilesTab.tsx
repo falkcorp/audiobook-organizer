@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/BookDetailFilesTab.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
 // last-edited: 2026-10-23
 
@@ -456,12 +456,7 @@ export const BookDetailFilesTab = ({
       )}
 
       {/* Retired versions: files of trashed or merged books moved onto this one */}
-      <RetiredVersionsPanel
-        key={book.id}
-        bookId={book.id}
-        refreshKey={filesRefreshKey}
-        onRestored={onRefreshFiles}
-      />
+      <RetiredVersionsPanel key={book.id} bookId={book.id} refreshKey={filesRefreshKey} />
 
       {/* Change Log */}
       <Paper sx={{ p: 2, mt: 2 }} data-testid="changelog-section">

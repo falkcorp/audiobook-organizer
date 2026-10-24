@@ -1,7 +1,7 @@
 // file: web/src/contexts/AuthContext.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b3c4d5e-6f70-4819-a2b3-c4d5e6f70819
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 import {
   createContext,
