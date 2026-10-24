@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -83,6 +83,10 @@ func (errVetoes) PairVetoed(string, string, string, string) (bool, error) {
 func (errVetoes) SubjectRejected(string, string, string) (bool, error) {
 	return false, errors.New("vetoes unavailable")
 }
+
+func (errVetoes) Load(context.Context) error { return nil }
+
+func (errVetoes) Unresolved() []decisions.UnresolvedID { return nil }
 
 type errJournals struct{}
 
@@ -432,7 +436,7 @@ func TestRetiredVersions_HungMountFailsThePlan(t *testing.T) {
 func TestRetiredVersions_StatChecksContext(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.live("primary", "g", rf.file("g/a.mp3"))
-	run, err := rf.f.newRun(nil)
+	run, err := rf.f.newRun(context.Background(), nil)
 	require.NoError(t, err)
 	files := []database.BookFileCore{{FilePath: "/x/1"}, {FilePath: "/x/2"}, {FilePath: "/x/3"}}
 
@@ -524,7 +528,7 @@ func TestRetiredVersions_LabelledTrashIsNotLive(t *testing.T) {
 	require.Equal(t, rf.ids["primary"], chained.Current["target_book_id"], "the chain runs past the labelled book")
 	require.Equal(t, retMethodMergedInto, chained.Current["target_method"])
 
-	run, err := rf.f.newRun(nil)
+	run, err := rf.f.newRun(context.Background(), nil)
 	require.NoError(t, err)
 	for name, want := range map[string]bool{"primary": true, "lab-member": false, "lab-hop": false, "lonely": false} {
 		got, err := run.isLive(rf.ids[name])

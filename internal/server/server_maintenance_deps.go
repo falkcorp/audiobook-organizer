@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.72.0
+// version: 1.73.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -170,8 +171,17 @@ func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 // through database.AsCapability so a decorated store still reaches it. nil
 // when the store has none (a non-Pebble backend): the fixer then refuses to
 // plan.
+//
+// Every call returns a fresh reader (a replan must see the book state of its
+// own moment), but the readers share the Server's decisions.RowCache: the scan
+// of the decision log is read once and reused until a record is written, so a
+// replan per row does not re-read the whole log. Only that scan is shared. The
+// stored ids are resolved again by each reader; what is left per replan is the
+// merge-journal scan for the flag-holder follows and the resolution of every
+// stored id (a few reads each).
 func (s *Server) OwnerVetoes() maintenanceplugin.OwnerVetoReader {
-	return maintenanceplugin.NewOwnerVetoReader(s.store)
+	s.ownerVetoRowsOnce.Do(func() { s.ownerVetoRows = decisions.NewRowCache() })
+	return maintenanceplugin.NewOwnerVetoReader(s.store, s.ownerVetoRows)
 }
 
 // CombineJournals hands the retired-versions fixer the combine undo journal's
