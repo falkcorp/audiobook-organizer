@@ -335,22 +335,30 @@ func TestRetiredApply_ResumeFinishesTheTail(t *testing.T) {
 	require.Zero(t, out.Applied, "%v", out.ByOutcome)
 }
 
-// Two shells with a row at the same path as the holder's: after the first
-// retires, the second's plan must still hold (a retired row is not a live
-// owner of the path), so both apply in one run.
+// Two shells with a row at the same path P, where the holder has NO live row at
+// P: after the first retires, the holder holds a RETIRED row at P. That row is a
+// hidden version, not a live owner of the path, so the second shell's plan must
+// not move (it would otherwise flip to would_retire_same_path and go
+// changed_since_plan), and both rows apply in one run. A holder that already
+// had a live row at P would not exercise this: the retired row would dedupe to
+// the same book.
 func TestRetiredApply_SiblingShellsAtOnePath(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.enableApply()
 	shared := rf.file("g1/shared.mp3")
-	rf.live("primary", "g1", shared)
+	rf.live("primary", "g1", rf.file("g1/primary-own.mp3"))
 	rf.trashed("sib-a", "g1", 30, shared)
 	rf.trashed("sib-b", "g1", 30, shared)
 	res := rf.planAll()
 	ids := rf.applicableIDs(res)
 	require.Len(t, ids, 2)
+	for _, n := range []string{"sib-a", "sib-b"} {
+		require.Equal(t, retCatWouldRetire, rf.retiredPlanRow(res, n).Class, "%s: the shells share a path only with each other", n)
+	}
 
 	out := rf.applyRows(rf.f, res, ids, false, "op-sib")
 	require.Equal(t, 2, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	require.Zero(t, out.ByOutcome[repairs.OutcomeChangedSincePlan], "%v", out.ByOutcome)
 	retired, err := rf.st.GetRetiredBookFiles(rf.ids["primary"])
 	require.NoError(t, err)
 	require.Len(t, retired, 2)

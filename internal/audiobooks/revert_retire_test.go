@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
 // last-edited: 2026-10-28
 
@@ -193,7 +193,7 @@ func TestRevertRetire_SharedPathLiveRowKeepsTheKey(t *testing.T) {
 func TestRevertRetire_PurgedShellRefusesWhenNothingCanRecreateIt(t *testing.T) {
 	fx := newRetireRevertFx(t)
 	fx.retire(t, fx.writer("op-purged"), "ver-purged")
-	require.NoError(t, fx.st.DeleteBook(fx.shell.ID))
+	require.NoError(t, fx.st.DeleteRetiredShellForTest(fx.shell.ID))
 
 	res, err := NewRevertService(fx.st).RevertOperation("op-purged")
 	require.Error(t, err)
@@ -254,7 +254,7 @@ func TestRevertRetire_RecreatesPurgedShellBeforeTheShellsOtherRows(t *testing.T)
 
 	snap, err := fx.st.GetBookByID(fx.shell.ID)
 	require.NoError(t, err)
-	require.NoError(t, fx.st.DeleteBook(fx.shell.ID))
+	require.NoError(t, fx.st.DeleteRetiredShellForTest(fx.shell.ID))
 	store := &recreatingStore{PebbleStore: fx.st, snapshots: map[string]database.Book{fx.shell.ID: *snap}}
 
 	// The preflight does not call the shell's rows book_missing.
