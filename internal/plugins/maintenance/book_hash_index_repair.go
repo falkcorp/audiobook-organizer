@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_hash_index_repair.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 6f2a8c15-4d93-4e70-b1a6-3c9e0d7b5a28
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -98,8 +98,9 @@ func (p *Plugin) bookHashIndexRepairDef() sdk.OperationDef {
 			"book_originalhash: and book_organizedhash: indexes (one key per hash and book). Preview " +
 			"by default: counts the missing keys and shows a sample, writes nothing. With dry_run=false " +
 			"it writes each missing key and, once every book row decoded, marks the index complete and " +
-			"deletes the retired single-valued book:hash: keys. Boot runs it with ensure=true. It never " +
-			"deletes a new key or writes a book row.",
+			"deletes the retired single-valued book:hash: keys, then deletes each extra key (a key whose " +
+			"book is gone or no longer holds that hash, re-read under the book's write stripe). Boot " +
+			"runs it with ensure=true. It never writes or deletes a book row or a book_file row.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  bookHashIndexRepairID,
