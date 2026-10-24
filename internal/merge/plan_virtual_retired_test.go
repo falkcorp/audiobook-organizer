@@ -81,3 +81,37 @@ func TestPlanVirtualFile_FileHeldByRetiredVersionPlansNothing(t *testing.T) {
 		})
 	}
 }
+
+// indexDownStore reports the complete multi-row lookup as unavailable, the way
+// a store does while memdb is warming up. Everything else is the real store, so
+// GetBookFileByPath still answers (and still cannot see a retired row).
+type indexDownStore struct{ database.Store }
+
+func (indexDownStore) BookFilesAtPath(string) ([]database.BookFile, error) {
+	return nil, database.ErrBookFilesAtPathUnavailable
+}
+
+// With the complete lookup unavailable, a retired-held path must not read as
+// free: the non-strict lookup fell back to the single-owner index, which hides
+// retired rows, and the plan created a second row on the file. The strict
+// lookup errors and the plan attaches nothing.
+func TestPlanVirtualFile_CompleteLookupUnavailableAttachesNothing(t *testing.T) {
+	store := setupTestStore(t)
+	other, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Other", FilePath: "/tmp/pvr-down-other.mp3"})
+	require.NoError(t, err)
+	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Target", FilePath: "/tmp/pvr-down.mp3"})
+	require.NoError(t, err)
+	retiredID := retireRowOnto(t, store, other.ID, target.FilePath)
+
+	ms := NewService(indexDownStore{Store: store})
+	plan := ms.planVirtualFile(target, target.ID)
+	assert.Nil(t, plan.create, "an unanswerable lookup must not read as a free path")
+	assert.Nil(t, plan.existing)
+	assert.False(t, plan.attached)
+	assert.Zero(t, ms.applyVirtualFile(plan, target.ID))
+
+	at, err := store.(*database.PebbleStore).BookFilesAtPath(target.FilePath)
+	require.NoError(t, err)
+	require.Len(t, at, 1)
+	assert.Equal(t, retiredID, at[0].ID)
+}
