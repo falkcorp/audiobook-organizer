@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package merge
 
@@ -184,6 +184,11 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 	var files []database.BookFile
 	var env database.TrashRestoreEnv
 	if trashed {
+		// A retire shell comes back as an empty "imported" book while its files
+		// stay retired under another book; refuse until its versions hold no row.
+		if err := RefuseRetiredShell(store, id, "restore"); err != nil {
+			return res, err
+		}
 		// The file rows decide whether the row may come back "organized"
 		// (database.RestoreLibraryStateFromTrash) and whether it keeps its
 		// merge redirect (database.RestoredRowIsABSListable).

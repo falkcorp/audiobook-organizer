@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-17
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -71,7 +71,16 @@ type PurgeResult struct {
 	// back on the book and it stays in the trash; the reason is in Errors.
 	CarryFailed    int      `json:"carry_failed"`
 	CarryFailedIDs []string `json:"carry_failed_ids,omitempty"`
-	Errors         []string `json:"errors"`
+	// SkippedRetiredShell counts books left in the trash because the
+	// retired-versions repair retired their files onto another book and those
+	// versions still hold rows (merge.ErrBookIsRetiredShell). Purging one would
+	// destroy the only record of where the versions came from, and the purge
+	// that journals a snapshot for a per-version restore is not built yet. They
+	// are named in SkippedRetiredShellIDs, reported once per run like
+	// SkippedOwnsFiles.
+	SkippedRetiredShell    int      `json:"skipped_retired_shell"`
+	SkippedRetiredShellIDs []string `json:"skipped_retired_shell_ids,omitempty"`
+	Errors                 []string `json:"errors"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook

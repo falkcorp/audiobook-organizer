@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -149,6 +149,17 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 			continue
 		}
 		restorable = append(restorable, c)
+	}
+
+	if blocked := RetireRevertBlock(operationID, changes); blocked != nil {
+		// The revert refuses the whole operation (RetireRevertBlock): every
+		// restorable row is refused, none is Safe, so no Undo is offered.
+		for _, c := range restorable {
+			report.CheckFailed = append(report.CheckFailed, UndoConflictItem{
+				ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType, Reason: ReasonRetireOpNotRevertible,
+			})
+		}
+		return report, nil
 	}
 
 	var files func(string) ([]database.BookFile, error)

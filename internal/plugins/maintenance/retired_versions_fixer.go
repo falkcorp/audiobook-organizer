@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.3.1
+// version: 1.5.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -130,6 +132,18 @@ const (
 	retCatListeningUnknown = "listening_state_unknown"
 	retCatSamePath         = "would_retire_same_path"
 	retCatWouldRetire      = "would_retire"
+	// retCatAlreadyRetired is a book whose file records are already retired
+	// onto a live book (a finished apply): it owns no live row, and a
+	// retired version names it as its shell. Skipped, so a second plan and a
+	// second apply count it done and write nothing. A re-plan of a row whose
+	// apply was cut off before its external-id, merged-into or chain steps
+	// returns it applicable again, with the planned fingerprint, so the run
+	// finishes those steps (see Replan).
+	retCatAlreadyRetired = "already_retired"
+	// retCatCombineLinkPending is the Replan-only hold on a combine_undo_aware
+	// row while apply is on: retiring it must be reversible by undoing its
+	// combine (plan section 6.5), and that link is not built yet.
+	retCatCombineLinkPending = "combine_undo_link_pending"
 	// retCatGone is only ever produced by a re-plan: the book left the trash
 	// (restored or purged) after the plan.
 	retCatGone = "gone"
@@ -158,10 +172,10 @@ const (
 // retiredEntityBook is the decisions store's entity type for a book.
 const retiredEntityBook = "book"
 
-// errRetiredApplyNotBuilt is what Apply returns. The retired-version model,
-// the reader changes and the undo journal land in later PRs of the plan; until
-// then this fixer only previews.
-var errRetiredApplyNotBuilt = errors.New("retired-versions: apply is not implemented until PR 7 of the retired-version plan; this fixer only previews")
+// errRetiredApplyDisabled is what Apply returns while the feature flag is off.
+// The apply routes and the engine refuse a PlanOnly fixer before they reach
+// Apply, so this is the last lock, not the first.
+var errRetiredApplyDisabled = errors.New("retired-versions: apply is disabled; set retire_versions_apply_enabled (env RETIRE_VERSIONS_APPLY_ENABLED) to enable it. This fixer only previews while the flag is off")
 
 // retiredMergedHops caps the merged-into chain, as the merge package's own
 // forward resolution does.
@@ -214,14 +228,17 @@ type retiredVersionsReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 }
 
-// retiredVersionsFixer previews moving every soft-deleted book's file rows
-// onto the live book it was a loser of, as a hidden "retired version"
-// (docs: the retired-version plan, PR 1 of 10). It is plan-only and
-// read-only: Plan and Replan classify each trashed book and name its target;
-// Apply refuses, and the lane offers no Apply for it (PlanOnly). Manual runs
-// only: nothing schedules it.
+// retiredVersionsFixer moves every soft-deleted book's file rows onto the
+// live book it was a loser of, as a hidden "retired version" (docs: the
+// retired-version plan; PR 1 is the preview, PR 7 the Apply). Plan and Replan
+// are read-only and classify each trashed book and name its target. Apply
+// (retired_versions_apply.go) writes only while retire_versions_apply_enabled
+// is on; with it off (the default) the fixer is PlanOnly: the routes and the
+// engine refuse an apply, the lane offers none, and Apply refuses again
+// itself. Manual runs only: nothing schedules it.
 //
 // The plan pass is one classification per trashed book, fanned out over a
 // bounded worker pool sized to runtime.NumCPU(). Each worker writes only its
@@ -241,12 +258,25 @@ type retiredVersionsFixer struct {
 	// stat is os.Stat; tests swap it to make a stat fail or hang. A run reads
 	// it once, before any bounded call starts.
 	stat func(string) (os.FileInfo, error)
+	// applyEnabled reads the retire_versions_apply_enabled flag (config's
+	// RLock accessor); tests swap it so they never touch the global config.
+	applyEnabled func() bool
+	// retireWriterFor builds the journaled write surface of one retire from the
+	// run's Writer; tests wrap it. See retireWriter.
+	retireWriterFor func(w *repairs.Writer) (retireWriter, error)
 }
 
 func newRetiredVersionsFixer(p *Plugin) *retiredVersionsFixer {
 	retiredAbandonedGaugeOnce.Do(func() { registerAbandonedGauge(opsmetrics.Default()) })
-	return &retiredVersionsFixer{p: p, now: time.Now, statTimeout: 15 * time.Second, stat: os.Stat}
+	f := &retiredVersionsFixer{p: p, now: time.Now, statTimeout: 15 * time.Second, stat: os.Stat,
+		applyEnabled: config.RetireVersionsApplyEnabled}
+	f.retireWriterFor = f.newJournaledRetireWriter
+	return f
 }
+
+// applyOn reports whether the apply flag is on. A fixer built without the
+// field (a test literal) reads the flag as off.
+func (f *retiredVersionsFixer) applyOn() bool { return f.applyEnabled != nil && f.applyEnabled() }
 
 var (
 	_ repairs.Fixer           = (*retiredVersionsFixer)(nil)
@@ -256,9 +286,25 @@ var (
 
 func (f *retiredVersionsFixer) ID() string { return retiredVersionsFixerID }
 func (f *retiredVersionsFixer) Title() string {
+	if f.applyOn() {
+		return "Retired versions"
+	}
 	return "Retired versions (preview)"
 }
 func (f *retiredVersionsFixer) Description() string {
+	if f.applyOn() {
+		return "Moves the file records of each book in the trash onto the live book it lost to, as a hidden " +
+			"retired version, never deleting one (an Apply cannot be undone from the Operations page yet; " +
+			// TODO(#4146): restore "undone from the Operations page" once PR 5's undo cases land.
+			"the original files stay on disk and in the database). The plan " +
+			"classifies every trashed book by what retiring it would do and says why a book would NOT be " +
+			"retired: no live target, trashed under min_age_days ago (14 by default; the min_age_days param " +
+			"overrides it, 0 turns the gate off), has listening state, files under the iTunes library on either " +
+			"side, Doctor Who / Big Finish / Torchwood on either side (the owner applies those by hand), " +
+			"labelled deleted, or an owner veto on the pair. A book that a combine journal not yet undone names " +
+			"as absorbed is flagged combine_undo_aware and is held (retry_later) at apply until its retire can be " +
+			"undone with that combine. A book already retired shows as already_retired and is not written again."
+	}
 	return "Preview only. Classifies every book in the trash by what retiring it would do: its file records " +
 		"moved onto the live book it lost to, as a hidden retired version, never deleted. Each row names its " +
 		"target and says why a book would NOT be retired: no live target, trashed under min_age_days ago " +
@@ -268,17 +314,20 @@ func (f *retiredVersionsFixer) Description() string {
 		"combine journal not yet undone names as absorbed is classified like any other and flagged " +
 		"combine_undo_aware: its retire is meant to be reversible by undoing that combine, and the plan " +
 		"counts those rows separately. The plan's rule 5 (a content-hash match between the book and its " +
-		"target) is not applied yet. Nothing is written; Apply is not built, so this fixer has no Apply " +
-		"control."
+		"target) is not applied yet. Nothing is written; Apply is switched off (retire_versions_apply_enabled), " +
+		"so this fixer has no Apply control."
 }
 
-// NoScanStandDown: the preview writes nothing through the Writer and nothing a
-// library scan writes, so a run of it never needs to park a running scan.
-func (f *retiredVersionsFixer) NoScanStandDown() bool { return true }
+// NoScanStandDown: while apply is off the preview writes nothing through the
+// Writer and nothing a library scan writes, so a run of it never needs to park
+// a running scan. With apply on it moves file rows a scan also writes, so it
+// takes the stand-down like every other Repairs apply (and its Writer is not
+// restricted to nothing).
+func (f *retiredVersionsFixer) NoScanStandDown() bool { return !f.applyOn() }
 
-// PlanOnly: Apply is refused by the routes, hidden by the lane, and refused
-// again by Apply itself.
-func (f *retiredVersionsFixer) PlanOnly() bool { return true }
+// PlanOnly: while the apply flag is off, Apply is refused by the routes,
+// hidden by the lane, and refused again by Apply itself.
+func (f *retiredVersionsFixer) PlanOnly() bool { return !f.applyOn() }
 
 // retiredVersionsParams are the plan's own params.
 type retiredVersionsParams struct {
@@ -348,6 +397,15 @@ type retiredRun struct {
 	// abandoned counts this run's timed-out stats that have not returned.
 	abandoned atomic.Int64
 
+	// retired reads the retired side of the book_file table; nil when the store
+	// cannot (a test double), in which case no book is reported already retired.
+	retired database.RetiredBookFileReader
+	// detail makes buildRow attach a retiredDetail (the shell's rows, the
+	// resolved target, the age gate) to the row. Only a Replan or an under-lock
+	// re-check sets it: a whole-library Plan holds every row in memory until
+	// the engine stores it, and must not carry 51,000 shells' file rows.
+	detail bool
+
 	books   sync.Map // book id -> *onceVal[*database.Book]
 	groups  sync.Map // version group id -> *onceVal[[]database.Book]
 	targets sync.Map // target book id -> *onceVal[*retiredTarget]
@@ -359,6 +417,13 @@ func (f *retiredVersionsFixer) newRun(params json.RawMessage) (*retiredRun, erro
 	if err != nil {
 		return nil, err
 	}
+	return f.newRunWithMinAge(minAge)
+}
+
+// newRunWithMinAge is newRun for a caller that already holds the age gate: an
+// Apply, which is handed no params and takes the gate its Replan used from the
+// row's retiredDetail.
+func (f *retiredVersionsFixer) newRunWithMinAge(minAge time.Duration) (*retiredRun, error) {
 	ops := f.p.deps.OpsStore()
 	paths := f.p.deps.FragmentRepairReader()
 	users := f.p.deps.MergeUserStateStore()
@@ -392,10 +457,14 @@ func (f *retiredVersionsFixer) newRun(params json.RawMessage) (*retiredRun, erro
 	if bound <= 0 {
 		bound = 15 * time.Second
 	}
-	return &retiredRun{f: f, store: ops, paths: paths, probe: probe, vetoes: vetoes, journals: journals,
+	run := &retiredRun{f: f, store: ops, paths: paths, probe: probe, vetoes: vetoes, journals: journals,
 		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.repairsGuardTags(), series: repairs.SeriesNamesFrom(all),
 		minAge: minAge, now: now(),
-		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}, nil
+		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}
+	if rr, ok := database.AsCapability[database.RetiredBookFileReader](ops); ok {
+		run.retired = rr
+	}
+	return run, nil
 }
 
 // book reads a book once per run; (nil, nil) is a book that does not exist.
@@ -603,6 +672,16 @@ func (r *retiredRun) classify(ctx context.Context, shell database.BookCore) (rep
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read book_file rows of %s: %w", shell.ID, err)
 	}
+	if len(files) == 0 {
+		// A book with no live row may be one a finished apply emptied: its rows
+		// are retired onto a live book and a retired version names it as the
+		// shell. That is "done", not "nothing to retire".
+		if row, done, err := r.alreadyRetired(shell); err != nil {
+			return repairs.Row{}, err
+		} else if done {
+			return row, nil
+		}
+	}
 	fa := retiredFacts{shell: shell, files: files, groupClass: retGroupNone, absentOnDisk: -1, statUnknown: -1}
 	idx, err := r.undoShells()
 	if err != nil {
@@ -736,7 +815,12 @@ func (r *retiredRun) readPathOwners(fa *retiredFacts) error {
 		}
 		owners := []string{}
 		for j := range rows {
-			if rows[j].BookID == fa.shell.ID {
+			// A retired row is a hidden version of a book, not a live file of
+			// it: the holder of a retired row at this path does not hold the
+			// path. Counting it would flip every sibling shell of a finished
+			// retire to same-path, and change its fingerprint, after the first
+			// shell of the group was retired.
+			if rows[j].BookID == fa.shell.ID || rows[j].Retired {
 				continue
 			}
 			live, err := r.isLive(rows[j].BookID)
@@ -1077,6 +1161,11 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		row.Skipped, row.SkipReason = cat, why
 	}
 	row.Fingerprint = retiredFingerprint(fa, cat)
+	if r.detail {
+		row.Detail = &retiredDetail{minAge: r.minAge, shell: sh, files: fa.files, targetID: fa.targetID,
+			targetMethod: fa.targetMethod, category: cat, sharedWith: fa.sharedWith, sharedRows: fa.sharedRows,
+			itunesRows: fa.itunesRows, groupID: fa.groupID}
+	}
 	return row
 }
 
@@ -1223,11 +1312,24 @@ func retiredSummary(rows []repairs.Row) string {
 // runs. A book no longer in the trash comes back skipped "gone" with a
 // different fingerprint, never an error. The combine-journal read is a full
 // scan per call (no per-book index yet).
+//
+// Two answers are specific to an apply (flag on):
+//   - a combine_undo_aware row that would be applied comes back held
+//     (combine_undo_link_pending, retry_later) because its retire must be
+//     reversible by undoing the combine and that link is not built; nothing is
+//     written for it and the same plan can be applied again once it is;
+//   - a book whose rows an interrupted apply already retired, but whose
+//     external-id, merged-into or chain steps are unfinished, comes back
+//     applicable again with the PLANNED fingerprint (the row it was planned as
+//     is the row being finished), carrying the unfinished steps for Apply. A
+//     book with nothing left to do stays already_retired, which the engine
+//     reports as skipped, so a second run applies nothing.
 func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
 	run, err := f.newRun(params)
 	if err != nil {
 		return repairs.Row{}, err
 	}
+	run.detail = true
 	b, err := run.store.GetBookByID(planned.RowID)
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read book %s: %w", planned.RowID, err)
@@ -1238,13 +1340,52 @@ func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessag
 		r.Fingerprint = retiredFingerprint(&retiredFacts{shell: database.BookCore{ID: planned.RowID}, absentOnDisk: -1, statUnknown: -1}, retCatGone)
 		return r, nil
 	}
-	return run.classify(ctx, b.Core())
+	row, err := run.classify(ctx, b.Core())
+	if err != nil || !f.applyOn() {
+		return row, err
+	}
+	switch {
+	case row.Class == retCatAlreadyRetired:
+		return resumeRetired(row, planned), nil
+	case row.Applicable() && slices.Contains(row.Flags, retFlagCombineUndoAware):
+		return holdCombineLink(row), nil
+	}
+	return row, nil
 }
 
-// Apply refuses. The retire writes (the retired marker, the version row, the
-// journal, the reader changes that make a retired row safe) are PRs 2-7 of the
-// plan; until they land this fixer only previews, and it takes no write path:
-// the Writer is never touched.
-func (f *retiredVersionsFixer) Apply(_ context.Context, _ *repairs.Writer, fresh repairs.Row) error {
-	return fmt.Errorf("%w (row %s)", errRetiredApplyNotBuilt, fresh.RowID)
+// holdCombineLink turns an applicable combine_undo_aware row into the transient
+// hold: skipped, retry_later, with RetryFingerprint the fingerprint the row had
+// so the engine matches it to the plan. The row's Detail is dropped; nothing of
+// it may be applied.
+func holdCombineLink(row repairs.Row) repairs.Row {
+	why := "an unreversed combine journal names this book as absorbed, and retiring it must be undone by undoing that combine; " +
+		"that link is not built yet (plan section 6.5), so the row is held, nothing written"
+	held := row
+	held.Detail = nil
+	held.Skipped, held.SkipReason, held.Reason = retCatCombineLinkPending, why, why
+	held.RetryLater = true
+	held.RetryFingerprint = row.Fingerprint
+	h := sha256.Sum256([]byte(row.Fingerprint + "\x00" + retCatCombineLinkPending))
+	held.Fingerprint = hex.EncodeToString(h[:])
+	return held
+}
+
+// resumeRetired is the Replan answer for a book that is already retired. When
+// the planned row was applicable, its retire landed in the holder the plan
+// named, and unfinished steps remain, the row is applicable again as the
+// planned row (same fingerprint, same class) carrying a resume Detail.
+// Otherwise it is the already_retired skip.
+func resumeRetired(done, planned repairs.Row) repairs.Row {
+	d, ok := done.Detail.(*retiredDetail)
+	if !ok || !d.done || !d.pending.any() || !planned.Applicable() ||
+		d.holder == "" || d.holder != planned.Current["target_book_id"] {
+		return done
+	}
+	done.Skipped, done.SkipReason = "", ""
+	done.Class = planned.Class
+	done.Fingerprint = planned.Fingerprint
+	done.Reason = "resume: the file records are already retired onto " + d.holder + "; finishing " + d.pending.String()
+	done.Proposed = planned.Proposed
+	d.resume = true
+	return done
 }

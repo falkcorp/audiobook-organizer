@@ -488,6 +488,13 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to get operation changes: %w", err)
 	}
+	// Refuse an operation that retired books' files as a whole, before any
+	// branch below writes or marks a row (see undo.RetireRevertBlock).
+	if blocked := undo.RetireRevertBlock(operationID, changes); blocked != nil {
+		revertLog.Warn("revert refused: operation retired files and cannot be undone yet: operation=%s types=%s",
+			logger.SanitizeLogValue(operationID), formatTypeCounts(blocked.Types))
+		return nil, blocked
+	}
 
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
 	retryOwed := func() (*RevertResult, error) {

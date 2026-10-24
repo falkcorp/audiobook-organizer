@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -295,8 +295,8 @@ func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) {
 		return
 	}
 
-	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d skipped: still own book_file rows, carried_to_sibling=%d, kept_has_progress=%d, carry_failed=%d, %d errors)",
-		result.Purged, result.Attempted, result.FilesDeleted, result.SkippedOwnsFiles, result.CarriedToSibling, result.KeptHasProgress, result.CarryFailed, len(result.Errors))
+	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d skipped: still own book_file rows, skipped_retired_shell=%d, carried_to_sibling=%d, kept_has_progress=%d, carry_failed=%d, %d errors)",
+		result.Purged, result.Attempted, result.FilesDeleted, result.SkippedOwnsFiles, result.SkippedRetiredShell, result.CarriedToSibling, result.KeptHasProgress, result.CarryFailed, len(result.Errors))
 	slog.Info("Auto-purge", "msg", msg)
 	activity.EmitInfo(s.activityWriter, opID, "purge-deleted", "purge-deleted", msg,
 		activity.TagsIf(result.Purged == 0, activity.NoOpTag)...)
