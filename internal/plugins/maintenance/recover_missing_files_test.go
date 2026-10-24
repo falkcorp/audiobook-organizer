@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -39,6 +39,11 @@ type recoverFakeStore struct {
 	// the write phase's update-error branch (UpdateErrs++, row not counted as repointed).
 	updateErr error
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// reads are the complete answer database.AllBookFilesCoreIncludingRetired
+// accepts for a store without the retired reader.
+func (*recoverFakeStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func (f *recoverFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.cores, nil

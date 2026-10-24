@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.19.2
+// version: 1.19.3
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 
 package scanner
 
@@ -1846,8 +1846,11 @@ func TestIsValidAuthorExtraEdgeCases(t *testing.T) {
 	}
 }
 
-// expectNoFileOwners stubs the book_file path lookup the ownership check
-// (checkFileOwnership) makes before a save: no row claims the scanned file.
+// expectNoFileOwners stubs the book_file lookups the ownership check
+// (checkFileOwnership) and the retired-content check (lookupRetiredContent)
+// make before a save: no row, live or retired, claims the scanned file or its
+// content hash.
 func expectNoFileOwners(store *dbmocks.MockStore) {
 	store.EXPECT().BookFilesAtPath(mock.Anything).Return(nil, nil).Maybe()
+	store.EXPECT().BookFilesWithHash(mock.Anything).Return(nil, nil).Maybe()
 }

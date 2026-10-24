@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b036c68e-a6da-48df-806b-b765cda262ef
-// last-edited: 2026-10-20
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -45,6 +45,11 @@ type rewriteFakeStore struct {
 	// reach the ledger when the commit did not happen.
 	modifyBookErr error
 }
+
+// HoldsNoRetiredBookFiles: this fake never holds a retired row, so its plain
+// reads are the complete answer database.AllBookFilesCoreIncludingRetired
+// accepts for a store without the retired reader.
+func (*rewriteFakeStore) HoldsNoRetiredBookFiles() bool { return true }
 
 func (f *rewriteFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
 	if offset >= len(f.books) {

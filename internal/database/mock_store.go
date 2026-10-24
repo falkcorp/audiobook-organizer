@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.153.0
+// version: 1.154.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package database
 
@@ -29,6 +29,13 @@ import (
 // clearly an improvement, so we keep the two patterns and rely on
 // this assertion + CI vet to prevent drift.)
 var _ Store = (*MockStore)(nil)
+
+// HoldsNoRetiredBookFiles marks MockStore as a store that never retires a row
+// (NoRetiredBookFiles), so the *IncludingRetired helpers answer from its plain
+// reads. It sits in this file because the unreachable-function ratchet
+// (scripts/deadcode-ratchet.py) exempts mock_store.go: a mock's methods are
+// reached only through the test-side capability assertion.
+func (*MockStore) HoldsNoRetiredBookFiles() bool { return true }
 
 // MockStore is a simple mock implementation for testing services
 type MockStore struct {

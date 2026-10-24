@@ -1,5 +1,5 @@
 // file: internal/database/retired_lookup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
 // last-edited: 2026-10-23
 
@@ -29,9 +29,6 @@ var ErrRetiredReaderUnavailable = errors.New("store cannot read retired book_fil
 type NoRetiredBookFiles interface {
 	HoldsNoRetiredBookFiles() bool
 }
-
-// HoldsNoRetiredBookFiles marks MockStore as a store that never retires a row.
-func (*MockStore) HoldsNoRetiredBookFiles() bool { return true }
 
 // plainReadsAreComplete reports whether s declares (through any opted-in
 // decorator chain) that its live-only reads are the complete answer.
@@ -109,10 +106,10 @@ func BookFileByPathIncludingRetired(s any, filePath string) (*BookFile, error) {
 	return nil, fmt.Errorf("book_file by path %s: %w", filePath, ErrRetiredReaderUnavailable)
 }
 
-// BookFilesHoldingHash is BookFilesWithHash for callers that hold a narrowed
-// store (the scanner's, which does not name the method): every row, live and
-// retired, whose FileHash or OriginalFileHash is hash. It resolves the method
-// through AsCapability and keeps BookFilesWithHash's contract: a store that
+// BookFilesHoldingHash is BookFilesWithHash for callers that hold a store as
+// any (the scanner's package store, narrowed to its own interface): every row,
+// live and retired, whose FileHash or OriginalFileHash is hash. It resolves the
+// method through AsCapability and keeps BookFilesWithHash's contract: a store that
 // cannot give the complete answer returns ErrBookFilesWithHashUnavailable and
 // the caller must fail closed on it.
 //
