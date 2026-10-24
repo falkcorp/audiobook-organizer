@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-23
 
@@ -2707,13 +2707,13 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtua
 	// cannot be complete is treated like a claim rather than as "free".
 	rows, rowsErr := database.BookFileRowsAtPathStrict(ms.db, b.FilePath)
 	if rowsErr != nil {
-		slog.Warn("combine: cannot tell whether a retired version holds the file; no row planned for it",
-			"book", b.ID, "path", logger.SanitizeLogValue(b.FilePath), "err", rowsErr)
+		mlog.Warn("combine: cannot tell whether a retired version holds the file; no row planned for it book=%s path=%s err=%s",
+			b.ID, logger.SanitizeLogValue(b.FilePath), logger.SanitizeLogValue(fmt.Sprint(rowsErr)))
 		return virtualFilePlan{}
 	}
 	if held := database.RetiredClaimOnPath(rows); held != nil {
-		slog.Info("combine: the file is held by a retired version; no row planned for it",
-			"book", b.ID, "path", logger.SanitizeLogValue(b.FilePath), "retired_file", held.ID, "holder", held.BookID)
+		mlog.Info("combine: the file is held by a retired version; no row planned for it book=%s path=%s retired_file=%s holder=%s",
+			b.ID, logger.SanitizeLogValue(b.FilePath), held.ID, held.BookID)
 		return virtualFilePlan{}
 	}
 	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
