@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -639,7 +639,7 @@ func (optedOutFixer) NoScanStandDown() bool { return true }
 // opt-out is asserted directly.
 func TestRetiredVersions_NoScanStandDown(t *testing.T) {
 	rf := newRetiredFixture(t)
-	require.True(t, rf.f.NoScanStandDown(), "the preview opts out of the scan stand-down")
+	require.True(t, rf.f.NoScanStandDown(), "with the flag off the fixer opts out of the scan stand-down")
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
 	rf.trashed("loser", "g", 30, rf.file("g/a.mp3"))
 	res, err := repairs.RunPlan(context.Background(), rf.f, nil, repairs.PlanDeps{Guard: rf.st}, &fakeReporter{})
