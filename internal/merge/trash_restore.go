@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -73,8 +73,8 @@ func refuseRetiredShell(store TrashRestoreStore, id string) error {
 		}
 		for j := range rows {
 			if rows[j].Retired && rows[j].VersionID == vers[i].ID {
-				return fmt.Errorf("restore %s: %w (version %s keeps its files under book %s); use \"Restore as separate book\" on that retired version instead",
-					id, database.ErrBookIsRetiredShell, vers[i].ID, vers[i].BookID)
+				return fmt.Errorf("restore %s: %w (version %s keeps its files under book %s, so this book would come back with none); leave it in the trash, its files are safe and listed as retired versions of book %s, and restoring them as a separate book is not available yet",
+					id, database.ErrBookIsRetiredShell, vers[i].ID, vers[i].BookID, vers[i].BookID)
 			}
 		}
 	}

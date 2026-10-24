@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore_retired_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a1e5d93-2c48-4f06-b3a9-0d6c82f1e574
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -119,7 +119,12 @@ func TestRestoreFromTrash_RefusesRetiredShell(t *testing.T) {
 
 	res, err := RestoreFromTrash(f.S, shell, nil, nil)
 	require.ErrorIs(t, err, database.ErrBookIsRetiredShell)
-	require.Contains(t, err.Error(), "Restore as separate book")
+	// The message must not send the user to a control that does not work yet
+	// ("Restore as separate book" is disabled and its route answers 501): it
+	// says what to do instead and that the files are safe.
+	require.NotContains(t, err.Error(), "Restore as separate book")
+	require.Contains(t, err.Error(), "leave it in the trash")
+	require.Contains(t, err.Error(), "not available yet")
 	require.False(t, res.Restored)
 	got, err := f.S.GetBookByID(shell)
 	require.NoError(t, err)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -394,11 +394,35 @@ func TestRestoreAudiobook(t *testing.T) {
 
 func TestRestoreAudiobook_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "x").Return(nil, errString("not found"))
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "x").Return(nil, fmt.Errorf("restore x: %w", audiobookspkg.ErrAudiobookNotFound))
 	c, w := newCtx("POST", "/audiobooks/x/restore", nil, p("id", "x"))
 	h.RestoreAudiobook(c)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// A restore that fails for any other reason is not "audiobook not found": the
+// retired-shell check fails closed (database.ErrRetiredReaderUnavailable) and a
+// read can fail, and neither says anything about whether the book exists. Both
+// answer 500 and the body must not claim the book is missing.
+func TestRestoreAudiobook_LookupFailureIsNot404(t *testing.T) {
+	for name, cause := range map[string]error{
+		"retired reader unavailable": fmt.Errorf("restore s1: cannot verify it is not the shell of a retired version: %w", database.ErrRetiredReaderUnavailable),
+		"read error":                 errString("pebble: read failed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.svc.EXPECT().RestoreAudiobook(mock.Anything, "s1").Return(nil, cause)
+			c, w := newCtx("POST", "/audiobooks/s1/restore", nil, p("id", "s1"))
+			h.RestoreAudiobook(c)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), "not found") {
+				t.Errorf("a failed lookup must not say the audiobook was not found: %s", w.Body.String())
+			}
+		})
 	}
 }
 
