@@ -1,5 +1,5 @@
 - [ ] **TODO-RETIRED-UNDO-DEFERRED** the undo change (PR 5) built the journal
-      and the revert for a retire but left three things to later changes.
+      and the revert for a retire but left things to later changes.
       (1) `undo.PurgedShellRecreator` has no store implementation: until the
       purge change (PR 6) journals a `book_purge_snapshot` and implements
       `HasPurgeSnapshot` and `RecreatePurgedBook` (and marks the purge's own
@@ -27,11 +27,9 @@
       version the shell's own retire created; only the rehome of a version the
       shell held before is reversed with it. (6) PR 7 must put the shell in the
       trash before calling `RetireVersion` (it now refuses a live shell).
-      (7) A scoped revert (`RevertOperationForBooks`, the combine undo) keeps
-      its owed-settle record under `revert_settle_owed:<op>#scope:<shells>`.
-      Only a scoped run of the same shells retries or clears it; a later
-      whole-operation `RevertOperation` reads and clears only its own record,
-      so a dead scoped run's owed group settle waits for the same scope to run
-      again (nothing scans that key family by prefix). The fix is a
-      `ScanPrefix` of `revert_settle_owed:<op>#scope:` in the whole-operation
-      settle, merged into its owed groups and deleted when it settles.
+      (7) The retire journal rows are exempt from journal pruning, but the
+      retire op's own `external_id_reassign` and `book_merged_into` rows are
+      not. `PruneOperationChanges` has no production caller today, so nothing
+      is lost yet; whichever change wires a prune must exempt those two types
+      for an op that also has retire rows, or an old retire op is read as
+      partly reversed.

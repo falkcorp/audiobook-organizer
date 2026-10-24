@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-24
 
@@ -689,12 +689,19 @@ func (rs *RevertService) loadSettleOwed(kv rawKV, operationID string) settleOwed
 			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
 		return rec
 	}
+	return decodeSettleOwed(raw, operationID)
+}
+
+// decodeSettleOwed decodes one owed record's stored bytes; none, or bytes that
+// do not decode (logged), is an empty record.
+func decodeSettleOwed(raw []byte, record string) settleOwedRecord {
+	rec := settleOwedRecord{Groups: map[string]settleOwedGroup{}}
 	if len(raw) == 0 {
 		return rec
 	}
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		revertLog.Warn("revert: decode the owed group settles of operation %s: %s",
-			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
+			logger.SanitizeLogValue(record), logger.SanitizeLogValue(err.Error()))
 		return settleOwedRecord{Groups: map[string]settleOwedGroup{}}
 	}
 	if rec.Groups == nil {
@@ -745,4 +752,106 @@ func (rs *RevertService) hasSettleOwed(operationID string) bool {
 		}
 	}
 	return false
+}
+
+// scopedRecordMarker joins an operation id and a scope's shell ids in the id of
+// a scoped run's owed record (revertScope.recordID).
+const scopedRecordMarker = "#scope:"
+
+// absorbScopedSettleRecords folds the owed-settle records of the operation's
+// scoped runs into the operation's own, then deletes them. A scoped run
+// (RevertOperationForBooks, the combine undo's retire reversal) keeps a record
+// of its own so it cannot clear the whole operation's, but a scoped run that
+// dies after restoring rows and before settling leaves its intent there, where
+// the only run that would ever look is a retry of the SAME scope. A whole-
+// operation revert reads the operation's own record, so without this its
+// priorPending would lack those groups, it would not count the rows the dead
+// run restored as evidence, and a version group could stay with no primary or
+// two, silently. After this, the whole run settles them like its own.
+//
+// The merged record is written BEFORE the scoped ones are deleted, so a crash
+// between the two re-runs the merge, which is idempotent. A failed read or write
+// is logged and leaves the scoped records where they are (never deleted
+// unmerged). The caller holds the operation's lock, which every scoped run
+// holds too, so no scoped run is writing a record while this reads it.
+func (rs *RevertService) absorbScopedSettleRecords(operationID string) {
+	kv, _ := rs.db.(rawKV)
+	scanner, _ := rs.db.(interface {
+		ScanPrefix(prefix string) ([]database.KVPair, error)
+	})
+	if kv == nil || scanner == nil {
+		return
+	}
+	rows, err := scanner.ScanPrefix(settleOwedKeyPrefix + operationID + scopedRecordMarker)
+	if err != nil {
+		revertLog.Warn("revert: scan the scoped owed group settles of operation %s: %s",
+			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	rec := rs.loadSettleOwed(kv, operationID)
+	for _, row := range rows {
+		scoped := decodeSettleOwed(row.Value, strings.TrimPrefix(row.Key, settleOwedKeyPrefix))
+		for gid, g := range scoped.Groups {
+			if cur, ok := rec.Groups[gid]; ok {
+				g = mergeSettleOwedGroup(cur, g)
+			}
+			rec.Groups[gid] = g
+		}
+	}
+	rec.Pending = false
+	for _, g := range rec.Groups {
+		if g.Pending {
+			rec.Pending = true
+		}
+	}
+	if len(rec.Groups) > 0 {
+		raw, err := json.Marshal(rec)
+		if err == nil {
+			err = kv.SetRaw(settleOwedKeyPrefix+operationID, raw)
+		}
+		if err != nil {
+			revertLog.Warn("revert: fold the scoped owed group settles into operation %s: %s; left in place",
+				logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
+			return
+		}
+	}
+	for _, row := range rows {
+		if err := kv.DeleteRaw(row.Key); err != nil {
+			revertLog.Warn("revert: clear the scoped owed group settles %s: %s",
+				logger.SanitizeLogValue(row.Key), logger.SanitizeLogValue(err.Error()))
+		}
+	}
+}
+
+// mergeSettleOwedGroup combines the two records of one group (the operation's
+// and a scoped run's), the conservative way. A group owed by a failed settle
+// beats a pending intent: it carries the originals and the snapshot of the
+// members explicit true, so the later-pick check still protects a user's pick
+// made since. Two owed entries union their originals and keep only the members
+// explicit true in both snapshots: a member in just one of them reads as a
+// later pick, and the owed settle is dropped rather than override it.
+func mergeSettleOwedGroup(a, b settleOwedGroup) settleOwedGroup {
+	switch {
+	case a.Pending && b.Pending:
+		return a
+	case a.Pending:
+		return b
+	case b.Pending:
+		return a
+	}
+	out := settleOwedGroup{Originals: slices.Clone(a.Originals)}
+	for _, o := range b.Originals {
+		if !slices.Contains(out.Originals, o) {
+			out.Originals = append(out.Originals, o)
+		}
+	}
+	for _, id := range a.ExplicitTrue {
+		if slices.Contains(b.ExplicitTrue, id) {
+			out.ExplicitTrue = append(out.ExplicitTrue, id)
+		}
+	}
+	return out
 }

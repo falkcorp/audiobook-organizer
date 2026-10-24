@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-24
 
@@ -744,7 +744,7 @@ func (p *PebbleStore) RehomeRetiredVersion(versionID, newHolderID string) error 
 	if err := p.requireHolderNotSoftDeleted(newHolderID); err != nil {
 		return fmt.Errorf("RehomeRetiredVersion: %w", err)
 	}
-	return p.moveRetiredVersion(versionID, newHolderID)
+	return p.moveRetiredVersion(versionID, newHolderID, nil)
 }
 
 // RestoreRetiredVersionHolder is the revert of a RehomeRetiredVersion: it moves
@@ -760,24 +760,38 @@ func (p *PebbleStore) RestoreRetiredVersionHolder(versionID, previousHolderID st
 	if versionID == "" || previousHolderID == "" {
 		return errors.New("RestoreRetiredVersionHolder: version and previous holder are required")
 	}
-	b, err := p.GetBookByID(previousHolderID)
-	if err != nil {
-		return fmt.Errorf("RestoreRetiredVersionHolder: read previous holder %s: %w", previousHolderID, err)
-	}
-	if b == nil {
-		return fmt.Errorf("RestoreRetiredVersionHolder: %w: previous holder %s", ErrBookFileOwnerMissing, previousHolderID)
-	}
-	return p.moveRetiredVersion(versionID, previousHolderID)
+	// The destination is checked under the version stripe (moveRetiredVersion
+	// runs it after taking the stripe), next to the move itself. A purge does
+	// not take that stripe, so the check does not exclude one: that is the
+	// caller's merge lock (the revert holds it, as does every purge), and
+	// this narrows the window to the read and the commit.
+	return p.moveRetiredVersion(versionID, previousHolderID, func() error {
+		b, err := p.GetBookByID(previousHolderID)
+		if err != nil {
+			return fmt.Errorf("RestoreRetiredVersionHolder: read previous holder %s: %w", previousHolderID, err)
+		}
+		if b == nil {
+			return fmt.Errorf("RestoreRetiredVersionHolder: %w: previous holder %s", ErrBookFileOwnerMissing, previousHolderID)
+		}
+		return nil
+	})
 }
 
 // moveRetiredVersion is the locked, retried body both rehome entry points
-// share; the caller has already decided whether the destination is acceptable.
-func (p *PebbleStore) moveRetiredVersion(versionID, newHolderID string) error {
+// share. checkDest, when set, is the destination check, run once the version
+// stripe is held; nil means the caller has already decided the destination is
+// acceptable.
+func (p *PebbleStore) moveRetiredVersion(versionID, newHolderID string, checkDest func() error) error {
 	// The version stripe excludes RetireBookFiles, UnretireBookFiles and
 	// UpdateBookVersion for this version, so neither its holder nor the set of
 	// rows that carry it changes between the reads below and the commit.
 	unlockVersion := p.lockBookVersion(versionID)
 	defer unlockVersion()
+	if checkDest != nil {
+		if err := checkDest(); err != nil {
+			return err
+		}
+	}
 	var err error
 	for range maxStageRetries {
 		err = p.rehomeRetiredVersionAttempt(versionID, newHolderID)

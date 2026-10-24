@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_scope_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b0e7c2d-41a6-4f93-8d17-c3a92e6f0b58
 // last-edited: 2026-10-24
 
@@ -263,7 +263,7 @@ func TestRevertOperationForBooks_ShellGetsBackTheVersionItHeld(t *testing.T) {
 // The combine undo's reversal of the same retire judges and restores it too.
 func TestRetireUndoer_ShellGetsBackTheVersionItHeld(t *testing.T) {
 	fx, older := newShellHeldVersionFx(t, "op-later-plan")
-	plan, err := NewRevertService(fx.st).retireUndoer().PlanRetireRevert("op-later-plan", fx.shell.ID)
+	plan, err := planRetire(NewRevertService(fx.st).retireUndoer(), "op-later-plan", fx.shell.ID)
 	require.NoError(t, err)
 	require.True(t, plan.Live)
 	require.Empty(t, plan.Reasons)
@@ -306,7 +306,7 @@ func TestRetireUndoer_UndecodableRetireRowRefusesByName(t *testing.T) {
 		ID: "chg-bad", OperationID: "op-bad-row", BookID: fx.holder.ID, ChangeType: undo.ChangeTypeBookFileRetire,
 		FieldName: "book_file:" + fx.rows[0].ID, OldValue: "{", NewValue: "{",
 	}))
-	plan, err := NewRevertService(fx.st).retireUndoer().PlanRetireRevert("op-bad-row", fx.shell.ID)
+	plan, err := planRetire(NewRevertService(fx.st).retireUndoer(), "op-bad-row", fx.shell.ID)
 	require.NoError(t, err)
 	require.True(t, plan.Live)
 	require.NotEmpty(t, plan.Reasons)
@@ -371,7 +371,7 @@ func TestRetireUndoer_BusyRetireOperationIsARetryableRefusal(t *testing.T) {
 	fx.retire(t, fx.writer("op-busy"), "ver-busy")
 	rs := NewRevertService(fx.st)
 	u := rs.retireUndoer()
-	plan, err := u.PlanRetireRevert("op-busy", fx.shell.ID)
+	plan, err := planRetire(u, "op-busy", fx.shell.ID)
 	require.NoError(t, err)
 	require.Empty(t, plan.Reasons)
 

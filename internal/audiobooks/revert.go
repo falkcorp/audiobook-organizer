@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.93.0
+// version: 1.94.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-24
 
@@ -546,6 +546,11 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			return nil, fmt.Errorf("operation %s has no rows for the named books", operationID)
 		}
 		record = scope.recordID(operationID)
+	} else {
+		// A scoped run that died after restoring rows and before settling
+		// left its intent under its own record: this whole-operation run is
+		// the only one that will look for it (absorbScopedSettleRecords).
+		rs.absorbScopedSettleRecords(operationID)
 	}
 
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
