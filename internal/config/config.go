@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.173.0
+// version: 1.174.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-23
 
@@ -1520,10 +1520,14 @@ type Config struct {
 	// See AIBackendConfig and EffectiveEmbeddingMode / EffectiveLLMMode.
 	AIBackend AIBackendConfig `json:"ai_backend" mapstructure:"ai_backend"`
 
-	// API limits
+	// API limits. MasterListRetention is how many stored master lists
+	// (read-status import inputs) are kept per uploader: an upload prunes the
+	// uploader's oldest lists beyond it; 0 means the default (10), negative is
+	// invalid.
 	APIRateLimitPerMinute int  `json:"api_rate_limit_per_minute"`
 	JSONBodyLimitMB       int  `json:"json_body_limit_mb"`
 	UploadBodyLimitMB     int  `json:"upload_body_limit_mb"`
+	MasterListRetention   int  `json:"master_list_retention"`
 	EnableAuth            bool `json:"enable_auth"`
 	EnableRateLimit       bool `json:"enable_rate_limit"`
 
@@ -2711,6 +2715,7 @@ func InitConfig() {
 	viper.SetDefault("api_rate_limit_per_minute", 100)
 	viper.SetDefault("json_body_limit_mb", 1)
 	viper.SetDefault("upload_body_limit_mb", 10)
+	viper.SetDefault("master_list_retention", 10)
 	viper.SetDefault("enable_auth", true)
 	viper.SetDefault("enable_rate_limit", true)
 	// Fail-safe ceiling for one bulk apply; see Config.BulkApplyMaxItems.
@@ -3241,6 +3246,7 @@ func InitConfig() {
 			APIRateLimitPerMinute:               viper.GetInt("api_rate_limit_per_minute"),
 			JSONBodyLimitMB:                     viper.GetInt("json_body_limit_mb"),
 			UploadBodyLimitMB:                   viper.GetInt("upload_body_limit_mb"),
+			MasterListRetention:                 viper.GetInt("master_list_retention"),
 			EnableAuth:                          viper.GetBool("enable_auth"),
 			ActivityLogNightlyCompactionEnabled: viper.GetBool("activity_log_nightly_compaction_enabled"),
 			ActivityLogFullDetailDays:           viper.GetInt("activity_log_full_detail_days"),
@@ -3930,6 +3936,9 @@ func (c *Config) Validate() error {
 	if c.UploadBodyLimitMB < 0 {
 		errs = append(errs, "upload_body_limit_mb must be >= 0")
 	}
+	if c.MasterListRetention < 0 {
+		errs = append(errs, "master_list_retention must be >= 0")
+	}
 	if c.EnableDiskQuota && (c.DiskQuotaPercent < 1 || c.DiskQuotaPercent > 100) {
 		errs = append(errs, "disk_quota_percent must be between 1 and 100")
 	}
@@ -4067,6 +4076,7 @@ func ResetToDefaults() {
 			APIRateLimitPerMinute:            100,
 			JSONBodyLimitMB:                  1,
 			UploadBodyLimitMB:                10,
+			MasterListRetention:              10,
 			EnableAuth:                       true,
 			EnableRateLimit:                  true,
 			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled

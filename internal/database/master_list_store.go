@@ -1,7 +1,7 @@
 // file: internal/database/master_list_store.go
-// version: 1.0.0
+// version: 1.3.0
 // guid: e49355ec-8cf3-4b4d-b7a4-732d4c7f90e7
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -17,8 +17,8 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// Master-list store (design: .claude/notes/2026-10-23-master-list-import-
-// design.md, section 3). An uploaded list (a CSV or JSON file of books with
+// Master-list store (design: docs/design/2026-10-23-master-list-import-design.md,
+// section 3). An uploaded list (a CSV or JSON file of books with
 // their ISBN, ASIN and read status) is kept so the Repairs plan can read it by
 // id instead of taking the rows in a request body, and so every plan row has a
 // durable source line.
@@ -40,6 +40,12 @@ import (
 // A list becomes visible when its mlist:list: key is written, which happens
 // after every row: a failed upload leaves no list, and its rows are deleted
 // again (best effort; the rows of a list nobody can name are unreachable).
+// DeleteList takes a list out the other way round, metadata first, so a list
+// that is visible always has all its rows.
+//
+// A list is the input of an import, not a record of one: deleting or pruning a
+// list leaves everything an import wrote from it alone (user state, and the
+// mlist:elsewhere: records of master_list_elsewhere.go).
 const (
 	masterListPrefix    = "mlist:list:"
 	masterListRowPrefix = "mlist:row:"
@@ -186,6 +192,86 @@ func (s *MasterListStore) ListLists() ([]MasterListMeta, error) {
 		return out[i].ID > out[j].ID
 	})
 	return out, nil
+}
+
+// DeleteList removes a list and its rows. The metadata key goes first, in its
+// own synced write: from then on nothing can name the list, and a crash before
+// the row range is deleted leaves unreachable rows rather than a visible list
+// whose ScanRows fails on the missing rows. Rows that outlive such a crash are
+// unreachable (list ids are never reused), which is the cost of the ordering.
+// It returns ErrMasterListNotFound for an unknown id.
+//
+// Whether the list exists is decided by its key, not by decoding it: a list
+// whose metadata no longer decodes is exactly the one an admin needs to be able
+// to remove, and GetList would answer with the decode error instead.
+func (s *MasterListStore) DeleteList(id string) error {
+	_, closer, err := s.db.Get([]byte(masterListPrefix + id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return ErrMasterListNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("master list %s: read metadata: %w", id, err)
+	}
+	_ = closer.Close()
+	if err := s.db.Delete([]byte(masterListPrefix+id), pebble.Sync); err != nil {
+		return fmt.Errorf("master list %s: delete metadata: %w", id, err)
+	}
+	p := masterListRowsPrefix(id)
+	if err := s.db.DeleteRange(p, prefixUpperBound(p), pebble.Sync); err != nil {
+		return fmt.Errorf("master list %s: delete rows (the list itself is gone): %w", id, err)
+	}
+	return nil
+}
+
+// DefaultMasterListRetention is how many lists one uploader keeps when the
+// setting is unset or unusable.
+const DefaultMasterListRetention = 10
+
+// PruneLists deletes the uploader's lists beyond the newest keep, oldest first,
+// and returns the ids it deleted. protectID is the list just stored: it counts
+// as the newest of the keep whatever its UploadedAt says (a clock that stepped
+// back, or two uploads in one tick, must not let the retention delete the list
+// the caller is about to answer with), and it is never deleted; "" protects
+// none. Lists of other uploaders are never touched; a list with no recorded
+// uploader (an upload by a key that names no user) is its own group. keep below
+// 1 is refused: a bad setting must never be able to prune the list that was
+// just stored.
+//
+// It stops at the first list it cannot delete and returns that error with the
+// ids already deleted, so the caller can say how far it got.
+func (s *MasterListStore) PruneLists(uploadedBy string, keep int, protectID string) ([]string, error) {
+	if keep < 1 {
+		return nil, fmt.Errorf("master list retention must keep at least 1 list per uploader, got %d", keep)
+	}
+	all, err := s.ListLists() // newest first
+	if err != nil {
+		return nil, err
+	}
+	// The protected list first, then the rest newest first: keep >= 1, so the
+	// protected list is always inside the kept head.
+	var mine []MasterListMeta
+	for _, m := range all {
+		if m.UploadedBy == uploadedBy && m.ID == protectID {
+			mine = append([]MasterListMeta{m}, mine...)
+		} else if m.UploadedBy == uploadedBy {
+			mine = append(mine, m)
+		}
+	}
+	if len(mine) <= keep {
+		return nil, nil
+	}
+	var deleted []string
+	// Oldest first: a failure part-way leaves the newest of the excess lists.
+	for i := len(mine) - 1; i >= keep; i-- {
+		if err := s.DeleteList(mine[i].ID); err != nil {
+			if errors.Is(err, ErrMasterListNotFound) {
+				continue // deleted by someone else since the listing
+			}
+			return deleted, err
+		}
+		deleted = append(deleted, mine[i].ID)
+	}
+	return deleted, nil
 }
 
 // ScanRows calls fn with every row of the list in input order: n is the row's

@@ -1,7 +1,7 @@
 // file: internal/server/master_list_handler.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 7d1e8a40-2b63-4c59-9f0a-5e3c6b7d8a12
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
@@ -51,6 +52,23 @@ type masterListUploadResponse struct {
 	// RowsWithoutIdentity is how many rows name no book at all (no title, no
 	// valid identifier, no source id); the plan lists them as invalid.
 	RowsWithoutIdentity int `json:"rows_without_identity"`
+	// PrunedLists are the ids of the uploader's older lists this upload's
+	// retention removed (master_list_retention lists are kept per uploader).
+	PrunedLists []string `json:"pruned_list_ids"`
+	// PruneError is set when retention could not finish: the upload itself
+	// succeeded and is stored, the listed ids were removed before the failure.
+	PruneError string `json:"prune_error,omitempty"`
+}
+
+// masterListRetention is how many lists an uploader keeps: the configured
+// master_list_retention, or the default when it is unset (0). A negative value
+// is refused by config validation; it is treated as unset here too, so a bad
+// stored setting can never turn retention into "delete everything".
+func masterListRetention() int {
+	if n := config.AppConfig.MasterListRetention; n > 0 {
+		return n
+	}
+	return database.DefaultMasterListRetention
 }
 
 // masterListFormat picks the upload's format: the explicit format field, the
@@ -181,6 +199,19 @@ func (s *Server) uploadMasterList(c *gin.Context) {
 		return
 	}
 	resp.List = stored
+	resp.PrunedLists = []string{}
+	// Retention runs after the new list is durably stored, so a failure here
+	// can never cost the upload. It touches lists only: read-elsewhere records
+	// are the import's output, are not retained by list, and are never pruned.
+	pruned, perr := store.PruneLists(stored.UploadedBy, masterListRetention(), stored.ID)
+	if pruned != nil {
+		resp.PrunedLists = pruned
+	}
+	if perr != nil {
+		resp.PruneError = perr.Error()
+		logger.New("master-list").Warn("master list retention stopped early: list=%s pruned=%d err=%s",
+			logger.SanitizeLogValue(stored.ID), len(pruned), logger.SanitizeLogValue(perr.Error()))
+	}
 	c.JSON(http.StatusCreated, resp)
 }
 
@@ -221,4 +252,64 @@ func (s *Server) listMasterLists(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"lists": lists})
+}
+
+// deleteMasterList removes one stored list and its rows. Read-elsewhere records
+// an import made from it are the import's output, not part of the list, and are
+// kept. A pending Repairs apply of a plan made from the list is unaffected: the
+// plan rows carry the list rows they were planned from.
+func (s *Server) deleteMasterList(c *gin.Context) {
+	store := database.NewMasterListStoreFromStore(s.storeForWiring())
+	if store == nil {
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, "this database cannot keep master lists", "MASTER_LIST_UNAVAILABLE")
+		return
+	}
+	id := c.Param("id")
+	if err := store.DeleteList(id); err != nil {
+		if errors.Is(err, database.ErrMasterListNotFound) {
+			httputil.RespondWithNotFound(c, "master list", id)
+			return
+		}
+		httputil.RespondWithInternalError(c, "delete the master list: "+err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": id})
+}
+
+// masterListElsewhereDefaultLimit and masterListElsewhereMaxLimit bound one page
+// of GET /master-lists/elsewhere: the records are the import's output for the
+// whole library and grow with every list.
+const (
+	masterListElsewhereDefaultLimit = 200
+	masterListElsewhereMaxLimit     = 1000
+)
+
+// listMasterListElsewhere answers the read-elsewhere records the master-list
+// import has made (rows of a list that match no library book), newest first;
+// ?user_id= narrows them to one user. It pages: ?limit= (default 200, at most
+// 1000) and ?offset=; "total" is the number of records before paging, "count"
+// the number in this page.
+func (s *Server) listMasterListElsewhere(c *gin.Context) {
+	store := database.NewMasterListStoreFromStore(s.storeForWiring())
+	if store == nil {
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, "this database cannot keep master lists", "MASTER_LIST_UNAVAILABLE")
+		return
+	}
+	records, err := store.ListElsewhere(strings.TrimSpace(c.Query("user_id")))
+	if err != nil {
+		httputil.RespondWithInternalError(c, "list read-elsewhere records: "+err.Error())
+		return
+	}
+	total := len(records)
+	limit := httputil.ParseQueryInt(c, "limit", masterListElsewhereDefaultLimit)
+	if limit < 1 {
+		limit = masterListElsewhereDefaultLimit
+	}
+	limit = min(limit, masterListElsewhereMaxLimit)
+	offset := min(max(httputil.ParseQueryInt(c, "offset", 0), 0), total)
+	page := records[offset:min(offset+limit, total)]
+	if page == nil {
+		page = []database.MasterListElsewhere{}
+	}
+	c.JSON(http.StatusOK, gin.H{"records": page, "count": len(page), "total": total, "limit": limit, "offset": offset})
 }

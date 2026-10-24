@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.5 -->
+<!-- version: 10.78.6 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-24 -->
 
@@ -19,15 +19,15 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **TODO-FILE-INTRO-FLUSH-ORDER** `fileIntroAccum.flush` copies the counters under its mutex but calls `PutFileIntroStats` after releasing it, so two workers flushing at once can land the older snapshot last and the persisted stats briefly go backwards (the final `flush(true)` is not exposed to it only because the pool has drained by then). Serialise the copy and the write behind a second mutex, or stamp a sequence and drop stale writes in the sink.
 - [ ] **TODO-FILE-INTRO-PROBE-PER-BATCH** `transcribe.TranscribeByPathBatch` runs `gateEndpoints` (one `/health` probe per endpoint) on every call, and the file-intro op sends batches of 8 files, so a full-library run issues a probe round for every 8 files. Measure it against the endpoints' own load; if it matters, cache the probe result for a short TTL inside `gateEndpoints` (a failed probe must still bench the endpoint immediately) or pass an already-probed endpoint set into the batch call.
 
-- [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126 (none blocks the preview; the first must land before PR 2 apply).
-  - [ ] No delete route or retention for stored lists (`mlist:list:` / `mlist:row:`): every upload is kept forever. Needed before PR 2 apply, which makes a list the input of a write.
-  - [ ] `masterlist.ClassifyASIN` only tries the ISBN-10 reading when the code is all digits, so an ISBN-10 whose check digit is `X` is classified as an ASIN instead of an ISBN-10.
-  - [ ] A generic `isbn` column that disagrees with an `isbn10` / `isbn13` column on the same row is dropped without an `identifier_conflict` issue.
-  - [ ] `ParseJSON`: one row with a wrong JSON type fails the whole file instead of becoming a row issue.
-  - [ ] An ambiguous ASIN tier returns without trying the ISBN tier, so a row whose ISBN would settle the match is left `ambiguous`.
-  - [ ] `checkAgreement` ignores survivors of trashed books when comparing the ASIN and ISBN hits.
+- [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126. The delete/retention, parser, matcher and master-list auth-off items are fixed by the import apply (PR 2); only the upload-limit item remains open here. The new open items from PR 2 are filed as their own tasks.
+  - [x] No delete route or retention for stored lists (`mlist:list:` / `mlist:row:`): `DELETE /api/v1/master-lists/:id` and per-uploader retention (`master_list_retention`, default 10, pruned on upload; the list just stored is never pruned).
+  - [x] `masterlist.ClassifyASIN` only tried the ISBN-10 reading when the code was all digits, so an ISBN-10 whose check digit is `X` was classified as an ASIN instead of an ISBN-10.
+  - [x] A generic `isbn` column that disagrees with an `isbn10` / `isbn13` column on the same row was dropped without an `identifier_conflict` issue.
+  - [x] `ParseJSON`: one row with a wrong JSON type failed the whole file instead of becoming a row issue.
+  - [x] An ambiguous ASIN tier returned without trying the ISBN tier, so a row whose ISBN would settle the match was left `ambiguous`.
+  - [x] `checkAgreement` ignored survivors of trashed books when comparing the ASIN and ISBN hits.
   - [ ] A runtime change of the upload limit gives the minimum of the middleware limit and the handler limit until restart.
-  - [ ] `RequireAdmin` answers 401 (not a pass-through) when `EnableAuth=false`, unlike `s.perm`, so the master-list routes are unreachable in a no-auth dev run.
+  - [x] `RequireAdmin` answered 401 (not a pass-through) when `EnableAuth=false`, unlike `s.perm`, so the master-list routes were unreachable in a no-auth dev run: fixed for the master-list routes only, through `Server.adminRole()` in `wire_master_list_routes.go`. The global `RequireAdmin` is tracked as **TODO-MLIST-REQUIREADMIN-AUTHOFF**.
 
 - [ ] **GUEST-SERVICE-TOKEN-FOLLOWUPS** Per-guest Cloudflare service token follow-ups:
       (1) an admin "issue key" action (re-mint) for a guest whose mint failed at

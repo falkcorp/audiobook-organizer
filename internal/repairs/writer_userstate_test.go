@@ -1,13 +1,14 @@
 // file: internal/repairs/writer_userstate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 02326bb6-8739-47c5-92ed-341f000b2900
-// last-edited: 2026-10-05
+// last-edited: 2026-10-24
 
 package repairs
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -210,4 +211,43 @@ func TestWriterSetUserState_TakesMergeLockFirst(t *testing.T) {
 	s, gerr := st.GetUserBookState("u1", "b2")
 	require.NoError(t, gerr)
 	require.Nil(t, s)
+}
+
+// SetUserStateChecked runs its check with the merge lock and the stripe held,
+// and a refusing check writes and journals nothing.
+func TestWriterSetUserStateChecked_RefusesUnderTheLocks(t *testing.T) {
+	st := newUSStore(t)
+	w := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-c").WithUserState(st)
+	next := finishedSnap("u1", "b1", true)
+
+	gone := fmt.Errorf("the book was merged away: %w", ErrChangedSincePlan)
+	var lockHeld bool
+	err := w.SetUserStateChecked(context.Background(), "u1", "b1", undo.UserStateSnapshot{}, next, func() error {
+		got := make(chan struct{})
+		go func() {
+			database.LockUserBookState("u1", "b1")()
+			close(got)
+		}()
+		select {
+		case <-got:
+		case <-time.After(150 * time.Millisecond):
+			lockHeld = true
+		}
+		return gone
+	})
+	require.ErrorIs(t, err, ErrChangedSincePlan)
+	require.True(t, lockHeld, "the check ran without the (user, book) stripe held")
+	require.Zero(t, w.Writes())
+	require.Zero(t, w.Journaled())
+	s, gerr := st.GetUserBookState("u1", "b1")
+	require.NoError(t, gerr)
+	require.Nil(t, s, "a refused check writes no state")
+	pos, perr := st.ListUserPositionsForBook("u1", "b1")
+	require.NoError(t, perr)
+	require.Empty(t, pos, "a refused check writes no position")
+
+	// A passing check is the plain write.
+	require.NoError(t, w.SetUserStateChecked(context.Background(), "u1", "b1", undo.UserStateSnapshot{}, next, func() error { return nil }))
+	require.Equal(t, 1, w.Writes())
+	require.Equal(t, 1, w.Journaled())
 }

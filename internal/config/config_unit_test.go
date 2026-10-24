@@ -1,7 +1,7 @@
 // file: internal/config/config_unit_test.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: c50805f7-8e88-4a02-a03a-2e48863e2619
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package config
 
@@ -240,6 +240,11 @@ func TestConfigValidate(t *testing.T) {
 		assert.ErrorContains(t, err, "json_body_limit_mb must be >= 0")
 	})
 
+	t.Run("negative master list retention", func(t *testing.T) {
+		c := &Config{DatabaseType: "pebble", MasterListRetention: -1}
+		assert.ErrorContains(t, c.Validate(), "master_list_retention must be >= 0")
+	})
+
 	t.Run("negative upload body limit", func(t *testing.T) {
 		c := &Config{DatabaseType: "pebble", UploadBodyLimitMB: -1}
 		err := c.Validate()
@@ -408,6 +413,7 @@ func TestInitConfigDefaults(t *testing.T) {
 		assert.Equal(t, 100, AppConfig.APIRateLimitPerMinute)
 		assert.Equal(t, 1, AppConfig.JSONBodyLimitMB)
 		assert.Equal(t, 10, AppConfig.UploadBodyLimitMB)
+		assert.Equal(t, 10, AppConfig.MasterListRetention)
 		assert.True(t, AppConfig.EnableAuth)
 		assert.False(t, AppConfig.BasicAuthEnabled)
 	})
@@ -704,6 +710,7 @@ func TestApplySettingIntKeys(t *testing.T) {
 		{"api_rate_limit_per_minute", "100", func() int { return AppConfig.APIRateLimitPerMinute }},
 		{"json_body_limit_mb", "5", func() int { return AppConfig.JSONBodyLimitMB }},
 		{"upload_body_limit_mb", "50", func() int { return AppConfig.UploadBodyLimitMB }},
+		{"master_list_retention", "3", func() int { return AppConfig.MasterListRetention }},
 		{"auto_scan_debounce_seconds", "10", func() int { return AppConfig.AutoScanDebounceSeconds }},
 		{"auto_update_check_minutes", "120", func() int { return AppConfig.AutoUpdate.CheckMinutes }},
 		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdate.WindowStart }},

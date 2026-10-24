@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_import_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 91c3d7e5-0a48-4b6f-8e12-d5f7a3b9c640
 // last-edited: 2026-10-23
 
@@ -131,7 +131,13 @@ func csvLine(cells ...string) string {
 // does: parse, one JSON document per row, PutList.
 func (l *mlLab) upload(lines ...string) string {
 	l.t.Helper()
-	rows, err := masterlist.ParseCSV(strings.NewReader(mlCSVHeader + "\n" + strings.Join(lines, "\n") + "\n"))
+	return l.uploadWithHeader(mlCSVHeader, lines...)
+}
+
+// uploadWithHeader is upload with the CSV header of the caller's choice.
+func (l *mlLab) uploadWithHeader(header string, lines ...string) string {
+	l.t.Helper()
+	rows, err := masterlist.ParseCSV(strings.NewReader(header + "\n" + strings.Join(lines, "\n") + "\n"))
 	require.NoError(l.t, err)
 	raw := make([][]byte, len(rows))
 	for i := range rows {
@@ -199,11 +205,11 @@ func TestMasterListImport_EveryClassAndTier(t *testing.T) {
 		csvLine("Alpha Voyage", "Ann Author", "B000000001", "", "", "", "", "600", "finished", "2026-09-01T10:00:00Z"),           // line 2: matched_high (ASIN)
 		csvLine("Beta Harbor", "Bob Writer", "", mlISBN13, "", "", "", "300", "finished", "2026-09-02T10:00:00Z"),                // 3: matched_high (ISBN)
 		csvLine("Beta Harbor", "Bob Writer", "", "", mlISBN10, "", "", "", "in_progress"),                                        // 4: duplicate_in_list of 3 (ISBN-10 converts)
-		csvLine("Gamma Ridge", "Cy Maker", "", "", "", "itunes", "abcdef0123456789", "", "unstarted"),                            // 5: matched_high (source id), runtime unknown
+		csvLine("Gamma Ridge", "Cy Maker", "", "", "", "itunes", "abcdef0123456789", "", "finished", "2026-09-08T10:00:00Z"),     // 5: matched_high (source id), runtime unknown
 		csvLine("Delta Fields", "Dee Penn", "", "", "", "", "", "500", "finished", "2026-09-03T10:00:00Z"),                       // 6: matched_review (title+author)
 		csvLine("Echo Park", "Eve Quill", "", "", "", "", "", "", "finished", "2026-09-04T10:00:00Z"),                            // 7: ambiguous
 		csvLine("Foxtrot Run", "Fay Stone", "B000000009", "", "", "", "", "100", "finished", "2026-09-05T10:00:00Z"),             // 8: matched_review runtime_mismatch
-		csvLine("Nobody Home", "Xan Yu", "", "", "", "", "", "", "finished"),                                                     // 9: unmatched
+		csvLine("Nobody Home", "Xan Yu", "", "", "", "", "", "", "finished"),                                                     // 9: read_elsewhere (nothing in the library could be it)
 		csvLine("Delta Fields", "Zed Other", "", "", "", "", "", "", "finished"),                                                 // 10: unmatched author_mismatch
 		csvLine("", "", "", "", "", "", "", "", "finished"),                                                                      // 11: invalid
 		csvLine("Golf Course", "Gus Yarn", "", "", "", "", "", "200", "finished"),                                                // 12: matched_review swapped_title
@@ -229,7 +235,7 @@ func TestMasterListImport_EveryClassAndTier(t *testing.T) {
 	// ASIN, runtime agrees.
 	r := byLine(2)
 	assert.Equal(t, mlMatchedHigh, r.Class)
-	assert.True(t, r.Applicable(), "the only applicable class is matched_high")
+	assert.True(t, r.Applicable(), "a matched_high row the decision pass accepted is applicable")
 	assert.Equal(t, "asin:B000000001", r.RowID)
 	assert.Equal(t, []string{l.ids["alpha"]}, memberOf(r, "target"))
 	assert.Equal(t, repairs.RiskLow, r.Risk)
@@ -277,10 +283,14 @@ func TestMasterListImport_EveryClassAndTier(t *testing.T) {
 	assert.Equal(t, mlMatchedReview, r.Class)
 	assert.Contains(t, r.Flags, mlFlagRuntime)
 
-	assert.Equal(t, mlUnmatched, byLine(9).Class)
+	r = byLine(9)
+	assert.Equal(t, mlReadElsewhere, r.Class)
+	assert.True(t, r.Applicable(), "a row nothing in the library could be is kept as a record")
+	assert.Empty(t, r.BookIDs, "a record names no book")
 
 	r = byLine(10)
 	assert.Equal(t, mlUnmatched, r.Class)
+	assert.False(t, r.Applicable(), "the title is in the library under another author: a person looks, no record is made")
 	assert.Contains(t, r.Flags, mlFlagAuthorMismatch)
 	assert.Equal(t, []string{l.ids["delta"]}, r.BookIDs, "the title hit is listed as a candidate")
 
@@ -309,9 +319,9 @@ func TestMasterListImport_EveryClassAndTier(t *testing.T) {
 
 	// Counts: every class count is a filter of the rows.
 	assert.Equal(t, map[string]int{
-		mlMatchedHigh: 3, mlMatchedReview: 5, mlAmbiguous: 1, mlUnmatched: 2, mlDuplicate: 2, mlInvalid: 1,
+		mlMatchedHigh: 3, mlMatchedReview: 5, mlAmbiguous: 1, mlUnmatched: 1, mlReadElsewhere: 1, mlDuplicate: 2, mlInvalid: 1,
 	}, plan.ByClass)
-	assert.Equal(t, 3, plan.Applicable)
+	assert.Equal(t, 4, plan.Applicable)
 	assert.Equal(t, 14, plan.Total)
 	assert.Equal(t, 1, plan.ByFlag[mlFlagRuntime])
 }
@@ -344,12 +354,13 @@ func TestMasterListImport_TrashedBooksAreFollowedNeverTargets(t *testing.T) {
 	assert.Empty(t, lost.BookIDs)
 	assert.Equal(t, []string{l.ids["lost"]}, memberOf(lost, "trashed"))
 
-	// A title that only a trashed book carries matches nothing.
+	// A title that only a trashed book carries matches nothing, and nothing live
+	// could be it: it is kept as a record, not matched to the trashed book.
 	title := ""
 	for id, r := range rows {
 		if strings.HasPrefix(id, "noid:") {
 			title = id
-			assert.Equal(t, mlUnmatched, r.Class)
+			assert.Equal(t, mlReadElsewhere, r.Class)
 			assert.Empty(t, r.BookIDs)
 		}
 	}
@@ -421,17 +432,6 @@ func TestMasterListImport_PlanIsDeterministicAndFingerprintsTrackInputs(t *testi
 	other := l.upload(csvLine("Alpha Voyage", "Ann Author", "B000000001", "", "", "", "", "600", "in_progress"))
 	_, c := l.plan(other)
 	assert.NotEqual(t, a["asin:B000000001"].Fingerprint, c["asin:B000000001"].Fingerprint)
-}
-
-func TestMasterListImport_ApplyAndReplanRefuseAndLaneHidesApply(t *testing.T) {
-	l := newMLLab(t)
-	assert.True(t, repairs.IsPlanOnly(l.fixer))
-	row := repairs.Row{RowID: "asin:B000000001"}
-	err := l.fixer.Apply(context.Background(), nil, row)
-	require.ErrorIs(t, err, errMasterListApplyNotBuilt)
-	assert.Contains(t, err.Error(), "PR 2")
-	_, err = l.fixer.Replan(context.Background(), nil, row, &fakeReporter{})
-	require.ErrorIs(t, err, errMasterListApplyNotBuilt)
 }
 
 func TestMasterListImport_ParamsAreChecked(t *testing.T) {
@@ -541,4 +541,75 @@ func TestMasterListImport_IdentifierHitOnDisagreeingTitleIsReview(t *testing.T) 
 		assert.Equal(t, mlMatchedHigh, rows[id].Class, id)
 		assert.NotContains(t, rows[id].Flags, mlFlagTitleMismatch, id)
 	}
+}
+
+// An ASIN carried by two editions does not end the match: the row's ISBN-13
+// settles it when it names one of them (follow-up 5), and the row stays high.
+func TestMasterListImport_AmbiguousASINIsSettledByTheISBN(t *testing.T) {
+	l := newMLLab(t)
+	yes := true
+	l.book("ed1", mlBook{title: "November Rain", author: "Nia Orr", asin: "B000000060", isbn13: "9780306406157", vg: "vg-1", primary: &yes})
+	l.book("ed2", mlBook{title: "November Rain", author: "Nia Orr", asin: "B000000060", isbn13: "9780140449136", vg: "vg-2", primary: &yes})
+	// Control: the ASIN alone cannot choose. (Two rows of one list naming the
+	// same ASIN are one group, so the control is a list of its own.)
+	_, plainRows := l.plan(l.upload(csvLine("November Rain", "Nia Orr", "B000000060")))
+	require.Len(t, plainRows, 1)
+	plain := plainRows["asin:B000000060"]
+	assert.Equal(t, mlAmbiguous, plain.Class, "an ASIN on two primary books, no runtime to choose: ambiguous")
+
+	// The same ASIN with one edition's ISBN-13.
+	_, rows := l.plan(l.upload(csvLine("November Rain", "Nia Orr", "B000000060", "9780306406157")))
+	require.Len(t, rows, 1)
+	var settled repairs.Row
+	for _, r := range rows {
+		settled = r
+	}
+	assert.NotEqual(t, mlAmbiguous, settled.Class, "the ISBN-13 names one of the two")
+	assert.Equal(t, []string{l.ids["ed1"]}, memberOf(settled, "target"))
+	assert.NotContains(t, settled.Flags, mlFlagIDConflict, "the ISBN agrees with the ASIN's candidates")
+	assert.Contains(t, strings.Join(settled.Evidence, "\n"), "names one of them")
+}
+
+// An ISBN-13 that names a book outside the ASIN's candidates means the row's
+// identifiers disagree: the match is held for review with identifier_conflict.
+func TestMasterListImport_ISBNOutsideTheAmbiguousASINIsAConflict(t *testing.T) {
+	l := newMLLab(t)
+	yes := true
+	l.book("ed1", mlBook{title: "Oscar Row", author: "Ola Pike", asin: "B000000061", vg: "vg-1", primary: &yes})
+	l.book("ed2", mlBook{title: "Oscar Row", author: "Ola Pike", asin: "B000000061", vg: "vg-2", primary: &yes})
+	l.book("other", mlBook{title: "Oscar Row", author: "Ola Pike", isbn13: "9780306406157", minutes: 300})
+	listID := l.upload(csvLine("Oscar Row", "Ola Pike", "B000000061", "9780306406157", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"))
+	plan, rows := l.plan(listID)
+	require.Len(t, rows, 1)
+	r := rows["asin:B000000061"]
+	assert.Equal(t, mlMatchedReview, r.Class)
+	assert.Contains(t, r.Flags, mlFlagIDConflict)
+	assert.Equal(t, []string{l.ids["other"]}, memberOf(r, "target"))
+	assert.Zero(t, plan.Applicable)
+}
+
+// An ISBN-13 that only a trashed copy carries names the book that copy was
+// merged into (follow-up 6): when that is not the ASIN's book, the identifiers
+// disagree and the match is held for review.
+func TestMasterListImport_AgreementFollowsTrashedCopiesToTheirSurvivor(t *testing.T) {
+	l := newMLLab(t)
+	l.book("a", mlBook{title: "Papa Trail", author: "Pia Rowe", asin: "B000000062", minutes: 300})
+	l.book("b", mlBook{title: "Papa Trail Two", author: "Pia Rowe", minutes: 300})
+	l.book("gone", mlBook{title: "Papa Trail Two", author: "Pia Rowe", isbn13: "9780306406157", trashed: true, mergedInto: "b"})
+	listID := l.upload(
+		csvLine("Papa Trail", "Pia Rowe", "B000000062", "9780306406157", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+		// Control: the trashed copy was merged into the ASIN's own book.
+		csvLine("Papa Trail", "Pia Rowe", "B000000063", "9780140449136", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"),
+	)
+	l.book("c", mlBook{title: "Papa Trail", author: "Pia Rowe", asin: "B000000063", minutes: 300})
+	l.book("gone2", mlBook{title: "Papa Trail", author: "Pia Rowe", isbn13: "9780140449136", trashed: true, mergedInto: "c"})
+	_, rows := l.plan(listID)
+	bad := rows["asin:B000000062"]
+	assert.Equal(t, mlMatchedReview, bad.Class)
+	assert.Contains(t, bad.Flags, mlFlagIDConflict)
+	assert.Contains(t, strings.Join(bad.Evidence, "\n"), "followed from a trashed copy")
+	assert.Equal(t, []string{l.ids["a"]}, memberOf(bad, "target"))
+	ok := rows["asin:B000000063"]
+	assert.Equal(t, mlMatchedHigh, ok.Class, ok.Reason)
+	assert.NotContains(t, ok.Flags, mlFlagIDConflict)
 }

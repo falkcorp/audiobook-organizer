@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -547,6 +547,8 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read the candidate cache of %s: %v", c.BookID, err)}
 		}
 		return verdictOf(CheckMetadataCacheCopy(cur, c))
+	case ChangeTypeMasterListElsewhereCreate:
+		return masterListElsewhereVerdict(store, c)
 	case ChangeTypeRepairBookCreate:
 		// The revert soft-deletes the created book; one that is absent or
 		// already soft-deleted counts restored, one whose rows moved or that
@@ -566,6 +568,33 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return verdictOf(checkFsRegroupRow(store, c, stamps))
 	}
 	return rowVerdict{}
+}
+
+// masterListElsewhereVerdict predicts the revert of a
+// ChangeTypeMasterListElsewhereCreate row (RevertService.
+// revertMasterListElsewhereCreate): it decodes the row, reads the record and
+// runs CheckMasterListElsewhereCreate. A record that is gone is already
+// restored; one that is no longer what the import created (deleted and
+// recreated by a later apply of another list, say) is refused, as is a row that
+// does not decode and a store that cannot keep or read the records. The row
+// names no book, so none is read.
+func masterListElsewhereVerdict(store ConflictChecker, c *database.OperationChange) rowVerdict {
+	want, err := DecodeMasterListElsewhereCreate(c)
+	if err != nil {
+		return rowVerdict{refusal: err}
+	}
+	ms := database.NewMasterListStoreFromStore(store)
+	if ms == nil {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "this store cannot hold read-elsewhere records (change %s)", c.ID)}
+	}
+	cur, err := ms.GetElsewhere(want.ID)
+	switch {
+	case errors.Is(err, database.ErrElsewhereNotFound):
+		cur = nil
+	case err != nil:
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read read-elsewhere record %s: %v", want.ID, err)}
+	}
+	return verdictOf(CheckMasterListElsewhereCreate(cur, want))
 }
 
 // checkFileMoveConflict mirrors RevertService.revertFileMove. A file no longer

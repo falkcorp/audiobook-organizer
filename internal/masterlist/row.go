@@ -1,7 +1,7 @@
 // file: internal/masterlist/row.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: e52147e5-a7b2-4b1b-99e5-616e6dac1eeb
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Package masterlist is the input side of the master-list import: the
 // canonical row an uploaded list is stored as, the validation of its
@@ -9,7 +9,7 @@
 // rows that name the same book. It imports nothing from the module, so both
 // the upload endpoint and the Repairs fixer can use it.
 //
-// Design: .claude/notes/2026-10-23-master-list-import-design.md, section 3.
+// Design: docs/design/2026-10-23-master-list-import-design.md, section 3.
 package masterlist
 
 import (
@@ -49,6 +49,13 @@ const (
 	// IssueListConflict: rows of one group (rows joined by a shared ASIN, ISBN
 	// or source id) carry different identifiers.
 	IssueListConflict = "list_conflict"
+	// IssueBadField: a JSON field had the wrong type (a number where a list
+	// of authors goes, an object where a string goes). The field is left out
+	// of the row; the row's other fields are kept.
+	IssueBadField = "bad_field"
+	// IssueBadRow: a JSON array element that is not an object. The row is
+	// kept, empty, so the list's line numbers still count it.
+	IssueBadRow = "bad_row"
 )
 
 // Issue is one finding about a row. The row is kept; the finding travels with

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_match.go
-// version: 1.1.0
+// version: 1.4.0
 // guid: bc498082-c7d9-434e-82a6-37e0eb55dd61
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -25,8 +25,11 @@ import (
 
 // Plan row classes (Row.Class). Every count of the plan is a filter of the
 // rows endpoint (?class=<class>), so every number on the page lists its rows.
-// Only matched_high can ever be applied (by PR 2); the others are listed,
-// never written, and are also the row's Skipped kind.
+// Two classes are applicable: matched_high (the row's read status is written to
+// the matched book for the target user, unless the decision pass finds a
+// reason not to, which is then the row's class) and read_elsewhere (a row that
+// matches no library book is kept as a record, never as a book). Every other
+// class is listed, never written, and is also the row's Skipped kind.
 const (
 	mlMatchedHigh   = "matched_high"
 	mlMatchedReview = "matched_review"
@@ -34,10 +37,41 @@ const (
 	mlUnmatched     = "unmatched"
 	mlDuplicate     = "duplicate_in_list"
 	mlInvalid       = "invalid"
+	// mlReadElsewhere: an unmatched row nothing in the library could be (no
+	// title candidates, no trashed copy carrying an identifier). Applicable:
+	// the apply creates a read-elsewhere record for it.
+	mlReadElsewhere = "read_elsewhere"
 	// mlUnreadable: a store read the row's decision needs failed. The row is
 	// refused rather than planned from a guess (an unreadable book is not "no
 	// book", and "unmatched" would offer to record a book the library has).
 	mlUnreadable = "error_unreadable"
+)
+
+// Classes of a matched_high row the decision pass declined to write (each is
+// also the row's Skipped kind, so every count is a filter of the rows
+// endpoint). They mirror the Audible import's: the import never un-finishes a
+// book, never overwrites a user's choice, and newer local activity wins.
+const (
+	mlSkipNoStatus        = "skipped_no_status"
+	mlSkipNotStarted      = "skipped_not_started"
+	mlSkipListAbandoned   = "skipped_list_abandoned"
+	mlSkipNoTimestamp     = "skipped_no_timestamp"
+	mlSkipNoProgress      = "skipped_no_progress"
+	mlSkipAlreadyFinished = "skipped_already_finished"
+	mlSkipNewerLocal      = "skipped_newer_local"
+	mlSkipLocalProgress   = "skipped_local_progress"
+	mlSkipUserAbandoned   = "skipped_user_abandoned"
+	mlSkipManualUnstarted = "skipped_manual_unstarted"
+	// mlSkipFutureTimestamp: the list's time is later than now (plus the clock
+	// slack), so it would beat every real listen. Apart from skipped_no_timestamp,
+	// whose filter counts the rows that give no time at all.
+	mlSkipFutureTimestamp = "skipped_future_timestamp"
+	// mlSkipAlreadyRecorded: a read-elsewhere record for this row and user
+	// already exists (an earlier import of it, from this list or another).
+	mlSkipAlreadyRecorded = "skipped_already_recorded"
+	// mlStateUnreadable: a read the decision needs (the user's state, a
+	// book's files, the record) failed; the row is refused, not guessed.
+	mlStateUnreadable = "error_state_unreadable"
 )
 
 // Match tiers (the evidence and the stored state name them).
@@ -150,9 +184,12 @@ type mlOutcome struct {
 	target     string
 	candidates []string
 	trashed    []string
-	flags      []string
-	evidence   []string
-	reason     string
+	// hits are the live books the matching identifier hit, before resolution
+	// to a version-group primary: their listening counts as the target's.
+	hits     []string
+	flags    []string
+	evidence []string
+	reason   string
 	// runtimeKnown: both the list and the target gave a runtime, so the
 	// runtime check ran. A match without it is planned at review risk.
 	runtimeKnown bool
@@ -313,13 +350,31 @@ func (c *mlCall) survivors(trashed []string) (live, noLive []string, err error) 
 	return uniqSorted(live), noLive, nil
 }
 
-// classify decides one combined row. It reads the library only (no user
-// state: nothing is applied in this PR).
+// outcome is classify with the two failures turned into classes: a row that
+// names no book is invalid, and a failed read fails the ROW closed (an
+// unreadable book is not "no book").
+func (m *mlMatcher) outcome(row masterlist.Row) mlOutcome {
+	if !row.HasIdentity() {
+		return mlOutcome{class: mlInvalid, reason: "the row has no title, identifier or source id"}
+	}
+	o, err := m.classify(row)
+	if err != nil {
+		return mlOutcome{class: mlUnreadable, reason: err.Error()}
+	}
+	return o
+}
+
+// classify decides one combined row. It reads the library only, never the
+// target user's state (the fixer's decision step does).
 func (m *mlMatcher) classify(row masterlist.Row) (mlOutcome, error) {
 	c := &mlCall{m: m, row: row, listSec: float64(row.RuntimeMin) * 60, durations: map[string]float64{}}
 	var trashedOnly []string
 
 	idTiers := []string{mlTierASIN, mlTierISBN, mlTierSource}
+	// ambiguous is the first identifier tier that hit several books it could
+	// not settle. It does not end the match: a later identifier of the same row
+	// (the ISBN, when the ASIN is on two editions) may name one of them.
+	var ambiguous *mlOutcome
 	for ti, tier := range idTiers {
 		h, err := c.hits(tier)
 		if err != nil {
@@ -342,12 +397,48 @@ func (m *mlMatcher) classify(row masterlist.Row) (mlOutcome, error) {
 			continue
 		}
 		o, err := c.resolveID(tier, h.note, raw, viaTrashed, shown)
-		if err != nil || o.target == "" {
+		if err != nil {
 			return o, err
+		}
+		if o.target == "" {
+			if ambiguous == nil {
+				first := o
+				ambiguous = &first
+			}
+			continue
+		}
+		if ambiguous != nil {
+			c.reconcileAmbiguous(&o, ambiguous)
 		}
 		return o, c.checkAgreement(&o, idTiers[ti+1:])
 	}
+	if ambiguous != nil {
+		return *ambiguous, nil
+	}
 	return c.byTitle(trashedOnly)
+}
+
+// reconcileAmbiguous folds an earlier identifier tier that was ambiguous into
+// the match a later tier settled. A later identifier that names one of the
+// earlier tier's candidates settles it: the evidence says so and the match
+// keeps its class. One that names a book outside them means the row's
+// identifiers disagree, so the match is held for review (identifier_conflict),
+// as when two settled tiers name different books.
+func (c *mlCall) reconcileAmbiguous(o, amb *mlOutcome) {
+	earlier := strings.ReplaceAll(amb.tier, "_", " ")
+	later := strings.ReplaceAll(o.tier, "_", " ")
+	if slices.Contains(amb.candidates, o.target) {
+		o.evidence = append(o.evidence, fmt.Sprintf("the row's %s named %d books (%s); its %s names one of them",
+			earlier, len(amb.candidates), strings.Join(amb.candidates, ", "), later))
+		return
+	}
+	why := fmt.Sprintf("the row's %s names %d books (%s), none of them the book matched by %s: %s",
+		earlier, len(amb.candidates), strings.Join(amb.candidates, ", "), later, o.target)
+	o.flag(mlFlagIDConflict)
+	o.evidence = append(o.evidence, why)
+	if o.class == mlMatchedHigh {
+		o.class, o.reason = mlMatchedReview, why
+	}
 }
 
 // checkAgreement holds an identifier match for review when a LATER identifier
@@ -361,15 +452,27 @@ func (c *mlCall) checkAgreement(o *mlOutcome, later []string) error {
 		if err != nil {
 			return err
 		}
-		if len(h.live) == 0 {
+		// A tier that only a trashed copy carries names the book that copy was
+		// merged into, exactly as it does when it is the tier that matches
+		// (classify): comparing live hits alone would let the ASIN and the ISBN
+		// disagree unseen whenever the disagreeing one had been merged away.
+		live, via := h.live, ""
+		if len(live) == 0 && len(h.trashed) > 0 {
+			surv, _, err := c.survivors(h.trashed)
+			if err != nil {
+				return err
+			}
+			live, via = surv, " (followed from a trashed copy to its live survivor)"
+		}
+		if len(live) == 0 {
 			continue
 		}
-		other := c.m.lib.targets(h.live)
+		other := c.m.lib.targets(live)
 		if len(other) == 0 || slices.Contains(other, o.target) {
 			continue
 		}
-		why := fmt.Sprintf("the row's %s (%s) names a different book than the one matched by %s: %s",
-			strings.ReplaceAll(tier, "_", " "), h.note, strings.ReplaceAll(o.tier, "_", " "), strings.Join(other, ", "))
+		why := fmt.Sprintf("the row's %s (%s%s) names a different book than the one matched by %s: %s",
+			strings.ReplaceAll(tier, "_", " "), h.note, via, strings.ReplaceAll(o.tier, "_", " "), strings.Join(other, ", "))
 		o.flag(mlFlagIDConflict)
 		o.evidence = append(o.evidence, why)
 		if o.class == mlMatchedHigh {
@@ -382,7 +485,7 @@ func (c *mlCall) checkAgreement(o *mlOutcome, later []string) error {
 // resolveID turns an identifier tier's live hits into one outcome.
 func (c *mlCall) resolveID(tier, note string, raw []string, viaTrashed bool, trashed []string) (mlOutcome, error) {
 	lib := c.m.lib
-	o := mlOutcome{tier: tier, trashed: trashed}
+	o := mlOutcome{tier: tier, trashed: trashed, hits: uniqSorted(raw)}
 	o.evidence = append(o.evidence, "matched by "+strings.ReplaceAll(tier, "_", " ")+": "+note)
 	if viaTrashed {
 		o.evidence = append(o.evidence, fmt.Sprintf("only a trashed copy (%s) carries it; followed to its live survivor", strings.Join(trashed, ", ")))

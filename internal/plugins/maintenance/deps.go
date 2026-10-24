@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.98.0
+// version: 1.100.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -547,11 +547,18 @@ type keyspaceStoreProvider interface {
 	UserReadStateStore() UserReadStateStore
 }
 
-// MasterListReader reads the uploaded master lists (database.MasterListStore).
-// The fixer only reads: an upload is the HTTP endpoint's write.
-type MasterListReader interface {
+// MasterListStore is the part of database.MasterListStore the master-list
+// import uses. It reads the uploaded lists (an upload is the HTTP endpoint's
+// write, never the fixer's) and keeps the read-elsewhere records its apply
+// creates for list rows that match no library book.
+type MasterListStore interface {
 	GetList(id string) (*database.MasterListMeta, error)
 	ScanRows(id string, fn func(n int, raw []byte) error) error
+	GetElsewhere(id string) (*database.MasterListElsewhere, error)
+	// ListElsewhere lists the records of one user ("" lists everyone's): the
+	// plan matches a row against them by identifier, not only by record id.
+	ListElsewhere(userID string) ([]database.MasterListElsewhere, error)
+	CreateElsewhere(rec database.MasterListElsewhere) error
 }
 
 // ExternalIDBookLookup is the one external-id read the master-list matcher
@@ -566,7 +573,7 @@ type ExternalIDBookLookup interface {
 type masterListStoreProvider interface {
 	// MasterLists serves the uploaded lists. nil when the store cannot keep
 	// them (no Pebble layer); the fixer then refuses to plan.
-	MasterLists() MasterListReader
+	MasterLists() MasterListStore
 	// ExternalIDBooks serves the (source, source id) tier of the matcher.
 	ExternalIDBooks() ExternalIDBookLookup
 }

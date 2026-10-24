@@ -1,7 +1,7 @@
 // file: internal/masterlist/parse.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 3a1896ea-2d97-4da6-bb85-27abe9094240
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package masterlist
 
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -126,13 +127,80 @@ func ParseJSON(r io.Reader) ([]Row, error) {
 	}
 	out := make([]Row, 0, len(items))
 	for i, raw := range items {
-		var in inRow
-		if err := json.Unmarshal(raw, &in); err != nil {
-			return nil, fmt.Errorf("masterlist: row %d: %w", i+1, err)
+		in, problems := decodeJSONRow(raw)
+		row := build(in, i+1)
+		// The decoding problems come first: they are what the row's other
+		// findings are measured against (a field dropped for its type is a
+		// field the identifier checks never saw).
+		for k := range problems {
+			problems[k].Line = i + 1
 		}
-		out = append(out, build(in, i+1))
+		row.Issues = append(problems, row.Issues...)
+		out = append(out, row)
 	}
 	return out, nil
+}
+
+// maxIssueValue bounds how much of a refused JSON value an Issue quotes: a
+// row's findings are stored with it and shown in the plan.
+const maxIssueValue = 120
+
+func truncateValue(s string) string {
+	if r := []rune(s); len(r) > maxIssueValue {
+		return string(r[:maxIssueValue]) + "..."
+	}
+	return s
+}
+
+// decodeJSONRow reads one array element into an inRow without ever failing:
+// the file's other rows are no worse for one row's wrong JSON type (a number
+// written where a list of authors goes, a nested object where a string goes).
+//
+// An element that is not an object at all gives an empty row and a bad_row
+// finding. Otherwise each field is decoded on its own; a field whose value does
+// not decode is left out and named in a bad_field finding, so one bad field
+// does not discard the row's good identifiers.
+func decodeJSONRow(raw json.RawMessage) (inRow, []Issue) {
+	var in inRow
+	if err := json.Unmarshal(raw, &in); err == nil {
+		return in, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return inRow{}, []Issue{{Code: IssueBadRow, Value: truncateValue(string(bytes.TrimSpace(raw))),
+			Detail: "the entry is not an object with the list's columns as fields"}}
+	}
+	// Sorted, so the findings come out in the same order every time.
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	good := make(map[string]json.RawMessage, len(fields))
+	var problems []Issue
+	for _, k := range keys {
+		var probe inRow
+		one, merr := json.Marshal(map[string]json.RawMessage{k: fields[k]})
+		if merr == nil {
+			merr = json.Unmarshal(one, &probe)
+		}
+		if merr != nil {
+			problems = append(problems, Issue{Code: IssueBadField, Field: k,
+				Value: truncateValue(string(bytes.TrimSpace(fields[k]))), Detail: "the value has the wrong type and was left out: " + merr.Error()})
+			continue
+		}
+		good[k] = fields[k]
+	}
+	rest, merr := json.Marshal(good)
+	if merr == nil {
+		merr = json.Unmarshal(rest, &in)
+	}
+	if merr != nil {
+		// Every field decoded alone and the whole did not: unreachable, but a
+		// row is never lost for it.
+		return inRow{}, append(problems, Issue{Code: IssueBadRow, Detail: "the entry could not be read: " + merr.Error()})
+	}
+	return in, problems
 }
 
 // csvColumns maps a header (lower-cased, spaces and hyphens as underscores)
@@ -499,19 +567,32 @@ func buildIdentifiers(r *Row, in inRow, issue func(code, field, value, detail st
 			bad("isbn13", v)
 		}
 	}
+	// conflict records a value that names a different edition than the one the
+	// row already holds for the same form. The first value read stays; the
+	// other is shown (Issue.Value) and never used to match, as a bad one is not.
+	conflict := func(field, v, held string) {
+		issue(IssueIdentifierConflict, field, v,
+			"another column of the row already gives "+held+"; the first is kept and this one is never used to match")
+	}
 	if v := strings.TrimSpace(string(in.ISBN)); v != "" {
 		switch c := cleanIdentifier(v); len(c) {
 		case 10:
-			if x, ok := ValidISBN10(c); ok && r.ISBN10 == "" {
-				r.ISBN10 = x
-			} else if !ok {
+			switch x, ok := ValidISBN10(c); {
+			case !ok:
 				bad("isbn", v)
+			case r.ISBN10 == "":
+				r.ISBN10 = x
+			case r.ISBN10 != x:
+				conflict("isbn", x, "the ISBN-10 "+r.ISBN10)
 			}
 		case 13:
-			if x, ok := ValidISBN13(c); ok && r.ISBN13 == "" {
-				r.ISBN13 = x
-			} else if !ok {
+			switch x, ok := ValidISBN13(c); {
+			case !ok:
 				bad("isbn", v)
+			case r.ISBN13 == "":
+				r.ISBN13 = x
+			case r.ISBN13 != x:
+				conflict("isbn", x, "the ISBN-13 "+r.ISBN13)
 			}
 		default:
 			bad("isbn", v)
@@ -523,9 +604,12 @@ func buildIdentifiers(r *Row, in inRow, issue func(code, field, value, detail st
 		case !ok:
 			bad("asin", v)
 		case isbn10 != "":
-			// An all-digit "ASIN" that is a valid ISBN-10 is an ISBN-10.
-			if r.ISBN10 == "" {
+			// A value of ISBN-10 shape that passes the check is an ISBN-10.
+			switch {
+			case r.ISBN10 == "":
 				r.ISBN10 = isbn10
+			case r.ISBN10 != isbn10:
+				conflict("asin", isbn10, "the ISBN-10 "+r.ISBN10)
 			}
 		default:
 			r.ASIN = asin
@@ -582,7 +666,7 @@ func (r *Row) addSource(source, id, purchased, listened string, issue func(code,
 		return
 	}
 	if source == "" {
-		source = "other"
+		source = UnlabelledSource
 	}
 	check := func(field, v string) string {
 		if v == "" {
