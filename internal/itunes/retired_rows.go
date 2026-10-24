@@ -1,5 +1,5 @@
 // file: internal/itunes/retired_rows.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d41c0a2-93e8-4b5f-a6d1-2c8e5b09f713
 // last-edited: 2026-10-23
 
@@ -21,8 +21,8 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 //
 // store is `any` because the audits narrow it to their own small interfaces;
 // database.AllBookFilesCoreIncludingRetired resolves the retired reader
-// through that and falls back to the plain getter for stores that have never
-// retired a row.
+// through that and fails closed (an error, never the live-only list) for a
+// store that does not offer it.
 func splitRetiredRows(store any) (live, retired []database.BookFileCore, err error) {
 	all, err := database.AllBookFilesCoreIncludingRetired(store)
 	if err != nil {

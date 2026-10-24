@@ -1,5 +1,5 @@
 // file: internal/itunes/retired_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b6e92d4-5a17-4c3f-8d20-e4f1a7c93b58
 // last-edited: 2026-10-23
 
@@ -14,9 +14,10 @@ import (
 // retiredAwareMock is a PIDIntegrityStore + PIDCoverageStore that behaves like
 // the production store: GetAllBookFilesCore returns the LIVE rows only, and the
 // retired rows are reachable only through the RetiredBookFileReader capability.
-// The compile-time assertion below keeps it a full implementation: a method
-// added to the interface otherwise makes the capability lookup fail quietly and
-// the tests fall back to the live-only path.
+// The compile-time assertion below keeps it a full implementation (the rest of
+// the reader comes from the embedded noRetiredRows): a method added to the
+// interface breaks the build here, and the capability lookup the audits make
+// fails closed rather than falling back to the live-only path.
 type retiredAwareMock struct {
 	pidCensusMock
 	retired []database.BookFileCore
@@ -25,22 +26,6 @@ type retiredAwareMock struct {
 
 func (m *retiredAwareMock) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
 	return append(append([]database.BookFileCore{}, m.files...), m.retired...), nil
-}
-
-func (m *retiredAwareMock) GetBookFilesIncludingRetired(string) ([]database.BookFile, error) {
-	return nil, nil
-}
-
-func (m *retiredAwareMock) GetRetiredBookFiles(string) ([]database.BookFile, error) {
-	return nil, nil
-}
-
-func (m *retiredAwareMock) GetRetiredVersionsFromBook(string) ([]database.BookVersion, error) {
-	return nil, nil
-}
-
-func (m *retiredAwareMock) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
-	return nil, nil
 }
 
 func (m *retiredAwareMock) ListBooksByITunesPID(int, int) ([]database.Book, error) {
@@ -153,35 +138,50 @@ func TestComputePIDCoverageRetiredOnlyIsResolvedButNotFileLevel(t *testing.T) {
 	}
 }
 
+// A retired row is keyed under its holder, which is usually a live primary. That
+// must not make a PID whose only claimant is retired, or a PID whose live row
+// sits on a non-primary book, count as a live-primary relocate hazard:
+// relocating rewrites live rows, and a retired row is not one.
 func TestComputeCrossTypeCollisionsRetiredOwner(t *testing.T) {
-	primary := true
+	primary, notPrimary := true, false
 	store := &retiredAwareMock{
 		pidCensusMock: pidCensusMock{
-			files: []database.BookFileCore{bf("f_live", "b_live", "/m/live.mp3", "BBBBBBBB00000002")},
+			files: []database.BookFileCore{
+				bf("f_live", "b_live", "/m/live.mp3", "BBBBBBBB00000002"),
+				bf("f_np", "b_np", "/m/np.mp3", "FFFFFFFF00000006"),
+			},
 			books: map[string]*database.Book{
 				"b_live": {ID: "b_live", Title: "Live", IsPrimaryVersion: &primary},
+				"b_np":   {ID: "b_np", Title: "Non-primary", IsPrimaryVersion: &notPrimary},
 				"b_hold": {ID: "b_hold", Title: "Holder", IsPrimaryVersion: &primary},
 			},
 		},
 		retired: []database.BookFileCore{
-			retiredBF("f_r_same", "b_hold", "/m/r1.mp3", "BBBBBBBB00000002"), // live row too: owner stays the live row
-			retiredBF("f_r_only", "b_hold", "/m/r2.mp3", "DDDDDDDD00000004"), // only claimant
+			retiredBF("f_r_same", "b_hold", "/m/r1.mp3", "BBBBBBBB00000002"),  // live row too: owner stays the live row
+			retiredBF("f_r_only", "b_hold", "/m/r2.mp3", "DDDDDDDD00000004"),  // only claimant
+			retiredBF("f_r_mixed", "b_hold", "/m/r3.mp3", "FFFFFFFF00000006"), // live row on a non-primary book + retired row under a primary holder
 		},
 	}
 	tracks := []ITLTrack{
 		{PersistentID: pidHexToBytes("BBBBBBBB00000002"), Genre: "Rock", Name: "Song"},
 		{PersistentID: pidHexToBytes("DDDDDDDD00000004"), Genre: "Podcast", Name: "Episode"},
 		{PersistentID: pidHexToBytes("EEEEEEEE00000005"), Genre: "Podcast", Name: "Unclaimed"},
+		{PersistentID: pidHexToBytes("FFFFFFFF00000006"), Genre: "Podcast", Name: "Mixed"},
 	}
 	r, err := computeCrossTypeCollisions(store, tracks)
 	if err != nil {
 		t.Fatalf("computeCrossTypeCollisions: %v", err)
 	}
-	if r.NonABOwned != 2 || r.NonABUnowned != 1 || r.CrossTypeCollisions != 2 {
-		t.Errorf("ownedByAny=%d unowned=%d collisions=%d, want 2/1/2", r.NonABOwned, r.NonABUnowned, r.CrossTypeCollisions)
+	if r.NonABOwned != 3 || r.NonABUnowned != 1 || r.CrossTypeCollisions != 3 {
+		t.Errorf("ownedByAny=%d unowned=%d collisions=%d, want 3/1/3", r.NonABOwned, r.NonABUnowned, r.CrossTypeCollisions)
 	}
 	if r.CollisionsRetiredOnlyOwner != 1 {
 		t.Errorf("CollisionsRetiredOnlyOwner = %d, want 1", r.CollisionsRetiredOnlyOwner)
+	}
+	// Only the live row on the primary b_live is a live-primary hazard: the
+	// retired-only PID and the mixed PID (live row on a non-primary) are not.
+	if r.CollisionsLivePrimaryOwner != 1 {
+		t.Errorf("CollisionsLivePrimaryOwner = %d, want 1 (retired rows under a primary holder are not live-primary owners)", r.CollisionsLivePrimaryOwner)
 	}
 	for _, s := range r.Samples {
 		if s.PID == "BBBBBBBB00000002" && s.OwnerFileID != "f_live" {

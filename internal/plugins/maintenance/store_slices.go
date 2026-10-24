@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -128,6 +128,10 @@ type fsRegroupFileStore interface {
 	// rows of one survivor and must recompute it once, not once per row.
 	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	// BookFilesAtPath is the complete, retired-inclusive "every row at this
+	// path" answer the gap check needs: GetBookFileByPath filters a retired row
+	// out and so says "free" for a file a retired version holds.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 }
 
 // fsExternalIDReassigner moves every external ID from one book to another in a

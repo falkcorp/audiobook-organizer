@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.5.2
+// version: 2.6.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-09-25
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -57,6 +57,9 @@ type fsGuardStore struct {
 	*database.PebbleStore
 	hardDeletes atomic.Int64
 	lookupErr   error
+	// atPathRowsErr, when set, is BookFilesAtPath's answer: the gap check reads
+	// every row at the path (retired ones included) through it.
+	atPathRowsErr error
 	// atPathErr and atPathIDs, when set, replace LiveBookIDsAtPath's answer,
 	// so the apply's book-folder re-check sees an error or a book the real
 	// store would not report.
@@ -77,6 +80,16 @@ func (s *fsGuardStore) LiveBookIDsAtPath(p string) ([]string, error) {
 func (s *fsGuardStore) DeleteBook(id string) error {
 	s.hardDeletes.Add(1)
 	return s.PebbleStore.DeleteBook(id)
+}
+
+func (s *fsGuardStore) BookFilesAtPath(p string) ([]database.BookFile, error) {
+	if s.atPathRowsErr != nil {
+		return nil, s.atPathRowsErr
+	}
+	if s.lookupErr != nil {
+		return nil, s.lookupErr
+	}
+	return s.PebbleStore.BookFilesAtPath(p)
 }
 
 func (s *fsGuardStore) GetBookFileByPath(p string) (*database.BookFile, error) {
