@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.4 -->
+<!-- version: 10.78.5 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-23 -->
+<!-- last-edited: 2026-10-24 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,89 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-FILE-INTRO-RUN** Once `feat/whisper-remote-extract` and the per-file intro PR are both merged and deployed, run `maintenance.transcribe-file-intros` as a dry run, record the real per-file time on the Mac workers, and replace the unmeasured 5.3 s/file estimate.
+- [ ] **TODO-FILE-INTRO-META** `transcribe.BatchResult` carries no model or language, so `IntroMeta.Model` and `.Language` are empty on every per-file result; have the path transport report the worker's model (from `/health`) so "same model for every track" is checkable per file.
+- [ ] **TODO-FILE-INTRO-FLUSH-ORDER** `fileIntroAccum.flush` copies the counters under its mutex but calls `PutFileIntroStats` after releasing it, so two workers flushing at once can land the older snapshot last and the persisted stats briefly go backwards (the final `flush(true)` is not exposed to it only because the pool has drained by then). Serialise the copy and the write behind a second mutex, or stamp a sequence and drop stale writes in the sink.
+- [ ] **TODO-FILE-INTRO-PROBE-PER-BATCH** `transcribe.TranscribeByPathBatch` runs `gateEndpoints` (one `/health` probe per endpoint) on every call, and the file-intro op sends batches of 8 files, so a full-library run issues a probe round for every 8 files. Measure it against the endpoints' own load; if it matters, cache the probe result for a short TTL inside `gateEndpoints` (a failed probe must still bench the endpoint immediately) or pass an already-probed endpoint set into the batch call.
+
+- [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126 (none blocks the preview; the first must land before PR 2 apply).
+  - [ ] No delete route or retention for stored lists (`mlist:list:` / `mlist:row:`): every upload is kept forever. Needed before PR 2 apply, which makes a list the input of a write.
+  - [ ] `masterlist.ClassifyASIN` only tries the ISBN-10 reading when the code is all digits, so an ISBN-10 whose check digit is `X` is classified as an ASIN instead of an ISBN-10.
+  - [ ] A generic `isbn` column that disagrees with an `isbn10` / `isbn13` column on the same row is dropped without an `identifier_conflict` issue.
+  - [ ] `ParseJSON`: one row with a wrong JSON type fails the whole file instead of becoming a row issue.
+  - [ ] An ambiguous ASIN tier returns without trying the ISBN tier, so a row whose ISBN would settle the match is left `ambiguous`.
+  - [ ] `checkAgreement` ignores survivors of trashed books when comparing the ASIN and ISBN hits.
+  - [ ] A runtime change of the upload limit gives the minimum of the middleware limit and the handler limit until restart.
+  - [ ] `RequireAdmin` answers 401 (not a pass-through) when `EnableAuth=false`, unlike `s.perm`, so the master-list routes are unreachable in a no-auth dev run.
+
+- [ ] **GUEST-SERVICE-TOKEN-FOLLOWUPS** Per-guest Cloudflare service token follow-ups:
+      (1) an admin "issue key" action (re-mint) for a guest whose mint failed at
+      accept (for example the missing "Access: Service Tokens > Edit" permission)
+      or who was reactivated after a deactivation revoked the key; the secret
+      must then be delivered once to the admin or by email, so decide the channel;
+      (2) hook `revokeGuestServiceToken` into user deletion when a user-delete
+      path exists (none on main today);
+      (3) first live run against the real Cloudflare API with the extra
+      permission, to confirm the `last_seen_at` field and the `forever` duration;
+      (4) `cfservicetoken.Client.Revoke` should check the exact name
+      `aorg-guest-<user id>` of the record it is revoking, not just the
+      `aorg-guest-` prefix;
+      (5) the accept request waits on Cloudflare for up to 45 s while minting:
+      consider a shorter bound, or minting after the response with the key
+      delivered another way.
+
+- [ ] **TODO-UNDO-JOURNAL-4107** undo journal follow-ups from #4107 round 10 —
+      non-blocking items from the round-10 and round-11 reviews of #4107 (N1, N2,
+      N4 and N6 from round 10, N3 from round 11), filed instead of fixed in that PR:
+      - [ ] N1 — the journal-clock seed tests overstate what they cover. Only
+        the present-key and missing-key cases open the store through
+        `NewPebbleStore`; the undecodable-row, malformed-key and list-entry
+        seed tests call `seedJournalClock` on a bare `&PebbleStore{db}`, and
+        the staging of more than 2,000 missing list entries (more than one
+        chunk) has no test. Drive those cases through a real open and add a
+        test with more than 2,000 missing entries.
+      - [ ] N2 — the orphan simulation counts against the old graph filter
+        (the marker history's ignored list), not against
+        `RevertResult.OrphanMarkers`, and its orphans sit in operations that
+        are never reverted, so the post-pass in `internal/audiobooks/revert.go`
+        that reports and stamps orphans is covered by one end-to-end test only.
+        Make the simulation assert on `OrphanMarkers` and revert the orphans'
+        own operations in some histories.
+      - [ ] N4 — an orphan marker whose own operation is never reverted is
+        reported by every later revert of that list, forever. Either stamp a
+        standing orphan that has no row in the same batch that writes the list,
+        or document how the owner clears it.
+      - [ ] N6 — `orphansIgnored` is an error value that is returned on success
+        when the row's own error is nil (`revert.go`, around the
+        `withOrphans` and `orphansIgnored` definitions). It is safe only
+        because `RevertOperation` is the sole caller of `revertChangeIn`. Make
+        the orphan markers a field of the row's result instead of an error.
+      - [ ] N3 — the open-time scan fails the whole store open on a transient
+        read error that is not "not found" (a `Get` of a list entry or of the
+        completion keys). Consider a retry with backoff at boot before giving up.
+
+- [ ] **USER-MERGE-REVIEW-NITS** Admin user-merge follow-ups from the #4118
+      review: (1) the temp-login token purge (PLAN Apply step 1) is not
+      implemented, so a pending temp-login token for the merged-away account
+      survives the lock; (2) `refuseForActiveOps` ignores scheduled fixer runs
+      whose params carry the absorbed id (decision D5): it only sees queued and
+      running operations; (3) the grant token is visible in the op params while
+      the run is queued: store only its hash on the op row and compare hashes on
+      redeem; (4) `DeactivateUser` on a merged-away account leaves it locked, so
+      an undo reactivates it: refuse or record that status change as a conflict;
+      (5) `Server.UserMerge()` caches a nil service permanently through its
+      `sync.Once` when the store is not ready at first use: retry until it is;
+      (6) the locked re-plan under every merge lock runs `warnAboutHistory`,
+      which scans every `merge:combine-journal:` value: skip the warnings in the
+      re-plan.
+      (7) `JSONStringField` and `RewriteJSONField` match field names
+      case-sensitively while the struct decoders fold case: unreachable for rows
+      written by `json.Marshal`, but a hand-written row with a differently cased
+      owner key would be read as unowned: make both match like the decoder, or
+      refuse a case-folded duplicate; (8) the owner-family refusals name a row
+      by position ("row 3"), which an admin cannot map to a row without
+      `AdminDetail`: return the position-to-key map in the admin-only detail.
 
 - [ ] **INVITE-PATH-REDACTION-FOLLOWUPS** Invite-path redaction follow-ups (#4112):
       (1) `internal/server/middleware/log_path_guard_test.go` only sees a
