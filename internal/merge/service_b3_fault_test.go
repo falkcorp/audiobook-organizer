@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -582,7 +582,7 @@ func TestB3_AttachVirtualFile_MoveBookFilesToBookError_NonFatal(t *testing.T) {
 	fault := &b3FaultStore{Store: real, failMoveBookFilesToBookFor: map[string]bool{strayOwner.ID: true}}
 	ms := NewService(fault)
 
-	n := ms.applyVirtualFile(ms.planVirtualFile(target, target.ID), target.ID)
+	n := ms.applyVirtualFile(mustPlanVirtualFile(t, ms, target, target.ID), target.ID)
 	assert.Equal(t, 0, n, "a failed reattach move must be warned and return 0, not panic")
 
 	// The stray file is still owned by its original book — the move never
@@ -602,7 +602,7 @@ func TestB3_AttachVirtualFile_CreateBookFileError_NonFatal(t *testing.T) {
 	fault := &b3FaultStore{Store: real, failCreateBookFile: true}
 	ms := NewService(fault)
 
-	n := ms.applyVirtualFile(ms.planVirtualFile(b, b.ID), b.ID)
+	n := ms.applyVirtualFile(mustPlanVirtualFile(t, ms, b, b.ID), b.ID)
 	assert.Equal(t, 0, n, "a failed CreateBookFile must be warned and return 0, not panic")
 
 	files, err := real.GetBookFiles(b.ID)
