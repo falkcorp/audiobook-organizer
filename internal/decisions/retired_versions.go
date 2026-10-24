@@ -1,5 +1,5 @@
 // file: internal/decisions/retired_versions.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c41e2a9-0d58-4b36-a1f3-5e92b6d08c74
 // last-edited: 2026-10-24
 
@@ -118,6 +118,9 @@ func RetiredBookResolver(r RetiredBookReader) IDResolver {
 				holders = append(holders, v.BookID)
 			}
 		}
+		// Sorted, so the failure (and the row fingerprint made from it) does
+		// not depend on the order the index happened to be read in.
+		slices.Sort(holders)
 		switch len(holders) {
 		case 0:
 			return id, nil

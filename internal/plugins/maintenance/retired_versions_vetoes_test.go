@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 91e6c0d4-3b2a-4f75-8d18-6a4f2c97e0b3
 // last-edited: 2026-10-24
 
@@ -91,7 +91,8 @@ func pairVetoed(t *testing.T, r OwnerVetoReader, a, b, fam string) bool {
 
 // The resolver follows idx:bv:from to the holder (also once the shell's row is
 // gone) and then the merge survivor, so a veto on a retired shell resolves and
-// blocks. The unresolved lookup, which is what the plan used before, does not.
+// blocks. A lookup by the names as recorded (exact, below, kept as the control)
+// does not.
 func TestOwnerVetoReader_ResolverFollowsTheIndexAndComposesWithTheMergeSurvivor(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.live("holder", "")
@@ -209,9 +210,10 @@ func TestRetiredVersions_PlanPairVetoThroughARetiredBook(t *testing.T) {
 	require.Equal(t, retCatWouldRetire, rows[rf.ids["free"]].Class)
 }
 
-// A shell that was merged into its target resolves to it, so the snapshot sees
-// one book, not a pair. A veto on that very pair must still hold the row (the
-// exact lookup stands beside the resolved one).
+// A shell that was merged into its target resolves to it, so the snapshot's
+// ends collapse into one book. A veto on that very pair must still hold the
+// row: the collapsed veto keeps both paths, and the shell's path took the
+// target (there is no separate lookup of the names as recorded any more).
 func TestRetiredVersions_PlanDirectPairVetoSurvivesAMergedIntoTarget(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
