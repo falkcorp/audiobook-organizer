@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -45,7 +45,27 @@ func newRetireRevertFx(t *testing.T) *retireRevertFx {
 		require.NoError(t, st.CreateBookFile(&row), "row %d", i)
 		fx.rows = append(fx.rows, &row)
 	}
+	// A retire acts on a trashed shell; the writer refuses a live one.
+	trashBook(t, st, shell)
 	return fx
+}
+
+// trashBook soft-deletes b, as a combine or an earlier retire leaves a shell.
+func trashBook(t *testing.T, st *database.PebbleStore, b *database.Book) {
+	t.Helper()
+	trashed, at := true, time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	b.MarkedForDeletion, b.MarkedForDeletionAt = &trashed, &at
+	_, err := st.UpdateBook(b.ID, b)
+	require.NoError(t, err)
+}
+
+// untrashBook puts a trashed book back, so it can hold a retired version.
+func untrashBook(t *testing.T, st *database.PebbleStore, b *database.Book) {
+	t.Helper()
+	live := false
+	b.MarkedForDeletion, b.MarkedForDeletionAt = &live, nil
+	_, err := st.UpdateBook(b.ID, b)
+	require.NoError(t, err)
 }
 
 func (fx *retireRevertFx) ids() []string {
@@ -342,6 +362,7 @@ func TestRevertOperationForBooks_RevertsOneShellAtATime(t *testing.T) {
 	require.NoError(t, err)
 	row2 := &database.BookFile{BookID: shell2.ID, FilePath: "/lib/syn/shell2/01.mp3", FileHash: "hash-c", TrackNumber: 1}
 	require.NoError(t, fx.st.CreateBookFile(row2))
+	trashBook(t, fx.st, shell2)
 	w := fx.writer("op-two")
 	fx.retire(t, w, "ver-one")
 	require.NoError(t, w.RetireVersion(repairs.RetireSpec{Shell: shell2.ID, Holder: fx.holder.ID, VersionID: "ver-two",
@@ -380,16 +401,19 @@ func TestRevertOperationForBooks_RevertsOneShellAtATime(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRetireUndoer_CheckAndRevertAShell(t *testing.T) {
+func TestRetireUndoer_PlanAndRevertAShell(t *testing.T) {
 	fx := newRetireRevertFx(t)
 	fx.retire(t, fx.writer("op-undoer"), "ver-undoer")
 	u := NewRevertService(fx.st).retireUndoer()
 
-	live, reasons, err := u.CheckRetireRevert("op-undoer", fx.shell.ID)
+	plan, err := u.PlanRetireRevert("op-undoer", fx.shell.ID)
 	require.NoError(t, err)
-	assert.True(t, live)
-	assert.Empty(t, reasons)
-	// The check wrote nothing.
+	assert.True(t, plan.Live)
+	assert.Empty(t, plan.Reasons)
+	assert.ElementsMatch(t, fx.ids(), plan.PendingFileIDs, "the shell's rows the retire holds")
+	assert.Empty(t, plan.RevertedFileIDs)
+	require.NotNil(t, plan.Revert)
+	// The plan wrote nothing.
 	for _, id := range fx.ids() {
 		f, gerr := fx.st.GetBookFileByID(fx.holder.ID, id)
 		require.NoError(t, gerr)
@@ -404,26 +428,31 @@ func TestRetireUndoer_CheckAndRevertAShell(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	live, reasons, err = u.CheckRetireRevert("op-undoer", fx.shell.ID)
+	plan, err = u.PlanRetireRevert("op-undoer", fx.shell.ID)
 	require.NoError(t, err)
-	assert.True(t, live)
-	require.NotEmpty(t, reasons)
-	assert.Contains(t, reasons[0], fx.rows[0].ID)
+	assert.True(t, plan.Live)
+	require.NotEmpty(t, plan.Reasons)
+	assert.Contains(t, plan.Reasons[0], fx.rows[0].ID)
+	require.Error(t, plan.Revert(), "a refused plan's Revert refuses too, writing nothing")
 	_, err = fx.st.ModifyBookFile(fx.holder.ID, edited.ID, func(f *database.BookFile) error {
 		f.VersionID = "ver-undoer"
 		return nil
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, u.RevertRetire("op-undoer", fx.shell.ID))
+	plan, err = u.PlanRetireRevert("op-undoer", fx.shell.ID)
+	require.NoError(t, err)
+	require.Empty(t, plan.Reasons)
+	require.NoError(t, plan.Revert())
 	for _, id := range fx.ids() {
 		assert.Equal(t, fx.shell.ID, view(t, fx.st, fx.shell.ID, id).BookID)
 	}
-	live, reasons, err = u.CheckRetireRevert("op-undoer", fx.shell.ID)
+	plan, err = u.PlanRetireRevert("op-undoer", fx.shell.ID)
 	require.NoError(t, err)
-	assert.False(t, live, "a reverted retire is a dead link")
-	assert.Empty(t, reasons)
-	require.NoError(t, u.RevertRetire("op-undoer", fx.shell.ID), "reversing a dead link is a no-op")
+	assert.False(t, plan.Live, "a reverted retire is a dead link")
+	assert.Empty(t, plan.PendingFileIDs)
+	assert.ElementsMatch(t, fx.ids(), plan.RevertedFileIDs, "and its rows are the shell's own again")
+	assert.Nil(t, plan.Revert)
 }
 
 func TestRetireUndoer_RefusesRowsTheCombineUndoDoesNotReverse(t *testing.T) {
@@ -434,12 +463,12 @@ func TestRetireUndoer_RefusesRowsTheCombineUndoDoesNotReverse(t *testing.T) {
 		FieldName: "title", OldValue: "a", NewValue: "b",
 	}))
 	u := NewRevertService(fx.st).retireUndoer()
-	live, reasons, err := u.CheckRetireRevert("op-extra", fx.shell.ID)
+	plan, err := u.PlanRetireRevert("op-extra", fx.shell.ID)
 	require.NoError(t, err)
-	assert.True(t, live)
-	require.Len(t, reasons, 1)
-	assert.Contains(t, reasons[0], "metadata_update")
-	err = u.RevertRetire("op-extra", fx.shell.ID)
+	assert.True(t, plan.Live)
+	require.Len(t, plan.Reasons, 1)
+	assert.Contains(t, plan.Reasons[0], "metadata_update")
+	err = plan.Revert()
 	require.Error(t, err)
 	f, gerr := fx.st.GetBookFileByID(fx.holder.ID, fx.rows[0].ID)
 	require.NoError(t, gerr)
@@ -455,6 +484,7 @@ func TestRevertScope_SelectsByShellAndVersionNeverByHolder(t *testing.T) {
 		{ID: "mi", BookID: "s2", ChangeType: undo.ChangeTypeBookMergedInto, FieldName: "merged_into_book_id", NewValue: "holder"},
 		{ID: "rehome1", BookID: "h2", ChangeType: undo.ChangeTypeRetiredVersionRehome, FieldName: undo.BookVersionField("v1"), OldValue: "holder", NewValue: "h2"},
 		{ID: "rehome2", BookID: "h2", ChangeType: undo.ChangeTypeRetiredVersionRehome, FieldName: undo.BookVersionField("v2"), OldValue: "holder", NewValue: "h2"},
+		{ID: "rehomeFromShell", BookID: "h2", ChangeType: undo.ChangeTypeRetiredVersionRehome, FieldName: undo.BookVersionField("v7"), OldValue: "s1", NewValue: "h2"},
 		{ID: "plan", BookID: "s1", ChangeType: undo.ChangeTypeRepairPlanRecord, FieldName: "row:1"},
 		{ID: "bad", BookID: "holder", ChangeType: undo.ChangeTypeBookFileRetire, FieldName: "book_file:f9", OldValue: "{", NewValue: "{"},
 	}
@@ -462,7 +492,8 @@ func TestRevertScope_SelectsByShellAndVersionNeverByHolder(t *testing.T) {
 	for _, c := range newRevertScope([]string{"s1"}).filter(rows) {
 		got = append(got, c.ID)
 	}
-	assert.Equal(t, []string{"r1", "ext", "rehome1"}, got)
+	assert.Equal(t, []string{"r1", "ext", "rehome1", "rehomeFromShell", "bad"}, got,
+		"a rehome that took a version off the shell is the shell's; a retire row that does not parse is selected, to be refused by name")
 }
 
 func TestRevertRetire_MissingStoreSurfaceRefusesRatherThanPanics(t *testing.T) {

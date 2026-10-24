@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -252,7 +252,7 @@ var opChangePruneBeforeCommit func()
 // (undo.ChangeTypeBookVersionCreate, ChangeTypeBookFileRetire,
 // ChangeTypeRetiredVersionRehome) are the journal of a retire: the only record
 // of which shell each retired file row came from and which version it carried.
-// A combine's undo finds its retire through the merge:combine-retire: link and
+// A combine's undo finds its retires through the merge:combine-retire: links and
 // treats a link whose op has no pending rows as already reversed, so a pruned
 // retire would be indistinguishable from a reversed one and the undo would
 // restore the shell while its files stayed retired on the holder. The combine
