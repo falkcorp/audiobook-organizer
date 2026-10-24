@@ -1,5 +1,5 @@
 // file: internal/decisions/store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0f7b3a91-d542-4e86-a1c3-78e9b60d2f15
 // last-edited: 2026-10-24
 
@@ -89,6 +89,7 @@ type Store struct {
 	now func() time.Time
 
 	lockScope string
+	cache     *RowCache
 
 	idMu     sync.Mutex
 	entropy  *ulid.MonotonicEntropy
@@ -315,10 +316,21 @@ func (s *Store) recordLocked(in Input, ids []string, subject string) (*Record, e
 	for _, eid := range ids {
 		writes = append(writes, database.RawWrite{Key: entityKey(in.EntityType, eid, rec.ID)})
 	}
-	if err := s.kv.ApplyRawBatch(writes); err != nil {
+	if err := s.commit(writes); err != nil {
 		return nil, fmt.Errorf("decisions: commit %s: %w", rec.ID, err)
 	}
 	return &rec, nil
+}
+
+// commit is the ONE way this package writes the decision keys: it applies the
+// batch and counts the write. The count is bumped whether or not the commit
+// reported success, because a cached read of the log (RowCache) must never
+// outlive a write that may have landed. TestDecisionKeysHaveOneWriter holds
+// the package to it.
+func (s *Store) commit(writes []database.RawWrite) error {
+	err := s.kv.ApplyRawBatch(writes)
+	bumpLogGeneration(s.lockScope)
+	return err
 }
 
 // checkTransition refuses a decision the current state does not allow.
