@@ -1,7 +1,7 @@
 // file: web/src/utils/purgeSummary.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b2e8f13-9c47-4d60-a3e1-8f0d6b4a7c25
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 import { describe, expect, it } from 'vitest';
 import type { PurgeResult } from '../services/api';
@@ -187,6 +187,31 @@ describe('books trashed after the preview', () => {
       /1 book was put in the trash after the preview/
     );
     expect(outcomeNotes({ ...r, trashed_after_preview: 0 })).toEqual([]);
+  });
+});
+
+describe('books left alone by the window or the preview binding', () => {
+  it('not-yet-due books count as decided, so a preview adds up to the trash total', () => {
+    const r: PurgeResult = { ...base, attempted: 10, purged: 0, purgeable: 4, skipped_owns_files: 1, not_yet_due: 5 };
+    expect(decidedCount(r)).toBe(10);
+    expect(previewNotes(r).join(' ')).toMatch(/5 books have not been in the trash long enough yet/);
+    expect(previewNotes({ ...r, not_yet_due: 1 }).join(' ')).toMatch(
+      /1 book has not been in the trash long enough yet, so it is left alone/
+    );
+    expect(previewNotes({ ...r, not_yet_due: 0 })).toEqual([]);
+  });
+  it('books the preview showed as kept are decided and named in a finished pass', () => {
+    const r: PurgeResult = { ...base, attempted: 6, purged: 3, skipped_owns_files: 1, not_in_preview: 2 };
+    expect(decidedCount(r)).toBe(6);
+    expect(outcomeNotes(r).join(' ')).toMatch(/2 books were shown as kept in the preview you confirmed/);
+    expect(outcomeNotes({ ...r, not_in_preview: 1 }).join(' ')).toMatch(
+      /1 book was shown as kept in the preview you confirmed and has since become purgeable/
+    );
+  });
+  it('a finished pass names the window too', () => {
+    const r: PurgeResult = { ...base, attempted: 4, purged: 3, not_yet_due: 1 };
+    expect(decidedCount(r)).toBe(4);
+    expect(outcomeNotes(r).join(' ')).toMatch(/not been in the trash long enough/);
   });
 });
 

@@ -1,7 +1,7 @@
 // file: web/src/utils/purgeSummary.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c3a9e15-2d84-4b60-a1f7-5e0d8b4c6a29
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 import type { PurgeBreakdown, PurgeResult } from '../services/api';
 
@@ -143,6 +143,10 @@ export function outcomeNotes(r: PurgeResult): string[] {
   }
   const after = r.trashed_after_preview ?? 0;
   if (after > 0) notes.push(afterPreviewNote(after));
+  const notInPreview = r.not_in_preview ?? 0;
+  if (notInPreview > 0) notes.push(notInPreviewNote(notInPreview));
+  const notDue = r.not_yet_due ?? 0;
+  if (notDue > 0) notes.push(notYetDueNote(notDue));
   return notes;
 }
 
@@ -165,8 +169,18 @@ export function decidedCount(r: PurgeResult): number {
     (r.kept_has_progress ?? 0) +
     (r.carry_failed ?? 0) +
     (r.failed ?? 0) +
-    (r.trashed_after_preview ?? 0)
+    (r.trashed_after_preview ?? 0) +
+    (r.not_in_preview ?? 0) +
+    (r.not_yet_due ?? 0)
   );
+}
+
+function notYetDueNote(n: number): string {
+  return `${books(n)} ${plural(n, 'has', 'have')} not been in the trash long enough yet, so ${plural(n, 'it is', 'they are')} left alone.`;
+}
+
+function notInPreviewNote(n: number): string {
+  return `${books(n)} ${plural(n, 'was', 'were')} shown as kept in the preview you confirmed and ${plural(n, 'has', 'have')} since become purgeable, so ${plural(n, 'it was', 'they were')} left alone. Open the purge again to see ${plural(n, 'it', 'them')}.`;
 }
 
 function afterPreviewNote(n: number): string {
@@ -180,7 +194,7 @@ function undecidedNote(failed: number): string {
 /**
  * Notes of a preview, so the numbers shown add up to the trash total
  * (purgeable + owns files + undo-possible + has-progress + carry-failed +
- * failed): the books the preview could not decide are named, not hidden.
+ * failed + not yet due): the books the preview could not decide are named, not hidden.
  */
 export function previewNotes(r: PurgeResult): string[] {
   const notes: string[] = [];
@@ -192,6 +206,8 @@ export function previewNotes(r: PurgeResult): string[] {
   }
   const failed = r.failed ?? 0;
   if (failed > 0) notes.push(undecidedNote(failed));
+  const notDue = r.not_yet_due ?? 0;
+  if (notDue > 0) notes.push(notYetDueNote(notDue));
   return notes;
 }
 

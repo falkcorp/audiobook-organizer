@@ -1,7 +1,7 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -194,7 +194,7 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
                         ? 'No file would be deleted from disk.'
                         : `${files.count.toLocaleString()} ${files.count === 1 ? 'file' : 'files'} would be deleted from disk:`}
                       {files.kept > 0
-                        ? ` ${files.kept.toLocaleString()} ${files.kept === 1 ? 'file stays' : 'files stay'} where ${files.kept === 1 ? 'it is' : 'they are'} (outside the library folder, or still used by another book).`
+                        ? ` ${files.kept.toLocaleString()} ${files.kept === 1 ? 'file stays' : 'files stay'} where ${files.kept === 1 ? 'it is' : 'they are'} (outside the library folder, protected, or also named by another book, including one that stays in the trash).`
                         : ''}
                     </Typography>
                     <Box component="ul" sx={{ mt: 0.5, mb: 0, pl: 3 }}>

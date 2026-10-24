@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.203.0
+// version: 2.203.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1585,6 +1585,13 @@ export interface PurgeResult {
   trashed_before?: string;
   /** books trashed after `trashed_before`: left alone, so not in any count above */
   trashed_after_preview?: number;
+  /** books still inside the retention window (not trashed long enough yet): left alone, counted in `attempted` */
+  not_yet_due?: number;
+  /**
+   * A purge only: books the preview it is bound to showed as kept that have
+   * since become purgeable. Left alone; a new preview lists them.
+   */
+  not_in_preview?: number;
   /**
    * Preview only: the files a purge with delete_files would remove from disk
    * (capped; `files_to_delete_count` is exact). Listed whether or not the
@@ -1592,7 +1599,7 @@ export interface PurgeResult {
    */
   files_to_delete?: string[];
   files_to_delete_count?: number;
-  /** preview only: purgeable books whose file a purge keeps (outside the library, or still in use) */
+  /** preview only: files a purge keeps (outside the library, protected, or also named by another book, even one that stays in the trash) */
   files_kept?: number;
   errors: string[];
 }
