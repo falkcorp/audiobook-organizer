@@ -1,10 +1,11 @@
 // file: web/src/services/versionApi.ts
-// version: 1.9.1
+// version: 1.10.1
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 
 import type { RevertOperationResult } from './api';
 import { apiFetch } from '../utils/apiFetch';
+import { unwrapData } from '../utils/apiResponse';
 
 const API_BASE = '/api/v1';
 
@@ -31,9 +32,54 @@ export interface BookVersion {
   /** Status purge_failed: the files a purge could not remove and why. A retry (purge-now) or a hard delete are the ways out. */
   purge_failed?: PurgeFileNote[];
   purge_failed_at?: string;
+  /** Set only on a retired version: the trashed or merged book whose files it holds. */
+  retired_from_book_id?: string;
+  retire_op_id?: string;
+  retired_at?: string;
   created_at: string;
   updated_at: string;
   version: number;
+}
+
+/** One retired file of a retired version, as GET /audiobooks/:id/retired-versions lists it. */
+export interface RetiredVersionFile {
+  id: string;
+  file_path: string;
+  original_filename?: string;
+  format?: string;
+  track_number?: number;
+  disc_number?: number;
+  /** Seconds. */
+  duration?: number;
+  file_size?: number;
+  missing: boolean;
+}
+
+/** A retired version the book holds, with its rows. */
+export interface RetiredVersion {
+  id: string;
+  /** The holder: the live book the rows were moved onto (the book being viewed). */
+  book_id: string;
+  retired_from_book_id?: string;
+  retired_from_title?: string;
+  /** False when the book it was retired out of has been purged; restore is refused then. */
+  shell_exists: boolean;
+  retire_op_id?: string;
+  retired_at?: string;
+  source?: string;
+  source_original_path?: string;
+  ingest_date: string;
+  file_count: number;
+  total_size: number;
+  /** Seconds. */
+  total_duration: number;
+  files: RetiredVersionFile[];
+}
+
+export interface RestoreRetiredVersionResult {
+  version_id: string;
+  restored_to_book: string;
+  restored_files: number;
 }
 
 export interface UndoConflictReport {
@@ -90,6 +136,28 @@ export async function purgeVersion(bookId: string, versionId: string): Promise<B
 
 export async function hardDeleteVersion(versionId: string): Promise<void> {
   await jsonFetch(`${API_BASE}/purged-versions/${versionId}`, { method: 'DELETE' });
+}
+
+/** The retired versions bookId holds (files of trashed or merged books moved onto it). */
+export async function listRetiredVersions(bookId: string): Promise<RetiredVersion[]> {
+  const body = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/retired-versions`);
+  return unwrapData<{ versions?: RetiredVersion[] }>(body).versions ?? [];
+}
+
+/**
+ * Moves a retired version's files back to the trashed book they were retired
+ * out of. The server refuses (409) when that book was purged or is not in the
+ * trash; the thrown error carries the reason in `.message`.
+ */
+export async function restoreRetiredVersion(
+  bookId: string,
+  versionId: string
+): Promise<RestoreRetiredVersionResult> {
+  const body = await jsonFetch(
+    `${API_BASE}/audiobooks/${bookId}/retired-versions/${versionId}/restore`,
+    { method: 'POST' }
+  );
+  return unwrapData<RestoreRetiredVersionResult>(body);
 }
 
 export async function getUndoPreflight(operationId: string): Promise<UndoConflictReport> {

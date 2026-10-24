@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.69.0
+// version: 1.69.1
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -156,6 +156,22 @@ export const BookDetail = () => {
   const [itunesLinked, setItunesLinked] = useState(false);
   const [filesRefreshKey, setFilesRefreshKey] = useState(0);
   const refreshFilesTab = () => setFilesRefreshKey((k) => k + 1);
+  // "Show retired files": the book's retired rows, kept apart from bookFiles
+  // (which feeds selection, split, move and the hash chain). The switch and the
+  // loaded rows are remembered with the book id they belong to, so navigating to
+  // another book turns it off without a reset effect.
+  const [retiredShownFor, setRetiredShownFor] = useState<string | null>(null);
+  const [loadedRetired, setLoadedRetired] = useState<{
+    bookId: string;
+    files: api.BookFile[];
+  } | null>(null);
+  const showRetiredFiles = !!id && retiredShownFor === id;
+  // null = still loading.
+  const retiredFiles = loadedRetired && loadedRetired.bookId === id ? loadedRetired.files : null;
+  const handleShowRetiredFilesChange = (show: boolean) => {
+    setRetiredShownFor(show && id ? id : null);
+    if (!show) setLoadedRetired(null);
+  };
   const [compareSnapshotTs, setCompareSnapshotTs] = useState<string | null>(null);
   const [itunesPidCount, setItunesPidCount] = useState(0);
   const [itunesExternalIDs, setItunesExternalIDs] = useState<api.ExternalIDMapping[]>([]);
@@ -367,6 +383,26 @@ export const BookDetail = () => {
       toast('Failed to link version', 'error');
     }
   };
+
+  // Load the retired rows while the "Show retired files" switch is on.
+  useEffect(() => {
+    if (!id || !showRetiredFiles) return;
+    let cancelled = false;
+    api
+      .getBookFiles(id, { includeRetired: true, skipDiskCheck: true })
+      .then((result) => {
+        if (cancelled) return;
+        setLoadedRetired({ bookId: id, files: (result.files ?? []).filter((f) => f.retired) });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setRetiredShownFor(null);
+        toast('Failed to load retired files.', 'error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, showRetiredFiles, filesRefreshKey, toast]);
 
   // Reset file/segment state when navigating between books (FE-4).
   useEffect(() => {
@@ -1230,6 +1266,9 @@ export const BookDetail = () => {
           book={book}
           versions={versions}
           bookFiles={bookFiles}
+          retiredFiles={retiredFiles}
+          showRetiredFiles={showRetiredFiles}
+          onShowRetiredFilesChange={handleShowRetiredFilesChange}
           segments={segments}
           versionSegments={versionSegments}
           versionFileTags={versionFileTags}
