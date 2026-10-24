@@ -1,5 +1,5 @@
 // file: internal/database/iface_retired.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d6b0c1e-8f3a-4b57-9e21-6a7c52d9f0b3
 // last-edited: 2026-10-23
 
@@ -25,6 +25,25 @@ package database
 //     ID-only LookupAcoustIDCandidates and LSHProbe (their callers read the row
 //     and must skip a Retired one; the fpidx: value still names the shell).
 //
+// THE ONE RULE for what a retired row means to a caller. Two different questions
+// get two different answers, and a caller must know which one it is asking:
+//
+//   - "Which live book owns this file?" (identifying an owner: the twin of a
+//     leftover, the survivor of a same-path retire, the book a scan attributes a
+//     file to). A retired row is NOT an owner. It is keyed under its holder only
+//     to keep the row addressable, so counting it would make the holder look like
+//     a second owner of a file its live sibling owns.
+//   - "May I put a row on this file?" (creating a book_file, repointing one onto
+//     the path, building rows from a folder, regrouping a gap). A retired row IS a
+//     claim, whoever holds it, whether or not the holder is live and even when
+//     the holder is the book doing the writing: the file is that retired
+//     version's file, and two rows on one file is the corruption the retired-
+//     version model exists to prevent. Gate such a write on the complete
+//     BookFilesAtPath answer and refuse on RetiredClaimOnPath.
+//
+// Never answer the second question with GetBookFileByPath: it filters the
+// retired row out and so says "free" for a file a retired row holds.
+//
 // These two interfaces, plus the include-retired readers below, are the only
 // ways to see or move a retired row through the default-skipping reads.
 //
@@ -49,6 +68,11 @@ type RetiredBookFileReader interface {
 	// PID held only by a retired row (the iTunes importers use it to recognise a
 	// track whose version was retired into another book).
 	GetBookFileByPIDIncludingRetired(itunesPID string) (*BookFile, error)
+	// GetBookFileByPathIncludingRetired is GetBookFileByPath that also answers a
+	// path held only by a retired row. It reads the single-owner path index, so
+	// it is one row per CRC (last writer wins); a caller gating a write on
+	// "nothing holds this path" must use BookFilesAtPath instead.
+	GetBookFileByPathIncludingRetired(path string) (*BookFile, error)
 }
 
 // RetiredBookFileWriter retires, restores and re-homes book_file rows.

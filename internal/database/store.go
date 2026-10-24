@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.123.0
+// version: 2.124.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-23
 
@@ -1000,8 +1000,8 @@ type BookFile struct {
 	// BookFilesWithHash, LookupAcoustIDCandidates and LSHProbe still return it
 	// (see the list in iface_retired.go). The retired-aware readers
 	// (GetBookFilesIncludingRetired, GetRetiredBookFiles,
-	// GetAllBookFilesCoreIncludingRetired, GetBookFileByPIDIncludingRetired)
-	// always return it.
+	// GetAllBookFilesCoreIncludingRetired, GetBookFileByPIDIncludingRetired,
+	// GetBookFileByPathIncludingRetired) always return it.
 	//
 	// omitzero, never omitempty, for the same v1/v2 reason as Scan: a live row
 	// serializes byte-identically to a row written before the field existed.

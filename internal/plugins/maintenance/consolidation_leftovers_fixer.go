@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-23
 
@@ -840,13 +840,18 @@ func leftoverWalkOwners(store OpsStore, scope string, size int64, seen map[strin
 		if info.Size() != size {
 			return nil
 		}
-		bf, err := store.GetBookFileByPath(p)
+		// The retired-inclusive lookup, so the Retired test below is a test of what
+		// the store holds (GetBookFileByPath never returns a retired row, which made
+		// the test dead). This walk only IDENTIFIES the live twin of a leftover's
+		// audio and writes no row onto the path, so it asks the "which live book owns
+		// this file" question (database/iface_retired.go): a retired row is not an
+		// owner. It is a retired version held under the live book it was folded into,
+		// and the live book would otherwise read as the second owner that makes a
+		// leftover ambiguous.
+		bf, err := database.BookFileByPathIncludingRetired(store, p)
 		if err != nil {
 			return fmt.Errorf("read the row at %s: %w", p, err)
 		}
-		// A retired row is not an owner of this audio: it is a retired version held
-		// under the live book it was folded into, and the live book would otherwise
-		// read as the second owner that makes a leftover ambiguous.
 		if bf != nil && !bf.Retired && !seen[bf.ID] {
 			seen[bf.ID] = true
 			out = append(out, bf.Core())

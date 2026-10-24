@@ -1,5 +1,5 @@
 // file: internal/database/retired_lookup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
 // last-edited: 2026-10-23
 
@@ -11,9 +11,9 @@ import (
 )
 
 // ErrRetiredReaderUnavailable is returned by the IncludingRetired helpers when
-// the store offers neither the retired-row reader nor a plain getter to fall
-// back on, so a caller that needs the retired rows learns it cannot have them
-// instead of quietly working from the live subset.
+// the store does not offer the retired-row reader, so a caller that needs the
+// retired rows learns it cannot have them instead of quietly working from the
+// live subset.
 var ErrRetiredReaderUnavailable = errors.New("store cannot read retired book_file rows")
 
 // AllBookFilesCoreIncludingRetired returns every book_file row, live and
@@ -21,18 +21,59 @@ var ErrRetiredReaderUnavailable = errors.New("store cannot read retired book_fil
 // cannot name RetiredBookFileReader themselves.
 //
 // The store is resolved through AsCapability, so it reaches the Pebble store
-// through decorators. A store that does not implement the reader (a MockStore,
-// a hand-written test fake) is an in-memory library that has never had a row
-// retired, so for it the plain GetAllBookFilesCore IS the complete list and is
-// used; the production store always takes the first branch.
+// through decorators that opt in via Unwrap. It FAILS CLOSED: a store that does
+// not resolve to a RetiredBookFileReader (a decorator that embeds Store without
+// Unwrap, a test double that never declared itself) answers
+// ErrRetiredReaderUnavailable, never the live-only GetAllBookFilesCore. A claim
+// set built from the live rows alone would silently omit every retired row's
+// path and let a write land on a file a retired version holds, and the result
+// would look exactly like a complete one. The hand-written MockStore implements
+// the reader (it holds no retired rows), so tests that use it are unaffected;
+// any other fake an op reaches must implement GetAllBookFilesCoreIncludingRetired
+// itself.
 func AllBookFilesCoreIncludingRetired(s any) ([]BookFileCore, error) {
-	if r, ok := AsCapability[RetiredBookFileReader](s); ok {
-		return r.GetAllBookFilesCoreIncludingRetired()
+	r, ok := AsCapability[RetiredBookFileReader](s)
+	if !ok {
+		return nil, fmt.Errorf("all book_file rows: %w", ErrRetiredReaderUnavailable)
 	}
-	if g, ok := s.(interface {
-		GetAllBookFilesCore() ([]BookFileCore, error)
-	}); ok {
-		return g.GetAllBookFilesCore()
+	return r.GetAllBookFilesCoreIncludingRetired()
+}
+
+// BookFileByPathIncludingRetired is GetBookFileByPath that also answers a path
+// held only by a retired row, for callers that narrow the store to a local
+// interface. Like AllBookFilesCoreIncludingRetired it fails closed. It reads
+// the single-owner path index (one row per CRC, last writer wins); a caller
+// gating a WRITE on "no row holds this path" reads every row at the path with
+// BookFileRowsAtPathStrict and asks RetiredClaimOnPath.
+func BookFileByPathIncludingRetired(s any, path string) (*BookFile, error) {
+	r, ok := AsCapability[RetiredBookFileReader](s)
+	if !ok {
+		return nil, fmt.Errorf("book_file at %q: %w", path, ErrRetiredReaderUnavailable)
 	}
-	return nil, fmt.Errorf("all book_file rows: %w", ErrRetiredReaderUnavailable)
+	return r.GetBookFileByPathIncludingRetired(path)
+}
+
+// RetiredClaimOnPath returns the retired row among rows (one path's
+// BookFilesAtPath answer), or nil when none is retired. When several are, the
+// smallest (BookID, ID) is returned so the answer, and the message built from
+// it, is deterministic.
+//
+// It is the single place the claim rule in iface_retired.go is written for
+// WRITE gates: a retired row counts as a claim on its file whoever holds it,
+// whether or not the holder is live, and even when the holder is the very book
+// that wants a row on the path. It deliberately takes no "self" or liveness
+// argument; every caller that filtered its own or a dead book's rows out of an
+// "owners" list was letting a retired version of itself through.
+func RetiredClaimOnPath(rows []BookFile) *BookFile {
+	var best *BookFile
+	for i := range rows {
+		r := &rows[i]
+		if !r.Retired {
+			continue
+		}
+		if best == nil || r.BookID < best.BookID || (r.BookID == best.BookID && r.ID < best.ID) {
+			best = r
+		}
+	}
+	return best
 }

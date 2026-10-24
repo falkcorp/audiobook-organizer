@@ -1,5 +1,5 @@
 // file: internal/itunes/cross_type.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b7e1a92-3c6d-4f80-9a15-8e2c7b3d1f64
 // last-edited: 2026-10-23
 //
@@ -223,8 +223,14 @@ func computeCrossTypeCollisions(store PIDIntegrityStore, tracks []ITLTrack) (*Cr
 				s.OwnerSoftDelete = b.IsSoftDeleted()
 			}
 		}
-		// A collision is acute when ANY owner is a live primary.
+		// A collision is acute when ANY owner is a live primary. A retired row is
+		// keyed under its holder, usually a live primary, but it is not a row a
+		// relocate would rewrite: counting it would report a retired-only PID (and a
+		// PID whose live row is on a non-primary book) as a live-primary hazard.
 		for _, f := range owners {
+			if f.Retired {
+				continue
+			}
 			if b := books[f.BookID]; b != nil {
 				pr := b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 				del := b.IsSoftDeleted()

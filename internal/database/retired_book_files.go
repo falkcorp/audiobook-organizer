@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-23
 
@@ -146,6 +146,12 @@ func (p *PebbleStore) GetAllBookFilesCoreIncludingRetired() ([]BookFileCore, err
 // filter. See RetiredBookFileReader.
 func (p *PebbleStore) GetBookFileByPIDIncludingRetired(itunesPID string) (*BookFile, error) {
 	return p.getBookFileByPIDAny(itunesPID)
+}
+
+// GetBookFileByPathIncludingRetired is GetBookFileByPath without the retired
+// filter. See RetiredBookFileReader.
+func (p *PebbleStore) GetBookFileByPathIncludingRetired(path string) (*BookFile, error) {
+	return p.getBookFileByPathAny(path)
 }
 
 // GetRetiredVersionsFromBook returns the retired versions retired out of

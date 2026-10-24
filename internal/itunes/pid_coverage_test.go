@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b5990a2-9a20-4b60-b852-64e4f8edc841
-// last-edited: 2026-09-11
+// last-edited: 2026-10-23
 
 package itunes
 
@@ -21,6 +21,7 @@ import (
 // coverageStoreFake is a read-only PIDCoverageStore. It records the paging
 // arguments so a test can pin that the census asks for every book (limit 0).
 type coverageStoreFake struct {
+	noRetiredRows
 	files    []database.BookFileCore
 	books    []database.Book
 	filesErr error
@@ -33,6 +34,11 @@ type coverageStoreFake struct {
 
 func (f *coverageStoreFake) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.files, f.filesErr
+}
+
+// GetAllBookFilesCoreIncludingRetired: this fake holds no retired row.
+func (f *coverageStoreFake) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return f.GetAllBookFilesCore()
 }
 
 func (f *coverageStoreFake) ListBooksByITunesPID(limit, offset int) ([]database.Book, error) {
