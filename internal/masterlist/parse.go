@@ -1,7 +1,7 @@
 // file: internal/masterlist/parse.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a1896ea-2d97-4da6-bb85-27abe9094240
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package masterlist
 
@@ -666,7 +666,7 @@ func (r *Row) addSource(source, id, purchased, listened string, issue func(code,
 		return
 	}
 	if source == "" {
-		source = "other"
+		source = UnlabelledSource
 	}
 	check := func(field, v string) string {
 		if v == "" {
