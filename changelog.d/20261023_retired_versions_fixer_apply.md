@@ -9,11 +9,16 @@ book it lost to (nothing is deleted), its external ids move to that book, its
 merged-into link is set, and any retired versions it held move too. Every write
 is journaled first (`repair_plan_record`, `book_version_create`,
 `book_file_retire`, `external_id_reassign`, `book_merged_into`,
-`retired_version_rehome`); the undo package does not yet understand the three
-new change types, which land with the undo change. Applies are a dry run unless
+`retired_version_rehome`). The undo package does not yet understand the three
+new change types (they land with PR 5), so reverting a retire operation from
+the Operations page is refused as a whole with a 409 rather than half-undone. Applies are a dry run unless
 explicitly told to write, partition by holder so no two workers touch one book,
-skip a book already retired, and finish a run that was cut off after its rows
-moved. A trashed book an unreversed combine absorbed is held as retry_later
+skip a book already retired (a shell only counts once a version naming it
+holds rows, so an empty version is never mistaken for a finished retire), and
+finish a run that was cut off after its rows moved from a fresh plan, which
+lists the book as `retire_tail_pending`. The run reads the series, user and
+combine-journal state once up front, never under the merge lock, and a flag
+flipped off as a run starts is `retry_later`, not `failed`. A trashed book an unreversed combine absorbed is held as retry_later
 until the combine-undo link exists. The plan no longer counts a retired row as
 a live owner of its path, so sibling shells keep stable fingerprints after the
 first one retires.
@@ -27,3 +32,10 @@ single and batch hard delete and `RestoreFromTrash` refuse it (HTTP 409, code
 `RETIRED_SHELL`), and a failed retired-version lookup fails closed. This holds
 until the journaled purge (PR 6) can snapshot a shell, and it keeps a restore
 from bringing back an empty imported book.
+
+The same refusal now guards every other un-trash or delete path for a retire
+shell: `DeleteBook` and `RevertBookToVersion` at the store (fail closed,
+`ErrBookIsRetiredShell`), the metadata revert handler (409), `UnmergeAuto`,
+the soft-delete revert, undo preflight and combine-undo. A trashed holder whose
+only rows are retired versions is kept by the purge as owning files. Restoring
+a book that does not exist returns 404.
