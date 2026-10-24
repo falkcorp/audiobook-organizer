@@ -12,3 +12,12 @@
       a trashed book that holds only retired rows for other shells and owns no
       live row is classed `no_book_files` by the PR 1 classifier and is not
       re-homed by this fixer.
+
+- [ ] **TODO-RETIRED-APPLY-PR8-HOOK** wire the decisions ledger into the retire
+      Apply once PR 8 (#4143) and PR 7 are stacked: after a row's
+      `RetireRows` commits in `retire()`
+      (`internal/plugins/maintenance/retired_versions_apply.go`, see the
+      `TODO(PR 8, #4143)` comment), call
+      `recordRetiredVersionApplied(f.p.deps.OpsStore(), ev)` with a
+      `decisions.RetiredVersionsEvent` keyed by
+      `decisions.RetiredVersionsSubjectKey(shell)`.

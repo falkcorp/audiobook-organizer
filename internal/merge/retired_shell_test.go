@@ -61,6 +61,6 @@ func TestRefuseRetiredShell(t *testing.T) {
 	require.True(t, errors.Is(err, database.ErrRetiredReaderUnavailable), "%v", err)
 
 	// A shell whose retired rows went back (unretire) holds nothing.
-	require.NoError(t, s.UnretireBookFiles([]database.BookFileMove{{FileIDs: []string{rows[0].ID}, SourceBookID: "shell"}}, "shell", "rv-shell", nil))
+	require.NoError(t, s.UnretireBookFiles([]database.BookFileMove{{FileIDs: []string{rows[0].ID}, SourceBookID: "holder"}}, "shell", "rv-shell", nil))
 	require.NoError(t, RefuseRetiredShell(s, "shell", "purge"))
 }

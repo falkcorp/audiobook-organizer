@@ -873,7 +873,14 @@ func (bs *BatchService) hardDeleteLocked(id string, purges *trashPurges) error {
 		return errors.New("hard delete refused: the store cannot check or carry users' listening state")
 	}
 	_, err = merge.HardDeleteKeepingUserStateLocked(merger, bs.db, book,
-		func() error { return database.CheckBookOwnsNoFiles(bs.db, book.ID, "hard delete") },
+		func() error {
+			if err := database.CheckBookOwnsNoFiles(bs.db, book.ID, "hard delete"); err != nil {
+				return err
+			}
+			// Under the merge lock the retire repair also takes: a shell
+			// retired since the check above is caught before the carry.
+			return merge.RefuseRetiredShell(bs.db, book.ID, "hard delete")
+		},
 		func() error { return bs.db.DeleteBook(book.ID) })
 	if err == nil {
 		return nil

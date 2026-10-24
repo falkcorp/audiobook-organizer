@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
 // version: 1.0.0
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -632,6 +632,11 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 		return retiredApplyErr(err)
 	}
 	steps++
+	// TODO(PR 8, #4143): the retire has committed; record it for the decisions
+	// ledger here with recordRetiredVersionApplied(f.p.deps.OpsStore(), ev), ev
+	// a decisions.RetiredVersionsEvent keyed by
+	// decisions.RetiredVersionsSubjectKey(shell). Not wired in this PR because
+	// PR 8 is not in this branch's base; wire it when the two are stacked.
 	return f.finishRetire(ctx, rw, run, shell, holder, steps)
 }
 
