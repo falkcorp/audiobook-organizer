@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files_guards_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b8d2e60-7a13-4c95-b0e8-2d6f91a3c570
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -199,7 +199,10 @@ func blocksWhileHeld(t *testing.T, name string, unlock func(), fn func() error) 
 	}
 	unlock()
 	select {
-	case <-done:
+	case err := <-done:
+		// fn's result is the second half of the assertion: it must have run to
+		// its expected outcome once the stripe was released, not merely returned.
+		require.NoError(t, err, "%s after its stripe was released", name)
 	case <-time.After(10 * time.Second):
 		t.Fatalf("%s did not finish after its stripe was released", name)
 	}
