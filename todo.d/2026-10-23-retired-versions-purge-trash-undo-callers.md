@@ -14,9 +14,7 @@
       `audiobooks/revert.go` and `merge/combine_journal.go` (a journaled row
       that is now retired is changed-since). All of them are safe while nothing
       retires a row (the fixer's Apply is not built yet), and must land before
-      the first prod retire. Also open from 3b: the two `AcoustIDScan` retired
-      checks in `dedup/engine.go` have no unit test (the collectors do).
-      Open question for the owner: `deluge/discovery.go` decides whether a
+      the first prod retire. Open question for the owner: `deluge/discovery.go` decides whether a
       torrent's intro fingerprint is "already tracked" through
       `GetBookFileByAcoustID` and `GetBookFileByAcoustIDFuzzy`, which both skip
       retired rows, so content the library holds only as a retired version would
