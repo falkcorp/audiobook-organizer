@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package opswriter
 
@@ -56,10 +56,13 @@ type BookStore interface {
 type BookFileStore interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	// GetBookFileByPath names the row holding a path's single-owner key, so a
-	// repoint's history can hand the key back on revert. A store that can
-	// also read retired rows (database.RetiredBookFileReader) is asked with
-	// database.BookFileByPathIncludingRetired, so a retired row holding the
-	// key is journaled as its owner; this method is the fallback.
+	// repoint's history can hand the key back on revert. The holder is read
+	// with database.BookFileByPathIncludingRetired, so a retired row holding
+	// the key is journaled as its owner. That helper resolves
+	// database.RetiredBookFileReader through decorators and answers from this
+	// method only for a store that declares it never holds a retired row
+	// (database.NoRetiredBookFiles); any other store without the reader makes
+	// RepointBookFile fail with database.ErrRetiredReaderUnavailable.
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
@@ -465,8 +468,9 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 // (database.SameFileLocation). Nothing on disk moves and no row is deleted. The
 // write is a compare-and-set against the location read here; the history row
 // (after the write) carries the whole location before and after, plus the row
-// that held to.Path's single-owner key (a retired row included), in the change type the operation
-// revert reverses (database.ChangeTypeBookFileRepoint).
+// that held to.Path's single-owner key (a retired row included: the revert
+// hands the key back to it unless a live row has the path), in the change type
+// the operation revert reverses (database.ChangeTypeBookFileRepoint).
 func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, expect, to database.BookFileLocation) error {
 	if w.cfg.Files == nil {
 		return errors.New("opswriter: no book_file store")

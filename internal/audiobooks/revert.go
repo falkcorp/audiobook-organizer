@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -1982,8 +1982,14 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 // soft-deleted since. A repoint journaled before the owner was recorded, or an
 // owner since gone or moved, falls back to the rows at path: a live book's
 // first, then a soft-deleted book's. A retired BOOK FILE ROW (a version held by
-// another book, database.BookFile.Retired) is never a candidate, owner or not:
-// the key is not handed to it (ClaimBookFilePathKey refuses it too).
+// another book, database.BookFile.Retired) is never a candidate for the key
+// while any non-retired row can take it (a live row always owns the key over a
+// retired one: the single-owner index rule), and ClaimBookFilePathKey refuses
+// it. The one retired row that does get the key back is the journaled owner,
+// as a last resort, through ClaimRetiredBookFilePathKey: a retired row keeps a
+// path key while no live row carries the path, so after a repoint took the key
+// from it, the revert gives it back and the single-row claim read
+// (GetBookFileByPathIncludingRetired) does not see the path as free.
 // The fallback never picks an iTunes row (a row or book iTunes id, a row
 // iTunes path), which it cannot tell was the owner; nor does anything act on
 // a path under books/itunes/**. With no eligible row the key stays dropped.
@@ -2009,10 +2015,18 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 		cands = append(cands, others...)
 	}
 	var owner, live, hidden []database.BookFile
+	var retiredOwner *database.BookFile
 	seen := map[string]bool{}
 	for i := range cands {
 		o := cands[i]
-		if o.ID == except || seen[o.ID] || o.FilePath != path || o.Retired {
+		if o.ID == except || seen[o.ID] || o.FilePath != path {
+			continue
+		}
+		if o.Retired {
+			if o.ID == ownerRow {
+				seen[o.ID] = true
+				retiredOwner = &o
+			}
 			continue
 		}
 		seen[o.ID] = true
@@ -2039,6 +2053,18 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 		if claimed {
 			return nil
 		}
+	}
+	if retiredOwner == nil {
+		return nil
+	}
+	// No non-retired row took the key: it goes back to the retired row that
+	// held it. A store that cannot claim for a retired row cannot hold one.
+	claimer, ok := database.AsCapability[database.RetiredPathKeyClaimer](rs.db)
+	if !ok {
+		return fmt.Errorf("re-index %s at %s: the store cannot hand a path key to a retired row", retiredOwner.ID, path)
+	}
+	if _, err := claimer.ClaimRetiredBookFilePathKey(retiredOwner.BookID, retiredOwner.ID, path); err != nil {
+		return fmt.Errorf("re-index retired %s at %s: %w", retiredOwner.ID, path, err)
 	}
 	return nil
 }

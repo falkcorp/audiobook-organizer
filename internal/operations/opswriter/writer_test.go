@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package opswriter
 
@@ -464,7 +464,8 @@ func (r retiredPathStore) GetBookFileByPathIncludingRetired(path string) (*datab
 // A retired row holding the target path's single-owner key is journaled as the
 // key's owner: the plain path getter cannot see it, so without the
 // include-retired read the repoint's history named no owner and a revert had
-// nobody to hand the key back to.
+// nobody to hand the key back to. The revert that reads it back is
+// TestRevertRepoint_KeyGoesBackToARetiredOwner (plugins/maintenance).
 func TestRepointBookFile_JournalsRetiredKeyOwner(t *testing.T) {
 	s := newRecStore()
 	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b"}

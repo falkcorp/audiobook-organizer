@@ -1,7 +1,7 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -107,8 +107,10 @@ func (a *externalIDStoreAdapter) GetAllBooksCore(limit, offset int) ([]database.
 }
 
 // GetAllBookFilesCoreIncludingRetired reads every book_file row, retired ones
-// kept, through the store's retired reader (resolved through decorators); a
-// store that never retired a row answers with its plain row list.
+// kept, through the store's retired reader (resolved through decorators). A
+// store without the reader answers with its plain row list only when it
+// declares it never holds a retired row (database.NoRetiredBookFiles);
+// any other store returns database.ErrRetiredReaderUnavailable.
 func (a *externalIDStoreAdapter) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
 	return database.AllBookFilesCoreIncludingRetired(a.store)
 }

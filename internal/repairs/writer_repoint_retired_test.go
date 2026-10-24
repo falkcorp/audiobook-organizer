@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_repoint_retired_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e1b4c92-5d38-4a06-b8f1-3c9a02d6e415
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package repairs
 
@@ -35,7 +35,9 @@ func (r retiredPathFiles) GetBookFileByPathIncludingRetired(path string) (*datab
 
 // A retired row that holds the target path's single-owner key is journaled as
 // the key's owner. The plain getter cannot see it, so before this the repoint's
-// journal named no owner and a revert had nobody to hand the key back to.
+// journal named no owner and a revert had nobody to hand the key back to. The
+// revert that reads it back is TestRevertRepoint_KeyGoesBackToARetiredOwner
+// (plugins/maintenance).
 func TestRepointBookFile_JournalsRetiredKeyOwner(t *testing.T) {
 	files := &memFiles{rows: map[string]*database.BookFile{
 		"f1": {ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b"},

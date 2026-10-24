@@ -1,5 +1,5 @@
 // file: internal/database/retired_lookup.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
 // last-edited: 2026-10-24
 
@@ -11,9 +11,10 @@ import (
 )
 
 // ErrRetiredReaderUnavailable is returned by the IncludingRetired helpers when
-// the store offers neither the retired-row reader nor a plain getter to fall
-// back on, so a caller that needs the retired rows learns it cannot have them
-// instead of quietly working from the live subset.
+// the store offers neither the retired-row reader nor a declaration (the
+// NoRetiredBookFiles marker) that its plain getter is the complete answer, so a
+// caller that needs the retired rows learns it cannot have them instead of
+// quietly working from the live subset.
 var ErrRetiredReaderUnavailable = errors.New("store cannot read retired book_file rows")
 
 // NoRetiredBookFiles is implemented by an in-memory test double that is
