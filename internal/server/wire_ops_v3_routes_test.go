@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-24
 
@@ -628,8 +628,8 @@ func TestOpsV3Routes_DeniedInHandlerAnswers403(t *testing.T) {
 		require.Contains(t, w.Body.String(), "permission denied: settings.manage", r.name)
 	}
 
-	// The admin passes the same checks: the start is queued and the approve
-	// reaches the handler's own 501 (no approver is wired to a runner).
+	// The admin passes the same check: the approve reaches the handler's own
+	// 501 (no approver is wired to a runner).
 	w := postRepairs(srv, admin, "/api/v3/ops/runs/run-awaiting-approval/approve", `{}`)
 	require.Equal(t, http.StatusNotImplemented, w.Code, "admin approve: %s", w.Body.String())
 }
