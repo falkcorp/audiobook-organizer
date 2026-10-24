@@ -1,7 +1,7 @@
 // file: internal/server/oplog_download_gzip_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8e1c52-7a4d-4b96-9e0c-5d2a8b61f7c3
-// last-edited: 2026-09-19
+// last-edited: 2026-10-24
 
 package server
 
@@ -46,6 +46,7 @@ func TestOperationLogDownload_BrowserSavesAValidGzip(t *testing.T) {
 		})
 	}
 	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOperationV2("op1").Return(nil, nil)
 	store.EXPECT().GetOpLogsV2("op1", 0).Return(rows, nil)
 
 	h := handlers.NewOperationsV2Handler(store, nil, nil, false)

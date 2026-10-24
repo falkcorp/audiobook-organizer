@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -169,6 +169,7 @@ func TestHandler_GetOperationChanges_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
 	changes := []*database.OperationChange{{ID: "c1", OperationID: "op-1"}}
+	mockStore.EXPECT().GetOperationV2("op-1").Return(nil, nil)
 	mockStore.EXPECT().GetOperationChanges("op-1").Return(changes, nil)
 
 	router.GET("/operations/:id/changes", newOperationsHandler(srv).GetOperationChanges)

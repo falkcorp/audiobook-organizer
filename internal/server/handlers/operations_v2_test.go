@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-24
 
 package handlers_test
 
@@ -131,6 +131,7 @@ func TestOperationsV2Handler_GetOperationV2_NotFound(t *testing.T) {
 
 func TestOperationsV2Handler_DownloadOperationLogs_GzipsFullTranscript(t *testing.T) {
 	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOperationV2("op1").Return(nil, nil)
 	store.EXPECT().GetOpLogsV2("op1", 0).Return([]database.OpLogV2Row{
 		{OperationID: "op1", Level: "info", Message: "first line", Attrs: `{"book":"one"}`},
 		{OperationID: "op1", Level: "error", Message: "last line", Attrs: `{"book":"two"}`},
