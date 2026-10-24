@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -256,6 +256,12 @@ type icRunner struct {
 	// holder. nil resolves from the store (icUserStateStore); with none the
 	// rollback is refused rather than delete state it cannot move.
 	userState merge.UserProgressMerger
+	// reads is the store the run was built from. icStore narrows it to OpsStore
+	// and hides the retired-row and path reads, so the rollback's shell and
+	// path-claim checks resolve them from here with database.AsCapability. nil
+	// resolves nothing: the checks then refuse (fail closed) instead of
+	// reading a missing capability as "no retired rows".
+	reads any
 }
 
 // icUserStateStore is the store undo moves a clone's user state through.
@@ -323,7 +329,7 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	if reflink == nil {
 		reflink = fileops.Reflink
 	}
-	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, reflink: reflink, rootDir: rootDir, opID: opID, apply: params.Apply, tags: p.deps.BookTagReader()}
+	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, reads: ops, cloner: p.deps, reflink: reflink, rootDir: rootDir, opID: opID, apply: params.Apply, tags: p.deps.BookTagReader()}
 	if um := p.deps.MergeUserStateStore(); um != nil {
 		run.userState = um
 	}
@@ -1100,6 +1106,14 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	}
 	switch rec.Kind {
 	case icKindVersion:
+		// A clone the retired-versions repair has since turned into a shell
+		// (its rows re-keyed onto another book as retired versions) is not
+		// removed: deleting it would drop the only record of where those
+		// versions came from. Refused first, before the source is restored or a
+		// user's state is carried: nothing has been written yet.
+		if err := merge.RefuseRetiredShell(r.reads, rec.CloneBookID, "roll back the clone"); err != nil {
+			return fail("refusing to delete clone %s: %v", rec.CloneBookID, err)
+		}
 		if err := r.checkUndoSource(rec); err != nil {
 			return fail("refusing to delete clone %s: its users' listening state could not be moved to source %s: %v",
 				rec.CloneBookID, rec.SourceBookID, err)
@@ -1146,9 +1160,20 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	default:
 		return fail("unknown record kind %q", rec.Kind)
 	}
-	var leftover []string
+	var leftover, kept []string
 	for _, pr := range rec.Pairs {
 		if pr.ClonePath == "" || !pathutil.IsWithin(pr.ClonePath, r.rootDir) {
+			continue
+		}
+		// The clone's own rows are gone by now. A row that still names the path
+		// (a retired version's included: it is audio a purge of the shell
+		// would also have left alone) means the file is not the clone's to
+		// remove. An unanswerable lookup keeps the file too.
+		if claim, err := r.clonePathClaim(pr.ClonePath); err != nil {
+			leftover = append(leftover, pr.ClonePath+" (kept: "+err.Error()+")")
+			continue
+		} else if claim != "" {
+			kept = append(kept, pr.ClonePath+" ("+claim+")")
 			continue
 		}
 		if err := os.Remove(pr.ClonePath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1163,6 +1188,9 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	if len(leftover) > 0 {
 		g.Error = strings.TrimSpace(g.Error + " clone files left on disk: " + strings.Join(leftover, "; "))
 	}
+	if len(kept) > 0 {
+		g.Error = strings.TrimSpace(g.Error + " clone files kept, a row still names them: " + strings.Join(kept, "; "))
+	}
 	// Reported, not fatal: the rows and files are already reversed, and a
 	// second rollback could not redo them.
 	if err := r.restorePriorPrimaries(rec); err != nil {
@@ -1176,6 +1204,25 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	}
 	g.Outcome = icOutcomeRolled
 	return g
+}
+
+// clonePathClaim returns "" when no book_file row, live or retired, names path,
+// and a description of the first row that does otherwise. It needs the
+// complete multi-row lookup (database.BookFileRowsAtPathStrict): a store that
+// cannot give it is an error, never "nobody claims it".
+func (r *icRunner) clonePathClaim(path string) (string, error) {
+	lk, ok := database.AsCapability[database.BookFilePathLookup](r.reads)
+	if !ok {
+		return "", errors.New("the store cannot look up which rows name a path")
+	}
+	rows, err := database.BookFileRowsAtPathStrict(lk, path)
+	if err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("book_file %s of book %s, retired=%v", rows[0].ID, rows[0].BookID, rows[0].Retired), nil
 }
 
 // checkUndoSource refuses a rollback whose source is missing or in the trash
