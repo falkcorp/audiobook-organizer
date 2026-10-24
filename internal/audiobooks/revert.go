@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -487,6 +487,13 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	changes, err := rs.db.GetOperationChanges(operationID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get operation changes: %w", err)
+	}
+	// Refuse an operation that retired books' files as a whole, before any
+	// branch below writes or marks a row (see undo.RetireRevertBlock).
+	if blocked := undo.RetireRevertBlock(operationID, changes); blocked != nil {
+		revertLog.Warn("revert refused: operation retired files and cannot be undone yet: operation=%s types=%s",
+			logger.SanitizeLogValue(operationID), formatTypeCounts(blocked.Types))
+		return nil, blocked
 	}
 
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}

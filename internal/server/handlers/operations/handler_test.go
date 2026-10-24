@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-10-09
+// last-edited: 2026-10-24
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (stale-op clear, pause-state
@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -373,6 +374,17 @@ func TestRevertOperation_NotRestorable_Returns409(t *testing.T) {
 	w := postRevert(h)
 	assert.Equal(t, http.StatusConflict, w.Code)
 	assert.Contains(t, w.Body.String(), "cannot be undone automatically: 1742 author_delete rows")
+}
+
+// An op that retired books' files is refused as a whole with 409 (the engine
+// cannot undo a retire yet), never a 500 and never a partial 200.
+func TestRevertOperation_RetireBlocked_Returns409(t *testing.T) {
+	h := newRevertHandler(t, nil, fmt.Errorf("revert: %w", &undo.RetireRevertBlockedError{
+		OperationID: "op-1", Types: map[string]int{"book_file_retire": 3},
+	}))
+	w := postRevert(h)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "retired books' files and cannot be undone yet")
 }
 
 // A partial revert is a 200 that says partial=true and reports the counts.

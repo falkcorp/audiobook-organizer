@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -294,7 +294,9 @@ func (f *retiredVersionsFixer) Title() string {
 func (f *retiredVersionsFixer) Description() string {
 	if f.applyOn() {
 		return "Moves the file records of each book in the trash onto the live book it lost to, as a hidden " +
-			"retired version, never deleting one (an Apply is undone from the Operations page). The plan " +
+			"retired version, never deleting one (an Apply cannot be undone from the Operations page yet; " +
+			// TODO(#4146): restore "undone from the Operations page" once PR 5's undo cases land.
+			"the original files stay on disk and in the database). The plan " +
 			"classifies every trashed book by what retiring it would do and says why a book would NOT be " +
 			"retired: no live target, trashed under min_age_days ago (14 by default; the min_age_days param " +
 			"overrides it, 0 turns the gate off), has listening state, files under the iTunes library on either " +

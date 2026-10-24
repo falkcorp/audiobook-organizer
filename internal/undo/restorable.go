@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-21
+// last-edited: 2026-10-24
 
 package undo
 
@@ -540,6 +540,10 @@ const (
 	// onto another book was not put back, so restoring the book would leave
 	// two live books owning one file. RevertOperation refuses it.
 	ReasonDependentNotReverted = "dependent change not reverted"
+	// ReasonRetireOpNotRevertible: the row belongs to an operation that retired
+	// books' files, which the engine cannot undo yet; RevertOperation refuses
+	// the whole operation (RetireRevertBlock), so every row is refused.
+	ReasonRetireOpNotRevertible = "operation retired files and cannot be undone yet"
 )
 
 // ReferentError is CheckRestoreReferent's refusal: Reason is one of the
@@ -870,6 +874,9 @@ func CountsTowardRevert(c *database.OperationChange) bool {
 // operation without one, and the Repairs fragment fixer offers "revert" on
 // a held row only for operations this holds for, so the two cannot drift.
 func OperationRevertible(changes []*database.OperationChange) bool {
+	if RetireRevertBlock("", changes) != nil {
+		return false // refused as a whole (retire_revert_block.go)
+	}
 	return slices.ContainsFunc(changes, CountsTowardRevert)
 }
 
