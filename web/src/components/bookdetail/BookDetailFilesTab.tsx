@@ -1,15 +1,17 @@
 // file: web/src/components/bookdetail/BookDetailFilesTab.tsx
-// version: 1.0.3
+// version: 1.2.0
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
-// last-edited: 2026-08-19
+// last-edited: 2026-10-23
 
 import {
   Alert,
   Box,
   Button,
   CircularProgress,
+  FormControlLabel,
   Paper,
   Stack,
+  Switch,
   TextField,
   Typography,
 } from '@mui/material';
@@ -19,11 +21,15 @@ import * as api from '../../services/api';
 import { BookDetailVersionGroup } from './BookDetailVersionGroup';
 import { ChangeLog } from '../ChangeLog';
 import { formatDuration } from './bookDetailUtils';
+import { RetiredVersionsPanel } from './RetiredVersionsPanel';
 
 export interface BookDetailFilesTabProps {
   book: Book;
   versions: Book[];
   bookFiles: BookFile[];
+  /** Retired rows for the "Show retired files" switch; null while they load. */
+  retiredFiles: BookFile[] | null;
+  showRetiredFiles: boolean;
   segments: BookSegment[];
   versionSegments: Record<string, BookSegment[]>;
   versionFileTags: Record<string, BookTags | null>;
@@ -41,6 +47,7 @@ export interface BookDetailFilesTabProps {
   linkSearchLoading: boolean;
   splittingVersion: boolean;
   splittingToBooks: boolean;
+  onShowRetiredFilesChange: (show: boolean) => void;
   onSetLinkSearchOpen: (open: boolean) => void;
   onSetLinkSearchQuery: (q: string) => void;
   onInlineLinkVersion: (targetId: string) => void;
@@ -64,6 +71,8 @@ export const BookDetailFilesTab = ({
   book,
   versions,
   bookFiles,
+  retiredFiles,
+  showRetiredFiles,
   segments,
   versionSegments,
   versionFileTags,
@@ -81,6 +90,7 @@ export const BookDetailFilesTab = ({
   linkSearchLoading,
   splittingVersion,
   splittingToBooks,
+  onShowRetiredFilesChange,
   onSetLinkSearchOpen,
   onSetLinkSearchQuery,
   onInlineLinkVersion,
@@ -167,6 +177,32 @@ export const BookDetailFilesTab = ({
         )}
       </Box>
 
+      {/* Retired files switch: lists this book's retired rows (include_retired)
+          read-only under its files. Off by default; they are not its files. */}
+      <Box sx={{ mb: 1 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={showRetiredFiles}
+              onChange={(e) => onShowRetiredFilesChange(e.target.checked)}
+              slotProps={{ input: { 'aria-label': 'Show retired files' } }}
+            />
+          }
+          label={<Typography variant="body2">Show retired files</Typography>}
+        />
+        {showRetiredFiles && retiredFiles === null && (
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            Loading retired files...
+          </Typography>
+        )}
+        {showRetiredFiles && retiredFiles !== null && retiredFiles.length === 0 && (
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            This book has no retired files.
+          </Typography>
+        )}
+      </Box>
+
       {/* Format group sections */}
       {Array.from(formatGroups.entries()).map(([, groupVersions]) => (
         <BookDetailVersionGroup
@@ -176,6 +212,7 @@ export const BookDetailFilesTab = ({
           expandedVersionIds={expandedVersionIds}
           expandedSegmentVersionIds={expandedSegmentVersionIds}
           bookFiles={bookFiles}
+          retiredFiles={retiredFiles ?? undefined}
           segments={segments}
           versionSegments={versionSegments}
           versionFileTags={versionFileTags}
@@ -417,6 +454,9 @@ export const BookDetailFilesTab = ({
           </Stack>
         </Alert>
       )}
+
+      {/* Retired versions: files of trashed or merged books moved onto this one */}
+      <RetiredVersionsPanel key={book.id} bookId={book.id} refreshKey={filesRefreshKey} />
 
       {/* Change Log */}
       <Paper sx={{ p: 2, mt: 2 }} data-testid="changelog-section">
