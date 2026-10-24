@@ -1,7 +1,7 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
-<!-- last-edited: 2026-10-17 -->
+<!-- last-edited: 2026-10-23 -->
 
 # Configuration Reference
 
@@ -65,6 +65,7 @@ below):
 | `API_RATE_LIMIT_PER_MINUTE` | `api_rate_limit_per_minute` | `100` |
 | `JSON_BODY_LIMIT_MB` | `json_body_limit_mb` | `1` |
 | `UPLOAD_BODY_LIMIT_MB` | `upload_body_limit_mb` | `10` |
+| `MASTER_LIST_RETENTION` | `master_list_retention` | `10` |
 | `ENABLE_AUTH` | `enable_auth` | `true` |
 | `DELUGE_WEB_URL` | `deluge_web_url` | `http://deluge.example.invalid:8112` |
 | `DELUGE_WEB_PASSWORD` | `deluge_web_password` | (the Deluge Web UI password) |
@@ -139,6 +140,7 @@ enable_auth: true
 api_rate_limit_per_minute: 100
 json_body_limit_mb: 1
 upload_body_limit_mb: 10
+master_list_retention: 10
 
 enable_ai_parsing: false
 openai_api_key: ""

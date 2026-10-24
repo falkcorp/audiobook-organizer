@@ -1,5 +1,5 @@
 // file: internal/masterlist/masterlist_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a9b54c7-a9db-4d6e-ab51-67572f9cef60
 // last-edited: 2026-10-23
 
@@ -316,4 +316,124 @@ func mustCSVRow(t *testing.T, csv string) Row {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	return rows[0]
+}
+
+// An ISBN-10 whose check character is X is an ISBN-10 in the ASIN column too.
+func TestClassifyASIN_ISBN10WithXCheckDigit(t *testing.T) {
+	for _, in := range []string{"080442957X", "0-8044-2957-x"} {
+		asin, isbn, ok := ClassifyASIN(in)
+		assert.True(t, ok, in)
+		assert.Empty(t, asin, in)
+		assert.Equal(t, "080442957X", isbn, in)
+	}
+	// Nine digits and an X that fails the check sum is not an ISBN-10: it keeps
+	// the ASIN shape.
+	asin, isbn, ok := ClassifyASIN("030640615X")
+	assert.True(t, ok)
+	assert.Equal(t, "030640615X", asin)
+	assert.Empty(t, isbn)
+	// An X anywhere but last never makes an ISBN-10.
+	asin, isbn, ok = ClassifyASIN("0306X06152")
+	assert.True(t, ok)
+	assert.Equal(t, "0306X06152", asin)
+	assert.Empty(t, isbn)
+
+	rows, err := ParseJSON(strings.NewReader(`[{"title":"X","asin":"080442957X"}]`))
+	require.NoError(t, err)
+	assert.Empty(t, rows[0].ASIN)
+	assert.Equal(t, "080442957X", rows[0].ISBN10)
+	assert.Equal(t, "9780804429573", rows[0].ISBN13)
+	assert.Empty(t, rows[0].Issues)
+}
+
+// A generic isbn column that names another edition than the isbn10 / isbn13
+// column of the same row is a finding, not a silent drop; the same edition
+// spelled two ways is not.
+func TestParseJSON_GenericISBNConflict(t *testing.T) {
+	cases := []struct {
+		name     string
+		row      string
+		conflict bool
+		field    string
+		isbn10   string
+		isbn13   string
+	}{
+		{"generic 10 vs typed 10", `{"title":"X","isbn10":"0306406152","isbn":"080442957X"}`, true, "isbn", "0306406152", "9780306406157"},
+		{"generic 13 vs typed 13", `{"title":"X","isbn13":"9780306406157","isbn":"9780804429573"}`, true, "isbn", "", "9780306406157"},
+		{"generic 13 vs typed 10", `{"title":"X","isbn10":"0306406152","isbn":"9780804429573"}`, true, "isbn10", "0306406152", "9780804429573"},
+		{"generic 10 vs typed 13", `{"title":"X","isbn13":"9780306406157","isbn":"080442957X"}`, true, "isbn10", "080442957X", "9780306406157"},
+		{"asin column ISBN-10 vs typed 10", `{"title":"X","isbn10":"0306406152","asin":"080442957X"}`, true, "asin", "0306406152", "9780306406157"},
+		{"generic 13 is the typed 10's edition", `{"title":"X","isbn10":"0306406152","isbn":"978-0-306-40615-7"}`, false, "", "0306406152", "9780306406157"},
+		{"generic 10 is the typed 13's edition", `{"title":"X","isbn13":"9780306406157","isbn":"0-306-40615-2"}`, false, "", "0306406152", "9780306406157"},
+		{"generic repeats the typed value", `{"title":"X","isbn10":"0306406152","isbn":"0306406152"}`, false, "", "0306406152", "9780306406157"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := ParseJSON(strings.NewReader("[" + tc.row + "]"))
+			require.NoError(t, err)
+			r := rows[0]
+			assert.Equal(t, tc.isbn10, r.ISBN10)
+			assert.Equal(t, tc.isbn13, r.ISBN13)
+			if !tc.conflict {
+				assert.False(t, r.HasIssue(IssueIdentifierConflict), "%+v", r.Issues)
+				return
+			}
+			require.True(t, r.HasIssue(IssueIdentifierConflict), "%+v", r.Issues)
+			var fields []string
+			for _, is := range r.Issues {
+				if is.Code == IssueIdentifierConflict {
+					fields = append(fields, is.Field)
+				}
+			}
+			assert.Equal(t, []string{tc.field}, fields)
+		})
+	}
+}
+
+// One row with a value of the wrong JSON type is a finding on that row; the
+// file and the row's other fields survive.
+func TestParseJSON_PerRowTypeErrors(t *testing.T) {
+	rows, err := ParseJSON(strings.NewReader(`[
+	  {"title":"Good","asin":"B000000000"},
+	  {"title":"Bad authors","asin":"B000000001","authors":7,"sources":{"source":"x"}},
+	  "not an object",
+	  42,
+	  {"title":{"x":1},"isbn13":"9780306406157"}
+	]`))
+	require.NoError(t, err)
+	require.Len(t, rows, 5)
+
+	assert.Empty(t, rows[0].Issues)
+
+	r := rows[1]
+	assert.Equal(t, "B000000001", r.ASIN, "the good identifier is kept")
+	assert.Equal(t, "Bad authors", r.Title)
+	assert.Empty(t, r.Authors)
+	var bad []string
+	for _, is := range r.Issues {
+		require.Equal(t, IssueBadField, is.Code)
+		require.Equal(t, 2, is.Line)
+		bad = append(bad, is.Field)
+	}
+	assert.Equal(t, []string{"authors", "sources"}, bad, "both bad fields are named, in a stable order")
+
+	for i, line := range map[int]int{2: 3, 3: 4} {
+		r = rows[i]
+		assert.Equal(t, line, r.Line)
+		require.Len(t, r.Issues, 1)
+		assert.Equal(t, IssueBadRow, r.Issues[0].Code)
+		assert.False(t, r.HasIdentity(), "an entry that is not an object names no book")
+	}
+
+	r = rows[4]
+	assert.Equal(t, "9780306406157", r.ISBN13)
+	assert.Empty(t, r.Title)
+	require.Len(t, r.Issues, 1)
+	assert.Equal(t, IssueBadField, r.Issues[0].Code)
+	assert.Equal(t, "title", r.Issues[0].Field)
+	assert.Equal(t, 5, r.Issues[0].Line)
+
+	// A file that is not a list at all still fails as a whole.
+	_, err = ParseJSON(strings.NewReader(`{"rows": 3}`))
+	assert.Error(t, err)
 }

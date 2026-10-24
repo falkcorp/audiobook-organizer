@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.90.1
+// version: 1.92.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-25
 
@@ -988,6 +988,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertFieldLock(c)
 	case undo.ChangeTypeBookTagAdd:
 		return rs.revertBookTagAdd(c)
+	case undo.ChangeTypeMasterListElsewhereCreate:
+		return rs.revertMasterListElsewhereCreate(c)
 	case undo.ChangeTypeUserContentFollow:
 		return rs.revertUserContentFollow(c)
 	case undo.ChangeTypeUserBookStateSet:
@@ -1119,6 +1121,35 @@ func (rs *RevertService) revertBookTagAdd(c *database.OperationChange) error {
 	}
 	if err := rs.db.RemoveBookTag(c.BookID, c.FieldName); err != nil {
 		return fmt.Errorf("remove tag %q of %s: %w", c.FieldName, c.BookID, err)
+	}
+	return nil
+}
+
+// revertMasterListElsewhereCreate deletes the read-elsewhere record a
+// master-list import created (undo.ChangeTypeMasterListElsewhereCreate), only
+// while it is still exactly what the import made. A record that is gone counts
+// restored. The row names no book, so no book is read.
+func (rs *RevertService) revertMasterListElsewhereCreate(c *database.OperationChange) error {
+	want, err := undo.DecodeMasterListElsewhereCreate(c)
+	if err != nil {
+		return err
+	}
+	st := database.NewMasterListStoreFromStore(rs.db)
+	if st == nil {
+		return fmt.Errorf("this store cannot hold read-elsewhere records (change %s)", c.ID)
+	}
+	cur, err := st.GetElsewhere(want.ID)
+	switch {
+	case errors.Is(err, database.ErrElsewhereNotFound):
+		cur = nil
+	case err != nil:
+		return fmt.Errorf("read read-elsewhere record %s: %w", want.ID, err)
+	}
+	if err := undo.CheckMasterListElsewhereCreate(cur, want); err != nil {
+		return err
+	}
+	if err := st.DeleteElsewhere(want.ID); err != nil && !errors.Is(err, database.ErrElsewhereNotFound) {
+		return fmt.Errorf("delete read-elsewhere record %s: %w", want.ID, err)
 	}
 	return nil
 }
