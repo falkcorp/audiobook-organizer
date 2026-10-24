@@ -20,6 +20,6 @@ retired checks now have unit tests. Purging a trashed version
 other book_file row, retired ones included, still names, and it stops without
 deleting anything when it cannot tell who names a path. Restoring a trashed book
 that is the shell of a retired version still holding its files is refused with
-a 409 pointing to "Restore as separate book", instead of bringing back a book
-with no files; the version restore route also answers 409 (not 400) for a
+a 409 saying the book stays in the trash and its files are safe, instead of
+bringing back a book with no files; the version restore route also answers 409 (not 400) for a
 retired version. Nothing retires a row yet, so running behavior does not change.
