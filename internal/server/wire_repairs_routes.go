@@ -1,5 +1,5 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
 // last-edited: 2026-10-24
 
@@ -81,12 +81,18 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 // caller must hold the op's fixer's permissions, as the Repairs routes require
 // (see opaccess.Repairs). It asks permHolds, so auth disabled and a first run
 // hold everything, as everywhere else.
+//
+// There is one instance per server (every route family asks the same one), so a
+// route family cannot be left on a stale or differently built check.
 func (s *Server) repairsOpAccess() *opaccess.Repairs {
-	// A nil *repairs.Registry must not become a non-nil interface: the check
-	// then refuses every repairs op rather than calling Get on nil.
-	var fixers opaccess.FixerLookup
-	if s.repairFixers != nil {
-		fixers = s.repairFixers
-	}
-	return opaccess.NewRepairs(fixers, s.permHolds())
+	s.repairsOpAccessOnce.Do(func() {
+		// A nil *repairs.Registry must not become a non-nil interface: the check
+		// then refuses every repairs op rather than calling Get on nil.
+		var fixers opaccess.FixerLookup
+		if s.repairFixers != nil {
+			fixers = s.repairFixers
+		}
+		s.repairsOpAccessCheck = opaccess.NewRepairs(fixers, s.permHolds())
+	})
+	return s.repairsOpAccessCheck
 }

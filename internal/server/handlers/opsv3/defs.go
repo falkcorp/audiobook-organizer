@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/defs.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a701dc58-da75-41f2-b165-03a957c6e540
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package opsv3
 
@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )
 
 // EffectsView is a definition's declared effects.
@@ -46,6 +47,10 @@ type LastRunView struct {
 	State      string     `json:"state"`
 	Outcome    string     `json:"outcome"`
 	FinishedAt *time.Time `json:"finished_at"`
+	// fixerID is the Repairs fixer the run belongs to ("" for any other run),
+	// kept so the last run of repairs.plan / repairs.apply can be withheld from a
+	// caller who may not read it. Never serialised.
+	fixerID string
 }
 
 // DefView is one definition as GET /api/v3/ops/defs lists it.
@@ -122,6 +127,9 @@ func (h *Handler) lastRunOf(defID string) *LastRunView {
 		var lr *LastRunView
 		if rec != nil {
 			lr = &LastRunView{ID: rec.ID, State: string(rec.State), Outcome: outcomeOf(rec.State), FinishedAt: rec.CompletedAt}
+			if opaccess.IsRepairsOp(rec.DefID) {
+				lr.fixerID = opaccess.RunFixerID(rec)
+			}
 		}
 		h.lastCache.mu.Lock()
 		if h.lastCache.byID == nil {
@@ -138,7 +146,21 @@ func (h *Handler) lastRunOf(defID string) *LastRunView {
 	return lr
 }
 
-func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo) DefView {
+// lastRunFor is lastRunOf as c's caller may see it: the newest Repairs run is
+// the run of some fixer (its id, state and time say what was just run), so it is
+// null for a caller who may not read it.
+func (h *Handler) lastRunFor(c *gin.Context, defID string) *LastRunView {
+	lr := h.lastRunOf(defID)
+	if lr == nil || !opaccess.IsRepairsOp(defID) {
+		return lr
+	}
+	if h.d.RepairsAccess.For(c).MayReadFixer(defID, lr.fixerID) {
+		return lr
+	}
+	return nil
+}
+
+func (h *Handler) defView(c *gin.Context, d DefInfo, scheds map[string]ScheduleInfo) DefView {
 	perms := requiredPerms(d, true)
 	ps := append([]string(nil), perms...)
 	approver := d.Approver
@@ -150,7 +172,7 @@ func (h *Handler) defView(d DefInfo, scheds map[string]ScheduleInfo) DefView {
 		Permission: ps[0], Permissions: ps, Approver: approver,
 		Effects:  EffectsView{ReadOnly: d.ReadOnly, Reads: nonNil(d.Reads), Writes: nonNil(d.Writes), Deletes: nonNil(d.Deletes)},
 		Schedule: ScheduleView{Kind: "manual"},
-		LastRun:  h.lastRunOf(d.ID),
+		LastRun:  h.lastRunFor(c, d.ID),
 	}
 	if len(d.ParamsSchema) > 0 {
 		v.ParamsSchema = d.ParamsSchema
@@ -203,7 +225,7 @@ func (h *Handler) ListDefs(c *gin.Context) {
 		if kind != "" && d.Kind != kind {
 			continue
 		}
-		items = append(items, h.defView(d, scheds))
+		items = append(items, h.defView(c, d, scheds))
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
 }
@@ -219,5 +241,5 @@ func (h *Handler) GetDef(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "definition", c.Param("id"))
 		return
 	}
-	c.JSON(http.StatusOK, h.defView(d, h.schedules()))
+	c.JSON(http.StatusOK, h.defView(c, d, h.schedules()))
 }

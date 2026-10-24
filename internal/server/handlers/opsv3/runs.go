@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package opsv3
 
@@ -40,15 +40,33 @@ func (h *Handler) ListRuns(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, err := rd.ListRunsV3(database.RunQuery{
-		DefID: c.Query("def_id"), State: st, Cursor: c.Query("cursor"), Limit: limit,
-	})
+	q := database.RunQuery{DefID: c.Query("def_id"), State: st, Cursor: c.Query("cursor"), Limit: limit}
+	hidden, err := h.hiddenFor(c, rd, q.DefID)
 	if err != nil {
 		storeErr(c, "list runs", err)
 		return
 	}
+	page, err := rd.ListRunsV3(q)
+	if err != nil {
+		storeErr(c, "list runs", err)
+		return
+	}
+	// A Repairs run the caller may not read is left out, and total gives up the
+	// hidden runs that match the filter, so it stays the number of rows the
+	// listing holds. A page the filter shortened is refilled from the next
+	// pages (each consumed whole, so next_cursor never skips a row).
+	recs := hidden.visible(page.Runs)
+	total := page.Total - hidden.matching(q.DefID, q.State)
+	for len(recs) < limit && page.Next != "" {
+		q.Cursor, q.Limit = page.Next, limit-len(recs)
+		if page, err = rd.ListRunsV3(q); err != nil {
+			storeErr(c, "list runs", err)
+			return
+		}
+		recs = append(recs, hidden.visible(page.Runs)...)
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"items": h.views(page.Runs), "next_cursor": page.Next, "total": page.Total,
+		"items": h.views(recs), "next_cursor": page.Next, "total": total,
 	})
 }
 
@@ -65,6 +83,9 @@ func (h *Handler) GetRun(c *gin.Context) {
 	}
 	if rec == nil {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
+		return
+	}
+	if !h.mayReadRun(c, rec) {
 		return
 	}
 	c.JSON(http.StatusOK, toView(*rec, h.zombieSet()))
@@ -294,6 +315,11 @@ func (h *Handler) CancelRun(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
 		return
 	}
+	// A Repairs run the caller may not read is refused before anything of it (its
+	// state in the 409s below) is said, except to the user who started it.
+	if !h.startedBy(c, rec) && !h.mayReadRun(c, rec) {
+		return
+	}
 	if !h.mayCancel(c, rec) {
 		httputil.RespondWithForbidden(c, "cancelling this run needs being the user who started it, or scan.trigger and the definition's permission")
 		return
@@ -320,10 +346,16 @@ func (h *Handler) CancelRun(c *gin.Context) {
 	accepted(c, gin.H{"run_id": rec.ID})
 }
 
+// startedBy reports whether the caller is the user who started rec.
+func (h *Handler) startedBy(c *gin.Context, rec *database.RunRecord) bool {
+	u, ok := auth.UserFromContext(c.Request.Context())
+	return ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID
+}
+
 // mayCancel: the run's starter, or scan.trigger plus the definition's
 // permissions.
 func (h *Handler) mayCancel(c *gin.Context, rec *database.RunRecord) bool {
-	if u, ok := auth.UserFromContext(c.Request.Context()); ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID {
+	if h.startedBy(c, rec) {
 		return true
 	}
 	var def DefInfo
@@ -367,6 +399,9 @@ func (h *Handler) ApproveRun(c *gin.Context) {
 	}
 	if rec == nil {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
+		return
+	}
+	if !h.mayReadRun(c, rec) {
 		return
 	}
 	approver := auth.Permission(auth.PermSettingsManage)

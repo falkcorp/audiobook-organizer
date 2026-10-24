@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package opsv3
 
@@ -21,10 +21,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -93,6 +95,13 @@ type BrokerOptions struct {
 type message struct {
 	id   uint64
 	view RunView
+	// repairs and fixerID say which Repairs fixer the run belongs to, so each
+	// stream can leave out the runs its caller may not read. They are not part of
+	// the event body: the broker computes them once, from the record it just
+	// read, and each Events loop applies its own caller's verdict.
+	repairs bool
+	defID   string
+	fixerID string
 }
 
 // Broker turns the registry's event feed into numbered `run` events carrying a
@@ -296,7 +305,7 @@ func (b *Broker) refresh(id string, zs map[string]bool, always bool) {
 	data, _ := json.Marshal(v)
 	last, watched := b.watch[id]
 	if always || !watched || string(last) != string(data) {
-		b.publish(v)
+		b.publishScoped(v, scopeOf(rec))
 	}
 	if state.ClassifyV3(rec.State).Settled && !zs[id] {
 		delete(b.watch, id)
@@ -324,10 +333,29 @@ func (b *Broker) recheckWatched() {
 
 // publish numbers v, stores it in the ring and offers it to every client
 // without blocking.
-func (b *Broker) publish(v RunView) {
+func (b *Broker) publish(v RunView) { b.publishScoped(v, runScope{}) }
+
+// runScope is the Repairs fixer a published run belongs to; the zero value is a
+// run that is not a Repairs run.
+type runScope struct {
+	repairs bool
+	defID   string
+	fixerID string
+}
+
+// scopeOf is rec's runScope: a Repairs run carries its definition and fixer ("" when
+// it states none, which no caller may read).
+func scopeOf(rec *database.RunRecord) runScope {
+	if !opaccess.IsRepairsOp(rec.DefID) {
+		return runScope{}
+	}
+	return runScope{repairs: true, defID: rec.DefID, fixerID: opaccess.RunFixerID(rec)}
+}
+
+func (b *Broker) publishScoped(v RunView, sc runScope) {
 	b.mu.Lock()
 	b.seq++
-	m := message{id: b.seq, view: v}
+	m := message{id: b.seq, view: v, repairs: sc.repairs, defID: sc.defID, fixerID: sc.fixerID}
 	b.ring = append(b.ring, m)
 	if len(b.ring) > b.opt.RingSize {
 		b.ring = append(b.ring[:0], b.ring[len(b.ring)-b.opt.RingSize:]...)
@@ -524,6 +552,9 @@ func (h *Handler) Events(c *gin.Context) {
 	defer hb.Stop()
 	done := c.Request.Context().Done()
 	closing := h.d.Closing // nil blocks forever
+	// A Repairs run the caller may not read never goes to this stream, whether it
+	// is live or replayed from the ring. The verdict is per fixer, read once.
+	reader := h.d.RepairsAccess.For(c)
 	// A subscribe that queued a replay or a resync has something to send now.
 	cl.signal()
 	for {
@@ -545,6 +576,9 @@ func (h *Handler) Events(c *gin.Context) {
 				}
 			}
 			for _, m := range msgs {
+				if m.repairs && !reader.MayReadFixer(m.defID, m.fixerID) {
+					continue
+				}
 				data, err := json.Marshal(m.view)
 				if err != nil {
 					continue

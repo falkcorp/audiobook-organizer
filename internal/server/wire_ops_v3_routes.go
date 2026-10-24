@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package server
 
@@ -30,7 +30,7 @@ import (
 // database.Store), the catalog and enqueuer are the registry, the schedules are
 // the TaskScheduler's.
 func (s *Server) wireOpsV3Routes(protected *gin.RouterGroup) {
-	d := opsv3.Deps{Authz: s.opsV3Authz(), Closing: s.opsV3Closing}
+	d := opsv3.Deps{Authz: s.opsV3Authz(), Closing: s.opsV3Closing, RepairsAccess: s.repairsOpAccess()}
 	if runs, ok := database.AsCapability[opsv3.RunReader](s.storeForWiring()); ok {
 		d.Runs = runs
 	}

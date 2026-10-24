@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.9.2
+// version: 1.10.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-24
 
 // Package database — activity log types and helpers shared by the Pebble
 // activity store, activity.Service and their callers. Extracted from the
@@ -118,6 +118,17 @@ type ActivityFilter struct {
 	// ExcludeTags is ignored. Stores read the set through ExcludeTagValues /
 	// rejectsTags, never ExcludeTags alone.
 	ExcludeTagAliases map[string][]string
+	// ExcludeOperation, when set, hides an entry that belongs to an operation it
+	// returns true for: the entry's own OperationID and, for a Summarize row, each
+	// op:<id> tag (see EntryOperationIDs). It is how a read decides per caller
+	// what it may show without the page, offset and total being counted before the
+	// hiding (the Repairs lane's operations are readable only to callers who may
+	// use the fixer). The function is called from the scan, so it must be cheap
+	// (memoise a lookup) and safe to call from one goroutine at a time. Only Query
+	// and QueryWithPartial honour it; GetDistinctSources does not read it. A
+	// non-nil value is a live predicate and refuses the id-index pushdown (see
+	// pactPushdownDecidable), so the scan applies it to every candidate row.
+	ExcludeOperation func(operationID string) bool
 }
 
 // TypeValues returns every type value f accepts: Type followed by TypeAliases,
@@ -471,6 +482,30 @@ func summarizeOpTags(sortedIDs []string) []string {
 
 // summarizeSource marks a Summarize row.
 const summarizeSource = "summarize"
+
+// EntryOperationIDs calls visit with each operation e belongs to until it
+// returns true: e's own OperationID, then, for a Summarize row only (which spans
+// many operations), the id of each op:<id> tag. It reports whether visit
+// returned true. Same membership as entryHasOperation.
+func EntryOperationIDs(e ActivityEntry, visit func(id string) bool) bool {
+	if e.OperationID != "" && visit(e.OperationID) {
+		return true
+	}
+	if e.Source != summarizeSource {
+		return false
+	}
+	for _, t := range e.Tags {
+		if id, ok := strings.CutPrefix(t, "op:"); ok && id != "" && id != e.OperationID && visit(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectsOperation reports whether f's ExcludeOperation hides e.
+func (f ActivityFilter) rejectsOperation(e ActivityEntry) bool {
+	return f.ExcludeOperation != nil && EntryOperationIDs(e, f.ExcludeOperation)
+}
 
 // entryHasOperation reports whether e answers an operation_id filter for id:
 // its own OperationID, or — for a Summarize row only, which spans many

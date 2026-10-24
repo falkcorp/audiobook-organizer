@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/rows.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 39018ebb-a7f9-40a8-8aef-6a3cd4889ce6
-// last-edited: 2026-10-17
+// last-edited: 2026-10-24
 
 package opsv3
 
@@ -44,6 +44,9 @@ func (h *Handler) ListRows(c *gin.Context) {
 	}
 	if rec == nil {
 		httputil.RespondWithNotFound(c, "run", id)
+		return
+	}
+	if !h.mayReadRun(c, rec) {
 		return
 	}
 	page, err := rd.ListItemOutcomesV3(id, database.ItemQuery{

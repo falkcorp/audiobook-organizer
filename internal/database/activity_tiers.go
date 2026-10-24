@@ -1,7 +1,7 @@
 // file: internal/database/activity_tiers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1e5c2a-4d3f-4a86-9e0b-2f6c8d1a5e47
-// last-edited: 2026-10-09
+// last-edited: 2026-10-24
 
 package database
 
@@ -67,7 +67,11 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 		return false
 	}
 	// Any excluded tag, or any of its aliases (ExcludeTagAliases), hides it.
-	return !f.rejectsTags(e.Tags)
+	if f.rejectsTags(e.Tags) {
+		return false
+	}
+	// Last: the one predicate that can cost a lookup.
+	return !f.rejectsOperation(e)
 }
 
 func boolInt(b bool) int {
